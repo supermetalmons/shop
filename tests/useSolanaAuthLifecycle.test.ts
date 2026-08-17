@@ -70,7 +70,10 @@ class RuntimeHarness {
   reconcileImpl: () => Promise<ReconcileProfileStateResponse> = async () => ({
     mergedStripeDeliveryOrders: 0,
   });
+  shipmentServerLoadImpl: (wallet: string) => Promise<DeliveryOrderSummary[]> = () => new Promise(() => {});
   reconcileCalls = 0;
+  shipmentServerLoadCalls = 0;
+  shipmentServerLoadWallets: string[] = [];
   sessionSubscribeCount = 0;
   nextTimerId = 1;
   timers = new Map<number, { at: number; callback: () => void; delay: number }>();
@@ -93,6 +96,11 @@ class RuntimeHarness {
     listenToProfile: (wallet, handlers) => this.subscribe(this.profileSubscriptions, wallet, handlers),
     listenToProfileShipments: (wallet, handlers) =>
       this.subscribe(this.shipmentSubscriptions, wallet, handlers),
+    loadProfileShipmentsFromServer: (wallet) => {
+      this.shipmentServerLoadCalls += 1;
+      this.shipmentServerLoadWallets.push(wallet);
+      return this.shipmentServerLoadImpl(wallet);
+    },
     reconcileProfileState: () => {
       this.reconcileCalls += 1;
       return this.reconcileImpl();
@@ -165,6 +173,10 @@ class RuntimeHarness {
     }
     this.nowMs = target;
   }
+
+  timerDelays() {
+    return [...this.timers.values()].map((timer) => timer.delay);
+  }
 }
 
 function walletState(wallet: string | null): SolanaAuthWalletState {
@@ -185,6 +197,18 @@ function cacheUpdate<T>(value: T): SnapshotUpdate<T> {
 
 function pendingUpdate<T>(value: T): SnapshotUpdate<T> {
   return { value, fromCache: false, hasPendingWrites: true };
+}
+
+function shipmentFixture(
+  dropId: string,
+  deliveryId: number,
+  overrides: Omit<Partial<DeliveryOrderSummary>, 'dropId' | 'deliveryId'> = {},
+): DeliveryOrderSummary {
+  return { dropId, deliveryId, status: 'processing', items: [], ...overrides };
+}
+
+function codedError(message: string, code: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
 }
 
 async function activateSession(
@@ -449,7 +473,7 @@ test('cached and pending session snapshots wait for identical authoritative meta
     harness.latestSession()!.handlers.next(serverUpdate(binding));
   });
   await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
-  assert.equal(harness.timers.size, 0);
+  assert.deepEqual(harness.timerDelays(), [5_000]);
 });
 
 test('fast authentication survives cached bindings until the server observer confirms or rejects them', async () => {
@@ -461,6 +485,7 @@ test('fast authentication survives cached bindings until the server observer con
     await result.current.signIn();
   });
   assert.equal(result.current.sessionWallet, WALLET_A);
+  assert.deepEqual(harness.timerDelays(), [5_000]);
   await waitFor(() => assert.ok(harness.sessionSubscribeCount >= 2));
   const observer = harness.latestSession()!;
   const binding = { wallet: WALLET_A };
@@ -471,13 +496,13 @@ test('fast authentication survives cached bindings until the server observer con
     observer.handlers.next(pendingUpdate(binding));
   });
   assert.equal(result.current.sessionWallet, WALLET_A);
-  assert.equal(harness.timers.size, 0);
+  assert.deepEqual(harness.timerDelays(), [5_000]);
 
   await act(async () => {
     observer.handlers.next(serverUpdate(binding));
   });
   assert.equal(result.current.sessionWallet, WALLET_A);
-  assert.equal(harness.timers.size, 0);
+  assert.deepEqual(harness.timerDelays(), [5_000]);
 
   await act(async () => {
     observer.handlers.next(serverUpdate(null));
@@ -548,13 +573,7 @@ test('cache-only shipment changes render without inheriting prior server authori
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
   await activateSession(harness, result);
   await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
-  const shipment: DeliveryOrderSummary = {
-    dropId: 'stripe',
-    deliveryId: 1,
-    status: 'processing',
-    stripeCheckoutSessionId: 'cs_pending',
-    items: [],
-  };
+  const shipment = shipmentFixture('stripe', 1, { stripeCheckoutSessionId: 'cs_pending' });
 
   await act(async () => {
     harness.latestShipments(WALLET_A)!.handlers.next(serverUpdate([]));
@@ -574,8 +593,332 @@ test('cache-only shipment changes render without inheriting prior server authori
 
   await act(async () => {
     harness.latestShipments(WALLET_A)!.handlers.next(cacheUpdate([shipment]));
+    harness.advance(4_999);
   });
   assert.equal(result.current.shipmentsReady, true);
+  assert.equal(harness.shipmentServerLoadCalls, 0);
+  await act(async () => harness.advance(1));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 1));
+});
+
+test('a shipment listener without server authority uses a slow ordered server watchdog', async () => {
+  const harness = new RuntimeHarness();
+  const firstShipment = shipmentFixture('alpha', 1);
+  const secondShipment = shipmentFixture('zeta', 2);
+  harness.shipmentServerLoadImpl = async () => [secondShipment, firstShipment];
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await activateSession(harness, result);
+  await waitFor(() => assert.ok(harness.latestProfile(WALLET_A) && harness.latestShipments(WALLET_A)));
+  const profile = harness.latestProfile(WALLET_A)!;
+  const shipments = harness.latestShipments(WALLET_A)!;
+
+  await act(async () => harness.advance(4_999));
+  assert.equal(harness.shipmentServerLoadCalls, 0);
+  await act(async () => harness.advance(1));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 1));
+  assert.deepEqual(harness.shipmentServerLoadWallets, [WALLET_A]);
+  await waitFor(() => assert.deepEqual(result.current.shipments, [firstShipment, secondShipment]));
+  assert.equal(harness.latestShipments(WALLET_A), shipments);
+  assert.equal(shipments.active, true);
+  assert.equal(harness.latestProfile(WALLET_A), profile);
+  assert.equal(result.current.shipmentsReady, true);
+  assert.deepEqual(harness.timerDelays(), [60_000]);
+
+  await act(async () => {
+    shipments.handlers.next(cacheUpdate([secondShipment, firstShipment]));
+    harness.advance(59_999);
+  });
+  assert.equal(harness.shipmentServerLoadCalls, 1);
+  assert.equal(result.current.shipmentsReady, true);
+  await act(async () => harness.advance(1));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 2));
+  assert.deepEqual(harness.timerDelays(), [60_000]);
+});
+
+test('a transient shipment server sync failure is retried without showing an error', async () => {
+  const harness = new RuntimeHarness();
+  const shipment = shipmentFixture('stripe', 1);
+  harness.shipmentServerLoadImpl = async () => {
+    if (harness.shipmentServerLoadCalls === 1) {
+      throw codedError('shipments offline', 'functions/unavailable');
+    }
+    return [shipment];
+  };
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await activateSession(harness, result);
+  await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
+
+  await act(async () => harness.advance(5_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 1));
+  assert.equal(result.current.shipmentsError, null);
+  assert.equal(result.current.shipmentsReady, false);
+  assert.deepEqual(harness.timerDelays(), [400]);
+
+  await act(async () => harness.advance(400));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 2));
+  await waitFor(() => assert.deepEqual(result.current.shipments, [shipment]));
+  assert.equal(result.current.shipmentsReady, true);
+  assert.equal(result.current.shipmentsError, null);
+});
+
+test('a shipment server sync session mismatch clears and re-resolves identity', async () => {
+  const harness = new RuntimeHarness();
+  harness.shipmentServerLoadImpl = async () => {
+    throw codedError('wallet session changed', 'functions/unauthenticated');
+  };
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(null), harness.runtime));
+  await activateSession(harness, result);
+  await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
+  const staleShipments = harness.latestShipments(WALLET_A)!;
+  const initialSessionSubscribeCount = harness.sessionSubscribeCount;
+
+  await act(async () => harness.advance(5_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 1));
+  await waitFor(() => assert.equal(result.current.sessionWallet, null));
+  await waitFor(() => assert.equal(staleShipments.active, false));
+  await waitFor(() => assert.ok(harness.sessionSubscribeCount > initialSessionSubscribeCount));
+  assert.equal(result.current.sessionResolution, 'resolving');
+  assert.equal(result.current.error, null);
+
+  await act(async () => {
+    harness.latestSession()!.handlers.next(serverUpdate({ wallet: WALLET_B }));
+  });
+  await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_B));
+});
+
+test('a shipment server sync permission failure remains section-local', async () => {
+  const harness = new RuntimeHarness();
+  harness.shipmentServerLoadImpl = async () => {
+    throw codedError('shipment fallback denied', 'functions/permission-denied');
+  };
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await activateSession(harness, result);
+  await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
+  const shipments = harness.latestShipments(WALLET_A)!;
+
+  await act(async () => harness.advance(5_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 1));
+
+  assert.equal(result.current.sessionWallet, WALLET_A);
+  assert.equal(result.current.error, null);
+  assert.equal(result.current.shipmentsError, 'shipment fallback denied');
+  assert.equal(result.current.shipmentsReady, false);
+  assert.equal(shipments.active, true);
+});
+
+test('repeated shipment server sync failures back off to one minute', async () => {
+  const harness = new RuntimeHarness();
+  harness.shipmentServerLoadImpl = async () => {
+    throw codedError('shipments offline', 'functions/unavailable');
+  };
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await activateSession(harness, result);
+  await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
+
+  await act(async () => harness.advance(5_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 1));
+
+  const delays = [400, 800, 1_600, 5_000, 30_000, 60_000, 60_000];
+  for (const [index, delay] of delays.entries()) {
+    assert.deepEqual(harness.timerDelays(), [delay]);
+    await act(async () => harness.advance(delay));
+    await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, index + 2));
+  }
+
+  assert.equal(result.current.shipmentsError, 'shipments offline');
+  assert.equal(result.current.shipmentsReady, false);
+});
+
+test('ordered shipments survive projection drift and back off after catch-up', async () => {
+  const harness = new RuntimeHarness();
+  const shipment = shipmentFixture('stripe', 1);
+  harness.shipmentServerLoadImpl = async () => [shipment];
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await activateSession(harness, result);
+  await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
+  const shipments = harness.latestShipments(WALLET_A)!;
+
+  await act(async () => {
+    shipments.handlers.next(serverUpdate([]));
+  });
+  await act(async () => harness.advance(5_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 1));
+  await waitFor(() => assert.deepEqual(result.current.shipments, [shipment]));
+  assert.deepEqual(harness.timerDelays(), [5 * 60_000]);
+
+  await act(async () => {
+    shipments.handlers.next(serverUpdate([]));
+  });
+  assert.deepEqual(harness.timerDelays(), [5 * 60_000]);
+
+  await act(async () => {
+    shipments.handlers.next(cacheUpdate([]));
+  });
+  assert.deepEqual(result.current.shipments, [shipment]);
+
+  await act(async () => {
+    shipments.handlers.next(serverUpdate([]));
+  });
+  assert.deepEqual(result.current.shipments, [shipment]);
+
+  await act(async () => {
+    shipments.handlers.next(serverUpdate([shipment]));
+  });
+  await act(async () => harness.advance(5_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 2));
+  assert.deepEqual(harness.timerDelays(), [60 * 60_000]);
+  harness.shipmentServerLoadImpl = async () => {
+    throw codedError('shipments offline', 'functions/unavailable');
+  };
+  await act(async () => harness.advance(60 * 60_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 3));
+  assert.deepEqual(harness.timerDelays(), [60 * 60_000]);
+
+  assert.equal(harness.latestShipments(WALLET_A), shipments);
+  assert.equal(harness.shipmentSubscriptions.get(WALLET_A)?.length, 1);
+  assert.equal(harness.shipmentServerLoadCalls, 3);
+  assert.deepEqual(result.current.shipments, [shipment]);
+  assert.equal(result.current.shipmentsReady, true);
+});
+
+test('listener additions remain visible while server revalidation retries', async () => {
+  const harness = new RuntimeHarness();
+  const firstShipment = shipmentFixture('alpha', 1);
+  const secondShipment = shipmentFixture('beta', 2);
+  const thirdShipment = shipmentFixture('gamma', 3);
+  const updatedFirstShipment: DeliveryOrderSummary = {
+    ...firstShipment,
+    fulfillmentStatus: 'Shipped',
+  };
+  harness.shipmentServerLoadImpl = async () => [firstShipment];
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await activateSession(harness, result);
+  await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
+  const shipments = harness.latestShipments(WALLET_A)!;
+
+  await act(async () => harness.advance(5_000));
+  await waitFor(() => assert.deepEqual(result.current.shipments, [firstShipment]));
+  harness.shipmentServerLoadImpl = async () => {
+    throw codedError('shipments offline', 'functions/unavailable');
+  };
+  await act(async () => {
+    shipments.handlers.next(serverUpdate([firstShipment, secondShipment]));
+  });
+  assert.deepEqual(result.current.shipments, [firstShipment, secondShipment]);
+
+  await act(async () => harness.advance(5_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 2));
+
+  for (const [index, delay] of [400, 800, 1_600, 5_000, 30_000].entries()) {
+    await act(async () => harness.advance(delay));
+    await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, index + 3));
+  }
+
+  assert.deepEqual(result.current.shipments, [firstShipment, secondShipment]);
+  assert.equal(result.current.shipmentsReady, true);
+  assert.equal(result.current.shipmentsError, null);
+  assert.equal(result.current.sessionWallet, WALLET_A);
+
+  harness.shipmentServerLoadImpl = async () => [firstShipment];
+  await act(async () => harness.advance(60_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 8));
+  await waitFor(() => assert.deepEqual(result.current.shipments, [firstShipment]));
+  await act(async () => {
+    shipments.handlers.next(serverUpdate([firstShipment, secondShipment]));
+  });
+  assert.deepEqual(result.current.shipments, [firstShipment]);
+  await act(async () => {
+    shipments.handlers.next(serverUpdate([updatedFirstShipment, secondShipment, thirdShipment]));
+  });
+  assert.deepEqual(result.current.shipments, [updatedFirstShipment, thirdShipment]);
+});
+
+test('a stale in-flight server sync cannot invalidate a listener that later loses authority', async () => {
+  const harness = new RuntimeHarness();
+  const serverLoad = deferred<DeliveryOrderSummary[]>();
+  const cachedShipment = shipmentFixture('cached', 1);
+  harness.shipmentServerLoadImpl = () => serverLoad.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await activateSession(harness, result);
+  await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
+  const shipments = harness.latestShipments(WALLET_A)!;
+
+  await act(async () => harness.advance(5_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 1));
+  await act(async () => {
+    shipments.handlers.next(serverUpdate([]));
+    shipments.handlers.next(cacheUpdate([cachedShipment]));
+    serverLoad.reject(codedError('stale fallback denied', 'functions/permission-denied'));
+    await Promise.resolve();
+  });
+
+  assert.equal(result.current.sessionWallet, WALLET_A);
+  assert.deepEqual(result.current.shipments, [cachedShipment]);
+  assert.equal(result.current.shipmentsReady, false);
+  assert.equal(result.current.shipmentsError, null);
+  assert.equal(result.current.error, null);
+});
+
+test('a shipment listener error accelerates an existing server refresh', async () => {
+  const harness = new RuntimeHarness();
+  const shipment = shipmentFixture('stripe', 1);
+  harness.shipmentServerLoadImpl = async () => [shipment];
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await activateSession(harness, result);
+  await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
+  const shipments = harness.latestShipments(WALLET_A)!;
+
+  await act(async () => harness.advance(5_000));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 1));
+  await waitFor(() => assert.deepEqual(result.current.shipments, [shipment]));
+
+  await act(async () => {
+    shipments.handlers.error(codedError('shipments offline', 'unavailable'));
+  });
+  assert.equal(result.current.shipmentsReady, false);
+  assert.equal(result.current.shipmentsError, 'shipments offline');
+
+  await act(async () => harness.advance(4_999));
+  assert.equal(harness.shipmentServerLoadCalls, 1);
+  await act(async () => harness.advance(1));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 2));
+  assert.equal(result.current.shipmentsReady, true);
+  assert.equal(result.current.shipmentsError, null);
+});
+
+test('repeated shipment listener errors preserve one scheduled and in-flight server sync', async () => {
+  const harness = new RuntimeHarness();
+  const serverLoad = deferred<DeliveryOrderSummary[]>();
+  const shipment = shipmentFixture('stripe', 1);
+  harness.shipmentServerLoadImpl = () => serverLoad.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await activateSession(harness, result);
+  await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
+
+  await act(async () => {
+    harness.latestShipments(WALLET_A)!.handlers.error(codedError('shipments offline', 'unavailable'));
+  });
+  await act(async () => harness.advance(400));
+  await waitFor(() => assert.ok(harness.latestShipments(WALLET_A)));
+  await act(async () => {
+    harness.latestShipments(WALLET_A)!.handlers.error(codedError('shipments still offline', 'unavailable'));
+    harness.advance(4_599);
+  });
+  assert.equal(harness.shipmentServerLoadCalls, 0);
+  await act(async () => harness.advance(1));
+  await waitFor(() => assert.equal(harness.shipmentServerLoadCalls, 1));
+
+  await act(async () => {
+    harness.advance(800);
+    harness.latestShipments(WALLET_A)!.handlers.error(codedError('shipments remain offline', 'unavailable'));
+    harness.advance(5_000);
+  });
+  assert.equal(harness.shipmentServerLoadCalls, 1);
+
+  await act(async () => serverLoad.resolve([shipment]));
+  await waitFor(() => assert.deepEqual(result.current.shipments, [shipment]));
+  assert.equal(result.current.shipmentsReady, true);
+  assert.equal(result.current.shipmentsError, null);
 });
 
 test('terminal session errors clear identity and a later sign-in reattaches the authoritative observer', async () => {

@@ -13,7 +13,10 @@ import {
 } from 'firebase/firestore';
 import { firebaseApp } from './firebase';
 import type { DeliveryOrderSummary, Profile, ProfileShipment } from '../types';
-import { isPositiveSafeInteger } from '../../functions/src/shared/positiveInteger';
+import {
+  deliveryOrderSummaryEqual,
+  parseDeliveryOrderSummary,
+} from '../../functions/src/shared/deliveryOrderSummary.js';
 import type { StripeCheckoutProfileRecoveryStatus } from './stripeCheckoutRecovery';
 
 export type SessionBinding = {
@@ -160,64 +163,12 @@ function optionalFiniteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function optionalPositiveInteger(value: unknown): number | undefined {
-  return isPositiveSafeInteger(value) ? value : undefined;
-}
+export const deliveryOrderSummaryFromDocument = parseDeliveryOrderSummary;
 
 export function profileShipmentFromDocument(data: DocumentData): ProfileShipmentDocument | null {
-  const dropId = typeof data.dropId === 'string' ? data.dropId.trim() : '';
-  const deliveryId = optionalPositiveInteger(data.deliveryId);
+  const shipment = parseDeliveryOrderSummary(data);
   const sortAt = optionalFiniteNumber(data.sortAt);
-  const status = typeof data.status === 'string' ? data.status : '';
-  if (
-    !dropId ||
-    deliveryId === undefined ||
-    sortAt === undefined ||
-    (status !== 'processing' && status !== 'ready_to_ship')
-  ) {
-    return null;
-  }
-
-  const items = (Array.isArray(data.items) ? data.items : [])
-    .map((item): DeliveryOrderSummary['items'][number] | null => {
-      const kind = item?.kind;
-      const refId = optionalPositiveInteger(item?.refId);
-      if ((kind !== 'box' && kind !== 'dude') || refId === undefined) return null;
-      return { kind, refId };
-    })
-    .filter((item): item is DeliveryOrderSummary['items'][number] => Boolean(item));
-
-  const stripeCheckoutSessionId =
-    typeof data.stripeCheckoutSessionId === 'string' && data.stripeCheckoutSessionId
-      ? data.stripeCheckoutSessionId
-      : undefined;
-  const fulfillmentStatus =
-    data.fulfillmentStatus === 'Preparing' || data.fulfillmentStatus === 'Shipped'
-      ? data.fulfillmentStatus
-      : undefined;
-  const fulfillmentTrackingCode =
-    typeof data.fulfillmentTrackingCode === 'string' && data.fulfillmentTrackingCode
-      ? data.fulfillmentTrackingCode
-      : undefined;
-  const createdAt = optionalFiniteNumber(data.createdAt);
-  const processingAt = optionalFiniteNumber(data.processingAt);
-  const processedAt = optionalFiniteNumber(data.processedAt);
-  const fulfillmentUpdatedAt = optionalFiniteNumber(data.fulfillmentUpdatedAt);
-
-  return {
-    dropId,
-    deliveryId,
-    status,
-    items,
-    sortAt,
-    ...(stripeCheckoutSessionId ? { stripeCheckoutSessionId } : {}),
-    ...(createdAt !== undefined ? { createdAt } : {}),
-    ...(processingAt !== undefined ? { processingAt } : {}),
-    ...(processedAt !== undefined ? { processedAt } : {}),
-    ...(fulfillmentStatus ? { fulfillmentStatus } : {}),
-    ...(fulfillmentTrackingCode ? { fulfillmentTrackingCode } : {}),
-    ...(fulfillmentUpdatedAt !== undefined ? { fulfillmentUpdatedAt } : {}),
-  };
+  return shipment && sortAt !== undefined ? { ...shipment, sortAt } : null;
 }
 
 export function profileShipmentsFromDocuments(
@@ -237,25 +188,7 @@ export function deliveryOrderSummariesEqual(
   if (left.length !== right.length) return false;
   return left.every((order, index) => {
     const other = right[index];
-    return Boolean(
-      other &&
-      order.dropId === other.dropId &&
-      order.deliveryId === other.deliveryId &&
-      order.status === other.status &&
-      order.stripeCheckoutSessionId === other.stripeCheckoutSessionId &&
-      order.createdAt === other.createdAt &&
-      order.processingAt === other.processingAt &&
-      order.processedAt === other.processedAt &&
-      order.fulfillmentStatus === other.fulfillmentStatus &&
-      order.fulfillmentTrackingCode === other.fulfillmentTrackingCode &&
-      order.fulfillmentUpdatedAt === other.fulfillmentUpdatedAt &&
-      order.items.length === other.items.length &&
-      order.items.every(
-        (item, itemIndex) =>
-          item.kind === other.items[itemIndex]?.kind &&
-          item.refId === other.items[itemIndex]?.refId,
-      )
-    );
+    return Boolean(other && deliveryOrderSummaryEqual(order, other));
   });
 }
 

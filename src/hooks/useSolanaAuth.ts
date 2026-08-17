@@ -4,6 +4,7 @@ import { onAuthStateChanged, signOut as firebaseSignOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import {
   ensureAuthenticated,
+  loadProfileShipmentsFromServer,
   reconcileProfileState,
   solanaAuth,
   type ReconcileProfileStateRequest,
@@ -12,6 +13,12 @@ import {
 import { isRetryableCallableError, retryWithBackoff } from '../lib/callableErrors';
 import type { DeliveryOrderSummary, Profile } from '../types';
 import { buildSignInMessage } from '../lib/solana';
+import { normalizeCallableErrorCode } from '../../functions/src/shared/callableErrorCode';
+import {
+  deliveryOrderSummaryEqual,
+  deliveryOrderSummaryKey,
+  deliveryOrderSummarySortAt,
+} from '../../functions/src/shared/deliveryOrderSummary.js';
 import {
   deliveryOrderSummariesEqual,
   firebaseAuthChangeInvalidatesSession,
@@ -62,6 +69,7 @@ export type SolanaAuthRuntime = {
     wallet: string,
     handlers: SnapshotHandlers<DeliveryOrderSummary[]>,
   ) => () => void;
+  loadProfileShipmentsFromServer: (wallet: string) => Promise<DeliveryOrderSummary[]>;
   reconcileProfileState: (options?: ReconcileProfileStateRequest) => Promise<ReconcileProfileStateResponse>;
   authenticateWallet: (wallet: string, message: string, signature: Uint8Array) => Promise<{ wallet: string }>;
   signOut: () => Promise<void>;
@@ -122,6 +130,7 @@ const DEFAULT_RUNTIME: SolanaAuthRuntime = {
   listenToSessionBinding,
   listenToProfile,
   listenToProfileShipments,
+  loadProfileShipmentsFromServer,
   reconcileProfileState,
   authenticateWallet: (wallet, message, signature) =>
     solanaAuth(wallet, message, signature, { responseMode: 'session' }),
@@ -152,11 +161,60 @@ function snapshotIsAuthoritative(update: Pick<SnapshotUpdate<unknown>, 'fromCach
 }
 
 const PERSISTENT_RETRY_DELAYS_MS = [400, 800, 1_600, 5_000] as const;
+const SHIPMENT_SERVER_SYNC_DELAY_MS = 5_000;
+const SHIPMENT_SERVER_REFRESH_DELAY_MS = 60_000;
+const SHIPMENT_SERVER_VALIDATION_DELAY_MS = 5 * 60_000;
+const SHIPMENT_SERVER_HEALTHY_VALIDATION_DELAY_MS = 60 * 60_000;
+const SHIPMENT_SERVER_RETRY_DELAYS_MS = [
+  ...PERSISTENT_RETRY_DELAYS_MS,
+  30_000,
+  SHIPMENT_SERVER_REFRESH_DELAY_MS,
+] as const;
 
-function persistentRetryDelay(retryCount: number): number {
-  return PERSISTENT_RETRY_DELAYS_MS[
-    Math.min(retryCount, PERSISTENT_RETRY_DELAYS_MS.length - 1)
-  ];
+function retryDelay(delays: readonly [number, ...number[]], retryCount: number): number {
+  return delays[Math.min(retryCount, delays.length - 1)];
+}
+
+function shipmentsInDisplayOrder(shipments: DeliveryOrderSummary[]): DeliveryOrderSummary[] {
+  return [...shipments].sort((left, right) => {
+    const leftAt = deliveryOrderSummarySortAt(left);
+    const rightAt = deliveryOrderSummarySortAt(right);
+    if (leftAt !== rightAt) return rightAt - leftAt;
+    if (left.dropId !== right.dropId) return left.dropId < right.dropId ? -1 : 1;
+    return left.deliveryId - right.deliveryId;
+  });
+}
+
+function mergeShipmentsForDisplay(
+  {
+    serverShipments,
+    listenerShipments,
+    listenerBaseline,
+    listenerAuthoritative,
+  }: {
+    serverShipments: DeliveryOrderSummary[];
+    listenerShipments: DeliveryOrderSummary[];
+    listenerBaseline: DeliveryOrderSummary[];
+    listenerAuthoritative: boolean;
+  },
+): DeliveryOrderSummary[] {
+  const merged = new Map<string, DeliveryOrderSummary>();
+  const baseline = new Map<string, DeliveryOrderSummary>();
+  for (const shipment of serverShipments) {
+    merged.set(deliveryOrderSummaryKey(shipment), shipment);
+  }
+  for (const shipment of listenerBaseline) {
+    baseline.set(deliveryOrderSummaryKey(shipment), shipment);
+  }
+  for (const shipment of listenerShipments) {
+    const key = deliveryOrderSummaryKey(shipment);
+    const previous = baseline.get(key);
+    const changedSinceServer = !previous || !deliveryOrderSummaryEqual(previous, shipment);
+    if (changedSinceServer && (listenerAuthoritative || !merged.has(key))) {
+      merged.set(key, shipment);
+    }
+  }
+  return shipmentsInDisplayOrder([...merged.values()]);
 }
 
 export function useSolanaAuthWithRuntime(
@@ -327,7 +385,7 @@ export function useSolanaAuthWithRuntime(
         void runtime.signOut().catch((signOutError) => {
           if (!mountedRef.current || mismatchSignOutRef.current !== mismatchKey) return;
           setError(errorMessage(signOutError, 'Unable to end the previous wallet session'));
-          const delay = persistentRetryDelay(retryCount);
+          const delay = retryDelay(PERSISTENT_RETRY_DELAYS_MS, retryCount);
           retryCount += 1;
           clearMismatchSignOutTimer();
           mismatchSignOutTimerRef.current = runtime.setTimer(() => {
@@ -389,7 +447,7 @@ export function useSolanaAuthWithRuntime(
     };
     const scheduleRetry = (sessionError: unknown, retry: () => void) => {
       if (!firestoreListenerErrorIsRetryable(sessionError)) return false;
-      const delay = persistentRetryDelay(retryCount);
+      const delay = retryDelay(PERSISTENT_RETRY_DELAYS_MS, retryCount);
       retryCount += 1;
       const hasValidatedSession = Boolean(
         sessionWalletRef.current && sessionUidRef.current === firebaseUidRef.current,
@@ -500,9 +558,10 @@ export function useSolanaAuthWithRuntime(
   ]);
 
   useEffect(() => {
-    const wallet = state.sessionWallet;
+    const sessionWallet = state.sessionWallet;
     const allowDisconnected = !connectedWallet;
-    if (!wallet || (connectedWallet !== wallet && !allowDisconnected)) return;
+    if (!sessionWallet || (connectedWallet !== sessionWallet && !allowDisconnected)) return;
+    const wallet = sessionWallet;
     const ownerGeneration = ownerGenerationRef.current;
     let cancelled = false;
     const isCurrent = () =>
@@ -537,7 +596,7 @@ export function useSolanaAuthWithRuntime(
         if (!isCurrent() || invalidateFromListener(listenerError)) return;
         handlers.error(listenerError);
         if (!firestoreListenerErrorIsRetryable(listenerError)) return;
-        const delay = persistentRetryDelay(retryCount);
+        const delay = retryDelay(PERSISTENT_RETRY_DELAYS_MS, retryCount);
         retryCount += 1;
         clearRetryTimer();
         retryTimer = runtime.setTimer(() => {
@@ -612,41 +671,245 @@ export function useSolanaAuthWithRuntime(
       },
     );
 
+    let shipmentServerSyncTimer: unknown = null;
+    let shipmentServerSyncTimerAt: number | null = null;
+    let shipmentServerSyncInFlight = false;
+    let shipmentServerSyncGeneration = 0;
+    let shipmentServerSyncRetryCount = 0;
+    let shipmentListenerAuthoritative = false;
+    let shipmentProjectionValidated = false;
+    let listenerShipments: DeliveryOrderSummary[] | null = null;
+    let listenerBaselineAtServerSync: DeliveryOrderSummary[] = [];
+    let serverShipments: DeliveryOrderSummary[] | null = null;
+    let displayedShipments = state.shipments;
+    const clearShipmentServerSyncTimer = () => {
+      if (shipmentServerSyncTimer === null) return;
+      runtime.clearTimer(shipmentServerSyncTimer);
+      shipmentServerSyncTimer = null;
+      shipmentServerSyncTimerAt = null;
+    };
+    const applyShipments = (update: SnapshotUpdate<DeliveryOrderSummary[]>) => {
+      const authoritative = snapshotIsAuthoritative(update);
+      const shipments = shipmentsInDisplayOrder(update.value);
+      const listenerChanged = listenerShipments === null
+        ? !deliveryOrderSummariesEqual(displayedShipments, shipments)
+        : !deliveryOrderSummariesEqual(listenerShipments, shipments);
+      const changed = !deliveryOrderSummariesEqual(displayedShipments, shipments);
+      const authorityChanged = shipmentListenerAuthoritative !== authoritative;
+      shipmentListenerAuthoritative = authoritative;
+      listenerShipments = shipments;
+      if (listenerChanged || authorityChanged) {
+        shipmentProjectionValidated = false;
+      }
+      if (listenerChanged) {
+        shipmentServerSyncGeneration += 1;
+        shipmentServerSyncRetryCount = 0;
+      }
+
+      if (
+        serverShipments !== null &&
+        !deliveryOrderSummariesEqual(serverShipments, shipments)
+      ) {
+        const displayShipments = mergeShipmentsForDisplay({
+          serverShipments,
+          listenerShipments: shipments,
+          listenerBaseline: listenerBaselineAtServerSync,
+          listenerAuthoritative: authoritative,
+        });
+        const displayReady = authoritative || deliveryOrderSummariesEqual(
+          displayShipments,
+          serverShipments,
+        );
+        displayedShipments = displayShipments;
+        if (listenerChanged || authorityChanged) {
+          scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
+        } else {
+          scheduleShipmentServerSync(
+            authoritative
+              ? SHIPMENT_SERVER_VALIDATION_DELAY_MS
+              : SHIPMENT_SERVER_REFRESH_DELAY_MS,
+          );
+        }
+        setState((current) => {
+          if (
+            current.sessionWallet !== wallet ||
+            (
+              current.shipmentsReady === displayReady &&
+              current.shipmentsError === null &&
+              deliveryOrderSummariesEqual(current.shipments, displayShipments)
+            )
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            shipments: displayShipments,
+            shipmentsReady: displayReady,
+            shipmentsError: null,
+          };
+        });
+        return;
+      }
+
+      displayedShipments = shipments;
+      if (shipmentProjectionValidated) {
+        shipmentServerSyncRetryCount = 0;
+        scheduleShipmentServerSync(SHIPMENT_SERVER_HEALTHY_VALIDATION_DELAY_MS);
+      } else if (listenerChanged || authorityChanged) {
+        scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
+      }
+      setState((current) => {
+        if (current.sessionWallet !== wallet) return current;
+        const shipmentsReady = authoritative
+          ? true
+          : changed
+            ? false
+            : current.shipmentsReady;
+        const shipmentsError = authoritative ? null : current.shipmentsError;
+        if (
+          current.shipmentsReady === shipmentsReady &&
+          current.shipmentsError === shipmentsError &&
+          deliveryOrderSummariesEqual(current.shipments, shipments)
+        ) {
+          return current;
+        }
+        return {
+          ...current,
+          shipments,
+          shipmentsReady,
+          shipmentsError,
+        };
+      });
+    };
+    const reportShipmentFailure = (snapshotError: unknown) => {
+      const shipmentsError = errorMessage(snapshotError, 'Unable to load shipments');
+      setState((current) => {
+        if (
+          current.sessionWallet !== wallet ||
+          (!current.shipmentsReady && current.shipmentsError === shipmentsError)
+        ) {
+          return current;
+        }
+        return { ...current, shipmentsReady: false, shipmentsError };
+      });
+    };
     const unsubscribeShipments = isCurrent()
       ? attachRetriableListener<DeliveryOrderSummary[]>(
           (handlers) => runtime.listenToProfileShipments(wallet, handlers),
           {
-            next: (update) => {
-              const authoritative = snapshotIsAuthoritative(update);
-              const shipments = update.value;
-              setState((current) => {
-                if (current.sessionWallet !== wallet) return current;
-                const changed = !deliveryOrderSummariesEqual(current.shipments, shipments);
-                return {
-                  ...current,
-                  shipments,
-                  ...(authoritative
-                    ? { shipmentsReady: true, shipmentsError: null }
-                    : changed
-                      ? { shipmentsReady: false }
-                      : {}),
-                };
-              });
-            },
+            next: applyShipments,
             error: (snapshotError) => {
-              setState((current) =>
-                current.sessionWallet === wallet
-                  ? {
-                      ...current,
-                      shipmentsReady: false,
-                      shipmentsError: errorMessage(snapshotError, 'Unable to load shipments'),
-                    }
-                  : current,
-              );
+              shipmentListenerAuthoritative = false;
+              shipmentProjectionValidated = false;
+              reportShipmentFailure(snapshotError);
+              scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
             },
           },
         )
       : () => {};
+    function scheduleShipmentServerSync(delay: number) {
+      const requestedAt = runtime.now() + delay;
+      if (
+        !isCurrent() ||
+        shipmentServerSyncInFlight ||
+        (shipmentServerSyncTimerAt !== null && shipmentServerSyncTimerAt <= requestedAt)
+      ) {
+        return;
+      }
+      clearShipmentServerSyncTimer();
+      shipmentServerSyncTimerAt = requestedAt;
+      shipmentServerSyncTimer = runtime.setTimer(syncShipmentsFromServer, delay);
+    }
+    function syncShipmentsFromServer() {
+      shipmentServerSyncTimer = null;
+      shipmentServerSyncTimerAt = null;
+      if (!isCurrent()) return;
+      const requestGeneration = shipmentServerSyncGeneration + 1;
+      shipmentServerSyncGeneration = requestGeneration;
+      shipmentServerSyncInFlight = true;
+      void runtime.loadProfileShipmentsFromServer(wallet).then(
+        (shipments) => {
+          shipmentServerSyncInFlight = false;
+          if (!isCurrent()) return;
+          if (shipmentServerSyncGeneration !== requestGeneration) {
+            scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
+            return;
+          }
+          const orderedShipments = shipmentsInDisplayOrder(shipments);
+          serverShipments = orderedShipments;
+          listenerBaselineAtServerSync = listenerShipments ?? [];
+          displayedShipments = orderedShipments;
+          shipmentServerSyncRetryCount = 0;
+          shipmentProjectionValidated = Boolean(
+            shipmentListenerAuthoritative &&
+            listenerShipments &&
+            deliveryOrderSummariesEqual(listenerShipments, orderedShipments),
+          );
+          setState((current) => {
+            if (current.sessionWallet !== wallet) return current;
+            if (
+              current.shipmentsReady &&
+              current.shipmentsError === null &&
+              deliveryOrderSummariesEqual(current.shipments, orderedShipments)
+            ) {
+              return current;
+            }
+            return {
+              ...current,
+              shipments: orderedShipments,
+              shipmentsReady: true,
+              shipmentsError: null,
+            };
+          });
+          scheduleShipmentServerSync(
+            shipmentProjectionValidated
+              ? SHIPMENT_SERVER_HEALTHY_VALIDATION_DELAY_MS
+              : shipmentListenerAuthoritative
+                ? SHIPMENT_SERVER_VALIDATION_DELAY_MS
+                : SHIPMENT_SERVER_REFRESH_DELAY_MS,
+          );
+        },
+        (snapshotError) => {
+          shipmentServerSyncInFlight = false;
+          if (!isCurrent()) return;
+          if (shipmentServerSyncGeneration !== requestGeneration) {
+            scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
+            return;
+          }
+          const callableCode = normalizeCallableErrorCode(
+            (snapshotError as { code?: unknown } | null)?.code,
+          );
+          if (callableCode === 'unauthenticated') {
+            contextGenerationRef.current += 1;
+            deactivateOwner(true);
+            setError(null);
+            setSessionResolution('resolving');
+            setSessionListenerRevision((revision) => revision + 1);
+            return;
+          }
+          if (shipmentProjectionValidated) {
+            scheduleShipmentServerSync(SHIPMENT_SERVER_HEALTHY_VALIDATION_DELAY_MS);
+            return;
+          }
+          if (
+            isRetryableCallableError(snapshotError) ||
+            firestoreListenerErrorIsRetryable(snapshotError)
+          ) {
+            const delay = retryDelay(SHIPMENT_SERVER_RETRY_DELAYS_MS, shipmentServerSyncRetryCount);
+            shipmentServerSyncRetryCount += 1;
+            if (delay === SHIPMENT_SERVER_REFRESH_DELAY_MS && !shipmentListenerAuthoritative) {
+              reportShipmentFailure(snapshotError);
+            }
+            scheduleShipmentServerSync(delay);
+            return;
+          }
+          shipmentServerSyncRetryCount = 0;
+          if (!shipmentListenerAuthoritative) reportShipmentFailure(snapshotError);
+          scheduleShipmentServerSync(SHIPMENT_SERVER_REFRESH_DELAY_MS);
+        },
+      );
+    }
+    scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
 
     let reconcileRetryTimer: unknown = null;
     let reconcileRetryCount = 0;
@@ -668,7 +931,7 @@ export function useSolanaAuthWithRuntime(
             console.warn('[mons] failed to reconcile profile state', reconcileError);
             return;
           }
-          const delay = persistentRetryDelay(reconcileRetryCount);
+          const delay = retryDelay(PERSISTENT_RETRY_DELAYS_MS, reconcileRetryCount);
           reconcileRetryCount += 1;
           reconcileRetryTimer = runtime.setTimer(reconcileWhenCurrent, delay);
         });
@@ -678,6 +941,7 @@ export function useSolanaAuthWithRuntime(
     return () => {
       cancelled = true;
       clearReconcileRetryTimer();
+      clearShipmentServerSyncTimer();
       unsubscribeProfile();
       unsubscribeShipments();
     };

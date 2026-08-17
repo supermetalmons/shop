@@ -13,6 +13,10 @@ import {
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
 } from './shared/fulfillmentSources.js';
 import { normalizeDropId } from './shared/deploymentCore.js';
+import {
+  deliveryOrderSummarySortAt,
+  isProfileShipmentStatus,
+} from './shared/deliveryOrderSummary.js';
 import type {
   DeliveryOrderItemSummary,
   DeliveryOrderSummary,
@@ -35,8 +39,6 @@ export const DELIVERY_ORDER_SUMMARY_FIELDS = [
   'fulfillmentTrackingCode',
   'fulfillmentUpdatedAt',
 ] as const;
-
-const PROFILE_SHIPMENT_STATUSES = new Set(['processing', 'ready_to_ship']);
 
 function optionalTrimmedString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -209,7 +211,7 @@ export function classifyProfileShipmentSource(
       return { kind: 'invalid', reason: 'drop_id_mismatch' };
     }
   }
-  if (!PROFILE_SHIPMENT_STATUSES.has(order?.status)) return { kind: 'excluded' };
+  if (!isProfileShipmentStatus(order?.status)) return { kind: 'excluded' };
   if (order?.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) return { kind: 'excluded' };
   const ownerWallet = normalizeProfileShipmentOwner(order?.owner);
   if (!ownerWallet) {
@@ -233,7 +235,7 @@ export function classifyProfileShipmentSource(
       documentId: profileShipmentDocumentId(docPath),
       data: {
         ...data,
-        sortAt: data.processedAt ?? data.processingAt ?? data.createdAt ?? 0,
+        sortAt: deliveryOrderSummarySortAt(data),
       },
     },
   };

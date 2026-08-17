@@ -16,6 +16,8 @@ export type {
   FulfillmentShipStationRate,
   GetAdminProfileViewRequest,
   GetAdminProfileViewResponse,
+  GetProfileShipmentsRequest,
+  GetProfileShipmentsResponse,
   GetFulfillmentShipStationLabelRequest,
   GetFulfillmentShipStationLabelResponse,
   GetFulfillmentShipStationRatesRequest,

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  deliveryOrderSummaryFromDocument,
   firebaseAuthChangeInvalidatesSession,
   firestoreErrorInvalidatesSession,
   firestoreListenerErrorIsRetryable,
@@ -68,6 +69,8 @@ test('profile documents expose only the owner wallet and email', () => {
 });
 
 test('shipment documents are allowlisted and malformed items are discarded', () => {
+  assert.equal(deliveryOrderSummaryFromDocument(null), null);
+  assert.equal(deliveryOrderSummaryFromDocument([]), null);
   assert.deepEqual(
     profileShipmentFromDocument({
       dropId: 'drop',

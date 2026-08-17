@@ -50,6 +50,32 @@ export async function runLegacyGetProfileFlow<TResponse>(
   return deps.buildResponse(profile.data);
 }
 
+export async function runProfileShipmentsResponseFlow<TOrder>(
+  params: {
+    sessionWallet: string;
+    rawOwnerWallet?: string;
+    mergeStripeDeliveryOrders?: boolean;
+  },
+  deps: {
+    invalidMergeError(): Error;
+    missingOwnerError(): Error;
+    sessionMismatchError(): Error;
+    normalizeWallet(wallet: string): string;
+    loadOrders(wallet: string): Promise<TOrder[]>;
+  },
+): Promise<{ responseMode: 'shipments'; wallet: string; orders: TOrder[] }> {
+  if (params.mergeStripeDeliveryOrders === true) throw deps.invalidMergeError();
+  const requestedWallet = params.rawOwnerWallet?.trim();
+  if (!requestedWallet) throw deps.missingOwnerError();
+  const wallet = deps.normalizeWallet(requestedWallet);
+  if (wallet !== params.sessionWallet) throw deps.sessionMismatchError();
+  return {
+    responseMode: 'shipments',
+    wallet,
+    orders: await deps.loadOrders(wallet),
+  };
+}
+
 export async function runProfileStateReconciliationFlow<Recovery>(
   options: {
     mergeStripeDeliveryOrders?: boolean;

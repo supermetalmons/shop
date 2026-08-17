@@ -6,6 +6,7 @@ import {
   AddFulfillmentOrderToShipStationResponse,
   AdminIrlRedeemFinalizeResult,
   AdminIrlRedeemPreparedTxResponse,
+  DeliveryOrderSummary,
   DeliverySelection,
   FulfillmentManualReviewCheckout,
   FulfillmentStatus,
@@ -13,6 +14,8 @@ import {
   FulfillmentOrdersCursor,
   GetAdminProfileViewRequest,
   GetAdminProfileViewResponse,
+  GetProfileShipmentsRequest,
+  GetProfileShipmentsResponse,
   GetFulfillmentShipStationLabelRequest,
   GetFulfillmentShipStationLabelResponse,
   GetFulfillmentShipStationRatesRequest,
@@ -51,6 +54,7 @@ import {
   normalizePackStatusBreakdown,
 } from '../../functions/src/shared/packStatus.ts';
 import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.ts';
+import { parseDeliveryOrderSummary } from '../../functions/src/shared/deliveryOrderSummary.ts';
 
 export type {
   ListCardNft2UnrevealedCardsRequest,
@@ -533,6 +537,25 @@ export async function reconcileProfileState(
     payload.includeDeliveryRecovery = options.includeDeliveryRecovery;
   }
   return callFunction<ReconcileProfileStateRequest, ReconcileProfileStateResponse>('reconcileProfileState', payload);
+}
+
+export async function loadProfileShipmentsFromServer(ownerWallet: string): Promise<DeliveryOrderSummary[]> {
+  const response = await callFunction<
+    GetProfileShipmentsRequest,
+    unknown
+  >('getProfile', { ownerWallet, responseMode: 'shipments' });
+  const payload = response && typeof response === 'object'
+    ? (response as Partial<GetProfileShipmentsResponse>)
+    : null;
+  if (
+    payload?.responseMode === 'shipments' &&
+    payload.wallet === ownerWallet &&
+    Array.isArray(payload.orders)
+  ) {
+    const orders = payload.orders.map(parseDeliveryOrderSummary);
+    if (orders.every((order): order is DeliveryOrderSummary => order !== null)) return orders;
+  }
+  throw new Error('Invalid shipment history response');
 }
 
 export async function getAdminProfileView(ownerWallet: string): Promise<GetAdminProfileViewResponse> {

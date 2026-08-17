@@ -203,6 +203,7 @@ import {
 } from './profileShipments.js';
 import {
   runLegacyGetProfileFlow,
+  runProfileShipmentsResponseFlow,
   runProfileStateReconciliationFlow,
   runVerifiedSolanaAuthProfileFlow,
 } from './profileLifecycle.js';
@@ -254,6 +255,7 @@ import type {
   DeliveryRecoveryOutcome,
   DeliveryRecoveryState,
   GetAdminProfileViewResponse,
+  GetProfileShipmentsResponse,
   ReconcileProfileStateResponse,
   FulfillmentOrderAddress,
   FulfillmentOrderBox,
@@ -265,6 +267,10 @@ import type {
   RecoverDeliveryOrdersResult as RecoverMyDeliveryOrdersResult,
   WalletDeliveryRecoveryState,
 } from './shared/contracts.js';
+import {
+  deliveryOrderSummarySortAt,
+  PROFILE_SHIPMENT_STATUSES,
+} from './shared/deliveryOrderSummary.js';
 import {
   dasAssetBoxId,
   dasAssetDudeId,
@@ -5390,25 +5396,15 @@ export const notifyStripeCheckoutManualReview = onDocumentUpdated(
 );
 
 async function fetchDeliveryOrderHistory(ownerId: string): Promise<DeliveryOrderSummary[]> {
-  const [readySnap, processingSnap] = await Promise.all([
-    db
-      .collectionGroup('deliveryOrders')
-      .where('owner', '==', ownerId)
-      .where('status', '==', 'ready_to_ship')
-      .select(...DELIVERY_ORDER_SUMMARY_FIELDS)
-      .get(),
-    db
-      .collectionGroup('deliveryOrders')
-      .where('owner', '==', ownerId)
-      .where('status', '==', 'processing')
-      .select(...DELIVERY_ORDER_SUMMARY_FIELDS)
-      .get(),
-  ]);
+  const snap = await db
+    .collectionGroup('deliveryOrders')
+    .where('owner', '==', ownerId)
+    .where('status', 'in', [...PROFILE_SHIPMENT_STATUSES])
+    .select(...DELIVERY_ORDER_SUMMARY_FIELDS)
+    .get();
 
-  const summaries = toDeliveryOrderSummaries([...readySnap.docs, ...processingSnap.docs]);
-  summaries.sort(
-    (a, b) => (b.processedAt ?? b.processingAt ?? b.createdAt ?? 0) - (a.processedAt ?? a.processingAt ?? a.createdAt ?? 0),
-  );
+  const summaries = toDeliveryOrderSummaries(snap.docs);
+  summaries.sort((a, b) => deliveryOrderSummarySortAt(b) - deliveryOrderSummarySortAt(a));
   return summaries;
 }
 
@@ -6206,16 +6202,31 @@ export const getProfile = onCallLogged('getProfile', async (request) => {
   const schema = z.object({
     ownerWallet: z.string().optional(),
     mergeStripeDeliveryOrders: z.boolean().optional(),
+    responseMode: z.literal('shipments').optional(),
   });
-  const { ownerWallet: rawOwnerWallet, mergeStripeDeliveryOrders } = parseRequest(schema, request.data || {});
+  const { ownerWallet: rawOwnerWallet, mergeStripeDeliveryOrders, responseMode } = parseRequest(schema, request.data || {});
+  if (responseMode === 'shipments') {
+    const response: GetProfileShipmentsResponse = await runProfileShipmentsResponseFlow(
+      { sessionWallet: wallet, rawOwnerWallet, mergeStripeDeliveryOrders },
+      {
+        invalidMergeError: () =>
+          new HttpsError('invalid-argument', 'Shipment response mode cannot merge Stripe delivery orders.'),
+        missingOwnerError: () =>
+          new HttpsError('invalid-argument', 'ownerWallet is required in shipment response mode.'),
+        sessionMismatchError: () =>
+          new HttpsError('unauthenticated', 'Wallet session changed. Sign in again.'),
+        normalizeWallet,
+        loadOrders: fetchDeliveryOrderHistory,
+      },
+    );
+    return response;
+  }
 
-  let profileWallet = wallet;
-  if (typeof rawOwnerWallet === 'string' && rawOwnerWallet.trim()) {
-    const requestedWallet = normalizeWallet(rawOwnerWallet.trim());
-    if (requestedWallet !== wallet) {
-      await requireAdminAccess(request);
-    }
-    profileWallet = requestedWallet;
+  const requestedWallet = rawOwnerWallet?.trim();
+  const profileWallet = requestedWallet ? normalizeWallet(requestedWallet) : wallet;
+
+  if (profileWallet !== wallet) {
+    await requireAdminAccess(request);
   }
 
   logger.info('getProfile:legacy', {

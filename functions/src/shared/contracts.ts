@@ -93,6 +93,17 @@ export type DeliveryOrderSummary = {
   fulfillmentUpdatedAt?: number;
 };
 
+export type GetProfileShipmentsRequest = {
+  ownerWallet: string;
+  responseMode: 'shipments';
+};
+
+export type GetProfileShipmentsResponse = {
+  responseMode: 'shipments';
+  wallet: string;
+  orders: DeliveryOrderSummary[];
+};
+
 export type ProfileShipment = DeliveryOrderSummary & {
   sortAt: number;
 };
