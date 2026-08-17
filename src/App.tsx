@@ -2704,7 +2704,7 @@ function App({
   }, [claimDeepLinkCode, claimOpenedFromDeepLink]);
 
   useEffect(() => {
-    if (isSignedInWallet) {
+    if (isSignedInWallet || hasAuthenticatedAccount || !authReady || authLoading) {
       setHeaderWalletButtonRevealed(false);
       return;
     }
@@ -2721,6 +2721,7 @@ function App({
     authLoading,
     authReady,
     connectedWallet,
+    hasAuthenticatedAccount,
     isSignedInWallet,
     pendingHeaderWalletSignIn,
     walletBusy,
@@ -7373,7 +7374,8 @@ function App({
       : canReadOwnProfile && profileError
         ? profileError
         : viewedProfileErrorMessage || (anonymousStripeHistoryVisible ? anonymousStripeHistoryErrorMessage : '');
-  const showHeaderWalletButton = !isSignedInWallet && headerWalletButtonRevealed;
+  const showHeaderWalletButton =
+    authReady && !authLoading && !hasAuthenticatedAccount && headerWalletButtonRevealed;
   const dropPageFrameViewport = Boolean(routeDrop || upcomingDropRoute || normalizedCurrentPath === '/');
   const dropsPanelFrameActive = !routeDrop && !upcomingDropRoute && normalizedCurrentPath === '/';
   const primaryFrameClassName = [
