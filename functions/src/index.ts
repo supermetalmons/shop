@@ -219,7 +219,6 @@ import { parseRequest } from './request.js';
 import {
   buildStripeCheckoutManualReviewSummary,
   createStripeCheckoutSessionForRequest,
-  createTestStripeCheckoutSessionForRequest,
   fetchStripeCheckoutSession,
   handleStripeWebhookEvent,
   isStripeCheckoutManualReviewCandidate,
@@ -5923,21 +5922,6 @@ export const saveAddress = onCallLogged('saveAddress', async (request) => {
   };
 });
 
-export const removeAddress = onCallLogged('removeAddress', async (request) => {
-  const { wallet } = await requireWalletSession(request);
-  const schema = z.object({
-    addressId: z.string().min(4).max(128).regex(/^[A-Za-z0-9_-]+$/),
-  });
-  const { addressId } = parseRequest(schema, request.data);
-  const addressRef = db.doc(`profiles/${wallet}/addresses/${addressId}`);
-  const snap = await addressRef.get();
-  if (!snap.exists) {
-    return { id: addressId, removed: false };
-  }
-  await addressRef.delete();
-  return { id: addressId, removed: true };
-});
-
 export const stripeWebhook = onRequest(
   { secrets: [STRIPE_WEBHOOK_SECRET, STRIPE_WEBHOOK_SECRET_DEVNET] },
   async (req, res) => {
@@ -6101,19 +6085,6 @@ export const createStripeCheckoutSession = onCallAuthed(
       ADDRESS_DECRYPTION_SECRET,
     ],
   },
-);
-
-export const createTestStripeCheckoutSession = onCallAuthed(
-  'createTestStripeCheckoutSession',
-  async (request, uid) =>
-    createTestStripeCheckoutSessionForRequest({
-      db,
-      request,
-      uid,
-      apiKeys: stripeApiKeys(),
-      deps: stripeCheckoutFlowDeps(),
-    }),
-  { secrets: [STRIPE_RESTRICTED_KEY, STRIPE_SECRET_KEY, COSIGNER_SECRET, ADDRESS_DECRYPTION_SECRET] },
 );
 
 export const listFulfillmentOrders = onCallLogged(
@@ -6362,35 +6333,6 @@ export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', a
 
   await orderRef.set(update, { merge: true });
   return { deliveryId, fulfillmentStatus: nextStatus, ...(nextTrackingCode ? { fulfillmentTrackingCode: nextTrackingCode } : {}) };
-});
-
-export const updateFulfillmentInternalStatus = onCallLogged('updateFulfillmentInternalStatus', async (request) => {
-  const schema = z.object({
-    dropId: z.string().min(1).max(64),
-    deliveryId: z.number().int().positive(),
-    status: z.enum(['🟢', '🟡', '🔴', '🏁']),
-  });
-  const { dropId: requestDropId, deliveryId, status } = parseRequest(schema, request.data);
-  const dropId = requireDropId(requestDropId);
-  const { wallet } = await requireFulfillmentDropAccess(request, dropId);
-
-  const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
-  const snap = await orderRef.get();
-  if (!snap.exists) {
-    throw new HttpsError('not-found', 'Delivery order not found');
-  }
-
-  await orderRef.set(
-    {
-      dropId,
-      fulfillmentInternalStatus: status,
-      fulfillmentInternalUpdatedAt: FieldValue.serverTimestamp(),
-      fulfillmentInternalUpdatedBy: wallet,
-    },
-    { merge: true },
-  );
-
-  return { deliveryId, fulfillmentInternalStatus: status };
 });
 
 /**

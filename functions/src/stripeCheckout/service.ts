@@ -1831,7 +1831,6 @@ export async function createStripeCheckoutSessionForRequest<
   request: CallableRequest<any>;
   uid: string;
   apiKeys: readonly string[];
-  allowedMode?: StripeApiMode;
   deps: StripeCheckoutFlowDeps<Runtime, Config>;
 }): Promise<StripeCheckoutSessionResponse> {
   const schema = z.object({
@@ -1850,13 +1849,6 @@ export async function createStripeCheckoutSessionForRequest<
   const dropId = deps.requireDropId(requestDropId);
   const dropRuntime = deps.getDropRuntime(dropId);
   const mode = stripeApiModeForCluster(dropRuntime.cluster);
-  if (params.allowedMode && params.allowedMode !== mode) {
-    const clusterLabel = params.allowedMode === 'test' ? 'devnet' : 'mainnet';
-    throw new HttpsError(
-      'failed-precondition',
-      `Stripe ${params.allowedMode} checkout is only enabled for ${clusterLabel} drops.`,
-    );
-  }
   const checkoutKind = stripeCheckoutKindForDrop(dropRuntime);
   if (!dropRuntime.receiptsMerkleTreeStr) {
     throw new HttpsError('failed-precondition', 'Stripe checkout requires a configured receipt cNFT tree.');
@@ -1922,17 +1914,4 @@ export async function createStripeCheckoutSessionForRequest<
     }),
   );
   return session;
-}
-
-export async function createTestStripeCheckoutSessionForRequest<
-  Runtime extends StripeCheckoutDropRuntime,
-  Config extends StripeCheckoutOnchainConfig,
->(params: {
-  db: Firestore;
-  request: CallableRequest<any>;
-  uid: string;
-  apiKeys: readonly string[];
-  deps: StripeCheckoutFlowDeps<Runtime, Config>;
-}): Promise<StripeCheckoutSessionResponse> {
-  return createStripeCheckoutSessionForRequest({ ...params, allowedMode: 'test' });
 }

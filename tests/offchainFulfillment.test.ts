@@ -44,7 +44,6 @@ import {
   checkoutReturnUrl,
   createOrGetStripeOffchainDeliveryOrder,
   createStripeCheckoutSessionForRequest,
-  createTestStripeCheckoutSessionForRequest,
   enqueueStripeCheckoutFulfillment,
   isRetryableStripeCheckoutFulfillmentError,
   markStripeCheckoutFulfillmentFailed,
@@ -2927,7 +2926,7 @@ test('shouldProcessStripeCheckoutFulfillmentWrite accepts only created/failed to
   );
 });
 
-test('createTestStripeCheckoutSessionForRequest rejects bad returnUrl before config fetch', async () => {
+test('createStripeCheckoutSessionForRequest rejects bad returnUrl before config fetch', async () => {
   let configFetches = 0;
   const deps = {
     requireDropId: (raw: unknown) => String(raw),
@@ -2952,7 +2951,7 @@ test('createTestStripeCheckoutSessionForRequest rejects bad returnUrl before con
 
   await assert.rejects(
     () =>
-      createTestStripeCheckoutSessionForRequest({
+      createStripeCheckoutSessionForRequest({
         db: {} as any,
         request: {
           data: {
