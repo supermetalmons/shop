@@ -8,7 +8,7 @@ import {
 import type { DropFamily } from './config/deployment.js';
 import { isAdminIrlRedeemDropFamily } from './shared/adminIrlEligibility.js';
 
-export const ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT = {
+const ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT = {
   label: 'Redeemed for IRL',
   country: 'Redeemed for IRL',
 };

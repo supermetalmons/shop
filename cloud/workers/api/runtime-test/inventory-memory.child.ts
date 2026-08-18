@@ -171,6 +171,11 @@ const env: Env = {
   RESEND_CONTACTS_API_KEY: 'memory-resend-test-key',
   NOTIFICATION_ENQUEUE_SECRET: 'memory-notification-enqueue-secret',
   FIRESTORE_SERVICE_ACCOUNT_JSON: '',
+  ADDRESS_DECRYPTION_SECRET: '',
+  STRIPE_SECRET_KEY: '',
+  STRIPE_RESTRICTED_KEY: '',
+  STRIPE_SECRET_KEY_LIVE: '',
+  STRIPE_RESTRICTED_KEY_LIVE: '',
 };
 const response = await handleRequest(new Request('https://api.mons.shop/inventory', {
   method: 'POST',

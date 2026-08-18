@@ -24,14 +24,13 @@ function compact(source: string): string {
   return source.replace(/\s+/g, ' ').trim();
 }
 
-test('Firestore profile rules encode owner-only session, profile, and shipment access', () => {
+test('Firestore profile rules encode owner-only session and profile access', () => {
   const hasSession = compact(extractBlock(rules, 'function hasSession(uid)'));
   const walletAddressShape = compact(extractBlock(rules, 'function hasWalletAddressShape(wallet)'));
   const ownerCheck = compact(extractBlock(rules, 'function canReadOwnProfile(wallet)'));
   const profile = compact(extractBlock(rules, 'match /profiles/{wallet}'));
   const profileDirect = profile.slice(0, profile.indexOf('match /addresses/{addressId}'));
   const addresses = compact(extractBlock(rules, 'match /addresses/{addressId}'));
-  const shipments = compact(extractBlock(rules, 'match /shipments/{summaryId}'));
   const sessions = compact(extractBlock(rules, 'match /authSessions/{uid}'));
 
   assert.match(hasSession, /exists\(\/databases\/\$\(database\)\/documents\/authSessions\/\$\(uid\)\)/);
@@ -49,8 +48,7 @@ test('Firestore profile rules encode owner-only session, profile, and shipment a
   assert.match(profileDirect, /allow get: if canReadOwnProfile\(wallet\)/);
   assert.match(profileDirect, /allow list, create, update, delete: if false/);
   assert.doesNotMatch(profileDirect, /allow read/);
-  assert.match(shipments, /allow get, list: if canReadOwnProfile\(wallet\)/);
-  assert.match(shipments, /allow create, update, delete: if false/);
+  assert.doesNotMatch(profile, /match \/shipments\//);
   assert.match(sessions, /allow get: if request\.auth != null && request\.auth\.uid == uid/);
   assert.match(sessions, /allow list, create, update, delete: if false/);
   assert.match(addresses, /allow read, write: if false/);
@@ -154,11 +152,11 @@ test(
       const active = environment.authenticatedContext('active-user').firestore();
       await assertSucceeds(getDoc(doc(active, 'authSessions', 'active-user')));
       await assertSucceeds(getDoc(doc(active, 'profiles', activeWallet)));
-      await assertSucceeds(getDoc(doc(active, 'profiles', activeWallet, 'shipments', 'shipment-1')));
-      await assertSucceeds(
+      await assertFails(getDoc(doc(active, 'profiles', activeWallet, 'shipments', 'shipment-1')));
+      await assertFails(
         getDocs(query(collection(active, 'profiles', activeWallet, 'shipments'), orderBy('sortAt', 'desc'))),
       );
-      await assertSucceeds(getDocs(collection(active, 'profiles', activeWallet, 'shipments')));
+      await assertFails(getDocs(collection(active, 'profiles', activeWallet, 'shipments')));
       await assertSucceeds(getDoc(doc(active, 'drops', 'card_nft_2', 'meta', 'packStatus')));
 
       await assertFails(getDoc(doc(active, 'authSessions', 'expired-user')));
@@ -286,7 +284,7 @@ test(
       const legacy = environment.authenticatedContext(legacyWallet).firestore();
       await assertSucceeds(getDoc(doc(legacy, 'authSessions', legacyWallet)));
       await assertSucceeds(getDoc(doc(legacy, 'profiles', legacyWallet)));
-      await assertSucceeds(getDocs(collection(legacy, 'profiles', legacyWallet, 'shipments')));
+      await assertFails(getDocs(collection(legacy, 'profiles', legacyWallet, 'shipments')));
       await assertFails(getDoc(doc(legacy, 'profiles', otherWallet)));
 
       const absentLegacy = environment.authenticatedContext(absentLegacyWallet).firestore();
@@ -300,7 +298,7 @@ test(
       for (const wallet of [expiredLegacyWallet, malformedLegacyWallet]) {
         const firestore = environment.authenticatedContext(wallet).firestore();
         await assertSucceeds(getDoc(doc(firestore, 'profiles', wallet)));
-        await assertSucceeds(getDocs(collection(firestore, 'profiles', wallet, 'shipments')));
+        await assertFails(getDocs(collection(firestore, 'profiles', wallet, 'shipments')));
       }
 
       const admin = environment.authenticatedContext('admin-user', { admin: true }).firestore();

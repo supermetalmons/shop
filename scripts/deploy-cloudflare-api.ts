@@ -334,6 +334,11 @@ function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): Nod
       normalized === 'RESEND_CONTACTS_API_KEY' ||
       normalized === 'NOTIFICATION_ENQUEUE_SECRET' ||
       normalized === 'FIRESTORE_SERVICE_ACCOUNT_JSON' ||
+      normalized === 'ADDRESS_DECRYPTION_SECRET' ||
+      normalized === 'STRIPE_SECRET_KEY' ||
+      normalized === 'STRIPE_RESTRICTED_KEY' ||
+      normalized === 'STRIPE_SECRET_KEY_LIVE' ||
+      normalized === 'STRIPE_RESTRICTED_KEY_LIVE' ||
       normalized === 'GOOGLE_APPLICATION_CREDENTIALS' ||
       normalized === 'VITE_HELIUS_API_KEY' ||
       normalized === 'DOTENV_KEY'
@@ -526,6 +531,11 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
       'HELIUS_API_KEY',
       'NOTIFICATION_ENQUEUE_SECRET',
       'RESEND_CONTACTS_API_KEY',
+      'ADDRESS_DECRYPTION_SECRET',
+      'STRIPE_SECRET_KEY',
+      'STRIPE_RESTRICTED_KEY',
+      'STRIPE_SECRET_KEY_LIVE',
+      'STRIPE_RESTRICTED_KEY_LIVE',
     ].sort().join('\0') &&
     isRecord(route) &&
     hasExactKeys(route, ['pattern', 'custom_domain']) &&
@@ -777,22 +787,25 @@ async function smokeApi(
   assertResponseHeaders(cors.response, 'CORS smoke response');
 
   if (options.includeProfileState === true) {
-    const profileState = await request(`${baseUrl}/profile/state`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
-      body: '{}',
-    }, 'Profile-state capability smoke request');
-    const profileStatePayload = await profileState.response.json() as {
-      error?: { code?: unknown };
-    };
-    if (
-      profileState.response.status !== 401 ||
-      profileState.response.headers.get('access-control-allow-origin') !== 'https://mons.shop' ||
-      profileStatePayload.error?.code !== 'unauthenticated'
-    ) {
-      fail('Profile-state capability smoke response was invalid.');
+    for (const [pathname, body] of [
+      ['/profile/state', {}],
+      ['/admin/delivery-order-owners', {}],
+      ['/fulfillment/orders', { dropId: 'card_nft_2', limit: 1 }],
+      ['/fulfillment/manual-review-checkouts', { dropId: 'card_nft_2' }],
+    ] as const) {
+      const capability = await request(`${baseUrl}${pathname}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+        body: JSON.stringify(body),
+      }, `${pathname} capability smoke request`);
+      const payload = await capability.response.json() as { error?: { code?: unknown } };
+      if (
+        capability.response.status !== 401 ||
+        capability.response.headers.get('access-control-allow-origin') !== 'https://mons.shop' ||
+        payload.error?.code !== 'unauthenticated'
+      ) fail(`${pathname} capability smoke response was invalid.`);
+      assertResponseHeaders(capability.response, `${pathname} capability smoke response`);
     }
-    assertResponseHeaders(profileState.response, 'Profile-state capability smoke response');
   }
 
   let packStatusDurationMs: number | undefined;

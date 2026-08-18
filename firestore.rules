@@ -33,10 +33,6 @@ service cloud.firestore {
         allow read, write: if false;
       }
 
-      match /shipments/{summaryId} {
-        allow get, list: if canReadOwnProfile(wallet);
-        allow create, update, delete: if false;
-      }
     }
 
     match /authSessions/{uid} {

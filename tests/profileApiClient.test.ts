@@ -138,6 +138,22 @@ test('profile API retries one 401 with a fresh token and then fails terminally',
   assert.deepEqual(refreshes, [false, true]);
 });
 
+test('admin and fulfillment reads use authenticated Cloudflare routes without callable fallbacks', () => {
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  for (const [exportName, pathname] of [
+    ['listDeliveryOrderOwners', '/admin/delivery-order-owners'],
+    ['listFulfillmentOrders', '/fulfillment/orders'],
+    ['listFulfillmentManualReviewCheckouts', '/fulfillment/manual-review-checkouts'],
+  ] as const) {
+    const start = source.indexOf(`export async function ${exportName}`);
+    const end = source.indexOf('\nexport ', start + 1);
+    assert.notEqual(start, -1);
+    const implementation = source.slice(start, end === -1 ? source.length : end);
+    assert.match(implementation, new RegExp(pathname.replaceAll('/', '\\/')));
+    assert.doesNotMatch(implementation, /callFunction|httpsCallable/);
+  }
+});
+
 test('profile state validator rejects mismatches, malformed summaries, and extra data', () => {
   const valid = {
     responseMode: 'profile-state',

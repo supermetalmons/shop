@@ -210,6 +210,15 @@ type ProfileApiClientDependencies = {
   timeoutMs: number;
 };
 
+type AuthenticatedApiPath =
+  | '/profile/state'
+  | '/profile/shipments'
+  | '/profile/anonymous-stripe-delivery-history'
+  | '/admin/profile'
+  | '/admin/delivery-order-owners'
+  | '/fulfillment/orders'
+  | '/fulfillment/manual-review-checkouts';
+
 const defaultProfileApiDependencies: ProfileApiClientDependencies = {
   fetch: (input, init) => fetch(input, init),
   getToken: authenticatedUserToken,
@@ -218,7 +227,7 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 };
 
 async function requestProfileApi<Req>(
-  pathname: '/profile/state' | '/profile/shipments' | '/profile/anonymous-stripe-delivery-history' | '/admin/profile',
+  pathname: AuthenticatedApiPath,
   data: Req,
   dependencies: ProfileApiClientDependencies,
 ): Promise<unknown> {
@@ -278,7 +287,7 @@ async function requestProfileApi<Req>(
 }
 
 async function callProfileApi<Req>(
-  pathname: '/profile/state' | '/profile/shipments' | '/profile/anonymous-stripe-delivery-history' | '/admin/profile',
+  pathname: AuthenticatedApiPath,
   data: Req,
 ): Promise<unknown> {
   return requestProfileApi(pathname, data, defaultProfileApiDependencies);
@@ -508,32 +517,54 @@ export async function listFulfillmentOrders(args: {
   cursor?: FulfillmentOrdersCursor | null;
   dropId: string;
 }): Promise<{ orders: FulfillmentOrder[]; nextCursor?: FulfillmentOrdersCursor | null }> {
-  const resp = await callFunction<
-    { limit?: number; cursor?: FulfillmentOrdersCursor | null; dropId: string },
-    { orders: FulfillmentOrder[]; nextCursor?: FulfillmentOrdersCursor | null }
-  >('listFulfillmentOrders', {
+  const response = await callProfileApi('/fulfillment/orders', {
     limit: args.limit,
     cursor: args.cursor || undefined,
     dropId: args.dropId,
   });
+  if (!isRecord(response) || !Array.isArray(response.orders)) throw new Error('Invalid fulfillment orders response');
+  const orders = response.orders.filter((order): order is FulfillmentOrder =>
+    isRecord(order) &&
+    typeof order.dropId === 'string' &&
+    Number.isSafeInteger(order.deliveryId) && Number(order.deliveryId) > 0 &&
+    typeof order.owner === 'string' &&
+    typeof order.status === 'string' &&
+    isRecord(order.address) &&
+    Array.isArray(order.boxes) &&
+    Array.isArray(order.looseDudes));
+  if (orders.length !== response.orders.length) throw new Error('Invalid fulfillment orders response');
+  const cursor = response.nextCursor;
+  if (cursor !== undefined && cursor !== null && (
+    !isRecord(cursor) || !isRecord(cursor.processedAt) ||
+    !Number.isSafeInteger(cursor.processedAt.seconds) ||
+    !Number.isInteger(cursor.processedAt.nanos) ||
+    typeof cursor.id !== 'string'
+  )) throw new Error('Invalid fulfillment orders response');
   return {
-    ...resp,
-    orders: (Array.isArray(resp.orders) ? resp.orders : []).map((order) => ({
+    orders: orders.map((order) => ({
       ...order,
       dropId: order.dropId || args.dropId,
     })),
+    nextCursor: cursor as FulfillmentOrdersCursor | null | undefined,
   };
 }
 
 export async function listFulfillmentManualReviewCheckouts(args: {
   dropId: string;
 }): Promise<{ checkouts: FulfillmentManualReviewCheckout[] }> {
-  const resp = await callFunction<
-    { dropId: string },
-    { checkouts: FulfillmentManualReviewCheckout[] }
-  >('listFulfillmentManualReviewCheckouts', { dropId: args.dropId });
+  const response = await callProfileApi('/fulfillment/manual-review-checkouts', { dropId: args.dropId });
+  if (!isRecord(response) || !Array.isArray(response.checkouts)) {
+    throw new Error('Invalid fulfillment manual-review response');
+  }
+  const checkouts = response.checkouts.filter((checkout): checkout is FulfillmentManualReviewCheckout =>
+    isRecord(checkout) &&
+    typeof checkout.dropId === 'string' &&
+    typeof checkout.sessionId === 'string' &&
+    typeof checkout.owner === 'string' &&
+    isRecord(checkout.address));
+  if (checkouts.length !== response.checkouts.length) throw new Error('Invalid fulfillment manual-review response');
   return {
-    checkouts: (Array.isArray(resp.checkouts) ? resp.checkouts : []).map((checkout) => ({
+    checkouts: checkouts.map((checkout) => ({
       ...checkout,
       dropId: checkout.dropId || args.dropId,
       address: checkout.address || {},
@@ -785,10 +816,19 @@ export async function listDeliveryOrderOwners(
   if (typeof options?.pageSize === 'number' && Number.isFinite(options.pageSize)) {
     payload.pageSize = options.pageSize;
   }
-  return callFunction<
-    { cursor?: string; pageSize?: number },
-    { owners: string[]; nextCursor: string | null; hasMore: boolean }
-  >('listDeliveryOrderOwners', payload);
+  const response = await callProfileApi('/admin/delivery-order-owners', payload);
+  if (
+    !isRecord(response) ||
+    !Array.isArray(response.owners) ||
+    !response.owners.every((owner) => typeof owner === 'string' && isBase58Bytes(owner, 32)) ||
+    (response.nextCursor !== null && typeof response.nextCursor !== 'string') ||
+    typeof response.hasMore !== 'boolean'
+  ) throw new Error('Invalid delivery order owners response');
+  return {
+    owners: response.owners as string[],
+    nextCursor: response.nextCursor as string | null,
+    hasMore: response.hasMore,
+  };
 }
 
 export const profileApiTestHooks = {

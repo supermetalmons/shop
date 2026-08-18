@@ -1,5 +1,5 @@
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
-import { dropIdFromDeliveryOrderPath } from './profileShipments.js';
+import { dropIdFromDeliveryOrderPath } from './deliveryOrderSummaries.js';
 import { stripeCheckoutOwnerId } from './stripeCheckout/contract.js';
 import { WALLET_SESSION_COLLECTION, resolveWalletSessionBinding } from './walletSessions.js';
 

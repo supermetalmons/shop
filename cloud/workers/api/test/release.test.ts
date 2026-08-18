@@ -51,6 +51,14 @@ import {
 } from '../../../../scripts/cloudflare-deployment-state.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+const EMPTY_NEW_API_SECRET_ENV = {
+  ADDRESS_DECRYPTION_SECRET: '',
+  STRIPE_SECRET_KEY: '',
+  STRIPE_RESTRICTED_KEY: '',
+  STRIPE_SECRET_KEY_LIVE: '',
+  STRIPE_RESTRICTED_KEY_LIVE: '',
+};
+
 const SOURCE_BRANCH = 'refs/heads/main';
 const SOURCE_COMMIT = 'a'.repeat(40);
 const FIRESTORE_SERVICE_ACCOUNT_JSON = JSON.stringify({
@@ -58,7 +66,6 @@ const FIRESTORE_SERVICE_ACCOUNT_JSON = JSON.stringify({
   client_email: 'mons-shop-cloudflare-reader@mons-shop.iam.gserviceaccount.com',
   private_key: '-----BEGIN PRIVATE KEY-----\ntest-key\n-----END PRIVATE KEY-----\n',
 });
-
 type DeploymentObservation = CloudflareDeploymentStatus | Error | string;
 
 function stableDeployment(versionId: string): CloudflareDeploymentStatus {
@@ -196,7 +203,7 @@ test('Wrangler deployment status parsing requires exact percentage state and cap
 
 test('Wrangler deployment status subprocesses are killed and classified after their deadline', () => {
   const timeoutError = Object.assign(new Error('spawnSync timed out'), { code: 'ETIMEDOUT' });
-  const environment = { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' };
+  const environment = { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV };
   let capturedOptions: unknown;
   assert.throws(
     () => runWranglerForOutput(
@@ -577,9 +584,9 @@ test('frontend candidate upload validates, dry-runs triggers, uploads, smokes, r
   const events: string[] = [];
   try {
     const candidate = await frontendDeployTestHooks.uploadFrontendCandidate({
-      authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-      unauthenticatedEnvironment: { CLOUDFLARE_API_TOKEN: '', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-      validationEnvironment: { CI: 'true', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+      authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+      unauthenticatedEnvironment: { CLOUDFLARE_API_TOKEN: '', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+      validationEnvironment: { CI: 'true', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
       wranglerLogDirectory: directory,
     }, {
       run: (_command, args, environment, label) => {
@@ -638,10 +645,10 @@ test('frontend candidate upload validates, dry-runs triggers, uploads, smokes, r
     let uploadReached = false;
     await assert.rejects(
       () => frontendDeployTestHooks.uploadFrontendCandidate({
-        authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         sourceCommit: SOURCE_COMMIT,
-        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         wranglerLogDirectory: directory,
       }, {
         run: (_command, _args, _environment, label) => {
@@ -1226,7 +1233,12 @@ test('validation environments exclude deployment and provider credentials', () =
     HELIUS_API_KEY: 'helius-secret',
     RESEND_CONTACTS_API_KEY: '',
     NOTIFICATION_ENQUEUE_SECRET: 'notification-enqueue-secret',
-    FIRESTORE_SERVICE_ACCOUNT_JSON: '',
+    FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV,
+    ADDRESS_DECRYPTION_SECRET: '',
+    STRIPE_SECRET_KEY: '',
+    STRIPE_RESTRICTED_KEY: '',
+    STRIPE_SECRET_KEY_LIVE: '',
+    STRIPE_RESTRICTED_KEY_LIVE: '',
     GOOGLE_APPLICATION_CREDENTIALS: '/tmp/google-credentials.json',
     VITE_HELIUS_API_KEY: 'vite-helius-secret',
     WRANGLER_OUTPUT_FILE_PATH: '/tmp/output',
@@ -1598,7 +1610,12 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
       if (method === 'POST' && pathname === '/notifications/subscribe') {
         return { response: Response.json({ subscribed: true }, { status: 200, headers }), durationMs: 1 };
       }
-      if (method === 'POST' && pathname === '/profile/state') {
+      if (method === 'POST' && [
+        '/profile/state',
+        '/admin/delivery-order-owners',
+        '/fulfillment/orders',
+        '/fulfillment/manual-review-checkouts',
+      ].includes(pathname)) {
         headers.set('Access-Control-Allow-Origin', 'https://mons.shop');
         return {
           response: Response.json({
@@ -1691,12 +1708,12 @@ test('complete API release blocks stale API or frontend state before upload', as
     await assert.rejects(
       () => deployApiTestHooks.runCompleteApiRelease({
         apiToken: 'scoped-token',
-        checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         firestoreServiceAccountJson: 'firestore-test-credential',
         heliusApiKey: 'helius-test-key',
         logsDirectory: '/tmp/logs',
         smokeOwner: OWNER,
-        wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
       }, {
         apiDeployment: async () => stableDeployment(livePair.apiVersionId),
         frontendDeployment: async () => stableDeployment(livePair.frontendVersionId),
@@ -1733,9 +1750,9 @@ test('complete frontend release verifies the production pair around upload, prom
   const apiStatuses = [apiVersionId, apiVersionId, apiVersionId];
   const frontendStatuses = [frontendVersionId, candidateVersionId];
   const result = await frontendDeployTestHooks.runCompleteFrontendRelease({
-    authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-    unauthenticatedEnvironment: { CLOUDFLARE_API_TOKEN: '', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-    validationEnvironment: { CI: 'true', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+    authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+    unauthenticatedEnvironment: { CLOUDFLARE_API_TOKEN: '', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+    validationEnvironment: { CI: 'true', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
     wranglerLogDirectory: '/tmp/logs',
   }, {
     apiDeployment: async () => {
@@ -1823,9 +1840,9 @@ test('complete frontend release blocks stale state before uploading or promoting
   ]) {
     await assert.rejects(
       () => frontendDeployTestHooks.runCompleteFrontendRelease({
-        authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(livePair.apiVersionId),
@@ -1859,9 +1876,9 @@ test('complete frontend release retains exact-version recovery and commits the r
   const apiStatuses = [apiVersionId, apiVersionId, apiVersionId];
   const frontendStatuses = [candidateVersionId, candidateVersionId];
   await frontendDeployTestHooks.runCompleteFrontendRelease({
-    authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-    unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-    validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+    authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+    unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+    validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
     versionId: candidateVersionId,
     wranglerLogDirectory: '/tmp/logs',
   }, {
@@ -1928,9 +1945,9 @@ test('complete frontend release rejects a candidate from another Git commit', as
   };
   await assert.rejects(
     () => frontendDeployTestHooks.runCompleteFrontendRelease({
-      authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-      unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-      validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+      authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+      unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+      validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
       versionId: candidateVersionId,
       wranglerLogDirectory: '/tmp/logs',
     }, {
@@ -1971,9 +1988,9 @@ test('complete frontend release rejects API drift and reports exact recovery aft
     const apiStatuses = [apiVersionId, randomUUID()];
     await assert.rejects(
       () => frontendDeployTestHooks.runCompleteFrontendRelease({
-        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
@@ -1996,9 +2013,9 @@ test('complete frontend release rejects API drift and reports exact recovery aft
     const frontendStatuses = [frontendVersionId, randomUUID()];
     await assert.rejects(
       () => frontendDeployTestHooks.runCompleteFrontendRelease({
-        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
@@ -2022,9 +2039,9 @@ test('complete frontend release rejects API drift and reports exact recovery aft
     const sourceBranches = [SOURCE_BRANCH, 'refs/heads/release'];
     await assert.rejects(
       () => frontendDeployTestHooks.runCompleteFrontendRelease({
-        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
@@ -2048,9 +2065,9 @@ test('complete frontend release rejects API drift and reports exact recovery aft
     const sourceCommits = [SOURCE_COMMIT, SOURCE_COMMIT, 'b'.repeat(40)];
     await assert.rejects(
       () => frontendDeployTestHooks.runCompleteFrontendRelease({
-        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
@@ -2074,9 +2091,9 @@ test('complete frontend release rejects API drift and reports exact recovery aft
     const sourceCommits = [SOURCE_COMMIT, SOURCE_COMMIT, SOURCE_COMMIT, 'b'.repeat(40)];
     await assert.rejects(
       () => frontendDeployTestHooks.runCompleteFrontendRelease({
-        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
@@ -2103,10 +2120,10 @@ test('complete frontend release rejects API drift and reports exact recovery aft
     const frontendStatuses = [frontendVersionId, candidateVersionId];
     await assert.rejects(
       () => frontendDeployTestHooks.runCompleteFrontendRelease({
-        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         tokenFile: '/tmp/cloudflare token',
-        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
@@ -2135,9 +2152,9 @@ test('complete frontend release rejects API drift and reports exact recovery aft
     const events: string[] = [];
     await assert.rejects(
       () => frontendDeployTestHooks.runCompleteFrontendRelease({
-        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
-        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        authenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        unauthenticatedEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+        validationEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         wranglerLogDirectory: '/tmp/logs',
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
@@ -2184,12 +2201,12 @@ test('complete API release verifies the full pair around one exact API promotion
   const frontendStatuses = [frontendVersionId, frontendVersionId, frontendVersionId];
   const metadata = await deployApiTestHooks.runCompleteApiRelease({
     apiToken: 'scoped-token',
-    checkEnvironment: { CI: 'true', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+    checkEnvironment: { CI: 'true', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
     firestoreServiceAccountJson: 'firestore-test-credential',
     heliusApiKey: 'helius-test-key',
     logsDirectory: '/tmp/logs',
     smokeOwner: OWNER,
-    wranglerEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+    wranglerEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
   }, {
     apiDeployment: async () => {
       events.push('api-status');
@@ -2271,12 +2288,12 @@ test('complete API release refuses post-promotion pair drift and manifest-write 
     await assert.rejects(
       () => deployApiTestHooks.runCompleteApiRelease({
         apiToken: 'scoped-token',
-        checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         firestoreServiceAccountJson: 'firestore-test-credential',
         heliusApiKey: 'helius-test-key',
         logsDirectory: '/tmp/logs',
         smokeOwner: OWNER,
-        wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
       }, {
         apiDeployment: async () => stableDeployment(apiVersionId),
         frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
@@ -2307,12 +2324,12 @@ test('complete API release refuses post-promotion pair drift and manifest-write 
     await assert.rejects(
       () => deployApiTestHooks.runCompleteApiRelease({
         apiToken: 'scoped-token',
-        checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         firestoreServiceAccountJson: 'firestore-test-credential',
         heliusApiKey: 'helius-test-key',
         logsDirectory: '/tmp/logs',
         smokeOwner: OWNER,
-        wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+        wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
       }, {
         apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
         frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),
@@ -2339,12 +2356,12 @@ test('complete API release refuses post-promotion pair drift and manifest-write 
   await assert.rejects(
     () => deployApiTestHooks.runCompleteApiRelease({
       apiToken: 'scoped-token',
-      checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+      checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
       firestoreServiceAccountJson: 'firestore-test-credential',
       heliusApiKey: 'helius-test-key',
       logsDirectory: '/tmp/logs',
       smokeOwner: OWNER,
-      wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '' },
+      wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
     }, {
       apiDeployment: async () => stableDeployment(apiStatuses.shift()!),
       frontendDeployment: async () => stableDeployment(frontendStatuses.shift()!),

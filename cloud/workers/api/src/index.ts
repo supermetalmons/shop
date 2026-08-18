@@ -66,6 +66,7 @@ import {
 import { handleNotificationEnqueue, NOTIFICATION_ENQUEUE_PATH } from './notificationEnqueue.js';
 import {
   ADMIN_PROFILE_PATH,
+  ADMIN_DELIVERY_ORDER_OWNERS_PATH,
   ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
   applyProfileCors,
   handleProfileCorsPreflight,
@@ -74,6 +75,8 @@ import {
   PROFILE_READ_PATHS,
   PROFILE_SHIPMENTS_PATH,
   PROFILE_STATE_PATH,
+  FULFILLMENT_ORDERS_PATH,
+  FULFILLMENT_MANUAL_REVIEW_PATH,
   type ProfileReadPath,
 } from './profileReads.js';
 
@@ -119,6 +122,9 @@ const KNOWN_LOG_ROUTES = new Set([
   PROFILE_STATE_PATH,
   ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
   ADMIN_PROFILE_PATH,
+  ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+  FULFILLMENT_ORDERS_PATH,
+  FULFILLMENT_MANUAL_REVIEW_PATH,
 ]);
 
 export type ProviderFetch = RpcProviderFetch;

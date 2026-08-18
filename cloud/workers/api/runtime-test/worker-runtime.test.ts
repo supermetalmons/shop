@@ -19,7 +19,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
   assert.equal(miniflarePackage.version, wranglerPackage.dependencies.miniflare);
   assert.equal(wranglerWorkerdPackage.version, wranglerPackage.dependencies.workerd);
   assert.equal(miniflareWorkerdPackage.version, miniflarePackage.dependencies.workerd);
-  assert.equal(productionConfig.compatibility_date, '2026-08-01');
+  assert.equal(productionConfig.compatibility_date, '2026-08-08');
   assert.deepEqual(productionConfig.compatibility_flags, ['nodejs_compat']);
   const runtimeConfig = {
     ...productionConfig,

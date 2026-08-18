@@ -55,6 +55,11 @@ function env(options: {
       ? 'notification-enqueue-test-secret'
       : options.notificationEnqueueSecret,
     FIRESTORE_SERVICE_ACCOUNT_JSON: '',
+    ADDRESS_DECRYPTION_SECRET: '',
+    STRIPE_SECRET_KEY: '',
+    STRIPE_RESTRICTED_KEY: '',
+    STRIPE_SECRET_KEY_LIVE: '',
+    STRIPE_RESTRICTED_KEY_LIVE: '',
   };
 }
 

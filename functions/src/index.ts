@@ -1,5 +1,5 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
-import { FieldPath, FieldValue, Timestamp, getFirestore, type DocumentReference } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp, getFirestore, type DocumentReference } from 'firebase-admin/firestore';
 import { onDocumentUpdated, onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { onCall, onRequest, type CallableOptions, type CallableRequest, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
@@ -35,8 +35,6 @@ import {
   dropAdminIrlRedeemRequestPath,
   dropAdminIrlRedeemRequestsCollectionPath,
   dropDeliveryOrderPath,
-  dropDeliveryOrdersCollectionPath,
-  dropRootPath,
 } from './dropPaths.js';
 import {
   countDeliveryOrderDudeItems,
@@ -87,7 +85,6 @@ import {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
   STRIPE_CHECKOUT_STATUS,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
-  collectStripeReceiptClaimsByBoxId,
   generateUniqueStripeReceiptClaimCodes,
   hasPluralStripeReceiptClaims,
   isReceiptClaimDeliveryOrderSource,
@@ -100,10 +97,8 @@ import {
   shouldProcessStripeCheckoutFulfillmentWrite,
   stripeReceiptClaimCodeMaybe,
   stripeReceiptClaimBoxMapKey,
-  stripeReceiptClaimSummary,
 } from './stripeCheckout/contract.js';
 import {
-  ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT,
   ADMIN_IRL_REDEEM_CARD_MARKER_VERSION,
   buildAdminIrlRedeemCardClaimCodeDocument,
   buildAdminIrlRedeemCardDeliveryOrderDocument,
@@ -187,13 +182,11 @@ import {
 } from './deliveryRecovery.js';
 import {
   DELIVERY_ORDER_SUMMARY_FIELDS,
-  applyProfileShipmentSyncPlan,
   dropIdFromDeliveryOrderPath,
-  planConvergentProfileShipmentSync,
   resolveDeliveryOrderIdentity,
   resolveDeliveryOrderDropId,
   toDeliveryOrderSummaries,
-} from './profileShipments.js';
+} from './deliveryOrderSummaries.js';
 import {
   runProfileStateReconciliationFlow,
   runVerifiedSolanaAuthProfileFlow,
@@ -213,23 +206,17 @@ import {
 } from './fulfillmentTracking.js';
 import {
   FULFILLMENT_STATUS_OPTIONS,
-  normalizeFulfillmentStatus,
 } from './fulfillmentStatus.js';
 import { parseRequest } from './request.js';
 import {
-  buildStripeCheckoutManualReviewSummary,
   createStripeCheckoutSessionForRequest,
-  fetchStripeCheckoutSession,
   handleStripeWebhookEvent,
-  isStripeCheckoutManualReviewCandidate,
   processStripeCheckoutFulfillmentDocument,
   requireStripeCheckoutSessionId,
-  stripeApiModeForCluster,
   stripeWebhookRawBody,
   stripeWebhookSignature,
   type StripeCheckoutKind,
   type StripeCheckoutFlowDeps,
-  type StripeCheckoutManualReviewSummary,
   type StripeCheckoutOnchainConfig,
 } from './stripeCheckout/service.js';
 import { constructStripeWebhookEvent } from './stripeCheckout/client.js';
@@ -240,11 +227,7 @@ import type {
   DeliveryRecoveryOutcome,
   DeliveryRecoveryState,
   ReconcileProfileStateResponse,
-  FulfillmentOrderAddress,
-  FulfillmentOrderBox,
-  FulfillmentOrderCardClaim,
   FulfillmentShipStationLabel,
-  FulfillmentOrderWithCardClaims as FulfillmentOrder,
   ShipStationMoney,
   RecoverDeliveryOrdersItemResult as RecoverMyDeliveryOrdersItemResult,
   RecoverDeliveryOrdersResult as RecoverMyDeliveryOrdersResult,
@@ -305,8 +288,6 @@ import {
   FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
-  walletCanViewSensitiveFulfillmentAddress,
-  walletHasAdminAccess,
   walletHasAdminIrlRedeemAccess,
   walletHasFulfillmentAddressAdminAccess,
   walletHasFulfillmentDropAccess,
@@ -427,8 +408,6 @@ const TX_SEND_TIMEOUT_MS = 12_000;
 const TX_CONFIRM_TIMEOUT_MS = 25_000;
 const TX_CONFIRM_POLL_MS = 800;
 const TX_MAX_SEND_ATTEMPTS = 3;
-const FULFILLMENT_ORDER_LIMIT = 1000;
-
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
 type DropRuntime = {
@@ -785,10 +764,6 @@ function hasFulfillmentDropAccess(wallet: string, dropId: string): boolean {
   return walletHasFulfillmentDropAccess(wallet, dropId, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET);
 }
 
-function canViewSensitiveFulfillmentAddress(wallet: string, dropId: string): boolean {
-  return walletCanViewSensitiveFulfillmentAddress(wallet, dropId, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET);
-}
-
 async function requireFulfillmentDropAccess(request: CallableReq<any>, dropId: string): Promise<{ uid: string; wallet: string }> {
   const { uid, wallet } = await requireWalletSession(request);
   if (!hasFulfillmentDropAccess(wallet, dropId)) {
@@ -806,14 +781,6 @@ async function requireFulfillmentAddressAdminAccess(
     throw new HttpsError('permission-denied', 'Fulfillment address admin access denied.');
   }
   return session;
-}
-
-async function requireAdminAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
-  const { uid, wallet } = await requireWalletSession(request);
-  if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
-    throw new HttpsError('permission-denied', 'Admin access denied.');
-  }
-  return { uid, wallet };
 }
 
 async function requireAdminIrlRedeemAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
@@ -4542,9 +4509,6 @@ async function buildTxWithOptionalDeliveryLookupTable(params: {
   return { tx, raw };
 }
 
-type DeliveryOrderOwnersCursor = {
-  path: string;
-};
 
 const BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON = 'buyer_order_received_email_recipient_missing_or_invalid';
 const BUYER_ORDER_SHIPPED_MISSING_RECIPIENT_REASON = 'buyer_order_shipped_email_recipient_missing_or_invalid';
@@ -4972,23 +4936,6 @@ async function fetchDeliveryOrderHistory(ownerId: string): Promise<DeliveryOrder
   return summaries;
 }
 
-function encodeDeliveryOrderOwnersCursor(cursor: DeliveryOrderOwnersCursor): string {
-  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url');
-}
-
-function parseDeliveryOrderOwnersCursor(rawCursor: unknown): DeliveryOrderOwnersCursor | null {
-  if (typeof rawCursor !== 'string' || !rawCursor.trim()) return null;
-  try {
-    const decoded = Buffer.from(rawCursor, 'base64url').toString('utf8');
-    const parsed = JSON.parse(decoded) as unknown;
-    const path = typeof parsed === 'string' ? parsed : (parsed as Partial<DeliveryOrderOwnersCursor>)?.path;
-    if (typeof path !== 'string' || !dropIdFromDeliveryOrderPath(path)) throw new Error('path');
-    return { path };
-  } catch {
-    throw new HttpsError('invalid-argument', 'Invalid cursor');
-  }
-}
-
 function storedShipStationMoney(value: unknown): ShipStationMoney | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const raw = value as Record<string, unknown>;
@@ -5049,171 +4996,6 @@ function storedFulfillmentShipStationLabel(value: unknown): FulfillmentShipStati
     ...(totalCost ? { totalCost } : {}),
     ...(purchasedAt ? { purchasedAt } : {}),
     ...(optionalString(raw.purchasedBy) ? { purchasedBy: optionalString(raw.purchasedBy) } : {}),
-  };
-}
-
-function toFulfillmentOrder(
-  docId: string,
-  order: any,
-  options: { canViewSensitiveAddress: boolean; dropId: string },
-): FulfillmentOrder | null {
-  const deliveryIdRaw = order?.deliveryId ?? docId;
-  const deliveryId = Number(deliveryIdRaw);
-  if (!Number.isFinite(deliveryId)) return null;
-  const owner = typeof order?.owner === 'string' ? order.owner : '';
-  const source = typeof order?.source === 'string' ? order.source : undefined;
-  const status = typeof order?.status === 'string' ? order.status : 'unknown';
-  const isAdminIrlRedeem = source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE;
-  const shipstationPackage = normalizeShipStationPackage(order?.shipstation?.package) || undefined;
-  const shipstationPackageCountRaw = Math.floor(Number(order?.shipstation?.packageCount));
-  const shipstationPackageCount = Number.isFinite(shipstationPackageCountRaw) && shipstationPackageCountRaw >= 0
-    ? shipstationPackageCountRaw
-    : shipstationPackage
-      ? 1
-      : undefined;
-  const shipstationLabel = storedFulfillmentShipStationLabel(order?.shipstation?.label);
-
-  const addressSnapshot = order?.addressSnapshot || {};
-  const encrypted = typeof addressSnapshot?.encrypted === 'string' ? addressSnapshot.encrypted : '';
-  const rawEmail = typeof addressSnapshot?.email === 'string' ? addressSnapshot.email : undefined;
-  const rawPhone = typeof addressSnapshot?.phone === 'string' ? addressSnapshot.phone.trim() || undefined : undefined;
-  let full: string | null = null;
-  let email = rawEmail;
-  let phone = rawPhone;
-  let encryptedPayload = encrypted || undefined;
-  if (isAdminIrlRedeem) {
-    full = ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT.label;
-    email = undefined;
-    phone = undefined;
-    encryptedPayload = undefined;
-  } else if (options.canViewSensitiveAddress) {
-    if (encrypted) {
-      full = decryptAddressPayload(encrypted);
-    }
-  } else {
-    full = encrypted ? '***' : null;
-    email = undefined;
-    phone = undefined;
-    encryptedPayload = undefined;
-  }
-
-  const address: FulfillmentOrderAddress = {
-    label: isAdminIrlRedeem
-      ? ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT.label
-      : typeof addressSnapshot?.label === 'string'
-        ? addressSnapshot.label
-        : undefined,
-    email,
-    phone,
-    country: isAdminIrlRedeem
-      ? ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT.country
-      : typeof addressSnapshot?.country === 'string'
-        ? addressSnapshot.country
-        : undefined,
-    countryCode: typeof addressSnapshot?.countryCode === 'string' ? addressSnapshot.countryCode : undefined,
-    hint: typeof addressSnapshot?.hint === 'string' ? addressSnapshot.hint : undefined,
-    encrypted: encryptedPayload,
-    full,
-  };
-
-  const itemsRaw = Array.isArray(order?.items) ? order.items : [];
-  const boxItems = itemsRaw
-    .filter((item: any) => item && item.kind === 'box')
-    .map((item: any) => ({
-      assetId: typeof item.assetId === 'string' ? item.assetId : undefined,
-      refId: Math.floor(Number(item.refId)),
-    }))
-    .filter((item: any) => Number.isFinite(item.refId) && item.refId > 0);
-
-  const looseDudeItems = itemsRaw
-    .filter((item: any) => item && item.kind === 'dude')
-    .map((item: any) => ({
-      figureId: Math.floor(Number(item.refId)),
-      assetId: typeof item.assetId === 'string' ? item.assetId.trim() : '',
-    }))
-    .filter((item: { figureId: number }) => Number.isFinite(item.figureId) && item.figureId > 0);
-  const looseDudes = looseDudeItems.map((item: { figureId: number }) => item.figureId).sort((a: number, b: number) => a - b);
-
-  const claimsRaw = Array.isArray(order?.irlClaims) ? order.irlClaims : [];
-  const claimsByBoxId = new Map<number, { code?: string; dudeIds?: number[]; boxAssetId?: string }>();
-  for (const claim of claimsRaw) {
-    const boxId = Math.floor(Number(claim?.boxId));
-    if (!Number.isFinite(boxId) || boxId <= 0) continue;
-    const dudeIdsRaw = Array.isArray(claim?.dudeIds) ? claim.dudeIds : [];
-    const dudeIds = dudeIdsRaw.map((id: any) => Math.floor(Number(id))).filter((id: number) => Number.isFinite(id) && id > 0);
-    claimsByBoxId.set(boxId, {
-      code: typeof claim?.code === 'string' ? claim.code : undefined,
-      dudeIds,
-      boxAssetId: typeof claim?.boxAssetId === 'string' ? claim.boxAssetId : undefined,
-    });
-  }
-
-  const stripeReceiptClaimsByBoxId = collectStripeReceiptClaimsByBoxId(order);
-
-  const boxes: FulfillmentOrderBox[] = boxItems
-    .map((item) => {
-      const claim = claimsByBoxId.get(item.refId);
-      const receiptClaim = stripeReceiptClaimsByBoxId.get(item.refId);
-      return {
-        boxId: item.refId,
-        assetId: item.assetId || claim?.boxAssetId,
-        claimCode: claim?.code,
-        ...(receiptClaim?.code ? { receiptClaimCode: receiptClaim.code } : {}),
-        ...(receiptClaim?.status ? { receiptClaimStatus: receiptClaim.status } : {}),
-        dudeIds: Array.isArray(claim?.dudeIds) ? claim.dudeIds : [],
-      };
-    })
-    .sort((a, b) => a.boxId - b.boxId);
-
-  const cardClaims: FulfillmentOrderCardClaim[] = [];
-  const directCardClaim = order?.stripeReceiptClaim;
-  if (
-    isAdminIrlRedeem &&
-    order?.adminIrlRedeem?.targetKind === 'card_receipt' &&
-    directCardClaim?.receiptKind === 'figure'
-  ) {
-    const figureId = Math.floor(Number(directCardClaim?.figureId));
-    const receiptAssetId = typeof directCardClaim?.receiptAssetId === 'string' ? directCardClaim.receiptAssetId.trim() : '';
-    const item = looseDudeItems.find(
-      (candidate: { figureId: number; assetId: string }) =>
-        candidate.figureId === figureId && (!receiptAssetId || !candidate.assetId || candidate.assetId === receiptAssetId),
-    );
-    if (item && receiptAssetId) {
-      const summary = stripeReceiptClaimSummary(directCardClaim);
-      cardClaims.push({
-        figureId,
-        assetId: receiptAssetId,
-        ...(summary.code ? { receiptClaimCode: summary.code } : {}),
-        ...(summary.status ? { receiptClaimStatus: summary.status } : {}),
-      });
-    }
-  }
-
-  return {
-    dropId: options.dropId,
-    deliveryId,
-    owner,
-    source,
-    status,
-    createdAt: toMillisMaybe(order?.createdAt),
-    processedAt: toMillisMaybe(order?.processedAt),
-    fulfillmentStatus: normalizeFulfillmentStatus(order?.fulfillmentStatus),
-    fulfillmentTrackingCode: normalizeOptionalFulfillmentTrackingCode(order?.fulfillmentTrackingCode),
-    fulfillmentUpdatedAt: toMillisMaybe(order?.fulfillmentUpdatedAt),
-    fulfillmentInternalStatus: typeof order?.fulfillmentInternalStatus === 'string' ? order.fulfillmentInternalStatus : undefined,
-    shipstationShipmentId:
-      typeof order?.shipstation?.shipmentId === 'string' && order.shipstation.shipmentId ? order.shipstation.shipmentId : undefined,
-    shipstationAddedAt: toMillisMaybe(order?.shipstation?.createdAt),
-    ...(shipstationPackage ? { shipstationPackage } : {}),
-    ...(shipstationPackageCount != null ? { shipstationPackageCount } : {}),
-    ...(shipstationLabel ? { shipstationLabel } : {}),
-    ...(order?.shipstation?.labelPurchase?.status === 'unknown' || order?.shipstation?.labelPurchase?.status === 'purchasing'
-      ? { shipstationPurchaseUnknown: true }
-      : {}),
-    address,
-    boxes,
-    looseDudes,
-    cardClaims,
   };
 }
 
@@ -5606,33 +5388,6 @@ async function buildProfileResponse(profileWallet: string, profileData: any, inc
   };
 }
 
-export const projectDeliveryOrderToProfileShipment = onDocumentWritten(
-  {
-    document: 'drops/{dropId}/deliveryOrders/{deliveryId}',
-    retry: true,
-  },
-  async (event) => {
-    const beforeSnap = event.data?.before;
-    const afterSnap = event.data?.after;
-    const sourceRef = afterSnap?.ref || beforeSnap?.ref;
-    if (!sourceRef) return;
-    const beforeOrder = beforeSnap?.exists ? beforeSnap.data() : null;
-    const afterOrder = afterSnap?.exists ? afterSnap.data() : null;
-
-    await db.runTransaction(async (tx) => {
-      const currentSnap = await tx.get(sourceRef);
-      const plan = planConvergentProfileShipmentSync({
-        docId: sourceRef.id,
-        docPath: sourceRef.path,
-        beforeOrder,
-        afterOrder,
-        currentOrder: currentSnap.exists ? currentSnap.data() : null,
-      });
-      await applyProfileShipmentSyncPlan(db, tx, plan);
-    });
-  },
-);
-
 function stripeOwnerMergeDiagnostic(
   err: unknown,
   classification = classifyStripeOwnerMergeError(err),
@@ -5795,87 +5550,6 @@ export const reconcileProfileState = onCallLogged('reconcileProfileState', async
     response.deliveryRecovery = { nextCheckAt: state.deliveryRecovery.nextCheckAt };
   }
   return response;
-});
-
-export const listDeliveryOrderOwners = onCallLogged('listDeliveryOrderOwners', async (request) => {
-  await requireAdminAccess(request);
-  const schema = z.object({
-    cursor: z.string().min(1).max(2000).optional(),
-    pageSize: z.number().int().min(1).max(500).optional(),
-  });
-  const { cursor: rawCursor, pageSize: rawPageSize } = parseRequest(schema, request.data || {});
-  const owners: string[] = [];
-  const seenOwners = new Set<string>();
-  let cursor = parseDeliveryOrderOwnersCursor(rawCursor);
-  const pageSize = rawPageSize ?? 200;
-  const fetchLimit = Math.min(Math.max(pageSize * 3, pageSize + 1), 500);
-  let hasMore = false;
-
-  while (owners.length < pageSize) {
-    let query = db
-      .collectionGroup('deliveryOrders')
-      .select('owner')
-      .orderBy(FieldPath.documentId(), 'asc')
-      .limit(fetchLimit);
-    if (cursor) {
-      query = query.startAfter(cursor.path);
-    }
-
-    const snap = await query.get();
-    if (snap.empty) {
-      hasMore = false;
-      cursor = null;
-      break;
-    }
-
-    let lastProcessedCursor: DeliveryOrderOwnersCursor | null = null;
-    let lastProcessedIndex = -1;
-    for (let index = 0; index < snap.docs.length; index += 1) {
-      const doc = snap.docs[index];
-      lastProcessedCursor = { path: doc.ref.path };
-      lastProcessedIndex = index;
-      const rawOwner = doc.get('owner');
-
-      if (typeof rawOwner !== 'string' || !rawOwner.trim()) continue;
-      try {
-        const owner = normalizeWallet(rawOwner.trim());
-        if (seenOwners.has(owner)) continue;
-        seenOwners.add(owner);
-        owners.push(owner);
-        if (owners.length >= pageSize) break;
-      } catch {
-        // Ignore malformed historical values.
-      }
-    }
-
-    if (!lastProcessedCursor || lastProcessedIndex < 0) {
-      hasMore = false;
-      cursor = null;
-      break;
-    }
-
-    cursor = lastProcessedCursor;
-    const endedEarly = lastProcessedIndex < snap.docs.length - 1;
-    if (owners.length >= pageSize) {
-      hasMore = endedEarly || snap.size === fetchLimit;
-      break;
-    }
-
-    if (snap.size < fetchLimit) {
-      hasMore = false;
-      cursor = null;
-      break;
-    }
-
-    hasMore = true;
-  }
-
-  const nextCursor = hasMore && cursor ? encodeDeliveryOrderOwnersCursor(cursor) : null;
-  return {
-    owners,
-    nextCursor,
-    hasMore: Boolean(nextCursor),
-  };
 });
 
 export const saveAddress = onCallLogged('saveAddress', async (request) => {
@@ -6085,134 +5759,6 @@ export const createStripeCheckoutSession = onCallAuthed(
       ADDRESS_DECRYPTION_SECRET,
     ],
   },
-);
-
-export const listFulfillmentOrders = onCallLogged(
-  'listFulfillmentOrders',
-  async (request) => {
-    const schema = z.object({
-      dropId: z.string().min(1).max(64),
-      limit: z.number().int().min(1).max(FULFILLMENT_ORDER_LIMIT).optional(),
-      cursor: z
-        .object({
-          processedAt: z.object({
-            seconds: z.number().int().min(0),
-            nanos: z.number().int().min(0).max(999_999_999),
-          }),
-          id: z.string().min(1).max(128),
-        })
-        .nullable()
-        .optional(),
-    });
-    const { dropId: requestDropId, limit = FULFILLMENT_ORDER_LIMIT, cursor } = parseRequest(schema, request.data);
-    const dropId = requireDropId(requestDropId);
-    const { wallet } = await requireFulfillmentDropAccess(request, dropId);
-    const allowSensitiveAddressView = canViewSensitiveFulfillmentAddress(wallet, dropId);
-
-    let query = db
-      .collection(dropDeliveryOrdersCollectionPath(dropId))
-      .where('status', '==', 'ready_to_ship')
-      .orderBy('processedAt', 'desc')
-      .orderBy(FieldPath.documentId(), 'desc')
-      .limit(limit + 1);
-
-    if (cursor) {
-      const ts = new Timestamp(cursor.processedAt.seconds, cursor.processedAt.nanos);
-      query = query.startAfter(ts, cursor.id);
-    }
-
-    const snap = await query.get();
-    const hasMore = snap.docs.length > limit;
-    const pageDocs = hasMore ? snap.docs.slice(0, limit) : snap.docs;
-    const orders = pageDocs
-      .map((doc) =>
-        toFulfillmentOrder(doc.id, doc.data(), {
-          canViewSensitiveAddress: allowSensitiveAddressView,
-          dropId,
-        }),
-      )
-      .filter((entry): entry is FulfillmentOrder => Boolean(entry));
-
-    const last = hasMore ? pageDocs[pageDocs.length - 1] : null;
-    const lastProcessedAt = last ? last.get('processedAt') : null;
-    const lastSeconds = typeof lastProcessedAt?.seconds === 'number' ? lastProcessedAt.seconds : null;
-    const lastNanos = typeof lastProcessedAt?.nanoseconds === 'number' ? lastProcessedAt.nanoseconds : null;
-    const nextCursor =
-      hasMore && last && lastSeconds != null && lastNanos != null
-        ? { processedAt: { seconds: lastSeconds, nanos: lastNanos }, id: last.id }
-        : null;
-
-    return { orders, nextCursor };
-  },
-  { secrets: [ADDRESS_DECRYPTION_SECRET] },
-);
-
-export const listFulfillmentManualReviewCheckouts = onCallLogged(
-  'listFulfillmentManualReviewCheckouts',
-  async (request) => {
-    const schema = z.object({ dropId: z.string().min(1).max(64) });
-    const { dropId: requestDropId } = parseRequest(schema, request.data);
-    const dropId = requireDropId(requestDropId);
-    const { wallet } = await requireFulfillmentDropAccess(request, dropId);
-    const allowSensitiveAddressView = canViewSensitiveFulfillmentAddress(wallet, dropId);
-    const dropRuntime = getDropRuntime(dropId);
-    const apiMode = stripeApiModeForCluster(dropRuntime.cluster);
-    const apiKeys = stripeApiKeys();
-
-    const snap = await db
-      .collection(`${dropRootPath(dropId)}/stripeCheckouts`)
-      .where('manualRefundReviewRequired', '==', true)
-      .get();
-
-    const summaries = await Promise.all(
-      snap.docs.map(async (doc) => {
-        const checkout = doc.data();
-        if (!isStripeCheckoutManualReviewCandidate(checkout)) return null;
-
-        let sessionId: string;
-        try {
-          sessionId = requireStripeCheckoutSessionId(checkout?.sessionId || doc.id);
-        } catch (err) {
-          logger.warn('listFulfillmentManualReviewCheckouts:invalidSessionId', {
-            dropId,
-            docId: doc.id,
-            error: summarizeError(err),
-          });
-          return null;
-        }
-
-        let session: Stripe.Checkout.Session | null = null;
-        try {
-          session = (await fetchStripeCheckoutSession(sessionId, apiKeys, apiMode)).session;
-        } catch (err) {
-          logger.warn('listFulfillmentManualReviewCheckouts:stripeSessionFetchFailed', {
-            dropId,
-            sessionId,
-            error: summarizeError(err),
-          });
-        }
-
-        return buildStripeCheckoutManualReviewSummary({
-          dropId,
-          sessionId,
-          checkout,
-          session,
-          canViewSensitiveAddress: allowSensitiveAddressView,
-        });
-      }),
-    );
-
-    const checkouts = summaries
-      .filter((entry): entry is StripeCheckoutManualReviewSummary => Boolean(entry))
-      .sort(
-        (a, b) =>
-          (b.failedAt || b.createdAt || 0) - (a.failedAt || a.createdAt || 0) ||
-          b.sessionId.localeCompare(a.sessionId),
-      );
-
-    return { checkouts };
-  },
-  { secrets: [STRIPE_RESTRICTED_KEY, STRIPE_SECRET_KEY, STRIPE_RESTRICTED_KEY_LIVE, STRIPE_SECRET_KEY_LIVE] },
 );
 
 export const updateFulfillmentAddress = onCallLogged(

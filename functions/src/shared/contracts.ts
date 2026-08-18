@@ -82,10 +82,6 @@ export type DeliveryOrderSummary = {
   fulfillmentUpdatedAt?: number;
 };
 
-export type GetProfileShipmentsRequest = {
-  ownerWallet: string;
-};
-
 export type GetProfileShipmentsResponse = {
   responseMode: 'shipments';
   wallet: string;
@@ -106,10 +102,6 @@ export type GetProfileStateResponse = {
   sessionWallet: string | null;
   profile: ProfileStateSection<ProfileStateProfile> | null;
   shipments: ProfileStateSection<DeliveryOrderSummary[]> | null;
-};
-
-export type ProfileShipment = DeliveryOrderSummary & {
-  sortAt: number;
 };
 
 export type DeliveryRecoveryState = {
@@ -305,10 +297,6 @@ export type FulfillmentOrder = {
    * direct card receipt claims were introduced.
    */
   cardClaims?: FulfillmentOrderCardClaim[];
-};
-
-export type FulfillmentOrderWithCardClaims = Omit<FulfillmentOrder, 'cardClaims'> & {
-  cardClaims: FulfillmentOrderCardClaim[];
 };
 
 export type StripeCheckoutManualReviewAddress = {

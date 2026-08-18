@@ -4,7 +4,7 @@ import { isPositiveSafeInteger } from './positiveInteger.js';
 
 export const PROFILE_SHIPMENT_STATUSES = ['processing', 'ready_to_ship'] as const;
 
-export function isProfileShipmentStatus(
+function isProfileShipmentStatus(
   value: unknown,
 ): value is (typeof PROFILE_SHIPMENT_STATUSES)[number] {
   return PROFILE_SHIPMENT_STATUSES.some((status) => status === value);

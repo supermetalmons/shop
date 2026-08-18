@@ -3,7 +3,7 @@
   "name": "mons-shop-api",
   "account_id": "e25f90fc073ea309b54b8b5144bf28e0",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-01",
+  "compatibility_date": "2026-08-08",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "preview_urls": true,
@@ -17,7 +17,17 @@
     }
   ],
   "secrets": {
-    "required": ["HELIUS_API_KEY", "RESEND_CONTACTS_API_KEY", "NOTIFICATION_ENQUEUE_SECRET", "FIRESTORE_SERVICE_ACCOUNT_JSON"]
+    "required": [
+      "HELIUS_API_KEY",
+      "RESEND_CONTACTS_API_KEY",
+      "NOTIFICATION_ENQUEUE_SECRET",
+      "FIRESTORE_SERVICE_ACCOUNT_JSON",
+      "ADDRESS_DECRYPTION_SECRET",
+      "STRIPE_SECRET_KEY",
+      "STRIPE_RESTRICTED_KEY",
+      "STRIPE_SECRET_KEY_LIVE",
+      "STRIPE_RESTRICTED_KEY_LIVE"
+    ]
   },
   "queues": {
     "producers": [

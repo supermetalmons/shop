@@ -59,7 +59,8 @@ The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_CONTACTS_API_KEY`, and
 `NOTIFICATION_ENQUEUE_SECRET` secrets, a `NOTIFICATION_EMAIL_QUEUE` producer
 binding, Smart Placement, and a version-first release flow. It serves
 `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
-`/pending-open-boxes`, `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
+`/pending-open-boxes`, authenticated profile/admin/fulfillment reads,
+`/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
 responses remain uncached. Pack-status reads use the public Firestore REST API
 with a 15-second Cloudflare subrequest cache and support only `card_nft_2`,
 `poncho_drifella`, and `little_swag_boxes`.
@@ -93,6 +94,12 @@ deletes the validated temporary path immediately afterward. The preconfigured
 preserved across version uploads. The Cloudflare token, Helius secret, and
 notification enqueue secret are stripped from all other child-process environment
 data and are never printed.
+
+The fulfillment read routes also use `ADDRESS_DECRYPTION_SECRET` and the four
+Stripe API-key secrets. Synchronize their existing Google Secret Manager values
+into an undeployed Worker version with `npm run sync:api:firebase-secrets`; the
+command uses a temporary mode-`0600` bulk file, verifies production is unchanged,
+and removes the file immediately.
 
 ### Notification delivery deployment
 
@@ -197,9 +204,9 @@ suite passes.
 - Deploy from the repo root:
   - `npm run deploy:firebase` runs the Firestore Emulator rules suite, deploys Functions and indexes to `mons-shop`, and then deploys Firestore rules in a separate Firebase CLI invocation.
   - `npm run deploy:functions` deploys Functions only to `mons-shop`.
-- Verify the production profile shipment projection with `npm run verify:profile-shipments`. The command is read-only, runs independently of deployment, and exits nonzero if it detects drift.
-  - Application Default Credentials must be authorized for `mons-shop`.
-  - If the combined source and projection collections exceed 20,000 documents, pass `--max-audit-documents <count>` up to 50,000 after confirming the expected collection size.
+- The retired profile shipment projection can be removed only with the guarded
+  `npm run purge:profile-shipments` command. It defaults to read-only and requires
+  the exact observed count plus explicit project confirmation before deleting.
 - Java is required for every rules deployment because `npm run test:firestore-rules` fails closed when the Firestore Emulator cannot run.
 
 ### Runtime env + secrets

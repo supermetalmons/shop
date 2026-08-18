@@ -13,9 +13,12 @@ import {
 } from '../src/firebaseIdToken.ts';
 import {
   ADMIN_PROFILE_PATH,
+  ADMIN_DELIVERY_ORDER_OWNERS_PATH,
   ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
   PROFILE_SHIPMENTS_PATH,
   PROFILE_STATE_PATH,
+  FULFILLMENT_ORDERS_PATH,
+  FULFILLMENT_MANUAL_REVIEW_PATH,
   ProfileReadError,
   createGoogleAccessTokenProvider,
   handleProfileReadRequest,
@@ -66,20 +69,6 @@ function orderDocument(owner = OWNER, deliveryId = 7) {
         },
       },
       owner: stringValue(owner),
-    },
-  };
-}
-
-function shipmentDocument(deliveryId = 7) {
-  return {
-    name: `projects/mons-shop/databases/(default)/documents/profiles/${OWNER}/shipments/shipment-${deliveryId}`,
-    fields: {
-      dropId: stringValue('card_nft_2'),
-      deliveryId: integerValue(deliveryId),
-      status: stringValue('ready_to_ship'),
-      processedAt: integerValue(NOW_MS),
-      items: { arrayValue: {} },
-      sortAt: integerValue(NOW_MS),
     },
   };
 }
@@ -472,7 +461,7 @@ test('shipment route preserves legacy wallet-shaped Firebase UIDs when no sessio
   assert.deepEqual(owners, [OWNER]);
 });
 
-test('admin profile route enforces the existing wallet allowlist and returns projected summaries', async () => {
+test('admin profile route enforces the existing wallet allowlist and returns canonical delivery summaries', async () => {
   const denied = await handleProfileReadRequest(
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
@@ -493,7 +482,7 @@ test('admin profile route enforces the existing wallet allowlist and returns pro
       const url = String(input);
       if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ fields: { email: stringValue('owner@example.com') } });
-      if (url.includes(`/profiles/${OWNER}:runQuery`)) return Response.json([{ document: shipmentDocument() }]);
+      if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }),
   );
@@ -506,8 +495,9 @@ test('admin profile route enforces the existing wallet allowlist and returns pro
         dropId: 'card_nft_2',
         deliveryId: 7,
         status: 'ready_to_ship',
-        processedAt: NOW_MS,
-        items: [],
+        createdAt: Date.parse('2026-08-18T10:00:00.000Z'),
+        processedAt: Date.parse('2026-08-18T11:00:00.000Z'),
+        items: [{ kind: 'box', refId: 3 }],
       }],
     },
   });
@@ -520,12 +510,109 @@ test('admin profile route enforces the existing wallet allowlist and returns pro
       const url = String(input);
       if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
-      if (url.includes(`/profiles/${OWNER}:runQuery`)) return Response.json([]);
+      if (url.endsWith('/documents:runQuery')) return Response.json([]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }),
   );
   assert.equal(missingProfile.response.status, 200);
   assert.deepEqual(await missingProfile.response.json(), { profile: { wallet: OWNER, orders: [] } });
+});
+
+test('admin and fulfillment read routes preserve access, pagination, masking, and Stripe fallback', async () => {
+  const env = {
+    FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account',
+    ADDRESS_DECRYPTION_SECRET: '',
+    STRIPE_SECRET_KEY: 'sk_test_primary',
+    STRIPE_RESTRICTED_KEY: 'rk_test_fallback',
+    STRIPE_SECRET_KEY_LIVE: 'sk_live_primary',
+    STRIPE_RESTRICTED_KEY_LIVE: 'rk_live_fallback',
+  };
+  const owners = await handleProfileReadRequest(
+    tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize: 2 }),
+    env,
+    ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+    profileDependencies(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
+      const query = JSON.parse(String(init?.body));
+      assert.equal(query.structuredQuery.from[0].collectionId, 'deliveryOrders');
+      return Response.json([
+        { document: { name: 'projects/mons-shop/databases/(default)/documents/drops/a/deliveryOrders/1', fields: { owner: stringValue(OWNER) } } },
+        { document: { name: 'projects/mons-shop/databases/(default)/documents/drops/a/deliveryOrders/2', fields: { owner: stringValue(OTHER) } } },
+      ]);
+    }),
+  );
+  assert.deepEqual(await owners.response.json(), { owners: [OWNER, OTHER], nextCursor: null, hasMore: false });
+
+  const fulfillment = await handleProfileReadRequest(
+    tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 2, cursor: null }),
+    env,
+    FULFILLMENT_ORDERS_PATH,
+    profileDependencies(async (input, init) => {
+      const url = String(input);
+      if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
+      const query = JSON.parse(String(init?.body));
+      assert.equal(query.structuredQuery.limit, 3);
+      return Response.json([{ document: {
+        name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
+        fields: {
+          deliveryId: integerValue(7),
+          owner: stringValue(OWNER),
+          status: stringValue('ready_to_ship'),
+          processedAt: { timestampValue: '2026-08-18T11:00:00.123456789Z' },
+          addressSnapshot: { mapValue: { fields: { encrypted: stringValue('private.payload.value'), email: stringValue('owner@example.com') } } },
+          items: { arrayValue: {} },
+        },
+      } }]);
+    }),
+  );
+  assert.deepEqual(await fulfillment.response.json(), {
+    orders: [{
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      owner: OWNER,
+      status: 'ready_to_ship',
+      processedAt: Date.parse('2026-08-18T11:00:00.123Z'),
+      address: { full: '***' },
+      boxes: [],
+      looseDudes: [],
+      cardClaims: [],
+    }],
+    nextCursor: null,
+  });
+
+  const manual = await handleProfileReadRequest(
+    tokenRequest(FULFILLMENT_MANUAL_REVIEW_PATH, { dropId: 'card_nft_2' }),
+    env,
+    FULFILLMENT_MANUAL_REVIEW_PATH,
+    profileDependencies(async (input) => {
+      const url = String(input);
+      if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
+      if (url.includes('api.stripe.com')) return Response.json({ error: 'temporary' }, { status: 503 });
+      return Response.json([{ document: {
+        name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/stripeCheckouts/cs_test_review',
+        fields: {
+          manualRefundReviewRequired: { booleanValue: true },
+          status: stringValue('fulfillment_failed'),
+          sessionId: stringValue('cs_test_review'),
+          owner: stringValue(OWNER),
+          quantity: integerValue(2),
+          stripeSessionSummary: { mapValue: { fields: { amount_total: integerValue(4200), currency: stringValue('usd') } } },
+        },
+      } }]);
+    }),
+  );
+  assert.deepEqual(await manual.response.json(), {
+    checkouts: [{
+      dropId: 'card_nft_2',
+      sessionId: 'cs_test_review',
+      owner: OWNER,
+      quantity: 2,
+      amountTotal: 4200,
+      currency: 'usd',
+      address: { full: null },
+    }],
+  });
 });
 
 test('Firestore reads refresh once after 401, retry transient failures, and remain bounded', async () => {
@@ -578,7 +665,7 @@ test('Firestore reads refresh once after 401, retry transient failures, and rema
     ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
     profileDependencies(async () => new Response('[]', {
       headers: {
-        'Content-Length': String(4 * 1024 * 1024 + 1),
+        'Content-Length': String(16 * 1024 * 1024 + 1),
         'Content-Type': 'application/json',
       },
     })),

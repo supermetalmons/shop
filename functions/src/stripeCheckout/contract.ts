@@ -244,8 +244,6 @@ export function stripeReceiptClaimBoxMapKey(boxId: number): string {
   return `box_${boxId}`;
 }
 
-export type StripeReceiptClaimSummary = { code?: string; status?: string };
-
 function plainObject(value: unknown): value is Record<string, any> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -257,12 +255,6 @@ function positiveBoxIdOrNull(value: unknown): number | null {
 
 export function stripeReceiptClaimCodeMaybe(rawClaim: any): string {
   return typeof rawClaim?.code === 'string' ? normalizeStripeReceiptClaimCode(rawClaim.code) : '';
-}
-
-export function stripeReceiptClaimSummary(rawClaim: any): StripeReceiptClaimSummary {
-  const code = stripeReceiptClaimCodeMaybe(rawClaim);
-  const status = typeof rawClaim?.status === 'string' ? rawClaim.status : undefined;
-  return { ...(code ? { code } : {}), ...(status ? { status } : {}) };
 }
 
 export function orderStripeReceiptClaimByBoxId(
@@ -293,28 +285,6 @@ export function hasPluralStripeReceiptClaims(order: any): boolean {
   const byBoxId = order?.stripeReceiptClaimsByBoxId;
   if (plainObject(byBoxId) && Object.keys(byBoxId).length > 0) return true;
   return Array.isArray(order?.stripeReceiptClaims) && order.stripeReceiptClaims.length > 0;
-}
-
-export function collectStripeReceiptClaimsByBoxId(order: any): Map<number, StripeReceiptClaimSummary> {
-  const claimsByBoxId = new Map<number, StripeReceiptClaimSummary>();
-  const addClaim = (rawBoxId: unknown, rawClaim: any) => {
-    const boxId = positiveBoxIdOrNull(rawBoxId);
-    if (!boxId || claimsByBoxId.has(boxId)) return;
-    claimsByBoxId.set(boxId, stripeReceiptClaimSummary(rawClaim));
-  };
-
-  const claimsByBoxIdRaw = order?.stripeReceiptClaimsByBoxId;
-  if (plainObject(claimsByBoxIdRaw)) {
-    Object.entries(claimsByBoxIdRaw).forEach(([rawBoxId, rawClaim]) => {
-      addClaim((rawClaim as any)?.boxId ?? rawBoxId, rawClaim);
-    });
-  }
-  const claims = Array.isArray(order?.stripeReceiptClaims) ? order.stripeReceiptClaims : [];
-  claims.forEach((rawClaim: any) => addClaim(rawClaim?.boxId, rawClaim));
-  if (order?.stripeReceiptClaim) {
-    addClaim(order.stripeReceiptClaim.boxId, order.stripeReceiptClaim);
-  }
-  return claimsByBoxId;
 }
 
 function normalizedHttpOrigin(value: unknown): string {
