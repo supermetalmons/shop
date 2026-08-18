@@ -226,7 +226,7 @@ test('pack-status route reads bounded Firestore fields with a 15-second edge cac
     assert.equal(calls[0]?.url.searchParams.getAll('mask.fieldPaths').length, 9);
     assert.equal(new Headers(calls[0]?.init?.headers).has('authorization'), false);
     assert.equal(calls[0]?.init?.method, 'GET');
-    assert.equal(calls[0]?.init?.redirect, 'error');
+    assert.equal(calls[0]?.init?.redirect, 'manual');
     assert.equal(calls[0]?.init?.cf?.cacheEverything, true);
     assert.deepEqual(calls[0]?.init?.cf?.cacheTtlByStatus, {
       '200-299': FIRESTORE_PACK_STATUS_CACHE_TTL_SECONDS,

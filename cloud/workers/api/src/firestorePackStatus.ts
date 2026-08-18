@@ -136,7 +136,7 @@ export async function fetchFirestorePackStatus(
     const response = await providerFetch(firestorePackStatusUrl(dropId), {
       method: 'GET',
       headers: { Accept: 'application/json' },
-      redirect: 'error',
+      redirect: 'manual',
       signal: controller.signal,
       cf: {
         cacheEverything: true,
@@ -167,7 +167,13 @@ export async function fetchFirestorePackStatus(
       return { ok: false, error: 'provider-unavailable', ...(cacheStatus ? { cacheStatus } : {}) };
     }
     return { ok: true, packStatus, ...(cacheStatus ? { cacheStatus } : {}) };
-  } catch {
+  } catch (error) {
+    console.error({
+      event: 'firestore_pack_status_fetch_error',
+      error: error instanceof Error
+        ? { name: error.name, message: error.message }
+        : { name: 'UnknownError' },
+    });
     return {
       ok: false,
       error: controller.signal.aborted ? 'provider-timeout' : 'provider-unavailable',
