@@ -1,6 +1,6 @@
-export const NOTIFICATION_EMAIL_FROM = 'notifications@support.mons.shop';
 const FULFILLMENT_APP_URL = 'https://mons.shop/fulfillment';
 const BUYER_ORDER_EMAIL_SUPPORT_FOOTNOTE = 'If you have any questions, reply to this email.';
+const NOTIFICATION_EMAIL_ERROR_MAX_CHARACTERS = 4096;
 
 export type ShipperReadyOrderSummary = {
   itemCount: number;
@@ -179,12 +179,18 @@ function timestampEmailValue(value: number | undefined): string {
 
 function stringifyEmailValue(value: unknown): string {
   if (value == null) return 'unknown';
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
+  let result: string;
+  if (typeof value === 'string') result = value;
+  else {
+    try {
+      const serialized = JSON.stringify(value, null, 2);
+      result = typeof serialized === 'string' ? serialized : String(value);
+    } catch {
+      result = String(value);
+    }
   }
+  if (result.length <= NOTIFICATION_EMAIL_ERROR_MAX_CHARACTERS) return result;
+  return `${result.slice(0, NOTIFICATION_EMAIL_ERROR_MAX_CHARACTERS)}\n… truncated`;
 }
 
 function stripeCheckoutManualReviewEmailDetails(

@@ -269,6 +269,7 @@ function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): Nod
       normalized.startsWith('WRANGLER_') ||
       normalized === 'HELIUS_API_KEY' ||
       normalized === 'RESEND_CONTACTS_API_KEY' ||
+      normalized === 'NOTIFICATION_ENQUEUE_SECRET' ||
       normalized === 'VITE_HELIUS_API_KEY' ||
       normalized === 'DOTENV_KEY'
     ) {
@@ -441,10 +442,19 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
     return false;
   }
   const route = value.routes[0];
+  const queues = value.queues;
+  if (!isRecord(queues) || !hasExactKeys(queues, ['producers']) || !Array.isArray(queues.producers) || queues.producers.length !== 1) {
+    return false;
+  }
+  const notificationProducer = queues.producers[0];
   return isRecord(route) &&
     hasExactKeys(route, ['pattern', 'custom_domain']) &&
     route.pattern === new URL(productionUrl).hostname &&
-    route.custom_domain === true;
+    route.custom_domain === true &&
+    isRecord(notificationProducer) &&
+    hasExactKeys(notificationProducer, ['binding', 'queue']) &&
+    notificationProducer.binding === 'NOTIFICATION_EMAIL_QUEUE' &&
+    notificationProducer.queue === 'mons-shop-notification-emails';
 }
 
 function assertApiDeploymentConfig(path = resolve(repoRoot, configPath)): void {
@@ -457,7 +467,7 @@ function assertApiDeploymentConfig(path = resolve(repoRoot, configPath)): void {
   }
   if (!isExactApiDeploymentConfig(value)) {
     fail(
-      `API Wrangler config must target only ${workerName}, account ${accountId}, and the ${new URL(productionUrl).hostname} custom domain.`,
+      `API Wrangler config must target only ${workerName}, account ${accountId}, the ${new URL(productionUrl).hostname} custom domain, and the reviewed notification queue.`,
     );
   }
 }

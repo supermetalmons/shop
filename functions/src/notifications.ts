@@ -4,6 +4,7 @@ import {
   normalizeNotificationEmailRecipient,
   validateNotificationEmailRecipient,
 } from './shared/notificationSubscription.js';
+import type { NotificationEmailKind } from './shared/notificationEmailJob.js';
 
 export {
   normalizeNotificationEmailRecipient,
@@ -15,15 +16,9 @@ export type DeliveryReadyToShipStatusSnapshot = {
   source?: unknown;
 } | null | undefined;
 
-export type ResendNotificationEmailKind =
-  | 'buyer_order_received'
-  | 'buyer_order_shipped'
-  | 'shipper_ready_to_ship'
-  | 'stripe_checkout_manual_review';
+export type ResendNotificationEmailKind = NotificationEmailKind;
 
 export const RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED = true;
-export const RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_DISABLED_REASON =
-  'resend_non_checkout_error_notifications_disabled';
 
 export type ReadyToShipOrderNotificationPlan = {
   buyerRecipient: string | null;

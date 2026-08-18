@@ -63,6 +63,7 @@ import {
   isPackStatusRouteDropId,
   type FirestorePackStatusFetch,
 } from './firestorePackStatus.js';
+import { handleNotificationEnqueue, NOTIFICATION_ENQUEUE_PATH } from './notificationEnqueue.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -95,6 +96,7 @@ const BASE_HEADERS = {
 const PENDING_OPEN_DISCRIMINATOR_BASE58 = bs58.encode(PENDING_OPEN_BOX_DISCRIMINATOR);
 const KNOWN_LOG_ROUTES = new Set([
   '/health',
+  NOTIFICATION_ENQUEUE_PATH,
   '/inventory',
   '/notifications/subscribe',
   '/pack-status/:dropId',
@@ -1253,6 +1255,8 @@ export async function handleRequest(
     response = request.method === 'GET'
       ? jsonResponse({ ok: true }, 200)
       : jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET' });
+  } else if (pathname === NOTIFICATION_ENQUEUE_PATH) {
+    response = await handleNotificationEnqueue(request, env, { log: dependencies.log });
   } else if (rpcCluster) {
     if (request.method !== 'POST') {
       response = handleRpcMethodNotAllowed(request);

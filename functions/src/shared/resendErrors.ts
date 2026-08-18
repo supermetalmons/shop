@@ -13,10 +13,13 @@ const RETRYABLE_RESEND_ERROR_NAMES = new Set([
   'rate_limit_exceeded',
 ]);
 
-export function summarizeResendError(error: any): ResendErrorSummary {
-  const name = typeof error?.name === 'string' && error.name ? error.name : 'unknown_resend_error';
-  const message = typeof error?.message === 'string' && error.message ? error.message : 'Unknown Resend error';
-  const statusCode = typeof error?.statusCode === 'number' && Number.isFinite(error.statusCode) ? error.statusCode : null;
+export function summarizeResendError(error: unknown): ResendErrorSummary {
+  const value = error && typeof error === 'object' && !Array.isArray(error)
+    ? error as Record<string, unknown>
+    : {};
+  const name = typeof value.name === 'string' && value.name ? value.name : 'unknown_resend_error';
+  const message = typeof value.message === 'string' && value.message ? value.message : 'Unknown Resend error';
+  const statusCode = typeof value.statusCode === 'number' && Number.isFinite(value.statusCode) ? value.statusCode : null;
   return { name, message, statusCode };
 }
 

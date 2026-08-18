@@ -1,29 +1,24 @@
 {
   "$schema": "../../../node_modules/wrangler/config-schema.json",
-  "name": "mons-shop-api",
+  "name": "mons-shop-notifications",
   "account_id": "e25f90fc073ea309b54b8b5144bf28e0",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-01",
+  "compatibility_date": "2026-08-08",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
-  "preview_urls": true,
-  "placement": {
-    "mode": "smart"
-  },
-  "routes": [
-    {
-      "pattern": "api.mons.shop",
-      "custom_domain": true
-    }
-  ],
+  "preview_urls": false,
   "secrets": {
-    "required": ["HELIUS_API_KEY", "RESEND_CONTACTS_API_KEY", "NOTIFICATION_ENQUEUE_SECRET"]
+    "required": ["RESEND_API_KEY"]
   },
   "queues": {
-    "producers": [
+    "consumers": [
       {
-        "binding": "NOTIFICATION_EMAIL_QUEUE",
-        "queue": "mons-shop-notification-emails"
+        "queue": "mons-shop-notification-emails",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "max_concurrency": 1,
+        "dead_letter_queue": "mons-shop-notification-emails-dlq"
       }
     ]
   },
@@ -31,7 +26,7 @@
     "enabled": true,
     "logs": {
       "enabled": true,
-      "head_sampling_rate": 0.1,
+      "head_sampling_rate": 1,
       "invocation_logs": false,
       "persist": true
     },

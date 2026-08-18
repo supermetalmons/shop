@@ -55,8 +55,9 @@ Never commit the token or expose secrets through a `VITE_*` variable.
 
 ### Shop API deployment
 
-The API Worker uses encrypted `HELIUS_API_KEY` and `RESEND_CONTACTS_API_KEY`
-secrets, Smart Placement, and a version-first release flow. It serves
+The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_CONTACTS_API_KEY`, and
+`NOTIFICATION_ENQUEUE_SECRET` secrets, a `NOTIFICATION_EMAIL_QUEUE` producer
+binding, Smart Placement, and a version-first release flow. It serves
 `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
 `/pending-open-boxes`, `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
 responses remain uncached. Pack-status reads use the public Firestore REST API
@@ -88,9 +89,38 @@ Advanced release controls remain available for separately managed releases:
 Preview upload writes `HELIUS_API_KEY` to a newly created mode-`0600` file inside
 a mode-`0700` temporary directory, passes that file directly to Wrangler, and
 deletes the validated temporary path immediately afterward. The preconfigured
-`RESEND_CONTACTS_API_KEY` Worker secret is preserved across version uploads.
-The Cloudflare token and Helius secret are stripped from all other child-process
-environment data and are never printed.
+`RESEND_CONTACTS_API_KEY` and `NOTIFICATION_ENQUEUE_SECRET` Worker secrets are
+preserved across version uploads. The Cloudflare token, Helius secret, and
+notification enqueue secret are stripped from all other child-process environment
+data and are never printed.
+
+### Notification delivery deployment
+
+Transactional order and manual-review emails are rendered by the three existing
+Firebase document triggers, authenticated with `NOTIFICATION_ENQUEUE_SECRET`,
+and queued through the internal `mons-shop-api` producer route. The dedicated
+`mons-shop-notifications` Worker consumes `mons-shop-notification-emails` and
+sends through Resend. It has no HTTP route, stores no delivery ledger, and writes
+no new Firestore notification documents. Failed transient deliveries retry five
+times before moving to `mons-shop-notification-emails-dlq`.
+
+- Validate generated bindings, TypeScript, unit tests, bundling, and startup:
+  - `npm run check:notifications`
+- Deploy the isolated consumer Worker after both queues exist and
+  `RESEND_API_KEY` is configured on the Worker:
+  - `npm run deploy:notifications`
+- Queue the synthetic test email through the production API and print its job ID:
+  - `npm run test-resend-notification-email -- --kind stripe-manual-review`
+- Inspect queue state and live structured logs:
+  - `node_modules/.bin/wrangler queues info mons-shop-notification-emails`
+  - `node_modules/.bin/wrangler queues info mons-shop-notification-emails-dlq`
+  - `node_modules/.bin/wrangler tail mons-shop-notifications --format json`
+- Roll back only to an explicit known-good version:
+  - `node_modules/.bin/wrangler rollback <version-id> --config cloud/workers/notifications/wrangler.jsonc`
+
+Both queues use 24-hour retention to match Resend's idempotency window. Do not
+automatically replay the DLQ after that window, and do not restore direct
+Firebase delivery while the primary queue contains messages.
 
 Wrangler can upload a preview version only after the Worker exists. The
 `mons-shop-api` Worker was bootstrapped once without routes during this migration;
@@ -184,8 +214,11 @@ suite passes.
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET_DEVNET`
 - `STRIPE_WEBHOOK_SECRET` (Firebase Functions secret or local env; Stripe live/production endpoint signing secret for mainnet drops handled by `stripeWebhook`)
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET`
-- `RESEND_API_KEY` (Firebase Functions secret used only for outbound notifications; use a Resend Sending Access key restricted to `support.mons.shop`)
-  - Set: `firebase functions:secrets:set RESEND_API_KEY`
+- `RESEND_API_KEY` (`mons-shop-notifications` Worker secret used only for outbound transactional emails; use a Resend Sending Access key restricted to `support.mons.shop`)
+  - Set or rotate with `wrangler versions secret put RESEND_API_KEY --config cloud/workers/notifications/wrangler.jsonc --env-file cloud/workers/notifications/release.env`, then deploy the exact reviewed consumer source.
+- `NOTIFICATION_ENQUEUE_SECRET` (shared HMAC secret for the three Firebase notification producers and the internal `mons-shop-api` queue endpoint)
+  - Store the same randomly generated 32-byte value in Firebase Secret Manager and the API Worker's secret set before uploading its candidate. Never pass it as a command argument or print it.
+  - The test-email command reads this secret from the shell or Firebase Secret Manager and never accesses the Resend key.
 - `RESEND_CONTACTS_API_KEY` (`mons-shop-api` Worker secret used only by `POST /notifications/subscribe`; requires Resend Full Access to manage Contacts)
   - Set or rotate with `wrangler versions secret put RESEND_CONTACTS_API_KEY --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env`, then promote the resulting version through the guarded API release flow.
   - A notification signup directly adds the normalized address to global Resend Contacts without sending a confirmation email. Existing contacts return success without changing their current unsubscribe state.

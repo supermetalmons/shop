@@ -302,6 +302,23 @@ test('stripe checkout manual review email builder includes details and escapes h
   assert.doesNotMatch(content.html, /bad <tag>/);
 });
 
+test('stripe checkout manual review email bounds oversized provider errors', () => {
+  const content = buildStripeCheckoutManualReviewEmailContent({
+    idempotencyKey: 'test-stripe-manual-review-large-error',
+    recipients: ['ivan@ivan.lol'],
+    dropId: 'card_nft_2',
+    dropName: 'Card NFT 2',
+    sessionId: 'cs_test_large_error',
+    checkoutPath: 'drops/card_nft_2/stripeCheckouts/cs_test_large_error',
+    livemode: false,
+    lastFulfillmentError: { message: '<danger>'.repeat(20_000) },
+  });
+  assert.match(content.text, /… truncated$/);
+  assert.ok(Buffer.byteLength(content.text, 'utf8') < 16 * 1024);
+  assert.ok(Buffer.byteLength(content.html, 'utf8') < 32 * 1024);
+  assert.doesNotMatch(content.html, /<danger>/);
+});
+
 test('buyer order received email builder includes item thumbnails and escapes html', () => {
   const content = buildBuyerOrderReceivedEmailContent(
     {

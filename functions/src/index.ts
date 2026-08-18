@@ -18,7 +18,6 @@ import {
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import type Stripe from 'stripe';
-import type { Resend as ResendClient } from 'resend';
 import { createHash, randomInt } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
@@ -143,23 +142,19 @@ import {
 } from './receiptProof.js';
 import { IX_BUBBLEGUM_TRANSFER_V2, bubblegumTransferV2Ix } from './bubblegum.js';
 import {
-  RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_DISABLED_REASON,
   firstRejectedReadyToShipNotificationError,
   normalizeNotificationEmailRecipient,
   planReadyToShipOrderNotifications,
   resolveNotificationDeliveryId,
   shouldNotifyBuyerForDeliveryShippedWrite,
   shouldNotifyShippersForDeliveryReadyToShipWrite,
-  shouldSendResendNotificationEmail,
   validateNotificationEmailRecipient,
-  type ResendNotificationEmailKind,
 } from './notifications.js';
 import {
   enforceReceiptTransferAssetRateLimit,
   enforceReceiptTransferCallerRateLimit,
 } from './receiptTransferRateLimit.js';
 import {
-  NOTIFICATION_EMAIL_FROM,
   buildBuyerOrderReceivedEmailContent,
   buildBuyerOrderShippedEmailContent,
   buildShipperReadyToShipEmailContent,
@@ -173,7 +168,12 @@ import {
   type ShipperVisibleOrderEmailItem,
   type StripeCheckoutManualReviewEmailMessage,
 } from './notificationEmails.js';
-import { isRetryableResendError, summarizeResendError, type ResendErrorSummary } from './resendErrors.js';
+import { enqueueNotificationEmailJob } from './cloudflareNotifications.js';
+import {
+  createNotificationEmailJobV1,
+  type NotificationEmailJobContext,
+  type NotificationEmailKind,
+} from './shared/notificationEmailJob.js';
 import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
@@ -353,7 +353,7 @@ import {
 const COSIGNER_SECRET = defineSecret('COSIGNER_SECRET');
 // Base64-encoded Curve25519 secret key for decrypting delivery addresses (TweetNaCl box).
 const ADDRESS_DECRYPTION_SECRET = defineSecret('ADDRESS_DECRYPTION_SECRET');
-const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
+const NOTIFICATION_ENQUEUE_SECRET = defineSecret('NOTIFICATION_ENQUEUE_SECRET');
 const STRIPE_RESTRICTED_KEY = defineSecret('STRIPE_RESTRICTED_KEY');
 const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
 const STRIPE_RESTRICTED_KEY_LIVE = defineSecret('STRIPE_RESTRICTED_KEY_LIVE');
@@ -1248,10 +1248,7 @@ function summarizeError(err: unknown) {
   }
   if (err instanceof Error) {
     const stack = typeof err.stack === 'string' ? err.stack.slice(0, 4000) : undefined;
-    const retryableEmailError = isRetryableNotificationEmailError(err)
-      ? { reason: err.reason, ...(err.details !== undefined ? { details: err.details } : {}) }
-      : {};
-    return { kind: err.name, message: err.message, ...retryableEmailError, ...(stack ? { stack } : {}) };
+    return { kind: err.name, message: err.message, ...(stack ? { stack } : {}) };
   }
   return { kind: typeof err, message: String(err) };
 }
@@ -4556,113 +4553,83 @@ type DeliveryOrderOwnersCursor = {
   path: string;
 };
 
-const SHIPPER_READY_NOTIFICATION_DOC_ID = 'shipper-ready-to-ship';
-const SHIPPER_READY_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
-const BUYER_ORDER_RECEIVED_NOTIFICATION_DOC_ID = 'order-received';
-const BUYER_ORDER_RECEIVED_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
 const BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON = 'buyer_order_received_email_recipient_missing_or_invalid';
-const BUYER_ORDER_SHIPPED_NOTIFICATION_DOC_ID = 'order-shipped';
-const BUYER_ORDER_SHIPPED_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
 const BUYER_ORDER_SHIPPED_MISSING_RECIPIENT_REASON = 'buyer_order_shipped_email_recipient_missing_or_invalid';
-const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_DOC_ID = 'stripe-checkout-manual-review';
-const STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_LEASE_MS = 5 * 60 * 1000;
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
 
-type EmailNotificationReservation =
-  | { reserved: true; reason: 'reserved' }
-  | { reserved: false; reason: 'already_completed' }
-  | { reserved: false; reason: 'send_in_progress'; leaseExpiresAt: number };
-
-type NotificationEmailResult =
-  | { status: 'sent'; provider: string; messageId?: string }
-  | { status: 'skipped'; provider: string; reason: string }
-  | { status: 'failed_permanent'; provider: string; reason: string; providerError: ResendErrorSummary };
-
-type RetryableNotificationEmailErrorName =
-  | 'RetryableBuyerOrderReceivedEmailError'
-  | 'RetryableBuyerOrderShippedEmailError'
-  | 'RetryableShipperReadyEmailError'
-  | 'RetryableStripeCheckoutManualReviewEmailError';
-
-class RetryableNotificationEmailError extends Error {
-  readonly reason: string;
-  readonly details?: unknown;
-
-  constructor(name: RetryableNotificationEmailErrorName, message: string, reason: string, details?: unknown) {
-    super(message);
-    this.name = name;
-    this.reason = reason;
-    this.details = details;
+async function enqueueRenderedNotificationEmail(params: {
+  kind: NotificationEmailKind;
+  idempotencyKey: string;
+  recipients: string[];
+  subject: string;
+  text: string;
+  html: string;
+  context: NotificationEmailJobContext;
+}): Promise<void> {
+  const job = createNotificationEmailJobV1(params);
+  try {
+    await enqueueNotificationEmailJob({
+      job,
+      secret: envOrSecretValue('NOTIFICATION_ENQUEUE_SECRET', NOTIFICATION_ENQUEUE_SECRET),
+    });
+    logger.info('notificationEmail:queued', {
+      jobId: job.jobId,
+      kind: job.kind,
+      recipientCount: job.recipients.length,
+      ...job.context,
+    });
+  } catch (error) {
+    logger.error('notificationEmail:enqueueFailed', error instanceof Error ? error : new Error(String(error)), {
+      jobId: job.jobId,
+      kind: job.kind,
+      recipientCount: job.recipients.length,
+      ...job.context,
+      error: summarizeError(error),
+    });
+    throw error;
   }
 }
 
-function isRetryableNotificationEmailError(err: unknown): err is RetryableNotificationEmailError {
-  return err instanceof RetryableNotificationEmailError && typeof err.reason === 'string';
-}
-
-function createResendClient(apiKey: () => string): () => Promise<ResendClient | null> {
-  let cachedClient: ResendClient | null = null;
-  return async () => {
-    if (cachedClient) return cachedClient;
-    const key = apiKey();
-    if (!key) return null;
-    const { Resend } = await import('resend');
-    cachedClient = new Resend(key);
-    return cachedClient;
-  };
-}
-
-const resendClient = createResendClient(() => envOrSecretValue('RESEND_API_KEY', RESEND_API_KEY));
-
 async function sendBuyerOrderReceivedEmail(
   message: BuyerOrderReceivedEmailMessage,
-): Promise<NotificationEmailResult> {
+): Promise<void> {
   const email = buildBuyerOrderReceivedEmailContent(message);
-  return sendResendNotificationEmail({
-    notificationKind: 'buyer_order_received',
+  return enqueueRenderedNotificationEmail({
+    kind: 'buyer_order_received',
     idempotencyKey: message.idempotencyKey,
     recipients: message.recipients,
     subject: email.subject,
     text: email.text,
     html: email.html,
-    retryableErrorName: 'RetryableBuyerOrderReceivedEmailError',
-    missingApiKeyMessage: 'RESEND_API_KEY is not configured for buyer order-received email',
-    missingApiKeyDetails: { dropId: message.dropId, deliveryId: message.deliveryId, recipientCount: message.recipients.length },
-    retryableFailurePrefix: 'resend buyer order-received email failed',
+    context: { dropId: message.dropId, deliveryId: message.deliveryId },
   });
 }
 
-async function sendBuyerOrderShippedEmail(message: BuyerOrderShippedEmailMessage): Promise<NotificationEmailResult> {
+async function sendBuyerOrderShippedEmail(message: BuyerOrderShippedEmailMessage): Promise<void> {
   const email = buildBuyerOrderShippedEmailContent(message);
-  return sendResendNotificationEmail({
-    notificationKind: 'buyer_order_shipped',
+  return enqueueRenderedNotificationEmail({
+    kind: 'buyer_order_shipped',
     idempotencyKey: message.idempotencyKey,
     recipients: message.recipients,
     subject: email.subject,
     text: email.text,
     html: email.html,
-    retryableErrorName: 'RetryableBuyerOrderShippedEmailError',
-    missingApiKeyMessage: 'RESEND_API_KEY is not configured for buyer order-shipped email',
-    missingApiKeyDetails: { dropId: message.dropId, deliveryId: message.deliveryId, recipientCount: message.recipients.length },
-    retryableFailurePrefix: 'resend buyer order-shipped email failed',
+    context: { dropId: message.dropId, deliveryId: message.deliveryId },
   });
 }
 
 async function sendShipperReadyToShipEmail(
   message: ShipperReadyToShipEmailMessage,
-): Promise<NotificationEmailResult> {
+): Promise<void> {
   const email = buildShipperReadyToShipEmailContent(message);
-  return sendResendNotificationEmail({
-    notificationKind: 'shipper_ready_to_ship',
+  return enqueueRenderedNotificationEmail({
+    kind: 'shipper_ready_to_ship',
     idempotencyKey: message.idempotencyKey,
     recipients: message.recipients,
     subject: email.subject,
     text: email.text,
     html: email.html,
-    retryableErrorName: 'RetryableShipperReadyEmailError',
-    missingApiKeyMessage: 'RESEND_API_KEY is not configured for shipper ready-to-ship email',
-    missingApiKeyDetails: { dropId: message.dropId, deliveryId: message.deliveryId, recipientCount: message.recipients.length },
-    retryableFailurePrefix: 'resend shipper ready email failed',
+    context: { dropId: message.dropId, deliveryId: message.deliveryId },
   });
 }
 
@@ -4672,267 +4639,23 @@ function optionalTrimmedString(value: unknown): string | undefined {
 
 async function sendStripeCheckoutManualReviewEmail(
   message: StripeCheckoutManualReviewEmailMessage,
-): Promise<NotificationEmailResult> {
+): Promise<void> {
   const email = buildStripeCheckoutManualReviewEmailContent(message);
-  return sendResendNotificationEmail({
-    notificationKind: 'stripe_checkout_manual_review',
+  return enqueueRenderedNotificationEmail({
+    kind: 'stripe_checkout_manual_review',
     idempotencyKey: message.idempotencyKey,
     recipients: message.recipients,
     subject: email.subject,
     text: email.text,
     html: email.html,
-    retryableErrorName: 'RetryableStripeCheckoutManualReviewEmailError',
-    missingApiKeyMessage: 'RESEND_API_KEY is not configured for Stripe checkout manual review email',
-    missingApiKeyDetails: { dropId: message.dropId, sessionId: message.sessionId, recipientCount: message.recipients.length },
-    retryableFailurePrefix: 'resend Stripe checkout manual review email failed',
+    context: { dropId: message.dropId, sessionId: message.sessionId },
   });
-}
-
-async function sendResendNotificationEmail(params: {
-  notificationKind: ResendNotificationEmailKind;
-  idempotencyKey: string;
-  recipients: string[];
-  subject: string;
-  text: string;
-  html: string;
-  retryableErrorName: RetryableNotificationEmailErrorName;
-  missingApiKeyMessage: string;
-  missingApiKeyDetails: unknown;
-  retryableFailurePrefix: string;
-}): Promise<NotificationEmailResult> {
-  if (!shouldSendResendNotificationEmail(params.notificationKind)) {
-    return {
-      status: 'skipped',
-      provider: 'resend',
-      reason: RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_DISABLED_REASON,
-    };
-  }
-
-  const resend = await resendClient();
-  if (!resend) {
-    throw new RetryableNotificationEmailError(
-      params.retryableErrorName,
-      params.missingApiKeyMessage,
-      'resend_api_key_not_configured',
-      params.missingApiKeyDetails,
-    );
-  }
-
-  const result = await resend.emails.send(
-    {
-      from: NOTIFICATION_EMAIL_FROM,
-      to: params.recipients,
-      subject: params.subject,
-      text: params.text,
-      html: params.html,
-    },
-    { idempotencyKey: params.idempotencyKey },
-  );
-
-  if (result.error) {
-    const providerError = summarizeResendError(result.error);
-    if (isRetryableResendError(providerError)) {
-      throw new RetryableNotificationEmailError(
-        params.retryableErrorName,
-        `${params.retryableFailurePrefix}: ${providerError.message}`,
-        'resend_retryable_error',
-        providerError,
-      );
-    }
-    return {
-      status: 'failed_permanent',
-      provider: 'resend',
-      reason: `resend_${providerError.name}`,
-      providerError,
-    };
-  }
-
-  return { status: 'sent', provider: 'resend', ...(result.data?.id ? { messageId: result.data.id } : {}) };
-}
-
-async function reserveEmailNotification(params: {
-  notificationRef: FirebaseFirestore.DocumentReference;
-  nowMs: number;
-  leaseMs: number;
-  notification: Record<string, unknown>;
-}): Promise<EmailNotificationReservation> {
-  return db.runTransaction<EmailNotificationReservation>(async (tx) => {
-    const snap = await tx.get(params.notificationRef);
-    const existing = snap.exists ? (snap.data() as any) : null;
-    const existingStatus = typeof existing?.status === 'string' ? existing.status : '';
-    if (
-      existing?.sentAt ||
-      existingStatus === 'sent' ||
-      existingStatus === 'skipped' ||
-      existingStatus === 'failed_permanent'
-    ) {
-      return { reserved: false, reason: 'already_completed' };
-    }
-
-    const leaseExpiresAt = toMillisMaybe(existing?.leaseExpiresAt) || 0;
-    if (existingStatus === 'sending' && leaseExpiresAt > params.nowMs) {
-      return { reserved: false, reason: 'send_in_progress', leaseExpiresAt };
-    }
-
-    tx.set(
-      params.notificationRef,
-      {
-        ...params.notification,
-        attempts: FieldValue.increment(1),
-        lastAttemptAt: FieldValue.serverTimestamp(),
-        leaseExpiresAt: Timestamp.fromMillis(params.nowMs + params.leaseMs),
-        failedAt: FieldValue.delete(),
-        skippedAt: FieldValue.delete(),
-        skipReason: FieldValue.delete(),
-        lastError: FieldValue.delete(),
-      },
-      { merge: true },
-    );
-
-    return { reserved: true, reason: 'reserved' };
-  });
-}
-
-async function recordEmailNotificationSendResult(
-  notificationRef: FirebaseFirestore.DocumentReference,
-  result: NotificationEmailResult,
-): Promise<void> {
-  if (result.status === 'sent') {
-    await notificationRef.set(
-      {
-        status: 'sent',
-        sentAt: FieldValue.serverTimestamp(),
-        transport: {
-          provider: result.provider,
-          ...(result.messageId ? { messageId: result.messageId } : {}),
-        },
-        leaseExpiresAt: FieldValue.delete(),
-        failedAt: FieldValue.delete(),
-        skippedAt: FieldValue.delete(),
-        skipReason: FieldValue.delete(),
-        lastError: FieldValue.delete(),
-      },
-      { merge: true },
-    );
-    return;
-  }
-
-  if (result.status === 'skipped') {
-    await notificationRef.set(
-      {
-        status: 'skipped',
-        skippedAt: FieldValue.serverTimestamp(),
-        skipReason: result.reason,
-        transport: {
-          provider: result.provider,
-        },
-        leaseExpiresAt: FieldValue.delete(),
-        failedAt: FieldValue.delete(),
-        failureReason: FieldValue.delete(),
-        lastError: FieldValue.delete(),
-      },
-      { merge: true },
-    );
-    return;
-  }
-
-  await notificationRef.set(
-    {
-      status: 'failed_permanent',
-      failedAt: FieldValue.serverTimestamp(),
-      failureReason: result.reason,
-      transport: {
-        provider: result.provider,
-        error: result.providerError,
-      },
-      leaseExpiresAt: FieldValue.delete(),
-      skippedAt: FieldValue.delete(),
-      skipReason: FieldValue.delete(),
-      lastError: result.providerError,
-    },
-    { merge: true },
-  );
-}
-
-async function recordEmailNotificationSendFailure(
-  notificationRef: FirebaseFirestore.DocumentReference,
-  errorSummary: unknown,
-): Promise<void> {
-  await notificationRef.set(
-    {
-      status: 'failed',
-      failedAt: FieldValue.serverTimestamp(),
-      lastError: errorSummary,
-      leaseExpiresAt: FieldValue.delete(),
-    },
-    { merge: true },
-  );
-}
-
-type ReservedEmailNotificationParams = {
-  notificationRef: FirebaseFirestore.DocumentReference;
-  leaseMs: number;
-  notification: Record<string, unknown>;
-  reservedElsewhereLogEvent: string;
-  failureLogEvent: string;
-  failureWriteFailedLogEvent: string;
-  logMeta: Record<string, unknown>;
-  retryableErrorName: RetryableNotificationEmailErrorName;
-  sendInProgressMessage: string;
-  send: () => Promise<NotificationEmailResult>;
-};
-
-async function runReservedEmailNotification(params: ReservedEmailNotificationParams): Promise<void> {
-  const reservation = await reserveEmailNotification({
-    notificationRef: params.notificationRef,
-    nowMs: Date.now(),
-    leaseMs: params.leaseMs,
-    notification: params.notification,
-  });
-
-  if (!reservation.reserved) {
-    logger.info(params.reservedElsewhereLogEvent, {
-      ...params.logMeta,
-      reason: reservation.reason,
-      ...(reservation.reason === 'send_in_progress' ? { leaseExpiresAt: reservation.leaseExpiresAt } : {}),
-    });
-    if (reservation.reason === 'send_in_progress') {
-      throw new RetryableNotificationEmailError(
-        params.retryableErrorName,
-        params.sendInProgressMessage,
-        'notification_send_in_progress',
-        { ...params.logMeta, leaseExpiresAt: reservation.leaseExpiresAt },
-      );
-    }
-    return;
-  }
-
-  try {
-    const result = await params.send();
-    await recordEmailNotificationSendResult(params.notificationRef, result);
-  } catch (err) {
-    const error = err instanceof Error ? err : new Error(String(err));
-    const errorSummary = summarizeError(err);
-    logger.error(params.failureLogEvent, error, {
-      ...params.logMeta,
-      error: errorSummary,
-    });
-    await recordEmailNotificationSendFailure(params.notificationRef, errorSummary).catch((writeErr) => {
-      const writeError = writeErr instanceof Error ? writeErr : new Error(String(writeErr));
-      logger.error(params.failureWriteFailedLogEvent, writeError, {
-        ...params.logMeta,
-        error: summarizeError(writeErr),
-      });
-    });
-    throw err;
-  }
 }
 
 type BuyerOrderEmailItems = BuyerVisibleOrderEmailItem[];
 type ShipperOrderEmailItems = ShipperVisibleOrderEmailItem[];
 
 async function sendShipperReadyToShipNotification(params: {
-  orderRef: DocumentReference;
   order: any;
   dropId: string;
   dropName: string;
@@ -4940,45 +4663,21 @@ async function sendShipperReadyToShipNotification(params: {
   recipients: string[];
   itemPreviews: ShipperOrderEmailItems;
 }): Promise<void> {
-  const notificationRef = params.orderRef.collection('notifications').doc(SHIPPER_READY_NOTIFICATION_DOC_ID);
   const idempotencyKey = `${params.dropId}:${params.deliveryId}:ready_to_ship`;
-  await runReservedEmailNotification({
-    notificationRef,
-    leaseMs: SHIPPER_READY_NOTIFICATION_LEASE_MS,
-    notification: {
-      type: 'shipper_ready_to_ship',
-      status: 'sending',
-      dropId: params.dropId,
-      deliveryId: params.deliveryId,
-      deliveryDocId: String(params.deliveryId),
-      orderPath: params.orderRef.path,
-      recipients: params.recipients,
-      recipientCount: params.recipients.length,
-      idempotencyKey,
-    },
-    reservedElsewhereLogEvent: 'notifyShippersOnDeliveryReadyToShip:shipperReadyReservedElsewhere',
-    failureLogEvent: 'notifyShippersOnDeliveryReadyToShip:shipperReadyFailed',
-    failureWriteFailedLogEvent: 'notifyShippersOnDeliveryReadyToShip:shipperReadyFailureWriteFailed',
-    logMeta: { dropId: params.dropId, deliveryId: params.deliveryId },
-    retryableErrorName: 'RetryableShipperReadyEmailError',
-    sendInProgressMessage: 'shipper ready-to-ship notification send lease is still active',
-    send: () =>
-      sendShipperReadyToShipEmail({
-        idempotencyKey,
-        recipients: params.recipients,
-        dropId: params.dropId,
-        dropName: params.dropName,
-        deliveryId: params.deliveryId,
-        owner: typeof params.order.owner === 'string' ? params.order.owner : '',
-        items: summarizeShipperReadyOrderItems(params.order),
-        itemPreviews: params.itemPreviews,
-        fulfillmentUrl: fulfillmentAppUrlForOrder(params.dropId, params.deliveryId),
-      }),
+  await sendShipperReadyToShipEmail({
+    idempotencyKey,
+    recipients: params.recipients,
+    dropId: params.dropId,
+    dropName: params.dropName,
+    deliveryId: params.deliveryId,
+    owner: typeof params.order.owner === 'string' ? params.order.owner : '',
+    items: summarizeShipperReadyOrderItems(params.order),
+    itemPreviews: params.itemPreviews,
+    fulfillmentUrl: fulfillmentAppUrlForOrder(params.dropId, params.deliveryId),
   });
 }
 
 async function sendBuyerOrderReceivedNotification(params: {
-  orderRef: DocumentReference;
   order: any;
   dropId: string;
   dropName: string;
@@ -4986,58 +4685,26 @@ async function sendBuyerOrderReceivedNotification(params: {
   recipient: string | null;
   items: BuyerOrderEmailItems;
 }): Promise<void> {
-  const recipients = params.recipient ? [params.recipient] : [];
-  const notificationRef = params.orderRef.collection('notifications').doc(BUYER_ORDER_RECEIVED_NOTIFICATION_DOC_ID);
-  const idempotencyKey = `${params.dropId}:${params.deliveryId}:order_received`;
-  await runReservedEmailNotification({
-    notificationRef,
-    leaseMs: BUYER_ORDER_RECEIVED_NOTIFICATION_LEASE_MS,
-    notification: {
-      type: 'buyer_order_received',
-      status: 'sending',
+  if (!params.recipient) {
+    logger.info('notifyShippersOnDeliveryReadyToShip:buyerOrderReceivedSkipped', {
       dropId: params.dropId,
       deliveryId: params.deliveryId,
-      deliveryDocId: String(params.deliveryId),
-      orderPath: params.orderRef.path,
-      recipients,
-      recipientCount: recipients.length,
-      idempotencyKey,
-    },
-    reservedElsewhereLogEvent: 'notifyShippersOnDeliveryReadyToShip:buyerOrderReceivedReservedElsewhere',
-    failureLogEvent: 'notifyShippersOnDeliveryReadyToShip:buyerOrderReceivedFailed',
-    failureWriteFailedLogEvent: 'notifyShippersOnDeliveryReadyToShip:buyerOrderReceivedFailureWriteFailed',
-    logMeta: { dropId: params.dropId, deliveryId: params.deliveryId },
-    retryableErrorName: 'RetryableBuyerOrderReceivedEmailError',
-    sendInProgressMessage: 'buyer order-received notification send lease is still active',
-    send: async () => {
-      if (!params.recipient) {
-        logger.info('notifyShippersOnDeliveryReadyToShip:buyerOrderReceivedSkipped', {
-          dropId: params.dropId,
-          deliveryId: params.deliveryId,
-          reason: BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON,
-          hasEmailField: typeof params.order?.addressSnapshot?.email === 'string',
-        });
-        return {
-          status: 'skipped',
-          provider: 'resend',
-          reason: BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON,
-        };
-      }
-
-      return sendBuyerOrderReceivedEmail({
-        idempotencyKey,
-        recipients,
-        dropId: params.dropId,
-        dropName: params.dropName,
-        deliveryId: params.deliveryId,
-        items: params.items,
-      });
-    },
+      reason: BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON,
+      hasEmailField: typeof params.order?.addressSnapshot?.email === 'string',
+    });
+    return;
+  }
+  await sendBuyerOrderReceivedEmail({
+    idempotencyKey: `${params.dropId}:${params.deliveryId}:order_received`,
+    recipients: [params.recipient],
+    dropId: params.dropId,
+    dropName: params.dropName,
+    deliveryId: params.deliveryId,
+    items: params.items,
   });
 }
 
 async function sendBuyerOrderShippedNotification(params: {
-  orderRef: DocumentReference;
   order: any;
   dropId: string;
   dropName: string;
@@ -5046,62 +4713,30 @@ async function sendBuyerOrderShippedNotification(params: {
   items: BuyerOrderEmailItems;
   trackingUrl: string;
 }): Promise<void> {
-  const recipients = params.recipient ? [params.recipient] : [];
-  const notificationRef = params.orderRef.collection('notifications').doc(BUYER_ORDER_SHIPPED_NOTIFICATION_DOC_ID);
-  const idempotencyKey = `${params.dropId}:${params.deliveryId}:order_shipped`;
-  await runReservedEmailNotification({
-    notificationRef,
-    leaseMs: BUYER_ORDER_SHIPPED_NOTIFICATION_LEASE_MS,
-    notification: {
-      type: 'buyer_order_shipped',
-      status: 'sending',
+  if (!params.recipient) {
+    logger.info('notifyBuyerOnDeliveryShipped:skipped', {
       dropId: params.dropId,
       deliveryId: params.deliveryId,
-      deliveryDocId: String(params.deliveryId),
-      orderPath: params.orderRef.path,
-      recipients,
-      recipientCount: recipients.length,
-      idempotencyKey,
-      trackingUrl: params.trackingUrl,
-    },
-    reservedElsewhereLogEvent: 'notifyBuyerOnDeliveryShipped:reservedElsewhere',
-    failureLogEvent: 'notifyBuyerOnDeliveryShipped:failed',
-    failureWriteFailedLogEvent: 'notifyBuyerOnDeliveryShipped:failureWriteFailed',
-    logMeta: { dropId: params.dropId, deliveryId: params.deliveryId },
-    retryableErrorName: 'RetryableBuyerOrderShippedEmailError',
-    sendInProgressMessage: 'buyer order-shipped notification send lease is still active',
-    send: async () => {
-      if (!params.recipient) {
-        logger.info('notifyBuyerOnDeliveryShipped:skipped', {
-          dropId: params.dropId,
-          deliveryId: params.deliveryId,
-          reason: BUYER_ORDER_SHIPPED_MISSING_RECIPIENT_REASON,
-          hasEmailField: typeof params.order?.addressSnapshot?.email === 'string',
-        });
-        return {
-          status: 'skipped',
-          provider: 'resend',
-          reason: BUYER_ORDER_SHIPPED_MISSING_RECIPIENT_REASON,
-        };
-      }
-
-      return sendBuyerOrderShippedEmail({
-        idempotencyKey,
-        recipients,
-        dropId: params.dropId,
-        dropName: params.dropName,
-        deliveryId: params.deliveryId,
-        items: params.items,
-        trackingUrl: params.trackingUrl,
-      });
-    },
+      reason: BUYER_ORDER_SHIPPED_MISSING_RECIPIENT_REASON,
+      hasEmailField: typeof params.order?.addressSnapshot?.email === 'string',
+    });
+    return;
+  }
+  await sendBuyerOrderShippedEmail({
+    idempotencyKey: `${params.dropId}:${params.deliveryId}:order_shipped`,
+    recipients: [params.recipient],
+    dropId: params.dropId,
+    dropName: params.dropName,
+    deliveryId: params.deliveryId,
+    items: params.items,
+    trackingUrl: params.trackingUrl,
   });
 }
 
 export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
   {
     document: 'drops/{dropId}/deliveryOrders/{deliveryId}',
-    secrets: [RESEND_API_KEY],
+    secrets: [NOTIFICATION_ENQUEUE_SECRET],
     retry: true,
   },
   async (event) => {
@@ -5157,10 +4792,8 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
     const shipperOrderEmailItems: ShipperOrderEmailItems = notificationPlan.shipperRecipients.length
       ? await buildShipperVisibleOrderEmailItems(after, { dropId })
       : [];
-    const orderRef = afterSnap.ref;
     const tasks: Promise<void>[] = [
       sendBuyerOrderReceivedNotification({
-        orderRef,
         order: after,
         dropId,
         dropName,
@@ -5173,7 +4806,6 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
     if (notificationPlan.shipperRecipients.length) {
       tasks.push(
         sendShipperReadyToShipNotification({
-          orderRef,
           order: after,
           dropId,
           dropName,
@@ -5185,7 +4817,7 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
     }
 
     const results = await Promise.allSettled(tasks);
-    const rejected = firstRejectedReadyToShipNotificationError(results, isRetryableNotificationEmailError);
+    const rejected = firstRejectedReadyToShipNotificationError(results, () => true);
     if (rejected) throw rejected;
   },
 );
@@ -5193,7 +4825,7 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
 export const notifyBuyerOnDeliveryShipped = onDocumentUpdated(
   {
     document: 'drops/{dropId}/deliveryOrders/{deliveryId}',
-    secrets: [RESEND_API_KEY],
+    secrets: [NOTIFICATION_ENQUEUE_SECRET],
     retry: true,
   },
   async (event) => {
@@ -5252,7 +4884,6 @@ export const notifyBuyerOnDeliveryShipped = onDocumentUpdated(
     const recipient = validateNotificationEmailRecipient(order?.addressSnapshot?.email);
     const items = recipient ? await buildBuyerVisibleOrderEmailItems(order, { dropId }) : [];
     await sendBuyerOrderShippedNotification({
-      orderRef: afterSnap.ref,
       order,
       dropId,
       dropName,
@@ -5267,7 +4898,7 @@ export const notifyBuyerOnDeliveryShipped = onDocumentUpdated(
 export const notifyStripeCheckoutManualReview = onDocumentUpdated(
   {
     document: 'drops/{dropId}/stripeCheckouts/{sessionId}',
-    secrets: [RESEND_API_KEY],
+    secrets: [NOTIFICATION_ENQUEUE_SECRET],
     retry: true,
   },
   async (event) => {
@@ -5312,47 +4943,25 @@ export const notifyStripeCheckoutManualReview = onDocumentUpdated(
     const recipients = [recipient];
     const checkout = afterSnap.data() as any;
     const checkoutRef = afterSnap.ref;
-    const notificationRef = checkoutRef.collection('notifications').doc(STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_DOC_ID);
     const idempotencyKey = `${dropId}:${sessionId}:stripe_manual_review`;
 
-    await runReservedEmailNotification({
-      notificationRef,
-      leaseMs: STRIPE_CHECKOUT_MANUAL_REVIEW_NOTIFICATION_LEASE_MS,
-      notification: {
-        type: 'stripe_checkout_manual_review',
-        status: 'sending',
-        dropId,
-        sessionId,
-        checkoutPath: checkoutRef.path,
-        recipients,
-        recipientCount: recipients.length,
-        idempotencyKey,
-      },
-      reservedElsewhereLogEvent: 'notifyStripeCheckoutManualReview:reservedElsewhere',
-      failureLogEvent: 'notifyStripeCheckoutManualReview:failed',
-      failureWriteFailedLogEvent: 'notifyStripeCheckoutManualReview:failureWriteFailed',
-      logMeta: { dropId, sessionId },
-      retryableErrorName: 'RetryableStripeCheckoutManualReviewEmailError',
-      sendInProgressMessage: 'Stripe checkout manual review notification send lease is still active',
-      send: () =>
-        sendStripeCheckoutManualReviewEmail({
-          idempotencyKey,
-          recipients,
-          dropId,
-          dropName,
-          sessionId,
-          checkoutPath: checkoutRef.path,
-          livemode: checkout?.livemode === true,
-          variantKey: optionalTrimmedString(checkout?.variantKey),
-          owner: optionalTrimmedString(checkout?.owner),
-          firebaseUid: optionalTrimmedString(checkout?.firebaseUid || checkout?.uid),
-          manualRefundReviewReason: optionalTrimmedString(checkout?.manualRefundReviewReason),
-          lastFulfillmentError: checkout?.lastFulfillmentError,
-          createdAt: toMillisMaybe(checkout?.createdAt),
-          fulfillmentRequestedAt: toMillisMaybe(checkout?.fulfillmentRequestedAt),
-          processingStartedAt: toMillisMaybe(checkout?.processingStartedAt),
-          failedAt: toMillisMaybe(checkout?.failedAt),
-        }),
+    await sendStripeCheckoutManualReviewEmail({
+      idempotencyKey,
+      recipients,
+      dropId,
+      dropName,
+      sessionId,
+      checkoutPath: checkoutRef.path,
+      livemode: checkout?.livemode === true,
+      variantKey: optionalTrimmedString(checkout?.variantKey),
+      owner: optionalTrimmedString(checkout?.owner),
+      firebaseUid: optionalTrimmedString(checkout?.firebaseUid || checkout?.uid),
+      manualRefundReviewReason: optionalTrimmedString(checkout?.manualRefundReviewReason),
+      lastFulfillmentError: checkout?.lastFulfillmentError,
+      createdAt: toMillisMaybe(checkout?.createdAt),
+      fulfillmentRequestedAt: toMillisMaybe(checkout?.fulfillmentRequestedAt),
+      processingStartedAt: toMillisMaybe(checkout?.processingStartedAt),
+      failedAt: toMillisMaybe(checkout?.failedAt),
     });
   },
 );

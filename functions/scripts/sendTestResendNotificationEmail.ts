@@ -4,11 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldPath, getFirestore, type DocumentSnapshot, type Firestore, type Query } from 'firebase-admin/firestore';
-import { Resend } from 'resend';
 import { FUNCTIONS_DROPS, normalizeDropId, requireFunctionsDrop } from '../src/config/deployment.ts';
 import { dropDeliveryOrderPath, dropDeliveryOrdersCollectionPath } from '../src/dropPaths.ts';
 import {
-  NOTIFICATION_EMAIL_FROM,
   buildBuyerOrderReceivedEmailContent,
   buildBuyerOrderShippedEmailContent,
   buildBuyerOrderUpdateEmailContent,
@@ -25,6 +23,11 @@ import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
 } from '../src/orderEmailItems.ts';
+import { enqueueNotificationEmailJob } from '../src/cloudflareNotifications.ts';
+import {
+  createNotificationEmailJobV1,
+  type NotificationEmailKind,
+} from '../src/shared/notificationEmailJob.ts';
 import { normalizeFulfillmentStatusOrNull, type FulfillmentStatus } from '../../src/lib/fulfillmentStatus.ts';
 import { resolveFulfillmentTrackingHref } from '../../src/lib/fulfillmentTracking.ts';
 
@@ -83,7 +86,7 @@ type BuiltTestEmail = {
 };
 
 const PROJECT_ID = 'mons-shop';
-const RESEND_SECRET_NAME = 'RESEND_API_KEY';
+const ENQUEUE_SECRET_NAME = 'NOTIFICATION_ENQUEUE_SECRET';
 const TEST_RECIPIENT = 'ivan@ivan.lol';
 const TEST_DROP_ID = 'local_resend_test';
 const TEST_DROP_NAME = 'Local Resend Test';
@@ -108,7 +111,7 @@ const DELIVERY_ORDER_LOOKUP_FIELDS = [
 
 function usage(): string {
   return [
-    'Send one local Resend notification test email to ivan@ivan.lol.',
+    'Queue one Resend notification test email to ivan@ivan.lol through Cloudflare.',
     '',
     'Usage:',
     '  npm run test-resend-notification-email',
@@ -329,7 +332,7 @@ function loadLocalEnv() {
 }
 
 function firebaseSecretAccessCommand(): string[] {
-  return ['functions:secrets:access', RESEND_SECRET_NAME, '--project', PROJECT_ID];
+  return ['functions:secrets:access', ENQUEUE_SECRET_NAME, '--project', PROJECT_ID];
 }
 
 function runFirebaseCli(args: string[]): SpawnSyncReturns<string> {
@@ -339,11 +342,11 @@ function runFirebaseCli(args: string[]): SpawnSyncReturns<string> {
   });
 }
 
-function readResendApiKeyFromFirebaseSecret(): string {
+function readNotificationEnqueueSecretFromFirebase(): string {
   const result = runFirebaseCli(firebaseSecretAccessCommand());
   if (result.error) {
     if ((result.error as NodeJS.ErrnoException).code === 'ENOENT') {
-      fail('Firebase CLI is not installed or is not on PATH. Install/login to Firebase CLI before accessing RESEND_API_KEY.');
+      fail(`Firebase CLI is not installed or is not on PATH. Install/login to Firebase CLI before accessing ${ENQUEUE_SECRET_NAME}.`);
     }
     fail(`Unable to run Firebase CLI: ${result.error.message}`);
   }
@@ -352,21 +355,21 @@ function readResendApiKeyFromFirebaseSecret(): string {
     const stdout = String(result.stdout || '').trim();
     fail(
       [
-        `Unable to access Firebase secret ${RESEND_SECRET_NAME} for project ${PROJECT_ID}.`,
+        `Unable to access Firebase secret ${ENQUEUE_SECRET_NAME} for project ${PROJECT_ID}.`,
         stderr || stdout || `Firebase CLI exited with status ${result.status}.`,
       ].join('\n'),
     );
   }
 
   const value = String(result.stdout || '').trim();
-  if (!value) fail(`Firebase secret ${RESEND_SECRET_NAME} is empty or unavailable.`);
+  if (!value) fail(`Firebase secret ${ENQUEUE_SECRET_NAME} is empty or unavailable.`);
   return value;
 }
 
-function resendApiKey(): string {
-  const fromEnv = String(process.env.RESEND_API_KEY || '').trim();
+function notificationEnqueueSecret(): string {
+  const fromEnv = String(process.env.NOTIFICATION_ENQUEUE_SECRET || '').trim();
   if (fromEnv) return fromEnv;
-  return readResendApiKeyFromFirebaseSecret();
+  return readNotificationEnqueueSecretFromFirebase();
 }
 
 function firestore(): Firestore {
@@ -747,11 +750,11 @@ async function buildTestEmail(args: Args, idempotencyKey: string): Promise<Built
   }
 }
 
-function summarizeResendError(error: any): string {
-  const name = typeof error?.name === 'string' && error.name ? error.name : 'unknown_resend_error';
-  const message = typeof error?.message === 'string' && error.message ? error.message : 'Unknown Resend error';
-  const statusCode = typeof error?.statusCode === 'number' && Number.isFinite(error.statusCode) ? error.statusCode : undefined;
-  return [name, statusCode ? `status ${statusCode}` : '', message].filter(Boolean).join(': ');
+function notificationKindForTest(kind: TestEmailKind): NotificationEmailKind {
+  if (kind === 'shipper-ready') return 'shipper_ready_to_ship';
+  if (kind === 'order-shipped') return 'buyer_order_shipped';
+  if (kind === 'stripe-manual-review') return 'stripe_checkout_manual_review';
+  return 'buyer_order_received';
 }
 
 async function main() {
@@ -762,25 +765,27 @@ async function main() {
   const builtEmail = await buildTestEmail(args, idempotencyKey);
   const email = builtEmail.content;
   const selectedOrder = builtEmail.selectedOrder;
-  const resend = new Resend(resendApiKey());
-  const result = await resend.emails.send(
-    {
-      from: NOTIFICATION_EMAIL_FROM,
-      to: [TEST_RECIPIENT],
-      subject: email.subject,
-      text: email.text,
-      html: email.html,
-    },
-    { idempotencyKey },
-  );
-
-  if (result.error) {
-    fail(`Resend send failed: ${summarizeResendError(result.error)}`);
-  }
+  const notificationKind = notificationKindForTest(args.kind);
+  const deliveryId = selectedOrder?.deliveryId || Math.max(1, Date.now());
+  const sessionId = `cs_test_local_${Date.now()}`;
+  const job = createNotificationEmailJobV1({
+    jobId: randomUUID(),
+    kind: notificationKind,
+    idempotencyKey,
+    recipients: [TEST_RECIPIENT],
+    subject: email.subject,
+    text: email.text,
+    html: email.html,
+    context: notificationKind === 'stripe_checkout_manual_review'
+      ? { dropId: TEST_DROP_ID, sessionId }
+      : { dropId: selectedOrder?.dropId || TEST_DROP_ID, deliveryId },
+  });
+  await enqueueNotificationEmailJob({ job, secret: notificationEnqueueSecret() });
 
   console.log(
     [
-      'Sent Resend notification test email.',
+      'Queued Resend notification test email.',
+      `Job ID: ${job.jobId}`,
       `Kind: ${args.kind}`,
       `To: ${TEST_RECIPIENT}`,
       `Subject: ${email.subject}`,
@@ -796,7 +801,6 @@ async function main() {
       selectedOrder
         ? `Selected order timestamp: ${selectedOrder.sortTimeMs ? new Date(selectedOrder.sortTimeMs).toISOString() : 'unknown'}`
         : undefined,
-      result.data?.id ? `Message ID: ${result.data.id}` : undefined,
     ]
       .filter(Boolean)
       .join('\n'),

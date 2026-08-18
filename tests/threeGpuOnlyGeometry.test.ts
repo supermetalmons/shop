@@ -375,7 +375,10 @@ test('unsafe geometry retains every CPU array in the object root', async (t) => 
       name: 'instanced geometry',
       createObject: (geometry, material) => {
         const instancedGeometry = new THREE.InstancedBufferGeometry();
-        instancedGeometry.copy(geometry);
+        for (const [name, attribute] of Object.entries(geometry.attributes)) {
+          instancedGeometry.setAttribute(name, attribute);
+        }
+        instancedGeometry.setIndex(geometry.index);
         return new THREE.Mesh(instancedGeometry, material);
       },
     },

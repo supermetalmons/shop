@@ -162,8 +162,14 @@ const providerFetch: ProviderFetch = async (_input, init) => {
 };
 
 const env: Env = {
+  NOTIFICATION_EMAIL_QUEUE: {
+    send: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+  },
   HELIUS_API_KEY: 'memory-test-key',
   RESEND_CONTACTS_API_KEY: 'memory-resend-test-key',
+  NOTIFICATION_ENQUEUE_SECRET: 'memory-notification-enqueue-secret',
 };
 const response = await handleRequest(new Request('https://api.mons.shop/inventory', {
   method: 'POST',

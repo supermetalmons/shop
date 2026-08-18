@@ -15,6 +15,14 @@ import {
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../functions/src/shared/pendingOpenCodec.ts';
 import { SHOP_EXPECTED_ASSET_IDS_MAX } from '../../../../functions/src/shared/shopApi.ts';
 import { isExactShopRpcRequest } from '../../../../functions/src/shared/solanaRpcProxy.ts';
+import { createNotificationEmailJobV1 } from '../../../../functions/src/shared/notificationEmailJob.ts';
+import {
+  NOTIFICATION_ENQUEUE_PATH,
+  NOTIFICATION_ENQUEUE_SIGNATURE_HEADER,
+  NOTIFICATION_ENQUEUE_TIMESTAMP_HEADER,
+  notificationEnqueueTimestamp,
+  signNotificationEnqueueRequest,
+} from '../../../../functions/src/shared/notificationEnqueueAuth.ts';
 import { handleRequest, sleepWithAbort, type ProviderFetch } from '../src/index.ts';
 import {
   FIRESTORE_PACK_STATUS_CACHE_TTL_SECONDS,
@@ -29,13 +37,56 @@ const TRANSACTION = Buffer.from([1, 2, 3]).toString('base64');
 function env(options: {
   apiKey?: string;
   resendContactsApiKey?: string;
+  notificationEnqueueSecret?: string;
+  notificationQueue?: Queue;
 } = {}): Env {
+  const notificationQueue: Queue = options.notificationQueue || {
+    send: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+  };
   return {
+    NOTIFICATION_EMAIL_QUEUE: notificationQueue,
     HELIUS_API_KEY: options.apiKey === undefined ? 'test-key' : options.apiKey,
     RESEND_CONTACTS_API_KEY: options.resendContactsApiKey === undefined
       ? 'resend-test-key'
       : options.resendContactsApiKey,
+    NOTIFICATION_ENQUEUE_SECRET: options.notificationEnqueueSecret === undefined
+      ? 'notification-enqueue-test-secret'
+      : options.notificationEnqueueSecret,
   };
+}
+
+const NOTIFICATION_JOB = createNotificationEmailJobV1({
+  jobId: '123e4567-e89b-42d3-a456-426614174000',
+  kind: 'buyer_order_received',
+  idempotencyKey: 'card_nft_2:123:order_received',
+  recipients: ['buyer@example.com'],
+  subject: 'Subject',
+  text: 'Text',
+  html: '<p>HTML</p>',
+  context: { dropId: 'card_nft_2', deliveryId: 123 },
+});
+
+async function notificationEnqueueRequest(
+  body: unknown = NOTIFICATION_JOB,
+  secret = 'notification-enqueue-test-secret',
+  timestamp = notificationEnqueueTimestamp(),
+): Promise<Request> {
+  const requestBody = JSON.stringify(body);
+  return new Request(`https://api.mons.shop${NOTIFICATION_ENQUEUE_PATH}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      [NOTIFICATION_ENQUEUE_TIMESTAMP_HEADER]: timestamp,
+      [NOTIFICATION_ENQUEUE_SIGNATURE_HEADER]: await signNotificationEnqueueRequest({
+        secret,
+        timestamp,
+        body: requestBody,
+      }),
+    },
+    body: requestBody,
+  });
 }
 
 function request(pathname: string, body: unknown = { owner: OWNER }, headers: Record<string, string> = {}): Request {
@@ -480,6 +531,77 @@ test('notification subscription converts a bounded provider deadline into a gene
     assert.equal(response.status, 504);
     assert.deepEqual(await response.json(), { ok: false, error: 'provider-timeout' });
   }
+});
+
+test('internal notification enqueue requires a valid signature and exposes no CORS', async () => {
+  let sends = 0;
+  const notificationQueue: Queue = {
+    send: async () => {
+      sends += 1;
+      return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+    },
+    sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+  };
+  const unsigned = await handleRequest(new Request(`https://api.mons.shop${NOTIFICATION_ENQUEUE_PATH}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(NOTIFICATION_JOB),
+  }), env({ notificationQueue }), quietDependencies(fetch));
+  assert.equal(unsigned.status, 401);
+  assert.equal(unsigned.headers.get('access-control-allow-origin'), null);
+  assert.equal(sends, 0);
+
+  const preflight = await handleRequest(new Request(`https://api.mons.shop${NOTIFICATION_ENQUEUE_PATH}`, {
+    method: 'OPTIONS',
+  }), env({ notificationQueue }), quietDependencies(fetch));
+  assert.equal(preflight.status, 405);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), null);
+  assert.equal(sends, 0);
+});
+
+test('internal notification enqueue sends the exact validated JSON job once', async () => {
+  const sent: Array<{ body: unknown; options?: QueueSendOptions }> = [];
+  const notificationQueue: Queue = {
+    send: async (body, options) => {
+      sent.push({ body, options });
+      return { metadata: { metrics: { backlogCount: 1, backlogBytes: 100 } } };
+    },
+    sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+  };
+  const response = await handleRequest(
+    await notificationEnqueueRequest(),
+    env({ notificationQueue }),
+    quietDependencies(fetch),
+  );
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), { queued: true });
+  assert.deepEqual(sent, [{ body: NOTIFICATION_JOB, options: { contentType: 'json' } }]);
+});
+
+test('internal notification enqueue rejects signed invalid jobs and surfaces queue failures', async () => {
+  const invalid = await handleRequest(
+    await notificationEnqueueRequest({ ...NOTIFICATION_JOB, recipients: ['not an email'] }),
+    env(),
+    quietDependencies(fetch),
+  );
+  assert.equal(invalid.status, 400);
+
+  const notificationQueue: Queue = {
+    send: async () => {
+      throw new Error('queue unavailable');
+    },
+    sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+  };
+  const unavailable = await handleRequest(
+    await notificationEnqueueRequest(),
+    env({ notificationQueue }),
+    quietDependencies(fetch),
+  );
+  assert.equal(unavailable.status, 503);
+  assert.deepEqual(await unavailable.json(), { ok: false, error: 'enqueue-unavailable' });
 });
 
 test('production config has no Worker rate limits', () => {
