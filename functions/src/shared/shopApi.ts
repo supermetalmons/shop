@@ -2,6 +2,7 @@ import {
   BOX_MINTER_MAX_ITEMS_PER_BOX,
   BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX,
 } from './boxMinterProtocol.js';
+import type { PackStatusBreakdown, PackStatusBreakdownItem } from './contracts.js';
 import { isBase58Bytes } from './solanaRpcProxy.js';
 
 type ShopApiBaseRequest = {
@@ -83,6 +84,11 @@ export type ShopInventoryResponse = {
 export type ShopPendingOpenBoxesResponse = {
   ok: true;
   items: ShopPendingOpenBox[];
+};
+
+export type ShopPackStatusResponse = {
+  ok: true;
+  packStatus: PackStatusBreakdown | null;
 };
 
 type ShopApiErrorCode =
@@ -206,6 +212,58 @@ function isExactShopPendingOpenBox(value: unknown): value is ShopPendingOpenBox 
     (Number.isSafeInteger(value.createdSlot) && Number(value.createdSlot) >= 0);
 }
 
+function isExactShopPackStatusBreakdownItem(value: unknown): value is PackStatusBreakdownItem {
+  return isRecord(value) &&
+    hasExactKeys(value, ['key', 'label', 'amount', 'percentage']) &&
+    (value.key === 'redeemed' || value.key === 'unsealed' || value.key === 'total') &&
+    typeof value.label === 'string' &&
+    value.label.length > 0 &&
+    Number.isSafeInteger(value.amount) &&
+    Number(value.amount) >= 0 &&
+    typeof value.percentage === 'number' &&
+    Number.isFinite(value.percentage) &&
+    value.percentage >= 0;
+}
+
+function isExactShopPackStatusBreakdown(value: unknown): value is PackStatusBreakdown {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'dropId',
+    'total',
+    'totalInitialSupply',
+    'totalCards',
+    'cardsPerPack',
+    'unsealedOnline',
+    'unsealedCards',
+    'redeemedIrl',
+    'redeemedIrlNormal',
+    'redeemedIrlStripe',
+    'redeemedUnsealedCards',
+    'redeemedCards',
+    'items',
+  ])) return false;
+  if (
+    typeof value.dropId !== 'string' ||
+    value.dropId.length === 0 ||
+    ![
+      value.total,
+      value.totalInitialSupply,
+      value.totalCards,
+      value.cardsPerPack,
+      value.unsealedOnline,
+      value.unsealedCards,
+      value.redeemedIrl,
+      value.redeemedIrlNormal,
+      value.redeemedIrlStripe,
+      value.redeemedUnsealedCards,
+      value.redeemedCards,
+    ].every((amount) => Number.isSafeInteger(amount) && Number(amount) >= 0) ||
+    !Array.isArray(value.items) ||
+    value.items.length !== 3 ||
+    !value.items.every(isExactShopPackStatusBreakdownItem)
+  ) return false;
+  return new Set(value.items.map((item) => item.key)).size === 3;
+}
+
 export function isExactShopInventoryResponse(value: unknown): value is ShopInventoryResponse {
   return isRecord(value) &&
     hasExactKeys(value, ['ok', 'items']) &&
@@ -222,6 +280,13 @@ export function isExactShopPendingOpenBoxesResponse(value: unknown): value is Sh
     Array.isArray(value.items) &&
     value.items.length <= SHOP_API_MAX_RESPONSE_ITEMS &&
     value.items.every(isExactShopPendingOpenBox);
+}
+
+export function isExactShopPackStatusResponse(value: unknown): value is ShopPackStatusResponse {
+  return isRecord(value) &&
+    hasExactKeys(value, ['ok', 'packStatus']) &&
+    value.ok === true &&
+    (value.packStatus === null || isExactShopPackStatusBreakdown(value.packStatus));
 }
 
 export function isExactShopApiErrorResponse(value: unknown): value is ShopApiErrorResponse {

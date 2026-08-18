@@ -57,6 +57,12 @@ import {
   MAX_INVENTORY_RESPONSE_BODY_BYTES,
   MAX_INVENTORY_SERIALIZED_ITEM_BYTES,
 } from './inventoryLimits.js';
+import {
+  fetchFirestorePackStatus,
+  FIRESTORE_PACK_STATUS_TIMEOUT_MS,
+  isPackStatusRouteDropId,
+  type FirestorePackStatusFetch,
+} from './firestorePackStatus.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -91,6 +97,7 @@ const KNOWN_LOG_ROUTES = new Set([
   '/health',
   '/inventory',
   '/notifications/subscribe',
+  '/pack-status/:dropId',
   '/pending-open-boxes',
   '/rpc/mainnet-beta',
   '/rpc/devnet',
@@ -205,6 +212,8 @@ function createAttemptScope(overallSignal: AbortSignal, timeoutMs: number): Atte
 
 type WorkerDependencies = RpcProxyDependencies & {
   expectedAssetRecoveryTimeoutMs: number;
+  firestoreFetch: FirestorePackStatusFetch;
+  firestoreTimeoutMs: number;
   providerMaxResponseBodyBytes: number;
   providerMaxTotalResponseBodyBytes: number;
   inventoryMaxCandidates: number;
@@ -994,6 +1003,8 @@ export function sleepWithAbort(milliseconds: number, signal: AbortSignal): Promi
 
 const defaultDependencies: WorkerDependencies = {
   expectedAssetRecoveryTimeoutMs: EXPECTED_ASSET_RECOVERY_TIMEOUT_MS,
+  firestoreFetch: (input, init) => fetch(input, init),
+  firestoreTimeoutMs: FIRESTORE_PACK_STATUS_TIMEOUT_MS,
   providerFetch: (input, init) => fetch(input, init),
   providerTimeoutMs: HELIUS_OVERALL_TIMEOUT_MS,
   providerAttemptTimeoutMs: HELIUS_ATTEMPT_TIMEOUT_MS,
@@ -1011,6 +1022,32 @@ const defaultDependencies: WorkerDependencies = {
   validateInventoryResponse: isExactShopInventoryResponse,
   validatePendingOpenBoxesResponse: isExactShopPendingOpenBoxesResponse,
 };
+
+function packStatusDropIdFromPathname(pathname: string): string | null | undefined {
+  if (pathname !== '/pack-status' && !pathname.startsWith('/pack-status/')) return undefined;
+  const match = pathname.match(/^\/pack-status\/([^/]+)$/);
+  const dropId = match?.[1] || '';
+  return isPackStatusRouteDropId(dropId) ? dropId : null;
+}
+
+async function handlePackStatus(
+  dropId: string,
+  dependencies: WorkerDependencies,
+  metrics: WorkerRequestMetrics,
+): Promise<{ response: Response; cacheStatus?: string }> {
+  const startedAt = performance.now();
+  metrics.upstreamCalls += 1;
+  const result = await fetchFirestorePackStatus(
+    dropId,
+    dependencies.firestoreFetch,
+    dependencies.firestoreTimeoutMs,
+  );
+  metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
+  const response = result.ok
+    ? jsonResponse({ ok: true, packStatus: result.packStatus }, 200)
+    : jsonResponse({ ok: false, error: result.error }, result.error === 'provider-timeout' ? 504 : 502);
+  return { response, ...(result.cacheStatus ? { cacheStatus: result.cacheStatus } : {}) };
+}
 
 async function handlePost(
   request: Request,
@@ -1184,7 +1221,10 @@ export async function handleRequest(
     expectedAssetResolved: 0,
   };
   const pathname = new URL(request.url).pathname;
+  const packStatusDropId = packStatusDropIdFromPathname(pathname);
+  const isPackStatusRoute = packStatusDropId !== undefined;
   let includeDevnet = false;
+  let providerCacheStatus: string | undefined;
   let rpcMethod: string | undefined;
   let response: Response;
   const rpcCluster = pathname === '/rpc/mainnet-beta'
@@ -1195,9 +1235,20 @@ export async function handleRequest(
   } else if (request.method === 'OPTIONS' && (
     pathname === '/inventory' ||
     pathname === '/notifications/subscribe' ||
-    pathname === '/pending-open-boxes'
+    pathname === '/pending-open-boxes' ||
+    (isPackStatusRoute && packStatusDropId !== null)
   )) {
     response = new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store', 'Timing-Allow-Origin': '*' } });
+  } else if (isPackStatusRoute) {
+    if (packStatusDropId === null) {
+      response = jsonResponse({ ok: false, error: 'invalid-request' }, 400);
+    } else if (request.method !== 'GET') {
+      response = jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET, OPTIONS' });
+    } else {
+      const result = await handlePackStatus(packStatusDropId, dependencies, metrics);
+      response = result.response;
+      providerCacheStatus = result.cacheStatus;
+    }
   } else if (pathname === '/health') {
     response = request.method === 'GET'
       ? jsonResponse({ ok: true }, 200)
@@ -1233,15 +1284,18 @@ export async function handleRequest(
   }
   const totalDurationMs = performance.now() - startedAt;
   response.headers.set('Server-Timing', `total;dur=${totalDurationMs.toFixed(1)}, provider;dur=${metrics.providerDurationMs.toFixed(1)}`);
+  const logRoute = isPackStatusRoute ? '/pack-status/:dropId' : KNOWN_LOG_ROUTES.has(pathname) ? pathname : 'not-found';
   dependencies.log({
     event: 'shop_api_request',
-    route: KNOWN_LOG_ROUTES.has(pathname) ? pathname : 'not-found',
+    route: logRoute,
     method: request.method,
     status: response.status,
     durationMs: Math.round(totalDurationMs),
     providerDurationMs: Math.round(metrics.providerDurationMs),
     upstreamCalls: metrics.upstreamCalls,
     includeDevnet,
+    ...(packStatusDropId ? { dropId: packStatusDropId } : {}),
+    ...(providerCacheStatus ? { providerCacheStatus } : {}),
     ...(pathname === '/inventory' ? {
       expectedAssetIds: metrics.expectedAssetIds,
       expectedAssetRecoveryFailures: metrics.expectedAssetRecoveryFailures,

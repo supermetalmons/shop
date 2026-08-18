@@ -471,7 +471,7 @@ test('pack status rebuild script accepts supported mainnet drops and rejects uns
   );
 });
 
-test('Firestore rules allow client pack status reads for every supported drop', () => {
+test('Firestore rules allow public pack status reads for every supported drop', () => {
   const rules = readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8');
   const start = rules.indexOf('match /meta/packStatus');
   const end = rules.indexOf('match /meta/dudePool', start);
@@ -479,7 +479,7 @@ test('Firestore rules allow client pack status reads for every supported drop', 
   assert.notEqual(end, -1);
   const packStatusRule = rules.slice(start, end);
 
-  assert.match(packStatusRule, /request\.auth\s*!=\s*null/);
+  assert.doesNotMatch(packStatusRule, /request\.auth/);
   for (const dropId of PACK_STATUS_SUPPORTED_DROP_IDS) {
     assert.equal(packStatusRule.includes(`"${dropId}"`), true);
   }

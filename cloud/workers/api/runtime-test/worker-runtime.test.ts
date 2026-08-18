@@ -52,6 +52,15 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(notificationPreflight.status, 204);
     assert.equal(notificationPreflight.headers.get('access-control-allow-origin'), '*');
 
+    const packStatusPreflight = await worker.fetch('https://api.mons.shop/pack-status/card_nft_2', { method: 'OPTIONS' });
+    assert.equal(packStatusPreflight.status, 204);
+    assert.equal(packStatusPreflight.headers.get('access-control-allow-origin'), '*');
+    assert.match(packStatusPreflight.headers.get('cache-control') || '', /no-store/);
+
+    const invalidPackStatus = await worker.fetch('https://api.mons.shop/pack-status/unsupported');
+    assert.equal(invalidPackStatus.status, 400);
+    assert.deepEqual(await invalidPackStatus.json(), { ok: false, error: 'invalid-request' });
+
     const invalidNotification = await worker.fetch('https://api.mons.shop/notifications/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

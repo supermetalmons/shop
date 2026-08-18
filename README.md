@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions are used for flows that require off-chain coordination (open box assignments, delivery order pricing, IRL claim locking). Public inventory, pending-open reads, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps the Helius credential out of the browser.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions are used for flows that require off-chain coordination (open box assignments, delivery order pricing, IRL claim locking). Public inventory, pack status, pending-open reads, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps the Helius credential out of the browser.
 
 ## Shared domain core
 
@@ -57,8 +57,11 @@ Never commit the token or expose secrets through a `VITE_*` variable.
 
 The API Worker uses encrypted `HELIUS_API_KEY` and `RESEND_CONTACTS_API_KEY`
 secrets, Smart Placement, and a version-first release flow. It serves
-`/inventory`, `/notifications/subscribe`, `/pending-open-boxes`,
-`/rpc/mainnet-beta`, and `/rpc/devnet`; every response is uncached.
+`/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
+`/pending-open-boxes`, `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
+responses remain uncached. Pack-status reads use the public Firestore REST API
+with a 15-second Cloudflare subrequest cache and support only `card_nft_2`,
+`poncho_drifella`, and `little_swag_boxes`.
 
 - Run the complete guarded API release with no intermediate commands or arguments:
   - `npm run deploy:api`
@@ -141,6 +144,12 @@ For a coordinated application and Firebase rollback, restore the frontend Worker
 before deploying older Functions or Firestore rules. A newer frontend can depend
 on backend authentication and read contracts that older Firebase releases do not
 provide.
+
+Pack-status releases must deploy Firestore rules first, then the API Worker, then
+the frontend Worker. Roll back in reverse order because the frontend deliberately
+has no direct-Firestore fallback. Deploy the prerequisite rules with
+`firebase deploy --project mons-shop --only firestore:rules` after the emulator
+suite passes.
 
 #### Address encryption key
 - Generate a Curve25519 keypair (TweetNaCl-compatible) and copy the base64 public key into `src/App.tsx` (`ADDRESS_ENCRYPTION_PUBLIC_KEY`):

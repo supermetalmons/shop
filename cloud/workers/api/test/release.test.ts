@@ -1498,6 +1498,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
     forbiddenInventoryDropId: 'clear_cards_devnet',
     includeDevnet: true,
     includeNotificationSubscription: true,
+    includePackStatus: true,
     owner: OWNER,
   }, {
     fetchSmoke: async (url, init, _label, timeoutMs = deployApiTestHooks.defaultSmokeTimeoutMs) => {
@@ -1540,6 +1541,33 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
       }
       if (method === 'POST' && pathname === '/notifications/subscribe') {
         return { response: Response.json({ subscribed: true }, { status: 200, headers }), durationMs: 1 };
+      }
+      if (method === 'GET' && pathname === '/pack-status/card_nft_2') {
+        return {
+          response: Response.json({
+            ok: true,
+            packStatus: {
+              dropId: 'card_nft_2',
+              total: 30,
+              totalInitialSupply: 10,
+              totalCards: 30,
+              cardsPerPack: 3,
+              unsealedOnline: 1,
+              unsealedCards: 3,
+              redeemedIrl: 1,
+              redeemedIrlNormal: 1,
+              redeemedIrlStripe: 0,
+              redeemedUnsealedCards: 0,
+              redeemedCards: 3,
+              items: [
+                { key: 'unsealed', label: 'Unpacked', amount: 3, percentage: 10 },
+                { key: 'redeemed', label: 'Redeemed', amount: 3, percentage: 10 },
+                { key: 'total', label: 'Total', amount: 30, percentage: 100 },
+              ],
+            },
+          }, { status: 200, headers }),
+          durationMs: 1,
+        };
       }
       if (method === 'POST' && pathname.startsWith('/rpc/')) {
         const cluster = pathname.endsWith('/devnet') ? 'devnet' : 'mainnet-beta';
@@ -2109,6 +2137,7 @@ test('complete API release verifies the full pair around one exact API promotion
         forbiddenInventoryDropId: 'clear_cards_devnet',
         includeDevnet: true,
         includeNotificationSubscription: true,
+        includePackStatus: true,
         owner: OWNER,
       });
       await input.verifyBeforePromotion?.();
@@ -2267,6 +2296,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
     expectedInventoryDropId?: string;
     forbiddenInventoryDropId?: string;
     includeNotificationSubscription?: boolean;
+    includePackStatus?: boolean;
   }> = [];
   const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
   await deployApiTestHooks.runProductionSequence(
@@ -2276,6 +2306,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
         forbiddenInventoryDropId: 'clear_cards_devnet',
         includeDevnet: true,
         includeNotificationSubscription: true,
+        includePackStatus: true,
         owner: OWNER,
       },
       expectedCurrentVersionId: baselineVersionId,
@@ -2347,21 +2378,25 @@ test('API production benchmarks the exact preview before mutation and writes evi
     expectedInventoryDropId: options.expectedInventoryDropId,
     forbiddenInventoryDropId: options.forbiddenInventoryDropId,
     includeNotificationSubscription: options.includeNotificationSubscription,
+    includePackStatus: options.includePackStatus,
   })), [
     {
       expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
       forbiddenInventoryDropId: 'clear_cards_devnet',
       includeNotificationSubscription: true,
+      includePackStatus: true,
     },
     {
       expectedInventoryDropId: undefined,
       forbiddenInventoryDropId: undefined,
       includeNotificationSubscription: undefined,
+      includePackStatus: undefined,
     },
     {
       expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
       forbiddenInventoryDropId: 'clear_cards_devnet',
       includeNotificationSubscription: true,
+      includePackStatus: true,
     },
   ]);
 });

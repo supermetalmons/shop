@@ -64,11 +64,10 @@ service cloud.firestore {
       }
 
       match /meta/packStatus {
-        allow get: if request.auth != null && (
+        allow get: if
           dropId == "card_nft_2" ||
           dropId == "poncho_drifella" ||
-          dropId == "little_swag_boxes"
-        );
+          dropId == "little_swag_boxes";
         allow list, create, update, delete: if false;
       }
 

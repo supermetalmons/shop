@@ -44,13 +44,12 @@ import {
   type FrontendDeploymentConfig,
 } from '../config/deployment';
 import {
-  PACK_STATUS_DEFAULT_CARDS_PER_PACK,
   isPackStatusSupportedDropId,
   normalizePackStatusAmount,
-  normalizePackStatusBreakdown,
 } from '../../functions/src/shared/packStatus.ts';
 import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.ts';
 import { parseDeliveryOrderSummary } from '../../functions/src/shared/deliveryOrderSummary.ts';
+import { fetchPackStatus } from './shopApi';
 
 export type {
   ReconcileProfileStateRequest,
@@ -235,12 +234,6 @@ function packStatusFrontendDropForDropId(dropId: string): FrontendDeploymentConf
   return drop;
 }
 
-function packStatusCardsPerPackForDropId(dropId: string): number {
-  const normalizedDropId = normalizeDropId(dropId);
-  const dropItemsPerBox = normalizePackStatusAmount(FRONTEND_DROPS[normalizedDropId]?.itemsPerBox);
-  return dropItemsPerBox || PACK_STATUS_DEFAULT_CARDS_PER_PACK;
-}
-
 export function packStatusDisplayLabelsForDropId(dropId: string | undefined): PackStatusDisplayLabels | null {
   if (!dropId) return null;
   const normalizedDropId = normalizeDropId(dropId);
@@ -259,17 +252,7 @@ export function supportsFrontendPackStatus(dropId: string | undefined): boolean 
 export async function getDropPackStatus(dropId: string): Promise<PackStatusBreakdown | null> {
   const normalizedDropId = normalizeDropId(dropId);
   if (!normalizedDropId) throw new Error('dropId is required');
-  if (!firebaseApp) throw new Error('Firebase client is not configured');
-  await ensureAuthenticated();
-  const { doc, getDoc, getFirestore } = await import('firebase/firestore');
-  const firestore = getFirestore(firebaseApp);
-  const snap = await getDoc(doc(firestore, 'drops', normalizedDropId, 'meta', 'packStatus'));
-  if (!snap.exists()) return null;
-  return normalizePackStatusBreakdown(
-    snap.data(),
-    normalizedDropId,
-    packStatusCardsPerPackForDropId(normalizedDropId),
-  );
+  return fetchPackStatus(normalizedDropId);
 }
 
 export async function listFulfillmentOrders(args: {

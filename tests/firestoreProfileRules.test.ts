@@ -66,7 +66,10 @@ test('Firestore profile rules keep sensitive and unrelated collections closed', 
   assert.match(claimCodes, /allow read, write: if false/);
   assert.match(deliveryOrders, /allow read, write: if false/);
   assert.match(catchAll, /allow read, write: if false/);
-  assert.match(packStatus, /allow get: if request\.auth != null/);
+  assert.doesNotMatch(packStatus, /request\.auth/);
+  assert.match(packStatus, /dropId == "card_nft_2"/);
+  assert.match(packStatus, /dropId == "poncho_drifella"/);
+  assert.match(packStatus, /dropId == "little_swag_boxes"/);
   assert.match(packStatus, /allow list, create, update, delete: if false/);
 });
 
@@ -143,6 +146,8 @@ test(
           setDoc(doc(firestore, 'drops', 'card_nft_2', 'deliveryOrders', '1'), { owner: activeWallet }),
           setDoc(doc(firestore, 'claimCodes', 'secret'), { owner: activeWallet }),
           setDoc(doc(firestore, 'drops', 'card_nft_2', 'meta', 'packStatus'), { total: 1 }),
+          setDoc(doc(firestore, 'drops', 'poncho_drifella', 'meta', 'packStatus'), { total: 1 }),
+          setDoc(doc(firestore, 'drops', 'little_swag_boxes', 'meta', 'packStatus'), { total: 1 }),
         ]);
       });
 
@@ -214,7 +219,7 @@ test(
           updateData: { owner: otherWallet },
         },
         {
-          createPath: 'drops/poncho_drifella/meta/packStatus',
+          createPath: 'drops/unsupported/meta/packStatus',
           existingPath: 'drops/card_nft_2/meta/packStatus',
           createData: { total: 1 },
           updateData: { total: 2 },
@@ -231,7 +236,11 @@ test(
       await assertFails(getDoc(doc(anonymous, 'profiles', activeWallet, 'shipments', 'shipment-1')));
       await assertFails(getDocs(collection(anonymous, 'profiles', activeWallet, 'shipments')));
       await assertFails(getDoc(doc(anonymous, 'authSessions', 'active-user')));
-      await assertFails(getDoc(doc(anonymous, 'drops', 'card_nft_2', 'meta', 'packStatus')));
+      await assertSucceeds(getDoc(doc(anonymous, 'drops', 'card_nft_2', 'meta', 'packStatus')));
+      await assertSucceeds(getDoc(doc(anonymous, 'drops', 'poncho_drifella', 'meta', 'packStatus')));
+      await assertSucceeds(getDoc(doc(anonymous, 'drops', 'little_swag_boxes', 'meta', 'packStatus')));
+      await assertFails(getDoc(doc(anonymous, 'drops', 'unsupported', 'meta', 'packStatus')));
+      await assertFails(getDocs(collection(anonymous, 'drops', 'card_nft_2', 'meta')));
 
       const unbound = environment.authenticatedContext('unbound-user').firestore();
       await assertSucceeds(getDoc(doc(unbound, 'authSessions', 'unbound-user')));

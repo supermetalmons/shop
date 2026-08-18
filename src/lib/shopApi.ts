@@ -1,12 +1,14 @@
 import {
   isExactShopApiErrorResponse,
   isExactShopInventoryResponse,
+  isExactShopPackStatusResponse,
   isExactShopPendingOpenBoxesResponse,
   type ShopExpectedAssetIds,
   type ShopInventoryRequest,
   type ShopInventoryItem,
   type ShopPendingOpenBoxesRequest,
 } from '../../functions/src/shared/shopApi.ts';
+import type { PackStatusBreakdown } from '../../functions/src/shared/contracts.ts';
 import type { InventoryItem, PendingOpenBox } from '../types';
 import {
   normalizeBoxDisplayImage,
@@ -26,9 +28,9 @@ export type InventoryFetchOptions = DropFetchOptions & {
   expectedAssetIds?: ShopExpectedAssetIds;
 };
 
-async function postShopApi(
-  pathname: '/inventory' | '/pending-open-boxes',
-  requestBody: ShopInventoryRequest | ShopPendingOpenBoxesRequest,
+async function requestShopApi(
+  pathname: string,
+  init: RequestInit,
   signal?: AbortSignal,
 ): Promise<unknown> {
   const controller = new AbortController();
@@ -38,9 +40,7 @@ async function postShopApi(
   if (signal?.aborted) abort();
   try {
     const response = await fetch(`${monsApiOrigin()}${pathname}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
+      ...init,
       cache: 'no-store',
       signal: controller.signal,
     });
@@ -60,6 +60,18 @@ async function postShopApi(
     clearTimeout(timeout);
     signal?.removeEventListener('abort', abort);
   }
+}
+
+async function postShopApi(
+  pathname: '/inventory' | '/pending-open-boxes',
+  requestBody: ShopInventoryRequest | ShopPendingOpenBoxesRequest,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  return requestShopApi(pathname, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(requestBody),
+  }, signal);
 }
 
 function normalizeInventoryItem(item: ShopInventoryItem): InventoryItem {
@@ -111,4 +123,12 @@ export async function fetchPendingOpenBoxes(owner: string, options: DropFetchOpt
   );
   if (!isExactShopPendingOpenBoxesResponse(payload)) throw new Error('Shop API returned an invalid pending-open response');
   return payload.items;
+}
+
+export async function fetchPackStatus(dropId: string, signal?: AbortSignal): Promise<PackStatusBreakdown | null> {
+  const payload = await requestShopApi(`/pack-status/${encodeURIComponent(dropId)}`, { method: 'GET' }, signal);
+  if (!isExactShopPackStatusResponse(payload) || (payload.packStatus !== null && payload.packStatus.dropId !== dropId)) {
+    throw new Error('Shop API returned an invalid pack-status response');
+  }
+  return payload.packStatus;
 }

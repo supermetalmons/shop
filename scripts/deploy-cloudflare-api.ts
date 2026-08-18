@@ -16,6 +16,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   isExactShopInventoryResponse,
+  isExactShopPackStatusResponse,
   isExactShopPendingOpenBoxesResponse,
 } from '../functions/src/shared/shopApi.ts';
 import { isExactSubscribeToNotificationsResponse } from '../functions/src/shared/notificationSubscription.ts';
@@ -68,6 +69,7 @@ type SmokeApiOptions = {
   forbiddenInventoryDropId?: string;
   includeDevnet: boolean;
   includeNotificationSubscription?: boolean;
+  includePackStatus?: boolean;
   owner: string;
 };
 
@@ -684,6 +686,28 @@ async function smokeApi(
   if (cors.response.status !== 204 || cors.response.headers.get('access-control-allow-origin') !== '*') fail('CORS smoke response was invalid.');
   assertResponseHeaders(cors.response, 'CORS smoke response');
 
+  let packStatusDurationMs: number | undefined;
+  if (options.includePackStatus === true) {
+    const packStatus = await request(
+      `${baseUrl}/pack-status/card_nft_2`,
+      { method: 'GET', headers: { Origin: 'https://mons.shop' } },
+      'Pack-status smoke request',
+    );
+    if (packStatus.response.status !== 200) {
+      fail(`Pack-status smoke request returned ${packStatus.response.status}.`);
+    }
+    assertResponseHeaders(packStatus.response, 'Pack-status smoke response');
+    const packStatusPayload: unknown = await packStatus.response.json();
+    if (
+      !isExactShopPackStatusResponse(packStatusPayload) ||
+      !packStatusPayload.packStatus ||
+      packStatusPayload.packStatus.dropId !== 'card_nft_2'
+    ) {
+      fail('Pack-status smoke response had an unexpected shape.');
+    }
+    packStatusDurationMs = Math.round(packStatus.durationMs);
+  }
+
   if (options.includeNotificationSubscription === true) {
     const notification = await request(`${baseUrl}/notifications/subscribe`, {
       method: 'POST',
@@ -767,7 +791,8 @@ async function smokeApi(
     durations[`/rpc/${cluster}`] = Math.round(rpc.durationMs);
   }
   console.log(
-    `[api-deploy] Smoke latency: inventory=${durations['/inventory']}ms pending=${durations['/pending-open-boxes']}ms ` +
+    `[api-deploy] Smoke latency: packStatus=${packStatusDurationMs === undefined ? 'skipped' : `${packStatusDurationMs}ms`} ` +
+    `inventory=${durations['/inventory']}ms pending=${durations['/pending-open-boxes']}ms ` +
     `mainnetRpc=${durations['/rpc/mainnet-beta']}ms devnetRpc=${durations['/rpc/devnet']}ms`,
   );
 }
@@ -1210,6 +1235,7 @@ async function runCompleteApiRelease(
     forbiddenInventoryDropId: forbiddenReleaseDropId,
     includeDevnet: true,
     includeNotificationSubscription: true,
+    includePackStatus: true,
     owner: input.smokeOwner,
   };
   const metadata = await dependencies.upload({
@@ -1295,7 +1321,7 @@ async function main(): Promise<void> {
     const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
     await uploadApiCandidate({
       apiToken,
-      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, owner: options.smokeOwner },
+      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, owner: options.smokeOwner },
       heliusApiKey,
       logsDirectory,
       smokeOwner: options.smokeOwner,
@@ -1331,7 +1357,7 @@ async function main(): Promise<void> {
       wranglerEnvironment,
     });
     await runProductionSequence({
-      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, owner: options.smokeOwner },
+      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, owner: options.smokeOwner },
       expectedCurrentVersionId,
       heliusApiKey,
       previewUrl,

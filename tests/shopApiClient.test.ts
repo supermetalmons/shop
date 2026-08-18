@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { QueryClient } from '@tanstack/react-query';
 import { CARD_NFT_2_PACK_BASE_URL } from '../src/config/dropMediaDefaults.ts';
 import {
@@ -11,10 +12,29 @@ import {
   isExactShopInventoryResponse,
   isExactShopPendingOpenBoxesResponse,
 } from '../functions/src/shared/shopApi.ts';
-import { fetchInventory, fetchPendingOpenBoxes } from '../src/lib/shopApi.ts';
+import { fetchInventory, fetchPackStatus, fetchPendingOpenBoxes } from '../src/lib/shopApi.ts';
 import { rpcEndpointForCluster, SHOP_SOLANA_CONNECTION_CONFIG } from '../src/lib/shopRpc.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+const PACK_STATUS = {
+  dropId: 'card_nft_2',
+  total: 11133,
+  totalInitialSupply: 3711,
+  totalCards: 11133,
+  cardsPerPack: 3,
+  unsealedOnline: 2,
+  unsealedCards: 6,
+  redeemedIrl: 3,
+  redeemedIrlNormal: 1,
+  redeemedIrlStripe: 2,
+  redeemedUnsealedCards: 1,
+  redeemedCards: 10,
+  items: [
+    { key: 'unsealed', label: 'Unpacked', amount: 6, percentage: 0.05 },
+    { key: 'redeemed', label: 'Redeemed', amount: 10, percentage: 0.09 },
+    { key: 'total', label: 'Total', amount: 11133, percentage: 100 },
+  ],
+} as const;
 
 test('frontend RPC endpoints and connection policy use the shared mons API origin', () => {
   assert.equal(rpcEndpointForCluster('mainnet-beta'), 'https://api.mons.shop/rpc/mainnet-beta');
@@ -97,6 +117,62 @@ test('inventory client serializes expected asset IDs by cluster without changing
       },
     });
   });
+});
+
+test('pack-status client uses api.mons.shop GET without browser caching', async () => {
+  await withFetch((async (input, init) => {
+    assert.equal(String(input), 'https://api.mons.shop/pack-status/card_nft_2');
+    assert.equal(init?.method, 'GET');
+    assert.equal(init?.cache, 'no-store');
+    assert.equal(init?.body, undefined);
+    assert.ok(init?.signal);
+    return Response.json({ ok: true, packStatus: PACK_STATUS });
+  }) as typeof fetch, async () => {
+    assert.deepEqual(await fetchPackStatus('card_nft_2'), PACK_STATUS);
+  });
+});
+
+test('pack-status client accepts null and rejects malformed or mismatched responses', async () => {
+  await withFetch((async () => Response.json({ ok: true, packStatus: null })) as typeof fetch, async () => {
+    assert.equal(await fetchPackStatus('card_nft_2'), null);
+  });
+  for (const payload of [
+    { ok: true, packStatus: { ...PACK_STATUS, extra: true } },
+    { ok: true, packStatus: { ...PACK_STATUS, dropId: 'poncho_drifella' } },
+    { ok: true, packStatus: { ...PACK_STATUS, items: PACK_STATUS.items.slice(0, 2) } },
+  ]) {
+    await withFetch((async () => Response.json(payload)) as typeof fetch, async () => {
+      await assert.rejects(fetchPackStatus('card_nft_2'), /invalid pack-status response/);
+    });
+  }
+});
+
+test('pack-status client propagates aborts and API errors', async () => {
+  await withFetch((async (_input, init) => {
+    if (init?.signal?.aborted) throw init.signal.reason;
+    throw new Error('unexpected');
+  }) as typeof fetch, async () => {
+    const controller = new AbortController();
+    controller.abort(new DOMException('aborted', 'AbortError'));
+    await assert.rejects(fetchPackStatus('card_nft_2', controller.signal), { name: 'AbortError' });
+  });
+  await withFetch((async () => Response.json(
+    { ok: false, error: 'provider-unavailable' },
+    { status: 502 },
+  )) as typeof fetch, async () => {
+    await assert.rejects(fetchPackStatus('card_nft_2'), /provider-unavailable/);
+  });
+});
+
+test('pack-status frontend facade has no direct Firestore fallback', () => {
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function getDropPackStatus');
+  const end = source.indexOf('export async function listFulfillmentOrders', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const implementation = source.slice(start, end);
+  assert.match(implementation, /fetchPackStatus\(normalizedDropId\)/);
+  assert.doesNotMatch(implementation, /firebase\/firestore|getFirestore|getDoc/);
 });
 
 test('inventory client accepts exact string bounds and rejects each over-limit field', async () => {
