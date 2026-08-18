@@ -436,6 +436,9 @@ function credentialFreeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv
       normalized.startsWith('WRANGLER_') ||
       normalized === 'HELIUS_API_KEY' ||
       normalized === 'RESEND_CONTACTS_API_KEY' ||
+      normalized === 'NOTIFICATION_ENQUEUE_SECRET' ||
+      normalized === 'FIRESTORE_SERVICE_ACCOUNT_JSON' ||
+      normalized === 'GOOGLE_APPLICATION_CREDENTIALS' ||
       normalized === 'DOTENV_KEY' ||
       normalized === 'STRIPE_TEST_UNIT_AMOUNT_CENTS'
     ) {

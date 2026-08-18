@@ -50,6 +50,7 @@ import {
 import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.ts';
 import { parseDeliveryOrderSummary } from '../../functions/src/shared/deliveryOrderSummary.ts';
 import { fetchPackStatus } from './shopApi';
+import { monsApiOrigin } from './monsApiOrigin';
 
 export type {
   ReconcileProfileStateRequest,
@@ -158,6 +159,133 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
     });
     throw err;
   }
+}
+
+type ProfileApiErrorPayload = {
+  code: string;
+  message: string;
+  details?: unknown;
+};
+
+class ProfileApiError extends Error {
+  readonly code: string;
+  readonly details?: unknown;
+
+  constructor(payload: ProfileApiErrorPayload) {
+    super(payload.message);
+    this.name = 'ProfileApiError';
+    this.code = payload.code;
+    this.details = payload.details;
+  }
+}
+
+function profileApiErrorPayload(value: unknown, status: number): ProfileApiErrorPayload {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const error = (value as Record<string, unknown>).error;
+    if (error && typeof error === 'object' && !Array.isArray(error)) {
+      const code = (error as Record<string, unknown>).code;
+      const message = (error as Record<string, unknown>).message;
+      const details = (error as Record<string, unknown>).details;
+      if (typeof code === 'string' && code && typeof message === 'string' && message) {
+        return { code, message, ...(details === undefined ? {} : { details }) };
+      }
+    }
+  }
+  return { code: status >= 500 ? 'unavailable' : `http-${status}`, message: 'Profile API request failed.' };
+}
+
+async function authenticatedUserToken(forceRefresh: boolean): Promise<string> {
+  const uid = await ensureAuthenticated();
+  const user = auth?.currentUser;
+  if (!user || user.uid !== uid) throw new ProfileApiError({ code: 'unauthenticated', message: 'Authentication is required.' });
+  return user.getIdToken(forceRefresh);
+}
+
+type ProfileApiClientDependencies = {
+  fetch: typeof fetch;
+  getToken: (forceRefresh: boolean) => Promise<string>;
+  origin: () => string;
+  timeoutMs: number;
+};
+
+const defaultProfileApiDependencies: ProfileApiClientDependencies = {
+  fetch: (input, init) => fetch(input, init),
+  getToken: authenticatedUserToken,
+  origin: monsApiOrigin,
+  timeoutMs: 20_000,
+};
+
+async function requestProfileApi<Req>(
+  pathname: '/profile/shipments' | '/profile/anonymous-stripe-delivery-history' | '/admin/profile',
+  data: Req,
+  dependencies: ProfileApiClientDependencies,
+): Promise<unknown> {
+  const startedAt = Date.now();
+  const callId = DEBUG_FUNCTIONS ? makeCallId() : undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const token = await dependencies.getToken(attempt > 0);
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new DOMException('Timed out', 'TimeoutError')),
+      dependencies.timeoutMs,
+    );
+    try {
+      if (DEBUG_FUNCTIONS) {
+        console.info(`[mons/api] → ${pathname}`, { callId, payload: summarizePayloadShape(data) });
+      }
+      const response = await dependencies.fetch(`${dependencies.origin()}${pathname}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch (error) {
+        if (controller.signal.aborted) throw controller.signal.reason;
+        throw new ProfileApiError({ code: 'unavailable', message: 'Profile API returned malformed JSON.', details: error });
+      }
+      if (response.status === 401 && attempt === 0) continue;
+      if (!response.ok) throw new ProfileApiError(profileApiErrorPayload(payload, response.status));
+      if (DEBUG_FUNCTIONS) {
+        console.info(`[mons/api] ← ${pathname}`, {
+          callId,
+          ms: Date.now() - startedAt,
+          data: summarizePayloadShape(payload),
+        });
+      }
+      return payload;
+    } catch (error) {
+      if (attempt === 0 && error instanceof ProfileApiError && error.code === 'unauthenticated') continue;
+      console.error(`[mons/api] ✖ ${pathname}`, {
+        ...(callId ? { callId } : {}),
+        ms: Date.now() - startedAt,
+        error: summarizeError(error),
+      });
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw new ProfileApiError({ code: 'unauthenticated', message: 'Authentication is required.' });
+}
+
+async function callProfileApi<Req>(
+  pathname: '/profile/shipments' | '/profile/anonymous-stripe-delivery-history' | '/admin/profile',
+  data: Req,
+): Promise<unknown> {
+  return requestProfileApi(pathname, data, defaultProfileApiDependencies);
+}
+
+function profileOrders(value: unknown): DeliveryOrderSummary[] | null {
+  if (!Array.isArray(value)) return null;
+  const orders = value.map(parseDeliveryOrderSummary);
+  return orders.every((order): order is DeliveryOrderSummary => order !== null) ? orders : null;
 }
 
 export { fetchPendingOpenBoxes } from './shopApi';
@@ -496,30 +624,45 @@ export async function reconcileProfileState(
 }
 
 export async function loadProfileShipmentsFromServer(ownerWallet: string): Promise<DeliveryOrderSummary[]> {
-  const response = await callFunction<
-    GetProfileShipmentsRequest,
-    unknown
-  >('getProfile', { ownerWallet, responseMode: 'shipments' });
+  const request: GetProfileShipmentsRequest = { ownerWallet };
+  const response: unknown = await callProfileApi('/profile/shipments', request);
   const payload = response && typeof response === 'object'
     ? (response as Partial<GetProfileShipmentsResponse>)
     : null;
+  const orders = profileOrders(payload?.orders);
   if (
     payload?.responseMode === 'shipments' &&
     payload.wallet === ownerWallet &&
-    Array.isArray(payload.orders)
+    orders
   ) {
-    const orders = payload.orders.map(parseDeliveryOrderSummary);
-    if (orders.every((order): order is DeliveryOrderSummary => order !== null)) return orders;
+    return orders;
   }
   throw new Error('Invalid shipment history response');
 }
 
 export async function getAdminProfileView(ownerWallet: string): Promise<GetAdminProfileViewResponse> {
-  return callFunction<GetAdminProfileViewRequest, GetAdminProfileViewResponse>('getAdminProfileView', { ownerWallet });
+  const response = await callProfileApi<GetAdminProfileViewRequest>('/admin/profile', { ownerWallet });
+  if (!response || typeof response !== 'object' || Array.isArray(response)) throw new Error('Invalid admin profile response');
+  const profile = (response as Record<string, unknown>).profile;
+  if (!profile || typeof profile !== 'object' || Array.isArray(profile)) throw new Error('Invalid admin profile response');
+  const wallet = (profile as Record<string, unknown>).wallet;
+  const email = (profile as Record<string, unknown>).email;
+  const orders = profileOrders((profile as Record<string, unknown>).orders);
+  if (wallet !== ownerWallet || (email !== undefined && typeof email !== 'string') || !orders) {
+    throw new Error('Invalid admin profile response');
+  }
+  const normalizedEmail = typeof email === 'string' && email ? email : undefined;
+  return { profile: { wallet, ...(normalizedEmail ? { email: normalizedEmail } : {}), orders } };
 }
 
 export async function getAnonymousStripeDeliveryHistory(): Promise<{ orders: Profile['orders'] }> {
-  return callFunction<Record<string, never>, { orders: Profile['orders'] }>('getAnonymousStripeDeliveryHistory', {});
+  const response: unknown = await callProfileApi('/profile/anonymous-stripe-delivery-history', {});
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error('Invalid anonymous Stripe delivery history response');
+  }
+  const orders = profileOrders((response as Record<string, unknown>).orders);
+  if (!orders) throw new Error('Invalid anonymous Stripe delivery history response');
+  return { orders };
 }
 
 export async function listDeliveryOrderOwners(
@@ -537,3 +680,9 @@ export async function listDeliveryOrderOwners(
     { owners: string[]; nextCursor: string | null; hasMore: boolean }
   >('listDeliveryOrderOwners', payload);
 }
+
+export const profileApiTestHooks = {
+  profileApiErrorPayload,
+  profileOrders,
+  requestProfileApi,
+};

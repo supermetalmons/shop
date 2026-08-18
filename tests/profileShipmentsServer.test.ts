@@ -11,8 +11,6 @@ import {
   toDeliveryOrderSummary,
 } from '../functions/src/profileShipments.ts';
 import {
-  runLegacyGetProfileFlow,
-  runProfileShipmentsResponseFlow,
   runProfileStateReconciliationFlow,
   runVerifiedSolanaAuthProfileFlow,
 } from '../functions/src/profileLifecycle.ts';
@@ -556,112 +554,6 @@ test('verified Solana auth keeps the default legacy response flow and rejects se
     /invalid combination/,
   );
   assert.deepEqual(calls, []);
-});
-
-test('legacy getProfile flow preserves own-profile creation, merge ordering, and response data', async () => {
-  const calls: string[] = [];
-  const response = await runLegacyGetProfileFlow(
-    {
-      callerWallet: OWNER_ONE,
-      profileWallet: OWNER_ONE,
-      mergeStripeDeliveryOrders: true,
-    },
-    {
-      loadProfile: async () => {
-        calls.push('loadProfile');
-        return { exists: false, data: {} };
-      },
-      ensureProfile: async () => {
-        calls.push('ensureProfile');
-      },
-      mergeStripeDeliveryOrders: async () => {
-        calls.push('mergeStripeDeliveryOrders');
-      },
-      buildResponse: async (profileData) => {
-        calls.push('buildResponse');
-        return { profile: { ...profileData, wallet: OWNER_ONE, orders: [] } };
-      },
-    },
-  );
-
-  assert.deepEqual(response, { profile: { wallet: OWNER_ONE, orders: [] } });
-  assert.deepEqual(calls, [
-    'loadProfile',
-    'ensureProfile',
-    'mergeStripeDeliveryOrders',
-    'buildResponse',
-  ]);
-});
-
-test('legacy getProfile flow never creates or merges a cross-wallet admin view', async () => {
-  const calls: string[] = [];
-  const response = await runLegacyGetProfileFlow(
-    {
-      callerWallet: OWNER_ONE,
-      profileWallet: OWNER_TWO,
-      mergeStripeDeliveryOrders: true,
-    },
-    {
-      loadProfile: async () => {
-        calls.push('loadProfile');
-        return { exists: false, data: {} };
-      },
-      ensureProfile: async () => {
-        calls.push('ensureProfile');
-      },
-      mergeStripeDeliveryOrders: async () => {
-        calls.push('mergeStripeDeliveryOrders');
-      },
-      buildResponse: async () => {
-        calls.push('buildResponse');
-        return { profile: { wallet: OWNER_TWO, orders: [] } };
-      },
-    },
-  );
-
-  assert.deepEqual(response, { profile: { wallet: OWNER_TWO, orders: [] } });
-  assert.deepEqual(calls, ['loadProfile', 'buildResponse']);
-});
-
-test('shipment response mode validates its owner and returns only the active wallet history', async () => {
-  const loadCalls: string[] = [];
-  const deps = {
-    invalidMergeError: () => new Error('merge not allowed'),
-    missingOwnerError: () => new Error('owner required'),
-    sessionMismatchError: () => new Error('session mismatch'),
-    normalizeWallet: (wallet: string) => wallet,
-    loadOrders: async (wallet: string) => {
-      loadCalls.push(wallet);
-      return [{ deliveryId: 1 }];
-    },
-  };
-
-  assert.deepEqual(
-    await runProfileShipmentsResponseFlow(
-      { sessionWallet: OWNER_ONE, rawOwnerWallet: ` ${OWNER_ONE} ` },
-      deps,
-    ),
-    { responseMode: 'shipments', wallet: OWNER_ONE, orders: [{ deliveryId: 1 }] },
-  );
-  await assert.rejects(
-    runProfileShipmentsResponseFlow(
-      { sessionWallet: OWNER_ONE, rawOwnerWallet: OWNER_ONE, mergeStripeDeliveryOrders: true },
-      deps,
-    ),
-    /merge not allowed/,
-  );
-  await assert.rejects(
-    runProfileShipmentsResponseFlow({ sessionWallet: OWNER_ONE }, deps),
-    /owner required/,
-  );
-  await assert.rejects(
-    runProfileShipmentsResponseFlow(
-      { sessionWallet: OWNER_ONE, rawOwnerWallet: OWNER_TWO },
-      deps,
-    ),
-    /session mismatch/,
-  );
-  assert.deepEqual(loadCalls, [OWNER_ONE]);
 });
 
 test('projection transaction applier reads destinations before exact deletes and writes', async () => {

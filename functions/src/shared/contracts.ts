@@ -84,7 +84,6 @@ export type DeliveryOrderSummary = {
 
 export type GetProfileShipmentsRequest = {
   ownerWallet: string;
-  responseMode: 'shipments';
 };
 
 export type GetProfileShipmentsResponse = {

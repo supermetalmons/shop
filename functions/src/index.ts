@@ -101,7 +101,6 @@ import {
   stripeReceiptClaimCodeMaybe,
   stripeReceiptClaimBoxMapKey,
   stripeReceiptClaimSummary,
-  stripeCheckoutOwnerId,
 } from './stripeCheckout/contract.js';
 import {
   ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT,
@@ -189,7 +188,6 @@ import {
 import {
   DELIVERY_ORDER_SUMMARY_FIELDS,
   applyProfileShipmentSyncPlan,
-  deliveryOrderSummaryFromProfileShipment,
   dropIdFromDeliveryOrderPath,
   planConvergentProfileShipmentSync,
   resolveDeliveryOrderIdentity,
@@ -197,8 +195,6 @@ import {
   toDeliveryOrderSummaries,
 } from './profileShipments.js';
 import {
-  runLegacyGetProfileFlow,
-  runProfileShipmentsResponseFlow,
   runProfileStateReconciliationFlow,
   runVerifiedSolanaAuthProfileFlow,
 } from './profileLifecycle.js';
@@ -244,8 +240,6 @@ import type {
   DeliveryOrderSummary,
   DeliveryRecoveryOutcome,
   DeliveryRecoveryState,
-  GetAdminProfileViewResponse,
-  GetProfileShipmentsResponse,
   ReconcileProfileStateResponse,
   FulfillmentOrderAddress,
   FulfillmentOrderBox,
@@ -5671,7 +5665,7 @@ function throwStripeOwnerMergeCallableError(err: unknown, wallet: string): never
 async function tryMergeFirebaseStripeDeliveryOrdersToWallet(
   uid: string,
   wallet: string,
-  logContext: 'solanaAuth' | 'getProfile',
+  logContext: 'solanaAuth',
 ): Promise<number> {
   try {
     const merged = await mergeFirebaseStripeDeliveryOrdersToWalletInDb(db, uid, wallet);
@@ -5768,61 +5762,6 @@ export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
   );
 });
 
-export const getProfile = onCallLogged('getProfile', async (request) => {
-  const { uid, wallet } = await requireWalletSession(request);
-  const schema = z.object({
-    ownerWallet: z.string().optional(),
-    mergeStripeDeliveryOrders: z.boolean().optional(),
-    responseMode: z.literal('shipments').optional(),
-  });
-  const { ownerWallet: rawOwnerWallet, mergeStripeDeliveryOrders, responseMode } = parseRequest(schema, request.data || {});
-  if (responseMode === 'shipments') {
-    const response: GetProfileShipmentsResponse = await runProfileShipmentsResponseFlow(
-      { sessionWallet: wallet, rawOwnerWallet, mergeStripeDeliveryOrders },
-      {
-        invalidMergeError: () =>
-          new HttpsError('invalid-argument', 'Shipment response mode cannot merge Stripe delivery orders.'),
-        missingOwnerError: () =>
-          new HttpsError('invalid-argument', 'ownerWallet is required in shipment response mode.'),
-        sessionMismatchError: () =>
-          new HttpsError('unauthenticated', 'Wallet session changed. Sign in again.'),
-        normalizeWallet,
-        loadOrders: fetchDeliveryOrderHistory,
-      },
-    );
-    return response;
-  }
-
-  const requestedWallet = rawOwnerWallet?.trim();
-  const profileWallet = requestedWallet ? normalizeWallet(requestedWallet) : wallet;
-
-  if (profileWallet !== wallet) {
-    await requireAdminAccess(request);
-  }
-
-  logger.info('getProfile:legacy', {
-    callerWallet: wallet,
-    profileWallet,
-    mode: profileWallet === wallet ? 'own' : 'admin',
-  });
-
-  const profileRef = db.doc(`profiles/${profileWallet}`);
-  return runLegacyGetProfileFlow(
-    { callerWallet: wallet, profileWallet, mergeStripeDeliveryOrders },
-    {
-      loadProfile: async () => {
-        const snap = await profileRef.get();
-        return { exists: snap.exists, data: snap.exists ? (snap.data() as any) : {} };
-      },
-      ensureProfile: () => profileRef.set({ wallet: profileWallet }, { merge: true }),
-      mergeStripeDeliveryOrders: () =>
-        tryMergeFirebaseStripeDeliveryOrdersToWallet(uid, wallet, 'getProfile'),
-      buildResponse: (profileData) =>
-        buildProfileResponse(profileWallet, profileData, profileWallet === wallet),
-    },
-  );
-});
-
 export const reconcileProfileState = onCallLogged('reconcileProfileState', async (request) => {
   const { uid, wallet } = await requireWalletSession(request);
   const schema = z.object({
@@ -5857,38 +5796,6 @@ export const reconcileProfileState = onCallLogged('reconcileProfileState', async
     response.deliveryRecovery = { nextCheckAt: state.deliveryRecovery.nextCheckAt };
   }
   return response;
-});
-
-export const getAdminProfileView = onCallLogged('getAdminProfileView', async (request) => {
-  await requireAdminAccess(request);
-  const schema = z.object({
-    ownerWallet: z.string().min(32).max(64),
-  });
-  const { ownerWallet: rawOwnerWallet } = parseRequest(schema, request.data || {});
-  const ownerWallet = normalizeWallet(rawOwnerWallet);
-  const profileRef = db.doc(`profiles/${ownerWallet}`);
-  const [profileSnap, shipmentsSnap] = await Promise.all([
-    profileRef.get(),
-    profileRef.collection('shipments').orderBy('sortAt', 'desc').get(),
-  ]);
-  const profileData = profileSnap.exists ? (profileSnap.data() as any) : {};
-  const email = optionalTrimmedString(profileData.email);
-  const orders = shipmentsSnap.docs
-    .map((doc) => deliveryOrderSummaryFromProfileShipment(doc.data()))
-    .filter((order): order is DeliveryOrderSummary => Boolean(order));
-  const response: GetAdminProfileViewResponse = {
-    profile: {
-      wallet: ownerWallet,
-      ...(email ? { email } : {}),
-      orders,
-    },
-  };
-  return response;
-});
-
-export const getAnonymousStripeDeliveryHistory = onCallAuthed('getAnonymousStripeDeliveryHistory', async (_request, uid) => {
-  const orders = await fetchDeliveryOrderHistory(stripeCheckoutOwnerId(uid));
-  return { orders };
 });
 
 export const listDeliveryOrderOwners = onCallLogged('listDeliveryOrderOwners', async (request) => {

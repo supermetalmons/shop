@@ -57,6 +57,22 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(packStatusPreflight.headers.get('access-control-allow-origin'), '*');
     assert.match(packStatusPreflight.headers.get('cache-control') || '', /no-store/);
 
+    const profilePreflight = await worker.fetch('https://api.mons.shop/profile/shipments', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://mons.shop' },
+    });
+    assert.equal(profilePreflight.status, 204);
+    assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+    assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+
+    const unauthenticatedProfile = await worker.fetch('https://api.mons.shop/profile/anonymous-stripe-delivery-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+      body: '{}',
+    });
+    assert.equal(unauthenticatedProfile.status, 401);
+    assert.equal((await unauthenticatedProfile.json() as any).error.code, 'unauthenticated');
+
     const invalidPackStatus = await worker.fetch('https://api.mons.shop/pack-status/unsupported');
     assert.equal(invalidPackStatus.status, 400);
     assert.deepEqual(await invalidPackStatus.json(), { ok: false, error: 'invalid-request' });

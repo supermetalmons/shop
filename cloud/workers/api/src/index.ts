@@ -64,6 +64,17 @@ import {
   type FirestorePackStatusFetch,
 } from './firestorePackStatus.js';
 import { handleNotificationEnqueue, NOTIFICATION_ENQUEUE_PATH } from './notificationEnqueue.js';
+import {
+  ADMIN_PROFILE_PATH,
+  ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
+  applyProfileCors,
+  handleProfileCorsPreflight,
+  handleProfileReadRequest,
+  isProfileRequestOriginAllowed,
+  PROFILE_READ_PATHS,
+  PROFILE_SHIPMENTS_PATH,
+  type ProfileReadPath,
+} from './profileReads.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -103,6 +114,9 @@ const KNOWN_LOG_ROUTES = new Set([
   '/pending-open-boxes',
   '/rpc/mainnet-beta',
   '/rpc/devnet',
+  PROFILE_SHIPMENTS_PATH,
+  ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
+  ADMIN_PROFILE_PATH,
 ]);
 
 export type ProviderFetch = RpcProviderFetch;
@@ -1227,12 +1241,16 @@ export async function handleRequest(
   const isPackStatusRoute = packStatusDropId !== undefined;
   let includeDevnet = false;
   let providerCacheStatus: string | undefined;
+  let profileAuthOutcome: string | undefined;
   let rpcMethod: string | undefined;
   let response: Response;
   const rpcCluster = pathname === '/rpc/mainnet-beta'
     ? 'mainnet-beta'
     : pathname === '/rpc/devnet' ? 'devnet' : null;
-  if (request.method === 'OPTIONS' && rpcCluster) {
+  const profilePath = PROFILE_READ_PATHS.has(pathname) ? pathname as ProfileReadPath : null;
+  if (request.method === 'OPTIONS' && profilePath) {
+    response = handleProfileCorsPreflight(request);
+  } else if (request.method === 'OPTIONS' && rpcCluster) {
     response = handleRpcPreflight(request);
   } else if (request.method === 'OPTIONS' && (
     pathname === '/inventory' ||
@@ -1257,6 +1275,16 @@ export async function handleRequest(
       : jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET' });
   } else if (pathname === NOTIFICATION_ENQUEUE_PATH) {
     response = await handleNotificationEnqueue(request, env, { log: dependencies.log });
+  } else if (profilePath) {
+    if (!isProfileRequestOriginAllowed(request)) {
+      response = applyProfileCors(request, new Response(null));
+    } else {
+      const result = await handleProfileReadRequest(request, env, profilePath);
+      metrics.upstreamCalls += result.metrics.upstreamCalls;
+      metrics.providerDurationMs += result.metrics.providerDurationMs;
+      profileAuthOutcome = result.authOutcome;
+      response = applyProfileCors(request, result.response);
+    }
   } else if (rpcCluster) {
     if (request.method !== 'POST') {
       response = handleRpcMethodNotAllowed(request);
@@ -1306,6 +1334,7 @@ export async function handleRequest(
       expectedAssetResolved: metrics.expectedAssetResolved,
     } : {}),
     ...(rpcMethod ? { rpcMethod } : {}),
+    ...(profileAuthOutcome ? { profileAuthOutcome } : {}),
   });
   return response;
 }

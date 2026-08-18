@@ -54,6 +54,7 @@ function env(options: {
     NOTIFICATION_ENQUEUE_SECRET: options.notificationEnqueueSecret === undefined
       ? 'notification-enqueue-test-secret'
       : options.notificationEnqueueSecret,
+    FIRESTORE_SERVICE_ACCOUNT_JSON: '',
   };
 }
 
@@ -242,6 +243,49 @@ test('health, routing, methods, CORS, and no-store headers are stable', async ()
   });
   assert.equal(logs[0]?.route, 'not-found');
   assert.equal(JSON.stringify(logs).includes(OWNER), false);
+});
+
+test('profile routes enforce restricted CORS, bearer authentication, and stable route logs', async () => {
+  const allowedPreflight = await handleRequest(new Request('https://api.mons.shop/profile/shipments', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(allowedPreflight.status, 204);
+  assert.equal(allowedPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(allowedPreflight.headers.get('vary'), 'Origin');
+
+  const deniedPreflight = await handleRequest(new Request('https://api.mons.shop/admin/profile', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://untrusted.example' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(deniedPreflight.status, 403);
+  assert.equal((await deniedPreflight.json() as { error: { code: string } }).error.code, 'permission-denied');
+
+  const logs: Record<string, unknown>[] = [];
+  const unauthenticated = await handleRequest(request('/profile/anonymous-stripe-delivery-history', {}, {
+    Origin: 'https://mons.shop',
+  }), env(), { ...quietDependencies(fetch), log: (entry) => logs.push(entry) });
+  assert.equal(unauthenticated.status, 401);
+  assert.equal((await unauthenticated.json() as { error: { code: string } }).error.code, 'unauthenticated');
+  assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(logs[0]?.route, '/profile/anonymous-stripe-delivery-history');
+  assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
+  assert.equal(JSON.stringify(logs).includes('firebase'), false);
+
+  let upstreamCalls = 0;
+  const deniedOrigin = await handleRequest(request('/profile/shipments', { ownerWallet: OWNER }, {
+    Authorization: 'Bearer private-token',
+    Origin: 'https://untrusted.example',
+  }), env(), {
+    ...quietDependencies(async () => {
+      upstreamCalls += 1;
+      return Response.json({});
+    }),
+  });
+  assert.equal(deniedOrigin.status, 403);
+  assert.equal(upstreamCalls, 0);
+  assert.equal(JSON.stringify(await deniedOrigin.json()).includes('private-token'), false);
 });
 
 test('pack-status route reads bounded Firestore fields with a 15-second edge cache', async () => {

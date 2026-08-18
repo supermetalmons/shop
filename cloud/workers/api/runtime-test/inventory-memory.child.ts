@@ -170,6 +170,7 @@ const env: Env = {
   HELIUS_API_KEY: 'memory-test-key',
   RESEND_CONTACTS_API_KEY: 'memory-resend-test-key',
   NOTIFICATION_ENQUEUE_SECRET: 'memory-notification-enqueue-secret',
+  FIRESTORE_SERVICE_ACCOUNT_JSON: '',
 };
 const response = await handleRequest(new Request('https://api.mons.shop/inventory', {
   method: 'POST',
