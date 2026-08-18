@@ -68,7 +68,7 @@
     "deploy": "node --experimental-strip-types scripts/deploy-cloudflare.ts",
     "deploy:api": "node --import tsx scripts/deploy-cloudflare-api.ts",
     "deploy:api:triggers": "node --import tsx scripts/deploy-cloudflare-api.ts triggers",
-    "deploy:notifications": "wrangler deploy --strict --config cloud/workers/notifications/wrangler.jsonc --env-file cloud/workers/notifications/release.env",
+    "deploy:notifications": "node --import tsx scripts/deploy-cloudflare-notifications.ts",
     "benchmark:api": "node --import tsx scripts/benchmark-cloudflare-api.ts",
     "release:finalize": "node --import tsx scripts/finalize-cloudflare-release.ts",
     "deploy:firebase": "npm run test:firestore-rules && firebase deploy --project mons-shop --only firestore:indexes,functions && firebase deploy --project mons-shop --only firestore:rules",

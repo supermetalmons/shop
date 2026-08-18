@@ -24,8 +24,9 @@ export function summarizeResendError(error: unknown): ResendErrorSummary {
 }
 
 export function isRetryableResendError(error: ResendErrorSummary): boolean {
+  if (error.statusCode === 408 || error.statusCode === 429 || (error.statusCode != null && error.statusCode >= 500)) {
+    return true;
+  }
   if (RETRYABLE_RESEND_ERROR_NAMES.has(error.name)) return true;
-  if (error.name !== 'unknown_resend_error') return false;
-  if (error.statusCode === 408 || error.statusCode === 409 || error.statusCode === 429) return true;
-  return Boolean(error.statusCode && error.statusCode >= 500);
+  return error.name === 'unknown_resend_error' && error.statusCode === 409;
 }

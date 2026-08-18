@@ -156,6 +156,23 @@ test('notification consumer retries transient provider and transport failures pe
   assert.equal(serialized.includes('private transport error'), false);
 });
 
+test('notification consumer retries transient HTTP statuses before provider names', async () => {
+  for (const statusCode of [408, 429, 503]) {
+    const queued = queueMessage({ ...JOB, jobId: `423e4567-e89b-42d3-a456-426614174${statusCode}` });
+    await processNotificationEmailBatch(batch(queued.message), env(), {
+      send: async () => ({
+        data: null,
+        error: { name: 'validation_error', message: 'recognized but transient', statusCode },
+      }),
+      log: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+    });
+    assert.equal(queued.actions.acks, 0, String(statusCode));
+    assert.deepEqual(queued.actions.retries, [{ delaySeconds: 30 }], String(statusCode));
+  }
+});
+
 test('notification consumer acknowledges permanent errors and malformed jobs', async () => {
   const permanent = queueMessage(JOB);
   const malformed = queueMessage({ ...JOB, recipients: ['not an email'] });

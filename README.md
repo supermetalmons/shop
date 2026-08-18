@@ -106,8 +106,10 @@ times before moving to `mons-shop-notification-emails-dlq`.
 
 - Validate generated bindings, TypeScript, unit tests, bundling, and startup:
   - `npm run check:notifications`
-- Deploy the isolated consumer Worker after both queues exist and
-  `RESEND_API_KEY` is configured on the Worker:
+- Run the guarded notification release. It validates the Worker, uploads and
+  deploys one exact version, sends a synthetic email through the production
+  Queue, automatically restores the tracked baseline if smoke fails, and records
+  the new production/rollback pair:
   - `npm run deploy:notifications`
 - Queue the synthetic test email through the production API and print its job ID:
   - `npm run test-resend-notification-email -- --kind stripe-manual-review`
@@ -115,8 +117,9 @@ times before moving to `mons-shop-notification-emails-dlq`.
   - `node_modules/.bin/wrangler queues info mons-shop-notification-emails`
   - `node_modules/.bin/wrangler queues info mons-shop-notification-emails-dlq`
   - `node_modules/.bin/wrangler tail mons-shop-notifications --format json`
-- Roll back only to an explicit known-good version:
-  - `node_modules/.bin/wrangler rollback <version-id> --config cloud/workers/notifications/wrangler.jsonc`
+- Roll back only to the exact approved version in
+  `cloud/notifications-release-manifest.json`:
+  - `npm run deploy:notifications -- rollback --version-id <uuid>`
 
 Both queues use 24-hour retention to match Resend's idempotency window. Do not
 automatically replay the DLQ after that window, and do not restore direct
