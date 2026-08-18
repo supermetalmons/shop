@@ -175,9 +175,11 @@ resolve the local write problem and rerun the same production command with the
 same version ID.
 
 Tracked release and rollback IDs live in `cloud/release-manifest.json`. The
-approved rollback targets are API `5ca5a74a-a68b-43b3-a6fb-6e218d2a3950` and
-frontend `0ffe94c8-97e7-46b1-8ae0-63c0abfddaef`; an older frontend containing
-direct browser Helius access is not an approved rollback target.
+approved rollback targets intentionally match the current API
+`91ca69bb-c4ba-4ebf-b3d0-a12528b11910` and frontend
+`ea8e4a16-d46e-4c5b-beb7-cfd44a40630d`. Rollback is therefore a no-op after the
+legacy fulfillment callables are retired; recover from a regression by fixing
+forward instead of restoring a former tracked version.
 
 To roll back an application version, provide `CLOUDFLARE_API_TOKEN` in the shell,
 inspect `node_modules/.bin/wrangler deployments list --config wrangler.jsonc`,
@@ -187,10 +189,8 @@ select a preview-only upload rather than the prior production deployment. The
 Amplify app and its CloudFront DNS targets were retired after the migration, so
 subsequent application rollbacks must use an explicit Worker version.
 
-For a coordinated application and Firebase rollback, restore the frontend Worker
-before deploying older Functions or Firestore rules. A newer frontend can depend
-on backend authentication and read contracts that older Firebase releases do not
-provide.
+Do not restore the former frontend or Functions versions after the fulfillment
+callables are retired. Those versions are no longer a compatible production pair.
 
 Pack-status releases must deploy Firestore rules first, then the API Worker, then
 the frontend Worker. Roll back in reverse order because the frontend deliberately
