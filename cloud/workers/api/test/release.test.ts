@@ -1497,6 +1497,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
     expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
     forbiddenInventoryDropId: 'clear_cards_devnet',
     includeDevnet: true,
+    includeNotificationSubscription: true,
     owner: OWNER,
   }, {
     fetchSmoke: async (url, init, _label, timeoutMs = deployApiTestHooks.defaultSmokeTimeoutMs) => {
@@ -2107,6 +2108,7 @@ test('complete API release verifies the full pair around one exact API promotion
         expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
         forbiddenInventoryDropId: 'clear_cards_devnet',
         includeDevnet: true,
+        includeNotificationSubscription: true,
         owner: OWNER,
       });
       await input.verifyBeforePromotion?.();
@@ -2261,7 +2263,11 @@ test('API production benchmarks the exact preview before mutation and writes evi
   const candidateVersionId = randomUUID();
   const previewUrl = deployApiTestHooks.expectedPreviewOrigin(candidateVersionId);
   const events: string[] = [];
-  const smokeOptions: Array<{ expectedInventoryDropId?: string; forbiddenInventoryDropId?: string }> = [];
+  const smokeOptions: Array<{
+    expectedInventoryDropId?: string;
+    forbiddenInventoryDropId?: string;
+    includeNotificationSubscription?: boolean;
+  }> = [];
   const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
   await deployApiTestHooks.runProductionSequence(
     {
@@ -2269,6 +2275,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
         expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
         forbiddenInventoryDropId: 'clear_cards_devnet',
         includeDevnet: true,
+        includeNotificationSubscription: true,
         owner: OWNER,
       },
       expectedCurrentVersionId: baselineVersionId,
@@ -2339,15 +2346,22 @@ test('API production benchmarks the exact preview before mutation and writes evi
   assert.deepEqual(smokeOptions.map((options) => ({
     expectedInventoryDropId: options.expectedInventoryDropId,
     forbiddenInventoryDropId: options.forbiddenInventoryDropId,
+    includeNotificationSubscription: options.includeNotificationSubscription,
   })), [
     {
       expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
       forbiddenInventoryDropId: 'clear_cards_devnet',
+      includeNotificationSubscription: true,
     },
-    { expectedInventoryDropId: undefined, forbiddenInventoryDropId: undefined },
+    {
+      expectedInventoryDropId: undefined,
+      forbiddenInventoryDropId: undefined,
+      includeNotificationSubscription: undefined,
+    },
     {
       expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
       forbiddenInventoryDropId: 'clear_cards_devnet',
+      includeNotificationSubscription: true,
     },
   ]);
 });

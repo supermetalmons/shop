@@ -67,6 +67,7 @@ type SmokeApiOptions = {
   expectedInventoryDropId?: string;
   forbiddenInventoryDropId?: string;
   includeDevnet: boolean;
+  includeNotificationSubscription?: boolean;
   owner: string;
 };
 
@@ -683,17 +684,19 @@ async function smokeApi(
   if (cors.response.status !== 204 || cors.response.headers.get('access-control-allow-origin') !== '*') fail('CORS smoke response was invalid.');
   assertResponseHeaders(cors.response, 'CORS smoke response');
 
-  const notification = await request(`${baseUrl}/notifications/subscribe`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
-    body: JSON.stringify({ email: notificationSmokeEmail }),
-  }, 'Notification subscription smoke request');
-  if (notification.response.status !== 200) {
-    fail(`Notification subscription smoke request returned ${notification.response.status}.`);
-  }
-  assertResponseHeaders(notification.response, 'Notification subscription smoke response');
-  if (!isExactSubscribeToNotificationsResponse(await notification.response.json())) {
-    fail('Notification subscription smoke response had an unexpected shape.');
+  if (options.includeNotificationSubscription === true) {
+    const notification = await request(`${baseUrl}/notifications/subscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+      body: JSON.stringify({ email: notificationSmokeEmail }),
+    }, 'Notification subscription smoke request');
+    if (notification.response.status !== 200) {
+      fail(`Notification subscription smoke request returned ${notification.response.status}.`);
+    }
+    assertResponseHeaders(notification.response, 'Notification subscription smoke response');
+    if (!isExactSubscribeToNotificationsResponse(await notification.response.json())) {
+      fail('Notification subscription smoke response had an unexpected shape.');
+    }
   }
 
   const deniedRpcCors = await request(`${baseUrl}/rpc/mainnet-beta`, {
@@ -1206,6 +1209,7 @@ async function runCompleteApiRelease(
     expectedInventoryDropId: expectedReleaseDropId,
     forbiddenInventoryDropId: forbiddenReleaseDropId,
     includeDevnet: true,
+    includeNotificationSubscription: true,
     owner: input.smokeOwner,
   };
   const metadata = await dependencies.upload({
@@ -1291,7 +1295,7 @@ async function main(): Promise<void> {
     const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
     await uploadApiCandidate({
       apiToken,
-      candidateSmoke: { includeDevnet: true, owner: options.smokeOwner },
+      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, owner: options.smokeOwner },
       heliusApiKey,
       logsDirectory,
       smokeOwner: options.smokeOwner,
@@ -1327,7 +1331,7 @@ async function main(): Promise<void> {
       wranglerEnvironment,
     });
     await runProductionSequence({
-      candidateSmoke: { includeDevnet: true, owner: options.smokeOwner },
+      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, owner: options.smokeOwner },
       expectedCurrentVersionId,
       heliusApiKey,
       previewUrl,
