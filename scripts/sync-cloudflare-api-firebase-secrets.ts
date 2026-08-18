@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 const PROJECT_ID = 'mons-shop';
 const SECRET_NAMES = [
   'ADDRESS_DECRYPTION_SECRET',
+  'SHIPSTATION_API_KEY',
   'STRIPE_SECRET_KEY',
   'STRIPE_RESTRICTED_KEY',
   'STRIPE_SECRET_KEY_LIVE',
@@ -62,7 +63,7 @@ function main(): void {
     chmodSync(path, 0o600);
     run(WRANGLER, [
       'versions', 'secret', 'bulk', path,
-      '--message', 'Stage Firebase read migration secrets',
+      '--message', 'Stage Firebase migration secrets',
       ...CONFIG_ARGS,
     ]);
   } finally {

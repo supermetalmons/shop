@@ -4,11 +4,30 @@ import { z } from 'zod';
 import { normalizeCountryCode } from './normalizers.js';
 import type {
   FulfillmentShipStationInvalidRate,
-  FulfillmentShipStationLabel,
   FulfillmentShipStationRate,
   ShipStationMoney,
 } from './shared/contracts.js';
+import {
+  getShipStationLabelById as getSharedShipStationLabelById,
+  isActiveShipStationLabel,
+  listShipStationLabelsForShipment as listSharedShipStationLabelsForShipment,
+  shipStationLabelResult,
+  ShipStationLabelProviderError,
+  shipStationTrackingCodeUpdate,
+  shouldClearShipStationPurchaseState,
+  shouldTransitionShipStationPurchaseState,
+  type ShipStationLabelResult,
+} from './shared/shipstationLabels.js';
 import { defaultShipStationPackage, type ShipStationPackageInput } from './shared/shipstationPackage.js';
+
+export {
+  isActiveShipStationLabel,
+  shipStationLabelResult,
+  shipStationTrackingCodeUpdate,
+  shouldClearShipStationPurchaseState,
+  shouldTransitionShipStationPurchaseState,
+};
+export type { ShipStationLabelResult };
 
 const SHIPSTATION_API_BASE = 'https://api.shipstation.com/v2';
 const SHIPSTATION_TIMEOUT_MS = 15_000;
@@ -42,11 +61,6 @@ export type ShipStationShipment = {
   errors?: unknown;
 };
 
-export type ShipStationLabelResult = {
-  label: FulfillmentShipStationLabel;
-  downloadUrl?: string;
-};
-
 export type ShipStationRateResponse = {
   shipmentId: string;
   status: string;
@@ -56,31 +70,6 @@ export type ShipStationRateResponse = {
   createdAt?: string;
 };
 
-export function isActiveShipStationLabel(
-  label: Pick<FulfillmentShipStationLabel, 'status'> | null | undefined,
-): boolean {
-  return label?.status === 'completed' || label?.status === 'processing';
-}
-
-export function shouldClearShipStationPurchaseState(
-  label: Pick<FulfillmentShipStationLabel, 'status'>,
-  confirmedPurchase = false,
-): boolean {
-  return confirmedPurchase || isActiveShipStationLabel(label);
-}
-
-export function shouldTransitionShipStationPurchaseState(
-  purchase: unknown,
-  expectedRequestId: string | undefined,
-  hasActiveLabel: boolean,
-): boolean {
-  if (hasActiveLabel || !purchase || typeof purchase !== 'object') return false;
-  const raw = purchase as Record<string, unknown>;
-  if (raw.status !== 'purchasing') return false;
-  const currentRequestId = typeof raw.requestId === 'string' ? raw.requestId : undefined;
-  return expectedRequestId ? currentRequestId === expectedRequestId : currentRequestId === undefined;
-}
-
 export async function adoptOrPurchaseShipStationLabel(
   findExisting: () => Promise<ShipStationLabelResult | null>,
   purchase: () => Promise<ShipStationLabelResult>,
@@ -88,22 +77,6 @@ export async function adoptOrPurchaseShipStationLabel(
   const existing = await findExisting();
   if (existing) return { result: existing, alreadyPurchased: true };
   return { result: await purchase(), alreadyPurchased: false };
-}
-
-export function shipStationTrackingCodeUpdate(
-  currentTrackingCode: string | undefined,
-  currentLabel: Pick<FulfillmentShipStationLabel, 'labelId' | 'trackingNumber'> | undefined,
-  nextLabel: Pick<FulfillmentShipStationLabel, 'labelId' | 'status' | 'trackingNumber'>,
-): string | null | undefined {
-  if (isActiveShipStationLabel(nextLabel) && nextLabel.trackingNumber) return nextLabel.trackingNumber;
-  if (
-    currentTrackingCode &&
-    currentLabel?.trackingNumber === currentTrackingCode &&
-    (currentLabel.labelId !== nextLabel.labelId || !isActiveShipStationLabel(nextLabel))
-  ) {
-    return null;
-  }
-  return undefined;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -199,53 +172,6 @@ export function shipStationPackageDetails(shipment: ShipStationShipment): {
   if (packages.length !== 1) return { packageCount: packages.length };
   const packageInput = shipStationPackageInputFromShipmentPackage(packages[0]);
   return { packageCount: 1, ...(packageInput ? { package: packageInput } : {}) };
-}
-
-function labelStatus(value: unknown): FulfillmentShipStationLabel['status'] {
-  const normalized = stringValue(value);
-  if (normalized === 'completed') return 'completed';
-  if (normalized === 'processing' || normalized === 'error' || normalized === 'voided') return normalized;
-  return 'error';
-}
-
-function labelDownloadUrl(value: unknown): string | undefined {
-  const raw = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-  const url = stringValue(raw.pdf) || stringValue(raw.href);
-  return /^https:\/\//i.test(url) ? url : undefined;
-}
-
-export function shipStationLabelResult(value: unknown): ShipStationLabelResult | null {
-  const raw = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-  const labelId = stringValue(raw.label_id);
-  const shipmentId = stringValue(raw.shipment_id);
-  if (!labelId || !shipmentId) return null;
-  const shipmentCost = shipStationMoney(raw.shipment_cost);
-  const insuranceCost = shipStationMoney(raw.insurance_cost, shipmentCost?.currency);
-  const createdAt = Date.parse(stringValue(raw.created_at));
-  const totalCost = shipmentCost && (!insuranceCost || insuranceCost.currency === shipmentCost.currency)
-    ? {
-        currency: shipmentCost.currency,
-        amount: roundCurrency(shipmentCost.amount + (insuranceCost?.amount ?? 0)),
-      }
-    : undefined;
-  const label: FulfillmentShipStationLabel = {
-    labelId,
-    shipmentId,
-    status: raw.voided === true ? 'voided' : labelStatus(raw.status),
-    ...(stringValue(raw.rate_id) ? { rateId: stringValue(raw.rate_id) } : {}),
-    ...(stringValue(raw.tracking_number) ? { trackingNumber: stringValue(raw.tracking_number) } : {}),
-    ...(stringValue(raw.carrier_id) ? { carrierId: stringValue(raw.carrier_id) } : {}),
-    ...(stringValue(raw.carrier_code) ? { carrierCode: stringValue(raw.carrier_code) } : {}),
-    ...(stringValue(raw.carrier_friendly_name) ? { carrierName: stringValue(raw.carrier_friendly_name) } : {}),
-    ...(stringValue(raw.service_code) ? { serviceCode: stringValue(raw.service_code) } : {}),
-    ...(stringValue(raw.service_type) ? { serviceName: stringValue(raw.service_type) } : {}),
-    ...(shipmentCost ? { shipmentCost } : {}),
-    ...(insuranceCost ? { insuranceCost } : {}),
-    ...(totalCost ? { totalCost } : {}),
-    ...(Number.isFinite(createdAt) ? { purchasedAt: createdAt } : {}),
-  };
-  const downloadUrl = labelDownloadUrl(raw.label_download);
-  return { label, ...(downloadUrl ? { downloadUrl } : {}) };
 }
 
 function shipStationInvalidRateSummary(
@@ -918,34 +844,25 @@ export async function listShipStationLabelsForShipment(
   apiKey: string,
   shipmentId: string,
 ): Promise<ShipStationLabelResult[]> {
-  const query = new URLSearchParams({ shipment_id: shipmentId, page_size: '50', sort_dir: 'desc' });
-  const { status, json } = await shipStationFetch(apiKey, `/labels?${query.toString()}`, { method: 'GET' });
-  if (status < 200 || status >= 300) {
-    throw httpsErrorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
+  try {
+    return await listSharedShipStationLabelsForShipment(apiKey, shipmentId);
+  } catch (error) {
+    if (error instanceof ShipStationLabelProviderError) {
+      throw new HttpsError(error.code, error.message);
+    }
+    throw error;
   }
-  const labels = Array.isArray(json?.labels) ? json.labels : [];
-  return labels
-    .map((label: unknown) => shipStationLabelResult(label))
-    .filter((result: ShipStationLabelResult | null): result is ShipStationLabelResult => Boolean(result))
-    .filter(
-      (result: ShipStationLabelResult) =>
-        result.label.shipmentId === shipmentId && isActiveShipStationLabel(result.label),
-    );
 }
 
 export async function getShipStationLabelById(apiKey: string, labelId: string): Promise<ShipStationLabelResult> {
-  const query = new URLSearchParams({ label_download_type: 'url' });
-  const { status, json } = await shipStationFetch(apiKey, `/labels/${encodeURIComponent(labelId)}?${query.toString()}`, {
-    method: 'GET',
-  });
-  if (status < 200 || status >= 300) {
-    throw httpsErrorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
+  try {
+    return await getSharedShipStationLabelById(apiKey, labelId);
+  } catch (error) {
+    if (error instanceof ShipStationLabelProviderError) {
+      throw new HttpsError(error.code, error.message);
+    }
+    throw error;
   }
-  const result = shipStationLabelResult(json?.label || json);
-  if (!result || result.label.labelId !== labelId) {
-    throw new HttpsError('internal', 'ShipStation did not return the requested label');
-  }
-  return result;
 }
 
 export async function createShipStationLabelFromRate(

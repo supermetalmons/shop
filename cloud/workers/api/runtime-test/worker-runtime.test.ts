@@ -73,6 +73,20 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(unauthenticatedProfile.status, 401);
     assert.equal((await unauthenticatedProfile.json() as any).error.code, 'unauthenticated');
 
+    for (const [pathname, body] of [
+      ['/fulfillment/order-address', { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }],
+      ['/fulfillment/shipstation-label', { dropId: 'card_nft_2', deliveryId: 7 }],
+    ] as const) {
+      const response = await worker.fetch(`https://api.mons.shop${pathname}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 401);
+      assert.equal((await response.json() as { error: { code: string } }).error.code, 'unauthenticated');
+      assert.equal(response.headers.get('access-control-allow-origin'), 'https://mons.shop');
+    }
+
     const invalidPackStatus = await worker.fetch('https://api.mons.shop/pack-status/unsupported');
     assert.equal(invalidPackStatus.status, 400);
     assert.deepEqual(await invalidPackStatus.json(), { ok: false, error: 'invalid-request' });

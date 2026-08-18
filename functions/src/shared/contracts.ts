@@ -325,6 +325,17 @@ export type FulfillmentManualReviewCheckout = Omit<StripeCheckoutManualReviewSum
   address: FulfillmentOrderAddress;
 };
 
+export type UpdateFulfillmentAddressRequest = {
+  dropId: string;
+  deliveryId: number;
+  full: string;
+};
+
+export type UpdateFulfillmentAddressResponse = {
+  deliveryId: number;
+  address: FulfillmentOrderAddress;
+};
+
 export type AddFulfillmentOrderToShipStationRequest = {
   dropId: string;
   deliveryId: number;

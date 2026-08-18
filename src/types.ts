@@ -41,6 +41,8 @@ export type {
   SubscribeToNotificationsRequest,
   SubscribeToNotificationsResponse,
   ShipStationMoney,
+  UpdateFulfillmentAddressRequest,
+  UpdateFulfillmentAddressResponse,
 } from '../functions/src/shared/contracts';
 export type { ShipStationPackageInput } from '../functions/src/shared/shipstationPackage';
 

@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions are used for flows that require off-chain coordination (open box assignments, delivery order pricing, IRL claim locking). Public inventory, pack status, pending-open reads, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps the Helius credential out of the browser.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions are used for flows that require off-chain coordination (open box assignments, delivery order pricing, IRL claim locking). Public inventory, pack status, pending-open reads, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
 
 ## Shared domain core
 
@@ -25,7 +25,8 @@ SDK, secrets, and environment access in thin runtime adapters. See
 
 ## Deployment
 The frontend is an asset-only Cloudflare Worker named `mons-shop`. Public Helius
-reads are served by the separate `mons-shop-api` Worker at `api.mons.shop`.
+reads and authenticated profile and fulfillment routes are served by the separate
+`mons-shop-api` Worker at `api.mons.shop`.
 Firebase, Firestore, and Cloud Functions remain independently deployed to Firebase.
 
 - Prerequisite: Node.js 22.12 or newer.
@@ -95,11 +96,17 @@ preserved across version uploads. The Cloudflare token, Helius secret, and
 notification enqueue secret are stripped from all other child-process environment
 data and are never printed.
 
-The fulfillment read routes also use `ADDRESS_DECRYPTION_SECRET` and the four
-Stripe API-key secrets. Synchronize their existing Google Secret Manager values
+The fulfillment routes also use `ADDRESS_DECRYPTION_SECRET`, `SHIPSTATION_API_KEY`,
+and the four Stripe API-key secrets. Synchronize their existing Google Secret Manager values
 into an undeployed Worker version with `npm run sync:api:firebase-secrets`; the
 command uses a temporary mode-`0600` bulk file, verifies production is unchanged,
 and removes the file immediately.
+
+Do not run a full Functions deployment during this cutover: the source removals
+would retire the legacy callables before the frontend is ready. After the API and
+frontend releases are both verified, run
+`npm run decommission:firebase-fulfillment-callables`, then deploy the complete
+Functions set with `npm run deploy:functions`.
 
 ### Notification delivery deployment
 
@@ -238,8 +245,9 @@ suite passes.
 - `ADDRESS_DECRYPTION_SECRET` (Firebase Functions secret or local env; base64 Curve25519 secret key matching the frontend address encryption public key)
   - Reused by fulfillment/admin address decryption and Stripe webhook fulfillment; set with `firebase functions:secrets:set ADDRESS_DECRYPTION_SECRET` only if the Firebase project does not already have it.
   - Stripe webhook fulfillment uses it to encrypt Stripe shipping addresses into the same delivery-order address format.
-- `SHIPSTATION_API_KEY` (Firebase Functions secret or local env; ShipStation API v2 key used by `addFulfillmentOrderToShipStation`)
+- `SHIPSTATION_API_KEY` (Firebase Functions and `mons-shop-api` secret or local env; ShipStation API v2 key used by fulfillment actions)
   - Set: `firebase functions:secrets:set SHIPSTATION_API_KEY`
+  - Synchronize to Cloudflare with `npm run sync:api:firebase-secrets`.
 - `SHIPSTATION_SHIP_FROM` (Firebase Functions secret or local env; the origin address as one JSON object, so it can change without a code deploy)
   - Set: `firebase functions:secrets:set SHIPSTATION_SHIP_FROM`
   - Shape: `{"name":"mons.shop","company_name":"mons.shop","phone":"+1XXXXXXXXXX","address_line1":"1061 10th Street","city_locality":"West Pittsburg","state_province":"PA","postal_code":"16160","country_code":"US","address_residential_indicator":"no"}`

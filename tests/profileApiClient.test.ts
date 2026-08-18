@@ -154,11 +154,13 @@ test('admin and fulfillment reads use authenticated Cloudflare routes without ca
   }
 });
 
-test('address and fulfillment status writes use authenticated Cloudflare routes without callable fallbacks', () => {
+test('migrated fulfillment actions use authenticated Cloudflare routes without callable fallbacks', () => {
   const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
   for (const [exportName, pathname] of [
     ['saveEncryptedAddress', '/profile/addresses'],
+    ['updateFulfillmentAddress', '/fulfillment/order-address'],
     ['updateFulfillmentStatus', '/fulfillment/order-status'],
+    ['getFulfillmentShipStationLabel', '/fulfillment/shipstation-label'],
   ] as const) {
     const start = source.indexOf(`export async function ${exportName}`);
     const end = source.indexOf('\nexport ', start + 1);
@@ -167,6 +169,8 @@ test('address and fulfillment status writes use authenticated Cloudflare routes 
     assert.match(implementation, new RegExp(pathname.replaceAll('/', '\\/')));
     assert.doesNotMatch(implementation, /callFunction|httpsCallable/);
   }
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label'), 50_000);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/order-address'), 20_000);
 });
 
 test('migrated write response validators accept only exact public contracts', () => {
@@ -194,6 +198,67 @@ test('migrated write response validators accept only exact public contracts', ()
   }), { deliveryId: 7, fulfillmentStatus: '' });
   assert.equal(profileApiTestHooks.parseFulfillmentStatusUpdate({ ...status, fulfillmentStatus: 'Delivered' }), null);
   assert.equal(profileApiTestHooks.parseFulfillmentStatusUpdate({ ...status, internal: true }), null);
+
+  const fulfillmentAddress = {
+    deliveryId: 7,
+    address: {
+      full: 'Ivan\n100 Main St\nIstanbul, 34000\nTurkey',
+      encrypted: 'cipher-text',
+      hint: 'I...ey',
+      label: 'Home',
+      countryCode: 'TR',
+    },
+  };
+  assert.deepEqual(profileApiTestHooks.parseUpdateFulfillmentAddress(fulfillmentAddress), fulfillmentAddress);
+  const expandedCipherAddress = {
+    ...fulfillmentAddress,
+    address: { ...fulfillmentAddress.address, encrypted: 'x'.repeat(12 * 1024) },
+  };
+  assert.deepEqual(profileApiTestHooks.parseUpdateFulfillmentAddress(expandedCipherAddress), expandedCipherAddress);
+  assert.equal(profileApiTestHooks.parseUpdateFulfillmentAddress({
+    ...expandedCipherAddress,
+    address: { ...expandedCipherAddress.address, encrypted: `${expandedCipherAddress.address.encrypted}x` },
+  }), null);
+  assert.equal(profileApiTestHooks.parseUpdateFulfillmentAddress({
+    ...fulfillmentAddress,
+    address: { ...fulfillmentAddress.address, private: true },
+  }), null);
+
+  const shipStationLabel = {
+    deliveryId: 7,
+    shipmentId: 'shipment-1',
+    label: {
+      labelId: 'label-1',
+      shipmentId: 'shipment-1',
+      status: 'completed',
+      trackingNumber: 'tracking-1',
+      totalCost: { currency: 'usd', amount: 12.5 },
+      purchasedAt: 1_776_513_600_000,
+    },
+    labelDownloadUrl: 'https://labels.example/label-1.pdf',
+  };
+  assert.deepEqual(profileApiTestHooks.parseGetFulfillmentShipStationLabel(shipStationLabel), shipStationLabel);
+  assert.deepEqual(profileApiTestHooks.parseGetFulfillmentShipStationLabel({
+    deliveryId: 7,
+    shipmentId: 'shipment-1',
+    purchaseUnknown: true,
+  }), {
+    deliveryId: 7,
+    shipmentId: 'shipment-1',
+    purchaseUnknown: true,
+  });
+  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationLabel({
+    ...shipStationLabel,
+    labelDownloadUrl: 'http://labels.example/label-1.pdf',
+  }), null);
+  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationLabel({
+    ...shipStationLabel,
+    private: true,
+  }), null);
+  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationLabel({
+    ...shipStationLabel,
+    label: { ...shipStationLabel.label, shipmentId: 'shipment-2' },
+  }), null);
 });
 
 test('profile state validator rejects mismatches, malformed summaries, and extra data', () => {
@@ -255,10 +320,20 @@ test('migrated profile reads are absent from Firebase exports and deployment sel
 test('migrated profile writes are absent from Firebase exports and deployment selection', () => {
   const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
   const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
-  for (const name of ['saveAddress', 'updateFulfillmentStatus']) {
+  const scripts = (JSON.parse(packageJson) as { scripts: Record<string, string> }).scripts;
+  for (const name of [
+    'saveAddress',
+    'updateFulfillmentStatus',
+    'updateFulfillmentAddress',
+    'getFulfillmentShipStationLabel',
+  ]) {
     assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
     assert.doesNotMatch(packageJson, new RegExp(`functions:${name}(?:,|\\")`));
   }
+  assert.match(
+    scripts['decommission:firebase-fulfillment-callables'],
+    /firebase functions:delete updateFulfillmentAddress getFulfillmentShipStationLabel --project mons-shop --force/,
+  );
 });
 
 test('browser source has no direct Firestore data access', () => {

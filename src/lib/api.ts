@@ -37,6 +37,8 @@ import {
   StripeCheckoutSessionRequest,
   StripeCheckoutSessionResponse,
   StripeReceiptClaimResult,
+  UpdateFulfillmentAddressRequest,
+  UpdateFulfillmentAddressResponse,
 } from '../types';
 import { dropAssetLabel } from './dropLabels';
 import {
@@ -218,8 +220,10 @@ type AuthenticatedApiPath =
   | '/admin/profile'
   | '/admin/delivery-order-owners'
   | '/fulfillment/orders'
+  | '/fulfillment/order-address'
   | '/fulfillment/order-status'
-  | '/fulfillment/manual-review-checkouts';
+  | '/fulfillment/manual-review-checkouts'
+  | '/fulfillment/shipstation-label';
 
 const defaultProfileApiDependencies: ProfileApiClientDependencies = {
   fetch: (input, init) => fetch(input, init),
@@ -227,6 +231,14 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
   origin: monsApiOrigin,
   timeoutMs: 20_000,
 };
+
+const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
+
+function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
+  return pathname === '/fulfillment/shipstation-label'
+    ? SHIPSTATION_LABEL_API_TIMEOUT_MS
+    : defaultProfileApiDependencies.timeoutMs;
+}
 
 async function requestProfileApi<Req>(
   pathname: AuthenticatedApiPath,
@@ -292,7 +304,10 @@ async function callProfileApi<Req>(
   pathname: AuthenticatedApiPath,
   data: Req,
 ): Promise<unknown> {
-  return requestProfileApi(pathname, data, defaultProfileApiDependencies);
+  return requestProfileApi(pathname, data, {
+    ...defaultProfileApiDependencies,
+    timeoutMs: profileApiTimeoutMs(pathname),
+  });
 }
 
 function profileOrders(value: unknown): DeliveryOrderSummary[] | null {
@@ -386,6 +401,124 @@ function parseFulfillmentStatusUpdate(value: unknown): {
     ...(typeof value.fulfillmentTrackingCode === 'string'
       ? { fulfillmentTrackingCode: value.fulfillmentTrackingCode }
       : {}),
+  };
+}
+
+const MAX_ENCRYPTED_FULFILLMENT_ADDRESS_LENGTH = 12 * 1024;
+
+function parseUpdateFulfillmentAddress(value: unknown): UpdateFulfillmentAddressResponse | null {
+  if (!isRecord(value) || !hasExactKeys(value, ['deliveryId', 'address'])) return null;
+  if (!Number.isSafeInteger(value.deliveryId) || Number(value.deliveryId) <= 0 || !isRecord(value.address)) return null;
+  const address = value.address;
+  const required = ['full', 'encrypted', 'hint'] as const;
+  const optional = ['label', 'email', 'phone', 'country', 'countryCode'] as const;
+  const allowed = new Set<string>([...required, ...optional]);
+  if (!required.every((key) => Object.hasOwn(address, key))) return null;
+  if (!Object.keys(address).every((key) => allowed.has(key))) return null;
+  if (
+    typeof address.full !== 'string' || !address.full || address.full.length > 2048 ||
+    typeof address.encrypted !== 'string' || !address.encrypted ||
+    address.encrypted.length > MAX_ENCRYPTED_FULFILLMENT_ADDRESS_LENGTH ||
+    typeof address.hint !== 'string' || address.hint.length > 256 ||
+    optional.some((key) => address[key] !== undefined && typeof address[key] !== 'string')
+  ) return null;
+  return {
+    deliveryId: Number(value.deliveryId),
+    address: {
+      full: address.full,
+      encrypted: address.encrypted,
+      hint: address.hint,
+      ...(typeof address.label === 'string' ? { label: address.label } : {}),
+      ...(typeof address.email === 'string' ? { email: address.email } : {}),
+      ...(typeof address.phone === 'string' ? { phone: address.phone } : {}),
+      ...(typeof address.country === 'string' ? { country: address.country } : {}),
+      ...(typeof address.countryCode === 'string' ? { countryCode: address.countryCode } : {}),
+    },
+  };
+}
+
+function parseShipStationMoney(value: unknown): { currency: string; amount: number } | null {
+  if (!isRecord(value) || !hasExactKeys(value, ['currency', 'amount'])) return null;
+  if (
+    typeof value.currency !== 'string' || !/^[a-z]{3}$/.test(value.currency) ||
+    typeof value.amount !== 'number' || !Number.isFinite(value.amount) || value.amount < 0
+  ) return null;
+  return { currency: value.currency, amount: value.amount };
+}
+
+function parseFulfillmentShipStationLabel(value: unknown): NonNullable<GetFulfillmentShipStationLabelResponse['label']> | null {
+  if (!isRecord(value)) return null;
+  const required = ['labelId', 'shipmentId', 'status'] as const;
+  const optionalStrings = [
+    'rateId',
+    'trackingNumber',
+    'carrierId',
+    'carrierCode',
+    'carrierName',
+    'serviceCode',
+    'serviceName',
+    'purchasedBy',
+  ] as const;
+  const optional = [...optionalStrings, 'shipmentCost', 'insuranceCost', 'totalCost', 'purchasedAt'] as const;
+  const allowed = new Set<string>([...required, ...optional]);
+  if (!required.every((key) => Object.hasOwn(value, key))) return null;
+  if (!Object.keys(value).every((key) => allowed.has(key))) return null;
+  if (
+    typeof value.labelId !== 'string' || !value.labelId ||
+    typeof value.shipmentId !== 'string' || !value.shipmentId ||
+    (value.status !== 'processing' && value.status !== 'completed' && value.status !== 'error' && value.status !== 'voided') ||
+    optionalStrings.some((key) => value[key] !== undefined && (typeof value[key] !== 'string' || !value[key])) ||
+    (value.purchasedAt !== undefined && (typeof value.purchasedAt !== 'number' || !Number.isFinite(value.purchasedAt)))
+  ) return null;
+  const shipmentCost = value.shipmentCost === undefined ? undefined : parseShipStationMoney(value.shipmentCost);
+  const insuranceCost = value.insuranceCost === undefined ? undefined : parseShipStationMoney(value.insuranceCost);
+  const totalCost = value.totalCost === undefined ? undefined : parseShipStationMoney(value.totalCost);
+  if (
+    (value.shipmentCost !== undefined && !shipmentCost) ||
+    (value.insuranceCost !== undefined && !insuranceCost) ||
+    (value.totalCost !== undefined && !totalCost)
+  ) return null;
+  return {
+    labelId: value.labelId,
+    shipmentId: value.shipmentId,
+    status: value.status,
+    ...(typeof value.rateId === 'string' ? { rateId: value.rateId } : {}),
+    ...(typeof value.trackingNumber === 'string' ? { trackingNumber: value.trackingNumber } : {}),
+    ...(typeof value.carrierId === 'string' ? { carrierId: value.carrierId } : {}),
+    ...(typeof value.carrierCode === 'string' ? { carrierCode: value.carrierCode } : {}),
+    ...(typeof value.carrierName === 'string' ? { carrierName: value.carrierName } : {}),
+    ...(typeof value.serviceCode === 'string' ? { serviceCode: value.serviceCode } : {}),
+    ...(typeof value.serviceName === 'string' ? { serviceName: value.serviceName } : {}),
+    ...(shipmentCost ? { shipmentCost } : {}),
+    ...(insuranceCost ? { insuranceCost } : {}),
+    ...(totalCost ? { totalCost } : {}),
+    ...(typeof value.purchasedAt === 'number' ? { purchasedAt: value.purchasedAt } : {}),
+    ...(typeof value.purchasedBy === 'string' ? { purchasedBy: value.purchasedBy } : {}),
+  };
+}
+
+function parseGetFulfillmentShipStationLabel(value: unknown): GetFulfillmentShipStationLabelResponse | null {
+  if (!isRecord(value)) return null;
+  const required = ['deliveryId', 'shipmentId'] as const;
+  const optional = ['label', 'labelDownloadUrl', 'purchaseUnknown'] as const;
+  const allowed = new Set<string>([...required, ...optional]);
+  if (!required.every((key) => Object.hasOwn(value, key))) return null;
+  if (!Object.keys(value).every((key) => allowed.has(key))) return null;
+  if (
+    !Number.isSafeInteger(value.deliveryId) || Number(value.deliveryId) <= 0 ||
+    typeof value.shipmentId !== 'string' || !value.shipmentId ||
+    (value.labelDownloadUrl !== undefined &&
+      (typeof value.labelDownloadUrl !== 'string' || !/^https:\/\//i.test(value.labelDownloadUrl))) ||
+    (value.purchaseUnknown !== undefined && typeof value.purchaseUnknown !== 'boolean')
+  ) return null;
+  const label = value.label === undefined ? undefined : parseFulfillmentShipStationLabel(value.label);
+  if (value.label !== undefined && (!label || label.shipmentId !== value.shipmentId)) return null;
+  return {
+    deliveryId: Number(value.deliveryId),
+    shipmentId: value.shipmentId,
+    ...(label ? { label } : {}),
+    ...(typeof value.labelDownloadUrl === 'string' ? { labelDownloadUrl: value.labelDownloadUrl } : {}),
+    ...(typeof value.purchaseUnknown === 'boolean' ? { purchaseUnknown: value.purchaseUnknown } : {}),
   };
 }
 
@@ -653,11 +786,14 @@ export async function updateFulfillmentAddress(
   deliveryId: number,
   full: string,
   dropId: string,
-): Promise<{ deliveryId: number; address: FulfillmentOrder['address'] }> {
-  return callFunction<
-    { deliveryId: number; full: string; dropId: string },
-    { deliveryId: number; address: FulfillmentOrder['address'] }
-  >('updateFulfillmentAddress', { deliveryId, full, dropId });
+): Promise<UpdateFulfillmentAddressResponse> {
+  const response = await callProfileApi<UpdateFulfillmentAddressRequest>(
+    '/fulfillment/order-address',
+    { deliveryId, full, dropId },
+  );
+  const result = parseUpdateFulfillmentAddress(response);
+  if (!result) throw new Error('Invalid fulfillment address response');
+  return result;
 }
 
 export async function addFulfillmentOrderToShipStation(
@@ -695,10 +831,13 @@ export async function getFulfillmentShipStationLabel(
   deliveryId: number,
   dropId: string,
 ): Promise<GetFulfillmentShipStationLabelResponse> {
-  return callFunction<GetFulfillmentShipStationLabelRequest, GetFulfillmentShipStationLabelResponse>(
-    'getFulfillmentShipStationLabel',
+  const response = await callProfileApi<GetFulfillmentShipStationLabelRequest>(
+    '/fulfillment/shipstation-label',
     { deliveryId, dropId },
   );
+  const result = parseGetFulfillmentShipStationLabel(response);
+  if (!result) throw new Error('Invalid fulfillment ShipStation label response');
+  return result;
 }
 
 export async function requestDeliveryTx(
@@ -897,9 +1036,12 @@ export async function listDeliveryOrderOwners(
 }
 
 export const profileApiTestHooks = {
+  parseGetFulfillmentShipStationLabel,
   parseFulfillmentStatusUpdate,
   parseProfileAddress,
   parseProfileState,
+  parseUpdateFulfillmentAddress,
+  profileApiTimeoutMs,
   profileApiErrorPayload,
   profileOrders,
   requestProfileApi,

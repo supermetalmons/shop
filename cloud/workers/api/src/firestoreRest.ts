@@ -35,6 +35,9 @@ export class ProfileReadError extends Error {
       | 'unauthenticated'
       | 'permission-denied'
       | 'not-found'
+      | 'aborted'
+      | 'failed-precondition'
+      | 'resource-exhausted'
       | 'deadline-exceeded'
       | 'unavailable'
       | 'internal',
@@ -43,6 +46,13 @@ export class ProfileReadError extends Error {
   ) {
     super(message);
     this.name = 'ProfileReadError';
+  }
+}
+
+export class FirestoreWriteConflict extends Error {
+  constructor() {
+    super('Firestore document changed during the write');
+    this.name = 'FirestoreWriteConflict';
   }
 }
 
@@ -259,6 +269,7 @@ export async function authenticatedFirestoreRequest(args: {
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
   signal: AbortSignal;
+  surfaceWriteConflict?: boolean;
   url: string;
 }): Promise<unknown | null> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -302,6 +313,14 @@ export async function authenticatedFirestoreRequest(args: {
       await cancelResponseBody(response);
       await pauseForRetry(args.signal);
       continue;
+    }
+    if (args.surfaceWriteConflict && (response.status === 400 || response.status === 409)) {
+      const payload = await readBoundedJson(response, MAX_FIRESTORE_RESPONSE_BYTES, args.signal);
+      const error = isRecord(payload) && isRecord(payload.error) ? payload.error : {};
+      if (error.status === 'ABORTED' || error.status === 'FAILED_PRECONDITION') {
+        throw new FirestoreWriteConflict();
+      }
+      throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
     }
     if (!response.ok) {
       await cancelResponseBody(response);

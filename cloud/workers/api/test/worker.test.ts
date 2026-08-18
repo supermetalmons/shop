@@ -57,6 +57,7 @@ function env(options: {
     FIRESTORE_SERVICE_ACCOUNT_JSON: '',
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '',
     ADDRESS_DECRYPTION_SECRET: '',
+    SHIPSTATION_API_KEY: '',
     STRIPE_SECRET_KEY: '',
     STRIPE_RESTRICTED_KEY: '',
     STRIPE_SECRET_KEY_LIVE: '',
@@ -317,6 +318,21 @@ test('profile write routes use restricted CORS, bearer authentication, and stabl
   assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
   assert.equal(logs[0]?.route, '/profile/addresses');
   assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
+
+  for (const [pathname, body] of [
+    ['/fulfillment/order-address', { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }],
+    ['/fulfillment/shipstation-label', { dropId: 'card_nft_2', deliveryId: 7 }],
+  ] as const) {
+    const routeLogs: Record<string, unknown>[] = [];
+    const response = await handleRequest(request(pathname, body, { Origin: 'https://mons.shop' }), env(), {
+      ...quietDependencies(fetch),
+      log: (entry) => routeLogs.push(entry),
+    });
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get('access-control-allow-origin'), 'https://mons.shop');
+    assert.equal(routeLogs[0]?.route, pathname);
+    assert.equal(routeLogs[0]?.profileAuthOutcome, 'rejected');
+  }
 
   const method = await handleRequest(new Request('https://api.mons.shop/fulfillment/order-status'), env(), quietDependencies(fetch));
   assert.equal(method.status, 405);

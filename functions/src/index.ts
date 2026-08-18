@@ -281,11 +281,9 @@ import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   CARD_FULFILLMENT_DROP_IDS,
   CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
-  FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   walletHasAdminIrlRedeemAccess,
-  walletHasFulfillmentAddressAdminAccess,
   walletHasFulfillmentDropAccess,
 } from './shared/fulfillmentAccess.js';
 import {
@@ -747,15 +745,6 @@ ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES.forEach((raw) => {
   }
 });
 
-const FULFILLMENT_ADDRESS_ADMIN_WALLETS = new Set<string>();
-FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES.forEach((raw) => {
-  try {
-    FULFILLMENT_ADDRESS_ADMIN_WALLETS.add(new PublicKey(raw).toBase58());
-  } catch (err) {
-    console.error('[mons/functions] invalid fulfillment address admin wallet', raw, summarizeError(err));
-  }
-});
-
 function hasFulfillmentDropAccess(wallet: string, dropId: string): boolean {
   return walletHasFulfillmentDropAccess(wallet, dropId, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET);
 }
@@ -766,17 +755,6 @@ async function requireFulfillmentDropAccess(request: CallableReq<any>, dropId: s
     throw new HttpsError('permission-denied', 'Fulfillment access denied.');
   }
   return { uid, wallet };
-}
-
-async function requireFulfillmentAddressAdminAccess(
-  request: CallableReq<any>,
-  dropId: string,
-): Promise<{ uid: string; wallet: string }> {
-  const session = await requireFulfillmentDropAccess(request, dropId);
-  if (!walletHasFulfillmentAddressAdminAccess(session.wallet, FULFILLMENT_ADDRESS_ADMIN_WALLETS)) {
-    throw new HttpsError('permission-denied', 'Fulfillment address admin access denied.');
-  }
-  return session;
 }
 
 async function requireAdminIrlRedeemAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
@@ -5705,88 +5683,6 @@ export const createStripeCheckoutSession = onCallAuthed(
   },
 );
 
-export const updateFulfillmentAddress = onCallLogged(
-  'updateFulfillmentAddress',
-  async (request) => {
-    const schema = z.object({
-      dropId: z.string().min(1).max(64),
-      deliveryId: z.number().int().positive(),
-      full: z.string().trim().min(1).max(2048),
-    });
-    const { dropId: requestDropId, deliveryId, full } = parseRequest(schema, request.data);
-    const dropId = requireDropId(requestDropId);
-    const { wallet } = await requireFulfillmentAddressAdminAccess(request, dropId);
-    const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
-    const encryptedAddress = encryptAddressPayloadForFulfillment(full);
-    if (!encryptedAddress) {
-      throw new HttpsError('invalid-argument', 'Delivery address is required');
-    }
-
-    const order = await db.runTransaction(async (tx) => {
-      const snap = await tx.get(orderRef);
-      if (!snap.exists) {
-        throw new HttpsError('not-found', 'Delivery order not found');
-      }
-      const currentOrder = snap.data() as any;
-      if (currentOrder?.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) {
-        throw new HttpsError('failed-precondition', 'In-person redemption orders do not have a delivery address');
-      }
-      const shipmentId = typeof currentOrder?.shipstation?.shipmentId === 'string'
-        ? currentOrder.shipstation.shipmentId.trim()
-        : '';
-      if (shipmentId) {
-        throw new HttpsError(
-          'failed-precondition',
-          'This order is already in ShipStation. Update its delivery address in ShipStation.',
-        );
-      }
-      const currentLabel = storedFulfillmentShipStationLabel(currentOrder?.shipstation?.label);
-      if (isActiveShipStationLabel(currentLabel)) {
-        throw new HttpsError(
-          'failed-precondition',
-          'This order already has a ShipStation label. Void it before changing the delivery address.',
-        );
-      }
-      const purchaseStatus = typeof currentOrder?.shipstation?.labelPurchase?.status === 'string'
-        ? currentOrder.shipstation.labelPurchase.status
-        : '';
-      if (purchaseStatus === 'purchasing' || purchaseStatus === 'unknown') {
-        throw new HttpsError('aborted', 'Check the ShipStation label purchase status before editing this address.');
-      }
-      const ratesClaimedAt = toMillisMaybe(currentOrder?.shipstation?.ratesClaimedAt) ?? 0;
-      if (ratesClaimedAt && Date.now() - ratesClaimedAt < SHIPSTATION_CLAIM_TTL_MS) {
-        throw new HttpsError('aborted', 'ShipStation rates are being refreshed. Try editing the address again in a moment.');
-      }
-      tx.update(orderRef, {
-        'addressSnapshot.encrypted': encryptedAddress.encrypted,
-        'addressSnapshot.hint': encryptedAddress.hint,
-        fulfillmentAddressUpdatedAt: FieldValue.serverTimestamp(),
-        fulfillmentAddressUpdatedBy: wallet,
-        'shipstation.rateQuotes': FieldValue.delete(),
-        'shipstation.ratesClaimedAt': FieldValue.delete(),
-        'shipstation.ratesClaimedBy': FieldValue.delete(),
-      });
-      return currentOrder;
-    });
-
-    const addressSnapshot = order?.addressSnapshot || {};
-    return {
-      deliveryId,
-      address: {
-        full,
-        encrypted: encryptedAddress.encrypted,
-        hint: encryptedAddress.hint,
-        ...(typeof addressSnapshot.label === 'string' ? { label: addressSnapshot.label } : {}),
-        ...(typeof addressSnapshot.email === 'string' ? { email: addressSnapshot.email } : {}),
-        ...(typeof addressSnapshot.phone === 'string' ? { phone: addressSnapshot.phone } : {}),
-        ...(typeof addressSnapshot.country === 'string' ? { country: addressSnapshot.country } : {}),
-        ...(typeof addressSnapshot.countryCode === 'string' ? { countryCode: addressSnapshot.countryCode } : {}),
-      },
-    };
-  },
-  { secrets: [ADDRESS_DECRYPTION_SECRET] },
-);
-
 /**
  * Window during which a started push blocks a second one. Long enough to cover the
  * ShipStation round trip, short enough that a crashed call becomes retryable quickly.
@@ -6463,78 +6359,6 @@ export const getFulfillmentShipStationRates = onCallLogged(
     }
   },
   { secrets: [ADDRESS_DECRYPTION_SECRET, SHIPSTATION_API_KEY, SHIPSTATION_SHIP_FROM] },
-);
-
-export const getFulfillmentShipStationLabel = onCallLogged(
-  'getFulfillmentShipStationLabel',
-  async (request) => {
-    const schema = z.object({
-      dropId: z.string().min(1).max(64),
-      deliveryId: z.number().int().positive(),
-    });
-    const { dropId: requestDropId, deliveryId } = parseRequest(schema, request.data);
-    const dropId = requireDropId(requestDropId);
-    const { wallet } = await requireFulfillmentDropAccess(request, dropId);
-    const apiKey = envOrSecretValue('SHIPSTATION_API_KEY', SHIPSTATION_API_KEY);
-    if (!apiKey) throw new HttpsError('failed-precondition', 'ShipStation API key is not configured');
-    const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
-    const snap = await orderRef.get();
-    if (!snap.exists) throw new HttpsError('not-found', 'Delivery order not found');
-    const order = snap.data() as any;
-    rejectIrlShipStationOrder(order);
-    const shipmentId = requireShipStationShipmentId(order);
-    const storedLabel = storedFulfillmentShipStationLabel(order?.shipstation?.label);
-    let inactiveLabel: FulfillmentShipStationLabel | undefined;
-    if (storedLabel?.labelId) {
-      const result = await getShipStationLabelById(apiKey, storedLabel.labelId);
-      const label = await persistFulfillmentShipStationLabel({
-        orderRef,
-        dropId,
-        wallet,
-        result,
-        fallbackLabel: storedLabel,
-      });
-      if (isActiveShipStationLabel(label)) {
-        return {
-          deliveryId,
-          shipmentId,
-          label,
-          ...(result.downloadUrl ? { labelDownloadUrl: result.downloadUrl } : {}),
-        };
-      }
-      inactiveLabel = label;
-    }
-    const adopted = await findAndPersistFulfillmentShipStationLabel({ apiKey, shipmentId, orderRef, dropId, wallet });
-    if (adopted) {
-      return {
-        deliveryId,
-        shipmentId,
-        label: adopted.label,
-        ...(adopted.downloadUrl ? { labelDownloadUrl: adopted.downloadUrl } : {}),
-      };
-    }
-    const purchase = order?.shipstation?.labelPurchase;
-    const purchaseStatus = typeof purchase?.status === 'string' ? purchase.status : '';
-    const purchaseRequestId = typeof purchase?.requestId === 'string' ? purchase.requestId : undefined;
-    const resolvedPurchase: { label?: FulfillmentShipStationLabel; purchaseUnknown: boolean } = purchaseStatus === 'purchasing'
-      ? await transitionFulfillmentShipStationPurchaseState({
-          orderRef,
-          expectedRequestId: purchaseRequestId,
-          nextStatus: 'unknown',
-          fields: {
-            checkedAt: FieldValue.serverTimestamp(),
-            checkedBy: wallet,
-          },
-        })
-      : { purchaseUnknown: purchaseStatus === 'unknown' };
-    return {
-      deliveryId,
-      shipmentId,
-      ...(resolvedPurchase.label ? { label: resolvedPurchase.label } : inactiveLabel ? { label: inactiveLabel } : {}),
-      ...(resolvedPurchase.purchaseUnknown ? { purchaseUnknown: true } : {}),
-    };
-  },
-  { secrets: [SHIPSTATION_API_KEY] },
 );
 
 export const purchaseFulfillmentShipStationLabel = onCallLogged(

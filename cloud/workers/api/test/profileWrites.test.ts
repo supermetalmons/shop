@@ -1,11 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import nacl from 'tweetnacl';
 import {
+  FULFILLMENT_ORDER_ADDRESS_PATH,
   FULFILLMENT_ORDER_STATUS_PATH,
+  FULFILLMENT_SHIPSTATION_LABEL_PATH,
   PROFILE_ADDRESSES_PATH,
   handleProfileWriteRequest,
   profileWriteTestHooks,
+  type ProfileWritePath,
 } from '../src/profileWrites.ts';
+import {
+  decryptAddressCipherText,
+  parseAddressCipherPayload,
+} from '../../../../functions/src/shared/addressCipher.ts';
 import type {
   GoogleAccessTokenProvider,
   ProfileProviderFetch,
@@ -17,6 +25,8 @@ const OTHER = 'So11111111111111111111111111111111111111112';
 const UID = 'firebase-user-one';
 const NOW_MS = Date.parse('2026-08-18T12:00:00.000Z');
 const ADDRESS_ID = 'AbCdEfGhIjKlMnOpQrSt';
+const ADDRESS_KEY_PAIR = nacl.box.keyPair();
+const ADDRESS_SECRET = Buffer.from(ADDRESS_KEY_PAIR.secretKey).toString('base64');
 
 function stringValue(value: string) {
   return { stringValue: value };
@@ -29,7 +39,7 @@ function sessionDocument(wallet: string) {
   };
 }
 
-function request(path: typeof PROFILE_ADDRESSES_PATH | typeof FULFILLMENT_ORDER_STATUS_PATH, body: unknown): Request {
+function request(path: ProfileWritePath, body: unknown): Request {
   return new Request(`https://api.mons.shop${path}`, {
     method: 'POST',
     headers: {
@@ -64,6 +74,44 @@ function dependencies(
 }
 
 const env = { FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'writer-service-account' };
+const fulfillmentEnv = {
+  ...env,
+  ADDRESS_DECRYPTION_SECRET: ADDRESS_SECRET,
+  SHIPSTATION_API_KEY: 'shipstation-api-key',
+};
+
+function firestoreValue(value: unknown): unknown {
+  if (typeof value === 'string') return { stringValue: value };
+  if (typeof value === 'boolean') return { booleanValue: value };
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
+  }
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(firestoreValue) } };
+  if (value && typeof value === 'object') {
+    return {
+      mapValue: {
+        fields: Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, firestoreValue(entry)])),
+      },
+    };
+  }
+  return { nullValue: null };
+}
+
+function orderDocument(fields: Record<string, unknown>, updateTime = '2026-08-18T12:00:00.000000Z') {
+  return {
+    name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
+    fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, firestoreValue(value)])),
+    updateTime,
+  };
+}
+
+function decodeBase64(value: string): Uint8Array | null {
+  try {
+    return Uint8Array.from(Buffer.from(value, 'base64'));
+  } catch {
+    return null;
+  }
+}
 
 test('address route authenticates and atomically commits the exact address and profile writes', async () => {
   let commit: Record<string, unknown> | undefined;
@@ -262,6 +310,595 @@ test('status route preserves, replaces, and deletes tracking fields with exact u
   }
 });
 
+test('fulfillment address route encrypts the address and conditionally clears stale ShipStation rates', async () => {
+  let commit: { writes: Array<Record<string, unknown>> } | undefined;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        addressSnapshot: {
+          label: 'Home',
+          email: 'owner@example.com',
+          phone: '+15555550123',
+          country: 'United States',
+          countryCode: 'US',
+        },
+        shipstation: {},
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commit = JSON.parse(String(init?.body));
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const full = '界'.repeat(2048);
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full }),
+    fulfillmentEnv,
+    FULFILLMENT_ORDER_ADDRESS_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  const payload = await result.response.json() as {
+    deliveryId: number;
+    address: { encrypted: string; hint: string; full: string; label?: string; email?: string; phone?: string; country?: string; countryCode?: string };
+  };
+  assert.equal(payload.deliveryId, 7);
+  assert.equal(payload.address.full, full);
+  assert.equal(payload.address.hint, '界...界界');
+  assert.equal(payload.address.label, 'Home');
+  assert.equal(payload.address.email, 'owner@example.com');
+  assert.equal(payload.address.phone, '+15555550123');
+  assert.equal(payload.address.country, 'United States');
+  assert.equal(payload.address.countryCode, 'US');
+  const cipher = parseAddressCipherPayload(payload.address.encrypted, decodeBase64);
+  assert.ok(cipher);
+  assert.equal(decryptAddressCipherText(cipher, ADDRESS_KEY_PAIR.secretKey), full);
+  const write = commit?.writes[0] as {
+    currentDocument: { updateTime: string };
+    update: { fields: { addressSnapshot: { mapValue: { fields: Record<string, { stringValue: string }> } } } };
+    updateMask: { fieldPaths: string[] };
+    updateTransforms: unknown[];
+  };
+  assert.equal(write.currentDocument.updateTime, '2026-08-18T12:00:00.000000Z');
+  assert.equal(write.update.fields.addressSnapshot.mapValue.fields.encrypted.stringValue, payload.address.encrypted);
+  assert.deepEqual(write.updateMask.fieldPaths, [
+    'addressSnapshot.encrypted',
+    'addressSnapshot.hint',
+    'fulfillmentAddressUpdatedBy',
+    'shipstation.rateQuotes',
+    'shipstation.ratesClaimedAt',
+    'shipstation.ratesClaimedBy',
+  ]);
+  assert.deepEqual(write.updateTransforms, [
+    { fieldPath: 'fulfillmentAddressUpdatedAt', setToServerValue: 'REQUEST_TIME' },
+  ]);
+});
+
+test('fulfillment address route retries the full read and validation after a Firestore precondition conflict', async () => {
+  let reads = 0;
+  let commits = 0;
+  const updateTimes: string[] = [];
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      reads += 1;
+      return Response.json(orderDocument(
+        { addressSnapshot: {}, shipstation: {} },
+        `2026-08-18T12:00:0${reads}.000000Z`,
+      ));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commits += 1;
+      const body = JSON.parse(String(init?.body)) as { writes: Array<{ currentDocument: { updateTime: string } }> };
+      updateTimes.push(body.writes[0].currentDocument.updateTime);
+      if (commits === 1) {
+        return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 400 });
+      }
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:02Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_ADDRESS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      full: 'Ivan\n100 Main St\nIstanbul, 34000\nTurkey',
+    }),
+    fulfillmentEnv,
+    FULFILLMENT_ORDER_ADDRESS_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal(reads, 2);
+  assert.equal(commits, 2);
+  assert.deepEqual(updateTimes, [
+    '2026-08-18T12:00:01.000000Z',
+    '2026-08-18T12:00:02.000000Z',
+  ]);
+});
+
+test('fulfillment address route preserves authorization and order-state guards', async () => {
+  const adminWallet = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+  let providerCalls = 0;
+  const denied = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }),
+    fulfillmentEnv,
+    FULFILLMENT_ORDER_ADDRESS_PATH,
+    dependencies(async (input) => {
+      providerCalls += 1;
+      const url = new URL(String(input));
+      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(adminWallet));
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    }),
+  );
+  assert.equal(denied.response.status, 403);
+  assert.equal((await denied.response.json() as { error: { code: string } }).error.code, 'permission-denied');
+  assert.equal(providerCalls, 1);
+
+  for (const [orderFields, code] of [
+    [{ addressSnapshot: {}, shipstation: { shipmentId: 'shipment-1' } }, 'failed-precondition'],
+    [{ addressSnapshot: {}, shipstation: { labelPurchase: { status: 'purchasing' } } }, 'aborted'],
+    [{
+      addressSnapshot: {},
+      shipstation: { label: { labelId: 'label-1', shipmentId: 'shipment-1', status: 'completed' } },
+    }, 'failed-precondition'],
+    [{ addressSnapshot: {}, shipstation: { ratesClaimedAt: NOW_MS - 1000 } }, 'aborted'],
+    [{ addressSnapshot: {}, shipstation: {}, source: 'admin_irl_redeem' }, 'failed-precondition'],
+  ] as const) {
+    const guarded = await handleProfileWriteRequest(
+      request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }),
+      fulfillmentEnv,
+      FULFILLMENT_ORDER_ADDRESS_PATH,
+      dependencies(async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+        if (url.pathname.endsWith('/deliveryOrders/7')) {
+          return Response.json(orderDocument(orderFields));
+        }
+        return Response.json({ error: 'unexpected' }, { status: 500 });
+      }),
+    );
+    assert.equal(guarded.response.status, 409);
+    assert.equal((await guarded.response.json() as { error: { code: string } }).error.code, code);
+  }
+});
+
+test('ShipStation label route refreshes and conditionally persists an active stored label', async () => {
+  let orderReads = 0;
+  let commit: { writes: Array<Record<string, unknown>> } | undefined;
+  const storedLabel = {
+    labelId: 'label-1',
+    shipmentId: 'shipment-1',
+    status: 'processing',
+    trackingNumber: 'old-tracking',
+    purchasedAt: NOW_MS - 1000,
+  };
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      assert.equal(url.pathname, '/v2/labels/label-1');
+      assert.equal(url.searchParams.get('label_download_type'), 'url');
+      assert.equal(new Headers(init?.headers).get('api-key'), 'shipstation-api-key');
+      return Response.json({
+        label: {
+          label_id: 'label-1',
+          shipment_id: 'shipment-1',
+          status: 'completed',
+          tracking_number: 'new-tracking',
+          created_at: '2026-08-18T11:59:00.000Z',
+          shipment_cost: { currency: 'usd', amount: 10 },
+          insurance_cost: { currency: 'usd', amount: 1 },
+          label_download: { pdf: 'https://labels.example/label-1.pdf' },
+        },
+      });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      orderReads += 1;
+      return Response.json(orderDocument({
+        fulfillmentTrackingCode: 'old-tracking',
+        shipstation: { shipmentId: 'shipment-1', label: storedLabel, labelPurchase: { status: 'purchasing' } },
+      }, `2026-08-18T12:00:0${orderReads}.000000Z`));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commit = JSON.parse(String(init?.body));
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  const payload = await result.response.json() as {
+    deliveryId: number;
+    shipmentId: string;
+    label: { status: string; trackingNumber: string; totalCost: { currency: string; amount: number } };
+    labelDownloadUrl: string;
+  };
+  assert.equal(payload.deliveryId, 7);
+  assert.equal(payload.shipmentId, 'shipment-1');
+  assert.equal(payload.label.status, 'completed');
+  assert.equal(payload.label.trackingNumber, 'new-tracking');
+  assert.deepEqual(payload.label.totalCost, { currency: 'usd', amount: 11 });
+  assert.equal(payload.labelDownloadUrl, 'https://labels.example/label-1.pdf');
+  assert.equal(orderReads, 2);
+  const write = commit?.writes[0] as {
+    currentDocument: { updateTime: string };
+    update: { fields: Record<string, unknown> };
+    updateMask: { fieldPaths: string[] };
+  };
+  assert.equal(write.currentDocument.updateTime, '2026-08-18T12:00:02.000000Z');
+  assert.ok(write.updateMask.fieldPaths.includes('shipstation.labelPurchase'));
+  assert.ok(write.updateMask.fieldPaths.includes('fulfillmentTrackingCode'));
+  assert.ok(write.updateMask.fieldPaths.includes('shipstation.rateQuotes'));
+  assert.ok(Object.hasOwn(write.update.fields, 'fulfillmentTrackingCode'));
+});
+
+test('ShipStation label route adopts a discovered label and resolves an uncertain purchase', async () => {
+  let scenario: 'adopt' | 'unknown' = 'adopt';
+  let commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      assert.equal(url.pathname, '/v2/labels');
+      return Response.json({
+        labels: scenario === 'adopt'
+          ? [{
+              label_id: 'adopted-label',
+              shipment_id: 'shipment-1',
+              status: 'completed',
+              tracking_number: 'adopted-tracking',
+            }]
+          : [],
+      });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          ...(scenario === 'unknown'
+            ? { labelPurchase: { status: 'purchasing', requestId: 'request-1' } }
+            : {}),
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commits.push(JSON.parse(String(init?.body)));
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const adopted = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(adopted.response.status, 200);
+  assert.equal((await adopted.response.json() as { label: { labelId: string } }).label.labelId, 'adopted-label');
+  assert.equal(commits.length, 1);
+
+  scenario = 'unknown';
+  commits = [];
+  const unknown = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(unknown.response.status, 200);
+  assert.deepEqual(await unknown.response.json(), {
+    deliveryId: 7,
+    shipmentId: 'shipment-1',
+    purchaseUnknown: true,
+  });
+  const write = commits[0].writes[0] as {
+    updateMask: { fieldPaths: string[] };
+    updateTransforms: unknown[];
+  };
+  assert.deepEqual(write.updateMask.fieldPaths, [
+    'shipstation.labelPurchase.status',
+    'shipstation.labelPurchase.checkedBy',
+  ]);
+  assert.deepEqual(write.updateTransforms, [
+    { fieldPath: 'shipstation.labelPurchase.checkedAt', setToServerValue: 'REQUEST_TIME' },
+  ]);
+});
+
+test('ShipStation label adoption replaces stale metadata from the previous label', async () => {
+  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
+  const staleLabel = {
+    labelId: 'old-label',
+    shipmentId: 'shipment-1',
+    status: 'voided',
+    trackingNumber: 'stale-tracking',
+    rateId: 'stale-rate',
+    totalCost: { currency: 'usd', amount: 99 },
+    purchasedBy: OWNER,
+    purchasedAt: NOW_MS - 1000,
+  };
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname === '/v2/labels/old-label') {
+        return Response.json({
+          label: {
+            label_id: 'old-label',
+            shipment_id: 'shipment-1',
+            status: 'voided',
+          },
+        });
+      }
+      assert.equal(url.pathname, '/v2/labels');
+      return Response.json({
+        labels: [{
+          label_id: 'adopted-label',
+          shipment_id: 'shipment-1',
+          status: 'processing',
+        }],
+      });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        fulfillmentTrackingCode: 'stale-tracking',
+        shipstation: { shipmentId: 'shipment-1', label: staleLabel },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commits.push(JSON.parse(String(init?.body)));
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual((await result.response.json() as { label: Record<string, unknown> }).label, {
+    labelId: 'adopted-label',
+    shipmentId: 'shipment-1',
+    status: 'processing',
+    purchasedAt: NOW_MS,
+  });
+  assert.equal(commits.length, 2);
+  const adoptedWrite = commits[1].writes[0] as {
+    update: {
+      fields: {
+        shipstation: { mapValue: { fields: { label: { mapValue: { fields: Record<string, unknown> } } } } };
+      };
+    };
+    updateMask: { fieldPaths: string[] };
+  };
+  assert.ok(adoptedWrite.updateMask.fieldPaths.includes('shipstation.label'));
+  assert.ok(adoptedWrite.updateMask.fieldPaths.includes('fulfillmentTrackingCode'));
+  assert.equal(
+    adoptedWrite.updateMask.fieldPaths.some((field) => field.startsWith('shipstation.label.')),
+    false,
+  );
+  assert.deepEqual(Object.keys(adoptedWrite.update.fields.shipstation.mapValue.fields.label.mapValue.fields).sort(), [
+    'labelId',
+    'purchasedAt',
+    'recordedBy',
+    'shipmentId',
+    'status',
+  ]);
+  assert.equal(Object.hasOwn(adoptedWrite.update.fields, 'fulfillmentTrackingCode'), false);
+});
+
+test('ShipStation label route does not overwrite a label created during adoption', async () => {
+  let orderReads = 0;
+  let commits = 0;
+  const providerFetch: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      return Response.json({
+        labels: [{
+          label_id: 'adopted-label',
+          shipment_id: 'shipment-1',
+          status: 'completed',
+        }],
+      });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      orderReads += 1;
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          ...(orderReads > 1
+            ? { label: { labelId: 'newer-label', shipmentId: 'shipment-1', status: 'completed' } }
+            : {}),
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) commits += 1;
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 409);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
+  assert.equal(orderReads, 2);
+  assert.equal(commits, 0);
+});
+
+test('ShipStation label route rejects a label from another shipment before persisting it', async () => {
+  let commits = 0;
+  const providerFetch: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      return Response.json({
+        label: {
+          label_id: 'label-1',
+          shipment_id: 'shipment-2',
+          status: 'completed',
+        },
+      });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          label: { labelId: 'label-1', shipmentId: 'shipment-1', status: 'processing' },
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) commits += 1;
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 409);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
+  assert.equal(commits, 0);
+});
+
+test('ShipStation label route rejects a shipment change before transitioning purchase state', async () => {
+  let orderReads = 0;
+  let commits = 0;
+  const providerFetch: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') return Response.json({ labels: [] });
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      orderReads += 1;
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: orderReads === 1 ? 'shipment-1' : 'shipment-2',
+          labelPurchase: { status: 'purchasing', requestId: 'request-1' },
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) commits += 1;
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 409);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
+  assert.equal(orderReads, 2);
+  assert.equal(commits, 0);
+});
+
+test('ShipStation label route fails closed for missing configuration and oversized provider responses', async () => {
+  const order = orderDocument({ shipstation: { shipmentId: 'shipment-1' } });
+  const firestoreFetch: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json(order);
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const missing = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    { ...fulfillmentEnv, SHIPSTATION_API_KEY: '' },
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(firestoreFetch),
+  );
+  assert.equal(missing.response.status, 409);
+  assert.equal((await missing.response.json() as { error: { code: string } }).error.code, 'failed-precondition');
+  assert.equal(missing.authOutcome, 'provider-failure');
+
+  const rateLimited = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') return Response.json({}, { status: 429 });
+      return firestoreFetch(input);
+    }),
+  );
+  assert.equal(rateLimited.response.status, 429);
+  assert.equal(rateLimited.authOutcome, 'provider-failure');
+
+  const oversized = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') {
+        return new Response('{}', { headers: { 'Content-Length': String(300 * 1024) } });
+      }
+      return firestoreFetch(input);
+    }),
+  );
+  assert.equal(oversized.response.status, 502);
+  assert.equal((await oversized.response.json() as { error: { code: string } }).error.code, 'unavailable');
+
+  const malformed = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') return Response.json({});
+      return firestoreFetch(input);
+    }),
+  );
+  assert.equal(malformed.response.status, 500);
+  assert.equal((await malformed.response.json() as { error: { code: string } }).error.code, 'internal');
+  assert.equal(malformed.authOutcome, 'provider-failure');
+
+  const malformedEntry = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') return Response.json({ labels: [{}] });
+      return firestoreFetch(input);
+    }),
+  );
+  assert.equal(malformedEntry.response.status, 500);
+  assert.equal((await malformedEntry.response.json() as { error: { code: string } }).error.code, 'internal');
+  assert.equal(malformedEntry.authOutcome, 'provider-failure');
+
+  const timedOut = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname !== 'api.shipstation.com') return firestoreFetch(input);
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        const abort = () => reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
+      });
+    }, { timeoutMs: 25 }),
+  );
+  assert.equal(timedOut.response.status, 504);
+  assert.equal((await timedOut.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
+});
+
 test('write routes reject invalid payloads, unauthorized wallets, missing orders, and missing writer configuration', async () => {
   let upstreamCalls = 0;
   const neverFetch: typeof fetch = async () => {
@@ -277,6 +914,19 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
       request(PROFILE_ADDRESSES_PATH, body),
       env,
       PROFILE_ADDRESSES_PATH,
+      dependencies(neverFetch),
+    );
+    assert.equal(result.response.status, 400);
+  }
+  for (const [path, body] of [
+    [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address', extra: true }],
+    [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'x'.repeat(2049) }],
+    [FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
+  ] as const) {
+    const result = await handleProfileWriteRequest(
+      request(path, body),
+      fulfillmentEnv,
+      path,
       dependencies(neverFetch),
     );
     assert.equal(result.response.status, 400);
