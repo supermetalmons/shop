@@ -85,6 +85,7 @@ const DELIVERY_ORDER_OWNER_PAGE_SIZE = 200;
 const MAX_DELIVERY_ORDER_OWNER_PAGE_SIZE = 500;
 const MAX_STRIPE_RESPONSE_BYTES = 512 * 1024;
 const STRIPE_API_BASE_URL = 'https://api.stripe.com/v1';
+const STRIPE_API_VERSION = '2026-07-29.dahlia';
 const DELIVERY_ORDER_SUMMARY_FIELDS = [
   'dropId',
   'deliveryId',
@@ -1111,7 +1112,11 @@ async function fetchStripeSession(
   let lastCredentialFailure = false;
   for (const key of keys) {
     const response = await providerFetch(`${STRIPE_API_BASE_URL}/checkout/sessions/${encodeURIComponent(sessionId)}`, {
-      headers: { Accept: 'application/json', Authorization: `Bearer ${key}` },
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${key}`,
+        'Stripe-Version': STRIPE_API_VERSION,
+      },
       redirect: 'manual',
       signal,
     });

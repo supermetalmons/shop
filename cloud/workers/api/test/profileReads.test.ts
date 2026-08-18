@@ -585,10 +585,13 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     tokenRequest(FULFILLMENT_MANUAL_REVIEW_PATH, { dropId: 'card_nft_2' }),
     env,
     FULFILLMENT_MANUAL_REVIEW_PATH,
-    profileDependencies(async (input) => {
+    profileDependencies(async (input, init) => {
       const url = String(input);
       if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
-      if (url.includes('api.stripe.com')) return Response.json({ error: 'temporary' }, { status: 503 });
+      if (url.includes('api.stripe.com')) {
+        assert.equal(new Headers(init?.headers).get('stripe-version'), '2026-07-29.dahlia');
+        return Response.json({ error: 'temporary' }, { status: 503 });
+      }
       return Response.json([{ document: {
         name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/stripeCheckouts/cs_test_review',
         fields: {
