@@ -79,6 +79,13 @@ import {
   FULFILLMENT_MANUAL_REVIEW_PATH,
   type ProfileReadPath,
 } from './profileReads.js';
+import {
+  FULFILLMENT_ORDER_STATUS_PATH,
+  PROFILE_ADDRESSES_PATH,
+  PROFILE_WRITE_PATHS,
+  handleProfileWriteRequest,
+  type ProfileWritePath,
+} from './profileWrites.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -125,6 +132,8 @@ const KNOWN_LOG_ROUTES = new Set([
   ADMIN_DELIVERY_ORDER_OWNERS_PATH,
   FULFILLMENT_ORDERS_PATH,
   FULFILLMENT_MANUAL_REVIEW_PATH,
+  PROFILE_ADDRESSES_PATH,
+  FULFILLMENT_ORDER_STATUS_PATH,
 ]);
 
 export type ProviderFetch = RpcProviderFetch;
@@ -1257,7 +1266,8 @@ export async function handleRequest(
     ? 'mainnet-beta'
     : pathname === '/rpc/devnet' ? 'devnet' : null;
   const profilePath = PROFILE_READ_PATHS.has(pathname) ? pathname as ProfileReadPath : null;
-  if (request.method === 'OPTIONS' && profilePath) {
+  const profileWritePath = PROFILE_WRITE_PATHS.has(pathname) ? pathname as ProfileWritePath : null;
+  if (request.method === 'OPTIONS' && (profilePath || profileWritePath)) {
     response = handleProfileCorsPreflight(request);
   } else if (request.method === 'OPTIONS' && rpcCluster) {
     response = handleRpcPreflight(request);
@@ -1293,6 +1303,16 @@ export async function handleRequest(
       metrics.providerDurationMs += result.metrics.providerDurationMs;
       profileAuthOutcome = result.authOutcome;
       profileStateSections = result.profileStateSections;
+      response = applyProfileCors(request, result.response);
+    }
+  } else if (profileWritePath) {
+    if (!isProfileRequestOriginAllowed(request)) {
+      response = applyProfileCors(request, new Response(null));
+    } else {
+      const result = await handleProfileWriteRequest(request, env, profileWritePath);
+      metrics.upstreamCalls += result.metrics.upstreamCalls;
+      metrics.providerDurationMs += result.metrics.providerDurationMs;
+      profileAuthOutcome = result.authOutcome;
       response = applyProfileCors(request, result.response);
     }
   } else if (rpcCluster) {

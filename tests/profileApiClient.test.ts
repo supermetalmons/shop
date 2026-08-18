@@ -154,6 +154,48 @@ test('admin and fulfillment reads use authenticated Cloudflare routes without ca
   }
 });
 
+test('address and fulfillment status writes use authenticated Cloudflare routes without callable fallbacks', () => {
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  for (const [exportName, pathname] of [
+    ['saveEncryptedAddress', '/profile/addresses'],
+    ['updateFulfillmentStatus', '/fulfillment/order-status'],
+  ] as const) {
+    const start = source.indexOf(`export async function ${exportName}`);
+    const end = source.indexOf('\nexport ', start + 1);
+    assert.notEqual(start, -1);
+    const implementation = source.slice(start, end === -1 ? source.length : end);
+    assert.match(implementation, new RegExp(pathname.replaceAll('/', '\\/')));
+    assert.doesNotMatch(implementation, /callFunction|httpsCallable/);
+  }
+});
+
+test('migrated write response validators accept only exact public contracts', () => {
+  const address = {
+    id: 'AbCdEfGhIjKlMnOpQrSt',
+    country: 'United States',
+    countryCode: 'US',
+    hint: '100…01',
+    encrypted: 'cipher-text',
+    email: 'owner@example.com',
+  };
+  assert.deepEqual(profileApiTestHooks.parseProfileAddress(address), address);
+  assert.equal(profileApiTestHooks.parseProfileAddress({ ...address, private: true }), null);
+  assert.equal(profileApiTestHooks.parseProfileAddress({ ...address, id: 'not-auto-id' }), null);
+
+  const status = {
+    deliveryId: 7,
+    fulfillmentStatus: 'Shipped',
+    fulfillmentTrackingCode: 'https://tracking.example/7',
+  } as const;
+  assert.deepEqual(profileApiTestHooks.parseFulfillmentStatusUpdate(status), status);
+  assert.deepEqual(profileApiTestHooks.parseFulfillmentStatusUpdate({
+    deliveryId: 7,
+    fulfillmentStatus: '',
+  }), { deliveryId: 7, fulfillmentStatus: '' });
+  assert.equal(profileApiTestHooks.parseFulfillmentStatusUpdate({ ...status, fulfillmentStatus: 'Delivered' }), null);
+  assert.equal(profileApiTestHooks.parseFulfillmentStatusUpdate({ ...status, internal: true }), null);
+});
+
 test('profile state validator rejects mismatches, malformed summaries, and extra data', () => {
   const valid = {
     responseMode: 'profile-state',
@@ -207,6 +249,15 @@ test('migrated profile reads are absent from Firebase exports and deployment sel
   for (const name of ['getProfile', 'getAdminProfileView', 'getAnonymousStripeDeliveryHistory']) {
     assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
     assert.doesNotMatch(packageJson, new RegExp(`functions:${name}(?:,|\\\")`));
+  }
+});
+
+test('migrated profile writes are absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+  for (const name of ['saveAddress', 'updateFulfillmentStatus']) {
+    assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
+    assert.doesNotMatch(packageJson, new RegExp(`functions:${name}(?:,|\\")`));
   }
 });
 

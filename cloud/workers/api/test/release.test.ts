@@ -14,7 +14,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import {
   benchmarkApi,
@@ -52,6 +52,7 @@ import {
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const EMPTY_NEW_API_SECRET_ENV = {
+  FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '',
   ADDRESS_DECRYPTION_SECRET: '',
   STRIPE_SECRET_KEY: '',
   STRIPE_RESTRICTED_KEY: '',
@@ -65,6 +66,13 @@ const FIRESTORE_SERVICE_ACCOUNT_JSON = JSON.stringify({
   project_id: 'mons-shop',
   client_email: 'mons-shop-cloudflare-reader@mons-shop.iam.gserviceaccount.com',
   private_key: '-----BEGIN PRIVATE KEY-----\ntest-key\n-----END PRIVATE KEY-----\n',
+});
+const FIRESTORE_WRITER_PRIVATE_KEY = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  .privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+const FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON = JSON.stringify({
+  project_id: 'mons-shop',
+  client_email: 'mons-shop-cloudflare-writer@mons-shop.iam.gserviceaccount.com',
+  private_key: FIRESTORE_WRITER_PRIVATE_KEY,
 });
 type DeploymentObservation = CloudflareDeploymentStatus | Error | string;
 
@@ -1252,6 +1260,7 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(validation.RESEND_CONTACTS_API_KEY, undefined);
   assert.equal(validation.NOTIFICATION_ENQUEUE_SECRET, undefined);
   assert.equal(validation.FIRESTORE_SERVICE_ACCOUNT_JSON, undefined);
+  assert.equal(validation.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, undefined);
   assert.equal(validation.GOOGLE_APPLICATION_CREDENTIALS, undefined);
   assert.equal(validation.VITE_HELIUS_API_KEY, undefined);
   assert.equal(validation.WRANGLER_OUTPUT_FILE_PATH, undefined);
@@ -1266,6 +1275,7 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(childEnvironment?.RESEND_CONTACTS_API_KEY, undefined);
   assert.equal(childEnvironment?.NOTIFICATION_ENQUEUE_SECRET, undefined);
   assert.equal(childEnvironment?.FIRESTORE_SERVICE_ACCOUNT_JSON, undefined);
+  assert.equal(childEnvironment?.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, undefined);
   assert.equal(childEnvironment?.GOOGLE_APPLICATION_CREDENTIALS, undefined);
   assert.equal(childEnvironment?.VITE_HELIUS_API_KEY, undefined);
   const authenticated = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token', source);
@@ -1274,6 +1284,7 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(authenticated.RESEND_CONTACTS_API_KEY, undefined);
   assert.equal(authenticated.NOTIFICATION_ENQUEUE_SECRET, undefined);
   assert.equal(authenticated.FIRESTORE_SERVICE_ACCOUNT_JSON, undefined);
+  assert.equal(authenticated.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, undefined);
   assert.equal(authenticated.GOOGLE_APPLICATION_CREDENTIALS, undefined);
   assert.equal(authenticated.VITE_HELIUS_API_KEY, undefined);
   const frontendValidation = frontendDeployTestHooks.credentialFreeEnvironment({
@@ -1286,6 +1297,7 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(frontendValidation.HELIUS_API_KEY, undefined);
   assert.equal(frontendValidation.RESEND_CONTACTS_API_KEY, undefined);
   assert.equal(frontendValidation.FIRESTORE_SERVICE_ACCOUNT_JSON, undefined);
+  assert.equal(frontendValidation.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, undefined);
   assert.equal(frontendValidation.GOOGLE_APPLICATION_CREDENTIALS, undefined);
   assert.equal(frontendValidation.WRANGLER_OUTPUT_FILE_PATH, undefined);
   assert.equal(frontendValidation.DOTENV_KEY, undefined);
@@ -1612,8 +1624,10 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
       }
       if (method === 'POST' && [
         '/profile/state',
+        '/profile/addresses',
         '/admin/delivery-order-owners',
         '/fulfillment/orders',
+        '/fulfillment/order-status',
         '/fulfillment/manual-review-checkouts',
       ].includes(pathname)) {
         headers.set('Access-Control-Allow-Origin', 'https://mons.shop');
@@ -1710,6 +1724,7 @@ test('complete API release blocks stale API or frontend state before upload', as
         apiToken: 'scoped-token',
         checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         firestoreServiceAccountJson: 'firestore-test-credential',
+        firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
         heliusApiKey: 'helius-test-key',
         logsDirectory: '/tmp/logs',
         smokeOwner: OWNER,
@@ -2203,6 +2218,7 @@ test('complete API release verifies the full pair around one exact API promotion
     apiToken: 'scoped-token',
     checkEnvironment: { CI: 'true', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
     firestoreServiceAccountJson: 'firestore-test-credential',
+    firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
     heliusApiKey: 'helius-test-key',
     logsDirectory: '/tmp/logs',
     smokeOwner: OWNER,
@@ -2290,6 +2306,7 @@ test('complete API release refuses post-promotion pair drift and manifest-write 
         apiToken: 'scoped-token',
         checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         firestoreServiceAccountJson: 'firestore-test-credential',
+        firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
         heliusApiKey: 'helius-test-key',
         logsDirectory: '/tmp/logs',
         smokeOwner: OWNER,
@@ -2326,6 +2343,7 @@ test('complete API release refuses post-promotion pair drift and manifest-write 
         apiToken: 'scoped-token',
         checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
         firestoreServiceAccountJson: 'firestore-test-credential',
+        firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
         heliusApiKey: 'helius-test-key',
         logsDirectory: '/tmp/logs',
         smokeOwner: OWNER,
@@ -2358,6 +2376,7 @@ test('complete API release refuses post-promotion pair drift and manifest-write 
       apiToken: 'scoped-token',
       checkEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
       firestoreServiceAccountJson: 'firestore-test-credential',
+      firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
       heliusApiKey: 'helius-test-key',
       logsDirectory: '/tmp/logs',
       smokeOwner: OWNER,
@@ -2917,12 +2936,14 @@ test('temporary secret setup enforces modes and removes partial files after inje
       deployApiTestHooks.secretFileOperations,
       'release-test-secret',
       FIRESTORE_SERVICE_ACCOUNT_JSON,
+      FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
     );
     assert.equal(statSync(secretFile.directory).mode & 0o777, 0o700);
     assert.equal(statSync(secretFile.path).mode & 0o777, 0o600);
     const storedSecrets = JSON.parse(readFileSync(secretFile.path, 'utf8'));
     assert.equal(storedSecrets.HELIUS_API_KEY, 'release-test-secret');
     assert.equal(storedSecrets.FIRESTORE_SERVICE_ACCOUNT_JSON, FIRESTORE_SERVICE_ACCOUNT_JSON);
+    assert.equal(storedSecrets.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON);
     secretFile.dispose();
     assert.equal(existsSync(secretFile.directory), false);
 
@@ -2939,7 +2960,12 @@ test('temporary secret setup enforces modes and removes partial files after inje
       },
     };
     assert.throws(
-      () => deployApiTestHooks.createSecretFile(operations, 'release-test-secret', FIRESTORE_SERVICE_ACCOUNT_JSON),
+      () => deployApiTestHooks.createSecretFile(
+        operations,
+        'release-test-secret',
+        FIRESTORE_SERVICE_ACCOUNT_JSON,
+        FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+      ),
       /injected setup failure/,
     );
     assert.equal(existsSync(partialDirectory), false);
@@ -2960,6 +2986,7 @@ test('temporary secret setup enforces modes and removes partial files after inje
         cleanupFailureOperations,
         'release-test-secret',
         FIRESTORE_SERVICE_ACCOUNT_JSON,
+        FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
       ),
       (error) => error instanceof AggregateError && error.errors.length === 2,
     );
@@ -2998,11 +3025,83 @@ test('Firestore viewer credential input is exact, private, and compacted before 
   }
 });
 
+test('Firestore writer credential input is exact, private, and distinct from the reader', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mons-firestore-writer-test-'));
+  const path = join(directory, 'writer.json');
+  try {
+    writeFileSync(path, JSON.stringify({
+      type: 'service_account',
+      project_id: 'mons-shop',
+      client_email: 'mons-shop-cloudflare-writer@mons-shop.iam.gserviceaccount.com',
+      private_key: FIRESTORE_WRITER_PRIVATE_KEY,
+      private_key_id: 'not-forwarded',
+    }), { mode: 0o600 });
+    assert.equal(deployApiTestHooks.readFirestoreWriterServiceAccount(path), FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON);
+    assert.equal(
+      deployApiTestHooks.validateFirestoreWriterServiceAccountJson(FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON),
+      FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+    );
+    assert.throws(
+      () => deployApiTestHooks.validateFirestoreWriterServiceAccountJson(FIRESTORE_SERVICE_ACCOUNT_JSON),
+      /mons-shop-cloudflare-writer/,
+    );
+    assert.throws(
+      () => deployApiTestHooks.validateFirestoreWriterServiceAccountJson(JSON.stringify({
+        project_id: 'mons-shop',
+        client_email: 'mons-shop-cloudflare-writer@mons-shop.iam.gserviceaccount.com',
+        private_key: '-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----\n',
+      })),
+      /valid PKCS8 private key/,
+    );
+    chmodSync(path, 0o644);
+    assert.throws(() => deployApiTestHooks.readFirestoreWriterServiceAccount(path), /permissions/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('Firestore writer preflight verifies OAuth and database write access without creating data', async () => {
+  const requests: Array<{ method: string; url: URL }> = [];
+  await deployApiTestHooks.verifyFirestoreWriterAccess(
+    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+    async (input, init) => {
+      const url = new URL(String(input));
+      requests.push({ method: String(init?.method), url });
+      if (url.href === 'https://oauth2.googleapis.com/token') {
+        return Response.json({ access_token: 'writer-token', token_type: 'Bearer', expires_in: 3600 });
+      }
+      assert.equal(init?.method, 'DELETE');
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer writer-token');
+      assert.match(url.pathname, /\/databases\/\(default\)\/documents\/cloudflareReleaseChecks\//);
+      assert.equal(url.searchParams.get('currentDocument.exists'), 'false');
+      return Response.json({});
+    },
+  );
+  assert.deepEqual(requests.map(({ method }) => method), ['POST', 'DELETE']);
+
+  await assert.rejects(
+    deployApiTestHooks.verifyFirestoreWriterAccess(
+      FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+      async (input) => String(input) === 'https://oauth2.googleapis.com/token'
+        ? Response.json({ access_token: 'writer-token' })
+        : Response.json({}, { status: 403 }),
+    ),
+    /Firestore writer access verification failed/,
+  );
+});
+
 test('release CLI requires exact production version metadata', () => {
   const versionId = randomUUID();
   assert.deepEqual(
     deployApiTestHooks.parseArgs(['production', '--version-id', versionId, '--smoke-owner', OWNER]),
-    { firestoreServiceAccountFile: undefined, mode: 'production', versionId, smokeOwner: OWNER, tokenFile: undefined },
+    {
+      firestoreServiceAccountFile: undefined,
+      firestoreWriterServiceAccountFile: undefined,
+      mode: 'production',
+      versionId,
+      smokeOwner: OWNER,
+      tokenFile: undefined,
+    },
   );
   assert.throws(
     () => deployApiTestHooks.parseArgs(['production', '--version-id', 'latest', '--smoke-owner', OWNER]),
@@ -3010,15 +3109,23 @@ test('release CLI requires exact production version metadata', () => {
   );
 });
 
-test('release CLI requires a Firestore viewer credential for candidate uploads', () => {
+test('release CLI requires separate Firestore reader and writer credentials for candidate uploads', () => {
   assert.throws(() => deployApiTestHooks.parseArgs([]), /firestore-service-account-file/);
   assert.throws(() => deployApiTestHooks.parseArgs(['release']), /firestore-service-account-file/);
+  assert.throws(() => deployApiTestHooks.parseArgs([
+    'release',
+    '--firestore-service-account-file',
+    '/tmp/firestore-reader.json',
+  ]), /firestore-writer-service-account-file/);
   assert.deepEqual(deployApiTestHooks.parseArgs([
     'release',
     '--firestore-service-account-file',
     '/tmp/firestore-reader.json',
+    '--firestore-writer-service-account-file',
+    '/tmp/firestore-writer.json',
   ]), {
     firestoreServiceAccountFile: '/tmp/firestore-reader.json',
+    firestoreWriterServiceAccountFile: '/tmp/firestore-writer.json',
     mode: 'release',
     smokeOwner: deployApiTestHooks.defaultSmokeOwner,
     tokenFile: undefined,
@@ -3027,10 +3134,13 @@ test('release CLI requires a Firestore viewer credential for candidate uploads',
   assert.deepEqual(deployApiTestHooks.parseArgs([
     '--firestore-service-account-file',
     '/tmp/firestore-reader.json',
+    '--firestore-writer-service-account-file',
+    '/tmp/firestore-writer.json',
     '--smoke-owner',
     OWNER,
   ]), {
     firestoreServiceAccountFile: '/tmp/firestore-reader.json',
+    firestoreWriterServiceAccountFile: '/tmp/firestore-writer.json',
     mode: 'release',
     smokeOwner: OWNER,
     tokenFile: undefined,
@@ -3041,6 +3151,8 @@ test('release CLI requires a Firestore viewer credential for candidate uploads',
       'release',
       '--firestore-service-account-file',
       '/tmp/firestore-reader.json',
+      '--firestore-writer-service-account-file',
+      '/tmp/firestore-writer.json',
       '--version-id',
       randomUUID(),
     ]),

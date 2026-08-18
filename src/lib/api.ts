@@ -214,9 +214,11 @@ type AuthenticatedApiPath =
   | '/profile/state'
   | '/profile/shipments'
   | '/profile/anonymous-stripe-delivery-history'
+  | '/profile/addresses'
   | '/admin/profile'
   | '/admin/delivery-order-owners'
   | '/fulfillment/orders'
+  | '/fulfillment/order-status'
   | '/fulfillment/manual-review-checkouts';
 
 const defaultProfileApiDependencies: ProfileApiClientDependencies = {
@@ -335,6 +337,58 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 }
 
+function parseProfileAddress(value: unknown): ProfileAddress | null {
+  if (!isRecord(value)) return null;
+  const required = ['id', 'country', 'hint', 'encrypted'] as const;
+  const optional = ['countryCode', 'email'] as const;
+  const allowed = new Set<string>([...required, ...optional]);
+  if (!required.every((key) => Object.hasOwn(value, key))) return null;
+  if (!Object.keys(value).every((key) => allowed.has(key))) return null;
+  if (
+    typeof value.id !== 'string' || !/^[A-Za-z0-9]{20}$/.test(value.id) ||
+    typeof value.country !== 'string' || value.country.length > 64 ||
+    typeof value.hint !== 'string' || value.hint.length > 256 ||
+    typeof value.encrypted !== 'string' || value.encrypted.length > 4096 ||
+    (value.countryCode !== undefined && (typeof value.countryCode !== 'string' || value.countryCode.length > 32)) ||
+    (value.email !== undefined && (typeof value.email !== 'string' || !value.email || value.email.length > 254))
+  ) return null;
+  return {
+    id: value.id,
+    country: value.country,
+    hint: value.hint,
+    encrypted: value.encrypted,
+    ...(typeof value.countryCode === 'string' ? { countryCode: value.countryCode } : {}),
+    ...(typeof value.email === 'string' ? { email: value.email } : {}),
+  };
+}
+
+function parseFulfillmentStatusUpdate(value: unknown): {
+  deliveryId: number;
+  fulfillmentStatus: FulfillmentStatus | '';
+  fulfillmentTrackingCode?: string;
+} | null {
+  if (!isRecord(value)) return null;
+  const keys = Object.keys(value).sort().join(',');
+  if (keys !== 'deliveryId,fulfillmentStatus' && keys !== 'deliveryId,fulfillmentStatus,fulfillmentTrackingCode') return null;
+  if (!Number.isSafeInteger(value.deliveryId) || Number(value.deliveryId) <= 0) return null;
+  if (value.fulfillmentStatus !== '' && value.fulfillmentStatus !== 'Preparing' && value.fulfillmentStatus !== 'Shipped') return null;
+  if (
+    value.fulfillmentTrackingCode !== undefined &&
+    (
+      typeof value.fulfillmentTrackingCode !== 'string' ||
+      !value.fulfillmentTrackingCode ||
+      value.fulfillmentTrackingCode.trim() !== value.fulfillmentTrackingCode
+    )
+  ) return null;
+  return {
+    deliveryId: Number(value.deliveryId),
+    fulfillmentStatus: value.fulfillmentStatus,
+    ...(typeof value.fulfillmentTrackingCode === 'string'
+      ? { fulfillmentTrackingCode: value.fulfillmentTrackingCode }
+      : {}),
+  };
+}
+
 function profileStateErrorSection(value: unknown): ProfileStateSection<never> | null {
   if (!isRecord(value) || !hasExactKeys(value, ['status', 'error']) || value.status !== 'error') return null;
   const error = value.error;
@@ -439,10 +493,16 @@ export async function saveEncryptedAddress(
   email?: string,
   countryCode?: string,
 ): Promise<ProfileAddress> {
-  return callFunction<
-    { encrypted: string; country: string; countryCode?: string; hint: string; email?: string },
-    ProfileAddress
-  >('saveAddress', { encrypted, country, countryCode, hint, email });
+  const response = await callProfileApi('/profile/addresses', {
+    encrypted,
+    country,
+    countryCode,
+    hint,
+    email,
+  });
+  const address = parseProfileAddress(response);
+  if (!address) throw new Error('Invalid saved address response');
+  return address;
 }
 
 function stripeCheckoutRequestQuantity(quantity: StripeCheckoutSessionRequest['quantity']): number | undefined {
@@ -578,10 +638,15 @@ export async function updateFulfillmentStatus(
   dropId: string,
   trackingCode?: string,
 ): Promise<{ deliveryId: number; fulfillmentStatus: FulfillmentStatus | ''; fulfillmentTrackingCode?: string }> {
-  return callFunction<
-    { deliveryId: number; status: FulfillmentStatus | '' | null; dropId: string; trackingCode?: string },
-    { deliveryId: number; fulfillmentStatus: FulfillmentStatus | ''; fulfillmentTrackingCode?: string }
-  >('updateFulfillmentStatus', { deliveryId, status, dropId, ...(trackingCode != null ? { trackingCode } : {}) });
+  const response = await callProfileApi('/fulfillment/order-status', {
+    deliveryId,
+    status,
+    dropId,
+    ...(trackingCode != null ? { trackingCode } : {}),
+  });
+  const result = parseFulfillmentStatusUpdate(response);
+  if (!result) throw new Error('Invalid fulfillment status response');
+  return result;
 }
 
 export async function updateFulfillmentAddress(
@@ -832,6 +897,8 @@ export async function listDeliveryOrderOwners(
 }
 
 export const profileApiTestHooks = {
+  parseFulfillmentStatusUpdate,
+  parseProfileAddress,
   parseProfileState,
   profileApiErrorPayload,
   profileOrders,

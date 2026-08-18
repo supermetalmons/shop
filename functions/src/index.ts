@@ -202,11 +202,7 @@ import {
 import {
   normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
-  sanitizeFulfillmentTrackingCode,
 } from './fulfillmentTracking.js';
-import {
-  FULFILLMENT_STATUS_OPTIONS,
-} from './fulfillmentStatus.js';
 import { parseRequest } from './request.js';
 import {
   createStripeCheckoutSessionForRequest,
@@ -1121,14 +1117,6 @@ function parseSolanaSignInMessage(message: string): ParsedSolanaSignInMessage {
   if (!session) throw new HttpsError('invalid-argument', 'Invalid sign-in message (missing Session)');
 
   return { wallet, domain, timestamp, session };
-}
-
-function safeJsonByteLength(value: unknown): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(value ?? null), 'utf8');
-  } catch {
-    return Number.POSITIVE_INFINITY;
-  }
 }
 
 function truncateForLog(value: unknown, maxLen: number): string | null {
@@ -5552,50 +5540,6 @@ export const reconcileProfileState = onCallLogged('reconcileProfileState', async
   return response;
 });
 
-export const saveAddress = onCallLogged('saveAddress', async (request) => {
-  const { wallet } = await requireWalletSession(request);
-
-  // Reject obviously oversized payloads early to reduce Firestore doc size/cost risk.
-  const MAX_SAVE_ADDRESS_BYTES = 10 * 1024;
-  const rawBytes = safeJsonByteLength((request as any)?.data);
-  if (!Number.isFinite(rawBytes) || rawBytes > MAX_SAVE_ADDRESS_BYTES) {
-    throw new HttpsError('invalid-argument', 'Request payload too large');
-  }
-
-  const schema = z.object({
-    encrypted: z.string().max(4096),
-    country: z.string().max(64),
-    countryCode: z.string().max(32).optional(),
-    hint: z.string().max(256),
-    email: z.string().email().max(254).optional(),
-  });
-  const body = parseRequest(schema, request.data);
-  const id = db.collection('tmp').doc().id;
-  const countryCode = normalizeCountryCode(body.countryCode || body.country);
-  const addressRef = db.doc(`profiles/${wallet}/addresses/${id}`);
-  await addressRef.set(
-    {
-      ...body,
-      countryCode: countryCode || body.countryCode,
-      id,
-      createdAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true },
-  );
-  await db.doc(`profiles/${wallet}`).set(
-    { wallet, ...(body.email ? { email: body.email } : {}) },
-    { merge: true },
-  );
-  return {
-    id,
-    country: body.country,
-    countryCode: countryCode || body.countryCode,
-    encrypted: body.encrypted,
-    hint: body.hint,
-    email: body.email,
-  };
-});
-
 export const stripeWebhook = onRequest(
   { secrets: [STRIPE_WEBHOOK_SECRET, STRIPE_WEBHOOK_SECRET_DEVNET] },
   async (req, res) => {
@@ -5842,44 +5786,6 @@ export const updateFulfillmentAddress = onCallLogged(
   },
   { secrets: [ADDRESS_DECRYPTION_SECRET] },
 );
-
-export const updateFulfillmentStatus = onCallLogged('updateFulfillmentStatus', async (request) => {
-  const schema = z.object({
-    dropId: z.string().min(1).max(64),
-    deliveryId: z.number().int().positive(),
-    status: z.union([z.enum(FULFILLMENT_STATUS_OPTIONS), z.literal(''), z.null()]),
-    trackingCode: z.string().optional(),
-  });
-  const { dropId: requestDropId, deliveryId, status, trackingCode } = parseRequest(schema, request.data);
-  const dropId = requireDropId(requestDropId);
-  const { wallet } = await requireFulfillmentDropAccess(request, dropId);
-  const nextStatus = status || '';
-
-  const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
-  const snap = await orderRef.get();
-  if (!snap.exists) {
-    throw new HttpsError('not-found', 'Delivery order not found');
-  }
-
-  const update: Record<string, unknown> = {
-    dropId,
-    fulfillmentUpdatedAt: FieldValue.serverTimestamp(),
-    fulfillmentUpdatedBy: wallet,
-  };
-  if (nextStatus) {
-    update.fulfillmentStatus = nextStatus;
-  } else {
-    update.fulfillmentStatus = FieldValue.delete();
-  }
-  let nextTrackingCode = normalizeOptionalFulfillmentTrackingCode((snap.data() as any)?.fulfillmentTrackingCode);
-  if (nextStatus === 'Shipped') {
-    nextTrackingCode = sanitizeFulfillmentTrackingCode(trackingCode);
-    update.fulfillmentTrackingCode = nextTrackingCode || FieldValue.delete();
-  }
-
-  await orderRef.set(update, { merge: true });
-  return { deliveryId, fulfillmentStatus: nextStatus, ...(nextTrackingCode ? { fulfillmentTrackingCode: nextTrackingCode } : {}) };
-});
 
 /**
  * Window during which a started push blocks a second one. Long enough to cover the

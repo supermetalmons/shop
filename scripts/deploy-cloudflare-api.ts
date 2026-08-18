@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createPrivateKey, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -14,6 +15,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SignJWT, importPKCS8 } from 'jose';
 import {
   isExactShopInventoryResponse,
   isExactShopPackStatusResponse,
@@ -47,6 +49,7 @@ type Mode = 'release' | 'preview' | 'production' | 'triggers' | 'rollback';
 
 type CliOptions = {
   firestoreServiceAccountFile?: string;
+  firestoreWriterServiceAccountFile?: string;
   mode: Mode;
   smokeOwner: string;
   tokenFile?: string;
@@ -136,6 +139,7 @@ type CompleteApiReleaseInput = {
   apiToken: string;
   checkEnvironment: NodeJS.ProcessEnv;
   firestoreServiceAccountJson: string;
+  firestoreWriterServiceAccountJson: string;
   heliusApiKey: string;
   logsDirectory: string;
   smokeOwner: string;
@@ -181,7 +185,11 @@ const expectedReleaseDropId = 'clear_cards_devnet_v2';
 const forbiddenReleaseDropId = 'clear_cards_devnet';
 const notificationSmokeEmail = 'ivan@ivan.lol';
 const firestoreServiceAccountEmail = 'mons-shop-cloudflare-reader@mons-shop.iam.gserviceaccount.com';
+const firestoreWriterServiceAccountEmail = 'mons-shop-cloudflare-writer@mons-shop.iam.gserviceaccount.com';
 const firestoreProjectId = 'mons-shop';
+const firestoreDatabaseName = `projects/${firestoreProjectId}/databases/(default)`;
+const googleOAuthTokenUrl = 'https://oauth2.googleapis.com/token';
+const googleDatastoreScope = 'https://www.googleapis.com/auth/datastore';
 const DEFAULT_SMOKE_TIMEOUT_MS = 15_000;
 const INVENTORY_SMOKE_TIMEOUT_MS = 70_000;
 const secretFileOperations: SecretFileOperations = {
@@ -201,15 +209,15 @@ function usage(): string {
     '',
     'Usage:',
     '  npm run deploy:api',
-    '  npm run deploy:api -- release --firestore-service-account-file <path> [--smoke-owner <wallet>] [--token-file <path>]',
-    '  npm run deploy:api -- preview --firestore-service-account-file <path> --smoke-owner <wallet> [--token-file <path>]',
+    '  npm run deploy:api -- release --firestore-service-account-file <path> --firestore-writer-service-account-file <path> [--smoke-owner <wallet>] [--token-file <path>]',
+    '  npm run deploy:api -- preview --firestore-service-account-file <path> --firestore-writer-service-account-file <path> --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- triggers --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
     '',
     'The default release validates, uploads, verifies, promotes, and records one exact Worker version.',
     'Release, preview, and production require HELIUS_API_KEY in the process environment.',
-    'Release and preview require the dedicated read-only Firestore service-account JSON file.',
+    'Release and preview require dedicated reader and writer Firestore service-account JSON files.',
     'Preview mode uploads the secret through a temporary mode-0600 file inside a mode-0700 directory.',
   ].join('\n');
 }
@@ -232,6 +240,7 @@ function parseArgs(argv: string[]): CliOptions {
   }
   let smokeOwner = mode === 'release' ? defaultSmokeOwner : '';
   let firestoreServiceAccountFile: string | undefined;
+  let firestoreWriterServiceAccountFile: string | undefined;
   let tokenFile: string | undefined;
   let versionId: string | undefined;
   for (let index = optionStart; index < argv.length; index += 1) {
@@ -239,6 +248,7 @@ function parseArgs(argv: string[]): CliOptions {
     const value = argv[index + 1];
     if (
       option !== '--firestore-service-account-file' &&
+      option !== '--firestore-writer-service-account-file' &&
       option !== '--smoke-owner' &&
       option !== '--token-file' &&
       option !== '--version-id'
@@ -248,6 +258,7 @@ function parseArgs(argv: string[]): CliOptions {
     if (!value || value.startsWith('--')) fail(`Missing value for ${option}.`, 2);
     index += 1;
     if (option === '--firestore-service-account-file') firestoreServiceAccountFile = value;
+    if (option === '--firestore-writer-service-account-file') firestoreWriterServiceAccountFile = value;
     if (option === '--smoke-owner') smokeOwner = value.trim();
     if (option === '--token-file') tokenFile = value;
     if (option === '--version-id') versionId = value.trim().toLowerCase();
@@ -260,10 +271,13 @@ function parseArgs(argv: string[]): CliOptions {
   if ((mode === 'release' || mode === 'preview') && !firestoreServiceAccountFile) {
     fail(`${mode} requires --firestore-service-account-file.`, 2);
   }
-  if (mode !== 'release' && mode !== 'preview' && firestoreServiceAccountFile) {
-    fail(`--firestore-service-account-file is not valid in ${mode} mode.`, 2);
+  if ((mode === 'release' || mode === 'preview') && !firestoreWriterServiceAccountFile) {
+    fail(`${mode} requires --firestore-writer-service-account-file.`, 2);
   }
-  return { firestoreServiceAccountFile, mode, smokeOwner, tokenFile, versionId };
+  if (mode !== 'release' && mode !== 'preview' && (firestoreServiceAccountFile || firestoreWriterServiceAccountFile)) {
+    fail(`Firestore service-account file options are not valid in ${mode} mode.`, 2);
+  }
+  return { firestoreServiceAccountFile, firestoreWriterServiceAccountFile, mode, smokeOwner, tokenFile, versionId };
 }
 
 function resolveHeliusApiKey(
@@ -278,48 +292,145 @@ function readApiToken(path?: string): string {
   return token;
 }
 
-function validateFirestoreServiceAccountJson(value: string): string {
+function validateFirestoreCredentialJson(value: string, expectedEmail: string, label: string): string {
   if (!value || Buffer.byteLength(value, 'utf8') > 64 * 1024) {
-    fail('Firestore service-account JSON is empty or oversized.');
+    fail(`${label} Firestore service-account JSON is empty or oversized.`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(value) as unknown;
   } catch {
-    fail('Firestore service-account file is not valid JSON.');
+    fail(`${label} Firestore service-account file is not valid JSON.`);
   }
-  if (!isRecord(parsed)) fail('Firestore service-account file must contain a JSON object.');
+  if (!isRecord(parsed)) fail(`${label} Firestore service-account file must contain a JSON object.`);
   const projectId = typeof parsed.project_id === 'string' ? parsed.project_id.trim() : '';
   const clientEmail = typeof parsed.client_email === 'string' ? parsed.client_email.trim() : '';
   const rawPrivateKey = typeof parsed.private_key === 'string' ? parsed.private_key : '';
   const privateKey = rawPrivateKey ? `${rawPrivateKey.trimEnd()}\n` : '';
   if (
     projectId !== firestoreProjectId ||
-    clientEmail !== firestoreServiceAccountEmail ||
+    clientEmail !== expectedEmail ||
     !privateKey.startsWith('-----BEGIN PRIVATE KEY-----\n') ||
     !privateKey.endsWith('-----END PRIVATE KEY-----\n') ||
     privateKey.length > 32 * 1024
   ) {
-    fail(`Firestore credential must be the ${firestoreServiceAccountEmail} key for project ${firestoreProjectId}.`);
+    fail(`${label} Firestore credential must be the ${expectedEmail} key for project ${firestoreProjectId}.`);
   }
   return JSON.stringify({ project_id: projectId, client_email: clientEmail, private_key: privateKey });
 }
 
-function readFirestoreServiceAccount(path: string | undefined): string {
-  if (!path) fail('Missing --firestore-service-account-file.');
+function validateFirestoreServiceAccountJson(value: string): string {
+  return validateFirestoreCredentialJson(value, firestoreServiceAccountEmail, 'Reader');
+}
+
+function validateFirestoreWriterServiceAccountJson(value: string): string {
+  const validated = validateFirestoreCredentialJson(value, firestoreWriterServiceAccountEmail, 'Writer');
+  try {
+    createPrivateKey((JSON.parse(validated) as { private_key: string }).private_key);
+  } catch {
+    fail('Writer Firestore credential must contain a valid PKCS8 private key.');
+  }
+  return validated;
+}
+
+async function verifyFirestoreWriterAccess(
+  value: string,
+  providerFetch: typeof fetch = fetch,
+  nowMs = Date.now(),
+): Promise<void> {
+  const credential = JSON.parse(validateFirestoreWriterServiceAccountJson(value)) as {
+    client_email: string;
+    private_key: string;
+  };
+  const issuedAt = Math.floor(nowMs / 1000);
+  const key = await importPKCS8(credential.private_key, 'RS256');
+  const assertion = await new SignJWT({ scope: googleDatastoreScope })
+    .setProtectedHeader({ alg: 'RS256', typ: 'JWT' })
+    .setIssuer(credential.client_email)
+    .setSubject(credential.client_email)
+    .setAudience(googleOAuthTokenUrl)
+    .setIssuedAt(issuedAt)
+    .setExpirationTime(issuedAt + 3600)
+    .sign(key);
+  let tokenResponse: Response;
+  try {
+    tokenResponse = await providerFetch(googleOAuthTokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion,
+      }),
+      signal: AbortSignal.timeout(DEFAULT_SMOKE_TIMEOUT_MS),
+    });
+  } catch {
+    fail('Unable to verify the Firestore writer credential.');
+  }
+  if (!tokenResponse.ok) {
+    await tokenResponse.body?.cancel().catch(() => undefined);
+    fail('Unable to verify the Firestore writer credential.');
+  }
+  let tokenPayload: unknown;
+  try {
+    tokenPayload = await tokenResponse.json();
+  } catch {
+    fail('Unable to verify the Firestore writer credential.');
+  }
+  const accessToken = isRecord(tokenPayload) && typeof tokenPayload.access_token === 'string'
+    ? tokenPayload.access_token
+    : '';
+  if (!accessToken) fail('Unable to verify the Firestore writer credential.');
+  const documentName = `${firestoreDatabaseName}/documents/cloudflareReleaseChecks/${randomUUID()}`;
+  const deleteUrl = new URL(`https://firestore.googleapis.com/v1/${documentName}`);
+  deleteUrl.searchParams.set('currentDocument.exists', 'false');
+  let deleteResponse: Response;
+  try {
+    deleteResponse = await providerFetch(deleteUrl, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(DEFAULT_SMOKE_TIMEOUT_MS),
+    });
+  } catch {
+    fail('Firestore writer access verification failed.');
+  }
+  if (!deleteResponse.ok) {
+    await deleteResponse.body?.cancel().catch(() => undefined);
+    fail('Firestore writer access verification failed.');
+  }
+  await deleteResponse.body?.cancel().catch(() => undefined);
+}
+
+function readFirestoreCredential(
+  path: string | undefined,
+  option: string,
+  validate: (value: string) => string,
+): string {
+  if (!path) fail(`Missing ${option}.`);
   const resolvedPath = resolve(path);
   let value: string;
   try {
     const entry = lstatSync(resolvedPath);
-    if (!entry.isFile() || entry.isSymbolicLink()) fail('Firestore service-account file must be a regular non-symlink file.');
-    if ((entry.mode & 0o077) !== 0) fail('Firestore service-account file permissions must not allow group or other access.');
+    if (!entry.isFile() || entry.isSymbolicLink()) fail(`${option} must reference a regular non-symlink file.`);
+    if ((entry.mode & 0o077) !== 0) fail(`${option} file permissions must not allow group or other access.`);
     value = readFileSync(resolvedPath, 'utf8');
   } catch (error) {
     if (error instanceof DeployFailure) throw error;
     const detail = error instanceof Error ? error.message : String(error);
-    fail(`Unable to read Firestore service-account file: ${detail}`);
+    fail(`Unable to read ${option}: ${detail}`);
   }
-  return validateFirestoreServiceAccountJson(value);
+  return validate(value);
+}
+
+function readFirestoreServiceAccount(path: string | undefined): string {
+  return readFirestoreCredential(path, '--firestore-service-account-file', validateFirestoreServiceAccountJson);
+}
+
+function readFirestoreWriterServiceAccount(path: string | undefined): string {
+  return readFirestoreCredential(
+    path,
+    '--firestore-writer-service-account-file',
+    validateFirestoreWriterServiceAccountJson,
+  );
 }
 
 function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -334,6 +445,7 @@ function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): Nod
       normalized === 'RESEND_CONTACTS_API_KEY' ||
       normalized === 'NOTIFICATION_ENQUEUE_SECRET' ||
       normalized === 'FIRESTORE_SERVICE_ACCOUNT_JSON' ||
+      normalized === 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' ||
       normalized === 'ADDRESS_DECRYPTION_SECRET' ||
       normalized === 'STRIPE_SECRET_KEY' ||
       normalized === 'STRIPE_RESTRICTED_KEY' ||
@@ -449,10 +561,12 @@ function createSecretFile(
   operations: SecretFileOperations = secretFileOperations,
   heliusApiKey = String(process.env.HELIUS_API_KEY || '').trim(),
   firestoreServiceAccountJson = '',
+  firestoreWriterServiceAccountJson = '',
 ): { directory: string; path: string; dispose: () => void } {
   const secret = heliusApiKey.trim();
   if (!secret) fail('A Helius API key is required for Worker candidate upload.');
   const firestoreSecret = validateFirestoreServiceAccountJson(firestoreServiceAccountJson);
+  const firestoreWriterSecret = validateFirestoreWriterServiceAccountJson(firestoreWriterServiceAccountJson);
   let directory: string | undefined;
   try {
     directory = operations.mkdtemp(join(tmpdir(), 'mons-shop-api-secret-'));
@@ -462,6 +576,7 @@ function createSecretFile(
     operations.write(path, JSON.stringify({
       HELIUS_API_KEY: secret,
       FIRESTORE_SERVICE_ACCOUNT_JSON: firestoreSecret,
+      FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: firestoreWriterSecret,
     }), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     operations.chmod(path, 0o600);
     if ((operations.stat(path).mode & 0o777) !== 0o600) fail('Unable to enforce mode 0600 on the temporary secrets file.');
@@ -528,6 +643,7 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
     Array.isArray(secrets.required) &&
     [...secrets.required].sort().join('\0') === [
       'FIRESTORE_SERVICE_ACCOUNT_JSON',
+      'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON',
       'HELIUS_API_KEY',
       'NOTIFICATION_ENQUEUE_SECRET',
       'RESEND_CONTACTS_API_KEY',
@@ -789,8 +905,10 @@ async function smokeApi(
   if (options.includeProfileState === true) {
     for (const [pathname, body] of [
       ['/profile/state', {}],
+      ['/profile/addresses', { encrypted: 'smoke', country: 'US', hint: 'smoke' }],
       ['/admin/delivery-order-owners', {}],
       ['/fulfillment/orders', { dropId: 'card_nft_2', limit: 1 }],
+      ['/fulfillment/order-status', { dropId: 'card_nft_2', deliveryId: 1, status: 'Preparing' }],
       ['/fulfillment/manual-review-checkouts', { dropId: 'card_nft_2' }],
     ] as const) {
       const capability = await request(`${baseUrl}${pathname}`, {
@@ -1238,6 +1356,7 @@ async function uploadApiCandidate(input: {
   apiToken: string;
   candidateSmoke: SmokeApiOptions;
   firestoreServiceAccountJson: string;
+  firestoreWriterServiceAccountJson: string;
   heliusApiKey: string;
   logsDirectory: string;
   smokeOwner: string;
@@ -1248,6 +1367,7 @@ async function uploadApiCandidate(input: {
     secretFileOperations,
     input.heliusApiKey,
     input.firestoreServiceAccountJson,
+    input.firestoreWriterServiceAccountJson,
   );
   const removeTerminationCleanup = installTerminationCleanup(secretFile.dispose);
   const outputFile = resolve(input.logsDirectory, `api-upload-${process.pid}-${Date.now()}.json`);
@@ -1370,6 +1490,7 @@ async function runCompleteApiRelease(
     apiToken: input.apiToken,
     candidateSmoke,
     firestoreServiceAccountJson: input.firestoreServiceAccountJson,
+    firestoreWriterServiceAccountJson: input.firestoreWriterServiceAccountJson,
     heliusApiKey: input.heliusApiKey,
     logsDirectory: input.logsDirectory,
     smokeOwner: input.smokeOwner,
@@ -1430,12 +1551,15 @@ async function main(): Promise<void> {
   if (options.mode === 'release') {
     if (!heliusApiKey) fail('Release requires HELIUS_API_KEY in the process environment.');
     const firestoreServiceAccountJson = readFirestoreServiceAccount(options.firestoreServiceAccountFile);
+    const firestoreWriterServiceAccountJson = readFirestoreWriterServiceAccount(options.firestoreWriterServiceAccountFile);
+    await verifyFirestoreWriterAccess(firestoreWriterServiceAccountJson);
     const apiToken = readApiToken(options.tokenFile);
     const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
     const metadata = await runCompleteApiRelease({
       apiToken,
       checkEnvironment,
       firestoreServiceAccountJson,
+      firestoreWriterServiceAccountJson,
       heliusApiKey,
       logsDirectory,
       smokeOwner: options.smokeOwner,
@@ -1448,6 +1572,8 @@ async function main(): Promise<void> {
   if (options.mode === 'preview') {
     if (!heliusApiKey) fail('Preview mode requires HELIUS_API_KEY in the process environment.');
     const firestoreServiceAccountJson = readFirestoreServiceAccount(options.firestoreServiceAccountFile);
+    const firestoreWriterServiceAccountJson = readFirestoreWriterServiceAccount(options.firestoreWriterServiceAccountFile);
+    await verifyFirestoreWriterAccess(firestoreWriterServiceAccountJson);
     runApiValidation();
     const apiToken = readApiToken(options.tokenFile);
     const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
@@ -1455,6 +1581,7 @@ async function main(): Promise<void> {
       apiToken,
       candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, includeProfileState: true, owner: options.smokeOwner },
       firestoreServiceAccountJson,
+      firestoreWriterServiceAccountJson,
       heliusApiKey,
       logsDirectory,
       smokeOwner: options.smokeOwner,
@@ -1527,6 +1654,7 @@ export const deployApiTestHooks = {
   removeSecretDirectory,
   readReleaseManifest,
   readFirestoreServiceAccount,
+  readFirestoreWriterServiceAccount,
   readStableReleasePair,
   requireCandidateRecord,
   resolveHeliusApiKey,
@@ -1538,6 +1666,8 @@ export const deployApiTestHooks = {
   smokeApi,
   validationEnvironment,
   validateFirestoreServiceAccountJson,
+  validateFirestoreWriterServiceAccountJson,
+  verifyFirestoreWriterAccess,
 };
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
