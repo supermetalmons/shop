@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 import { z } from 'zod';
-import { subscribeToNotifications } from '../lib/api';
+import { subscribeToNotifications } from '../lib/notificationSubscriptions';
 
 interface NotifyFormProps {
   onSuccess: () => void;

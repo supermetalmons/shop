@@ -1,6 +1,14 @@
-import { z } from 'zod';
 import { normalizeFulfillmentStatus } from './fulfillmentStatus.js';
 import { resolveFulfillmentTrackingHref } from './fulfillmentTracking.js';
+import {
+  normalizeNotificationEmailRecipient,
+  validateNotificationEmailRecipient,
+} from './shared/notificationSubscription.js';
+
+export {
+  normalizeNotificationEmailRecipient,
+  validateNotificationEmailRecipient,
+} from './shared/notificationSubscription.js';
 
 export type DeliveryReadyToShipStatusSnapshot = {
   status?: unknown;
@@ -17,24 +25,11 @@ export const RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED = true;
 export const RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_DISABLED_REASON =
   'resend_non_checkout_error_notifications_disabled';
 
-const NOTIFICATION_EMAIL_RECIPIENT_SCHEMA = z.string().email().max(254);
-
 export type ReadyToShipOrderNotificationPlan = {
   buyerRecipient: string | null;
   shipperRecipients: string[];
   shouldBuildOrderEmailItems: boolean;
 };
-
-export function validateNotificationEmailRecipient(rawEmail: unknown): string | null {
-  if (typeof rawEmail !== 'string') return null;
-  const email = rawEmail.trim();
-  if (!email || !NOTIFICATION_EMAIL_RECIPIENT_SCHEMA.safeParse(email).success) return null;
-  return email;
-}
-
-export function normalizeNotificationEmailRecipient(rawEmail: unknown): string | null {
-  return validateNotificationEmailRecipient(rawEmail)?.toLowerCase() || null;
-}
 
 function parseCanonicalPositiveSafeInteger(value: unknown): number | null {
   if (typeof value === 'number') {

@@ -18,6 +18,7 @@ import {
   isExactShopInventoryResponse,
   isExactShopPendingOpenBoxesResponse,
 } from '../functions/src/shared/shopApi.ts';
+import { isExactSubscribeToNotificationsResponse } from '../functions/src/shared/notificationSubscription.ts';
 import { FULFILLMENT_ADMIN_WALLET_ADDRESSES } from '../functions/src/shared/fulfillmentAccess.ts';
 import { isBase58Bytes } from '../functions/src/shared/solanaRpcProxy.ts';
 import { benchmarkApi, type ApiBenchmarkResult } from './benchmark-cloudflare-api.ts';
@@ -172,6 +173,7 @@ const candidateRecordClockSkewMs = 5 * 60 * 1000;
 const defaultSmokeOwner = FULFILLMENT_ADMIN_WALLET_ADDRESSES[0];
 const expectedReleaseDropId = 'clear_cards_devnet_v2';
 const forbiddenReleaseDropId = 'clear_cards_devnet';
+const notificationSmokeEmail = 'ivan@ivan.lol';
 const DEFAULT_SMOKE_TIMEOUT_MS = 15_000;
 const INVENTORY_SMOKE_TIMEOUT_MS = 70_000;
 const secretFileOperations: SecretFileOperations = {
@@ -263,6 +265,7 @@ function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): Nod
       normalized.startsWith('CF_') ||
       normalized.startsWith('WRANGLER_') ||
       normalized === 'HELIUS_API_KEY' ||
+      normalized === 'RESEND_CONTACTS_API_KEY' ||
       normalized === 'VITE_HELIUS_API_KEY' ||
       normalized === 'DOTENV_KEY'
     ) {
@@ -679,6 +682,19 @@ async function smokeApi(
   }, 'CORS smoke request');
   if (cors.response.status !== 204 || cors.response.headers.get('access-control-allow-origin') !== '*') fail('CORS smoke response was invalid.');
   assertResponseHeaders(cors.response, 'CORS smoke response');
+
+  const notification = await request(`${baseUrl}/notifications/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+    body: JSON.stringify({ email: notificationSmokeEmail }),
+  }, 'Notification subscription smoke request');
+  if (notification.response.status !== 200) {
+    fail(`Notification subscription smoke request returned ${notification.response.status}.`);
+  }
+  assertResponseHeaders(notification.response, 'Notification subscription smoke response');
+  if (!isExactSubscribeToNotificationsResponse(await notification.response.json())) {
+    fail('Notification subscription smoke response had an unexpected shape.');
+  }
 
   const deniedRpcCors = await request(`${baseUrl}/rpc/mainnet-beta`, {
     method: 'OPTIONS',
@@ -1334,6 +1350,7 @@ export const deployApiTestHooks = {
   candidateRecordPath,
   createSecretFile,
   defaultSmokeOwner,
+  notificationSmokeEmail,
   defaultSmokeTimeoutMs: DEFAULT_SMOKE_TIMEOUT_MS,
   expectedReleaseDropId,
   expectedPreviewOrigin,

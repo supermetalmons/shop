@@ -48,6 +48,18 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(inventoryPreflight.status, 204);
     assert.equal(inventoryPreflight.headers.get('access-control-allow-origin'), '*');
 
+    const notificationPreflight = await worker.fetch('https://api.mons.shop/notifications/subscribe', { method: 'OPTIONS' });
+    assert.equal(notificationPreflight.status, 204);
+    assert.equal(notificationPreflight.headers.get('access-control-allow-origin'), '*');
+
+    const invalidNotification = await worker.fetch('https://api.mons.shop/notifications/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: 'not an email' }),
+    });
+    assert.equal(invalidNotification.status, 400);
+    assert.deepEqual(await invalidNotification.json(), { ok: false, error: 'invalid-email' });
+
     const allowedRpcPreflight = await worker.fetch('https://api.mons.shop/rpc/devnet', {
       method: 'OPTIONS',
       headers: {

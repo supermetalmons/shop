@@ -175,10 +175,6 @@ import {
 } from './notificationEmails.js';
 import { isRetryableResendError, summarizeResendError, type ResendErrorSummary } from './resendErrors.js';
 import {
-  createResendSubscribersProvider,
-  subscribeResendContact,
-} from './resendSubscribers.js';
-import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
 } from './orderEmailItems.js';
@@ -358,7 +354,6 @@ const COSIGNER_SECRET = defineSecret('COSIGNER_SECRET');
 // Base64-encoded Curve25519 secret key for decrypting delivery addresses (TweetNaCl box).
 const ADDRESS_DECRYPTION_SECRET = defineSecret('ADDRESS_DECRYPTION_SECRET');
 const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
-const RESEND_CONTACTS_API_KEY = defineSecret('RESEND_CONTACTS_API_KEY');
 const STRIPE_RESTRICTED_KEY = defineSecret('STRIPE_RESTRICTED_KEY');
 const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
 const STRIPE_RESTRICTED_KEY_LIVE = defineSecret('STRIPE_RESTRICTED_KEY_LIVE');
@@ -4618,9 +4613,6 @@ function createResendClient(apiKey: () => string): () => Promise<ResendClient | 
 }
 
 const resendClient = createResendClient(() => envOrSecretValue('RESEND_API_KEY', RESEND_API_KEY));
-const resendContactsClient = createResendClient(() =>
-  envOrSecretValue('RESEND_CONTACTS_API_KEY', RESEND_CONTACTS_API_KEY),
-);
 
 async function sendBuyerOrderReceivedEmail(
   message: BuyerOrderReceivedEmailMessage,
@@ -6429,32 +6421,6 @@ export const removeAddress = onCallLogged('removeAddress', async (request) => {
   await addressRef.delete();
   return { id: addressId, removed: true };
 });
-
-export const subscribeToNotifications = onCallAuthed(
-  'subscribeToNotifications',
-  async (request) => {
-    const { email: rawEmail } = parseRequest(
-      z.object({ email: z.unknown() }),
-      request.data,
-    );
-    const email = normalizeNotificationEmailRecipient(rawEmail);
-    if (!email) {
-      throw new HttpsError('invalid-argument', 'Enter a valid email address.');
-    }
-
-    try {
-      const resend = await resendContactsClient();
-      if (!resend) throw new Error('Resend Contacts is not configured.');
-      return await subscribeResendContact({
-        email,
-        provider: createResendSubscribersProvider(resend),
-      });
-    } catch {
-      throw new HttpsError('internal', 'Unable to subscribe.');
-    }
-  },
-  { secrets: [RESEND_CONTACTS_API_KEY] },
-);
 
 export const stripeWebhook = onRequest(
   { secrets: [STRIPE_WEBHOOK_SECRET, STRIPE_WEBHOOK_SECRET_DEVNET] },

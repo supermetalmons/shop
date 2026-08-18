@@ -24,9 +24,13 @@ const TRANSACTION = Buffer.from([1, 2, 3]).toString('base64');
 
 function env(options: {
   apiKey?: string;
+  resendContactsApiKey?: string;
 } = {}): Env {
   return {
     HELIUS_API_KEY: options.apiKey === undefined ? 'test-key' : options.apiKey,
+    RESEND_CONTACTS_API_KEY: options.resendContactsApiKey === undefined
+      ? 'resend-test-key'
+      : options.resendContactsApiKey,
   };
 }
 
@@ -137,6 +141,16 @@ test('health, routing, methods, CORS, and no-store headers are stable', async ()
   assert.equal(cors.headers.get('access-control-allow-origin'), '*');
   assert.match(cors.headers.get('cache-control') || '', /no-store/);
 
+  const notificationCors = await handleRequest(new Request('https://api.mons.shop/notifications/subscribe', {
+    method: 'OPTIONS',
+  }), env(), quietDependencies(fetch));
+  assert.equal(notificationCors.status, 204);
+  assert.equal(notificationCors.headers.get('access-control-allow-origin'), '*');
+
+  const notificationMethod = await handleRequest(new Request('https://api.mons.shop/notifications/subscribe'), env(), quietDependencies(fetch));
+  assert.equal(notificationMethod.status, 405);
+  assert.equal(notificationMethod.headers.get('allow'), 'POST, OPTIONS');
+
   const method = await handleRequest(new Request('https://api.mons.shop/inventory'), env(), quietDependencies(fetch));
   assert.equal(method.status, 405);
   assert.deepEqual(await method.json(), { ok: false, error: 'method-not-allowed' });
@@ -152,6 +166,186 @@ test('health, routing, methods, CORS, and no-store headers are stable', async ()
   });
   assert.equal(logs[0]?.route, 'not-found');
   assert.equal(JSON.stringify(logs).includes(OWNER), false);
+});
+
+test('notification subscription normalizes email and calls Resend without exposing credentials', async () => {
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  const logs: Record<string, unknown>[] = [];
+  const response = await handleRequest(
+    request('/notifications/subscribe', { email: ' Buyer@Example.COM ' }),
+    env({ resendContactsApiKey: 'resend-secret-value' }),
+    {
+      ...quietDependencies(fetch),
+      log: (entry) => logs.push(entry),
+      resendFetch: async (input, init) => {
+        calls.push({ input: String(input), init });
+        return Response.json({ object: 'contact', id: 'contact-1' });
+      },
+    },
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { subscribed: true });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.input, 'https://api.resend.com/contacts');
+  assert.equal(calls[0]?.init?.method, 'POST');
+  assert.equal(new Headers(calls[0]?.init?.headers).get('authorization'), 'Bearer resend-secret-value');
+  assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), {
+    email: 'buyer@example.com',
+    unsubscribed: false,
+  });
+  const serializedLogs = JSON.stringify(logs);
+  assert.equal(serializedLogs.includes('buyer@example.com'), false);
+  assert.equal(serializedLogs.includes('resend-secret-value'), false);
+  assert.equal(logs[0]?.route, '/notifications/subscribe');
+  assert.equal(logs[0]?.upstreamCalls, 1);
+});
+
+test('notification subscription validates exact bounded JSON before calling Resend', async () => {
+  let calls = 0;
+  const dependencies = {
+    ...quietDependencies(fetch),
+    resendFetch: async () => {
+      calls += 1;
+      return Response.json({ id: 'unexpected' });
+    },
+  };
+  for (const invalidRequest of [
+    new Request('https://api.mons.shop/notifications/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ email: 'buyer@example.com' }),
+    }),
+    request('/notifications/subscribe', { email: 'buyer@example.com', extra: true }),
+    request('/notifications/subscribe', { email: 42 }),
+    new Request('https://api.mons.shop/notifications/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{',
+    }),
+    new Request('https://api.mons.shop/notifications/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: `${'a'.repeat(1024)}@example.com` }),
+    }),
+  ]) {
+    const response = await handleRequest(invalidRequest, env(), dependencies);
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { ok: false, error: 'invalid-request' });
+  }
+  const invalidEmail = await handleRequest(
+    request('/notifications/subscribe', { email: 'not an email' }),
+    env(),
+    dependencies,
+  );
+  assert.equal(invalidEmail.status, 400);
+  assert.deepEqual(await invalidEmail.json(), { ok: false, error: 'invalid-email' });
+  assert.equal(calls, 0);
+});
+
+test('notification subscription treats Resend conflicts as idempotent success', async () => {
+  for (const providerResponse of [
+    Response.json({ name: 'contact_already_exists' }, { status: 409 }),
+    Response.json({ name: 'duplicate_contact' }, { status: 400 }),
+  ]) {
+    const response = await handleRequest(
+      request('/notifications/subscribe', { email: 'buyer@example.com' }),
+      env(),
+      {
+        ...quietDependencies(fetch),
+        resendFetch: async () => providerResponse,
+      },
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { subscribed: true });
+  }
+});
+
+test('notification subscription hides missing configuration and provider failures', async () => {
+  const missing = await handleRequest(
+    request('/notifications/subscribe', { email: 'buyer@example.com' }),
+    env({ resendContactsApiKey: '' }),
+    quietDependencies(fetch),
+  );
+  assert.equal(missing.status, 502);
+  assert.deepEqual(await missing.json(), { ok: false, error: 'provider-unavailable' });
+
+  const logs: Record<string, unknown>[] = [];
+  const failed = await handleRequest(
+    request('/notifications/subscribe', { email: 'private@example.com' }),
+    env({ resendContactsApiKey: 'private-secret' }),
+    {
+      ...quietDependencies(fetch),
+      log: (entry) => logs.push(entry),
+      resendFetch: async () => Response.json({ message: 'provider-private-detail' }, { status: 422 }),
+    },
+  );
+  assert.equal(failed.status, 502);
+  assert.deepEqual(await failed.json(), { ok: false, error: 'provider-unavailable' });
+  const serialized = JSON.stringify(logs);
+  assert.equal(serialized.includes('private@example.com'), false);
+  assert.equal(serialized.includes('private-secret'), false);
+  assert.equal(serialized.includes('provider-private-detail'), false);
+
+  const malformed = await handleRequest(
+    request('/notifications/subscribe', { email: 'buyer@example.com' }),
+    env(),
+    {
+      ...quietDependencies(fetch),
+      resendFetch: async () => Response.json({ object: 'contact' }),
+    },
+  );
+  assert.equal(malformed.status, 502);
+  assert.deepEqual(await malformed.json(), { ok: false, error: 'provider-unavailable' });
+
+  const oversized = await handleRequest(
+    request('/notifications/subscribe', { email: 'buyer@example.com' }),
+    env(),
+    {
+      ...quietDependencies(fetch),
+      resendFetch: async () => new Response(JSON.stringify({
+        id: 'contact-1',
+        padding: 'x'.repeat(8 * 1024),
+      })),
+    },
+  );
+  assert.equal(oversized.status, 502);
+  assert.deepEqual(await oversized.json(), { ok: false, error: 'provider-unavailable' });
+
+  const transportFailure = await handleRequest(
+    request('/notifications/subscribe', { email: 'buyer@example.com' }),
+    env(),
+    {
+      ...quietDependencies(fetch),
+      resendFetch: async () => {
+        throw new Error('provider transport detail');
+      },
+    },
+  );
+  assert.equal(transportFailure.status, 502);
+  assert.deepEqual(await transportFailure.json(), { ok: false, error: 'provider-unavailable' });
+});
+
+test('notification subscription converts a bounded provider deadline into a generic timeout', async () => {
+  for (const resendFetch of [
+    async (_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) return reject(new Error('missing signal'));
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+    async () => new Response(new ReadableStream<Uint8Array>({ start() {} })),
+  ]) {
+    const response = await handleRequest(
+      request('/notifications/subscribe', { email: 'buyer@example.com' }),
+      env(),
+      {
+        ...quietDependencies(fetch),
+        resendTimeoutMs: 1,
+        resendFetch,
+      },
+    );
+    assert.equal(response.status, 504);
+    assert.deepEqual(await response.json(), { ok: false, error: 'provider-timeout' });
+  }
 });
 
 test('production config has no Worker rate limits', () => {

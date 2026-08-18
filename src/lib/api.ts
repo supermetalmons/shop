@@ -36,8 +36,6 @@ import {
   StripeCheckoutSessionRequest,
   StripeCheckoutSessionResponse,
   StripeReceiptClaimResult,
-  SubscribeToNotificationsRequest,
-  SubscribeToNotificationsResponse,
 } from '../types';
 import { dropAssetLabel } from './dropLabels';
 import {
@@ -59,8 +57,6 @@ export type {
   ReconcileProfileStateResponse,
   StripeCheckoutSessionRequest,
   StripeCheckoutSessionResponse,
-  SubscribeToNotificationsRequest,
-  SubscribeToNotificationsResponse,
 } from '../types';
 
 const region = FIREBASE_FUNCTIONS_REGION;
@@ -167,16 +163,6 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
 
 export { fetchPendingOpenBoxes } from './shopApi';
 export type { DropFetchOptions } from './shopApi';
-
-export function subscribeToNotifications(
-  args: SubscribeToNotificationsRequest,
-): Promise<SubscribeToNotificationsResponse> {
-  return callFunction<SubscribeToNotificationsRequest, SubscribeToNotificationsResponse>(
-    'subscribeToNotifications',
-    args,
-  );
-}
-
 
 export async function revealDudes(
   owner: string,

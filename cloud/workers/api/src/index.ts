@@ -40,6 +40,10 @@ import {
   type ShopDropRuntime,
 } from '../../../../functions/src/shared/shopDomain.js';
 import type { SolanaCluster } from '../../../../functions/src/shared/deploymentCore.js';
+import {
+  isExactSubscribeToNotificationsRequest,
+  normalizeNotificationEmailRecipient,
+} from '../../../../functions/src/shared/notificationSubscription.js';
 import { isBase58Bytes } from '../../../../functions/src/shared/solanaRpcProxy.js';
 import {
   handleRpcPost,
@@ -59,8 +63,16 @@ const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
 const HELIUS_ATTEMPT_TIMEOUT_MS = 15_000;
 const EXPECTED_ASSET_RECOVERY_TIMEOUT_MS = 5_000;
 const MAX_REQUEST_BODY_BYTES = 1024;
+const MAX_RESEND_RESPONSE_BODY_BYTES = 8 * 1024;
 const PROVIDER_CONCURRENCY = 3;
+const RESEND_CONTACTS_API_URL = 'https://api.resend.com/contacts';
+const RESEND_TIMEOUT_MS = 10_000;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const EXISTING_RESEND_CONTACT_ERROR_NAMES = new Set([
+  'contact_already_exists',
+  'duplicate_contact',
+  'already_exists',
+]);
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -78,6 +90,7 @@ const PENDING_OPEN_DISCRIMINATOR_BASE58 = bs58.encode(PENDING_OPEN_BOX_DISCRIMIN
 const KNOWN_LOG_ROUTES = new Set([
   '/health',
   '/inventory',
+  '/notifications/subscribe',
   '/pending-open-boxes',
   '/rpc/mainnet-beta',
   '/rpc/devnet',
@@ -199,6 +212,8 @@ type WorkerDependencies = RpcProxyDependencies & {
   inventoryMaxProviderCalls: number;
   inventoryMaxResponseBodyBytes: number;
   log: (entry: Record<string, unknown>) => void;
+  resendFetch: ProviderFetch;
+  resendTimeoutMs: number;
   validateInventoryResponse: typeof isExactShopInventoryResponse;
   validatePendingOpenBoxesResponse: typeof isExactShopPendingOpenBoxesResponse;
 };
@@ -232,6 +247,12 @@ function jsonResponse(body: unknown, status: number, headers?: HeadersInit): Res
     status,
     headers: { ...BASE_HEADERS, ...headers },
   });
+}
+
+function isExistingResendContactError(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const name = (value as Record<string, unknown>).name;
+  return typeof name === 'string' && EXISTING_RESEND_CONTACT_ERROR_NAMES.has(name.trim().toLowerCase());
 }
 
 function utf8ByteLength(value: string): number {
@@ -320,7 +341,7 @@ async function readBoundedRequestBody(request: Request): Promise<string> {
   return readBoundedText(request.body, MAX_REQUEST_BODY_BYTES, () => new Error('invalid-request'));
 }
 
-async function parseRequestBody<T extends ShopInventoryRequest | ShopPendingOpenBoxesRequest>(
+async function parseJsonRequestBody<T>(
   request: Request,
   validate: (value: unknown) => value is T,
 ): Promise<T> {
@@ -333,7 +354,16 @@ async function parseRequestBody<T extends ShopInventoryRequest | ShopPendingOpen
   } catch {
     throw new Error('invalid-request');
   }
-  if (!validate(value) || !isBase58Bytes(value.owner, 32)) throw new Error('invalid-request');
+  if (!validate(value)) throw new Error('invalid-request');
+  return value;
+}
+
+async function parseShopRequestBody<T extends ShopInventoryRequest | ShopPendingOpenBoxesRequest>(
+  request: Request,
+  validate: (value: unknown) => value is T,
+): Promise<T> {
+  const value = await parseJsonRequestBody(request, validate);
+  if (!isBase58Bytes(value.owner, 32)) throw new Error('invalid-request');
   return value;
 }
 
@@ -976,6 +1006,8 @@ const defaultDependencies: WorkerDependencies = {
   randomUint32: () => crypto.getRandomValues(new Uint32Array(1))[0],
   sleep: sleepWithAbort,
   log: (entry) => console.log(entry),
+  resendFetch: (input, init) => fetch(input, init),
+  resendTimeoutMs: RESEND_TIMEOUT_MS,
   validateInventoryResponse: isExactShopInventoryResponse,
   validatePendingOpenBoxesResponse: isExactShopPendingOpenBoxesResponse,
 };
@@ -992,8 +1024,8 @@ async function handlePost(
     | { kind: 'pending-open-boxes'; body: ShopPendingOpenBoxesRequest };
   try {
     parsedRequest = pathname === '/inventory'
-      ? { kind: 'inventory', body: await parseRequestBody(request, isExactShopInventoryRequest) }
-      : { kind: 'pending-open-boxes', body: await parseRequestBody(request, isExactShopPendingOpenBoxesRequest) };
+      ? { kind: 'inventory', body: await parseShopRequestBody(request, isExactShopInventoryRequest) }
+      : { kind: 'pending-open-boxes', body: await parseShopRequestBody(request, isExactShopPendingOpenBoxesRequest) };
   } catch {
     return { response: jsonResponse({ ok: false, error: 'invalid-request' }, 400), includeDevnet: false };
   }
@@ -1050,6 +1082,93 @@ async function handlePost(
   }
 }
 
+async function handleNotificationSubscription(
+  request: Request,
+  env: Env,
+  dependencies: WorkerDependencies,
+  metrics: WorkerRequestMetrics,
+): Promise<Response> {
+  let rawEmail: string;
+  try {
+    rawEmail = (await parseJsonRequestBody(
+      request,
+      isExactSubscribeToNotificationsRequest,
+    )).email;
+  } catch {
+    return jsonResponse({ ok: false, error: 'invalid-request' }, 400);
+  }
+  const email = normalizeNotificationEmailRecipient(rawEmail);
+  if (!email) return jsonResponse({ ok: false, error: 'invalid-email' }, 400);
+
+  const apiKey = typeof env.RESEND_CONTACTS_API_KEY === 'string'
+    ? env.RESEND_CONTACTS_API_KEY.trim()
+    : '';
+  if (!apiKey) return jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException('Resend request timed out', 'TimeoutError')),
+    dependencies.resendTimeoutMs,
+  );
+  const startedAt = performance.now();
+  metrics.upstreamCalls += 1;
+  try {
+    const providerResponse = await dependencies.resendFetch(RESEND_CONTACTS_API_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email, unsubscribed: false }),
+      signal: controller.signal,
+    });
+    if (providerResponse.status === 409) {
+      await cancelResponseBody(providerResponse);
+      return jsonResponse({ subscribed: true }, 200);
+    }
+    if (!providerResponse.body) {
+      await cancelResponseBody(providerResponse);
+      return jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(await readBoundedText(
+        providerResponse.body,
+        MAX_RESEND_RESPONSE_BODY_BYTES,
+        () => new Error('provider-response-too-large'),
+        undefined,
+        controller.signal,
+      ));
+    } catch {
+      return controller.signal.aborted
+        ? jsonResponse({ ok: false, error: 'provider-timeout' }, 504)
+        : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+    }
+    if (!providerResponse.ok) {
+      return isExistingResendContactError(payload)
+        ? jsonResponse({ subscribed: true }, 200)
+        : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+    }
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      Array.isArray(payload) ||
+      typeof (payload as Record<string, unknown>).id !== 'string' ||
+      !(payload as Record<string, unknown>).id
+    ) {
+      return jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+    }
+    return jsonResponse({ subscribed: true }, 200);
+  } catch {
+    return controller.signal.aborted
+      ? jsonResponse({ ok: false, error: 'provider-timeout' }, 504)
+      : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+  } finally {
+    clearTimeout(timeout);
+    metrics.providerDurationMs += performance.now() - startedAt;
+  }
+}
+
 export async function handleRequest(
   request: Request,
   env: Env,
@@ -1073,7 +1192,11 @@ export async function handleRequest(
     : pathname === '/rpc/devnet' ? 'devnet' : null;
   if (request.method === 'OPTIONS' && rpcCluster) {
     response = handleRpcPreflight(request);
-  } else if (request.method === 'OPTIONS' && (pathname === '/inventory' || pathname === '/pending-open-boxes')) {
+  } else if (request.method === 'OPTIONS' && (
+    pathname === '/inventory' ||
+    pathname === '/notifications/subscribe' ||
+    pathname === '/pending-open-boxes'
+  )) {
     response = new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store', 'Timing-Allow-Origin': '*' } });
   } else if (pathname === '/health') {
     response = request.method === 'GET'
@@ -1093,6 +1216,10 @@ export async function handleRequest(
       response = result.response;
       rpcMethod = result.rpcMethod;
     }
+  } else if (pathname === '/notifications/subscribe') {
+    response = request.method === 'POST'
+      ? await handleNotificationSubscription(request, env, dependencies, metrics)
+      : jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'POST, OPTIONS' });
   } else if (pathname === '/inventory' || pathname === '/pending-open-boxes') {
     if (request.method !== 'POST') {
       response = jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'POST, OPTIONS' });

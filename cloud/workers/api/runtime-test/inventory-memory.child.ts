@@ -163,6 +163,7 @@ const providerFetch: ProviderFetch = async (_input, init) => {
 
 const env: Env = {
   HELIUS_API_KEY: 'memory-test-key',
+  RESEND_CONTACTS_API_KEY: 'memory-resend-test-key',
 };
 const response = await handleRequest(new Request('https://api.mons.shop/inventory', {
   method: 'POST',

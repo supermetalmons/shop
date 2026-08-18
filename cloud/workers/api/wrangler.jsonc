@@ -17,7 +17,7 @@
     }
   ],
   "secrets": {
-    "required": ["HELIUS_API_KEY"]
+    "required": ["HELIUS_API_KEY", "RESEND_CONTACTS_API_KEY"]
   },
   "observability": {
     "enabled": true,

@@ -55,10 +55,10 @@ Never commit the token or expose secrets through a `VITE_*` variable.
 
 ### Shop API deployment
 
-The API Worker uses the encrypted `HELIUS_API_KEY` secret, four fail-closed
-Cloudflare rate-limit bindings, Smart Placement, and a version-first release
-flow. It serves `/inventory`, `/pending-open-boxes`, `/rpc/mainnet-beta`, and
-`/rpc/devnet`; every response is uncached.
+The API Worker uses encrypted `HELIUS_API_KEY` and `RESEND_CONTACTS_API_KEY`
+secrets, Smart Placement, and a version-first release flow. It serves
+`/inventory`, `/notifications/subscribe`, `/pending-open-boxes`,
+`/rpc/mainnet-beta`, and `/rpc/devnet`; every response is uncached.
 
 - Run the complete guarded API release with no intermediate commands or arguments:
   - `npm run deploy:api`
@@ -84,7 +84,8 @@ Advanced release controls remain available for separately managed releases:
 
 Preview upload writes `HELIUS_API_KEY` to a newly created mode-`0600` file inside
 a mode-`0700` temporary directory, passes that file directly to Wrangler, and
-deletes the validated temporary path immediately afterward.
+deletes the validated temporary path immediately afterward. The preconfigured
+`RESEND_CONTACTS_API_KEY` Worker secret is preserved across version uploads.
 The Cloudflare token and Helius secret are stripped from all other child-process
 environment data and are never printed.
 
@@ -159,7 +160,7 @@ provide.
   - If the combined source and projection collections exceed 20,000 documents, pass `--max-audit-documents <count>` up to 50,000 after confirming the expected collection size.
 - Java is required for every rules deployment because `npm run test:firestore-rules` fails closed when the Firestore Emulator cannot run.
 
-### Function env + secrets
+### Runtime env + secrets
 - `HELIUS_API_KEY` (env/runtime config)
 - `COSIGNER_SECRET` (Firebase Functions secret / Google Secret Manager; bs58 secret key for the server cosigner; must match the on-chain box minter admin)
   - Set (recommended): `firebase functions:secrets:set COSIGNER_SECRET`
@@ -176,8 +177,8 @@ provide.
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET`
 - `RESEND_API_KEY` (Firebase Functions secret used only for outbound notifications; use a Resend Sending Access key restricted to `support.mons.shop`)
   - Set: `firebase functions:secrets:set RESEND_API_KEY`
-- `RESEND_CONTACTS_API_KEY` (Firebase Functions secret used only by `subscribeToNotifications`; requires Resend Full Access to manage Contacts)
-  - Set: `firebase functions:secrets:set RESEND_CONTACTS_API_KEY`
+- `RESEND_CONTACTS_API_KEY` (`mons-shop-api` Worker secret used only by `POST /notifications/subscribe`; requires Resend Full Access to manage Contacts)
+  - Set or rotate with `wrangler versions secret put RESEND_CONTACTS_API_KEY --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env`, then promote the resulting version through the guarded API release flow.
   - A notification signup directly adds the normalized address to global Resend Contacts without sending a confirmation email. Existing contacts return success without changing their current unsubscribe state.
   - There is deliberately no fallback between the outbound and Contacts keys.
   - Inbound mail for `support.mons.shop` is delivered directly by iCloud and is not handled by Firebase.
