@@ -26,7 +26,6 @@ document.title = getBuildInfo() === 'local dev' ? 'localshop' : 'mons.shop';
 const queryClient = new QueryClient();
 const canonicalFulfillmentPath = '/fulfillment';
 const canonicalDrifPath = '/notify_me';
-const canonicalCardNft2UnrevealedPath = '/card_nft_2/unrevealed';
 const canonicalCardNft2WipPath = '/card_nft_2/wip';
 const canonicalClearCardsWipPath = '/clear_cards/wip';
 const canonicalLittleSwagBoxesWipPath = '/little_swag_boxes/wip';
@@ -39,7 +38,6 @@ const wipExperiencesByPath = {
   [canonicalLittleSwagBoxesWipPath]: 'little_swag_boxes',
   [canonicalPonchoDrifellaWipPath]: 'poncho_drifella',
 } as const;
-const CardNft2UnrevealedApp = React.lazy(() => import('./CardNft2UnrevealedApp'));
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const FulfillmentRoute = React.lazy(() => import('./FulfillmentRoute'));
 const NEUTRAL_WALLET_CLUSTER: SolanaCluster = 'mainnet-beta';
@@ -82,7 +80,6 @@ const resolveCurrentRoute = (): CurrentRoute => {
   if (
     normalizedPath === '/' ||
     normalizedPath === canonicalFulfillmentPath ||
-    normalizedPath === canonicalCardNft2UnrevealedPath ||
     normalizedPath in wipExperiencesByPath ||
     drifPaths.has(normalizedPath) ||
     resolveUpcomingDropRouteByPath(normalizedPath) ||
@@ -129,8 +126,7 @@ function RoutedContent({ route }: RoutedContentProps) {
   const wipExperience =
     wipExperiencesByPath[path as keyof typeof wipExperiencesByPath] || null;
   const isFulfillmentRoute = path === canonicalFulfillmentPath;
-  const isCardNft2UnrevealedRoute = path === canonicalCardNft2UnrevealedPath;
-  const routeDrop = isCardNft2UnrevealedRoute ? null : resolveFrontendDropByPath(path);
+  const routeDrop = resolveFrontendDropByPath(path);
   const upcomingRoute = routeDrop ? null : resolveUpcomingDropRouteByPath(path);
 
   if (isDrifRoute) {
@@ -145,14 +141,6 @@ function RoutedContent({ route }: RoutedContentProps) {
     return (
       <React.Suspense fallback={null}>
         <FulfillmentRoute />
-      </React.Suspense>
-    );
-  }
-
-  if (isCardNft2UnrevealedRoute) {
-    return (
-      <React.Suspense fallback={null}>
-        <CardNft2UnrevealedApp />
       </React.Suspense>
     );
   }

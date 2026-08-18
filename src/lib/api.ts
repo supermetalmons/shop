@@ -21,8 +21,6 @@ import {
   GetFulfillmentShipStationRatesRequest,
   GetFulfillmentShipStationRatesResponse,
   IssueReceiptsResult,
-  ListCardNft2UnrevealedCardsRequest,
-  ListCardNft2UnrevealedCardsResponse,
   PackStatusBreakdown,
   PackStatusDisplayLabels,
   PreparedTxResponse,
@@ -57,8 +55,6 @@ import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.t
 import { parseDeliveryOrderSummary } from '../../functions/src/shared/deliveryOrderSummary.ts';
 
 export type {
-  ListCardNft2UnrevealedCardsRequest,
-  ListCardNft2UnrevealedCardsResponse,
   ReconcileProfileStateRequest,
   ReconcileProfileStateResponse,
   StripeCheckoutSessionRequest,
@@ -171,15 +167,6 @@ async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
 
 export { fetchPendingOpenBoxes } from './shopApi';
 export type { DropFetchOptions } from './shopApi';
-
-export async function listCardNft2UnrevealedCards(
-  args: ListCardNft2UnrevealedCardsRequest = {},
-): Promise<ListCardNft2UnrevealedCardsResponse> {
-  return callFunction<ListCardNft2UnrevealedCardsRequest, ListCardNft2UnrevealedCardsResponse>(
-    'listCardNft2UnrevealedCards',
-    args,
-  );
-}
 
 export function subscribeToNotifications(
   args: SubscribeToNotificationsRequest,

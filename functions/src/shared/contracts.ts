@@ -24,17 +24,6 @@ export type PackStatusBreakdown = {
   items: PackStatusBreakdownItem[];
 };
 
-export type ListCardNft2UnrevealedCardsRequest = {
-  limit?: number;
-  cursor?: number;
-};
-
-export type ListCardNft2UnrevealedCardsResponse = {
-  ids: number[];
-  nextCursor?: number;
-  hasMore: boolean;
-};
-
 export type SubscribeToNotificationsRequest = {
   email: string;
 };

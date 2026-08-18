@@ -23,8 +23,6 @@ export type {
   GetFulfillmentShipStationRatesRequest,
   GetFulfillmentShipStationRatesResponse,
   IssueReceiptsResult,
-  ListCardNft2UnrevealedCardsRequest,
-  ListCardNft2UnrevealedCardsResponse,
   PackStatusBreakdown,
   PackStatusBreakdownItem,
   PreparedTxResponse,
