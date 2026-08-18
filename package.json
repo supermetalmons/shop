@@ -19,6 +19,7 @@
   },
   "description": "mons.shop – physically redeemable nft drops",
   "scripts": {
+    "start": "npm run dev",
     "dev": "vite",
     "renderer": "vite --host 127.0.0.1 --port 5174 --open /renderer.html",
     "render:clear-cards": "node scripts/render-clear-cards.mjs",

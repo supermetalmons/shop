@@ -16,6 +16,7 @@ const ponchoImageDimensions = imageDimensionsForAspectRatio(mintPanelPreviewAspe
 const upcomingDropRoutes = listUpcomingDropRoutes();
 const CARD_NFT_BINDER_FLAT_IMAGE_URL = 'https://cdn.lil.org/nft/card_nft_binder/flat.webp';
 const CARD_NFT_BINDER_FLAT_IMAGE_DIMENSIONS = { width: 1298, height: 1242 };
+const showsTbaOnMain = false;
 
 function imageDimensionsForAspectRatio(aspectRatio: number, height = 1000): DropPanelImageDimensions | undefined {
   if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return undefined;
@@ -240,41 +241,50 @@ export function DropsPanel() {
   const cardNftBinder = resolveUpcomingTileSource('card_nft_binder', 'Card NFT Binder');
 
   const items: DropPanelItem[] = [
-    {
-      key: 'tbd',
-      size: 'half',
-      image: tbd.image,
-      imageDimensions: tbd.imageDimensions,
-      alt: tbd.alt,
-      title: tbd.title,
-      path: tbd.path,
-      imageMaxWidth: '78%',
-      imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
-      compactImageMaxHeight: 'clamp(145px, 30cqw, 170px)',
-      imageScale: 1,
-      compactImageScale: 1,
-      imageGap: 'clamp(26px, 3cqw, 34px)',
-      compactImageGap: 'clamp(10px, 3cqw, 16px)',
-      imageBottomSpace: 'clamp(24px, 3cqw, 34px)',
-      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
-    },
+    ...(showsTbaOnMain
+      ? [
+          {
+            key: 'tbd',
+            size: 'half' as const,
+            image: tbd.image,
+            imageDimensions: tbd.imageDimensions,
+            alt: tbd.alt,
+            title: tbd.title,
+            path: tbd.path,
+            imageMaxWidth: '78%',
+            imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
+            compactImageMaxHeight: 'clamp(145px, 30cqw, 170px)',
+            imageScale: 1,
+            compactImageScale: 1,
+            imageGap: 'clamp(26px, 3cqw, 34px)',
+            compactImageGap: 'clamp(10px, 3cqw, 16px)',
+            imageBottomSpace: 'clamp(24px, 3cqw, 34px)',
+            compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
+          },
+        ]
+      : []),
     {
       key: 'clear_cards',
-      size: 'half',
+      size: showsTbaOnMain ? 'half' : 'full',
       image: clearCards.image,
       imageDimensions: clearCards.imageDimensions,
       alt: clearCards.alt,
       title: clearCards.title,
       path: clearCards.path,
-      imageMaxWidth: '78%',
-      imageMaxHeight: 'clamp(160px, 25cqw, 245px)',
-      compactImageMaxHeight: 'clamp(145px, 30cqw, 170px)',
+      imageMaxWidth: showsTbaOnMain ? '78%' : '72%',
+      compactImageMaxWidth: showsTbaOnMain ? undefined : '74%',
+      imageMaxHeight: showsTbaOnMain ? 'clamp(160px, 25cqw, 245px)' : 'clamp(247px, 32.7cqw, 327px)',
+      compactImageMaxHeight: showsTbaOnMain
+        ? 'clamp(145px, 30cqw, 170px)'
+        : 'clamp(184px, 54.5cqw, 260px)',
       imageScale: 1,
       compactImageScale: 1,
-      imageGap: 'clamp(26px, 3cqw, 34px)',
+      imageGap: showsTbaOnMain ? 'clamp(26px, 3cqw, 34px)' : 'clamp(24px, 3cqw, 34px)',
       compactImageGap: 'clamp(10px, 3cqw, 16px)',
       imageBottomSpace: 'clamp(24px, 3cqw, 34px)',
-      compactImageBottomSpace: 'clamp(14px, 4cqw, 20px)',
+      compactImageBottomSpace: showsTbaOnMain
+        ? 'clamp(14px, 4cqw, 20px)'
+        : 'clamp(12px, 3.4cqw, 18px)',
     },
     {
       key: 'card_nft_2',
@@ -390,7 +400,7 @@ export function DropsPanel() {
   return (
     <section className="drops-panel">
       <div
-        className="drops-panel__grid drops-panel__grid--with-drifella-items"
+        className={`drops-panel__grid drops-panel__grid--with-drifella-items${showsTbaOnMain ? '' : ' drops-panel__grid--without-tba'}`}
       >
         {items.map((item) => (
           <DropPanelTile key={item.key} item={item} />
