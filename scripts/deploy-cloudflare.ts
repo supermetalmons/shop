@@ -107,6 +107,7 @@ type CompleteFrontendReleaseDependencies = {
   commit: typeof commitFrontendReleaseManifest;
   frontendDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
   manifest: () => ReleaseManifest;
+  profileApi?: typeof smokeProfileStateApi;
   production: typeof runFrontendProductionSequence;
   record: typeof recordFrontendProductionVersion;
   resolveCandidate: typeof resolveFrontendProductionCandidate;
@@ -152,6 +153,7 @@ const workersDevSubdomain = 'lil-org.workers.dev';
 const frontendWorkerName = 'mons-shop';
 const frontendAccountId = 'e25f90fc073ea309b54b8b5144bf28e0';
 const frontendProductionOrigins = ['https://mons.shop', 'https://www.mons.shop'] as const;
+const profileApiProductionOrigin = 'https://api.mons.shop';
 const frontendCandidateRecordDirectory = resolve(repoRoot, '.cache', 'mons-shop-frontend-candidates');
 const frontendCandidateMaxAgeMs = 6 * 60 * 60 * 1000;
 const frontendCandidateClockSkewMs = 5 * 60 * 1000;
@@ -792,6 +794,49 @@ export async function smokeFrontendOrigin(
   fail(`Frontend smoke request failed for ${origin}.`);
 }
 
+export async function smokeProfileStateApi(
+  dependencies: Pick<FrontendSmokeDependencies, 'fetch'> = {},
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await (dependencies.fetch ?? fetch)(`${profileApiProductionOrigin}/profile/state`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        origin: 'https://mons.shop',
+      },
+      body: '{}',
+      cache: 'no-store',
+      redirect: 'manual',
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    fail(`Profile API capability check failed: ${detail}`);
+  }
+  const body = await readBoundedSmokeBody(response, 16 * 1024);
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    fail('Profile API capability check returned invalid JSON.');
+  }
+  const error = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as Record<string, unknown>).error
+    : undefined;
+  if (
+    response.status !== 401 ||
+    response.headers.get('access-control-allow-origin') !== 'https://mons.shop' ||
+    !error ||
+    typeof error !== 'object' ||
+    Array.isArray(error) ||
+    (error as Record<string, unknown>).code !== 'unauthenticated'
+  ) {
+    fail('Profile API capability check returned an incompatible response.');
+  }
+}
+
 export function frontendProductionWranglerCommands(versionId: string): readonly {
   label: string;
   args: string[];
@@ -1347,6 +1392,7 @@ async function runCompleteFrontendRelease(
     commit: commitFrontendReleaseManifest,
     frontendDeployment: readFrontendDeploymentStatus,
     manifest: readReleaseManifest,
+    profileApi: smokeProfileStateApi,
     production: runFrontendProductionSequence,
     record: recordFrontendProductionVersion,
     resolveCandidate: resolveFrontendProductionCandidate,
@@ -1365,6 +1411,7 @@ async function runCompleteFrontendRelease(
   } else {
     assertReleasePair(initialLivePair, expectedCurrentProduction, 'Frontend release preflight');
   }
+  await dependencies.profileApi?.();
 
   let candidate: VerifiedFrontendCandidate;
   if (requestedVersionId) {
@@ -1552,6 +1599,7 @@ export const frontendDeployTestHooks = {
   resolveFrontendProductionCandidate,
   runCompleteFrontendRelease,
   runFrontendProductionSequence,
+  smokeProfileStateApi,
   uploadFrontendCandidate,
   writeFrontendCandidateRecord,
 };

@@ -661,6 +661,34 @@ test('frontend candidate upload validates, dry-runs triggers, uploads, smokes, r
   }
 });
 
+test('frontend production capability check requires the profile-state API contract', async () => {
+  let request: RequestInit | undefined;
+  await frontendDeployTestHooks.smokeProfileStateApi({
+    fetch: async (input, init) => {
+      assert.equal(String(input), 'https://api.mons.shop/profile/state');
+      request = init;
+      return Response.json({
+        ok: false,
+        error: { code: 'unauthenticated', message: 'Authentication is required.' },
+      }, {
+        status: 401,
+        headers: {
+          'Access-Control-Allow-Origin': 'https://mons.shop',
+          'Cache-Control': 'no-store',
+        },
+      });
+    },
+  });
+  assert.equal(request?.method, 'POST');
+  assert.equal(request?.body, '{}');
+  await assert.rejects(
+    () => frontendDeployTestHooks.smokeProfileStateApi({
+      fetch: async () => Response.json({ ok: false, error: 'not-found' }, { status: 404 }),
+    }),
+    /incompatible response/,
+  );
+});
+
 test('API production candidate resolution permits cache-free resume only for the exact live version', async () => {
   const baselineVersionId = randomUUID();
   const candidateVersionId = randomUUID();
@@ -1526,6 +1554,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
     includeDevnet: true,
     includeNotificationSubscription: true,
     includePackStatus: true,
+    includeProfileState: true,
     owner: OWNER,
   }, {
     fetchSmoke: async (url, init, _label, timeoutMs = deployApiTestHooks.defaultSmokeTimeoutMs) => {
@@ -1568,6 +1597,16 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
       }
       if (method === 'POST' && pathname === '/notifications/subscribe') {
         return { response: Response.json({ subscribed: true }, { status: 200, headers }), durationMs: 1 };
+      }
+      if (method === 'POST' && pathname === '/profile/state') {
+        headers.set('Access-Control-Allow-Origin', 'https://mons.shop');
+        return {
+          response: Response.json({
+            ok: false,
+            error: { code: 'unauthenticated', message: 'Authentication is required.' },
+          }, { status: 401, headers }),
+          durationMs: 1,
+        };
       }
       if (method === 'GET' && pathname === '/pack-status/card_nft_2') {
         return {
@@ -1618,6 +1657,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
   assert.deepEqual(bodies.get('/notifications/subscribe'), {
     email: deployApiTestHooks.notificationSmokeEmail,
   });
+  assert.equal(timeouts.get('POST:/profile/state'), deployApiTestHooks.defaultSmokeTimeoutMs);
   for (const [request, timeoutMs] of timeouts) {
     if (request === 'POST:/inventory' || request === 'POST:/pending-open-boxes') continue;
     assert.equal(timeoutMs, deployApiTestHooks.defaultSmokeTimeoutMs);
@@ -1715,6 +1755,9 @@ test('complete frontend release verifies the production pair around upload, prom
       events.push('manifest');
       return manifest;
     },
+    profileApi: async () => {
+      events.push('profile-api');
+    },
     production: async (input) => {
       events.push('production');
       assert.equal(input.candidateHtmlSha256, candidate.htmlSha256);
@@ -1752,6 +1795,7 @@ test('complete frontend release verifies the production pair around upload, prom
     'manifest',
     'api-status',
     'frontend-status',
+    'profile-api',
     'upload',
     'production',
     'source-commit',
@@ -2167,6 +2211,7 @@ test('complete API release verifies the full pair around one exact API promotion
         includeDevnet: true,
         includeNotificationSubscription: true,
         includePackStatus: true,
+        includeProfileState: true,
         owner: OWNER,
       });
       await input.verifyBeforePromotion?.();
@@ -2329,6 +2374,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
     forbiddenInventoryDropId?: string;
     includeNotificationSubscription?: boolean;
     includePackStatus?: boolean;
+    includeProfileState?: boolean;
   }> = [];
   const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
   await deployApiTestHooks.runProductionSequence(
@@ -2339,6 +2385,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
         includeDevnet: true,
         includeNotificationSubscription: true,
         includePackStatus: true,
+        includeProfileState: true,
         owner: OWNER,
       },
       expectedCurrentVersionId: baselineVersionId,
@@ -2411,24 +2458,28 @@ test('API production benchmarks the exact preview before mutation and writes evi
     forbiddenInventoryDropId: options.forbiddenInventoryDropId,
     includeNotificationSubscription: options.includeNotificationSubscription,
     includePackStatus: options.includePackStatus,
+    includeProfileState: options.includeProfileState,
   })), [
     {
       expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
       forbiddenInventoryDropId: 'clear_cards_devnet',
       includeNotificationSubscription: true,
       includePackStatus: true,
+      includeProfileState: true,
     },
     {
       expectedInventoryDropId: undefined,
       forbiddenInventoryDropId: undefined,
       includeNotificationSubscription: undefined,
       includePackStatus: undefined,
+      includeProfileState: undefined,
     },
     {
       expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
       forbiddenInventoryDropId: 'clear_cards_devnet',
       includeNotificationSubscription: true,
       includePackStatus: true,
+      includeProfileState: true,
     },
   ]);
 });

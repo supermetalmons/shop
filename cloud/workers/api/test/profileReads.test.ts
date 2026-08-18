@@ -15,6 +15,7 @@ import {
   ADMIN_PROFILE_PATH,
   ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
   PROFILE_SHIPMENTS_PATH,
+  PROFILE_STATE_PATH,
   ProfileReadError,
   createGoogleAccessTokenProvider,
   handleProfileReadRequest,
@@ -274,6 +275,147 @@ test('shipment and anonymous history routes preserve exact source-query behavior
   assert.match(serialized[0], new RegExp(OWNER));
   assert.match(serialized[1], new RegExp(`firebase:${UID}`));
   assert.equal(serialized.every((query) => query.includes('deliveryOrders') && query.includes('ready_to_ship')), true);
+});
+
+test('profile state derives identity server-side and returns independently bounded sections', async () => {
+  const result = await handleProfileReadRequest(
+    tokenRequest(PROFILE_STATE_PATH, {}),
+    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    PROFILE_STATE_PATH,
+    profileDependencies(async (input) => {
+      const url = String(input);
+      if (url.includes('/authSessions/')) return Response.json(sessionDocument(OWNER));
+      if (url.includes(`/profiles/${OWNER}?`)) {
+        return Response.json({
+          fields: {
+            email: stringValue(' owner@example.com '),
+            address: { mapValue: { fields: { encrypted: stringValue('secret') } } },
+          },
+        });
+      }
+      if (url.endsWith('/documents:runQuery')) {
+        return Response.json([
+          { document: orderDocument(OWNER, 8) },
+          { document: orderDocument(OWNER, 7) },
+        ]);
+      }
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), {
+    responseMode: 'profile-state',
+    sessionWallet: OWNER,
+    profile: {
+      status: 'ready',
+      value: { wallet: OWNER, email: 'owner@example.com' },
+    },
+    shipments: {
+      status: 'ready',
+      value: [
+        {
+          dropId: 'card_nft_2',
+          deliveryId: 8,
+          status: 'ready_to_ship',
+          createdAt: Date.parse('2026-08-18T10:00:00.000Z'),
+          processedAt: Date.parse('2026-08-18T11:00:00.000Z'),
+          items: [{ kind: 'box', refId: 3 }],
+        },
+        {
+          dropId: 'card_nft_2',
+          deliveryId: 7,
+          status: 'ready_to_ship',
+          createdAt: Date.parse('2026-08-18T10:00:00.000Z'),
+          processedAt: Date.parse('2026-08-18T11:00:00.000Z'),
+          items: [{ kind: 'box', refId: 3 }],
+        },
+      ],
+    },
+  });
+  assert.deepEqual(result.profileStateSections, { profile: 'ready', shipments: 'ready' });
+});
+
+test('profile state returns a settled empty session and preserves legacy wallet UIDs', async () => {
+  const missing = await handleProfileReadRequest(
+    tokenRequest(PROFILE_STATE_PATH, {}),
+    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    PROFILE_STATE_PATH,
+    profileDependencies(async (input) => {
+      assert.match(String(input), /authSessions/);
+      return Response.json({ error: 'missing' }, { status: 404 });
+    }),
+  );
+  assert.deepEqual(await missing.response.json(), {
+    responseMode: 'profile-state',
+    sessionWallet: null,
+    profile: null,
+    shipments: null,
+  });
+
+  const legacy = await handleProfileReadRequest(
+    tokenRequest(PROFILE_STATE_PATH, {}),
+    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    PROFILE_STATE_PATH,
+    {
+      ...profileDependencies(async (input) => {
+        const url = String(input);
+        if (url.includes('/authSessions/')) return Response.json({ error: 'missing' }, { status: 404 });
+        if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
+        if (url.endsWith('/documents:runQuery')) return Response.json([]);
+        return Response.json({ error: 'unexpected' }, { status: 500 });
+      }),
+      verifyIdToken: async () => ({ uid: OWNER }),
+    },
+  );
+  assert.deepEqual(await legacy.response.json(), {
+    responseMode: 'profile-state',
+    sessionWallet: OWNER,
+    profile: { status: 'ready', value: { wallet: OWNER } },
+    shipments: { status: 'ready', value: [] },
+  });
+});
+
+test('profile state reports section failures without discarding successful data', async () => {
+  const result = await handleProfileReadRequest(
+    tokenRequest(PROFILE_STATE_PATH, {}),
+    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    PROFILE_STATE_PATH,
+    profileDependencies(async (input) => {
+      const url = String(input);
+      if (url.includes('/authSessions/')) return Response.json(sessionDocument(OWNER));
+      if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'busy' }, { status: 503 });
+      if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  const payload = await result.response.json() as {
+    profile: { status: string; error: { code: string } };
+    shipments: { status: string; value: unknown[] };
+  };
+  assert.equal(payload.profile.status, 'error');
+  assert.equal(payload.profile.error.code, 'unavailable');
+  assert.equal(payload.shipments.status, 'ready');
+  assert.equal(payload.shipments.value.length, 1);
+  assert.deepEqual(result.profileStateSections, { profile: 'error', shipments: 'ready' });
+});
+
+test('profile state rejects malformed session documents and non-empty requests', async () => {
+  const malformedSession = await handleProfileReadRequest(
+    tokenRequest(PROFILE_STATE_PATH, {}),
+    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    PROFILE_STATE_PATH,
+    profileDependencies(async () => Response.json({ fields: { wallet: stringValue('invalid') } })),
+  );
+  assert.equal(malformedSession.response.status, 401);
+
+  const invalidBody = await handleProfileReadRequest(
+    tokenRequest(PROFILE_STATE_PATH, { ownerWallet: OWNER }),
+    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    PROFILE_STATE_PATH,
+    profileDependencies(async () => assert.fail('invalid request reached provider')),
+  );
+  assert.equal(invalidBody.response.status, 400);
 });
 
 test('shipment route rejects mismatched sessions and malformed requests before source queries', async () => {

@@ -246,7 +246,7 @@ test('health, routing, methods, CORS, and no-store headers are stable', async ()
 });
 
 test('profile routes enforce restricted CORS, bearer authentication, and stable route logs', async () => {
-  const allowedPreflight = await handleRequest(new Request('https://api.mons.shop/profile/shipments', {
+  const allowedPreflight = await handleRequest(new Request('https://api.mons.shop/profile/state', {
     method: 'OPTIONS',
     headers: { Origin: 'https://mons.shop' },
   }), env(), quietDependencies(fetch));
@@ -263,13 +263,13 @@ test('profile routes enforce restricted CORS, bearer authentication, and stable 
   assert.equal((await deniedPreflight.json() as { error: { code: string } }).error.code, 'permission-denied');
 
   const logs: Record<string, unknown>[] = [];
-  const unauthenticated = await handleRequest(request('/profile/anonymous-stripe-delivery-history', {}, {
+  const unauthenticated = await handleRequest(request('/profile/state', {}, {
     Origin: 'https://mons.shop',
   }), env(), { ...quietDependencies(fetch), log: (entry) => logs.push(entry) });
   assert.equal(unauthenticated.status, 401);
   assert.equal((await unauthenticated.json() as { error: { code: string } }).error.code, 'unauthenticated');
   assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(logs[0]?.route, '/profile/anonymous-stripe-delivery-history');
+  assert.equal(logs[0]?.route, '/profile/state');
   assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
   assert.equal(JSON.stringify(logs).includes('firebase'), false);
 

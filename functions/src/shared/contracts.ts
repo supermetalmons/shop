@@ -92,6 +92,22 @@ export type GetProfileShipmentsResponse = {
   orders: DeliveryOrderSummary[];
 };
 
+export type ProfileStateSection<T> =
+  | { status: 'ready'; value: T }
+  | { status: 'error'; error: { code: 'deadline-exceeded' | 'unavailable'; message: string } };
+
+export type ProfileStateProfile = {
+  wallet: string;
+  email?: string;
+};
+
+export type GetProfileStateResponse = {
+  responseMode: 'profile-state';
+  sessionWallet: string | null;
+  profile: ProfileStateSection<ProfileStateProfile> | null;
+  shipments: ProfileStateSection<DeliveryOrderSummary[]> | null;
+};
+
 export type ProfileShipment = DeliveryOrderSummary & {
   sortAt: number;
 };

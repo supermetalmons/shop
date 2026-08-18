@@ -16,12 +16,6 @@ export function deliveryOrderSummarySortAt(
   return order.processedAt ?? order.processingAt ?? order.createdAt ?? 0;
 }
 
-export function deliveryOrderSummaryKey(
-  order: Pick<DeliveryOrderSummary, 'dropId' | 'deliveryId'>,
-): string {
-  return `${order.dropId}:${order.deliveryId}`;
-}
-
 function optionalFiniteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

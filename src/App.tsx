@@ -69,9 +69,9 @@ import { refetchInventoryWithLatestExpectedAssets } from './lib/inventoryQuery';
 import {
   profileForAuthorizedView,
   ownProfileShipmentsEmptyState,
-  stripeProfileRecoveryAfterSnapshot,
+  stripeProfileRecoveryAfterRefresh,
   stripeMergeReconciliationOptions,
-} from './lib/profileFirestore';
+} from './lib/profileState';
 import {
   authoritativeProfileShipmentsContainStripeSessions,
   beginKeyedInventoryRecovery,
@@ -1541,6 +1541,7 @@ function App({
     sessionResolution,
     signIn,
     reconcileProfile,
+    refreshProfileState,
     beginDeliveryRecoveryScheduleUpdate,
     hasAuthenticatedWalletSession,
   } = useSolanaAuth();
@@ -2262,7 +2263,7 @@ function App({
     }
     if (!sessionWallet || pendingProfileStripeSessionIds.length) return;
     setStripeCheckoutProfileRecovery((current) =>
-      stripeProfileRecoveryAfterSnapshot(current, stripeCheckoutRecoveryKey, true),
+      stripeProfileRecoveryAfterRefresh(current, stripeCheckoutRecoveryKey, true),
     );
     setStripeCheckoutRecoveredProfile((current) =>
       retainMatchingOwnerRecoveryKey(current, {
@@ -2753,6 +2754,7 @@ function App({
                 await reconcileProfile({ includeDeliveryRecovery: true });
               } else {
                 commitRecoverySchedule(nextCheckAt);
+                void refreshProfileState().catch(() => undefined);
               }
               if (result.attempted > 0 || result.recovered > 0) {
                 await refetchInventory().catch(() => undefined);
@@ -2777,6 +2779,7 @@ function App({
       hasAuthenticatedWalletSession,
       isViewerMode,
       reconcileProfile,
+      refreshProfileState,
       refetchInventory,
     ],
   );

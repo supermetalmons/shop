@@ -73,6 +73,7 @@ import {
   isProfileRequestOriginAllowed,
   PROFILE_READ_PATHS,
   PROFILE_SHIPMENTS_PATH,
+  PROFILE_STATE_PATH,
   type ProfileReadPath,
 } from './profileReads.js';
 
@@ -115,6 +116,7 @@ const KNOWN_LOG_ROUTES = new Set([
   '/rpc/mainnet-beta',
   '/rpc/devnet',
   PROFILE_SHIPMENTS_PATH,
+  PROFILE_STATE_PATH,
   ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
   ADMIN_PROFILE_PATH,
 ]);
@@ -1242,6 +1244,7 @@ export async function handleRequest(
   let includeDevnet = false;
   let providerCacheStatus: string | undefined;
   let profileAuthOutcome: string | undefined;
+  let profileStateSections: { profile: string; shipments: string } | undefined;
   let rpcMethod: string | undefined;
   let response: Response;
   const rpcCluster = pathname === '/rpc/mainnet-beta'
@@ -1283,6 +1286,7 @@ export async function handleRequest(
       metrics.upstreamCalls += result.metrics.upstreamCalls;
       metrics.providerDurationMs += result.metrics.providerDurationMs;
       profileAuthOutcome = result.authOutcome;
+      profileStateSections = result.profileStateSections;
       response = applyProfileCors(request, result.response);
     }
   } else if (rpcCluster) {
@@ -1335,6 +1339,7 @@ export async function handleRequest(
     } : {}),
     ...(rpcMethod ? { rpcMethod } : {}),
     ...(profileAuthOutcome ? { profileAuthOutcome } : {}),
+    ...(profileStateSections ? { profileStateSections } : {}),
   });
   return response;
 }

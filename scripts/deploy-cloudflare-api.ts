@@ -71,6 +71,7 @@ type SmokeApiOptions = {
   includeDevnet: boolean;
   includeNotificationSubscription?: boolean;
   includePackStatus?: boolean;
+  includeProfileState?: boolean;
   owner: string;
 };
 
@@ -775,6 +776,25 @@ async function smokeApi(
   if (cors.response.status !== 204 || cors.response.headers.get('access-control-allow-origin') !== '*') fail('CORS smoke response was invalid.');
   assertResponseHeaders(cors.response, 'CORS smoke response');
 
+  if (options.includeProfileState === true) {
+    const profileState = await request(`${baseUrl}/profile/state`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+      body: '{}',
+    }, 'Profile-state capability smoke request');
+    const profileStatePayload = await profileState.response.json() as {
+      error?: { code?: unknown };
+    };
+    if (
+      profileState.response.status !== 401 ||
+      profileState.response.headers.get('access-control-allow-origin') !== 'https://mons.shop' ||
+      profileStatePayload.error?.code !== 'unauthenticated'
+    ) {
+      fail('Profile-state capability smoke response was invalid.');
+    }
+    assertResponseHeaders(profileState.response, 'Profile-state capability smoke response');
+  }
+
   let packStatusDurationMs: number | undefined;
   if (options.includePackStatus === true) {
     const packStatus = await request(
@@ -1330,6 +1350,7 @@ async function runCompleteApiRelease(
     includeDevnet: true,
     includeNotificationSubscription: true,
     includePackStatus: true,
+    includeProfileState: true,
     owner: input.smokeOwner,
   };
   const metadata = await dependencies.upload({
@@ -1419,7 +1440,7 @@ async function main(): Promise<void> {
     const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
     await uploadApiCandidate({
       apiToken,
-      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, owner: options.smokeOwner },
+      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, includeProfileState: true, owner: options.smokeOwner },
       firestoreServiceAccountJson,
       heliusApiKey,
       logsDirectory,
@@ -1456,7 +1477,7 @@ async function main(): Promise<void> {
       wranglerEnvironment,
     });
     await runProductionSequence({
-      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, owner: options.smokeOwner },
+      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, includeProfileState: true, owner: options.smokeOwner },
       expectedCurrentVersionId,
       heliusApiKey,
       previewUrl,

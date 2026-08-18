@@ -14,8 +14,7 @@ import {
   FulfillmentOrdersCursor,
   GetAdminProfileViewRequest,
   GetAdminProfileViewResponse,
-  GetProfileShipmentsRequest,
-  GetProfileShipmentsResponse,
+  GetProfileStateResponse,
   GetFulfillmentShipStationLabelRequest,
   GetFulfillmentShipStationLabelResponse,
   GetFulfillmentShipStationRatesRequest,
@@ -26,6 +25,8 @@ import {
   PreparedTxResponse,
   Profile,
   ProfileAddress,
+  ProfileStateProfile,
+  ProfileStateSection,
   PurchaseFulfillmentShipStationLabelRequest,
   PurchaseFulfillmentShipStationLabelResponse,
   RecoverDeliveryOrdersArgs,
@@ -49,6 +50,7 @@ import {
 } from '../../functions/src/shared/packStatus.ts';
 import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.ts';
 import { parseDeliveryOrderSummary } from '../../functions/src/shared/deliveryOrderSummary.ts';
+import { isBase58Bytes } from '../../functions/src/shared/solanaRpcProxy.ts';
 import { fetchPackStatus } from './shopApi';
 import { monsApiOrigin } from './monsApiOrigin';
 
@@ -216,7 +218,7 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 };
 
 async function requestProfileApi<Req>(
-  pathname: '/profile/shipments' | '/profile/anonymous-stripe-delivery-history' | '/admin/profile',
+  pathname: '/profile/state' | '/profile/shipments' | '/profile/anonymous-stripe-delivery-history' | '/admin/profile',
   data: Req,
   dependencies: ProfileApiClientDependencies,
 ): Promise<unknown> {
@@ -276,7 +278,7 @@ async function requestProfileApi<Req>(
 }
 
 async function callProfileApi<Req>(
-  pathname: '/profile/shipments' | '/profile/anonymous-stripe-delivery-history' | '/admin/profile',
+  pathname: '/profile/state' | '/profile/shipments' | '/profile/anonymous-stripe-delivery-history' | '/admin/profile',
   data: Req,
 ): Promise<unknown> {
   return requestProfileApi(pathname, data, defaultProfileApiDependencies);
@@ -286,6 +288,124 @@ function profileOrders(value: unknown): DeliveryOrderSummary[] | null {
   if (!Array.isArray(value)) return null;
   const orders = value.map(parseDeliveryOrderSummary);
   return orders.every((order): order is DeliveryOrderSummary => order !== null) ? orders : null;
+}
+
+function exactProfileOrders(value: unknown): DeliveryOrderSummary[] | null {
+  if (!Array.isArray(value)) return null;
+  const required = ['dropId', 'deliveryId', 'status', 'items'] as const;
+  const optional = [
+    'stripeCheckoutSessionId',
+    'createdAt',
+    'processingAt',
+    'processedAt',
+    'fulfillmentStatus',
+    'fulfillmentTrackingCode',
+    'fulfillmentUpdatedAt',
+  ] as const;
+  const allowed = new Set<string>([...required, ...optional]);
+  const orders: DeliveryOrderSummary[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) return null;
+    if (!required.every((key) => Object.hasOwn(entry, key))) return null;
+    if (!Object.keys(entry).every((key) => allowed.has(key))) return null;
+    if (!Array.isArray(entry.items) || !entry.items.every((item) =>
+      isRecord(item) && hasExactKeys(item, ['kind', 'refId'])
+    )) return null;
+    const order = parseDeliveryOrderSummary(entry);
+    if (!order) return null;
+    orders.push(order);
+  }
+  return orders;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+}
+
+function profileStateErrorSection(value: unknown): ProfileStateSection<never> | null {
+  if (!isRecord(value) || !hasExactKeys(value, ['status', 'error']) || value.status !== 'error') return null;
+  const error = value.error;
+  if (!isRecord(error) || !hasExactKeys(error, ['code', 'message'])) return null;
+  if (
+    (error.code !== 'deadline-exceeded' && error.code !== 'unavailable') ||
+    typeof error.message !== 'string' ||
+    !error.message
+  ) return null;
+  return { status: 'error', error: { code: error.code, message: error.message } };
+}
+
+function profileStateProfileSection(
+  value: unknown,
+  sessionWallet: string,
+): ProfileStateSection<ProfileStateProfile> | null {
+  const error = profileStateErrorSection(value);
+  if (error) return error;
+  if (!isRecord(value) || !hasExactKeys(value, ['status', 'value']) || value.status !== 'ready') return null;
+  const profile = value.value;
+  if (!isRecord(profile)) return null;
+  const keys = Object.keys(profile).sort().join(',');
+  if (keys !== 'wallet' && keys !== 'email,wallet') return null;
+  if (profile.wallet !== sessionWallet) return null;
+  if (
+    profile.email !== undefined &&
+    (
+      typeof profile.email !== 'string' ||
+      !profile.email ||
+      profile.email.length > 254 ||
+      profile.email.trim() !== profile.email
+    )
+  ) return null;
+  return {
+    status: 'ready',
+    value: {
+      wallet: sessionWallet,
+      ...(typeof profile.email === 'string' ? { email: profile.email } : {}),
+    },
+  };
+}
+
+function profileStateShipmentsSection(
+  value: unknown,
+): ProfileStateSection<DeliveryOrderSummary[]> | null {
+  const error = profileStateErrorSection(value);
+  if (error) return error;
+  if (!isRecord(value) || !hasExactKeys(value, ['status', 'value']) || value.status !== 'ready') return null;
+  const orders = exactProfileOrders(value.value);
+  return orders ? { status: 'ready', value: orders } : null;
+}
+
+function parseProfileState(value: unknown): GetProfileStateResponse | null {
+  if (!isRecord(value) || !hasExactKeys(value, [
+    'responseMode',
+    'sessionWallet',
+    'profile',
+    'shipments',
+  ])) return null;
+  if (value.responseMode !== 'profile-state') return null;
+  if (value.sessionWallet === null) {
+    return value.profile === null && value.shipments === null
+      ? {
+          responseMode: 'profile-state',
+          sessionWallet: null,
+          profile: null,
+          shipments: null,
+        }
+      : null;
+  }
+  if (typeof value.sessionWallet !== 'string' || !isBase58Bytes(value.sessionWallet, 32)) return null;
+  const profile = profileStateProfileSection(value.profile, value.sessionWallet);
+  const shipments = profileStateShipmentsSection(value.shipments);
+  if (!profile || !shipments) return null;
+  return {
+    responseMode: 'profile-state',
+    sessionWallet: value.sessionWallet,
+    profile,
+    shipments,
+  };
 }
 
 export { fetchPendingOpenBoxes } from './shopApi';
@@ -623,21 +743,11 @@ export async function reconcileProfileState(
   return callFunction<ReconcileProfileStateRequest, ReconcileProfileStateResponse>('reconcileProfileState', payload);
 }
 
-export async function loadProfileShipmentsFromServer(ownerWallet: string): Promise<DeliveryOrderSummary[]> {
-  const request: GetProfileShipmentsRequest = { ownerWallet };
-  const response: unknown = await callProfileApi('/profile/shipments', request);
-  const payload = response && typeof response === 'object'
-    ? (response as Partial<GetProfileShipmentsResponse>)
-    : null;
-  const orders = profileOrders(payload?.orders);
-  if (
-    payload?.responseMode === 'shipments' &&
-    payload.wallet === ownerWallet &&
-    orders
-  ) {
-    return orders;
-  }
-  throw new Error('Invalid shipment history response');
+export async function loadProfileStateFromServer(): Promise<GetProfileStateResponse> {
+  const response = await callProfileApi('/profile/state', {});
+  const state = parseProfileState(response);
+  if (!state) throw new Error('Invalid profile state response');
+  return state;
 }
 
 export async function getAdminProfileView(ownerWallet: string): Promise<GetAdminProfileViewResponse> {
@@ -682,6 +792,7 @@ export async function listDeliveryOrderOwners(
 }
 
 export const profileApiTestHooks = {
+  parseProfileState,
   profileApiErrorPayload,
   profileOrders,
   requestProfileApi,

@@ -11,7 +11,11 @@ import {
 import type {
   DeliveryOrderSummary,
   GetAdminProfileViewResponse,
+  GetProfileStateResponse,
+  GetProfileShipmentsRequest,
   GetProfileShipmentsResponse,
+  ProfileStateProfile,
+  ProfileStateSection,
 } from '../../../../functions/src/shared/contracts.js';
 import { normalizeDropId } from '../../../../functions/src/shared/deploymentCore.js';
 import { parseCanonicalPositiveInteger } from '../../../../functions/src/shared/positiveInteger.js';
@@ -24,10 +28,12 @@ import {
 } from './firebaseIdToken.js';
 
 export const PROFILE_SHIPMENTS_PATH = '/profile/shipments';
+export const PROFILE_STATE_PATH = '/profile/state';
 export const ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH = '/profile/anonymous-stripe-delivery-history';
 export const ADMIN_PROFILE_PATH = '/admin/profile';
 export const PROFILE_READ_PATHS = new Set([
   PROFILE_SHIPMENTS_PATH,
+  PROFILE_STATE_PATH,
   ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
   ADMIN_PROFILE_PATH,
 ]);
@@ -78,6 +84,7 @@ const PROFILE_SHIPMENT_FIELDS = [
 
 export type ProfileReadPath =
   | typeof PROFILE_SHIPMENTS_PATH
+  | typeof PROFILE_STATE_PATH
   | typeof ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH
   | typeof ADMIN_PROFILE_PATH;
 
@@ -90,6 +97,10 @@ export type ProfileReadResult = {
   response: Response;
   metrics: ProfileReadMetrics;
   authOutcome: 'accepted' | 'rejected' | 'provider-failure';
+  profileStateSections?: {
+    profile: 'ready' | 'error' | 'not-applicable';
+    shipments: 'ready' | 'error' | 'not-applicable';
+  };
 };
 
 export type ProfileProviderFetch = FirebaseIdTokenFetch;
@@ -486,7 +497,7 @@ async function parseExactRequestBody(
   request: Request,
   path: ProfileReadPath,
   signal: AbortSignal,
-): Promise<{ ownerWallet?: string }> {
+): Promise<Partial<GetProfileShipmentsRequest>> {
   if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
   }
@@ -508,7 +519,7 @@ async function parseExactRequestBody(
     throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
   }
   if (!isRecord(parsed)) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
+  if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH || path === PROFILE_STATE_PATH) {
     if (Object.keys(parsed).length !== 0) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
     return {};
   }
@@ -639,10 +650,10 @@ async function authenticatedFirestoreRequest(args: {
   throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
 }
 
-function sessionWallet(value: unknown, uid: string): string {
+function optionalSessionWallet(value: unknown, uid: string): string | null {
   if (value === null) {
     if (isBase58Bytes(uid, 32)) return uid;
-    throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
+    return null;
   }
   if (!isRecord(value)) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
   const fields = decodeFirestoreFields(value.fields);
@@ -653,6 +664,24 @@ function sessionWallet(value: unknown, uid: string): string {
   return wallet;
 }
 
+async function loadOptionalSessionWallet(args: {
+  accessTokenProvider: GoogleAccessTokenProvider;
+  nowMs: number;
+  providerFetch: ProfileProviderFetch;
+  serviceAccountJson: string;
+  signal: AbortSignal;
+  uid: string;
+}): Promise<string | null> {
+  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/authSessions/${encodeURIComponent(args.uid)}`);
+  url.searchParams.append('mask.fieldPaths', 'wallet');
+  const document = await authenticatedFirestoreRequest({
+    ...args,
+    method: 'GET',
+    url: url.toString(),
+  });
+  return optionalSessionWallet(document, args.uid);
+}
+
 async function loadSessionWallet(args: {
   accessTokenProvider: GoogleAccessTokenProvider;
   nowMs: number;
@@ -661,14 +690,9 @@ async function loadSessionWallet(args: {
   signal: AbortSignal;
   uid: string;
 }): Promise<string> {
-  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/authSessions/${encodeURIComponent(args.uid)}`);
-  url.searchParams.append('mask.fieldPaths', 'wallet');
-  const document = await authenticatedFirestoreRequest({
-    ...args,
-    method: 'GET',
-    url: url.toString(),
-  });
-  return sessionWallet(document, args.uid);
+  const wallet = await loadOptionalSessionWallet(args);
+  if (!wallet) throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
+  return wallet;
 }
 
 async function loadDeliveryHistory(args: {
@@ -727,6 +751,47 @@ async function loadAdminProfile(args: {
   };
 }
 
+async function loadProfileStateProfile(args: {
+  accessTokenProvider: GoogleAccessTokenProvider;
+  nowMs: number;
+  ownerWallet: string;
+  providerFetch: ProfileProviderFetch;
+  serviceAccountJson: string;
+  signal: AbortSignal;
+}): Promise<ProfileStateProfile> {
+  const profileUrl = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/profiles/${encodeURIComponent(args.ownerWallet)}`);
+  profileUrl.searchParams.append('mask.fieldPaths', 'email');
+  const profileDocument = await authenticatedFirestoreRequest({ ...args, method: 'GET', url: profileUrl.toString() });
+  const profileFields = isRecord(profileDocument) ? decodeFirestoreFields(profileDocument.fields) : null;
+  const email = typeof profileFields?.email === 'string' && profileFields.email.trim()
+    ? profileFields.email.trim()
+    : undefined;
+  return { wallet: args.ownerWallet, ...(email ? { email } : {}) };
+}
+
+function profileStateSection<T>(
+  result: PromiseSettledResult<T>,
+  signal: AbortSignal,
+): ProfileStateSection<T> {
+  if (result.status === 'fulfilled') return { status: 'ready', value: result.value };
+  if (signal.aborted) {
+    return {
+      status: 'error',
+      error: { code: 'deadline-exceeded', message: 'Profile request timed out.' },
+    };
+  }
+  if (
+    result.reason instanceof ProfileReadError &&
+    (result.reason.code === 'deadline-exceeded' || result.reason.code === 'unavailable')
+  ) {
+    return {
+      status: 'error',
+      error: { code: result.reason.code, message: result.reason.message },
+    };
+  }
+  throw result.reason;
+}
+
 export async function handleProfileReadRequest(
   request: Request,
   env: Pick<Env, 'FIRESTORE_SERVICE_ACCOUNT_JSON'>,
@@ -782,6 +847,41 @@ export async function handleProfileReadRequest(
     if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
       const orders = await loadDeliveryHistory({ ...common, owner: `firebase:${identity.uid}` });
       return { response: jsonResponse({ orders }, 200), metrics, authOutcome: 'accepted' };
+    }
+    if (path === PROFILE_STATE_PATH) {
+      const wallet = await loadOptionalSessionWallet({ ...common, uid: identity.uid });
+      if (!wallet) {
+        const response: GetProfileStateResponse = {
+          responseMode: 'profile-state',
+          sessionWallet: null,
+          profile: null,
+          shipments: null,
+        };
+        return {
+          response: jsonResponse(response, 200),
+          metrics,
+          authOutcome: 'accepted',
+          profileStateSections: { profile: 'not-applicable', shipments: 'not-applicable' },
+        };
+      }
+      const [profileResult, shipmentsResult] = await Promise.allSettled([
+        loadProfileStateProfile({ ...common, ownerWallet: wallet }),
+        loadDeliveryHistory({ ...common, owner: wallet }),
+      ]);
+      const profile = profileStateSection(profileResult, controller.signal);
+      const shipments = profileStateSection(shipmentsResult, controller.signal);
+      const response: GetProfileStateResponse = {
+        responseMode: 'profile-state',
+        sessionWallet: wallet,
+        profile,
+        shipments,
+      };
+      return {
+        response: jsonResponse(response, 200),
+        metrics,
+        authOutcome: 'accepted',
+        profileStateSections: { profile: profile.status, shipments: shipments.status },
+      };
     }
     const ownerWallet = requestBody.ownerWallet!;
     const wallet = await loadSessionWallet({ ...common, uid: identity.uid });

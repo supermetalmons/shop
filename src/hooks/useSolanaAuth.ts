@@ -4,33 +4,21 @@ import { onAuthStateChanged, signOut as firebaseSignOut } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import {
   ensureAuthenticated,
-  loadProfileShipmentsFromServer,
+  loadProfileStateFromServer,
   reconcileProfileState,
   solanaAuth,
   type ReconcileProfileStateRequest,
   type ReconcileProfileStateResponse,
 } from '../lib/api';
 import { isRetryableCallableError, retryWithBackoff } from '../lib/callableErrors';
-import type { DeliveryOrderSummary, Profile } from '../types';
+import type { DeliveryOrderSummary, GetProfileStateResponse, Profile } from '../types';
 import { buildSignInMessage } from '../lib/solana';
 import { normalizeCallableErrorCode } from '../../functions/src/shared/callableErrorCode';
-import {
-  deliveryOrderSummaryEqual,
-  deliveryOrderSummaryKey,
-  deliveryOrderSummarySortAt,
-} from '../../functions/src/shared/deliveryOrderSummary.js';
+import { deliveryOrderSummarySortAt } from '../../functions/src/shared/deliveryOrderSummary.js';
 import {
   deliveryOrderSummariesEqual,
   firebaseAuthChangeInvalidatesSession,
-  firestoreErrorInvalidatesSession,
-  firestoreListenerErrorIsRetryable,
-  listenToProfile,
-  listenToProfileShipments,
-  listenToSessionBinding,
-  profileListenerIsCurrent,
-  type SessionBinding,
-  type SnapshotUpdate,
-} from '../lib/profileFirestore';
+} from '../lib/profileState';
 
 export type SolanaAuthState = {
   profile: Profile | null;
@@ -47,11 +35,6 @@ export type SolanaAuthState = {
 
 export type SessionResolution = 'disabled' | 'resolving' | 'settled';
 
-type SnapshotHandlers<T> = {
-  next: (update: SnapshotUpdate<T>) => void;
-  error: (error: unknown) => void;
-};
-
 export type SolanaAuthWalletState = {
   connected: boolean;
   publicKey: { toBase58: () => string } | null;
@@ -63,16 +46,12 @@ export type SolanaAuthRuntime = {
   subscribeAuthUser: (listener: (uid: string | null) => void) => () => void;
   ensureAuthenticated: () => Promise<string>;
   getIdToken: () => Promise<string | null>;
-  listenToSessionBinding: (uid: string, handlers: SnapshotHandlers<SessionBinding | null>) => () => void;
-  listenToProfile: (wallet: string, handlers: SnapshotHandlers<Profile>) => () => void;
-  listenToProfileShipments: (
-    wallet: string,
-    handlers: SnapshotHandlers<DeliveryOrderSummary[]>,
-  ) => () => void;
-  loadProfileShipmentsFromServer: (wallet: string) => Promise<DeliveryOrderSummary[]>;
+  loadProfileState: () => Promise<GetProfileStateResponse>;
   reconcileProfileState: (options?: ReconcileProfileStateRequest) => Promise<ReconcileProfileStateResponse>;
   authenticateWallet: (wallet: string, message: string, signature: Uint8Array) => Promise<{ wallet: string }>;
   signOut: () => Promise<void>;
+  subscribeRefreshEvents: (listener: () => void) => () => void;
+  isPageVisible: () => boolean;
   now: () => number;
   setTimer: (callback: () => void, delay: number) => unknown;
   clearTimer: (timer: unknown) => void;
@@ -88,6 +67,12 @@ type SignInAttempt = {
   contextGeneration: number;
   uid: string | null;
   promise: Promise<SignInResult>;
+};
+
+type RefreshRun = {
+  contextGeneration: number;
+  queued: boolean;
+  promise: Promise<boolean>;
 };
 
 const authenticateWalletTails = new Map<string, Promise<void>>();
@@ -119,6 +104,21 @@ const EMPTY_AUTH_STATE: SolanaAuthState = {
   deliveryRecoveryNextCheckAt: null,
 };
 
+function subscribeBrowserRefreshEvents(listener: () => void): () => void {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return () => {};
+  const onVisible = () => {
+    if (document.visibilityState !== 'hidden') listener();
+  };
+  window.addEventListener('focus', onVisible);
+  window.addEventListener('online', onVisible);
+  document.addEventListener('visibilitychange', onVisible);
+  return () => {
+    window.removeEventListener('focus', onVisible);
+    window.removeEventListener('online', onVisible);
+    document.removeEventListener('visibilitychange', onVisible);
+  };
+}
+
 const DEFAULT_RUNTIME: SolanaAuthRuntime = {
   currentUid: () => auth?.currentUser?.uid || null,
   subscribeAuthUser: (listener) => {
@@ -127,16 +127,15 @@ const DEFAULT_RUNTIME: SolanaAuthRuntime = {
   },
   ensureAuthenticated,
   getIdToken: async () => (await auth?.currentUser?.getIdToken()) || null,
-  listenToSessionBinding,
-  listenToProfile,
-  listenToProfileShipments,
-  loadProfileShipmentsFromServer,
+  loadProfileState: loadProfileStateFromServer,
   reconcileProfileState,
   authenticateWallet: (wallet, message, signature) =>
     solanaAuth(wallet, message, signature, { responseMode: 'session' }),
   signOut: async () => {
     if (auth) await firebaseSignOut(auth);
   },
+  subscribeRefreshEvents: subscribeBrowserRefreshEvents,
+  isPageVisible: () => typeof document === 'undefined' || document.visibilityState !== 'hidden',
   now: () => Date.now(),
   setTimer: (callback, delay) => setTimeout(callback, delay),
   clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
@@ -144,6 +143,12 @@ const DEFAULT_RUNTIME: SolanaAuthRuntime = {
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function errorCode(error: unknown): string {
+  return normalizeCallableErrorCode(
+    typeof error === 'object' && error ? (error as { code?: unknown }).code : undefined,
+  );
 }
 
 function isInvalidSignatureError(error: unknown): boolean {
@@ -155,21 +160,6 @@ function isInvalidSignatureError(error: unknown): boolean {
 function normalizedRecoveryNextCheckAt(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
-
-function snapshotIsAuthoritative(update: Pick<SnapshotUpdate<unknown>, 'fromCache' | 'hasPendingWrites'>) {
-  return !update.fromCache && !update.hasPendingWrites;
-}
-
-const PERSISTENT_RETRY_DELAYS_MS = [400, 800, 1_600, 5_000] as const;
-const SHIPMENT_SERVER_SYNC_DELAY_MS = 5_000;
-const SHIPMENT_SERVER_REFRESH_DELAY_MS = 60_000;
-const SHIPMENT_SERVER_VALIDATION_DELAY_MS = 5 * 60_000;
-const SHIPMENT_SERVER_HEALTHY_VALIDATION_DELAY_MS = 60 * 60_000;
-const SHIPMENT_SERVER_RETRY_DELAYS_MS = [
-  ...PERSISTENT_RETRY_DELAYS_MS,
-  30_000,
-  SHIPMENT_SERVER_REFRESH_DELAY_MS,
-] as const;
 
 function retryDelay(delays: readonly [number, ...number[]], retryCount: number): number {
   return delays[Math.min(retryCount, delays.length - 1)];
@@ -185,37 +175,9 @@ function shipmentsInDisplayOrder(shipments: DeliveryOrderSummary[]): DeliveryOrd
   });
 }
 
-function mergeShipmentsForDisplay(
-  {
-    serverShipments,
-    listenerShipments,
-    listenerBaseline,
-    listenerAuthoritative,
-  }: {
-    serverShipments: DeliveryOrderSummary[];
-    listenerShipments: DeliveryOrderSummary[];
-    listenerBaseline: DeliveryOrderSummary[];
-    listenerAuthoritative: boolean;
-  },
-): DeliveryOrderSummary[] {
-  const merged = new Map<string, DeliveryOrderSummary>();
-  const baseline = new Map<string, DeliveryOrderSummary>();
-  for (const shipment of serverShipments) {
-    merged.set(deliveryOrderSummaryKey(shipment), shipment);
-  }
-  for (const shipment of listenerBaseline) {
-    baseline.set(deliveryOrderSummaryKey(shipment), shipment);
-  }
-  for (const shipment of listenerShipments) {
-    const key = deliveryOrderSummaryKey(shipment);
-    const previous = baseline.get(key);
-    const changedSinceServer = !previous || !deliveryOrderSummaryEqual(previous, shipment);
-    if (changedSinceServer && (listenerAuthoritative || !merged.has(key))) {
-      merged.set(key, shipment);
-    }
-  }
-  return shipmentsInDisplayOrder([...merged.values()]);
-}
+const PERSISTENT_RETRY_DELAYS_MS = [400, 800, 1_600, 5_000] as const;
+const PROFILE_REFRESH_RETRY_DELAYS_MS = [400, 800, 1_600, 5_000, 30_000, 60_000] as const;
+const PROFILE_REFRESH_INTERVAL_MS = 60_000;
 
 export function useSolanaAuthWithRuntime(
   walletState: SolanaAuthWalletState,
@@ -226,7 +188,6 @@ export function useSolanaAuthWithRuntime(
   const [state, setState] = useState<SolanaAuthState>(EMPTY_AUTH_STATE);
   const [error, setError] = useState<string | null>(null);
   const [authUserRevision, setAuthUserRevision] = useState(0);
-  const [sessionListenerRevision, setSessionListenerRevision] = useState(0);
   const [sessionResolution, setSessionResolution] = useState<SessionResolution>('disabled');
   const lastSignedRef = useRef<{
     wallet: string;
@@ -247,6 +208,7 @@ export function useSolanaAuthWithRuntime(
   const deliveryRecoveryRequestGenerationRef = useRef(0);
   const deliveryRecoveryAppliedGenerationRef = useRef(0);
   const signInAttemptRef = useRef<SignInAttempt | null>(null);
+  const refreshRunRef = useRef<RefreshRun | null>(null);
   const mountedRef = useRef(true);
   connectedWalletRef.current = connectedWallet;
   connectedRef.current = connected;
@@ -263,6 +225,7 @@ export function useSolanaAuthWithRuntime(
       mountedRef.current = false;
       contextGenerationRef.current += 1;
       signInAttemptRef.current = null;
+      refreshRunRef.current = null;
       clearMismatchSignOutTimer();
     };
   }, [clearMismatchSignOutTimer]);
@@ -294,81 +257,6 @@ export function useSolanaAuthWithRuntime(
     );
   }, []);
 
-  const beginDeliveryRecoveryScheduleUpdate = useCallback(() => {
-    const wallet = sessionWalletRef.current;
-    const uid = sessionUidRef.current;
-    const ownerGeneration = ownerGenerationRef.current;
-    if (!wallet || !uid) return (_nextCheckAt: number | null) => false;
-    const requestGeneration = deliveryRecoveryRequestGenerationRef.current + 1;
-    deliveryRecoveryRequestGenerationRef.current = requestGeneration;
-    return (nextCheckAt: number | null) => {
-      if (
-        sessionUidRef.current !== uid ||
-        firebaseUidRef.current !== uid ||
-        ownerGenerationRef.current !== ownerGeneration ||
-        sessionWalletRef.current !== wallet ||
-        requestGeneration <= deliveryRecoveryAppliedGenerationRef.current
-      ) {
-        return false;
-      }
-      deliveryRecoveryAppliedGenerationRef.current = requestGeneration;
-      const normalizedNextCheckAt = normalizedRecoveryNextCheckAt(nextCheckAt);
-      setState((current) =>
-        current.sessionWallet === wallet
-          ? { ...current, deliveryRecoveryNextCheckAt: normalizedNextCheckAt }
-          : current,
-      );
-      return true;
-    };
-  }, []);
-
-  const reconcileProfile = useCallback(
-    async (options?: ReconcileProfileStateRequest): Promise<ReconcileProfileStateResponse | null> => {
-      const wallet = sessionWalletRef.current;
-      if (!wallet) return null;
-      const contextGeneration = contextGenerationRef.current;
-      const ownerGeneration = ownerGenerationRef.current;
-      const includesDeliveryRecovery = options?.includeDeliveryRecovery !== false;
-      const commitSchedule = includesDeliveryRecovery ? beginDeliveryRecoveryScheduleUpdate() : null;
-      const result = await runtime.reconcileProfileState(options);
-      if (
-        contextGenerationRef.current !== contextGeneration ||
-        ownerGenerationRef.current !== ownerGeneration ||
-        sessionWalletRef.current !== wallet
-      ) {
-        return null;
-      }
-      if (commitSchedule) {
-        commitSchedule(normalizedRecoveryNextCheckAt(result.deliveryRecovery?.nextCheckAt));
-      }
-      return result;
-    },
-    [beginDeliveryRecoveryScheduleUpdate, runtime],
-  );
-
-  useEffect(() => {
-    return runtime.subscribeAuthUser((nextUid) => {
-      const previousUid = firebaseUidRef.current;
-      const activeSignIn = signInAttemptRef.current;
-      const invalidatesSession = firebaseAuthChangeInvalidatesSession({
-        previousUid,
-        nextUid,
-        signInActive: Boolean(activeSignIn),
-        activeSignInUid: activeSignIn?.uid ?? null,
-      });
-      firebaseUidRef.current = nextUid;
-      if (previousUid !== nextUid) {
-        clearMismatchSignOutTimer();
-        mismatchSignOutRef.current = null;
-      }
-      if (!invalidatesSession) return;
-      contextGenerationRef.current += 1;
-      deactivateOwner(false);
-      setError(null);
-      setAuthUserRevision((revision) => revision + 1);
-    });
-  }, [clearMismatchSignOutTimer, deactivateOwner, runtime]);
-
   const endMismatchedFirebaseSession = useCallback(
     (uid: string, boundWallet: string, nextWallet: string) => {
       const mismatchKey = `${uid}:${boundWallet}:${nextWallet}`;
@@ -399,13 +287,204 @@ export function useSolanaAuthWithRuntime(
     [clearMismatchSignOutTimer, deactivateOwner, runtime],
   );
 
+  const applyProfileState = useCallback((response: GetProfileStateResponse, token: string, uid: string) => {
+    const wallet = response.sessionWallet;
+    if (!wallet) {
+      deactivateOwner(false);
+      setError(null);
+      setSessionResolution('settled');
+      return true;
+    }
+    const activeConnectedWallet = connectedWalletRef.current;
+    if (activeConnectedWallet && wallet !== activeConnectedWallet) {
+      endMismatchedFirebaseSession(uid, wallet, activeConnectedWallet);
+      return true;
+    }
+    const previousWallet = sessionWalletRef.current;
+    sessionWalletRef.current = wallet;
+    sessionUidRef.current = uid;
+    if (previousWallet !== wallet) {
+      ownerGenerationRef.current += 1;
+      deliveryRecoveryRequestGenerationRef.current = 0;
+      deliveryRecoveryAppliedGenerationRef.current = 0;
+    }
+    const profileError = response.profile?.status === 'error' ? response.profile.error : null;
+    const shipmentsError = response.shipments?.status === 'error' ? response.shipments.error : null;
+    setState((current) => {
+      const base = current.sessionWallet === wallet
+        ? current
+        : { ...EMPTY_AUTH_STATE, sessionWallet: wallet, token };
+      const nextShipments = response.shipments?.status === 'ready'
+        ? shipmentsInDisplayOrder(response.shipments.value)
+        : base.shipments;
+      const next: SolanaAuthState = {
+        ...base,
+        sessionWallet: wallet,
+        token,
+        loading: false,
+        profile: response.profile?.status === 'ready' ? response.profile.value : base.profile,
+        profileReady: response.profile?.status === 'ready' ? true : base.profileReady,
+        profileError: response.profile?.status === 'ready' ? null : profileError?.message || base.profileError,
+        shipments: nextShipments,
+        shipmentsReady: response.shipments?.status === 'ready' ? true : base.shipmentsReady,
+        shipmentsError: response.shipments?.status === 'ready' ? null : shipmentsError?.message || base.shipmentsError,
+      };
+      if (
+        current.sessionWallet === next.sessionWallet &&
+        current.token === next.token &&
+        current.loading === next.loading &&
+        current.profile === next.profile &&
+        current.profileReady === next.profileReady &&
+        current.profileError === next.profileError &&
+        current.shipmentsReady === next.shipmentsReady &&
+        current.shipmentsError === next.shipmentsError &&
+        deliveryOrderSummariesEqual(current.shipments, next.shipments)
+      ) return current;
+      return next;
+    });
+    setError(null);
+    setSessionResolution('settled');
+    return !profileError && !shipmentsError;
+  }, [deactivateOwner, endMismatchedFirebaseSession]);
+
+  const refreshProfileState = useCallback((): Promise<boolean> => {
+    const requestedGeneration = contextGenerationRef.current;
+    const existing = refreshRunRef.current;
+    if (existing && existing.contextGeneration === requestedGeneration) {
+      existing.queued = true;
+      return existing.promise;
+    }
+    const run: RefreshRun = {
+      contextGeneration: requestedGeneration,
+      queued: false,
+      promise: Promise.resolve(true),
+    };
+    const isCurrent = () => mountedRef.current && contextGenerationRef.current === run.contextGeneration;
+    const execute = async (): Promise<boolean> => {
+      try {
+        const uid = await runtime.ensureAuthenticated();
+        if (!isCurrent() || runtime.currentUid() !== uid) return true;
+        const response = await runtime.loadProfileState();
+        const token = await runtime.getIdToken();
+        if (!isCurrent() || runtime.currentUid() !== uid || !token) return true;
+        return applyProfileState(response, token, uid);
+      } catch (refreshError) {
+        if (!isCurrent()) return true;
+        if (errorCode(refreshError) === 'unauthenticated') {
+          contextGenerationRef.current += 1;
+          deactivateOwner(true);
+          setError(null);
+          setSessionResolution('resolving');
+          try {
+            await runtime.signOut();
+          } catch (signOutError) {
+            setError(errorMessage(signOutError, 'Unable to reset authentication'));
+          }
+          throw refreshError;
+        }
+        const message = errorMessage(refreshError, 'Unable to refresh profile');
+        const hasValidatedSession = Boolean(
+          sessionWalletRef.current && sessionUidRef.current === firebaseUidRef.current,
+        );
+        if (hasValidatedSession) {
+          setState((current) => current.sessionWallet === sessionWalletRef.current
+            ? { ...current, profileError: message, shipmentsError: message }
+            : current);
+          setSessionResolution('settled');
+        } else {
+          setState((current) => ({ ...current, loading: true }));
+          setError(message);
+          setSessionResolution('resolving');
+        }
+        throw refreshError;
+      }
+    };
+    run.promise = (async () => {
+      let complete = true;
+      do {
+        run.queued = false;
+        complete = await execute();
+      } while (run.queued && isCurrent());
+      return complete;
+    })().finally(() => {
+      if (refreshRunRef.current === run) refreshRunRef.current = null;
+    });
+    refreshRunRef.current = run;
+    return run.promise;
+  }, [applyProfileState, deactivateOwner, runtime]);
+
+  const beginDeliveryRecoveryScheduleUpdate = useCallback(() => {
+    const wallet = sessionWalletRef.current;
+    const uid = sessionUidRef.current;
+    const ownerGeneration = ownerGenerationRef.current;
+    if (!wallet || !uid) return (_nextCheckAt: number | null) => false;
+    const requestGeneration = deliveryRecoveryRequestGenerationRef.current + 1;
+    deliveryRecoveryRequestGenerationRef.current = requestGeneration;
+    return (nextCheckAt: number | null) => {
+      if (
+        sessionUidRef.current !== uid ||
+        firebaseUidRef.current !== uid ||
+        ownerGenerationRef.current !== ownerGeneration ||
+        sessionWalletRef.current !== wallet ||
+        requestGeneration <= deliveryRecoveryAppliedGenerationRef.current
+      ) return false;
+      deliveryRecoveryAppliedGenerationRef.current = requestGeneration;
+      const normalizedNextCheckAt = normalizedRecoveryNextCheckAt(nextCheckAt);
+      setState((current) =>
+        current.sessionWallet === wallet
+          ? { ...current, deliveryRecoveryNextCheckAt: normalizedNextCheckAt }
+          : current,
+      );
+      return true;
+    };
+  }, []);
+
+  const reconcileProfile = useCallback(
+    async (options?: ReconcileProfileStateRequest): Promise<ReconcileProfileStateResponse | null> => {
+      const wallet = sessionWalletRef.current;
+      if (!wallet) return null;
+      const contextGeneration = contextGenerationRef.current;
+      const ownerGeneration = ownerGenerationRef.current;
+      const includesDeliveryRecovery = options?.includeDeliveryRecovery !== false;
+      const commitSchedule = includesDeliveryRecovery ? beginDeliveryRecoveryScheduleUpdate() : null;
+      const result = await runtime.reconcileProfileState(options);
+      if (
+        contextGenerationRef.current !== contextGeneration ||
+        ownerGenerationRef.current !== ownerGeneration ||
+        sessionWalletRef.current !== wallet
+      ) return null;
+      if (commitSchedule) commitSchedule(normalizedRecoveryNextCheckAt(result.deliveryRecovery?.nextCheckAt));
+      await refreshProfileState().catch(() => false);
+      return result;
+    },
+    [beginDeliveryRecoveryScheduleUpdate, refreshProfileState, runtime],
+  );
+
+  useEffect(() => runtime.subscribeAuthUser((nextUid) => {
+    const previousUid = firebaseUidRef.current;
+    const activeSignIn = signInAttemptRef.current;
+    const invalidatesSession = firebaseAuthChangeInvalidatesSession({
+      previousUid,
+      nextUid,
+      signInActive: Boolean(activeSignIn),
+      activeSignInUid: activeSignIn?.uid ?? null,
+    });
+    firebaseUidRef.current = nextUid;
+    if (previousUid !== nextUid) {
+      clearMismatchSignOutTimer();
+      mismatchSignOutRef.current = null;
+    }
+    if (!invalidatesSession) return;
+    contextGenerationRef.current += 1;
+    refreshRunRef.current = null;
+    deactivateOwner(false);
+    setError(null);
+    setAuthUserRevision((revision) => revision + 1);
+  }), [clearMismatchSignOutTimer, deactivateOwner, runtime]);
+
   useEffect(() => {
     const currentUid = firebaseUidRef.current;
     const activeWallet = sessionWalletRef.current;
-    if (mismatchSignOutRef.current) {
-      setSessionResolution('resolving');
-      return;
-    }
     if (
       connectedWallet &&
       activeWallet &&
@@ -416,542 +495,101 @@ export function useSolanaAuthWithRuntime(
       endMismatchedFirebaseSession(currentUid, activeWallet, connectedWallet);
       return;
     }
-
-    const contextGeneration = contextGenerationRef.current + 1;
-    contextGenerationRef.current = contextGeneration;
-    if (!activeWallet && connectedWallet) {
-      setState((current) => ({ ...current, loading: true }));
-    }
-    setError(null);
-    const hasValidatedSession = Boolean(
-      activeWallet &&
-        currentUid &&
-        sessionUidRef.current === currentUid &&
-        (!connectedWallet || activeWallet === connectedWallet),
+    contextGenerationRef.current += 1;
+    refreshRunRef.current = null;
+    if (!activeWallet && connectedWallet) setState((current) => ({ ...current, loading: true }));
+    const validated = Boolean(
+      activeWallet && currentUid && sessionUidRef.current === currentUid && (!connectedWallet || connectedWallet === activeWallet),
     );
-    setSessionResolution(hasValidatedSession ? 'settled' : 'resolving');
-
+    setSessionResolution(validated ? 'settled' : 'resolving');
     let cancelled = false;
-    let unsubscribeSession = () => {};
+    let timer: unknown = null;
+    let retryCount = 0;
+    const clearTimer = () => {
+      if (timer === null) return;
+      runtime.clearTimer(timer);
+      timer = null;
+    };
+    const schedule = (delay: number) => {
+      clearTimer();
+      if (cancelled || !runtime.isPageVisible()) return;
+      timer = runtime.setTimer(() => {
+        timer = null;
+        if (!runtime.isPageVisible()) return;
+        run();
+      }, delay);
+    };
+    const run = () => {
+      if (cancelled) return;
+      clearTimer();
+      void refreshProfileState().then(
+        (complete) => {
+          if (cancelled) return;
+          if (complete) {
+            retryCount = 0;
+            schedule(PROFILE_REFRESH_INTERVAL_MS);
+          } else {
+            const delay = retryDelay(PROFILE_REFRESH_RETRY_DELAYS_MS, retryCount);
+            retryCount += 1;
+            schedule(delay);
+          }
+        },
+        (refreshError) => {
+          if (cancelled) return;
+          if (isRetryableCallableError(refreshError)) {
+            const delay = retryDelay(PROFILE_REFRESH_RETRY_DELAYS_MS, retryCount);
+            retryCount += 1;
+            schedule(delay);
+          } else {
+            retryCount = 0;
+            schedule(PROFILE_REFRESH_INTERVAL_MS);
+          }
+        },
+      );
+    };
+    const unsubscribeRefreshEvents = runtime.subscribeRefreshEvents(run);
+    run();
+    return () => {
+      cancelled = true;
+      clearTimer();
+      unsubscribeRefreshEvents();
+    };
+  }, [authUserRevision, connectedWallet, endMismatchedFirebaseSession, refreshProfileState, runtime]);
+
+  useEffect(() => {
+    if (!state.sessionWallet) return;
+    let cancelled = false;
     let retryTimer: unknown = null;
     let retryCount = 0;
-    let subscriptionGeneration = 0;
-    const isCurrentContext = () =>
-      !cancelled &&
-      contextGenerationRef.current === contextGeneration &&
-      connectedWalletRef.current === connectedWallet;
     const clearRetryTimer = () => {
       if (retryTimer === null) return;
       runtime.clearTimer(retryTimer);
       retryTimer = null;
     };
-    const scheduleRetry = (sessionError: unknown, retry: () => void) => {
-      if (!firestoreListenerErrorIsRetryable(sessionError)) return false;
-      const delay = retryDelay(PERSISTENT_RETRY_DELAYS_MS, retryCount);
-      retryCount += 1;
-      const hasValidatedSession = Boolean(
-        sessionWalletRef.current && sessionUidRef.current === firebaseUidRef.current,
-      );
-      setSessionResolution(hasValidatedSession ? 'settled' : 'resolving');
+    const run = () => {
+      if (cancelled) return;
       clearRetryTimer();
-      retryTimer = runtime.setTimer(() => {
-        retryTimer = null;
-        retry();
-      }, delay);
-      return true;
-    };
-    const invalidateBinding = (message?: string) => {
-      if (!isCurrentContext()) return;
-      clearRetryTimer();
-      deactivateOwner(false);
-      setSessionResolution('settled');
-      if (message) setError(message);
-    };
-
-    const subscribe = (uid: string, token: string) => {
-      if (!isCurrentContext()) return;
-      unsubscribeSession();
-      unsubscribeSession = () => {};
-      const generation = subscriptionGeneration + 1;
-      subscriptionGeneration = generation;
-      try {
-        const unsubscribe = runtime.listenToSessionBinding(uid, {
-          next: (update) => {
-            if (
-              !isCurrentContext() ||
-              generation !== subscriptionGeneration ||
-              !snapshotIsAuthoritative(update)
-            ) {
-              return;
-            }
-            const binding = update.value;
-            if (!binding) {
-              invalidateBinding();
-              return;
-            }
-            if (connectedWallet !== null && binding.wallet !== connectedWallet) {
-              endMismatchedFirebaseSession(uid, binding.wallet, connectedWallet);
-              return;
-            }
-            retryCount = 0;
-            clearRetryTimer();
-            setError(null);
-            activateOwner(binding.wallet, token, uid);
-            setSessionResolution('settled');
-          },
-          error: (sessionError) => {
-            if (!isCurrentContext() || generation !== subscriptionGeneration) return;
-            subscriptionGeneration += 1;
-            unsubscribeSession();
-            unsubscribeSession = () => {};
-            if (scheduleRetry(sessionError, () => subscribe(uid, token))) return;
-            invalidateBinding(errorMessage(sessionError, 'Unable to validate wallet session'));
-          },
-        });
-        if (isCurrentContext() && generation === subscriptionGeneration) {
-          unsubscribeSession = unsubscribe;
-        }
-        else unsubscribe();
-      } catch (sessionError) {
-        if (!isCurrentContext() || generation !== subscriptionGeneration) return;
-        subscriptionGeneration += 1;
-        if (scheduleRetry(sessionError, () => subscribe(uid, token))) return;
-        invalidateBinding(errorMessage(sessionError, 'Unable to validate wallet session'));
-      }
-    };
-
-    const startObservation = () => {
-      void (async () => {
-        try {
-          const uid = await runtime.ensureAuthenticated();
-          const token = await runtime.getIdToken();
-          if (!isCurrentContext()) return;
-          if (runtime.currentUid() !== uid || !token) {
-            invalidateBinding();
-            return;
-          }
-          retryCount = 0;
-          subscribe(uid, token);
-        } catch (sessionError) {
-          if (!isCurrentContext()) return;
-          if (scheduleRetry(sessionError, startObservation)) return;
-          invalidateBinding(errorMessage(sessionError, 'Unable to validate wallet session'));
-        }
-      })();
-    };
-    startObservation();
-
-    return () => {
-      cancelled = true;
-      subscriptionGeneration += 1;
-      clearRetryTimer();
-      unsubscribeSession();
-    };
-  }, [
-    activateOwner,
-    authUserRevision,
-    connectedWallet,
-    deactivateOwner,
-    endMismatchedFirebaseSession,
-    runtime,
-    sessionListenerRevision,
-  ]);
-
-  useEffect(() => {
-    const sessionWallet = state.sessionWallet;
-    const allowDisconnected = !connectedWallet;
-    if (!sessionWallet || (connectedWallet !== sessionWallet && !allowDisconnected)) return;
-    const wallet = sessionWallet;
-    const ownerGeneration = ownerGenerationRef.current;
-    let cancelled = false;
-    const isCurrent = () =>
-      !cancelled && profileListenerIsCurrent({
-        expectedWallet: wallet,
-        expectedEpoch: ownerGeneration,
-        currentWallet: sessionWalletRef.current,
-        currentEpoch: ownerGenerationRef.current,
-        connectedWallet: connectedWalletRef.current,
-        allowDisconnected,
-      });
-    const invalidateFromListener = (listenerError: unknown) => {
-      if (!isCurrent() || !firestoreErrorInvalidatesSession(listenerError)) return false;
-      deactivateOwner(false);
-      setError(errorMessage(listenerError, 'Wallet session is no longer authorized'));
-      return true;
-    };
-    const attachRetriableListener = <T,>(
-      listen: (handlers: SnapshotHandlers<T>) => () => void,
-      handlers: SnapshotHandlers<T>,
-    ) => {
-      let unsubscribe = () => {};
-      let retryTimer: unknown = null;
-      let retryCount = 0;
-      let generation = 0;
-      const clearRetryTimer = () => {
-        if (retryTimer === null) return;
-        runtime.clearTimer(retryTimer);
-        retryTimer = null;
-      };
-      const reportFailure = (listenerError: unknown) => {
-        if (!isCurrent() || invalidateFromListener(listenerError)) return;
-        handlers.error(listenerError);
-        if (!firestoreListenerErrorIsRetryable(listenerError)) return;
-        const delay = retryDelay(PERSISTENT_RETRY_DELAYS_MS, retryCount);
-        retryCount += 1;
-        clearRetryTimer();
-        retryTimer = runtime.setTimer(() => {
-          retryTimer = null;
-          subscribe();
-        }, delay);
-      };
-      const subscribe = () => {
-        if (!isCurrent()) return;
-        clearRetryTimer();
-        unsubscribe();
-        unsubscribe = () => {};
-        const activeGeneration = generation + 1;
-        generation = activeGeneration;
-        try {
-          const nextUnsubscribe = listen({
-            next: (update) => {
-              if (!isCurrent() || generation !== activeGeneration) return;
-              if (snapshotIsAuthoritative(update)) retryCount = 0;
-              handlers.next(update);
-            },
-            error: (listenerError) => {
-              if (!isCurrent() || generation !== activeGeneration) return;
-              generation += 1;
-              unsubscribe();
-              unsubscribe = () => {};
-              reportFailure(listenerError);
-            },
-          });
-          if (isCurrent() && generation === activeGeneration) unsubscribe = nextUnsubscribe;
-          else nextUnsubscribe();
-        } catch (listenerError) {
-          if (!isCurrent() || generation !== activeGeneration) return;
-          generation += 1;
-          reportFailure(listenerError);
-        }
-      };
-      subscribe();
-      return () => {
-        generation += 1;
-        clearRetryTimer();
-        unsubscribe();
-      };
-    };
-
-    const unsubscribeProfile = attachRetriableListener<Profile>(
-      (handlers) => runtime.listenToProfile(wallet, handlers),
-      {
-        next: (update) => {
-          const authoritative = snapshotIsAuthoritative(update);
-          setState((current) =>
-            current.sessionWallet === wallet
-              ? {
-                  ...current,
-                  profile: update.value,
-                  ...(authoritative ? { profileReady: true, profileError: null } : {}),
-                }
-              : current,
-          );
-        },
-        error: (snapshotError) => {
-          setState((current) =>
-            current.sessionWallet === wallet
-              ? {
-                  ...current,
-                  profileReady: false,
-                  profileError: errorMessage(snapshotError, 'Unable to load profile'),
-                }
-              : current,
-          );
-        },
-      },
-    );
-
-    let shipmentServerSyncTimer: unknown = null;
-    let shipmentServerSyncTimerAt: number | null = null;
-    let shipmentServerSyncInFlight = false;
-    let shipmentServerSyncGeneration = 0;
-    let shipmentServerSyncRetryCount = 0;
-    let shipmentListenerAuthoritative = false;
-    let shipmentProjectionValidated = false;
-    let listenerShipments: DeliveryOrderSummary[] | null = null;
-    let listenerBaselineAtServerSync: DeliveryOrderSummary[] = [];
-    let serverShipments: DeliveryOrderSummary[] | null = null;
-    let displayedShipments = state.shipments;
-    const clearShipmentServerSyncTimer = () => {
-      if (shipmentServerSyncTimer === null) return;
-      runtime.clearTimer(shipmentServerSyncTimer);
-      shipmentServerSyncTimer = null;
-      shipmentServerSyncTimerAt = null;
-    };
-    const applyShipments = (update: SnapshotUpdate<DeliveryOrderSummary[]>) => {
-      const authoritative = snapshotIsAuthoritative(update);
-      const shipments = shipmentsInDisplayOrder(update.value);
-      const listenerChanged = listenerShipments === null
-        ? !deliveryOrderSummariesEqual(displayedShipments, shipments)
-        : !deliveryOrderSummariesEqual(listenerShipments, shipments);
-      const changed = !deliveryOrderSummariesEqual(displayedShipments, shipments);
-      const authorityChanged = shipmentListenerAuthoritative !== authoritative;
-      shipmentListenerAuthoritative = authoritative;
-      listenerShipments = shipments;
-      if (listenerChanged || authorityChanged) {
-        shipmentProjectionValidated = false;
-      }
-      if (listenerChanged) {
-        shipmentServerSyncGeneration += 1;
-        shipmentServerSyncRetryCount = 0;
-      }
-
-      if (
-        serverShipments !== null &&
-        !deliveryOrderSummariesEqual(serverShipments, shipments)
-      ) {
-        const displayShipments = mergeShipmentsForDisplay({
-          serverShipments,
-          listenerShipments: shipments,
-          listenerBaseline: listenerBaselineAtServerSync,
-          listenerAuthoritative: authoritative,
-        });
-        const displayReady = authoritative || deliveryOrderSummariesEqual(
-          displayShipments,
-          serverShipments,
-        );
-        displayedShipments = displayShipments;
-        if (listenerChanged || authorityChanged) {
-          scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
-        } else {
-          scheduleShipmentServerSync(
-            authoritative
-              ? SHIPMENT_SERVER_VALIDATION_DELAY_MS
-              : SHIPMENT_SERVER_REFRESH_DELAY_MS,
-          );
-        }
-        setState((current) => {
-          if (
-            current.sessionWallet !== wallet ||
-            (
-              current.shipmentsReady === displayReady &&
-              current.shipmentsError === null &&
-              deliveryOrderSummariesEqual(current.shipments, displayShipments)
-            )
-          ) {
-            return current;
-          }
-          return {
-            ...current,
-            shipments: displayShipments,
-            shipmentsReady: displayReady,
-            shipmentsError: null,
-          };
-        });
-        return;
-      }
-
-      displayedShipments = shipments;
-      if (shipmentProjectionValidated) {
-        shipmentServerSyncRetryCount = 0;
-        scheduleShipmentServerSync(SHIPMENT_SERVER_HEALTHY_VALIDATION_DELAY_MS);
-      } else if (listenerChanged || authorityChanged) {
-        scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
-      }
-      setState((current) => {
-        if (current.sessionWallet !== wallet) return current;
-        const shipmentsReady = authoritative
-          ? true
-          : changed
-            ? false
-            : current.shipmentsReady;
-        const shipmentsError = authoritative ? null : current.shipmentsError;
-        if (
-          current.shipmentsReady === shipmentsReady &&
-          current.shipmentsError === shipmentsError &&
-          deliveryOrderSummariesEqual(current.shipments, shipments)
-        ) {
-          return current;
-        }
-        return {
-          ...current,
-          shipments,
-          shipmentsReady,
-          shipmentsError,
-        };
-      });
-    };
-    const reportShipmentFailure = (snapshotError: unknown) => {
-      const shipmentsError = errorMessage(snapshotError, 'Unable to load shipments');
-      setState((current) => {
-        if (
-          current.sessionWallet !== wallet ||
-          (!current.shipmentsReady && current.shipmentsError === shipmentsError)
-        ) {
-          return current;
-        }
-        return { ...current, shipmentsReady: false, shipmentsError };
-      });
-    };
-    const unsubscribeShipments = isCurrent()
-      ? attachRetriableListener<DeliveryOrderSummary[]>(
-          (handlers) => runtime.listenToProfileShipments(wallet, handlers),
-          {
-            next: applyShipments,
-            error: (snapshotError) => {
-              shipmentListenerAuthoritative = false;
-              shipmentProjectionValidated = false;
-              reportShipmentFailure(snapshotError);
-              scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
-            },
-          },
-        )
-      : () => {};
-    function scheduleShipmentServerSync(delay: number) {
-      const requestedAt = runtime.now() + delay;
-      if (
-        !isCurrent() ||
-        shipmentServerSyncInFlight ||
-        (shipmentServerSyncTimerAt !== null && shipmentServerSyncTimerAt <= requestedAt)
-      ) {
-        return;
-      }
-      clearShipmentServerSyncTimer();
-      shipmentServerSyncTimerAt = requestedAt;
-      shipmentServerSyncTimer = runtime.setTimer(syncShipmentsFromServer, delay);
-    }
-    function syncShipmentsFromServer() {
-      shipmentServerSyncTimer = null;
-      shipmentServerSyncTimerAt = null;
-      if (!isCurrent()) return;
-      const requestGeneration = shipmentServerSyncGeneration + 1;
-      shipmentServerSyncGeneration = requestGeneration;
-      shipmentServerSyncInFlight = true;
-      void runtime.loadProfileShipmentsFromServer(wallet).then(
-        (shipments) => {
-          shipmentServerSyncInFlight = false;
-          if (!isCurrent()) return;
-          if (shipmentServerSyncGeneration !== requestGeneration) {
-            scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
-            return;
-          }
-          const orderedShipments = shipmentsInDisplayOrder(shipments);
-          serverShipments = orderedShipments;
-          listenerBaselineAtServerSync = listenerShipments ?? [];
-          displayedShipments = orderedShipments;
-          shipmentServerSyncRetryCount = 0;
-          shipmentProjectionValidated = Boolean(
-            shipmentListenerAuthoritative &&
-            listenerShipments &&
-            deliveryOrderSummariesEqual(listenerShipments, orderedShipments),
-          );
-          setState((current) => {
-            if (current.sessionWallet !== wallet) return current;
-            if (
-              current.shipmentsReady &&
-              current.shipmentsError === null &&
-              deliveryOrderSummariesEqual(current.shipments, orderedShipments)
-            ) {
-              return current;
-            }
-            return {
-              ...current,
-              shipments: orderedShipments,
-              shipmentsReady: true,
-              shipmentsError: null,
-            };
-          });
-          scheduleShipmentServerSync(
-            shipmentProjectionValidated
-              ? SHIPMENT_SERVER_HEALTHY_VALIDATION_DELAY_MS
-              : shipmentListenerAuthoritative
-                ? SHIPMENT_SERVER_VALIDATION_DELAY_MS
-                : SHIPMENT_SERVER_REFRESH_DELAY_MS,
-          );
-        },
-        (snapshotError) => {
-          shipmentServerSyncInFlight = false;
-          if (!isCurrent()) return;
-          if (shipmentServerSyncGeneration !== requestGeneration) {
-            scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
-            return;
-          }
-          const callableCode = normalizeCallableErrorCode(
-            (snapshotError as { code?: unknown } | null)?.code,
-          );
-          if (callableCode === 'unauthenticated') {
-            contextGenerationRef.current += 1;
-            deactivateOwner(true);
-            setError(null);
-            setSessionResolution('resolving');
-            setSessionListenerRevision((revision) => revision + 1);
-            return;
-          }
-          if (shipmentProjectionValidated) {
-            scheduleShipmentServerSync(SHIPMENT_SERVER_HEALTHY_VALIDATION_DELAY_MS);
-            return;
-          }
-          if (
-            isRetryableCallableError(snapshotError) ||
-            firestoreListenerErrorIsRetryable(snapshotError)
-          ) {
-            const delay = retryDelay(SHIPMENT_SERVER_RETRY_DELAYS_MS, shipmentServerSyncRetryCount);
-            shipmentServerSyncRetryCount += 1;
-            if (delay === SHIPMENT_SERVER_REFRESH_DELAY_MS && !shipmentListenerAuthoritative) {
-              reportShipmentFailure(snapshotError);
-            }
-            scheduleShipmentServerSync(delay);
-            return;
-          }
-          shipmentServerSyncRetryCount = 0;
-          if (!shipmentListenerAuthoritative) reportShipmentFailure(snapshotError);
-          scheduleShipmentServerSync(SHIPMENT_SERVER_REFRESH_DELAY_MS);
-        },
-      );
-    }
-    scheduleShipmentServerSync(SHIPMENT_SERVER_SYNC_DELAY_MS);
-
-    let reconcileRetryTimer: unknown = null;
-    let reconcileRetryCount = 0;
-    const clearReconcileRetryTimer = () => {
-      if (reconcileRetryTimer === null) return;
-      runtime.clearTimer(reconcileRetryTimer);
-      reconcileRetryTimer = null;
-    };
-    const reconcileWhenCurrent = () => {
-      if (!isCurrent()) return;
-      clearReconcileRetryTimer();
       void reconcileProfile()
         .then(() => {
-          reconcileRetryCount = 0;
+          retryCount = 0;
         })
         .catch((reconcileError) => {
-          if (!isCurrent()) return;
+          if (cancelled) return;
           if (!isRetryableCallableError(reconcileError)) {
             console.warn('[mons] failed to reconcile profile state', reconcileError);
             return;
           }
-          const delay = retryDelay(PERSISTENT_RETRY_DELAYS_MS, reconcileRetryCount);
-          reconcileRetryCount += 1;
-          reconcileRetryTimer = runtime.setTimer(reconcileWhenCurrent, delay);
+          const delay = retryDelay(PERSISTENT_RETRY_DELAYS_MS, retryCount);
+          retryCount += 1;
+          retryTimer = runtime.setTimer(run, delay);
         });
     };
-    reconcileWhenCurrent();
-
+    run();
     return () => {
       cancelled = true;
-      clearReconcileRetryTimer();
-      clearShipmentServerSyncTimer();
-      unsubscribeProfile();
-      unsubscribeShipments();
+      clearRetryTimer();
     };
-  }, [
-    connectedWallet,
-    deactivateOwner,
-    reconcileProfile,
-    runtime,
-    state.sessionWallet,
-  ]);
+  }, [connectedWallet, reconcileProfile, runtime, state.sessionWallet]);
 
   const signIn = useCallback((): Promise<SignInResult> => {
     if (!mountedRef.current) {
@@ -961,31 +599,20 @@ export function useSolanaAuthWithRuntime(
     }
     if (!publicKey) return Promise.reject(new Error('Connect a wallet first'));
     if (!signMessage) return Promise.reject(new Error('Wallet cannot sign messages'));
-
     const wallet = publicKey.toBase58();
     const contextGeneration = contextGenerationRef.current;
     const existingAttempt = signInAttemptRef.current;
-    if (
-      existingAttempt?.wallet === wallet &&
-      existingAttempt.contextGeneration === contextGeneration
-    ) {
+    if (existingAttempt?.wallet === wallet && existingAttempt.contextGeneration === contextGeneration) {
       return existingAttempt.promise;
     }
-
     let resolveAttempt!: (result: SignInResult) => void;
     let rejectAttempt!: (error: unknown) => void;
     const promise = new Promise<SignInResult>((resolve, reject) => {
       resolveAttempt = resolve;
       rejectAttempt = reject;
     });
-    const attempt: SignInAttempt = {
-      wallet,
-      contextGeneration,
-      uid: null,
-      promise,
-    };
+    const attempt: SignInAttempt = { wallet, contextGeneration, uid: null, promise };
     signInAttemptRef.current = attempt;
-
     const attemptIsCurrent = () => signInAttemptRef.current === attempt;
     const ensureAttemptCurrent = () => {
       if (!attempt.uid || runtime.currentUid() !== attempt.uid) {
@@ -1004,7 +631,6 @@ export function useSolanaAuthWithRuntime(
       (walletChangedError as Error & { code?: string }).code = 'wallet-changed';
       throw walletChangedError;
     };
-
     setState((current) => ({ ...current, loading: true }));
     setError(null);
     void (async () => {
@@ -1012,18 +638,12 @@ export function useSolanaAuthWithRuntime(
         const uid = await runtime.ensureAuthenticated();
         attempt.uid = uid;
         ensureAttemptCurrent();
-
         const reuseWindowMs = 2 * 60 * 1000;
         const cached = lastSignedRef.current;
         const now = runtime.now();
         let message: string;
         let signature: Uint8Array;
-        if (
-          cached &&
-          cached.wallet === wallet &&
-          cached.uid === uid &&
-          now - cached.createdAt <= reuseWindowMs
-        ) {
+        if (cached && cached.wallet === wallet && cached.uid === uid && now - cached.createdAt <= reuseWindowMs) {
           ({ message, signature } = cached);
         } else {
           message = buildSignInMessage(wallet, uid);
@@ -1031,15 +651,13 @@ export function useSolanaAuthWithRuntime(
           ensureAttemptCurrent();
           lastSignedRef.current = { wallet, uid, message, signature, createdAt: now };
         }
-
         const session = await retryWithBackoff(
-          () =>
-            authenticateWalletInOrder(uid, async () => {
-              ensureAttemptCurrent();
-              const response = await runtime.authenticateWallet(wallet, message, signature);
-              ensureAttemptCurrent();
-              return response;
-            }),
+          () => authenticateWalletInOrder(uid, async () => {
+            ensureAttemptCurrent();
+            const response = await runtime.authenticateWallet(wallet, message, signature);
+            ensureAttemptCurrent();
+            return response;
+          }),
           {
             maxAttempts: 4,
             baseDelayMs: 400,
@@ -1051,17 +669,14 @@ export function useSolanaAuthWithRuntime(
             },
           },
         );
-        if (session.wallet !== wallet) {
-          throw new Error('Wallet session response did not match the connected wallet');
-        }
-
+        if (session.wallet !== wallet) throw new Error('Wallet session response did not match the connected wallet');
         const token = await runtime.getIdToken();
         ensureAttemptCurrent();
         if (!token) throw new Error('Missing Firebase auth token');
         setError(null);
-        activateOwner(wallet, token, attempt.uid);
+        activateOwner(wallet, token, uid);
         setSessionResolution('settled');
-        setSessionListenerRevision((revision) => revision + 1);
+        await refreshProfileState().catch(() => undefined);
         resolveAttempt({ wallet, token });
       } catch (signInError) {
         console.error(signInError);
@@ -1071,13 +686,8 @@ export function useSolanaAuthWithRuntime(
           attemptIsCurrent() &&
           contextGenerationRef.current === contextGeneration &&
           connectedWalletRef.current === wallet;
-        if (attemptStillOwnsContext) {
-          setState((current) => ({ ...current, loading: false }));
-        }
-        if (
-          attemptStillOwnsContext &&
-          (signInError as { code?: string } | null)?.code !== 'wallet-changed'
-        ) {
+        if (attemptStillOwnsContext) setState((current) => ({ ...current, loading: false }));
+        if (attemptStillOwnsContext && errorCode(signInError) !== 'wallet-changed') {
           setError(errorMessage(signInError, 'Failed to sign in'));
         }
         rejectAttempt(signInError);
@@ -1085,14 +695,14 @@ export function useSolanaAuthWithRuntime(
         if (attemptIsCurrent()) signInAttemptRef.current = null;
       }
     })();
-
     return promise;
-  }, [activateOwner, publicKey, runtime, signMessage]);
+  }, [activateOwner, publicKey, refreshProfileState, runtime, signMessage]);
 
   const signOut = useCallback(async () => {
     contextGenerationRef.current += 1;
     clearMismatchSignOutTimer();
     mismatchSignOutRef.current = null;
+    refreshRunRef.current = null;
     deactivateOwner(false);
     setError(null);
     lastSignedRef.current = null;
@@ -1100,12 +710,9 @@ export function useSolanaAuthWithRuntime(
   }, [clearMismatchSignOutTimer, deactivateOwner, runtime]);
 
   const hasAuthenticatedWalletSession = useCallback(
-    (wallet: string | null | undefined) =>
-      Boolean(
-        wallet &&
-          sessionWalletRef.current === wallet &&
-          sessionUidRef.current === firebaseUidRef.current,
-      ),
+    (wallet: string | null | undefined) => Boolean(
+      wallet && sessionWalletRef.current === wallet && sessionUidRef.current === firebaseUidRef.current,
+    ),
     [],
   );
 
@@ -1125,6 +732,7 @@ export function useSolanaAuthWithRuntime(
     signIn,
     signOut,
     reconcileProfile,
+    refreshProfileState,
     beginDeliveryRecoveryScheduleUpdate,
     hasAuthenticatedWalletSession,
   };

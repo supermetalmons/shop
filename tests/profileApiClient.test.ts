@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import test from 'node:test';
 import { profileApiTestHooks } from '../src/lib/api.ts';
 
@@ -89,6 +89,102 @@ test('profile API client summary validator accepts only exact shipment summaries
   assert.equal(profileApiTestHooks.profileOrders({}), null);
 });
 
+test('profile state client sends an exact authenticated request and validates independent sections', async () => {
+  const payload = await profileApiTestHooks.requestProfileApi(
+    '/profile/state',
+    {},
+    {
+      fetch: async (input, init) => {
+        assert.equal(String(input), 'https://api.mons.shop/profile/state');
+        assert.equal(init?.method, 'POST');
+        assert.deepEqual(JSON.parse(String(init?.body)), {});
+        return Response.json({
+          responseMode: 'profile-state',
+          sessionWallet: OWNER,
+          profile: { status: 'ready', value: { wallet: OWNER, email: 'owner@example.com' } },
+          shipments: { status: 'error', error: { code: 'unavailable', message: 'Shipments unavailable.' } },
+        });
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1000,
+    },
+  );
+  assert.deepEqual(profileApiTestHooks.parseProfileState(payload), payload);
+});
+
+test('profile API retries one 401 with a fresh token and then fails terminally', async () => {
+  const refreshes: boolean[] = [];
+  let calls = 0;
+  await assert.rejects(
+    profileApiTestHooks.requestProfileApi('/profile/state', {}, {
+      fetch: async () => {
+        calls += 1;
+        return Response.json({
+          ok: false,
+          error: { code: 'unauthenticated', message: 'Authentication is required.' },
+        }, { status: 401 });
+      },
+      getToken: async (forceRefresh) => {
+        refreshes.push(forceRefresh);
+        return forceRefresh ? 'fresh-token' : 'cached-token';
+      },
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1000,
+    }),
+    (error) => (error as { code?: unknown }).code === 'unauthenticated',
+  );
+  assert.equal(calls, 2);
+  assert.deepEqual(refreshes, [false, true]);
+});
+
+test('profile state validator rejects mismatches, malformed summaries, and extra data', () => {
+  const valid = {
+    responseMode: 'profile-state',
+    sessionWallet: OWNER,
+    profile: { status: 'ready', value: { wallet: OWNER } },
+    shipments: { status: 'ready', value: [] },
+  };
+  assert.deepEqual(profileApiTestHooks.parseProfileState(valid), valid);
+  assert.deepEqual(profileApiTestHooks.parseProfileState({
+    responseMode: 'profile-state',
+    sessionWallet: null,
+    profile: null,
+    shipments: null,
+  }), {
+    responseMode: 'profile-state',
+    sessionWallet: null,
+    profile: null,
+    shipments: null,
+  });
+  assert.equal(profileApiTestHooks.parseProfileState({
+    ...valid,
+    profile: { status: 'ready', value: { wallet: 'So11111111111111111111111111111111111111112' } },
+  }), null);
+  assert.equal(profileApiTestHooks.parseProfileState({
+    ...valid,
+    shipments: { status: 'ready', value: [{ dropId: 'drop', deliveryId: 0, status: 'processing', items: [] }] },
+  }), null);
+  assert.equal(profileApiTestHooks.parseProfileState({
+    ...valid,
+    shipments: {
+      status: 'ready',
+      value: [{ dropId: 'drop', deliveryId: 1, status: 'processing', items: [], claimCode: 'secret' }],
+    },
+  }), null);
+  assert.equal(profileApiTestHooks.parseProfileState({
+    ...valid,
+    profile: { status: 'ready', value: { wallet: OWNER, email: ' owner@example.com ' } },
+  }), null);
+  assert.equal(profileApiTestHooks.parseProfileState({ ...valid, private: true }), null);
+  assert.equal(profileApiTestHooks.parseProfileState({
+    responseMode: 'profile-state',
+    sessionWallet: null,
+    profile: { status: 'ready', value: { wallet: OWNER } },
+    shipments: null,
+  }), null);
+});
+
 test('migrated profile reads are absent from Firebase exports and deployment selection', () => {
   const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
   const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
@@ -96,4 +192,15 @@ test('migrated profile reads are absent from Firebase exports and deployment sel
     assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
     assert.doesNotMatch(packageJson, new RegExp(`functions:${name}(?:,|\\\")`));
   }
+});
+
+test('browser source has no direct Firestore data access', () => {
+  const sourceRoot = new URL('../src/', import.meta.url);
+  const files = (directory: URL): URL[] => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const child = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory);
+    return entry.isDirectory() ? files(child) : statSync(child).isFile() && /\.[cm]?[jt]sx?$/.test(entry.name) ? [child] : [];
+  });
+  const source = files(sourceRoot).map((file) => readFileSync(file, 'utf8')).join('\n');
+  assert.doesNotMatch(source, /from\s+['"]firebase\/firestore['"]/);
+  assert.doesNotMatch(source, /\bgetFirestore\s*\(/);
 });

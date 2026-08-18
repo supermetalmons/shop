@@ -18,7 +18,7 @@ import {
   walletSessionSignInReadiness,
   type WalletScopedSerialRun,
 } from '../src/lib/profileClientLifecycle.ts';
-import { stripeProfileRecoveryAfterSnapshot } from '../src/lib/profileFirestore.ts';
+import { stripeProfileRecoveryAfterRefresh } from '../src/lib/profileState.ts';
 
 function deferred() {
   let resolve!: () => void;
@@ -510,9 +510,9 @@ test('only authoritative shipment snapshots prove Stripe recovery', () => {
   assert.equal(authoritativeMatch, true);
   for (const phase of ['pending', 'fallback'] as const) {
     const current = { key: recoveryKey, phase };
-    assert.equal(stripeProfileRecoveryAfterSnapshot(current, recoveryKey, cachedMatch), current);
+    assert.equal(stripeProfileRecoveryAfterRefresh(current, recoveryKey, cachedMatch), current);
     assert.deepEqual(
-      stripeProfileRecoveryAfterSnapshot(current, recoveryKey, authoritativeMatch),
+      stripeProfileRecoveryAfterRefresh(current, recoveryKey, authoritativeMatch),
       { key: recoveryKey, phase: 'recovered' },
     );
   }
