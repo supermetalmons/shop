@@ -630,14 +630,14 @@ async function fetchSmoke(
   label: string,
   timeoutMs = DEFAULT_SMOKE_TIMEOUT_MS,
 ): Promise<{ response: Response; durationMs: number }> {
-  for (const delay of [0, 500, 1500]) {
+  for (const delay of [0, 500, 1500, 3000]) {
     if (delay) await new Promise((resolvePromise) => setTimeout(resolvePromise, delay));
     const startedAt = performance.now();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(url, { ...init, redirect: 'manual', signal: controller.signal });
-      if ((response.status === 404 || response.status === 502 || response.status === 504) && delay !== 1500) {
+      if ((response.status === 404 || response.status === 502 || response.status === 504) && delay !== 3000) {
         await response.body?.cancel().catch(() => undefined);
         continue;
       }
@@ -649,7 +649,7 @@ async function fetchSmoke(
       });
       return { response: bufferedResponse, durationMs: performance.now() - startedAt };
     } catch {
-      if (delay === 1500) fail(`${label} failed after bounded retries.`);
+      if (delay === 3000) fail(`${label} failed after bounded retries.`);
     } finally {
       clearTimeout(timeout);
     }
