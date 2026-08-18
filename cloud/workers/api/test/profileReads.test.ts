@@ -147,6 +147,13 @@ test('Firebase token verifier validates claims, signatures, and certificate cach
   assert.deepEqual(await verifier(`Bearer ${token}`, providerFetch, new AbortController().signal, NOW_MS + 1000), { uid: UID });
   assert.equal(certificateFetches, 1);
 
+  const unknownKid = await signedFirebaseToken({ privateKey: signing.privateKey, kid: 'unknown-kid' });
+  await assert.rejects(
+    verifier(`Bearer ${unknownKid}`, providerFetch, new AbortController().signal, NOW_MS + 2000),
+    (error) => error instanceof FirebaseIdTokenError && error.kind === 'invalid-token',
+  );
+  assert.equal(certificateFetches, 1);
+
   for (const invalidToken of [
     await signedFirebaseToken({ privateKey: other.privateKey }),
     await signedFirebaseToken({ privateKey: signing.privateKey, audience: 'other-project' }),

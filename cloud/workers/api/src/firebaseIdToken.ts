@@ -179,7 +179,7 @@ export function createFirebaseIdTokenVerifier(
     if (protectedHeader.alg !== 'RS256' || typeof protectedHeader.kid !== 'string' || !protectedHeader.kid) {
       throw new FirebaseIdTokenError('invalid-token');
     }
-    if (cache.expiresAtMs <= nowMs || !cache.certificates.has(protectedHeader.kid)) {
+    if (cache.expiresAtMs <= nowMs) {
       await refreshCertificates(providerFetch, signal, nowMs);
     }
     const certificate = cache.certificates.get(protectedHeader.kid);
