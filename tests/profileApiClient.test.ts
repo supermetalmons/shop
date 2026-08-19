@@ -206,6 +206,39 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/order-address'), 20_000);
 });
 
+test('Stripe checkout uses the authenticated Cloudflare route with an exact response contract', async () => {
+  const payload = await profileApiTestHooks.requestProfileApi(
+    '/checkout/session',
+    { dropId: 'card_nft_binder_devnet', quantity: 1, returnUrl: 'https://mons.shop/drop' },
+    {
+      fetch: async (input, init) => {
+        assert.equal(String(input), 'https://api.mons.shop/checkout/session');
+        assert.equal(init?.method, 'POST');
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        return Response.json({
+          id: 'cs_test_123',
+          url: 'https://checkout.stripe.com/c/pay/test',
+          livemode: false,
+        });
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1000,
+    },
+  );
+  assert.deepEqual(profileApiTestHooks.parseStripeCheckoutSessionResponse(payload), payload);
+  assert.equal(profileApiTestHooks.parseStripeCheckoutSessionResponse({ ...payload as object, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseStripeCheckoutSessionResponse({ ...payload as object, livemode: 'false' }), null);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/checkout/session'), 35_000);
+
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function createStripeCheckoutSession');
+  const end = source.indexOf('\nexport ', start + 1);
+  const implementation = source.slice(start, end === -1 ? source.length : end);
+  assert.match(implementation, /\/checkout\/session/);
+  assert.doesNotMatch(implementation, /callFunction|httpsCallable|createStripeCheckoutSession['"]/);
+});
+
 test('migrated write response validators accept only exact public contracts', () => {
   const shipment = {
     deliveryId: 7,
@@ -508,6 +541,19 @@ test('migrated profile reads are absent from Firebase exports and deployment sel
     assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
     assert.doesNotMatch(packageJson, new RegExp(`functions:${name}(?:,|\\\")`));
   }
+});
+
+test('Stripe checkout callable is absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts: Record<string, string>;
+  };
+  assert.doesNotMatch(functionsSource, /export const createStripeCheckoutSession\b/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:createStripeCheckoutSession(?:,|$)/);
+  assert.equal(
+    packageJson.scripts['decommission:firebase-create-stripe-checkout-session'],
+    'firebase functions:delete createStripeCheckoutSession --project mons-shop --region us-central1 --force',
+  );
 });
 
 test('migrated profile writes are absent from Firebase exports and deployment selection', () => {

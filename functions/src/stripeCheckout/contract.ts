@@ -1,6 +1,5 @@
 import { createHash, randomInt } from 'crypto';
 import { PublicKey } from '@solana/web3.js';
-import type { MintSelectionConfig } from '../config/deployment.js';
 import { normalizeCountryCode } from '../normalizers.js';
 import {
   normalizeStripeReceiptClaimCode,
@@ -13,6 +12,14 @@ import {
   STRIPE_UNIT_AMOUNT_CENTS_MAX,
   STRIPE_UNIT_AMOUNT_CENTS_MIN,
 } from '../shared/stripeCheckoutCore.js';
+import {
+  STRIPE_CHECKOUT_STATUS,
+  STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
+  STRIPE_OFFCHAIN_CURRENCY,
+  STRIPE_OFFCHAIN_FULFILLMENT_MODE,
+  normalizeStripeCheckoutQuantity,
+  stripeCheckoutShippingCountriesForDropFamily,
+} from '../shared/stripeCheckoutSession.js';
 export {
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
@@ -22,106 +29,28 @@ export {
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
   isReceiptClaimDeliveryOrderSource,
 } from '../shared/fulfillmentSources.js';
+export {
+  STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES,
+  STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+  STRIPE_CHECKOUT_SHIPPING_COUNTRY,
+  STRIPE_CHECKOUT_STATUS,
+  STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
+  STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
+  STRIPE_OFFCHAIN_CURRENCY,
+  STRIPE_OFFCHAIN_FULFILLMENT_MODE,
+  buildStripeCheckoutDocument,
+  buildStripeCheckoutSessionMetadata,
+  normalizeStripeCheckoutQuantity,
+  resolveMintSelectionVariantIndex,
+  stripeCheckoutOwnerId,
+} from '../shared/stripeCheckoutSession.js';
 export { stripeAssignedIrlClaimForBox } from '../cardAssignment.js';
 
 const ADMIN_ORDER_SEED = 'admin_order';
 export const IX_ADMIN_DELIVER_VARIANT_ORDER = Buffer.from('bf80de4f9c1a0722', 'hex');
 export const ACCOUNT_ADMIN_DELIVERY_ORDER = Buffer.from('cde7b3967ff802f4', 'hex');
 const ADMIN_DELIVERY_ORDER_RECORD_SIZE = 8 + 32 + 1 + 1 + 4 + 32 + 8 + 1;
-export const STRIPE_OFFCHAIN_FULFILLMENT_MODE = 'admin_variant_receipt';
-export const STRIPE_OFFCHAIN_CURRENCY = 'usd';
-export const STRIPE_OFFCHAIN_CHECKOUT_QUANTITY = 1;
-export const STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY = 15;
-export const STRIPE_CHECKOUT_SHIPPING_COUNTRY = 'US';
-const STRIPE_CHECKOUT_DEFAULT_SHIPPING_COUNTRIES = [STRIPE_CHECKOUT_SHIPPING_COUNTRY] as const;
-export const STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES = [
-  'AE',
-  'AM',
-  'AR',
-  'AT',
-  'AU',
-  'BE',
-  'BG',
-  'BR',
-  'CA',
-  'CH',
-  'CL',
-  'CN',
-  'CO',
-  'CR',
-  'CY',
-  'CZ',
-  'DE',
-  'DK',
-  'DO',
-  'EE',
-  'EG',
-  'ES',
-  'FI',
-  'FR',
-  'GB',
-  'GR',
-  'HK',
-  'HR',
-  'HU',
-  'ID',
-  'IE',
-  'IL',
-  'IN',
-  'IS',
-  'IT',
-  'JP',
-  'KE',
-  'KR',
-  'LT',
-  'LU',
-  'LV',
-  'MA',
-  'MX',
-  'MY',
-  'NG',
-  'NL',
-  'NO',
-  'NZ',
-  'PE',
-  'PH',
-  'PK',
-  'PL',
-  'PT',
-  'RO',
-  'SA',
-  'SE',
-  'SG',
-  'SI',
-  'SK',
-  'TH',
-  'TR',
-  'TW',
-  'UA',
-  'US',
-  'VN',
-  'ZA',
-] as const;
-
-export function stripeCheckoutShippingCountriesForDropFamily(dropFamily: unknown) {
-  return dropFamily === 'card_nft_binder'
-    ? STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES
-    : STRIPE_CHECKOUT_DEFAULT_SHIPPING_COUNTRIES;
-}
-
-export const STRIPE_CHECKOUT_OWNER_KIND_FIREBASE = 'firebase';
 export const STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE = 'stripe_receipt_v1';
-const DEFAULT_STRIPE_RETURN_URL = 'https://mons.shop';
-
-export const STRIPE_CHECKOUT_STATUS = {
-  CREATED: 'created',
-  FULFILLED: 'fulfilled',
-  PROCESSING: 'processing',
-  FULFILLMENT_PENDING: 'fulfillment_pending',
-  FULFILLMENT_FAILED: 'fulfillment_failed',
-} as const;
-
-export type OffchainMintSelectionConfig = MintSelectionConfig;
 
 export type DecodedAdminDeliveryOrderRecord = {
   orderHash: Buffer;
@@ -184,18 +113,6 @@ export type StripeOffchainDeliveryOrderDocumentInput = {
     boxId: number;
     status?: string;
   }>;
-};
-
-export type StripeCheckoutDocumentInput = {
-  dropId: string;
-  sessionId: string;
-  uid: string;
-  variantKey?: string;
-  unitAmountCents: number;
-  quantity?: number;
-  livemode?: boolean;
-  createdAt: unknown;
-  updatedAt: unknown;
 };
 
 export type StripeAddressEncryptionResult = {
@@ -287,87 +204,6 @@ export function hasPluralStripeReceiptClaims(order: any): boolean {
   return Array.isArray(order?.stripeReceiptClaims) && order.stripeReceiptClaims.length > 0;
 }
 
-function normalizedHttpOrigin(value: unknown): string {
-  const candidate = normalizedString(value);
-  if (!candidate) return '';
-  try {
-    const parsed = new URL(candidate);
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
-    return parsed.origin;
-  } catch {
-    return '';
-  }
-}
-
-function isStripeCheckoutLocalOrigin(parsed: URL): boolean {
-  const hostname = parsed.hostname.toLowerCase();
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
-}
-
-function isDefaultStripeCheckoutReturnOrigin(parsed: URL, allowLocalhost: boolean): boolean {
-  if (allowLocalhost && isStripeCheckoutLocalOrigin(parsed)) return true;
-  const hostname = parsed.hostname.toLowerCase();
-  return parsed.protocol === 'https:' && (hostname === 'mons.shop' || hostname.endsWith('.mons.shop'));
-}
-
-function isAllowedStripeCheckoutReturnOrigin(
-  parsed: URL,
-  allowedOrigins: readonly unknown[],
-  allowLocalhost: boolean,
-): boolean {
-  if (isDefaultStripeCheckoutReturnOrigin(parsed, allowLocalhost)) return true;
-  return allowedOrigins.some((origin) => normalizedHttpOrigin(origin) === parsed.origin);
-}
-
-export function normalizeStripeCheckoutReturnUrl(args: {
-  requestOrigin?: unknown;
-  rawReturnUrl?: unknown;
-  status: 'success' | 'cancel';
-  allowedOrigins?: readonly unknown[];
-  allowLocalhost?: boolean;
-}): string {
-  const requestOrigin = normalizedString(args.requestOrigin);
-  const rawReturnUrl = normalizedString(args.rawReturnUrl);
-  const candidate = rawReturnUrl || requestOrigin || DEFAULT_STRIPE_RETURN_URL;
-  const allowLocalhost = args.allowLocalhost !== false;
-  const allowedOrigins = args.allowedOrigins || [];
-
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
-    throw new Error('Invalid returnUrl');
-  }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new Error('returnUrl must be an http(s) URL');
-  }
-
-  let expectedOrigin = '';
-  if (requestOrigin) {
-    try {
-      const parsedOrigin = new URL(requestOrigin);
-      if (parsedOrigin.protocol !== 'https:' && parsedOrigin.protocol !== 'http:') {
-        throw new Error('Invalid request origin');
-      }
-      expectedOrigin = parsedOrigin.origin;
-    } catch (err) {
-      if (err instanceof Error && err.message === 'Invalid request origin') throw err;
-      throw new Error('Invalid request origin');
-    }
-  }
-
-  const allowedOrigin = isAllowedStripeCheckoutReturnOrigin(parsed, allowedOrigins, allowLocalhost);
-  if (expectedOrigin && parsed.origin !== expectedOrigin) throw new Error('returnUrl origin mismatch');
-  if (!allowedOrigin) throw new Error(expectedOrigin ? 'returnUrl origin is not allowed' : 'returnUrl origin mismatch');
-
-  parsed.searchParams.set('stripe_checkout', args.status);
-  parsed.searchParams.delete('session_id');
-  if (args.status === 'success') {
-    parsed.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
-  }
-  return parsed.toString().replace('%7BCHECKOUT_SESSION_ID%7D', '{CHECKOUT_SESSION_ID}');
-}
-
 function normalizedCurrency(value: unknown): string {
   return normalizedString(value).toLowerCase();
 }
@@ -391,15 +227,6 @@ function positiveIntegerOrNull(value: unknown): number | null {
 function integerInRangeOrNull(value: unknown, min: number, max: number): number | null {
   const numeric = integerOrNull(value);
   return numeric != null && numeric >= min && numeric <= max ? numeric : null;
-}
-
-export function normalizeStripeCheckoutQuantity(value: unknown): number {
-  if (value === undefined || value === null || value === '') return STRIPE_OFFCHAIN_CHECKOUT_QUANTITY;
-  const quantity = integerInRangeOrNull(value, 1, STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY);
-  if (quantity == null) {
-    throw new Error(`Stripe checkout quantity must be an integer from 1 to ${STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY}`);
-  }
-  return quantity;
 }
 
 function lineItemUnitAmountCents(
@@ -439,12 +266,6 @@ export function shouldProcessStripeCheckoutFulfillmentWrite(args: {
     normalizedString(args.afterStatus) === STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING &&
     (beforeStatus === STRIPE_CHECKOUT_STATUS.CREATED || beforeStatus === STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED)
   );
-}
-
-export function stripeCheckoutOwnerId(uid: string): string {
-  const normalizedUid = normalizedString(uid);
-  if (!normalizedUid) throw new Error('App-created Stripe checkout is missing uid');
-  return `${STRIPE_CHECKOUT_OWNER_KIND_FIREBASE}:${normalizedUid}`;
 }
 
 export function validateStripeCheckoutDocumentData(params: {
@@ -664,20 +485,6 @@ export function encodeAdminDeliverVariantOrderArgs(args: {
   ]);
 }
 
-export function resolveMintSelectionVariantIndex(
-  selection: OffchainMintSelectionConfig | undefined,
-  variantKey: string,
-): number {
-  const key = String(variantKey || '').trim();
-  if (!key) throw new Error('Missing variantKey');
-  if (selection?.kind !== 'size' || !Array.isArray(selection.options)) {
-    throw new Error('Drop does not use size variant minting');
-  }
-  const index = selection.options.findIndex((option) => option?.key === key);
-  if (index < 0) throw new Error('Invalid variantKey');
-  return index;
-}
-
 export function decodeAdminDeliveryOrderRecord(data: Buffer | Uint8Array): DecodedAdminDeliveryOrderRecord {
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data || []);
   if (buf.length < ADMIN_DELIVERY_ORDER_RECORD_SIZE) {
@@ -840,46 +647,6 @@ export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliv
     receiptTx: args.receiptTx,
     ...(stripeReceiptClaims.length ? { stripeReceiptClaimCodesByBoxId } : {}),
     ...(legacyStripeReceiptClaim ? { stripeReceiptClaimCode: legacyStripeReceiptClaim.code } : {}),
-  };
-}
-
-export function buildStripeCheckoutSessionMetadata(args: {
-  dropId: string;
-  uid: string;
-  variantKey?: string;
-  quantity?: number;
-}): Record<string, string> {
-  const quantity = normalizeStripeCheckoutQuantity(args.quantity);
-  const variantKey = normalizedString(args.variantKey);
-  return {
-    dropId: args.dropId,
-    uid: args.uid,
-    fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
-    placeholder: 'stripe_direct_delivery',
-    quantity: String(quantity),
-    ...(variantKey ? { variantKey } : {}),
-  };
-}
-
-export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): Record<string, unknown> {
-  const quantity = normalizeStripeCheckoutQuantity(args.quantity);
-  const variantKey = normalizedString(args.variantKey);
-  return {
-    sessionId: args.sessionId,
-    dropId: args.dropId,
-    uid: args.uid,
-    owner: stripeCheckoutOwnerId(args.uid),
-    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-    firebaseUid: args.uid,
-    ...(variantKey ? { variantKey } : {}),
-    quantity,
-    currency: STRIPE_OFFCHAIN_CURRENCY,
-    unitAmountCents: args.unitAmountCents,
-    fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
-    livemode: args.livemode === true,
-    status: STRIPE_CHECKOUT_STATUS.CREATED,
-    createdAt: args.createdAt,
-    updatedAt: args.updatedAt,
   };
 }
 

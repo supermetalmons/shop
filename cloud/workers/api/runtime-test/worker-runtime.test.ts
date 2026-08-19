@@ -65,6 +65,22 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
     assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
 
+    const checkoutPreflight = await worker.fetch('https://api.mons.shop/checkout/session', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://mons.shop' },
+    });
+    assert.equal(checkoutPreflight.status, 204);
+    assert.equal(checkoutPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+    assert.equal(checkoutPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+
+    const unauthenticatedCheckout = await worker.fetch('https://api.mons.shop/checkout/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+      body: JSON.stringify({ dropId: 'card_nft_binder_devnet' }),
+    });
+    assert.equal(unauthenticatedCheckout.status, 401);
+    assert.equal((await unauthenticatedCheckout.json() as { error: { code: string } }).error.code, 'unauthenticated');
+
     const unauthenticatedProfile = await worker.fetch('https://api.mons.shop/profile/anonymous-stripe-delivery-history', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },

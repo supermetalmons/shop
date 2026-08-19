@@ -54,6 +54,7 @@ const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const EMPTY_NEW_API_SECRET_ENV = {
   FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '',
   ADDRESS_DECRYPTION_SECRET: '',
+  COSIGNER_SECRET: '',
   SHIPSTATION_API_KEY: '',
   SHIPSTATION_SHIP_FROM: '',
   STRIPE_SECRET_KEY: '',
@@ -804,6 +805,15 @@ test('frontend deployment validates exact Worker and custom-domain targets befor
 test('API deployment validates exact Worker and custom-domain targets before mutation', () => {
   const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8')) as Record<string, unknown>;
   assert.equal(deployApiTestHooks.isExactApiDeploymentConfig(config), true);
+  assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({
+      ...config,
+      secrets: {
+        required: ((config.secrets as { required: string[] }).required).filter((name) => name !== 'COSIGNER_SECRET'),
+      },
+    }),
+    false,
+  );
   assert.equal(
     deployApiTestHooks.isExactApiDeploymentConfig({ ...config, account_id: randomUUID() }),
     false,
@@ -1629,6 +1639,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         return { response: Response.json({ subscribed: true }, { status: 200, headers }), durationMs: 1 };
       }
       if (method === 'POST' && [
+        '/checkout/session',
         '/profile/state',
         '/profile/addresses',
         '/admin/delivery-order-owners',

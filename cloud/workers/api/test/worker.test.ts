@@ -57,6 +57,7 @@ function env(options: {
     FIRESTORE_SERVICE_ACCOUNT_JSON: '',
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '',
     ADDRESS_DECRYPTION_SECRET: '',
+    COSIGNER_SECRET: '',
     SHIPSTATION_API_KEY: '',
     SHIPSTATION_SHIP_FROM: '',
     STRIPE_SECRET_KEY: '',
@@ -294,6 +295,49 @@ test('profile routes enforce restricted CORS, bearer authentication, and stable 
   assert.equal(deniedOrigin.status, 403);
   assert.equal(upstreamCalls, 0);
   assert.equal(JSON.stringify(await deniedOrigin.json()).includes('private-token'), false);
+});
+
+test('checkout route enforces restricted CORS, bearer authentication, methods, and stable logging', async () => {
+  const logs: Record<string, unknown>[] = [];
+  const allowedPreflight = await handleRequest(new Request('https://api.mons.shop/checkout/session', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), {
+    ...quietDependencies(fetch),
+    log: (entry) => logs.push(entry),
+  });
+  assert.equal(allowedPreflight.status, 204);
+  assert.equal(allowedPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+
+  const deniedPreflight = await handleRequest(new Request('https://api.mons.shop/checkout/session', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://evil.example' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(deniedPreflight.status, 403);
+
+  const unauthenticated = await handleRequest(request('/checkout/session', {
+    dropId: 'card_nft_binder_devnet',
+  }, { Origin: 'https://mons.shop' }), env(), {
+    ...quietDependencies(fetch),
+    log: (entry) => logs.push(entry),
+  });
+  assert.equal(unauthenticated.status, 401);
+  assert.deepEqual(await unauthenticated.json(), {
+    ok: false,
+    error: { code: 'unauthenticated', message: 'Authentication is required.' },
+  });
+  assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
+
+  const wrongMethod = await handleRequest(new Request('https://api.mons.shop/checkout/session', {
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
+  assert.ok(logs.some((entry) =>
+    entry.event === 'shop_api_request' &&
+    entry.route === '/checkout/session' &&
+    entry.profileAuthOutcome === 'rejected'));
 });
 
 test('profile write routes use restricted CORS, bearer authentication, and stable route logs', async () => {

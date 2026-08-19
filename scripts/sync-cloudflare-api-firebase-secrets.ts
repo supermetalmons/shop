@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 const PROJECT_ID = 'mons-shop';
 const SECRET_NAMES = [
   'ADDRESS_DECRYPTION_SECRET',
+  'COSIGNER_SECRET',
   'SHIPSTATION_API_KEY',
   'SHIPSTATION_SHIP_FROM',
   'STRIPE_SECRET_KEY',

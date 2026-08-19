@@ -49,10 +49,6 @@ export type StripeCheckoutSessionResponse = {
   livemode?: boolean;
 };
 
-export type StripeCheckoutSessionServerResponse = Omit<StripeCheckoutSessionResponse, 'livemode'> & {
-  livemode: boolean;
-};
-
 export type ProfileAddress = {
   id: string;
   country: string;

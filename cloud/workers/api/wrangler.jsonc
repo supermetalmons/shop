@@ -19,6 +19,7 @@
   "secrets": {
     "required": [
       "HELIUS_API_KEY",
+      "COSIGNER_SECRET",
       "RESEND_CONTACTS_API_KEY",
       "NOTIFICATION_ENQUEUE_SECRET",
       "FIRESTORE_SERVICE_ACCOUNT_JSON",

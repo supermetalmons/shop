@@ -59,7 +59,7 @@ Never commit the token or expose secrets through a `VITE_*` variable.
 The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_CONTACTS_API_KEY`, and
 `NOTIFICATION_ENQUEUE_SECRET` secrets, a `NOTIFICATION_EMAIL_QUEUE` producer
 binding, Smart Placement, and a version-first release flow. It serves
-`/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
+`/checkout/session`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
 `/pending-open-boxes`, authenticated profile/admin/fulfillment reads,
 `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
 responses remain uncached. Pack-status reads use the public Firestore REST API
@@ -96,7 +96,7 @@ preserved across version uploads. The Cloudflare token, Helius secret, and
 notification enqueue secret are stripped from all other child-process environment
 data and are never printed.
 
-The fulfillment routes also use `ADDRESS_DECRYPTION_SECRET`, `SHIPSTATION_API_KEY`,
+The fulfillment and checkout routes also use `ADDRESS_DECRYPTION_SECRET`, `COSIGNER_SECRET`, `SHIPSTATION_API_KEY`,
 `SHIPSTATION_SHIP_FROM`, and the four Stripe API-key secrets. Synchronize their existing Google Secret Manager values
 into an undeployed Worker version with `npm run sync:api:firebase-secrets`; the
 command uses a temporary mode-`0600` bulk file, verifies production is unchanged,
@@ -106,7 +106,8 @@ Do not run a full Functions deployment during this cutover: the source removals
 would retire the legacy callables before the frontend is ready. After the API and
 frontend releases are both verified, run
 `npm run decommission:firebase-fulfillment-callables` and
-`npm run decommission:firebase-shipstation-label-purchase`, then deploy the complete
+`npm run decommission:firebase-shipstation-label-purchase`. The checkout cutover separately uses
+`npm run decommission:firebase-create-stripe-checkout-session` immediately after its frontend verification, then deploy the complete
 Functions set with `npm run deploy:functions`.
 
 ### Notification delivery deployment
@@ -219,8 +220,9 @@ suite passes.
 
 ### Runtime env + secrets
 - `HELIUS_API_KEY` (env/runtime config)
-- `COSIGNER_SECRET` (Firebase Functions secret / Google Secret Manager; bs58 secret key for the server cosigner; must match the on-chain box minter admin)
+- `COSIGNER_SECRET` (Firebase Functions and `mons-shop-api` Worker secret / Google Secret Manager; bs58 secret key for the server cosigner; must match the on-chain box minter admin)
   - Set (recommended): `firebase functions:secrets:set COSIGNER_SECRET`
+  - Synchronize to Cloudflare with `npm run sync:api:firebase-secrets` before releasing checkout-session creation.
   - Local dev: set `COSIGNER_SECRET` in your shell (do not commit it in `.env`)
 - `STRIPE_RESTRICTED_KEY` or `STRIPE_SECRET_KEY` (Firebase Functions secret or local env; test-mode key used by devnet Checkout Sessions)
   - Set (recommended): `firebase functions:secrets:set STRIPE_RESTRICTED_KEY`

@@ -442,6 +442,7 @@ function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): Nod
       normalized.startsWith('CF_') ||
       normalized.startsWith('WRANGLER_') ||
       normalized === 'HELIUS_API_KEY' ||
+      normalized === 'COSIGNER_SECRET' ||
       normalized === 'RESEND_CONTACTS_API_KEY' ||
       normalized === 'NOTIFICATION_ENQUEUE_SECRET' ||
       normalized === 'FIRESTORE_SERVICE_ACCOUNT_JSON' ||
@@ -647,6 +648,7 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
       'FIRESTORE_SERVICE_ACCOUNT_JSON',
       'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON',
       'HELIUS_API_KEY',
+      'COSIGNER_SECRET',
       'NOTIFICATION_ENQUEUE_SECRET',
       'RESEND_CONTACTS_API_KEY',
       'ADDRESS_DECRYPTION_SECRET',
@@ -908,6 +910,7 @@ async function smokeApi(
 
   if (options.includeProfileState === true) {
     for (const [pathname, body] of [
+      ['/checkout/session', { dropId: 'card_nft_binder_devnet' }],
       ['/profile/state', {}],
       ['/profile/addresses', { encrypted: 'smoke', country: 'US', hint: 'smoke' }],
       ['/admin/delivery-order-owners', {}],

@@ -1,6 +1,6 @@
 import { randomInt } from 'crypto';
 import { FieldValue, Timestamp, type DocumentReference, type DocumentSnapshot, type Firestore } from 'firebase-admin/firestore';
-import { HttpsError, type CallableRequest } from 'firebase-functions/v2/https';
+import { HttpsError } from 'firebase-functions/v2/https';
 import {
   ComputeBudgetProgram,
   Connection,
@@ -11,14 +11,11 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import type Stripe from 'stripe';
-import { z } from 'zod';
 import type { MintSelectionConfig, SolanaCluster } from '../config/deployment.js';
 import type { DropFamily, DropSalesMode } from '../shared/deploymentCore.js';
 import { dropDeliveryOrderPath, dropRootPath } from '../dropPaths.js';
 import { countStripeIrlPackStatus, type PackStatusDropRuntime } from '../packStatus.js';
 import {
-  buildStripeCheckoutDocument,
-  buildStripeCheckoutSessionMetadata,
   buildStripeOffchainAddressSnapshot,
   buildStripeOffchainDeliveryOrderDocument,
   buildStripeOffchainOrderMarkerDocument,
@@ -27,7 +24,6 @@ import {
   encodeAdminDeliverVariantOrderArgs,
   generateUniqueStripeReceiptClaimCodes,
   isStripeOffchainFulfillmentSession,
-  normalizeStripeCheckoutReturnUrl,
   normalizeStripeCheckoutQuantity,
   resolveMintSelectionVariantIndex,
   STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
@@ -37,7 +33,6 @@ import {
   requireStripeReceiptClaimCode,
   stripeCheckoutOwnerId,
   stripeCheckoutSessionOrderHash,
-  stripeCheckoutShippingCountriesForDropFamily,
   stripeFulfillmentAddressFromSession,
   validateStripeCheckoutContract,
   validateStripeCheckoutDocumentData,
@@ -46,7 +41,6 @@ import {
   type StripeCheckoutDocumentData,
   type StripeOffchainDeliveryOrderDocumentInput,
 } from './contract.js';
-import { parseRequest } from '../request.js';
 import {
   isStripeApiKeyForMode,
   isStripeCredentialError,
@@ -58,22 +52,13 @@ import {
 import type {
   StripeCheckoutManualReviewAddress,
   StripeCheckoutManualReviewSummary as SharedStripeCheckoutManualReviewSummary,
-  StripeCheckoutSessionServerResponse,
 } from '../shared/contracts.js';
 import {
-  STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT,
-  STRIPE_UNIT_AMOUNT_CENTS_MAX,
-  STRIPE_UNIT_AMOUNT_CENTS_MIN,
-  assertStripeCheckoutQuantityForKind,
   classifyStripeCheckoutKind,
-  normalizeStripeUnitAmountCents,
-  resolveStripeCheckoutUnitAmountCents,
   stripeCheckoutModeForCluster,
   type StripeCheckoutKind as SharedStripeCheckoutKind,
 } from '../shared/stripeCheckoutCore.js';
 import { toMillisMaybe } from '../time.js';
-
-export type StripeCheckoutSessionResponse = StripeCheckoutSessionServerResponse;
 
 type StripeCheckoutSessionSnapshot = {
   id: string;
@@ -224,14 +209,6 @@ export type StripeCheckoutFlowDeps<
   connection: (dropRuntime: Runtime) => Connection;
   fetchCheckoutConfig: (params: { dropRuntime: Runtime; conn: Connection; context: string }) => Promise<Config>;
   ensureOnchainCoreConfig: (dropRuntime: Runtime) => Promise<Config>;
-  requireStripeCheckoutAvailable: (params: {
-    dropRuntime: Runtime;
-    cfg: Config;
-    checkoutKind: StripeCheckoutKind;
-    variantKey?: string;
-    quantity: number;
-  }) => void;
-  requireStripeCheckoutFulfillmentPrerequisites: (cfg: Config) => void;
   requireStripeCheckoutCollectionMatchesConfig: (
     dropRuntime: Runtime,
     cfg: Config,
@@ -468,103 +445,12 @@ export function stripeApiModeForCluster(cluster: SolanaCluster): StripeApiMode {
   throw new HttpsError('failed-precondition', 'Stripe checkout is only enabled for devnet and mainnet drops.');
 }
 
-function requireStripeUnitAmountCents(value: unknown, label: string): number {
-  const parsed = normalizeStripeUnitAmountCents(value);
-  if (parsed != null) return parsed;
-  throw new HttpsError(
-    'failed-precondition',
-    `${label} must be an integer from ${STRIPE_UNIT_AMOUNT_CENTS_MIN} to ${STRIPE_UNIT_AMOUNT_CENTS_MAX}.`,
-  );
-}
-
-const STRIPE_PRODUCT_TAX_CODE_RE = /^txcd_\d{8}$/;
-
-export function stripeCheckoutProductTaxCodeForDrop(dropRuntime: StripeCheckoutDropRuntime): string {
-  if (dropRuntime.config.stripeCheckoutEnabled !== true) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout is not enabled for this drop.');
-  }
-  const taxCode = String(dropRuntime.config.stripeProductTaxCode || '').trim();
-  if (!taxCode) {
-    throw new HttpsError('failed-precondition', 'Stripe product tax code is not configured for this drop.');
-  }
-  if (!STRIPE_PRODUCT_TAX_CODE_RE.test(taxCode)) {
-    throw new HttpsError('failed-precondition', 'Stripe product tax code is invalid for this drop.');
-  }
-  return taxCode;
-}
-
-export function stripeCheckoutUnitAmountCentsForDrop(dropRuntime: StripeCheckoutDropRuntime): number {
-  const mode = stripeApiModeForCluster(dropRuntime.cluster);
-  const configuredLiveUnitAmountCents = dropRuntime.config.stripeLiveUnitAmountCents;
-  if (mode === 'live') {
-    if (configuredLiveUnitAmountCents == null) {
-      throw new HttpsError('failed-precondition', 'Stripe live unit amount is not configured for this drop.');
-    }
-  }
-
-  const unitAmountCents = resolveStripeCheckoutUnitAmountCents({
-    mode,
-    testConfiguredUnitAmountCents: process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS,
-    testFallbackUnitAmountCents: STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT,
-    liveConfiguredUnitAmountCents: configuredLiveUnitAmountCents,
-  });
-  return mode === 'live'
-    ? requireStripeUnitAmountCents(unitAmountCents, 'Stripe live unit amount')
-    : unitAmountCents || STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT;
-}
-
 export function requireStripeCheckoutSessionId(rawSessionId: unknown): string {
   const sessionId = String(rawSessionId || '').trim();
   if (!STRIPE_CHECKOUT_SESSION_ID_RE.test(sessionId)) {
     throw new HttpsError('failed-precondition', 'Stripe checkout session id is invalid');
   }
   return sessionId;
-}
-
-type StripeAllowedCountry =
-  NonNullable<Stripe.Checkout.Session['shipping_address_collection']>['allowed_countries'][number];
-
-export function stripeCheckoutShippingParams(dropFamily?: unknown): Pick<
-  Stripe.Checkout.SessionCreateParams,
-  'shipping_address_collection'
-> {
-  const allowedCountries =
-    stripeCheckoutShippingCountriesForDropFamily(dropFamily) satisfies readonly StripeAllowedCountry[];
-  return {
-    shipping_address_collection: {
-      allowed_countries: [...allowedCountries],
-    },
-  };
-}
-
-function requestOrigin(request: CallableRequest<any>): string {
-  const rawOrigin = request.rawRequest?.headers?.origin;
-  const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
-  return typeof origin === 'string' ? origin.trim() : '';
-}
-
-function stripeCheckoutReturnUrlAllowedOrigins(): string[] {
-  return String(process.env.STRIPE_RETURN_URL_ALLOWED_ORIGINS || '')
-    .split(/[,\s]+/)
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-}
-
-export function checkoutReturnUrl(
-  request: CallableRequest<any>,
-  rawReturnUrl: string | undefined,
-  status: 'success' | 'cancel',
-): string {
-  try {
-    return normalizeStripeCheckoutReturnUrl({
-      requestOrigin: requestOrigin(request),
-      rawReturnUrl,
-      status,
-      allowedOrigins: stripeCheckoutReturnUrlAllowedOrigins(),
-    });
-  } catch (err) {
-    throw new HttpsError('invalid-argument', err instanceof Error ? err.message : String(err));
-  }
 }
 
 function normalizeSizeStripeVariantKey(
@@ -611,77 +497,6 @@ function normalizeStripeCheckoutVariantKey(
   const variantKey = normalizeSizeStripeVariantKey(dropRuntime, raw);
   if (!variantKey) throw new HttpsError('invalid-argument', 'variantKey is required for Stripe checkout.');
   return variantKey;
-}
-
-function itemNameWithCollectionCasing(itemName: string, collectionSuffix: string): string {
-  if (!collectionSuffix || collectionSuffix[0] !== collectionSuffix[0].toUpperCase()) return itemName;
-  return `${itemName.slice(0, 1).toUpperCase()}${itemName.slice(1)}`;
-}
-
-function stripeCheckoutBaseProductName(dropRuntime: StripeCheckoutDropRuntime): string {
-  const collectionName = String(
-    dropRuntime.config.displayName ||
-    dropRuntime.config.collectionName ||
-    dropRuntime.dropId,
-  ).trim();
-  const itemName = String(dropRuntime.config.namePrefix || 'item').trim();
-  if (!itemName) return collectionName;
-
-  const normalizedCollection = collectionName.toLowerCase();
-  const normalizedItemName = itemName.toLowerCase();
-  const pluralSuffixes = [
-    `${normalizedItemName}s`,
-    ...(normalizedItemName.endsWith('y') ? [`${normalizedItemName.slice(0, -1)}ies`] : []),
-  ];
-  for (const suffix of pluralSuffixes) {
-    if (!normalizedCollection.endsWith(suffix)) continue;
-    const collectionSuffix = collectionName.slice(collectionName.length - suffix.length);
-    const singularItemName = itemNameWithCollectionCasing(itemName, collectionSuffix);
-    return `${collectionName.slice(0, collectionName.length - suffix.length)}${singularItemName}`.trim();
-  }
-  if (normalizedCollection.endsWith(normalizedItemName)) return collectionName;
-  return `${collectionName} ${itemName}`;
-}
-
-export function stripeCheckoutProductName(
-  dropRuntime: StripeCheckoutDropRuntime,
-  variantKey: string | undefined,
-  mode: StripeApiMode,
-): string {
-  const baseName = stripeCheckoutBaseProductName(dropRuntime);
-  const variantSuffix = variantKey ? ` ${variantKey}` : '';
-  const modePrefix = mode === 'test' ? 'test ' : '';
-  return `${modePrefix}${baseName}${variantSuffix}`.slice(0, 200);
-}
-
-async function createStripeCheckoutSession(
-  params: Stripe.Checkout.SessionCreateParams,
-  apiKeys: readonly string[],
-  mode: StripeApiMode,
-): Promise<StripeCheckoutSessionResponse> {
-  const keys = stripeApiKeysForMode(apiKeys, mode);
-  let lastCredentialError: unknown;
-  for (const apiKey of keys) {
-    try {
-      const stripe = await stripeClientForKey(apiKey, mode);
-      const session = await stripe.checkout.sessions.create(params);
-      if (typeof session.id !== 'string' || typeof session.url !== 'string') {
-        throw new HttpsError('unavailable', 'Stripe response did not include a checkout URL');
-      }
-      if (Boolean(session.livemode) !== (mode === 'live')) {
-        throw new HttpsError('failed-precondition', 'Stripe response mode does not match the configured drop mode');
-      }
-      return { id: session.id, url: session.url, livemode: Boolean(session.livemode) };
-    } catch (err) {
-      if (!isStripeCredentialError(err)) throw err;
-      lastCredentialError = err;
-    }
-  }
-  throw new HttpsError('failed-precondition', `Stripe ${mode} key was rejected by Stripe.`, {
-    mode,
-    configuredKeyKinds: keys.map(stripeApiKeyKindForLog),
-    stripeError: stripeCredentialErrorSummary(lastCredentialError),
-  });
 }
 
 async function fetchStripeCheckoutLineItems(stripe: Stripe, session: Stripe.Checkout.Session) {
@@ -1821,97 +1636,4 @@ export async function processStripeCheckoutFulfillmentDocument<
     }
     return { status: 'failed', dropId, sessionId, error: deps.summarizeError(err) };
   }
-}
-
-export async function createStripeCheckoutSessionForRequest<
-  Runtime extends StripeCheckoutDropRuntime,
-  Config extends StripeCheckoutOnchainConfig,
->(params: {
-  db: Firestore;
-  request: CallableRequest<any>;
-  uid: string;
-  apiKeys: readonly string[];
-  deps: StripeCheckoutFlowDeps<Runtime, Config>;
-}): Promise<StripeCheckoutSessionResponse> {
-  const schema = z.object({
-    dropId: z.string().min(1).max(64),
-    variantKey: z.string().min(1).max(64).optional(),
-    quantity: z.union([z.number(), z.string()]).optional(),
-    returnUrl: z.string().url().max(2048).optional(),
-  });
-  const {
-    dropId: requestDropId,
-    variantKey: rawVariantKey,
-    quantity: rawQuantity,
-    returnUrl,
-  } = parseRequest(schema, params.request.data);
-  const { deps } = params;
-  const dropId = deps.requireDropId(requestDropId);
-  const dropRuntime = deps.getDropRuntime(dropId);
-  const mode = stripeApiModeForCluster(dropRuntime.cluster);
-  const checkoutKind = stripeCheckoutKindForDrop(dropRuntime);
-  if (!dropRuntime.receiptsMerkleTreeStr) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout requires a configured receipt cNFT tree.');
-  }
-
-  const variantKey = normalizeStripeCheckoutVariantKey(dropRuntime, rawVariantKey, checkoutKind);
-  let quantity: number;
-  try {
-    quantity = normalizeStripeCheckoutQuantity(rawQuantity);
-    assertStripeCheckoutQuantityForKind(checkoutKind, quantity);
-  } catch (err) {
-    throw new HttpsError('invalid-argument', err instanceof Error ? err.message : String(err));
-  }
-  const successUrl = checkoutReturnUrl(params.request, returnUrl, 'success');
-  const cancelUrl = checkoutReturnUrl(params.request, returnUrl, 'cancel');
-  const productTaxCode = stripeCheckoutProductTaxCodeForDrop(dropRuntime);
-  const unitAmountCents = stripeCheckoutUnitAmountCentsForDrop(dropRuntime);
-  const cfg = await deps.fetchCheckoutConfig({
-    dropRuntime,
-    conn: deps.connection(dropRuntime),
-    context: 'getAccountInfo:boxMinterConfig:stripeCheckout',
-  });
-  deps.requireStripeCheckoutAvailable({ dropRuntime, cfg, checkoutKind, variantKey, quantity });
-  deps.requireStripeCheckoutCollectionMatchesConfig(dropRuntime, cfg);
-  deps.requireStripeCheckoutFulfillmentPrerequisites(cfg);
-
-  const session = await createStripeCheckoutSession(
-    {
-      mode: 'payment',
-      automatic_tax: { enabled: true },
-      billing_address_collection: 'auto',
-      success_url: successUrl,
-      cancel_url: cancelUrl,
-      client_reference_id: `${params.uid}:${dropId}:${Date.now()}`.slice(0, 200),
-      line_items: [
-        {
-          quantity,
-          price_data: {
-            currency: STRIPE_OFFCHAIN_CURRENCY,
-            unit_amount: unitAmountCents,
-            tax_behavior: 'exclusive',
-            product_data: { name: stripeCheckoutProductName(dropRuntime, variantKey, mode), tax_code: productTaxCode },
-          },
-        },
-      ],
-      metadata: buildStripeCheckoutSessionMetadata({ dropId, uid: params.uid, variantKey, quantity }),
-      ...stripeCheckoutShippingParams(dropRuntime.config.dropFamily),
-    },
-    params.apiKeys,
-    mode,
-  );
-  await params.db.doc(stripeCheckoutPath(dropId, session.id)).set(
-    buildStripeCheckoutDocument({
-      dropId,
-      sessionId: session.id,
-      uid: params.uid,
-      ...(variantKey ? { variantKey } : {}),
-      unitAmountCents,
-      quantity,
-      livemode: session.livemode,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    }),
-  );
-  return session;
 }

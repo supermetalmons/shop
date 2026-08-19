@@ -59,11 +59,9 @@ import {
   hasPluralStripeReceiptClaims,
   isReceiptClaimDeliveryOrderSource,
   isStripeOffchainFulfillmentSession,
-  normalizeStripeCheckoutQuantity,
   normalizeStripeReceiptClaimCode,
   orderStripeReceiptClaimByBoxId,
   requireStripeReceiptClaimCode,
-  resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
   stripeReceiptClaimCodeMaybe,
   stripeReceiptClaimBoxMapKey,
@@ -167,13 +165,11 @@ import {
 } from './walletSessions.js';
 import { parseRequest } from './request.js';
 import {
-  createStripeCheckoutSessionForRequest,
   handleStripeWebhookEvent,
   processStripeCheckoutFulfillmentDocument,
   requireStripeCheckoutSessionId,
   stripeWebhookRawBody,
   stripeWebhookSignature,
-  type StripeCheckoutKind,
   type StripeCheckoutFlowDeps,
   type StripeCheckoutOnchainConfig,
 } from './stripeCheckout/service.js';
@@ -212,9 +208,6 @@ import {
   BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX as MIN_ITEMS_PER_BOX,
   BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET as MIN_DISCOUNT_MINTS_PER_WALLET,
   BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX as MIN_OPENABLE_ITEMS_PER_BOX,
-  BOX_MINTER_MINT_VARIANT_KIND_NONE as MINT_VARIANT_KIND_NONE,
-  BOX_MINTER_MINT_VARIANT_KIND_SIZE as MINT_VARIANT_KIND_SIZE,
-  BOX_MINTER_MINT_VARIANT_OPTION_COUNT as MINT_VARIANT_OPTION_COUNT,
   BOX_MINTER_PENDING_OPEN_SEED,
   isBoxMinterDiscountMintsPerWallet,
   isConfiguredBoxMinterItemsPerBox,
@@ -234,7 +227,6 @@ import {
   LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS,
   canDeliverItemKind,
   calculateDeliveryLamports,
-  isDirectDeliveryItemsPerBox,
   normalizeDeliveryUnitsPerBox,
 } from './shared/shipping.js';
 import {
@@ -2381,106 +2373,6 @@ async function fetchDecodedBoxMinterConfigAccount(params: {
   return decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
 }
 
-function requireStripeCheckoutAvailable(params: {
-  dropRuntime: DropRuntime;
-  cfg: DecodedBoxMinterConfig;
-  checkoutKind: StripeCheckoutKind;
-  variantKey?: string;
-  quantity: number;
-}): void {
-  const { dropRuntime, cfg, checkoutKind, variantKey } = params;
-  let quantity: number;
-  try {
-    quantity = normalizeStripeCheckoutQuantity(params.quantity);
-  } catch (err) {
-    throw new HttpsError('invalid-argument', err instanceof Error ? err.message : 'Stripe checkout quantity is invalid.');
-  }
-  if (!cfg.started) {
-    throw new HttpsError('failed-precondition', 'Mint has not started.');
-  }
-  if (cfg.minted + quantity > cfg.maxSupply) {
-    throw new HttpsError('failed-precondition', 'Mint is sold out.');
-  }
-  if (quantity > cfg.maxPerTx) {
-    throw new HttpsError('failed-precondition', `Stripe checkout quantity cannot exceed ${cfg.maxPerTx}.`);
-  }
-
-  if (checkoutKind === 'receipt_only') {
-    if (dropSalesMode(dropRuntime) !== 'stripe_receipt_only') {
-      throw new HttpsError('failed-precondition', 'Stripe receipt checkout requires receipt-only sales mode.');
-    }
-    if (!isDirectDeliveryItemsPerBox(cfg.itemsPerBox) || cfg.mintVariantKind !== MINT_VARIANT_KIND_NONE) {
-      throw new HttpsError('failed-precondition', 'Stripe receipt checkout requires a non-variant receipt-only drop.');
-    }
-    return;
-  }
-
-  if (checkoutKind === 'standard_pack') {
-    if (dropSalesMode(dropRuntime) === 'stripe_receipt_only') {
-      throw new HttpsError('failed-precondition', 'Stripe receipt-only drops cannot use pack checkout.');
-    }
-    if (isDirectDeliveryItemsPerBox(cfg.itemsPerBox) || cfg.mintVariantKind !== MINT_VARIANT_KIND_NONE) {
-      throw new HttpsError('failed-precondition', 'Stripe pack checkout requires a non-variant pack drop.');
-    }
-    return;
-  }
-
-  if (!isDirectDeliveryItemsPerBox(cfg.itemsPerBox)) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout is only available for direct-delivery size drops.');
-  }
-  if (cfg.mintVariantKind !== MINT_VARIANT_KIND_SIZE) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout requires on-chain size variant minting.');
-  }
-
-  let variantIndex: number;
-  try {
-    variantIndex = resolveMintSelectionVariantIndex(dropRuntime.config.mintSelection, variantKey || '');
-  } catch (err) {
-    throw new HttpsError('invalid-argument', err instanceof Error ? err.message : String(err));
-  }
-  if (variantIndex < 0 || variantIndex >= MINT_VARIANT_OPTION_COUNT) {
-    throw new HttpsError('invalid-argument', 'Invalid size variant.');
-  }
-
-  const option = dropRuntime.config.mintSelection?.options?.[variantIndex];
-  const startId = cfg.mintVariantStartIds[variantIndex];
-  const endId = cfg.mintVariantEndIds[variantIndex];
-  if (!option || option.startId !== startId || option.endId !== endId) {
-    throw new HttpsError('failed-precondition', 'Drop mint selection is out of sync with on-chain variant ranges.');
-  }
-
-  const nextId = cfg.mintVariantNextIds[variantIndex];
-  if (nextId < startId) {
-    throw new HttpsError('failed-precondition', 'On-chain size variant state is invalid.');
-  }
-  if (nextId > endId || nextId + quantity - 1 > endId) {
-    throw new HttpsError('failed-precondition', 'Selected size is sold out.');
-  }
-}
-
-function requireStripeCheckoutFulfillmentPrerequisites(cfg: DecodedBoxMinterConfig): void {
-  let signer: Keypair;
-  try {
-    signer = cosigner();
-  } catch (err) {
-    throw new HttpsError('failed-precondition', 'COSIGNER_SECRET is not configured for Stripe checkout fulfillment', {
-      error: summarizeError(err),
-    });
-  }
-  if (!signer.publicKey.equals(cfg.admin)) {
-    throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
-      expectedAdmin: cfg.admin.toBase58(),
-      cosigner: signer.publicKey.toBase58(),
-    });
-  }
-  if (!addressDecryptKeyMaybe()) {
-    throw new HttpsError(
-      'failed-precondition',
-      'ADDRESS_DECRYPTION_SECRET is not configured correctly for Stripe checkout fulfillment',
-    );
-  }
-}
-
 function requireStripeCheckoutCollectionMatchesConfig(
   dropRuntime: DropRuntime,
   cfg: DecodedBoxMinterConfig,
@@ -2501,8 +2393,6 @@ function stripeCheckoutFlowDeps(): StripeCheckoutFlowDeps<DropRuntime, DecodedBo
     connection,
     fetchCheckoutConfig: fetchDecodedBoxMinterConfigAccount,
     ensureOnchainCoreConfig,
-    requireStripeCheckoutAvailable,
-    requireStripeCheckoutFulfillmentPrerequisites,
     requireStripeCheckoutCollectionMatchesConfig,
     cosigner,
     encryptAddress: encryptAddressPayloadForFulfillment,
@@ -5400,28 +5290,6 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
       sessionId,
       error: result.error,
     });
-  },
-);
-
-export const createStripeCheckoutSession = onCallAuthed(
-  'createStripeCheckoutSession',
-  async (request, uid) =>
-    createStripeCheckoutSessionForRequest({
-      db,
-      request,
-      uid,
-      apiKeys: stripeApiKeys(),
-      deps: stripeCheckoutFlowDeps(),
-    }),
-  {
-    secrets: [
-      STRIPE_RESTRICTED_KEY,
-      STRIPE_SECRET_KEY,
-      STRIPE_RESTRICTED_KEY_LIVE,
-      STRIPE_SECRET_KEY_LIVE,
-      COSIGNER_SECRET,
-      ADDRESS_DECRYPTION_SECRET,
-    ],
   },
 );
 

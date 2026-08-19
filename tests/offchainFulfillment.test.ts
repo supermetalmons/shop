@@ -41,9 +41,7 @@ import {
 import {
   STRIPE_CHECKOUT_PROCESSING_LEASE_MS,
   buildStripeCheckoutManualReviewSummary,
-  checkoutReturnUrl,
   createOrGetStripeOffchainDeliveryOrder,
-  createStripeCheckoutSessionForRequest,
   enqueueStripeCheckoutFulfillment,
   isRetryableStripeCheckoutFulfillmentError,
   markStripeCheckoutFulfillmentFailed,
@@ -54,13 +52,17 @@ import {
   stripeApiModeForCluster,
   stripeApiKeysForMode,
   stripeApiKeyForMode,
-  stripeCheckoutProductName,
-  stripeCheckoutProductTaxCodeForDrop,
   stripeCheckoutKindForDrop,
-  stripeCheckoutShippingParams,
-  stripeCheckoutUnitAmountCentsForDrop,
   stripeTestApiKey,
 } from '../functions/src/stripeCheckout/service.ts';
+import {
+  createStripeCheckoutSessionCore,
+  normalizeStripeCheckoutReturnUrl,
+  stripeCheckoutProductName,
+  stripeCheckoutProductTaxCodeForDrop,
+  stripeCheckoutShippingCountriesForDropFamily,
+  stripeCheckoutUnitAmountCentsForDrop,
+} from '../functions/src/shared/stripeCheckoutSession.ts';
 import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from '../functions/src/claimCodes.ts';
 import {
   IX_BUBBLEGUM_MINT_V2,
@@ -710,19 +712,14 @@ test('buildStripeOffchainAddressSnapshot accepts supported international binder 
   );
 });
 
-test('stripeCheckoutShippingParams selects shipping countries by drop family without requesting phone numbers', () => {
-  const params = stripeCheckoutShippingParams();
-  assert.equal('phone_number_collection' in params, false);
-  assert.deepEqual(params.shipping_address_collection?.allowed_countries, [STRIPE_CHECKOUT_SHIPPING_COUNTRY]);
-
-  const binderParams = stripeCheckoutShippingParams('card_nft_binder');
+test('stripe checkout shipping countries vary by drop family', () => {
+  assert.deepEqual(stripeCheckoutShippingCountriesForDropFamily(undefined), [STRIPE_CHECKOUT_SHIPPING_COUNTRY]);
+  const binderCountriesList = stripeCheckoutShippingCountriesForDropFamily('card_nft_binder');
   assert.deepEqual(
-    binderParams.shipping_address_collection?.allowed_countries,
+    binderCountriesList,
     STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES,
   );
-  const binderCountries = new Set<string>(
-    binderParams.shipping_address_collection?.allowed_countries,
-  );
+  const binderCountries = new Set<string>(binderCountriesList);
   assert.deepEqual(
     [...binderCountries].sort(),
     COUNTRIES.filter(({ code }) => code !== 'INTL').map(({ code }) => code).sort(),
@@ -1829,11 +1826,9 @@ test('stripeCheckoutProductName uses a singular, non-duplicated item label', () 
     stripeCheckoutProductName(
       {
         dropId: 'card_nft_binder',
-        config: {
-          collectionName: 'Mons Shop Receipts',
-          displayName: 'Card NFT Binder',
-          namePrefix: 'binder',
-        },
+        collectionName: 'Mons Shop Receipts',
+        displayName: 'Card NFT Binder',
+        namePrefix: 'binder',
       } as any,
       undefined,
       'live',
@@ -1844,7 +1839,8 @@ test('stripeCheckoutProductName uses a singular, non-duplicated item label', () 
     stripeCheckoutProductName(
       {
         dropId: 'little_swag_hoodies',
-        config: { collectionName: 'Little Swag Hoodies', namePrefix: 'hoodie' },
+        collectionName: 'Little Swag Hoodies',
+        namePrefix: 'hoodie',
       } as any,
       'L',
       'live',
@@ -1855,7 +1851,8 @@ test('stripeCheckoutProductName uses a singular, non-duplicated item label', () 
     stripeCheckoutProductName(
       {
         dropId: 'little_swag_hoodies_devnet',
-        config: { collectionName: 'Little Swag Hoodies', namePrefix: 'hoodie' },
+        collectionName: 'Little Swag Hoodies',
+        namePrefix: 'hoodie',
       } as any,
       'XL',
       'test',
@@ -1865,107 +1862,54 @@ test('stripeCheckoutProductName uses a singular, non-duplicated item label', () 
 });
 
 test('stripeCheckoutUnitAmountCentsForDrop separates devnet test and mainnet live pricing', () => {
-  const previous = process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS;
-  try {
-    delete process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS;
-    assert.equal(
-      stripeCheckoutUnitAmountCentsForDrop({
-        cluster: 'devnet',
-        config: {},
-      } as any),
-      100,
-    );
-    process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS = '250';
-    assert.equal(
-      stripeCheckoutUnitAmountCentsForDrop({
-        cluster: 'devnet',
-        config: { stripeLiveUnitAmountCents: 24900 },
-      } as any),
-      250,
-    );
-    process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS = '250.9';
-    assert.equal(
-      stripeCheckoutUnitAmountCentsForDrop({
-        cluster: 'devnet',
-        config: {},
-      } as any),
-      250,
-    );
-    assert.equal(
-      stripeCheckoutUnitAmountCentsForDrop({
-        cluster: 'mainnet-beta',
-        config: { stripeLiveUnitAmountCents: 24900 },
-      } as any),
-      24900,
-    );
-    assert.throws(
-      () =>
-        stripeCheckoutUnitAmountCentsForDrop({
-          cluster: 'mainnet-beta',
-          config: {},
-        } as any),
-      /Stripe live unit amount is not configured/,
-    );
-    assert.throws(
-      () =>
-        stripeCheckoutUnitAmountCentsForDrop({
-          cluster: 'mainnet-beta',
-          config: { stripeLiveUnitAmountCents: 49 },
-        } as any),
-      /Stripe live unit amount must be an integer from 50 to 99999999/,
-    );
-    assert.throws(
-      () =>
-        stripeCheckoutUnitAmountCentsForDrop({
-          cluster: 'mainnet-beta',
-          config: { stripeLiveUnitAmountCents: 100_000_000 },
-        } as any),
-      /Stripe live unit amount must be an integer from 50 to 99999999/,
-    );
-  } finally {
-    if (previous === undefined) {
-      delete process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS;
-    } else {
-      process.env.STRIPE_TEST_UNIT_AMOUNT_CENTS = previous;
-    }
-  }
+  assert.equal(stripeCheckoutUnitAmountCentsForDrop({ solanaCluster: 'devnet' } as any), 100);
+  assert.equal(stripeCheckoutUnitAmountCentsForDrop({ solanaCluster: 'devnet' } as any, '250'), 250);
+  assert.equal(stripeCheckoutUnitAmountCentsForDrop({ solanaCluster: 'devnet' } as any, '250.9'), 250);
+  assert.equal(
+    stripeCheckoutUnitAmountCentsForDrop({ solanaCluster: 'mainnet-beta', stripeLiveUnitAmountCents: 24900 } as any),
+    24900,
+  );
+  assert.throws(
+    () => stripeCheckoutUnitAmountCentsForDrop({ solanaCluster: 'mainnet-beta' } as any),
+    /Stripe live unit amount is not configured/,
+  );
+  assert.throws(
+    () => stripeCheckoutUnitAmountCentsForDrop({ solanaCluster: 'mainnet-beta', stripeLiveUnitAmountCents: 49 } as any),
+    /Stripe unit amount must be an integer from 50 to 99999999/,
+  );
+  assert.throws(
+    () => stripeCheckoutUnitAmountCentsForDrop({ solanaCluster: 'mainnet-beta', stripeLiveUnitAmountCents: 100_000_000 } as any),
+    /Stripe unit amount must be an integer from 50 to 99999999/,
+  );
 });
 
 test('stripeCheckoutProductTaxCodeForDrop requires explicit checkout enablement and product tax code', () => {
   assert.equal(
     stripeCheckoutProductTaxCodeForDrop({
-      config: {
-        stripeCheckoutEnabled: true,
-        stripeProductTaxCode: 'txcd_30011000',
-      },
+      stripeCheckoutEnabled: true,
+      stripeProductTaxCode: 'txcd_30011000',
     } as any),
     'txcd_30011000',
   );
   assert.throws(
     () =>
       stripeCheckoutProductTaxCodeForDrop({
-        config: {
-          stripeProductTaxCode: 'txcd_30011000',
-        },
+        stripeProductTaxCode: 'txcd_30011000',
       } as any),
     /not enabled/,
   );
   assert.throws(
     () =>
       stripeCheckoutProductTaxCodeForDrop({
-        config: {
-          stripeCheckoutEnabled: true,
-        },
+        stripeCheckoutEnabled: true,
       } as any),
     /product tax code is not configured/,
   );
   assert.throws(
     () =>
       stripeCheckoutProductTaxCodeForDrop({
-        config: {
-          stripeCheckoutEnabled: true,
-          stripeProductTaxCode: 'clothing',
-        },
+        stripeCheckoutEnabled: true,
+        stripeProductTaxCode: 'clothing',
       } as any),
     /product tax code is invalid/,
   );
@@ -2926,116 +2870,155 @@ test('shouldProcessStripeCheckoutFulfillmentWrite accepts only created/failed to
   );
 });
 
-test('createStripeCheckoutSessionForRequest rejects bad returnUrl before config fetch', async () => {
+test('checkout session core rejects bad returnUrl before config fetch', async () => {
   let configFetches = 0;
-  const deps = {
-    requireDropId: (raw: unknown) => String(raw),
-    getDropRuntime: (dropId: string) =>
-      ({
-        dropId,
-        cluster: 'devnet',
-        itemsPerBox: 0,
-        receiptsMerkleTreeStr: 'tree',
-        config: {
-          mintSelection: {
-            kind: 'size',
-            options: [{ key: 'L' }, { key: 'XL' }, { key: '2XL' }],
-          },
-        },
-      }) as any,
-    fetchCheckoutConfig: async () => {
-      configFetches += 1;
-      throw new Error('unexpected config fetch');
-    },
-  } as any;
-
   await assert.rejects(
-    () =>
-      createStripeCheckoutSessionForRequest({
-        db: {} as any,
-        request: {
-          data: {
-            dropId: 'little_swag_hoodies_devnet',
-            variantKey: 'XL',
-            returnUrl: 'https://evil.example/drop',
-          },
-          rawRequest: { headers: {} },
-        } as any,
-        uid: 'anon_uid_123',
-        apiKeys: ['sk_test_secret'],
-        deps,
-      }),
+    () => createStripeCheckoutSessionCore({
+      uid: 'anon_uid_123',
+      body: {
+        dropId: 'little_swag_hoodies_devnet',
+        variantKey: 'XL',
+        returnUrl: 'https://evil.example/drop',
+      },
+    }, {
+      getDrop: () => undefined,
+      loadOnchainConfig: async () => {
+        configFetches += 1;
+        throw new Error('unexpected config fetch');
+      },
+      requireFulfillmentPrerequisites: () => undefined,
+      createProviderSession: async () => { throw new Error('unexpected provider call'); },
+      persistCheckout: async () => undefined,
+    }),
     /returnUrl origin mismatch/,
   );
   assert.equal(configFetches, 0);
 });
 
-test('createStripeCheckoutSessionForRequest rejects drops without explicit Stripe checkout enablement before Stripe call', async () => {
+test('checkout session core rejects disabled drops before config fetch', async () => {
   let configFetches = 0;
-  const deps = {
-    requireDropId: (raw: unknown) => String(raw),
-    getDropRuntime: (dropId: string) =>
-      ({
-        dropId,
-        cluster: 'mainnet-beta',
-        itemsPerBox: 0,
-        receiptsMerkleTreeStr: 'tree',
-        config: {
-          mintSelection: {
-            kind: 'size',
-            options: [{ key: 'L' }, { key: 'XL' }, { key: '2XL' }],
-          },
-        },
-      }) as any,
-    connection: () => ({}),
-    fetchCheckoutConfig: async () => {
-      configFetches += 1;
-      throw new Error('unexpected config fetch');
-    },
-    requireStripeCheckoutAvailable: () => undefined,
-    requireStripeCheckoutCollectionMatchesConfig: () => undefined,
-    requireStripeCheckoutFulfillmentPrerequisites: () => undefined,
-  } as any;
-
   await assert.rejects(
-    () =>
-      createStripeCheckoutSessionForRequest({
-        db: {} as any,
-        request: {
-          data: {
-            dropId: 'little_swag_hoodies',
-            variantKey: 'XL',
-            returnUrl: 'https://mons.shop/drop',
-          },
-          rawRequest: { headers: {} },
-        } as any,
-        uid: 'anon_uid_123',
-        apiKeys: ['sk_live_secret'],
-        deps,
+    () => createStripeCheckoutSessionCore({
+      uid: 'anon_uid_123',
+      body: { dropId: 'little_swag_hoodies', variantKey: 'XL', returnUrl: 'https://mons.shop/drop' },
+    }, {
+      getDrop: (dropId) => ({
+        dropId,
+        solanaCluster: 'mainnet-beta',
+        dropFamily: 'little_swag_hoodies',
+        collectionName: 'Little Swag Hoodies',
+        itemsPerBox: 0,
+        namePrefix: 'hoodie',
+        mintSelection: { kind: 'size', options: [
+          { key: 'L', label: 'L', startId: 1, endId: 10 },
+          { key: 'XL', label: 'XL', startId: 11, endId: 20 },
+          { key: '2XL', label: '2XL', startId: 21, endId: 30 },
+        ] },
+        boxMinterProgramId: pubkey(1).toBase58(),
+        boxMinterConfigPda: pubkey(2).toBase58(),
+        collectionMint: pubkey(3).toBase58(),
+        receiptsMerkleTree: pubkey(4).toBase58(),
       }),
+      loadOnchainConfig: async () => {
+        configFetches += 1;
+        throw new Error('unexpected config fetch');
+      },
+      requireFulfillmentPrerequisites: () => undefined,
+      createProviderSession: async () => { throw new Error('unexpected provider call'); },
+      persistCheckout: async () => undefined,
+    }),
     /Stripe checkout is not enabled/,
   );
   assert.equal(configFetches, 0);
 });
 
-test('checkoutReturnUrl rejects arbitrary no-origin return URLs', () => {
-  const noOriginRequest = { rawRequest: { headers: {} } } as any;
-  const browserRequest = { rawRequest: { headers: { origin: 'https://mons.shop' } } } as any;
+test('checkout session core persists the established Stripe checkout document', async () => {
+  const writes: Array<{ path: string; document: Record<string, unknown> }> = [];
+  const collectionMint = pubkey(3).toBase58();
+  const result = await createStripeCheckoutSessionCore({
+    uid: 'anon_uid_123',
+    requestOrigin: 'https://mons.shop',
+    body: { dropId: 'card_nft_binder_devnet', quantity: 1, returnUrl: 'https://mons.shop/drop' },
+  }, {
+    getDrop: (dropId) => ({
+      dropId,
+      solanaCluster: 'devnet',
+      dropFamily: 'card_nft_binder',
+      collectionName: 'Card NFT Binder',
+      salesMode: 'stripe_receipt_only',
+      stripeCheckoutEnabled: true,
+      stripeProductTaxCode: 'txcd_99999999',
+      itemsPerBox: 0,
+      namePrefix: 'binder',
+      boxMinterProgramId: pubkey(1).toBase58(),
+      boxMinterConfigPda: pubkey(2).toBase58(),
+      collectionMint,
+      receiptsMerkleTree: pubkey(4).toBase58(),
+    }),
+    loadOnchainConfig: async () => ({
+      admin: pubkey(5).toBase58(),
+      coreCollection: collectionMint,
+      maxSupply: 100,
+      maxPerTx: 5,
+      itemsPerBox: 0,
+      minted: 1,
+      started: true,
+      mintVariantKind: 0,
+      mintVariantStartIds: [0, 0, 0],
+      mintVariantEndIds: [0, 0, 0],
+      mintVariantNextIds: [0, 0, 0],
+    }),
+    requireFulfillmentPrerequisites: () => undefined,
+    createProviderSession: async (request, mode) => {
+      assert.equal(mode, 'test');
+      assert.equal(request.quantity, 1);
+      assert.deepEqual(request.allowedCountries, STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES);
+      return { id: 'cs_test_123', url: 'https://checkout.stripe.com/c/pay/test', livemode: false };
+    },
+    persistCheckout: async (path, document) => {
+      writes.push({ path, document });
+    },
+    nowMs: () => 1_700_000_000_000,
+  });
+  assert.deepEqual(result.session, {
+    id: 'cs_test_123',
+    url: 'https://checkout.stripe.com/c/pay/test',
+    livemode: false,
+  });
+  assert.equal(writes[0]?.path, 'drops/card_nft_binder_devnet/stripeCheckouts/cs_test_123');
+  assert.deepEqual(writes[0]?.document, {
+    sessionId: 'cs_test_123',
+    dropId: 'card_nft_binder_devnet',
+    uid: 'anon_uid_123',
+    owner: 'firebase:anon_uid_123',
+    ownerKind: 'firebase',
+    firebaseUid: 'anon_uid_123',
+    quantity: 1,
+    currency: 'usd',
+    unitAmountCents: 100,
+    fulfillmentMode: 'admin_variant_receipt',
+    livemode: false,
+    status: 'created',
+    createdAt: { serverTimestamp: true },
+    updatedAt: { serverTimestamp: true },
+  });
+});
 
+test('checkout return URL rejects arbitrary no-origin return URLs', () => {
   assert.equal(
-    checkoutReturnUrl(noOriginRequest, 'https://mons.shop/drop?drop=devnet', 'success'),
+    normalizeStripeCheckoutReturnUrl({ rawReturnUrl: 'https://mons.shop/drop?drop=devnet', status: 'success' }),
     'https://mons.shop/drop?drop=devnet&stripe_checkout=success&session_id={CHECKOUT_SESSION_ID}',
   );
   assert.equal(
-    checkoutReturnUrl(browserRequest, 'https://mons.shop/drop?drop=devnet', 'cancel'),
+    normalizeStripeCheckoutReturnUrl({ requestOrigin: 'https://mons.shop', rawReturnUrl: 'https://mons.shop/drop?drop=devnet', status: 'cancel' }),
     'https://mons.shop/drop?drop=devnet&stripe_checkout=cancel',
   );
   assert.equal(
-    checkoutReturnUrl(noOriginRequest, 'http://localhost:5173/drop', 'cancel'),
+    normalizeStripeCheckoutReturnUrl({ rawReturnUrl: 'http://localhost:5173/drop', status: 'cancel' }),
     'http://localhost:5173/drop?stripe_checkout=cancel',
   );
   assert.throws(
-    () => checkoutReturnUrl(noOriginRequest, 'https://evil.example/drop', 'success'),
+    () => normalizeStripeCheckoutReturnUrl({ rawReturnUrl: 'https://evil.example/drop', status: 'success' }),
     /returnUrl origin mismatch/,
   );
 });

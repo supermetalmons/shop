@@ -65,6 +65,10 @@ import {
 } from './firestorePackStatus.js';
 import { handleNotificationEnqueue, NOTIFICATION_ENQUEUE_PATH } from './notificationEnqueue.js';
 import {
+  STRIPE_CHECKOUT_SESSION_PATH,
+  handleStripeCheckoutSession,
+} from './stripeCheckout.js';
+import {
   ADMIN_PROFILE_PATH,
   ADMIN_DELIVERY_ORDER_OWNERS_PATH,
   ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
@@ -125,6 +129,7 @@ const PENDING_OPEN_DISCRIMINATOR_BASE58 = bs58.encode(PENDING_OPEN_BOX_DISCRIMIN
 const KNOWN_LOG_ROUTES = new Set([
   '/health',
   NOTIFICATION_ENQUEUE_PATH,
+  STRIPE_CHECKOUT_SESSION_PATH,
   '/inventory',
   '/notifications/subscribe',
   '/pack-status/:dropId',
@@ -1273,13 +1278,15 @@ export async function handleRequest(
   let profileAuthOutcome: string | undefined;
   let profileStateSections: { profile: string; shipments: string } | undefined;
   let rpcMethod: string | undefined;
+  let checkoutDropId: string | undefined;
+  let checkoutMode: string | undefined;
   let response: Response;
   const rpcCluster = pathname === '/rpc/mainnet-beta'
     ? 'mainnet-beta'
     : pathname === '/rpc/devnet' ? 'devnet' : null;
   const profilePath = PROFILE_READ_PATHS.has(pathname) ? pathname as ProfileReadPath : null;
   const profileWritePath = PROFILE_WRITE_PATHS.has(pathname) ? pathname as ProfileWritePath : null;
-  if (request.method === 'OPTIONS' && (profilePath || profileWritePath)) {
+  if (request.method === 'OPTIONS' && (profilePath || profileWritePath || pathname === STRIPE_CHECKOUT_SESSION_PATH)) {
     response = handleProfileCorsPreflight(request);
   } else if (request.method === 'OPTIONS' && rpcCluster) {
     response = handleRpcPreflight(request);
@@ -1306,6 +1313,18 @@ export async function handleRequest(
       : jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET' });
   } else if (pathname === NOTIFICATION_ENQUEUE_PATH) {
     response = await handleNotificationEnqueue(request, env, { log: dependencies.log });
+  } else if (pathname === STRIPE_CHECKOUT_SESSION_PATH) {
+    if (!isProfileRequestOriginAllowed(request)) {
+      response = applyProfileCors(request, new Response(null));
+    } else {
+      const result = await handleStripeCheckoutSession(request, env);
+      metrics.upstreamCalls += result.metrics.upstreamCalls;
+      metrics.providerDurationMs += result.metrics.providerDurationMs;
+      profileAuthOutcome = result.authOutcome;
+      checkoutDropId = result.dropId;
+      checkoutMode = result.mode;
+      response = applyProfileCors(request, result.response);
+    }
   } else if (profilePath) {
     if (!isProfileRequestOriginAllowed(request)) {
       response = applyProfileCors(request, new Response(null));
@@ -1376,6 +1395,8 @@ export async function handleRequest(
       expectedAssetResolved: metrics.expectedAssetResolved,
     } : {}),
     ...(rpcMethod ? { rpcMethod } : {}),
+    ...(checkoutDropId ? { checkoutDropId } : {}),
+    ...(checkoutMode ? { checkoutMode } : {}),
     ...(profileAuthOutcome ? { profileAuthOutcome } : {}),
     ...(profileStateSections ? { profileStateSections } : {}),
   });

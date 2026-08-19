@@ -243,6 +243,7 @@ type ProfileApiClientDependencies = {
 };
 
 type AuthenticatedApiPath =
+  | '/checkout/session'
   | '/profile/state'
   | '/profile/shipments'
   | '/profile/anonymous-stripe-delivery-history'
@@ -266,6 +267,7 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
   timeoutMs: 20_000,
 };
 
+const STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS = 35_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_VOID_API_TIMEOUT_MS = 65_000;
@@ -273,6 +275,7 @@ const SHIPSTATION_RATES_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
+  if (pathname === '/checkout/session') return STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label-purchase') return SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label-void') return SHIPSTATION_LABEL_VOID_API_TIMEOUT_MS;
@@ -1008,11 +1011,28 @@ function stripeCheckoutSessionPayload(args: StripeCheckoutSessionRequest): Strip
   return payload;
 }
 
+function parseStripeCheckoutSessionResponse(value: unknown): StripeCheckoutSessionResponse | null {
+  if (!isRecord(value) || !hasExactKeys(value, ['id', 'url', 'livemode'])) return null;
+  if (
+    typeof value.id !== 'string' || !/^cs_(?:test|live)_[A-Za-z0-9_]+$/.test(value.id) ||
+    typeof value.url !== 'string' || !value.url ||
+    typeof value.livemode !== 'boolean'
+  ) return null;
+  let url: URL;
+  try {
+    url = new URL(value.url);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:') return null;
+  return { id: value.id, url: value.url, livemode: value.livemode };
+}
+
 export async function createStripeCheckoutSession(args: StripeCheckoutSessionRequest): Promise<StripeCheckoutSessionResponse> {
-  return callFunction<StripeCheckoutSessionRequest, StripeCheckoutSessionResponse>(
-    'createStripeCheckoutSession',
-    stripeCheckoutSessionPayload(args),
-  );
+  const response = await callProfileApi('/checkout/session', stripeCheckoutSessionPayload(args));
+  const session = parseStripeCheckoutSessionResponse(response);
+  if (!session) throw new Error('Invalid Stripe checkout session response');
+  return session;
 }
 
 function packStatusFrontendDropForDropId(dropId: string): FrontendDeploymentConfig | null {
@@ -1437,6 +1457,7 @@ export const profileApiTestHooks = {
   parseFulfillmentShipStationAddressCorrectionDetails,
   parseProfileAddress,
   parseProfileState,
+  parseStripeCheckoutSessionResponse,
   parseUpdateFulfillmentAddress,
   profileApiTimeoutMs,
   profileApiErrorPayload,
