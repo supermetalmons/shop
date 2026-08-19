@@ -57,7 +57,7 @@ function listDeliveryOrderItems(order: any): DeliveryOrderItem[] {
       const refId = normalizePositiveInteger(item.refId);
       return refId ? ({ kind: item.kind, refId } as DeliveryOrderItem) : null;
     })
-    .filter((item): item is DeliveryOrderItem => Boolean(item));
+    .filter((item: DeliveryOrderItem | null): item is DeliveryOrderItem => Boolean(item));
 }
 
 function orderEmailItemContext(order: any): OrderEmailItemContext {

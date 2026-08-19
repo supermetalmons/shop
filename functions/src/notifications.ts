@@ -114,11 +114,11 @@ export function shouldNotifyBuyerForDeliveryShippedWrite(args: {
 
   const afterIsShippedWithTracking =
     normalizeFulfillmentStatus(args.after?.fulfillmentStatus) === 'Shipped' &&
-    Boolean(resolveFulfillmentTrackingHref(args.after.fulfillmentTrackingCode));
+    Boolean(resolveFulfillmentTrackingHref(args.after?.fulfillmentTrackingCode));
   if (!afterIsShippedWithTracking) return false;
 
   const beforeWasShippedWithTracking =
     normalizeFulfillmentStatus(args.before?.fulfillmentStatus) === 'Shipped' &&
-    Boolean(resolveFulfillmentTrackingHref(args.before.fulfillmentTrackingCode));
+    Boolean(resolveFulfillmentTrackingHref(args.before?.fulfillmentTrackingCode));
   return !beforeWasShippedWithTracking;
 }

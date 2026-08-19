@@ -236,10 +236,18 @@ test('migrated write response validators accept only exact public contracts', ()
   } as const;
   assert.deepEqual(profileApiTestHooks.parseFulfillmentStatusUpdate(status), status);
   assert.deepEqual(profileApiTestHooks.parseFulfillmentStatusUpdate({
+    ...status,
+    buyerOrderShippedEmailState: 'queued',
+  }), { ...status, buyerOrderShippedEmailState: 'queued' });
+  assert.deepEqual(profileApiTestHooks.parseFulfillmentStatusUpdate({
     deliveryId: 7,
     fulfillmentStatus: '',
   }), { deliveryId: 7, fulfillmentStatus: '' });
   assert.equal(profileApiTestHooks.parseFulfillmentStatusUpdate({ ...status, fulfillmentStatus: 'Delivered' }), null);
+  assert.equal(profileApiTestHooks.parseFulfillmentStatusUpdate({
+    ...status,
+    buyerOrderShippedEmailState: 'sent',
+  }), null);
   assert.equal(profileApiTestHooks.parseFulfillmentStatusUpdate({ ...status, internal: true }), null);
 
   const fulfillmentAddress = {
@@ -526,6 +534,18 @@ test('migrated profile writes are absent from Firebase exports and deployment se
   assert.match(
     scripts['decommission:firebase-shipstation-label-purchase'],
     /firebase functions:delete purchaseFulfillmentShipStationLabel --project mons-shop --force/,
+  );
+});
+
+test('migrated buyer shipped notification is absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+  const scripts = (JSON.parse(packageJson) as { scripts: Record<string, string> }).scripts;
+  assert.doesNotMatch(functionsSource, /export const notifyBuyerOnDeliveryShipped\b/);
+  assert.doesNotMatch(scripts['deploy:firebaseNewDrops'], /functions:notifyBuyerOnDeliveryShipped(?:,|$)/);
+  assert.equal(
+    scripts['decommission:firebase-buyer-shipped-notification'],
+    'firebase functions:delete notifyBuyerOnDeliveryShipped --project mons-shop --region us-central1 --force',
   );
 });
 

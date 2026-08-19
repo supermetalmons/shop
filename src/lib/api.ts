@@ -423,6 +423,16 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 }
 
+function hasExactRequiredAndOptionalKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[],
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return required.every((key) => Object.hasOwn(value, key)) &&
+    Object.keys(value).every((key) => allowed.has(key));
+}
+
 function parseProfileAddress(value: unknown): ProfileAddress | null {
   if (!isRecord(value)) return null;
   const required = ['id', 'country', 'hint', 'encrypted'] as const;
@@ -449,13 +459,17 @@ function parseProfileAddress(value: unknown): ProfileAddress | null {
 }
 
 function parseFulfillmentStatusUpdate(value: unknown): {
+  buyerOrderShippedEmailState?: 'pending' | 'queued';
   deliveryId: number;
   fulfillmentStatus: FulfillmentStatus | '';
   fulfillmentTrackingCode?: string;
 } | null {
   if (!isRecord(value)) return null;
-  const keys = Object.keys(value).sort().join(',');
-  if (keys !== 'deliveryId,fulfillmentStatus' && keys !== 'deliveryId,fulfillmentStatus,fulfillmentTrackingCode') return null;
+  if (!hasExactRequiredAndOptionalKeys(
+    value,
+    ['deliveryId', 'fulfillmentStatus'],
+    ['buyerOrderShippedEmailState', 'fulfillmentTrackingCode'],
+  )) return null;
   if (!Number.isSafeInteger(value.deliveryId) || Number(value.deliveryId) <= 0) return null;
   if (value.fulfillmentStatus !== '' && value.fulfillmentStatus !== 'Preparing' && value.fulfillmentStatus !== 'Shipped') return null;
   if (
@@ -466,7 +480,15 @@ function parseFulfillmentStatusUpdate(value: unknown): {
       value.fulfillmentTrackingCode.trim() !== value.fulfillmentTrackingCode
     )
   ) return null;
+  if (
+    value.buyerOrderShippedEmailState !== undefined &&
+    value.buyerOrderShippedEmailState !== 'pending' &&
+    value.buyerOrderShippedEmailState !== 'queued'
+  ) return null;
   return {
+    ...(value.buyerOrderShippedEmailState === 'pending' || value.buyerOrderShippedEmailState === 'queued'
+      ? { buyerOrderShippedEmailState: value.buyerOrderShippedEmailState }
+      : {}),
     deliveryId: Number(value.deliveryId),
     fulfillmentStatus: value.fulfillmentStatus,
     ...(typeof value.fulfillmentTrackingCode === 'string'
@@ -1045,6 +1067,9 @@ export async function listFulfillmentOrders(args: {
     Number.isSafeInteger(order.deliveryId) && Number(order.deliveryId) > 0 &&
     typeof order.owner === 'string' &&
     typeof order.status === 'string' &&
+    (order.buyerOrderShippedEmailState === undefined ||
+      order.buyerOrderShippedEmailState === 'pending' ||
+      order.buyerOrderShippedEmailState === 'queued') &&
     isRecord(order.address) &&
     Array.isArray(order.boxes) &&
     Array.isArray(order.looseDudes));
@@ -1093,11 +1118,18 @@ export async function updateFulfillmentStatus(
   status: FulfillmentStatus | '' | null,
   dropId: string,
   trackingCode?: string,
-): Promise<{ deliveryId: number; fulfillmentStatus: FulfillmentStatus | ''; fulfillmentTrackingCode?: string }> {
+  options: { retryShippedEmail?: boolean } = {},
+): Promise<{
+  buyerOrderShippedEmailState?: 'pending' | 'queued';
+  deliveryId: number;
+  fulfillmentStatus: FulfillmentStatus | '';
+  fulfillmentTrackingCode?: string;
+}> {
   const response = await callProfileApi('/fulfillment/order-status', {
     deliveryId,
     status,
     dropId,
+    ...(options.retryShippedEmail === true ? { retryShippedEmail: true } : {}),
     ...(trackingCode != null ? { trackingCode } : {}),
   });
   const result = parseFulfillmentStatusUpdate(response);

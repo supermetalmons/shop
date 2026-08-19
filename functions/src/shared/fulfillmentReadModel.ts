@@ -223,6 +223,10 @@ export function fulfillmentOrderFromRecord(
   }
 
   const shipstationLabel = storedLabel(shipstation.label);
+  const buyerOrderShippedEmailState = order.buyerOrderShippedEmailState === 'pending' ||
+    order.buyerOrderShippedEmailState === 'queued'
+    ? order.buyerOrderShippedEmailState
+    : undefined;
   return {
     dropId: options.dropId,
     deliveryId,
@@ -234,6 +238,7 @@ export function fulfillmentOrderFromRecord(
     fulfillmentStatus: normalizeFulfillmentStatus(order.fulfillmentStatus),
     fulfillmentTrackingCode: normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode),
     fulfillmentUpdatedAt: optionalMillis(order.fulfillmentUpdatedAt),
+    ...(buyerOrderShippedEmailState ? { buyerOrderShippedEmailState } : {}),
     fulfillmentInternalStatus: optionalString(order.fulfillmentInternalStatus),
     shipstationShipmentId: optionalString(shipstation.shipmentId),
     shipstationAddedAt: optionalMillis(shipstation.createdAt),

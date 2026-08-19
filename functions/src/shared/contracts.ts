@@ -282,6 +282,7 @@ export type FulfillmentOrder = {
   fulfillmentStatus?: FulfillmentStatus;
   fulfillmentTrackingCode?: string;
   fulfillmentUpdatedAt?: number;
+  buyerOrderShippedEmailState?: 'pending' | 'queued';
   fulfillmentInternalStatus?: string;
   shipstationShipmentId?: string;
   shipstationAddedAt?: number;

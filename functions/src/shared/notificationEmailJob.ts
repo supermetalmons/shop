@@ -54,6 +54,14 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_]{1,255}$/;
 const UTF8 = new TextEncoder();
 const NOTIFICATION_EMAIL_KIND_SET = new Set<string>(NOTIFICATION_EMAIL_KINDS);
 
+export function isNotificationEmailJobId(value: unknown): value is string {
+  return typeof value === 'string' && JOB_ID_PATTERN.test(value);
+}
+
+export function isNotificationEmailIdempotencyKey(value: unknown): value is string {
+  return typeof value === 'string' && IDEMPOTENCY_KEY_PATTERN.test(value);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -96,8 +104,8 @@ export function notificationEmailJobByteLength(job: NotificationEmailJobV1): num
 
 export function isNotificationEmailJobV1(value: unknown): value is NotificationEmailJobV1 {
   if (!isRecord(value) || !hasExactKeys(value, JOB_KEYS)) return false;
-  if (value.version !== NOTIFICATION_EMAIL_JOB_VERSION || !JOB_ID_PATTERN.test(String(value.jobId || ''))) return false;
-  if (!isNotificationEmailKind(value.kind) || !IDEMPOTENCY_KEY_PATTERN.test(String(value.idempotencyKey || ''))) return false;
+  if (value.version !== NOTIFICATION_EMAIL_JOB_VERSION || !isNotificationEmailJobId(value.jobId)) return false;
+  if (!isNotificationEmailKind(value.kind) || !isNotificationEmailIdempotencyKey(value.idempotencyKey)) return false;
   if (!Array.isArray(value.recipients) || value.recipients.length < 1 || value.recipients.length > NOTIFICATION_EMAIL_MAX_RECIPIENTS) {
     return false;
   }

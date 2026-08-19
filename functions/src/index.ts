@@ -110,9 +110,7 @@ import {
   normalizeNotificationEmailRecipient,
   planReadyToShipOrderNotifications,
   resolveNotificationDeliveryId,
-  shouldNotifyBuyerForDeliveryShippedWrite,
   shouldNotifyShippersForDeliveryReadyToShipWrite,
-  validateNotificationEmailRecipient,
 } from './notifications.js';
 import {
   enforceReceiptTransferAssetRateLimit,
@@ -120,13 +118,11 @@ import {
 } from './receiptTransferRateLimit.js';
 import {
   buildBuyerOrderReceivedEmailContent,
-  buildBuyerOrderShippedEmailContent,
   buildShipperReadyToShipEmailContent,
   buildStripeCheckoutManualReviewEmailContent,
   fulfillmentAppUrlForOrder,
   summarizeShipperReadyOrderItems,
   type BuyerOrderReceivedEmailMessage,
-  type BuyerOrderShippedEmailMessage,
   type BuyerVisibleOrderEmailItem,
   type ShipperReadyToShipEmailMessage,
   type ShipperVisibleOrderEmailItem,
@@ -169,9 +165,6 @@ import {
   resolveWalletSessionBinding,
   writeWalletSessionAndProfileIfCurrent,
 } from './walletSessions.js';
-import {
-  resolveFulfillmentTrackingHref,
-} from './fulfillmentTracking.js';
 import { parseRequest } from './request.js';
 import {
   createStripeCheckoutSessionForRequest,
@@ -4405,7 +4398,6 @@ async function buildTxWithOptionalDeliveryLookupTable(params: {
 
 
 const BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON = 'buyer_order_received_email_recipient_missing_or_invalid';
-const BUYER_ORDER_SHIPPED_MISSING_RECIPIENT_REASON = 'buyer_order_shipped_email_recipient_missing_or_invalid';
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
 
 async function enqueueRenderedNotificationEmail(params: {
@@ -4447,19 +4439,6 @@ async function sendBuyerOrderReceivedEmail(
   const email = buildBuyerOrderReceivedEmailContent(message);
   return enqueueRenderedNotificationEmail({
     kind: 'buyer_order_received',
-    idempotencyKey: message.idempotencyKey,
-    recipients: message.recipients,
-    subject: email.subject,
-    text: email.text,
-    html: email.html,
-    context: { dropId: message.dropId, deliveryId: message.deliveryId },
-  });
-}
-
-async function sendBuyerOrderShippedEmail(message: BuyerOrderShippedEmailMessage): Promise<void> {
-  const email = buildBuyerOrderShippedEmailContent(message);
-  return enqueueRenderedNotificationEmail({
-    kind: 'buyer_order_shipped',
     idempotencyKey: message.idempotencyKey,
     recipients: message.recipients,
     subject: email.subject,
@@ -4555,35 +4534,6 @@ async function sendBuyerOrderReceivedNotification(params: {
   });
 }
 
-async function sendBuyerOrderShippedNotification(params: {
-  order: any;
-  dropId: string;
-  dropName: string;
-  deliveryId: number;
-  recipient: string | null;
-  items: BuyerOrderEmailItems;
-  trackingUrl: string;
-}): Promise<void> {
-  if (!params.recipient) {
-    logger.info('notifyBuyerOnDeliveryShipped:skipped', {
-      dropId: params.dropId,
-      deliveryId: params.deliveryId,
-      reason: BUYER_ORDER_SHIPPED_MISSING_RECIPIENT_REASON,
-      hasEmailField: typeof params.order?.addressSnapshot?.email === 'string',
-    });
-    return;
-  }
-  await sendBuyerOrderShippedEmail({
-    idempotencyKey: `${params.dropId}:${params.deliveryId}:order_shipped`,
-    recipients: [params.recipient],
-    dropId: params.dropId,
-    dropName: params.dropName,
-    deliveryId: params.deliveryId,
-    items: params.items,
-    trackingUrl: params.trackingUrl,
-  });
-}
-
 export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
   {
     document: 'drops/{dropId}/deliveryOrders/{deliveryId}',
@@ -4670,79 +4620,6 @@ export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
     const results = await Promise.allSettled(tasks);
     const rejected = firstRejectedReadyToShipNotificationError(results, () => true);
     if (rejected) throw rejected;
-  },
-);
-
-export const notifyBuyerOnDeliveryShipped = onDocumentUpdated(
-  {
-    document: 'drops/{dropId}/deliveryOrders/{deliveryId}',
-    secrets: [NOTIFICATION_ENQUEUE_SECRET],
-    retry: true,
-  },
-  async (event) => {
-    const beforeSnap = event.data?.before;
-    const afterSnap = event.data?.after;
-    if (!beforeSnap || !afterSnap) return;
-    if (
-      !shouldNotifyBuyerForDeliveryShippedWrite({
-        before: {
-          fulfillmentStatus: beforeSnap.get('fulfillmentStatus'),
-          fulfillmentTrackingCode: beforeSnap.get('fulfillmentTrackingCode'),
-        },
-        after: {
-          fulfillmentStatus: afterSnap.get('fulfillmentStatus'),
-          fulfillmentTrackingCode: afterSnap.get('fulfillmentTrackingCode'),
-          source: afterSnap.get('source'),
-        },
-        ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
-      })
-    ) {
-      return;
-    }
-
-    let dropId: string;
-    let dropName: string;
-    try {
-      dropId = requireDropId(event.params.dropId);
-      const dropRuntime = getDropRuntime(dropId);
-      dropName = dropRuntime.config.displayName || dropRuntime.config.collectionName || dropId;
-    } catch (err) {
-      logger.warn('notifyBuyerOnDeliveryShipped:invalidDrop', {
-        dropId: event.params.dropId,
-        error: summarizeError(err),
-      });
-      return;
-    }
-
-    const deliveryDocId = String(event.params.deliveryId || '').trim();
-    const order = afterSnap.data() as any;
-    const deliveryId = resolveNotificationDeliveryId({
-      deliveryDocId,
-      storedDeliveryId: order.deliveryId,
-    });
-    if (!deliveryId) {
-      logger.warn('notifyBuyerOnDeliveryShipped:invalidDeliveryId', {
-        dropId,
-        deliveryDocId,
-        storedDeliveryId: order.deliveryId ?? null,
-      });
-      return;
-    }
-
-    const trackingUrl = resolveFulfillmentTrackingHref(order.fulfillmentTrackingCode);
-    if (!trackingUrl) return;
-
-    const recipient = validateNotificationEmailRecipient(order?.addressSnapshot?.email);
-    const items = recipient ? await buildBuyerVisibleOrderEmailItems(order, { dropId }) : [];
-    await sendBuyerOrderShippedNotification({
-      order,
-      dropId,
-      dropName,
-      deliveryId,
-      recipient,
-      items,
-      trackingUrl,
-    });
   },
 );
 

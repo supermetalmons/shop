@@ -1369,7 +1369,7 @@ test('frontend deployment gates upload on typechecking, tests, build, and bundle
   assert.match(packageJson.scripts['check:api'], /dry-run:api:triggers/);
 });
 
-test('API observability samples custom logs without automatic invocation logs', () => {
+test('API observability retains all custom logs without automatic invocation logs', () => {
   const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8')) as {
     observability?: {
       enabled?: boolean;
@@ -1382,7 +1382,7 @@ test('API observability samples custom logs without automatic invocation logs', 
   };
   assert.equal(config.observability?.enabled, true);
   assert.equal(config.observability?.logs?.enabled, true);
-  assert.equal(config.observability?.logs?.head_sampling_rate, 0.1);
+  assert.equal(config.observability?.logs?.head_sampling_rate, 1);
   assert.equal(config.observability?.logs?.invocation_logs, false);
 });
 

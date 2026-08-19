@@ -31,6 +31,7 @@ const OTHER = 'So11111111111111111111111111111111111111112';
 const UID = 'firebase-user-one';
 const NOW_MS = Date.parse('2026-08-18T12:00:00.000Z');
 const ADDRESS_ID = 'AbCdEfGhIjKlMnOpQrSt';
+const NOTIFICATION_JOB_ID = '123e4567-e89b-42d3-a456-426614174000';
 const ADDRESS_KEY_PAIR = nacl.box.keyPair();
 const ADDRESS_SECRET = Buffer.from(ADDRESS_KEY_PAIR.secretKey).toString('base64');
 const SHIP_FROM = {
@@ -118,10 +119,14 @@ function dependencies(
   return {
     accessTokenProvider: accessTokenProvider(),
     autoId: () => ADDRESS_ID,
+    createNotificationJobId: () => NOTIFICATION_JOB_ID,
+    error: () => undefined,
+    log: () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
     timeoutMs: 500,
     verifyIdToken: async () => ({ uid: UID }),
+    warn: () => undefined,
     ...overrides,
   };
 }
@@ -133,6 +138,14 @@ const fulfillmentEnv = {
   SHIPSTATION_API_KEY: 'shipstation-api-key',
   SHIPSTATION_SHIP_FROM: JSON.stringify(SHIP_FROM),
 };
+
+function notificationQueue(send: Queue['send']): Queue {
+  return {
+    send,
+    sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+  };
+}
 
 function firestoreValue(value: unknown): unknown {
   if (typeof value === 'string') return { stringValue: value };
@@ -346,8 +359,8 @@ test('status route preserves, replaces, and deletes tracking fields with exact u
       const url = new URL(String(input));
       if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
-        assert.deepEqual(url.searchParams.getAll('mask.fieldPaths'), ['fulfillmentTrackingCode']);
-        return Response.json({ fields: { fulfillmentTrackingCode: stringValue(' https://tracking.example/old ') } });
+        assert.deepEqual(url.searchParams.getAll('mask.fieldPaths'), []);
+        return Response.json(orderDocument({ fulfillmentTrackingCode: ' https://tracking.example/old ' }));
       }
       if (url.pathname.endsWith('/documents:commit')) {
         commit = JSON.parse(String(init?.body));
@@ -370,9 +383,419 @@ test('status route preserves, replaces, and deletes tracking fields with exact u
       },
       updateMask: { fieldPaths: entry.expectedMask },
       updateTransforms: [{ fieldPath: 'fulfillmentUpdatedAt', setToServerValue: 'REQUEST_TIME' }],
-      currentDocument: { exists: true },
+      currentDocument: { updateTime: '2026-08-18T12:00:00.000000Z' },
     });
   }
+});
+
+test('status route atomically marks, queues, and finalizes the first shipped email', async () => {
+  const commits: Array<{ writes: Array<Record<string, any>> }> = [];
+  const queued: unknown[] = [];
+  const logs: Record<string, unknown>[] = [];
+  let orderReads = 0;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      orderReads += 1;
+      return Response.json(orderDocument(orderReads === 1 ? {
+        deliveryId: 7,
+        addressSnapshot: { email: 'buyer@example.com' },
+        fulfillmentStatus: 'Preparing',
+      } : {
+        deliveryId: 7,
+        addressSnapshot: { email: 'buyer@example.com' },
+        fulfillmentStatus: 'Shipped',
+        fulfillmentTrackingCode: 'https://tracking.example/new',
+        buyerOrderShippedEmailState: 'pending',
+        buyerOrderShippedEmailJobId: NOTIFICATION_JOB_ID,
+      }, orderReads === 1 ? '2026-08-18T12:00:00.000000Z' : '2026-08-18T12:00:01.000000Z'));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commits.push(JSON.parse(String(init?.body)));
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:02Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      status: 'Shipped',
+      trackingCode: 'https://tracking.example/new',
+    }),
+    {
+      ...env,
+      NOTIFICATION_EMAIL_QUEUE: notificationQueue(async (body) => {
+        queued.push(body);
+        return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+      }),
+    },
+    FULFILLMENT_ORDER_STATUS_PATH,
+    dependencies(providerFetch, {
+      error: (entry) => logs.push(entry),
+      log: (entry) => logs.push(entry),
+      warn: (entry) => logs.push(entry),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), {
+    buyerOrderShippedEmailState: 'queued',
+    deliveryId: 7,
+    fulfillmentStatus: 'Shipped',
+    fulfillmentTrackingCode: 'https://tracking.example/new',
+  });
+  assert.equal(queued.length, 1);
+  assert.deepEqual(queued[0], {
+    version: 1,
+    jobId: NOTIFICATION_JOB_ID,
+    kind: 'buyer_order_shipped',
+    idempotencyKey: 'card_nft_2:7:order_shipped',
+    recipients: ['buyer@example.com'],
+    subject: 'Order shipped - Card NFT 2',
+    text: (queued[0] as { text: string }).text,
+    html: (queued[0] as { html: string }).html,
+    context: { dropId: 'card_nft_2', deliveryId: 7 },
+  });
+  assert.match((queued[0] as { text: string }).text, /Tracking: https:\/\/tracking\.example\/new/);
+  assert.match((queued[0] as { html: string }).html, /Track package/);
+  assert.equal(commits.length, 2);
+  assert.deepEqual(commits[0].writes[0].updateMask.fieldPaths, [
+    'dropId',
+    'fulfillmentUpdatedBy',
+    'fulfillmentStatus',
+    'fulfillmentTrackingCode',
+    'buyerOrderShippedEmailState',
+    'buyerOrderShippedEmailJobId',
+    'buyerOrderShippedEmailIdempotencyKey',
+    'buyerOrderShippedEmailQueuedAt',
+  ]);
+  assert.equal(
+    commits[0].writes[0].update.fields.buyerOrderShippedEmailState.stringValue,
+    'pending',
+  );
+  assert.equal(
+    commits[0].writes[0].update.fields.buyerOrderShippedEmailJobId.stringValue,
+    NOTIFICATION_JOB_ID,
+  );
+  assert.equal(
+    commits[0].writes[0].update.fields.buyerOrderShippedEmailIdempotencyKey.stringValue,
+    'card_nft_2:7:order_shipped',
+  );
+  assert.deepEqual(commits[0].writes[0].currentDocument, {
+    updateTime: '2026-08-18T12:00:00.000000Z',
+  });
+  assert.equal(commits[1].writes[0].update.fields.buyerOrderShippedEmailState.stringValue, 'queued');
+  assert.deepEqual(commits[1].writes[0].updateTransforms, [{
+    fieldPath: 'buyerOrderShippedEmailQueuedAt',
+    setToServerValue: 'REQUEST_TIME',
+  }]);
+  assert.ok(logs.some((entry) => entry.event === 'buyer_order_shipped_notification_queued'));
+});
+
+test('status route leaves a pending marker and returns 503 when Queue publication fails', async () => {
+  let commit: { writes: Array<Record<string, any>> } | undefined;
+  const errors: Record<string, unknown>[] = [];
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        deliveryId: 7,
+        addressSnapshot: { email: 'buyer@example.com' },
+        fulfillmentStatus: 'Preparing',
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commit = JSON.parse(String(init?.body));
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:01Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      status: 'Shipped',
+      trackingCode: 'https://tracking.example/new',
+    }),
+    {
+      ...env,
+      NOTIFICATION_EMAIL_QUEUE: notificationQueue(async () => {
+        throw new Error('queue unavailable');
+      }),
+    },
+    FULFILLMENT_ORDER_STATUS_PATH,
+    dependencies(providerFetch, { error: (entry) => errors.push(entry) }),
+  );
+  assert.equal(result.response.status, 503);
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: {
+      code: 'unavailable',
+      message: 'Order status was saved, but the shipment email could not be queued. Retry saving the status.',
+    },
+  });
+  assert.equal(commit?.writes[0].update.fields.buyerOrderShippedEmailState.stringValue, 'pending');
+  assert.equal(commit?.writes[0].update.fields.buyerOrderShippedEmailJobId.stringValue, NOTIFICATION_JOB_ID);
+  assert.equal(errors[0]?.event, 'buyer_order_shipped_notification_enqueue_failed');
+});
+
+test('status route retries a Firestore conflict before publishing one Queue job', async () => {
+  let commits = 0;
+  let orderReads = 0;
+  let queueSends = 0;
+  const providerFetch: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      orderReads += 1;
+      return Response.json(orderDocument(orderReads < 3 ? {
+        deliveryId: 7,
+        addressSnapshot: { email: 'buyer@example.com' },
+        fulfillmentStatus: 'Preparing',
+      } : {
+        deliveryId: 7,
+        addressSnapshot: { email: 'buyer@example.com' },
+        fulfillmentStatus: 'Shipped',
+        fulfillmentTrackingCode: 'https://tracking.example/new',
+        buyerOrderShippedEmailState: 'pending',
+        buyerOrderShippedEmailJobId: NOTIFICATION_JOB_ID,
+      }, `2026-08-18T12:00:0${orderReads}.000000Z`));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commits += 1;
+      if (commits === 1) {
+        return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 409 });
+      }
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:04Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      status: 'Shipped',
+      trackingCode: 'https://tracking.example/new',
+    }),
+    {
+      ...env,
+      NOTIFICATION_EMAIL_QUEUE: notificationQueue(async () => {
+        queueSends += 1;
+        return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+      }),
+    },
+    FULFILLMENT_ORDER_STATUS_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal(commits, 3);
+  assert.equal(queueSends, 1);
+});
+
+test('status route retries a pending shipped notification and skips a queued one', async () => {
+  for (const [emailState, expectedQueueCount] of [['pending', 1], ['queued', 0]] as const) {
+    const queued: unknown[] = [];
+    let orderReads = 0;
+    const providerFetch: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+      if (url.pathname.endsWith('/deliveryOrders/7')) {
+        orderReads += 1;
+        return Response.json(orderDocument({
+          deliveryId: 7,
+          addressSnapshot: { email: 'buyer@example.com' },
+          fulfillmentStatus: 'Shipped',
+          fulfillmentTrackingCode: 'https://tracking.example/new',
+          buyerOrderShippedEmailState: orderReads > 1 ? 'pending' : emailState,
+          buyerOrderShippedEmailJobId: NOTIFICATION_JOB_ID,
+        }, orderReads > 1 ? '2026-08-18T12:00:01.000000Z' : '2026-08-18T12:00:00.000000Z'));
+      }
+      if (url.pathname.endsWith('/documents:commit')) {
+        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:02Z' });
+      }
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    };
+    const result = await handleProfileWriteRequest(
+      request(FULFILLMENT_ORDER_STATUS_PATH, {
+        dropId: 'card_nft_2',
+        deliveryId: 7,
+        status: 'Shipped',
+        trackingCode: 'https://tracking.example/new',
+      }),
+      {
+        ...env,
+        NOTIFICATION_EMAIL_QUEUE: notificationQueue(async (body) => {
+          queued.push(body);
+          return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+        }),
+      },
+      FULFILLMENT_ORDER_STATUS_PATH,
+      dependencies(providerFetch),
+    );
+    assert.equal(result.response.status, 200);
+    assert.equal(queued.length, expectedQueueCount);
+  }
+});
+
+test('status route explicitly replays a queued shipped email with a fresh idempotency key', async () => {
+  const previousJobId = '123e4567-e89b-42d3-a456-426614174001';
+  const retryIdempotencyKey = `card_nft_2:7:order_shipped:retry:${NOTIFICATION_JOB_ID}`;
+  const queued: Array<Record<string, unknown>> = [];
+  const commits: Array<{ writes: Array<Record<string, any>> }> = [];
+  let orderReads = 0;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      orderReads += 1;
+      return Response.json(orderDocument({
+        deliveryId: 7,
+        addressSnapshot: { email: 'buyer@example.com' },
+        fulfillmentStatus: 'Shipped',
+        fulfillmentTrackingCode: 'https://tracking.example/new',
+        buyerOrderShippedEmailState: orderReads === 1 ? 'queued' : 'pending',
+        buyerOrderShippedEmailJobId: orderReads === 1 ? previousJobId : NOTIFICATION_JOB_ID,
+        buyerOrderShippedEmailIdempotencyKey: orderReads === 1
+          ? 'card_nft_2:7:order_shipped'
+          : retryIdempotencyKey,
+      }, orderReads === 1 ? '2026-08-18T12:00:00.000000Z' : '2026-08-18T12:00:01.000000Z'));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commits.push(JSON.parse(String(init?.body)));
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:02Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      retryShippedEmail: true,
+      status: 'Shipped',
+      trackingCode: 'https://tracking.example/new',
+    }),
+    {
+      ...env,
+      NOTIFICATION_EMAIL_QUEUE: notificationQueue(async (body) => {
+        queued.push(body as Record<string, unknown>);
+        return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+      }),
+    },
+    FULFILLMENT_ORDER_STATUS_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].jobId, NOTIFICATION_JOB_ID);
+  assert.equal(queued[0].idempotencyKey, retryIdempotencyKey);
+  assert.equal(
+    commits[0].writes[0].update.fields.buyerOrderShippedEmailIdempotencyKey.stringValue,
+    retryIdempotencyKey,
+  );
+  assert.deepEqual(await result.response.json(), {
+    buyerOrderShippedEmailState: 'queued',
+    deliveryId: 7,
+    fulfillmentStatus: 'Shipped',
+    fulfillmentTrackingCode: 'https://tracking.example/new',
+  });
+});
+
+test('status route clears a pending marker when shipment is reversed', async () => {
+  let commit: { writes: Array<Record<string, any>> } | undefined;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        deliveryId: 7,
+        addressSnapshot: { email: 'buyer@example.com' },
+        fulfillmentStatus: 'Shipped',
+        fulfillmentTrackingCode: 'https://tracking.example/new',
+        buyerOrderShippedEmailState: 'pending',
+        buyerOrderShippedEmailJobId: NOTIFICATION_JOB_ID,
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commit = JSON.parse(String(init?.body));
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:01Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      status: 'Preparing',
+    }),
+    env,
+    FULFILLMENT_ORDER_STATUS_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  const write = commit?.writes[0];
+  assert.ok(write);
+  assert.ok(write.updateMask.fieldPaths.includes('buyerOrderShippedEmailState'));
+  assert.ok(write.updateMask.fieldPaths.includes('buyerOrderShippedEmailJobId'));
+  assert.ok(write.updateMask.fieldPaths.includes('buyerOrderShippedEmailIdempotencyKey'));
+  assert.ok(write.updateMask.fieldPaths.includes('buyerOrderShippedEmailQueuedAt'));
+  assert.equal(Object.hasOwn(write.update.fields, 'buyerOrderShippedEmailState'), false);
+  assert.equal(Object.hasOwn(write.update.fields, 'buyerOrderShippedEmailJobId'), false);
+  assert.equal(Object.hasOwn(write.update.fields, 'buyerOrderShippedEmailIdempotencyKey'), false);
+});
+
+test('status route returns success when only queued-marker finalization fails', async () => {
+  const queued: unknown[] = [];
+  const errors: Record<string, unknown>[] = [];
+  let orderReads = 0;
+  let commits = 0;
+  const providerFetch: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      orderReads += 1;
+      return Response.json(orderDocument(orderReads === 1 ? {
+        deliveryId: 7,
+        addressSnapshot: { email: 'buyer@example.com' },
+        fulfillmentStatus: 'Preparing',
+      } : {
+        deliveryId: 7,
+        addressSnapshot: { email: 'buyer@example.com' },
+        fulfillmentStatus: 'Shipped',
+        fulfillmentTrackingCode: 'https://tracking.example/new',
+        buyerOrderShippedEmailState: 'pending',
+        buyerOrderShippedEmailJobId: NOTIFICATION_JOB_ID,
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commits += 1;
+      return commits === 1
+        ? Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:01Z' })
+        : Response.json({ error: { status: 'PERMISSION_DENIED' } }, { status: 403 });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      status: 'Shipped',
+      trackingCode: 'https://tracking.example/new',
+    }),
+    {
+      ...env,
+      NOTIFICATION_EMAIL_QUEUE: notificationQueue(async (body) => {
+        queued.push(body);
+        return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+      }),
+    },
+    FULFILLMENT_ORDER_STATUS_PATH,
+    dependencies(providerFetch, { error: (entry) => errors.push(entry) }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal(queued.length, 1);
+  assert.equal(errors[0]?.event, 'buyer_order_shipped_notification_marker_finalization_failed');
 });
 
 test('fulfillment address route encrypts the address and conditionally clears stale ShipStation rates', async () => {

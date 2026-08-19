@@ -106,6 +106,13 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
+import {
+  BUYER_ORDER_SHIPPED_EMAIL_PENDING,
+  BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
+  createBuyerOrderShippedNotificationJob,
+  decideBuyerOrderShippedNotification,
+  type BuyerOrderShippedDecision,
+} from './buyerOrderShipped.js';
 
 export const PROFILE_ADDRESSES_PATH = '/profile/addresses';
 export const FULFILLMENT_ORDER_STATUS_PATH = '/fulfillment/order-status';
@@ -150,6 +157,9 @@ export type ProfileWriteResult = {
 type ProfileWriteDependencies = {
   accessTokenProvider: GoogleAccessTokenProvider;
   autoId: () => string;
+  createNotificationJobId: () => string;
+  error: (entry: Record<string, unknown>) => void;
+  log: (entry: Record<string, unknown>) => void;
   nowMs: () => number;
   pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
   providerFetch: ProfileProviderFetch;
@@ -160,10 +170,11 @@ type ProfileWriteDependencies = {
     signal: AbortSignal,
     nowMs?: number,
   ) => Promise<FirebaseIdentity>;
+  warn: (entry: Record<string, unknown>) => void;
 };
 
 type ProfileWriteEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
-  'ADDRESS_DECRYPTION_SECRET' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
+  'ADDRESS_DECRYPTION_SECRET' | 'NOTIFICATION_EMAIL_QUEUE' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
 >>;
 
 const PROFILE_WRITE_TIMEOUT_MS = 15_000;
@@ -205,6 +216,7 @@ const saveAddressSchema = z.object({
 const fulfillmentStatusSchema = z.object({
   dropId: z.string().min(1).max(64),
   deliveryId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  retryShippedEmail: z.boolean().optional(),
   status: z.union([z.enum(FULFILLMENT_STATUS_OPTIONS), z.literal(''), z.null()]),
   trackingCode: z.string().optional(),
 }).strict();
@@ -292,11 +304,15 @@ function firestoreAutoId(): string {
 const defaultDependencies: ProfileWriteDependencies = {
   accessTokenProvider: defaultAccessTokenProvider,
   autoId: firestoreAutoId,
+  createNotificationJobId: () => crypto.randomUUID(),
+  error: (entry) => console.error(entry),
+  log: (entry) => console.log(entry),
   nowMs: () => Date.now(),
   pauseForRatePoll,
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: PROFILE_WRITE_TIMEOUT_MS,
   verifyIdToken: verifyFirebaseIdToken,
+  warn: (entry) => console.warn(entry),
 };
 
 function jsonResponse(body: unknown, status: number): Response {
@@ -511,64 +527,262 @@ async function saveAddress(
   };
 }
 
-async function updateFulfillmentStatus(
-  body: z.infer<typeof fulfillmentStatusSchema>,
-  wallet: string,
-  common: {
-    accessTokenProvider: GoogleAccessTokenProvider;
-    nowMs: number;
-    providerFetch: ProfileProviderFetch;
-    serviceAccountJson: string;
-    signal: AbortSignal;
-  },
-): Promise<{
+type FulfillmentStatusResponse = {
+  buyerOrderShippedEmailState?: 'pending' | 'queued';
   deliveryId: number;
   fulfillmentStatus: (typeof FULFILLMENT_STATUS_OPTIONS)[number] | '';
   fulfillmentTrackingCode?: string;
-}> {
+};
+
+const BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD = 'buyerOrderShippedEmailState';
+const BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD = 'buyerOrderShippedEmailJobId';
+const BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD = 'buyerOrderShippedEmailIdempotencyKey';
+const BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD = 'buyerOrderShippedEmailQueuedAt';
+
+type FulfillmentStatusMutation = {
+  decision: BuyerOrderShippedDecision;
+  order: Record<string, unknown>;
+  response: FulfillmentStatusResponse;
+};
+
+function orderAfterFulfillmentStatusUpdate(args: {
+  dropId: string;
+  fields: Record<string, unknown>;
+  nextStatus: FulfillmentStatusResponse['fulfillmentStatus'];
+  nextTrackingCode?: string;
+  wallet: string;
+}): Record<string, unknown> {
+  const order: Record<string, unknown> = {
+    ...args.fields,
+    dropId: args.dropId,
+    fulfillmentUpdatedBy: args.wallet,
+  };
+  if (args.nextStatus) order.fulfillmentStatus = args.nextStatus;
+  else delete order.fulfillmentStatus;
+  if (args.nextStatus === 'Shipped') {
+    if (args.nextTrackingCode) order.fulfillmentTrackingCode = args.nextTrackingCode;
+    else delete order.fulfillmentTrackingCode;
+  }
+  return order;
+}
+
+function markerFieldPaths(): string[] {
+  return [
+    BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD,
+    BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD,
+    BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD,
+    BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD,
+  ];
+}
+
+async function markBuyerOrderShippedEmailQueued(args: {
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  jobId: string;
+}): Promise<boolean> {
+  return mutateDeliveryOrder({
+    common: args.common,
+    deliveryId: args.deliveryId,
+    dropId: args.dropId,
+    build: (document) => {
+      if (
+        document.fields[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] !== BUYER_ORDER_SHIPPED_EMAIL_PENDING ||
+        document.fields[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD] !== args.jobId
+      ) {
+        return { value: false };
+      }
+      return {
+        value: true,
+        write: {
+          update: {
+            name: documentName(`drops/${args.dropId}/deliveryOrders/${args.deliveryId}`),
+            fields: {
+              [BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD]: firestoreString(BUYER_ORDER_SHIPPED_EMAIL_QUEUED),
+              [BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD]: firestoreString(args.jobId),
+            },
+          },
+          updateMask: {
+            fieldPaths: [
+              BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD,
+              BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD,
+            ],
+          },
+          updateTransforms: [{
+            fieldPath: BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD,
+            setToServerValue: 'REQUEST_TIME',
+          }],
+          currentDocument: { updateTime: document.updateTime },
+        },
+      };
+    },
+  });
+}
+
+async function updateFulfillmentStatus(
+  body: z.infer<typeof fulfillmentStatusSchema>,
+  wallet: string,
+  common: FirestoreWriteCommon,
+  env: ProfileWriteEnv,
+  dependencies: Pick<
+    ProfileWriteDependencies,
+    'createNotificationJobId' | 'error' | 'log' | 'warn'
+  >,
+): Promise<FulfillmentStatusResponse> {
   const dropId = supportedDropId(body.dropId);
   if (!walletHasFulfillmentDropAccess(wallet, dropId, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET)) {
     throw new ProfileReadError('permission-denied', 403, 'Fulfillment access denied.');
   }
-  const orderPath = `drops/${dropId}/deliveryOrders/${body.deliveryId}`;
-  const orderUrl = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/${orderPath}`);
-  orderUrl.searchParams.append('mask.fieldPaths', 'fulfillmentTrackingCode');
-  const orderDocument = await authenticatedFirestoreRequest({
-    ...common,
-    method: 'GET',
-    url: orderUrl.toString(),
-  });
-  if (orderDocument === null) throw new ProfileReadError('not-found', 404, 'Delivery order not found.');
-  if (!isRecord(orderDocument)) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-  const orderFields = orderDocument.fields === undefined ? {} : decodeFirestoreFields(orderDocument.fields);
-  if (!orderFields) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-  const nextStatus = body.status || '';
-  let nextTrackingCode = normalizeOptionalFulfillmentTrackingCode(orderFields.fulfillmentTrackingCode);
-  const updateFields: Record<string, unknown> = {
-    dropId: firestoreString(dropId),
-    fulfillmentUpdatedBy: firestoreString(wallet),
-    ...(nextStatus ? { fulfillmentStatus: firestoreString(nextStatus) } : {}),
-  };
-  const updateMask = ['dropId', 'fulfillmentUpdatedBy', 'fulfillmentStatus'];
-  if (nextStatus === 'Shipped') {
-    nextTrackingCode = sanitizeFulfillmentTrackingCode(body.trackingCode);
-    updateMask.push('fulfillmentTrackingCode');
-    if (nextTrackingCode) updateFields.fulfillmentTrackingCode = firestoreString(nextTrackingCode);
-  }
-  await commitWrites(common, [{
-    update: {
-      name: documentName(orderPath),
-      fields: updateFields,
-    },
-    updateMask: { fieldPaths: updateMask },
-    updateTransforms: [{ fieldPath: 'fulfillmentUpdatedAt', setToServerValue: 'REQUEST_TIME' }],
-    currentDocument: { exists: true },
-  }]);
-  return {
+  const mutation = await mutateDeliveryOrder({
+    common,
     deliveryId: body.deliveryId,
-    fulfillmentStatus: nextStatus,
-    ...(nextTrackingCode ? { fulfillmentTrackingCode: nextTrackingCode } : {}),
+    dropId,
+    build: (document): { value: FulfillmentStatusMutation; write: Record<string, unknown> } => {
+      const nextStatus = body.status || '';
+      const currentTrackingCode = normalizeOptionalFulfillmentTrackingCode(
+        document.fields.fulfillmentTrackingCode,
+      );
+      const nextTrackingCode = nextStatus === 'Shipped'
+        ? sanitizeFulfillmentTrackingCode(body.trackingCode)
+        : currentTrackingCode;
+      const order = orderAfterFulfillmentStatusUpdate({
+        dropId,
+        fields: document.fields,
+        nextStatus,
+        nextTrackingCode,
+        wallet,
+      });
+      const decision = decideBuyerOrderShippedNotification({
+        before: document.fields,
+        after: order,
+        deliveryDocId: body.deliveryId,
+        dropId,
+        emailState: document.fields[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD],
+        forceRetry: body.retryShippedEmail === true,
+        idempotencyKey: document.fields[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD],
+        jobId: document.fields[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD],
+        createJobId: dependencies.createNotificationJobId,
+      });
+      const updateFields: Record<string, unknown> = {
+        dropId: firestoreString(dropId),
+        fulfillmentUpdatedBy: firestoreString(wallet),
+        ...(nextStatus ? { fulfillmentStatus: firestoreString(nextStatus) } : {}),
+      };
+      const updateMask = ['dropId', 'fulfillmentUpdatedBy', 'fulfillmentStatus'];
+      if (nextStatus === 'Shipped') {
+        updateMask.push('fulfillmentTrackingCode');
+        if (nextTrackingCode) updateFields.fulfillmentTrackingCode = firestoreString(nextTrackingCode);
+      }
+      if (decision.kind === 'send') {
+        updateFields[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] = firestoreString(BUYER_ORDER_SHIPPED_EMAIL_PENDING);
+        updateFields[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD] = firestoreString(decision.jobId);
+        updateFields[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD] = firestoreString(decision.idempotencyKey);
+        updateMask.push(...markerFieldPaths());
+        order[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] = BUYER_ORDER_SHIPPED_EMAIL_PENDING;
+        order[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD] = decision.jobId;
+        order[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD] = decision.idempotencyKey;
+        delete order[BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD];
+      } else if (decision.clearPending) {
+        updateMask.push(...markerFieldPaths());
+        delete order[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD];
+        delete order[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD];
+        delete order[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD];
+        delete order[BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD];
+      }
+      return {
+        value: {
+          decision,
+          order,
+          response: {
+            ...(decision.kind === 'send'
+              ? { buyerOrderShippedEmailState: BUYER_ORDER_SHIPPED_EMAIL_PENDING }
+              : document.fields[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] === BUYER_ORDER_SHIPPED_EMAIL_QUEUED
+                ? { buyerOrderShippedEmailState: BUYER_ORDER_SHIPPED_EMAIL_QUEUED }
+                : {}),
+            deliveryId: body.deliveryId,
+            fulfillmentStatus: nextStatus,
+            ...(nextTrackingCode ? { fulfillmentTrackingCode: nextTrackingCode } : {}),
+          },
+        },
+        write: {
+          update: {
+            name: documentName(`drops/${dropId}/deliveryOrders/${body.deliveryId}`),
+            fields: updateFields,
+          },
+          updateMask: { fieldPaths: updateMask },
+          updateTransforms: [{ fieldPath: 'fulfillmentUpdatedAt', setToServerValue: 'REQUEST_TIME' }],
+          currentDocument: { updateTime: document.updateTime },
+        },
+      };
+    },
+  });
+  if (mutation.decision.kind === 'skip') {
+    dependencies.log({
+      event: 'buyer_order_shipped_notification_skipped',
+      dropId,
+      deliveryId: body.deliveryId,
+      reason: mutation.decision.reason,
+    });
+    return mutation.response;
+  }
+
+  const jobContext = {
+    dropId,
+    deliveryId: mutation.decision.deliveryId,
+    jobId: mutation.decision.jobId,
   };
+  let job;
+  try {
+    job = await createBuyerOrderShippedNotificationJob({
+      ...jobContext,
+      idempotencyKey: mutation.decision.idempotencyKey,
+      order: mutation.order,
+    });
+    if (!env.NOTIFICATION_EMAIL_QUEUE) throw new Error('Notification email queue binding is unavailable');
+    await env.NOTIFICATION_EMAIL_QUEUE.send(job, { contentType: 'json' });
+  } catch (error) {
+    dependencies.error({
+      event: 'buyer_order_shipped_notification_enqueue_failed',
+      ...jobContext,
+      error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+    });
+    throw new ProfileReadError(
+      'unavailable',
+      503,
+      'Order status was saved, but the shipment email could not be queued. Retry saving the status.',
+    );
+  }
+  dependencies.log({
+    event: 'buyer_order_shipped_notification_queued',
+    ...jobContext,
+    kind: job.kind,
+  });
+  try {
+    const marked = await markBuyerOrderShippedEmailQueued({
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      jobId: mutation.decision.jobId,
+    });
+    if (marked) {
+      return {
+        ...mutation.response,
+        buyerOrderShippedEmailState: BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
+      };
+    }
+    dependencies.warn({
+      event: 'buyer_order_shipped_notification_marker_finalization_failed',
+      ...jobContext,
+      reason: 'pending-marker-changed',
+    });
+  } catch (error) {
+    dependencies.error({
+      event: 'buyer_order_shipped_notification_marker_finalization_failed',
+      ...jobContext,
+      error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+    });
+  }
+  return mutation.response;
 }
 
 type FirestoreWriteCommon = {
@@ -3104,6 +3318,8 @@ export async function handleProfileWriteRequest(
         requestBody as z.infer<typeof fulfillmentStatusSchema>,
         wallet,
         common,
+        env,
+        dependencies,
       );
     } else if (path === FULFILLMENT_ORDER_ADDRESS_PATH) {
       const addressSecret = typeof env.ADDRESS_DECRYPTION_SECRET === 'string'
