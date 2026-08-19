@@ -108,6 +108,7 @@ import {
   normalizeShipStationPackage,
   SHIPSTATION_PACKAGE_RANGE_MESSAGE,
 } from '../functions/src/shared/shipstationPackage.js';
+import { buildShipStationCustomsDeclaration } from '../functions/src/shared/shipstationCustoms.js';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const SHIPSTATION_AWAITING_SHIPMENT_URL = 'https://ship.shipstation.com/orders/awaiting-shipment';
@@ -208,7 +209,18 @@ const SHIPSTATION_PACKAGE_FIELDS: { key: keyof ShipStationPackageDraft; label: s
 
 function defaultShipStationPackageDraft(order: FulfillmentOrder): ShipStationPackageDraft {
   const parcel = defaultShipStationPackage(order.boxes.length + order.looseDudes.length);
-  return shipStationPackageDraft(parcel);
+  const countryCode = String(order.address.countryCode || '').trim().toUpperCase();
+  if (!countryCode || countryCode === 'US') return shipStationPackageDraft(parcel);
+  const declaration = buildShipStationCustomsDeclaration(
+    order.dropId,
+    order.boxes.length,
+    order.looseDudes.length,
+  );
+  return shipStationPackageDraft(
+    declaration && parcel.weight < declaration.minimumPackageWeightOunces
+      ? { ...parcel, weight: declaration.minimumPackageWeightOunces }
+      : parcel,
+  );
 }
 
 function shipStationPackageDraft(parcel: ShipStationPackageInput): ShipStationPackageDraft {

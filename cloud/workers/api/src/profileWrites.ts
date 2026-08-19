@@ -38,6 +38,10 @@ import {
   type ShipStationLabelResult,
 } from '../../../../functions/src/shared/shipstationLabels.js';
 import {
+  buildShipStationCustomsDeclaration,
+  type ShipStationCustomsDeclaration,
+} from '../../../../functions/src/shared/shipstationCustoms.js';
+import {
   buildShipStationPackages,
   createShipStationShipment,
   getShipStationShipmentByExternalId,
@@ -48,10 +52,15 @@ import {
   parseShipStationShipTo,
   requestShipStationShipmentRates,
   shipStationExternalId,
+  shipStationPackageContentDescription,
   shipStationPackageDetails,
+  shipStationPackageProducts,
   shipStationMoneyMatches,
+  shipStationProductsTotalWeightOunces,
   ShipStationRatesProviderError,
   updateShipStationShipment,
+  type ShipStationCustoms,
+  type ShipStationPackageProduct,
   type ShipStationRateResponse,
 } from '../../../../functions/src/shared/shipstationRates.js';
 import {
@@ -907,13 +916,51 @@ type ShipStationShipmentClaim =
   | { alreadyAdded: true; shipmentId: string; addedAt?: number }
   | { alreadyAdded: false; claimId: string; order: Record<string, unknown> };
 
-function fulfillmentShipmentUnitCount(order: Record<string, unknown>): number {
+function fulfillmentShipmentItemCounts(order: Record<string, unknown>): { boxCount: number; looseItemCount: number } {
   const items = Array.isArray(order.items) ? order.items : [];
-  return items.filter((item) => {
-    if (!isRecord(item) || (item.kind !== 'box' && item.kind !== 'dude')) return false;
+  let boxCount = 0;
+  let looseItemCount = 0;
+  for (const item of items) {
+    if (!isRecord(item) || (item.kind !== 'box' && item.kind !== 'dude')) continue;
     const refId = Math.floor(Number(item.refId));
-    return Number.isFinite(refId) && refId > 0;
-  }).length;
+    if (!Number.isFinite(refId) || refId <= 0) continue;
+    if (item.kind === 'box') boxCount += 1;
+    else looseItemCount += 1;
+  }
+  return { boxCount, looseItemCount };
+}
+
+function fulfillmentShipmentUnitCount(order: Record<string, unknown>): number {
+  const counts = fulfillmentShipmentItemCounts(order);
+  return counts.boxCount + counts.looseItemCount;
+}
+
+function requireShipStationCustomsDeclaration(
+  dropId: string,
+  order: Record<string, unknown>,
+): ShipStationCustomsDeclaration {
+  const counts = fulfillmentShipmentItemCounts(order);
+  const declaration = buildShipStationCustomsDeclaration(dropId, counts.boxCount, counts.looseItemCount);
+  if (!declaration) {
+    throw new ProfileReadError(
+      'failed-precondition',
+      409,
+      'International customs data is unavailable for this product.',
+    );
+  }
+  return declaration;
+}
+
+function requireShipStationPackageWeight(
+  parcel: ShipStationPackageInput,
+  requiredWeightOunces: number,
+): void {
+  if (!Number.isFinite(requiredWeightOunces) || parcel.weight + 0.005 >= requiredWeightOunces) return;
+  throw new ProfileReadError(
+    'failed-precondition',
+    409,
+    `Package weight must be at least ${requiredWeightOunces} oz for the customs items in this shipment.`,
+  );
 }
 
 async function claimFulfillmentShipStationShipment(args: {
@@ -1208,7 +1255,19 @@ async function addFulfillmentOrderToShipStation(
       const unitCount = fulfillmentShipmentUnitCount(claim.order);
       const email = optionalString(addressSnapshot.email);
       const phone = optionalString(addressSnapshot.phone);
-      appliedPackage = packageOverride ?? defaultShipStationPackage(unitCount);
+      const international = shipFrom.country_code !== parsed.shipTo.country_code;
+      const customsDeclaration = international
+        ? requireShipStationCustomsDeclaration(dropId, claim.order)
+        : undefined;
+      const defaultPackage = defaultShipStationPackage(unitCount);
+      appliedPackage = packageOverride ?? (
+        customsDeclaration && defaultPackage.weight < customsDeclaration.minimumPackageWeightOunces
+          ? { ...defaultPackage, weight: customsDeclaration.minimumPackageWeightOunces }
+          : defaultPackage
+      );
+      if (customsDeclaration) {
+        requireShipStationPackageWeight(appliedPackage, customsDeclaration.totalNetWeightOunces);
+      }
       postAttempted = true;
       shipment = await createShipStationShipment(apiKey, {
         external_shipment_id: externalShipmentId,
@@ -1219,7 +1278,17 @@ async function addFulfillmentOrderToShipStation(
           ...(phone ? { phone } : {}),
         },
         ship_from: shipFrom,
-        packages: buildShipStationPackages(unitCount, appliedPackage),
+        packages: buildShipStationPackages(unitCount, appliedPackage, customsDeclaration ? {
+          contentDescription: customsDeclaration.contentDescription,
+          products: [customsDeclaration.product],
+        } : {}),
+        ...(customsDeclaration ? {
+          customs: {
+            contents: 'merchandise',
+            non_delivery: 'return_to_sender',
+            terms_of_trade_code: 'dap',
+          },
+        } : {}),
       }, {
         fetch: common.providerFetch,
         signal: common.signal,
@@ -2467,7 +2536,8 @@ async function getFulfillmentShipStationRates(
         invalidRates: [],
       };
     }
-    const resolvedPackage = packageOverride ?? currentPackageDetails.package;
+    const storedOrderPackage = orderShipStationPackage(claimedOrder);
+    const resolvedPackage = packageOverride ?? currentPackageDetails.package ?? storedOrderPackage;
     if (!resolvedPackage) {
       throw new ProfileReadError(
         'failed-precondition',
@@ -2475,10 +2545,37 @@ async function getFulfillmentShipStationRates(
         'ShipStation package measurements are unavailable for this shipment.',
       );
     }
+    const sourcePackage = shipment.packages[0];
+    const international = shipFrom.country_code !== shipment.ship_to.country_code;
+    let customs: ShipStationCustoms | undefined;
+    let products: ShipStationPackageProduct[] | undefined;
+    let contentDescription: string | undefined;
+    let repairedShipment = Boolean(!packageOverride && !currentPackageDetails.package && storedOrderPackage);
+    if (international) {
+      const currentProducts = shipStationPackageProducts(sourcePackage);
+      const currentContentDescription = shipStationPackageContentDescription(sourcePackage);
+      const declaration = !shipment.customs || !currentProducts || !currentContentDescription
+        ? requireShipStationCustomsDeclaration(dropId, claimedOrder)
+        : undefined;
+      customs = shipment.customs ?? {
+        contents: 'merchandise',
+        non_delivery: 'return_to_sender',
+        terms_of_trade_code: 'dap',
+      };
+      products = currentProducts ?? [declaration!.product];
+      contentDescription = currentContentDescription ?? declaration!.contentDescription;
+      repairedShipment ||= !shipment.customs || !currentProducts || !currentContentDescription;
+      requireShipStationPackageWeight(resolvedPackage, shipStationProductsTotalWeightOunces(products));
+    }
     const updatedShipment = await updateShipStationShipment(apiKey, shipmentId, {
       ship_to: shipment.ship_to,
       ship_from: shipFrom,
-      ...(packageOverride ? { packages: buildShipStationPackages(1, packageOverride) } : {}),
+      packages: buildShipStationPackages(1, resolvedPackage, {
+        sourcePackage,
+        ...(products ? { products } : {}),
+        ...(contentDescription ? { contentDescription } : {}),
+      }),
+      ...(customs ? { customs } : {}),
     }, { fetch: common.providerFetch, signal: common.signal });
     const updatedPackageDetails = shipStationPackageDetails(updatedShipment);
     if (updatedPackageDetails.packageCount !== 1) {
@@ -2545,12 +2642,14 @@ async function getFulfillmentShipStationRates(
         ...(adoptedAfterUpdate.downloadUrl ? { labelDownloadUrl: adoptedAfterUpdate.downloadUrl } : {}),
       };
     }
-    const pendingRateRequest = storedPendingShipStationRateRequest(
-      shipStationState(claimedOrder).rateRequest,
-      shipmentId,
-      storedPackage,
-      common.nowMs,
-    );
+    const pendingRateRequest = repairedShipment
+      ? undefined
+      : storedPendingShipStationRateRequest(
+          shipStationState(claimedOrder).rateRequest,
+          shipmentId,
+          storedPackage,
+          common.nowMs,
+        );
     const rateResponse = await getCompletedShipStationRates({
       apiKey,
       common,

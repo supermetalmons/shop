@@ -51,9 +51,54 @@ export type ShipStationAddress = {
   geolocation?: Array<{ type: 'what3words'; value: string }>;
 };
 
+export type ShipStationWeightUnit = 'pound' | 'ounce' | 'gram' | 'kilogram';
+
+export type ShipStationPackageProduct = {
+  description: string;
+  quantity: number;
+  value: { amount: number; currency: string };
+  weight: { value: number; unit: ShipStationWeightUnit };
+  harmonized_tariff_code: string;
+  country_of_origin: string;
+  unit_of_measure?: string;
+  sku: string;
+  sku_description?: string;
+  mid_code?: string;
+  product_url?: string;
+  vat_rate?: number;
+};
+
+type ShipStationInvoiceAdditionalDetails = {
+  freight_charge?: ShipStationMoney;
+  insurance_charge?: ShipStationMoney;
+  other_charge?: ShipStationMoney;
+  other_charge_description?: string;
+  discount?: ShipStationMoney;
+};
+
+export type ShipStationCustoms = {
+  contents: 'merchandise' | 'documents' | 'gift' | 'returned_goods' | 'sample' |
+    'e_commerce_goods' | 'commercial_sale_of_goods_b2b' | 'other';
+  contents_explanation?: string;
+  non_delivery: 'return_to_sender' | 'treat_as_abandoned';
+  terms_of_trade_code: 'exw' | 'fca' | 'cpt' | 'cip' | 'dpu' | 'dap' | 'ddp' |
+    'fas' | 'fob' | 'cfr' | 'cif' | 'ddu' | 'daf' | 'deq' | 'des';
+  declaration?: string;
+  invoice_additional_details?: ShipStationInvoiceAdditionalDetails;
+  importer_of_record?: ShipStationAddress;
+  pending_documents?: boolean;
+};
+
 export type ShipStationPackage = {
+  package_id?: string;
+  package_code?: string;
   weight: { value: number; unit: 'ounce' };
   dimensions: { length: number; width: number; height: number; unit: 'inch' };
+  insured_value?: { amount: number; currency: string };
+  label_messages?: { reference1?: string; reference2?: string; reference3?: string };
+  external_package_id?: string;
+  content_description?: string;
+  products?: ShipStationPackageProduct[];
 };
 
 export type ShipStationShipment = {
@@ -62,6 +107,7 @@ export type ShipStationShipment = {
   external_shipment_id?: string | null;
   shipment_number?: string | null;
   ship_to?: ShipStationAddress;
+  customs?: ShipStationCustoms;
   packages?: unknown[];
   errors?: unknown;
 };
@@ -72,6 +118,7 @@ export type ShipStationShipmentInput = {
   ship_to: ShipStationAddress;
   ship_from: ShipStationAddress;
   packages: ShipStationPackage[];
+  customs?: ShipStationCustoms;
 };
 
 export type ShipStationRateResponse = {
@@ -110,6 +157,11 @@ function roundCurrency(value: number): number {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function boundedString(value: unknown, maxLength: number): string {
+  const normalized = stringValue(value);
+  return normalized.length <= maxLength ? normalized : '';
 }
 
 function shipStationAddressValue(value: unknown): ShipStationAddress | null {
@@ -162,12 +214,14 @@ function shipmentValue(value: unknown): ShipStationShipment {
   const externalShipmentId = raw.external_shipment_id === null ? null : stringValue(raw.external_shipment_id);
   const shipmentNumber = raw.shipment_number === null ? null : stringValue(raw.shipment_number);
   const shipTo = shipStationAddressValue(raw.ship_to);
+  const customs = shipStationCustomsValue(raw.customs);
   return {
     ...(shipmentId ? { shipment_id: shipmentId } : {}),
     ...(shipmentStatus ? { shipment_status: shipmentStatus } : {}),
     ...(externalShipmentId === null || externalShipmentId ? { external_shipment_id: externalShipmentId } : {}),
     ...(shipmentNumber === null || shipmentNumber ? { shipment_number: shipmentNumber } : {}),
     ...(shipTo ? { ship_to: shipTo } : {}),
+    ...(customs ? { customs } : {}),
     ...(Array.isArray(raw.packages) ? { packages: raw.packages } : {}),
     ...(raw.errors !== undefined ? { errors: raw.errors } : {}),
   };
@@ -176,6 +230,16 @@ function shipmentValue(value: unknown): ShipStationShipment {
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map(stringValue).filter(Boolean).slice(0, 10);
+}
+
+function safeProviderIdentifier(value: unknown): string {
+  const normalized = stringValue(value);
+  return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(normalized) ? normalized : '';
+}
+
+function safeProviderFieldName(value: unknown): string {
+  const normalized = stringValue(value);
+  return /^[A-Za-z][A-Za-z0-9_.\[\]-]{0,127}$/.test(normalized) ? normalized : '';
 }
 
 function normalizedCurrency(value: unknown, fallback?: string): string | null {
@@ -191,6 +255,120 @@ function shipStationMoney(value: unknown, fallbackCurrency?: string): ShipStatio
   if (amount == null || amount < 0 || !currency) return null;
   const roundedAmount = roundCurrency(amount);
   return Number.isFinite(roundedAmount) ? { currency, amount: roundedAmount } : null;
+}
+
+function shipStationWeight(value: unknown): { value: number; unit: ShipStationWeightUnit } | null {
+  const raw = record(value);
+  const weightValue = finiteNumber(raw.value);
+  const unit = stringValue(raw.unit).toLowerCase();
+  if (weightValue == null || weightValue <= 0 || !['pound', 'ounce', 'gram', 'kilogram'].includes(unit)) return null;
+  return { value: weightValue, unit: unit as ShipStationWeightUnit };
+}
+
+function shipStationPackageProductValue(value: unknown): ShipStationPackageProduct | null {
+  const raw = record(value);
+  const description = boundedString(raw.description, 100);
+  const quantity = finiteNumber(raw.quantity);
+  const declaredValue = shipStationMoney(raw.value);
+  const weight = shipStationWeight(raw.weight);
+  const harmonizedTariffCode = boundedString(raw.harmonized_tariff_code, 32);
+  const countryOfOrigin = stringValue(raw.country_of_origin).toUpperCase();
+  const unitOfMeasure = boundedString(raw.unit_of_measure, 50);
+  const sku = boundedString(raw.sku, 20);
+  const skuDescription = boundedString(raw.sku_description, 100);
+  const midCode = boundedString(raw.mid_code, 50);
+  const productUrlValue = boundedString(raw.product_url, 2_048);
+  const productUrl = /^https:\/\/[^\s]+$/i.test(productUrlValue) ? productUrlValue : '';
+  const vatRate = finiteNumber(raw.vat_rate);
+  if (
+    !description ||
+    quantity == null ||
+    !Number.isSafeInteger(quantity) ||
+    quantity <= 0 ||
+    !declaredValue ||
+    declaredValue.amount <= 0 ||
+    !weight ||
+    !sku ||
+    !/^[0-9][0-9.]{3,31}$/.test(harmonizedTariffCode) ||
+    !/^[A-Z]{2}$/.test(countryOfOrigin)
+  ) return null;
+  return {
+    description,
+    quantity,
+    value: declaredValue,
+    weight,
+    harmonized_tariff_code: harmonizedTariffCode,
+    country_of_origin: countryOfOrigin,
+    ...(unitOfMeasure ? { unit_of_measure: unitOfMeasure } : {}),
+    sku,
+    ...(skuDescription ? { sku_description: skuDescription } : {}),
+    ...(midCode ? { mid_code: midCode } : {}),
+    ...(productUrl ? { product_url: productUrl } : {}),
+    ...(vatRate != null && vatRate >= 0 ? { vat_rate: vatRate } : {}),
+  };
+}
+
+export function shipStationPackageProducts(value: unknown): ShipStationPackageProduct[] | null {
+  const products = record(value).products;
+  if (!Array.isArray(products) || !products.length || products.length > 100) return null;
+  const parsed = products.map(shipStationPackageProductValue);
+  return parsed.every((product): product is ShipStationPackageProduct => Boolean(product)) ? parsed : null;
+}
+
+const SHIPSTATION_CONTENTS = new Set<ShipStationCustoms['contents']>([
+  'merchandise',
+  'documents',
+  'gift',
+  'returned_goods',
+  'sample',
+  'e_commerce_goods',
+  'commercial_sale_of_goods_b2b',
+  'other',
+]);
+const SHIPSTATION_NON_DELIVERY = new Set<ShipStationCustoms['non_delivery']>([
+  'return_to_sender',
+  'treat_as_abandoned',
+]);
+const SHIPSTATION_TERMS = new Set<NonNullable<ShipStationCustoms['terms_of_trade_code']>>([
+  'exw', 'fca', 'cpt', 'cip', 'dpu', 'dap', 'ddp', 'fas', 'fob', 'cfr', 'cif', 'ddu', 'daf', 'deq', 'des',
+]);
+
+export function shipStationCustomsValue(value: unknown): ShipStationCustoms | null {
+  const raw = record(value);
+  const contents = stringValue(raw.contents).toLowerCase() as ShipStationCustoms['contents'];
+  const nonDelivery = stringValue(raw.non_delivery).toLowerCase() as ShipStationCustoms['non_delivery'];
+  const terms = stringValue(raw.terms_of_trade_code).toLowerCase() as ShipStationCustoms['terms_of_trade_code'];
+  const contentsExplanation = boundedString(raw.contents_explanation, 100);
+  const declaration = boundedString(raw.declaration, 500);
+  const invoiceRaw = record(raw.invoice_additional_details);
+  const freightCharge = shipStationMoney(invoiceRaw.freight_charge);
+  const insuranceCharge = shipStationMoney(invoiceRaw.insurance_charge);
+  const otherCharge = shipStationMoney(invoiceRaw.other_charge);
+  const otherChargeDescription = boundedString(invoiceRaw.other_charge_description, 100);
+  const discount = shipStationMoney(invoiceRaw.discount);
+  const invoiceAdditionalDetails = freightCharge || insuranceCharge || otherCharge || otherChargeDescription || discount
+    ? {
+        ...(freightCharge ? { freight_charge: freightCharge } : {}),
+        ...(insuranceCharge ? { insurance_charge: insuranceCharge } : {}),
+        ...(otherCharge ? { other_charge: otherCharge } : {}),
+        ...(otherChargeDescription ? { other_charge_description: otherChargeDescription } : {}),
+        ...(discount ? { discount } : {}),
+      }
+    : undefined;
+  const importerOfRecord = shipStationAddressValue(raw.importer_of_record);
+  if (!SHIPSTATION_CONTENTS.has(contents) || !SHIPSTATION_NON_DELIVERY.has(nonDelivery)) return null;
+  if (contents === 'other' && !contentsExplanation) return null;
+  if (!SHIPSTATION_TERMS.has(terms)) return null;
+  return {
+    contents,
+    ...(contentsExplanation ? { contents_explanation: contentsExplanation } : {}),
+    non_delivery: nonDelivery,
+    terms_of_trade_code: terms,
+    ...(declaration ? { declaration } : {}),
+    ...(invoiceAdditionalDetails ? { invoice_additional_details: invoiceAdditionalDetails } : {}),
+    ...(importerOfRecord ? { importer_of_record: importerOfRecord } : {}),
+    ...(typeof raw.pending_documents === 'boolean' ? { pending_documents: raw.pending_documents } : {}),
+  };
 }
 
 export function shipStationMoneyMatches(expected: ShipStationMoney, actual: ShipStationMoney): boolean {
@@ -246,6 +424,53 @@ export function shipStationPackageDetails(shipment: ShipStationShipment): {
   return { packageCount: 1, ...(packageInput ? { package: packageInput } : {}) };
 }
 
+export function shipStationProductsTotalWeightOunces(products: readonly ShipStationPackageProduct[]): number {
+  const total = products.reduce((sum, product) => {
+    const unitWeight = packageWeightOunces(product.weight);
+    return unitWeight == null ? Number.NaN : sum + unitWeight * product.quantity;
+  }, 0);
+  return Number.isFinite(total) ? Math.round(total * 100) / 100 : Number.NaN;
+}
+
+export function shipStationPackageContentDescription(value: unknown): string | null {
+  const description = boundedString(record(value).content_description, 35);
+  return description || null;
+}
+
+function safePackageIdentifier(value: unknown): string {
+  const normalized = boundedString(value, 100);
+  return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(normalized) ? normalized : '';
+}
+
+function shipStationWritablePackageSettings(value: unknown): Omit<ShipStationPackage, 'weight' | 'dimensions'> {
+  const raw = record(value);
+  const packageId = safePackageIdentifier(raw.package_id);
+  const packageCode = safePackageIdentifier(raw.package_code);
+  const insuredValue = shipStationMoney(raw.insured_value);
+  const labelMessagesRaw = record(raw.label_messages);
+  const reference1 = boundedString(labelMessagesRaw.reference1, 50);
+  const reference2 = boundedString(labelMessagesRaw.reference2, 50);
+  const reference3 = boundedString(labelMessagesRaw.reference3, 50);
+  const externalPackageId = safePackageIdentifier(raw.external_package_id);
+  const contentDescription = shipStationPackageContentDescription(raw);
+  const products = shipStationPackageProducts(raw);
+  return {
+    ...(packageId ? { package_id: packageId } : {}),
+    ...(packageCode ? { package_code: packageCode } : {}),
+    ...(insuredValue ? { insured_value: insuredValue } : {}),
+    ...(reference1 || reference2 || reference3 ? {
+      label_messages: {
+        ...(reference1 ? { reference1 } : {}),
+        ...(reference2 ? { reference2 } : {}),
+        ...(reference3 ? { reference3 } : {}),
+      },
+    } : {}),
+    ...(externalPackageId ? { external_package_id: externalPackageId } : {}),
+    ...(contentDescription ? { content_description: contentDescription } : {}),
+    ...(products ? { products } : {}),
+  };
+}
+
 function invalidRate(
   rate: Record<string, unknown>,
   errorMessages: string[],
@@ -285,6 +510,22 @@ function invalidRateKey(rate: FulfillmentShipStationInvalidRate): string {
 function rateErrorMessages(value: unknown): string[] {
   return Array.from(new Set(stringList(value).map((message) => {
     const normalized = message.toLowerCase();
+    if (/harmon|tariff|hs[ _.-]?code|commodity[ _.-]?code/.test(normalized)) {
+      return 'The carrier rejected the customs HS code.';
+    }
+    if (/non.?delivery/.test(normalized)) return 'The carrier rejected the customs non-delivery option.';
+    if (/customs\.contents\b|contents?[ _.-]+type/.test(normalized)) {
+      return 'The carrier rejected the customs contents type.';
+    }
+    if (/country[ _.-]+of[ _.-]+origin|origin[ _.-]+country/.test(normalized)) {
+      return 'The carrier rejected the customs country of origin.';
+    }
+    if (/declared value|customs.*value|product.*value/.test(normalized)) {
+      return 'The carrier rejected the customs declared value.';
+    }
+    if (/customs|custom item|customs item|product/.test(normalized)) {
+      return 'The carrier rejected the customs declaration.';
+    }
     if (/postal|zip/.test(normalized)) return 'The carrier rejected the postal code.';
     if (/phone/.test(normalized)) return 'The carrier rejected the phone number.';
     if (/address/.test(normalized)) return 'The carrier rejected the address.';
@@ -301,6 +542,12 @@ function rateErrorMessages(value: unknown): string[] {
   })));
 }
 
+function providerFieldErrorMessage(fieldName: string): string | null {
+  if (!fieldName) return null;
+  const message = rateErrorMessages([fieldName])[0];
+  return message === 'The carrier rejected this rate.' ? null : message;
+}
+
 function responseInvalidRates(value: unknown): FulfillmentShipStationInvalidRate[] {
   const errors = Array.isArray(value) ? value : value ? [value] : [];
   const summaries = errors.map((candidate): FulfillmentShipStationInvalidRate => {
@@ -312,19 +559,20 @@ function responseInvalidRates(value: unknown): FulfillmentShipStationInvalidRate
       );
     }
     const error = record(candidate);
-    const code = stringValue(error.error_code) || stringValue(error.code);
-    const type = stringValue(error.error_type);
-    const fieldName = stringValue(error.field_name);
-    const source = stringValue(error.error_source);
+    const code = safeProviderIdentifier(error.error_code) || safeProviderIdentifier(error.code);
+    const type = safeProviderIdentifier(error.error_type);
+    const fieldName = safeProviderFieldName(error.field_name);
+    const source = safeProviderIdentifier(error.error_source);
     const carrierId = stringValue(error.carrier_id);
     const carrierCode = stringValue(error.carrier_code);
     const carrierName = stringValue(error.carrier_name) || stringValue(error.carrier_friendly_name) ||
       stringValue(error.carrier_nickname);
     const hasCarrierIdentity = Boolean(carrierId || carrierCode || carrierName);
     const responseIssue = !hasCarrierIdentity || Boolean(source && source.toLowerCase() !== 'carrier');
-    const details = [code || 'rate_error'];
+    const fieldMessage = providerFieldErrorMessage(fieldName);
+    const details = [fieldMessage || code || 'rate_error'];
     if (type) details.push(`type: ${type}`);
-    if (fieldName) details.push(`field: ${fieldName}`);
+    if (fieldName && !fieldMessage) details.push(`field: ${fieldName}`);
     if (source) details.push(`source: ${source}`);
     return invalidRate({
       carrier_id: carrierId,
@@ -654,11 +902,24 @@ export function parseShipStationShipTo(full: string | null | undefined, snapshot
   };
 }
 
-export function buildShipStationPackages(unitCount: number, override?: ShipStationPackageInput | null): ShipStationPackage[] {
+export function buildShipStationPackages(
+  unitCount: number,
+  override?: ShipStationPackageInput | null,
+  options: Readonly<{
+    contentDescription?: string;
+    products?: ShipStationPackageProduct[];
+    sourcePackage?: unknown;
+  }> = {},
+): ShipStationPackage[] {
   const parcel = override ?? defaultShipStationPackage(unitCount);
+  const source = shipStationWritablePackageSettings(options.sourcePackage);
+  const contentDescription = boundedString(options.contentDescription, 35);
   return [{
+    ...source,
     weight: { value: parcel.weight, unit: 'ounce' },
     dimensions: { length: parcel.length, width: parcel.width, height: parcel.height, unit: 'inch' },
+    ...(contentDescription ? { content_description: contentDescription } : {}),
+    ...(options.products ? { products: options.products } : {}),
   }];
 }
 
@@ -708,10 +969,9 @@ function errorMessage(value: unknown, fallback: string): string {
   const errors = Array.isArray(record(value).errors) ? record(value).errors as unknown[] : [];
   const details = Array.from(new Set(errors.flatMap((entry) => {
     const error = record(entry);
-    const code = stringValue(error.error_code);
-    if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(code)) return [];
-    const fieldName = stringValue(error.field_name);
-    const safeFieldName = /^[A-Za-z][A-Za-z0-9_.\[\]-]{0,127}$/.test(fieldName) ? fieldName : '';
+    const code = safeProviderIdentifier(error.error_code);
+    if (!code) return [];
+    const safeFieldName = safeProviderFieldName(error.field_name);
     return [`${code}${safeFieldName ? ` (${safeFieldName})` : ''}`];
   }))).slice(0, 5);
   const codes = details.map((detail) => detail.split(' (', 1)[0]);
@@ -874,7 +1134,12 @@ export async function createShipStationShipment(
 export async function updateShipStationShipment(
   apiKey: string,
   shipmentId: string,
-  update: { ship_to?: ShipStationAddress; ship_from?: ShipStationAddress; packages?: ShipStationPackage[] },
+  update: {
+    ship_to?: ShipStationAddress;
+    ship_from?: ShipStationAddress;
+    packages?: ShipStationPackage[];
+    customs?: ShipStationCustoms;
+  },
   options: ShipStationRatesClientOptions = {},
 ): Promise<ShipStationShipment> {
   const { status, json, validJson } = await shipStationFetch(apiKey, `/shipments/${encodeURIComponent(shipmentId)}`, {

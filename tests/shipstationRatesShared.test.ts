@@ -9,8 +9,10 @@ import {
   getShipStationShipmentRates,
   parseShipStationShipFrom,
   requestShipStationShipmentRates,
+  shipStationCustomsValue,
   shipStationExternalId,
   shipStationPackageInputFromShipmentPackage,
+  shipStationPackageProducts,
   ShipStationRatesProviderError,
   updateShipStationShipment,
 } from '../functions/src/shared/shipstationRates.ts';
@@ -110,6 +112,22 @@ test('shared ShipStation shipment client rejects incomplete and mismatched succe
 });
 
 test('shared ShipStation shipment client retains sanitized destinations from wrapped and unwrapped responses', async () => {
+  const customs = {
+    contents: 'gift',
+    contents_explanation: 'Manually corrected contents',
+    non_delivery: 'treat_as_abandoned',
+    terms_of_trade_code: 'ddp',
+    declaration: 'Manual declaration',
+    invoice_additional_details: {
+      freight_charge: { amount: 2, currency: 'usd' },
+      insurance_charge: { amount: 1, currency: 'usd' },
+      other_charge: { amount: 0.5, currency: 'usd' },
+      other_charge_description: 'Manual handling',
+      discount: { amount: 0.25, currency: 'usd' },
+    },
+    importer_of_record: SHIP_TO,
+    pending_documents: true,
+  } as const;
   for (const wrapped of [false, true]) {
     const raw = {
       shipment_id: 'shipment-1',
@@ -118,13 +136,61 @@ test('shared ShipStation shipment client retains sanitized destinations from wra
         name: ` ${SHIP_TO.name} `,
         address_validation_status: 'verified',
       },
+      customs,
       packages: [],
     };
     const shipment = await getShipStationShipmentById('api-key', 'shipment-1', {
       fetch: async () => Response.json(wrapped ? { shipment: raw } : raw),
     });
     assert.deepEqual(shipment.ship_to, SHIP_TO);
+    assert.deepEqual(shipment.customs, customs);
   }
+});
+
+test('shared ShipStation customs and products preserve complete corrections and reject malformed declarations', () => {
+  const products = [{
+    description: 'Manually corrected cotton shirt',
+    quantity: 2,
+    value: { amount: 123.45, currency: 'eur' },
+    weight: { value: 11, unit: 'ounce' },
+    harmonized_tariff_code: '6109.10',
+    country_of_origin: 'PT',
+    unit_of_measure: 'each',
+    sku: 'manual-shirt',
+    sku_description: 'Manual SKU description',
+    mid_code: 'PTMANUAL123',
+    product_url: 'https://mons.shop/manual-shirt',
+    vat_rate: 0.2,
+  }];
+  assert.deepEqual(shipStationPackageProducts({ products }), products);
+  for (const malformed of [
+    [],
+    [{ ...products[0], quantity: 0 }],
+    [{ ...products[0], harmonized_tariff_code: '' }],
+    [{ ...products[0], country_of_origin: 'Portugal' }],
+    [{ ...products[0], sku: '' }],
+    [{ ...products[0], value: { amount: 0, currency: 'eur' } }],
+  ]) {
+    assert.equal(shipStationPackageProducts({ products: malformed }), null);
+  }
+  assert.equal(shipStationCustomsValue({ contents: 'merchandise' }), null);
+  assert.equal(shipStationCustomsValue({ contents: 'other', non_delivery: 'return_to_sender' }), null);
+  assert.equal(shipStationCustomsValue({
+    contents: 'merchandise',
+    non_delivery: 'return_to_sender',
+    terms_of_trade_code: 'invalid',
+  }), null);
+  assert.deepEqual(shipStationCustomsValue({
+    contents: 'MERCHANDISE',
+    non_delivery: 'RETURN_TO_SENDER',
+    terms_of_trade_code: 'DAP',
+    buyer_shipping_amount_paid: { amount: 12.34, currency: 'usd' },
+    duties_paid: { amount: 3.21, currency: 'usd' },
+  }), {
+    contents: 'merchandise',
+    non_delivery: 'return_to_sender',
+    terms_of_trade_code: 'dap',
+  });
 });
 
 test('shared ShipStation shipment creation and external-id adoption are bounded and runtime-neutral', async () => {

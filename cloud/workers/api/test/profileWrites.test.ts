@@ -146,9 +146,13 @@ function firestoreValue(value: unknown): unknown {
 }
 
 function orderDocument(fields: Record<string, unknown>, updateTime = '2026-08-18T12:00:00.000000Z') {
+  const normalizedFields = {
+    items: [{ kind: 'dude', refId: 1 }],
+    ...fields,
+  };
   return {
     name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
-    fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, firestoreValue(value)])),
+    fields: Object.fromEntries(Object.entries(normalizedFields).map(([key, value]) => [key, firestoreValue(value)])),
     updateTime,
   };
 }
@@ -761,9 +765,24 @@ test('ShipStation shipment route claims, decrypts, creates, and conditionally pe
       },
       ship_from: SHIP_FROM,
       packages: [{
+        content_description: 'Printed collectible art card',
         weight: { value: 8, unit: 'ounce' },
         dimensions: { length: 10, width: 8, height: 3, unit: 'inch' },
+        products: [{
+          description: 'Printed collectible art card',
+          quantity: 4,
+          value: { amount: 14.67, currency: 'usd' },
+          weight: { value: 0.2, unit: 'ounce' },
+          harmonized_tariff_code: '4911.99',
+          country_of_origin: 'US',
+          sku: 'card-nft-2',
+        }],
       }],
+      customs: {
+        contents: 'merchandise',
+        non_delivery: 'return_to_sender',
+        terms_of_trade_code: 'dap',
+      },
       create_sales_order: true,
       shipment_status: 'pending',
     }],
@@ -781,6 +800,77 @@ test('ShipStation shipment route claims, decrypts, creates, and conditionally pe
   assert.deepEqual(finalWrite.updateTransforms, [
     { fieldPath: 'shipstation.createdAt', setToServerValue: 'REQUEST_TIME' },
   ]);
+});
+
+test('ShipStation shipment route raises an international default parcel above declared net weight', async () => {
+  let claimId = '';
+  let createBody: { shipments: Array<Record<string, unknown>> } | undefined;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+      if (url.pathname === '/v2/shipments' && init?.method === 'POST') {
+        createBody = JSON.parse(String(init.body)) as { shipments: Array<Record<string, unknown>> };
+        return Response.json({
+          shipments: [{
+            shipment_id: 'shipment-new',
+            packages: createBody.shipments[0].packages,
+          }],
+        });
+      }
+      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        addressSnapshot: {
+          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
+          countryCode: 'TR',
+        },
+        items: [{ kind: 'dude', refId: 1 }],
+        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as {
+        writes: Array<{
+          update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } };
+        }>;
+      };
+      claimId = commit.writes[0].update?.fields?.shipstation?.mapValue?.fields?.claimId?.stringValue ?? claimId;
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'little_swag_hoodies',
+      deliveryId: 7,
+    }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(createBody?.shipments[0].packages, [{
+    content_description: 'Printed cotton hooded sweatshirt',
+    weight: { value: 25, unit: 'ounce' },
+    dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
+    products: [{
+      description: 'Printed cotton hooded sweatshirt',
+      quantity: 1,
+      value: { amount: 219, currency: 'usd' },
+      weight: { value: 24, unit: 'ounce' },
+      harmonized_tariff_code: '6110.20',
+      country_of_origin: 'US',
+      sku: 'swag-hoodie',
+    }],
+  }]);
+  assert.deepEqual(createBody?.shipments[0].customs, {
+    contents: 'merchandise',
+    non_delivery: 'return_to_sender',
+    terms_of_trade_code: 'dap',
+  });
 });
 
 test('ShipStation shipment route retains its claim when final persistence conflicts after creation', async () => {
@@ -2275,9 +2365,24 @@ test('ShipStation rates route refreshes a single package without replacing its S
     ship_to: manuallyCorrectedShipTo,
     ship_from: SHIP_FROM,
     packages: [{
+      content_description: 'Printed collectible art card',
       weight: { value: 8, unit: 'ounce' },
       dimensions: { length: 10, width: 8, height: 3, unit: 'inch' },
+      products: [{
+        description: 'Printed collectible art card',
+        quantity: 1,
+        value: { amount: 14.67, currency: 'usd' },
+        weight: { value: 0.2, unit: 'ounce' },
+        harmonized_tariff_code: '4911.99',
+        country_of_origin: 'US',
+        sku: 'card-nft-2',
+      }],
     }],
+    customs: {
+      contents: 'merchandise',
+      non_delivery: 'return_to_sender',
+      terms_of_trade_code: 'dap',
+    },
   });
   assert.equal(commits.length, 3);
   const claim = commits[0].writes[0] as {
@@ -2304,6 +2409,280 @@ test('ShipStation rates route refreshes a single package without replacing its S
   assert.ok(finalWrite.updateMask.fieldPaths.includes('shipstation.rateRequest'));
   assert.ok(finalWrite.updateMask.fieldPaths.includes('shipstation.ratesClaimId'));
   assert.ok(finalWrite.updateMask.fieldPaths.includes('shipstation.ratesClaimedAt'));
+});
+
+test('ShipStation rates route preserves manual declarations, repairs zeroed packages, and keeps domestic parcels', async () => {
+  const run = async (scenario: {
+    shipTo: Record<string, unknown>;
+    sourcePackage: Record<string, unknown>;
+    storedPackage: Record<string, number>;
+    customs?: Record<string, unknown>;
+    items?: Array<Record<string, unknown>>;
+  }) => {
+    let claimId = '';
+    let shipmentUpdate: Record<string, unknown> | undefined;
+    const providerFetch: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') {
+        const method = init?.method || 'GET';
+        if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
+        if (url.pathname === '/v2/shipments/shipment-1' && method === 'GET') {
+          return Response.json({
+            shipment_id: 'shipment-1',
+            ship_to: scenario.shipTo,
+            packages: [scenario.sourcePackage],
+            ...(scenario.customs ? { customs: scenario.customs } : {}),
+          });
+        }
+        if (url.pathname === '/v2/shipments/shipment-1' && method === 'PUT') {
+          shipmentUpdate = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          return Response.json({
+            shipment_id: 'shipment-1',
+            ship_to: shipmentUpdate.ship_to,
+            packages: shipmentUpdate.packages,
+          });
+        }
+        if (url.pathname === '/v2/carriers') {
+          return Response.json({ carriers: [{ carrier_id: 'carrier-1', send_rates: true }] });
+        }
+        if (url.pathname === '/v2/rates') {
+          return Response.json({
+            shipment_id: 'shipment-1',
+            rate_request_id: 'request-1',
+            status: 'completed',
+            rates: [SHIPSTATION_RATE],
+            invalid_rates: [],
+            errors: [],
+          });
+        }
+        return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+      }
+      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+      if (url.pathname.endsWith('/deliveryOrders/7')) {
+        return Response.json(orderDocument({
+          items: scenario.items ?? [{ kind: 'dude', refId: 1 }],
+          shipstation: {
+            shipmentId: 'shipment-1',
+            package: scenario.storedPackage,
+            packageCount: 1,
+            ...(claimId ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER } : {}),
+          },
+        }));
+      }
+      if (url.pathname.endsWith('/documents:commit')) {
+        const commit = JSON.parse(String(init?.body)) as {
+          writes: Array<{
+            update?: { fields?: { shipstation?: { mapValue?: { fields?: { ratesClaimId?: { stringValue?: string } } } } } };
+          }>;
+        };
+        claimId = commit.writes[0].update?.fields?.shipstation?.mapValue?.fields?.ratesClaimId?.stringValue ?? claimId;
+        return Response.json({ writeResults: [{}], commitTime: '2026-08-19T00:00:00Z' });
+      }
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    };
+    const result = await handleProfileWriteRequest(
+      request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_RATES_PATH,
+      dependencies(providerFetch),
+    );
+    assert.equal(result.response.status, 200);
+    return shipmentUpdate;
+  };
+
+  const manualProduct = {
+    description: 'Manual cotton art card case',
+    quantity: 2,
+    value: { amount: 91.25, currency: 'eur' },
+    weight: { value: 2, unit: 'ounce' },
+    harmonized_tariff_code: '4202.92',
+    country_of_origin: 'PT',
+    unit_of_measure: 'each',
+    sku: 'manual-case',
+    sku_description: 'Manual case correction',
+    mid_code: 'PTMANUAL123',
+    product_url: 'https://mons.shop/manual-case',
+    vat_rate: 0.2,
+  };
+  const manualCustoms = {
+    contents: 'gift',
+    non_delivery: 'treat_as_abandoned',
+    terms_of_trade_code: 'ddp',
+    declaration: 'Manual declaration',
+    pending_documents: true,
+  };
+  const manualUpdate = await run({
+    shipTo: { ...SHIP_TO, address_line1: '200 Manually Corrected Ave' },
+    sourcePackage: {
+      package_id: 'se-3',
+      package_code: 'package',
+      shipment_package_id: 'se-read-only',
+      package_name: 'Read only',
+      tracking_number: 'private-tracking',
+      weight: { value: 20, unit: 'ounce' },
+      dimensions: { length: 14, width: 10, height: 4, unit: 'inch' },
+      insured_value: { amount: 50, currency: 'usd' },
+      label_messages: { reference1: 'Manual reference' },
+      external_package_id: 'parcel-7',
+      content_description: 'Manual corrected contents',
+      products: [manualProduct],
+    },
+    storedPackage: { length: 12, width: 9, height: 2, weight: 12 },
+    customs: manualCustoms,
+  });
+  assert.deepEqual(manualUpdate, {
+    ship_to: { ...SHIP_TO, address_line1: '200 Manually Corrected Ave' },
+    ship_from: SHIP_FROM,
+    packages: [{
+      package_id: 'se-3',
+      package_code: 'package',
+      insured_value: { amount: 50, currency: 'usd' },
+      label_messages: { reference1: 'Manual reference' },
+      external_package_id: 'parcel-7',
+      content_description: 'Manual corrected contents',
+      products: [manualProduct],
+      weight: { value: 20, unit: 'ounce' },
+      dimensions: { length: 14, width: 10, height: 4, unit: 'inch' },
+    }],
+    customs: manualCustoms,
+  });
+
+  const repairedUpdate = await run({
+    shipTo: SHIP_TO,
+    sourcePackage: {
+      package_code: 'package',
+      shipment_package_id: 'se-read-only',
+      weight: { value: 0, unit: 'ounce' },
+      dimensions: { length: 0, width: 0, height: 0, unit: 'inch' },
+    },
+    storedPackage: { length: 12, width: 9, height: 2, weight: 12 },
+    items: [{ kind: 'box', refId: 1 }, { kind: 'dude', refId: 2 }],
+  });
+  assert.deepEqual(repairedUpdate, {
+    ship_to: SHIP_TO,
+    ship_from: SHIP_FROM,
+    packages: [{
+      package_code: 'package',
+      content_description: 'Printed collectible art card',
+      products: [{
+        description: 'Printed collectible art card',
+        quantity: 4,
+        value: { amount: 14.67, currency: 'usd' },
+        weight: { value: 0.2, unit: 'ounce' },
+        harmonized_tariff_code: '4911.99',
+        country_of_origin: 'US',
+        sku: 'card-nft-2',
+      }],
+      weight: { value: 12, unit: 'ounce' },
+      dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
+    }],
+    customs: {
+      contents: 'merchandise',
+      non_delivery: 'return_to_sender',
+      terms_of_trade_code: 'dap',
+    },
+  });
+
+  const domesticShipTo = {
+    ...SHIP_TO,
+    city_locality: 'New York',
+    state_province: 'NY',
+    postal_code: '10001',
+    country_code: 'US',
+  };
+  const domesticUpdate = await run({
+    shipTo: domesticShipTo,
+    sourcePackage: {
+      package_code: 'package',
+      weight: { value: 15, unit: 'ounce' },
+      dimensions: { length: 13, width: 8, height: 3, unit: 'inch' },
+    },
+    storedPackage: { length: 12, width: 9, height: 2, weight: 12 },
+  });
+  assert.deepEqual(domesticUpdate, {
+    ship_to: domesticShipTo,
+    ship_from: SHIP_FROM,
+    packages: [{
+      package_code: 'package',
+      weight: { value: 15, unit: 'ounce' },
+      dimensions: { length: 13, width: 8, height: 3, unit: 'inch' },
+    }],
+  });
+});
+
+test('ShipStation rates route rejects a parcel lighter than its declared products', async () => {
+  let claimId = '';
+  let updateCalls = 0;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      const method = init?.method || 'GET';
+      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
+      if (url.pathname === '/v2/shipments/shipment-1' && method === 'GET') {
+        return Response.json({
+          shipment_id: 'shipment-1',
+          ship_to: SHIP_TO,
+          customs: {
+            contents: 'merchandise',
+            non_delivery: 'return_to_sender',
+            terms_of_trade_code: 'dap',
+          },
+          packages: [{
+            content_description: 'Manual cotton T-shirt',
+            weight: { value: 4, unit: 'ounce' },
+            dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
+            products: [{
+              description: 'Manual cotton T-shirt',
+              quantity: 1,
+              value: { amount: 144, currency: 'usd' },
+              weight: { value: 10, unit: 'ounce' },
+              harmonized_tariff_code: '6109.10',
+              country_of_origin: 'US',
+              sku: 'manual-shirt',
+            }],
+          }],
+        });
+      }
+      if (url.pathname === '/v2/shipments/shipment-1' && method === 'PUT') updateCalls += 1;
+      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          package: { length: 12, width: 9, height: 2, weight: 4 },
+          packageCount: 1,
+          ...(claimId ? { ratesClaimId: claimId, ratesClaimedAt: NOW_MS, ratesClaimedBy: OWNER } : {}),
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as {
+        writes: Array<{
+          update?: { fields?: { shipstation?: { mapValue?: { fields?: { ratesClaimId?: { stringValue?: string } } } } } };
+        }>;
+      };
+      claimId = commit.writes[0].update?.fields?.shipstation?.mapValue?.fields?.ratesClaimId?.stringValue ?? claimId;
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-19T00:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_RATES_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 409);
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: {
+      code: 'failed-precondition',
+      message: 'Package weight must be at least 10 oz for the customs items in this shipment.',
+    },
+  });
+  assert.equal(updateCalls, 0);
 });
 
 test('ShipStation rates route resumes and polls pending requests with exact delays', async () => {
@@ -2340,9 +2719,24 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
           return Response.json({
             shipment_id: 'shipment-1',
             ship_to: SHIP_TO,
+            customs: {
+              contents: 'merchandise',
+              non_delivery: 'return_to_sender',
+              terms_of_trade_code: 'dap',
+            },
             packages: [{
+              content_description: 'Printed collectible art card',
               weight: { value: packageWeight, unit: 'ounce' },
               dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
+              products: [{
+                description: 'Printed collectible art card',
+                quantity: 1,
+                value: { amount: 14.67, currency: 'usd' },
+                weight: { value: 0.2, unit: 'ounce' },
+                harmonized_tariff_code: '4911.99',
+                country_of_origin: 'US',
+                sku: 'card-nft-2',
+              }],
             }],
           });
         }

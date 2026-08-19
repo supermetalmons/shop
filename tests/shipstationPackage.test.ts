@@ -22,6 +22,7 @@ import {
   shipStationMoneyMatches,
   shipStationPackageDetails,
   shipStationPackageInputFromShipmentPackage,
+  shipStationProductsTotalWeightOunces,
   shipStationRateSummaries,
   updateShipStationShipment,
 } from '../functions/src/shared/shipstationRates.ts';
@@ -75,6 +76,44 @@ test('an override replaces the derived parcel, and its absence falls back to the
   assert.deepEqual(buildShipStationPackages(2, { length: 6, width: 4, height: 1.5, weight: 10 }), [
     { weight: { value: 10, unit: 'ounce' }, dimensions: { length: 6, width: 4, height: 1.5, unit: 'inch' } },
   ]);
+});
+
+test('package updates preserve writable settings and exclude provider response fields', () => {
+  const products = [{
+    description: 'Manual shirt correction',
+    quantity: 2,
+    value: { amount: 120, currency: 'usd' },
+    weight: { value: 0.5, unit: 'pound' as const },
+    harmonized_tariff_code: '6109.10',
+    country_of_origin: 'PT',
+    sku: 'manual-shirt',
+  }];
+  assert.deepEqual(buildShipStationPackages(1, { length: 10, width: 8, height: 3, weight: 20 }, {
+    sourcePackage: {
+      package_id: 'se-3',
+      package_code: 'package',
+      shipment_package_id: 'se-read-only',
+      package_name: 'Read-only package name',
+      tracking_number: 'private-tracking-number',
+      sequence: 1,
+      insured_value: { amount: 50, currency: 'usd' },
+      label_messages: { reference1: 'Order 7', reference2: 'Warehouse', reference3: 'Manual' },
+      external_package_id: 'parcel-7',
+      content_description: 'Manual content',
+      products,
+    },
+  }), [{
+    package_id: 'se-3',
+    package_code: 'package',
+    insured_value: { amount: 50, currency: 'usd' },
+    label_messages: { reference1: 'Order 7', reference2: 'Warehouse', reference3: 'Manual' },
+    external_package_id: 'parcel-7',
+    content_description: 'Manual content',
+    products,
+    weight: { value: 20, unit: 'ounce' },
+    dimensions: { length: 10, width: 8, height: 3, unit: 'inch' },
+  }]);
+  assert.equal(shipStationProductsTotalWeightOunces(products), 16);
 });
 
 test('ShipStation package measurements are converted to the integration units', () => {
@@ -282,11 +321,72 @@ test('top-level ShipStation rating errors are preserved for operators', () => {
       serviceCode: '',
       serviceName: 'Rating',
       errorMessages: [
-        'invalid_address · type: validation · field: shipment.ship_to.postal_code · source: carrier',
+        'The carrier rejected the postal code. · type: validation · source: carrier',
         'unspecified · type: business_rules · source: carrier',
       ],
     },
   ]);
+});
+
+test('customs rate failures use safe operator messages without provider details', () => {
+  const messages = [
+    'Invalid harmonized tariff code 4911.99 for 12 Private Street',
+    'Non-delivery option rejected for recipient Ivan',
+    'Invalid customs contents type at 12 Private Street',
+    'Country of origin PT rejected for private order',
+    'Declared value 123.45 rejected for private order',
+    'Product description contains private recipient details',
+  ];
+  const response = shipStationRateSummaries({
+    shipment_id: 'se-shipment',
+    status: 'completed',
+    rates: [],
+    invalid_rates: messages.map((message, index) => ({
+      carrier_id: `se-carrier-${index}`,
+      carrier_friendly_name: `Carrier ${index}`,
+      error_messages: [message],
+    })),
+    errors: [{
+      error_code: 'field_value_required',
+      error_type: 'validation',
+      field_name: 'shipment.packages[0].products[0].harmonized_tariff_code',
+      error_source: 'carrier',
+      carrier_id: 'se-field-carrier',
+      carrier_name: 'Field carrier',
+      message: '12 Private Street',
+    }, {
+      error_code: 'field_value_required',
+      field_name: 'shipment.customs.contents',
+      carrier_id: 'se-contents-field',
+      carrier_name: 'Contents field carrier',
+      message: '12 Private Street',
+    }, {
+      error_code: 'field_value_required',
+      field_name: 'shipment.packages[0].products[0].country_of_origin',
+      carrier_id: 'se-origin-field',
+      carrier_name: 'Origin field carrier',
+      message: '12 Private Street',
+    }, {
+      error_code: 'field_value_required',
+      field_name: 'customs (12 Private Street)',
+      carrier_id: 'se-malformed-field',
+      carrier_name: 'Malformed field carrier',
+      message: '12 Private Street',
+    }],
+  });
+  assert.deepEqual(response.invalidRates.flatMap((rate) => rate.errorMessages), [
+    'The carrier rejected the customs HS code. · type: validation · source: carrier',
+    'The carrier rejected the customs contents type.',
+    'The carrier rejected the customs country of origin.',
+    'field_value_required',
+    'The carrier rejected the customs HS code.',
+    'The carrier rejected the customs non-delivery option.',
+    'The carrier rejected the customs contents type.',
+    'The carrier rejected the customs country of origin.',
+    'The carrier rejected the customs declared value.',
+    'The carrier rejected the customs declaration.',
+  ]);
+  assert.doesNotMatch(JSON.stringify(response.invalidRates), /Private Street|recipient Ivan|123\.45/);
 });
 
 test('top-level rating errors keep distinct carrier accounts without carrier ids', () => {
