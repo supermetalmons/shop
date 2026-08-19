@@ -151,6 +151,7 @@ type ProfileWriteEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Part
 const PROFILE_WRITE_TIMEOUT_MS = 15_000;
 const SHIPSTATION_LABEL_OPERATION_TIMEOUT_MS = 45_000;
 const SHIPSTATION_LABEL_PURCHASE_OPERATION_TIMEOUT_MS = 55_000;
+const SHIPSTATION_LABEL_PURCHASE_CLEANUP_TIMEOUT_MS = 5_000;
 const SHIPSTATION_RATES_OPERATION_TIMEOUT_MS = 55_000;
 const SHIPSTATION_SHIPMENT_OPERATION_TIMEOUT_MS = 55_000;
 const MAX_SAVE_ADDRESS_BYTES = 10 * 1024;
@@ -1756,6 +1757,86 @@ async function transitionFulfillmentShipStationLabelPurchase(args: {
   });
 }
 
+async function recoverAmbiguousFulfillmentShipStationLabelPurchase(args: {
+  apiKey: string;
+  body: z.infer<typeof shipStationLabelPurchaseSchema>;
+  common: FirestoreWriteCommon;
+  dropId: string;
+  message: string;
+  shipmentId: string;
+  wallet: string;
+}): Promise<PurchaseFulfillmentShipStationLabelResponse | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException('Label purchase cleanup timed out', 'TimeoutError')),
+    SHIPSTATION_LABEL_PURCHASE_CLEANUP_TIMEOUT_MS,
+  );
+  const common = { ...args.common, signal: controller.signal };
+  try {
+    try {
+      const current = await loadDeliveryOrderDocument(common, args.dropId, args.body.deliveryId);
+      const recovered = await reconcileFulfillmentShipStationLabel({
+        apiKey: args.apiKey,
+        common,
+        deliveryId: args.body.deliveryId,
+        dropId: args.dropId,
+        expectedPurchaseRequestId: args.body.requestId,
+        order: current.fields,
+        refreshInactiveStoredLabel: false,
+        shipmentId: args.shipmentId,
+        wallet: args.wallet,
+      });
+      if (recovered.active) {
+        return {
+          deliveryId: args.body.deliveryId,
+          shipmentId: args.shipmentId,
+          label: recovered.active,
+          ...(recovered.downloadUrl ? { labelDownloadUrl: recovered.downloadUrl } : {}),
+          alreadyPurchased: false,
+        };
+      }
+    } catch (error) {
+      const failure = shipStationLabelPurchaseFailure(error);
+      console.error(JSON.stringify({
+        event: 'fulfillment_shipstation_label_purchase_reconcile_failed',
+        dropId: args.dropId,
+        deliveryId: args.body.deliveryId,
+        code: failure.code,
+      }));
+    }
+    try {
+      const failureState = await transitionFulfillmentShipStationLabelPurchase({
+        body: args.body,
+        common,
+        dropId: args.dropId,
+        message: args.message,
+        nextStatus: 'unknown',
+        shipmentId: args.shipmentId,
+        wallet: args.wallet,
+      });
+      if (failureState.label) {
+        return {
+          deliveryId: args.body.deliveryId,
+          shipmentId: args.shipmentId,
+          label: failureState.label,
+          alreadyPurchased: true,
+        };
+      }
+    } catch (error) {
+      const failure = shipStationLabelPurchaseFailure(error);
+      console.error(JSON.stringify({
+        event: 'fulfillment_shipstation_label_purchase_cleanup_failed',
+        dropId: args.dropId,
+        deliveryId: args.body.deliveryId,
+        code: failure.code,
+      }));
+    }
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function purchaseFulfillmentShipStationLabel(
   body: z.infer<typeof shipStationLabelPurchaseSchema>,
   wallet: string,
@@ -1791,6 +1872,7 @@ async function purchaseFulfillmentShipStationLabel(
   }
   let claimAcquired = false;
   let purchaseAttempted = false;
+  let purchaseAccepted = false;
   try {
     const claim = await claimFulfillmentShipStationLabelPurchase({ body, common, dropId, shipmentId, wallet });
     if (claim.alreadyPurchased) {
@@ -1872,10 +1954,12 @@ async function purchaseFulfillmentShipStationLabel(
           );
         }
         purchaseAttempted = true;
-        return createShipStationLabelFromRate(apiKey, body.rateId, {
+        const result = await createShipStationLabelFromRate(apiKey, body.rateId, {
           fetch: common.providerFetch,
           signal: common.signal,
         });
+        purchaseAccepted = true;
+        return result;
       },
     );
     if (resolution.result.label.shipmentId !== shipmentId) {
@@ -1923,47 +2007,33 @@ async function purchaseFulfillmentShipStationLabel(
   } catch (error) {
     if (!claimAcquired) throw error;
     const failure = shipStationLabelPurchaseFailure(error);
-    const ambiguous = purchaseAttempted
-      && ['deadline-exceeded', 'unavailable', 'internal', 'unknown'].includes(failure.code);
+    const ambiguous = purchaseAccepted || (
+      purchaseAttempted
+      && ['deadline-exceeded', 'unavailable', 'internal', 'unknown'].includes(failure.code)
+    );
     if (ambiguous) {
-      try {
-        const current = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
-        const recovered = await reconcileFulfillmentShipStationLabel({
-          apiKey,
-          common,
-          deliveryId: body.deliveryId,
-          dropId,
-          expectedPurchaseRequestId: body.requestId,
-          order: current.fields,
-          refreshInactiveStoredLabel: false,
-          shipmentId,
-          wallet,
-        });
-        if (recovered.active) {
-          return {
-            deliveryId: body.deliveryId,
-            shipmentId,
-            label: recovered.active,
-            ...(recovered.downloadUrl ? { labelDownloadUrl: recovered.downloadUrl } : {}),
-            alreadyPurchased: false,
-          };
-        }
-      } catch (reconcileError) {
-        const summary = shipStationLabelPurchaseFailure(reconcileError);
-        console.error(JSON.stringify({
-          event: 'fulfillment_shipstation_label_purchase_reconcile_failed',
-          dropId,
-          deliveryId: body.deliveryId,
-          code: summary.code,
-        }));
-      }
+      const recovered = await recoverAmbiguousFulfillmentShipStationLabelPurchase({
+        apiKey,
+        body,
+        common,
+        dropId,
+        message: failure.message,
+        shipmentId,
+        wallet,
+      });
+      if (recovered) return recovered;
+      throw new ProfileReadError(
+        'aborted',
+        409,
+        'ShipStation did not confirm the label purchase. Check purchase status or open ShipStation before retrying.',
+      );
     }
     const failureState = await transitionFulfillmentShipStationLabelPurchase({
       body,
       common,
       dropId,
       message: failure.message,
-      nextStatus: ambiguous ? 'unknown' : 'failed',
+      nextStatus: 'failed',
       shipmentId,
       wallet,
     });
@@ -1974,13 +2044,6 @@ async function purchaseFulfillmentShipStationLabel(
         label: failureState.label,
         alreadyPurchased: true,
       };
-    }
-    if (ambiguous) {
-      throw new ProfileReadError(
-        'aborted',
-        409,
-        'ShipStation did not confirm the label purchase. Check purchase status or open ShipStation before retrying.',
-      );
     }
     if (error instanceof ShipStationLabelProviderError || error instanceof ShipStationRatesProviderError) {
       throw profileErrorForShipStation(error);

@@ -1674,7 +1674,7 @@ test('ShipStation label purchase route adopts an existing provider label without
 });
 
 test('ShipStation label purchase route records definite failures and unresolved ambiguous purchases safely', async () => {
-  for (const mode of ['definite', 'ambiguous'] as const) {
+  for (const mode of ['definite', 'ambiguous', 'missing-status', 'unsupported-status'] as const) {
     let purchaseState: Record<string, unknown> | undefined;
     let labelListCalls = 0;
     const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
@@ -1691,7 +1691,12 @@ test('ShipStation label purchase route records definite failures and unresolved 
             : Response.json(SHIPSTATION_RATE);
         }
         if (url.pathname === '/v2/labels/rates/rate-1') {
-          throw new TypeError('Private 100 Main St');
+          if (mode === 'ambiguous') throw new TypeError('Private 100 Main St');
+          return Response.json({
+            label_id: 'label-1',
+            shipment_id: 'shipment-1',
+            ...(mode === 'unsupported-status' ? { status: 'queued' } : {}),
+          });
         }
         return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
       }
@@ -1746,7 +1751,7 @@ test('ShipStation label purchase route records definite failures and unresolved 
     const payload = await result.response.json() as { error: { code: string; message: string } };
     assert.equal(payload.error.code, mode === 'definite' ? 'failed-precondition' : 'aborted');
     assert.doesNotMatch(JSON.stringify(payload), /100 Main St|Private/);
-    if (mode === 'ambiguous') {
+    if (mode !== 'definite') {
       assert.match(payload.error.message, /Check purchase status or open ShipStation/);
       assert.equal(labelListCalls, 3);
     }
@@ -1767,6 +1772,225 @@ test('ShipStation label purchase route records definite failures and unresolved 
     assert.equal(transitionFields.status.stringValue, mode === 'definite' ? 'failed' : 'unknown');
     assert.doesNotMatch(transitionFields.lastError.stringValue || '', /100 Main St|Private/);
   }
+});
+
+test('ShipStation label purchase stays unknown after a successful charge and repeated Firestore conflicts', async () => {
+  let purchaseState: Record<string, unknown> | undefined;
+  let purchaseCalls = 0;
+  let persistenceConflicts = 0;
+  const transitionStatuses: string[] = [];
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
+      if (url.pathname === '/v2/rates/rate-1') return Response.json(SHIPSTATION_RATE);
+      if (url.pathname === '/v2/labels/rates/rate-1') {
+        purchaseCalls += 1;
+        return Response.json({
+          label_id: 'charged-label',
+          shipment_id: 'shipment-1',
+          status: 'completed',
+        });
+      }
+      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          rateQuotes: [{
+            rateId: 'rate-1',
+            shipmentId: 'shipment-1',
+            totalAmount: { currency: 'usd', amount: 10 },
+          }],
+          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
+      const write = commit.writes[0] as {
+        update?: { fields?: { shipstation?: { mapValue?: { fields?: Record<string, unknown> } } } };
+        updateMask?: { fieldPaths?: string[] };
+      };
+      const purchaseFields = ((write.update?.fields?.shipstation?.mapValue?.fields?.labelPurchase as {
+        mapValue?: { fields?: Record<string, { stringValue?: string }> };
+      } | undefined)?.mapValue?.fields);
+      const status = purchaseFields?.status?.stringValue;
+      if (write.updateMask?.fieldPaths?.includes('shipstation.label')) {
+        persistenceConflicts += 1;
+        return Response.json({ error: { status: 'ABORTED' } }, { status: 409 });
+      }
+      if (status) {
+        transitionStatuses.push(status);
+        purchaseState = {
+          status,
+          requestId: purchaseFields?.requestId?.stringValue ?? LABEL_PURCHASE_BODY.requestId,
+          rateId: purchaseFields?.rateId?.stringValue ?? LABEL_PURCHASE_BODY.rateId,
+        };
+      }
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
+    dependencies(providerFetch, { timeoutMs: 2_000 }),
+  );
+  assert.equal(result.response.status, 409);
+  const payload = await result.response.json() as { error: { code: string; message: string } };
+  assert.equal(payload.error.code, 'aborted');
+  assert.match(payload.error.message, /Check purchase status or open ShipStation/);
+  assert.equal(purchaseCalls, 1);
+  assert.equal(persistenceConflicts, 3);
+  assert.deepEqual(transitionStatuses, ['purchasing', 'unknown']);
+  assert.equal(purchaseState?.status, 'unknown');
+});
+
+test('ShipStation label purchase timeout uses a fresh cleanup signal and stores unknown', async () => {
+  let purchaseState: Record<string, unknown> | undefined;
+  let chargedPostStarted = false;
+  let chargedPostAborted = false;
+  let cleanupUsedFreshSignal = false;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
+      if (url.pathname === '/v2/rates/rate-1') return Response.json(SHIPSTATION_RATE);
+      if (url.pathname === '/v2/labels/rates/rate-1') {
+        chargedPostStarted = true;
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          const abort = () => {
+            chargedPostAborted = true;
+            reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+          };
+          signal?.addEventListener('abort', abort, { once: true });
+          if (signal?.aborted) abort();
+        });
+      }
+      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+    }
+    if (chargedPostAborted) cleanupUsedFreshSignal ||= init?.signal?.aborted === false;
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          rateQuotes: [{
+            rateId: 'rate-1',
+            shipmentId: 'shipment-1',
+            totalAmount: { currency: 'usd', amount: 10 },
+          }],
+          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
+      const fields = (commit.writes[0] as {
+        update?: { fields?: { shipstation?: { mapValue?: { fields?: Record<string, unknown> } } } };
+      }).update?.fields?.shipstation?.mapValue?.fields?.labelPurchase as {
+        mapValue?: { fields?: Record<string, { stringValue?: string }> };
+      } | undefined;
+      const purchaseFields = fields?.mapValue?.fields;
+      if (purchaseFields?.status?.stringValue) {
+        purchaseState = {
+          status: purchaseFields.status.stringValue,
+          requestId: purchaseFields.requestId?.stringValue ?? LABEL_PURCHASE_BODY.requestId,
+          rateId: purchaseFields.rateId?.stringValue ?? LABEL_PURCHASE_BODY.rateId,
+        };
+      }
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
+    dependencies(providerFetch, { timeoutMs: 75 }),
+  );
+  assert.equal(chargedPostStarted, true);
+  assert.equal(chargedPostAborted, true);
+  assert.equal(cleanupUsedFreshSignal, true);
+  assert.equal(result.response.status, 409);
+  const payload = await result.response.json() as { error: { code: string; message: string } };
+  assert.equal(payload.error.code, 'aborted');
+  assert.equal(
+    payload.error.message,
+    'ShipStation did not confirm the label purchase. Check purchase status or open ShipStation before retrying.',
+  );
+  assert.equal(purchaseState?.status, 'unknown');
+});
+
+test('ShipStation label purchase cleanup failure keeps the claim blocked and logs only safe metadata', async () => {
+  let purchaseState: Record<string, unknown> | undefined;
+  let purchaseFailed = false;
+  let commitCount = 0;
+  const logs: string[] = [];
+  const providerFetch: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
+      if (url.pathname === '/v2/rates/rate-1') return Response.json(SHIPSTATION_RATE);
+      if (url.pathname === '/v2/labels/rates/rate-1') {
+        purchaseFailed = true;
+        throw new TypeError('Private 100 Main St Bearer secret-token shipstation-api-key');
+      }
+      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      if (purchaseFailed) {
+        return Response.json({ error: 'Private 100 Main St Bearer secret-token' }, { status: 500 });
+      }
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          rateQuotes: [{
+            rateId: 'rate-1',
+            shipmentId: 'shipment-1',
+            totalAmount: { currency: 'usd', amount: 10 },
+          }],
+          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commitCount += 1;
+      purchaseState = {
+        status: 'purchasing',
+        requestId: LABEL_PURCHASE_BODY.requestId,
+        rateId: LABEL_PURCHASE_BODY.rateId,
+      };
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const originalConsoleError = console.error;
+  console.error = (...values: unknown[]) => logs.push(values.map(String).join(' '));
+  try {
+    const result = await handleProfileWriteRequest(
+      request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
+      dependencies(providerFetch, { timeoutMs: 2_000 }),
+    );
+    assert.equal(result.response.status, 409);
+    const payload = await result.response.json() as { error: { code: string; message: string } };
+    assert.equal(payload.error.code, 'aborted');
+    assert.match(payload.error.message, /Check purchase status or open ShipStation/);
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.equal(commitCount, 1);
+  assert.equal(purchaseState?.status, 'purchasing');
+  assert.match(logs.join('\n'), /fulfillment_shipstation_label_purchase_cleanup_failed/);
+  assert.doesNotMatch(logs.join('\n'), /Private|100 Main|Bearer|secret-token|shipstation-api-key/);
 });
 
 test('ShipStation label purchase route reconciles a label after an ambiguous charged request', async () => {

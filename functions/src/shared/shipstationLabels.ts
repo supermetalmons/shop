@@ -75,11 +75,11 @@ function shipStationMoney(value: unknown, fallbackCurrency?: string): ShipStatio
   return { currency, amount: roundCurrency(amount) };
 }
 
-function labelStatus(value: unknown): FulfillmentShipStationLabel['status'] {
+function labelStatus(value: unknown): FulfillmentShipStationLabel['status'] | null {
   const normalized = stringValue(value);
   if (normalized === 'completed') return 'completed';
   if (normalized === 'processing' || normalized === 'error' || normalized === 'voided') return normalized;
-  return 'error';
+  return null;
 }
 
 function labelDownloadUrl(value: unknown): string | undefined {
@@ -137,7 +137,8 @@ export function shipStationLabelResult(value: unknown): ShipStationLabelResult |
   const raw = record(value);
   const labelId = stringValue(raw.label_id);
   const shipmentId = stringValue(raw.shipment_id);
-  if (!labelId || !shipmentId) return null;
+  const status = raw.voided === true ? 'voided' : labelStatus(raw.status);
+  if (!labelId || !shipmentId || !status) return null;
   const shipmentCost = shipStationMoney(raw.shipment_cost);
   const insuranceCost = shipStationMoney(raw.insurance_cost, shipmentCost?.currency);
   const createdAt = Date.parse(stringValue(raw.created_at));
@@ -150,7 +151,7 @@ export function shipStationLabelResult(value: unknown): ShipStationLabelResult |
   const label: FulfillmentShipStationLabel = {
     labelId,
     shipmentId,
-    status: raw.voided === true ? 'voided' : labelStatus(raw.status),
+    status,
     ...(optionalString(raw.rate_id) ? { rateId: optionalString(raw.rate_id) } : {}),
     ...(optionalString(raw.tracking_number) ? { trackingNumber: optionalString(raw.tracking_number) } : {}),
     ...(optionalString(raw.carrier_id) ? { carrierId: optionalString(raw.carrier_id) } : {}),
