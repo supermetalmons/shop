@@ -33,6 +33,7 @@ import {
   ShipStationPackageInput,
 } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
+import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import {
   figureMetadataCacheKey,
@@ -1202,6 +1203,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
 
   useDismissibleMenu(manualReviewMenuOpen, manualReviewMenuRef, setManualReviewMenuOpen);
   useDismissibleMenu(exportMenuOpen, exportMenuRef, setExportMenuOpen);
+  useOverlayScrollLock({ active: activeShipstationOrderKey !== null && !walletModalVisible });
 
   const resetShipstationFlow = useCallback(() => {
     setShipstationRates([]);
