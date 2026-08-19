@@ -525,6 +525,17 @@ test('ShipStation labels expose sanitized purchase details and an HTTPS PDF URL'
     shipment_id: 'se-shipment',
     status: 'queued',
   }), null);
+  assert.equal(shipStationLabelResult({
+    label_id: 'se-label',
+    shipment_id: 'se-shipment',
+    voided: true,
+  }), null);
+  assert.equal(shipStationLabelResult({
+    label_id: 'se-label',
+    shipment_id: 'se-shipment',
+    status: 'queued',
+    voided: true,
+  }), null);
   assert.equal(
     shipStationLabelResult({
       label_id: 'se-voided',
@@ -718,17 +729,19 @@ test('label purchase rejects oversized and malformed provider responses', async 
     () => createShipStationLabelFromRate('api-key', 'se-rate', {
       fetch: async () => new Response('not-json'),
     }),
-    /did not return a label id/,
+    /returned an invalid label/,
   );
   for (const label of [
     { label_id: 'se-label', shipment_id: 'se-shipment' },
     { label_id: 'se-label', shipment_id: 'se-shipment', status: 'queued' },
+    { label_id: 'se-label', shipment_id: 'se-shipment', voided: true },
+    { label_id: 'se-label', shipment_id: 'se-shipment', status: 'queued', voided: true },
   ]) {
     await assert.rejects(
       () => createShipStationLabelFromRate('api-key', 'se-rate', {
         fetch: async () => Response.json(label),
       }),
-      /did not return a label id/,
+      /returned an invalid label/,
     );
   }
 });

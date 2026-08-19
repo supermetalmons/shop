@@ -137,8 +137,9 @@ export function shipStationLabelResult(value: unknown): ShipStationLabelResult |
   const raw = record(value);
   const labelId = stringValue(raw.label_id);
   const shipmentId = stringValue(raw.shipment_id);
-  const status = raw.voided === true ? 'voided' : labelStatus(raw.status);
-  if (!labelId || !shipmentId || !status) return null;
+  const providerStatus = labelStatus(raw.status);
+  if (!labelId || !shipmentId || !providerStatus) return null;
+  const status = raw.voided === true ? 'voided' : providerStatus;
   const shipmentCost = shipStationMoney(raw.shipment_cost);
   const insuranceCost = shipStationMoney(raw.insurance_cost, shipmentCost?.currency);
   const createdAt = Date.parse(stringValue(raw.created_at));
@@ -401,7 +402,7 @@ export async function createShipStationLabelFromRate(
   const payload = record(json);
   const result = shipStationLabelResult(payload.label ?? json);
   if (!result) {
-    throw new ShipStationLabelProviderError('internal', 'ShipStation did not return a label id');
+    throw new ShipStationLabelProviderError('internal', 'ShipStation returned an invalid label');
   }
   return result;
 }

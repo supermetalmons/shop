@@ -1674,7 +1674,14 @@ test('ShipStation label purchase route adopts an existing provider label without
 });
 
 test('ShipStation label purchase route records definite failures and unresolved ambiguous purchases safely', async () => {
-  for (const mode of ['definite', 'ambiguous', 'missing-status', 'unsupported-status'] as const) {
+  for (const mode of [
+    'definite',
+    'ambiguous',
+    'missing-status',
+    'unsupported-status',
+    'missing-status-voided',
+    'unsupported-status-voided',
+  ] as const) {
     let purchaseState: Record<string, unknown> | undefined;
     let labelListCalls = 0;
     const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
@@ -1695,7 +1702,8 @@ test('ShipStation label purchase route records definite failures and unresolved 
           return Response.json({
             label_id: 'label-1',
             shipment_id: 'shipment-1',
-            ...(mode === 'unsupported-status' ? { status: 'queued' } : {}),
+            ...(mode.startsWith('unsupported-status') ? { status: 'queued' } : {}),
+            ...(mode.endsWith('-voided') ? { voided: true } : {}),
           });
         }
         return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
