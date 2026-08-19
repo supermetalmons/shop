@@ -764,8 +764,11 @@ export async function getShipStationShipmentByExternalId(
   if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
   if (!validJson) throw providerResponseError();
   const raw = record(json);
-  const shipment = shipmentValue(Object.keys(record(raw.shipment)).length ? raw.shipment : raw);
+  const rawShipment = Object.keys(record(raw.shipment)).length ? record(raw.shipment) : raw;
+  const shipment = shipmentValue(rawShipment);
   if (!stringValue(shipment.shipment_id)) throw providerResponseError();
+  if (rawShipment.external_shipment_id !== undefined &&
+    stringValue(rawShipment.external_shipment_id) !== externalId) throw providerResponseError();
   return shipment.shipment_status === 'cancelled' ? null : shipment;
 }
 
@@ -784,6 +787,7 @@ export async function createShipStationShipment(
       }],
     },
   }, options);
+  if (status === 408) throw new ShipStationRatesProviderError('deadline-exceeded', 'ShipStation request timed out');
   if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
   if (!validJson) throw providerResponseError();
   const root = record(json);
@@ -800,6 +804,12 @@ export async function createShipStationShipment(
   }
   const created = shipmentValue(rawShipment);
   if (!stringValue(created.shipment_id)) throw providerResponseError();
+  if (
+    (rawShipment.external_shipment_id !== undefined &&
+      stringValue(rawShipment.external_shipment_id) !== shipment.external_shipment_id) ||
+    (rawShipment.shipment_number !== undefined &&
+      stringValue(rawShipment.shipment_number) !== shipment.shipment_number)
+  ) throw providerResponseError();
   return created;
 }
 

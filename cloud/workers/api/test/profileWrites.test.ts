@@ -749,6 +749,65 @@ test('ShipStation shipment route claims, decrypts, creates, and conditionally pe
   ]);
 });
 
+test('ShipStation shipment route retains its claim when final persistence conflicts after creation', async () => {
+  let claimId = '';
+  let finalPersistAttempts = 0;
+  let retained = false;
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+    dependencies(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') {
+        if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+        return Response.json({ shipments: [{ shipment_id: 'shipment-new', packages: [] }] });
+      }
+      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+      if (url.pathname.endsWith('/deliveryOrders/7')) {
+        return Response.json(orderDocument({
+          addressSnapshot: {
+            encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
+            countryCode: 'TR',
+          },
+          items: [{ kind: 'box', refId: 1 }],
+          shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
+        }));
+      }
+      if (url.pathname.endsWith('/documents:commit')) {
+        const commit = JSON.parse(String(init?.body)) as {
+          writes: Array<{
+            update?: {
+              fields?: {
+                shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
+              };
+            };
+            updateTransforms?: Array<{ fieldPath: string }>;
+          }>;
+        };
+        const write = commit.writes[0];
+        const fields = write.update?.fields?.shipstation?.mapValue?.fields ?? {};
+        if (fields.shipmentId) {
+          finalPersistAttempts += 1;
+          return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 409 });
+        }
+        if (fields.lastError) {
+          retained = fields.claimId?.stringValue === claimId &&
+            Boolean(write.updateTransforms?.some((entry) => entry.fieldPath === 'shipstation.claimedAt'));
+          return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+        }
+        claimId = fields.claimId?.stringValue ?? claimId;
+        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+      }
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    }),
+  );
+  assert.equal(result.response.status, 409);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
+  assert.equal(finalPersistAttempts, 3);
+  assert.equal(retained, true);
+});
+
 test('ShipStation shipment route adopts an external-id match without creating a duplicate', async () => {
   let claimId = '';
   let postCalls = 0;

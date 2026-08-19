@@ -1117,6 +1117,7 @@ async function addFulfillmentOrderToShipStation(
   const claimId = crypto.randomUUID();
   let claimWriteAttempted = false;
   let postAttempted = false;
+  let shipmentCreated = false;
   try {
     const claim = await claimFulfillmentShipStationShipment({
       claimId,
@@ -1172,6 +1173,7 @@ async function addFulfillmentOrderToShipStation(
         fetch: common.providerFetch,
         signal: common.signal,
       });
+      shipmentCreated = true;
     }
     const shipmentId = optionalString(shipment.shipment_id);
     if (!shipmentId) throw new ShipStationRatesProviderError('internal', 'ShipStation did not return a shipment id');
@@ -1198,11 +1200,11 @@ async function addFulfillmentOrderToShipStation(
     const failureCode = error instanceof ShipStationRatesProviderError || error instanceof ProfileReadError
       ? error.code
       : 'internal';
-    const mayHaveCreated = postAttempted && (
+    const mayHaveCreated = shipmentCreated || (postAttempted && (
       failureCode === 'deadline-exceeded' ||
       failureCode === 'unavailable' ||
       failureCode === 'internal'
-    );
+    ));
     if (claimWriteAttempted) {
       await safelyTransitionFulfillmentShipStationShipmentClaim({
         claimId,

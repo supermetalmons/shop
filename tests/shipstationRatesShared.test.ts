@@ -125,7 +125,12 @@ test('shared ShipStation shipment creation and external-id adoption are bounded 
         path: url.pathname,
         ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}),
       });
-      return Response.json({ shipments: [{ shipment_id: 'shipment-1', packages: input.packages }] });
+      return Response.json({ shipments: [{
+        shipment_id: 'shipment-1',
+        external_shipment_id: input.external_shipment_id,
+        shipment_number: input.shipment_number,
+        packages: input.packages,
+      }] });
     },
   });
   assert.equal(created.shipment_id, 'shipment-1');
@@ -138,7 +143,11 @@ test('shared ShipStation shipment creation and external-id adoption are bounded 
   }]);
 
   const adopted = await getShipStationShipmentByExternalId('api-key', input.external_shipment_id, {
-    fetch: async () => Response.json({ shipment: { shipment_id: 'shipment-1', shipment_status: 'pending' } }),
+    fetch: async () => Response.json({ shipment: {
+      shipment_id: 'shipment-1',
+      external_shipment_id: input.external_shipment_id,
+      shipment_status: 'pending',
+    } }),
   });
   assert.equal(adopted?.shipment_id, 'shipment-1');
   assert.equal(await getShipStationShipmentByExternalId('api-key', input.external_shipment_id, {
@@ -203,6 +212,30 @@ test('shared ShipStation shipment creation sanitizes provider failures and rejec
     createShipStationShipment('api-key', input, { fetch: async () => Response.json({ shipments: [{}] }) }),
     (error) => error instanceof ShipStationRatesProviderError && error.code === 'unavailable',
   );
+  for (const identity of [
+    { external_shipment_id: 'mons-card_nft_2-8', shipment_number: '7' },
+    { external_shipment_id: 'mons-card_nft_2-7', shipment_number: '8' },
+  ]) {
+    await assert.rejects(
+      createShipStationShipment('api-key', input, {
+        fetch: async () => Response.json({ shipments: [{ shipment_id: 'shipment-1', ...identity }] }),
+      }),
+      (error) => error instanceof ShipStationRatesProviderError && error.code === 'unavailable',
+    );
+  }
+  await assert.rejects(
+    getShipStationShipmentByExternalId('api-key', input.external_shipment_id, {
+      fetch: async () => Response.json({
+        shipment_id: 'shipment-1',
+        external_shipment_id: 'mons-card_nft_2-8',
+      }),
+    }),
+    (error) => error instanceof ShipStationRatesProviderError && error.code === 'unavailable',
+  );
+  await assert.rejects(
+    createShipStationShipment('api-key', input, { fetch: async () => Response.json({}, { status: 408 }) }),
+    (error) => error instanceof ShipStationRatesProviderError && error.code === 'deadline-exceeded',
+  );
   await assert.rejects(
     getShipStationShipmentByExternalId('api-key', input.external_shipment_id, {
       fetch: async () => new Response('{}', { headers: { 'Content-Length': String(513 * 1024) } }),
@@ -254,6 +287,12 @@ test('shared ShipStation package parsing preserves provider measurements beyond 
 });
 
 test('shared ShipStation rate requests preserve rate-limit, timeout, and size errors', async () => {
+  await assert.rejects(
+    requestShipStationShipmentRates('api-key', 'shipment-1', {
+      fetch: async () => Response.json({}, { status: 408 }),
+    }),
+    (error) => error instanceof ShipStationRatesProviderError && error.code === 'failed-precondition',
+  );
   await assert.rejects(
     requestShipStationShipmentRates('api-key', 'shipment-1', {
       fetch: async () => Response.json({ errors: [] }, { status: 429 }),
