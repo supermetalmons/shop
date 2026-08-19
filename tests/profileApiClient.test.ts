@@ -186,6 +186,7 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
     ['updateFulfillmentAddress', '/fulfillment/order-address'],
     ['updateFulfillmentStatus', '/fulfillment/order-status'],
     ['getFulfillmentShipStationLabel', '/fulfillment/shipstation-label'],
+    ['purchaseFulfillmentShipStationLabel', '/fulfillment/shipstation-label-purchase'],
     ['getFulfillmentShipStationRates', '/fulfillment/shipstation-rates'],
     ['addFulfillmentOrderToShipStation', '/fulfillment/shipstation-shipment'],
   ] as const) {
@@ -197,6 +198,7 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
     assert.doesNotMatch(implementation, /callFunction|httpsCallable/);
   }
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label'), 50_000);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label-purchase'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-rates'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-shipment'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/order-address'), 20_000);
@@ -297,6 +299,24 @@ test('migrated write response validators accept only exact public contracts', ()
   assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationLabel({
     ...shipStationLabel,
     label: { ...shipStationLabel.label, shipmentId: 'shipment-2' },
+  }), null);
+
+  const shipStationLabelPurchase = { ...shipStationLabel, alreadyPurchased: false };
+  assert.deepEqual(
+    profileApiTestHooks.parsePurchaseFulfillmentShipStationLabel(shipStationLabelPurchase),
+    shipStationLabelPurchase,
+  );
+  assert.equal(profileApiTestHooks.parsePurchaseFulfillmentShipStationLabel({
+    ...shipStationLabelPurchase,
+    private: true,
+  }), null);
+  assert.equal(profileApiTestHooks.parsePurchaseFulfillmentShipStationLabel({
+    ...shipStationLabelPurchase,
+    label: { ...shipStationLabelPurchase.label, shipmentId: 'shipment-2' },
+  }), null);
+  assert.equal(profileApiTestHooks.parsePurchaseFulfillmentShipStationLabel({
+    ...shipStationLabelPurchase,
+    alreadyPurchased: 'false',
   }), null);
 
   const shipStationRates = {
@@ -432,6 +452,7 @@ test('migrated profile writes are absent from Firebase exports and deployment se
     'addFulfillmentOrderToShipStation',
     'getFulfillmentShipStationLabel',
     'getFulfillmentShipStationRates',
+    'purchaseFulfillmentShipStationLabel',
   ]) {
     assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
     assert.doesNotMatch(packageJson, new RegExp(`functions:${name}(?:,|\\")`));
@@ -440,16 +461,10 @@ test('migrated profile writes are absent from Firebase exports and deployment se
     scripts['decommission:firebase-fulfillment-callables'],
     /firebase functions:delete addFulfillmentOrderToShipStation --project mons-shop --force/,
   );
-});
-
-test('Firebase label persistence replaces the complete label map', () => {
-  const source = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('async function persistFulfillmentShipStationLabel');
-  const end = source.indexOf('\nasync function findAndPersistFulfillmentShipStationLabel', start);
-  const implementation = source.slice(start, end);
-  assert.match(implementation, /tx\.update\(args\.orderRef/);
-  assert.match(implementation, /'shipstation\.label': shipStationLabelDocument/);
-  assert.doesNotMatch(implementation, /\{ merge: true \}/);
+  assert.match(
+    scripts['decommission:firebase-shipstation-label-purchase'],
+    /firebase functions:delete purchaseFulfillmentShipStationLabel --project mons-shop --force/,
+  );
 });
 
 test('browser source has no direct Firestore data access', () => {

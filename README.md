@@ -105,7 +105,8 @@ and removes the file immediately.
 Do not run a full Functions deployment during this cutover: the source removals
 would retire the legacy callables before the frontend is ready. After the API and
 frontend releases are both verified, run
-`npm run decommission:firebase-fulfillment-callables`, then deploy the complete
+`npm run decommission:firebase-fulfillment-callables` and
+`npm run decommission:firebase-shipstation-label-purchase`, then deploy the complete
 Functions set with `npm run deploy:functions`.
 
 ### Notification delivery deployment
@@ -245,11 +246,10 @@ suite passes.
 - `ADDRESS_DECRYPTION_SECRET` (Firebase Functions secret or local env; base64 Curve25519 secret key matching the frontend address encryption public key)
   - Reused by fulfillment/admin address decryption and Stripe webhook fulfillment; set with `firebase functions:secrets:set ADDRESS_DECRYPTION_SECRET` only if the Firebase project does not already have it.
   - Stripe webhook fulfillment uses it to encrypt Stripe shipping addresses into the same delivery-order address format.
-- `SHIPSTATION_API_KEY` (Firebase Functions and `mons-shop-api` secret or local env; ShipStation API v2 key used by fulfillment actions)
-  - Set: `firebase functions:secrets:set SHIPSTATION_API_KEY`
+- `SHIPSTATION_API_KEY` (`mons-shop-api` Worker secret or local env; ShipStation API v2 key used by fulfillment actions, including label purchases)
+  - Keep the source value in Google Secret Manager during the initial rollback window; the Firebase callable no longer reads it.
   - Synchronize to Cloudflare with `npm run sync:api:firebase-secrets`.
-- `SHIPSTATION_SHIP_FROM` (Firebase Functions and `mons-shop-api` secret or local env; the origin address as one JSON object, so it can change without a code deploy)
-  - Set: `firebase functions:secrets:set SHIPSTATION_SHIP_FROM`
+- `SHIPSTATION_SHIP_FROM` (`mons-shop-api` Worker secret or local env; the origin address as one JSON object, so it can change without a code deploy)
   - Synchronize to Cloudflare with `npm run sync:api:firebase-secrets`.
   - Shape: `{"name":"mons.shop","company_name":"mons.shop","phone":"+1XXXXXXXXXX","address_line1":"1061 10th Street","city_locality":"West Pittsburg","state_province":"PA","postal_code":"16160","country_code":"US","address_residential_indicator":"no"}`
   - The fulfillment page's "Add to ShipStation" button creates a pending shipment with `create_sales_order: true` and no carrier/service, so it lands in ShipStation's Awaiting Shipment tab for the shipper to rate and label. Parcels default to 4 oz per item at 9x12x2 in.

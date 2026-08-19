@@ -225,6 +225,7 @@ type AuthenticatedApiPath =
   | '/fulfillment/order-status'
   | '/fulfillment/manual-review-checkouts'
   | '/fulfillment/shipstation-label'
+  | '/fulfillment/shipstation-label-purchase'
   | '/fulfillment/shipstation-rates'
   | '/fulfillment/shipstation-shipment';
 
@@ -236,11 +237,13 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 };
 
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
+const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_RATES_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
+  if (pathname === '/fulfillment/shipstation-label-purchase') return SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-rates') return SHIPSTATION_RATES_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-shipment') return SHIPSTATION_SHIPMENT_API_TIMEOUT_MS;
   return defaultProfileApiDependencies.timeoutMs;
@@ -588,6 +591,33 @@ function parseGetFulfillmentShipStationLabel(value: unknown): GetFulfillmentShip
     ...(label ? { label } : {}),
     ...(typeof value.labelDownloadUrl === 'string' ? { labelDownloadUrl: value.labelDownloadUrl } : {}),
     ...(typeof value.purchaseUnknown === 'boolean' ? { purchaseUnknown: value.purchaseUnknown } : {}),
+  };
+}
+
+function parsePurchaseFulfillmentShipStationLabel(
+  value: unknown,
+): PurchaseFulfillmentShipStationLabelResponse | null {
+  if (!isRecord(value)) return null;
+  const required = ['deliveryId', 'shipmentId', 'label', 'alreadyPurchased'] as const;
+  const allowed = new Set<string>([...required, 'labelDownloadUrl']);
+  if (!required.every((key) => Object.hasOwn(value, key))) return null;
+  if (!Object.keys(value).every((key) => allowed.has(key))) return null;
+  if (
+    !Number.isSafeInteger(value.deliveryId) || Number(value.deliveryId) <= 0 ||
+    typeof value.shipmentId !== 'string' || !value.shipmentId ||
+    typeof value.alreadyPurchased !== 'boolean' ||
+    (value.labelDownloadUrl !== undefined && (
+      typeof value.labelDownloadUrl !== 'string' || !/^https:\/\//i.test(value.labelDownloadUrl)
+    ))
+  ) return null;
+  const label = parseFulfillmentShipStationLabel(value.label);
+  if (!label || label.shipmentId !== value.shipmentId) return null;
+  return {
+    deliveryId: Number(value.deliveryId),
+    shipmentId: value.shipmentId,
+    label,
+    ...(typeof value.labelDownloadUrl === 'string' ? { labelDownloadUrl: value.labelDownloadUrl } : {}),
+    alreadyPurchased: value.alreadyPurchased,
   };
 }
 
@@ -1069,10 +1099,13 @@ export async function getFulfillmentShipStationRates(
 export async function purchaseFulfillmentShipStationLabel(
   args: PurchaseFulfillmentShipStationLabelRequest,
 ): Promise<PurchaseFulfillmentShipStationLabelResponse> {
-  return callFunction<PurchaseFulfillmentShipStationLabelRequest, PurchaseFulfillmentShipStationLabelResponse>(
-    'purchaseFulfillmentShipStationLabel',
+  const response = await callProfileApi<PurchaseFulfillmentShipStationLabelRequest>(
+    '/fulfillment/shipstation-label-purchase',
     args,
   );
+  const result = parsePurchaseFulfillmentShipStationLabel(response);
+  if (!result) throw new Error('Invalid fulfillment ShipStation label purchase response');
+  return result;
 }
 
 export async function getFulfillmentShipStationLabel(
@@ -1287,6 +1320,7 @@ export const profileApiTestHooks = {
   parseAddFulfillmentOrderToShipStation,
   parseGetFulfillmentShipStationLabel,
   parseGetFulfillmentShipStationRates,
+  parsePurchaseFulfillmentShipStationLabel,
   parseFulfillmentStatusUpdate,
   parseProfileAddress,
   parseProfileState,

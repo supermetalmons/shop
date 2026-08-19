@@ -7,22 +7,24 @@ import {
 } from '../functions/src/shared/shipstationPackage.ts';
 import {
   adoptOrPurchaseShipStationLabel,
-  buildShipStationPackages,
   createShipStationLabelFromRate,
-  getShipStationShipmentRates,
   isActiveShipStationLabel,
-  requestShipStationShipmentRates,
   shipStationErrorMessage,
   shipStationLabelResult,
+  shipStationTrackingCodeUpdate,
+  shouldClearShipStationPurchaseState,
+  shouldTransitionShipStationPurchaseState,
+} from '../functions/src/shared/shipstationLabels.ts';
+import {
+  buildShipStationPackages,
+  getShipStationShipmentRates,
+  requestShipStationShipmentRates,
   shipStationMoneyMatches,
   shipStationPackageDetails,
   shipStationPackageInputFromShipmentPackage,
   shipStationRateSummaries,
-  shipStationTrackingCodeUpdate,
-  shouldClearShipStationPurchaseState,
-  shouldTransitionShipStationPurchaseState,
   updateShipStationShipment,
-} from '../functions/src/shipstation.ts';
+} from '../functions/src/shared/shipstationRates.ts';
 
 test('the default parcel scales its weight with the unit count and keeps a floor of one unit', () => {
   assert.deepEqual(defaultShipStationPackage(1), { length: 12, width: 9, height: 2, weight: 4 });
@@ -630,6 +632,10 @@ test('ShipStation failures do not return upstream messages containing address da
     'validation_error',
   );
   assert.equal(shipStationErrorMessage({ message: 'Invalid 12 Private Street' }, 'Request failed'), 'Request failed');
+  assert.equal(
+    shipStationErrorMessage({ errors: [{ error_code: 'invalid 12 Private Street' }] }, 'Request failed'),
+    'Request failed',
+  );
 });
 
 test('shipment package updates use the ShipStation update endpoint', async () => {
@@ -689,4 +695,20 @@ test('label purchase requests a 4x6 PDF URL without downloading it', async () =>
     label_layout: '4x6',
     label_download_type: 'url',
   });
+});
+
+test('label purchase rejects oversized and malformed provider responses', async () => {
+  await assert.rejects(
+    () => createShipStationLabelFromRate('api-key', 'se-rate', {
+      fetch: async () => new Response('x'.repeat(32)),
+      maxResponseBytes: 16,
+    }),
+    /oversized response/,
+  );
+  await assert.rejects(
+    () => createShipStationLabelFromRate('api-key', 'se-rate', {
+      fetch: async () => new Response('not-json'),
+    }),
+    /did not return a label id/,
+  );
 });

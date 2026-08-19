@@ -244,11 +244,11 @@ async function readBoundedText(response: Response, maxBytes: number, signal: Abo
   return new TextDecoder().decode(merged);
 }
 
-function shipStationErrorMessage(value: unknown, fallback: string): string {
+export function shipStationErrorMessage(value: unknown, fallback: string): string {
   const errors = Array.isArray(record(value).errors) ? record(value).errors as unknown[] : [];
   const codes = Array.from(new Set(errors.flatMap((entry) => {
     const code = optionalString(record(entry).error_code);
-    return code ? [code] : [];
+    return code && /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(code) ? [code] : [];
   }))).slice(0, 5);
   if (codes.some((code) => /balance|fund|postage/i.test(code))) {
     return 'Insufficient ShipStation funds. Add funds or enable auto-funding in ShipStation.';
@@ -272,6 +272,7 @@ function errorForStatus(status: number, message: string): ShipStationLabelProvid
 async function shipStationLabelFetch(
   apiKey: string,
   path: string,
+  init: { method: 'GET' | 'POST'; body?: unknown },
   options: ShipStationLabelClientOptions,
 ): Promise<{ status: number; json: unknown }> {
   const providerFetch = options.fetch ?? fetch;
@@ -285,8 +286,13 @@ async function shipStationLabelFetch(
   );
   try {
     const response = await providerFetch(`${SHIPSTATION_API_BASE}${path}`, {
-      method: 'GET',
-      headers: { 'API-Key': apiKey, Accept: 'application/json' },
+      method: init.method,
+      headers: {
+        'API-Key': apiKey,
+        Accept: 'application/json',
+        ...(init.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
       redirect: 'manual',
       signal: controller.signal,
     });
@@ -322,7 +328,12 @@ export async function listShipStationLabelsForShipment(
   options: ShipStationLabelClientOptions = {},
 ): Promise<ShipStationLabelResult[]> {
   const query = new URLSearchParams({ shipment_id: shipmentId, page_size: '50', sort_dir: 'desc' });
-  const { status, json } = await shipStationLabelFetch(apiKey, `/labels?${query.toString()}`, options);
+  const { status, json } = await shipStationLabelFetch(
+    apiKey,
+    `/labels?${query.toString()}`,
+    { method: 'GET' },
+    options,
+  );
   if (status < 200 || status >= 300) {
     throw errorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
   }
@@ -348,6 +359,7 @@ export async function getShipStationLabelById(
   const { status, json } = await shipStationLabelFetch(
     apiKey,
     `/labels/${encodeURIComponent(labelId)}?${query.toString()}`,
+    { method: 'GET' },
     options,
   );
   if (status < 200 || status >= 300) {
@@ -359,4 +371,45 @@ export async function getShipStationLabelById(
     throw new ShipStationLabelProviderError('internal', 'ShipStation did not return the requested label');
   }
   return result;
+}
+
+export async function createShipStationLabelFromRate(
+  apiKey: string,
+  rateId: string,
+  options: ShipStationLabelClientOptions = {},
+): Promise<ShipStationLabelResult> {
+  const { status, json } = await shipStationLabelFetch(
+    apiKey,
+    `/labels/rates/${encodeURIComponent(rateId)}`,
+    {
+      method: 'POST',
+      body: {
+        label_format: 'pdf',
+        label_layout: '4x6',
+        label_download_type: 'url',
+      },
+    },
+    options,
+  );
+  if (status === 408) {
+    throw new ShipStationLabelProviderError('deadline-exceeded', 'ShipStation request timed out');
+  }
+  if (status < 200 || status >= 300) {
+    throw errorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
+  }
+  const payload = record(json);
+  const result = shipStationLabelResult(payload.label ?? json);
+  if (!result) {
+    throw new ShipStationLabelProviderError('internal', 'ShipStation did not return a label id');
+  }
+  return result;
+}
+
+export async function adoptOrPurchaseShipStationLabel(
+  findExisting: () => Promise<ShipStationLabelResult | null>,
+  purchase: () => Promise<ShipStationLabelResult>,
+): Promise<{ result: ShipStationLabelResult; alreadyPurchased: boolean }> {
+  const existing = await findExisting();
+  if (existing) return { result: existing, alreadyPurchased: true };
+  return { result: await purchase(), alreadyPurchased: false };
 }

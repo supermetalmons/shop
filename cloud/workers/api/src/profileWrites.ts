@@ -25,6 +25,8 @@ import {
   serializeAddressCipherPayload,
 } from '../../../../functions/src/shared/addressCipher.js';
 import {
+  adoptOrPurchaseShipStationLabel,
+  createShipStationLabelFromRate,
   getShipStationLabelById,
   isActiveShipStationLabel,
   listShipStationLabelsForShipment,
@@ -41,11 +43,13 @@ import {
   getShipStationShipmentByExternalId,
   getShipStationShipmentById,
   getShipStationShipmentRates,
+  getShipStationRateById,
   parseShipStationShipFrom,
   parseShipStationShipTo,
   requestShipStationShipmentRates,
   shipStationExternalId,
   shipStationPackageDetails,
+  shipStationMoneyMatches,
   ShipStationRatesProviderError,
   updateShipStationShipment,
   type ShipStationRateResponse,
@@ -64,6 +68,7 @@ import type {
   FulfillmentShipStationLabel,
   GetFulfillmentShipStationLabelResponse,
   GetFulfillmentShipStationRatesResponse,
+  PurchaseFulfillmentShipStationLabelResponse,
   ProfileAddress,
   UpdateFulfillmentAddressResponse,
 } from '../../../../functions/src/shared/contracts.js';
@@ -91,6 +96,7 @@ export const PROFILE_ADDRESSES_PATH = '/profile/addresses';
 export const FULFILLMENT_ORDER_STATUS_PATH = '/fulfillment/order-status';
 export const FULFILLMENT_ORDER_ADDRESS_PATH = '/fulfillment/order-address';
 export const FULFILLMENT_SHIPSTATION_LABEL_PATH = '/fulfillment/shipstation-label';
+export const FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH = '/fulfillment/shipstation-label-purchase';
 export const FULFILLMENT_SHIPSTATION_RATES_PATH = '/fulfillment/shipstation-rates';
 export const FULFILLMENT_SHIPSTATION_SHIPMENT_PATH = '/fulfillment/shipstation-shipment';
 export const PROFILE_WRITE_PATHS = new Set([
@@ -98,6 +104,7 @@ export const PROFILE_WRITE_PATHS = new Set([
   FULFILLMENT_ORDER_STATUS_PATH,
   FULFILLMENT_ORDER_ADDRESS_PATH,
   FULFILLMENT_SHIPSTATION_LABEL_PATH,
+  FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
   FULFILLMENT_SHIPSTATION_RATES_PATH,
   FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
 ]);
@@ -107,6 +114,7 @@ export type ProfileWritePath =
   | typeof FULFILLMENT_ORDER_STATUS_PATH
   | typeof FULFILLMENT_ORDER_ADDRESS_PATH
   | typeof FULFILLMENT_SHIPSTATION_LABEL_PATH
+  | typeof FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH
   | typeof FULFILLMENT_SHIPSTATION_RATES_PATH
   | typeof FULFILLMENT_SHIPSTATION_SHIPMENT_PATH;
 
@@ -142,12 +150,14 @@ type ProfileWriteEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Part
 
 const PROFILE_WRITE_TIMEOUT_MS = 15_000;
 const SHIPSTATION_LABEL_OPERATION_TIMEOUT_MS = 45_000;
+const SHIPSTATION_LABEL_PURCHASE_OPERATION_TIMEOUT_MS = 55_000;
 const SHIPSTATION_RATES_OPERATION_TIMEOUT_MS = 55_000;
 const SHIPSTATION_SHIPMENT_OPERATION_TIMEOUT_MS = 55_000;
 const MAX_SAVE_ADDRESS_BYTES = 10 * 1024;
 const MAX_STATUS_REQUEST_BYTES = 4096;
 const MAX_FULFILLMENT_ADDRESS_REQUEST_BYTES = 16 * 1024;
 const MAX_SHIPSTATION_LABEL_REQUEST_BYTES = 2048;
+const MAX_SHIPSTATION_LABEL_PURCHASE_REQUEST_BYTES = 4096;
 const MAX_SHIPSTATION_RATES_REQUEST_BYTES = 2048;
 const MAX_SHIPSTATION_SHIPMENT_REQUEST_BYTES = 2048;
 const SHIPSTATION_CLAIM_TTL_MS = 120_000;
@@ -186,6 +196,17 @@ const fulfillmentAddressSchema = z.object({
 const shipStationLabelSchema = z.object({
   dropId: z.string().min(1).max(64),
   deliveryId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+}).strict();
+
+const shipStationLabelPurchaseSchema = z.object({
+  dropId: z.string().min(1).max(64),
+  deliveryId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  rateId: z.string().trim().min(1).max(64),
+  expectedTotal: z.object({
+    currency: z.string().trim().toLowerCase().regex(/^[a-z]{3}$/),
+    amount: z.number().finite().nonnegative(),
+  }).strict(),
+  requestId: z.string().uuid(),
 }).strict();
 
 const shipStationRatesSchema = z.object({
@@ -252,6 +273,7 @@ async function parseExactRequestBody(
   | z.infer<typeof fulfillmentStatusSchema>
   | z.infer<typeof fulfillmentAddressSchema>
   | z.infer<typeof shipStationLabelSchema>
+  | z.infer<typeof shipStationLabelPurchaseSchema>
   | z.infer<typeof shipStationRatesSchema>
   | z.infer<typeof shipStationShipmentSchema>
 > {
@@ -264,6 +286,8 @@ async function parseExactRequestBody(
       ? MAX_FULFILLMENT_ADDRESS_REQUEST_BYTES
       : path === FULFILLMENT_SHIPSTATION_LABEL_PATH
         ? MAX_SHIPSTATION_LABEL_REQUEST_BYTES
+        : path === FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH
+          ? MAX_SHIPSTATION_LABEL_PURCHASE_REQUEST_BYTES
         : path === FULFILLMENT_SHIPSTATION_RATES_PATH
           ? MAX_SHIPSTATION_RATES_REQUEST_BYTES
           : path === FULFILLMENT_SHIPSTATION_SHIPMENT_PATH
@@ -292,6 +316,8 @@ async function parseExactRequestBody(
       ? fulfillmentAddressSchema.safeParse(parsed)
       : path === FULFILLMENT_SHIPSTATION_LABEL_PATH
         ? shipStationLabelSchema.safeParse(parsed)
+        : path === FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH
+          ? shipStationLabelPurchaseSchema.safeParse(parsed)
         : path === FULFILLMENT_SHIPSTATION_RATES_PATH
           ? shipStationRatesSchema.safeParse(parsed)
           : shipStationShipmentSchema.safeParse(parsed);
@@ -543,6 +569,30 @@ function firestoreRateQuotes(
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function storedShipStationMoney(value: unknown): { currency: string; amount: number } | undefined {
+  if (!isRecord(value)) return undefined;
+  const currency = optionalString(value.currency)?.toLowerCase() ?? '';
+  const amount = typeof value.amount === 'number' ? value.amount : Number.NaN;
+  return /^[a-z]{3}$/.test(currency) && Number.isFinite(amount) && amount >= 0
+    ? { currency, amount }
+    : undefined;
+}
+
+function storedShipStationRateQuotes(value: unknown): Array<{
+  rateId: string;
+  shipmentId: string;
+  totalAmount: { currency: string; amount: number };
+}> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) return [];
+    const rateId = optionalString(entry.rateId);
+    const shipmentId = optionalString(entry.shipmentId);
+    const totalAmount = storedShipStationMoney(entry.totalAmount);
+    return rateId && shipmentId && totalAmount ? [{ rateId, shipmentId, totalAmount }] : [];
+  }).slice(0, 100);
 }
 
 async function loadDeliveryOrderDocument(
@@ -1255,9 +1305,11 @@ function labelDocumentFields(
 
 async function persistFulfillmentShipStationLabel(args: {
   common: FirestoreWriteCommon;
+  confirmedPurchase?: boolean;
   deliveryId: number;
   dropId: string;
   expectedCurrentLabel?: FulfillmentShipStationLabel | null;
+  expectedPurchaseRequestId?: string;
   expectedRateMutation?: ShipStationRateMutationExpectation;
   fallbackLabel?: Partial<FulfillmentShipStationLabel>;
   result: ShipStationLabelResult;
@@ -1286,6 +1338,20 @@ async function persistFulfillmentShipStationLabel(args: {
       }
       const currentLabel = storedFulfillmentShipStationLabel(shipstation.label);
       const currentLabelIdentity = shipStationLabelIdentity(currentLabel);
+      if (
+        args.expectedPurchaseRequestId
+        && currentLabel
+        && isActiveShipStationLabel(currentLabel)
+        && currentLabelIdentity !== shipStationLabelIdentity(label)
+      ) {
+        return { value: currentLabel };
+      }
+      if (args.expectedPurchaseRequestId) {
+        const purchase = isRecord(shipstation.labelPurchase) ? shipstation.labelPurchase : {};
+        if (!shouldTransitionShipStationPurchaseState(purchase, args.expectedPurchaseRequestId, false)) {
+          throw new ProfileReadError('aborted', 409, 'The ShipStation label purchase changed. Check its status again.');
+        }
+      }
       if (
         args.expectedCurrentLabel !== undefined
         && currentLabelIdentity !== shipStationLabelIdentity(args.expectedCurrentLabel)
@@ -1316,7 +1382,9 @@ async function persistFulfillmentShipStationLabel(args: {
         );
       }
       if (trackingCodeUpdate !== undefined) updateMask.push('fulfillmentTrackingCode');
-      if (shouldClearShipStationPurchaseState(label)) updateMask.push('shipstation.labelPurchase');
+      if (shouldClearShipStationPurchaseState(label, args.confirmedPurchase)) {
+        updateMask.push('shipstation.labelPurchase');
+      }
       return {
         value: label,
         write: {
@@ -1406,6 +1474,7 @@ async function reconcileFulfillmentShipStationLabel(args: {
   common: FirestoreWriteCommon;
   deliveryId: number;
   dropId: string;
+  expectedPurchaseRequestId?: string;
   expectedRateMutation?: ShipStationRateMutationExpectation;
   order: Record<string, unknown>;
   refreshInactiveStoredLabel: boolean;
@@ -1425,6 +1494,7 @@ async function reconcileFulfillmentShipStationLabel(args: {
         deliveryId: args.deliveryId,
         dropId: args.dropId,
         expectedCurrentLabel: storedLabel,
+        ...(args.expectedPurchaseRequestId ? { expectedPurchaseRequestId: args.expectedPurchaseRequestId } : {}),
         ...(args.expectedRateMutation ? { expectedRateMutation: args.expectedRateMutation } : {}),
         fallbackLabel: storedLabel,
         result,
@@ -1445,6 +1515,7 @@ async function reconcileFulfillmentShipStationLabel(args: {
         deliveryId: args.deliveryId,
         dropId: args.dropId,
         expectedCurrentLabel: inactive ?? storedLabel ?? null,
+        ...(args.expectedPurchaseRequestId ? { expectedPurchaseRequestId: args.expectedPurchaseRequestId } : {}),
         ...(args.expectedRateMutation ? { expectedRateMutation: args.expectedRateMutation } : {}),
         result: adopted,
         wallet: args.wallet,
@@ -1512,6 +1583,411 @@ async function getFulfillmentShipStationLabel(
     ...(resolvedPurchase.label ? { label: resolvedPurchase.label } : reconciled.inactive ? { label: reconciled.inactive } : {}),
     ...(resolvedPurchase.purchaseUnknown ? { purchaseUnknown: true } : {}),
   };
+}
+
+type ShipStationLabelPurchaseClaim =
+  | { alreadyPurchased: true; label: FulfillmentShipStationLabel }
+  | { alreadyPurchased: false };
+
+async function claimFulfillmentShipStationLabelPurchase(args: {
+  body: z.infer<typeof shipStationLabelPurchaseSchema>;
+  common: FirestoreWriteCommon;
+  dropId: string;
+  shipmentId: string;
+  wallet: string;
+}): Promise<ShipStationLabelPurchaseClaim> {
+  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.body.deliveryId}`;
+  return mutateDeliveryOrder<ShipStationLabelPurchaseClaim>({
+    common: args.common,
+    deliveryId: args.body.deliveryId,
+    dropId: args.dropId,
+    build: ({ fields: order, updateTime }) => {
+      rejectIrlShipStationOrder(order);
+      const shipstation = shipStationState(order);
+      if (optionalString(shipstation.shipmentId) !== args.shipmentId) {
+        throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
+      }
+      const currentLabel = storedFulfillmentShipStationLabel(shipstation.label);
+      if (currentLabel && isActiveShipStationLabel(currentLabel)) {
+        return { value: { alreadyPurchased: true, label: currentLabel } };
+      }
+      const quotedRate = storedShipStationRateQuotes(shipstation.rateQuotes)
+        .find((candidate) => candidate.rateId === args.body.rateId);
+      if (!quotedRate || quotedRate.shipmentId !== args.shipmentId) {
+        throw new ProfileReadError('failed-precondition', 409, 'Refresh rates before purchasing this label.');
+      }
+      if (!shipStationMoneyMatches(args.body.expectedTotal, quotedRate.totalAmount)) {
+        throw new ProfileReadError(
+          'failed-precondition',
+          409,
+          'The selected quote changed. Refresh rates before purchasing.',
+        );
+      }
+      const purchase = isRecord(shipstation.labelPurchase) ? shipstation.labelPurchase : {};
+      const status = optionalString(purchase.status) ?? '';
+      const previousRequestId = optionalString(purchase.requestId) ?? '';
+      if (status === 'purchasing' || status === 'unknown') {
+        throw new ProfileReadError(
+          'aborted',
+          409,
+          'A label purchase may already be in progress. Check purchase status before retrying.',
+        );
+      }
+      if (status === 'failed' && previousRequestId === args.body.requestId) {
+        throw new ProfileReadError(
+          'aborted',
+          409,
+          'This label purchase request was already handled. Review the purchase again.',
+        );
+      }
+      return {
+        value: { alreadyPurchased: false },
+        write: {
+          update: {
+            name: documentName(orderPath),
+            fields: {
+              shipstation: firestoreMap({
+                labelPurchase: firestoreMap({
+                  status: firestoreString('purchasing'),
+                  requestId: firestoreString(args.body.requestId),
+                  rateId: firestoreString(args.body.rateId),
+                  expectedTotal: firestoreMoney(args.body.expectedTotal),
+                  claimedBy: firestoreString(args.wallet),
+                }),
+              }),
+            },
+          },
+          updateMask: {
+            fieldPaths: [
+              'shipstation.labelPurchase.status',
+              'shipstation.labelPurchase.requestId',
+              'shipstation.labelPurchase.rateId',
+              'shipstation.labelPurchase.expectedTotal',
+              'shipstation.labelPurchase.claimedBy',
+              'shipstation.labelPurchase.lastError',
+              'shipstation.labelPurchase.lastErrorAt',
+              'shipstation.labelPurchase.lastErrorBy',
+              'shipstation.labelPurchase.checkedAt',
+              'shipstation.labelPurchase.checkedBy',
+            ],
+          },
+          updateTransforms: [
+            { fieldPath: 'shipstation.labelPurchase.claimedAt', setToServerValue: 'REQUEST_TIME' },
+          ],
+          currentDocument: { updateTime },
+        },
+      };
+    },
+  });
+}
+
+function shipStationLabelPurchaseFailure(error: unknown): { code: string; message: string } {
+  if (
+    error instanceof ShipStationLabelProviderError
+    || error instanceof ShipStationRatesProviderError
+    || error instanceof ProfileReadError
+  ) {
+    return { code: error.code, message: error.message.slice(0, 500) };
+  }
+  return { code: 'internal', message: 'Failed to purchase the ShipStation label' };
+}
+
+async function transitionFulfillmentShipStationLabelPurchase(args: {
+  body: z.infer<typeof shipStationLabelPurchaseSchema>;
+  common: FirestoreWriteCommon;
+  dropId: string;
+  message: string;
+  nextStatus: 'unknown' | 'failed';
+  shipmentId: string;
+  wallet: string;
+}): Promise<{ label?: FulfillmentShipStationLabel; purchaseUnknown: boolean }> {
+  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.body.deliveryId}`;
+  return mutateDeliveryOrder<{ label?: FulfillmentShipStationLabel; purchaseUnknown: boolean }>({
+    common: args.common,
+    deliveryId: args.body.deliveryId,
+    dropId: args.dropId,
+    build: ({ fields: order, updateTime }) => {
+      const shipstation = shipStationState(order);
+      if (optionalString(shipstation.shipmentId) !== args.shipmentId) {
+        throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
+      }
+      const label = storedFulfillmentShipStationLabel(shipstation.label);
+      if (isActiveShipStationLabel(label)) return { value: { label, purchaseUnknown: false } };
+      const purchase = isRecord(shipstation.labelPurchase) ? shipstation.labelPurchase : {};
+      const status = optionalString(purchase.status) ?? '';
+      if (!shouldTransitionShipStationPurchaseState(purchase, args.body.requestId, false)) {
+        return { value: { purchaseUnknown: status === 'purchasing' || status === 'unknown' } };
+      }
+      return {
+        value: { purchaseUnknown: args.nextStatus === 'unknown' },
+        write: {
+          update: {
+            name: documentName(orderPath),
+            fields: {
+              shipstation: firestoreMap({
+                labelPurchase: firestoreMap({
+                  status: firestoreString(args.nextStatus),
+                  requestId: firestoreString(args.body.requestId),
+                  rateId: firestoreString(args.body.rateId),
+                  expectedTotal: firestoreMoney(args.body.expectedTotal),
+                  lastError: firestoreString(args.message.slice(0, 500)),
+                  lastErrorBy: firestoreString(args.wallet),
+                }),
+              }),
+            },
+          },
+          updateMask: {
+            fieldPaths: [
+              'shipstation.labelPurchase.status',
+              'shipstation.labelPurchase.requestId',
+              'shipstation.labelPurchase.rateId',
+              'shipstation.labelPurchase.expectedTotal',
+              'shipstation.labelPurchase.lastError',
+              'shipstation.labelPurchase.lastErrorBy',
+            ],
+          },
+          updateTransforms: [
+            { fieldPath: 'shipstation.labelPurchase.lastErrorAt', setToServerValue: 'REQUEST_TIME' },
+          ],
+          currentDocument: { updateTime },
+        },
+      };
+    },
+  });
+}
+
+async function purchaseFulfillmentShipStationLabel(
+  body: z.infer<typeof shipStationLabelPurchaseSchema>,
+  wallet: string,
+  common: FirestoreWriteCommon,
+  apiKey: string,
+): Promise<PurchaseFulfillmentShipStationLabelResponse> {
+  const dropId = supportedDropId(body.dropId);
+  requireFulfillmentAccess(wallet, dropId);
+  if (!apiKey) {
+    throw new ShipStationProfileError('failed-precondition', 409, 'ShipStation API key is not configured');
+  }
+  const initial = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
+  rejectIrlShipStationOrder(initial.fields);
+  const shipmentId = requireShipStationShipmentId(initial.fields);
+  const reconciled = await reconcileFulfillmentShipStationLabel({
+    apiKey,
+    common,
+    deliveryId: body.deliveryId,
+    dropId,
+    order: initial.fields,
+    refreshInactiveStoredLabel: false,
+    shipmentId,
+    wallet,
+  });
+  if (reconciled.active) {
+    return {
+      deliveryId: body.deliveryId,
+      shipmentId,
+      label: reconciled.active,
+      ...(reconciled.downloadUrl ? { labelDownloadUrl: reconciled.downloadUrl } : {}),
+      alreadyPurchased: true,
+    };
+  }
+  let claimAcquired = false;
+  let purchaseAttempted = false;
+  try {
+    const claim = await claimFulfillmentShipStationLabelPurchase({ body, common, dropId, shipmentId, wallet });
+    if (claim.alreadyPurchased) {
+      const result = await getShipStationLabelById(apiKey, claim.label.labelId, {
+        fetch: common.providerFetch,
+        signal: common.signal,
+      });
+      const label = await persistFulfillmentShipStationLabel({
+        common,
+        deliveryId: body.deliveryId,
+        dropId,
+        expectedCurrentLabel: claim.label,
+        fallbackLabel: claim.label,
+        result,
+        wallet,
+      });
+      if (!isActiveShipStationLabel(label)) {
+        throw new ProfileReadError(
+          'failed-precondition',
+          409,
+          'The existing ShipStation label is no longer active. Refresh rates before purchasing.',
+        );
+      }
+      return {
+        deliveryId: body.deliveryId,
+        shipmentId,
+        label,
+        ...(result.downloadUrl ? { labelDownloadUrl: result.downloadUrl } : {}),
+        alreadyPurchased: true,
+      };
+    }
+    claimAcquired = true;
+    const selectedRate = await getShipStationRateById(apiKey, body.rateId, shipmentId, {
+      fetch: common.providerFetch,
+      signal: common.signal,
+    });
+    if (selectedRate.shipmentId !== shipmentId) {
+      throw new ProfileReadError('permission-denied', 403, 'The selected rate does not belong to this shipment.');
+    }
+    if (!shipStationMoneyMatches(body.expectedTotal, selectedRate.totalAmount)) {
+      throw new ProfileReadError(
+        'failed-precondition',
+        409,
+        'The selected rate changed. Refresh rates before purchasing.',
+      );
+    }
+    let labelAppearedBeforePurchase: FulfillmentShipStationLabel | undefined;
+    const resolution = await adoptOrPurchaseShipStationLabel(
+      async () => (await listShipStationLabelsForShipment(apiKey, shipmentId, {
+        fetch: common.providerFetch,
+        signal: common.signal,
+      }))[0] ?? null,
+      async () => {
+        const current = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
+        const currentShipstation = shipStationState(current.fields);
+        if (optionalString(currentShipstation.shipmentId) !== shipmentId) {
+          throw new ProfileReadError(
+            'aborted',
+            409,
+            'The ShipStation shipment changed. Refresh the order and try again.',
+          );
+        }
+        const currentLabel = storedFulfillmentShipStationLabel(currentShipstation.label);
+        if (currentLabel && isActiveShipStationLabel(currentLabel)) {
+          labelAppearedBeforePurchase = currentLabel;
+          return getShipStationLabelById(apiKey, currentLabel.labelId, {
+            fetch: common.providerFetch,
+            signal: common.signal,
+          });
+        }
+        const currentPurchase = isRecord(currentShipstation.labelPurchase)
+          ? currentShipstation.labelPurchase
+          : {};
+        if (!shouldTransitionShipStationPurchaseState(currentPurchase, body.requestId, false)) {
+          throw new ProfileReadError(
+            'aborted',
+            409,
+            'The ShipStation label purchase changed. Check its status again.',
+          );
+        }
+        purchaseAttempted = true;
+        return createShipStationLabelFromRate(apiKey, body.rateId, {
+          fetch: common.providerFetch,
+          signal: common.signal,
+        });
+      },
+    );
+    if (resolution.result.label.shipmentId !== shipmentId) {
+      throw new ProfileReadError('internal', 500, 'ShipStation returned a label for the wrong shipment');
+    }
+    const fallbackLabel = resolution.alreadyPurchased
+      ? undefined
+      : labelAppearedBeforePurchase ?? {
+          rateId: body.rateId,
+          purchasedBy: wallet,
+          carrierId: selectedRate.carrierId,
+          carrierCode: selectedRate.carrierCode,
+          carrierName: selectedRate.carrierName,
+          serviceCode: selectedRate.serviceCode,
+          serviceName: selectedRate.serviceName,
+        };
+    const label = await persistFulfillmentShipStationLabel({
+      common,
+      confirmedPurchase: !resolution.alreadyPurchased && labelAppearedBeforePurchase === undefined,
+      deliveryId: body.deliveryId,
+      dropId,
+      expectedPurchaseRequestId: body.requestId,
+      ...(fallbackLabel ? { fallbackLabel } : {}),
+      result: resolution.result,
+      wallet,
+    });
+    if (labelAppearedBeforePurchase && !isActiveShipStationLabel(label)) {
+      throw new ProfileReadError(
+        'failed-precondition',
+        409,
+        'The existing ShipStation label is no longer active. Refresh rates before purchasing.',
+      );
+    }
+    return {
+      deliveryId: body.deliveryId,
+      shipmentId,
+      label,
+      ...(label.labelId === resolution.result.label.labelId && resolution.result.downloadUrl
+        ? { labelDownloadUrl: resolution.result.downloadUrl }
+        : {}),
+      alreadyPurchased: resolution.alreadyPurchased
+        || labelAppearedBeforePurchase !== undefined
+        || label.labelId !== resolution.result.label.labelId,
+    };
+  } catch (error) {
+    if (!claimAcquired) throw error;
+    const failure = shipStationLabelPurchaseFailure(error);
+    const ambiguous = purchaseAttempted
+      && ['deadline-exceeded', 'unavailable', 'internal', 'unknown'].includes(failure.code);
+    if (ambiguous) {
+      try {
+        const current = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
+        const recovered = await reconcileFulfillmentShipStationLabel({
+          apiKey,
+          common,
+          deliveryId: body.deliveryId,
+          dropId,
+          expectedPurchaseRequestId: body.requestId,
+          order: current.fields,
+          refreshInactiveStoredLabel: false,
+          shipmentId,
+          wallet,
+        });
+        if (recovered.active) {
+          return {
+            deliveryId: body.deliveryId,
+            shipmentId,
+            label: recovered.active,
+            ...(recovered.downloadUrl ? { labelDownloadUrl: recovered.downloadUrl } : {}),
+            alreadyPurchased: false,
+          };
+        }
+      } catch (reconcileError) {
+        const summary = shipStationLabelPurchaseFailure(reconcileError);
+        console.error(JSON.stringify({
+          event: 'fulfillment_shipstation_label_purchase_reconcile_failed',
+          dropId,
+          deliveryId: body.deliveryId,
+          code: summary.code,
+        }));
+      }
+    }
+    const failureState = await transitionFulfillmentShipStationLabelPurchase({
+      body,
+      common,
+      dropId,
+      message: failure.message,
+      nextStatus: ambiguous ? 'unknown' : 'failed',
+      shipmentId,
+      wallet,
+    });
+    if (failureState.label) {
+      return {
+        deliveryId: body.deliveryId,
+        shipmentId,
+        label: failureState.label,
+        alreadyPurchased: true,
+      };
+    }
+    if (ambiguous) {
+      throw new ProfileReadError(
+        'aborted',
+        409,
+        'ShipStation did not confirm the label purchase. Check purchase status or open ShipStation before retrying.',
+      );
+    }
+    if (error instanceof ShipStationLabelProviderError || error instanceof ShipStationRatesProviderError) {
+      throw profileErrorForShipStation(error);
+    }
+    if (error instanceof ProfileReadError) throw error;
+    throw new ProfileReadError('internal', 500, 'Failed to purchase the ShipStation label');
+  }
 }
 
 type PendingShipStationRateRequest = {
@@ -2095,6 +2571,9 @@ export async function handleProfileWriteRequest(
   const dependencies = {
     ...defaultDependencies,
     ...(path === FULFILLMENT_SHIPSTATION_LABEL_PATH ? { timeoutMs: SHIPSTATION_LABEL_OPERATION_TIMEOUT_MS } : {}),
+    ...(path === FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH
+      ? { timeoutMs: SHIPSTATION_LABEL_PURCHASE_OPERATION_TIMEOUT_MS }
+      : {}),
     ...(path === FULFILLMENT_SHIPSTATION_RATES_PATH ? { timeoutMs: SHIPSTATION_RATES_OPERATION_TIMEOUT_MS } : {}),
     ...(path === FULFILLMENT_SHIPSTATION_SHIPMENT_PATH ? { timeoutMs: SHIPSTATION_SHIPMENT_OPERATION_TIMEOUT_MS } : {}),
     ...overrides,
@@ -2170,6 +2649,14 @@ export async function handleProfileWriteRequest(
       const apiKey = typeof env.SHIPSTATION_API_KEY === 'string' ? env.SHIPSTATION_API_KEY.trim() : '';
       payload = await getFulfillmentShipStationLabel(
         requestBody as z.infer<typeof shipStationLabelSchema>,
+        wallet,
+        common,
+        apiKey,
+      );
+    } else if (path === FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH) {
+      const apiKey = typeof env.SHIPSTATION_API_KEY === 'string' ? env.SHIPSTATION_API_KEY.trim() : '';
+      payload = await purchaseFulfillmentShipStationLabel(
+        requestBody as z.infer<typeof shipStationLabelPurchaseSchema>,
         wallet,
         common,
         apiKey,

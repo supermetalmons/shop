@@ -76,6 +76,13 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     for (const [pathname, body] of [
       ['/fulfillment/order-address', { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }],
       ['/fulfillment/shipstation-label', { dropId: 'card_nft_2', deliveryId: 7 }],
+      ['/fulfillment/shipstation-label-purchase', {
+        dropId: 'card_nft_2',
+        deliveryId: 7,
+        rateId: 'rate-1',
+        expectedTotal: { currency: 'usd', amount: 12 },
+        requestId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+      }],
       ['/fulfillment/shipstation-rates', { dropId: 'card_nft_2', deliveryId: 7 }],
     ] as const) {
       const response = await worker.fetch(`https://api.mons.shop${pathname}`, {

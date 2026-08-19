@@ -145,6 +145,11 @@ function shipStationMoney(value: unknown, fallbackCurrency?: string): ShipStatio
   return Number.isFinite(roundedAmount) ? { currency, amount: roundedAmount } : null;
 }
 
+export function shipStationMoneyMatches(expected: ShipStationMoney, actual: ShipStationMoney): boolean {
+  return expected.currency.trim().toLowerCase() === actual.currency.trim().toLowerCase()
+    && Math.abs(expected.amount - actual.amount) < 0.005;
+}
+
 function packageWeightOunces(weight: unknown): number | null {
   const raw = record(weight);
   const value = finiteNumber(raw.value);

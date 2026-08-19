@@ -916,6 +916,13 @@ async function smokeApi(
       ['/fulfillment/order-status', { dropId: 'card_nft_2', deliveryId: 1, status: 'Preparing' }],
       ['/fulfillment/manual-review-checkouts', { dropId: 'card_nft_2' }],
       ['/fulfillment/shipstation-label', { dropId: 'card_nft_2', deliveryId: 1 }],
+      ['/fulfillment/shipstation-label-purchase', {
+        dropId: 'card_nft_2',
+        deliveryId: 1,
+        rateId: 'rate-1',
+        expectedTotal: { currency: 'usd', amount: 12 },
+        requestId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+      }],
       ['/fulfillment/shipstation-rates', { dropId: 'card_nft_2', deliveryId: 1 }],
       ['/fulfillment/shipstation-shipment', { dropId: 'card_nft_2', deliveryId: 1 }],
     ] as const) {

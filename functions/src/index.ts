@@ -52,19 +52,6 @@ import { decodePendingOpenBox } from './pendingOpenBox.js';
 import { encodeFinalizeOpenBoxArgs } from './finalizeOpenBoxArgs.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
-  adoptOrPurchaseShipStationLabel,
-  createShipStationLabelFromRate,
-  getShipStationLabelById,
-  getShipStationRateById,
-  isActiveShipStationLabel,
-  listShipStationLabelsForShipment,
-  shipStationMoneyMatches,
-  shipStationTrackingCodeUpdate,
-  shouldClearShipStationPurchaseState,
-  shouldTransitionShipStationPurchaseState,
-  type ShipStationLabelResult,
-} from './shipstation.js';
-import {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
   STRIPE_CHECKOUT_STATUS,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
@@ -183,7 +170,6 @@ import {
   writeWalletSessionAndProfileIfCurrent,
 } from './walletSessions.js';
 import {
-  normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
 } from './fulfillmentTracking.js';
 import { parseRequest } from './request.js';
@@ -206,8 +192,6 @@ import type {
   DeliveryRecoveryOutcome,
   DeliveryRecoveryState,
   ReconcileProfileStateResponse,
-  FulfillmentShipStationLabel,
-  ShipStationMoney,
   RecoverDeliveryOrdersItemResult as RecoverMyDeliveryOrdersItemResult,
   RecoverDeliveryOrdersResult as RecoverMyDeliveryOrdersResult,
   WalletDeliveryRecoveryState,
@@ -267,7 +251,6 @@ import {
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   walletHasAdminIrlRedeemAccess,
-  walletHasFulfillmentDropAccess,
 } from './shared/fulfillmentAccess.js';
 import {
   getAdminIrlRedeemTargetEligibility,
@@ -309,7 +292,6 @@ const STRIPE_RESTRICTED_KEY_LIVE = defineSecret('STRIPE_RESTRICTED_KEY_LIVE');
 const STRIPE_SECRET_KEY_LIVE = defineSecret('STRIPE_SECRET_KEY_LIVE');
 const STRIPE_WEBHOOK_SECRET = defineSecret('STRIPE_WEBHOOK_SECRET');
 const STRIPE_WEBHOOK_SECRET_DEVNET = defineSecret('STRIPE_WEBHOOK_SECRET_DEVNET');
-const SHIPSTATION_API_KEY = defineSecret('SHIPSTATION_API_KEY');
 
 function loadLocalEnv() {
   const envPaths = [
@@ -723,18 +705,6 @@ ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES.forEach((raw) => {
     console.error('[mons/functions] invalid Admin IRL Redeem wallet', raw, summarizeError(err));
   }
 });
-
-function hasFulfillmentDropAccess(wallet: string, dropId: string): boolean {
-  return walletHasFulfillmentDropAccess(wallet, dropId, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET);
-}
-
-async function requireFulfillmentDropAccess(request: CallableReq<any>, dropId: string): Promise<{ uid: string; wallet: string }> {
-  const { uid, wallet } = await requireWalletSession(request);
-  if (!hasFulfillmentDropAccess(wallet, dropId)) {
-    throw new HttpsError('permission-denied', 'Fulfillment access denied.');
-  }
-  return { uid, wallet };
-}
 
 async function requireAdminIrlRedeemAccess(request: CallableReq<any>): Promise<{ uid: string; wallet: string }> {
   const { uid, wallet } = await requireWalletSession(request);
@@ -4860,69 +4830,6 @@ async function fetchDeliveryOrderHistory(ownerId: string): Promise<DeliveryOrder
   return summaries;
 }
 
-function storedShipStationMoney(value: unknown): ShipStationMoney | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const raw = value as Record<string, unknown>;
-  const currency = typeof raw.currency === 'string' ? raw.currency.trim().toLowerCase() : '';
-  if (raw.amount == null || (typeof raw.amount === 'string' && !raw.amount.trim())) return undefined;
-  const amount = Number(raw.amount);
-  if (!/^[a-z]{3}$/.test(currency) || !Number.isFinite(amount) || amount < 0) return undefined;
-  return { currency, amount };
-}
-
-function storedShipStationRateQuotes(value: unknown): Array<{
-  rateId: string;
-  shipmentId: string;
-  totalAmount: ShipStationMoney;
-}> {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
-    if (!entry || typeof entry !== 'object') return [];
-    const raw = entry as Record<string, unknown>;
-    const rateId = typeof raw.rateId === 'string' ? raw.rateId.trim() : '';
-    const shipmentId = typeof raw.shipmentId === 'string' ? raw.shipmentId.trim() : '';
-    const totalAmount = storedShipStationMoney(raw.totalAmount);
-    return rateId && shipmentId && totalAmount ? [{ rateId, shipmentId, totalAmount }] : [];
-  }).slice(0, 100);
-}
-
-function storedFulfillmentShipStationLabel(value: unknown): FulfillmentShipStationLabel | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const raw = value as Record<string, unknown>;
-  const labelId = typeof raw.labelId === 'string' ? raw.labelId.trim() : '';
-  const shipmentId = typeof raw.shipmentId === 'string' ? raw.shipmentId.trim() : '';
-  const status = raw.status;
-  if (
-    !labelId ||
-    !shipmentId ||
-    (status !== 'processing' && status !== 'completed' && status !== 'error' && status !== 'voided')
-  ) {
-    return undefined;
-  }
-  const optionalString = (entry: unknown) => (typeof entry === 'string' && entry.trim() ? entry.trim() : undefined);
-  const shipmentCost = storedShipStationMoney(raw.shipmentCost);
-  const insuranceCost = storedShipStationMoney(raw.insuranceCost);
-  const totalCost = storedShipStationMoney(raw.totalCost);
-  const purchasedAt = toMillisMaybe(raw.purchasedAt);
-  return {
-    labelId,
-    shipmentId,
-    status,
-    ...(optionalString(raw.rateId) ? { rateId: optionalString(raw.rateId) } : {}),
-    ...(optionalString(raw.trackingNumber) ? { trackingNumber: optionalString(raw.trackingNumber) } : {}),
-    ...(optionalString(raw.carrierId) ? { carrierId: optionalString(raw.carrierId) } : {}),
-    ...(optionalString(raw.carrierCode) ? { carrierCode: optionalString(raw.carrierCode) } : {}),
-    ...(optionalString(raw.carrierName) ? { carrierName: optionalString(raw.carrierName) } : {}),
-    ...(optionalString(raw.serviceCode) ? { serviceCode: optionalString(raw.serviceCode) } : {}),
-    ...(optionalString(raw.serviceName) ? { serviceName: optionalString(raw.serviceName) } : {}),
-    ...(shipmentCost ? { shipmentCost } : {}),
-    ...(insuranceCost ? { insuranceCost } : {}),
-    ...(totalCost ? { totalCost } : {}),
-    ...(purchasedAt ? { purchasedAt } : {}),
-    ...(optionalString(raw.purchasedBy) ? { purchasedBy: optionalString(raw.purchasedBy) } : {}),
-  };
-}
-
 function resolveInstructionAccounts(tx: any): PublicKey[] {
   if (!tx?.transaction?.message) return [];
   const accountKeys = tx.transaction.message.getAccountKeys({
@@ -5639,371 +5546,6 @@ export const createStripeCheckoutSession = onCallAuthed(
       ADDRESS_DECRYPTION_SECRET,
     ],
   },
-);
-
-function shipStationLabelDocument(
-  label: FulfillmentShipStationLabel,
-  wallet: string,
-  rateId?: string,
-): Record<string, unknown> {
-  return {
-    ...label,
-    ...(rateId && !label.rateId ? { rateId } : {}),
-    purchasedAt: label.purchasedAt ? Timestamp.fromMillis(label.purchasedAt) : FieldValue.serverTimestamp(),
-    ...(label.purchasedBy ? { purchasedBy: label.purchasedBy } : {}),
-    recordedBy: wallet,
-  };
-}
-
-async function persistFulfillmentShipStationLabel(args: {
-  orderRef: FirebaseFirestore.DocumentReference;
-  dropId: string;
-  wallet: string;
-  result: ShipStationLabelResult;
-  rateId?: string;
-  fallbackLabel?: Partial<FulfillmentShipStationLabel>;
-  purchasedBy?: string;
-  confirmedPurchase?: boolean;
-}): Promise<FulfillmentShipStationLabel> {
-  const label: FulfillmentShipStationLabel = {
-    ...args.fallbackLabel,
-    ...args.result.label,
-    ...(args.rateId && !args.result.label.rateId ? { rateId: args.rateId } : {}),
-    purchasedAt: args.result.label.purchasedAt || args.fallbackLabel?.purchasedAt || Date.now(),
-    ...(args.purchasedBy ? { purchasedBy: args.purchasedBy } : {}),
-  };
-  const clearPurchaseState = shouldClearShipStationPurchaseState(label, args.confirmedPurchase);
-  await db.runTransaction(async (tx) => {
-    const snap = await tx.get(args.orderRef);
-    if (!snap.exists) throw new HttpsError('not-found', 'Delivery order not found');
-    const currentOrder = snap.data() as any;
-    const currentLabel = storedFulfillmentShipStationLabel(currentOrder?.shipstation?.label);
-    if (args.fallbackLabel?.labelId && currentLabel?.labelId !== args.fallbackLabel.labelId) {
-      throw new HttpsError('aborted', 'The ShipStation label changed. Check its status again.');
-    }
-    const trackingCodeUpdate = shipStationTrackingCodeUpdate(
-      normalizeOptionalFulfillmentTrackingCode(currentOrder?.fulfillmentTrackingCode),
-      currentLabel,
-      label,
-    );
-    tx.update(args.orderRef, {
-      dropId: args.dropId,
-      ...(trackingCodeUpdate === null
-        ? { fulfillmentTrackingCode: FieldValue.delete() }
-        : trackingCodeUpdate
-          ? { fulfillmentTrackingCode: trackingCodeUpdate }
-          : {}),
-      'shipstation.label': shipStationLabelDocument(label, args.wallet, args.rateId),
-      ...(clearPurchaseState ? { 'shipstation.labelPurchase': FieldValue.delete() } : {}),
-      'shipstation.rateQuotes': FieldValue.delete(),
-      'shipstation.ratesClaimedAt': FieldValue.delete(),
-      'shipstation.ratesClaimedBy': FieldValue.delete(),
-    });
-  });
-  return label;
-}
-
-async function findAndPersistFulfillmentShipStationLabel(args: {
-  apiKey: string;
-  shipmentId: string;
-  orderRef: FirebaseFirestore.DocumentReference;
-  dropId: string;
-  wallet: string;
-}): Promise<{ label: FulfillmentShipStationLabel; downloadUrl?: string } | null> {
-  const existing = (await listShipStationLabelsForShipment(args.apiKey, args.shipmentId))[0];
-  if (!existing) return null;
-  const label = await persistFulfillmentShipStationLabel({
-    orderRef: args.orderRef,
-    dropId: args.dropId,
-    wallet: args.wallet,
-    result: existing,
-  });
-  return { label, ...(existing.downloadUrl ? { downloadUrl: existing.downloadUrl } : {}) };
-}
-
-async function transitionFulfillmentShipStationPurchaseState(args: {
-  orderRef: FirebaseFirestore.DocumentReference;
-  expectedRequestId?: string;
-  nextStatus: 'unknown' | 'failed';
-  fields: Record<string, unknown>;
-}): Promise<{ label?: FulfillmentShipStationLabel; purchaseUnknown: boolean }> {
-  return db.runTransaction(async (tx) => {
-    const snap = await tx.get(args.orderRef);
-    if (!snap.exists) throw new HttpsError('not-found', 'Delivery order not found');
-    const order = snap.data() as any;
-    const label = storedFulfillmentShipStationLabel(order?.shipstation?.label);
-    if (isActiveShipStationLabel(label)) return { label, purchaseUnknown: false };
-    const purchase = order?.shipstation?.labelPurchase;
-    const status = typeof purchase?.status === 'string' ? purchase.status : '';
-    if (shouldTransitionShipStationPurchaseState(purchase, args.expectedRequestId, false)) {
-      tx.set(
-        args.orderRef,
-        {
-          shipstation: {
-            labelPurchase: {
-              ...purchase,
-              ...args.fields,
-              status: args.nextStatus,
-            },
-          },
-        },
-        { merge: true },
-      );
-      return { purchaseUnknown: args.nextStatus === 'unknown' };
-    }
-    return { purchaseUnknown: status === 'purchasing' || status === 'unknown' };
-  });
-}
-
-function requireShipStationShipmentId(order: any): string {
-  const shipmentId = typeof order?.shipstation?.shipmentId === 'string' ? order.shipstation.shipmentId.trim() : '';
-  if (!shipmentId) throw new HttpsError('failed-precondition', 'Add this order to ShipStation before getting rates.');
-  return shipmentId;
-}
-
-function rejectIrlShipStationOrder(order: any): void {
-  if (order?.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) {
-    throw new HttpsError('failed-precondition', 'In-person redemption orders do not have a delivery address');
-  }
-}
-
-export const purchaseFulfillmentShipStationLabel = onCallLogged(
-  'purchaseFulfillmentShipStationLabel',
-  async (request) => {
-    const moneySchema = z.object({
-      currency: z.string().trim().toLowerCase().regex(/^[a-z]{3}$/),
-      amount: z.number().nonnegative(),
-    });
-    const schema = z.object({
-      dropId: z.string().min(1).max(64),
-      deliveryId: z.number().int().positive(),
-      rateId: z.string().trim().min(1).max(64),
-      expectedTotal: moneySchema,
-      requestId: z.string().uuid(),
-    });
-    const { dropId: requestDropId, deliveryId, rateId, expectedTotal, requestId } = parseRequest(schema, request.data);
-    const dropId = requireDropId(requestDropId);
-    const { wallet } = await requireFulfillmentDropAccess(request, dropId);
-    const apiKey = envOrSecretValue('SHIPSTATION_API_KEY', SHIPSTATION_API_KEY);
-    if (!apiKey) throw new HttpsError('failed-precondition', 'ShipStation API key is not configured');
-    const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
-    const initialSnap = await orderRef.get();
-    if (!initialSnap.exists) throw new HttpsError('not-found', 'Delivery order not found');
-    const initialOrder = initialSnap.data() as any;
-    rejectIrlShipStationOrder(initialOrder);
-    const shipmentId = requireShipStationShipmentId(initialOrder);
-    const storedLabel = storedFulfillmentShipStationLabel(initialOrder?.shipstation?.label);
-    if (isActiveShipStationLabel(storedLabel)) {
-      const result = await getShipStationLabelById(apiKey, storedLabel!.labelId);
-      const label = await persistFulfillmentShipStationLabel({
-        orderRef,
-        dropId,
-        wallet,
-        result,
-        fallbackLabel: storedLabel,
-      });
-      if (isActiveShipStationLabel(label)) {
-        return {
-          deliveryId,
-          shipmentId,
-          label,
-          ...(result.downloadUrl ? { labelDownloadUrl: result.downloadUrl } : {}),
-          alreadyPurchased: true,
-        };
-      }
-    }
-    const adopted = await findAndPersistFulfillmentShipStationLabel({ apiKey, shipmentId, orderRef, dropId, wallet });
-    if (adopted) {
-      return {
-        deliveryId,
-        shipmentId,
-        label: adopted.label,
-        ...(adopted.downloadUrl ? { labelDownloadUrl: adopted.downloadUrl } : {}),
-        alreadyPurchased: true,
-      };
-    }
-    let claimAcquired = false;
-    let purchaseAttempted = false;
-    try {
-      const claim = await db.runTransaction(async (tx) => {
-        const snap = await tx.get(orderRef);
-        if (!snap.exists) throw new HttpsError('not-found', 'Delivery order not found');
-        const order = snap.data() as any;
-        const currentShipmentId = requireShipStationShipmentId(order);
-        if (currentShipmentId !== shipmentId) {
-          throw new HttpsError('aborted', 'The ShipStation shipment changed. Refresh the order and try again.');
-        }
-        const currentLabel = storedFulfillmentShipStationLabel(order?.shipstation?.label);
-        if (isActiveShipStationLabel(currentLabel)) return { alreadyPurchased: true as const, label: currentLabel! };
-        const quotedRate = storedShipStationRateQuotes(order?.shipstation?.rateQuotes)
-          .find((candidate) => candidate.rateId === rateId);
-        if (!quotedRate || quotedRate.shipmentId !== shipmentId) {
-          throw new HttpsError('failed-precondition', 'Refresh rates before purchasing this label.');
-        }
-        if (!shipStationMoneyMatches(expectedTotal, quotedRate.totalAmount)) {
-          throw new HttpsError('failed-precondition', 'The selected quote changed. Refresh rates before purchasing.');
-        }
-        const purchaseStatus = typeof order?.shipstation?.labelPurchase?.status === 'string'
-          ? order.shipstation.labelPurchase.status
-          : '';
-        const previousRequestId = typeof order?.shipstation?.labelPurchase?.requestId === 'string'
-          ? order.shipstation.labelPurchase.requestId
-          : '';
-        if (purchaseStatus === 'purchasing' || purchaseStatus === 'unknown') {
-          throw new HttpsError('aborted', 'A label purchase may already be in progress. Check purchase status before retrying.');
-        }
-        if (purchaseStatus === 'failed' && previousRequestId === requestId) {
-          throw new HttpsError('aborted', 'This label purchase request was already handled. Review the purchase again.');
-        }
-        tx.set(
-          orderRef,
-          {
-            shipstation: {
-              labelPurchase: {
-                status: 'purchasing',
-                requestId,
-                rateId,
-                expectedTotal,
-                claimedAt: FieldValue.serverTimestamp(),
-                claimedBy: wallet,
-              },
-            },
-          },
-          { merge: true },
-        );
-        return { alreadyPurchased: false as const };
-      });
-      if (claim.alreadyPurchased) {
-        const result = await getShipStationLabelById(apiKey, claim.label.labelId);
-        const label = await persistFulfillmentShipStationLabel({
-          orderRef,
-          dropId,
-          wallet,
-          result,
-          fallbackLabel: claim.label,
-        });
-        if (!isActiveShipStationLabel(label)) {
-          throw new HttpsError('failed-precondition', 'The existing ShipStation label is no longer active. Refresh rates before purchasing.');
-        }
-        return {
-          deliveryId,
-          shipmentId,
-          label,
-          ...(result.downloadUrl ? { labelDownloadUrl: result.downloadUrl } : {}),
-          alreadyPurchased: true,
-        };
-      }
-      claimAcquired = true;
-      const selectedRate = await getShipStationRateById(apiKey, rateId, shipmentId);
-      if (selectedRate.shipmentId !== shipmentId) {
-        throw new HttpsError('permission-denied', 'The selected rate does not belong to this shipment.');
-      }
-      if (!shipStationMoneyMatches(expectedTotal, selectedRate.totalAmount)) {
-        throw new HttpsError('failed-precondition', 'The selected rate changed. Refresh rates before purchasing.');
-      }
-      const resolution = await adoptOrPurchaseShipStationLabel(
-        async () => (await listShipStationLabelsForShipment(apiKey, shipmentId))[0] ?? null,
-        async () => {
-          purchaseAttempted = true;
-          return createShipStationLabelFromRate(apiKey, rateId);
-        },
-      );
-      const result = resolution.result;
-      if (result.label.shipmentId !== shipmentId) {
-        throw new HttpsError('internal', 'ShipStation returned a label for the wrong shipment');
-      }
-      const label = await persistFulfillmentShipStationLabel({
-        orderRef,
-        dropId,
-        wallet,
-        result,
-        ...(resolution.alreadyPurchased
-          ? {}
-          : {
-              rateId,
-              purchasedBy: wallet,
-              confirmedPurchase: true,
-              fallbackLabel: {
-                carrierId: selectedRate.carrierId,
-                carrierCode: selectedRate.carrierCode,
-                carrierName: selectedRate.carrierName,
-                serviceCode: selectedRate.serviceCode,
-                serviceName: selectedRate.serviceName,
-              },
-            }),
-      });
-      return {
-        deliveryId,
-        shipmentId,
-        label,
-        ...(result.downloadUrl ? { labelDownloadUrl: result.downloadUrl } : {}),
-        alreadyPurchased: resolution.alreadyPurchased,
-      };
-    } catch (err) {
-      if (!claimAcquired) throw err;
-      const failureCode = err instanceof HttpsError ? String(err.code) : 'internal';
-      const ambiguous =
-        purchaseAttempted &&
-        ['deadline-exceeded', 'unavailable', 'internal', 'unknown'].some((code) => failureCode.endsWith(code));
-      if (ambiguous) {
-        try {
-          const reconciled = await findAndPersistFulfillmentShipStationLabel({
-            apiKey,
-            shipmentId,
-            orderRef,
-            dropId,
-            wallet,
-          });
-          if (reconciled) {
-            return {
-              deliveryId,
-              shipmentId,
-              label: reconciled.label,
-              ...(reconciled.downloadUrl ? { labelDownloadUrl: reconciled.downloadUrl } : {}),
-              alreadyPurchased: false,
-            };
-          }
-        } catch (reconcileErr) {
-          logger.error('purchaseFulfillmentShipStationLabel:reconcile_failed', {
-            dropId,
-            deliveryId,
-            error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr),
-          });
-        }
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      const failureState = await transitionFulfillmentShipStationPurchaseState({
-        orderRef,
-        expectedRequestId: requestId,
-        nextStatus: ambiguous ? 'unknown' : 'failed',
-        fields: {
-          requestId,
-          rateId,
-          expectedTotal,
-          lastError: message.slice(0, 500),
-          lastErrorAt: FieldValue.serverTimestamp(),
-          lastErrorBy: wallet,
-        },
-      });
-      if (failureState.label) {
-        return {
-          deliveryId,
-          shipmentId,
-          label: failureState.label,
-          alreadyPurchased: true,
-        };
-      }
-      if (ambiguous) {
-        throw new HttpsError(
-          'aborted',
-          'ShipStation did not confirm the label purchase. Check purchase status or open ShipStation before retrying.',
-        );
-      }
-      if (err instanceof HttpsError) throw err;
-      throw new HttpsError('internal', 'Failed to purchase the ShipStation label');
-    }
-  },
-  { secrets: [SHIPSTATION_API_KEY] },
 );
 
 export const revealDudes = onCallLogged(
