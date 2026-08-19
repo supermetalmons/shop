@@ -11,7 +11,7 @@ import type {
 import { normalizeFulfillmentStatus } from './fulfillmentStatus.js';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from './fulfillmentSources.js';
 import { normalizeOptionalFulfillmentTrackingCode } from './fulfillmentTracking.js';
-import { normalizeShipStationPackage } from './shipstationPackage.js';
+import { parseShipStationPackage } from './shipstationPackage.js';
 import { normalizeStripeReceiptClaimCode } from './stripeReceiptClaims.js';
 
 const ADMIN_IRL_REDEEM_LABEL = 'Redeemed for IRL';
@@ -127,7 +127,7 @@ export function fulfillmentOrderFromRecord(
   const addressSnapshot = record(order.addressSnapshot) || {};
   const encrypted = optionalString(addressSnapshot.encrypted);
   const shipstation = record(order.shipstation) || {};
-  const shipstationPackage = normalizeShipStationPackage(shipstation.package) || undefined;
+  const shipstationPackage = parseShipStationPackage(shipstation.package) || undefined;
   const rawPackageCount = Math.floor(Number(shipstation.packageCount));
   const shipstationPackageCount = Number.isFinite(rawPackageCount) && rawPackageCount >= 0
     ? rawPackageCount

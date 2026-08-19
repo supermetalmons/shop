@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   defaultShipStationPackage,
   normalizeShipStationPackage,
+  parseShipStationPackage,
 } from '../functions/src/shared/shipstationPackage.ts';
 import {
   adoptOrPurchaseShipStationLabel,
@@ -49,6 +50,20 @@ test('measurements outside the accepted range are rejected rather than silently 
   assert.equal(normalizeShipStationPackage({ ...valid, length: '' }), null);
   assert.equal(normalizeShipStationPackage({ length: 12, width: 9, height: 2 }), null);
   assert.equal(normalizeShipStationPackage(null), null);
+});
+
+test('canonical package measurements remain strict without applying editor limits', () => {
+  assert.deepEqual(
+    parseShipStationPackage({ length: 12.345, width: 9, height: 2, weight: 1616 }),
+    { length: 12.345, width: 9, height: 2, weight: 1616 },
+  );
+  assert.deepEqual(
+    parseShipStationPackage({ length: 0.004, width: 9, height: 2, weight: 4 }),
+    { length: 0.004, width: 9, height: 2, weight: 4 },
+  );
+  for (const value of ['12', true, Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
+    assert.equal(parseShipStationPackage({ length: value, width: 9, height: 2, weight: 4 }), null);
+  }
 });
 
 test('an override replaces the derived parcel, and its absence falls back to the defaults', () => {
@@ -366,7 +381,7 @@ test('rate shopping requests fresh rates from connected rate-capable carriers', 
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     requests.push({ url, init });
-    if (url.endsWith('/carriers?page_size=50')) {
+    if (url.endsWith('/carriers?page_size=50&include_extended_details=false')) {
       return new Response(JSON.stringify({
         carriers: [
           { carrier_id: 'se-active', send_rates: true },
@@ -411,7 +426,10 @@ test('rate shopping requests fresh rates from connected rate-capable carriers', 
   } finally {
     globalThis.fetch = originalFetch;
   }
-  assert.equal(requests[0].url, 'https://api.shipstation.com/v2/carriers?page_size=50');
+  assert.equal(
+    requests[0].url,
+    'https://api.shipstation.com/v2/carriers?page_size=50&include_extended_details=false',
+  );
   assert.equal(requests[1].url, 'https://api.shipstation.com/v2/rates');
   assert.equal(requests[1].init?.method, 'POST');
   assert.deepEqual(JSON.parse(String(requests[1].init?.body)), {

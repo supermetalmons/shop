@@ -52,6 +52,7 @@ import {
 } from '../../functions/src/shared/packStatus.ts';
 import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.ts';
 import { parseDeliveryOrderSummary } from '../../functions/src/shared/deliveryOrderSummary.ts';
+import { parseShipStationPackage } from '../../functions/src/shared/shipstationPackage.ts';
 import { isBase58Bytes } from '../../functions/src/shared/solanaRpcProxy.ts';
 import { fetchPackStatus } from './shopApi';
 import { monsApiOrigin } from './monsApiOrigin';
@@ -223,7 +224,8 @@ type AuthenticatedApiPath =
   | '/fulfillment/order-address'
   | '/fulfillment/order-status'
   | '/fulfillment/manual-review-checkouts'
-  | '/fulfillment/shipstation-label';
+  | '/fulfillment/shipstation-label'
+  | '/fulfillment/shipstation-rates';
 
 const defaultProfileApiDependencies: ProfileApiClientDependencies = {
   fetch: (input, init) => fetch(input, init),
@@ -233,11 +235,37 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 };
 
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
+const SHIPSTATION_RATES_API_TIMEOUT_MS = 65_000;
 
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
-  return pathname === '/fulfillment/shipstation-label'
-    ? SHIPSTATION_LABEL_API_TIMEOUT_MS
-    : defaultProfileApiDependencies.timeoutMs;
+  if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
+  if (pathname === '/fulfillment/shipstation-rates') return SHIPSTATION_RATES_API_TIMEOUT_MS;
+  return defaultProfileApiDependencies.timeoutMs;
+}
+
+function profileApiDeadlineError(): ProfileApiError {
+  return new ProfileApiError({ code: 'deadline-exceeded', message: 'Profile API request timed out.' });
+}
+
+async function waitForProfileApiValue<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw signal.reason;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function requestProfileApi<Req>(
@@ -247,57 +275,62 @@ async function requestProfileApi<Req>(
 ): Promise<unknown> {
   const startedAt = Date.now();
   const callId = DEBUG_FUNCTIONS ? makeCallId() : undefined;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const token = await dependencies.getToken(attempt > 0);
-    const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(new DOMException('Timed out', 'TimeoutError')),
-      dependencies.timeoutMs,
-    );
-    try {
-      if (DEBUG_FUNCTIONS) {
-        console.info(`[mons/api] → ${pathname}`, { callId, payload: summarizePayloadShape(data) });
-      }
-      const response = await dependencies.fetch(`${dependencies.origin()}${pathname}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-      let payload: unknown;
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException('Timed out', 'TimeoutError')),
+    dependencies.timeoutMs,
+  );
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        payload = await response.json();
-      } catch (error) {
-        if (controller.signal.aborted) throw controller.signal.reason;
-        throw new ProfileApiError({ code: 'unavailable', message: 'Profile API returned malformed JSON.', details: error });
-      }
-      if (response.status === 401 && attempt === 0) continue;
-      if (!response.ok) throw new ProfileApiError(profileApiErrorPayload(payload, response.status));
-      if (DEBUG_FUNCTIONS) {
-        console.info(`[mons/api] ← ${pathname}`, {
-          callId,
-          ms: Date.now() - startedAt,
-          data: summarizePayloadShape(payload),
+        const token = await waitForProfileApiValue(dependencies.getToken(attempt > 0), controller.signal);
+        if (DEBUG_FUNCTIONS) {
+          console.info(`[mons/api] → ${pathname}`, { callId, payload: summarizePayloadShape(data) });
+        }
+        const response = await dependencies.fetch(`${dependencies.origin()}${pathname}`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(data),
+          cache: 'no-store',
+          signal: controller.signal,
         });
+        let payload: unknown;
+        try {
+          payload = await waitForProfileApiValue(response.json(), controller.signal);
+        } catch (error) {
+          if (controller.signal.aborted) throw controller.signal.reason;
+          throw new ProfileApiError({ code: 'unavailable', message: 'Profile API returned malformed JSON.', details: error });
+        }
+        if (response.status === 401 && attempt === 0) continue;
+        if (!response.ok) throw new ProfileApiError(profileApiErrorPayload(payload, response.status));
+        if (DEBUG_FUNCTIONS) {
+          console.info(`[mons/api] ← ${pathname}`, {
+            callId,
+            ms: Date.now() - startedAt,
+            data: summarizePayloadShape(payload),
+          });
+        }
+        return payload;
+      } catch (error) {
+        const normalizedError = controller.signal.aborted ? profileApiDeadlineError() : error;
+        if (attempt === 0 && normalizedError instanceof ProfileApiError && normalizedError.code === 'unauthenticated') {
+          continue;
+        }
+        console.error(`[mons/api] ✖ ${pathname}`, {
+          ...(callId ? { callId } : {}),
+          ms: Date.now() - startedAt,
+          error: summarizeError(normalizedError),
+        });
+        throw normalizedError;
       }
-      return payload;
-    } catch (error) {
-      if (attempt === 0 && error instanceof ProfileApiError && error.code === 'unauthenticated') continue;
-      console.error(`[mons/api] ✖ ${pathname}`, {
-        ...(callId ? { callId } : {}),
-        ms: Date.now() - startedAt,
-        error: summarizeError(error),
-      });
-      throw error;
-    } finally {
-      clearTimeout(timeout);
     }
+    throw new ProfileApiError({ code: 'unauthenticated', message: 'Authentication is required.' });
+  } finally {
+    clearTimeout(timeout);
   }
-  throw new ProfileApiError({ code: 'unauthenticated', message: 'Authentication is required.' });
 }
 
 async function callProfileApi<Req>(
@@ -446,6 +479,11 @@ function parseShipStationMoney(value: unknown): { currency: string; amount: numb
   return { currency: value.currency, amount: value.amount };
 }
 
+function parseShipStationPackageResponse(value: unknown): ShipStationPackageInput | null {
+  if (!isRecord(value) || !hasExactKeys(value, ['length', 'width', 'height', 'weight'])) return null;
+  return parseShipStationPackage(value);
+}
+
 function parseFulfillmentShipStationLabel(value: unknown): NonNullable<GetFulfillmentShipStationLabelResponse['label']> | null {
   if (!isRecord(value)) return null;
   const required = ['labelId', 'shipmentId', 'status'] as const;
@@ -516,6 +554,179 @@ function parseGetFulfillmentShipStationLabel(value: unknown): GetFulfillmentShip
   return {
     deliveryId: Number(value.deliveryId),
     shipmentId: value.shipmentId,
+    ...(label ? { label } : {}),
+    ...(typeof value.labelDownloadUrl === 'string' ? { labelDownloadUrl: value.labelDownloadUrl } : {}),
+    ...(typeof value.purchaseUnknown === 'boolean' ? { purchaseUnknown: value.purchaseUnknown } : {}),
+  };
+}
+
+function parseFulfillmentShipStationRate(
+  value: unknown,
+): GetFulfillmentShipStationRatesResponse['rates'][number] | null {
+  if (!isRecord(value)) return null;
+  const requiredStrings = [
+    'rateId',
+    'shipmentId',
+    'carrierId',
+    'carrierCode',
+    'carrierName',
+    'serviceCode',
+    'serviceName',
+  ] as const;
+  const requiredMoney = [
+    'shippingAmount',
+    'insuranceAmount',
+    'confirmationAmount',
+    'otherAmount',
+    'totalAmount',
+  ] as const;
+  const optionalStrings = [
+    'carrierNickname',
+    'packageType',
+    'rateType',
+    'carrierDeliveryDays',
+    'shipDate',
+    'estimatedDeliveryDate',
+  ] as const;
+  const optional = [
+    ...optionalStrings,
+    'zone',
+    'negotiatedRate',
+    'trackable',
+    'taxAmount',
+    'deliveryDays',
+  ] as const;
+  const allowed = new Set<string>([
+    ...requiredStrings,
+    ...requiredMoney,
+    ...optional,
+    'guaranteedService',
+    'warningMessages',
+  ]);
+  if (!requiredStrings.every((key) => Object.hasOwn(value, key))) return null;
+  if (!requiredMoney.every((key) => Object.hasOwn(value, key))) return null;
+  if (!Object.hasOwn(value, 'guaranteedService') || !Object.hasOwn(value, 'warningMessages')) return null;
+  if (!Object.keys(value).every((key) => allowed.has(key))) return null;
+  if (
+    requiredStrings.some((key) => typeof value[key] !== 'string') ||
+    typeof value.rateId !== 'string' || !value.rateId ||
+    typeof value.shipmentId !== 'string' || !value.shipmentId ||
+    optionalStrings.some((key) => value[key] !== undefined && (typeof value[key] !== 'string' || !value[key])) ||
+    typeof value.guaranteedService !== 'boolean' ||
+    !Array.isArray(value.warningMessages) ||
+    !value.warningMessages.every((message) => typeof message === 'string') ||
+    (value.zone !== undefined && (!Number.isSafeInteger(value.zone) || Number(value.zone) < 0)) ||
+    (value.deliveryDays !== undefined && (!Number.isSafeInteger(value.deliveryDays) || Number(value.deliveryDays) < 0)) ||
+    (value.negotiatedRate !== undefined && typeof value.negotiatedRate !== 'boolean') ||
+    (value.trackable !== undefined && typeof value.trackable !== 'boolean')
+  ) return null;
+  const shippingAmount = parseShipStationMoney(value.shippingAmount);
+  const insuranceAmount = parseShipStationMoney(value.insuranceAmount);
+  const confirmationAmount = parseShipStationMoney(value.confirmationAmount);
+  const otherAmount = parseShipStationMoney(value.otherAmount);
+  const totalAmount = parseShipStationMoney(value.totalAmount);
+  const taxAmount = value.taxAmount === undefined ? undefined : parseShipStationMoney(value.taxAmount);
+  if (!shippingAmount || !insuranceAmount || !confirmationAmount || !otherAmount || !totalAmount) return null;
+  if (value.taxAmount !== undefined && !taxAmount) return null;
+  const currencies = [shippingAmount, insuranceAmount, confirmationAmount, otherAmount, totalAmount, taxAmount]
+    .filter((amount): amount is NonNullable<typeof amount> => Boolean(amount))
+    .map((amount) => amount.currency);
+  if (currencies.some((currency) => currency !== currencies[0])) return null;
+  return {
+    rateId: value.rateId,
+    shipmentId: value.shipmentId,
+    carrierId: value.carrierId as string,
+    carrierCode: value.carrierCode as string,
+    carrierName: value.carrierName as string,
+    ...(typeof value.carrierNickname === 'string' ? { carrierNickname: value.carrierNickname } : {}),
+    serviceCode: value.serviceCode as string,
+    serviceName: value.serviceName as string,
+    ...(typeof value.packageType === 'string' ? { packageType: value.packageType } : {}),
+    ...(typeof value.rateType === 'string' ? { rateType: value.rateType } : {}),
+    ...(typeof value.zone === 'number' ? { zone: value.zone } : {}),
+    ...(typeof value.carrierDeliveryDays === 'string' ? { carrierDeliveryDays: value.carrierDeliveryDays } : {}),
+    ...(typeof value.shipDate === 'string' ? { shipDate: value.shipDate } : {}),
+    ...(typeof value.negotiatedRate === 'boolean' ? { negotiatedRate: value.negotiatedRate } : {}),
+    ...(typeof value.trackable === 'boolean' ? { trackable: value.trackable } : {}),
+    shippingAmount,
+    insuranceAmount,
+    confirmationAmount,
+    otherAmount,
+    ...(taxAmount ? { taxAmount } : {}),
+    totalAmount,
+    ...(typeof value.deliveryDays === 'number' ? { deliveryDays: value.deliveryDays } : {}),
+    ...(typeof value.estimatedDeliveryDate === 'string'
+      ? { estimatedDeliveryDate: value.estimatedDeliveryDate }
+      : {}),
+    guaranteedService: value.guaranteedService,
+    warningMessages: value.warningMessages,
+  };
+}
+
+function parseFulfillmentShipStationInvalidRate(
+  value: unknown,
+): GetFulfillmentShipStationRatesResponse['invalidRates'][number] | null {
+  if (!isRecord(value)) return null;
+  const required = ['carrierId', 'carrierCode', 'carrierName', 'serviceCode', 'serviceName', 'errorMessages'] as const;
+  const allowed = new Set<string>([...required, 'responseIssue']);
+  if (!required.every((key) => Object.hasOwn(value, key))) return null;
+  if (!Object.keys(value).every((key) => allowed.has(key))) return null;
+  if (
+    typeof value.carrierId !== 'string' ||
+    typeof value.carrierCode !== 'string' ||
+    typeof value.carrierName !== 'string' || !value.carrierName ||
+    typeof value.serviceCode !== 'string' ||
+    typeof value.serviceName !== 'string' || !value.serviceName ||
+    !Array.isArray(value.errorMessages) ||
+    !value.errorMessages.length ||
+    !value.errorMessages.every((message) => typeof message === 'string' && Boolean(message)) ||
+    (value.responseIssue !== undefined && value.responseIssue !== true)
+  ) return null;
+  return {
+    carrierId: value.carrierId,
+    carrierCode: value.carrierCode,
+    carrierName: value.carrierName,
+    serviceCode: value.serviceCode,
+    serviceName: value.serviceName,
+    errorMessages: value.errorMessages,
+    ...(value.responseIssue === true ? { responseIssue: true } : {}),
+  };
+}
+
+function parseGetFulfillmentShipStationRates(value: unknown): GetFulfillmentShipStationRatesResponse | null {
+  if (!isRecord(value)) return null;
+  const required = ['deliveryId', 'shipmentId', 'packageCount', 'rates', 'invalidRates'] as const;
+  const optional = ['package', 'label', 'labelDownloadUrl', 'purchaseUnknown'] as const;
+  const allowed = new Set<string>([...required, ...optional]);
+  if (!required.every((key) => Object.hasOwn(value, key))) return null;
+  if (!Object.keys(value).every((key) => allowed.has(key))) return null;
+  if (
+    !Number.isSafeInteger(value.deliveryId) || Number(value.deliveryId) <= 0 ||
+    typeof value.shipmentId !== 'string' || !value.shipmentId ||
+    !Number.isSafeInteger(value.packageCount) || Number(value.packageCount) < 0 ||
+    !Array.isArray(value.rates) ||
+    !Array.isArray(value.invalidRates) ||
+    (value.labelDownloadUrl !== undefined &&
+      (typeof value.labelDownloadUrl !== 'string' || !/^https:\/\//i.test(value.labelDownloadUrl))) ||
+    (value.purchaseUnknown !== undefined && typeof value.purchaseUnknown !== 'boolean')
+  ) return null;
+  const packageInput = value.package === undefined ? undefined : parseShipStationPackageResponse(value.package);
+  if (value.package !== undefined && !packageInput) return null;
+  const rates = value.rates.map(parseFulfillmentShipStationRate);
+  const invalidRates = value.invalidRates.map(parseFulfillmentShipStationInvalidRate);
+  if (!rates.every((rate): rate is NonNullable<typeof rate> => rate !== null)) return null;
+  if (!invalidRates.every((rate): rate is NonNullable<typeof rate> => rate !== null)) return null;
+  if (rates.some((rate) => rate.shipmentId !== value.shipmentId)) return null;
+  const label = value.label === undefined ? undefined : parseFulfillmentShipStationLabel(value.label);
+  if (value.label !== undefined && (!label || label.shipmentId !== value.shipmentId)) return null;
+  if (value.labelDownloadUrl !== undefined && !label) return null;
+  return {
+    deliveryId: Number(value.deliveryId),
+    shipmentId: value.shipmentId,
+    ...(packageInput ? { package: packageInput } : {}),
+    packageCount: Number(value.packageCount),
+    rates,
+    invalidRates,
     ...(label ? { label } : {}),
     ...(typeof value.labelDownloadUrl === 'string' ? { labelDownloadUrl: value.labelDownloadUrl } : {}),
     ...(typeof value.purchaseUnknown === 'boolean' ? { purchaseUnknown: value.purchaseUnknown } : {}),
@@ -812,10 +1023,13 @@ export async function getFulfillmentShipStationRates(
   dropId: string,
   packageInput?: ShipStationPackageInput,
 ): Promise<GetFulfillmentShipStationRatesResponse> {
-  return callFunction<GetFulfillmentShipStationRatesRequest, GetFulfillmentShipStationRatesResponse>(
-    'getFulfillmentShipStationRates',
+  const response = await callProfileApi<GetFulfillmentShipStationRatesRequest>(
+    '/fulfillment/shipstation-rates',
     { deliveryId, dropId, ...(packageInput ? { package: packageInput } : {}) },
   );
+  const result = parseGetFulfillmentShipStationRates(response);
+  if (!result) throw new Error('Invalid fulfillment ShipStation rates response');
+  return result;
 }
 
 export async function purchaseFulfillmentShipStationLabel(
@@ -1037,6 +1251,7 @@ export async function listDeliveryOrderOwners(
 
 export const profileApiTestHooks = {
   parseGetFulfillmentShipStationLabel,
+  parseGetFulfillmentShipStationRates,
   parseFulfillmentStatusUpdate,
   parseProfileAddress,
   parseProfileState,

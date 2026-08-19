@@ -1808,9 +1808,13 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       );
       if (response.alreadyAdded) {
         setShipstationError('This order was already in ShipStation, so these measurements were not applied.');
-      } else {
-        setShipstationPackageEdits((prev) => ({ ...prev, [key]: shipStationPackageDraft(parcel) }));
       }
+      setShipstationPackageEdits((prev) => {
+        if (!Object.hasOwn(prev, key)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     } catch (err) {
       if (orderRequestEpochRef.current !== requestEpoch) return;
       console.error(err);
@@ -1835,14 +1839,22 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     }
     const requestEpoch = orderRequestEpochRef.current;
     const key = fulfillmentOrderKey(activeShipstationOrder);
+    const packageDraft = shipstationPackageEdits[key];
+    const draftPackage = packageDraft ? {
+      length: parseShipStationMeasurement(packageDraft.length),
+      width: parseShipStationMeasurement(packageDraft.width),
+      height: parseShipStationMeasurement(packageDraft.height),
+      weight: parseShipStationMeasurement(packageDraft.weight),
+    } : undefined;
+    const canonicalPackage = activeShipstationOrder.shipstationPackage;
+    const draftMatchesCanonical = Boolean(
+      draftPackage &&
+      canonicalPackage &&
+      SHIPSTATION_PACKAGE_FIELDS.every(({ key: field }) => draftPackage[field] === canonicalPackage[field]),
+    );
     let parcel: ShipStationPackageInput | undefined;
-    if (activeShipstationPackageKnown) {
-      parcel = normalizeShipStationPackage({
-        length: parseShipStationMeasurement(activeShipstationPackageDraft.length),
-        width: parseShipStationMeasurement(activeShipstationPackageDraft.width),
-        height: parseShipStationMeasurement(activeShipstationPackageDraft.height),
-        weight: parseShipStationMeasurement(activeShipstationPackageDraft.weight),
-      }) ?? undefined;
+    if (draftPackage && !draftMatchesCanonical) {
+      parcel = normalizeShipStationPackage(draftPackage) ?? undefined;
       if (!parcel) {
         setShipstationError(SHIPSTATION_PACKAGE_RANGE_MESSAGE);
         return;
@@ -1864,10 +1876,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       if (orderRequestEpochRef.current !== requestEpoch) return;
       const resolvedPackage = response.package;
       if (resolvedPackage) {
-        setShipstationPackageEdits((prev) => ({
-          ...prev,
-          [key]: shipStationPackageDraft(resolvedPackage),
-        }));
+        setShipstationPackageEdits((prev) => {
+          if (!Object.hasOwn(prev, key)) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
       }
       setOrders((prev) =>
         prev.map((order) =>
@@ -1908,10 +1922,9 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     activeShipstationHasLabel,
     activeShipstationMultiPackage,
     activeShipstationOrder,
-    activeShipstationPackageDraft,
-    activeShipstationPackageKnown,
     activeShipstationPurchaseUnknown,
     hasFulfillmentAccess,
+    shipstationPackageEdits,
     signedIn,
   ]);
 

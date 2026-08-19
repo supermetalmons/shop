@@ -78,6 +78,7 @@ import {
 import {
   defaultShipStationPackage,
   normalizeShipStationPackage,
+  parseShipStationPackage,
   SHIPSTATION_PACKAGE_RANGE_MESSAGE,
   type ShipStationPackageInput,
 } from './shared/shipstationPackage.js';
@@ -5704,7 +5705,7 @@ function storedPendingShipStationRateRequest(
   const raw = value as Record<string, unknown>;
   const requestId = typeof raw.requestId === 'string' ? raw.requestId.trim() : '';
   const storedShipmentId = typeof raw.shipmentId === 'string' ? raw.shipmentId.trim() : '';
-  const storedPackage = normalizeShipStationPackage(raw.package);
+  const storedPackage = parseShipStationPackage(raw.package);
   const requestedAt = toMillisMaybe(raw.requestedAt) ?? 0;
   if (
     !requestId ||
@@ -5719,27 +5720,6 @@ function storedPendingShipStationRateRequest(
   ) return undefined;
   const createdAt = typeof raw.createdAt === 'string' && raw.createdAt.trim() ? raw.createdAt.trim() : undefined;
   return { requestId, ...(createdAt ? { createdAt } : {}) };
-}
-
-function shipStationShipToForOrder(order: any) {
-  const addressSnapshot = order?.addressSnapshot || {};
-  const encrypted = typeof addressSnapshot?.encrypted === 'string' ? addressSnapshot.encrypted : '';
-  const full = encrypted ? decryptAddressPayload(encrypted) : null;
-  const parsed = parseShipStationShipTo(
-    full,
-    typeof addressSnapshot?.countryCode === 'string' ? addressSnapshot.countryCode : undefined,
-  );
-  if (!parsed.ok || !parsed.shipTo) {
-    const reason = parsed.reason || 'Could not read the delivery address';
-    throw new HttpsError('failed-precondition', `${reason}. Edit the delivery address and try again.`);
-  }
-  const email = typeof addressSnapshot?.email === 'string' ? addressSnapshot.email.trim() : '';
-  const phone = typeof addressSnapshot?.phone === 'string' ? addressSnapshot.phone.trim() : '';
-  return {
-    ...parsed.shipTo,
-    ...(email ? { email } : {}),
-    ...(phone ? { phone } : {}),
-  };
 }
 
 function shipStationLabelDocument(
@@ -6154,7 +6134,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
         return {
           deliveryId,
           shipmentId,
-          package: normalizeShipStationPackage(order?.shipstation?.package) || undefined,
+          package: parseShipStationPackage(order?.shipstation?.package) || undefined,
           packageCount: Math.max(0, Math.floor(Number(order?.shipstation?.packageCount) || 0)),
           rates: [],
           invalidRates: [],
@@ -6168,7 +6148,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
       return {
         deliveryId,
         shipmentId,
-        package: normalizeShipStationPackage(order?.shipstation?.package) || undefined,
+        package: parseShipStationPackage(order?.shipstation?.package) || undefined,
         packageCount: Math.max(0, Math.floor(Number(order?.shipstation?.packageCount) || 0)),
         rates: [],
         invalidRates: [],
@@ -6183,7 +6163,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
       return {
         deliveryId,
         shipmentId,
-        package: normalizeShipStationPackage(order?.shipstation?.package) || undefined,
+        package: parseShipStationPackage(order?.shipstation?.package) || undefined,
         packageCount: Math.max(0, Math.floor(Number(order?.shipstation?.packageCount) || 0)),
         rates: [],
         invalidRates: [],
@@ -6253,9 +6233,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
     });
 
     try {
-      const shipTo = shipStationShipToForOrder(claimedOrder);
       const updatedShipment = await updateShipStationShipment(apiKey, shipmentId, {
-        ship_to: shipTo,
         ship_from: shipFrom,
         ...(packageOverride ? { packages: buildShipStationPackages(1, packageOverride) } : {}),
       });
@@ -6352,7 +6330,7 @@ export const getFulfillmentShipStationRates = onCallLogged(
       throw err;
     }
   },
-  { secrets: [ADDRESS_DECRYPTION_SECRET, SHIPSTATION_API_KEY, SHIPSTATION_SHIP_FROM] },
+  { secrets: [SHIPSTATION_API_KEY, SHIPSTATION_SHIP_FROM] },
 );
 
 export const purchaseFulfillmentShipStationLabel = onCallLogged(

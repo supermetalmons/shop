@@ -58,6 +58,7 @@ function env(options: {
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '',
     ADDRESS_DECRYPTION_SECRET: '',
     SHIPSTATION_API_KEY: '',
+    SHIPSTATION_SHIP_FROM: '',
     STRIPE_SECRET_KEY: '',
     STRIPE_RESTRICTED_KEY: '',
     STRIPE_SECRET_KEY_LIVE: '',
@@ -322,6 +323,7 @@ test('profile write routes use restricted CORS, bearer authentication, and stabl
   for (const [pathname, body] of [
     ['/fulfillment/order-address', { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }],
     ['/fulfillment/shipstation-label', { dropId: 'card_nft_2', deliveryId: 7 }],
+    ['/fulfillment/shipstation-rates', { dropId: 'card_nft_2', deliveryId: 7 }],
   ] as const) {
     const routeLogs: Record<string, unknown>[] = [];
     const response = await handleRequest(request(pathname, body, { Origin: 'https://mons.shop' }), env(), {

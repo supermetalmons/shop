@@ -97,7 +97,7 @@ notification enqueue secret are stripped from all other child-process environmen
 data and are never printed.
 
 The fulfillment routes also use `ADDRESS_DECRYPTION_SECRET`, `SHIPSTATION_API_KEY`,
-and the four Stripe API-key secrets. Synchronize their existing Google Secret Manager values
+`SHIPSTATION_SHIP_FROM`, and the four Stripe API-key secrets. Synchronize their existing Google Secret Manager values
 into an undeployed Worker version with `npm run sync:api:firebase-secrets`; the
 command uses a temporary mode-`0600` bulk file, verifies production is unchanged,
 and removes the file immediately.
@@ -248,8 +248,9 @@ suite passes.
 - `SHIPSTATION_API_KEY` (Firebase Functions and `mons-shop-api` secret or local env; ShipStation API v2 key used by fulfillment actions)
   - Set: `firebase functions:secrets:set SHIPSTATION_API_KEY`
   - Synchronize to Cloudflare with `npm run sync:api:firebase-secrets`.
-- `SHIPSTATION_SHIP_FROM` (Firebase Functions secret or local env; the origin address as one JSON object, so it can change without a code deploy)
+- `SHIPSTATION_SHIP_FROM` (Firebase Functions and `mons-shop-api` secret or local env; the origin address as one JSON object, so it can change without a code deploy)
   - Set: `firebase functions:secrets:set SHIPSTATION_SHIP_FROM`
+  - Synchronize to Cloudflare with `npm run sync:api:firebase-secrets`.
   - Shape: `{"name":"mons.shop","company_name":"mons.shop","phone":"+1XXXXXXXXXX","address_line1":"1061 10th Street","city_locality":"West Pittsburg","state_province":"PA","postal_code":"16160","country_code":"US","address_residential_indicator":"no"}`
   - The fulfillment page's "Add to ShipStation" button creates a pending shipment with `create_sales_order: true` and no carrier/service, so it lands in ShipStation's Awaiting Shipment tab for the shipper to rate and label. Parcels default to 4 oz per item at 9x12x2 in.
   - Pushes are idempotent per order: the `shipstation.shipmentId` field on the delivery order short-circuits repeats, and `external_shipment_id` (`mons-{dropId}-{deliveryId}`) lets the function re-adopt a shipment created by a call that crashed before recording it.

@@ -31,21 +31,50 @@ function inRange(value: number, min: number, max: number): boolean {
   return Number.isFinite(value) && value >= min && value <= max;
 }
 
+export function parseShipStationPackage(input: unknown): ShipStationPackageInput | null {
+  if (!input || typeof input !== 'object') return null;
+  const raw = input as Record<string, unknown>;
+  if (
+    typeof raw.length !== 'number' ||
+    typeof raw.width !== 'number' ||
+    typeof raw.height !== 'number' ||
+    typeof raw.weight !== 'number'
+  ) return null;
+  const value = {
+    length: raw.length,
+    width: raw.width,
+    height: raw.height,
+    weight: raw.weight,
+  };
+  return Object.values(value).every((measurement) => Number.isFinite(measurement) && measurement > 0)
+    ? value
+    : null;
+}
+
 /** Null when any measurement is missing or out of range. */
 export function normalizeShipStationPackage(input: unknown): ShipStationPackageInput | null {
   if (!input || typeof input !== 'object') return null;
   const raw = input as Record<string, unknown>;
-  const length = roundMeasurement(Number(raw.length));
-  const width = roundMeasurement(Number(raw.width));
-  const height = roundMeasurement(Number(raw.height));
-  const weight = roundMeasurement(Number(raw.weight));
+  const parsed = parseShipStationPackage({
+    length: Number(raw.length),
+    width: Number(raw.width),
+    height: Number(raw.height),
+    weight: Number(raw.weight),
+  });
+  if (!parsed) return null;
+  const value = {
+    length: roundMeasurement(parsed.length),
+    width: roundMeasurement(parsed.width),
+    height: roundMeasurement(parsed.height),
+    weight: roundMeasurement(parsed.weight),
+  };
   if (
-    !inRange(length, MIN_DIMENSION_INCHES, MAX_DIMENSION_INCHES) ||
-    !inRange(width, MIN_DIMENSION_INCHES, MAX_DIMENSION_INCHES) ||
-    !inRange(height, MIN_DIMENSION_INCHES, MAX_DIMENSION_INCHES) ||
-    !inRange(weight, MIN_WEIGHT_OUNCES, MAX_WEIGHT_OUNCES)
+    !inRange(value.length, MIN_DIMENSION_INCHES, MAX_DIMENSION_INCHES) ||
+    !inRange(value.width, MIN_DIMENSION_INCHES, MAX_DIMENSION_INCHES) ||
+    !inRange(value.height, MIN_DIMENSION_INCHES, MAX_DIMENSION_INCHES) ||
+    !inRange(value.weight, MIN_WEIGHT_OUNCES, MAX_WEIGHT_OUNCES)
   ) {
     return null;
   }
-  return { length, width, height, weight };
+  return value;
 }

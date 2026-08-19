@@ -448,6 +448,7 @@ function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): Nod
       normalized === 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' ||
       normalized === 'ADDRESS_DECRYPTION_SECRET' ||
       normalized === 'SHIPSTATION_API_KEY' ||
+      normalized === 'SHIPSTATION_SHIP_FROM' ||
       normalized === 'STRIPE_SECRET_KEY' ||
       normalized === 'STRIPE_RESTRICTED_KEY' ||
       normalized === 'STRIPE_SECRET_KEY_LIVE' ||
@@ -650,6 +651,7 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
       'RESEND_CONTACTS_API_KEY',
       'ADDRESS_DECRYPTION_SECRET',
       'SHIPSTATION_API_KEY',
+      'SHIPSTATION_SHIP_FROM',
       'STRIPE_SECRET_KEY',
       'STRIPE_RESTRICTED_KEY',
       'STRIPE_SECRET_KEY_LIVE',
@@ -914,6 +916,7 @@ async function smokeApi(
       ['/fulfillment/order-status', { dropId: 'card_nft_2', deliveryId: 1, status: 'Preparing' }],
       ['/fulfillment/manual-review-checkouts', { dropId: 'card_nft_2' }],
       ['/fulfillment/shipstation-label', { dropId: 'card_nft_2', deliveryId: 1 }],
+      ['/fulfillment/shipstation-rates', { dropId: 'card_nft_2', deliveryId: 1 }],
     ] as const) {
       const capability = await request(`${baseUrl}${pathname}`, {
         method: 'POST',

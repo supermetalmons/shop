@@ -8,6 +8,7 @@ const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 test('profile API client sends bearer JSON without caching and refreshes once after 401', async () => {
   const refreshes: boolean[] = [];
   const authorizations: string[] = [];
+  const signals: AbortSignal[] = [];
   let calls = 0;
   const payload = await profileApiTestHooks.requestProfileApi(
     '/profile/shipments',
@@ -18,6 +19,9 @@ test('profile API client sends bearer JSON without caching and refreshes once af
         assert.equal(String(input), 'https://api.mons.shop/profile/shipments');
         assert.equal(init?.method, 'POST');
         assert.equal(init?.cache, 'no-store');
+        const signal = init?.signal;
+        assert.ok(signal);
+        signals.push(signal);
         assert.deepEqual(JSON.parse(String(init?.body)), { ownerWallet: OWNER });
         const headers = new Headers(init?.headers);
         assert.equal(headers.get('content-type'), 'application/json');
@@ -37,6 +41,27 @@ test('profile API client sends bearer JSON without caching and refreshes once af
   assert.deepEqual(payload, { responseMode: 'shipments', wallet: OWNER, orders: [] });
   assert.deepEqual(refreshes, [false, true]);
   assert.deepEqual(authorizations, ['Bearer cached-token', 'Bearer fresh-token']);
+  assert.equal(signals[0], signals[1]);
+});
+
+test('profile API client applies its deadline to token retrieval and returns a stable error', async () => {
+  let fetchCalled = false;
+  await assert.rejects(
+    profileApiTestHooks.requestProfileApi('/fulfillment/shipstation-rates', {}, {
+      fetch: async () => {
+        fetchCalled = true;
+        return Response.json({});
+      },
+      getToken: async () => new Promise<string>(() => undefined),
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 10,
+    }),
+    (error) => {
+      const value = error as { code?: unknown; message?: unknown };
+      return value.code === 'deadline-exceeded' && value.message === 'Profile API request timed out.';
+    },
+  );
+  assert.equal(fetchCalled, false);
 });
 
 test('profile API client preserves stable error codes and rejects malformed JSON', async () => {
@@ -161,6 +186,7 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
     ['updateFulfillmentAddress', '/fulfillment/order-address'],
     ['updateFulfillmentStatus', '/fulfillment/order-status'],
     ['getFulfillmentShipStationLabel', '/fulfillment/shipstation-label'],
+    ['getFulfillmentShipStationRates', '/fulfillment/shipstation-rates'],
   ] as const) {
     const start = source.indexOf(`export async function ${exportName}`);
     const end = source.indexOf('\nexport ', start + 1);
@@ -170,6 +196,7 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
     assert.doesNotMatch(implementation, /callFunction|httpsCallable/);
   }
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label'), 50_000);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-rates'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/order-address'), 20_000);
 });
 
@@ -259,6 +286,71 @@ test('migrated write response validators accept only exact public contracts', ()
     ...shipStationLabel,
     label: { ...shipStationLabel.label, shipmentId: 'shipment-2' },
   }), null);
+
+  const shipStationRates = {
+    deliveryId: 7,
+    shipmentId: 'shipment-1',
+    package: { length: 10, width: 8, height: 3, weight: 8 },
+    packageCount: 1,
+    rates: [{
+      rateId: 'rate-1',
+      shipmentId: 'shipment-1',
+      carrierId: 'carrier-1',
+      carrierCode: 'ups',
+      carrierName: 'UPS',
+      serviceCode: 'ups_ground',
+      serviceName: 'UPS Ground',
+      shippingAmount: { currency: 'usd', amount: 10 },
+      insuranceAmount: { currency: 'usd', amount: 1 },
+      confirmationAmount: { currency: 'usd', amount: 0 },
+      otherAmount: { currency: 'usd', amount: 0.5 },
+      totalAmount: { currency: 'usd', amount: 11.5 },
+      guaranteedService: false,
+      warningMessages: [],
+    }],
+    invalidRates: [],
+  };
+  assert.deepEqual(profileApiTestHooks.parseGetFulfillmentShipStationRates(shipStationRates), shipStationRates);
+  const providerPackage = { ...shipStationRates.package, weight: 1616 };
+  assert.deepEqual(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+    ...shipStationRates,
+    package: providerPackage,
+  }), { ...shipStationRates, package: providerPackage });
+  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+    ...shipStationRates,
+    rates: [{ ...shipStationRates.rates[0], shipmentId: 'shipment-2' }],
+  }), null);
+  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+    ...shipStationRates,
+    package: { ...shipStationRates.package, private: true },
+  }), null);
+  for (const field of ['length', 'width', 'height', 'weight'] as const) {
+    for (const malformedValue of [
+      '10',
+      true,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      0,
+      -1,
+    ]) {
+      assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+        ...shipStationRates,
+        package: { ...shipStationRates.package, [field]: malformedValue },
+      }), null, `package ${field} must reject ${String(malformedValue)}`);
+    }
+  }
+  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+    ...shipStationRates,
+    rates: [{
+      ...shipStationRates.rates[0],
+      insuranceAmount: { currency: 'eur', amount: 1 },
+    }],
+  }), null);
+  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+    ...shipStationRates,
+    private: true,
+  }), null);
 });
 
 test('profile state validator rejects mismatches, malformed summaries, and extra data', () => {
@@ -334,6 +426,9 @@ test('migrated profile writes are absent from Firebase exports and deployment se
     scripts['decommission:firebase-fulfillment-callables'],
     /firebase functions:delete updateFulfillmentAddress getFulfillmentShipStationLabel --project mons-shop --force/,
   );
+  assert.match(functionsSource, /export const getFulfillmentShipStationRates\b/);
+  assert.match(packageJson, /functions:getFulfillmentShipStationRates(?:,|\")/);
+  assert.doesNotMatch(scripts['decommission:firebase-fulfillment-callables'], /getFulfillmentShipStationRates/);
 });
 
 test('Firebase label persistence replaces the complete label map', () => {

@@ -33,11 +33,29 @@ import {
   ShipStationLabelProviderError,
   type ShipStationLabelResult,
 } from '../../../../functions/src/shared/shipstationLabels.js';
+import {
+  buildShipStationPackages,
+  getShipStationShipmentById,
+  getShipStationShipmentRates,
+  parseShipStationShipFrom,
+  requestShipStationShipmentRates,
+  shipStationPackageDetails,
+  ShipStationRatesProviderError,
+  updateShipStationShipment,
+  type ShipStationRateResponse,
+} from '../../../../functions/src/shared/shipstationRates.js';
+import {
+  normalizeShipStationPackage,
+  parseShipStationPackage,
+  SHIPSTATION_PACKAGE_RANGE_MESSAGE,
+  type ShipStationPackageInput,
+} from '../../../../functions/src/shared/shipstationPackage.js';
 import { isBase58Bytes } from '../../../../functions/src/shared/solanaRpcProxy.js';
 import type {
   FulfillmentOrderAddress,
   FulfillmentShipStationLabel,
   GetFulfillmentShipStationLabelResponse,
+  GetFulfillmentShipStationRatesResponse,
   ProfileAddress,
   UpdateFulfillmentAddressResponse,
 } from '../../../../functions/src/shared/contracts.js';
@@ -65,18 +83,21 @@ export const PROFILE_ADDRESSES_PATH = '/profile/addresses';
 export const FULFILLMENT_ORDER_STATUS_PATH = '/fulfillment/order-status';
 export const FULFILLMENT_ORDER_ADDRESS_PATH = '/fulfillment/order-address';
 export const FULFILLMENT_SHIPSTATION_LABEL_PATH = '/fulfillment/shipstation-label';
+export const FULFILLMENT_SHIPSTATION_RATES_PATH = '/fulfillment/shipstation-rates';
 export const PROFILE_WRITE_PATHS = new Set([
   PROFILE_ADDRESSES_PATH,
   FULFILLMENT_ORDER_STATUS_PATH,
   FULFILLMENT_ORDER_ADDRESS_PATH,
   FULFILLMENT_SHIPSTATION_LABEL_PATH,
+  FULFILLMENT_SHIPSTATION_RATES_PATH,
 ]);
 
 export type ProfileWritePath =
   | typeof PROFILE_ADDRESSES_PATH
   | typeof FULFILLMENT_ORDER_STATUS_PATH
   | typeof FULFILLMENT_ORDER_ADDRESS_PATH
-  | typeof FULFILLMENT_SHIPSTATION_LABEL_PATH;
+  | typeof FULFILLMENT_SHIPSTATION_LABEL_PATH
+  | typeof FULFILLMENT_SHIPSTATION_RATES_PATH;
 
 type ProfileWriteMetrics = {
   upstreamCalls: number;
@@ -93,6 +114,7 @@ type ProfileWriteDependencies = {
   accessTokenProvider: GoogleAccessTokenProvider;
   autoId: () => string;
   nowMs: () => number;
+  pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
   verifyIdToken: (
@@ -104,16 +126,19 @@ type ProfileWriteDependencies = {
 };
 
 type ProfileWriteEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
-  'ADDRESS_DECRYPTION_SECRET' | 'SHIPSTATION_API_KEY'
+  'ADDRESS_DECRYPTION_SECRET' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
 >>;
 
 const PROFILE_WRITE_TIMEOUT_MS = 15_000;
 const SHIPSTATION_LABEL_OPERATION_TIMEOUT_MS = 45_000;
+const SHIPSTATION_RATES_OPERATION_TIMEOUT_MS = 55_000;
 const MAX_SAVE_ADDRESS_BYTES = 10 * 1024;
 const MAX_STATUS_REQUEST_BYTES = 4096;
 const MAX_FULFILLMENT_ADDRESS_REQUEST_BYTES = 16 * 1024;
 const MAX_SHIPSTATION_LABEL_REQUEST_BYTES = 2048;
+const MAX_SHIPSTATION_RATES_REQUEST_BYTES = 2048;
 const SHIPSTATION_CLAIM_TTL_MS = 120_000;
+const SHIPSTATION_RATE_REQUEST_TTL_MS = 10 * 60_000;
 const FIRESTORE_MUTATION_ATTEMPTS = 3;
 const AUTO_ID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const AUTO_ID_LENGTH = 20;
@@ -150,6 +175,17 @@ const shipStationLabelSchema = z.object({
   deliveryId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 }).strict();
 
+const shipStationRatesSchema = z.object({
+  dropId: z.string().min(1).max(64),
+  deliveryId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  package: z.object({
+    length: z.number(),
+    width: z.number(),
+    height: z.number(),
+    weight: z.number(),
+  }).strict().optional(),
+}).strict();
+
 const defaultAccessTokenProvider = createGoogleAccessTokenProvider();
 
 class ShipStationProfileError extends ProfileReadError {}
@@ -171,6 +207,7 @@ const defaultDependencies: ProfileWriteDependencies = {
   accessTokenProvider: defaultAccessTokenProvider,
   autoId: firestoreAutoId,
   nowMs: () => Date.now(),
+  pauseForRatePoll,
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: PROFILE_WRITE_TIMEOUT_MS,
   verifyIdToken: verifyFirebaseIdToken,
@@ -200,6 +237,7 @@ async function parseExactRequestBody(
   | z.infer<typeof fulfillmentStatusSchema>
   | z.infer<typeof fulfillmentAddressSchema>
   | z.infer<typeof shipStationLabelSchema>
+  | z.infer<typeof shipStationRatesSchema>
 > {
   if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
@@ -210,6 +248,8 @@ async function parseExactRequestBody(
       ? MAX_FULFILLMENT_ADDRESS_REQUEST_BYTES
       : path === FULFILLMENT_SHIPSTATION_LABEL_PATH
         ? MAX_SHIPSTATION_LABEL_REQUEST_BYTES
+        : path === FULFILLMENT_SHIPSTATION_RATES_PATH
+          ? MAX_SHIPSTATION_RATES_REQUEST_BYTES
         : MAX_STATUS_REQUEST_BYTES;
   const contentLength = Number(request.headers.get('Content-Length'));
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
@@ -230,9 +270,11 @@ async function parseExactRequestBody(
     ? saveAddressSchema.safeParse(parsed)
     : path === FULFILLMENT_ORDER_STATUS_PATH
       ? fulfillmentStatusSchema.safeParse(parsed)
-      : path === FULFILLMENT_ORDER_ADDRESS_PATH
-        ? fulfillmentAddressSchema.safeParse(parsed)
-        : shipStationLabelSchema.safeParse(parsed);
+    : path === FULFILLMENT_ORDER_ADDRESS_PATH
+      ? fulfillmentAddressSchema.safeParse(parsed)
+      : path === FULFILLMENT_SHIPSTATION_LABEL_PATH
+        ? shipStationLabelSchema.safeParse(parsed)
+        : shipStationRatesSchema.safeParse(parsed);
   if (!result.success) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
   return result.data;
 }
@@ -422,6 +464,7 @@ async function updateFulfillmentStatus(
 type FirestoreWriteCommon = {
   accessTokenProvider: GoogleAccessTokenProvider;
   nowMs: number;
+  pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
   signal: AbortSignal;
@@ -453,6 +496,29 @@ function firestoreMoney(value: { currency: string; amount: number }): ReturnType
     currency: firestoreString(value.currency),
     amount: firestoreNumber(value.amount),
   });
+}
+
+function firestorePackage(value: ShipStationPackageInput): ReturnType<typeof firestoreMap> {
+  return firestoreMap({
+    length: firestoreNumber(value.length),
+    width: firestoreNumber(value.width),
+    height: firestoreNumber(value.height),
+    weight: firestoreNumber(value.weight),
+  });
+}
+
+function firestoreRateQuotes(
+  rates: GetFulfillmentShipStationRatesResponse['rates'],
+): { arrayValue: { values: Array<ReturnType<typeof firestoreMap>> } } {
+  return {
+    arrayValue: {
+      values: rates.map((rate) => firestoreMap({
+        rateId: firestoreString(rate.rateId),
+        shipmentId: firestoreString(rate.shipmentId),
+        totalAmount: firestoreMoney(rate.totalAmount),
+      })),
+    },
+  };
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -580,6 +646,81 @@ function requireShipStationShipmentId(order: Record<string, unknown>): string {
   return shipmentId;
 }
 
+type ShipStationRateMutationExpectation = {
+  claimId: string | null;
+  claimedBy: string | null;
+  labelIdentity: string;
+  purchaseIdentity: string;
+  shipmentId: string;
+};
+
+function shipStationLabelIdentity(value: unknown): string {
+  const label = storedFulfillmentShipStationLabel(value);
+  return label ? JSON.stringify([
+    label.labelId,
+    label.shipmentId,
+    label.status,
+    label.rateId ?? null,
+    label.trackingNumber ?? null,
+    label.carrierId ?? null,
+    label.carrierCode ?? null,
+    label.carrierName ?? null,
+    label.serviceCode ?? null,
+    label.serviceName ?? null,
+    label.shipmentCost?.currency ?? null,
+    label.shipmentCost?.amount ?? null,
+    label.insuranceCost?.currency ?? null,
+    label.insuranceCost?.amount ?? null,
+    label.totalCost?.currency ?? null,
+    label.totalCost?.amount ?? null,
+    label.purchasedAt ?? null,
+    label.purchasedBy ?? null,
+  ]) : '';
+}
+
+function shipStationPurchaseIdentity(shipstation: Record<string, unknown>): string {
+  const purchase = isRecord(shipstation.labelPurchase) ? shipstation.labelPurchase : {};
+  return `${optionalString(purchase.status) ?? ''}\n${optionalString(purchase.requestId) ?? ''}`;
+}
+
+function rateMutationExpectation(
+  order: Record<string, unknown>,
+  shipmentId: string,
+  claim?: { claimId: string; wallet: string },
+): ShipStationRateMutationExpectation {
+  const shipstation = shipStationState(order);
+  return {
+    shipmentId,
+    labelIdentity: shipStationLabelIdentity(shipstation.label),
+    purchaseIdentity: shipStationPurchaseIdentity(shipstation),
+    claimId: claim?.claimId ?? optionalString(shipstation.ratesClaimId) ?? null,
+    claimedBy: claim?.wallet ?? optionalString(shipstation.ratesClaimedBy) ?? null,
+  };
+}
+
+function requireRateMutationState(
+  order: Record<string, unknown>,
+  expected: ShipStationRateMutationExpectation,
+): Record<string, unknown> {
+  const shipstation = shipStationState(order);
+  if (optionalString(shipstation.shipmentId) !== expected.shipmentId) {
+    throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
+  }
+  if (shipStationLabelIdentity(shipstation.label) !== expected.labelIdentity) {
+    throw new ProfileReadError('aborted', 409, 'The ShipStation label changed. Check its status again.');
+  }
+  if (shipStationPurchaseIdentity(shipstation) !== expected.purchaseIdentity) {
+    throw new ProfileReadError('aborted', 409, 'The ShipStation label purchase changed. Check its status again.');
+  }
+  if (
+    (optionalString(shipstation.ratesClaimId) ?? null) !== expected.claimId ||
+    (optionalString(shipstation.ratesClaimedBy) ?? null) !== expected.claimedBy
+  ) {
+    throw new ProfileReadError('aborted', 409, 'The ShipStation rate refresh claim changed. Try again.');
+  }
+  return shipstation;
+}
+
 async function updateFulfillmentAddress(
   body: z.infer<typeof fulfillmentAddressSchema>,
   wallet: string,
@@ -661,6 +802,7 @@ async function updateFulfillmentAddress(
               'addressSnapshot.hint',
               'fulfillmentAddressUpdatedBy',
               'shipstation.rateQuotes',
+              'shipstation.ratesClaimId',
               'shipstation.ratesClaimedAt',
               'shipstation.ratesClaimedBy',
             ],
@@ -702,7 +844,8 @@ async function persistFulfillmentShipStationLabel(args: {
   common: FirestoreWriteCommon;
   deliveryId: number;
   dropId: string;
-  expectedCurrentLabelId?: string | null;
+  expectedCurrentLabel?: FulfillmentShipStationLabel | null;
+  expectedRateMutation?: ShipStationRateMutationExpectation;
   fallbackLabel?: Partial<FulfillmentShipStationLabel>;
   result: ShipStationLabelResult;
   wallet: string;
@@ -720,6 +863,7 @@ async function persistFulfillmentShipStationLabel(args: {
     deliveryId: args.deliveryId,
     build: ({ fields: order, updateTime }) => {
       const shipstation = shipStationState(order);
+      if (args.expectedRateMutation) requireRateMutationState(order, args.expectedRateMutation);
       if (optionalString(shipstation.shipmentId) !== label.shipmentId) {
         throw new ProfileReadError(
           'aborted',
@@ -728,15 +872,12 @@ async function persistFulfillmentShipStationLabel(args: {
         );
       }
       const currentLabel = storedFulfillmentShipStationLabel(shipstation.label);
-      const currentLabelId = currentLabel?.labelId ?? null;
+      const currentLabelIdentity = shipStationLabelIdentity(currentLabel);
       if (
-        args.expectedCurrentLabelId !== undefined
-        && currentLabelId !== args.expectedCurrentLabelId
-        && currentLabelId !== label.labelId
+        args.expectedCurrentLabel !== undefined
+        && currentLabelIdentity !== shipStationLabelIdentity(args.expectedCurrentLabel)
+        && currentLabelIdentity !== shipStationLabelIdentity(label)
       ) {
-        throw new ProfileReadError('aborted', 409, 'The ShipStation label changed. Check its status again.');
-      }
-      if (args.fallbackLabel?.labelId && currentLabel?.labelId !== args.fallbackLabel.labelId) {
         throw new ProfileReadError('aborted', 409, 'The ShipStation label changed. Check its status again.');
       }
       const trackingCodeUpdate = shipStationTrackingCodeUpdate(
@@ -753,9 +894,14 @@ async function persistFulfillmentShipStationLabel(args: {
         'dropId',
         'shipstation.label',
         'shipstation.rateQuotes',
-        'shipstation.ratesClaimedAt',
-        'shipstation.ratesClaimedBy',
       ];
+      if (args.expectedRateMutation) {
+        updateMask.push(
+          'shipstation.ratesClaimId',
+          'shipstation.ratesClaimedAt',
+          'shipstation.ratesClaimedBy',
+        );
+      }
       if (trackingCodeUpdate !== undefined) updateMask.push('fulfillmentTrackingCode');
       if (shouldClearShipStationPurchaseState(label)) updateMask.push('shipstation.labelPurchase');
       return {
@@ -826,12 +972,77 @@ async function transitionShipStationPurchaseState(args: {
   });
 }
 
-function profileErrorForShipStation(error: ShipStationLabelProviderError): ProfileReadError {
+function profileErrorForShipStation(
+  error: ShipStationLabelProviderError | ShipStationRatesProviderError,
+): ProfileReadError {
   if (error.code === 'deadline-exceeded') return new ShipStationProfileError(error.code, 504, error.message);
   if (error.code === 'resource-exhausted') return new ShipStationProfileError(error.code, 429, error.message);
   if (error.code === 'failed-precondition') return new ShipStationProfileError(error.code, 409, error.message);
-  if (error.code === 'internal') return new ShipStationProfileError(error.code, 500, error.message);
+  if (error.code === 'internal') return new ShipStationProfileError('unavailable', 502, error.message);
   return new ShipStationProfileError(error.code, 502, error.message);
+}
+
+type ReconciledShipStationLabel = {
+  active?: FulfillmentShipStationLabel;
+  downloadUrl?: string;
+  inactive?: FulfillmentShipStationLabel;
+};
+
+async function reconcileFulfillmentShipStationLabel(args: {
+  apiKey: string;
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  expectedRateMutation?: ShipStationRateMutationExpectation;
+  order: Record<string, unknown>;
+  refreshInactiveStoredLabel: boolean;
+  shipmentId: string;
+  wallet: string;
+}): Promise<ReconciledShipStationLabel> {
+  const storedLabel = storedFulfillmentShipStationLabel(shipStationState(args.order).label);
+  let inactive: FulfillmentShipStationLabel | undefined;
+  try {
+    if (storedLabel?.labelId && (args.refreshInactiveStoredLabel || isActiveShipStationLabel(storedLabel))) {
+      const result = await getShipStationLabelById(args.apiKey, storedLabel.labelId, {
+        fetch: args.common.providerFetch,
+        signal: args.common.signal,
+      });
+      const label = await persistFulfillmentShipStationLabel({
+        common: args.common,
+        deliveryId: args.deliveryId,
+        dropId: args.dropId,
+        expectedCurrentLabel: storedLabel,
+        ...(args.expectedRateMutation ? { expectedRateMutation: args.expectedRateMutation } : {}),
+        fallbackLabel: storedLabel,
+        result,
+        wallet: args.wallet,
+      });
+      if (isActiveShipStationLabel(label)) {
+        return { active: label, ...(result.downloadUrl ? { downloadUrl: result.downloadUrl } : {}) };
+      }
+      inactive = label;
+    }
+    const adopted = (await listShipStationLabelsForShipment(args.apiKey, args.shipmentId, {
+      fetch: args.common.providerFetch,
+      signal: args.common.signal,
+    }))[0];
+    if (adopted) {
+      const label = await persistFulfillmentShipStationLabel({
+        common: args.common,
+        deliveryId: args.deliveryId,
+        dropId: args.dropId,
+        expectedCurrentLabel: inactive ?? storedLabel ?? null,
+        ...(args.expectedRateMutation ? { expectedRateMutation: args.expectedRateMutation } : {}),
+        result: adopted,
+        wallet: args.wallet,
+      });
+      return { active: label, ...(adopted.downloadUrl ? { downloadUrl: adopted.downloadUrl } : {}) };
+    }
+    return { ...(inactive ? { inactive } : {}) };
+  } catch (error) {
+    if (error instanceof ShipStationLabelProviderError) throw profileErrorForShipStation(error);
+    throw error;
+  }
 }
 
 async function getFulfillmentShipStationLabel(
@@ -849,55 +1060,23 @@ async function getFulfillmentShipStationLabel(
   const order = initial.fields;
   rejectIrlShipStationOrder(order);
   const shipmentId = requireShipStationShipmentId(order);
-  const storedLabel = storedFulfillmentShipStationLabel(shipStationState(order).label);
-  let inactiveLabel: FulfillmentShipStationLabel | undefined;
-  try {
-    if (storedLabel?.labelId) {
-      const result = await getShipStationLabelById(apiKey, storedLabel.labelId, {
-        fetch: common.providerFetch,
-        signal: common.signal,
-      });
-      const label = await persistFulfillmentShipStationLabel({
-        common,
-        deliveryId: body.deliveryId,
-        dropId,
-        fallbackLabel: storedLabel,
-        result,
-        wallet,
-      });
-      if (isActiveShipStationLabel(label)) {
-        return {
-          deliveryId: body.deliveryId,
-          shipmentId,
-          label,
-          ...(result.downloadUrl ? { labelDownloadUrl: result.downloadUrl } : {}),
-        };
-      }
-      inactiveLabel = label;
-    }
-    const adopted = (await listShipStationLabelsForShipment(apiKey, shipmentId, {
-      fetch: common.providerFetch,
-      signal: common.signal,
-    }))[0];
-    if (adopted) {
-      const label = await persistFulfillmentShipStationLabel({
-        common,
-        deliveryId: body.deliveryId,
-        dropId,
-        expectedCurrentLabelId: inactiveLabel?.labelId ?? null,
-        result: adopted,
-        wallet,
-      });
-      return {
-        deliveryId: body.deliveryId,
-        shipmentId,
-        label,
-        ...(adopted.downloadUrl ? { labelDownloadUrl: adopted.downloadUrl } : {}),
-      };
-    }
-  } catch (error) {
-    if (error instanceof ShipStationLabelProviderError) throw profileErrorForShipStation(error);
-    throw error;
+  const reconciled = await reconcileFulfillmentShipStationLabel({
+    apiKey,
+    common,
+    deliveryId: body.deliveryId,
+    dropId,
+    order,
+    refreshInactiveStoredLabel: true,
+    shipmentId,
+    wallet,
+  });
+  if (reconciled.active) {
+    return {
+      deliveryId: body.deliveryId,
+      shipmentId,
+      label: reconciled.active,
+      ...(reconciled.downloadUrl ? { labelDownloadUrl: reconciled.downloadUrl } : {}),
+    };
   }
   const purchase = shipStationState(order).labelPurchase;
   const purchaseStatus = isRecord(purchase) && typeof purchase.status === 'string' ? purchase.status : '';
@@ -917,9 +1096,581 @@ async function getFulfillmentShipStationLabel(
   return {
     deliveryId: body.deliveryId,
     shipmentId,
-    ...(resolvedPurchase.label ? { label: resolvedPurchase.label } : inactiveLabel ? { label: inactiveLabel } : {}),
+    ...(resolvedPurchase.label ? { label: resolvedPurchase.label } : reconciled.inactive ? { label: reconciled.inactive } : {}),
     ...(resolvedPurchase.purchaseUnknown ? { purchaseUnknown: true } : {}),
   };
+}
+
+type PendingShipStationRateRequest = {
+  requestId: string;
+  createdAt?: string;
+};
+
+function storedPendingShipStationRateRequest(
+  value: unknown,
+  shipmentId: string,
+  parcel: ShipStationPackageInput,
+  nowMs: number,
+): PendingShipStationRateRequest | undefined {
+  if (!isRecord(value)) return undefined;
+  const requestId = optionalString(value.requestId);
+  const storedShipmentId = optionalString(value.shipmentId);
+  const storedPackage = parseShipStationPackage(value.package);
+  const requestedAt = typeof value.requestedAt === 'number' ? value.requestedAt : 0;
+  if (
+    !requestId ||
+    storedShipmentId !== shipmentId ||
+    !storedPackage ||
+    !requestedAt ||
+    nowMs - requestedAt >= SHIPSTATION_RATE_REQUEST_TTL_MS ||
+    storedPackage.length !== parcel.length ||
+    storedPackage.width !== parcel.width ||
+    storedPackage.height !== parcel.height ||
+    storedPackage.weight !== parcel.weight
+  ) return undefined;
+  const createdAt = optionalString(value.createdAt);
+  return { requestId, ...(createdAt ? { createdAt } : {}) };
+}
+
+function orderShipStationPackage(order: Record<string, unknown>): ShipStationPackageInput | undefined {
+  return parseShipStationPackage(shipStationState(order).package) ?? undefined;
+}
+
+function orderShipStationPackageCount(order: Record<string, unknown>): number {
+  const packageCount = Math.floor(Number(shipStationState(order).packageCount) || 0);
+  return Math.max(0, packageCount);
+}
+
+async function persistUnsupportedShipStationPackageCount(args: {
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  expected: ShipStationRateMutationExpectation;
+  packageCount: number;
+}): Promise<void> {
+  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
+  await mutateDeliveryOrder<void>({
+    common: args.common,
+    deliveryId: args.deliveryId,
+    dropId: args.dropId,
+    build: ({ fields: order, updateTime }) => {
+      requireRateMutationState(order, args.expected);
+      return {
+        value: undefined,
+        write: {
+          update: {
+            name: documentName(orderPath),
+            fields: { shipstation: firestoreMap({ packageCount: firestoreNumber(args.packageCount) }) },
+          },
+          updateMask: {
+            fieldPaths: [
+              'shipstation.packageCount',
+              'shipstation.package',
+              'shipstation.rateQuotes',
+              'shipstation.rateRequest',
+              'shipstation.ratesClaimId',
+              'shipstation.ratesClaimedAt',
+              'shipstation.ratesClaimedBy',
+            ],
+          },
+          currentDocument: { updateTime },
+        },
+      };
+    },
+  });
+}
+
+async function pauseForRatePoll(signal: AbortSignal, delayMs: number): Promise<void> {
+  if (signal.aborted) throw signal.reason;
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const timeout = setTimeout(finish, delayMs);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
+
+async function persistPendingShipStationRateRequest(args: {
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  expected: ShipStationRateMutationExpectation;
+  package: ShipStationPackageInput;
+  request: PendingShipStationRateRequest;
+  shipmentId: string;
+}): Promise<void> {
+  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
+  await mutateDeliveryOrder<void>({
+    common: args.common,
+    deliveryId: args.deliveryId,
+    dropId: args.dropId,
+    build: ({ fields: order, updateTime }) => {
+      requireRateMutationState(order, args.expected);
+      if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(shipStationState(order).label))) {
+        throw new ProfileReadError('failed-precondition', 409, 'This shipment already has a label.');
+      }
+      return {
+        value: undefined,
+        write: {
+          update: {
+            name: documentName(orderPath),
+            fields: {
+              shipstation: firestoreMap({
+                rateRequest: firestoreMap({
+                  requestId: firestoreString(args.request.requestId),
+                  ...(args.request.createdAt ? { createdAt: firestoreString(args.request.createdAt) } : {}),
+                  shipmentId: firestoreString(args.shipmentId),
+                  package: firestorePackage(args.package),
+                }),
+              }),
+            },
+          },
+          updateMask: {
+            fieldPaths: [
+              'shipstation.rateRequest.requestId',
+              'shipstation.rateRequest.createdAt',
+              'shipstation.rateRequest.shipmentId',
+              'shipstation.rateRequest.package',
+            ],
+          },
+          updateTransforms: [
+            { fieldPath: 'shipstation.rateRequest.requestedAt', setToServerValue: 'REQUEST_TIME' },
+          ],
+          currentDocument: { updateTime },
+        },
+      };
+    },
+  });
+}
+
+async function getCompletedShipStationRates(args: {
+  apiKey: string;
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  expected: ShipStationRateMutationExpectation;
+  package: ShipStationPackageInput;
+  pendingRequest?: PendingShipStationRateRequest;
+  shipmentId: string;
+}): Promise<Pick<GetFulfillmentShipStationRatesResponse, 'invalidRates' | 'rates'>> {
+  const options = { fetch: args.common.providerFetch, signal: args.common.signal };
+  let response: ShipStationRateResponse = args.pendingRequest
+    ? await getShipStationShipmentRates(args.apiKey, args.shipmentId, args.pendingRequest, options)
+    : await requestShipStationShipmentRates(args.apiKey, args.shipmentId, options);
+  let expectedRequest = args.pendingRequest;
+  if (!expectedRequest && response.status === 'working') {
+    if (!response.rateRequestId) {
+      throw new ShipStationRatesProviderError('internal', 'ShipStation did not identify the pending rate request.');
+    }
+    expectedRequest = {
+      requestId: response.rateRequestId,
+      ...(response.createdAt ? { createdAt: response.createdAt } : {}),
+    };
+    await persistPendingShipStationRateRequest({
+      common: args.common,
+      deliveryId: args.deliveryId,
+      dropId: args.dropId,
+      expected: args.expected,
+      package: args.package,
+      request: expectedRequest,
+      shipmentId: args.shipmentId,
+    });
+  }
+  for (const delayMs of [400, 800, 1200]) {
+    if (response.status !== 'working') break;
+    if (!expectedRequest) {
+      throw new ShipStationRatesProviderError('internal', 'ShipStation did not identify the pending rate request.');
+    }
+    await args.common.pauseForRatePoll(args.common.signal, delayMs);
+    response = await getShipStationShipmentRates(args.apiKey, args.shipmentId, expectedRequest, options);
+  }
+  if (response.status === 'working') {
+    throw new ShipStationRatesProviderError('unavailable', 'ShipStation is still calculating rates. Try again in a moment.');
+  }
+  return {
+    rates: response.rates.filter((rate) => rate.shipmentId === args.shipmentId),
+    invalidRates: response.invalidRates,
+  };
+}
+
+async function releaseShipStationRatesClaim(args: {
+  claimId: string;
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  shipmentId: string;
+  wallet: string;
+}): Promise<void> {
+  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
+  return mutateDeliveryOrder<void>({
+    common: args.common,
+    deliveryId: args.deliveryId,
+    dropId: args.dropId,
+    build: ({ fields: order, updateTime }) => {
+      const shipstation = shipStationState(order);
+      if (optionalString(shipstation.shipmentId) !== args.shipmentId) return { value: undefined };
+      const currentClaimId = optionalString(shipstation.ratesClaimId);
+      if (currentClaimId && (
+        currentClaimId !== args.claimId || optionalString(shipstation.ratesClaimedBy) !== args.wallet
+      )) {
+        return { value: undefined };
+      }
+      if (!currentClaimId && optionalString(shipstation.ratesClaimFenceId) === args.claimId) {
+        return { value: undefined };
+      }
+      const fieldPaths = currentClaimId
+        ? [
+            'shipstation.ratesClaimId',
+            'shipstation.ratesClaimedAt',
+            'shipstation.ratesClaimedBy',
+            'shipstation.ratesClaimFenceId',
+          ]
+        : ['shipstation.ratesClaimFenceId'];
+      return {
+        value: undefined,
+        write: {
+          update: {
+            name: documentName(orderPath),
+            fields: currentClaimId
+              ? {}
+              : { shipstation: firestoreMap({ ratesClaimFenceId: firestoreString(args.claimId) }) },
+          },
+          updateMask: { fieldPaths },
+          currentDocument: { updateTime },
+        },
+      };
+    },
+  });
+}
+
+async function safelyReleaseShipStationRatesClaim(args: {
+  claimId: string;
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  shipmentId: string;
+  wallet: string;
+}): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException('Claim cleanup timed out', 'TimeoutError')),
+    3_000,
+  );
+  try {
+    await releaseShipStationRatesClaim({
+      ...args,
+      common: { ...args.common, signal: controller.signal },
+    });
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: 'fulfillment_shipstation_rates_claim_release_failed',
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getFulfillmentShipStationRates(
+  body: z.infer<typeof shipStationRatesSchema>,
+  wallet: string,
+  common: FirestoreWriteCommon,
+  env: ProfileWriteEnv,
+): Promise<GetFulfillmentShipStationRatesResponse> {
+  const dropId = supportedDropId(body.dropId);
+  requireFulfillmentAccess(wallet, dropId);
+  const packageOverride = body.package ? normalizeShipStationPackage(body.package) : null;
+  if (body.package && !packageOverride) {
+    throw new ProfileReadError('invalid-argument', 400, SHIPSTATION_PACKAGE_RANGE_MESSAGE);
+  }
+  const apiKey = typeof env.SHIPSTATION_API_KEY === 'string' ? env.SHIPSTATION_API_KEY.trim() : '';
+  if (!apiKey) throw new ShipStationProfileError('failed-precondition', 409, 'ShipStation API key is not configured');
+  const shipFromSecret = typeof env.SHIPSTATION_SHIP_FROM === 'string' ? env.SHIPSTATION_SHIP_FROM.trim() : '';
+  const claimId = crypto.randomUUID();
+  let shipmentId = '';
+  let claimWriteAttempted = false;
+  try {
+    const shipFrom = parseShipStationShipFrom(shipFromSecret);
+    const initial = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
+    let order = initial.fields;
+    rejectIrlShipStationOrder(order);
+    shipmentId = requireShipStationShipmentId(order);
+    const reconciled = await reconcileFulfillmentShipStationLabel({
+      apiKey,
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      order,
+      refreshInactiveStoredLabel: false,
+      shipmentId,
+      wallet,
+    });
+    if (reconciled.active) {
+      return {
+        deliveryId: body.deliveryId,
+        shipmentId,
+        ...(orderShipStationPackage(order) ? { package: orderShipStationPackage(order) } : {}),
+        packageCount: orderShipStationPackageCount(order),
+        rates: [],
+        invalidRates: [],
+        label: reconciled.active,
+        ...(reconciled.downloadUrl ? { labelDownloadUrl: reconciled.downloadUrl } : {}),
+      };
+    }
+    order = (await loadDeliveryOrderDocument(common, dropId, body.deliveryId)).fields;
+    if (requireShipStationShipmentId(order) !== shipmentId) {
+      throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
+    }
+    const purchase = shipStationState(order).labelPurchase;
+    const purchaseStatus = isRecord(purchase) ? optionalString(purchase.status) : undefined;
+    if (purchaseStatus === 'purchasing' || purchaseStatus === 'unknown') {
+      return {
+        deliveryId: body.deliveryId,
+        shipmentId,
+        ...(orderShipStationPackage(order) ? { package: orderShipStationPackage(order) } : {}),
+        packageCount: orderShipStationPackageCount(order),
+        rates: [],
+        invalidRates: [],
+        purchaseUnknown: true,
+      };
+    }
+    const initialExpectation = rateMutationExpectation(order, shipmentId);
+    const orderPath = `drops/${dropId}/deliveryOrders/${body.deliveryId}`;
+    const claimedOrder = await mutateDeliveryOrder<Record<string, unknown>>({
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      build: ({ fields: currentOrder, updateTime }) => {
+        const currentShipstation = requireRateMutationState(currentOrder, initialExpectation);
+        const currentPurchase = isRecord(currentShipstation.labelPurchase) ? currentShipstation.labelPurchase : {};
+        const currentPurchaseStatus = optionalString(currentPurchase.status);
+        if (currentPurchaseStatus === 'purchasing' || currentPurchaseStatus === 'unknown') {
+          throw new ProfileReadError('aborted', 409, 'A label purchase may already be in progress. Check purchase status first.');
+        }
+        if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(currentShipstation.label))) {
+          throw new ProfileReadError('failed-precondition', 409, 'This shipment already has a label.');
+        }
+        const claimedAt = typeof currentShipstation.ratesClaimedAt === 'number'
+          ? currentShipstation.ratesClaimedAt
+          : 0;
+        if (claimedAt && common.nowMs - claimedAt < SHIPSTATION_CLAIM_TTL_MS) {
+          throw new ProfileReadError('aborted', 409, 'Rates are already being refreshed for this shipment. Try again in a moment.');
+        }
+        claimWriteAttempted = true;
+        return {
+          value: currentOrder,
+          write: {
+            update: {
+              name: documentName(orderPath),
+              fields: {
+                shipstation: firestoreMap({
+                  ratesClaimId: firestoreString(claimId),
+                  ratesClaimedBy: firestoreString(wallet),
+                }),
+              },
+            },
+            updateMask: {
+              fieldPaths: [
+                'shipstation.rateQuotes',
+                'shipstation.ratesClaimId',
+                'shipstation.ratesClaimedBy',
+                'shipstation.ratesClaimFenceId',
+              ],
+            },
+            updateTransforms: [{ fieldPath: 'shipstation.ratesClaimedAt', setToServerValue: 'REQUEST_TIME' }],
+            currentDocument: { updateTime },
+          },
+        };
+      },
+    });
+    const claimedExpectation = rateMutationExpectation(claimedOrder, shipmentId, { claimId, wallet });
+    const shipment = await getShipStationShipmentById(apiKey, shipmentId, {
+      fetch: common.providerFetch,
+      signal: common.signal,
+    });
+    const currentPackageDetails = shipStationPackageDetails(shipment);
+    if (currentPackageDetails.packageCount !== 1) {
+      await persistUnsupportedShipStationPackageCount({
+        common,
+        deliveryId: body.deliveryId,
+        dropId,
+        expected: claimedExpectation,
+        packageCount: currentPackageDetails.packageCount,
+      });
+      return {
+        deliveryId: body.deliveryId,
+        shipmentId,
+        packageCount: currentPackageDetails.packageCount,
+        rates: [],
+        invalidRates: [],
+      };
+    }
+    const resolvedPackage = packageOverride ?? currentPackageDetails.package;
+    if (!resolvedPackage) {
+      throw new ProfileReadError(
+        'failed-precondition',
+        409,
+        'ShipStation package measurements are unavailable for this shipment.',
+      );
+    }
+    const updatedShipment = await updateShipStationShipment(apiKey, shipmentId, {
+      ship_from: shipFrom,
+      ...(packageOverride ? { packages: buildShipStationPackages(1, packageOverride) } : {}),
+    }, { fetch: common.providerFetch, signal: common.signal });
+    const updatedPackageDetails = shipStationPackageDetails(updatedShipment);
+    if (updatedPackageDetails.packageCount !== 1) {
+      await persistUnsupportedShipStationPackageCount({
+        common,
+        deliveryId: body.deliveryId,
+        dropId,
+        expected: claimedExpectation,
+        packageCount: updatedPackageDetails.packageCount,
+      });
+      return {
+        deliveryId: body.deliveryId,
+        shipmentId,
+        packageCount: updatedPackageDetails.packageCount,
+        rates: [],
+        invalidRates: [],
+      };
+    }
+    const storedPackage = packageOverride ?? updatedPackageDetails.package ?? resolvedPackage;
+    await mutateDeliveryOrder<void>({
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      build: ({ fields: currentOrder, updateTime }) => {
+        requireRateMutationState(currentOrder, claimedExpectation);
+        return {
+          value: undefined,
+          write: {
+            update: {
+              name: documentName(orderPath),
+              fields: {
+                shipstation: firestoreMap({
+                  package: firestorePackage(storedPackage),
+                  packageCount: firestoreNumber(1),
+                }),
+              },
+            },
+            updateMask: { fieldPaths: ['shipstation.package', 'shipstation.packageCount'] },
+            currentDocument: { updateTime },
+          },
+        };
+      },
+    });
+    const adoptedAfterUpdate = await reconcileFulfillmentShipStationLabel({
+      apiKey,
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      expectedRateMutation: claimedExpectation,
+      order: claimedOrder,
+      refreshInactiveStoredLabel: false,
+      shipmentId,
+      wallet,
+    });
+    if (adoptedAfterUpdate.active) {
+      return {
+        deliveryId: body.deliveryId,
+        shipmentId,
+        package: storedPackage,
+        packageCount: 1,
+        rates: [],
+        invalidRates: [],
+        label: adoptedAfterUpdate.active,
+        ...(adoptedAfterUpdate.downloadUrl ? { labelDownloadUrl: adoptedAfterUpdate.downloadUrl } : {}),
+      };
+    }
+    const pendingRateRequest = storedPendingShipStationRateRequest(
+      shipStationState(claimedOrder).rateRequest,
+      shipmentId,
+      storedPackage,
+      common.nowMs,
+    );
+    const rateResponse = await getCompletedShipStationRates({
+      apiKey,
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      expected: claimedExpectation,
+      package: storedPackage,
+      ...(pendingRateRequest ? { pendingRequest: pendingRateRequest } : {}),
+      shipmentId,
+    });
+    await mutateDeliveryOrder<void>({
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      build: ({ fields: currentOrder, updateTime }) => {
+        requireRateMutationState(currentOrder, claimedExpectation);
+        if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(shipStationState(currentOrder).label))) {
+          throw new ProfileReadError('failed-precondition', 409, 'This shipment already has a label.');
+        }
+        return {
+          value: undefined,
+          write: {
+            update: {
+              name: documentName(orderPath),
+              fields: {
+                shipstation: firestoreMap({
+                  package: firestorePackage(storedPackage),
+                  packageCount: firestoreNumber(1),
+                  rateQuotes: firestoreRateQuotes(rateResponse.rates),
+                  ratesUpdatedBy: firestoreString(wallet),
+                }),
+              },
+            },
+            updateMask: {
+              fieldPaths: [
+                'shipstation.package',
+                'shipstation.packageCount',
+                'shipstation.rateQuotes',
+                'shipstation.rateRequest',
+                'shipstation.ratesUpdatedBy',
+                'shipstation.ratesClaimId',
+                'shipstation.ratesClaimedAt',
+                'shipstation.ratesClaimedBy',
+              ],
+            },
+            updateTransforms: [{ fieldPath: 'shipstation.ratesUpdatedAt', setToServerValue: 'REQUEST_TIME' }],
+            currentDocument: { updateTime },
+          },
+        };
+      },
+    });
+    return {
+      deliveryId: body.deliveryId,
+      shipmentId,
+      package: storedPackage,
+      packageCount: 1,
+      rates: rateResponse.rates,
+      invalidRates: rateResponse.invalidRates,
+    };
+  } catch (error) {
+    if (claimWriteAttempted && shipmentId) {
+      await safelyReleaseShipStationRatesClaim({
+        claimId,
+        common,
+        deliveryId: body.deliveryId,
+        dropId,
+        shipmentId,
+        wallet,
+      });
+    }
+    if (error instanceof ShipStationRatesProviderError) throw profileErrorForShipStation(error);
+    throw error;
+  }
 }
 
 export async function handleProfileWriteRequest(
@@ -931,6 +1682,7 @@ export async function handleProfileWriteRequest(
   const dependencies = {
     ...defaultDependencies,
     ...(path === FULFILLMENT_SHIPSTATION_LABEL_PATH ? { timeoutMs: SHIPSTATION_LABEL_OPERATION_TIMEOUT_MS } : {}),
+    ...(path === FULFILLMENT_SHIPSTATION_RATES_PATH ? { timeoutMs: SHIPSTATION_RATES_OPERATION_TIMEOUT_MS } : {}),
     ...overrides,
   };
   const metrics: ProfileWriteMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
@@ -970,6 +1722,7 @@ export async function handleProfileWriteRequest(
     const common = {
       accessTokenProvider: dependencies.accessTokenProvider,
       nowMs: dependencies.nowMs(),
+      pauseForRatePoll: dependencies.pauseForRatePoll,
       providerFetch: trackedFetch,
       serviceAccountJson,
       signal: controller.signal,
@@ -999,13 +1752,20 @@ export async function handleProfileWriteRequest(
         common,
         addressSecret,
       );
-    } else {
+    } else if (path === FULFILLMENT_SHIPSTATION_LABEL_PATH) {
       const apiKey = typeof env.SHIPSTATION_API_KEY === 'string' ? env.SHIPSTATION_API_KEY.trim() : '';
       payload = await getFulfillmentShipStationLabel(
         requestBody as z.infer<typeof shipStationLabelSchema>,
         wallet,
         common,
         apiKey,
+      );
+    } else {
+      payload = await getFulfillmentShipStationRates(
+        requestBody as z.infer<typeof shipStationRatesSchema>,
+        wallet,
+        common,
+        env,
       );
     }
     return { response: jsonResponse(payload, 200), metrics, authOutcome: 'accepted' };

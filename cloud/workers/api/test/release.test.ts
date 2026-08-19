@@ -55,6 +55,7 @@ const EMPTY_NEW_API_SECRET_ENV = {
   FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '',
   ADDRESS_DECRYPTION_SECRET: '',
   SHIPSTATION_API_KEY: '',
+  SHIPSTATION_SHIP_FROM: '',
   STRIPE_SECRET_KEY: '',
   STRIPE_RESTRICTED_KEY: '',
   STRIPE_SECRET_KEY_LIVE: '',
@@ -1245,6 +1246,7 @@ test('validation environments exclude deployment and provider credentials', () =
     FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV,
     ADDRESS_DECRYPTION_SECRET: '',
     SHIPSTATION_API_KEY: '',
+    SHIPSTATION_SHIP_FROM: '',
     STRIPE_SECRET_KEY: '',
     STRIPE_RESTRICTED_KEY: '',
     STRIPE_SECRET_KEY_LIVE: '',
@@ -1264,6 +1266,7 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(validation.FIRESTORE_SERVICE_ACCOUNT_JSON, undefined);
   assert.equal(validation.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, undefined);
   assert.equal(validation.SHIPSTATION_API_KEY, undefined);
+  assert.equal(validation.SHIPSTATION_SHIP_FROM, undefined);
   assert.equal(validation.GOOGLE_APPLICATION_CREDENTIALS, undefined);
   assert.equal(validation.VITE_HELIUS_API_KEY, undefined);
   assert.equal(validation.WRANGLER_OUTPUT_FILE_PATH, undefined);
@@ -1634,6 +1637,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         '/fulfillment/order-status',
         '/fulfillment/manual-review-checkouts',
         '/fulfillment/shipstation-label',
+        '/fulfillment/shipstation-rates',
       ].includes(pathname)) {
         headers.set('Access-Control-Allow-Origin', 'https://mons.shop');
         return {
