@@ -47,6 +47,8 @@ export type ShipStationAddress = {
   postal_code: string;
   country_code: string;
   address_residential_indicator: 'yes' | 'no' | 'unknown';
+  instructions?: string;
+  geolocation?: Array<{ type: 'what3words'; value: string }>;
 };
 
 export type ShipStationPackage = {
@@ -59,6 +61,7 @@ export type ShipStationShipment = {
   shipment_status?: string;
   external_shipment_id?: string | null;
   shipment_number?: string | null;
+  ship_to?: ShipStationAddress;
   packages?: unknown[];
   errors?: unknown;
 };
@@ -109,17 +112,62 @@ function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function shipStationAddressValue(value: unknown): ShipStationAddress | null {
+  const raw = record(value);
+  const name = stringValue(raw.name);
+  const addressLine1 = stringValue(raw.address_line1);
+  const cityLocality = stringValue(raw.city_locality);
+  const stateProvince = stringValue(raw.state_province);
+  const postalCode = stringValue(raw.postal_code);
+  const countryCode = stringValue(raw.country_code).toUpperCase();
+  const residentialIndicator = stringValue(raw.address_residential_indicator);
+  if (
+    !name ||
+    !addressLine1 ||
+    !cityLocality ||
+    !postalCode ||
+    !/^[A-Z]{2}$/.test(countryCode) ||
+    !['yes', 'no', 'unknown'].includes(residentialIndicator)
+  ) return null;
+  const geolocation = Array.isArray(raw.geolocation)
+    ? raw.geolocation.flatMap((candidate): Array<{ type: 'what3words'; value: string }> => {
+        const location = record(candidate);
+        const type = stringValue(location.type);
+        const locationValue = stringValue(location.value);
+        return type === 'what3words' && locationValue ? [{ type, value: locationValue }] : [];
+      }).slice(0, 10)
+    : [];
+  return {
+    name,
+    ...(stringValue(raw.company_name) ? { company_name: stringValue(raw.company_name) } : {}),
+    ...(stringValue(raw.phone) ? { phone: stringValue(raw.phone) } : {}),
+    ...(stringValue(raw.email) ? { email: stringValue(raw.email) } : {}),
+    address_line1: addressLine1,
+    ...(stringValue(raw.address_line2) ? { address_line2: stringValue(raw.address_line2) } : {}),
+    ...(stringValue(raw.address_line3) ? { address_line3: stringValue(raw.address_line3) } : {}),
+    city_locality: cityLocality,
+    state_province: stateProvince,
+    postal_code: postalCode,
+    country_code: countryCode,
+    address_residential_indicator: residentialIndicator as ShipStationAddress['address_residential_indicator'],
+    ...(stringValue(raw.instructions) ? { instructions: stringValue(raw.instructions) } : {}),
+    ...(geolocation.length ? { geolocation } : {}),
+  };
+}
+
 function shipmentValue(value: unknown): ShipStationShipment {
   const raw = record(value);
   const shipmentId = stringValue(raw.shipment_id);
   const shipmentStatus = stringValue(raw.shipment_status);
   const externalShipmentId = raw.external_shipment_id === null ? null : stringValue(raw.external_shipment_id);
   const shipmentNumber = raw.shipment_number === null ? null : stringValue(raw.shipment_number);
+  const shipTo = shipStationAddressValue(raw.ship_to);
   return {
     ...(shipmentId ? { shipment_id: shipmentId } : {}),
     ...(shipmentStatus ? { shipment_status: shipmentStatus } : {}),
     ...(externalShipmentId === null || externalShipmentId ? { external_shipment_id: externalShipmentId } : {}),
     ...(shipmentNumber === null || shipmentNumber ? { shipment_number: shipmentNumber } : {}),
+    ...(shipTo ? { ship_to: shipTo } : {}),
     ...(Array.isArray(raw.packages) ? { packages: raw.packages } : {}),
     ...(raw.errors !== undefined ? { errors: raw.errors } : {}),
   };
@@ -658,14 +706,19 @@ async function readBoundedText(response: Response, maxBytes: number, signal: Abo
 
 function errorMessage(value: unknown, fallback: string): string {
   const errors = Array.isArray(record(value).errors) ? record(value).errors as unknown[] : [];
-  const codes = Array.from(new Set(errors.flatMap((entry) => {
-    const code = stringValue(record(entry).error_code);
-    return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(code) ? [code] : [];
+  const details = Array.from(new Set(errors.flatMap((entry) => {
+    const error = record(entry);
+    const code = stringValue(error.error_code);
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(code)) return [];
+    const fieldName = stringValue(error.field_name);
+    const safeFieldName = /^[A-Za-z][A-Za-z0-9_.\[\]-]{0,127}$/.test(fieldName) ? fieldName : '';
+    return [`${code}${safeFieldName ? ` (${safeFieldName})` : ''}`];
   }))).slice(0, 5);
+  const codes = details.map((detail) => detail.split(' (', 1)[0]);
   if (codes.some((code) => /balance|fund|postage/i.test(code))) {
     return 'Insufficient ShipStation funds. Add funds or enable auto-funding in ShipStation.';
   }
-  return codes.length ? codes.join('; ') : fallback;
+  return details.length ? details.join('; ') : fallback;
 }
 
 function errorForStatus(status: number, message: string): ShipStationRatesProviderError {
@@ -736,7 +789,7 @@ export async function getShipStationShipmentById(
   apiKey: string,
   shipmentId: string,
   options: ShipStationRatesClientOptions = {},
-): Promise<ShipStationShipment> {
+): Promise<ShipStationShipment & { ship_to: ShipStationAddress; packages: unknown[] }> {
   const { status, json, validJson } = await shipStationFetch(apiKey, `/shipments/${encodeURIComponent(shipmentId)}`, {
     method: 'GET',
   }, options);
@@ -744,10 +797,10 @@ export async function getShipStationShipmentById(
   if (!validJson) throw providerResponseError();
   const raw = record(json);
   const shipment = shipmentValue(Object.keys(record(raw.shipment)).length ? raw.shipment : raw);
-  if (stringValue(shipment.shipment_id) !== shipmentId || !Array.isArray(shipment.packages)) {
+  if (stringValue(shipment.shipment_id) !== shipmentId || !shipment.ship_to || !Array.isArray(shipment.packages)) {
     throw providerResponseError();
   }
-  return shipment;
+  return { ...shipment, ship_to: shipment.ship_to, packages: shipment.packages };
 }
 
 export function shipStationExternalId(dropId: string, deliveryId: number): string {

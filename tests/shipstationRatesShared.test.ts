@@ -15,6 +15,21 @@ import {
   updateShipStationShipment,
 } from '../functions/src/shared/shipstationRates.ts';
 
+const SHIP_TO = {
+  name: 'Manually Corrected Recipient',
+  company_name: 'Corrected Company',
+  email: 'corrected@example.com',
+  address_line1: '200 Corrected Ave',
+  address_line2: 'Suite 4',
+  city_locality: 'Istanbul',
+  state_province: 'IST',
+  postal_code: '34000',
+  country_code: 'TR',
+  address_residential_indicator: 'yes' as const,
+  instructions: 'Side door',
+  geolocation: [{ type: 'what3words', value: 'cats.with.thumbs' }],
+};
+
 test('shared ShipStation rates client is runtime-neutral and validates the origin secret', () => {
   const source = readFileSync(new URL('../functions/src/shared/shipstationRates.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /firebase-functions|HttpsError/);
@@ -85,6 +100,30 @@ test('shared ShipStation shipment client rejects incomplete and mismatched succe
       (error) => error instanceof ShipStationRatesProviderError && error.code === 'unavailable',
     );
     assert.equal(calls, 1);
+  }
+  await assert.rejects(
+    getShipStationShipmentById('api-key', 'shipment-1', {
+      fetch: async () => Response.json({ shipment_id: 'shipment-1', packages: [] }),
+    }),
+    (error) => error instanceof ShipStationRatesProviderError && error.code === 'unavailable',
+  );
+});
+
+test('shared ShipStation shipment client retains sanitized destinations from wrapped and unwrapped responses', async () => {
+  for (const wrapped of [false, true]) {
+    const raw = {
+      shipment_id: 'shipment-1',
+      ship_to: {
+        ...SHIP_TO,
+        name: ` ${SHIP_TO.name} `,
+        address_validation_status: 'verified',
+      },
+      packages: [],
+    };
+    const shipment = await getShipStationShipmentById('api-key', 'shipment-1', {
+      fetch: async () => Response.json(wrapped ? { shipment: raw } : raw),
+    });
+    assert.deepEqual(shipment.ship_to, SHIP_TO);
   }
 });
 
@@ -244,6 +283,37 @@ test('shared ShipStation shipment creation sanitizes provider failures and rejec
   );
 });
 
+test('shared ShipStation shipment errors include only safe field names', async () => {
+  await assert.rejects(
+    updateShipStationShipment('api-key', 'shipment-1', {}, {
+      fetch: async () => Response.json({
+        errors: [
+          {
+            error_code: 'field_value_required',
+            field_name: 'ship_to',
+            message: 'Recipient at 100 Private Street is missing',
+          },
+          {
+            error_code: 'invalid_field_value',
+            field_name: 'packages[0].weight.value',
+            message: 'Private package data',
+          },
+          {
+            error_code: 'field_value_required',
+            field_name: 'ship_to (100 Private Street)',
+            message: 'Private address data',
+          },
+        ],
+      }, { status: 400 }),
+    }),
+    (error) => error instanceof ShipStationRatesProviderError &&
+      error.code === 'failed-precondition' &&
+      error.message.includes('field_value_required (ship_to)') &&
+      error.message.includes('invalid_field_value (packages[0].weight.value)') &&
+      !error.message.includes('Private'),
+  );
+});
+
 test('shared ShipStation parsing never coerces provider numbers', async () => {
   assert.equal(shipStationPackageInputFromShipmentPackage({
     weight: { value: '4', unit: 'ounce' },
@@ -371,7 +441,7 @@ test('shared ShipStation rates client injects fetch and bounds provider response
       requestedUrl = String(input);
       assert.equal(new Headers(init?.headers).get('API-Key'), 'api-key');
       assert.equal(init?.redirect, 'manual');
-      return Response.json({ shipment_id: 'shipment-1', packages: [] });
+      return Response.json({ shipment_id: 'shipment-1', ship_to: SHIP_TO, packages: [] });
     },
   });
   assert.equal(requestedUrl, 'https://api.shipstation.com/v2/shipments/shipment-1');

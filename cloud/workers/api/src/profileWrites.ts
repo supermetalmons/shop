@@ -2476,6 +2476,7 @@ async function getFulfillmentShipStationRates(
       );
     }
     const updatedShipment = await updateShipStationShipment(apiKey, shipmentId, {
+      ship_to: shipment.ship_to,
       ship_from: shipFrom,
       ...(packageOverride ? { packages: buildShipStationPackages(1, packageOverride) } : {}),
     }, { fetch: common.providerFetch, signal: common.signal });

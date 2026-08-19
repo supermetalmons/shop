@@ -41,6 +41,15 @@ const SHIP_FROM = {
   country_code: 'US',
   address_residential_indicator: 'no',
 };
+const SHIP_TO = {
+  name: 'Ivan',
+  address_line1: '100 Main St',
+  city_locality: 'Istanbul',
+  state_province: 'IST',
+  postal_code: '34000',
+  country_code: 'TR',
+  address_residential_indicator: 'yes',
+};
 const LABEL_PURCHASE_BODY = {
   dropId: 'card_nft_2',
   deliveryId: 7,
@@ -2146,6 +2155,13 @@ test('ShipStation label purchase route never charges after its Firestore claim i
 test('ShipStation rates route refreshes a single package without replacing its ShipStation address', async () => {
   const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
   const shipStationCalls: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+  const manuallyCorrectedShipTo = {
+    ...SHIP_TO,
+    name: 'Manually Corrected Recipient',
+    address_line1: '200 Corrected Ave',
+    address_line2: 'Suite 4',
+    instructions: 'Side door',
+  };
   let claimId = '';
   const currentOrder = () => orderDocument({
     addressSnapshot: {
@@ -2172,11 +2188,8 @@ test('ShipStation rates route refreshes a single package without replacing its S
         return Response.json({
           shipment_id: 'shipment-1',
           ship_to: {
-            name: 'Manually Corrected Recipient',
-            address_line1: '200 Corrected Ave',
-            city_locality: 'Istanbul',
-            postal_code: '34000',
-            country_code: 'TR',
+            ...manuallyCorrectedShipTo,
+            address_validation_status: 'verified',
           },
           packages: [{
             weight: { value: 4, unit: 'ounce' },
@@ -2187,13 +2200,7 @@ test('ShipStation rates route refreshes a single package without replacing its S
       if (url.pathname === '/v2/shipments/shipment-1' && method === 'PUT') {
         return Response.json({
           shipment_id: 'shipment-1',
-          ship_to: {
-            name: 'Manually Corrected Recipient',
-            address_line1: '200 Corrected Ave',
-            city_locality: 'Istanbul',
-            postal_code: '34000',
-            country_code: 'TR',
-          },
+          ship_to: manuallyCorrectedShipTo,
           packages: [{
             weight: { value: 8, unit: 'ounce' },
             dimensions: { length: 10, width: 8, height: 3, unit: 'inch' },
@@ -2265,6 +2272,7 @@ test('ShipStation rates route refreshes a single package without replacing its S
   assert.deepEqual(payload.rates[0].totalAmount, { currency: 'usd', amount: 11.5 });
   const shipmentUpdate = shipStationCalls.find((call) => call.method === 'PUT');
   assert.deepEqual(shipmentUpdate?.body, {
+    ship_to: manuallyCorrectedShipTo,
     ship_from: SHIP_FROM,
     packages: [{
       weight: { value: 8, unit: 'ounce' },
@@ -2331,6 +2339,7 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
         if (url.pathname === '/v2/shipments/shipment-1' && method === 'GET') {
           return Response.json({
             shipment_id: 'shipment-1',
+            ship_to: SHIP_TO,
             packages: [{
               weight: { value: packageWeight, unit: 'ounce' },
               dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
@@ -2456,6 +2465,7 @@ test('ShipStation rates route maps rate limits, timeouts, and oversized response
         if (url.pathname === '/v2/shipments/shipment-1') {
           return Response.json({
             shipment_id: 'shipment-1',
+            ship_to: SHIP_TO,
             packages: [{
               weight: { value: 4, unit: 'ounce' },
               dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
@@ -2569,6 +2579,7 @@ test('ShipStation rates route rejects same-id label state changes', async () => 
       if (url.pathname === '/v2/shipments/shipment-1') {
         return Response.json({
           shipment_id: 'shipment-1',
+          ship_to: SHIP_TO,
           packages: [{
             weight: { value: 4, unit: 'ounce' },
             dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
@@ -2633,6 +2644,7 @@ test('ShipStation rates route stops when an updated shipment becomes multi-packa
       if (url.pathname === '/v2/shipments/shipment-1' && method === 'GET') {
         return Response.json({
           shipment_id: 'shipment-1',
+          ship_to: SHIP_TO,
           packages: [{
             weight: { value: 4, unit: 'ounce' },
             dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
@@ -2715,6 +2727,7 @@ test('ShipStation rates route rejects concurrent label, purchase, and claim chan
         if (url.pathname === '/v2/shipments/shipment-1') {
           return Response.json({
             shipment_id: 'shipment-1',
+            ship_to: SHIP_TO,
             packages: [{
               weight: { value: 4, unit: 'ounce' },
               dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
@@ -2787,6 +2800,7 @@ test('ShipStation rates route preserves purchase, package-count, and refresh-cla
       if (url.pathname === '/v2/shipments/shipment-1') {
         return Response.json({
           shipment_id: 'shipment-1',
+          ship_to: SHIP_TO,
           packages: scenario === 'multi'
             ? [{ weight: {}, dimensions: {} }, { weight: {}, dimensions: {} }]
             : [{
@@ -2867,6 +2881,7 @@ test('ShipStation rates route safely releases its own claim after an upstream fa
       if (url.pathname === '/v2/shipments/shipment-1' && (init?.method || 'GET') === 'GET') {
         return Response.json({
           shipment_id: 'shipment-1',
+          ship_to: SHIP_TO,
           packages: [{
             weight: { value: 4, unit: 'ounce' },
             dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
@@ -3075,6 +3090,7 @@ test('ShipStation rates route never releases a replacement claim', async () => {
       if (url.pathname === '/v2/shipments/shipment-1' && (init?.method || 'GET') === 'GET') {
         return Response.json({
           shipment_id: 'shipment-1',
+          ship_to: SHIP_TO,
           packages: [{
             weight: { value: 4, unit: 'ounce' },
             dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
