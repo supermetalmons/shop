@@ -18,7 +18,6 @@ import {
 import {
   buildShipStationPackages as buildSharedShipStationPackages,
   getShipStationRateById as getSharedShipStationRateById,
-  getShipStationShipmentById as getSharedShipStationShipmentById,
   getShipStationShipmentRates as getSharedShipStationShipmentRates,
   parseShipStationShipFrom as parseSharedShipStationShipFrom,
   parseShipStationShipTo as parseSharedShipStationShipTo,
@@ -193,13 +192,6 @@ async function withFirebaseRatesError<T>(operation: () => Promise<T>): Promise<T
     if (error instanceof ShipStationRatesProviderError) throw new HttpsError(error.code, error.message);
     throw error;
   }
-}
-
-export async function getShipStationShipmentById(
-  apiKey: string,
-  shipmentId: string,
-): Promise<ShipStationShipment> {
-  return withFirebaseRatesError(() => getSharedShipStationShipmentById(apiKey, shipmentId));
 }
 
 export async function updateShipStationShipment(

@@ -418,6 +418,7 @@ test('migrated profile writes are absent from Firebase exports and deployment se
     'updateFulfillmentStatus',
     'updateFulfillmentAddress',
     'getFulfillmentShipStationLabel',
+    'getFulfillmentShipStationRates',
   ]) {
     assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
     assert.doesNotMatch(packageJson, new RegExp(`functions:${name}(?:,|\\")`));
@@ -426,9 +427,6 @@ test('migrated profile writes are absent from Firebase exports and deployment se
     scripts['decommission:firebase-fulfillment-callables'],
     /firebase functions:delete updateFulfillmentAddress getFulfillmentShipStationLabel --project mons-shop --force/,
   );
-  assert.match(functionsSource, /export const getFulfillmentShipStationRates\b/);
-  assert.match(packageJson, /functions:getFulfillmentShipStationRates(?:,|\")/);
-  assert.doesNotMatch(scripts['decommission:firebase-fulfillment-callables'], /getFulfillmentShipStationRates/);
 });
 
 test('Firebase label persistence replaces the complete label map', () => {
