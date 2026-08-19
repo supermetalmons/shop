@@ -153,22 +153,37 @@ test('shared ShipStation customs and products preserve complete corrections and 
     quantity: 2,
     value: { amount: 123.45, currency: 'eur' },
     weight: { value: 11, unit: 'ounce' },
-    harmonized_tariff_code: '6109.10',
+    harmonized_tariff_code: '6109-10',
     country_of_origin: 'PT',
     unit_of_measure: 'each',
-    sku: 'manual-shirt',
+    sku: 'manual-shirt-2026',
     sku_description: 'Manual SKU description',
     mid_code: 'PTMANUAL123',
     product_url: 'https://mons.shop/manual-shirt',
     vat_rate: 0.2,
+    dangerous_goods: [{ id_number: 'UN1234', quantity: 1 }],
+    manufacturer_product_id_type: 'gtin',
+    manufacturer_product_id: '012345678905',
+    manufacturer_ns_product_id: 'MANUAL-2026',
+    cpsc_certificates: [{ certifier_id: 'CERT-12345', certificate_version_id: 'v1.0' }],
   }];
   assert.deepEqual(shipStationPackageProducts({ products }), products);
+  const nullableProductFields = shipStationPackageProducts({
+    products: [{ ...products[0], dangerous_goods: null, cpsc_certificates: null }],
+  });
+  assert.ok(nullableProductFields);
+  assert.equal(nullableProductFields[0].dangerous_goods, undefined);
+  assert.equal(nullableProductFields[0].cpsc_certificates, undefined);
   for (const malformed of [
     [],
     [{ ...products[0], quantity: 0 }],
     [{ ...products[0], harmonized_tariff_code: '' }],
+    [{ ...products[0], harmonized_tariff_code: 'invalid' }],
+    [{ ...products[0], harmonized_tariff_code: '6109..10' }],
     [{ ...products[0], country_of_origin: 'Portugal' }],
     [{ ...products[0], sku: '' }],
+    [{ ...products[0], sku: 'x'.repeat(21) }],
+    [{ ...products[0], dangerous_goods: { id_number: 'UN1234' } }],
     [{ ...products[0], value: { amount: 0, currency: 'eur' } }],
   ]) {
     assert.equal(shipStationPackageProducts({ products: malformed }), null);

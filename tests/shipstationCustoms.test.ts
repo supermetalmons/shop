@@ -79,9 +79,9 @@ test('physical customs quantities expand boxes and count loose products individu
   assert.equal(shipStationPhysicalProductQuantity('little_swag_boxes', 3, 2), 11);
   assert.equal(shipStationPhysicalProductQuantity('poncho_drifella', 2, 1), 3);
   assert.equal(shipStationPhysicalProductQuantity('clear_cards_devnet_v3', 2, 1), 3);
-  assert.equal(shipStationPhysicalProductQuantity('drifella_shirt', 2, 3), 3);
-  assert.equal(shipStationPhysicalProductQuantity('little_swag_hoodies', 2, 3), 3);
-  assert.equal(shipStationPhysicalProductQuantity('card_nft_binder', 2, 3), 3);
+  assert.equal(shipStationPhysicalProductQuantity('drifella_shirt', 2, 3), 5);
+  assert.equal(shipStationPhysicalProductQuantity('little_swag_hoodies', 2, 3), 5);
+  assert.equal(shipStationPhysicalProductQuantity('card_nft_binder', 2, 3), 5);
   assert.equal(shipStationPhysicalProductQuantity('unknown', 2, 3), 3);
 });
 
@@ -102,19 +102,19 @@ test('customs declarations use family defaults and add one ounce of packaging', 
   });
   assert.deepEqual(buildShipStationCustomsDeclaration('drifella_shirt_devnet', 4, 2), {
     contentDescription: 'Printed cotton T-shirt',
-    minimumPackageWeightOunces: 21,
+    minimumPackageWeightOunces: 61,
     product: {
       description: 'Printed cotton T-shirt',
-      quantity: 2,
+      quantity: 6,
       value: { amount: 144, currency: 'usd' },
       weight: { value: 10, unit: 'ounce' },
       harmonized_tariff_code: '6109.10',
       country_of_origin: 'US',
       sku: 'drifella-shirt',
     },
-    totalNetWeightOunces: 20,
+    totalNetWeightOunces: 60,
   });
   assert.equal(shipStationCustomsCatalogEntry('card_nft_binder_devnet')?.sku, 'card-binder');
-  assert.equal(buildShipStationCustomsDeclaration('drifella_shirt', 2, 0), undefined);
+  assert.equal(buildShipStationCustomsDeclaration('drifella_shirt', 2, 0)?.product.quantity, 2);
   assert.equal(buildShipStationCustomsDeclaration('unknown', 2, 1), undefined);
 });

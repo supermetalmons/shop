@@ -827,7 +827,7 @@ test('ShipStation shipment route raises an international default parcel above de
           encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
           countryCode: 'TR',
         },
-        items: [{ kind: 'dude', refId: 1 }],
+        items: [{ kind: 'box', refId: 1 }],
         shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
       }));
     }
@@ -2522,7 +2522,7 @@ test('ShipStation rates route preserves manual declarations, repairs zeroed pack
       weight: { value: 20, unit: 'ounce' },
       dimensions: { length: 14, width: 10, height: 4, unit: 'inch' },
       insured_value: { amount: 50, currency: 'usd' },
-      label_messages: { reference1: 'Manual reference' },
+      label_messages: { reference1: 'Manual reference', reference2: null, reference3: null },
       external_package_id: 'parcel-7',
       content_description: 'Manual corrected contents',
       products: [manualProduct],
@@ -2537,7 +2537,7 @@ test('ShipStation rates route preserves manual declarations, repairs zeroed pack
       package_id: 'se-3',
       package_code: 'package',
       insured_value: { amount: 50, currency: 'usd' },
-      label_messages: { reference1: 'Manual reference' },
+      label_messages: { reference1: 'Manual reference', reference2: null, reference3: null },
       external_package_id: 'parcel-7',
       content_description: 'Manual corrected contents',
       products: [manualProduct],
@@ -2702,8 +2702,32 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
     warning_messages: [],
     error_messages: [],
   };
-  const run = async (mode: 'fresh' | 'resumed' | 'working') => {
+  const run = async (mode: 'fresh' | 'resumed' | 'changed' | 'working') => {
     const packageWeight = mode === 'resumed' ? 1616 : 4;
+    const product = {
+      description: 'Printed collectible art card',
+      quantity: 1,
+      value: { amount: 14.67, currency: 'usd' },
+      weight: { value: 0.2, unit: 'ounce' },
+      harmonized_tariff_code: '4911.99',
+      country_of_origin: 'US',
+      sku: 'card-nft-2',
+    };
+    const inputHash = await profileWriteTestHooks.shipStationRateInputHash({
+      ship_to: SHIP_TO,
+      ship_from: SHIP_FROM,
+      packages: [{
+        content_description: 'Printed collectible art card',
+        products: [product],
+        weight: { value: packageWeight, unit: 'ounce' },
+        dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
+      }],
+      customs: {
+        contents: 'merchandise',
+        non_delivery: 'return_to_sender',
+        terms_of_trade_code: 'dap',
+      },
+    });
     let claimId = '';
     let pollCalls = 0;
     const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
@@ -2728,15 +2752,7 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
               content_description: 'Printed collectible art card',
               weight: { value: packageWeight, unit: 'ounce' },
               dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
-              products: [{
-                description: 'Printed collectible art card',
-                quantity: 1,
-                value: { amount: 14.67, currency: 'usd' },
-                weight: { value: 0.2, unit: 'ounce' },
-                harmonized_tariff_code: '4911.99',
-                country_of_origin: 'US',
-                sku: 'card-nft-2',
-              }],
+              products: [product],
             }],
           });
         }
@@ -2763,7 +2779,7 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
         }
         if (url.pathname === '/v2/shipments/shipment-1/rates') {
           pollCalls += 1;
-          const completed = mode === 'resumed' || (mode === 'fresh' && pollCalls === 3);
+          const completed = mode === 'resumed' || mode === 'changed' || (mode === 'fresh' && pollCalls === 3);
           return Response.json([{
             shipment_id: 'shipment-1',
             rate_request_id: 'request-1',
@@ -2785,12 +2801,13 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
             shipmentId: 'shipment-1',
             package: { length: 12, width: 9, height: 2, weight: packageWeight },
             packageCount: 1,
-            ...(mode === 'resumed' ? {
+            ...(mode === 'resumed' || mode === 'changed' ? {
               rateRequest: {
                 requestId: 'request-1',
                 createdAt: '2026-08-19T00:00:00Z',
                 requestedAt: NOW_MS - 1_000,
                 shipmentId: 'shipment-1',
+                inputHash: mode === 'changed' ? '0'.repeat(64) : inputHash,
                 package: { length: 12, width: 9, height: 2, weight: packageWeight },
               },
             } : {}),
@@ -2832,6 +2849,11 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
   assert.deepEqual(resumed.delays, []);
   assert.equal(resumed.shipStationCalls.some((call) => call === 'GET /v2/carriers'), false);
   assert.equal(resumed.shipStationCalls.some((call) => call === 'POST /v2/rates'), false);
+
+  const changed = await run('changed');
+  assert.equal(changed.result.response.status, 200);
+  assert.equal(changed.shipStationCalls.some((call) => call === 'GET /v2/carriers'), true);
+  assert.equal(changed.shipStationCalls.some((call) => call === 'POST /v2/rates'), true);
 
   const working = await run('working');
   assert.equal(working.result.response.status, 502);

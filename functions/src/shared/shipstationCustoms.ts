@@ -97,7 +97,8 @@ export function shipStationPhysicalProductQuantity(
   looseItemCount: number,
 ): number {
   const drop = DEPLOYMENT_DROPS[normalizeDropId(dropId)];
-  const unitsPerBox = Math.max(0, Math.floor(Number(drop?.itemsPerBox) || 0));
+  const configuredUnitsPerBox = Math.max(0, Math.floor(Number(drop?.itemsPerBox) || 0));
+  const unitsPerBox = drop ? Math.max(1, configuredUnitsPerBox) : 0;
   const quantity = nonNegativeInteger(boxCount) * unitsPerBox + nonNegativeInteger(looseItemCount);
   return quantity;
 }

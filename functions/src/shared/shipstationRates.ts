@@ -66,6 +66,11 @@ export type ShipStationPackageProduct = {
   mid_code?: string;
   product_url?: string;
   vat_rate?: number;
+  dangerous_goods?: Record<string, unknown>[];
+  manufacturer_product_id_type?: 'undefined' | 'gtin' | 'ean' | 'isbn' | 'upc' | 'mpn' | 'sku';
+  manufacturer_product_id?: string;
+  manufacturer_ns_product_id?: string;
+  cpsc_certificates?: Record<string, unknown>[];
 };
 
 type ShipStationInvoiceAdditionalDetails = {
@@ -95,7 +100,11 @@ export type ShipStationPackage = {
   weight: { value: number; unit: 'ounce' };
   dimensions: { length: number; width: number; height: number; unit: 'inch' };
   insured_value?: { amount: number; currency: string };
-  label_messages?: { reference1?: string; reference2?: string; reference3?: string };
+  label_messages?: {
+    reference1: string | null;
+    reference2: string | null;
+    reference3: string | null;
+  };
   external_package_id?: string;
   content_description?: string;
   products?: ShipStationPackageProduct[];
@@ -265,21 +274,47 @@ function shipStationWeight(value: unknown): { value: number; unit: ShipStationWe
   return { value: weightValue, unit: unit as ShipStationWeightUnit };
 }
 
+function providerObjectList(value: unknown, maxItems: number): Record<string, unknown>[] | null {
+  if (!Array.isArray(value) || value.length > maxItems) return null;
+  if (!value.every((candidate) => candidate && typeof candidate === 'object' && !Array.isArray(candidate))) return null;
+  return value.map((candidate) => ({ ...candidate as Record<string, unknown> }));
+}
+
+function harmonizedTariffCode(value: unknown): string {
+  const normalized = boundedString(value, 32);
+  if (!/^\d+(?:[. -]\d+)*$/.test(normalized)) return '';
+  const digits = normalized.replace(/[. -]/g, '');
+  return /^\d{6,14}$/.test(digits) ? normalized : '';
+}
+
+const SHIPSTATION_MANUFACTURER_ID_TYPES = new Set<
+  NonNullable<ShipStationPackageProduct['manufacturer_product_id_type']>
+>(['undefined', 'gtin', 'ean', 'isbn', 'upc', 'mpn', 'sku']);
+
 function shipStationPackageProductValue(value: unknown): ShipStationPackageProduct | null {
   const raw = record(value);
   const description = boundedString(raw.description, 100);
   const quantity = finiteNumber(raw.quantity);
   const declaredValue = shipStationMoney(raw.value);
   const weight = shipStationWeight(raw.weight);
-  const harmonizedTariffCode = boundedString(raw.harmonized_tariff_code, 32);
+  const tariffCode = harmonizedTariffCode(raw.harmonized_tariff_code);
   const countryOfOrigin = stringValue(raw.country_of_origin).toUpperCase();
-  const unitOfMeasure = boundedString(raw.unit_of_measure, 50);
+  const unitOfMeasure = stringValue(raw.unit_of_measure);
   const sku = boundedString(raw.sku, 20);
-  const skuDescription = boundedString(raw.sku_description, 100);
-  const midCode = boundedString(raw.mid_code, 50);
-  const productUrlValue = boundedString(raw.product_url, 2_048);
-  const productUrl = /^https:\/\/[^\s]+$/i.test(productUrlValue) ? productUrlValue : '';
+  const skuDescription = stringValue(raw.sku_description);
+  const midCode = stringValue(raw.mid_code);
+  const productUrl = stringValue(raw.product_url);
   const vatRate = finiteNumber(raw.vat_rate);
+  const dangerousGoods = raw.dangerous_goods == null
+    ? undefined
+    : providerObjectList(raw.dangerous_goods, 100);
+  const manufacturerProductIdType = stringValue(raw.manufacturer_product_id_type) as
+    ShipStationPackageProduct['manufacturer_product_id_type'];
+  const manufacturerProductId = stringValue(raw.manufacturer_product_id);
+  const manufacturerNsProductId = stringValue(raw.manufacturer_ns_product_id);
+  const cpscCertificates = raw.cpsc_certificates == null
+    ? undefined
+    : providerObjectList(raw.cpsc_certificates, 100);
   if (
     !description ||
     quantity == null ||
@@ -289,15 +324,18 @@ function shipStationPackageProductValue(value: unknown): ShipStationPackageProdu
     declaredValue.amount <= 0 ||
     !weight ||
     !sku ||
-    !/^[0-9][0-9.]{3,31}$/.test(harmonizedTariffCode) ||
-    !/^[A-Z]{2}$/.test(countryOfOrigin)
+    !tariffCode ||
+    !/^[A-Z]{2}$/.test(countryOfOrigin) ||
+    dangerousGoods === null ||
+    cpscCertificates === null ||
+    (manufacturerProductIdType && !SHIPSTATION_MANUFACTURER_ID_TYPES.has(manufacturerProductIdType))
   ) return null;
   return {
     description,
     quantity,
     value: declaredValue,
     weight,
-    harmonized_tariff_code: harmonizedTariffCode,
+    harmonized_tariff_code: tariffCode,
     country_of_origin: countryOfOrigin,
     ...(unitOfMeasure ? { unit_of_measure: unitOfMeasure } : {}),
     sku,
@@ -305,6 +343,11 @@ function shipStationPackageProductValue(value: unknown): ShipStationPackageProdu
     ...(midCode ? { mid_code: midCode } : {}),
     ...(productUrl ? { product_url: productUrl } : {}),
     ...(vatRate != null && vatRate >= 0 ? { vat_rate: vatRate } : {}),
+    ...(dangerousGoods ? { dangerous_goods: dangerousGoods } : {}),
+    ...(manufacturerProductIdType ? { manufacturer_product_id_type: manufacturerProductIdType } : {}),
+    ...(manufacturerProductId ? { manufacturer_product_id: manufacturerProductId } : {}),
+    ...(manufacturerNsProductId ? { manufacturer_ns_product_id: manufacturerNsProductId } : {}),
+    ...(cpscCertificates ? { cpsc_certificates: cpscCertificates } : {}),
   };
 }
 
@@ -460,9 +503,9 @@ function shipStationWritablePackageSettings(value: unknown): Omit<ShipStationPac
     ...(insuredValue ? { insured_value: insuredValue } : {}),
     ...(reference1 || reference2 || reference3 ? {
       label_messages: {
-        ...(reference1 ? { reference1 } : {}),
-        ...(reference2 ? { reference2 } : {}),
-        ...(reference3 ? { reference3 } : {}),
+        reference1: reference1 || null,
+        reference2: reference2 || null,
+        reference3: reference3 || null,
       },
     } : {}),
     ...(externalPackageId ? { external_package_id: externalPackageId } : {}),

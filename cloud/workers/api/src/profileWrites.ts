@@ -2127,10 +2127,31 @@ type PendingShipStationRateRequest = {
   createdAt?: string;
 };
 
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number') return JSON.stringify(Number.isFinite(value) ? value : null);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (!isRecord(value)) return 'null';
+  return `{${Object.keys(value)
+    .filter((key) => value[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+    .join(',')}}`;
+}
+
+async function shipStationRateInputHash(value: unknown): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(canonicalJson(value)),
+  ));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function storedPendingShipStationRateRequest(
   value: unknown,
   shipmentId: string,
   parcel: ShipStationPackageInput,
+  inputHash: string,
   nowMs: number,
 ): PendingShipStationRateRequest | undefined {
   if (!isRecord(value)) return undefined;
@@ -2143,6 +2164,7 @@ function storedPendingShipStationRateRequest(
     storedShipmentId !== shipmentId ||
     !storedPackage ||
     !requestedAt ||
+    optionalString(value.inputHash) !== inputHash ||
     nowMs - requestedAt >= SHIPSTATION_RATE_REQUEST_TTL_MS ||
     storedPackage.length !== parcel.length ||
     storedPackage.width !== parcel.width ||
@@ -2224,6 +2246,7 @@ async function persistPendingShipStationRateRequest(args: {
   deliveryId: number;
   dropId: string;
   expected: ShipStationRateMutationExpectation;
+  inputHash: string;
   package: ShipStationPackageInput;
   request: PendingShipStationRateRequest;
   shipmentId: string;
@@ -2249,6 +2272,7 @@ async function persistPendingShipStationRateRequest(args: {
                   requestId: firestoreString(args.request.requestId),
                   ...(args.request.createdAt ? { createdAt: firestoreString(args.request.createdAt) } : {}),
                   shipmentId: firestoreString(args.shipmentId),
+                  inputHash: firestoreString(args.inputHash),
                   package: firestorePackage(args.package),
                 }),
               }),
@@ -2259,6 +2283,7 @@ async function persistPendingShipStationRateRequest(args: {
               'shipstation.rateRequest.requestId',
               'shipstation.rateRequest.createdAt',
               'shipstation.rateRequest.shipmentId',
+              'shipstation.rateRequest.inputHash',
               'shipstation.rateRequest.package',
             ],
           },
@@ -2278,6 +2303,7 @@ async function getCompletedShipStationRates(args: {
   deliveryId: number;
   dropId: string;
   expected: ShipStationRateMutationExpectation;
+  inputHash: string;
   package: ShipStationPackageInput;
   pendingRequest?: PendingShipStationRateRequest;
   shipmentId: string;
@@ -2300,6 +2326,7 @@ async function getCompletedShipStationRates(args: {
       deliveryId: args.deliveryId,
       dropId: args.dropId,
       expected: args.expected,
+      inputHash: args.inputHash,
       package: args.package,
       request: expectedRequest,
       shipmentId: args.shipmentId,
@@ -2567,7 +2594,7 @@ async function getFulfillmentShipStationRates(
       repairedShipment ||= !shipment.customs || !currentProducts || !currentContentDescription;
       requireShipStationPackageWeight(resolvedPackage, shipStationProductsTotalWeightOunces(products));
     }
-    const updatedShipment = await updateShipStationShipment(apiKey, shipmentId, {
+    const rateInput = {
       ship_to: shipment.ship_to,
       ship_from: shipFrom,
       packages: buildShipStationPackages(1, resolvedPackage, {
@@ -2576,7 +2603,14 @@ async function getFulfillmentShipStationRates(
         ...(contentDescription ? { contentDescription } : {}),
       }),
       ...(customs ? { customs } : {}),
-    }, { fetch: common.providerFetch, signal: common.signal });
+    };
+    const inputHash = await shipStationRateInputHash(rateInput);
+    const updatedShipment = await updateShipStationShipment(
+      apiKey,
+      shipmentId,
+      rateInput,
+      { fetch: common.providerFetch, signal: common.signal },
+    );
     const updatedPackageDetails = shipStationPackageDetails(updatedShipment);
     if (updatedPackageDetails.packageCount !== 1) {
       await persistUnsupportedShipStationPackageCount({
@@ -2648,6 +2682,7 @@ async function getFulfillmentShipStationRates(
           shipStationState(claimedOrder).rateRequest,
           shipmentId,
           storedPackage,
+          inputHash,
           common.nowMs,
         );
     const rateResponse = await getCompletedShipStationRates({
@@ -2656,6 +2691,7 @@ async function getFulfillmentShipStationRates(
       deliveryId: body.deliveryId,
       dropId,
       expected: claimedExpectation,
+      inputHash,
       package: storedPackage,
       ...(pendingRateRequest ? { pendingRequest: pendingRateRequest } : {}),
       shipmentId,
@@ -2879,4 +2915,5 @@ export async function handleProfileWriteRequest(
 
 export const profileWriteTestHooks = {
   firestoreAutoId,
+  shipStationRateInputHash,
 };
