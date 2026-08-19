@@ -355,20 +355,21 @@ async function createStripeProviderSession(
   request: StripeCheckoutProviderRequest,
   mode: StripeCheckoutMode,
   env: CheckoutEnv,
-  providerFetch: ProfileProviderFetch,
+  _providerFetch: ProfileProviderFetch,
   signal: AbortSignal,
 ): Promise<StripeCheckoutProviderResponse> {
   const keys = stripeKeys(env, mode);
   if (!keys.length) throw new StripeCheckoutSessionError('failed-precondition', `Stripe ${mode} key is not configured.`);
   let lastCredentialError: unknown;
-  const fetchWithSignal: typeof fetch = (input, init) => providerFetch(input, { ...init, signal });
   for (const key of keys) {
     try {
+      if (signal.aborted) throw signal.reason;
       const stripe = new Stripe(key, {
-        httpClient: Stripe.createFetchHttpClient(fetchWithSignal),
+        httpClient: Stripe.createFetchHttpClient(),
         maxNetworkRetries: 1,
         timeout: 20_000,
       });
+      if (signal.aborted) throw signal.reason;
       const session = await stripe.checkout.sessions.create({
         mode: request.mode,
         automatic_tax: { enabled: request.automaticTax },
@@ -398,6 +399,15 @@ async function createStripeProviderSession(
       if (error instanceof StripeCheckoutSessionError) throw error;
       if (!stripeCredentialError(error)) {
         if (signal.aborted) throw signal.reason;
+        const record = isRecord(error) ? error : {};
+        const raw = isRecord(record.raw) ? record.raw : {};
+        console.warn({
+          event: 'stripe_checkout_provider_error',
+          mode,
+          type: String(record.type || record.rawType || record.name || 'StripeProviderError'),
+          statusCode: Number(record.statusCode ?? raw.statusCode) || undefined,
+          code: typeof record.code === 'string' ? record.code : undefined,
+        });
         throw new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.');
       }
       lastCredentialError = error;
@@ -509,13 +519,21 @@ export async function handleStripeCheckoutSession(
       requireFulfillmentPrerequisites: dependencies.requireFulfillmentPrerequisites ||
         ((config) => requireFulfillmentPrerequisites(env, config)),
       createProviderSession: (providerRequest, mode) =>
-        (dependencies.createProviderSession || createStripeProviderSession)(
-          providerRequest,
-          mode,
-          env,
-          trackedFetch,
-          controller.signal,
-        ),
+        (async () => {
+          const startedAt = performance.now();
+          metrics.upstreamCalls += 1;
+          try {
+            return await (dependencies.createProviderSession || createStripeProviderSession)(
+              providerRequest,
+              mode,
+              env,
+              trackedFetch,
+              controller.signal,
+            );
+          } finally {
+            metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
+          }
+        })(),
       persistCheckout: dependencies.persistCheckout ||
         ((path, document) => persistCheckoutDocument(
           path,
