@@ -12,6 +12,10 @@ export type ShipStationLabelResult = {
   downloadUrl?: string;
 };
 
+export type ShipStationLabelVoidResult = {
+  alreadyVoided: boolean;
+};
+
 export type ShipStationLabelProviderErrorCode =
   | 'failed-precondition'
   | 'resource-exhausted'
@@ -258,7 +262,11 @@ export function shipStationErrorMessage(value: unknown, fallback: string): strin
   return codes.length ? codes.join('; ') : fallback;
 }
 
-function errorForStatus(status: number, message: string): ShipStationLabelProviderError {
+function errorForStatus(
+  status: number,
+  message: string,
+  operation = 'shipment',
+): ShipStationLabelProviderError {
   if (status === 401 || status === 403) {
     return new ShipStationLabelProviderError('failed-precondition', `ShipStation rejected the API key: ${message}`);
   }
@@ -268,13 +276,13 @@ function errorForStatus(status: number, message: string): ShipStationLabelProvid
   if (status >= 500) {
     return new ShipStationLabelProviderError('unavailable', `ShipStation is unavailable: ${message}`);
   }
-  return new ShipStationLabelProviderError('failed-precondition', `ShipStation rejected the shipment: ${message}`);
+  return new ShipStationLabelProviderError('failed-precondition', `ShipStation rejected the ${operation}: ${message}`);
 }
 
 async function shipStationLabelFetch(
   apiKey: string,
   path: string,
-  init: { method: 'GET' | 'POST'; body?: unknown },
+  init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown },
   options: ShipStationLabelClientOptions,
 ): Promise<{ status: number; json: unknown }> {
   const providerFetch = options.fetch ?? fetch;
@@ -405,6 +413,53 @@ export async function createShipStationLabelFromRate(
     throw new ShipStationLabelProviderError('internal', 'ShipStation returned an invalid label');
   }
   return result;
+}
+
+function shipStationLabelVoidRejectionMessage(reasonCode: string): string {
+  if (reasonCode === 'label_already_used') {
+    return 'This label has already been used and cannot be voided.';
+  }
+  if (reasonCode === 'label_not_found_within_void_period') {
+    return 'This label is outside the carrier\'s allowed void period.';
+  }
+  if (reasonCode === 'contact_carrier') {
+    return 'Contact the carrier to void this label.';
+  }
+  return 'ShipStation did not approve the label void request.';
+}
+
+export async function voidShipStationLabel(
+  apiKey: string,
+  labelId: string,
+  options: ShipStationLabelClientOptions = {},
+): Promise<ShipStationLabelVoidResult> {
+  const { status, json } = await shipStationLabelFetch(
+    apiKey,
+    `/labels/${encodeURIComponent(labelId)}/void`,
+    { method: 'PUT' },
+    options,
+  );
+  if (status === 408) {
+    throw new ShipStationLabelProviderError('deadline-exceeded', 'ShipStation request timed out');
+  }
+  if (status < 200 || status >= 300) {
+    throw errorForStatus(
+      status,
+      shipStationErrorMessage(json, `HTTP ${status}`),
+      'label void request',
+    );
+  }
+  const raw = record(json);
+  if (typeof raw.approved !== 'boolean') {
+    throw new ShipStationLabelProviderError('internal', 'ShipStation returned an invalid label void response');
+  }
+  if (raw.approved) return { alreadyVoided: false };
+  const reasonCode = stringValue(raw.reason_code);
+  if (reasonCode === 'label_already_voided') return { alreadyVoided: true };
+  throw new ShipStationLabelProviderError(
+    'failed-precondition',
+    shipStationLabelVoidRejectionMessage(reasonCode),
+  );
 }
 
 export async function adoptOrPurchaseShipStationLabel(

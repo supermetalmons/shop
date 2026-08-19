@@ -1638,6 +1638,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         '/fulfillment/manual-review-checkouts',
         '/fulfillment/shipstation-label',
         '/fulfillment/shipstation-label-purchase',
+        '/fulfillment/shipstation-label-void',
         '/fulfillment/shipstation-rates',
         '/fulfillment/shipstation-shipment',
       ].includes(pathname)) {

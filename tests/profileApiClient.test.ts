@@ -187,6 +187,7 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
     ['updateFulfillmentStatus', '/fulfillment/order-status'],
     ['getFulfillmentShipStationLabel', '/fulfillment/shipstation-label'],
     ['purchaseFulfillmentShipStationLabel', '/fulfillment/shipstation-label-purchase'],
+    ['voidFulfillmentShipStationLabel', '/fulfillment/shipstation-label-void'],
     ['getFulfillmentShipStationRates', '/fulfillment/shipstation-rates'],
     ['addFulfillmentOrderToShipStation', '/fulfillment/shipstation-shipment'],
   ] as const) {
@@ -199,6 +200,7 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
   }
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label'), 50_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label-purchase'), 65_000);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label-void'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-rates'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-shipment'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/order-address'), 20_000);
@@ -317,6 +319,28 @@ test('migrated write response validators accept only exact public contracts', ()
   assert.equal(profileApiTestHooks.parsePurchaseFulfillmentShipStationLabel({
     ...shipStationLabelPurchase,
     alreadyPurchased: 'false',
+  }), null);
+
+  const shipStationLabelVoid = {
+    deliveryId: 7,
+    shipmentId: 'shipment-1',
+    label: { ...shipStationLabel.label, status: 'voided' },
+  };
+  assert.deepEqual(
+    profileApiTestHooks.parseVoidFulfillmentShipStationLabel(shipStationLabelVoid),
+    shipStationLabelVoid,
+  );
+  assert.equal(profileApiTestHooks.parseVoidFulfillmentShipStationLabel({
+    ...shipStationLabelVoid,
+    label: { ...shipStationLabelVoid.label, status: 'completed' },
+  }), null);
+  assert.equal(profileApiTestHooks.parseVoidFulfillmentShipStationLabel({
+    ...shipStationLabelVoid,
+    label: { ...shipStationLabelVoid.label, shipmentId: 'shipment-2' },
+  }), null);
+  assert.equal(profileApiTestHooks.parseVoidFulfillmentShipStationLabel({
+    ...shipStationLabelVoid,
+    private: true,
   }), null);
 
   const shipStationRates = {
@@ -490,6 +514,7 @@ test('migrated profile writes are absent from Firebase exports and deployment se
     'getFulfillmentShipStationLabel',
     'getFulfillmentShipStationRates',
     'purchaseFulfillmentShipStationLabel',
+    'voidFulfillmentShipStationLabel',
   ]) {
     assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
     assert.doesNotMatch(packageJson, new RegExp(`functions:${name}(?:,|\\")`));

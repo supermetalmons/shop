@@ -330,6 +330,11 @@ test('profile write routes use restricted CORS, bearer authentication, and stabl
       expectedTotal: { currency: 'usd', amount: 12 },
       requestId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
     }],
+    ['/fulfillment/shipstation-label-void', {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      labelId: 'se-label',
+    }],
     ['/fulfillment/shipstation-rates', { dropId: 'card_nft_2', deliveryId: 7 }],
     ['/fulfillment/shipstation-shipment', { dropId: 'card_nft_2', deliveryId: 7 }],
   ] as const) {

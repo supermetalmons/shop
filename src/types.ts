@@ -46,6 +46,8 @@ export type {
   ShipStationEditableAddressField,
   UpdateFulfillmentAddressRequest,
   UpdateFulfillmentAddressResponse,
+  VoidFulfillmentShipStationLabelRequest,
+  VoidFulfillmentShipStationLabelResponse,
 } from '../functions/src/shared/contracts';
 export { SHIPSTATION_EDITABLE_ADDRESS_FIELDS } from '../functions/src/shared/contracts';
 export type { ShipStationPackageInput } from '../functions/src/shared/shipstationPackage';

@@ -36,6 +36,7 @@ import {
   storedFulfillmentShipStationLabel,
   ShipStationLabelProviderError,
   type ShipStationLabelResult,
+  voidShipStationLabel,
 } from '../../../../functions/src/shared/shipstationLabels.js';
 import {
   buildShipStationCustomsDeclaration,
@@ -84,6 +85,7 @@ import type {
   ProfileAddress,
   ShipStationAddressPatch,
   UpdateFulfillmentAddressResponse,
+  VoidFulfillmentShipStationLabelResponse,
 } from '../../../../functions/src/shared/contracts.js';
 import {
   FirebaseIdTokenError,
@@ -110,6 +112,7 @@ export const FULFILLMENT_ORDER_STATUS_PATH = '/fulfillment/order-status';
 export const FULFILLMENT_ORDER_ADDRESS_PATH = '/fulfillment/order-address';
 export const FULFILLMENT_SHIPSTATION_LABEL_PATH = '/fulfillment/shipstation-label';
 export const FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH = '/fulfillment/shipstation-label-purchase';
+export const FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH = '/fulfillment/shipstation-label-void';
 export const FULFILLMENT_SHIPSTATION_RATES_PATH = '/fulfillment/shipstation-rates';
 export const FULFILLMENT_SHIPSTATION_SHIPMENT_PATH = '/fulfillment/shipstation-shipment';
 export const PROFILE_WRITE_PATHS = new Set([
@@ -118,6 +121,7 @@ export const PROFILE_WRITE_PATHS = new Set([
   FULFILLMENT_ORDER_ADDRESS_PATH,
   FULFILLMENT_SHIPSTATION_LABEL_PATH,
   FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
+  FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
   FULFILLMENT_SHIPSTATION_RATES_PATH,
   FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
 ]);
@@ -128,6 +132,7 @@ export type ProfileWritePath =
   | typeof FULFILLMENT_ORDER_ADDRESS_PATH
   | typeof FULFILLMENT_SHIPSTATION_LABEL_PATH
   | typeof FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH
+  | typeof FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH
   | typeof FULFILLMENT_SHIPSTATION_RATES_PATH
   | typeof FULFILLMENT_SHIPSTATION_SHIPMENT_PATH;
 
@@ -165,6 +170,8 @@ const PROFILE_WRITE_TIMEOUT_MS = 15_000;
 const SHIPSTATION_LABEL_OPERATION_TIMEOUT_MS = 45_000;
 const SHIPSTATION_LABEL_PURCHASE_OPERATION_TIMEOUT_MS = 55_000;
 const SHIPSTATION_LABEL_PURCHASE_CLEANUP_TIMEOUT_MS = 5_000;
+const SHIPSTATION_LABEL_VOID_OPERATION_TIMEOUT_MS = 45_000;
+const SHIPSTATION_LABEL_VOID_CLEANUP_TIMEOUT_MS = 5_000;
 const SHIPSTATION_RATES_OPERATION_TIMEOUT_MS = 55_000;
 const SHIPSTATION_SHIPMENT_OPERATION_TIMEOUT_MS = 55_000;
 const MAX_SAVE_ADDRESS_BYTES = 10 * 1024;
@@ -172,6 +179,7 @@ const MAX_STATUS_REQUEST_BYTES = 4096;
 const MAX_FULFILLMENT_ADDRESS_REQUEST_BYTES = 16 * 1024;
 const MAX_SHIPSTATION_LABEL_REQUEST_BYTES = 2048;
 const MAX_SHIPSTATION_LABEL_PURCHASE_REQUEST_BYTES = 4096;
+const MAX_SHIPSTATION_LABEL_VOID_REQUEST_BYTES = 2048;
 const MAX_SHIPSTATION_RATES_REQUEST_BYTES = 2048;
 const MAX_SHIPSTATION_SHIPMENT_REQUEST_BYTES = 2048;
 const SHIPSTATION_CLAIM_TTL_MS = 120_000;
@@ -221,6 +229,12 @@ const shipStationLabelPurchaseSchema = z.object({
     amount: z.number().finite().nonnegative(),
   }).strict(),
   requestId: z.string().uuid(),
+}).strict();
+
+const shipStationLabelVoidSchema = z.object({
+  dropId: z.string().min(1).max(64),
+  deliveryId: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  labelId: z.string().trim().min(1).max(64),
 }).strict();
 
 const shipStationRatesSchema = z.object({
@@ -319,6 +333,7 @@ async function parseExactRequestBody(
   | z.infer<typeof fulfillmentAddressSchema>
   | z.infer<typeof shipStationLabelSchema>
   | z.infer<typeof shipStationLabelPurchaseSchema>
+  | z.infer<typeof shipStationLabelVoidSchema>
   | z.infer<typeof shipStationRatesSchema>
   | z.infer<typeof shipStationShipmentSchema>
 > {
@@ -333,6 +348,8 @@ async function parseExactRequestBody(
         ? MAX_SHIPSTATION_LABEL_REQUEST_BYTES
         : path === FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH
           ? MAX_SHIPSTATION_LABEL_PURCHASE_REQUEST_BYTES
+        : path === FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH
+          ? MAX_SHIPSTATION_LABEL_VOID_REQUEST_BYTES
         : path === FULFILLMENT_SHIPSTATION_RATES_PATH
           ? MAX_SHIPSTATION_RATES_REQUEST_BYTES
           : path === FULFILLMENT_SHIPSTATION_SHIPMENT_PATH
@@ -363,6 +380,8 @@ async function parseExactRequestBody(
         ? shipStationLabelSchema.safeParse(parsed)
         : path === FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH
           ? shipStationLabelPurchaseSchema.safeParse(parsed)
+        : path === FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH
+          ? shipStationLabelVoidSchema.safeParse(parsed)
         : path === FULFILLMENT_SHIPSTATION_RATES_PATH
           ? shipStationRatesSchema.safeParse(parsed)
           : shipStationShipmentSchema.safeParse(parsed);
@@ -1602,6 +1621,13 @@ type ReconciledShipStationLabel = {
   inactive?: FulfillmentShipStationLabel;
 };
 
+function regressesVoidedShipStationLabel(
+  current: FulfillmentShipStationLabel | undefined,
+  next: FulfillmentShipStationLabel,
+): boolean {
+  return current?.status === 'voided' && current.labelId === next.labelId && next.status !== 'voided';
+}
+
 async function reconcileFulfillmentShipStationLabel(args: {
   apiKey: string;
   common: FirestoreWriteCommon;
@@ -1622,26 +1648,30 @@ async function reconcileFulfillmentShipStationLabel(args: {
         fetch: args.common.providerFetch,
         signal: args.common.signal,
       });
-      const label = await persistFulfillmentShipStationLabel({
-        common: args.common,
-        deliveryId: args.deliveryId,
-        dropId: args.dropId,
-        expectedCurrentLabel: storedLabel,
-        ...(args.expectedPurchaseRequestId ? { expectedPurchaseRequestId: args.expectedPurchaseRequestId } : {}),
-        ...(args.expectedRateMutation ? { expectedRateMutation: args.expectedRateMutation } : {}),
-        fallbackLabel: storedLabel,
-        result,
-        wallet: args.wallet,
-      });
-      if (isActiveShipStationLabel(label)) {
-        return { active: label, ...(result.downloadUrl ? { downloadUrl: result.downloadUrl } : {}) };
+      if (regressesVoidedShipStationLabel(storedLabel, result.label)) {
+        inactive = storedLabel;
+      } else {
+        const label = await persistFulfillmentShipStationLabel({
+          common: args.common,
+          deliveryId: args.deliveryId,
+          dropId: args.dropId,
+          expectedCurrentLabel: storedLabel,
+          ...(args.expectedPurchaseRequestId ? { expectedPurchaseRequestId: args.expectedPurchaseRequestId } : {}),
+          ...(args.expectedRateMutation ? { expectedRateMutation: args.expectedRateMutation } : {}),
+          fallbackLabel: storedLabel,
+          result,
+          wallet: args.wallet,
+        });
+        if (isActiveShipStationLabel(label)) {
+          return { active: label, ...(result.downloadUrl ? { downloadUrl: result.downloadUrl } : {}) };
+        }
+        inactive = label;
       }
-      inactive = label;
     }
     const adopted = (await listShipStationLabelsForShipment(args.apiKey, args.shipmentId, {
       fetch: args.common.providerFetch,
       signal: args.common.signal,
-    }))[0];
+    })).find((candidate) => !regressesVoidedShipStationLabel(inactive ?? storedLabel, candidate.label));
     if (adopted) {
       const label = await persistFulfillmentShipStationLabel({
         common: args.common,
@@ -1716,6 +1746,181 @@ async function getFulfillmentShipStationLabel(
     ...(resolvedPurchase.label ? { label: resolvedPurchase.label } : reconciled.inactive ? { label: reconciled.inactive } : {}),
     ...(resolvedPurchase.purchaseUnknown ? { purchaseUnknown: true } : {}),
   };
+}
+
+function expectedFulfillmentShipStationLabelForVoid(
+  order: Record<string, unknown>,
+  shipmentId: string,
+  labelId: string,
+): FulfillmentShipStationLabel {
+  const label = storedFulfillmentShipStationLabel(shipStationState(order).label);
+  if (!label || label.labelId !== labelId) {
+    throw new ProfileReadError('aborted', 409, 'The ShipStation label changed. Check its status again.');
+  }
+  if (label.shipmentId !== shipmentId) {
+    throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
+  }
+  return label;
+}
+
+async function persistVoidedFulfillmentShipStationLabel(args: {
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  label: FulfillmentShipStationLabel;
+  wallet: string;
+}): Promise<FulfillmentShipStationLabel & { status: 'voided' }> {
+  const result = await persistFulfillmentShipStationLabel({
+    common: args.common,
+    deliveryId: args.deliveryId,
+    dropId: args.dropId,
+    expectedCurrentLabel: args.label,
+    fallbackLabel: args.label,
+    result: { label: { ...args.label, status: 'voided' } },
+    wallet: args.wallet,
+  });
+  if (result.status !== 'voided') {
+    throw new ProfileReadError('aborted', 409, 'The ShipStation label changed. Check its status again.');
+  }
+  return { ...result, status: 'voided' };
+}
+
+function shipStationLabelVoidFailure(error: unknown): { code: string; message: string } {
+  if (error instanceof ShipStationLabelProviderError || error instanceof ProfileReadError) {
+    return { code: error.code, message: error.message.slice(0, 500) };
+  }
+  return { code: 'internal', message: 'Failed to void the ShipStation label' };
+}
+
+async function recoverAmbiguousFulfillmentShipStationLabelVoid(args: {
+  apiKey: string;
+  body: z.infer<typeof shipStationLabelVoidSchema>;
+  common: FirestoreWriteCommon;
+  dropId: string;
+  shipmentId: string;
+  wallet: string;
+}): Promise<VoidFulfillmentShipStationLabelResponse | undefined> {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException('Label void cleanup timed out', 'TimeoutError')),
+    SHIPSTATION_LABEL_VOID_CLEANUP_TIMEOUT_MS,
+  );
+  const common = { ...args.common, signal: controller.signal };
+  try {
+    try {
+      const current = await loadDeliveryOrderDocument(common, args.dropId, args.body.deliveryId);
+      const currentLabel = expectedFulfillmentShipStationLabelForVoid(
+        current.fields,
+        args.shipmentId,
+        args.body.labelId,
+      );
+      if (currentLabel.status === 'voided') {
+        return {
+          deliveryId: args.body.deliveryId,
+          shipmentId: args.shipmentId,
+          label: { ...currentLabel, status: 'voided' },
+        };
+      }
+      const providerResult = await getShipStationLabelById(args.apiKey, args.body.labelId, {
+        fetch: common.providerFetch,
+        signal: common.signal,
+      });
+      if (
+        providerResult.label.shipmentId !== args.shipmentId ||
+        providerResult.label.status !== 'voided'
+      ) return undefined;
+      const label = await persistVoidedFulfillmentShipStationLabel({
+        common,
+        deliveryId: args.body.deliveryId,
+        dropId: args.dropId,
+        label: currentLabel,
+        wallet: args.wallet,
+      });
+      return { deliveryId: args.body.deliveryId, shipmentId: args.shipmentId, label };
+    } catch (error) {
+      const failure = shipStationLabelVoidFailure(error);
+      console.error(JSON.stringify({
+        event: 'fulfillment_shipstation_label_void_reconcile_failed',
+        dropId: args.dropId,
+        deliveryId: args.body.deliveryId,
+        code: failure.code,
+      }));
+      return undefined;
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function voidFulfillmentShipStationLabel(
+  body: z.infer<typeof shipStationLabelVoidSchema>,
+  wallet: string,
+  common: FirestoreWriteCommon,
+  apiKey: string,
+): Promise<VoidFulfillmentShipStationLabelResponse> {
+  const dropId = supportedDropId(body.dropId);
+  requireFulfillmentAccess(wallet, dropId);
+  if (!apiKey) {
+    throw new ShipStationProfileError('failed-precondition', 409, 'ShipStation API key is not configured');
+  }
+  const initial = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
+  rejectIrlShipStationOrder(initial.fields);
+  const shipmentId = requireShipStationShipmentId(initial.fields);
+  const initialLabel = expectedFulfillmentShipStationLabelForVoid(initial.fields, shipmentId, body.labelId);
+  if (initialLabel.status === 'voided') {
+    return {
+      deliveryId: body.deliveryId,
+      shipmentId,
+      label: { ...initialLabel, status: 'voided' },
+    };
+  }
+  if (initialLabel.status === 'processing') {
+    throw new ProfileReadError('failed-precondition', 409, 'Wait for this ShipStation label to finish processing before voiding it.');
+  }
+  if (initialLabel.status !== 'completed') {
+    throw new ProfileReadError('failed-precondition', 409, 'Only completed ShipStation labels can be voided.');
+  }
+  let voidAccepted = false;
+  try {
+    await voidShipStationLabel(apiKey, body.labelId, {
+      fetch: common.providerFetch,
+      signal: common.signal,
+    });
+    voidAccepted = true;
+    const label = await persistVoidedFulfillmentShipStationLabel({
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      label: initialLabel,
+      wallet,
+    });
+    return { deliveryId: body.deliveryId, shipmentId, label };
+  } catch (error) {
+    const failure = shipStationLabelVoidFailure(error);
+    const ambiguous = voidAccepted || (
+      error instanceof ShipStationLabelProviderError &&
+      ['deadline-exceeded', 'unavailable', 'internal'].includes(error.code)
+    );
+    if (ambiguous) {
+      const recovered = await recoverAmbiguousFulfillmentShipStationLabelVoid({
+        apiKey,
+        body,
+        common,
+        dropId,
+        shipmentId,
+        wallet,
+      });
+      if (recovered) return recovered;
+      throw new ProfileReadError(
+        'aborted',
+        409,
+        'ShipStation did not confirm the label void. Check its status before trying again.',
+      );
+    }
+    if (error instanceof ShipStationLabelProviderError) throw profileErrorForShipStation(error);
+    if (error instanceof ProfileReadError) throw error;
+    throw new ProfileReadError('internal', 500, failure.message);
+  }
 }
 
 type ShipStationLabelPurchaseClaim =
@@ -2836,6 +3041,9 @@ export async function handleProfileWriteRequest(
     ...(path === FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH
       ? { timeoutMs: SHIPSTATION_LABEL_PURCHASE_OPERATION_TIMEOUT_MS }
       : {}),
+    ...(path === FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH
+      ? { timeoutMs: SHIPSTATION_LABEL_VOID_OPERATION_TIMEOUT_MS }
+      : {}),
     ...(path === FULFILLMENT_SHIPSTATION_RATES_PATH ? { timeoutMs: SHIPSTATION_RATES_OPERATION_TIMEOUT_MS } : {}),
     ...(path === FULFILLMENT_SHIPSTATION_SHIPMENT_PATH ? { timeoutMs: SHIPSTATION_SHIPMENT_OPERATION_TIMEOUT_MS } : {}),
     ...overrides,
@@ -2919,6 +3127,14 @@ export async function handleProfileWriteRequest(
       const apiKey = typeof env.SHIPSTATION_API_KEY === 'string' ? env.SHIPSTATION_API_KEY.trim() : '';
       payload = await purchaseFulfillmentShipStationLabel(
         requestBody as z.infer<typeof shipStationLabelPurchaseSchema>,
+        wallet,
+        common,
+        apiKey,
+      );
+    } else if (path === FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH) {
+      const apiKey = typeof env.SHIPSTATION_API_KEY === 'string' ? env.SHIPSTATION_API_KEY.trim() : '';
+      payload = await voidFulfillmentShipStationLabel(
+        requestBody as z.infer<typeof shipStationLabelVoidSchema>,
         wallet,
         common,
         apiKey,

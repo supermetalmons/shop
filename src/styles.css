@@ -4948,6 +4948,31 @@ button.fulfillment-order-address-edit svg {
   font-weight: 600;
 }
 
+.shipstation-review--void {
+  border-color: color-mix(in srgb, #c1121f 28%, var(--border));
+  background: color-mix(in srgb, #c1121f 6%, var(--surface));
+}
+
+.shipstation-review--void .shipstation-review__title,
+button.shipstation-void-button {
+  color: #c1121f;
+}
+
+button.shipstation-void-confirm {
+  background: #c1121f;
+}
+
+button.shipstation-void-confirm:hover:not(:disabled) {
+  background: #a00f1a;
+}
+
+@media (prefers-color-scheme: dark) {
+  .shipstation-review--void .shipstation-review__title,
+  button.shipstation-void-button {
+    color: #ff6961;
+  }
+}
+
 .shipstation-label-summary__details {
   display: flex;
   flex-wrap: wrap;

@@ -419,6 +419,18 @@ export type GetFulfillmentShipStationLabelResponse = {
   purchaseUnknown?: boolean;
 };
 
+export type VoidFulfillmentShipStationLabelRequest = {
+  dropId: string;
+  deliveryId: number;
+  labelId: string;
+};
+
+export type VoidFulfillmentShipStationLabelResponse = {
+  deliveryId: number;
+  shipmentId: string;
+  label: FulfillmentShipStationLabel & { status: 'voided' };
+};
+
 export type FulfillmentOrdersCursor = {
   processedAt: {
     seconds: number;

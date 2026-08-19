@@ -14,6 +14,7 @@ import {
   shipStationTrackingCodeUpdate,
   shouldClearShipStationPurchaseState,
   shouldTransitionShipStationPurchaseState,
+  voidShipStationLabel,
 } from '../functions/src/shared/shipstationLabels.ts';
 import {
   buildShipStationPackages,
@@ -844,4 +845,78 @@ test('label purchase rejects oversized and malformed provider responses', async 
       /returned an invalid label/,
     );
   }
+});
+
+test('label void sends the bounded ShipStation PUT request and accepts idempotent success', async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = [];
+  const fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    requests.push({ url: String(input), init });
+    return Response.json(requests.length === 1
+      ? { approved: true, message: 'Refund requested' }
+      : { approved: false, message: 'Already voided', reason_code: 'label_already_voided' });
+  };
+  assert.deepEqual(await voidShipStationLabel('api-key', 'se-label', { fetch }), { alreadyVoided: false });
+  assert.deepEqual(await voidShipStationLabel('api-key', 'se-label', { fetch }), { alreadyVoided: true });
+  assert.equal(requests[0].url, 'https://api.shipstation.com/v2/labels/se-label/void');
+  assert.equal(requests[0].init?.method, 'PUT');
+  assert.equal(requests[0].init?.body, undefined);
+  assert.equal(new Headers(requests[0].init?.headers).get('api-key'), 'api-key');
+});
+
+test('label void maps provider reason codes without exposing provider messages', async () => {
+  for (const [reasonCode, message] of [
+    ['label_already_used', 'already been used'],
+    ['label_not_found_within_void_period', 'allowed void period'],
+    ['contact_carrier', 'Contact the carrier'],
+    ['validation_failed', 'did not approve'],
+  ] as const) {
+    await assert.rejects(
+      () => voidShipStationLabel('api-key', 'se-label', {
+        fetch: async () => Response.json({
+          approved: false,
+          message: 'Private 100 Main St secret-token',
+          reason_code: reasonCode,
+        }),
+      }),
+      (error) => error instanceof Error && error.message.includes(message) && !error.message.includes('Private'),
+    );
+  }
+});
+
+test('label void rejects malformed, oversized, timed-out, and aborted provider responses', async () => {
+  await assert.rejects(
+    () => voidShipStationLabel('api-key', 'se-label', {
+      fetch: async () => Response.json({ approved: 'yes' }),
+    }),
+    /invalid label void response/,
+  );
+  await assert.rejects(
+    () => voidShipStationLabel('api-key', 'se-label', {
+      fetch: async () => new Response('x'.repeat(32)),
+      maxResponseBytes: 16,
+    }),
+    /oversized response/,
+  );
+  await assert.rejects(
+    () => voidShipStationLabel('api-key', 'se-label', {
+      fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(init?.signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+        init?.signal?.addEventListener('abort', abort, { once: true });
+        if (init?.signal?.aborted) abort();
+      }),
+      timeoutMs: 5,
+    }),
+    /request timed out/,
+  );
+  const controller = new AbortController();
+  controller.abort(new DOMException('Stopped', 'AbortError'));
+  await assert.rejects(
+    () => voidShipStationLabel('api-key', 'se-label', {
+      fetch: async (_input, init) => {
+        throw init?.signal?.reason;
+      },
+      signal: controller.signal,
+    }),
+    /request timed out/,
+  );
 });

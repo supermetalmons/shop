@@ -22,6 +22,7 @@ import {
   purchaseFulfillmentShipStationLabel,
   updateFulfillmentAddress,
   updateFulfillmentStatus,
+  voidFulfillmentShipStationLabel,
 } from './lib/api';
 import {
   FulfillmentManualReviewCheckout,
@@ -1206,6 +1207,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [shipstationRatesLoading, setShipstationRatesLoading] = useState(false);
   const [shipstationPurchasing, setShipstationPurchasing] = useState(false);
   const [shipstationLabelLoading, setShipstationLabelLoading] = useState(false);
+  const [shipstationVoiding, setShipstationVoiding] = useState(false);
   const [shipstationError, setShipstationError] = useState<string | null>(null);
   const [shipstationPackageEdits, setShipstationPackageEdits] = useState<Record<string, ShipStationPackageDraft>>({});
   const [shipstationAddressCorrection, setShipstationAddressCorrection] =
@@ -1216,6 +1218,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [shipstationSelectedRateId, setShipstationSelectedRateId] = useState<string | null>(null);
   const [shipstationRatesRequested, setShipstationRatesRequested] = useState(false);
   const [shipstationReviewingPurchase, setShipstationReviewingPurchase] = useState(false);
+  const [shipstationReviewingVoid, setShipstationReviewingVoid] = useState(false);
   const [shipstationPurchaseRequestId, setShipstationPurchaseRequestId] = useState<string | null>(null);
   const [shipstationLabelDownloadUrl, setShipstationLabelDownloadUrl] = useState<string | null>(null);
   const [shipstationPurchaseUnknown, setShipstationPurchaseUnknown] = useState(false);
@@ -1232,12 +1235,14 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   useOverlayScrollLock({ active: activeShipstationOrderKey !== null && !walletModalVisible });
 
   const resetShipstationFlow = useCallback(() => {
+    setShipstationVoiding(false);
     setShipstationRates([]);
     setShipstationInvalidRates([]);
     setShipstationRatesExpanded(false);
     setShipstationSelectedRateId(null);
     setShipstationRatesRequested(false);
     setShipstationReviewingPurchase(false);
+    setShipstationReviewingVoid(false);
     setShipstationPurchaseRequestId(null);
     setShipstationLabelDownloadUrl(null);
     setShipstationPurchaseUnknown(false);
@@ -1766,7 +1771,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     shipstationPurchaseUnknown || activeShipstationOrder?.shipstationPurchaseUnknown,
   );
   const activeShipstationBusy =
-    shipstationSaving || shipstationRatesLoading || shipstationPurchasing || shipstationLabelLoading;
+    shipstationSaving || shipstationRatesLoading || shipstationPurchasing || shipstationLabelLoading || shipstationVoiding;
   const activeShipstationSelectedRate =
     shipstationRates.find((rate) => rate.rateId === shipstationSelectedRateId) ?? null;
   const activeShipstationPreparedRates = useMemo(
@@ -2095,6 +2100,71 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     activeShipstationSelectedRate,
     hasFulfillmentAccess,
     shipstationPurchaseRequestId,
+    signedIn,
+  ]);
+
+  const handleConfirmShipstationVoid = useCallback(async () => {
+    if (
+      !activeShipstationOrder ||
+      activeShipstationLabel?.status !== 'completed' ||
+      !hasFulfillmentAccess ||
+      !signedIn ||
+      activeShipstationBusy
+    ) {
+      return;
+    }
+    const requestEpoch = orderRequestEpochRef.current;
+    const key = fulfillmentOrderKey(activeShipstationOrder);
+    const labelId = activeShipstationLabel.labelId;
+    setShipstationVoiding(true);
+    setShipstationError(null);
+    try {
+      const response = await voidFulfillmentShipStationLabel({
+        dropId: activeShipstationOrder.dropId,
+        deliveryId: activeShipstationOrder.deliveryId,
+        labelId,
+      });
+      if (orderRequestEpochRef.current !== requestEpoch) return;
+      if (response.label.labelId !== labelId) {
+        throw new Error('ShipStation returned a different label. Check its status again.');
+      }
+      setOrders((prev) =>
+        prev.map((order) =>
+          fulfillmentOrderKey(order) === key
+            ? {
+                ...order,
+                ...shipStationLabelOrderUpdate(order, response.label),
+                shipstationPurchaseUnknown: false,
+              }
+            : order,
+        ),
+      );
+      setShipstationRates([]);
+      setShipstationInvalidRates([]);
+      setShipstationRatesExpanded(false);
+      setShipstationSelectedRateId(null);
+      setShipstationRatesRequested(false);
+      setShipstationReviewingPurchase(false);
+      setShipstationReviewingVoid(false);
+      setShipstationPurchaseRequestId(null);
+      setShipstationPurchaseUnknown(false);
+      setShipstationLabelDownloadUrl(null);
+      const trackingCodeUpdate = shipStationTrackingCodeUpdateForOrder(activeShipstationOrder, response.label);
+      if (trackingCodeUpdate !== undefined) {
+        setTrackingCodeEdits((prev) => ({ ...prev, [key]: trackingCodeUpdate ?? '' }));
+      }
+    } catch (err) {
+      if (orderRequestEpochRef.current !== requestEpoch) return;
+      console.error(err);
+      setShipstationError(err instanceof Error ? err.message : 'Failed to void the ShipStation label');
+    } finally {
+      if (orderRequestEpochRef.current === requestEpoch) setShipstationVoiding(false);
+    }
+  }, [
+    activeShipstationBusy,
+    activeShipstationLabel,
+    activeShipstationOrder,
+    hasFulfillmentAccess,
     signedIn,
   ]);
 
@@ -3016,7 +3086,17 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 </div>
               ) : null}
 
-              {activeShipstationLabel ? (
+              {shipstationReviewingVoid && activeShipstationLabel?.status === 'completed' ? (
+                <div className="shipstation-review shipstation-review--void" role="alert">
+                  <div className="shipstation-review__title">Void this label?</div>
+                  <div className="small">
+                    This cannot be undone. ShipStation will request a carrier refund when applicable, but approval and timing depend on the carrier.
+                  </div>
+                  {activeShipstationLabel.trackingNumber ? (
+                    <div className="muted small">Tracking {activeShipstationLabel.trackingNumber}</div>
+                  ) : null}
+                </div>
+              ) : activeShipstationLabel ? (
                 <div className="shipstation-label-summary" aria-live="polite">
                   <div className="shipstation-label-summary__heading">
                     {activeShipstationLabel.status === 'processing'
@@ -3299,24 +3379,60 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               >
                 {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
               </button>
+            ) : shipstationReviewingVoid && activeShipstationLabel?.status === 'completed' ? (
+              <>
+                <button
+                  type="button"
+                  className="secondary-light"
+                  onClick={() => {
+                    setShipstationReviewingVoid(false);
+                    setShipstationError(null);
+                  }}
+                  disabled={activeShipstationBusy}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  className="shipstation-void-confirm"
+                  onClick={() => void handleConfirmShipstationVoid()}
+                  disabled={activeShipstationBusy}
+                >
+                  {shipstationVoiding ? 'Voiding…' : 'Confirm void'}
+                </button>
+              </>
             ) : activeShipstationPurchaseUnknown || activeShipstationLabel?.status === 'processing' ? (
               <button type="button" onClick={() => void refreshShipstationLabel(false)} disabled={activeShipstationBusy}>
                 {shipstationLabelLoading ? 'Checking…' : 'Check purchase status'}
               </button>
             ) : activeShipstationLabel?.status === 'completed' ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (shipstationLabelDownloadUrl) {
-                    downloadShipStationLabel(shipstationLabelDownloadUrl);
-                  } else {
-                    void refreshShipstationLabel(true);
-                  }
-                }}
-                disabled={activeShipstationBusy}
-              >
-                {shipstationLabelLoading ? 'Preparing PDF…' : 'Download PDF'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="secondary-light shipstation-void-button"
+                  onClick={() => {
+                    setShipstationReviewingPurchase(false);
+                    setShipstationReviewingVoid(true);
+                    setShipstationError(null);
+                  }}
+                  disabled={activeShipstationBusy}
+                >
+                  Void label
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (shipstationLabelDownloadUrl) {
+                      downloadShipStationLabel(shipstationLabelDownloadUrl);
+                    } else {
+                      void refreshShipstationLabel(true);
+                    }
+                  }}
+                  disabled={activeShipstationBusy}
+                >
+                  {shipstationLabelLoading ? 'Preparing PDF…' : 'Download PDF'}
+                </button>
+              </>
             ) : shipstationReviewingPurchase && activeShipstationSelectedRate ? (
               <>
                 <button

@@ -6,6 +6,7 @@ import {
   FULFILLMENT_ORDER_STATUS_PATH,
   FULFILLMENT_SHIPSTATION_LABEL_PATH,
   FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
+  FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
   FULFILLMENT_SHIPSTATION_RATES_PATH,
   FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
   PROFILE_ADDRESSES_PATH,
@@ -56,6 +57,11 @@ const LABEL_PURCHASE_BODY = {
   rateId: 'rate-1',
   expectedTotal: { currency: 'usd', amount: 10 },
   requestId: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+};
+const LABEL_VOID_BODY = {
+  dropId: 'card_nft_2',
+  deliveryId: 7,
+  labelId: 'label-1',
 };
 
 const SHIPSTATION_RATE = {
@@ -1526,6 +1532,48 @@ test('ShipStation label adoption replaces stale metadata from the previous label
   assert.equal(Object.hasOwn(adoptedWrite.update.fields, 'fulfillmentTrackingCode'), false);
 });
 
+test('ShipStation label route keeps a voided label terminal across stale provider reads', async () => {
+  let commits = 0;
+  const providerFetch: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      const label = {
+        label_id: 'label-1',
+        shipment_id: 'shipment-1',
+        status: 'completed',
+        tracking_number: 'tracking-1',
+      };
+      return Response.json(url.pathname === '/v2/labels/label-1' ? { label } : { labels: [label] });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          label: {
+            labelId: 'label-1',
+            shipmentId: 'shipment-1',
+            status: 'voided',
+            trackingNumber: 'tracking-1',
+            purchasedAt: NOW_MS - 1000,
+          },
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) commits += 1;
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal((await result.response.json() as { label: { status: string } }).label.status, 'voided');
+  assert.equal(commits, 0);
+});
+
 test('ShipStation label route does not overwrite a label created during adoption', async () => {
   let orderReads = 0;
   let commits = 0;
@@ -1725,6 +1773,292 @@ test('ShipStation label route fails closed for missing configuration and oversiz
   );
   assert.equal(timedOut.response.status, 504);
   assert.equal((await timedOut.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
+});
+
+test('ShipStation label void route persists the exact label and conditionally removes its tracking code', async () => {
+  const run = async (fulfillmentTrackingCode: string) => {
+    let putCalls = 0;
+    let commit: { writes: Array<Record<string, unknown>> } | undefined;
+    const providerFetch: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') {
+        putCalls += 1;
+        assert.equal(url.pathname, '/v2/labels/label-1/void');
+        assert.equal(init?.method, 'PUT');
+        assert.equal(init?.body, undefined);
+        assert.equal(new Headers(init?.headers).get('api-key'), 'shipstation-api-key');
+        return Response.json({ approved: true, message: 'Refund requested' });
+      }
+      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+      if (url.pathname.endsWith('/deliveryOrders/7')) {
+        return Response.json(orderDocument({
+          fulfillmentStatus: 'Shipped',
+          fulfillmentTrackingCode,
+          shipstation: {
+            shipmentId: 'shipment-1',
+            rateQuotes: [{ rateId: 'rate-1' }],
+            label: {
+              labelId: 'label-1',
+              shipmentId: 'shipment-1',
+              status: 'completed',
+              trackingNumber: 'tracking-1',
+              purchasedAt: NOW_MS - 1000,
+            },
+          },
+        }));
+      }
+      if (url.pathname.endsWith('/documents:commit')) {
+        commit = JSON.parse(String(init?.body));
+        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+      }
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    };
+    const result = await handleProfileWriteRequest(
+      request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
+      dependencies(providerFetch),
+    );
+    return { result, putCalls, commit };
+  };
+
+  const matching = await run('tracking-1');
+  assert.equal(matching.result.response.status, 200);
+  assert.deepEqual(await matching.result.response.json(), {
+    deliveryId: 7,
+    shipmentId: 'shipment-1',
+    label: {
+      labelId: 'label-1',
+      shipmentId: 'shipment-1',
+      status: 'voided',
+      trackingNumber: 'tracking-1',
+      purchasedAt: NOW_MS - 1000,
+    },
+  });
+  assert.equal(matching.putCalls, 1);
+  const matchingWrite = matching.commit?.writes[0] as {
+    update: {
+      fields: {
+        fulfillmentTrackingCode?: unknown;
+        fulfillmentStatus?: unknown;
+        shipstation: { mapValue: { fields: { label: { mapValue: { fields: Record<string, { stringValue?: string }> } } } } };
+      };
+    };
+    updateMask: { fieldPaths: string[] };
+  };
+  assert.equal(
+    matchingWrite.update.fields.shipstation.mapValue.fields.label.mapValue.fields.status.stringValue,
+    'voided',
+  );
+  assert.ok(matchingWrite.updateMask.fieldPaths.includes('shipstation.rateQuotes'));
+  assert.ok(matchingWrite.updateMask.fieldPaths.includes('fulfillmentTrackingCode'));
+  assert.equal(Object.hasOwn(matchingWrite.update.fields, 'fulfillmentTrackingCode'), false);
+  assert.equal(matchingWrite.updateMask.fieldPaths.includes('fulfillmentStatus'), false);
+  assert.equal(Object.hasOwn(matchingWrite.update.fields, 'fulfillmentStatus'), false);
+
+  const manual = await run('manual-tracking');
+  assert.equal(manual.result.response.status, 200);
+  const manualWrite = manual.commit?.writes[0] as { updateMask: { fieldPaths: string[] } };
+  assert.equal(manualWrite.updateMask.fieldPaths.includes('fulfillmentTrackingCode'), false);
+  assert.equal(manualWrite.updateMask.fieldPaths.includes('fulfillmentStatus'), false);
+});
+
+test('ShipStation label void route is idempotent and rejects stale or ineligible labels before calling ShipStation', async () => {
+  let providerCalls = 0;
+  let commits = 0;
+  let labelStatus: 'voided' | 'processing' | 'error' = 'voided';
+  let labelId = 'label-1';
+  let source: string | undefined;
+  const providerFetch: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      providerCalls += 1;
+      return Response.json({ approved: true, message: 'ok' });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        ...(source ? { source } : {}),
+        shipstation: {
+          shipmentId: 'shipment-1',
+          label: { labelId, shipmentId: 'shipment-1', status: labelStatus, purchasedAt: NOW_MS - 1000 },
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) commits += 1;
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const run = (activeEnv = fulfillmentEnv) => handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
+    activeEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
+    dependencies(providerFetch),
+  );
+
+  const idempotent = await run();
+  assert.equal(idempotent.response.status, 200);
+  assert.equal((await idempotent.response.json() as { label: { status: string } }).label.status, 'voided');
+  assert.equal(providerCalls, 0);
+  assert.equal(commits, 0);
+
+  labelStatus = 'processing';
+  assert.equal((await run()).response.status, 409);
+  labelStatus = 'error';
+  assert.equal((await run()).response.status, 409);
+  labelStatus = 'voided';
+  labelId = 'replacement-label';
+  assert.equal((await run()).response.status, 409);
+  labelId = 'label-1';
+  source = 'admin_irl_redeem';
+  assert.equal((await run()).response.status, 409);
+  const missingConfig = await run({ ...fulfillmentEnv, SHIPSTATION_API_KEY: '' });
+  assert.equal(missingConfig.response.status, 409);
+  assert.equal(providerCalls, 0);
+  assert.equal(commits, 0);
+});
+
+test('ShipStation label void route maps definite rejection without leaking provider messages', async () => {
+  let commits = 0;
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
+    dependencies(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') {
+        return Response.json({
+          approved: false,
+          message: 'Private 100 Main St secret-token',
+          reason_code: 'label_already_used',
+        });
+      }
+      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+      if (url.pathname.endsWith('/deliveryOrders/7')) {
+        return Response.json(orderDocument({
+          shipstation: {
+            shipmentId: 'shipment-1',
+            label: {
+              labelId: 'label-1',
+              shipmentId: 'shipment-1',
+              status: 'completed',
+              purchasedAt: NOW_MS - 1000,
+            },
+          },
+        }));
+      }
+      if (url.pathname.endsWith('/documents:commit')) commits += 1;
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    }),
+  );
+  assert.equal(result.response.status, 409);
+  const payload = await result.response.json() as { error: { message: string } };
+  assert.match(payload.error.message, /already been used/);
+  assert.doesNotMatch(payload.error.message, /Private|100 Main|secret-token/);
+  assert.equal(commits, 0);
+});
+
+test('ShipStation label void route reconciles an ambiguous provider result with a fresh signal', async () => {
+  let voidCalls = 0;
+  let cleanupUsedFreshSignal = false;
+  let commit: { writes: Array<Record<string, unknown>> } | undefined;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname.endsWith('/void')) {
+        voidCalls += 1;
+        return Response.json({}, { status: 408 });
+      }
+      cleanupUsedFreshSignal = init?.signal?.aborted === false;
+      assert.equal(url.pathname, '/v2/labels/label-1');
+      return Response.json({
+        label: {
+          label_id: 'label-1',
+          shipment_id: 'shipment-1',
+          status: 'voided',
+          created_at: '2026-08-18T11:59:00.000Z',
+        },
+      });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      cleanupUsedFreshSignal ||= voidCalls > 0 && init?.signal?.aborted === false;
+      return Response.json(orderDocument({
+        fulfillmentTrackingCode: 'tracking-1',
+        shipstation: {
+          shipmentId: 'shipment-1',
+          label: {
+            labelId: 'label-1',
+            shipmentId: 'shipment-1',
+            status: 'completed',
+            trackingNumber: 'tracking-1',
+            purchasedAt: NOW_MS - 1000,
+          },
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commit = JSON.parse(String(init?.body));
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal((await result.response.json() as { label: { status: string } }).label.status, 'voided');
+  assert.equal(voidCalls, 1);
+  assert.equal(cleanupUsedFreshSignal, true);
+  assert.ok(commit);
+});
+
+test('ShipStation label void route does not overwrite a replacement label after provider approval', async () => {
+  let orderReads = 0;
+  let commits = 0;
+  const logs: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...values: unknown[]) => logs.push(values.map(String).join(' '));
+  try {
+    const result = await handleProfileWriteRequest(
+      request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
+      dependencies(async (input) => {
+        const url = new URL(String(input));
+        if (url.hostname === 'api.shipstation.com') {
+          return Response.json({ approved: true, message: 'Refund requested' });
+        }
+        if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+        if (url.pathname.endsWith('/deliveryOrders/7')) {
+          orderReads += 1;
+          const currentLabelId = orderReads === 1 ? 'label-1' : 'replacement-label';
+          return Response.json(orderDocument({
+            shipstation: {
+              shipmentId: 'shipment-1',
+              label: {
+                labelId: currentLabelId,
+                shipmentId: 'shipment-1',
+                status: 'completed',
+                purchasedAt: NOW_MS - 1000,
+              },
+            },
+          }));
+        }
+        if (url.pathname.endsWith('/documents:commit')) commits += 1;
+        return Response.json({ error: 'unexpected' }, { status: 500 });
+      }),
+    );
+    assert.equal(result.response.status, 409);
+    assert.match((await result.response.json() as { error: { message: string } }).error.message, /did not confirm/);
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.equal(commits, 0);
+  assert.ok(orderReads >= 3);
+  assert.match(logs.join('\n'), /fulfillment_shipstation_label_void_reconcile_failed/);
 });
 
 test('ShipStation label purchase route claims, validates, purchases, and atomically persists a label', async () => {

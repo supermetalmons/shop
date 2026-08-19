@@ -43,6 +43,8 @@ import {
   StripeReceiptClaimResult,
   UpdateFulfillmentAddressRequest,
   UpdateFulfillmentAddressResponse,
+  VoidFulfillmentShipStationLabelRequest,
+  VoidFulfillmentShipStationLabelResponse,
 } from '../types';
 import { dropAssetLabel } from './dropLabels';
 import {
@@ -253,6 +255,7 @@ type AuthenticatedApiPath =
   | '/fulfillment/manual-review-checkouts'
   | '/fulfillment/shipstation-label'
   | '/fulfillment/shipstation-label-purchase'
+  | '/fulfillment/shipstation-label-void'
   | '/fulfillment/shipstation-rates'
   | '/fulfillment/shipstation-shipment';
 
@@ -265,12 +268,14 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
+const SHIPSTATION_LABEL_VOID_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_RATES_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label-purchase') return SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS;
+  if (pathname === '/fulfillment/shipstation-label-void') return SHIPSTATION_LABEL_VOID_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-rates') return SHIPSTATION_RATES_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-shipment') return SHIPSTATION_SHIPMENT_API_TIMEOUT_MS;
   return defaultProfileApiDependencies.timeoutMs;
@@ -645,6 +650,25 @@ function parsePurchaseFulfillmentShipStationLabel(
     label,
     ...(typeof value.labelDownloadUrl === 'string' ? { labelDownloadUrl: value.labelDownloadUrl } : {}),
     alreadyPurchased: value.alreadyPurchased,
+  };
+}
+
+function parseVoidFulfillmentShipStationLabel(
+  value: unknown,
+): VoidFulfillmentShipStationLabelResponse | null {
+  if (!isRecord(value)) return null;
+  const required = ['deliveryId', 'shipmentId', 'label'] as const;
+  if (!hasExactKeys(value, required)) return null;
+  if (
+    !Number.isSafeInteger(value.deliveryId) || Number(value.deliveryId) <= 0 ||
+    typeof value.shipmentId !== 'string' || !value.shipmentId
+  ) return null;
+  const label = parseFulfillmentShipStationLabel(value.label);
+  if (!label || label.shipmentId !== value.shipmentId || label.status !== 'voided') return null;
+  return {
+    deliveryId: Number(value.deliveryId),
+    shipmentId: value.shipmentId,
+    label: { ...label, status: 'voided' },
   };
 }
 
@@ -1163,6 +1187,18 @@ export async function getFulfillmentShipStationLabel(
   return result;
 }
 
+export async function voidFulfillmentShipStationLabel(
+  args: VoidFulfillmentShipStationLabelRequest,
+): Promise<VoidFulfillmentShipStationLabelResponse> {
+  const response = await callProfileApi<VoidFulfillmentShipStationLabelRequest>(
+    '/fulfillment/shipstation-label-void',
+    args,
+  );
+  const result = parseVoidFulfillmentShipStationLabel(response);
+  if (!result) throw new Error('Invalid fulfillment ShipStation label void response');
+  return result;
+}
+
 export async function requestDeliveryTx(
   owner: string,
   selection: DeliverySelection,
@@ -1364,6 +1400,7 @@ export const profileApiTestHooks = {
   parseGetFulfillmentShipStationLabel,
   parseGetFulfillmentShipStationRates,
   parsePurchaseFulfillmentShipStationLabel,
+  parseVoidFulfillmentShipStationLabel,
   parseFulfillmentStatusUpdate,
   parseFulfillmentShipStationAddressCorrectionDetails,
   parseProfileAddress,
