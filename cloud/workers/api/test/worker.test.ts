@@ -324,6 +324,7 @@ test('profile write routes use restricted CORS, bearer authentication, and stabl
     ['/fulfillment/order-address', { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }],
     ['/fulfillment/shipstation-label', { dropId: 'card_nft_2', deliveryId: 7 }],
     ['/fulfillment/shipstation-rates', { dropId: 'card_nft_2', deliveryId: 7 }],
+    ['/fulfillment/shipstation-shipment', { dropId: 'card_nft_2', deliveryId: 7 }],
   ] as const) {
     const routeLogs: Record<string, unknown>[] = [];
     const response = await handleRequest(request(pathname, body, { Origin: 'https://mons.shop' }), env(), {

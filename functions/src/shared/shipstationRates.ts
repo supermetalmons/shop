@@ -63,6 +63,14 @@ export type ShipStationShipment = {
   errors?: unknown;
 };
 
+export type ShipStationShipmentInput = {
+  external_shipment_id: string;
+  shipment_number: string;
+  ship_to: ShipStationAddress;
+  ship_from: ShipStationAddress;
+  packages: ShipStationPackage[];
+};
+
 export type ShipStationRateResponse = {
   shipmentId: string;
   status: string;
@@ -647,7 +655,7 @@ function errorMessage(value: unknown, fallback: string): string {
   const errors = Array.isArray(record(value).errors) ? record(value).errors as unknown[] : [];
   const codes = Array.from(new Set(errors.flatMap((entry) => {
     const code = stringValue(record(entry).error_code);
-    return code ? [code] : [];
+    return /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/.test(code) ? [code] : [];
   }))).slice(0, 5);
   if (codes.some((code) => /balance|fund|postage/i.test(code))) {
     return 'Insufficient ShipStation funds. Add funds or enable auto-funding in ShipStation.';
@@ -735,6 +743,64 @@ export async function getShipStationShipmentById(
     throw providerResponseError();
   }
   return shipment;
+}
+
+export function shipStationExternalId(dropId: string, deliveryId: number): string {
+  return `mons-${dropId}-${deliveryId}`;
+}
+
+export async function getShipStationShipmentByExternalId(
+  apiKey: string,
+  externalId: string,
+  options: ShipStationRatesClientOptions = {},
+): Promise<ShipStationShipment | null> {
+  const { status, json, validJson } = await shipStationFetch(
+    apiKey,
+    `/shipments/external_shipment_id/${encodeURIComponent(externalId)}`,
+    { method: 'GET' },
+    options,
+  );
+  if (status === 404) return null;
+  if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
+  if (!validJson) throw providerResponseError();
+  const raw = record(json);
+  const shipment = shipmentValue(Object.keys(record(raw.shipment)).length ? raw.shipment : raw);
+  if (!stringValue(shipment.shipment_id)) throw providerResponseError();
+  return shipment.shipment_status === 'cancelled' ? null : shipment;
+}
+
+export async function createShipStationShipment(
+  apiKey: string,
+  shipment: ShipStationShipmentInput,
+  options: ShipStationRatesClientOptions = {},
+): Promise<ShipStationShipment> {
+  const { status, json, validJson } = await shipStationFetch(apiKey, '/shipments', {
+    method: 'POST',
+    body: {
+      shipments: [{
+        ...shipment,
+        create_sales_order: true,
+        shipment_status: 'pending',
+      }],
+    },
+  }, options);
+  if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
+  if (!validJson) throw providerResponseError();
+  const root = record(json);
+  const rawShipment = Array.isArray(root.shipments) ? record(root.shipments[0]) : {};
+  const shipmentErrors = Array.isArray(rawShipment.errors) ? rawShipment.errors : [];
+  if (root.has_errors === true || shipmentErrors.length) {
+    throw new ShipStationRatesProviderError(
+      'failed-precondition',
+      `ShipStation rejected the shipment: ${errorMessage(
+        { errors: shipmentErrors },
+        errorMessage(root, 'ShipStation reported an error'),
+      )}`,
+    );
+  }
+  const created = shipmentValue(rawShipment);
+  if (!stringValue(created.shipment_id)) throw providerResponseError();
+  return created;
 }
 
 export async function updateShipStationShipment(

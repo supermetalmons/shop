@@ -3,10 +3,13 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
+  createShipStationShipment,
+  getShipStationShipmentByExternalId,
   getShipStationShipmentById,
   getShipStationShipmentRates,
   parseShipStationShipFrom,
   requestShipStationShipmentRates,
+  shipStationExternalId,
   shipStationPackageInputFromShipmentPackage,
   ShipStationRatesProviderError,
   updateShipStationShipment,
@@ -83,6 +86,129 @@ test('shared ShipStation shipment client rejects incomplete and mismatched succe
     );
     assert.equal(calls, 1);
   }
+});
+
+test('shared ShipStation shipment creation and external-id adoption are bounded and runtime-neutral', async () => {
+  assert.equal(shipStationExternalId('card_nft_2', 7), 'mons-card_nft_2-7');
+  const requests: Array<{ method: string; path: string; body?: unknown }> = [];
+  const input = {
+    external_shipment_id: 'mons-card_nft_2-7',
+    shipment_number: '7',
+    ship_to: {
+      name: 'Ivan',
+      address_line1: '100 Main St',
+      city_locality: 'Istanbul',
+      state_province: '',
+      postal_code: '34000',
+      country_code: 'TR',
+      address_residential_indicator: 'yes' as const,
+    },
+    ship_from: {
+      name: 'mons.shop',
+      address_line1: '1061 10th Street',
+      city_locality: 'West Pittsburg',
+      state_province: 'PA',
+      postal_code: '16160',
+      country_code: 'US',
+      address_residential_indicator: 'no' as const,
+    },
+    packages: [{
+      weight: { value: 4, unit: 'ounce' as const },
+      dimensions: { length: 12, width: 9, height: 2, unit: 'inch' as const },
+    }],
+  };
+  const created = await createShipStationShipment('api-key', input, {
+    fetch: async (request, init) => {
+      const url = new URL(String(request));
+      requests.push({
+        method: init?.method || 'GET',
+        path: url.pathname,
+        ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}),
+      });
+      return Response.json({ shipments: [{ shipment_id: 'shipment-1', packages: input.packages }] });
+    },
+  });
+  assert.equal(created.shipment_id, 'shipment-1');
+  assert.deepEqual(requests, [{
+    method: 'POST',
+    path: '/v2/shipments',
+    body: {
+      shipments: [{ ...input, create_sales_order: true, shipment_status: 'pending' }],
+    },
+  }]);
+
+  const adopted = await getShipStationShipmentByExternalId('api-key', input.external_shipment_id, {
+    fetch: async () => Response.json({ shipment: { shipment_id: 'shipment-1', shipment_status: 'pending' } }),
+  });
+  assert.equal(adopted?.shipment_id, 'shipment-1');
+  assert.equal(await getShipStationShipmentByExternalId('api-key', input.external_shipment_id, {
+    fetch: async () => Response.json({}, { status: 404 }),
+  }), null);
+  assert.equal(await getShipStationShipmentByExternalId('api-key', input.external_shipment_id, {
+    fetch: async () => Response.json({ shipment_id: 'shipment-1', shipment_status: 'cancelled' }),
+  }), null);
+});
+
+test('shared ShipStation shipment creation sanitizes provider failures and rejects malformed success', async () => {
+  const input = {
+    external_shipment_id: 'mons-card_nft_2-7',
+    shipment_number: '7',
+    ship_to: {
+      name: 'Ivan',
+      address_line1: '100 Main St',
+      city_locality: 'Istanbul',
+      state_province: '',
+      postal_code: '34000',
+      country_code: 'TR',
+      address_residential_indicator: 'yes' as const,
+    },
+    ship_from: {
+      name: 'mons.shop',
+      address_line1: '1061 10th Street',
+      city_locality: 'West Pittsburg',
+      state_province: 'PA',
+      postal_code: '16160',
+      country_code: 'US',
+      address_residential_indicator: 'no' as const,
+    },
+    packages: [{
+      weight: { value: 4, unit: 'ounce' as const },
+      dimensions: { length: 12, width: 9, height: 2, unit: 'inch' as const },
+    }],
+  };
+  await assert.rejects(
+    createShipStationShipment('api-key', input, {
+      fetch: async () => Response.json({
+        has_errors: true,
+        shipments: [{ errors: [{ error_code: 'invalid_address', message: '100 Main St' }] }],
+      }),
+    }),
+    (error) => error instanceof ShipStationRatesProviderError &&
+      error.code === 'failed-precondition' &&
+      error.message.includes('invalid_address') &&
+      !error.message.includes('100 Main St'),
+  );
+  await assert.rejects(
+    createShipStationShipment('api-key', input, {
+      fetch: async () => Response.json({
+        has_errors: true,
+        shipments: [{ errors: [{ error_code: 'invalid address at 100 Main St' }] }],
+      }),
+    }),
+    (error) => error instanceof ShipStationRatesProviderError &&
+      error.code === 'failed-precondition' &&
+      !error.message.includes('100 Main St'),
+  );
+  await assert.rejects(
+    createShipStationShipment('api-key', input, { fetch: async () => Response.json({ shipments: [{}] }) }),
+    (error) => error instanceof ShipStationRatesProviderError && error.code === 'unavailable',
+  );
+  await assert.rejects(
+    getShipStationShipmentByExternalId('api-key', input.external_shipment_id, {
+      fetch: async () => new Response('{}', { headers: { 'Content-Length': String(513 * 1024) } }),
+    }),
+    (error) => error instanceof ShipStationRatesProviderError && error.code === 'unavailable',
+  );
 });
 
 test('shared ShipStation parsing never coerces provider numbers', async () => {

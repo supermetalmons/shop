@@ -1638,6 +1638,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         '/fulfillment/manual-review-checkouts',
         '/fulfillment/shipstation-label',
         '/fulfillment/shipstation-rates',
+        '/fulfillment/shipstation-shipment',
       ].includes(pathname)) {
         headers.set('Access-Control-Allow-Origin', 'https://mons.shop');
         return {

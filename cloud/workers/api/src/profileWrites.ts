@@ -19,7 +19,9 @@ import {
 import {
   ADDRESS_CIPHER_SECRET_KEY_LENGTH,
   addressCipherHint,
+  decryptAddressCipherText,
   encryptAddressCipherText,
+  parseAddressCipherPayload,
   serializeAddressCipherPayload,
 } from '../../../../functions/src/shared/addressCipher.js';
 import {
@@ -35,16 +37,21 @@ import {
 } from '../../../../functions/src/shared/shipstationLabels.js';
 import {
   buildShipStationPackages,
+  createShipStationShipment,
+  getShipStationShipmentByExternalId,
   getShipStationShipmentById,
   getShipStationShipmentRates,
   parseShipStationShipFrom,
+  parseShipStationShipTo,
   requestShipStationShipmentRates,
+  shipStationExternalId,
   shipStationPackageDetails,
   ShipStationRatesProviderError,
   updateShipStationShipment,
   type ShipStationRateResponse,
 } from '../../../../functions/src/shared/shipstationRates.js';
 import {
+  defaultShipStationPackage,
   normalizeShipStationPackage,
   parseShipStationPackage,
   SHIPSTATION_PACKAGE_RANGE_MESSAGE,
@@ -52,6 +59,7 @@ import {
 } from '../../../../functions/src/shared/shipstationPackage.js';
 import { isBase58Bytes } from '../../../../functions/src/shared/solanaRpcProxy.js';
 import type {
+  AddFulfillmentOrderToShipStationResponse,
   FulfillmentOrderAddress,
   FulfillmentShipStationLabel,
   GetFulfillmentShipStationLabelResponse,
@@ -84,12 +92,14 @@ export const FULFILLMENT_ORDER_STATUS_PATH = '/fulfillment/order-status';
 export const FULFILLMENT_ORDER_ADDRESS_PATH = '/fulfillment/order-address';
 export const FULFILLMENT_SHIPSTATION_LABEL_PATH = '/fulfillment/shipstation-label';
 export const FULFILLMENT_SHIPSTATION_RATES_PATH = '/fulfillment/shipstation-rates';
+export const FULFILLMENT_SHIPSTATION_SHIPMENT_PATH = '/fulfillment/shipstation-shipment';
 export const PROFILE_WRITE_PATHS = new Set([
   PROFILE_ADDRESSES_PATH,
   FULFILLMENT_ORDER_STATUS_PATH,
   FULFILLMENT_ORDER_ADDRESS_PATH,
   FULFILLMENT_SHIPSTATION_LABEL_PATH,
   FULFILLMENT_SHIPSTATION_RATES_PATH,
+  FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
 ]);
 
 export type ProfileWritePath =
@@ -97,7 +107,8 @@ export type ProfileWritePath =
   | typeof FULFILLMENT_ORDER_STATUS_PATH
   | typeof FULFILLMENT_ORDER_ADDRESS_PATH
   | typeof FULFILLMENT_SHIPSTATION_LABEL_PATH
-  | typeof FULFILLMENT_SHIPSTATION_RATES_PATH;
+  | typeof FULFILLMENT_SHIPSTATION_RATES_PATH
+  | typeof FULFILLMENT_SHIPSTATION_SHIPMENT_PATH;
 
 type ProfileWriteMetrics = {
   upstreamCalls: number;
@@ -132,11 +143,13 @@ type ProfileWriteEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Part
 const PROFILE_WRITE_TIMEOUT_MS = 15_000;
 const SHIPSTATION_LABEL_OPERATION_TIMEOUT_MS = 45_000;
 const SHIPSTATION_RATES_OPERATION_TIMEOUT_MS = 55_000;
+const SHIPSTATION_SHIPMENT_OPERATION_TIMEOUT_MS = 55_000;
 const MAX_SAVE_ADDRESS_BYTES = 10 * 1024;
 const MAX_STATUS_REQUEST_BYTES = 4096;
 const MAX_FULFILLMENT_ADDRESS_REQUEST_BYTES = 16 * 1024;
 const MAX_SHIPSTATION_LABEL_REQUEST_BYTES = 2048;
 const MAX_SHIPSTATION_RATES_REQUEST_BYTES = 2048;
+const MAX_SHIPSTATION_SHIPMENT_REQUEST_BYTES = 2048;
 const SHIPSTATION_CLAIM_TTL_MS = 120_000;
 const SHIPSTATION_RATE_REQUEST_TTL_MS = 10 * 60_000;
 const FIRESTORE_MUTATION_ATTEMPTS = 3;
@@ -185,6 +198,8 @@ const shipStationRatesSchema = z.object({
     weight: z.number(),
   }).strict().optional(),
 }).strict();
+
+const shipStationShipmentSchema = shipStationRatesSchema;
 
 const defaultAccessTokenProvider = createGoogleAccessTokenProvider();
 
@@ -238,6 +253,7 @@ async function parseExactRequestBody(
   | z.infer<typeof fulfillmentAddressSchema>
   | z.infer<typeof shipStationLabelSchema>
   | z.infer<typeof shipStationRatesSchema>
+  | z.infer<typeof shipStationShipmentSchema>
 > {
   if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
@@ -250,6 +266,8 @@ async function parseExactRequestBody(
         ? MAX_SHIPSTATION_LABEL_REQUEST_BYTES
         : path === FULFILLMENT_SHIPSTATION_RATES_PATH
           ? MAX_SHIPSTATION_RATES_REQUEST_BYTES
+          : path === FULFILLMENT_SHIPSTATION_SHIPMENT_PATH
+            ? MAX_SHIPSTATION_SHIPMENT_REQUEST_BYTES
         : MAX_STATUS_REQUEST_BYTES;
   const contentLength = Number(request.headers.get('Content-Length'));
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
@@ -274,7 +292,9 @@ async function parseExactRequestBody(
       ? fulfillmentAddressSchema.safeParse(parsed)
       : path === FULFILLMENT_SHIPSTATION_LABEL_PATH
         ? shipStationLabelSchema.safeParse(parsed)
-        : shipStationRatesSchema.safeParse(parsed);
+        : path === FULFILLMENT_SHIPSTATION_RATES_PATH
+          ? shipStationRatesSchema.safeParse(parsed)
+          : shipStationShipmentSchema.safeParse(parsed);
   if (!result.success) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
   return result.data;
 }
@@ -622,6 +642,15 @@ function encryptFulfillmentAddress(full: string, secretValue: string): { encrypt
   }
 }
 
+function decryptFulfillmentAddress(payload: string, secretValue: string): string | null {
+  const secret = decodeBase64(secretValue.trim());
+  if (!secret || secret.length !== ADDRESS_CIPHER_SECRET_KEY_LENGTH) {
+    throw new ProfileReadError('unavailable', 503, 'Fulfillment address decryption is temporarily unavailable.');
+  }
+  const parts = parseAddressCipherPayload(payload, decodeBase64);
+  return parts ? decryptAddressCipherText(parts, secret) : null;
+}
+
 function requireFulfillmentAccess(wallet: string, dropId: string): void {
   if (!walletHasFulfillmentDropAccess(wallet, dropId, ADMIN_WALLETS, SHIPPER_DROP_IDS_BY_WALLET)) {
     throw new ProfileReadError('permission-denied', 403, 'Fulfillment access denied.');
@@ -764,6 +793,14 @@ async function updateFulfillmentAddress(
           'Check the ShipStation label purchase status before editing this address.',
         );
       }
+      const shipmentClaimedAt = typeof shipstation.claimedAt === 'number' ? shipstation.claimedAt : 0;
+      if (shipmentClaimedAt && common.nowMs - shipmentClaimedAt < SHIPSTATION_CLAIM_TTL_MS) {
+        throw new ProfileReadError(
+          'aborted',
+          409,
+          'This order is being added to ShipStation. Try editing the address again in a moment.',
+        );
+      }
       const ratesClaimedAt = typeof shipstation.ratesClaimedAt === 'number' ? shipstation.ratesClaimedAt : 0;
       if (ratesClaimedAt && common.nowMs - ratesClaimedAt < SHIPSTATION_CLAIM_TTL_MS) {
         throw new ProfileReadError(
@@ -813,6 +850,380 @@ async function updateFulfillmentAddress(
       };
     },
   });
+}
+
+type ShipStationShipmentClaim =
+  | { alreadyAdded: true; shipmentId: string; addedAt?: number }
+  | { alreadyAdded: false; claimId: string; order: Record<string, unknown> };
+
+function fulfillmentShipmentUnitCount(order: Record<string, unknown>): number {
+  const items = Array.isArray(order.items) ? order.items : [];
+  return items.filter((item) => {
+    if (!isRecord(item) || (item.kind !== 'box' && item.kind !== 'dude')) return false;
+    const refId = Math.floor(Number(item.refId));
+    return Number.isFinite(refId) && refId > 0;
+  }).length;
+}
+
+async function claimFulfillmentShipStationShipment(args: {
+  claimId: string;
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  onWriteAttempt: () => void;
+  wallet: string;
+}): Promise<ShipStationShipmentClaim> {
+  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
+  return mutateDeliveryOrder<ShipStationShipmentClaim>({
+    common: args.common,
+    deliveryId: args.deliveryId,
+    dropId: args.dropId,
+    build: ({ fields: order, updateTime }) => {
+      rejectIrlShipStationOrder(order);
+      const shipstation = shipStationState(order);
+      const shipmentId = optionalString(shipstation.shipmentId);
+      if (shipmentId) {
+        const addedAt = typeof shipstation.createdAt === 'number' ? shipstation.createdAt : undefined;
+        return { value: { alreadyAdded: true, shipmentId, ...(addedAt ? { addedAt } : {}) } };
+      }
+      const claimedAt = typeof shipstation.claimedAt === 'number' ? shipstation.claimedAt : 0;
+      if (claimedAt && args.common.nowMs - claimedAt < SHIPSTATION_CLAIM_TTL_MS) {
+        throw new ProfileReadError(
+          'aborted',
+          409,
+          'This order is already being added to ShipStation. Try again in a moment.',
+        );
+      }
+      args.onWriteAttempt();
+      return {
+        value: { alreadyAdded: false, claimId: args.claimId, order },
+        write: {
+          update: {
+            name: documentName(orderPath),
+            fields: {
+              dropId: firestoreString(args.dropId),
+              shipstation: firestoreMap({
+                claimId: firestoreString(args.claimId),
+                claimedBy: firestoreString(args.wallet),
+              }),
+            },
+          },
+          updateMask: {
+            fieldPaths: ['dropId', 'shipstation.claimId', 'shipstation.claimedBy', 'shipstation.claimFenceId'],
+          },
+          updateTransforms: [{ fieldPath: 'shipstation.claimedAt', setToServerValue: 'REQUEST_TIME' }],
+          currentDocument: { updateTime },
+        },
+      };
+    },
+  });
+}
+
+function shipStationShipmentFailureMessage(error: unknown): string {
+  if (error instanceof ShipStationRatesProviderError || error instanceof ProfileReadError) {
+    return error.message.slice(0, 500);
+  }
+  return 'Failed to add the order to ShipStation';
+}
+
+async function transitionFulfillmentShipStationShipmentClaim(args: {
+  claimId: string;
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  errorMessage: string;
+  retain: boolean;
+  wallet: string;
+}): Promise<void> {
+  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
+  await mutateDeliveryOrder<void>({
+    common: args.common,
+    deliveryId: args.deliveryId,
+    dropId: args.dropId,
+    build: ({ fields: order, updateTime }) => {
+      const shipstation = shipStationState(order);
+      const currentClaimId = optionalString(shipstation.claimId);
+      const currentClaimedBy = optionalString(shipstation.claimedBy);
+      if (currentClaimId !== args.claimId || currentClaimedBy !== args.wallet) return { value: undefined };
+      const fields = args.retain
+        ? {
+            claimId: firestoreString(args.claimId),
+            claimedBy: firestoreString(args.wallet),
+            lastError: firestoreString(args.errorMessage),
+          }
+        : {
+            claimFenceId: firestoreString(args.claimId),
+            lastError: firestoreString(args.errorMessage),
+          };
+      return {
+        value: undefined,
+        write: {
+          update: {
+            name: documentName(orderPath),
+            fields: { shipstation: firestoreMap(fields) },
+          },
+          updateMask: {
+            fieldPaths: args.retain
+              ? [
+                  'shipstation.claimId',
+                  'shipstation.claimedBy',
+                  'shipstation.claimFenceId',
+                  'shipstation.lastError',
+                ]
+              : [
+                  'shipstation.claimId',
+                  'shipstation.claimedAt',
+                  'shipstation.claimedBy',
+                  'shipstation.claimFenceId',
+                  'shipstation.lastError',
+                ],
+          },
+          updateTransforms: [
+            ...(args.retain ? [{ fieldPath: 'shipstation.claimedAt', setToServerValue: 'REQUEST_TIME' }] : []),
+            { fieldPath: 'shipstation.lastErrorAt', setToServerValue: 'REQUEST_TIME' },
+          ],
+          currentDocument: { updateTime },
+        },
+      };
+    },
+  });
+}
+
+async function safelyTransitionFulfillmentShipStationShipmentClaim(args: {
+  claimId: string;
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  errorMessage: string;
+  retain: boolean;
+  wallet: string;
+}): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException('Claim cleanup timed out', 'TimeoutError')),
+    3_000,
+  );
+  try {
+    await transitionFulfillmentShipStationShipmentClaim({
+      ...args,
+      common: { ...args.common, signal: controller.signal },
+    });
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: 'fulfillment_shipstation_shipment_claim_transition_failed',
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
+      retain: args.retain,
+      error: error instanceof Error ? error.message : String(error),
+    }));
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function persistFulfillmentShipStationShipment(args: {
+  claimId: string;
+  common: FirestoreWriteCommon;
+  deliveryId: number;
+  dropId: string;
+  externalShipmentId: string;
+  packageCount: number;
+  shipmentId: string;
+  storedPackage?: ShipStationPackageInput;
+  wallet: string;
+}): Promise<void> {
+  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
+  await mutateDeliveryOrder<void>({
+    common: args.common,
+    deliveryId: args.deliveryId,
+    dropId: args.dropId,
+    build: ({ fields: order, updateTime }) => {
+      const shipstation = shipStationState(order);
+      if (
+        optionalString(shipstation.claimId) !== args.claimId ||
+        optionalString(shipstation.claimedBy) !== args.wallet
+      ) {
+        throw new ProfileReadError('aborted', 409, 'The ShipStation shipment claim changed. Try again.');
+      }
+      const currentShipmentId = optionalString(shipstation.shipmentId);
+      if (currentShipmentId && currentShipmentId !== args.shipmentId) {
+        throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
+      }
+      return {
+        value: undefined,
+        write: {
+          update: {
+            name: documentName(orderPath),
+            fields: {
+              dropId: firestoreString(args.dropId),
+              shipstation: firestoreMap({
+                shipmentId: firestoreString(args.shipmentId),
+                externalShipmentId: firestoreString(args.externalShipmentId),
+                shipmentNumber: firestoreString(String(args.deliveryId)),
+                createdBy: firestoreString(args.wallet),
+                ...(args.storedPackage ? { package: firestorePackage(args.storedPackage) } : {}),
+                packageCount: firestoreNumber(args.packageCount),
+              }),
+            },
+          },
+          updateMask: {
+            fieldPaths: [
+              'dropId',
+              'shipstation.shipmentId',
+              'shipstation.externalShipmentId',
+              'shipstation.shipmentNumber',
+              'shipstation.createdBy',
+              ...(args.storedPackage ? ['shipstation.package'] : []),
+              'shipstation.packageCount',
+              'shipstation.claimId',
+              'shipstation.claimedAt',
+              'shipstation.claimedBy',
+              'shipstation.claimFenceId',
+              'shipstation.lastError',
+              'shipstation.lastErrorAt',
+            ],
+          },
+          updateTransforms: [{ fieldPath: 'shipstation.createdAt', setToServerValue: 'REQUEST_TIME' }],
+          currentDocument: { updateTime },
+        },
+      };
+    },
+  });
+}
+
+async function addFulfillmentOrderToShipStation(
+  body: z.infer<typeof shipStationShipmentSchema>,
+  wallet: string,
+  common: FirestoreWriteCommon,
+  env: ProfileWriteEnv,
+): Promise<AddFulfillmentOrderToShipStationResponse> {
+  const dropId = supportedDropId(body.dropId);
+  requireFulfillmentAccess(wallet, dropId);
+  const packageOverride = body.package ? normalizeShipStationPackage(body.package) : null;
+  if (body.package && !packageOverride) {
+    throw new ProfileReadError('invalid-argument', 400, SHIPSTATION_PACKAGE_RANGE_MESSAGE);
+  }
+  const apiKey = typeof env.SHIPSTATION_API_KEY === 'string' ? env.SHIPSTATION_API_KEY.trim() : '';
+  if (!apiKey) throw new ShipStationProfileError('failed-precondition', 409, 'ShipStation API key is not configured');
+  const shipFromSecret = typeof env.SHIPSTATION_SHIP_FROM === 'string' ? env.SHIPSTATION_SHIP_FROM.trim() : '';
+  let shipFrom: ReturnType<typeof parseShipStationShipFrom>;
+  try {
+    shipFrom = parseShipStationShipFrom(shipFromSecret);
+  } catch (error) {
+    if (error instanceof ShipStationRatesProviderError) throw profileErrorForShipStation(error);
+    throw error;
+  }
+  const addressSecret = typeof env.ADDRESS_DECRYPTION_SECRET === 'string' ? env.ADDRESS_DECRYPTION_SECRET : '';
+  const claimId = crypto.randomUUID();
+  let claimWriteAttempted = false;
+  let postAttempted = false;
+  try {
+    const claim = await claimFulfillmentShipStationShipment({
+      claimId,
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      onWriteAttempt: () => { claimWriteAttempted = true; },
+      wallet,
+    });
+    if (claim.alreadyAdded) {
+      return {
+        deliveryId: body.deliveryId,
+        shipmentId: claim.shipmentId,
+        alreadyAdded: true,
+        ...(claim.addedAt ? { shipstationAddedAt: claim.addedAt } : {}),
+      };
+    }
+    const externalShipmentId = shipStationExternalId(dropId, body.deliveryId);
+    const existing = await getShipStationShipmentByExternalId(apiKey, externalShipmentId, {
+      fetch: common.providerFetch,
+      signal: common.signal,
+    });
+    let shipment = existing;
+    let appliedPackage = existing ? shipStationPackageDetails(existing).package : undefined;
+    if (!shipment) {
+      const addressSnapshot = isRecord(claim.order.addressSnapshot) ? claim.order.addressSnapshot : {};
+      const encrypted = optionalString(addressSnapshot.encrypted) ?? '';
+      const full = encrypted ? decryptFulfillmentAddress(encrypted, addressSecret) : null;
+      const parsed = parseShipStationShipTo(
+        full,
+        typeof addressSnapshot.countryCode === 'string' ? addressSnapshot.countryCode : undefined,
+      );
+      if (!parsed.ok || !parsed.shipTo) {
+        const reason = parsed.reason || 'Could not read the delivery address';
+        throw new ProfileReadError('failed-precondition', 409, `${reason}. Edit the delivery address and try again.`);
+      }
+      const unitCount = fulfillmentShipmentUnitCount(claim.order);
+      const email = optionalString(addressSnapshot.email);
+      const phone = optionalString(addressSnapshot.phone);
+      appliedPackage = packageOverride ?? defaultShipStationPackage(unitCount);
+      postAttempted = true;
+      shipment = await createShipStationShipment(apiKey, {
+        external_shipment_id: externalShipmentId,
+        shipment_number: String(body.deliveryId),
+        ship_to: {
+          ...parsed.shipTo,
+          ...(email ? { email } : {}),
+          ...(phone ? { phone } : {}),
+        },
+        ship_from: shipFrom,
+        packages: buildShipStationPackages(unitCount, appliedPackage),
+      }, {
+        fetch: common.providerFetch,
+        signal: common.signal,
+      });
+    }
+    const shipmentId = optionalString(shipment.shipment_id);
+    if (!shipmentId) throw new ShipStationRatesProviderError('internal', 'ShipStation did not return a shipment id');
+    const packageDetails = shipStationPackageDetails(shipment);
+    const storedPackage = appliedPackage ?? packageDetails.package;
+    await persistFulfillmentShipStationShipment({
+      claimId,
+      common,
+      deliveryId: body.deliveryId,
+      dropId,
+      externalShipmentId,
+      packageCount: packageDetails.packageCount || 1,
+      shipmentId,
+      ...(storedPackage ? { storedPackage } : {}),
+      wallet,
+    });
+    return {
+      deliveryId: body.deliveryId,
+      shipmentId,
+      alreadyAdded: Boolean(existing),
+      shipstationAddedAt: common.nowMs,
+    };
+  } catch (error) {
+    const failureCode = error instanceof ShipStationRatesProviderError || error instanceof ProfileReadError
+      ? error.code
+      : 'internal';
+    const mayHaveCreated = postAttempted && (
+      failureCode === 'deadline-exceeded' ||
+      failureCode === 'unavailable' ||
+      failureCode === 'internal'
+    );
+    if (claimWriteAttempted) {
+      await safelyTransitionFulfillmentShipStationShipmentClaim({
+        claimId,
+        common,
+        deliveryId: body.deliveryId,
+        dropId,
+        errorMessage: shipStationShipmentFailureMessage(error),
+        retain: mayHaveCreated,
+        wallet,
+      });
+    }
+    if (mayHaveCreated) {
+      throw new ShipStationProfileError(
+        'aborted',
+        409,
+        'ShipStation did not confirm the shipment. It may still have been created — check ShipStation, or try again in a couple of minutes.',
+      );
+    }
+    if (error instanceof ShipStationRatesProviderError) throw profileErrorForShipStation(error);
+    throw error;
+  }
 }
 
 function labelDocumentFields(
@@ -1683,6 +2094,7 @@ export async function handleProfileWriteRequest(
     ...defaultDependencies,
     ...(path === FULFILLMENT_SHIPSTATION_LABEL_PATH ? { timeoutMs: SHIPSTATION_LABEL_OPERATION_TIMEOUT_MS } : {}),
     ...(path === FULFILLMENT_SHIPSTATION_RATES_PATH ? { timeoutMs: SHIPSTATION_RATES_OPERATION_TIMEOUT_MS } : {}),
+    ...(path === FULFILLMENT_SHIPSTATION_SHIPMENT_PATH ? { timeoutMs: SHIPSTATION_SHIPMENT_OPERATION_TIMEOUT_MS } : {}),
     ...overrides,
   };
   const metrics: ProfileWriteMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
@@ -1760,9 +2172,16 @@ export async function handleProfileWriteRequest(
         common,
         apiKey,
       );
-    } else {
+    } else if (path === FULFILLMENT_SHIPSTATION_RATES_PATH) {
       payload = await getFulfillmentShipStationRates(
         requestBody as z.infer<typeof shipStationRatesSchema>,
+        wallet,
+        common,
+        env,
+      );
+    } else {
+      payload = await addFulfillmentOrderToShipStation(
+        requestBody as z.infer<typeof shipStationShipmentSchema>,
         wallet,
         common,
         env,

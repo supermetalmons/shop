@@ -6,6 +6,7 @@ import {
   FULFILLMENT_ORDER_STATUS_PATH,
   FULFILLMENT_SHIPSTATION_LABEL_PATH,
   FULFILLMENT_SHIPSTATION_RATES_PATH,
+  FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
   PROFILE_ADDRESSES_PATH,
   handleProfileWriteRequest,
   profileWriteTestHooks,
@@ -468,6 +469,7 @@ test('fulfillment address route preserves authorization and order-state guards',
       shipstation: { label: { labelId: 'label-1', shipmentId: 'shipment-1', status: 'completed' } },
     }, 'failed-precondition'],
     [{ addressSnapshot: {}, shipstation: { ratesClaimedAt: NOW_MS - 1000 } }, 'aborted'],
+    [{ addressSnapshot: {}, shipstation: { claimedAt: NOW_MS - 1000 } }, 'aborted'],
     [{ addressSnapshot: {}, shipstation: {}, source: 'admin_irl_redeem' }, 'failed-precondition'],
   ] as const) {
     const guarded = await handleProfileWriteRequest(
@@ -486,6 +488,495 @@ test('fulfillment address route preserves authorization and order-state guards',
     assert.equal(guarded.response.status, 409);
     assert.equal((await guarded.response.json() as { error: { code: string } }).error.code, code);
   }
+});
+
+test('ShipStation shipment route returns an existing Firestore shipment without calling ShipStation', async () => {
+  let shipStationCalls = 0;
+  let commits = 0;
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+    dependencies(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') {
+        shipStationCalls += 1;
+        return Response.json({ error: 'unexpected' }, { status: 500 });
+      }
+      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+      if (url.pathname.endsWith('/deliveryOrders/7')) {
+        return Response.json(orderDocument({
+          shipstation: { shipmentId: 'shipment-1', createdAt: NOW_MS - 5_000 },
+        }));
+      }
+      if (url.pathname.endsWith('/documents:commit')) commits += 1;
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), {
+    deliveryId: 7,
+    shipmentId: 'shipment-1',
+    alreadyAdded: true,
+    shipstationAddedAt: NOW_MS - 5_000,
+  });
+  assert.equal(shipStationCalls, 0);
+  assert.equal(commits, 0);
+});
+
+test('ShipStation shipment route never cleans up a claim it did not acquire', async () => {
+  for (const [orderFields, expectedCode] of [
+    [{ shipstation: { claimedAt: NOW_MS - 1_000, claimedBy: OTHER } }, 'aborted'],
+    [{ shipstation: {}, source: 'admin_irl_redeem' }, 'failed-precondition'],
+  ] as const) {
+    let commits = 0;
+    let shipStationCalls = 0;
+    const result = await handleProfileWriteRequest(
+      request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+      dependencies(async (input) => {
+        const url = new URL(String(input));
+        if (url.hostname === 'api.shipstation.com') {
+          shipStationCalls += 1;
+          return Response.json({ error: 'unexpected' }, { status: 500 });
+        }
+        if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+        if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json(orderDocument(orderFields));
+        if (url.pathname.endsWith('/documents:commit')) commits += 1;
+        return Response.json({ error: 'unexpected' }, { status: 500 });
+      }),
+    );
+    assert.equal(result.response.status, 409);
+    assert.equal((await result.response.json() as { error: { code: string } }).error.code, expectedCode);
+    assert.equal(commits, 0);
+    assert.equal(shipStationCalls, 0);
+  }
+});
+
+test('ShipStation shipment route fails before claiming when provider configuration is missing', async () => {
+  for (const missingEnv of [
+    { ...fulfillmentEnv, SHIPSTATION_API_KEY: '' },
+    { ...fulfillmentEnv, SHIPSTATION_SHIP_FROM: '' },
+  ]) {
+    let orderReads = 0;
+    let commits = 0;
+    const result = await handleProfileWriteRequest(
+      request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+      missingEnv,
+      FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+      dependencies(async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+        if (url.pathname.endsWith('/deliveryOrders/7')) orderReads += 1;
+        if (url.pathname.endsWith('/documents:commit')) commits += 1;
+        return Response.json({ error: 'unexpected' }, { status: 500 });
+      }),
+    );
+    assert.equal(result.response.status, 409);
+    assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'failed-precondition');
+    assert.equal(result.authOutcome, 'provider-failure');
+    assert.equal(orderReads, 0);
+    assert.equal(commits, 0);
+  }
+});
+
+test('ShipStation shipment route safely releases a claim after its commit response is lost', async () => {
+  let claimId = '';
+  let orderReads = 0;
+  let claimCommitAttempts = 0;
+  let releaseCommits = 0;
+  let shipStationCalls = 0;
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+    dependencies(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') {
+        shipStationCalls += 1;
+        return Response.json({ error: 'unexpected' }, { status: 500 });
+      }
+      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+      if (url.pathname.endsWith('/deliveryOrders/7')) {
+        orderReads += 1;
+        return Response.json(orderDocument({
+          shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
+        }, `2026-08-18T12:00:0${orderReads}.000000Z`));
+      }
+      if (url.pathname.endsWith('/documents:commit')) {
+        const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
+        const write = commit.writes[0] as {
+          update?: {
+            fields?: {
+              shipstation?: {
+                mapValue?: { fields?: Record<string, { stringValue?: string }> };
+              };
+            };
+          };
+          updateMask?: { fieldPaths?: string[] };
+        };
+        const nextClaimId = write.update?.fields?.shipstation?.mapValue?.fields?.claimId?.stringValue;
+        if (nextClaimId) {
+          claimCommitAttempts += 1;
+          claimId = nextClaimId;
+          if (claimCommitAttempts === 1) throw new Error('commit response lost');
+          return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 400 });
+        }
+        releaseCommits += 1;
+        assert.ok(write.updateMask?.fieldPaths?.includes('shipstation.claimId'));
+        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:03Z' });
+      }
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    }),
+  );
+  assert.equal(result.response.status, 409);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
+  assert.equal(claimCommitAttempts, 2);
+  assert.equal(releaseCommits, 1);
+  assert.equal(shipStationCalls, 0);
+});
+
+test('ShipStation shipment route claims, decrypts, creates, and conditionally persists one shipment', async () => {
+  let claimId = '';
+  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
+  let createBody: unknown;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      assert.equal(new Headers(init?.headers).get('api-key'), 'shipstation-api-key');
+      if (url.pathname === '/v2/shipments/external_shipment_id/mons-card_nft_2-7') {
+        return Response.json({}, { status: 404 });
+      }
+      if (url.pathname === '/v2/shipments' && init?.method === 'POST') {
+        createBody = JSON.parse(String(init.body));
+        return Response.json({
+          shipments: [{
+            shipment_id: 'shipment-new',
+            packages: [{
+              weight: { value: 8, unit: 'ounce' },
+              dimensions: { length: 10, width: 8, height: 3, unit: 'inch' },
+            }],
+          }],
+        });
+      }
+      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        addressSnapshot: {
+          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
+          countryCode: 'TR',
+          email: 'owner@example.com',
+          phone: '+905555555555',
+        },
+        items: [
+          { kind: 'box', refId: 1 },
+          { kind: 'dude', refId: 2 },
+          { kind: 'box', refId: 0 },
+          { kind: 'other', refId: 3 },
+        ],
+        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
+      commits.push(commit);
+      const fields = (commit.writes[0] as {
+        update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } };
+      }).update?.fields?.shipstation?.mapValue?.fields;
+      claimId = fields?.claimId?.stringValue ?? claimId;
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      package: { length: 10, width: 8, height: 3, weight: 8 },
+    }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), {
+    deliveryId: 7,
+    shipmentId: 'shipment-new',
+    alreadyAdded: false,
+    shipstationAddedAt: NOW_MS,
+  });
+  assert.equal(commits.length, 2);
+  assert.match(claimId, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(createBody, {
+    shipments: [{
+      external_shipment_id: 'mons-card_nft_2-7',
+      shipment_number: '7',
+      ship_to: {
+        name: 'Ivan',
+        address_line1: '100 Main St',
+        city_locality: 'Istanbul',
+        state_province: '',
+        postal_code: '34000',
+        country_code: 'TR',
+        address_residential_indicator: 'yes',
+        email: 'owner@example.com',
+        phone: '+905555555555',
+      },
+      ship_from: SHIP_FROM,
+      packages: [{
+        weight: { value: 8, unit: 'ounce' },
+        dimensions: { length: 10, width: 8, height: 3, unit: 'inch' },
+      }],
+      create_sales_order: true,
+      shipment_status: 'pending',
+    }],
+  });
+  const finalWrite = commits[1].writes[0] as {
+    update: { fields: { shipstation: { mapValue: { fields: Record<string, unknown> } } } };
+    updateMask: { fieldPaths: string[] };
+    updateTransforms: unknown[];
+  };
+  const finalFields = finalWrite.update.fields.shipstation.mapValue.fields;
+  assert.deepEqual(finalFields.shipmentId, stringValue('shipment-new'));
+  assert.deepEqual(finalFields.externalShipmentId, stringValue('mons-card_nft_2-7'));
+  assert.ok(finalWrite.updateMask.fieldPaths.includes('shipstation.claimId'));
+  assert.ok(finalWrite.updateMask.fieldPaths.includes('shipstation.lastError'));
+  assert.deepEqual(finalWrite.updateTransforms, [
+    { fieldPath: 'shipstation.createdAt', setToServerValue: 'REQUEST_TIME' },
+  ]);
+});
+
+test('ShipStation shipment route adopts an external-id match without creating a duplicate', async () => {
+  let claimId = '';
+  let postCalls = 0;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (init?.method === 'POST') postCalls += 1;
+      return Response.json({
+        shipment: {
+          shipment_id: 'shipment-adopted',
+          shipment_status: 'pending',
+          packages: [{
+            weight: { value: 12, unit: 'ounce' },
+            dimensions: { length: 12, width: 9, height: 2, unit: 'inch' },
+          }],
+        },
+      });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        shipstation: claimId
+          ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER }
+          : { claimedAt: NOW_MS - 120_001, claimedBy: OTHER },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as {
+        writes: Array<{ update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } } }>;
+      };
+      claimId = commit.writes[0].update?.fields?.shipstation?.mapValue?.fields?.claimId?.stringValue ?? claimId;
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), {
+    deliveryId: 7,
+    shipmentId: 'shipment-adopted',
+    alreadyAdded: true,
+    shipstationAddedAt: NOW_MS,
+  });
+  assert.equal(postCalls, 0);
+});
+
+test('ShipStation shipment route retains only its own claim after an ambiguous create failure', async () => {
+  for (const replacement of [false, true]) {
+    let claimId = '';
+    const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
+    const providerFetch: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'api.shipstation.com') {
+        if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+        return new Promise<Response>((_resolve, reject) => {
+          reject(new Error('network failed after sending a private address'));
+        });
+      }
+      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+      if (url.pathname.endsWith('/deliveryOrders/7')) {
+        return Response.json(orderDocument({
+          addressSnapshot: {
+            encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
+            countryCode: 'TR',
+          },
+          items: [{ kind: 'box', refId: 1 }],
+          shipstation: claimId
+            ? replacement && commits.length === 1
+              ? { claimId: 'replacement-claim', claimedAt: NOW_MS, claimedBy: OTHER }
+              : { claimId, claimedAt: NOW_MS, claimedBy: OWNER }
+            : {},
+        }));
+      }
+      if (url.pathname.endsWith('/documents:commit')) {
+        const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
+        commits.push(commit);
+        const fields = (commit.writes[0] as {
+          update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } };
+        }).update?.fields?.shipstation?.mapValue?.fields;
+        claimId = fields?.claimId?.stringValue ?? claimId;
+        return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+      }
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    };
+    const result = await handleProfileWriteRequest(
+      request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+      dependencies(providerFetch),
+    );
+    assert.equal(result.response.status, 409);
+    const payload = await result.response.json() as { error: { code: string; message: string } };
+    assert.equal(payload.error.code, 'aborted');
+    assert.doesNotMatch(payload.error.message, /100 Main St|private address/);
+    assert.equal(commits.length, replacement ? 1 : 2);
+    if (!replacement) {
+      const transition = commits[1].writes[0] as {
+        update: { fields: { shipstation: { mapValue: { fields: Record<string, { stringValue?: string }> } } } };
+        updateTransforms: Array<{ fieldPath: string }>;
+      };
+      const fields = transition.update.fields.shipstation.mapValue.fields;
+      assert.equal(fields.claimId.stringValue, claimId);
+      assert.equal(fields.lastError.stringValue, 'Could not reach ShipStation');
+      assert.ok(transition.updateTransforms.some((entry) => entry.fieldPath === 'shipstation.claimedAt'));
+    }
+  }
+});
+
+test('ShipStation shipment route releases its claim after a definitive provider rejection', async () => {
+  let claimId = '';
+  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+      return Response.json({
+        errors: [{ error_code: 'invalid_address', message: 'Ivan, 100 Main St' }],
+      }, { status: 400 });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        addressSnapshot: {
+          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
+          countryCode: 'TR',
+        },
+        items: [{ kind: 'box', refId: 1 }],
+        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
+      commits.push(commit);
+      const fields = (commit.writes[0] as {
+        update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } };
+      }).update?.fields?.shipstation?.mapValue?.fields;
+      claimId = fields?.claimId?.stringValue ?? claimId;
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+    dependencies(providerFetch),
+  );
+  assert.equal(result.response.status, 409);
+  const payload = await result.response.json() as { error: { code: string; message: string } };
+  assert.equal(payload.error.code, 'failed-precondition');
+  assert.match(payload.error.message, /invalid_address/);
+  assert.doesNotMatch(payload.error.message, /100 Main St/);
+  assert.equal(commits.length, 2);
+  const release = commits[1].writes[0] as {
+    update: { fields: { shipstation: { mapValue: { fields: Record<string, { stringValue?: string }> } } } };
+    updateMask: { fieldPaths: string[] };
+  };
+  assert.equal(release.update.fields.shipstation.mapValue.fields.claimFenceId.stringValue, claimId);
+  assert.ok(release.updateMask.fieldPaths.includes('shipstation.claimedAt'));
+});
+
+test('ShipStation shipment route preserves its sanitized provider error when claim cleanup fails', async () => {
+  let claimId = '';
+  let cleanupAttempts = 0;
+  const logged: string[] = [];
+  const originalConsoleError = console.error;
+  console.error = (...values: unknown[]) => logged.push(values.map(String).join(' '));
+  try {
+    const result = await handleProfileWriteRequest(
+      request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+      dependencies(async (input, init) => {
+        const url = new URL(String(input));
+        if (url.hostname === 'api.shipstation.com') {
+          if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+          return Response.json({
+            errors: [{ error_code: 'invalid_address', message: 'Ivan, 100 Main St' }],
+          }, { status: 400 });
+        }
+        if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+        if (url.pathname.endsWith('/deliveryOrders/7')) {
+          return Response.json(orderDocument({
+            addressSnapshot: {
+              encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
+              countryCode: 'TR',
+            },
+            items: [{ kind: 'box', refId: 1 }],
+            shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
+          }));
+        }
+        if (url.pathname.endsWith('/documents:commit')) {
+          const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
+          const write = commit.writes[0] as {
+            update?: {
+              fields?: {
+                shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
+              };
+            };
+          };
+          const nextClaimId = write.update?.fields?.shipstation?.mapValue?.fields?.claimId?.stringValue;
+          if (nextClaimId) {
+            claimId = nextClaimId;
+            return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+          }
+          cleanupAttempts += 1;
+          return Response.json({ error: { status: 'UNAVAILABLE' } }, { status: 503 });
+        }
+        return Response.json({ error: 'unexpected' }, { status: 500 });
+      }),
+    );
+    assert.equal(result.response.status, 409);
+    const payload = await result.response.json() as { error: { code: string; message: string } };
+    assert.equal(payload.error.code, 'failed-precondition');
+    assert.match(payload.error.message, /invalid_address/);
+    assert.doesNotMatch(payload.error.message, /100 Main St/);
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.equal(cleanupAttempts, 2);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /fulfillment_shipstation_shipment_claim_transition_failed/);
+  assert.doesNotMatch(logged[0], /100 Main St/);
 });
 
 test('ShipStation label route refreshes and conditionally persists an active stored label', async () => {
@@ -1934,6 +2425,7 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
     [FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'x'.repeat(2049) }],
     [FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
     [FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
   ] as const) {
     const result = await handleProfileWriteRequest(
       request(path, body),

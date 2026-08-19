@@ -19,15 +19,12 @@ import {
   buildShipStationPackages as buildSharedShipStationPackages,
   getShipStationRateById as getSharedShipStationRateById,
   getShipStationShipmentRates as getSharedShipStationShipmentRates,
-  parseShipStationShipFrom as parseSharedShipStationShipFrom,
-  parseShipStationShipTo as parseSharedShipStationShipTo,
   requestShipStationShipmentRates as requestSharedShipStationShipmentRates,
   shipStationPackageDetails as sharedShipStationPackageDetails,
   shipStationPackageInputFromShipmentPackage as sharedShipStationPackageInputFromShipmentPackage,
   shipStationRateSummaries as sharedShipStationRateSummaries,
   ShipStationRatesProviderError,
   updateShipStationShipment as updateSharedShipStationShipment,
-  type ParsedShipToResult,
   type ShipStationAddress,
   type ShipStationPackage,
   type ShipStationRateResponse,
@@ -43,7 +40,6 @@ export {
 };
 export type { ShipStationLabelResult };
 export type {
-  ParsedShipToResult,
   ShipStationAddress,
   ShipStationPackage,
   ShipStationRateResponse,
@@ -69,25 +65,7 @@ export function shipStationMoneyMatches(expected: ShipStationMoney, actual: Ship
 export const shipStationPackageInputFromShipmentPackage = sharedShipStationPackageInputFromShipmentPackage;
 export const shipStationPackageDetails = sharedShipStationPackageDetails;
 export const shipStationRateSummaries = sharedShipStationRateSummaries;
-export const parseShipStationShipTo = parseSharedShipStationShipTo;
 export const buildShipStationPackages = buildSharedShipStationPackages;
-
-export function parseShipStationShipFrom(raw: string): ShipStationAddress {
-  try {
-    return parseSharedShipStationShipFrom(raw);
-  } catch (error) {
-    if (error instanceof ShipStationRatesProviderError) throw new HttpsError(error.code, error.message);
-    throw error;
-  }
-}
-
-/**
- * Deterministic per order — this is what makes the create call de-duplicable.
- * ShipStation truncates this at 50 characters; the longest drop id leaves ~15 to spare.
- */
-export function shipStationExternalId(dropId: string, deliveryId: number): string {
-  return `mons-${dropId}-${deliveryId}`;
-}
 
 async function shipStationFetch(
   apiKey: string,
@@ -157,32 +135,6 @@ function httpsErrorForStatus(status: number, message: string): HttpsError {
   if (status === 429) return new HttpsError('resource-exhausted', `ShipStation rate limit: ${message}`);
   if (status >= 500) return new HttpsError('unavailable', `ShipStation is unavailable: ${message}`);
   return new HttpsError('failed-precondition', `ShipStation rejected the shipment: ${message}`);
-}
-
-/**
- * Crash-recovery lookup: if we created a shipment but failed to record it, this
- * finds it again instead of creating a duplicate. Returns null when absent.
- */
-export async function getShipStationShipmentByExternalId(
-  apiKey: string,
-  externalId: string,
-): Promise<ShipStationShipment | null> {
-  const { status, json } = await shipStationFetch(
-    apiKey,
-    `/shipments/external_shipment_id/${encodeURIComponent(externalId)}`,
-    { method: 'GET' },
-  );
-  if (status === 404) return null;
-  if (status < 200 || status >= 300) {
-    throw httpsErrorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
-  }
-  // The endpoint answers with a bare shipment object; the wrapper check costs nothing and
-  // a wrong guess here means a duplicate shipment.
-  const shipment: ShipStationShipment | null = json?.shipment || json || null;
-  if (!shipment || typeof shipment.shipment_id !== 'string' || !shipment.shipment_id) return null;
-  // A cancelled shipment should not block a fresh push.
-  if (shipment.shipment_status === 'cancelled') return null;
-  return shipment;
 }
 
 async function withFirebaseRatesError<T>(operation: () => Promise<T>): Promise<T> {
@@ -268,47 +220,4 @@ export async function createShipStationLabelFromRate(
   const result = shipStationLabelResult(json?.label || json);
   if (!result) throw new HttpsError('internal', 'ShipStation did not return a label id');
   return result;
-}
-
-export async function createShipStationShipment(
-  apiKey: string,
-  shipment: {
-    external_shipment_id: string;
-    shipment_number: string;
-    ship_to: ShipStationAddress;
-    ship_from: ShipStationAddress;
-    packages: ShipStationPackage[];
-  },
-): Promise<ShipStationShipment> {
-  const { status, json } = await shipStationFetch(apiKey, '/shipments', {
-    method: 'POST',
-    body: {
-      shipments: [
-        {
-          ...shipment,
-          create_sales_order: true,
-          shipment_status: 'pending',
-        },
-      ],
-    },
-  });
-
-  if (status < 200 || status >= 300) {
-    throw httpsErrorForStatus(status, shipStationErrorMessage(json, `HTTP ${status}`));
-  }
-
-  const created: ShipStationShipment | undefined = Array.isArray(json?.shipments) ? json.shipments[0] : undefined;
-  // Any error entry rejects the shipment, whether or not a code could be read off it.
-  const shipmentErrors = Array.isArray(created?.errors) ? created?.errors : [];
-  const codes = shipStationErrorCodes(shipmentErrors);
-  if (json?.has_errors === true || shipmentErrors.length) {
-    const message = codes.length
-      ? codes.join('; ')
-      : shipStationErrorMessage(json, 'ShipStation reported an error');
-    throw new HttpsError('failed-precondition', `ShipStation rejected the shipment: ${message}`);
-  }
-  if (!created || typeof created.shipment_id !== 'string' || !created.shipment_id) {
-    throw new HttpsError('internal', 'ShipStation did not return a shipment id');
-  }
-  return created;
 }

@@ -225,7 +225,8 @@ type AuthenticatedApiPath =
   | '/fulfillment/order-status'
   | '/fulfillment/manual-review-checkouts'
   | '/fulfillment/shipstation-label'
-  | '/fulfillment/shipstation-rates';
+  | '/fulfillment/shipstation-rates'
+  | '/fulfillment/shipstation-shipment';
 
 const defaultProfileApiDependencies: ProfileApiClientDependencies = {
   fetch: (input, init) => fetch(input, init),
@@ -236,10 +237,12 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_RATES_API_TIMEOUT_MS = 65_000;
+const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-rates') return SHIPSTATION_RATES_API_TIMEOUT_MS;
+  if (pathname === '/fulfillment/shipstation-shipment') return SHIPSTATION_SHIPMENT_API_TIMEOUT_MS;
   return defaultProfileApiDependencies.timeoutMs;
 }
 
@@ -532,6 +535,34 @@ function parseFulfillmentShipStationLabel(value: unknown): NonNullable<GetFulfil
     ...(totalCost ? { totalCost } : {}),
     ...(typeof value.purchasedAt === 'number' ? { purchasedAt: value.purchasedAt } : {}),
     ...(typeof value.purchasedBy === 'string' ? { purchasedBy: value.purchasedBy } : {}),
+  };
+}
+
+function parseAddFulfillmentOrderToShipStation(
+  value: unknown,
+): AddFulfillmentOrderToShipStationResponse | null {
+  if (!isRecord(value)) return null;
+  const required = ['deliveryId', 'shipmentId', 'alreadyAdded'] as const;
+  const allowed = new Set<string>([...required, 'shipstationAddedAt']);
+  if (!required.every((key) => Object.hasOwn(value, key))) return null;
+  if (!Object.keys(value).every((key) => allowed.has(key))) return null;
+  if (
+    !Number.isSafeInteger(value.deliveryId) || Number(value.deliveryId) <= 0 ||
+    typeof value.shipmentId !== 'string' || !value.shipmentId ||
+    typeof value.alreadyAdded !== 'boolean' ||
+    (value.shipstationAddedAt !== undefined && (
+      typeof value.shipstationAddedAt !== 'number' ||
+      !Number.isFinite(value.shipstationAddedAt) ||
+      value.shipstationAddedAt <= 0
+    ))
+  ) return null;
+  return {
+    deliveryId: Number(value.deliveryId),
+    shipmentId: value.shipmentId,
+    alreadyAdded: value.alreadyAdded,
+    ...(typeof value.shipstationAddedAt === 'number'
+      ? { shipstationAddedAt: value.shipstationAddedAt }
+      : {}),
   };
 }
 
@@ -1012,10 +1043,13 @@ export async function addFulfillmentOrderToShipStation(
   dropId: string,
   packageInput?: ShipStationPackageInput,
 ): Promise<AddFulfillmentOrderToShipStationResponse> {
-  return callFunction<AddFulfillmentOrderToShipStationRequest, AddFulfillmentOrderToShipStationResponse>(
-    'addFulfillmentOrderToShipStation',
+  const response = await callProfileApi<AddFulfillmentOrderToShipStationRequest>(
+    '/fulfillment/shipstation-shipment',
     { deliveryId, dropId, ...(packageInput ? { package: packageInput } : {}) },
   );
+  const result = parseAddFulfillmentOrderToShipStation(response);
+  if (!result) throw new Error('Invalid fulfillment ShipStation shipment response');
+  return result;
 }
 
 export async function getFulfillmentShipStationRates(
@@ -1250,6 +1284,7 @@ export async function listDeliveryOrderOwners(
 }
 
 export const profileApiTestHooks = {
+  parseAddFulfillmentOrderToShipStation,
   parseGetFulfillmentShipStationLabel,
   parseGetFulfillmentShipStationRates,
   parseFulfillmentStatusUpdate,

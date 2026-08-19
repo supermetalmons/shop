@@ -53,29 +53,17 @@ import { encodeFinalizeOpenBoxArgs } from './finalizeOpenBoxArgs.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
   adoptOrPurchaseShipStationLabel,
-  buildShipStationPackages,
   createShipStationLabelFromRate,
-  createShipStationShipment,
   getShipStationLabelById,
   getShipStationRateById,
-  getShipStationShipmentByExternalId,
   isActiveShipStationLabel,
   listShipStationLabelsForShipment,
-  parseShipStationShipFrom,
-  parseShipStationShipTo,
   shipStationMoneyMatches,
-  shipStationPackageDetails,
   shipStationTrackingCodeUpdate,
   shouldClearShipStationPurchaseState,
   shouldTransitionShipStationPurchaseState,
-  shipStationExternalId,
   type ShipStationLabelResult,
 } from './shipstation.js';
-import {
-  defaultShipStationPackage,
-  normalizeShipStationPackage,
-  SHIPSTATION_PACKAGE_RANGE_MESSAGE,
-} from './shared/shipstationPackage.js';
 import {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
   STRIPE_CHECKOUT_STATUS,
@@ -292,9 +280,7 @@ import {
 import {
   ADDRESS_CIPHER_SECRET_KEY_LENGTH,
   addressCipherHint,
-  decryptAddressCipherText,
   encryptAddressCipherText,
-  parseAddressCipherPayload,
   serializeAddressCipherPayload,
 } from './shared/addressCipher.js';
 import { summarizePayloadShape } from './shared/logSummaries.js';
@@ -323,9 +309,7 @@ const STRIPE_RESTRICTED_KEY_LIVE = defineSecret('STRIPE_RESTRICTED_KEY_LIVE');
 const STRIPE_SECRET_KEY_LIVE = defineSecret('STRIPE_SECRET_KEY_LIVE');
 const STRIPE_WEBHOOK_SECRET = defineSecret('STRIPE_WEBHOOK_SECRET');
 const STRIPE_WEBHOOK_SECRET_DEVNET = defineSecret('STRIPE_WEBHOOK_SECRET_DEVNET');
-// ShipStation API v2 key, plus the origin address as a single JSON object.
 const SHIPSTATION_API_KEY = defineSecret('SHIPSTATION_API_KEY');
-const SHIPSTATION_SHIP_FROM = defineSecret('SHIPSTATION_SHIP_FROM');
 
 function loadLocalEnv() {
   const envPaths = [
@@ -887,27 +871,6 @@ function addressDecryptKeyMaybe(): Uint8Array | null {
   } catch (err) {
     cachedAddressDecryptKeyState = 'missing';
     console.warn('[mons/functions] ADDRESS_DECRYPTION_SECRET unavailable; returning encrypted addresses', summarizeError(err));
-    return null;
-  }
-}
-
-function decodeAddressCipherPart(part: string): Uint8Array | null {
-  if (!part) return null;
-  try {
-    return Buffer.from(part, 'base64');
-  } catch {
-    return null;
-  }
-}
-
-function decryptAddressPayload(payload: string): string | null {
-  try {
-    const parts = parseAddressCipherPayload(payload, decodeAddressCipherPart);
-    if (!parts) return null;
-    const secret = addressDecryptKeyMaybe();
-    if (!secret) return null;
-    return decryptAddressCipherText(parts, secret);
-  } catch {
     return null;
   }
 }
@@ -5678,12 +5641,6 @@ export const createStripeCheckoutSession = onCallAuthed(
   },
 );
 
-/**
- * Window during which a started push blocks a second one. Long enough to cover the
- * ShipStation round trip, short enough that a crashed call becomes retryable quickly.
- */
-const SHIPSTATION_CLAIM_TTL_MS = 120_000;
-
 function shipStationLabelDocument(
   label: FulfillmentShipStationLabel,
   wallet: string,
@@ -5809,210 +5766,6 @@ function rejectIrlShipStationOrder(order: any): void {
     throw new HttpsError('failed-precondition', 'In-person redemption orders do not have a delivery address');
   }
 }
-
-export const addFulfillmentOrderToShipStation = onCallLogged(
-  'addFulfillmentOrderToShipStation',
-  async (request) => {
-    const schema = z.object({
-      dropId: z.string().min(1).max(64),
-      deliveryId: z.number().int().positive(),
-      package: z
-        .object({
-          length: z.number(),
-          width: z.number(),
-          height: z.number(),
-          weight: z.number(),
-        })
-        .optional(),
-    });
-    const { dropId: requestDropId, deliveryId, package: requestPackage } = parseRequest(schema, request.data);
-    const dropId = requireDropId(requestDropId);
-    const { wallet } = await requireFulfillmentDropAccess(request, dropId);
-
-    const packageOverride = requestPackage ? normalizeShipStationPackage(requestPackage) : null;
-    if (requestPackage && !packageOverride) {
-      throw new HttpsError('invalid-argument', SHIPSTATION_PACKAGE_RANGE_MESSAGE);
-    }
-
-    const apiKey = envOrSecretValue('SHIPSTATION_API_KEY', SHIPSTATION_API_KEY);
-    if (!apiKey) {
-      throw new HttpsError('failed-precondition', 'ShipStation API key is not configured');
-    }
-    const shipFrom = parseShipStationShipFrom(envOrSecretValue('SHIPSTATION_SHIP_FROM', SHIPSTATION_SHIP_FROM));
-
-    const orderRef = db.doc(dropDeliveryOrderPath(dropId, deliveryId));
-    const externalShipmentId = shipStationExternalId(dropId, deliveryId);
-
-    // Claim the order before touching ShipStation so concurrent presses cannot both create.
-    const claim = await db.runTransaction(async (tx) => {
-      const snap = await tx.get(orderRef);
-      if (!snap.exists) {
-        throw new HttpsError('not-found', 'Delivery order not found');
-      }
-      const order = snap.data() as any;
-      if (order?.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) {
-        throw new HttpsError('failed-precondition', 'In-person redemption orders do not have a delivery address');
-      }
-
-      const existingShipmentId =
-        typeof order?.shipstation?.shipmentId === 'string' ? order.shipstation.shipmentId.trim() : '';
-      if (existingShipmentId) {
-        return {
-          alreadyAdded: true as const,
-          shipmentId: existingShipmentId,
-          addedAt: toMillisMaybe(order?.shipstation?.createdAt),
-        };
-      }
-
-      const claimedAt = toMillisMaybe(order?.shipstation?.claimedAt) ?? 0;
-      if (claimedAt && Date.now() - claimedAt < SHIPSTATION_CLAIM_TTL_MS) {
-        throw new HttpsError('aborted', 'This order is already being added to ShipStation. Try again in a moment.');
-      }
-
-      tx.set(
-        orderRef,
-        {
-          dropId,
-          shipstation: {
-            claimedAt: FieldValue.serverTimestamp(),
-            claimedBy: wallet,
-          },
-        },
-        { merge: true },
-      );
-      return { alreadyAdded: false as const, order };
-    });
-
-    if (claim.alreadyAdded) {
-      return {
-        deliveryId,
-        shipmentId: claim.shipmentId,
-        alreadyAdded: true,
-        ...(claim.addedAt ? { shipstationAddedAt: claim.addedAt } : {}),
-      };
-    }
-
-    // Tracks whether ShipStation could have created a shipment we did not record.
-    let postAttempted = false;
-
-    try {
-      // If a previous attempt created the shipment but died before recording it, adopt it.
-      const existing = await getShipStationShipmentByExternalId(apiKey, externalShipmentId);
-      let shipment = existing;
-      let appliedPackage = existing ? shipStationPackageDetails(existing).package : undefined;
-
-      if (!shipment) {
-        const order = claim.order;
-        const addressSnapshot = order?.addressSnapshot || {};
-        const encrypted = typeof addressSnapshot?.encrypted === 'string' ? addressSnapshot.encrypted : '';
-        const full = encrypted ? decryptAddressPayload(encrypted) : null;
-        const parsed = parseShipStationShipTo(
-          full,
-          typeof addressSnapshot?.countryCode === 'string' ? addressSnapshot.countryCode : undefined,
-        );
-        if (!parsed.ok || !parsed.shipTo) {
-          const reason = parsed.reason || 'Could not read the delivery address';
-          throw new HttpsError('failed-precondition', `${reason}. Edit the delivery address and try again.`);
-        }
-
-        const itemsRaw = Array.isArray(order?.items) ? order.items : [];
-        // Same rule the order summary uses, so the fulfillment UI prefills this exact count.
-        const unitCount = itemsRaw.filter((item: any) => {
-          if (!item || (item.kind !== 'box' && item.kind !== 'dude')) return false;
-          const refId = Math.floor(Number(item.refId));
-          return Number.isFinite(refId) && refId > 0;
-        }).length;
-
-        const email = typeof addressSnapshot?.email === 'string' ? addressSnapshot.email.trim() : '';
-        const phone = typeof addressSnapshot?.phone === 'string' ? addressSnapshot.phone.trim() : '';
-        appliedPackage = packageOverride ?? defaultShipStationPackage(unitCount);
-
-        postAttempted = true;
-        shipment = await createShipStationShipment(apiKey, {
-          external_shipment_id: externalShipmentId,
-          shipment_number: String(deliveryId),
-          ship_to: {
-            ...parsed.shipTo,
-            ...(email ? { email } : {}),
-            ...(phone ? { phone } : {}),
-          },
-          ship_from: shipFrom,
-          packages: buildShipStationPackages(unitCount, appliedPackage),
-        });
-      }
-
-      const shipmentId = String(shipment.shipment_id);
-      const packageDetails = shipStationPackageDetails(shipment);
-      const storedPackage = appliedPackage ?? packageDetails.package;
-      await orderRef.set(
-        {
-          dropId,
-          shipstation: {
-            shipmentId,
-            externalShipmentId,
-            shipmentNumber: String(deliveryId),
-            createdAt: FieldValue.serverTimestamp(),
-            createdBy: wallet,
-            ...(storedPackage ? { package: storedPackage } : {}),
-            packageCount: packageDetails.packageCount || 1,
-            claimedAt: FieldValue.delete(),
-            claimedBy: FieldValue.delete(),
-            lastError: FieldValue.delete(),
-            lastErrorAt: FieldValue.delete(),
-          },
-        },
-        { merge: true },
-      );
-
-      return {
-        deliveryId,
-        shipmentId,
-        alreadyAdded: Boolean(existing),
-        shipstationAddedAt: Date.now(),
-      };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // A clean rejection (bad address, 4xx from ShipStation) definitely created nothing,
-      // so the claim can be released and the operator can retry at once. A timeout, network
-      // failure or 5xx after the POST left, however, may have created the shipment anyway —
-      // and the external-id lookup is not instantly consistent, so an immediate retry could
-      // duplicate it. In that case re-arm the claim and make the operator wait out the TTL,
-      // by which point the lookup will find and adopt any shipment that did get created.
-      const failureCode = err instanceof HttpsError ? String(err.code) : 'internal';
-      const mayHaveCreated =
-        postAttempted && ['deadline-exceeded', 'unavailable', 'internal', 'unknown'].some((code) => failureCode.endsWith(code));
-      await orderRef
-        .set(
-          {
-            shipstation: {
-              ...(mayHaveCreated
-                ? { claimedAt: FieldValue.serverTimestamp() }
-                : { claimedAt: FieldValue.delete(), claimedBy: FieldValue.delete() }),
-              lastError: message.slice(0, 500),
-              lastErrorAt: FieldValue.serverTimestamp(),
-            },
-          },
-          { merge: true },
-        )
-        .catch((releaseErr) => {
-          logger.error('addFulfillmentOrderToShipStation:claim_release_failed', {
-            dropId,
-            deliveryId,
-            error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
-          });
-        });
-      if (mayHaveCreated) {
-        throw new HttpsError(
-          'aborted',
-          'ShipStation did not confirm the shipment. It may still have been created — check ShipStation, or try again in a couple of minutes.',
-        );
-      }
-      if (err instanceof HttpsError) throw err;
-      throw new HttpsError('internal', 'Failed to add the order to ShipStation');
-    }
-  },
-  { secrets: [ADDRESS_DECRYPTION_SECRET, SHIPSTATION_API_KEY, SHIPSTATION_SHIP_FROM] },
-);
 
 export const purchaseFulfillmentShipStationLabel = onCallLogged(
   'purchaseFulfillmentShipStationLabel',

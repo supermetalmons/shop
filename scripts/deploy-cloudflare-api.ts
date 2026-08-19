@@ -917,6 +917,7 @@ async function smokeApi(
       ['/fulfillment/manual-review-checkouts', { dropId: 'card_nft_2' }],
       ['/fulfillment/shipstation-label', { dropId: 'card_nft_2', deliveryId: 1 }],
       ['/fulfillment/shipstation-rates', { dropId: 'card_nft_2', deliveryId: 1 }],
+      ['/fulfillment/shipstation-shipment', { dropId: 'card_nft_2', deliveryId: 1 }],
     ] as const) {
       const capability = await request(`${baseUrl}${pathname}`, {
         method: 'POST',

@@ -187,6 +187,7 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
     ['updateFulfillmentStatus', '/fulfillment/order-status'],
     ['getFulfillmentShipStationLabel', '/fulfillment/shipstation-label'],
     ['getFulfillmentShipStationRates', '/fulfillment/shipstation-rates'],
+    ['addFulfillmentOrderToShipStation', '/fulfillment/shipstation-shipment'],
   ] as const) {
     const start = source.indexOf(`export async function ${exportName}`);
     const end = source.indexOf('\nexport ', start + 1);
@@ -197,10 +198,21 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
   }
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label'), 50_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-rates'), 65_000);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-shipment'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/order-address'), 20_000);
 });
 
 test('migrated write response validators accept only exact public contracts', () => {
+  const shipment = {
+    deliveryId: 7,
+    shipmentId: 'shipment-1',
+    alreadyAdded: false,
+    shipstationAddedAt: 1_755_000_000_000,
+  };
+  assert.deepEqual(profileApiTestHooks.parseAddFulfillmentOrderToShipStation(shipment), shipment);
+  assert.equal(profileApiTestHooks.parseAddFulfillmentOrderToShipStation({ ...shipment, private: true }), null);
+  assert.equal(profileApiTestHooks.parseAddFulfillmentOrderToShipStation({ ...shipment, alreadyAdded: 'false' }), null);
+
   const address = {
     id: 'AbCdEfGhIjKlMnOpQrSt',
     country: 'United States',
@@ -417,6 +429,7 @@ test('migrated profile writes are absent from Firebase exports and deployment se
     'saveAddress',
     'updateFulfillmentStatus',
     'updateFulfillmentAddress',
+    'addFulfillmentOrderToShipStation',
     'getFulfillmentShipStationLabel',
     'getFulfillmentShipStationRates',
   ]) {
@@ -425,7 +438,7 @@ test('migrated profile writes are absent from Firebase exports and deployment se
   }
   assert.match(
     scripts['decommission:firebase-fulfillment-callables'],
-    /firebase functions:delete updateFulfillmentAddress getFulfillmentShipStationLabel --project mons-shop --force/,
+    /firebase functions:delete addFulfillmentOrderToShipStation --project mons-shop --force/,
   );
 });
 
