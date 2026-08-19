@@ -336,6 +336,16 @@ test('migrated profile writes are absent from Firebase exports and deployment se
   );
 });
 
+test('Firebase label persistence replaces the complete label map', () => {
+  const source = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('async function persistFulfillmentShipStationLabel');
+  const end = source.indexOf('\nasync function findAndPersistFulfillmentShipStationLabel', start);
+  const implementation = source.slice(start, end);
+  assert.match(implementation, /tx\.update\(args\.orderRef/);
+  assert.match(implementation, /'shipstation\.label': shipStationLabelDocument/);
+  assert.doesNotMatch(implementation, /\{ merge: true \}/);
+});
+
 test('browser source has no direct Firestore data access', () => {
   const sourceRoot = new URL('../src/', import.meta.url);
   const files = (directory: URL): URL[] => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

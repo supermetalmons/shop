@@ -5787,25 +5787,19 @@ async function persistFulfillmentShipStationLabel(args: {
       currentLabel,
       label,
     );
-    tx.set(
-      args.orderRef,
-      {
-        dropId: args.dropId,
-        ...(trackingCodeUpdate === null
-          ? { fulfillmentTrackingCode: FieldValue.delete() }
-          : trackingCodeUpdate
-            ? { fulfillmentTrackingCode: trackingCodeUpdate }
-            : {}),
-        shipstation: {
-          label: shipStationLabelDocument(label, args.wallet, args.rateId),
-          ...(clearPurchaseState ? { labelPurchase: FieldValue.delete() } : {}),
-          rateQuotes: FieldValue.delete(),
-          ratesClaimedAt: FieldValue.delete(),
-          ratesClaimedBy: FieldValue.delete(),
-        },
-      },
-      { merge: true },
-    );
+    tx.update(args.orderRef, {
+      dropId: args.dropId,
+      ...(trackingCodeUpdate === null
+        ? { fulfillmentTrackingCode: FieldValue.delete() }
+        : trackingCodeUpdate
+          ? { fulfillmentTrackingCode: trackingCodeUpdate }
+          : {}),
+      'shipstation.label': shipStationLabelDocument(label, args.wallet, args.rateId),
+      ...(clearPurchaseState ? { 'shipstation.labelPurchase': FieldValue.delete() } : {}),
+      'shipstation.rateQuotes': FieldValue.delete(),
+      'shipstation.ratesClaimedAt': FieldValue.delete(),
+      'shipstation.ratesClaimedBy': FieldValue.delete(),
+    });
   });
   return label;
 }
