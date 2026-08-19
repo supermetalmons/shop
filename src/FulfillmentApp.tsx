@@ -1650,10 +1650,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   }, [hasFulfillmentAccess, signedIn, selectedDropIds, loadMore]);
 
   const handleSaveStatus = useCallback(
-    async (
-      orderToUpdate: FulfillmentOrder,
-      options: { retryShippedEmail?: boolean } = {},
-    ) => {
+    async (orderToUpdate: FulfillmentOrder) => {
       if (!hasFulfillmentAccess || !signedIn) return false;
       const requestEpoch = orderRequestEpochRef.current;
       const key = fulfillmentOrderKey(orderToUpdate);
@@ -1668,7 +1665,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           nextStatus,
           orderToUpdate.dropId,
           nextTrackingCode,
-          options,
         );
         if (orderRequestEpochRef.current !== requestEpoch) return false;
         const normalized = normalizeFulfillmentStatus(resp.fulfillmentStatus || nextStatus);
@@ -1683,7 +1679,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                     normalized === 'Shipped'
                       ? responseTrackingCode
                       : responseTrackingCode || normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode),
-                  buyerOrderShippedEmailState: resp.buyerOrderShippedEmailState,
                 }
               : order,
           ),
@@ -1737,9 +1732,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       normalizeOptionalFulfillmentTrackingCode(activeUpdateOrder.fulfillmentTrackingCode) ??
       ''
     : '';
-  const activeUpdateEmailState = activeUpdateOrder?.buyerOrderShippedEmailState;
-  const activeUpdateCanRetryEmail = activeUpdateText === 'Shipped' &&
-    (activeUpdateEmailState === 'pending' || activeUpdateEmailState === 'queued');
   const activeUpdateDirty = activeUpdateOrder ? statusDirty.has(activeUpdateOrderKeyResolved) : false;
   const activeUpdateSaving = activeUpdateOrder ? Boolean(statusSaving[activeUpdateOrderKeyResolved]) : false;
 
@@ -2276,12 +2268,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     const ok = await handleSaveStatus(activeUpdateOrder);
     if (ok) setActiveUpdateOrderKey(null);
   }, [activeUpdateDirty, activeUpdateOrder, handleSaveStatus]);
-
-  const handleRetryActiveUpdateEmail = useCallback(async () => {
-    if (!activeUpdateOrder || !activeUpdateCanRetryEmail) return;
-    const ok = await handleSaveStatus(activeUpdateOrder, { retryShippedEmail: true });
-    if (ok) setActiveUpdateOrderKey(null);
-  }, [activeUpdateCanRetryEmail, activeUpdateOrder, handleSaveStatus]);
 
   const activeAddressOrder = useMemo(
     () => orders.find((order) => fulfillmentOrderKey(order) === activeAddressOrderKey) ?? null,
@@ -3530,16 +3516,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
             />
           ) : null}
           <div className="row row--end">
-            {activeUpdateCanRetryEmail ? (
-              <button
-                type="button"
-                className="secondary-light"
-                onClick={() => void handleRetryActiveUpdateEmail()}
-                disabled={activeUpdateSaving}
-              >
-                {activeUpdateEmailState === 'pending' ? 'Retry email' : 'Resend email'}
-              </button>
-            ) : null}
             <button type="button" className="secondary-light" onClick={handleCancelUpdate}>
               Cancel
             </button>
