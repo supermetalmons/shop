@@ -353,7 +353,7 @@ function shipStationLabelOrderUpdate(
 
 function downloadShipStationLabel(url: string): void {
   if (typeof window === 'undefined' || !/^https:\/\//i.test(url)) return;
-  window.location.assign(url);
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function parseShipStationMeasurement(value: string): number {
