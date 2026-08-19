@@ -9,6 +9,7 @@ import {
   DeliveryOrderSummary,
   DeliverySelection,
   FulfillmentManualReviewCheckout,
+  FulfillmentShipStationAddressCorrectionDetails,
   FulfillmentStatus,
   FulfillmentOrder,
   FulfillmentOrdersCursor,
@@ -33,6 +34,9 @@ import {
   RecoverDeliveryOrdersResult,
   ReconcileProfileStateRequest,
   ReconcileProfileStateResponse,
+  SHIPSTATION_EDITABLE_ADDRESS_FIELDS,
+  ShipStationAddressPatch,
+  ShipStationEditableAddressField,
   ShipStationPackageInput,
   StripeCheckoutSessionRequest,
   StripeCheckoutSessionResponse,
@@ -197,6 +201,29 @@ function profileApiErrorPayload(value: unknown, status: number): ProfileApiError
     }
   }
   return { code: status >= 500 ? 'unavailable' : `http-${status}`, message: 'Profile API request failed.' };
+}
+
+function parseFulfillmentShipStationAddressCorrectionDetails(
+  value: unknown,
+): FulfillmentShipStationAddressCorrectionDetails | null {
+  if (!isRecord(value) || !hasExactKeys(value, ['kind', 'fields'])) return null;
+  if (value.kind !== 'shipstation-address-correction' || !Array.isArray(value.fields) || !value.fields.length) {
+    return null;
+  }
+  const supported = new Set<string>(SHIPSTATION_EDITABLE_ADDRESS_FIELDS);
+  if (!value.fields.every((field) => typeof field === 'string' && supported.has(field))) return null;
+  const fields = value.fields as ShipStationEditableAddressField[];
+  if (new Set(fields).size !== fields.length) return null;
+  const canonical = SHIPSTATION_EDITABLE_ADDRESS_FIELDS.filter((field) => fields.includes(field));
+  if (canonical.some((field, index) => fields[index] !== field)) return null;
+  return { kind: 'shipstation-address-correction', fields: [...fields] };
+}
+
+export function fulfillmentShipStationAddressCorrectionDetails(
+  error: unknown,
+): FulfillmentShipStationAddressCorrectionDetails | null {
+  if (!(error instanceof ProfileApiError) || error.code !== 'failed-precondition') return null;
+  return parseFulfillmentShipStationAddressCorrectionDetails(error.details);
 }
 
 async function authenticatedUserToken(forceRefresh: boolean): Promise<string> {
@@ -1068,14 +1095,29 @@ export async function updateFulfillmentAddress(
   return result;
 }
 
+function addFulfillmentOrderToShipStationRequestPayload(
+  deliveryId: number,
+  dropId: string,
+  packageInput?: ShipStationPackageInput,
+  addressPatch?: ShipStationAddressPatch,
+): AddFulfillmentOrderToShipStationRequest {
+  return {
+    deliveryId,
+    dropId,
+    ...(packageInput ? { package: packageInput } : {}),
+    ...(addressPatch ? { addressPatch } : {}),
+  };
+}
+
 export async function addFulfillmentOrderToShipStation(
   deliveryId: number,
   dropId: string,
   packageInput?: ShipStationPackageInput,
+  addressPatch?: ShipStationAddressPatch,
 ): Promise<AddFulfillmentOrderToShipStationResponse> {
   const response = await callProfileApi<AddFulfillmentOrderToShipStationRequest>(
     '/fulfillment/shipstation-shipment',
-    { deliveryId, dropId, ...(packageInput ? { package: packageInput } : {}) },
+    addFulfillmentOrderToShipStationRequestPayload(deliveryId, dropId, packageInput, addressPatch),
   );
   const result = parseAddFulfillmentOrderToShipStation(response);
   if (!result) throw new Error('Invalid fulfillment ShipStation shipment response');
@@ -1317,11 +1359,13 @@ export async function listDeliveryOrderOwners(
 }
 
 export const profileApiTestHooks = {
+  addFulfillmentOrderToShipStationRequestPayload,
   parseAddFulfillmentOrderToShipStation,
   parseGetFulfillmentShipStationLabel,
   parseGetFulfillmentShipStationRates,
   parsePurchaseFulfillmentShipStationLabel,
   parseFulfillmentStatusUpdate,
+  parseFulfillmentShipStationAddressCorrectionDetails,
   parseProfileAddress,
   parseProfileState,
   parseUpdateFulfillmentAddress,

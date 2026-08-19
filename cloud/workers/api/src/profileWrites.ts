@@ -57,8 +57,10 @@ import {
   shipStationPackageProducts,
   shipStationMoneyMatches,
   shipStationProductsTotalWeightOunces,
+  ShipStationAddressCorrectionProviderError,
   ShipStationRatesProviderError,
   updateShipStationShipment,
+  type ShipStationAddress,
   type ShipStationCustoms,
   type ShipStationPackageProduct,
   type ShipStationRateResponse,
@@ -73,12 +75,14 @@ import {
 import { isBase58Bytes } from '../../../../functions/src/shared/solanaRpcProxy.js';
 import type {
   AddFulfillmentOrderToShipStationResponse,
+  FulfillmentShipStationAddressCorrectionDetails,
   FulfillmentOrderAddress,
   FulfillmentShipStationLabel,
   GetFulfillmentShipStationLabelResponse,
   GetFulfillmentShipStationRatesResponse,
   PurchaseFulfillmentShipStationLabelResponse,
   ProfileAddress,
+  ShipStationAddressPatch,
   UpdateFulfillmentAddressResponse,
 } from '../../../../functions/src/shared/contracts.js';
 import {
@@ -230,11 +234,33 @@ const shipStationRatesSchema = z.object({
   }).strict().optional(),
 }).strict();
 
-const shipStationShipmentSchema = shipStationRatesSchema;
+const shipStationAddressPatchSchema = z.object({
+  name: z.string().trim().min(1).max(50).optional(),
+  address_line1: z.string().trim().min(1).max(50).optional(),
+  address_line2: z.string().trim().max(50).optional(),
+  address_line3: z.string().trim().max(50).optional(),
+  city_locality: z.string().trim().min(1).max(50).optional(),
+  state_province: z.string().trim().min(1).max(50).optional(),
+  postal_code: z.string().trim().min(1).max(50).optional(),
+  country_code: z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/).optional(),
+}).strict().refine((value) => Object.keys(value).length > 0);
+
+const shipStationShipmentSchema = shipStationRatesSchema.extend({
+  addressPatch: shipStationAddressPatchSchema.optional(),
+}).strict();
 
 const defaultAccessTokenProvider = createGoogleAccessTokenProvider();
 
-class ShipStationProfileError extends ProfileReadError {}
+class ShipStationProfileError extends ProfileReadError {
+  constructor(
+    code: ConstructorParameters<typeof ProfileReadError>[0],
+    status: number,
+    message: string,
+    readonly details?: unknown,
+  ) {
+    super(code, status, message);
+  }
+}
 
 function firestoreAutoId(): string {
   let id = '';
@@ -271,7 +297,16 @@ function jsonResponse(body: unknown, status: number): Response {
 }
 
 function errorResponse(error: ProfileReadError): Response {
-  return jsonResponse({ ok: false, error: { code: error.code, message: error.message } }, error.status);
+  return jsonResponse({
+    ok: false,
+    error: {
+      code: error.code,
+      message: error.message,
+      ...(error instanceof ShipStationProfileError && error.details !== undefined
+        ? { details: error.details }
+        : {}),
+    },
+  }, error.status);
 }
 
 async function parseExactRequestBody(
@@ -1189,6 +1224,29 @@ async function persistFulfillmentShipStationShipment(args: {
   });
 }
 
+function applyShipStationAddressPatch(
+  address: ShipStationAddress,
+  patch?: ShipStationAddressPatch,
+): ShipStationAddress {
+  if (!patch) return address;
+  const next = { ...address };
+  if (patch.name !== undefined) next.name = patch.name;
+  if (patch.address_line1 !== undefined) next.address_line1 = patch.address_line1;
+  if (patch.address_line2 !== undefined) {
+    if (patch.address_line2) next.address_line2 = patch.address_line2;
+    else delete next.address_line2;
+  }
+  if (patch.address_line3 !== undefined) {
+    if (patch.address_line3) next.address_line3 = patch.address_line3;
+    else delete next.address_line3;
+  }
+  if (patch.city_locality !== undefined) next.city_locality = patch.city_locality;
+  if (patch.state_province !== undefined) next.state_province = patch.state_province;
+  if (patch.postal_code !== undefined) next.postal_code = patch.postal_code;
+  if (patch.country_code !== undefined) next.country_code = patch.country_code;
+  return next;
+}
+
 async function addFulfillmentOrderToShipStation(
   body: z.infer<typeof shipStationShipmentSchema>,
   wallet: string,
@@ -1255,7 +1313,12 @@ async function addFulfillmentOrderToShipStation(
       const unitCount = fulfillmentShipmentUnitCount(claim.order);
       const email = optionalString(addressSnapshot.email);
       const phone = optionalString(addressSnapshot.phone);
-      const international = shipFrom.country_code !== parsed.shipTo.country_code;
+      const shipTo = applyShipStationAddressPatch({
+        ...parsed.shipTo,
+        ...(email ? { email } : {}),
+        ...(phone ? { phone } : {}),
+      }, body.addressPatch);
+      const international = shipFrom.country_code !== shipTo.country_code;
       const customsDeclaration = international
         ? requireShipStationCustomsDeclaration(dropId, claim.order)
         : undefined;
@@ -1272,11 +1335,7 @@ async function addFulfillmentOrderToShipStation(
       shipment = await createShipStationShipment(apiKey, {
         external_shipment_id: externalShipmentId,
         shipment_number: String(body.deliveryId),
-        ship_to: {
-          ...parsed.shipTo,
-          ...(email ? { email } : {}),
-          ...(phone ? { phone } : {}),
-        },
+        ship_to: shipTo,
         ship_from: shipFrom,
         packages: buildShipStationPackages(unitCount, appliedPackage, customsDeclaration ? {
           contentDescription: customsDeclaration.contentDescription,
@@ -1526,9 +1585,13 @@ async function transitionShipStationPurchaseState(args: {
 function profileErrorForShipStation(
   error: ShipStationLabelProviderError | ShipStationRatesProviderError,
 ): ProfileReadError {
+  const details: FulfillmentShipStationAddressCorrectionDetails | undefined =
+    error instanceof ShipStationAddressCorrectionProviderError
+      ? { kind: 'shipstation-address-correction', fields: error.fields }
+      : undefined;
   if (error.code === 'deadline-exceeded') return new ShipStationProfileError(error.code, 504, error.message);
   if (error.code === 'resource-exhausted') return new ShipStationProfileError(error.code, 429, error.message);
-  if (error.code === 'failed-precondition') return new ShipStationProfileError(error.code, 409, error.message);
+  if (error.code === 'failed-precondition') return new ShipStationProfileError(error.code, 409, error.message, details);
   if (error.code === 'internal') return new ShipStationProfileError('unavailable', 502, error.message);
   return new ShipStationProfileError(error.code, 502, error.message);
 }

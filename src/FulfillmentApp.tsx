@@ -14,6 +14,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { FiAlertTriangle, FiDownload, FiEdit2, FiMoreHorizontal } from 'react-icons/fi';
 import {
   addFulfillmentOrderToShipStation,
+  fulfillmentShipStationAddressCorrectionDetails,
   getFulfillmentShipStationLabel,
   getFulfillmentShipStationRates,
   listFulfillmentManualReviewCheckouts,
@@ -30,6 +31,7 @@ import {
   FulfillmentShipStationRate,
   FulfillmentStatus,
   ShipStationMoney,
+  ShipStationEditableAddressField,
   ShipStationPackageInput,
 } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
@@ -89,6 +91,14 @@ import {
   groupFulfillmentShipStationRates,
   prepareFulfillmentShipStationRates,
 } from './lib/fulfillmentShipStationRates';
+import {
+  fulfillmentShipStationAddressCanRetry,
+  fulfillmentShipStationAddressCorrectionFailure,
+  fulfillmentShipStationAddressDraft,
+  fulfillmentShipStationAddressOtherFailure,
+  fulfillmentShipStationAddressPatch,
+  type FulfillmentShipStationAddressCorrectionSession,
+} from './lib/fulfillmentShipStationAddress';
 import {
   normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
@@ -207,6 +217,20 @@ const SHIPSTATION_PACKAGE_FIELDS: { key: keyof ShipStationPackageDraft; label: s
   { key: 'height', label: 'H in', ariaLabel: 'Package height in inches' },
   { key: 'weight', label: 'oz', ariaLabel: 'Package weight in ounces' },
 ];
+
+const SHIPSTATION_ADDRESS_FIELDS: Record<
+  ShipStationEditableAddressField,
+  { label: string; autoComplete: string; optional?: boolean }
+> = {
+  name: { label: 'Recipient name', autoComplete: 'name' },
+  address_line1: { label: 'Address line 1', autoComplete: 'address-line1' },
+  address_line2: { label: 'Address line 2', autoComplete: 'address-line2', optional: true },
+  address_line3: { label: 'Address line 3', autoComplete: 'address-line3', optional: true },
+  city_locality: { label: 'City', autoComplete: 'address-level2' },
+  state_province: { label: 'State / province', autoComplete: 'address-level1' },
+  postal_code: { label: 'Postal code', autoComplete: 'postal-code' },
+  country_code: { label: 'Country code', autoComplete: 'country' },
+};
 
 function defaultShipStationPackageDraft(order: FulfillmentOrder): ShipStationPackageDraft {
   const parcel = defaultShipStationPackage(order.boxes.length + order.looseDudes.length);
@@ -1184,6 +1208,8 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [shipstationLabelLoading, setShipstationLabelLoading] = useState(false);
   const [shipstationError, setShipstationError] = useState<string | null>(null);
   const [shipstationPackageEdits, setShipstationPackageEdits] = useState<Record<string, ShipStationPackageDraft>>({});
+  const [shipstationAddressCorrection, setShipstationAddressCorrection] =
+    useState<FulfillmentShipStationAddressCorrectionSession | null>(null);
   const [shipstationRates, setShipstationRates] = useState<FulfillmentShipStationRate[]>([]);
   const [shipstationInvalidRates, setShipstationInvalidRates] = useState<FulfillmentShipStationInvalidRate[]>([]);
   const [shipstationRatesExpanded, setShipstationRatesExpanded] = useState(false);
@@ -1216,6 +1242,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     setShipstationLabelDownloadUrl(null);
     setShipstationPurchaseUnknown(false);
     setShipstationError(null);
+    setShipstationAddressCorrection(null);
   }, []);
 
   useEffect(() => {
@@ -1711,6 +1738,10 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     () => orders.find((order) => fulfillmentOrderKey(order) === activeShipstationOrderKey) ?? null,
     [activeShipstationOrderKey, orders],
   );
+  const activeShipstationAddressBaseline = useMemo(
+    () => activeShipstationOrder ? fulfillmentShipStationAddressDraft(activeShipstationOrder.address) : null,
+    [activeShipstationOrder],
+  );
   const activeShipstationOrderKeyResolved = activeShipstationOrder ? fulfillmentOrderKey(activeShipstationOrder) : '';
   const activeShipstationPackageDraft = activeShipstationOrder
     ? shipstationPackageEdits[activeShipstationOrderKeyResolved] ??
@@ -1758,6 +1789,12 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       !activeShipstationOrder.shipstationShipmentId &&
       normalizeFulfillmentStatus(activeShipstationOrder.fulfillmentStatus) !== 'Shipped',
   );
+  const activeShipstationAddressPatch = shipstationAddressCorrection
+    ? fulfillmentShipStationAddressPatch(shipstationAddressCorrection)
+    : {};
+  const activeShipstationAddressCorrectionValid = Boolean(
+    shipstationAddressCorrection && fulfillmentShipStationAddressCanRetry(shipstationAddressCorrection),
+  );
   const activeShipstationCanGetRates = Boolean(
     activeShipstationOrder?.shipstationShipmentId &&
       !activeShipstationHasLabel &&
@@ -1783,9 +1820,18 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   }, [activeShipstationBusy, resetShipstationFlow]);
 
   const handleAddToShipStation = useCallback(async () => {
-    if (!activeShipstationOrder || !hasFulfillmentAccess || !signedIn || shipstationSaving) return;
+    if (
+      !activeShipstationOrder ||
+      !hasFulfillmentAccess ||
+      !signedIn ||
+      shipstationSaving ||
+      (Boolean(shipstationAddressCorrection?.visibleFields.length) && !activeShipstationAddressCorrectionValid)
+    ) return;
     const requestEpoch = orderRequestEpochRef.current;
     const key = fulfillmentOrderKey(activeShipstationOrder);
+    const addressPatch = shipstationAddressCorrection && Object.keys(activeShipstationAddressPatch).length > 0
+      ? activeShipstationAddressPatch
+      : undefined;
     const draft = shipstationPackageEdits[key] ?? defaultShipStationPackageDraft(activeShipstationOrder);
     const parcel = normalizeShipStationPackage({
       length: parseShipStationMeasurement(draft.length),
@@ -1804,6 +1850,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         activeShipstationOrder.deliveryId,
         activeShipstationOrder.dropId,
         parcel,
+        addressPatch,
       );
       if (orderRequestEpochRef.current !== requestEpoch) return;
       setOrders((prev) =>
@@ -1821,8 +1868,11 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
         ),
       );
       if (response.alreadyAdded) {
-        setShipstationError('This order was already in ShipStation, so these measurements were not applied.');
+        setShipstationError(
+          `This order was already in ShipStation, so these measurements${addressPatch ? ' and address corrections' : ''} were not applied.`,
+        );
       }
+      setShipstationAddressCorrection(null);
       setShipstationPackageEdits((prev) => {
         if (!Object.hasOwn(prev, key)) return prev;
         const next = { ...prev };
@@ -1833,10 +1883,29 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
       if (orderRequestEpochRef.current !== requestEpoch) return;
       console.error(err);
       setShipstationError(err instanceof Error ? err.message : 'Failed to add the order to ShipStation');
+      const correction = fulfillmentShipStationAddressCorrectionDetails(err);
+      setShipstationAddressCorrection((current) => correction
+        ? fulfillmentShipStationAddressCorrectionFailure(
+            current,
+            activeShipstationAddressBaseline,
+            correction.fields,
+            addressPatch ?? {},
+          )
+        : fulfillmentShipStationAddressOtherFailure(current, addressPatch ?? {}));
     } finally {
       if (orderRequestEpochRef.current === requestEpoch) setShipstationSaving(false);
     }
-  }, [activeShipstationOrder, hasFulfillmentAccess, shipstationPackageEdits, shipstationSaving, signedIn]);
+  }, [
+    activeShipstationAddressBaseline,
+    activeShipstationAddressCorrectionValid,
+    activeShipstationAddressPatch,
+    activeShipstationOrder,
+    hasFulfillmentAccess,
+    shipstationAddressCorrection,
+    shipstationPackageEdits,
+    shipstationSaving,
+    signedIn,
+  ]);
 
   const handleGetShipstationRates = useCallback(async () => {
     if (
@@ -3172,6 +3241,44 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
             </div>
           ) : null}
           {shipstationError ? <div className="error">{shipstationError}</div> : null}
+          {shipstationAddressCorrection?.visibleFields.length ? (
+            <div className="shipstation-address-correction" role="group" aria-label="Temporary ShipStation address corrections">
+              <div className="shipstation-address-correction__heading">Correct the ShipStation address</div>
+              <div className="muted small">
+                {shipstationAddressCorrection.baseline
+                  ? 'These changes apply only to the ShipStation shipment and do not update the saved fulfillment address.'
+                  : 'The saved address is hidden for this account. Enter the requested values; they apply only to the ShipStation shipment.'}
+              </div>
+              <div className="shipstation-address-correction__fields">
+                {shipstationAddressCorrection.visibleFields.map((field) => {
+                  const config = SHIPSTATION_ADDRESS_FIELDS[field];
+                  return (
+                    <label key={field} className="shipstation-address-correction__field">
+                      <span className="muted small">
+                        {config.label}{config.optional ? ' (optional)' : ''}
+                      </span>
+                      <input
+                        type="text"
+                        value={shipstationAddressCorrection.draft[field]}
+                        onChange={(evt) => {
+                          const value = field === 'country_code' ? evt.target.value.toUpperCase() : evt.target.value;
+                          setShipstationAddressCorrection((current) => current ? {
+                            ...current,
+                            draft: { ...current.draft, [field]: value },
+                          } : current);
+                        }}
+                        maxLength={field === 'country_code' ? 2 : 50}
+                        required={!config.optional}
+                        disabled={activeShipstationBusy}
+                        autoComplete={config.autoComplete}
+                        aria-label={config.label}
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           <div className="row row--end">
             <button
               type="button"
@@ -3182,7 +3289,14 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
               Cancel
             </button>
             {activeShipstationCanAdd ? (
-              <button type="button" onClick={() => void handleAddToShipStation()} disabled={activeShipstationBusy}>
+              <button
+                type="button"
+                onClick={() => void handleAddToShipStation()}
+                disabled={activeShipstationBusy || (
+                  Boolean(shipstationAddressCorrection?.visibleFields.length) &&
+                    !activeShipstationAddressCorrectionValid
+                )}
+              >
                 {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
               </button>
             ) : activeShipstationPurchaseUnknown || activeShipstationLabel?.status === 'processing' ? (

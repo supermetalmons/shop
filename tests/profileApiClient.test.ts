@@ -385,6 +385,43 @@ test('migrated write response validators accept only exact public contracts', ()
   }), null);
 });
 
+test('ShipStation address correction details and request serialization use strict public contracts', () => {
+  const details = {
+    kind: 'shipstation-address-correction',
+    fields: ['name', 'state_province', 'country_code'],
+  };
+  assert.deepEqual(profileApiTestHooks.parseFulfillmentShipStationAddressCorrectionDetails(details), details);
+  for (const malformed of [
+    { ...details, private: '100 Main St' },
+    { ...details, kind: 'address-correction' },
+    { ...details, fields: [] },
+    { ...details, fields: ['state_province', 'name'] },
+    { ...details, fields: ['name', 'name'] },
+    { ...details, fields: ['company_name'] },
+    { ...details, fields: 'state_province' },
+  ]) {
+    assert.equal(profileApiTestHooks.parseFulfillmentShipStationAddressCorrectionDetails(malformed), null);
+  }
+
+  const parcel = { length: 10, width: 8, height: 3, weight: 8 };
+  const addressPatch = { address_line2: '', state_province: 'PA', country_code: 'US' };
+  assert.deepEqual(profileApiTestHooks.addFulfillmentOrderToShipStationRequestPayload(
+    7,
+    'card_nft_2',
+    parcel,
+    addressPatch,
+  ), {
+    deliveryId: 7,
+    dropId: 'card_nft_2',
+    package: parcel,
+    addressPatch,
+  });
+  assert.deepEqual(profileApiTestHooks.addFulfillmentOrderToShipStationRequestPayload(7, 'card_nft_2'), {
+    deliveryId: 7,
+    dropId: 'card_nft_2',
+  });
+});
+
 test('profile state validator rejects mismatches, malformed summaries, and extra data', () => {
   const valid = {
     responseMode: 'profile-state',

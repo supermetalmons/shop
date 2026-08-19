@@ -934,11 +934,11 @@ test('ShipStation shipment route retains its claim when final persistence confli
 
 test('ShipStation shipment route adopts an external-id match without creating a duplicate', async () => {
   let claimId = '';
-  let postCalls = 0;
+  let mutationCalls = 0;
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     if (url.hostname === 'api.shipstation.com') {
-      if (init?.method === 'POST') postCalls += 1;
+      if (init?.method && init.method !== 'GET') mutationCalls += 1;
       return Response.json({
         shipment: {
           shipment_id: 'shipment-adopted',
@@ -968,7 +968,12 @@ test('ShipStation shipment route adopts an external-id match without creating a 
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };
   const result = await handleProfileWriteRequest(
-    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      package: { length: 10, width: 8, height: 3, weight: 8 },
+      addressPatch: { state_province: 'PA' },
+    }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
     dependencies(providerFetch),
@@ -980,7 +985,7 @@ test('ShipStation shipment route adopts an external-id match without creating a 
     alreadyAdded: true,
     shipstationAddedAt: NOW_MS,
   });
-  assert.equal(postCalls, 0);
+  assert.equal(mutationCalls, 0);
 });
 
 test('ShipStation shipment route retains only its own claim after an ambiguous create failure', async () => {
@@ -1085,10 +1090,25 @@ test('ShipStation shipment route releases its claim after a definitive provider 
     dependencies(providerFetch),
   );
   assert.equal(result.response.status, 409);
-  const payload = await result.response.json() as { error: { code: string; message: string } };
+  const payload = await result.response.json() as {
+    error: { code: string; message: string; details?: { kind: string; fields: string[] } };
+  };
   assert.equal(payload.error.code, 'failed-precondition');
   assert.match(payload.error.message, /invalid_address/);
   assert.doesNotMatch(payload.error.message, /100 Main St/);
+  assert.deepEqual(payload.error.details, {
+    kind: 'shipstation-address-correction',
+    fields: [
+      'name',
+      'address_line1',
+      'address_line2',
+      'address_line3',
+      'city_locality',
+      'state_province',
+      'postal_code',
+      'country_code',
+    ],
+  });
   assert.equal(commits.length, 2);
   const release = commits[1].writes[0] as {
     update: { fields: { shipstation: { mapValue: { fields: Record<string, { stringValue?: string }> } } } };
@@ -1096,6 +1116,116 @@ test('ShipStation shipment route releases its claim after a definitive provider 
   };
   assert.equal(release.update.fields.shipstation.mapValue.fields.claimFenceId.stringValue, claimId);
   assert.ok(release.updateMask.fieldPaths.includes('shipstation.claimedAt'));
+});
+
+test('ShipStation shipment route releases a structured 5xx rejection and accepts a temporary correction', async () => {
+  let claimId = '';
+  let createCalls = 0;
+  let correctedCreateBody: { shipments: Array<Record<string, unknown>> } | undefined;
+  const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+      if (url.pathname === '/v2/shipments' && init?.method === 'POST') {
+        createCalls += 1;
+        if (createCalls === 1) {
+          return Response.json({
+            errors: [{
+              error_code: 'unspecified',
+              field_name: 'state_province',
+              field_value: 'Private subdivision',
+              message: 'Ivan at 100 Main St',
+            }],
+          }, { status: 500 });
+        }
+        correctedCreateBody = JSON.parse(String(init.body)) as { shipments: Array<Record<string, unknown>> };
+        return Response.json({
+          shipments: [{
+            shipment_id: 'shipment-corrected',
+            packages: correctedCreateBody.shipments[0].packages,
+          }],
+        });
+      }
+      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+    }
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        addressSnapshot: {
+          encrypted: encryptedAddress('Ivan\n100 Main St\nSuite 4\nIstanbul, 34000\nTurkey'),
+          countryCode: 'TR',
+          email: 'owner@example.com',
+          phone: '+905555555555',
+        },
+        items: [{ kind: 'box', refId: 1 }],
+        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
+      commits.push(commit);
+      const write = commit.writes[0] as {
+        update?: { fields?: { shipstation?: { mapValue?: { fields?: { claimId?: { stringValue?: string } } } } } };
+        updateMask?: { fieldPaths?: string[] };
+      };
+      if (write.updateMask?.fieldPaths?.includes('shipstation.claimId')) {
+        claimId = write.update?.fields?.shipstation?.mapValue?.fields?.claimId?.stringValue ?? '';
+      }
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const run = (body: Record<string, unknown>) => handleProfileWriteRequest(
+    request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, body),
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+    dependencies(providerFetch),
+  );
+
+  const rejected = await run({ dropId: 'card_nft_2', deliveryId: 7 });
+  assert.equal(rejected.response.status, 409);
+  const rejectedPayload = await rejected.response.json() as {
+    error: { message: string; details?: { kind: string; fields: string[] } };
+  };
+  assert.deepEqual(rejectedPayload.error.details, {
+    kind: 'shipstation-address-correction',
+    fields: ['state_province'],
+  });
+  assert.doesNotMatch(JSON.stringify(rejectedPayload), /Private subdivision|100 Main St/);
+  assert.equal(claimId, '');
+
+  const corrected = await run({
+    dropId: 'card_nft_2',
+    deliveryId: 7,
+    addressPatch: { address_line2: '   ', state_province: ' PA ', country_code: ' us ' },
+  });
+  assert.equal(corrected.response.status, 200);
+  assert.deepEqual(await corrected.response.json(), {
+    deliveryId: 7,
+    shipmentId: 'shipment-corrected',
+    alreadyAdded: false,
+    shipstationAddedAt: NOW_MS,
+  });
+  assert.equal(createCalls, 2);
+  const shipment = correctedCreateBody?.shipments[0];
+  assert.deepEqual(shipment?.ship_to, {
+    name: 'Ivan',
+    address_line1: '100 Main St',
+    city_locality: 'Istanbul',
+    state_province: 'PA',
+    postal_code: '34000',
+    country_code: 'US',
+    address_residential_indicator: 'yes',
+    email: 'owner@example.com',
+    phone: '+905555555555',
+  });
+  assert.equal(Object.hasOwn(shipment ?? {}, 'customs'), false);
+  assert.equal(claimId, '');
+  for (const commit of commits) {
+    const fieldPaths = (commit.writes[0] as { updateMask?: { fieldPaths?: string[] } }).updateMask?.fieldPaths ?? [];
+    assert.equal(fieldPaths.some((field) => field.startsWith('addressSnapshot')), false);
+  }
 });
 
 test('ShipStation shipment route preserves its sanitized provider error when claim cleanup fails', async () => {
@@ -3593,6 +3723,19 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
     }],
     [FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
     [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7, extra: true }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7, addressPatch: {} }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { name: ' ' },
+    }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { address_line1: 'x'.repeat(51) },
+    }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { country_code: 'USA' },
+    }],
+    [FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, {
+      dropId: 'card_nft_2', deliveryId: 7, addressPatch: { company_name: 'Private' },
+    }],
   ] as const) {
     const result = await handleProfileWriteRequest(
       request(path, body),

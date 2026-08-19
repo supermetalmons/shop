@@ -4896,12 +4896,39 @@ button.fulfillment-order-address-edit svg {
 
 .shipstation-notice,
 .shipstation-label-summary,
-.shipstation-review {
+.shipstation-review,
+.shipstation-address-correction {
   width: 100%;
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
+}
+
+.shipstation-address-correction {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shipstation-address-correction__heading {
+  font-weight: 600;
+}
+
+.shipstation-address-correction__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.shipstation-address-correction__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.shipstation-address-correction__field input {
+  width: 100%;
 }
 
 .shipstation-notice {
@@ -5048,6 +5075,10 @@ button.fulfillment-order-address-edit svg {
 }
 
 @media (max-width: 540px) {
+  .shipstation-address-correction__fields {
+    grid-template-columns: 1fr;
+  }
+
   .shipstation-package-field {
     flex: 1 1 calc(50% - 4px);
   }

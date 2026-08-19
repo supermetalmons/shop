@@ -1,9 +1,11 @@
 import { z } from 'zod';
 
 import { normalizeCountryCode } from './countryNormalization.js';
+import { SHIPSTATION_EDITABLE_ADDRESS_FIELDS } from './contracts.js';
 import type {
   FulfillmentShipStationInvalidRate,
   FulfillmentShipStationRate,
+  ShipStationEditableAddressField,
   ShipStationMoney,
 } from './contracts.js';
 import {
@@ -31,6 +33,16 @@ export class ShipStationRatesProviderError extends Error {
   ) {
     super(message);
     this.name = 'ShipStationRatesProviderError';
+  }
+}
+
+export class ShipStationAddressCorrectionProviderError extends ShipStationRatesProviderError {
+  constructor(
+    message: string,
+    readonly fields: ShipStationEditableAddressField[],
+  ) {
+    super('failed-precondition', message);
+    this.name = 'ShipStationAddressCorrectionProviderError';
   }
 }
 
@@ -249,6 +261,43 @@ function safeProviderIdentifier(value: unknown): string {
 function safeProviderFieldName(value: unknown): string {
   const normalized = stringValue(value);
   return /^[A-Za-z][A-Za-z0-9_.\[\]-]{0,127}$/.test(normalized) ? normalized : '';
+}
+
+function providerErrors(value: unknown): Record<string, unknown>[] {
+  const errors = record(value).errors;
+  return Array.isArray(errors) ? errors.map(record) : [];
+}
+
+export function shipStationAddressCorrectionFields(value: unknown): ShipStationEditableAddressField[] {
+  const supported = new Set<string>(SHIPSTATION_EDITABLE_ADDRESS_FIELDS);
+  const fields = new Set<ShipStationEditableAddressField>();
+  let genericAddressError = false;
+  for (const error of providerErrors(value)) {
+    const code = safeProviderIdentifier(error.error_code).toLowerCase();
+    const fieldName = safeProviderFieldName(error.field_name).toLowerCase();
+    if (supported.has(fieldName)) {
+      fields.add(fieldName as ShipStationEditableAddressField);
+      continue;
+    }
+    const segments = fieldName.split('.');
+    const shipToIndex = segments.lastIndexOf('ship_to');
+    const shipToSuffix = shipToIndex < 0 ? [] : segments.slice(shipToIndex + 1);
+    if (shipToIndex >= 0 && shipToSuffix.length === 0) {
+      genericAddressError = true;
+      continue;
+    }
+    if (shipToSuffix.length === 1 && supported.has(shipToSuffix[0])) {
+      fields.add(shipToSuffix[0] as ShipStationEditableAddressField);
+      continue;
+    }
+    if (
+      code === 'invalid_address' &&
+      (!fieldName || fieldName === 'address' || (shipToSuffix.length === 1 && shipToSuffix[0] === 'address'))
+    ) genericAddressError = true;
+  }
+  return genericAddressError
+    ? [...SHIPSTATION_EDITABLE_ADDRESS_FIELDS]
+    : SHIPSTATION_EDITABLE_ADDRESS_FIELDS.filter((field) => fields.has(field));
 }
 
 function normalizedCurrency(value: unknown, fallback?: string): string | null {
@@ -1149,19 +1198,32 @@ export async function createShipStationShipment(
     },
   }, options);
   if (status === 408) throw new ShipStationRatesProviderError('deadline-exceeded', 'ShipStation request timed out');
-  if (status < 200 || status >= 300) throw errorForStatus(status, errorMessage(json, `HTTP ${status}`));
+  if (status < 200 || status >= 300) {
+    const message = errorMessage(json, `HTTP ${status}`);
+    const correctionFields = shipStationAddressCorrectionFields(json);
+    if (![401, 403, 429, 504].includes(status) && correctionFields.length) {
+      throw new ShipStationAddressCorrectionProviderError(
+        `ShipStation rejected the shipment: ${message}`,
+        correctionFields,
+      );
+    }
+    throw errorForStatus(status, message);
+  }
   if (!validJson) throw providerResponseError();
   const root = record(json);
   const rawShipment = Array.isArray(root.shipments) ? record(root.shipments[0]) : {};
   const shipmentErrors = Array.isArray(rawShipment.errors) ? rawShipment.errors : [];
   if (root.has_errors === true || shipmentErrors.length) {
-    throw new ShipStationRatesProviderError(
-      'failed-precondition',
-      `ShipStation rejected the shipment: ${errorMessage(
-        { errors: shipmentErrors },
-        errorMessage(root, 'ShipStation reported an error'),
-      )}`,
-    );
+    const errors = { errors: [...providerErrors(root), ...shipmentErrors] };
+    const message = `ShipStation rejected the shipment: ${errorMessage(
+      errors,
+      errorMessage(root, 'ShipStation reported an error'),
+    )}`;
+    const correctionFields = shipStationAddressCorrectionFields(errors);
+    if (correctionFields.length) {
+      throw new ShipStationAddressCorrectionProviderError(message, correctionFields);
+    }
+    throw new ShipStationRatesProviderError('failed-precondition', message);
   }
   const created = shipmentValue(rawShipment);
   if (!stringValue(created.shipment_id)) throw providerResponseError();

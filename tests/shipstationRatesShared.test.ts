@@ -9,13 +9,26 @@ import {
   getShipStationShipmentRates,
   parseShipStationShipFrom,
   requestShipStationShipmentRates,
+  shipStationAddressCorrectionFields,
   shipStationCustomsValue,
   shipStationExternalId,
   shipStationPackageInputFromShipmentPackage,
   shipStationPackageProducts,
+  ShipStationAddressCorrectionProviderError,
   ShipStationRatesProviderError,
   updateShipStationShipment,
 } from '../functions/src/shared/shipstationRates.ts';
+
+const ALL_EDITABLE_ADDRESS_FIELDS = [
+  'name',
+  'address_line1',
+  'address_line2',
+  'address_line3',
+  'city_locality',
+  'state_province',
+  'postal_code',
+  'country_code',
+];
 
 const SHIP_TO = {
   name: 'Manually Corrected Recipient',
@@ -54,6 +67,39 @@ test('shared ShipStation rates client is runtime-neutral and validates the origi
     () => parseShipStationShipFrom('{}'),
     (error) => error instanceof ShipStationRatesProviderError && error.code === 'failed-precondition',
   );
+});
+
+test('shared ShipStation address correction fields are allowlisted, canonical, and PII-free', () => {
+  assert.deepEqual(shipStationAddressCorrectionFields({ errors: [
+    { error_code: 'unspecified', field_name: 'state_province', message: 'Ivan at 100 Private Street' },
+    { error_code: 'invalid_field_value', field_name: 'shipment.ship_to.postal_code', field_value: 'private' },
+    { error_code: 'invalid_field_value', field_name: 'ship_to.state_province' },
+    { error_code: 'invalid_field_value', field_name: 'packages[0].weight.value' },
+  ] }), ['state_province', 'postal_code']);
+  assert.deepEqual(shipStationAddressCorrectionFields({ errors: [
+    { error_code: 'invalid_address', message: 'Ivan at 100 Private Street' },
+  ] }), ALL_EDITABLE_ADDRESS_FIELDS);
+  assert.deepEqual(shipStationAddressCorrectionFields({ errors: [
+    { error_code: 'invalid_address', field_name: 'address' },
+    { error_code: 'invalid_address', field_name: 'shipment.ship_to.address' },
+  ] }), ALL_EDITABLE_ADDRESS_FIELDS);
+  assert.deepEqual(shipStationAddressCorrectionFields({ errors: [
+    { error_code: 'invalid_address', field_name: 'shipment.ship_from.state_province' },
+    { error_code: 'invalid_address', field_name: 'shipment.ship_from_address_line1' },
+    { error_code: 'invalid_address', field_name: 'shipment.packages[0].weight.value' },
+    { error_code: 'invalid_address', field_name: 'package_id' },
+    { error_code: 'invalid_address', field_name: 'shipment.customs.contents' },
+    { error_code: 'invalid_address', field_name: 'customs_items' },
+    { error_code: 'invalid_address', field_name: 'carrier.id' },
+    { error_code: 'invalid_address', field_name: 'carrier_id' },
+    { error_code: 'invalid_address', field_name: 'label_format' },
+  ] }), []);
+  assert.deepEqual(shipStationAddressCorrectionFields({ errors: [
+    { error_code: 'unspecified', field_name: 'shipment.ship_to' },
+  ] }), ALL_EDITABLE_ADDRESS_FIELDS);
+  assert.doesNotMatch(JSON.stringify(shipStationAddressCorrectionFields({ errors: [
+    { error_code: 'unspecified', field_name: 'state_province', field_value: '100 Private Street' },
+  ] })), /Private/);
 });
 
 test('shared ShipStation rates client rejects malformed and inconsistent success responses', async () => {
@@ -312,9 +358,59 @@ test('shared ShipStation shipment creation sanitizes provider failures and rejec
         shipments: [{ errors: [{ error_code: 'invalid_address', message: '100 Main St' }] }],
       }),
     }),
-    (error) => error instanceof ShipStationRatesProviderError &&
+    (error) => error instanceof ShipStationAddressCorrectionProviderError &&
       error.code === 'failed-precondition' &&
+      assert.deepEqual(error.fields, ALL_EDITABLE_ADDRESS_FIELDS) === undefined &&
       error.message.includes('invalid_address') &&
+      !error.message.includes('100 Main St'),
+  );
+  await assert.rejects(
+    createShipStationShipment('api-key', input, {
+      fetch: async () => Response.json({
+        errors: [{ error_code: 'unspecified', field_name: 'shipment.ship_to.state_province' }],
+      }, { status: 500 }),
+    }),
+    (error) => error instanceof ShipStationAddressCorrectionProviderError &&
+      error.code === 'failed-precondition' &&
+      assert.deepEqual(error.fields, ['state_province']) === undefined,
+  );
+  for (const status of [401, 403, 429]) {
+    await assert.rejects(
+      createShipStationShipment('api-key', input, {
+        fetch: async () => Response.json({
+          errors: [{ error_code: 'unspecified', field_name: 'state_province' }],
+        }, { status }),
+      }),
+      (error) => error instanceof ShipStationRatesProviderError &&
+        !(error instanceof ShipStationAddressCorrectionProviderError),
+    );
+  }
+  await assert.rejects(
+    createShipStationShipment('api-key', input, {
+      fetch: async () => Response.json({
+        has_errors: true,
+        errors: [{ error_code: 'unspecified', field_name: 'shipment.ship_to.city_locality' }],
+        shipments: [{}],
+      }),
+    }),
+    (error) => error instanceof ShipStationAddressCorrectionProviderError &&
+      assert.deepEqual(error.fields, ['city_locality']) === undefined,
+  );
+  await assert.rejects(
+    createShipStationShipment('api-key', input, {
+      fetch: async () => Response.json({
+        errors: [{
+          error_code: 'unspecified',
+          field_name: 'shipment.ship_to.state_province',
+          field_value: 'Private subdivision',
+          message: 'Ivan at 100 Main St',
+        }],
+      }, { status: 400 }),
+    }),
+    (error) => error instanceof ShipStationAddressCorrectionProviderError &&
+      error.code === 'failed-precondition' &&
+      assert.deepEqual(error.fields, ['state_province']) === undefined &&
+      !error.message.includes('Private subdivision') &&
       !error.message.includes('100 Main St'),
   );
   await assert.rejects(
@@ -353,8 +449,24 @@ test('shared ShipStation shipment creation sanitizes provider failures and rejec
     (error) => error instanceof ShipStationRatesProviderError && error.code === 'unavailable',
   );
   await assert.rejects(
-    createShipStationShipment('api-key', input, { fetch: async () => Response.json({}, { status: 408 }) }),
-    (error) => error instanceof ShipStationRatesProviderError && error.code === 'deadline-exceeded',
+    createShipStationShipment('api-key', input, {
+      fetch: async () => Response.json({
+        errors: [{ error_code: 'unspecified', field_name: 'state_province' }],
+      }, { status: 408 }),
+    }),
+    (error) => error instanceof ShipStationRatesProviderError &&
+      !(error instanceof ShipStationAddressCorrectionProviderError) &&
+      error.code === 'deadline-exceeded',
+  );
+  await assert.rejects(
+    createShipStationShipment('api-key', input, {
+      fetch: async () => Response.json({
+        errors: [{ error_code: 'unspecified', field_name: 'state_province' }],
+      }, { status: 504 }),
+    }),
+    (error) => error instanceof ShipStationRatesProviderError &&
+      !(error instanceof ShipStationAddressCorrectionProviderError) &&
+      error.code === 'unavailable',
   );
   await assert.rejects(
     getShipStationShipmentByExternalId('api-key', input.external_shipment_id, {

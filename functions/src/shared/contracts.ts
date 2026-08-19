@@ -336,11 +336,32 @@ export type UpdateFulfillmentAddressResponse = {
   address: FulfillmentOrderAddress;
 };
 
+export const SHIPSTATION_EDITABLE_ADDRESS_FIELDS = [
+  'name',
+  'address_line1',
+  'address_line2',
+  'address_line3',
+  'city_locality',
+  'state_province',
+  'postal_code',
+  'country_code',
+] as const;
+
+export type ShipStationEditableAddressField = typeof SHIPSTATION_EDITABLE_ADDRESS_FIELDS[number];
+
+export type ShipStationAddressPatch = Partial<Record<ShipStationEditableAddressField, string>>;
+
+export type FulfillmentShipStationAddressCorrectionDetails = {
+  kind: 'shipstation-address-correction';
+  fields: ShipStationEditableAddressField[];
+};
+
 export type AddFulfillmentOrderToShipStationRequest = {
   dropId: string;
   deliveryId: number;
   /** Defaults are used when omitted. */
   package?: ShipStationPackageInput;
+  addressPatch?: ShipStationAddressPatch;
 };
 
 export type AddFulfillmentOrderToShipStationResponse = {

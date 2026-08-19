@@ -14,6 +14,7 @@ export type {
   FulfillmentOrdersCursor,
   FulfillmentShipStationInvalidRate,
   FulfillmentShipStationRate,
+  FulfillmentShipStationAddressCorrectionDetails,
   GetAdminProfileViewRequest,
   GetAdminProfileViewResponse,
   GetProfileStateResponse,
@@ -41,9 +42,12 @@ export type {
   SubscribeToNotificationsRequest,
   SubscribeToNotificationsResponse,
   ShipStationMoney,
+  ShipStationAddressPatch,
+  ShipStationEditableAddressField,
   UpdateFulfillmentAddressRequest,
   UpdateFulfillmentAddressResponse,
 } from '../functions/src/shared/contracts';
+export { SHIPSTATION_EDITABLE_ADDRESS_FIELDS } from '../functions/src/shared/contracts';
 export type { ShipStationPackageInput } from '../functions/src/shared/shipstationPackage';
 
 type AssetKind = 'box' | 'dude' | 'certificate';
