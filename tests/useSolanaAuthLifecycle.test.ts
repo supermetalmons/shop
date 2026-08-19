@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { JSDOM } from 'jsdom';
+import { useLayoutEffect } from 'react';
 import type { DeliveryOrderSummary, GetProfileStateResponse, ReconcileProfileStateResponse } from '../src/types.ts';
 import {
   useSolanaAuthWithRuntime,
@@ -195,6 +196,31 @@ test('a connected-wallet mismatch clears state and signs Firebase out once', asy
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_B), harness.runtime));
   await waitFor(() => assert.equal(harness.signOutCalls, 1));
   await waitFor(() => assert.equal(result.current.sessionWallet, null));
+});
+
+test('switching the connected extension account begins logout before refresh effects', async () => {
+  const harness = new RuntimeHarness();
+  harness.reconcileImpl = () => new Promise(() => {});
+  harness.signOutImpl = () => new Promise(() => {});
+  const layoutSignOutCalls: number[] = [];
+  const { result, rerender } = renderHook(
+    ({ wallet }: { wallet: string | null }) => {
+      const authState = useSolanaAuthWithRuntime(walletState(wallet), harness.runtime);
+      useLayoutEffect(() => {
+        layoutSignOutCalls.push(harness.signOutCalls);
+      }, [wallet]);
+      return authState;
+    },
+    { initialProps: { wallet: null as string | null } },
+  );
+  await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));
+  const loadCalls = harness.loadCalls;
+
+  rerender({ wallet: WALLET_B });
+  assert.equal(result.current.sessionWallet, null);
+  assert.equal(layoutSignOutCalls.at(-1), 1);
+  await act(async () => Promise.resolve());
+  assert.equal(harness.loadCalls, loadCalls);
 });
 
 test('partial API failures retain state and recover section-by-section', async () => {

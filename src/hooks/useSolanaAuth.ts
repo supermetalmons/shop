@@ -482,7 +482,7 @@ export function useSolanaAuthWithRuntime(
     setAuthUserRevision((revision) => revision + 1);
   }), [clearMismatchSignOutTimer, deactivateOwner, runtime]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const currentUid = firebaseUidRef.current;
     const activeWallet = sessionWalletRef.current;
     if (
@@ -493,8 +493,13 @@ export function useSolanaAuthWithRuntime(
       sessionUidRef.current === currentUid
     ) {
       endMismatchedFirebaseSession(currentUid, activeWallet, connectedWallet);
-      return;
     }
+  }, [connectedWallet, endMismatchedFirebaseSession]);
+
+  useEffect(() => {
+    if (mismatchSignOutRef.current) return;
+    const currentUid = firebaseUidRef.current;
+    const activeWallet = sessionWalletRef.current;
     contextGenerationRef.current += 1;
     refreshRunRef.current = null;
     if (!activeWallet && connectedWallet) setState((current) => ({ ...current, loading: true }));
@@ -554,7 +559,7 @@ export function useSolanaAuthWithRuntime(
       clearTimer();
       unsubscribeRefreshEvents();
     };
-  }, [authUserRevision, connectedWallet, endMismatchedFirebaseSession, refreshProfileState, runtime]);
+  }, [authUserRevision, connectedWallet, refreshProfileState, runtime]);
 
   useEffect(() => {
     if (!state.sessionWallet) return;
