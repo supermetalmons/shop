@@ -299,6 +299,7 @@ function buildBuyerOrderShippedEmailText(message: BuyerOrderShippedEmailMessage)
     intro: 'Your order shipped.',
     message,
     trackingUrl: message.trackingUrl,
+    footnote: BUYER_ORDER_EMAIL_SUPPORT_FOOTNOTE,
   });
 }
 
@@ -431,6 +432,7 @@ function buildBuyerOrderShippedEmailHtml(message: BuyerOrderShippedEmailMessage)
       label: 'Track package',
       url: message.trackingUrl,
     },
+    footnote: BUYER_ORDER_EMAIL_SUPPORT_FOOTNOTE,
   });
 }
 

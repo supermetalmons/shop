@@ -404,7 +404,7 @@ test('buyer order shipped email builder includes tracking link and escapes html'
   assert.match(content.text, /Your order shipped\./);
   assert.match(content.text, /^Order shipped - 456/);
   assert.match(content.text, new RegExp(`Tracking: ${escapeRegExp(trackingUrl)}`));
-  assert.doesNotMatch(content.text, /If you have any questions, reply to this email\./);
+  assert.match(content.text, /If you have any questions, reply to this email\./);
   assert.match(content.html, />Order shipped - 456<\/h1>/);
   assert.doesNotMatch(content.html, /Little Swag Hoodies &lt;Drop&gt;/);
   assert.doesNotMatch(content.html, /background:#f8fafc;border:1px solid #e5e7eb/);
@@ -412,7 +412,7 @@ test('buyer order shipped email builder includes tracking link and escapes html'
   assert.match(content.html, /Track package/);
   assert.match(content.html, /background:#0071e3/);
   assert.match(content.html, /border-radius:980px/);
-  assert.doesNotMatch(content.html, /If you have any questions, reply to this email\.<\/p>/);
+  assert.match(content.html, /If you have any questions, reply to this email\.<\/p>/);
   assert.match(content.html, /href="https:\/\/carrier\.example\/track\?id=AB&lt;123&gt;&amp;ref=&quot;x&quot;"/);
   assert.doesNotMatch(content.html, /Hoodie XL <special>/);
 });
