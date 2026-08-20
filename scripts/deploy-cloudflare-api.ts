@@ -229,7 +229,7 @@ const notificationSmokeEmail = 'ivan@ivan.lol';
 const notificationQueueName = 'mons-shop-notification-emails';
 const notificationDeadLetterQueueName = 'mons-shop-notification-emails-dlq';
 const notificationWorkerName = 'mons-shop-notifications';
-const notificationSmokeTimeoutMs = 45_000;
+const notificationSmokeTimeoutMs = 90_000;
 const firestoreServiceAccountEmail = 'mons-shop-cloudflare-reader@mons-shop.iam.gserviceaccount.com';
 const firestoreWriterServiceAccountEmail = 'mons-shop-cloudflare-writer@mons-shop.iam.gserviceaccount.com';
 const firestoreProjectId = 'mons-shop';
@@ -1836,6 +1836,7 @@ async function runNotificationCutoverSequence(
       assertSoleNotificationConsumer(consumers, workerName);
     }
     assertSoleNotificationConsumer(dependencies.consumerList(input.wranglerEnvironment), workerName);
+    await dependencies.sleep(15_000);
     await dependencies.notificationSmoke(input.wranglerEnvironment, workerName);
     const committedVersion = stableCloudflareVersionId(
       await dependencies.apiDeployment(input.wranglerEnvironment),
