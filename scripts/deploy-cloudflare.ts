@@ -800,43 +800,54 @@ export async function smokeFrontendOrigin(
 export async function smokeProfileStateApi(
   dependencies: Pick<FrontendSmokeDependencies, 'fetch'> = {},
 ): Promise<void> {
-  let response: Response;
-  try {
-    response = await (dependencies.fetch ?? fetch)(`${profileApiProductionOrigin}/profile/state`, {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        origin: 'https://mons.shop',
-      },
-      body: '{}',
-      cache: 'no-store',
-      redirect: 'manual',
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    fail(`Profile API capability check failed: ${detail}`);
-  }
-  const body = await readBoundedSmokeBody(response, 16 * 1024);
-  let payload: unknown;
-  try {
-    payload = JSON.parse(body);
-  } catch {
-    fail('Profile API capability check returned invalid JSON.');
-  }
-  const error = payload && typeof payload === 'object' && !Array.isArray(payload)
-    ? (payload as Record<string, unknown>).error
-    : undefined;
-  if (
-    response.status !== 401 ||
-    response.headers.get('access-control-allow-origin') !== 'https://mons.shop' ||
-    !error ||
-    typeof error !== 'object' ||
-    Array.isArray(error) ||
-    (error as Record<string, unknown>).code !== 'unauthenticated'
-  ) {
-    fail('Profile API capability check returned an incompatible response.');
+  const authBody = JSON.stringify({
+    wallet: '11111111111111111111111111111111',
+    message: 'smoke',
+    signature: Array(64).fill(0),
+  });
+  for (const [pathname, body] of [
+    ['/auth/solana', authBody],
+    ['/profile/reconcile', '{}'],
+    ['/profile/state', '{}'],
+  ] as const) {
+    let response: Response;
+    try {
+      response = await (dependencies.fetch ?? fetch)(`${profileApiProductionOrigin}${pathname}`, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+          origin: 'https://mons.shop',
+        },
+        body,
+        cache: 'no-store',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      fail(`Profile API capability check failed for ${pathname}: ${detail}`);
+    }
+    const responseBody = await readBoundedSmokeBody(response, 16 * 1024);
+    let payload: unknown;
+    try {
+      payload = JSON.parse(responseBody);
+    } catch {
+      fail(`Profile API capability check returned invalid JSON for ${pathname}.`);
+    }
+    const error = payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>).error
+      : undefined;
+    if (
+      response.status !== 401 ||
+      response.headers.get('access-control-allow-origin') !== 'https://mons.shop' ||
+      !error ||
+      typeof error !== 'object' ||
+      Array.isArray(error) ||
+      (error as Record<string, unknown>).code !== 'unauthenticated'
+    ) {
+      fail(`Profile API capability check returned an incompatible response for ${pathname}.`);
+    }
   }
 }
 

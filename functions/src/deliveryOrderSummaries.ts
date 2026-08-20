@@ -1,30 +1,11 @@
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from './shared/fulfillmentSources.js';
 import { normalizeDropId } from './shared/deploymentCore.js';
-import { normalizeOptionalFulfillmentTrackingCode } from './shared/fulfillmentTracking.js';
-import { normalizeFulfillmentStatus } from './shared/fulfillmentStatus.js';
 import { parseDropDeliveryOrderPath, type DropDeliveryOrderPathIdentity } from './dropPaths.js';
-import type { DeliveryOrderItemSummary, DeliveryOrderSummary } from './shared/contracts.js';
 import { parsePositiveSafeInteger } from './shared/positiveInteger.js';
-import { toMillisMaybe } from './time.js';
-
-export const DELIVERY_ORDER_SUMMARY_FIELDS = [
-  'dropId', 'deliveryId', 'source', 'status', 'stripeCheckoutSessionId', 'createdAt', 'processingAt',
-  'processedAt', 'items', 'fulfillmentStatus', 'fulfillmentTrackingCode', 'fulfillmentUpdatedAt',
-] as const;
-
-function optionalTrimmedString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
 
 function normalizeDropIdMaybe(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   const dropId = normalizeDropId(value);
   return /^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId) ? dropId : null;
-}
-
-function finiteMillisMaybe(value: unknown): number | undefined {
-  const millis = toMillisMaybe(value);
-  return typeof millis === 'number' && Number.isFinite(millis) ? millis : undefined;
 }
 
 export type DeliveryOrderIdentityResolution =
@@ -61,44 +42,4 @@ export function dropIdFromDeliveryOrderPath(path: string): string | null {
 
 export function resolveDeliveryOrderDropId(order: unknown, path: string): string | null {
   return normalizeDropIdMaybe((order as { dropId?: unknown } | null)?.dropId) || dropIdFromDeliveryOrderPath(path);
-}
-
-function toDeliveryOrderSummary(documentId: string, value: unknown, path: string): DeliveryOrderSummary | null {
-  const order = value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-  if (!order || order.source === ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) return null;
-  const resolution = resolveDeliveryOrderIdentity(documentId, order, path);
-  if (!('identity' in resolution)) return null;
-  const { deliveryId, dropId } = resolution.identity;
-  if (order.dropId !== undefined && normalizeDropIdMaybe(order.dropId) !== dropId) return null;
-  const items = (Array.isArray(order.items) ? order.items : []).flatMap((value) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
-    const item = value as Record<string, unknown>;
-    const refId = Math.floor(Number(item.refId));
-    if ((item.kind !== 'box' && item.kind !== 'dude') || !Number.isSafeInteger(refId) || refId <= 0) return [];
-    return [{ kind: item.kind, refId } satisfies DeliveryOrderItemSummary];
-  });
-  return {
-    dropId,
-    deliveryId,
-    status: typeof order.status === 'string' ? order.status : 'unknown',
-    stripeCheckoutSessionId: optionalTrimmedString(order.stripeCheckoutSessionId),
-    createdAt: finiteMillisMaybe(order.createdAt),
-    processingAt: finiteMillisMaybe(order.processingAt),
-    processedAt: finiteMillisMaybe(order.processedAt),
-    items,
-    fulfillmentStatus: normalizeFulfillmentStatus(order.fulfillmentStatus),
-    fulfillmentTrackingCode: normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode),
-    fulfillmentUpdatedAt: finiteMillisMaybe(order.fulfillmentUpdatedAt),
-  };
-}
-
-export function toDeliveryOrderSummaries(
-  documents: Array<{ id: string; data(): unknown; ref: { path: string } }>,
-): DeliveryOrderSummary[] {
-  return documents.flatMap((document) => {
-    const summary = toDeliveryOrderSummary(document.id, document.data(), document.ref.path);
-    return summary ? [summary] : [];
-  });
 }

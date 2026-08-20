@@ -203,6 +203,7 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label-void'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-rates'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-shipment'), 65_000);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/profile/reconcile'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/order-address'), 20_000);
 });
 
@@ -237,6 +238,36 @@ test('Stripe checkout uses the authenticated Cloudflare route with an exact resp
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/checkout\/session/);
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|createStripeCheckoutSession['"]/);
+});
+
+test('wallet lifecycle clients use the authenticated Cloudflare routes without callable fallbacks', async () => {
+  for (const [pathname, body] of [
+    ['/auth/solana', { wallet: OWNER, message: 'signed-message', signature: Array(64).fill(1) }],
+    ['/profile/reconcile', { mergeStripeDeliveryOrders: true }],
+  ] as const) {
+    const payload = await profileApiTestHooks.requestProfileApi(pathname, body, {
+      fetch: async (input, init) => {
+        assert.equal(String(input), `https://api.mons.shop${pathname}`);
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        assert.deepEqual(JSON.parse(String(init?.body)), body);
+        return Response.json(pathname === '/auth/solana'
+          ? { wallet: OWNER }
+          : { mergedStripeDeliveryOrders: 1 });
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1000,
+    });
+    assert.ok(payload);
+  }
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  for (const name of ['solanaAuth', 'reconcileProfileState']) {
+    const start = source.indexOf(`export async function ${name}`);
+    const end = source.indexOf('\nexport async function ', start + 1);
+    const implementation = source.slice(start, end < 0 ? source.length : end);
+    assert.match(implementation, /callProfileApi\(/);
+    assert.doesNotMatch(implementation, /callFunction\(/);
+  }
 });
 
 test('migrated write response validators accept only exact public contracts', () => {
@@ -553,6 +584,21 @@ test('Stripe checkout callable is absent from Firebase exports and deployment se
   assert.equal(
     packageJson.scripts['decommission:firebase-create-stripe-checkout-session'],
     'firebase functions:delete createStripeCheckoutSession --project mons-shop --region us-central1 --force',
+  );
+});
+
+test('wallet lifecycle callables are absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts: Record<string, string>;
+  };
+  for (const name of ['solanaAuth', 'reconcileProfileState']) {
+    assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
+    assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], new RegExp(`functions:${name}(?:,|$)`));
+  }
+  assert.equal(
+    packageJson.scripts['decommission:firebase-profile-lifecycle'],
+    'firebase functions:delete solanaAuth reconcileProfileState --project mons-shop --region us-central1 --force',
   );
 });
 

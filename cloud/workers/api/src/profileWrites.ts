@@ -332,7 +332,7 @@ function errorResponse(error: ProfileReadError): Response {
     error: {
       code: error.code,
       message: error.message,
-      ...(error instanceof ShipStationProfileError && error.details !== undefined
+      ...(error.details !== undefined
         ? { details: error.details }
         : {}),
     },

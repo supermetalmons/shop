@@ -683,12 +683,11 @@ test('frontend candidate upload validates, dry-runs triggers, uploads, smokes, r
   }
 });
 
-test('frontend production capability check requires the profile-state API contract', async () => {
-  let request: RequestInit | undefined;
+test('frontend production capability check requires the profile lifecycle API contracts', async () => {
+  const requests: Array<{ input: string; init?: RequestInit }> = [];
   await frontendDeployTestHooks.smokeProfileStateApi({
     fetch: async (input, init) => {
-      assert.equal(String(input), 'https://api.mons.shop/profile/state');
-      request = init;
+      requests.push({ input: String(input), init });
       return Response.json({
         ok: false,
         error: { code: 'unauthenticated', message: 'Authentication is required.' },
@@ -701,8 +700,13 @@ test('frontend production capability check requires the profile-state API contra
       });
     },
   });
-  assert.equal(request?.method, 'POST');
-  assert.equal(request?.body, '{}');
+  assert.deepEqual(requests.map((entry) => entry.input), [
+    'https://api.mons.shop/auth/solana',
+    'https://api.mons.shop/profile/reconcile',
+    'https://api.mons.shop/profile/state',
+  ]);
+  assert.ok(requests.every((entry) => entry.init?.method === 'POST'));
+  assert.equal(requests[1]?.init?.body, '{}');
   await assert.rejects(
     () => frontendDeployTestHooks.smokeProfileStateApi({
       fetch: async () => Response.json({ ok: false, error: 'not-found' }, { status: 404 }),
@@ -1694,7 +1698,9 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         };
       }
       if (method === 'POST' && [
+        '/auth/solana',
         '/checkout/session',
+        '/profile/reconcile',
         '/profile/state',
         '/profile/addresses',
         '/admin/delivery-order-owners',
@@ -3195,14 +3201,20 @@ test('release CLI requires exact production version metadata', () => {
   );
 });
 
-test('release CLI requires separate Firestore reader and writer credentials for candidate uploads', () => {
-  assert.throws(() => deployApiTestHooks.parseArgs([]), /firestore-service-account-file/);
-  assert.throws(() => deployApiTestHooks.parseArgs(['release']), /firestore-service-account-file/);
+test('release CLI defaults to Keychain and requires paired Firestore file overrides', () => {
+  assert.deepEqual(deployApiTestHooks.parseArgs([]), {
+    firestoreServiceAccountFile: undefined,
+    firestoreWriterServiceAccountFile: undefined,
+    mode: 'release',
+    smokeOwner: deployApiTestHooks.defaultSmokeOwner,
+    tokenFile: undefined,
+    versionId: undefined,
+  });
   assert.throws(() => deployApiTestHooks.parseArgs([
     'release',
     '--firestore-service-account-file',
     '/tmp/firestore-reader.json',
-  ]), /firestore-writer-service-account-file/);
+  ]), /supplied together/);
   assert.deepEqual(deployApiTestHooks.parseArgs([
     'release',
     '--firestore-service-account-file',

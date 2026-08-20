@@ -129,8 +129,7 @@ const DEFAULT_RUNTIME: SolanaAuthRuntime = {
   getIdToken: async () => (await auth?.currentUser?.getIdToken()) || null,
   loadProfileState: loadProfileStateFromServer,
   reconcileProfileState,
-  authenticateWallet: (wallet, message, signature) =>
-    solanaAuth(wallet, message, signature, { responseMode: 'session' }),
+  authenticateWallet: solanaAuth,
   signOut: async () => {
     if (auth) await firebaseSignOut(auth);
   },

@@ -43,6 +43,7 @@ export class ProfileReadError extends Error {
       | 'internal',
     readonly status: number,
     message: string,
+    readonly details?: unknown,
   ) {
     super(message);
     this.name = 'ProfileReadError';

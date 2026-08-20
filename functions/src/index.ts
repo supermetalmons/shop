@@ -135,31 +135,22 @@ import {
   buildShipperVisibleOrderEmailItems,
 } from './orderEmailItems.js';
 import {
-  classifyStripeOwnerMergeError,
-  mergeFirebaseStripeDeliveryOrdersToWalletInDb,
-} from './deliveryOrderHistory.js';
-import {
+  DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS,
+  DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS,
   buildRecoverDeliveryOrdersResult,
   buildWalletDeliveryRecoveryState,
+  nextPreparedDeliveryRecoveryDelayMs,
+  preparedDeliveryRecoveryNextCheckMs,
+  processingDeliveryRecoveryNextCheckMs,
 } from './deliveryRecovery.js';
 import {
-  DELIVERY_ORDER_SUMMARY_FIELDS,
   dropIdFromDeliveryOrderPath,
   resolveDeliveryOrderIdentity,
   resolveDeliveryOrderDropId,
-  toDeliveryOrderSummaries,
 } from './deliveryOrderSummaries.js';
 import {
-  runProfileStateReconciliationFlow,
-  runVerifiedSolanaAuthProfileFlow,
-} from './profileLifecycle.js';
-import {
   WALLET_SESSION_COLLECTION,
-  WalletSessionWriteSupersededError,
-  establishVerifiedWalletSession,
-  readWalletSessionBaseline,
   resolveWalletSessionBinding,
-  writeWalletSessionAndProfileIfCurrent,
 } from './walletSessions.js';
 import { parseRequest } from './request.js';
 import {
@@ -171,18 +162,11 @@ import {
 import { toMillisMaybe } from './time.js';
 import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from './claimCodes.js';
 import type {
-  DeliveryOrderSummary,
   DeliveryRecoveryOutcome,
-  DeliveryRecoveryState,
-  ReconcileProfileStateResponse,
   RecoverDeliveryOrdersItemResult as RecoverMyDeliveryOrdersItemResult,
   RecoverDeliveryOrdersResult as RecoverMyDeliveryOrdersResult,
   WalletDeliveryRecoveryState,
 } from './shared/contracts.js';
-import {
-  deliveryOrderSummarySortAt,
-  PROFILE_SHIPMENT_STATUSES,
-} from './shared/deliveryOrderSummary.js';
 import {
   dasAssetBoxId,
   dasAssetDudeId,
@@ -254,10 +238,7 @@ import {
   MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
 } from './shared/solanaProgramAddresses.js';
-import {
-  WALLET_SESSION_SUPERSEDED_ERROR_REASON,
-  normalizeCallableErrorCode,
-} from './shared/callableErrorCode.js';
+import { normalizeCallableErrorCode } from './shared/callableErrorCode.js';
 
 // Firebase/Google Secret Manager secrets (Cloud Functions v2).
 // Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
@@ -719,9 +700,7 @@ const IX_BURN_V2 = Buffer.from([115, 210, 34, 240, 232, 143, 183, 16]);
 const MAX_DELIVERY_ITEMS = 32;
 const SERVER_INVALID_DELIVERY_UNITS_POLICY = 'arithmetic' as const;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
-const DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS = 30_000;
 const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
-const DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS = [30_000, 2 * 60 * 1000, 10 * 60 * 1000] as const;
 const MAX_PREPARED_DELIVERY_RECOVERY_CHECKS = DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS.length;
 const STRIPE_RECEIPT_CLAIM_PROCESSING_LEASE_MS = 90_000;
 const DIRECT_CARD_RECEIPT_SUBMISSION_RESOLUTION_MAX_WAIT_MS = 90_000;
@@ -874,52 +853,6 @@ function stripeApiKeys(): string[] {
     .map((value) => String(value || '').trim())
     .filter(Boolean);
   return Array.from(new Set(values));
-}
-
-type ParsedSolanaSignInMessage = {
-  wallet: string;
-  domain: string;
-  timestamp: string;
-  session: string;
-};
-
-function parseSolanaSignInMessage(message: string): ParsedSolanaSignInMessage {
-  const raw = typeof message === 'string' ? message.trim() : '';
-  if (!raw) throw new HttpsError('invalid-argument', 'Missing sign-in message');
-  if (raw.length > 1024) throw new HttpsError('invalid-argument', 'Sign-in message too long');
-
-  const lines = raw
-    .split(/\r?\n/g)
-    .map((l) => l.trim())
-    .filter((l) => l.length);
-
-  const header = lines[0] || '';
-  const prefix = 'Sign in to mons.shop as ';
-  if (!header.startsWith(prefix)) {
-    throw new HttpsError('invalid-argument', 'Invalid sign-in message (bad header)');
-  }
-  const wallet = header.slice(prefix.length).trim();
-  if (!wallet) throw new HttpsError('invalid-argument', 'Invalid sign-in message (missing wallet)');
-
-  const kv: Record<string, string> = {};
-  for (const line of lines.slice(1)) {
-    const idx = line.indexOf(':');
-    if (idx <= 0) continue;
-    const key = line.slice(0, idx).trim();
-    const value = line.slice(idx + 1).trim();
-    if (!key || !value) continue;
-    if (!(key in kv)) kv[key] = value;
-  }
-
-  const domain = kv.Domain || '';
-  const timestamp = kv.Timestamp || '';
-  const session = kv.Session || '';
-
-  if (!domain) throw new HttpsError('invalid-argument', 'Invalid sign-in message (missing Domain)');
-  if (!timestamp) throw new HttpsError('invalid-argument', 'Invalid sign-in message (missing Timestamp)');
-  if (!session) throw new HttpsError('invalid-argument', 'Invalid sign-in message (missing Session)');
-
-  return { wallet, domain, timestamp, session };
 }
 
 function truncateForLog(value: unknown, maxLen: number): string | null {
@@ -1418,11 +1351,6 @@ async function ensureOnchainCoreConfig(dropRuntime: DropRuntime, force = false):
 
   onchainConfigCheckByDrop.set(dropRuntime.dropId, { lastCheckedMs: now, ok: true, config: decoded });
   return decoded;
-}
-
-function parseSignature(sig: number[] | string) {
-  if (typeof sig === 'string') return bs58.decode(sig);
-  return Uint8Array.from(sig);
 }
 
 async function heliusJson(url: string, label: string, retries = 3, backoffMs = 400) {
@@ -4496,19 +4424,6 @@ export const notifyStripeCheckoutManualReview = onDocumentUpdated(
   },
 );
 
-async function fetchDeliveryOrderHistory(ownerId: string): Promise<DeliveryOrderSummary[]> {
-  const snap = await db
-    .collectionGroup('deliveryOrders')
-    .where('owner', '==', ownerId)
-    .where('status', 'in', [...PROFILE_SHIPMENT_STATUSES])
-    .select(...DELIVERY_ORDER_SUMMARY_FIELDS)
-    .get();
-
-  const summaries = toDeliveryOrderSummaries(snap.docs);
-  summaries.sort((a, b) => deliveryOrderSummarySortAt(b) - deliveryOrderSummarySortAt(a));
-  return summaries;
-}
-
 function resolveInstructionAccounts(tx: any): PublicKey[] {
   if (!tx?.transaction?.message) return [];
   const accountKeys = tx.transaction.message.getAccountKeys({
@@ -4554,31 +4469,6 @@ function preparedDeliveryRecoveryCheckCount(order: any): number {
   const raw = Number(order?.receiptRecovery?.preparedProbeCount || 0);
   if (!Number.isFinite(raw) || raw <= 0) return 0;
   return Math.floor(raw);
-}
-
-function nextPreparedDeliveryRecoveryDelayMs(probeCount: number): number | null {
-  return DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS[probeCount] ?? null;
-}
-
-function preparedDeliveryRecoveryNextCheckMs(order: any): number | null {
-  const probeCount = preparedDeliveryRecoveryCheckCount(order);
-  if (probeCount >= MAX_PREPARED_DELIVERY_RECOVERY_CHECKS) return null;
-  const scheduledAt = toMillisMaybe(order?.receiptRecovery?.nextPreparedProbeAt);
-  if (scheduledAt && scheduledAt > 0) return scheduledAt;
-  const createdAt = toMillisMaybe(order?.createdAt) ?? 0;
-  if (createdAt <= 0) return Date.now();
-  const initialDelayMs = nextPreparedDeliveryRecoveryDelayMs(probeCount) ?? 0;
-  return createdAt + initialDelayMs;
-}
-
-function processingDeliveryRecoveryNextCheckMs(order: any, nowMs: number): number | null {
-  const status = typeof order?.status === 'string' ? order.status : '';
-  if (status !== 'processing') return null;
-  const leaseExpiresAt = toMillisMaybe(order?.receiptRecovery?.leaseExpiresAt) ?? 0;
-  const lastAttemptAt = toMillisMaybe(order?.receiptRecovery?.lastAttemptAt) ?? 0;
-  const retryAt = lastAttemptAt > 0 ? lastAttemptAt + DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS : nowMs;
-  const nextCheckAt = Math.max(retryAt, leaseExpiresAt);
-  return Math.max(nowMs, nextCheckAt);
 }
 
 function deliveryRecoveryPriorityMs(order: any): number {
@@ -4878,189 +4768,6 @@ async function finalizeDeliveryRecoveryAttempt(
     'receiptRecovery.lastErrorMessage': result.message ? result.message : FieldValue.delete(),
   });
 }
-
-async function buildProfileResponse(profileWallet: string, profileData: any, includeRecoveryState: boolean) {
-  const [orders, deliveryRecoveryState] = await Promise.all([
-    fetchDeliveryOrderHistory(profileWallet),
-    includeRecoveryState ? fetchDeliveryRecoveryState(profileWallet) : Promise.resolve<DeliveryRecoveryState | null>(null),
-  ]);
-  const deliveryRecovery =
-    deliveryRecoveryState?.nextCheckAt != null ? ({ nextCheckAt: deliveryRecoveryState.nextCheckAt } satisfies DeliveryRecoveryState) : null;
-
-  return {
-    profile: {
-      ...profileData,
-      wallet: profileWallet,
-      email: profileData.email,
-      orders,
-      ...(deliveryRecovery ? { deliveryRecovery } : {}),
-    },
-  };
-}
-
-function stripeOwnerMergeDiagnostic(
-  err: unknown,
-  classification = classifyStripeOwnerMergeError(err),
-): Record<string, unknown> {
-  if (classification.kind === 'session_changed') {
-    return { error: summarizeError(err), reason: classification.reason };
-  }
-  if (classification.kind === 'unexpected_path') {
-    return { error: summarizeError(err), path: classification.path };
-  }
-  return { error: summarizeError(err) };
-}
-
-function throwStripeOwnerMergeCallableError(err: unknown, wallet: string): never {
-  const classification = classifyStripeOwnerMergeError(err);
-  logger.error('reconcileProfileState:stripeOwnerMergeRejected', {
-    wallet,
-    ...stripeOwnerMergeDiagnostic(err, classification),
-  });
-  if (classification.kind === 'session_changed') {
-    throw new HttpsError('unauthenticated', 'Wallet session changed. Sign in again.');
-  }
-  if (classification.kind === 'unexpected_path') {
-    throw new HttpsError('failed-precondition', 'Stripe order reconciliation found invalid server data.');
-  }
-  throw err;
-}
-
-async function tryMergeFirebaseStripeDeliveryOrdersToWallet(
-  uid: string,
-  wallet: string,
-  logContext: 'solanaAuth',
-): Promise<number> {
-  try {
-    const merged = await mergeFirebaseStripeDeliveryOrdersToWalletInDb(db, uid, wallet);
-    if (merged > 0) {
-      logger.info(`${logContext}:stripeOwnerMerge`, { wallet, merged });
-    }
-    return merged;
-  } catch (err) {
-    logger.warn(`${logContext}:stripeOwnerMergeFailed`, {
-      wallet,
-      ...stripeOwnerMergeDiagnostic(err),
-    });
-    return 0;
-  }
-}
-
-export const solanaAuth = onCallAuthed('solanaAuth', async (request, uid) => {
-  const schema = z.object({
-    wallet: z.string().min(32).max(64),
-    message: z.string().min(1).max(1024),
-    signature: z.array(z.number().int().min(0).max(255)).length(64),
-    mergeStripeDeliveryOrders: z.boolean().optional(),
-    responseMode: z.literal('session').optional(),
-  });
-  const { wallet: rawWallet, message, signature, mergeStripeDeliveryOrders, responseMode } = parseRequest(schema, request.data);
-  const wallet = normalizeWallet(rawWallet);
-
-  const statement = parseSolanaSignInMessage(message);
-  const statementWallet = normalizeWallet(statement.wallet);
-  if (statementWallet !== wallet) {
-    throw new HttpsError('invalid-argument', 'Wallet mismatch in signed message');
-  }
-  if (statement.session !== uid) {
-    throw new HttpsError('permission-denied', 'Signed message does not match caller');
-  }
-
-  // Soft-ish sanity check: accept timestamps within ±2 days to avoid rejecting clients
-  // with mildly incorrect clocks/timezones, while still preventing very stale replays.
-  const tsMs = Date.parse(statement.timestamp);
-  if (!Number.isFinite(tsMs)) {
-    throw new HttpsError('invalid-argument', 'Invalid Timestamp in signed message');
-  }
-  const MAX_SKEW_MS = 2 * 24 * 60 * 60 * 1000;
-  const skewMs = Math.abs(Date.now() - tsMs);
-  if (skewMs > MAX_SKEW_MS) {
-    throw new HttpsError('failed-precondition', 'Signed message timestamp is too far from current time');
-  }
-
-  const pubkey = new PublicKey(wallet);
-
-  const profileRef = db.doc(`profiles/${wallet}`);
-  return runVerifiedSolanaAuthProfileFlow(
-    { wallet, responseMode, mergeStripeDeliveryOrders },
-    {
-      invalidSessionMergeError: () =>
-        new HttpsError('invalid-argument', 'Session response mode cannot merge Stripe delivery orders.'),
-      establishSession: () => establishVerifiedWalletSession({
-        readBaseline: () => readWalletSessionBaseline(db, uid),
-        verifySignature: () => nacl.sign.detached.verify(
-          new TextEncoder().encode(message),
-          parseSignature(signature),
-          pubkey.toBytes(),
-        ),
-        invalidSignatureError: () => new HttpsError('unauthenticated', 'Invalid signature'),
-        writeSession: async (baseline) => {
-          try {
-            await writeWalletSessionAndProfileIfCurrent({
-              db,
-              uid,
-              wallet,
-              baseline,
-            });
-          } catch (error) {
-            if (error instanceof WalletSessionWriteSupersededError) {
-              throw new HttpsError(
-                'failed-precondition',
-                'A newer wallet sign-in superseded this request. Sign in again.',
-                { reason: WALLET_SESSION_SUPERSEDED_ERROR_REASON },
-              );
-            }
-            throw error;
-          }
-        },
-      }),
-      loadProfile: async () => {
-        const snap = await profileRef.get();
-        return { exists: snap.exists, data: snap.exists ? (snap.data() as any) : {} };
-      },
-      mergeStripeDeliveryOrders: async () => {
-        await tryMergeFirebaseStripeDeliveryOrdersToWallet(uid, wallet, 'solanaAuth');
-      },
-      buildLegacyResponse: (profileData) => buildProfileResponse(wallet, profileData, true),
-    },
-  );
-});
-
-export const reconcileProfileState = onCallLogged('reconcileProfileState', async (request) => {
-  const { uid, wallet } = await requireWalletSession(request);
-  const schema = z.object({
-    mergeStripeDeliveryOrders: z.boolean().optional(),
-    includeDeliveryRecovery: z.boolean().optional(),
-  });
-  const { mergeStripeDeliveryOrders, includeDeliveryRecovery } = parseRequest(schema, request.data || {});
-
-  const state = await runProfileStateReconciliationFlow(
-    { mergeStripeDeliveryOrders, includeDeliveryRecovery },
-    {
-      mergeStripeDeliveryOrders: async () => {
-        let merged: number;
-        try {
-          merged = await mergeFirebaseStripeDeliveryOrdersToWalletInDb(db, uid, wallet);
-        } catch (err) {
-          throwStripeOwnerMergeCallableError(err, wallet);
-        }
-        if (merged > 0) {
-          logger.info('reconcileProfileState:stripeOwnerMerge', { wallet, merged });
-        }
-        return merged;
-      },
-      loadDeliveryRecovery: () => fetchDeliveryRecoveryState(wallet),
-    },
-  );
-
-  const response: ReconcileProfileStateResponse = {
-    mergedStripeDeliveryOrders: state.mergedStripeDeliveryOrders,
-  };
-  if (state.deliveryRecovery?.nextCheckAt != null) {
-    response.deliveryRecovery = { nextCheckAt: state.deliveryRecovery.nextCheckAt };
-  }
-  return response;
-});
 
 export const processStripeCheckoutFulfillment = onDocumentWritten(
   {

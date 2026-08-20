@@ -101,6 +101,11 @@ import {
   handleProfileWriteRequest,
   type ProfileWritePath,
 } from './profileWrites.js';
+import {
+  PROFILE_LIFECYCLE_PATHS,
+  handleProfileLifecycleRequest,
+  type ProfileLifecyclePath,
+} from './profileLifecycle.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -157,6 +162,8 @@ const KNOWN_LOG_ROUTES = new Set([
   FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
   FULFILLMENT_SHIPSTATION_RATES_PATH,
   FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+  '/auth/solana',
+  '/profile/reconcile',
 ]);
 
 export type ProviderFetch = RpcProviderFetch;
@@ -1283,6 +1290,7 @@ export async function handleRequest(
   let providerCacheStatus: string | undefined;
   let profileAuthOutcome: string | undefined;
   let profileStateSections: { profile: string; shipments: string } | undefined;
+  let mergedStripeDeliveryOrders: number | undefined;
   let rpcMethod: string | undefined;
   let checkoutDropId: string | undefined;
   let checkoutMode: string | undefined;
@@ -1295,7 +1303,8 @@ export async function handleRequest(
     : pathname === '/rpc/devnet' ? 'devnet' : null;
   const profilePath = PROFILE_READ_PATHS.has(pathname) ? pathname as ProfileReadPath : null;
   const profileWritePath = PROFILE_WRITE_PATHS.has(pathname) ? pathname as ProfileWritePath : null;
-  if (request.method === 'OPTIONS' && (profilePath || profileWritePath || pathname === STRIPE_CHECKOUT_SESSION_PATH)) {
+  const profileLifecyclePath = PROFILE_LIFECYCLE_PATHS.has(pathname) ? pathname as ProfileLifecyclePath : null;
+  if (request.method === 'OPTIONS' && (profilePath || profileWritePath || profileLifecyclePath || pathname === STRIPE_CHECKOUT_SESSION_PATH)) {
     response = handleProfileCorsPreflight(request);
   } else if (request.method === 'OPTIONS' && rpcCluster) {
     response = handleRpcPreflight(request);
@@ -1342,6 +1351,17 @@ export async function handleRequest(
     webhookEventType = result.eventType;
     webhookOutcome = result.outcome;
     response = result.response;
+  } else if (profileLifecyclePath) {
+    if (!isProfileRequestOriginAllowed(request)) {
+      response = applyProfileCors(request, new Response(null));
+    } else {
+      const result = await handleProfileLifecycleRequest(request, env, profileLifecyclePath);
+      metrics.upstreamCalls += result.metrics.upstreamCalls;
+      metrics.providerDurationMs += result.metrics.providerDurationMs;
+      profileAuthOutcome = result.authOutcome;
+      mergedStripeDeliveryOrders = result.mergedStripeDeliveryOrders;
+      response = applyProfileCors(request, result.response);
+    }
   } else if (profilePath) {
     if (!isProfileRequestOriginAllowed(request)) {
       response = applyProfileCors(request, new Response(null));
@@ -1419,6 +1439,7 @@ export async function handleRequest(
     ...(webhookOutcome ? { webhookOutcome } : {}),
     ...(profileAuthOutcome ? { profileAuthOutcome } : {}),
     ...(profileStateSections ? { profileStateSections } : {}),
+    ...(mergedStripeDeliveryOrders === undefined ? {} : { mergedStripeDeliveryOrders }),
   });
   return response;
 }

@@ -243,7 +243,9 @@ type ProfileApiClientDependencies = {
 };
 
 type AuthenticatedApiPath =
+  | '/auth/solana'
   | '/checkout/session'
+  | '/profile/reconcile'
   | '/profile/state'
   | '/profile/shipments'
   | '/profile/anonymous-stripe-delivery-history'
@@ -268,6 +270,7 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 };
 
 const STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS = 35_000;
+const PROFILE_RECONCILE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_VOID_API_TIMEOUT_MS = 65_000;
@@ -275,6 +278,7 @@ const SHIPSTATION_RATES_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
+  if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
   if (pathname === '/checkout/session') return STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label-purchase') return SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS;
@@ -1341,39 +1345,16 @@ export async function solanaAuth(
   wallet: string,
   message: string,
   signature: Uint8Array,
-  options: { responseMode: 'session' },
-): Promise<{ wallet: string }>;
-export async function solanaAuth(
-  wallet: string,
-  message: string,
-  signature: Uint8Array,
-  options?: { mergeStripeDeliveryOrders?: boolean },
-): Promise<{ profile: Profile }>;
-export async function solanaAuth(
-  wallet: string,
-  message: string,
-  signature: Uint8Array,
-  options?: { responseMode?: 'session'; mergeStripeDeliveryOrders?: boolean },
-): Promise<{ wallet: string } | { profile: Profile }> {
-  type SolanaAuthRequest = {
-    wallet: string;
-    message: string;
-    signature: number[];
-    responseMode?: 'session';
-    mergeStripeDeliveryOrders?: boolean;
-  };
-  const payload: SolanaAuthRequest = {
+): Promise<{ wallet: string }> {
+  const response = await callProfileApi('/auth/solana', {
     wallet,
     message,
     signature: Array.from(signature),
-  };
-  if (options?.responseMode === 'session') {
-    payload.responseMode = 'session';
+  });
+  if (!isRecord(response) || !hasExactKeys(response, ['wallet']) || !isBase58Bytes(response.wallet, 32)) {
+    throw new Error('Invalid wallet session response');
   }
-  if (options?.mergeStripeDeliveryOrders) {
-    payload.mergeStripeDeliveryOrders = true;
-  }
-  return callFunction<SolanaAuthRequest, { wallet: string } | { profile: Profile }>('solanaAuth', payload);
+  return { wallet: String(response.wallet) };
 }
 
 export async function reconcileProfileState(
@@ -1386,7 +1367,36 @@ export async function reconcileProfileState(
   if (typeof options?.includeDeliveryRecovery === 'boolean') {
     payload.includeDeliveryRecovery = options.includeDeliveryRecovery;
   }
-  return callFunction<ReconcileProfileStateRequest, ReconcileProfileStateResponse>('reconcileProfileState', payload);
+  const response = await callProfileApi('/profile/reconcile', payload);
+  if (!isRecord(response) || !hasExactRequiredAndOptionalKeys(
+    response,
+    ['mergedStripeDeliveryOrders'],
+    ['deliveryRecovery'],
+  )) {
+    throw new Error('Invalid profile reconciliation response');
+  }
+  if (
+    !Number.isSafeInteger(response.mergedStripeDeliveryOrders) ||
+    Number(response.mergedStripeDeliveryOrders) < 0
+  ) {
+    throw new Error('Invalid profile reconciliation response');
+  }
+  let deliveryRecovery: ReconcileProfileStateResponse['deliveryRecovery'];
+  if (response.deliveryRecovery !== undefined) {
+    if (
+      !isRecord(response.deliveryRecovery) ||
+      !hasExactKeys(response.deliveryRecovery, ['nextCheckAt']) ||
+      typeof response.deliveryRecovery.nextCheckAt !== 'number' ||
+      !Number.isFinite(response.deliveryRecovery.nextCheckAt)
+    ) {
+      throw new Error('Invalid profile reconciliation response');
+    }
+    deliveryRecovery = { nextCheckAt: response.deliveryRecovery.nextCheckAt };
+  }
+  return {
+    mergedStripeDeliveryOrders: Number(response.mergedStripeDeliveryOrders),
+    ...(deliveryRecovery ? { deliveryRecovery } : {}),
+  };
 }
 
 export async function loadProfileStateFromServer(): Promise<GetProfileStateResponse> {

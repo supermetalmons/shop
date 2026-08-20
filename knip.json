@@ -4,6 +4,8 @@
     ".": {
       "entry": [
         "src/renderer/main.tsx",
+        "src/static-render/clearCards.tsx",
+        "src/components/ClearCardDropPreview.tsx",
         "cloud/workers/api/src/index.ts",
         "cloud/workers/api/test/*.test.ts",
         "cloud/workers/api/runtime-test/*.test.ts",
@@ -18,10 +20,17 @@
         "tests/**/*.ts"
       ],
       "ignoreDependencies": ["buffer"],
-      "ignoreBinaries": ["anchor", "mkfifo", "solana"]
+      "ignoreBinaries": ["anchor", "gcloud", "mkfifo", "solana", "swift"],
+      "ignoreExportsUsedInFile": { "type": true }
     },
     "functions": {
-      "entry": ["scripts/*.ts", "../tests/*.test.ts"],
+      "entry": [
+        "scripts/*.ts",
+        "src/fulfillmentStatus.ts",
+        "src/shared/contracts.ts",
+        "src/shared/packStatus.ts",
+        "../tests/*.test.ts"
+      ],
       "project": ["src/**/*.{ts,js}", "scripts/**/*.ts", "../tests/**/*.ts"],
       "ignoreBinaries": ["gcloud"]
     }

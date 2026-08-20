@@ -60,7 +60,7 @@ The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_API_KEY`,
 `RESEND_CONTACTS_API_KEY`, and `NOTIFICATION_ENQUEUE_SECRET` secrets, both the
 producer and consumer sides of `NOTIFICATION_EMAIL_QUEUE`, Smart Placement, and
 a version-first release flow. It serves
-`/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
+`/auth/solana`, `/profile/reconcile`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
 `/pending-open-boxes`, authenticated profile/admin/fulfillment reads,
 `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
 responses remain uncached. Pack-status reads use the public Firestore REST API
@@ -70,6 +70,7 @@ with a 15-second Cloudflare subrequest cache and support only `card_nft_2`,
 - Run the complete guarded API release with no intermediate commands or arguments:
   - `npm run deploy:api`
   - This requires `HELIUS_API_KEY` and `CLOUDFLARE_API_TOKEN` in the process environment. It does not read `.env.local` or accept either secret as a command argument.
+  - On macOS, install or verify the dedicated Firestore reader and writer credentials once with `npm run setup:api:firestore-keychain`. Release and preview commands read them directly from the device-local Keychain. Paired private JSON file arguments remain available for non-macOS release environments.
   - The command verifies the tracked API/frontend production pair before upload, validates the API, tests an exact Version Preview against devnet inventory, runs the mandatory comparison, promotes only the API version, verifies that the frontend stayed unchanged, and records the new pair.
   - The fulfillment admin wallet is used for smoke requests unless `--smoke-owner` is supplied. The default release requires `clear_cards_devnet_v2` and rejects stale `clear_cards_devnet` inventory.
 - Validate code, generated bindings, tests, dry-run bundling, and startup time:
@@ -110,6 +111,7 @@ frontend releases are both verified, run
 `npm run decommission:firebase-shipstation-label-purchase`. The checkout cutover separately uses
 `npm run decommission:firebase-create-stripe-checkout-session` immediately after its frontend verification, then deploy the complete
 Functions set with `npm run deploy:functions`.
+The wallet lifecycle cutover separately uses `npm run decommission:firebase-profile-lifecycle` only after both `/auth/solana` and `/profile/reconcile` are live, the frontend release is verified, and rollback metadata no longer approves pre-migration Worker versions.
 
 ### Notification delivery
 

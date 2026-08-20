@@ -44,6 +44,11 @@ import {
   type CloudflareDeploymentStatus,
   type CloudflareSleep,
 } from './cloudflare-deployment-state.ts';
+import {
+  firestoreReaderServiceAccountEmail,
+  firestoreWriterServiceAccountEmail,
+  readCloudflareFirestoreKeychainCredential,
+} from './cloudflare-firestore-keychain.ts';
 
 type Mode = 'release' | 'preview' | 'production' | 'triggers' | 'rollback';
 
@@ -202,8 +207,6 @@ const notificationSmokeEmail = 'ivan@ivan.lol';
 const notificationQueueName = 'mons-shop-notification-emails';
 const notificationDeadLetterQueueName = 'mons-shop-notification-emails-dlq';
 const notificationSmokeTimeoutMs = 90_000;
-const firestoreServiceAccountEmail = 'mons-shop-cloudflare-reader@mons-shop.iam.gserviceaccount.com';
-const firestoreWriterServiceAccountEmail = 'mons-shop-cloudflare-writer@mons-shop.iam.gserviceaccount.com';
 const firestoreProjectId = 'mons-shop';
 const firestoreDatabaseName = `projects/${firestoreProjectId}/databases/(default)`;
 const googleOAuthTokenUrl = 'https://oauth2.googleapis.com/token';
@@ -235,7 +238,7 @@ function usage(): string {
     '',
     'The default release validates, uploads, verifies, promotes, and records one exact Worker version.',
     'Release, preview, and production require HELIUS_API_KEY in the process environment.',
-    'Release and preview require dedicated reader and writer Firestore service-account JSON files.',
+    'Release and preview use macOS Keychain credentials by default or accept dedicated reader and writer JSON files.',
     'Preview mode uploads the secret through a temporary mode-0600 file inside a mode-0700 directory.',
   ].join('\n');
 }
@@ -286,14 +289,14 @@ function parseArgs(argv: string[]): CliOptions {
     fail(`${mode} requires an exact UUID --version-id.`, 2);
   }
   if ((mode === 'release' || mode === 'preview' || mode === 'triggers') && versionId) fail(`--version-id is not valid in ${mode} mode.`, 2);
-  if ((mode === 'release' || mode === 'preview') && !firestoreServiceAccountFile) {
-    fail(`${mode} requires --firestore-service-account-file.`, 2);
-  }
-  if ((mode === 'release' || mode === 'preview') && !firestoreWriterServiceAccountFile) {
-    fail(`${mode} requires --firestore-writer-service-account-file.`, 2);
-  }
   if (mode !== 'release' && mode !== 'preview' && (firestoreServiceAccountFile || firestoreWriterServiceAccountFile)) {
     fail(`Firestore service-account file options are not valid in ${mode} mode.`, 2);
+  }
+  if (Boolean(firestoreServiceAccountFile) !== Boolean(firestoreWriterServiceAccountFile)) {
+    fail('Firestore reader and writer service-account file options must be supplied together.', 2);
+  }
+  if ((mode === 'release' || mode === 'preview') && !firestoreServiceAccountFile && process.platform !== 'darwin') {
+    fail(`${mode} requires Firestore service-account files outside macOS.`, 2);
   }
   return { firestoreServiceAccountFile, firestoreWriterServiceAccountFile, mode, smokeOwner, tokenFile, versionId };
 }
@@ -338,7 +341,7 @@ function validateFirestoreCredentialJson(value: string, expectedEmail: string, l
 }
 
 function validateFirestoreServiceAccountJson(value: string): string {
-  return validateFirestoreCredentialJson(value, firestoreServiceAccountEmail, 'Reader');
+  return validateFirestoreCredentialJson(value, firestoreReaderServiceAccountEmail, 'Reader');
 }
 
 function validateFirestoreWriterServiceAccountJson(value: string): string {
@@ -440,15 +443,23 @@ function readFirestoreCredential(
 }
 
 function readFirestoreServiceAccount(path: string | undefined): string {
-  return readFirestoreCredential(path, '--firestore-service-account-file', validateFirestoreServiceAccountJson);
+  return path
+    ? readFirestoreCredential(path, '--firestore-service-account-file', validateFirestoreServiceAccountJson)
+    : validateFirestoreServiceAccountJson(
+        readCloudflareFirestoreKeychainCredential(firestoreReaderServiceAccountEmail),
+      );
 }
 
 function readFirestoreWriterServiceAccount(path: string | undefined): string {
-  return readFirestoreCredential(
-    path,
-    '--firestore-writer-service-account-file',
-    validateFirestoreWriterServiceAccountJson,
-  );
+  return path
+    ? readFirestoreCredential(
+        path,
+        '--firestore-writer-service-account-file',
+        validateFirestoreWriterServiceAccountJson,
+      )
+    : validateFirestoreWriterServiceAccountJson(
+        readCloudflareFirestoreKeychainCredential(firestoreWriterServiceAccountEmail),
+      );
 }
 
 function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -1183,7 +1194,9 @@ async function smokeApi(
 
   if (options.includeProfileState === true) {
     for (const [pathname, body] of [
+      ['/auth/solana', { wallet: defaultSmokeOwner, message: 'smoke', signature: Array(64).fill(0) }],
       ['/checkout/session', { dropId: 'card_nft_binder_devnet' }],
+      ['/profile/reconcile', {}],
       ['/profile/state', {}],
       ['/profile/addresses', { encrypted: 'smoke', country: 'US', hint: 'smoke' }],
       ['/admin/delivery-order-owners', {}],

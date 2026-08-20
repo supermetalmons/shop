@@ -71,6 +71,16 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
     assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
 
+    for (const pathname of ['/auth/solana', '/profile/reconcile']) {
+      const lifecyclePreflight = await worker.fetch(`https://api.mons.shop${pathname}`, {
+        method: 'OPTIONS',
+        headers: { Origin: 'https://mons.shop' },
+      });
+      assert.equal(lifecyclePreflight.status, 204);
+      assert.equal(lifecyclePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+      assert.equal(lifecyclePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+    }
+
     const checkoutPreflight = await worker.fetch('https://api.mons.shop/checkout/session', {
       method: 'OPTIONS',
       headers: { Origin: 'https://mons.shop' },
@@ -94,6 +104,23 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     });
     assert.equal(unauthenticatedProfile.status, 401);
     assert.equal((await unauthenticatedProfile.json() as any).error.code, 'unauthenticated');
+
+    for (const [pathname, body] of [
+      ['/auth/solana', {
+        wallet: '11111111111111111111111111111111',
+        message: 'smoke',
+        signature: Array(64).fill(0),
+      }],
+      ['/profile/reconcile', {}],
+    ] as const) {
+      const response = await worker.fetch(`https://api.mons.shop${pathname}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 401);
+      assert.equal((await response.json() as { error: { code: string } }).error.code, 'unauthenticated');
+    }
 
     const webhookPayload = JSON.stringify({
       id: 'evt_runtime_test',

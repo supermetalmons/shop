@@ -285,6 +285,29 @@ test('profile routes enforce restricted CORS, bearer authentication, and stable 
   assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
   assert.equal(JSON.stringify(logs).includes('firebase'), false);
 
+  const authPreflight = await handleRequest(new Request('https://api.mons.shop/auth/solana', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(authPreflight.status, 204);
+  assert.equal(authPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+
+  const missingAuthOrigin = await handleRequest(request('/auth/solana', {
+    wallet: OWNER,
+    message: 'message',
+    signature: Array(64).fill(0),
+  }), env(), quietDependencies(fetch));
+  assert.equal(missingAuthOrigin.status, 403);
+
+  const lifecycleLogs: Record<string, unknown>[] = [];
+  const unauthenticatedReconcile = await handleRequest(request('/profile/reconcile', {}, {
+    Origin: 'https://mons.shop',
+  }), env(), { ...quietDependencies(fetch), log: (entry) => lifecycleLogs.push(entry) });
+  assert.equal(unauthenticatedReconcile.status, 401);
+  assert.equal((await unauthenticatedReconcile.json() as { error: { code: string } }).error.code, 'unauthenticated');
+  assert.equal(lifecycleLogs[0]?.route, '/profile/reconcile');
+  assert.equal(lifecycleLogs[0]?.profileAuthOutcome, 'rejected');
+
   let upstreamCalls = 0;
   const deniedOrigin = await handleRequest(request('/profile/shipments', { ownerWallet: OWNER }, {
     Authorization: 'Bearer private-token',

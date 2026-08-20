@@ -215,7 +215,14 @@ export function applyProfileCors(request: Request, response: Response): Response
 }
 
 function errorResponse(error: ProfileReadError): Response {
-  return jsonResponse({ ok: false, error: { code: error.code, message: error.message } }, error.status);
+  return jsonResponse({
+    ok: false,
+    error: {
+      code: error.code,
+      message: error.message,
+      ...(error.details === undefined ? {} : { details: error.details }),
+    },
+  }, error.status);
 }
 
 const defaultAccessTokenProvider = createGoogleAccessTokenProvider();
