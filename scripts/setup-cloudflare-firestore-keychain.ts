@@ -130,11 +130,15 @@ function createCredential(email: string, directory: string): { credential: Crede
   ]);
   chmodSync(path, 0o600);
   if ((statSync(path).mode & 0o077) !== 0) fail(`Credential permissions are unsafe for ${email}.`);
-  const created = compactCredential(readFileSync(path, 'utf8'), email);
-  if (!serviceAccountKeyIds(email).has(created.credential.private_key_id)) {
-    fail(`Created key was not visible for ${email}.`);
+  return compactCredential(readFileSync(path, 'utf8'), email);
+}
+
+async function waitForKeyVisibility(email: string, keyId: string): Promise<void> {
+  for (const delay of [0, 500, 1_500, 3_000]) {
+    if (delay) await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, delay));
+    if (serviceAccountKeyIds(email).has(keyId)) return;
   }
-  return created;
+  fail(`Created key was not visible for ${email}.`);
 }
 
 function deleteIamKey(email: string, keyId: string): void {
@@ -169,6 +173,7 @@ async function main(): Promise<void> {
       if (serviceAccountKeyIds(email).size >= 9) fail(`${email} has no safe key-creation capacity.`);
       const generated = createCredential(email, directory);
       created.push({ email, keyId: generated.credential.private_key_id });
+      await waitForKeyVisibility(email, generated.credential.private_key_id);
       writeCloudflareFirestoreKeychainCredential(email, generated.json);
       updatedKeychainAccounts.push(email);
       const verified = readValidKeychainCredential(email);
