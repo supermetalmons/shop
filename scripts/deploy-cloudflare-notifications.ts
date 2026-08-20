@@ -79,8 +79,42 @@ export function notificationSmokeJobId(output: string): string {
   return match[1].toLowerCase();
 }
 
+type NotificationSmokeOutcome = 'sent' | 'retry' | 'failed' | null;
+
+function notificationSmokeEvent(value: unknown, jobId: string): NotificationSmokeOutcome {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const outcome = notificationSmokeEvent(entry, jobId);
+      if (outcome) return outcome;
+    }
+    return null;
+  }
+  if (!isRecord(value)) return null;
+  if (value.jobId === jobId) {
+    if (value.event === 'notification_email_sent') return 'sent';
+    if (value.event === 'notification_email_retry') return 'retry';
+    if (value.event === 'notification_email_failed_permanent') return 'failed';
+  }
+  for (const entry of Object.values(value)) {
+    const outcome = notificationSmokeEvent(entry, jobId);
+    if (outcome) return outcome;
+  }
+  return null;
+}
+
+function notificationSmokeLogOutcome(output: string, jobId: string): NotificationSmokeOutcome {
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const outcome = notificationSmokeEvent(JSON.parse(line) as unknown, jobId);
+      if (outcome) return outcome;
+    } catch {}
+  }
+  return null;
+}
+
 export function notificationSmokeLogSucceeded(output: string, jobId: string): boolean {
-  return output.includes(jobId) && output.includes('notification_email_sent');
+  return notificationSmokeLogOutcome(output, jobId) === 'sent';
 }
 
 function parseArgs(argv: string[]): { mode: ReleaseMode; versionId?: string } {
@@ -234,14 +268,12 @@ async function smokeNotificationDelivery(environment: NodeJS.ProcessEnv): Promis
     const jobId = notificationSmokeJobId(smokeOutput);
     const deadline = Date.now() + smokeTimeoutMs;
     while (Date.now() < deadline) {
-      if (notificationSmokeLogSucceeded(tailOutput, jobId)) {
+      const outcome = notificationSmokeLogOutcome(tailOutput, jobId);
+      if (outcome === 'sent') {
         console.log(`[notifications-deploy] Smoke job ${jobId} sent successfully.`);
         return;
       }
-      if (
-        tailOutput.includes(jobId) &&
-        (tailOutput.includes('notification_email_retry') || tailOutput.includes('notification_email_failed_permanent'))
-      ) fail(`Notification smoke job ${jobId} did not send successfully.`);
+      if (outcome === 'retry' || outcome === 'failed') fail(`Notification smoke job ${jobId} did not send successfully.`);
       await wait(500);
     }
     fail(`Notification smoke job ${jobId} was not observed before the timeout.`);

@@ -42,6 +42,10 @@ test('notification smoke parsing binds a sent log to the exact queued job', () =
     JSON.stringify({ event: 'notification_email_sent', jobId: CURRENT }),
     CANDIDATE,
   ), false);
+  assert.equal(notificationsDeployTestHooks.notificationSmokeLogSucceeded([
+    JSON.stringify({ event: 'notification_email_retry', jobId: CANDIDATE }),
+    JSON.stringify({ event: 'notification_email_sent', jobId: CURRENT }),
+  ].join('\n'), CANDIDATE), false);
 });
 
 test('notification deployment command uses the guarded release helper', () => {

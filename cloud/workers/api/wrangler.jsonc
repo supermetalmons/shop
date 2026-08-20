@@ -20,6 +20,7 @@
     "required": [
       "HELIUS_API_KEY",
       "COSIGNER_SECRET",
+      "RESEND_API_KEY",
       "RESEND_CONTACTS_API_KEY",
       "NOTIFICATION_ENQUEUE_SECRET",
       "FIRESTORE_SERVICE_ACCOUNT_JSON",
@@ -38,6 +39,16 @@
       {
         "binding": "NOTIFICATION_EMAIL_QUEUE",
         "queue": "mons-shop-notification-emails"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "mons-shop-notification-emails",
+        "max_batch_size": 5,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "max_concurrency": 1,
+        "dead_letter_queue": "mons-shop-notification-emails-dlq"
       }
     ]
   },

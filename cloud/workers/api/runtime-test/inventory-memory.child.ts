@@ -168,6 +168,7 @@ const env: Env = {
     metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
   },
   HELIUS_API_KEY: 'memory-test-key',
+  RESEND_API_KEY: '',
   RESEND_CONTACTS_API_KEY: 'memory-resend-test-key',
   NOTIFICATION_ENQUEUE_SECRET: 'memory-notification-enqueue-secret',
   FIRESTORE_SERVICE_ACCOUNT_JSON: '',

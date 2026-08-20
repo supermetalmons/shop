@@ -56,9 +56,10 @@ Never commit the token or expose secrets through a `VITE_*` variable.
 
 ### Shop API deployment
 
-The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_CONTACTS_API_KEY`, and
-`NOTIFICATION_ENQUEUE_SECRET` secrets, a `NOTIFICATION_EMAIL_QUEUE` producer
-binding, Smart Placement, and a version-first release flow. It serves
+The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_API_KEY`,
+`RESEND_CONTACTS_API_KEY`, and `NOTIFICATION_ENQUEUE_SECRET` secrets, both the
+producer and consumer sides of `NOTIFICATION_EMAIL_QUEUE`, Smart Placement, and
+a version-first release flow. It serves
 `/checkout/session`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
 `/pending-open-boxes`, authenticated profile/admin/fulfillment reads,
 `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
@@ -91,9 +92,9 @@ Advanced release controls remain available for separately managed releases:
 Preview upload writes `HELIUS_API_KEY` to a newly created mode-`0600` file inside
 a mode-`0700` temporary directory, passes that file directly to Wrangler, and
 deletes the validated temporary path immediately afterward. The preconfigured
-`RESEND_CONTACTS_API_KEY` and `NOTIFICATION_ENQUEUE_SECRET` Worker secrets are
+`RESEND_API_KEY`, `RESEND_CONTACTS_API_KEY`, and `NOTIFICATION_ENQUEUE_SECRET` Worker secrets are
 preserved across version uploads. The Cloudflare token, Helius secret, and
-notification enqueue secret are stripped from all other child-process environment
+notification secrets are stripped from all other child-process environment
 data and are never printed.
 
 The fulfillment and checkout routes also use `ADDRESS_DECRYPTION_SECRET`, `COSIGNER_SECRET`, `SHIPSTATION_API_KEY`,
@@ -110,32 +111,40 @@ frontend releases are both verified, run
 `npm run decommission:firebase-create-stripe-checkout-session` immediately after its frontend verification, then deploy the complete
 Functions set with `npm run deploy:functions`.
 
-### Notification delivery deployment
+### Notification delivery
 
 Transactional order and manual-review emails are rendered by the three existing
 Firebase document triggers, authenticated with `NOTIFICATION_ENQUEUE_SECRET`,
-and queued through the internal `mons-shop-api` producer route. The dedicated
-`mons-shop-notifications` Worker consumes `mons-shop-notification-emails` and
-sends through Resend. It has no HTTP route, stores no delivery ledger, and writes
-no new Firestore notification documents. Failed transient deliveries retry five
-times before moving to `mons-shop-notification-emails-dlq`.
+and queued through the internal `mons-shop-api` producer route. Until the guarded
+cutover completes, `mons-shop-notifications` remains the live consumer; the
+combined API source contains the replacement queue handler but does not own the
+consumer yet. Both implementations preserve the same Resend, retry, and DLQ
+behavior.
 
-- Validate generated bindings, TypeScript, unit tests, bundling, and startup:
-  - `npm run check:notifications`
-- Run the guarded notification release. It validates the Worker, uploads and
-  deploys one exact version, sends a synthetic email through the production
-  Queue, automatically restores the tracked baseline if smoke fails, and records
-  the new production/rollback pair:
-  - `npm run deploy:notifications`
+- Validate the HTTP and notification handlers, generated bindings, TypeScript,
+  unit tests, bundling, and startup together with `npm run check:api`.
+- Keep validating and releasing the live legacy consumer with
+  `npm run check:notifications` and `npm run deploy:notifications` until cutover.
+- API production releases and approved rollbacks send a synthetic email through
+  the production queue before writing release evidence.
+- Perform the one-time guarded consumer consolidation with a newly created
+  Resend Sending Access key in `RESEND_API_KEY`:
+  - `npm run deploy:api -- notifications-cutover --firestore-service-account-file /path/to/reader.json --firestore-writer-service-account-file /path/to/writer.json`
+  - The cutover promotes a combined API version, moves the sole queue consumer,
+    verifies an exact sent job, pins that version as the temporary fix-forward
+    rollback target, and deletes the detached legacy Worker.
+  - Resume an interrupted promoted candidate with
+    `npm run deploy:api -- notifications-cutover --version-id <uuid> --smoke-owner <wallet>` from the same clean Git commit.
 - Queue the synthetic test email through the production API and print its job ID:
   - `npm run test-resend-notification-email -- --kind stripe-manual-review`
 - Inspect queue state and live structured logs:
   - `node_modules/.bin/wrangler queues info mons-shop-notification-emails`
   - `node_modules/.bin/wrangler queues info mons-shop-notification-emails-dlq`
-  - `node_modules/.bin/wrangler tail mons-shop-notifications --format json`
-- Roll back only to the exact approved version in
-  `cloud/notifications-release-manifest.json`:
-  - `npm run deploy:notifications -- rollback --version-id <uuid>`
+  - Before cutover: `node_modules/.bin/wrangler tail mons-shop-notifications --format json`
+  - After cutover: `node_modules/.bin/wrangler tail mons-shop-api --format json`
+
+The legacy source, config, deploy helper, and release manifest remain tracked
+until production handover succeeds. Remove them in the post-cutover cleanup.
 
 Both queues use 24-hour retention to match Resend's idempotency window. Do not
 automatically replay the DLQ after that window, and do not restore direct
@@ -145,10 +154,10 @@ Wrangler can upload a preview version only after the Worker exists. The
 `mons-shop-api` Worker was bootstrapped once without routes during this migration;
 subsequent releases can use the preview command directly.
 
-Both deployment helpers keep short-lived, exact-version verification records
-under the ignored `.cache` directory. A frontend candidate record is bound to the
-clean Git commit that created it, and production promotion requires the same clean
-commit. Promotion never rebuilds the candidate. Guarded resume reruns the frontend
+The deployment helpers keep short-lived, exact-version verification records
+under the ignored `.cache` directory. Frontend and API candidate records are bound
+to the clean Git commit that created them, and production promotion requires that
+same clean commit. Promotion never rebuilds the candidate. Guarded resume reruns the frontend
 hash checks or API smoke and benchmark before touching triggers or evidence.
 Production evidence is written only after both `mons.shop` and `www.mons.shop`
 pass their smoke tests. The release finalization command
@@ -177,11 +186,11 @@ resolve the local write problem and rerun the same production command with the
 same version ID.
 
 Tracked release and rollback IDs live in `cloud/release-manifest.json`. The
-approved rollback targets intentionally match the current API
-`91ca69bb-c4ba-4ebf-b3d0-a12528b11910` and frontend
-`ea8e4a16-d46e-4c5b-beb7-cfd44a40630d`. Rollback is therefore a no-op after the
-legacy fulfillment callables are retired; recover from a regression by fixing
-forward instead of restoring a former tracked version.
+notification cutover records its combined API version as both current and
+approved rollback, so the rollback command deliberately refuses to restore the
+pre-consumer API and requires a fix forward. The next successful API release
+keeps that combined version as the approved rollback and restores a distinct,
+queue-capable recovery target.
 
 To roll back an application version, provide `CLOUDFLARE_API_TOKEN` in the shell,
 inspect `node_modules/.bin/wrangler deployments list --config wrangler.jsonc`,
@@ -234,8 +243,9 @@ suite passes.
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET_DEVNET`
 - `STRIPE_WEBHOOK_SECRET` (Firebase Functions secret or local env; Stripe live/production endpoint signing secret for mainnet drops handled by `stripeWebhook`)
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET`
-- `RESEND_API_KEY` (`mons-shop-notifications` Worker secret used only for outbound transactional emails; use a Resend Sending Access key restricted to `support.mons.shop`)
-  - Set or rotate with `wrangler versions secret put RESEND_API_KEY --config cloud/workers/notifications/wrangler.jsonc --env-file cloud/workers/notifications/release.env`, then deploy the exact reviewed consumer source.
+- `RESEND_API_KEY` (outbound transactional-email secret; currently on `mons-shop-notifications` and moved to `mons-shop-api` by cutover; use a Resend Sending Access key restricted to `support.mons.shop`)
+  - The initial consolidation reads it only from the `RESEND_API_KEY` process environment and uploads it through the guarded mode-`0600` temporary secrets file.
+  - Later API versions inherit it; rotate it as an API Worker secret and promote only the exact reviewed combined version.
 - `NOTIFICATION_ENQUEUE_SECRET` (shared HMAC secret for the three Firebase notification producers and the internal `mons-shop-api` queue endpoint)
   - Store the same randomly generated 32-byte value in Firebase Secret Manager and the API Worker's secret set before uploading its candidate. Never pass it as a command argument or print it.
   - The test-email command reads this secret from the shell or Firebase Secret Manager and never accesses the Resend key.

@@ -48,6 +48,7 @@ function env(options: {
   return {
     NOTIFICATION_EMAIL_QUEUE: notificationQueue,
     HELIUS_API_KEY: options.apiKey === undefined ? 'test-key' : options.apiKey,
+    RESEND_API_KEY: '',
     RESEND_CONTACTS_API_KEY: options.resendContactsApiKey === undefined
       ? 'resend-test-key'
       : options.resendContactsApiKey,

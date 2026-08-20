@@ -64,6 +64,7 @@ import {
   type FirestorePackStatusFetch,
 } from './firestorePackStatus.js';
 import { handleNotificationEnqueue, NOTIFICATION_ENQUEUE_PATH } from './notificationEnqueue.js';
+import { processNotificationEmailBatch } from './notificationEmailConsumer.js';
 import {
   STRIPE_CHECKOUT_SESSION_PATH,
   handleStripeCheckoutSession,
@@ -1407,4 +1408,7 @@ export default {
   fetch(request, env) {
     return handleRequest(request, env);
   },
-} satisfies ExportedHandler<Env>;
+  queue(batch, env) {
+    return processNotificationEmailBatch(batch, env);
+  },
+} satisfies ExportedHandler<Env, unknown>;

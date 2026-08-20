@@ -32,6 +32,7 @@ import {
   finalizeReleaseManifest,
   isProductionEvidence,
   parseFinalizeReleaseArgs,
+  recordApiNotificationsCutoverVersion,
   recordApiProductionVersion,
   recordFrontendProductionVersion,
   writeProductionEvidence,
@@ -52,6 +53,7 @@ import {
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const EMPTY_NEW_API_SECRET_ENV = {
+  RESEND_API_KEY: '',
   FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '',
   ADDRESS_DECRYPTION_SECRET: '',
   COSIGNER_SECRET: '',
@@ -351,6 +353,7 @@ test('candidate promotion evidence is exact, version-keyed, and owner-bound', ()
     versionId,
     previewUrl: deployApiTestHooks.expectedPreviewOrigin(versionId),
     smokeOwner: OWNER,
+    sourceCommit: SOURCE_COMMIT,
     testedAt: new Date().toISOString(),
     runs: 5,
     workerMedianMs: 10,
@@ -848,6 +851,60 @@ test('API deployment validates exact Worker and custom-domain targets before mut
   );
 });
 
+test('notification consumer and combined version inspection require the exact reviewed surface', () => {
+  const consumers = deployApiTestHooks.parseNotificationQueueConsumers(JSON.stringify([{
+    script: 'mons-shop-api',
+    type: 'worker',
+    dead_letter_queue: 'mons-shop-notification-emails-dlq',
+    settings: {
+      batch_size: 5,
+      max_retries: 5,
+      max_wait_time_ms: 5000,
+      max_concurrency: 1,
+      retry_delay: 0,
+    },
+  }]));
+  assert.doesNotThrow(() => deployApiTestHooks.assertSoleNotificationConsumer(consumers, 'mons-shop-api'));
+  assert.throws(
+    () => deployApiTestHooks.assertSoleNotificationConsumer(consumers, 'mons-shop-notifications'),
+    /exactly one reviewed/,
+  );
+
+  const versionId = randomUUID();
+  const combinedVersion = JSON.stringify({
+    id: versionId,
+    resources: {
+      script: { handlers: ['fetch', 'queue'] },
+      bindings: [
+        { name: 'RESEND_API_KEY', type: 'secret_text' },
+        { name: 'NOTIFICATION_EMAIL_QUEUE', type: 'queue' },
+      ],
+    },
+  });
+  assert.doesNotThrow(() => deployApiTestHooks.assertCombinedApiVersion(combinedVersion, versionId));
+  assert.throws(
+    () => deployApiTestHooks.assertCombinedApiVersion(JSON.stringify({
+      id: versionId,
+      resources: {
+        script: { handlers: ['fetch'] },
+        bindings: [{ name: 'NOTIFICATION_EMAIL_QUEUE', type: 'queue' }],
+      },
+    }), versionId),
+    /fetch and queue handlers/,
+  );
+
+  const smokeJobId = randomUUID();
+  const mixedTail = [
+    JSON.stringify({ event: 'notification_email_retry', jobId: smokeJobId }),
+    JSON.stringify({ event: 'notification_email_sent', jobId: randomUUID() }),
+  ].join('\n');
+  assert.equal(deployApiTestHooks.notificationSmokeLogSucceeded(mixedTail, smokeJobId), false);
+  assert.equal(deployApiTestHooks.notificationSmokeLogOutcome(
+    JSON.stringify({ logs: [{ message: [{ event: 'notification_email_sent', jobId: smokeJobId }] }] }),
+    smokeJobId,
+  ), 'sent');
+});
+
 test('frontend production deploys reviewed triggers before exact promotion', () => {
   const versionId = randomUUID();
   assert.deepEqual(frontendDeployTestHooks.frontendProductionWranglerCommands(versionId), [
@@ -1281,6 +1338,11 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(validation.VITE_HELIUS_API_KEY, undefined);
   assert.equal(validation.WRANGLER_OUTPUT_FILE_PATH, undefined);
   assert.equal(validation.DOTENV_KEY, undefined);
+  const smoke = deployApiTestHooks.notificationSmokeEnvironment(source);
+  assert.equal(smoke.NOTIFICATION_ENQUEUE_SECRET, 'notification-enqueue-secret');
+  assert.equal(smoke.GOOGLE_APPLICATION_CREDENTIALS, '/tmp/google-credentials.json');
+  assert.equal(smoke.HELIUS_API_KEY, undefined);
+  assert.equal(smoke.RESEND_API_KEY, undefined);
   let childEnvironment: NodeJS.ProcessEnv | undefined;
   deployApiTestHooks.runApiValidation(source, (_command, args, environment) => {
     assert.deepEqual(args, ['run', 'check:api']);
@@ -2951,6 +3013,235 @@ test('API evidence failure never rolls back and directs a guarded-resume rerun',
   assert.deepEqual(labels, ['Reviewed trigger deployment']);
 });
 
+test('notification cutover promotes before consumer handover and deletes only after evidence and manifest recording', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const previewUrl = deployApiTestHooks.expectedPreviewOrigin(candidateVersionId);
+  const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
+  const events: string[] = [];
+  let consumers = deployApiTestHooks.parseNotificationQueueConsumers(JSON.stringify([{
+    script: 'mons-shop-notifications',
+    type: 'worker',
+    dead_letter_queue: 'mons-shop-notification-emails-dlq',
+    settings: { batch_size: 5, max_retries: 5, max_wait_time_ms: 5000, max_concurrency: 1, retry_delay: 0 },
+  }]));
+  const apiConsumers = deployApiTestHooks.parseNotificationQueueConsumers(JSON.stringify([{
+    script: 'mons-shop-api',
+    type: 'worker',
+    dead_letter_queue: 'mons-shop-notification-emails-dlq',
+    settings: { batch_size: 5, max_retries: 5, max_wait_time_ms: 5000, max_concurrency: 1, retry_delay: 0 },
+  }]));
+  await deployApiTestHooks.runNotificationCutoverSequence({
+    apiToken: 'scoped-token',
+    candidateSmoke: { includeDevnet: true, owner: OWNER },
+    expectedCurrentProduction: { apiVersionId: baselineVersionId, frontendVersionId },
+    heliusApiKey: 'helius-test-key',
+    previewUrl,
+    smokeOwner: OWNER,
+    versionId: candidateVersionId,
+    wranglerEnvironment,
+  }, {
+    apiDeployment: deploymentReader([
+      baselineVersionId,
+      baselineVersionId,
+      candidateVersionId,
+      candidateVersionId,
+      candidateVersionId,
+    ]),
+    benchmark: async (options) => {
+      events.push(`benchmark:${options.apiOrigin}`);
+      return { runs: 5, workerMedianMs: 10, legacyMedianMs: 20 };
+    },
+    consumerList: () => consumers,
+    deleteWorker: () => events.push('delete-worker'),
+    evidence: (_kind, versionId) => {
+      events.push(`evidence:${versionId}`);
+      return { schemaVersion: 1, kind: 'api', workerName: 'mons-shop-api', versionId, verifiedAt: new Date().toISOString() };
+    },
+    frontendDeployment: async () => stableDeployment(frontendVersionId),
+    notificationSmoke: async (_environment, name) => {
+      events.push(`notification-smoke:${name}`);
+    },
+    record: (versionId) => {
+      events.push(`record:${versionId}`);
+      return {
+        schemaVersion: 1,
+        recordedAt: new Date().toISOString(),
+        currentProduction: { apiVersionId: versionId, frontendVersionId },
+        approvedRollback: { apiVersionId: versionId, frontendVersionId },
+        allowDirectHeliusFrontendRollback: false,
+      };
+    },
+    sleep: async () => undefined,
+    smoke: async (origin) => {
+      events.push(`smoke:${origin}`);
+    },
+    verifyVersion: (versionId) => events.push(`verify:${versionId}`),
+    workerExists: async () => {
+      events.push('verify-deleted');
+      return false;
+    },
+    wrangler: (_args, _environment, label) => {
+      events.push(label);
+      if (label === 'Legacy notification consumer removal') consumers = [];
+      if (label === 'Combined API trigger deployment') consumers = apiConsumers;
+    },
+  });
+  assert.deepEqual(events, [
+    `smoke:${previewUrl}`,
+    `benchmark:${previewUrl}`,
+    `verify:${candidateVersionId}`,
+    'Combined API exact-version promotion',
+    'smoke:https://api.mons.shop',
+    'Legacy notification consumer removal',
+    'Combined API trigger deployment',
+    'notification-smoke:mons-shop-api',
+    `evidence:${candidateVersionId}`,
+    `record:${candidateVersionId}`,
+    'delete-worker',
+    'verify-deleted',
+  ]);
+});
+
+test('notification cutover restores the legacy consumer and API baseline before retirement on smoke failure', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const events: string[] = [];
+  const legacyConsumers = deployApiTestHooks.parseNotificationQueueConsumers(JSON.stringify([{
+    script: 'mons-shop-notifications',
+    type: 'worker',
+    dead_letter_queue: 'mons-shop-notification-emails-dlq',
+    settings: { batch_size: 5, max_retries: 5, max_wait_time_ms: 5000, max_concurrency: 1, retry_delay: 0 },
+  }]));
+  const apiConsumers = deployApiTestHooks.parseNotificationQueueConsumers(JSON.stringify([{
+    script: 'mons-shop-api',
+    type: 'worker',
+    dead_letter_queue: 'mons-shop-notification-emails-dlq',
+    settings: { batch_size: 5, max_retries: 5, max_wait_time_ms: 5000, max_concurrency: 1, retry_delay: 0 },
+  }]));
+  let consumers = legacyConsumers;
+  await assert.rejects(
+    () => deployApiTestHooks.runNotificationCutoverSequence({
+      apiToken: 'scoped-token',
+      candidateSmoke: { includeDevnet: true, owner: OWNER },
+      expectedCurrentProduction: { apiVersionId: baselineVersionId, frontendVersionId },
+      heliusApiKey: 'helius-test-key',
+      previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+      smokeOwner: OWNER,
+      versionId: candidateVersionId,
+      wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+    }, {
+      apiDeployment: deploymentReader([
+        baselineVersionId,
+        baselineVersionId,
+        candidateVersionId,
+        candidateVersionId,
+        candidateVersionId,
+        baselineVersionId,
+      ]),
+      benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+      consumerList: () => consumers,
+      deleteWorker: () => assert.fail('failed cutover deleted the legacy Worker'),
+      evidence: () => assert.fail('failed cutover wrote evidence'),
+      frontendDeployment: async () => stableDeployment(frontendVersionId),
+      notificationSmoke: async (_environment, name) => {
+        events.push(`notification-smoke:${name}`);
+        if (name === 'mons-shop-api') throw new Error('injected notification smoke failure');
+      },
+      record: () => assert.fail('failed cutover recorded the manifest'),
+      sleep: async () => undefined,
+      smoke: async () => undefined,
+      verifyVersion: () => undefined,
+      workerExists: async () => true,
+      wrangler: (_args, _environment, label) => {
+        events.push(label);
+        if (label === 'Legacy notification consumer removal') consumers = [];
+        if (label === 'Combined API trigger deployment') consumers = apiConsumers;
+        if (label === 'Combined API consumer recovery removal') consumers = [];
+        if (label === 'Legacy notification consumer recovery') consumers = legacyConsumers;
+      },
+    }),
+    /recovery was attempted/,
+  );
+  assert.deepEqual(events, [
+    'Combined API exact-version promotion',
+    'Legacy notification consumer removal',
+    'Combined API trigger deployment',
+    'notification-smoke:mons-shop-api',
+    'Combined API consumer recovery removal',
+    'Legacy notification consumer recovery',
+    'Notification cutover API rollback',
+    'notification-smoke:mons-shop-notifications',
+  ]);
+});
+
+test('notification cutover recovery suppresses rollback after concurrent API drift', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const concurrentVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const labels: string[] = [];
+  const legacyConsumers = deployApiTestHooks.parseNotificationQueueConsumers(JSON.stringify([{
+    script: 'mons-shop-notifications',
+    type: 'worker',
+    dead_letter_queue: 'mons-shop-notification-emails-dlq',
+    settings: { batch_size: 5, max_retries: 5, max_wait_time_ms: 5000, max_concurrency: 1, retry_delay: 0 },
+  }]));
+  const apiConsumers = deployApiTestHooks.parseNotificationQueueConsumers(JSON.stringify([{
+    script: 'mons-shop-api',
+    type: 'worker',
+    dead_letter_queue: 'mons-shop-notification-emails-dlq',
+    settings: { batch_size: 5, max_retries: 5, max_wait_time_ms: 5000, max_concurrency: 1, retry_delay: 0 },
+  }]));
+  let consumers = legacyConsumers;
+  await assert.rejects(
+    () => deployApiTestHooks.runNotificationCutoverSequence({
+      apiToken: 'scoped-token',
+      candidateSmoke: { includeDevnet: true, owner: OWNER },
+      expectedCurrentProduction: { apiVersionId: baselineVersionId, frontendVersionId },
+      heliusApiKey: 'helius-test-key',
+      previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+      smokeOwner: OWNER,
+      versionId: candidateVersionId,
+      wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+    }, {
+      apiDeployment: deploymentReader([
+        baselineVersionId,
+        baselineVersionId,
+        candidateVersionId,
+        candidateVersionId,
+        concurrentVersionId,
+      ]),
+      benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+      consumerList: () => consumers,
+      deleteWorker: () => assert.fail('failed cutover deleted the legacy Worker'),
+      evidence: () => assert.fail('failed cutover wrote evidence'),
+      frontendDeployment: async () => stableDeployment(frontendVersionId),
+      notificationSmoke: async (_environment, name) => {
+        if (name === 'mons-shop-api') throw new Error('injected notification smoke failure');
+      },
+      record: () => assert.fail('failed cutover recorded the manifest'),
+      sleep: async () => undefined,
+      smoke: async () => undefined,
+      verifyVersion: () => undefined,
+      workerExists: async () => true,
+      wrangler: (_args, _environment, label) => {
+        labels.push(label);
+        if (label === 'Legacy notification consumer removal') consumers = [];
+        if (label === 'Combined API trigger deployment') consumers = apiConsumers;
+        if (label === 'Combined API consumer recovery removal') consumers = [];
+        if (label === 'Legacy notification consumer recovery') consumers = legacyConsumers;
+        if (label === 'Notification cutover API rollback') assert.fail('concurrent drift was overwritten');
+      },
+    }),
+    /recovery was attempted/,
+  );
+  assert.equal(labels.includes('Notification cutover API rollback'), false);
+  assert.equal(labels.includes('Legacy notification consumer recovery'), true);
+});
+
 test('temporary secret setup enforces modes and removes partial files after injected failures', () => {
   const previousSecret = process.env.HELIUS_API_KEY;
   process.env.HELIUS_API_KEY = 'release-test-secret';
@@ -2960,6 +3251,7 @@ test('temporary secret setup enforces modes and removes partial files after inje
       'release-test-secret',
       FIRESTORE_SERVICE_ACCOUNT_JSON,
       FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+      'resend-cutover-test-secret',
     );
     assert.equal(statSync(secretFile.directory).mode & 0o777, 0o700);
     assert.equal(statSync(secretFile.path).mode & 0o777, 0o600);
@@ -2967,6 +3259,7 @@ test('temporary secret setup enforces modes and removes partial files after inje
     assert.equal(storedSecrets.HELIUS_API_KEY, 'release-test-secret');
     assert.equal(storedSecrets.FIRESTORE_SERVICE_ACCOUNT_JSON, FIRESTORE_SERVICE_ACCOUNT_JSON);
     assert.equal(storedSecrets.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON);
+    assert.equal(storedSecrets.RESEND_API_KEY, 'resend-cutover-test-secret');
     secretFile.dispose();
     assert.equal(existsSync(secretFile.directory), false);
 
@@ -3201,6 +3494,41 @@ test('API release resolves the Helius key without exposing it as an argument', (
   assert.equal(deployApiTestHooks.resolveHeliusApiKey({ HELIUS_API_KEY: ' server-secret ' }), 'server-secret');
 });
 
+test('notification cutover resolves only a bounded explicit Resend key', () => {
+  assert.equal(deployApiTestHooks.resolveResendApiKey({}), '');
+  assert.equal(deployApiTestHooks.resolveResendApiKey({ RESEND_API_KEY: ' resend-key ' }), 'resend-key');
+  assert.equal(deployApiTestHooks.resolveResendApiKey({ RESEND_API_KEY: 'invalid key' }), '');
+  assert.deepEqual(deployApiTestHooks.parseArgs([
+    'notifications-cutover',
+    '--firestore-service-account-file',
+    '/tmp/firestore-reader.json',
+    '--firestore-writer-service-account-file',
+    '/tmp/firestore-writer.json',
+  ]), {
+    firestoreServiceAccountFile: '/tmp/firestore-reader.json',
+    firestoreWriterServiceAccountFile: '/tmp/firestore-writer.json',
+    mode: 'notifications-cutover',
+    smokeOwner: deployApiTestHooks.defaultSmokeOwner,
+    tokenFile: undefined,
+    versionId: undefined,
+  });
+  const versionId = randomUUID();
+  assert.deepEqual(deployApiTestHooks.parseArgs([
+    'notifications-cutover',
+    '--version-id',
+    versionId,
+    '--smoke-owner',
+    OWNER,
+  ]), {
+    firestoreServiceAccountFile: undefined,
+    firestoreWriterServiceAccountFile: undefined,
+    mode: 'notifications-cutover',
+    smokeOwner: OWNER,
+    tokenFile: undefined,
+    versionId,
+  });
+});
+
 test('tracked release metadata is exact and excludes direct-Helius frontend rollback', () => {
   const manifest = deployApiTestHooks.readReleaseManifest();
   assert.equal(deployApiTestHooks.isReleaseManifest(manifest), true);
@@ -3330,6 +3658,38 @@ test('one-step API release advances only the verified API production baseline', 
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), after);
   } finally {
     rmSync(directory, { recursive: true });
+  }
+});
+
+test('notification cutover pins current and approved API versions to the queue-capable candidate', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mons-shop-notification-cutover-manifest-test-'));
+  const path = join(directory, 'release-manifest.json');
+  const evidenceDirectory = join(directory, 'evidence');
+  const before = deployApiTestHooks.readReleaseManifest();
+  const apiVersionId = randomUUID();
+  const now = new Date('2026-08-20T12:34:56.000Z');
+  try {
+    assert.doesNotThrow(
+      () => deployApiTestHooks.assertApprovedApiRollback(before, before.approvedRollback.apiVersionId),
+    );
+    writeFileSync(path, `${JSON.stringify(before, null, 2)}\n`, { encoding: 'utf8', mode: 0o640 });
+    writeProductionEvidence('api', apiVersionId, { directory: evidenceDirectory, now });
+    const after = recordApiNotificationsCutoverVersion(apiVersionId, {
+      evidenceDirectory,
+      expectedCurrentProduction: before.currentProduction,
+      manifestPath: path,
+      now,
+    });
+    assert.equal(after.currentProduction.apiVersionId, apiVersionId);
+    assert.equal(after.approvedRollback.apiVersionId, apiVersionId);
+    assert.equal(after.currentProduction.frontendVersionId, before.currentProduction.frontendVersionId);
+    assert.equal(after.approvedRollback.frontendVersionId, before.approvedRollback.frontendVersionId);
+    assert.throws(
+      () => deployApiTestHooks.assertApprovedApiRollback(after, apiVersionId),
+      /No distinct queue-capable API rollback/,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

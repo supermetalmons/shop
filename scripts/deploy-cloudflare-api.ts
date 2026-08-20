@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createPrivateKey, randomUUID } from 'node:crypto';
 import {
   chmodSync,
@@ -30,6 +30,7 @@ import {
   isReleaseManifest,
   readReleaseManifest,
   recordApiProductionVersion,
+  recordApiNotificationsCutoverVersion,
   type ReleaseManifest,
   type ReleaseVersionPair,
   writeProductionEvidence,
@@ -45,7 +46,7 @@ import {
   type CloudflareSleep,
 } from './cloudflare-deployment-state.ts';
 
-type Mode = 'release' | 'preview' | 'production' | 'triggers' | 'rollback';
+type Mode = 'release' | 'preview' | 'production' | 'triggers' | 'rollback' | 'notifications-cutover';
 
 type CliOptions = {
   firestoreServiceAccountFile?: string;
@@ -63,6 +64,7 @@ type UploadMetadata = {
 
 type CandidateRecord = UploadMetadata & ApiBenchmarkResult & {
   includeDevnet: true;
+  sourceCommit: string;
   workerName: 'mons-shop-api';
   smokeOwner: string;
   testedAt: string;
@@ -123,6 +125,7 @@ type ProductionSequenceDependencies = {
   evidence: typeof writeProductionEvidence;
   sleep: CloudflareSleep;
   smoke: typeof smokeApi;
+  notificationSmoke?: typeof smokeNotificationDelivery;
   wrangler: typeof runWrangler;
 };
 
@@ -157,6 +160,44 @@ type CompleteApiReleaseDependencies = {
   validate: () => void;
 };
 
+type NotificationQueueConsumer = {
+  deadLetterQueue: string;
+  maxBatchSize: number;
+  maxBatchTimeoutMs: number;
+  maxConcurrency: number;
+  maxRetries: number;
+  retryDelay: number;
+  script: string;
+  type: string;
+};
+
+type NotificationCutoverSequenceInput = {
+  apiToken: string;
+  candidateSmoke: SmokeApiOptions;
+  expectedCurrentProduction: ReleaseVersionPair;
+  heliusApiKey: string;
+  previewUrl: string;
+  smokeOwner: string;
+  versionId: string;
+  wranglerEnvironment: NodeJS.ProcessEnv;
+};
+
+type NotificationCutoverSequenceDependencies = {
+  apiDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  benchmark: typeof benchmarkApi;
+  consumerList: (environment: NodeJS.ProcessEnv) => NotificationQueueConsumer[];
+  deleteWorker: (environment: NodeJS.ProcessEnv) => void;
+  evidence: typeof writeProductionEvidence;
+  frontendDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  notificationSmoke: typeof smokeNotificationDelivery;
+  record: typeof recordApiNotificationsCutoverVersion;
+  sleep: CloudflareSleep;
+  smoke: typeof smokeApi;
+  verifyVersion: (versionId: string, environment: NodeJS.ProcessEnv) => void;
+  workerExists: (name: string) => Promise<boolean>;
+  wrangler: typeof runWrangler;
+};
+
 class DeployFailure extends Error {
   readonly exitCode: number;
 
@@ -180,10 +221,15 @@ const workersDevSubdomain = 'lil-org.workers.dev';
 const candidateRecordDirectory = resolve(repoRoot, '.cache', 'mons-shop-api-candidates');
 const candidateRecordMaxAgeMs = 6 * 60 * 60 * 1000;
 const candidateRecordClockSkewMs = 5 * 60 * 1000;
+const gitCommitPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const defaultSmokeOwner = FULFILLMENT_ADMIN_WALLET_ADDRESSES[0];
 const expectedReleaseDropId = 'clear_cards_devnet_v2';
 const forbiddenReleaseDropId = 'clear_cards_devnet';
 const notificationSmokeEmail = 'ivan@ivan.lol';
+const notificationQueueName = 'mons-shop-notification-emails';
+const notificationDeadLetterQueueName = 'mons-shop-notification-emails-dlq';
+const notificationWorkerName = 'mons-shop-notifications';
+const notificationSmokeTimeoutMs = 45_000;
 const firestoreServiceAccountEmail = 'mons-shop-cloudflare-reader@mons-shop.iam.gserviceaccount.com';
 const firestoreWriterServiceAccountEmail = 'mons-shop-cloudflare-writer@mons-shop.iam.gserviceaccount.com';
 const firestoreProjectId = 'mons-shop';
@@ -214,9 +260,12 @@ function usage(): string {
     '  npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- triggers --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
+    '  npm run deploy:api -- notifications-cutover --firestore-service-account-file <path> --firestore-writer-service-account-file <path> [--smoke-owner <wallet>] [--token-file <path>]',
+    '  npm run deploy:api -- notifications-cutover --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
     '',
     'The default release validates, uploads, verifies, promotes, and records one exact Worker version.',
     'Release, preview, and production require HELIUS_API_KEY in the process environment.',
+    'Notifications cutover requires HELIUS_API_KEY and RESEND_API_KEY in the process environment.',
     'Release and preview require dedicated reader and writer Firestore service-account JSON files.',
     'Preview mode uploads the secret through a temporary mode-0600 file inside a mode-0700 directory.',
   ].join('\n');
@@ -232,13 +281,13 @@ function parseArgs(argv: string[]): CliOptions {
     process.exit(0);
   }
   const requestedMode = argv[0];
-  const knownModes: readonly Mode[] = ['release', 'preview', 'production', 'triggers', 'rollback'];
+  const knownModes: readonly Mode[] = ['release', 'preview', 'production', 'triggers', 'rollback', 'notifications-cutover'];
   const mode: Mode = requestedMode && knownModes.includes(requestedMode as Mode) ? requestedMode as Mode : 'release';
   const optionStart = mode === requestedMode ? 1 : 0;
   if (requestedMode && !requestedMode.startsWith('--') && optionStart === 0) {
-    fail(`Expected release, preview, production, triggers, or rollback.\n\n${usage()}`, 2);
+    fail(`Expected release, preview, production, triggers, rollback, or notifications-cutover.\n\n${usage()}`, 2);
   }
-  let smokeOwner = mode === 'release' ? defaultSmokeOwner : '';
+  let smokeOwner = mode === 'release' || mode === 'notifications-cutover' ? defaultSmokeOwner : '';
   let firestoreServiceAccountFile: string | undefined;
   let firestoreWriterServiceAccountFile: string | undefined;
   let tokenFile: string | undefined;
@@ -268,13 +317,19 @@ function parseArgs(argv: string[]): CliOptions {
     fail(`${mode} requires an exact UUID --version-id.`, 2);
   }
   if ((mode === 'release' || mode === 'preview' || mode === 'triggers') && versionId) fail(`--version-id is not valid in ${mode} mode.`, 2);
-  if ((mode === 'release' || mode === 'preview') && !firestoreServiceAccountFile) {
+  if (mode === 'notifications-cutover' && versionId && !versionIdPattern.test(versionId)) {
+    fail('notifications-cutover --version-id must be an exact UUID.', 2);
+  }
+  if ((mode === 'release' || mode === 'preview' || (mode === 'notifications-cutover' && !versionId)) && !firestoreServiceAccountFile) {
     fail(`${mode} requires --firestore-service-account-file.`, 2);
   }
-  if ((mode === 'release' || mode === 'preview') && !firestoreWriterServiceAccountFile) {
+  if ((mode === 'release' || mode === 'preview' || (mode === 'notifications-cutover' && !versionId)) && !firestoreWriterServiceAccountFile) {
     fail(`${mode} requires --firestore-writer-service-account-file.`, 2);
   }
-  if (mode !== 'release' && mode !== 'preview' && (firestoreServiceAccountFile || firestoreWriterServiceAccountFile)) {
+  if (mode === 'notifications-cutover' && versionId && (firestoreServiceAccountFile || firestoreWriterServiceAccountFile)) {
+    fail('Firestore service-account file options are not valid when resuming notifications-cutover.', 2);
+  }
+  if (mode !== 'release' && mode !== 'preview' && mode !== 'notifications-cutover' && (firestoreServiceAccountFile || firestoreWriterServiceAccountFile)) {
     fail(`Firestore service-account file options are not valid in ${mode} mode.`, 2);
   }
   return { firestoreServiceAccountFile, firestoreWriterServiceAccountFile, mode, smokeOwner, tokenFile, versionId };
@@ -284,6 +339,14 @@ function resolveHeliusApiKey(
   source: Readonly<Record<string, string | undefined>> = process.env,
 ): string {
   return source.HELIUS_API_KEY?.trim() || '';
+}
+
+function resolveResendApiKey(
+  source: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  const value = source.RESEND_API_KEY?.trim() || '';
+  if (!value || value.length > 4096 || /\s/.test(value)) return '';
+  return value;
 }
 
 function readApiToken(path?: string): string {
@@ -443,6 +506,7 @@ function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): Nod
       normalized.startsWith('WRANGLER_') ||
       normalized === 'HELIUS_API_KEY' ||
       normalized === 'COSIGNER_SECRET' ||
+      normalized === 'RESEND_API_KEY' ||
       normalized === 'RESEND_CONTACTS_API_KEY' ||
       normalized === 'NOTIFICATION_ENQUEUE_SECRET' ||
       normalized === 'FIRESTORE_SERVICE_ACCOUNT_JSON' ||
@@ -473,6 +537,15 @@ function validationEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.
     WRANGLER_SEND_ERROR_REPORTS: 'false',
     WRANGLER_SEND_METRICS: 'false',
   };
+}
+
+function notificationSmokeEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const environment = credentialFreeEnvironment(source);
+  for (const name of ['NOTIFICATION_ENQUEUE_SECRET', 'GOOGLE_APPLICATION_CREDENTIALS'] as const) {
+    const value = String(source[name] || '').trim();
+    if (value) environment[name] = value;
+  }
+  return environment;
 }
 
 function authenticatedWranglerEnvironment(apiToken: string, source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -526,6 +599,244 @@ function runProcess(command: string, args: string[], environment: NodeJS.Process
   if (result.status !== 0) fail(`${label} failed with exit code ${result.status ?? 1}.`, result.status ?? 1);
 }
 
+function runProcessForOutput(command: string, args: string[], environment: NodeJS.ProcessEnv, label: string): string {
+  const result = spawnSync(command, args, {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: environment,
+    shell: false,
+    stdio: ['ignore', 'pipe', 'inherit'],
+  });
+  if (result.error) fail(`${label} could not start: ${result.error.message}`);
+  if (result.status !== 0) fail(`${label} failed with exit code ${result.status ?? 1}.`, result.status ?? 1);
+  return String(result.stdout || '');
+}
+
+function readCleanSourceCommit(): string {
+  const environment = credentialFreeEnvironment();
+  const status = runProcessForOutput('git', ['status', '--porcelain'], environment, 'Git status').trim();
+  if (status) fail('API candidate upload requires a clean Git worktree.');
+  const commit = runProcessForOutput('git', ['rev-parse', '--verify', 'HEAD'], environment, 'Git HEAD').trim().toLowerCase();
+  if (!gitCommitPattern.test(commit)) fail('Git HEAD did not resolve to an exact commit.');
+  return commit;
+}
+
+function parseNotificationQueueConsumers(output: string): NotificationQueueConsumer[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(output) as unknown;
+  } catch {
+    fail('Wrangler did not return valid notification queue consumer JSON.');
+  }
+  if (!Array.isArray(value)) fail('Wrangler did not return a notification queue consumer list.');
+  return value.map((entry) => {
+    if (!isRecord(entry) || !isRecord(entry.settings)) {
+      return fail('Wrangler returned an invalid notification queue consumer.');
+    }
+    const deadLetterQueue = entry.dead_letter_queue;
+    const maxBatchSize = entry.settings.batch_size;
+    const maxBatchTimeoutMs = entry.settings.max_wait_time_ms;
+    const maxConcurrency = entry.settings.max_concurrency;
+    const maxRetries = entry.settings.max_retries;
+    const retryDelay = entry.settings.retry_delay;
+    const script = entry.script;
+    const type = entry.type;
+    if (
+      typeof deadLetterQueue !== 'string' ||
+      typeof maxBatchSize !== 'number' ||
+      typeof maxBatchTimeoutMs !== 'number' ||
+      typeof maxConcurrency !== 'number' ||
+      typeof maxRetries !== 'number' ||
+      typeof retryDelay !== 'number' ||
+      typeof script !== 'string' ||
+      typeof type !== 'string'
+    ) {
+      return fail('Wrangler returned an invalid notification queue consumer.');
+    }
+    return {
+      deadLetterQueue,
+      maxBatchSize,
+      maxBatchTimeoutMs,
+      maxConcurrency,
+      maxRetries,
+      retryDelay,
+      script,
+      type,
+    };
+  });
+}
+
+function notificationConsumerMatches(consumer: NotificationQueueConsumer, script: string): boolean {
+  return consumer.script === script &&
+    consumer.type === 'worker' &&
+    consumer.deadLetterQueue === notificationDeadLetterQueueName &&
+    consumer.maxBatchSize === 5 &&
+    consumer.maxBatchTimeoutMs === 5_000 &&
+    consumer.maxRetries === 5 &&
+    consumer.maxConcurrency === 1 &&
+    consumer.retryDelay === 0;
+}
+
+function assertSoleNotificationConsumer(consumers: readonly NotificationQueueConsumer[], script: string): void {
+  if (consumers.length !== 1 || !notificationConsumerMatches(consumers[0], script)) {
+    fail(`Notification queue must have exactly one reviewed ${script} consumer.`);
+  }
+}
+
+function assertApprovedApiRollback(manifest: ReleaseManifest, versionId: string): void {
+  if (versionId !== manifest.approvedRollback.apiVersionId) {
+    fail('API rollback version is not the approved target in cloud/release-manifest.json.');
+  }
+  if (manifest.currentProduction.apiVersionId === manifest.approvedRollback.apiVersionId) {
+    fail('No distinct queue-capable API rollback is approved; deploy a fix-forward API version.');
+  }
+}
+
+function readNotificationQueueConsumers(environment: NodeJS.ProcessEnv): NotificationQueueConsumer[] {
+  return parseNotificationQueueConsumers(runProcessForOutput(
+    wranglerBinary,
+    ['queues', 'consumer', 'worker', 'list', notificationQueueName, '--json', ...configArgs],
+    environment,
+    'Notification queue consumer inspection',
+  ));
+}
+
+function assertCombinedApiVersion(output: string, versionId: string): void {
+  let value: unknown;
+  try {
+    value = JSON.parse(output) as unknown;
+  } catch {
+    fail('Wrangler did not return valid API version JSON.');
+  }
+  if (!isRecord(value) || value.id !== versionId || !isRecord(value.resources)) {
+    fail('Wrangler did not return the exact combined API version.');
+  }
+  const script = isRecord(value.resources.script) ? value.resources.script : null;
+  const handlers = script && Array.isArray(script.handlers) ? script.handlers : [];
+  const bindings = Array.isArray(value.resources.bindings) ? value.resources.bindings : [];
+  const bindingNames = new Set(bindings.flatMap((binding) =>
+    isRecord(binding) && typeof binding.name === 'string' ? [binding.name] : []));
+  if (
+    !handlers.includes('fetch') ||
+    !handlers.includes('queue') ||
+    !bindingNames.has('RESEND_API_KEY') ||
+    !bindingNames.has('NOTIFICATION_EMAIL_QUEUE')
+  ) {
+    fail('Combined API candidate must expose fetch and queue handlers with both notification bindings.');
+  }
+}
+
+function verifyCombinedApiVersion(versionId: string, environment: NodeJS.ProcessEnv): void {
+  assertCombinedApiVersion(runProcessForOutput(
+    wranglerBinary,
+    ['versions', 'view', versionId, '--json', ...configArgs],
+    environment,
+    'Combined API version inspection',
+  ), versionId);
+}
+
+function inspectNotificationQueues(environment: NodeJS.ProcessEnv): void {
+  runWrangler(['queues', 'info', notificationQueueName, ...configArgs], environment, 'Notification queue inspection');
+  runWrangler(['queues', 'info', notificationDeadLetterQueueName, ...configArgs], environment, 'Notification DLQ inspection');
+}
+
+async function closeTail(tail: ChildProcessWithoutNullStreams): Promise<void> {
+  if (tail.exitCode !== null) return;
+  tail.kill('SIGINT');
+  await Promise.race([
+    new Promise<void>((resolvePromise) => tail.once('exit', () => resolvePromise())),
+    sleep(2_000),
+  ]);
+  if (tail.exitCode === null) tail.kill('SIGKILL');
+}
+
+function notificationSmokeJobId(output: string): string {
+  const match = output.match(/^Job ID:\s*([0-9a-f-]{36})$/im);
+  if (!match || !versionIdPattern.test(match[1])) fail('Notification smoke did not report an exact job ID.');
+  return match[1].toLowerCase();
+}
+
+type NotificationSmokeOutcome = 'sent' | 'retry' | 'failed' | null;
+
+function notificationSmokeEvent(value: unknown, jobId: string): NotificationSmokeOutcome {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const outcome = notificationSmokeEvent(entry, jobId);
+      if (outcome) return outcome;
+    }
+    return null;
+  }
+  if (!isRecord(value)) return null;
+  if (value.jobId === jobId) {
+    if (value.event === 'notification_email_sent') return 'sent';
+    if (value.event === 'notification_email_retry') return 'retry';
+    if (value.event === 'notification_email_failed_permanent') return 'failed';
+  }
+  for (const entry of Object.values(value)) {
+    const outcome = notificationSmokeEvent(entry, jobId);
+    if (outcome) return outcome;
+  }
+  return null;
+}
+
+function notificationSmokeLogOutcome(output: string, jobId: string): NotificationSmokeOutcome {
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const outcome = notificationSmokeEvent(JSON.parse(line) as unknown, jobId);
+      if (outcome) return outcome;
+    } catch {}
+  }
+  return null;
+}
+
+function notificationSmokeLogSucceeded(output: string, jobId: string): boolean {
+  return notificationSmokeLogOutcome(output, jobId) === 'sent';
+}
+
+async function smokeNotificationDelivery(
+  environment: NodeJS.ProcessEnv,
+  tailWorkerName = workerName,
+): Promise<void> {
+  const tail = spawn(wranglerBinary, ['tail', tailWorkerName, '--format', 'json'], {
+    cwd: repoRoot,
+    env: environment,
+    shell: false,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let tailOutput = '';
+  tail.stdout.setEncoding('utf8');
+  tail.stderr.setEncoding('utf8');
+  tail.stdout.on('data', (chunk) => { tailOutput += String(chunk); });
+  tail.stderr.on('data', (chunk) => { tailOutput += String(chunk); });
+  try {
+    await sleep(7_000);
+    if (tail.exitCode !== null) fail('Notification live tail ended before the smoke request.');
+    const smokeOutput = runProcessForOutput(
+      process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      ['run', 'test-resend-notification-email', '--', '--kind', 'stripe-manual-review'],
+      notificationSmokeEnvironment(),
+      'Notification end-to-end smoke',
+    );
+    const jobId = notificationSmokeJobId(smokeOutput);
+    const deadline = Date.now() + notificationSmokeTimeoutMs;
+    while (Date.now() < deadline) {
+      const outcome = notificationSmokeLogOutcome(tailOutput, jobId);
+      if (outcome === 'sent') {
+        console.log(`[api-deploy] Notification smoke job ${jobId} sent successfully through ${tailWorkerName}.`);
+        return;
+      }
+      if (outcome === 'retry' || outcome === 'failed') {
+        fail(`Notification smoke job ${jobId} did not send successfully.`);
+      }
+      await sleep(500);
+    }
+    fail(`Notification smoke job ${jobId} was not observed before the timeout.`);
+  } finally {
+    await closeTail(tail);
+  }
+}
+
 function readApiDeploymentStatus(environment: NodeJS.ProcessEnv): CloudflareDeploymentStatus {
   return readWranglerDeploymentStatus({
     configArgs,
@@ -565,6 +876,7 @@ function createSecretFile(
   heliusApiKey = String(process.env.HELIUS_API_KEY || '').trim(),
   firestoreServiceAccountJson = '',
   firestoreWriterServiceAccountJson = '',
+  resendApiKey = '',
 ): { directory: string; path: string; dispose: () => void } {
   const secret = heliusApiKey.trim();
   if (!secret) fail('A Helius API key is required for Worker candidate upload.');
@@ -580,6 +892,7 @@ function createSecretFile(
       HELIUS_API_KEY: secret,
       FIRESTORE_SERVICE_ACCOUNT_JSON: firestoreSecret,
       FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: firestoreWriterSecret,
+      ...(resendApiKey ? { RESEND_API_KEY: resendApiKey } : {}),
     }), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     operations.chmod(path, 0o600);
     if ((operations.stat(path).mode & 0o777) !== 0o600) fail('Unable to enforce mode 0600 on the temporary secrets file.');
@@ -637,10 +950,18 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
   const route = value.routes[0];
   const queues = value.queues;
   const secrets = value.secrets;
-  if (!isRecord(queues) || !hasExactKeys(queues, ['producers']) || !Array.isArray(queues.producers) || queues.producers.length !== 1) {
+  if (
+    !isRecord(queues) ||
+    !hasExactKeys(queues, ['consumers', 'producers']) ||
+    !Array.isArray(queues.producers) ||
+    queues.producers.length !== 1 ||
+    !Array.isArray(queues.consumers) ||
+    queues.consumers.length !== 1
+  ) {
     return false;
   }
   const notificationProducer = queues.producers[0];
+  const notificationConsumer = queues.consumers[0];
   return isRecord(secrets) &&
     hasExactKeys(secrets, ['required']) &&
     Array.isArray(secrets.required) &&
@@ -649,6 +970,7 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
       'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON',
       'HELIUS_API_KEY',
       'COSIGNER_SECRET',
+      'RESEND_API_KEY',
       'NOTIFICATION_ENQUEUE_SECRET',
       'RESEND_CONTACTS_API_KEY',
       'ADDRESS_DECRYPTION_SECRET',
@@ -666,7 +988,22 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
     isRecord(notificationProducer) &&
     hasExactKeys(notificationProducer, ['binding', 'queue']) &&
     notificationProducer.binding === 'NOTIFICATION_EMAIL_QUEUE' &&
-    notificationProducer.queue === 'mons-shop-notification-emails';
+    notificationProducer.queue === notificationQueueName &&
+    isRecord(notificationConsumer) &&
+    hasExactKeys(notificationConsumer, [
+      'dead_letter_queue',
+      'max_batch_size',
+      'max_batch_timeout',
+      'max_concurrency',
+      'max_retries',
+      'queue',
+    ]) &&
+    notificationConsumer.queue === notificationQueueName &&
+    notificationConsumer.dead_letter_queue === notificationDeadLetterQueueName &&
+    notificationConsumer.max_batch_size === 5 &&
+    notificationConsumer.max_batch_timeout === 5 &&
+    notificationConsumer.max_retries === 5 &&
+    notificationConsumer.max_concurrency === 1;
 }
 
 function assertApiDeploymentConfig(path = resolve(repoRoot, configPath)): void {
@@ -679,7 +1016,7 @@ function assertApiDeploymentConfig(path = resolve(repoRoot, configPath)): void {
   }
   if (!isExactApiDeploymentConfig(value)) {
     fail(
-      `API Wrangler config must target only ${workerName}, account ${accountId}, the ${new URL(productionUrl).hostname} custom domain, and the reviewed notification queue.`,
+      `API Wrangler config must target only ${workerName}, account ${accountId}, the ${new URL(productionUrl).hostname} custom domain, and the reviewed notification queue producer and consumer.`,
     );
   }
 }
@@ -695,6 +1032,7 @@ function isCandidateRecord(value: unknown, now = new Date()): value is Candidate
     'previewUrl',
     'runs',
     'smokeOwner',
+    'sourceCommit',
     'testedAt',
     'versionId',
     'workerMedianMs',
@@ -705,6 +1043,7 @@ function isCandidateRecord(value: unknown, now = new Date()): value is Candidate
     typeof record.versionId === 'string' && versionIdPattern.test(record.versionId) &&
     typeof record.previewUrl === 'string' && record.previewUrl === expectedPreviewOrigin(record.versionId) &&
     typeof record.smokeOwner === 'string' && isBase58Bytes(record.smokeOwner, 32) &&
+    typeof record.sourceCommit === 'string' && gitCommitPattern.test(record.sourceCommit) &&
     Number.isFinite(now.getTime()) && Number.isFinite(testedAt) &&
     ageMs >= -candidateRecordClockSkewMs && ageMs <= candidateRecordMaxAgeMs &&
     Number.isSafeInteger(record.runs) && Number(record.runs) === 5 &&
@@ -718,12 +1057,18 @@ function candidateRecordPath(versionId: string): string {
   return resolve(candidateRecordDirectory, `${versionId.toLowerCase()}.json`);
 }
 
-function writeCandidateRecord(metadata: UploadMetadata, smokeOwner: string, benchmark: ApiBenchmarkResult): void {
+function writeCandidateRecord(
+  metadata: UploadMetadata,
+  smokeOwner: string,
+  benchmark: ApiBenchmarkResult,
+  sourceCommit: string,
+): void {
   const record: CandidateRecord = {
     workerName,
     ...metadata,
     includeDevnet: true,
     smokeOwner,
+    sourceCommit,
     testedAt: new Date().toISOString(),
     ...benchmark,
   };
@@ -807,9 +1152,9 @@ function createBootstrapConfig(directory: string): string {
   return path;
 }
 
-async function workerExists(apiToken: string): Promise<boolean> {
+async function workerExists(apiToken: string, name = workerName): Promise<boolean> {
   const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${workerName}`,
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${name}`,
     { headers: { Authorization: `Bearer ${apiToken}` }, signal: AbortSignal.timeout(15_000) },
   );
   await response.body?.cancel().catch(() => undefined);
@@ -1193,6 +1538,7 @@ async function recoverApiProduction(
         includeDevnet: candidateSmoke.includeDevnet,
         owner: input.smokeOwner,
       });
+      await dependencies.notificationSmoke?.(input.wranglerEnvironment, workerName);
     } catch (smokeError) {
       recoveryVerificationErrors.push(smokeError);
     }
@@ -1249,6 +1595,7 @@ async function runProductionSequence(
     benchmark: benchmarkApi,
     deployment: readApiDeploymentStatus,
     evidence: writeProductionEvidence,
+    notificationSmoke: smokeNotificationDelivery,
     sleep,
     smoke: smokeApi,
     wrangler: runWrangler,
@@ -1356,6 +1703,7 @@ async function runProductionSequence(
       dependencies,
       'API production commit verification',
     );
+    await dependencies.notificationSmoke?.(input.wranglerEnvironment, workerName);
   } catch (error) {
     if (releaseStart.resumeCandidate) {
       throw resumedApiReleaseFailure(error, candidateVersionId);
@@ -1375,6 +1723,211 @@ async function runProductionSequence(
   }
 }
 
+async function runNotificationCutoverSequence(
+  input: NotificationCutoverSequenceInput,
+  dependencies: NotificationCutoverSequenceDependencies = {
+    apiDeployment: readApiDeploymentStatus,
+    benchmark: benchmarkApi,
+    consumerList: readNotificationQueueConsumers,
+    deleteWorker: (environment) => runWrangler(
+      ['delete', notificationWorkerName, '--force', ...configArgs],
+      environment,
+      'Legacy notification Worker deletion',
+    ),
+    evidence: writeProductionEvidence,
+    frontendDeployment: readFrontendDeploymentStatus,
+    notificationSmoke: smokeNotificationDelivery,
+    record: recordApiNotificationsCutoverVersion,
+    sleep,
+    smoke: smokeApi,
+    verifyVersion: verifyCombinedApiVersion,
+    workerExists: (name) => workerExists(input.apiToken, name),
+    wrangler: runWrangler,
+  },
+): Promise<void> {
+  const candidateVersionId = input.versionId.toLowerCase();
+  await dependencies.smoke(input.previewUrl, input.candidateSmoke);
+  await dependencies.benchmark({
+    apiOrigin: input.previewUrl,
+    includeDevnet: input.candidateSmoke.includeDevnet,
+    owner: input.smokeOwner,
+    runs: 5,
+  }, input.heliusApiKey);
+  dependencies.verifyVersion(candidateVersionId, input.wranglerEnvironment);
+
+  const [initialApi, initialFrontend] = await Promise.all([
+    dependencies.apiDeployment(input.wranglerEnvironment),
+    dependencies.frontendDeployment(input.wranglerEnvironment),
+  ]);
+  const releaseStart = guardCloudflareReleaseStart({
+    candidateVersionId,
+    expectedCurrentVersionId: input.expectedCurrentProduction.apiVersionId,
+    liveVersionId: stableCloudflareVersionId(initialApi),
+    workerLabel: workerName,
+  });
+  const frontendVersionId = stableCloudflareVersionId(initialFrontend);
+  if (frontendVersionId !== input.expectedCurrentProduction.frontendVersionId.toLowerCase()) {
+    fail('Frontend changed before notification cutover.');
+  }
+
+  const initialConsumers = dependencies.consumerList(input.wranglerEnvironment);
+  if (releaseStart.resumeCandidate) {
+    if (
+      initialConsumers.length > 1 ||
+      (initialConsumers.length === 1 &&
+        !notificationConsumerMatches(initialConsumers[0], notificationWorkerName) &&
+        !notificationConsumerMatches(initialConsumers[0], workerName))
+    ) {
+      fail('Resumed notification cutover found an unexpected queue consumer.');
+    }
+  } else {
+    assertSoleNotificationConsumer(initialConsumers, notificationWorkerName);
+  }
+
+  let candidatePromoted = releaseStart.resumeCandidate;
+  let manifestRecorded = false;
+  try {
+    if (!releaseStart.resumeCandidate) {
+      dependencies.wrangler([
+        'versions',
+        'deploy',
+        '--version-id',
+        candidateVersionId,
+        '--percentage',
+        '100',
+        '--yes',
+        ...configArgs,
+      ], input.wranglerEnvironment, 'Combined API exact-version promotion');
+      const liveVersionId = await reconcileCloudflareStableVersion({
+        allowedPendingVersionIds: [releaseStart.baselineVersionId],
+        preferredVersionId: candidateVersionId,
+        read: () => dependencies.apiDeployment(input.wranglerEnvironment),
+        requireAllPendingObservations: true,
+        sleep: dependencies.sleep,
+        workerLabel: workerName,
+      });
+      if (liveVersionId !== candidateVersionId) fail('Combined API promotion did not converge.');
+      candidatePromoted = true;
+    }
+
+    await dependencies.smoke(productionUrl, input.candidateSmoke);
+    const preHandoverVersion = stableCloudflareVersionId(
+      await dependencies.apiDeployment(input.wranglerEnvironment),
+    );
+    if (preHandoverVersion !== candidateVersionId) fail('API changed before notification consumer handover.');
+
+    const consumers = dependencies.consumerList(input.wranglerEnvironment);
+    if (consumers.length === 1 && notificationConsumerMatches(consumers[0], notificationWorkerName)) {
+      dependencies.wrangler([
+        'queues', 'consumer', 'worker', 'remove', notificationQueueName, notificationWorkerName, ...configArgs,
+      ], input.wranglerEnvironment, 'Legacy notification consumer removal');
+      dependencies.wrangler(
+        ['triggers', 'deploy', ...configArgs],
+        input.wranglerEnvironment,
+        'Combined API trigger deployment',
+      );
+    } else if (consumers.length === 0) {
+      dependencies.wrangler(
+        ['triggers', 'deploy', ...configArgs],
+        input.wranglerEnvironment,
+        'Combined API trigger deployment resume',
+      );
+    } else {
+      assertSoleNotificationConsumer(consumers, workerName);
+    }
+    assertSoleNotificationConsumer(dependencies.consumerList(input.wranglerEnvironment), workerName);
+    await dependencies.notificationSmoke(input.wranglerEnvironment, workerName);
+    const committedVersion = stableCloudflareVersionId(
+      await dependencies.apiDeployment(input.wranglerEnvironment),
+    );
+    if (committedVersion !== candidateVersionId) fail('API changed during notification delivery smoke.');
+    dependencies.evidence('api', candidateVersionId);
+    dependencies.record(candidateVersionId, {
+      expectedCurrentProduction: input.expectedCurrentProduction,
+    });
+    manifestRecorded = true;
+  } catch (error) {
+    if (manifestRecorded) throw error;
+    const recoveryErrors: unknown[] = [error];
+    try {
+      const consumers = dependencies.consumerList(input.wranglerEnvironment);
+      if (consumers.length === 1 && notificationConsumerMatches(consumers[0], workerName)) {
+        dependencies.wrangler([
+          'queues', 'consumer', 'worker', 'remove', notificationQueueName, workerName, ...configArgs,
+        ], input.wranglerEnvironment, 'Combined API consumer recovery removal');
+      } else if (
+        consumers.length !== 0 &&
+        !(consumers.length === 1 && notificationConsumerMatches(consumers[0], notificationWorkerName))
+      ) {
+        fail('Notification recovery found an unexpected queue consumer.');
+      }
+      const afterRemoval = dependencies.consumerList(input.wranglerEnvironment);
+      if (afterRemoval.length === 0) {
+        dependencies.wrangler([
+          'queues', 'consumer', 'worker', 'add', notificationQueueName, notificationWorkerName,
+          '--batch-size', '5',
+          '--batch-timeout', '5',
+          '--message-retries', '5',
+          '--dead-letter-queue', notificationDeadLetterQueueName,
+          '--max-concurrency', '1',
+          ...configArgs,
+        ], input.wranglerEnvironment, 'Legacy notification consumer recovery');
+      }
+      assertSoleNotificationConsumer(dependencies.consumerList(input.wranglerEnvironment), notificationWorkerName);
+    } catch (recoveryError) {
+      recoveryErrors.push(recoveryError);
+    }
+    if (candidatePromoted) {
+      try {
+        const rollbackGuardVersion = stableCloudflareVersionId(
+          await dependencies.apiDeployment(input.wranglerEnvironment),
+        );
+        if (rollbackGuardVersion !== candidateVersionId) {
+          fail('Notification cutover recovery suppressed rollback after concurrent API drift.');
+        }
+        dependencies.wrangler([
+          'rollback',
+          releaseStart.baselineVersionId,
+          '--yes',
+          '--message',
+          'Recovery after failed notification consumer cutover',
+          ...configArgs,
+        ], input.wranglerEnvironment, 'Notification cutover API rollback');
+        const recoveredVersion = await reconcileCloudflareStableVersion({
+          allowedPendingVersionIds: [candidateVersionId],
+          preferredVersionId: releaseStart.baselineVersionId,
+          read: () => dependencies.apiDeployment(input.wranglerEnvironment),
+          sleep: dependencies.sleep,
+          workerLabel: workerName,
+        });
+        if (recoveredVersion !== releaseStart.baselineVersionId) fail('Notification cutover rollback did not converge.');
+        await dependencies.smoke(productionUrl, {
+          includeDevnet: input.candidateSmoke.includeDevnet,
+          owner: input.smokeOwner,
+        });
+        await dependencies.notificationSmoke(input.wranglerEnvironment, notificationWorkerName);
+      } catch (recoveryError) {
+        recoveryErrors.push(recoveryError);
+      }
+    }
+    throw new AggregateError(recoveryErrors, 'Notification cutover failed and recovery was attempted.');
+  }
+
+  try {
+    dependencies.deleteWorker(input.wranglerEnvironment);
+  } catch (error) {
+    throw new Error(
+      'Combined API and consumer are live and recorded, but legacy Worker deletion failed. Rerun notifications-cutover to retry deletion; do not roll back.',
+      { cause: error },
+    );
+  }
+  if (await dependencies.workerExists(notificationWorkerName)) {
+    fail('Legacy notification Worker deletion did not converge; the combined API remains live and must not be rolled back.');
+  }
+  assertSoleNotificationConsumer(dependencies.consumerList(input.wranglerEnvironment), workerName);
+  console.log(`[api-deploy] Notifications consolidated into ${workerName}; ${notificationWorkerName} was deleted.`);
+}
+
 async function uploadApiCandidate(input: {
   apiToken: string;
   candidateSmoke: SmokeApiOptions;
@@ -1382,15 +1935,18 @@ async function uploadApiCandidate(input: {
   firestoreWriterServiceAccountJson: string;
   heliusApiKey: string;
   logsDirectory: string;
+  resendApiKey?: string;
   smokeOwner: string;
   wranglerEnvironment: NodeJS.ProcessEnv;
 }): Promise<UploadMetadata> {
   if (input.candidateSmoke.owner !== input.smokeOwner) fail('Candidate smoke owner did not match the upload owner.');
+  const sourceCommit = readCleanSourceCommit();
   const secretFile = createSecretFile(
     secretFileOperations,
     input.heliusApiKey,
     input.firestoreServiceAccountJson,
     input.firestoreWriterServiceAccountJson,
+    input.resendApiKey,
   );
   const removeTerminationCleanup = installTerminationCleanup(secretFile.dispose);
   const outputFile = resolve(input.logsDirectory, `api-upload-${process.pid}-${Date.now()}.json`);
@@ -1421,7 +1977,7 @@ async function uploadApiCandidate(input: {
       },
       input.heliusApiKey,
     );
-    writeCandidateRecord(metadata, input.smokeOwner, benchmark);
+    writeCandidateRecord(metadata, input.smokeOwner, benchmark, sourceCommit);
     console.log(`[api-deploy] Candidate smoke checks and benchmark passed; record written for ${metadata.versionId}.`);
   } catch (error) {
     releaseError = error;
@@ -1569,7 +2125,91 @@ async function main(): Promise<void> {
   mkdirSync(logsDirectory, { recursive: true });
   const checkEnvironment = validationEnvironment();
   const heliusApiKey = resolveHeliusApiKey();
+  const resendApiKey = resolveResendApiKey();
   console.log(`[api-deploy] Mode: ${options.mode}`);
+
+  if (options.mode === 'notifications-cutover') {
+    if (!heliusApiKey) fail('Notifications cutover requires HELIUS_API_KEY in the process environment.');
+    const apiToken = readApiToken(options.tokenFile);
+    const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
+    const tracked = readReleaseManifest();
+    const consumers = readNotificationQueueConsumers(wranglerEnvironment);
+    if (
+      tracked.currentProduction.apiVersionId === tracked.approvedRollback.apiVersionId &&
+      consumers.length === 1 &&
+      notificationConsumerMatches(consumers[0], workerName)
+    ) {
+      const liveVersionId = stableCloudflareVersionId(readApiDeploymentStatus(wranglerEnvironment));
+      if (liveVersionId !== tracked.currentProduction.apiVersionId) {
+        fail('Refusing legacy Worker deletion because live API state does not match the cutover manifest.');
+      }
+      verifyCombinedApiVersion(liveVersionId, wranglerEnvironment);
+      if (await workerExists(apiToken, notificationWorkerName)) {
+        runWrangler(
+          ['delete', notificationWorkerName, '--force', ...configArgs],
+          wranglerEnvironment,
+          'Legacy notification Worker deletion retry',
+        );
+        if (await workerExists(apiToken, notificationWorkerName)) fail('Legacy notification Worker deletion retry did not converge.');
+      }
+      console.log('[api-deploy] Notification cutover was already committed; legacy Worker deletion is complete.');
+      return;
+    }
+    inspectNotificationQueues(wranglerEnvironment);
+    if (!await workerExists(apiToken, notificationWorkerName)) fail('Legacy notification Worker was not found.');
+    const candidateSmoke: SmokeApiOptions = {
+      expectedInventoryDropId: expectedReleaseDropId,
+      forbiddenInventoryDropId: forbiddenReleaseDropId,
+      includeDevnet: true,
+      includeNotificationSubscription: true,
+      includePackStatus: true,
+      includeProfileState: true,
+      owner: options.smokeOwner,
+    };
+    let metadata: UploadMetadata;
+    if (options.versionId) {
+      const sourceCommit = readCleanSourceCommit();
+      const candidate = requireCandidateRecord(options.versionId, options.smokeOwner);
+      if (candidate.sourceCommit !== sourceCommit) fail('Notification cutover candidate belongs to another Git commit.');
+      metadata = { versionId: candidate.versionId, previewUrl: candidate.previewUrl };
+    } else {
+      if (!resendApiKey) fail('Notifications cutover requires a new RESEND_API_KEY in the process environment.');
+      const firestoreServiceAccountJson = readFirestoreServiceAccount(options.firestoreServiceAccountFile);
+      const firestoreWriterServiceAccountJson = readFirestoreWriterServiceAccount(options.firestoreWriterServiceAccountFile);
+      await verifyFirestoreWriterAccess(firestoreWriterServiceAccountJson);
+      const initialLivePair = await readStableReleasePair(wranglerEnvironment, {
+        apiDeployment: readApiDeploymentStatus,
+        frontendDeployment: readFrontendDeploymentStatus,
+      });
+      assertReleasePair(initialLivePair, tracked.currentProduction, 'Notification cutover preflight');
+      assertSoleNotificationConsumer(consumers, notificationWorkerName);
+      runApiValidation();
+      runWrangler(['triggers', 'deploy', '--dry-run', ...configArgs], checkEnvironment, 'Combined trigger configuration dry-run');
+      metadata = await uploadApiCandidate({
+        apiToken,
+        candidateSmoke,
+        firestoreServiceAccountJson,
+        firestoreWriterServiceAccountJson,
+        heliusApiKey,
+        logsDirectory,
+        resendApiKey,
+        smokeOwner: options.smokeOwner,
+        wranglerEnvironment,
+      });
+    }
+    await runNotificationCutoverSequence({
+      apiToken,
+      candidateSmoke,
+      expectedCurrentProduction: tracked.currentProduction,
+      heliusApiKey,
+      previewUrl: metadata.previewUrl,
+      smokeOwner: options.smokeOwner,
+      versionId: metadata.versionId,
+      wranglerEnvironment,
+    });
+    console.log(`[api-deploy] Combined API version ${metadata.versionId} deployed and notification cutover completed.`);
+    return;
+  }
 
   if (options.mode === 'release') {
     if (!heliusApiKey) fail('Release requires HELIUS_API_KEY in the process environment.');
@@ -1578,6 +2218,7 @@ async function main(): Promise<void> {
     await verifyFirestoreWriterAccess(firestoreWriterServiceAccountJson);
     const apiToken = readApiToken(options.tokenFile);
     const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
+    assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
     const metadata = await runCompleteApiRelease({
       apiToken,
       checkEnvironment,
@@ -1600,6 +2241,7 @@ async function main(): Promise<void> {
     runApiValidation();
     const apiToken = readApiToken(options.tokenFile);
     const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
+    assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
     await uploadApiCandidate({
       apiToken,
       candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, includeProfileState: true, owner: options.smokeOwner },
@@ -1618,14 +2260,15 @@ async function main(): Promise<void> {
   }
   const apiToken = readApiToken(options.tokenFile);
   const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
+  assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
 
   if (options.mode === 'rollback') {
     const releaseManifest = readReleaseManifest();
-    if (options.versionId !== releaseManifest.approvedRollback.apiVersionId) {
-      fail('API rollback version is not the approved target in cloud/release-manifest.json.');
-    }
+    assertApprovedApiRollback(releaseManifest, options.versionId!);
     runWrangler(['rollback', options.versionId!, '--yes', '--message', 'Explicit mons-shop-api rollback', ...configArgs], wranglerEnvironment, 'Worker rollback');
     await smokeApi(productionUrl, { includeDevnet: true, owner: options.smokeOwner });
+    assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
+    await smokeNotificationDelivery(wranglerEnvironment, workerName);
     console.log(`[api-deploy] Rolled back and verified version ${options.versionId}.`);
     return;
   }
@@ -1653,6 +2296,8 @@ async function main(): Promise<void> {
   }
   runWrangler(['triggers', 'deploy', ...configArgs], wranglerEnvironment, 'Reviewed trigger deployment');
   await smokeApi(productionUrl, { includeDevnet: true, owner: options.smokeOwner });
+  assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
+  await smokeNotificationDelivery(wranglerEnvironment, workerName);
   console.log('[api-deploy] Custom-domain trigger verified.');
 }
 
@@ -1664,6 +2309,10 @@ export const deployApiTestHooks = {
   createSecretFile,
   defaultSmokeOwner,
   notificationSmokeEmail,
+  notificationSmokeEnvironment,
+  notificationSmokeJobId,
+  notificationSmokeLogOutcome,
+  notificationSmokeLogSucceeded,
   defaultSmokeTimeoutMs: DEFAULT_SMOKE_TIMEOUT_MS,
   expectedReleaseDropId,
   expectedPreviewOrigin,
@@ -1673,6 +2322,7 @@ export const deployApiTestHooks = {
   isCandidateRecord,
   isReleaseManifest,
   parseArgs,
+  parseNotificationQueueConsumers,
   parseUploadMetadata,
   removeSecretDirectory,
   readReleaseManifest,
@@ -1681,15 +2331,20 @@ export const deployApiTestHooks = {
   readStableReleasePair,
   requireCandidateRecord,
   resolveHeliusApiKey,
+  resolveResendApiKey,
   resolveApiProductionPreviewUrl,
   runApiValidation,
   runCompleteApiRelease,
+  runNotificationCutoverSequence,
   runProductionSequence,
   secretFileOperations,
   smokeApi,
   validationEnvironment,
   validateFirestoreServiceAccountJson,
   validateFirestoreWriterServiceAccountJson,
+  assertCombinedApiVersion,
+  assertApprovedApiRollback,
+  assertSoleNotificationConsumer,
   verifyFirestoreWriterAccess,
 };
 
