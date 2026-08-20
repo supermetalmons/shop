@@ -213,6 +213,7 @@ const googleOAuthTokenUrl = 'https://oauth2.googleapis.com/token';
 const googleDatastoreScope = 'https://www.googleapis.com/auth/datastore';
 const DEFAULT_SMOKE_TIMEOUT_MS = 15_000;
 const INVENTORY_SMOKE_TIMEOUT_MS = 70_000;
+const SMOKE_PROPAGATION_DELAYS_MS = [0, 500, 1_500, 3_000, 5_000, 10_000, 15_000] as const;
 const secretFileOperations: SecretFileOperations = {
   chmod: chmodSync,
   exists: existsSync,
@@ -1126,14 +1127,17 @@ async function fetchSmoke(
   label: string,
   timeoutMs = DEFAULT_SMOKE_TIMEOUT_MS,
 ): Promise<{ response: Response; durationMs: number }> {
-  for (const delay of [0, 500, 1500, 3000]) {
+  for (const delay of SMOKE_PROPAGATION_DELAYS_MS) {
     if (delay) await new Promise((resolvePromise) => setTimeout(resolvePromise, delay));
     const startedAt = performance.now();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(url, { ...init, redirect: 'manual', signal: controller.signal });
-      if ((response.status === 404 || response.status === 502 || response.status === 504) && delay !== 3000) {
+      if (
+        (response.status === 404 || response.status === 502 || response.status === 504) &&
+        delay !== SMOKE_PROPAGATION_DELAYS_MS.at(-1)
+      ) {
         await response.body?.cancel().catch(() => undefined);
         continue;
       }
@@ -1145,7 +1149,7 @@ async function fetchSmoke(
       });
       return { response: bufferedResponse, durationMs: performance.now() - startedAt };
     } catch {
-      if (delay === 3000) fail(`${label} failed after bounded retries.`);
+      if (delay === SMOKE_PROPAGATION_DELAYS_MS.at(-1)) fail(`${label} failed after bounded retries.`);
     } finally {
       clearTimeout(timeout);
     }
@@ -1964,6 +1968,7 @@ export const deployApiTestHooks = {
   notificationSmokeJobId,
   notificationSmokeLogOutcome,
   notificationSmokeLogSucceeded,
+  smokePropagationDelaysMs: SMOKE_PROPAGATION_DELAYS_MS,
   defaultSmokeTimeoutMs: DEFAULT_SMOKE_TIMEOUT_MS,
   expectedReleaseDropId,
   expectedPreviewOrigin,

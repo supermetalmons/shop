@@ -1772,7 +1772,10 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
   assert.deepEqual(bodies.get('/notifications/subscribe'), {
     email: deployApiTestHooks.notificationSmokeEmail,
   });
+  assert.equal(timeouts.get('POST:/auth/solana'), deployApiTestHooks.defaultSmokeTimeoutMs);
+  assert.equal(timeouts.get('POST:/profile/reconcile'), deployApiTestHooks.defaultSmokeTimeoutMs);
   assert.equal(timeouts.get('POST:/profile/state'), deployApiTestHooks.defaultSmokeTimeoutMs);
+  assert.ok(deployApiTestHooks.smokePropagationDelaysMs.at(-1)! >= 15_000);
   for (const [request, timeoutMs] of timeouts) {
     if (request === 'POST:/inventory' || request === 'POST:/pending-open-boxes') continue;
     assert.equal(timeoutMs, deployApiTestHooks.defaultSmokeTimeoutMs);
