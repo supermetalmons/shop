@@ -1,13 +1,11 @@
 import { createHash } from 'node:crypto';
-import type { Firestore } from 'firebase-admin/firestore';
-import { HttpsError } from 'firebase-functions/v2/https';
-import type { SolanaCluster } from './shared/deploymentCore.js';
+import type { SolanaCluster } from './deploymentCore.js';
 
 export const RECEIPT_TRANSFER_CALLER_RATE_LIMIT = 60;
 export const RECEIPT_TRANSFER_ASSET_RATE_LIMIT = 20;
 export const RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+export const RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION = 2;
 
-const RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION = 2;
 const RECEIPT_TRANSFER_RATE_LIMIT_ROOT = 'system/receiptTransferRateLimits';
 const RECEIPT_TRANSFER_CALLER_RATE_LIMIT_ROOT = `${RECEIPT_TRANSFER_RATE_LIMIT_ROOT}/callers`;
 const RECEIPT_TRANSFER_ASSET_RATE_LIMIT_ROOT = `${RECEIPT_TRANSFER_RATE_LIMIT_ROOT}/assets`;
@@ -30,11 +28,7 @@ export type ReceiptTransferRateLimitDecision =
       windowStartedAtMs: number;
     };
 
-type ReceiptTransferRateLimitLogger = {
-  error: (message: string, ...args: unknown[]) => void;
-};
-
-type ReceiptTransferRateLimitBucket = {
+export type ReceiptTransferRateLimitBucket = {
   scope: ReceiptTransferRateLimitScope;
   subjectHash: string;
   documentPath: string;
@@ -59,7 +53,7 @@ function hashTuple(domain: string, values: readonly string[]): string {
   return hash.digest('hex');
 }
 
-function storedBucketMatches(
+export function receiptTransferStoredBucketMatches(
   existing: Record<string, unknown> | undefined,
   bucket: ReceiptTransferRateLimitBucket,
 ): boolean {
@@ -134,6 +128,16 @@ export function receiptTransferCallerRateLimitDocumentPath(uid: string): string 
   return `${RECEIPT_TRANSFER_CALLER_RATE_LIMIT_ROOT}/${receiptTransferCallerRateLimitSubjectHash(uid)}`;
 }
 
+export function receiptTransferCallerRateLimitBucket(uid: string): ReceiptTransferRateLimitBucket {
+  const subjectHash = receiptTransferCallerRateLimitSubjectHash(uid);
+  return {
+    scope: 'caller',
+    subjectHash,
+    documentPath: `${RECEIPT_TRANSFER_CALLER_RATE_LIMIT_ROOT}/${subjectHash}`,
+    limit: RECEIPT_TRANSFER_CALLER_RATE_LIMIT,
+  };
+}
+
 export function receiptTransferAssetRateLimitSubjectHash(params: {
   uid: string;
   cluster: ReceiptTransferRateLimitCluster;
@@ -157,112 +161,22 @@ export function receiptTransferAssetRateLimitDocumentPath(params: {
   return `${RECEIPT_TRANSFER_ASSET_RATE_LIMIT_ROOT}/${receiptTransferAssetRateLimitSubjectHash(params)}`;
 }
 
-async function enforceReceiptTransferRateLimit(params: {
-  db: Firestore;
-  logger: ReceiptTransferRateLimitLogger;
-  bucket: ReceiptTransferRateLimitBucket;
-  nowMs?: number;
-}): Promise<void> {
-  let decision: ReceiptTransferRateLimitDecision;
-
-  try {
-    const nowMs = params.nowMs ?? Date.now();
-    const ref = params.db.doc(params.bucket.documentPath);
-    decision = await params.db.runTransaction(async (tx) => {
-      const snap = await tx.get(ref);
-      const rawExisting = snap.exists ? (snap.data() as Record<string, unknown> | undefined) : undefined;
-      const existing = storedBucketMatches(rawExisting, params.bucket)
-        ? rawExisting
-        : undefined;
-      const next = evaluateReceiptTransferRateLimit(existing, nowMs, params.bucket.limit);
-      if (next.allowed) {
-        tx.set(ref, {
-          schemaVersion: RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION,
-          scope: params.bucket.scope,
-          subjectHash: params.bucket.subjectHash,
-          ...params.bucket.publicFields,
-          windowStartedAtMs: next.windowStartedAtMs,
-          count: next.count,
-          updatedAtMs: nowMs,
-        });
-      }
-      return next;
-    });
-  } catch (err) {
-    const errorForLog = err instanceof Error ? err : new Error(String(err));
-    try {
-      params.logger.error('prepareReceiptTransferTx:rate_limit_firestore_error', errorForLog, {
-        scope: params.bucket.scope,
-        subjectHash: params.bucket.subjectHash,
-      });
-    } catch {}
-    throw new HttpsError(
-      'unavailable',
-      'Receipt transfers are temporarily unavailable. Please retry shortly.',
-    );
-  }
-
-  if (decision.allowed === false) {
-    throw new HttpsError(
-      'resource-exhausted',
-      'Too many receipt transfer attempts. Please wait before trying again.',
-      {
-        retryAfterMs: decision.retryAfterMs,
-      },
-    );
-  }
-}
-
-export async function enforceReceiptTransferCallerRateLimit(params: {
-  db: Firestore;
-  logger: ReceiptTransferRateLimitLogger;
-  uid: string;
-  nowMs?: number;
-}): Promise<void> {
-  const subjectHash = receiptTransferCallerRateLimitSubjectHash(params.uid);
-  await enforceReceiptTransferRateLimit({
-    db: params.db,
-    logger: params.logger,
-    nowMs: params.nowMs,
-    bucket: {
-      scope: 'caller',
-      subjectHash,
-      documentPath: `${RECEIPT_TRANSFER_CALLER_RATE_LIMIT_ROOT}/${subjectHash}`,
-      limit: RECEIPT_TRANSFER_CALLER_RATE_LIMIT,
-    },
-  });
-}
-
-export async function enforceReceiptTransferAssetRateLimit(params: {
-  db: Firestore;
-  logger: ReceiptTransferRateLimitLogger;
+export function receiptTransferAssetRateLimitBucket(params: {
   uid: string;
   cluster: ReceiptTransferRateLimitCluster;
   ownerWallet: string;
   receiptAssetId: string;
-  nowMs?: number;
-}): Promise<void> {
-  const subject = {
-    uid: params.uid,
-    cluster: params.cluster,
-    ownerWallet: params.ownerWallet,
-    receiptAssetId: params.receiptAssetId,
-  };
-  const subjectHash = receiptTransferAssetRateLimitSubjectHash(subject);
-  await enforceReceiptTransferRateLimit({
-    db: params.db,
-    logger: params.logger,
-    nowMs: params.nowMs,
-    bucket: {
-      scope: 'asset',
-      subjectHash,
-      documentPath: `${RECEIPT_TRANSFER_ASSET_RATE_LIMIT_ROOT}/${subjectHash}`,
-      limit: RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
-      publicFields: {
-        cluster: params.cluster,
-        ownerWallet: params.ownerWallet,
-        receiptAssetId: params.receiptAssetId,
-      },
+}): ReceiptTransferRateLimitBucket {
+  const subjectHash = receiptTransferAssetRateLimitSubjectHash(params);
+  return {
+    scope: 'asset',
+    subjectHash,
+    documentPath: `${RECEIPT_TRANSFER_ASSET_RATE_LIMIT_ROOT}/${subjectHash}`,
+    limit: RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
+    publicFields: {
+      cluster: params.cluster,
+      ownerWallet: params.ownerWallet,
+      receiptAssetId: params.receiptAssetId,
     },
-  });
+  };
 }

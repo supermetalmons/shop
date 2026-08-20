@@ -109,10 +109,6 @@ import {
   shouldNotifyShippersForDeliveryReadyToShipWrite,
 } from './notifications.js';
 import {
-  enforceReceiptTransferAssetRateLimit,
-  enforceReceiptTransferCallerRateLimit,
-} from './receiptTransferRateLimit.js';
-import {
   buildBuyerOrderReceivedEmailContent,
   buildShipperReadyToShipEmailContent,
   buildStripeCheckoutManualReviewEmailContent,
@@ -175,7 +171,6 @@ import {
 import {
   boxMinterMetadataBaseMatchesDrop,
   normalizeBoxMinterMetadataBaseForComparison,
-  normalizeDropSalesMode,
   normalizeDropId as normalizeDropIdShared,
 } from './shared/deploymentCore.js';
 import {
@@ -980,17 +975,6 @@ function onCallLogged<TReq, TRes>(
   });
 }
 
-function onCallAuthed<TReq, TRes>(
-  name: string,
-  handler: (request: CallableReq<TReq>, uid: string) => Promise<TRes>,
-  options: CallableOptions = {},
-) {
-  return onCallLogged<TReq, TRes>(name, async (request: CallableReq<TReq>) => {
-    const uid = requireAuth(request);
-    return handler(request, uid);
-  }, options);
-}
-
 function heliusRpcEndpoint(runtime: DropRuntime) {
   const apiKey = (process.env.HELIUS_API_KEY || '').trim();
   if (!apiKey) throw new Error('Missing HELIUS_API_KEY');
@@ -1631,30 +1615,6 @@ function receiptDropIdentity(dropRuntime: DropRuntime) {
     receiptPoolId: dropRuntime.config.receiptPoolId,
     receiptMaxId: dropRuntime.receiptMaxId,
   };
-}
-
-function dropSalesMode(dropRuntime: DropRuntime) {
-  return normalizeDropSalesMode(
-    (dropRuntime.config as FunctionsDropConfig & { salesMode?: unknown }).salesMode,
-  );
-}
-
-function receiptIdentityExpectationForAsset(
-  asset: any,
-  dropRuntime: DropRuntime,
-): Partial<ReceiptMetadataReference> | undefined {
-  const reference = receiptMetadataReference(asset);
-  if (!reference) return undefined;
-  if (
-    (reference.kind === 'box' && reference.id > dropRuntime.receiptMaxId) ||
-    (reference.kind === 'figure' && reference.id > dropRuntime.maxDudeId)
-  ) {
-    return undefined;
-  }
-  if (dropSalesMode(dropRuntime) === 'stripe_receipt_only') {
-    return reference.kind === 'box' ? reference : undefined;
-  }
-  return reference;
 }
 
 async function receiptAssetProofMatchesDropIdentity(
@@ -5180,204 +5140,6 @@ export const prepareAdminIrlRedeemTx = onCallLogged(
       }
       throw err;
     }
-  },
-);
-
-export const prepareReceiptTransferTx = onCallAuthed(
-  'prepareReceiptTransferTx',
-  async (request, uid) => {
-    const schema = z.object({
-      owner: z.string().min(1).max(64),
-      dropId: z.string().min(1).max(64),
-      receiptAssetId: z.string().min(1).max(64),
-      destination: z.string().min(1).max(64),
-    });
-    const {
-      owner,
-      dropId: requestDropId,
-      receiptAssetId: rawReceiptAssetId,
-      destination: rawDestination,
-    } = parseRequest(schema, request.data);
-    const dropId = requireDropId(requestDropId);
-    const dropRuntime = getDropRuntime(dropId);
-    const ownerWallet = normalizeWallet(owner);
-    const ownerPk = new PublicKey(ownerWallet);
-
-    let receiptAssetPk: PublicKey;
-    try {
-      receiptAssetPk = new PublicKey(rawReceiptAssetId.trim());
-    } catch {
-      throw new HttpsError('invalid-argument', 'Invalid receipt asset id');
-    }
-    if (receiptAssetPk.equals(PublicKey.default)) {
-      throw new HttpsError('invalid-argument', 'Invalid receipt asset id');
-    }
-    const receiptAssetId = receiptAssetPk.toBase58();
-
-    let destinationPk: PublicKey;
-    try {
-      destinationPk = new PublicKey(rawDestination.trim());
-    } catch {
-      throw new HttpsError('invalid-argument', 'Invalid destination address');
-    }
-    if (destinationPk.equals(PublicKey.default)) {
-      throw new HttpsError('invalid-argument', 'The system address cannot receive a receipt');
-    }
-    if (destinationPk.equals(ownerPk)) {
-      throw new HttpsError('invalid-argument', 'Destination address must be different from the current owner');
-    }
-
-    assertConfiguredPublicKey(dropRuntime.collectionMint, 'COLLECTION_MINT');
-    assertConfiguredPublicKey(dropRuntime.receiptsMerkleTree, 'RECEIPTS_MERKLE_TREE');
-
-    // Bound aggregate upstream work before the first Helius request. The
-    // owner-signed transaction remains the authorization boundary, so this
-    // does not require message-signing support from the connected wallet.
-    await enforceReceiptTransferCallerRateLimit({
-      db,
-      logger,
-      uid,
-    });
-
-    // This callable intentionally uses anonymous Firebase auth, so fail fast on
-    // user-controlled asset ids. Unlike newly minted/opened asset flows, a
-    // transfer target already came from inventory and does not need the
-    // multi-attempt DAS indexing retry.
-    const asset = await fetchAsset(receiptAssetId, dropRuntime);
-    if (looksBurntOrClosedInHelius(asset)) {
-      throw new HttpsError('failed-precondition', 'Receipt is no longer transferable');
-    }
-    if (getAssetKind(asset) !== 'certificate') {
-      throw new HttpsError('failed-precondition', 'Provided asset is not a receipt');
-    }
-    if (String(asset?.id || '') !== receiptAssetId) {
-      throw new HttpsError('failed-precondition', 'Receipt asset id does not match the indexed asset');
-    }
-    if (asset?.ownership?.owner !== ownerWallet) {
-      throw new HttpsError('failed-precondition', 'Receipt is not owned by the requesting wallet');
-    }
-
-    const expectedReceipt = receiptIdentityExpectationForAsset(asset, dropRuntime);
-    if (
-      !expectedReceipt ||
-      !assetMatchesReceiptMetadataIdentity(
-        asset,
-        receiptDropIdentity(dropRuntime),
-        expectedReceipt,
-      )
-    ) {
-      throw new HttpsError('failed-precondition', 'Receipt does not belong to the requested drop', {
-        dropId,
-        expectedCollectionMint: dropRuntime.collectionMintStr,
-        expectedMetadataBase: dropRuntime.config.metadataBase,
-        assetGroupingCollectionMints: assetGroupingCollectionMints(asset),
-      });
-    }
-
-    const proof = await fetchAssetProof(receiptAssetId, dropRuntime);
-    if (
-      !assetMatchesReceiptDropIdentity(
-        asset,
-        proof,
-        receiptDropIdentity(dropRuntime),
-        expectedReceipt,
-      )
-    ) {
-      throw new HttpsError('failed-precondition', 'Receipt does not belong to the configured receipts tree', {
-        dropId,
-        receiptAssetId,
-        expectedReceiptsTree: dropRuntime.receiptsMerkleTreeStr,
-        actualReceiptsTree: assetProofTreePublicKey(proof)?.toBase58() || null,
-      });
-    }
-    const proofContext = parseCompressedReceiptProof({
-      asset,
-      proof,
-      dropRuntime,
-      expectedOwner: ownerWallet,
-    });
-    if (!proofContext.leafOwner.equals(ownerPk)) {
-      throw new HttpsError('failed-precondition', 'Receipt proof owner does not match the requesting wallet');
-    }
-
-    await enforceReceiptTransferAssetRateLimit({
-      db,
-      logger,
-      uid,
-      cluster: dropRuntime.cluster,
-      ownerWallet,
-      receiptAssetId,
-    });
-
-    // Only spend additional Solana RPC calls after DAS has established a
-    // plausible owned receipt and a proof for this drop's exact tree.
-    const conn = connection(dropRuntime);
-    const [cfg, collectionInfo] = await Promise.all([
-      fetchDecodedBoxMinterConfigAccount({
-        dropRuntime,
-        conn,
-        context: 'getAccountInfo:boxMinterConfig:prepareReceiptTransferTx',
-      }),
-      withTimeout(
-        conn.getAccountInfo(dropRuntime.collectionMint, {
-          commitment: 'confirmed',
-          dataSlice: { offset: 0, length: 0 },
-        }),
-        RPC_TIMEOUT_MS,
-        'getAccountInfo:receiptTransferCollection',
-      ),
-    ]);
-
-    requireStripeCheckoutCollectionMatchesConfig(dropRuntime, cfg);
-    if (!collectionInfo) {
-      throw new HttpsError('failed-precondition', 'Configured receipt collection was not found on-chain', {
-        collection: dropRuntime.collectionMintStr,
-        dropId,
-      });
-    }
-    if (!collectionInfo.owner.equals(MPL_CORE_PROGRAM_ID)) {
-      throw new HttpsError('failed-precondition', 'Configured receipt collection is not an MPL Core collection', {
-        collection: dropRuntime.collectionMintStr,
-        expectedOwner: MPL_CORE_PROGRAM_ID.toBase58(),
-        actualOwner: collectionInfo.owner.toBase58(),
-        dropId,
-      });
-    }
-
-    const transferIx = buildCompressedReceiptTransferIx({
-      proofContext,
-      owner: ownerPk,
-      newOwner: destinationPk,
-      coreCollection: cfg.coreCollection,
-    });
-    const { blockhash } = await withTimeout(
-      conn.getLatestBlockhash('confirmed'),
-      RPC_TIMEOUT_MS,
-      'getLatestBlockhash:prepareReceiptTransferTx',
-    );
-    const { tx } = await buildTxWithOptionalDeliveryLookupTable({
-      conn,
-      dropRuntime,
-      build: (luts) =>
-        buildTx(
-          [ComputeBudgetProgram.setComputeUnitLimit({ units: 700_000 }), transferIx],
-          ownerPk,
-          blockhash,
-          [],
-          luts,
-        ),
-      encodeTooLargeMessage: 'Receipt transfer transaction is too large to encode.',
-      encodeTooLargeDetails: { dropId, receiptAssetId },
-      packetTooLargeMessage: (rawBytes, maxRawBytes) =>
-        `Receipt transfer transaction too large (${rawBytes} bytes > ${maxRawBytes}).`,
-      packetTooLargeDetails: { dropId, receiptAssetId },
-    });
-
-    return {
-      encodedTx: Buffer.from(tx.serialize()).toString('base64'),
-      dropId,
-      certificateId: receiptAssetId,
-    };
   },
 );
 

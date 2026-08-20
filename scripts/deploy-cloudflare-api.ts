@@ -1200,6 +1200,12 @@ async function smokeApi(
     for (const [pathname, body] of [
       ['/auth/solana', { wallet: defaultSmokeOwner, message: 'smoke', signature: Array(64).fill(0) }],
       ['/claims/irl/prepare', { owner: defaultSmokeOwner, code: '0000000000' }],
+      ['/receipts/transfer/prepare', {
+        owner: defaultSmokeOwner,
+        dropId: expectedReleaseDropId,
+        receiptAssetId: defaultSmokeOwner,
+        destination: '11111111111111111111111111111112',
+      }],
       ['/checkout/session', { dropId: 'card_nft_binder_devnet' }],
       ['/profile/reconcile', {}],
       ['/profile/state', {}],

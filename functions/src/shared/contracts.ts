@@ -462,6 +462,19 @@ export type PrepareIrlClaimResponse = {
   message: string;
 };
 
+export type PrepareReceiptTransferRequest = {
+  owner: string;
+  dropId: string;
+  receiptAssetId: string;
+  destination: string;
+};
+
+export type PrepareReceiptTransferResponse = {
+  encodedTx: string;
+  dropId: string;
+  certificateId: string;
+};
+
 export type AdminIrlRedeemPreparedTxResponse = PreparedTxResponse & {
   requestId: string;
   dropId: string;

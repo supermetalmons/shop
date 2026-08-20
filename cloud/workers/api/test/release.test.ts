@@ -703,6 +703,7 @@ test('frontend production capability check requires the profile lifecycle API co
   assert.deepEqual(requests.map((entry) => entry.input), [
     'https://api.mons.shop/auth/solana',
     'https://api.mons.shop/claims/irl/prepare',
+    'https://api.mons.shop/receipts/transfer/prepare',
     'https://api.mons.shop/profile/reconcile',
     'https://api.mons.shop/profile/state',
   ]);
@@ -711,7 +712,13 @@ test('frontend production capability check requires the profile lifecycle API co
     owner: '11111111111111111111111111111111',
     code: '0000000000',
   });
-  assert.equal(requests[2]?.init?.body, '{}');
+  assert.deepEqual(JSON.parse(String(requests[2]?.init?.body)), {
+    owner: '11111111111111111111111111111111',
+    dropId: 'card_nft_2',
+    receiptAssetId: '11111111111111111111111111111112',
+    destination: '11111111111111111111111111111113',
+  });
+  assert.equal(requests[3]?.init?.body, '{}');
   await assert.rejects(
     () => frontendDeployTestHooks.smokeProfileStateApi({
       fetch: async () => Response.json({ ok: false, error: 'not-found' }, { status: 404 }),
@@ -1705,6 +1712,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
       if (method === 'POST' && [
         '/auth/solana',
         '/claims/irl/prepare',
+        '/receipts/transfer/prepare',
         '/checkout/session',
         '/profile/reconcile',
         '/profile/state',
@@ -3289,8 +3297,8 @@ test('tracked release metadata is exact and excludes direct-Helius frontend roll
   const manifest = deployApiTestHooks.readReleaseManifest();
   assert.equal(deployApiTestHooks.isReleaseManifest(manifest), true);
   assert.deepEqual(manifest.approvedRollback, {
-    apiVersionId: '72bfa410-5c85-4e3c-b1e0-5ce0cfdb1108',
-    frontendVersionId: 'd310f1bc-8ee3-4032-8360-ded742f2bec4',
+    apiVersionId: 'e0480f0a-187a-4ac9-9ac8-e2c371c99bd3',
+    frontendVersionId: '0a4077ab-ee9d-48f9-b06b-60acf455915b',
   });
   assert.equal(manifest.allowDirectHeliusFrontendRollback, false);
 });

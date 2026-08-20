@@ -4,6 +4,7 @@ import test from 'node:test';
 import { profileApiTestHooks } from '../src/lib/api.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+const DESTINATION = '11111111111111111111111111111112';
 
 test('profile API client sends bearer JSON without caching and refreshes once after 401', async () => {
   const refreshes: boolean[] = [];
@@ -277,6 +278,48 @@ test('IRL claim preparation uses the authenticated Cloudflare route with an exac
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/claims\/irl\/prepare/);
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareIrlClaimTx/);
+});
+
+test('receipt transfer preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
+  const response = {
+    encodedTx: 'AQ==',
+    dropId: 'card_nft_2',
+    certificateId: OWNER,
+  };
+  const payload = await profileApiTestHooks.requestProfileApi(
+    '/receipts/transfer/prepare',
+    { owner: OWNER, dropId: 'card_nft_2', receiptAssetId: OWNER, destination: DESTINATION },
+    {
+      fetch: async (input, init) => {
+        assert.equal(String(input), 'https://api.mons.shop/receipts/transfer/prepare');
+        assert.equal(init?.method, 'POST');
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          owner: OWNER,
+          dropId: 'card_nft_2',
+          receiptAssetId: OWNER,
+          destination: DESTINATION,
+        });
+        return Response.json(response);
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1000,
+    },
+  );
+  assert.deepEqual(profileApiTestHooks.parseReceiptTransferPrepareResponse(payload), response);
+  assert.equal(profileApiTestHooks.parseReceiptTransferPrepareResponse({ ...response, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseReceiptTransferPrepareResponse({ ...response, encodedTx: '' }), null);
+  assert.equal(profileApiTestHooks.parseReceiptTransferPrepareResponse({ ...response, certificateId: 'invalid' }), null);
+  assert.equal(profileApiTestHooks.parseReceiptTransferPrepareResponse({ ...response, dropId: 'unknown_drop' }), null);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/receipts/transfer/prepare'), 65_000);
+
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function prepareReceiptTransferTx');
+  const end = source.indexOf('\nexport ', start + 1);
+  const implementation = source.slice(start, end === -1 ? source.length : end);
+  assert.match(implementation, /\/receipts\/transfer\/prepare/);
+  assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareReceiptTransferTx['"]/);
 });
 
 test('wallet lifecycle clients use the authenticated Cloudflare routes without callable fallbacks', async () => {
@@ -651,6 +694,19 @@ test('IRL claim preparation callable is absent from Firebase exports and deploym
   assert.equal(
     packageJson.scripts['decommission:firebase-prepare-irl-claim'],
     'node --import tsx scripts/decommission-firebase-prepare-irl-claim.ts',
+  );
+});
+
+test('receipt transfer preparation callable is absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts: Record<string, string>;
+  };
+  assert.doesNotMatch(functionsSource, /export const prepareReceiptTransferTx\b/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:prepareReceiptTransferTx(?:,|$)/);
+  assert.equal(
+    packageJson.scripts['decommission:firebase-prepare-receipt-transfer'],
+    'node --import tsx scripts/decommission-firebase-prepare-receipt-transfer.ts',
   );
 });
 

@@ -811,6 +811,12 @@ export async function smokeProfileStateApi(
       owner: '11111111111111111111111111111111',
       code: '0000000000',
     })],
+    ['/receipts/transfer/prepare', JSON.stringify({
+      owner: '11111111111111111111111111111111',
+      dropId: 'card_nft_2',
+      receiptAssetId: '11111111111111111111111111111112',
+      destination: '11111111111111111111111111111113',
+    })],
     ['/profile/reconcile', '{}'],
     ['/profile/state', '{}'],
   ] as const) {

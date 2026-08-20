@@ -25,6 +25,8 @@ import {
   PackStatusDisplayLabels,
   PrepareIrlClaimRequest,
   PrepareIrlClaimResponse,
+  PrepareReceiptTransferRequest,
+  PrepareReceiptTransferResponse,
   PreparedTxResponse,
   Profile,
   ProfileAddress,
@@ -248,6 +250,7 @@ type AuthenticatedApiPath =
   | '/auth/solana'
   | '/checkout/session'
   | '/claims/irl/prepare'
+  | '/receipts/transfer/prepare'
   | '/profile/reconcile'
   | '/profile/state'
   | '/profile/shipments'
@@ -275,6 +278,7 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 const STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS = 35_000;
 const PROFILE_RECONCILE_API_TIMEOUT_MS = 65_000;
 const IRL_CLAIM_PREPARE_API_TIMEOUT_MS = 65_000;
+const RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_VOID_API_TIMEOUT_MS = 65_000;
@@ -284,6 +288,7 @@ const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
   if (pathname === '/claims/irl/prepare') return IRL_CLAIM_PREPARE_API_TIMEOUT_MS;
+  if (pathname === '/receipts/transfer/prepare') return RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/checkout/session') return STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label-purchase') return SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS;
@@ -1278,10 +1283,33 @@ export async function prepareReceiptTransferTx(args: {
   receiptAssetId: string;
   destination: string;
 }): Promise<PreparedTxResponse> {
-  return callFunction<
-    { owner: string; dropId: string; receiptAssetId: string; destination: string },
-    PreparedTxResponse
-  >('prepareReceiptTransferTx', args);
+  const response = await callProfileApi<PrepareReceiptTransferRequest>('/receipts/transfer/prepare', args);
+  const parsed = parseReceiptTransferPrepareResponse(response);
+  if (!parsed) throw new Error('Invalid receipt transfer transaction response');
+  return parsed;
+}
+
+function parseReceiptTransferPrepareResponse(response: unknown): PrepareReceiptTransferResponse | null {
+  if (
+    !isRecord(response) ||
+    !hasExactKeys(response, ['encodedTx', 'dropId', 'certificateId']) ||
+    typeof response.encodedTx !== 'string' ||
+    response.encodedTx.length === 0 ||
+    response.encodedTx.length > 16 * 1024 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(response.encodedTx) ||
+    typeof response.dropId !== 'string' ||
+    normalizeDropId(response.dropId) !== response.dropId ||
+    !FRONTEND_DROPS[response.dropId] ||
+    typeof response.certificateId !== 'string' ||
+    !isBase58Bytes(response.certificateId, 32)
+  ) {
+    return null;
+  }
+  return {
+    encodedTx: response.encodedTx,
+    dropId: response.dropId,
+    certificateId: response.certificateId,
+  };
 }
 
 export async function prepareAdminIrlRedeemTx(args: {
@@ -1516,6 +1544,7 @@ export const profileApiTestHooks = {
   parseFulfillmentStatusUpdate,
   parseFulfillmentShipStationAddressCorrectionDetails,
   parseIrlClaimPrepareResponse,
+  parseReceiptTransferPrepareResponse,
   parseProfileAddress,
   parseProfileState,
   parseStripeCheckoutSessionResponse,
