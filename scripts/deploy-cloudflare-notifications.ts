@@ -103,10 +103,10 @@ function notificationSmokeEvent(value: unknown, jobId: string): NotificationSmok
 }
 
 function notificationSmokeLogOutcome(output: string, jobId: string): NotificationSmokeOutcome {
-  for (const line of output.split(/\r?\n/)) {
-    if (!line.trim()) continue;
+  for (const document of output.trim().split(/(?<=\})\s*(?=\{)/)) {
+    if (!document) continue;
     try {
-      const outcome = notificationSmokeEvent(JSON.parse(line) as unknown, jobId);
+      const outcome = notificationSmokeEvent(JSON.parse(document) as unknown, jobId);
       if (outcome) return outcome;
     } catch {}
   }

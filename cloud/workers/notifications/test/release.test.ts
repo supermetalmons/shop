@@ -35,7 +35,7 @@ test('notification smoke parsing binds a sent log to the exact queued job', () =
   const smokeOutput = `Queued Resend notification test email.\nJob ID: ${CANDIDATE}\n`;
   assert.equal(notificationsDeployTestHooks.notificationSmokeJobId(smokeOutput), CANDIDATE);
   assert.equal(notificationsDeployTestHooks.notificationSmokeLogSucceeded(
-    JSON.stringify({ event: 'notification_email_sent', jobId: CANDIDATE }),
+    JSON.stringify({ event: 'notification_email_sent', jobId: CANDIDATE }, null, 2),
     CANDIDATE,
   ), true);
   assert.equal(notificationsDeployTestHooks.notificationSmokeLogSucceeded(

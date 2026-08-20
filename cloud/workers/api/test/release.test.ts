@@ -900,7 +900,7 @@ test('notification consumer and combined version inspection require the exact re
   ].join('\n');
   assert.equal(deployApiTestHooks.notificationSmokeLogSucceeded(mixedTail, smokeJobId), false);
   assert.equal(deployApiTestHooks.notificationSmokeLogOutcome(
-    JSON.stringify({ logs: [{ message: [{ event: 'notification_email_sent', jobId: smokeJobId }] }] }),
+    JSON.stringify({ logs: [{ message: [{ event: 'notification_email_sent', jobId: smokeJobId }] }] }, null, 2),
     smokeJobId,
   ), 'sent');
 });
