@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
+import Stripe from 'stripe';
 import { createTestHarness } from 'wrangler';
 
 test('Wrangler test harness starts the Worker in workerd and preserves route headers', async () => {
@@ -25,10 +26,15 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     ...productionConfig,
     main: resolve('cloud/workers/api/src/index.ts'),
     routes: undefined,
+    vars: {
+      STRIPE_WEBHOOK_SECRET_DEVNET: 'whsec_runtime_devnet',
+      STRIPE_WEBHOOK_SECRET: 'whsec_runtime_mainnet',
+    },
   };
   assert.equal(runtimeConfig.compatibility_date, productionConfig.compatibility_date);
   assert.deepEqual(runtimeConfig.compatibility_flags, productionConfig.compatibility_flags);
   delete runtimeConfig.$schema;
+  delete runtimeConfig.secrets;
   const server = createTestHarness({
     root: resolve('.'),
     workers: [{
@@ -88,6 +94,47 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     });
     assert.equal(unauthenticatedProfile.status, 401);
     assert.equal((await unauthenticatedProfile.json() as any).error.code, 'unauthenticated');
+
+    const webhookPayload = JSON.stringify({
+      id: 'evt_runtime_test',
+      object: 'event',
+      type: 'customer.created',
+      data: { object: { id: 'cus_runtime_test' } },
+    });
+    const webhookSignature = await Stripe.webhooks.generateTestHeaderStringAsync({
+      payload: webhookPayload,
+      secret: 'whsec_runtime_devnet',
+      timestamp: Math.floor(Date.now() / 1000),
+      cryptoProvider: Stripe.createSubtleCryptoProvider(crypto.subtle),
+    });
+    const signedWebhook = await worker.fetch('https://api.mons.shop/webhooks/stripe', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Stripe-Signature': webhookSignature,
+      },
+      body: webhookPayload,
+    });
+    assert.equal(signedWebhook.status, 200);
+    assert.deepEqual(await signedWebhook.json(), {
+      received: true,
+      ignored: true,
+      reason: 'unsupported_event',
+    });
+
+    const invalidWebhook = await worker.fetch('https://api.mons.shop/webhooks/stripe', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Stripe-Signature': 't=1,v1=invalid',
+      },
+      body: webhookPayload,
+    });
+    assert.equal(invalidWebhook.status, 400);
+
+    const webhookMethod = await worker.fetch('https://api.mons.shop/webhooks/stripe');
+    assert.equal(webhookMethod.status, 405);
+    assert.equal(webhookMethod.headers.get('allow'), 'POST');
 
     for (const [pathname, body] of [
       ['/fulfillment/order-address', { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }],

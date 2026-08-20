@@ -62,12 +62,3 @@ export async function stripeClientForKey(key: string, mode: StripeApiMode): Prom
   cachedStripeClientsByKey.set(normalized, client);
   return client;
 }
-
-export async function constructStripeWebhookEvent(
-  rawBody: Buffer,
-  signature: string,
-  webhookSecret: string,
-): Promise<Stripe.Event> {
-  const StripeClient = await stripeCtor();
-  return StripeClient.webhooks.constructEvent(rawBody, signature, webhookSecret);
-}

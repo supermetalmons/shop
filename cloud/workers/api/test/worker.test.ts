@@ -65,6 +65,8 @@ function env(options: {
     STRIPE_RESTRICTED_KEY: '',
     STRIPE_SECRET_KEY_LIVE: '',
     STRIPE_RESTRICTED_KEY_LIVE: '',
+    STRIPE_WEBHOOK_SECRET_DEVNET: 'whsec_test_devnet',
+    STRIPE_WEBHOOK_SECRET: 'whsec_test_mainnet',
   };
 }
 

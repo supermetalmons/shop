@@ -9,17 +9,15 @@ import {
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
 } from '../shared/fulfillmentSources.js';
 import {
-  STRIPE_UNIT_AMOUNT_CENTS_MAX,
-  STRIPE_UNIT_AMOUNT_CENTS_MIN,
-} from '../shared/stripeCheckoutCore.js';
-import {
   STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
   STRIPE_OFFCHAIN_CURRENCY,
-  STRIPE_OFFCHAIN_FULFILLMENT_MODE,
   normalizeStripeCheckoutQuantity,
   stripeCheckoutShippingCountriesForDropFamily,
 } from '../shared/stripeCheckoutSession.js';
+import {
+  isStripeOffchainFulfillmentSession,
+} from '../shared/stripeWebhook.js';
 export {
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
@@ -44,6 +42,11 @@ export {
   resolveMintSelectionVariantIndex,
   stripeCheckoutOwnerId,
 } from '../shared/stripeCheckoutSession.js';
+export {
+  isStripeOffchainFulfillmentSession,
+  validateStripeCheckoutDocumentData,
+  type StripeCheckoutDocumentData,
+} from '../shared/stripeWebhook.js';
 export { stripeAssignedIrlClaimForBox } from '../cardAssignment.js';
 
 const ADMIN_ORDER_SEED = 'admin_order';
@@ -118,16 +121,6 @@ export type StripeOffchainDeliveryOrderDocumentInput = {
 export type StripeAddressEncryptionResult = {
   encrypted: string;
   hint: string;
-};
-
-export type StripeCheckoutDocumentData = {
-  uid: string;
-  variantKey?: string;
-  quantity: number;
-  unitAmountCents: number;
-  livemode: boolean;
-  status: string;
-  deliveryId?: number;
 };
 
 function normalizedString(value: unknown): string {
@@ -253,10 +246,6 @@ function lineItemUnitAmountCents(
   return null;
 }
 
-export function isStripeOffchainFulfillmentSession(session: { metadata?: Record<string, unknown> | null } | null | undefined): boolean {
-  return normalizedString(session?.metadata?.fulfillmentMode) === STRIPE_OFFCHAIN_FULFILLMENT_MODE;
-}
-
 export function shouldProcessStripeCheckoutFulfillmentWrite(args: {
   beforeStatus?: unknown;
   afterStatus?: unknown;
@@ -266,64 +255,6 @@ export function shouldProcessStripeCheckoutFulfillmentWrite(args: {
     normalizedString(args.afterStatus) === STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING &&
     (beforeStatus === STRIPE_CHECKOUT_STATUS.CREATED || beforeStatus === STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED)
   );
-}
-
-export function validateStripeCheckoutDocumentData(params: {
-  dropId: string;
-  variantKey?: string;
-  sessionId: string;
-  expectedLivemode?: boolean;
-  checkout: any;
-}): StripeCheckoutDocumentData {
-  const checkout = params.checkout || {};
-  const expectedLivemode = params.expectedLivemode === true;
-  const requireString = (value: unknown, expected: string, label: string): void => {
-    if (normalizedString(value) !== expected) {
-      throw new Error(`App-created Stripe checkout has invalid ${label}`);
-    }
-  };
-
-  requireString(checkout.sessionId, params.sessionId, 'session id');
-  requireString(checkout.fulfillmentMode, STRIPE_OFFCHAIN_FULFILLMENT_MODE, 'fulfillment mode');
-  requireString(checkout.dropId, params.dropId, 'drop id');
-  const expectedVariantKey = normalizedString(params.variantKey);
-  const checkoutVariantKey = normalizedString(checkout.variantKey);
-  if (expectedVariantKey || checkoutVariantKey) {
-    requireString(checkout.variantKey, expectedVariantKey, 'variant key');
-  }
-  requireString(checkout.currency, STRIPE_OFFCHAIN_CURRENCY, 'currency');
-
-  let quantity: number;
-  try {
-    quantity = normalizeStripeCheckoutQuantity(checkout.quantity);
-  } catch {
-    throw new Error('App-created Stripe checkout has invalid quantity');
-  }
-  if (checkout.livemode !== expectedLivemode) {
-    throw new Error('App-created Stripe checkout has invalid mode');
-  }
-
-  const unitAmountCents = integerInRangeOrNull(
-    checkout.unitAmountCents,
-    STRIPE_UNIT_AMOUNT_CENTS_MIN,
-    STRIPE_UNIT_AMOUNT_CENTS_MAX,
-  );
-  if (unitAmountCents == null) {
-    throw new Error('App-created Stripe checkout has invalid unit amount');
-  }
-
-  const uid = normalizedString(checkout.uid);
-  if (!uid) throw new Error('App-created Stripe checkout is missing uid');
-  const deliveryId = positiveIntegerOrNull(checkout.deliveryId);
-  return {
-    uid,
-    ...(expectedVariantKey ? { variantKey: expectedVariantKey } : {}),
-    quantity,
-    unitAmountCents,
-    livemode: expectedLivemode,
-    status: normalizedString(checkout.status),
-    ...(deliveryId != null ? { deliveryId } : {}),
-  };
 }
 
 export function validateStripeCheckoutContract(args: {

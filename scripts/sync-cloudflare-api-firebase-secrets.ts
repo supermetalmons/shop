@@ -13,6 +13,8 @@ const SECRET_NAMES = [
   'STRIPE_RESTRICTED_KEY',
   'STRIPE_SECRET_KEY_LIVE',
   'STRIPE_RESTRICTED_KEY_LIVE',
+  'STRIPE_WEBHOOK_SECRET_DEVNET',
+  'STRIPE_WEBHOOK_SECRET',
 ] as const;
 const CONFIG_ARGS = ['--config', 'cloud/workers/api/wrangler.jsonc', '--env-file', 'cloud/workers/api/release.env'];
 const WRANGLER = resolve('node_modules/.bin/wrangler');

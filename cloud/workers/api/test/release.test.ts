@@ -62,6 +62,8 @@ const EMPTY_NEW_API_SECRET_ENV = {
   STRIPE_RESTRICTED_KEY: '',
   STRIPE_SECRET_KEY_LIVE: '',
   STRIPE_RESTRICTED_KEY_LIVE: '',
+  STRIPE_WEBHOOK_SECRET_DEVNET: '',
+  STRIPE_WEBHOOK_SECRET: '',
 };
 
 const SOURCE_BRANCH = 'refs/heads/main';
@@ -1308,6 +1310,8 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(validation.NOTIFICATION_ENQUEUE_SECRET, undefined);
   assert.equal(validation.FIRESTORE_SERVICE_ACCOUNT_JSON, undefined);
   assert.equal(validation.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, undefined);
+  assert.equal(validation.STRIPE_WEBHOOK_SECRET_DEVNET, undefined);
+  assert.equal(validation.STRIPE_WEBHOOK_SECRET, undefined);
   assert.equal(validation.SHIPSTATION_API_KEY, undefined);
   assert.equal(validation.SHIPSTATION_SHIP_FROM, undefined);
   assert.equal(validation.GOOGLE_APPLICATION_CREDENTIALS, undefined);
@@ -1330,6 +1334,8 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(childEnvironment?.NOTIFICATION_ENQUEUE_SECRET, undefined);
   assert.equal(childEnvironment?.FIRESTORE_SERVICE_ACCOUNT_JSON, undefined);
   assert.equal(childEnvironment?.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, undefined);
+  assert.equal(childEnvironment?.STRIPE_WEBHOOK_SECRET_DEVNET, undefined);
+  assert.equal(childEnvironment?.STRIPE_WEBHOOK_SECRET, undefined);
   assert.equal(childEnvironment?.GOOGLE_APPLICATION_CREDENTIALS, undefined);
   assert.equal(childEnvironment?.VITE_HELIUS_API_KEY, undefined);
   const authenticated = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token', source);
@@ -1339,6 +1345,8 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(authenticated.NOTIFICATION_ENQUEUE_SECRET, undefined);
   assert.equal(authenticated.FIRESTORE_SERVICE_ACCOUNT_JSON, undefined);
   assert.equal(authenticated.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, undefined);
+  assert.equal(authenticated.STRIPE_WEBHOOK_SECRET_DEVNET, undefined);
+  assert.equal(authenticated.STRIPE_WEBHOOK_SECRET, undefined);
   assert.equal(authenticated.GOOGLE_APPLICATION_CREDENTIALS, undefined);
   assert.equal(authenticated.VITE_HELIUS_API_KEY, undefined);
   const frontendValidation = frontendDeployTestHooks.credentialFreeEnvironment({
@@ -1352,6 +1360,8 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(frontendValidation.RESEND_CONTACTS_API_KEY, undefined);
   assert.equal(frontendValidation.FIRESTORE_SERVICE_ACCOUNT_JSON, undefined);
   assert.equal(frontendValidation.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON, undefined);
+  assert.equal(frontendValidation.STRIPE_WEBHOOK_SECRET_DEVNET, undefined);
+  assert.equal(frontendValidation.STRIPE_WEBHOOK_SECRET, undefined);
   assert.equal(frontendValidation.GOOGLE_APPLICATION_CREDENTIALS, undefined);
   assert.equal(frontendValidation.WRANGLER_OUTPUT_FILE_PATH, undefined);
   assert.equal(frontendValidation.DOTENV_KEY, undefined);
@@ -1633,6 +1643,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
     includeNotificationSubscription: true,
     includePackStatus: true,
     includeProfileState: true,
+    includeStripeWebhook: true,
     owner: OWNER,
   }, {
     fetchSmoke: async (url, init, _label, timeoutMs = deployApiTestHooks.defaultSmokeTimeoutMs) => {
@@ -1675,6 +1686,12 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
       }
       if (method === 'POST' && pathname === '/notifications/subscribe') {
         return { response: Response.json({ subscribed: true }, { status: 200, headers }), durationMs: 1 };
+      }
+      if (method === 'POST' && pathname === '/webhooks/stripe') {
+        return {
+          response: Response.json({ received: false, error: 'Invalid Stripe webhook request' }, { status: 400, headers }),
+          durationMs: 1,
+        };
       }
       if (method === 'POST' && [
         '/checkout/session',
@@ -2306,6 +2323,7 @@ test('complete API release verifies the full pair around one exact API promotion
         includeNotificationSubscription: true,
         includePackStatus: true,
         includeProfileState: true,
+        includeStripeWebhook: true,
         owner: OWNER,
       });
       await input.verifyBeforePromotion?.();
@@ -2472,6 +2490,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
     includeNotificationSubscription?: boolean;
     includePackStatus?: boolean;
     includeProfileState?: boolean;
+    includeStripeWebhook?: boolean;
   }> = [];
   const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
   await deployApiTestHooks.runProductionSequence(
@@ -2483,6 +2502,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
         includeNotificationSubscription: true,
         includePackStatus: true,
         includeProfileState: true,
+        includeStripeWebhook: true,
         owner: OWNER,
       },
       expectedCurrentVersionId: baselineVersionId,
@@ -2556,6 +2576,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
     includeNotificationSubscription: options.includeNotificationSubscription,
     includePackStatus: options.includePackStatus,
     includeProfileState: options.includeProfileState,
+    includeStripeWebhook: options.includeStripeWebhook,
   })), [
     {
       expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
@@ -2563,6 +2584,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
       includeNotificationSubscription: true,
       includePackStatus: true,
       includeProfileState: true,
+      includeStripeWebhook: true,
     },
     {
       expectedInventoryDropId: undefined,
@@ -2570,6 +2592,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
       includeNotificationSubscription: undefined,
       includePackStatus: undefined,
       includeProfileState: undefined,
+      includeStripeWebhook: undefined,
     },
     {
       expectedInventoryDropId: deployApiTestHooks.expectedReleaseDropId,
@@ -2577,6 +2600,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
       includeNotificationSubscription: true,
       includePackStatus: true,
       includeProfileState: true,
+      includeStripeWebhook: true,
     },
   ]);
 });

@@ -60,19 +60,6 @@ import {
 } from '../shared/stripeCheckoutCore.js';
 import { toMillisMaybe } from '../time.js';
 
-type StripeCheckoutSessionSnapshot = {
-  id: string;
-  livemode: boolean;
-  mode?: unknown;
-  payment_status?: unknown;
-  automatic_tax?: unknown;
-  amount_subtotal?: unknown;
-  amount_total?: unknown;
-  total_details?: unknown;
-  currency?: unknown;
-  metadata?: Record<string, string>;
-};
-
 type StripeCheckoutDocumentRecord = {
   ref: DocumentReference;
   checkout: any;
@@ -80,38 +67,6 @@ type StripeCheckoutDocumentRecord = {
 
 export type StripeCheckoutManualReviewSummary =
   SharedStripeCheckoutManualReviewSummary;
-
-type StripeCheckoutFulfillmentEnqueueReason =
-  | 'not_app_fulfillment'
-  | 'already_fulfilled'
-  | 'already_pending';
-
-export type StripeCheckoutFulfillmentEnqueueResult =
-  | {
-      ignored: true;
-      queued?: false;
-      reason: StripeCheckoutFulfillmentEnqueueReason;
-      dropId?: string;
-      sessionId?: string;
-      deliveryId?: number;
-      checkoutPath?: string;
-      awaitingPayment?: undefined;
-    }
-  | {
-      queued: true;
-      ignored?: false;
-      dropId: string;
-      sessionId: string;
-      checkoutPath: string;
-      deliveryId?: undefined;
-      reason?: undefined;
-      awaitingPayment?: undefined;
-    };
-
-export type StripeWebhookHandlingResult =
-  | StripeCheckoutFulfillmentEnqueueResult
-  | { ignored: true; reason: 'unsupported_event'; queued?: false }
-  | { awaitingPayment: true; ignored?: false; queued?: false; sessionId?: string };
 
 export type StripeCheckoutFulfillmentStart =
   | {
@@ -263,10 +218,6 @@ const RETRYABLE_STRIPE_FULFILLMENT_CODES = new Set([
   'unavailable',
 ]);
 const RETRYABLE_GRPC_STATUS_CODES = new Set([4, 8, 10, 13, 14]);
-
-function stripeCheckoutPath(dropId: string, sessionId: string): string {
-  return `${dropRootPath(dropId)}/stripeCheckouts/${requireStripeCheckoutSessionId(sessionId)}`;
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
@@ -527,24 +478,6 @@ export async function fetchStripeCheckoutSession(sessionId: string, apiKeys: rea
   });
 }
 
-export function stripeWebhookRawBody(req: any): Buffer {
-  const rawBody = req?.rawBody;
-  if (Buffer.isBuffer(rawBody)) return rawBody;
-  if (typeof rawBody === 'string') return Buffer.from(rawBody, 'utf8');
-  if (Buffer.isBuffer(req?.body)) return req.body;
-  if (typeof req?.body === 'string') return Buffer.from(req.body, 'utf8');
-  throw new HttpsError('invalid-argument', 'Missing raw request body for Stripe webhook signature verification');
-}
-
-export function stripeWebhookSignature(req: any): string {
-  const raw = req?.headers?.['stripe-signature'];
-  const signature = Array.isArray(raw) ? raw[0] : raw;
-  if (typeof signature !== 'string' || !signature.trim()) {
-    throw new HttpsError('invalid-argument', 'Missing Stripe-Signature header');
-  }
-  return signature;
-}
-
 function requireStripeOffchainAddressSnapshot(params: {
   session: Stripe.Checkout.Session;
   encryptAddress: (plaintext: string) => StripeAddressEncryptionResult | null;
@@ -559,28 +492,6 @@ function requireStripeOffchainAddressSnapshot(params: {
       sessionId: params.session.id,
     });
   }
-}
-
-function stripeCheckoutSessionSnapshot(session: Stripe.Checkout.Session): StripeCheckoutSessionSnapshot {
-  const sessionId = requireStripeCheckoutSessionId(session.id);
-  const metadata: Record<string, string> = {};
-  Object.entries(session.metadata || {}).forEach(([key, value]) => {
-    if (typeof value === 'string') metadata[key] = value;
-  });
-
-  const snapshot: StripeCheckoutSessionSnapshot = {
-    id: sessionId,
-    livemode: Boolean(session.livemode),
-    metadata,
-  };
-  if (session.mode !== undefined) snapshot.mode = session.mode;
-  if (session.payment_status !== undefined) snapshot.payment_status = session.payment_status;
-  if (session.automatic_tax !== undefined) snapshot.automatic_tax = session.automatic_tax;
-  if (session.amount_subtotal !== undefined) snapshot.amount_subtotal = session.amount_subtotal;
-  if (session.amount_total !== undefined) snapshot.amount_total = session.amount_total;
-  if (session.total_details !== undefined) snapshot.total_details = session.total_details;
-  if (session.currency !== undefined) snapshot.currency = session.currency;
-  return snapshot;
 }
 
 function normalizedManualReviewString(value: unknown): string {
@@ -868,14 +779,6 @@ export async function markStripeCheckoutFulfillmentFulfilled(
     .catch((err) => {
       throw new StripeCheckoutProcessingAttemptOwnershipCheckError(err);
     });
-}
-
-function stripeCheckoutWebhookSeenUpdate(event: Stripe.Event): Record<string, unknown> {
-  return {
-    lastStripeWebhookEventId: event.id,
-    stripeWebhookEventIds: FieldValue.arrayUnion(event.id),
-    updatedAt: FieldValue.serverTimestamp(),
-  };
 }
 
 function positiveInteger(value: unknown): number | undefined {
@@ -1364,94 +1267,6 @@ async function fulfillStripeCheckoutSession<
     metadataIds,
     receiptTx,
   };
-}
-
-export async function enqueueStripeCheckoutFulfillment<Runtime extends StripeCheckoutDropRuntime>(params: {
-  db: Firestore;
-  event: Stripe.Event;
-  session: Stripe.Checkout.Session;
-  requireDropId: (rawDropId: unknown) => string;
-  getDropRuntime: (dropId: string) => Runtime;
-}): Promise<StripeCheckoutFulfillmentEnqueueResult> {
-  const { db, event, session } = params;
-  const sessionId = requireStripeCheckoutSessionId(session.id);
-  if (!isStripeOffchainFulfillmentSession(session)) {
-    return { ignored: true, reason: 'not_app_fulfillment', sessionId };
-  }
-
-  const context = requireStripeCheckoutFulfillmentContext(session, params);
-  const { dropId, variantKey } = context;
-  const expectedLivemode = stripeApiModeForCluster(context.dropRuntime.cluster) === 'live';
-  if (Boolean(session.livemode) !== expectedLivemode) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout mode does not match the drop cluster', {
-      dropId,
-      sessionId,
-      cluster: context.dropRuntime.cluster,
-      sessionLivemode: Boolean(session.livemode),
-      expectedLivemode,
-    });
-  }
-  const checkoutRef = db.doc(stripeCheckoutPath(dropId, sessionId));
-
-  return db.runTransaction(async (tx) => {
-    const checkoutSnap = await tx.get(checkoutRef);
-    const checkout = requireAppCreatedStripeCheckoutSnapshot({
-      dropId,
-      variantKey,
-      sessionId,
-      expectedLivemode,
-      ref: checkoutRef,
-      snap: checkoutSnap,
-    });
-    if (checkout.status === STRIPE_CHECKOUT_STATUS.FULFILLED) {
-      tx.update(checkoutRef, stripeCheckoutWebhookSeenUpdate(event));
-      return {
-        ignored: true,
-        reason: 'already_fulfilled',
-        dropId,
-        sessionId,
-        ...(checkout.deliveryId ? { deliveryId: checkout.deliveryId } : {}),
-      };
-    }
-    if (
-      checkout.status !== STRIPE_CHECKOUT_STATUS.CREATED &&
-      checkout.status !== STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED
-    ) {
-      tx.update(checkoutRef, stripeCheckoutWebhookSeenUpdate(event));
-      return { ignored: true, reason: 'already_pending', dropId, sessionId, checkoutPath: checkoutRef.path };
-    }
-
-    tx.update(checkoutRef, {
-      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-      paymentStatus: session.payment_status || null,
-      stripeSessionSummary: stripeCheckoutSessionSnapshot(session),
-      ...stripeCheckoutWebhookSeenUpdate(event),
-      lastStripeWebhookEventType: event.type,
-      fulfillmentRequestedAt: FieldValue.serverTimestamp(),
-      processingStartedAt: FieldValue.delete(),
-      ...stripeCheckoutFulfillmentClearUpdate(),
-    });
-    return { queued: true, dropId, sessionId, checkoutPath: checkoutRef.path };
-  });
-}
-
-export async function handleStripeWebhookEvent<Runtime extends StripeCheckoutDropRuntime>(params: {
-  db: Firestore;
-  event: Stripe.Event;
-  requireDropId: (rawDropId: unknown) => string;
-  getDropRuntime: (dropId: string) => Runtime;
-}): Promise<StripeWebhookHandlingResult> {
-  const { event } = params;
-  if (event.type !== 'checkout.session.completed' && event.type !== 'checkout.session.async_payment_succeeded') {
-    return { ignored: true, reason: 'unsupported_event' };
-  }
-  const session = event.data.object as Stripe.Checkout.Session;
-  const appFulfillmentMode = isStripeOffchainFulfillmentSession(session);
-  if (event.type === 'checkout.session.completed' && session.payment_status !== 'paid') {
-    if (!appFulfillmentMode) return { ignored: true, reason: 'not_app_fulfillment', sessionId: session.id };
-    return { awaitingPayment: true, sessionId: session.id };
-  }
-  return enqueueStripeCheckoutFulfillment({ ...params, session });
 }
 
 export async function startStripeCheckoutFulfillmentDocument(params: {

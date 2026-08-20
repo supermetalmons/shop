@@ -76,6 +76,7 @@ type SmokeApiOptions = {
   includeNotificationSubscription?: boolean;
   includePackStatus?: boolean;
   includeProfileState?: boolean;
+  includeStripeWebhook?: boolean;
   owner: string;
 };
 
@@ -472,6 +473,8 @@ function credentialFreeEnvironment(source: NodeJS.ProcessEnv = process.env): Nod
       normalized === 'STRIPE_RESTRICTED_KEY' ||
       normalized === 'STRIPE_SECRET_KEY_LIVE' ||
       normalized === 'STRIPE_RESTRICTED_KEY_LIVE' ||
+      normalized === 'STRIPE_WEBHOOK_SECRET_DEVNET' ||
+      normalized === 'STRIPE_WEBHOOK_SECRET' ||
       normalized === 'GOOGLE_APPLICATION_CREDENTIALS' ||
       normalized === 'VITE_HELIUS_API_KEY' ||
       normalized === 'DOTENV_KEY'
@@ -893,6 +896,8 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
       'STRIPE_RESTRICTED_KEY',
       'STRIPE_SECRET_KEY_LIVE',
       'STRIPE_RESTRICTED_KEY_LIVE',
+      'STRIPE_WEBHOOK_SECRET_DEVNET',
+      'STRIPE_WEBHOOK_SECRET',
     ].sort().join('\0') &&
     isRecord(route) &&
     hasExactKeys(route, ['pattern', 'custom_domain']) &&
@@ -1165,6 +1170,16 @@ async function smokeApi(
   }, 'CORS smoke request');
   if (cors.response.status !== 204 || cors.response.headers.get('access-control-allow-origin') !== '*') fail('CORS smoke response was invalid.');
   assertResponseHeaders(cors.response, 'CORS smoke response');
+
+  if (options.includeStripeWebhook === true) {
+    const stripeWebhook = await request(`${baseUrl}/webhooks/stripe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }, 'Stripe webhook configuration smoke request');
+    if (stripeWebhook.response.status !== 400) fail('Stripe webhook configuration smoke response was invalid.');
+    assertResponseHeaders(stripeWebhook.response, 'Stripe webhook configuration smoke response');
+  }
 
   if (options.includeProfileState === true) {
     for (const [pathname, body] of [
@@ -1499,7 +1514,7 @@ function apiEvidenceFailure(error: unknown, candidateVersionId: string): Error {
 }
 
 function productionCandidateSmoke(input: ProductionSequenceInput): SmokeApiOptions {
-  return input.candidateSmoke || { includeDevnet: true, owner: input.smokeOwner };
+  return input.candidateSmoke || { includeDevnet: true, includeStripeWebhook: true, owner: input.smokeOwner };
 }
 
 async function runProductionSequence(
@@ -1769,6 +1784,7 @@ async function runCompleteApiRelease(
     includeNotificationSubscription: true,
     includePackStatus: true,
     includeProfileState: true,
+    includeStripeWebhook: true,
     owner: input.smokeOwner,
   };
   const metadata = await dependencies.upload({
@@ -1866,7 +1882,7 @@ async function main(): Promise<void> {
     assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
     await uploadApiCandidate({
       apiToken,
-      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, includeProfileState: true, owner: options.smokeOwner },
+      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, includeProfileState: true, includeStripeWebhook: true, owner: options.smokeOwner },
       firestoreServiceAccountJson,
       firestoreWriterServiceAccountJson,
       heliusApiKey,
@@ -1905,7 +1921,7 @@ async function main(): Promise<void> {
       wranglerEnvironment,
     });
     await runProductionSequence({
-      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, includeProfileState: true, owner: options.smokeOwner },
+      candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, includeProfileState: true, includeStripeWebhook: true, owner: options.smokeOwner },
       expectedCurrentVersionId,
       heliusApiKey,
       previewUrl,

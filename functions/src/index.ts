@@ -1,7 +1,7 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldValue, Timestamp, getFirestore, type DocumentReference } from 'firebase-admin/firestore';
 import { onDocumentUpdated, onDocumentWritten } from 'firebase-functions/v2/firestore';
-import { onCall, onRequest, type CallableOptions, type CallableRequest, HttpsError } from 'firebase-functions/v2/https';
+import { onCall, type CallableOptions, type CallableRequest, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
 import {
@@ -17,7 +17,6 @@ import {
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
-import type Stripe from 'stripe';
 import { createHash, randomInt } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { z } from 'zod';
@@ -58,7 +57,6 @@ import {
   generateUniqueStripeReceiptClaimCodes,
   hasPluralStripeReceiptClaims,
   isReceiptClaimDeliveryOrderSource,
-  isStripeOffchainFulfillmentSession,
   normalizeStripeReceiptClaimCode,
   orderStripeReceiptClaimByBoxId,
   requireStripeReceiptClaimCode,
@@ -165,15 +163,11 @@ import {
 } from './walletSessions.js';
 import { parseRequest } from './request.js';
 import {
-  handleStripeWebhookEvent,
   processStripeCheckoutFulfillmentDocument,
   requireStripeCheckoutSessionId,
-  stripeWebhookRawBody,
-  stripeWebhookSignature,
   type StripeCheckoutFlowDeps,
   type StripeCheckoutOnchainConfig,
 } from './stripeCheckout/service.js';
-import { constructStripeWebhookEvent } from './stripeCheckout/client.js';
 import { toMillisMaybe } from './time.js';
 import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from './claimCodes.js';
 import type {
@@ -275,8 +269,6 @@ const STRIPE_RESTRICTED_KEY = defineSecret('STRIPE_RESTRICTED_KEY');
 const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
 const STRIPE_RESTRICTED_KEY_LIVE = defineSecret('STRIPE_RESTRICTED_KEY_LIVE');
 const STRIPE_SECRET_KEY_LIVE = defineSecret('STRIPE_SECRET_KEY_LIVE');
-const STRIPE_WEBHOOK_SECRET = defineSecret('STRIPE_WEBHOOK_SECRET');
-const STRIPE_WEBHOOK_SECRET_DEVNET = defineSecret('STRIPE_WEBHOOK_SECRET_DEVNET');
 
 function loadLocalEnv() {
   const envPaths = [
@@ -882,86 +874,6 @@ function stripeApiKeys(): string[] {
     .map((value) => String(value || '').trim())
     .filter(Boolean);
   return Array.from(new Set(values));
-}
-
-type StripeWebhookSecretScope = 'devnet' | 'mainnet';
-
-type StripeWebhookEndpointSecret = {
-  envName: 'STRIPE_WEBHOOK_SECRET_DEVNET' | 'STRIPE_WEBHOOK_SECRET';
-  scope: StripeWebhookSecretScope;
-  value: string;
-};
-
-function stripeWebhookEndpointSecrets(): StripeWebhookEndpointSecret[] {
-  const devnetSecret = envOrSecretValue('STRIPE_WEBHOOK_SECRET_DEVNET', STRIPE_WEBHOOK_SECRET_DEVNET);
-  const mainnetSecret = envOrSecretValue('STRIPE_WEBHOOK_SECRET', STRIPE_WEBHOOK_SECRET);
-  if (!devnetSecret && !mainnetSecret) {
-    throw new HttpsError('failed-precondition', 'Stripe webhook secret is not configured.');
-  }
-  if (devnetSecret && mainnetSecret && devnetSecret === mainnetSecret) {
-    throw new HttpsError(
-      'failed-precondition',
-      'STRIPE_WEBHOOK_SECRET_DEVNET and STRIPE_WEBHOOK_SECRET must be different.',
-    );
-  }
-
-  return [
-    ...(devnetSecret
-      ? [{ envName: 'STRIPE_WEBHOOK_SECRET_DEVNET' as const, scope: 'devnet' as const, value: devnetSecret }]
-      : []),
-    ...(mainnetSecret
-      ? [{ envName: 'STRIPE_WEBHOOK_SECRET' as const, scope: 'mainnet' as const, value: mainnetSecret }]
-      : []),
-  ];
-}
-
-function stripeWebhookSecretScopeForCluster(cluster: SolanaCluster): StripeWebhookSecretScope {
-  return cluster === 'devnet' ? 'devnet' : 'mainnet';
-}
-
-async function constructStripeWebhookEventFromConfiguredSecrets(
-  rawBody: Buffer,
-  signature: string,
-  endpointSecrets: readonly StripeWebhookEndpointSecret[],
-): Promise<{
-  event: Stripe.Event;
-  verifiedSecretEnvName: StripeWebhookEndpointSecret['envName'];
-  verifiedSecretScope: StripeWebhookSecretScope;
-}> {
-  let lastError: unknown;
-  for (const endpointSecret of endpointSecrets) {
-    try {
-      const event = await constructStripeWebhookEvent(rawBody, signature, endpointSecret.value);
-      return {
-        event,
-        verifiedSecretEnvName: endpointSecret.envName,
-        verifiedSecretScope: endpointSecret.scope,
-      };
-    } catch (err) {
-      lastError = err;
-    }
-  }
-  throw lastError || new HttpsError('invalid-argument', 'Invalid Stripe webhook signature');
-}
-
-function stripeWebhookSecretScopeForEvent(event: Stripe.Event): {
-  dropId: string;
-  cluster: SolanaCluster;
-  expectedSecretScope: StripeWebhookSecretScope;
-} | null {
-  if (event.type !== 'checkout.session.completed' && event.type !== 'checkout.session.async_payment_succeeded') {
-    return null;
-  }
-  const session = event.data.object as Stripe.Checkout.Session;
-  if (!isStripeOffchainFulfillmentSession(session)) return null;
-
-  const dropId = requireDropId(session.metadata?.dropId);
-  const dropRuntime = getDropRuntime(dropId);
-  return {
-    dropId,
-    cluster: dropRuntime.cluster,
-    expectedSecretScope: stripeWebhookSecretScopeForCluster(dropRuntime.cluster),
-  };
 }
 
 type ParsedSolanaSignInMessage = {
@@ -5149,85 +5061,6 @@ export const reconcileProfileState = onCallLogged('reconcileProfileState', async
   }
   return response;
 });
-
-export const stripeWebhook = onRequest(
-  { secrets: [STRIPE_WEBHOOK_SECRET, STRIPE_WEBHOOK_SECRET_DEVNET] },
-  async (req, res) => {
-    if (req.method !== 'POST') {
-      res.status(405).send('Method not allowed');
-      return;
-    }
-
-    let endpointSecrets: StripeWebhookEndpointSecret[];
-    try {
-      endpointSecrets = stripeWebhookEndpointSecrets();
-    } catch (err) {
-      logger.error('stripeWebhook:notConfigured', err instanceof Error ? err : new Error(String(err)), {
-        error: summarizeError(err),
-      });
-      res.status(500).send('Stripe webhook is not configured');
-      return;
-    }
-
-    let event: Stripe.Event;
-    let verifiedSecretEnvName: StripeWebhookEndpointSecret['envName'];
-    let verifiedSecretScope: StripeWebhookSecretScope;
-    try {
-      const verified = await constructStripeWebhookEventFromConfiguredSecrets(
-        stripeWebhookRawBody(req),
-        stripeWebhookSignature(req),
-        endpointSecrets,
-      );
-      event = verified.event;
-      verifiedSecretEnvName = verified.verifiedSecretEnvName;
-      verifiedSecretScope = verified.verifiedSecretScope;
-    } catch (err) {
-      logger.warn('stripeWebhook:signatureRejected', { error: summarizeError(err) });
-      res.status(400).send('Invalid Stripe webhook signature');
-      return;
-    }
-
-    try {
-      const expectedScope = stripeWebhookSecretScopeForEvent(event);
-      if (expectedScope && verifiedSecretScope !== expectedScope.expectedSecretScope) {
-        logger.warn('stripeWebhook:secretScopeRejected', {
-          eventId: event.id,
-          dropId: expectedScope.dropId,
-          cluster: expectedScope.cluster,
-          verifiedSecretEnvName,
-          verifiedSecretScope,
-          expectedSecretScope: expectedScope.expectedSecretScope,
-        });
-        res.status(400).send('Invalid Stripe webhook signature');
-        return;
-      }
-
-      const result = await handleStripeWebhookEvent({
-        db,
-        event,
-        requireDropId,
-        getDropRuntime,
-      });
-      logger.info('stripeWebhook:handled', {
-        eventId: event.id,
-        sessionId: 'sessionId' in result ? result.sessionId || null : null,
-        dropId: 'dropId' in result ? result.dropId || null : null,
-        deliveryId: 'deliveryId' in result ? result.deliveryId || null : null,
-        queued: result.queued === true,
-        reason: 'reason' in result ? result.reason || null : null,
-        ignored: result.ignored === true,
-        awaitingPayment: 'awaitingPayment' in result && result.awaitingPayment === true,
-      });
-      res.json({ received: true, ...result });
-    } catch (err) {
-      logger.error('stripeWebhook:error', err instanceof Error ? err : new Error(String(err)), {
-        eventId: event.id,
-        error: summarizeError(err),
-      });
-      res.status(500).json({ received: true, error: err instanceof Error ? err.message : String(err) });
-    }
-  },
-);
 
 export const processStripeCheckoutFulfillment = onDocumentWritten(
   {

@@ -70,6 +70,10 @@ import {
   handleStripeCheckoutSession,
 } from './stripeCheckout.js';
 import {
+  STRIPE_WEBHOOK_PATH,
+  handleStripeWebhookRequest,
+} from './stripeWebhook.js';
+import {
   ADMIN_PROFILE_PATH,
   ADMIN_DELIVERY_ORDER_OWNERS_PATH,
   ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
@@ -131,6 +135,7 @@ const KNOWN_LOG_ROUTES = new Set([
   '/health',
   NOTIFICATION_ENQUEUE_PATH,
   STRIPE_CHECKOUT_SESSION_PATH,
+  STRIPE_WEBHOOK_PATH,
   '/inventory',
   '/notifications/subscribe',
   '/pack-status/:dropId',
@@ -1281,6 +1286,9 @@ export async function handleRequest(
   let rpcMethod: string | undefined;
   let checkoutDropId: string | undefined;
   let checkoutMode: string | undefined;
+  let webhookEventId: string | undefined;
+  let webhookEventType: string | undefined;
+  let webhookOutcome: string | undefined;
   let response: Response;
   const rpcCluster = pathname === '/rpc/mainnet-beta'
     ? 'mainnet-beta'
@@ -1326,6 +1334,14 @@ export async function handleRequest(
       checkoutMode = result.mode;
       response = applyProfileCors(request, result.response);
     }
+  } else if (pathname === STRIPE_WEBHOOK_PATH) {
+    const result = await handleStripeWebhookRequest(request, env, { log: dependencies.log });
+    metrics.upstreamCalls += result.metrics.upstreamCalls;
+    metrics.providerDurationMs += result.metrics.providerDurationMs;
+    webhookEventId = result.eventId;
+    webhookEventType = result.eventType;
+    webhookOutcome = result.outcome;
+    response = result.response;
   } else if (profilePath) {
     if (!isProfileRequestOriginAllowed(request)) {
       response = applyProfileCors(request, new Response(null));
@@ -1398,6 +1414,9 @@ export async function handleRequest(
     ...(rpcMethod ? { rpcMethod } : {}),
     ...(checkoutDropId ? { checkoutDropId } : {}),
     ...(checkoutMode ? { checkoutMode } : {}),
+    ...(webhookEventId ? { webhookEventId } : {}),
+    ...(webhookEventType ? { webhookEventType } : {}),
+    ...(webhookOutcome ? { webhookOutcome } : {}),
     ...(profileAuthOutcome ? { profileAuthOutcome } : {}),
     ...(profileStateSections ? { profileStateSections } : {}),
   });
