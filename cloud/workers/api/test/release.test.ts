@@ -3533,7 +3533,7 @@ test('tracked release metadata is exact and excludes direct-Helius frontend roll
   const manifest = deployApiTestHooks.readReleaseManifest();
   assert.equal(deployApiTestHooks.isReleaseManifest(manifest), true);
   assert.deepEqual(manifest.approvedRollback, {
-    apiVersionId: '91ca69bb-c4ba-4ebf-b3d0-a12528b11910',
+    apiVersionId: '20b8f89b-30d7-4e45-a00f-722f75e1e5b0',
     frontendVersionId: 'ea8e4a16-d46e-4c5b-beb7-cfd44a40630d',
   });
   assert.equal(manifest.allowDirectHeliusFrontendRollback, false);
@@ -3665,7 +3665,12 @@ test('notification cutover pins current and approved API versions to the queue-c
   const directory = mkdtempSync(join(tmpdir(), 'mons-shop-notification-cutover-manifest-test-'));
   const path = join(directory, 'release-manifest.json');
   const evidenceDirectory = join(directory, 'evidence');
-  const before = deployApiTestHooks.readReleaseManifest();
+  const tracked = deployApiTestHooks.readReleaseManifest();
+  const before = {
+    ...tracked,
+    currentProduction: { ...tracked.currentProduction, apiVersionId: randomUUID() },
+    approvedRollback: { ...tracked.approvedRollback, apiVersionId: randomUUID() },
+  };
   const apiVersionId = randomUUID();
   const now = new Date('2026-08-20T12:34:56.000Z');
   try {

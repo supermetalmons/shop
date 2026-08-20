@@ -115,36 +115,21 @@ Functions set with `npm run deploy:functions`.
 
 Transactional order and manual-review emails are rendered by the three existing
 Firebase document triggers, authenticated with `NOTIFICATION_ENQUEUE_SECRET`,
-and queued through the internal `mons-shop-api` producer route. Until the guarded
-cutover completes, `mons-shop-notifications` remains the live consumer; the
-combined API source contains the replacement queue handler but does not own the
-consumer yet. Both implementations preserve the same Resend, retry, and DLQ
-behavior.
+and queued through the internal `mons-shop-api` producer route. `mons-shop-api`
+consumes `mons-shop-notification-emails` and sends through Resend from its queue
+handler. Failed transient deliveries retry five times before moving to
+`mons-shop-notification-emails-dlq`.
 
 - Validate the HTTP and notification handlers, generated bindings, TypeScript,
   unit tests, bundling, and startup together with `npm run check:api`.
-- Keep validating and releasing the live legacy consumer with
-  `npm run check:notifications` and `npm run deploy:notifications` until cutover.
 - API production releases and approved rollbacks send a synthetic email through
   the production queue before writing release evidence.
-- Perform the one-time guarded consumer consolidation with a newly created
-  Resend Sending Access key in `RESEND_API_KEY`:
-  - `npm run deploy:api -- notifications-cutover --firestore-service-account-file /path/to/reader.json --firestore-writer-service-account-file /path/to/writer.json`
-  - The cutover promotes a combined API version, moves the sole queue consumer,
-    verifies an exact sent job, pins that version as the temporary fix-forward
-    rollback target, and deletes the detached legacy Worker.
-  - Resume an interrupted promoted candidate with
-    `npm run deploy:api -- notifications-cutover --version-id <uuid> --smoke-owner <wallet>` from the same clean Git commit.
 - Queue the synthetic test email through the production API and print its job ID:
   - `npm run test-resend-notification-email -- --kind stripe-manual-review`
 - Inspect queue state and live structured logs:
   - `node_modules/.bin/wrangler queues info mons-shop-notification-emails`
   - `node_modules/.bin/wrangler queues info mons-shop-notification-emails-dlq`
-  - Before cutover: `node_modules/.bin/wrangler tail mons-shop-notifications --format json`
-  - After cutover: `node_modules/.bin/wrangler tail mons-shop-api --format json`
-
-The legacy source, config, deploy helper, and release manifest remain tracked
-until production handover succeeds. Remove them in the post-cutover cleanup.
+  - `node_modules/.bin/wrangler tail mons-shop-api --format json`
 
 Both queues use 24-hour retention to match Resend's idempotency window. Do not
 automatically replay the DLQ after that window, and do not restore direct
@@ -243,8 +228,7 @@ suite passes.
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET_DEVNET`
 - `STRIPE_WEBHOOK_SECRET` (Firebase Functions secret or local env; Stripe live/production endpoint signing secret for mainnet drops handled by `stripeWebhook`)
   - Set: `firebase functions:secrets:set STRIPE_WEBHOOK_SECRET`
-- `RESEND_API_KEY` (outbound transactional-email secret; currently on `mons-shop-notifications` and moved to `mons-shop-api` by cutover; use a Resend Sending Access key restricted to `support.mons.shop`)
-  - The initial consolidation reads it only from the `RESEND_API_KEY` process environment and uploads it through the guarded mode-`0600` temporary secrets file.
+- `RESEND_API_KEY` (`mons-shop-api` outbound transactional-email secret; use a Resend Sending Access key restricted to `support.mons.shop`)
   - Later API versions inherit it; rotate it as an API Worker secret and promote only the exact reviewed combined version.
 - `NOTIFICATION_ENQUEUE_SECRET` (shared HMAC secret for the three Firebase notification producers and the internal `mons-shop-api` queue endpoint)
   - Store the same randomly generated 32-byte value in Firebase Secret Manager and the API Worker's secret set before uploading its candidate. Never pass it as a command argument or print it.

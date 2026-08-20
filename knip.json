@@ -7,8 +7,6 @@
         "cloud/workers/api/src/index.ts",
         "cloud/workers/api/test/*.test.ts",
         "cloud/workers/api/runtime-test/*.test.ts",
-        "cloud/workers/notifications/src/index.ts",
-        "cloud/workers/notifications/test/*.test.ts",
         "scripts/*.{ts,cjs}",
         "scripts/newDrops/*.ts",
         "tests/*.test.ts"
@@ -16,7 +14,6 @@
       "project": [
         "src/**/*.{ts,tsx}",
         "cloud/workers/api/**/*.{ts,tsx}",
-        "cloud/workers/notifications/**/*.{ts,tsx}",
         "scripts/**/*.{ts,cjs}",
         "tests/**/*.ts"
       ],
