@@ -23,6 +23,8 @@ import {
   IssueReceiptsResult,
   PackStatusBreakdown,
   PackStatusDisplayLabels,
+  PrepareIrlClaimRequest,
+  PrepareIrlClaimResponse,
   PreparedTxResponse,
   Profile,
   ProfileAddress,
@@ -245,6 +247,7 @@ type ProfileApiClientDependencies = {
 type AuthenticatedApiPath =
   | '/auth/solana'
   | '/checkout/session'
+  | '/claims/irl/prepare'
   | '/profile/reconcile'
   | '/profile/state'
   | '/profile/shipments'
@@ -271,6 +274,7 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 
 const STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS = 35_000;
 const PROFILE_RECONCILE_API_TIMEOUT_MS = 65_000;
+const IRL_CLAIM_PREPARE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_VOID_API_TIMEOUT_MS = 65_000;
@@ -279,6 +283,7 @@ const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
+  if (pathname === '/claims/irl/prepare') return IRL_CLAIM_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/checkout/session') return STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label-purchase') return SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS;
@@ -1327,11 +1332,56 @@ export async function recoverMyDeliveryOrders(args?: RecoverDeliveryOrdersArgs):
   return callFunction<RecoverDeliveryOrdersArgs, RecoverDeliveryOrdersResult>('recoverMyDeliveryOrders', payload);
 }
 
+function parseIrlClaimPrepareResponse(response: unknown): PrepareIrlClaimResponse | null {
+  if (
+    !isRecord(response) ||
+    !hasExactKeys(response, ['encodedTx', 'dropId', 'certificates', 'certificateId', 'message']) ||
+    typeof response.dropId !== 'string'
+  ) {
+    return null;
+  }
+  const drop = FRONTEND_DROPS[response.dropId];
+  if (
+    typeof response.encodedTx !== 'string' ||
+    response.encodedTx.length === 0 ||
+    response.encodedTx.length > 16 * 1024 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(response.encodedTx) ||
+    normalizeDropId(response.dropId) !== response.dropId ||
+    !drop ||
+    !Array.isArray(response.certificates) ||
+    response.certificates.length === 0 ||
+    response.certificates.length !== drop.itemsPerBox ||
+    !response.certificates.every((id) =>
+      Number.isSafeInteger(id) &&
+      Number(id) > 0 &&
+      Number(id) <= drop.maxSupply * drop.itemsPerBox
+    ) ||
+    new Set(response.certificates).size !== response.certificates.length ||
+    typeof response.certificateId !== 'string' ||
+    !isBase58Bytes(response.certificateId, 32) ||
+    typeof response.message !== 'string' ||
+    response.message.length === 0 ||
+    response.message.length > 512
+  ) {
+    return null;
+  }
+  return {
+    encodedTx: response.encodedTx,
+    dropId: response.dropId,
+    certificates: response.certificates as number[],
+    certificateId: response.certificateId,
+    message: response.message,
+  };
+}
+
 export async function requestClaimTx(
   owner: string,
   code: string,
-): Promise<PreparedTxResponse> {
-  return callFunction<{ owner: string; code: string }, PreparedTxResponse>('prepareIrlClaimTx', { owner, code });
+): Promise<PrepareIrlClaimResponse> {
+  const response = await callProfileApi<PrepareIrlClaimRequest>('/claims/irl/prepare', { owner, code });
+  const parsed = parseIrlClaimPrepareResponse(response);
+  if (!parsed) throw new Error('Invalid IRL claim transaction response');
+  return parsed;
 }
 
 export async function claimStripeReceipt(args: { code: string; recipient: string }): Promise<StripeReceiptClaimResult> {
@@ -1465,6 +1515,7 @@ export const profileApiTestHooks = {
   parseVoidFulfillmentShipStationLabel,
   parseFulfillmentStatusUpdate,
   parseFulfillmentShipStationAddressCorrectionDetails,
+  parseIrlClaimPrepareResponse,
   parseProfileAddress,
   parseProfileState,
   parseStripeCheckoutSessionResponse,

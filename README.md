@@ -60,7 +60,7 @@ The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_API_KEY`,
 `RESEND_CONTACTS_API_KEY`, and `NOTIFICATION_ENQUEUE_SECRET` secrets, both the
 producer and consumer sides of `NOTIFICATION_EMAIL_QUEUE`, Smart Placement, and
 a version-first release flow. It serves
-`/auth/solana`, `/profile/reconcile`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
+`/auth/solana`, `/profile/reconcile`, `/claims/irl/prepare`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
 `/pending-open-boxes`, authenticated profile/admin/fulfillment reads,
 `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
 responses remain uncached. Pack-status reads use the public Firestore REST API
@@ -112,6 +112,7 @@ frontend releases are both verified, run
 `npm run decommission:firebase-create-stripe-checkout-session` immediately after its frontend verification, then deploy the complete
 Functions set with `npm run deploy:functions`.
 The wallet lifecycle cutover separately uses `npm run decommission:firebase-profile-lifecycle` only after both `/auth/solana` and `/profile/reconcile` are live, the frontend release is verified, and rollback metadata no longer approves pre-migration Worker versions.
+The IRL claim preparation cutover uses `npm run decommission:firebase-prepare-irl-claim` only after `/claims/irl/prepare` and the matching frontend are live. The guard requires `IRL_CLAIM_SMOKE_FIREBASE_TOKEN`, `IRL_CLAIM_SMOKE_OWNER`, and an unused `IRL_CLAIM_SMOKE_CODE`, prepares and validates a production transaction without submitting it, and requires the approved rollback pair to equal current production before deleting the Firebase callable.
 
 ### Notification delivery
 

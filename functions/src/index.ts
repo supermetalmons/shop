@@ -160,7 +160,6 @@ import {
   type StripeCheckoutOnchainConfig,
 } from './stripeCheckout/service.js';
 import { toMillisMaybe } from './time.js';
-import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from './claimCodes.js';
 import type {
   DeliveryRecoveryOutcome,
   RecoverDeliveryOrdersItemResult as RecoverMyDeliveryOrdersItemResult,
@@ -348,12 +347,6 @@ type DropRuntime = {
 
 function isOpenableDrop(dropRuntime: Pick<DropRuntime, 'itemsPerBox'>): boolean {
   return dropRuntime.itemsPerBox >= MIN_OPENABLE_ITEMS_PER_BOX;
-}
-
-function assertOpenableDrop(dropRuntime: Pick<DropRuntime, 'itemsPerBox'>, message: string): void {
-  if (!isOpenableDrop(dropRuntime)) {
-    throw new HttpsError('failed-precondition', message);
-  }
 }
 
 function normalizeDropId(dropId: string): string {
@@ -1539,29 +1532,6 @@ async function scanOwnedAssetPages(params: {
   });
 }
 
-async function fetchAssetsOwned(owner: string, dropRuntime: DropRuntime) {
-  // Helius DAS expects `grouping` as a tuple: [groupKey, groupValue]
-  // (assets returned by the API use objects like { group_key, group_value }).
-  //
-  // NOTE: Newly minted assets can briefly miss collection-group indexing on devnet.
-  // We first try the collection-group query (fast/small), then fall back to an ungrouped query
-  // and filter locally by explicit collection identity from the asset payload.
-  if (dropRuntime.collectionMintStr) {
-    const grouping = ['collection', dropRuntime.collectionMintStr] as const;
-    const grouped = await heliusRpc<any>(dropRuntime, 'searchAssets', heliusSearchAssetsParams(owner, 1, grouping), 'Helius assets error');
-    const items = heliusSearchAssetsItems(grouped);
-    if (items.length) return items;
-    logger.warn('Helius searchAssets returned 0 items for collection grouping; falling back to ungrouped search', {
-      owner,
-      collection: dropRuntime.collectionMintStr,
-      dropId: dropRuntime.dropId,
-    });
-  }
-
-  const result = await heliusRpc<any>(dropRuntime, 'searchAssets', heliusSearchAssetsParams(owner, 1), 'Helius assets error');
-  return heliusSearchAssetsItems(result);
-}
-
 function looksBurntOrClosedInHelius(asset: any): boolean {
   return dasAssetLooksBurntOrClosed(asset, FUNCTIONS_DAS_BURN_POLICY);
 }
@@ -2314,40 +2284,6 @@ async function assignDudes(dropId: string, boxAssetId: string): Promise<number[]
     logger,
     summarizeError,
   });
-}
-
-function normalizeDropIdMaybe(rawDropId: unknown): string | null {
-  if (typeof rawDropId !== 'string' || !rawDropId.trim()) return null;
-  try {
-    return normalizeDropId(rawDropId);
-  } catch {
-    return null;
-  }
-}
-
-function dropIdFromBoxAssignmentPath(path: string): string | null {
-  const parts = String(path || '').split('/');
-  if (parts.length !== 4) return null;
-  if (parts[0] !== 'drops' || parts[2] !== 'boxAssignments') return null;
-  return normalizeDropIdMaybe(parts[1]);
-}
-
-async function resolveClaimDropIdForCode(code: string, claim: any): Promise<string> {
-  const fromClaim = normalizeDropIdMaybe(claim?.dropId);
-  if (fromClaim) return fromClaim;
-
-  const byCodeSnap = await db.collectionGroup('boxAssignments').where('irlClaimCode', '==', code).limit(2).get();
-  const dropIds = new Set<string>();
-  byCodeSnap.docs.forEach((doc) => {
-    const dropId = dropIdFromBoxAssignmentPath(doc.ref.path);
-    if (dropId) dropIds.add(dropId);
-  });
-  if (dropIds.size === 1) return Array.from(dropIds)[0];
-  if (dropIds.size > 1) {
-    throw new HttpsError('failed-precondition', 'Claim code is linked to multiple drops; contact support.');
-  }
-
-  throw new HttpsError('failed-precondition', 'Claim code record is missing dropId and could not be resolved.');
 }
 
 async function ensureIrlClaimCodeForBox(params: {
@@ -8866,220 +8802,4 @@ export const claimStripeReceipt = onCallLogged(
     }
   },
   { secrets: [COSIGNER_SECRET], timeoutSeconds: 180 },
-);
-
-export const prepareIrlClaimTx = onCallLogged(
-  'prepareIrlClaimTx',
-  async (request) => {
-  const { wallet } = await requireWalletSession(request);
-  const schema = z.object({ owner: z.string(), code: z.string() });
-  const { owner, code } = parseRequest(schema, request.data);
-  const ownerWallet = normalizeWallet(owner);
-  if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
-  const ownerPk = new PublicKey(ownerWallet);
-
-  const normalizedCode = normalizeIrlClaimCode(code);
-  if (!normalizedCode || normalizedCode.length !== IRL_CLAIM_CODE_DIGITS) {
-    throw new HttpsError('invalid-argument', `Invalid claim code (must be ${IRL_CLAIM_CODE_DIGITS} digits)`);
-  }
-
-  const claimRef = db.doc(`claimCodes/${normalizedCode}`);
-  const claimDoc = await claimRef.get();
-  if (!claimDoc.exists) {
-    throw new HttpsError('not-found', 'Invalid claim code');
-  }
-
-  const claim = claimDoc.data() as any;
-  const claimDropId = await resolveClaimDropIdForCode(normalizedCode, claim);
-  const claimDropRuntime = getDropRuntime(claimDropId);
-  assertOpenableDrop(claimDropRuntime, 'This drop does not use secret claim codes.');
-  await ensureOnchainCoreConfig(claimDropRuntime);
-  const boxIdNum = Number(claim?.boxId);
-  const boxIdStr = claim?.boxId != null ? String(claim.boxId) : '';
-  if (!Number.isFinite(boxIdNum) || boxIdNum <= 0 || boxIdNum > 0xffff_ffff || !boxIdStr) {
-    throw new HttpsError('failed-precondition', 'Claim code is missing a valid box id');
-  }
-
-  const dudeIdsRaw = claim?.dudeIds ?? claim?.dude_ids ?? claim?.dudes ?? [];
-  const dudeIds: number[] = Array.isArray(dudeIdsRaw) ? dudeIdsRaw.map((n: any) => Number(n)) : [];
-  if (dudeIds.length !== claimDropRuntime.itemsPerBox) {
-    throw new HttpsError('failed-precondition', `Claim has invalid dudeIds (expected ${claimDropRuntime.itemsPerBox})`);
-  }
-  dudeIds.forEach((id) => {
-    if (!Number.isFinite(id) || id < 1 || id > claimDropRuntime.maxDudeId) {
-      throw new HttpsError('failed-precondition', `Invalid dude id: ${id}`);
-    }
-  });
-  if (new Set(dudeIds).size !== dudeIds.length) {
-    throw new HttpsError('failed-precondition', 'Duplicate dude ids in claim');
-  }
-
-  if (clusterSharesCollectionMint(claimDropRuntime)) {
-    throw new HttpsError('failed-precondition', 'IRL claim code cannot be disambiguated for a shared collection mint', {
-      dropId: claimDropRuntime.dropId,
-      expectedCollectionMint: claimDropRuntime.collectionMintStr || null,
-    });
-  }
-
-  // Load wallet assets once and use it for both:
-  // - detecting an already-claimed code (dude receipts already present)
-  // - finding the matching box certificate in the wallet
-  const ownedAssets = await fetchAssetsOwned(ownerWallet, claimDropRuntime);
-  // Filter to certificates that belong to the requested drop before matching ids.
-  // Shared collections can legitimately reuse box/dude number ranges across drops.
-  const ownedRequestedDropCertificates = ownedAssets.filter(
-    (asset: any) => getAssetKind(asset) === 'certificate' && assetMatchesRequestedDrop(asset, claimDropRuntime),
-  );
-
-  // If any of the expected dude receipts are already in the wallet, the claim is already done.
-  // (The claim tx is atomic; once any of these exist, the box certificate must already be burned.)
-  const dudeSet = new Set(dudeIds.map((n) => Number(n)));
-  const mintedDudeReceipts = new Set<number>();
-  for (const a of ownedRequestedDropCertificates) {
-    const id = getDudeIdFromAsset(a);
-    if (id != null && dudeSet.has(Number(id))) mintedDudeReceipts.add(Number(id));
-  }
-  if (mintedDudeReceipts.size > 0) {
-    throw new HttpsError('failed-precondition', 'This IRL claim code has already been used');
-  }
-
-  // Locate the matching box certificate (receipt) in the requesting wallet.
-  const certificate = ownedRequestedDropCertificates.find((asset: any) => getBoxIdFromAsset(asset) === boxIdStr) || null;
-  if (!certificate) {
-    throw new HttpsError('failed-precondition', 'Matching box certificate not found in wallet');
-  }
-  if (looksBurntOrClosedInHelius(certificate)) {
-    throw new HttpsError('failed-precondition', 'This IRL claim code has already been used');
-  }
-  if (certificate?.ownership?.owner !== ownerWallet) {
-    throw new HttpsError('failed-precondition', 'Matching box certificate not found in wallet');
-  }
-  const kind = getAssetKind(certificate);
-  if (kind !== 'certificate') {
-    throw new HttpsError('failed-precondition', 'Provided asset is not a certificate');
-  }
-  const certificateBoxId = getBoxIdFromAsset(certificate);
-  if (!certificateBoxId) {
-    throw new HttpsError('failed-precondition', 'Certificate missing box reference');
-  }
-  if (String(certificateBoxId) !== boxIdStr) {
-    throw new HttpsError('failed-precondition', 'Certificate does not match claim box');
-  }
-  if (!assetMatchesRequestedDrop(certificate, claimDropRuntime)) {
-    throw new HttpsError('failed-precondition', 'Certificate does not belong to the requested drop');
-  }
-  const certificateId = String(certificate.id || '');
-
-  const conn = connection(claimDropRuntime);
-
-  // Load on-chain config so we can build correct burn + mint instructions.
-  const cfg = await fetchDecodedBoxMinterConfigAccount({
-    dropRuntime: claimDropRuntime,
-    conn,
-    context: 'getAccountInfo:boxMinterConfig:claimIrl',
-  });
-  const cfgAdmin = cfg.admin;
-  const cfgCoreCollection = cfg.coreCollection;
-  const signer = cosigner();
-  if (!signer.publicKey.equals(cfgAdmin)) {
-    throw new HttpsError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin', {
-      expectedAdmin: cfgAdmin.toBase58(),
-      cosigner: signer.publicKey.toBase58(),
-    });
-  }
-  assertConfiguredPublicKey(claimDropRuntime.collectionMint, 'COLLECTION_MINT');
-  if (!claimDropRuntime.collectionMint.equals(cfgCoreCollection)) {
-    throw new HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
-      configured: claimDropRuntime.collectionMint.toBase58(),
-      onchain: cfgCoreCollection.toBase58(),
-      dropId: claimDropId,
-    });
-  }
-
-  if (!claimDropRuntime.receiptsMerkleTreeStr) {
-    throw new HttpsError(
-      'failed-precondition',
-      'Receipt cNFT tree is not configured (set `receiptsMerkleTree` in functions/src/config/deployment.ts)',
-      { dropId: claimDropId },
-    );
-  }
-
-  const instructions: TransactionInstruction[] = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })];
-
-  // All receipts/certificates in this repo are Bubblegum v2 compressed cNFTs.
-  // (We intentionally do NOT support uncompressed receipt assets anymore.)
-  const proof = await fetchAssetProof(certificateId, claimDropRuntime);
-  const proofContext = parseCompressedReceiptProof({
-    asset: certificate,
-    proof,
-    dropRuntime: claimDropRuntime,
-    expectedOwner: ownerWallet,
-    proofMissingMessage: 'Unable to fetch certificate proof for burn',
-    treeMismatchMessage: 'Certificate does not belong to the configured receipts tree',
-    treeMismatchActualKey: 'certificateTree',
-    treeMismatchExpectedKey: 'receiptsTree',
-    leafIdMessage: 'Unable to parse certificate leaf id',
-    leafIndexMessage: 'Certificate leaf index out of range',
-  });
-
-  // 1) Burn the box certificate cNFT (user-signed).
-  instructions.push(
-    bubblegumBurnV2Ix({
-      payer: ownerPk,
-      authority: ownerPk,
-      leafOwner: proofContext.leafOwner,
-      leafDelegate: proofContext.leafDelegate,
-      merkleTree: proofContext.merkleTree,
-      coreCollection: cfgCoreCollection,
-      root: proofContext.root,
-      dataHash: proofContext.dataHash,
-      creatorHash: proofContext.creatorHash,
-      assetDataHash: proofContext.assetDataHash,
-      flags: proofContext.flags,
-      nonce: proofContext.nonce,
-      index: proofContext.index,
-      proof: proofContext.proofAccounts,
-    }),
-  );
-
-  // 2) Mint the configured figure receipt cNFTs (server-cosigned via box_minter CPI to Bubblegum mintV2).
-  instructions.push(
-    buildMintReceiptsIx({
-      dropRuntime: claimDropRuntime,
-      cosignerPk: signer.publicKey,
-      recipientPk: ownerPk,
-      coreCollection: cfgCoreCollection,
-      boxIds: [],
-      dudeIds,
-    }),
-  );
-
-  // Prefer building without LUT first (wallet UX / preview tends to behave better),
-  // but fall back to the delivery ALT if needed to fit under Solana's packet limit.
-  const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:claimIrl');
-  const buildClaimTx = (luts: AddressLookupTableAccount[]) => buildTx(instructions, ownerPk, blockhash, [signer], luts);
-  const { raw } = await buildTxWithOptionalDeliveryLookupTable({
-    conn,
-    dropRuntime: claimDropRuntime,
-    build: buildClaimTx,
-    encodeTooLargeMessage:
-      'Claim transaction is too large to encode. Re-run deploy-all to update functions/src/config/deployment.ts (deliveryLookupTable), then retry.',
-    encodeTooLargeDetails: { receiptsMerkleTree: claimDropRuntime.receiptsMerkleTreeStr, dropId: claimDropId },
-    packetTooLargeMessage: (rawBytes, maxRawBytes) => `Claim transaction too large (${rawBytes} bytes > ${maxRawBytes}).`,
-    packetTooLargeDetails: {
-      deliveryLookupTable: claimDropRuntime.deliveryLookupTableStr,
-      receiptsMerkleTree: claimDropRuntime.receiptsMerkleTreeStr,
-      dropId: claimDropId,
-    },
-  });
-
-  return {
-    encodedTx: Buffer.from(raw).toString('base64'),
-    dropId: claimDropId,
-    certificates: dudeIds,
-    certificateId,
-    message: 'Sign and send to burn your box receipt and mint your dude receipts.',
-  };
-  },
-  { secrets: [COSIGNER_SECRET] },
 );

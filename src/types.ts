@@ -25,6 +25,8 @@ export type {
   IssueReceiptsResult,
   PackStatusBreakdown,
   PackStatusBreakdownItem,
+  PrepareIrlClaimRequest,
+  PrepareIrlClaimResponse,
   PreparedTxResponse,
   Profile,
   ProfileAddress,

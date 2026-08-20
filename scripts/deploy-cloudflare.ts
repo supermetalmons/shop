@@ -807,6 +807,10 @@ export async function smokeProfileStateApi(
   });
   for (const [pathname, body] of [
     ['/auth/solana', authBody],
+    ['/claims/irl/prepare', JSON.stringify({
+      owner: '11111111111111111111111111111111',
+      code: '0000000000',
+    })],
     ['/profile/reconcile', '{}'],
     ['/profile/state', '{}'],
   ] as const) {

@@ -366,6 +366,43 @@ test('checkout route enforces restricted CORS, bearer authentication, methods, a
     entry.profileAuthOutcome === 'rejected'));
 });
 
+test('IRL claim route enforces restricted CORS, bearer authentication, methods, and stable logging', async () => {
+  const preflight = await handleRequest(new Request('https://api.mons.shop/claims/irl/prepare', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+
+  const logs: Record<string, unknown>[] = [];
+  const unauthenticated = await handleRequest(request('/claims/irl/prepare', {
+    owner: OWNER,
+    code: '0000000000',
+  }, { Origin: 'https://mons.shop' }), env(), {
+    ...quietDependencies(fetch),
+    log: (entry) => logs.push(entry),
+  });
+  assert.equal(unauthenticated.status, 401);
+  assert.equal((await unauthenticated.json() as { error: { code: string } }).error.code, 'unauthenticated');
+  assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(logs[0]?.route, '/claims/irl/prepare');
+  assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
+  assert.equal(JSON.stringify(logs).includes('0000000000'), false);
+
+  const denied = await handleRequest(request('/claims/irl/prepare', {
+    owner: OWNER,
+    code: '0000000000',
+  }, { Origin: 'https://evil.example' }), env(), quietDependencies(fetch));
+  assert.equal(denied.status, 403);
+
+  const wrongMethod = await handleRequest(new Request('https://api.mons.shop/claims/irl/prepare', {
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
+});
+
 test('profile write routes use restricted CORS, bearer authentication, and stable route logs', async () => {
   const preflight = await handleRequest(new Request('https://api.mons.shop/profile/addresses', {
     method: 'OPTIONS',

@@ -240,6 +240,45 @@ test('Stripe checkout uses the authenticated Cloudflare route with an exact resp
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|createStripeCheckoutSession['"]/);
 });
 
+test('IRL claim preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
+  const response = {
+    encodedTx: 'AQ==',
+    dropId: 'card_nft_2',
+    certificates: [1, 2, 3],
+    certificateId: OWNER,
+    message: 'Sign and send to burn your box receipt and mint your dude receipts.',
+  };
+  const payload = await profileApiTestHooks.requestProfileApi(
+    '/claims/irl/prepare',
+    { owner: OWNER, code: '1234567890' },
+    {
+      fetch: async (input, init) => {
+        assert.equal(String(input), 'https://api.mons.shop/claims/irl/prepare');
+        assert.equal(init?.method, 'POST');
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        assert.deepEqual(JSON.parse(String(init?.body)), { owner: OWNER, code: '1234567890' });
+        return Response.json(response);
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1000,
+    },
+  );
+  assert.deepEqual(profileApiTestHooks.parseIrlClaimPrepareResponse(payload), response);
+  assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, certificates: [1, 2] }), null);
+  assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, certificateId: 'invalid' }), null);
+  assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, dropId: 'unknown_drop' }), null);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/claims/irl/prepare'), 65_000);
+
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function requestClaimTx');
+  const end = source.indexOf('\nexport ', start + 1);
+  const implementation = source.slice(start, end === -1 ? source.length : end);
+  assert.match(implementation, /\/claims\/irl\/prepare/);
+  assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareIrlClaimTx/);
+});
+
 test('wallet lifecycle clients use the authenticated Cloudflare routes without callable fallbacks', async () => {
   for (const [pathname, body] of [
     ['/auth/solana', { wallet: OWNER, message: 'signed-message', signature: Array(64).fill(1) }],
@@ -599,6 +638,19 @@ test('wallet lifecycle callables are absent from Firebase exports and deployment
   assert.equal(
     packageJson.scripts['decommission:firebase-profile-lifecycle'],
     'firebase functions:delete solanaAuth reconcileProfileState --project mons-shop --region us-central1 --force',
+  );
+});
+
+test('IRL claim preparation callable is absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts: Record<string, string>;
+  };
+  assert.doesNotMatch(functionsSource, /export const prepareIrlClaimTx\b/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:prepareIrlClaimTx(?:,|$)/);
+  assert.equal(
+    packageJson.scripts['decommission:firebase-prepare-irl-claim'],
+    'node --import tsx scripts/decommission-firebase-prepare-irl-claim.ts',
   );
 });
 

@@ -449,6 +449,19 @@ export type PreparedTxResponse = {
   certificateId?: string;
 };
 
+export type PrepareIrlClaimRequest = {
+  owner: string;
+  code: string;
+};
+
+export type PrepareIrlClaimResponse = {
+  encodedTx: string;
+  dropId: string;
+  certificates: number[];
+  certificateId: string;
+  message: string;
+};
+
 export type AdminIrlRedeemPreparedTxResponse = PreparedTxResponse & {
   requestId: string;
   dropId: string;

@@ -106,6 +106,10 @@ import {
   handleProfileLifecycleRequest,
   type ProfileLifecyclePath,
 } from './profileLifecycle.js';
+import {
+  IRL_CLAIM_PREPARE_PATH,
+  handleIrlClaimPrepare,
+} from './irlClaim.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -164,6 +168,7 @@ const KNOWN_LOG_ROUTES = new Set([
   FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
   '/auth/solana',
   '/profile/reconcile',
+  IRL_CLAIM_PREPARE_PATH,
 ]);
 
 export type ProviderFetch = RpcProviderFetch;
@@ -1294,6 +1299,7 @@ export async function handleRequest(
   let rpcMethod: string | undefined;
   let checkoutDropId: string | undefined;
   let checkoutMode: string | undefined;
+  let irlClaimDropId: string | undefined;
   let webhookEventId: string | undefined;
   let webhookEventType: string | undefined;
   let webhookOutcome: string | undefined;
@@ -1304,7 +1310,13 @@ export async function handleRequest(
   const profilePath = PROFILE_READ_PATHS.has(pathname) ? pathname as ProfileReadPath : null;
   const profileWritePath = PROFILE_WRITE_PATHS.has(pathname) ? pathname as ProfileWritePath : null;
   const profileLifecyclePath = PROFILE_LIFECYCLE_PATHS.has(pathname) ? pathname as ProfileLifecyclePath : null;
-  if (request.method === 'OPTIONS' && (profilePath || profileWritePath || profileLifecyclePath || pathname === STRIPE_CHECKOUT_SESSION_PATH)) {
+  if (request.method === 'OPTIONS' && (
+    profilePath ||
+    profileWritePath ||
+    profileLifecyclePath ||
+    pathname === STRIPE_CHECKOUT_SESSION_PATH ||
+    pathname === IRL_CLAIM_PREPARE_PATH
+  )) {
     response = handleProfileCorsPreflight(request);
   } else if (request.method === 'OPTIONS' && rpcCluster) {
     response = handleRpcPreflight(request);
@@ -1351,6 +1363,17 @@ export async function handleRequest(
     webhookEventType = result.eventType;
     webhookOutcome = result.outcome;
     response = result.response;
+  } else if (pathname === IRL_CLAIM_PREPARE_PATH) {
+    if (!isProfileRequestOriginAllowed(request)) {
+      response = applyProfileCors(request, new Response(null));
+    } else {
+      const result = await handleIrlClaimPrepare(request, env);
+      metrics.upstreamCalls += result.metrics.upstreamCalls;
+      metrics.providerDurationMs += result.metrics.providerDurationMs;
+      profileAuthOutcome = result.authOutcome;
+      irlClaimDropId = result.dropId;
+      response = applyProfileCors(request, result.response);
+    }
   } else if (profileLifecyclePath) {
     if (!isProfileRequestOriginAllowed(request)) {
       response = applyProfileCors(request, new Response(null));
@@ -1434,6 +1457,7 @@ export async function handleRequest(
     ...(rpcMethod ? { rpcMethod } : {}),
     ...(checkoutDropId ? { checkoutDropId } : {}),
     ...(checkoutMode ? { checkoutMode } : {}),
+    ...(irlClaimDropId ? { irlClaimDropId } : {}),
     ...(webhookEventId ? { webhookEventId } : {}),
     ...(webhookEventType ? { webhookEventType } : {}),
     ...(webhookOutcome ? { webhookOutcome } : {}),

@@ -702,11 +702,16 @@ test('frontend production capability check requires the profile lifecycle API co
   });
   assert.deepEqual(requests.map((entry) => entry.input), [
     'https://api.mons.shop/auth/solana',
+    'https://api.mons.shop/claims/irl/prepare',
     'https://api.mons.shop/profile/reconcile',
     'https://api.mons.shop/profile/state',
   ]);
   assert.ok(requests.every((entry) => entry.init?.method === 'POST'));
-  assert.equal(requests[1]?.init?.body, '{}');
+  assert.deepEqual(JSON.parse(String(requests[1]?.init?.body)), {
+    owner: '11111111111111111111111111111111',
+    code: '0000000000',
+  });
+  assert.equal(requests[2]?.init?.body, '{}');
   await assert.rejects(
     () => frontendDeployTestHooks.smokeProfileStateApi({
       fetch: async () => Response.json({ ok: false, error: 'not-found' }, { status: 404 }),
@@ -1699,6 +1704,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
       }
       if (method === 'POST' && [
         '/auth/solana',
+        '/claims/irl/prepare',
         '/checkout/session',
         '/profile/reconcile',
         '/profile/state',
