@@ -1737,6 +1737,7 @@ function App({
   const [walletIdleReady, setWalletIdleReady] = useState(false);
   const [pendingShipmentsSignIn, setPendingShipmentsSignIn] = useState(false);
   const [pendingHeaderWalletSignIn, setPendingHeaderWalletSignIn] = useState(false);
+  const headerWalletSignInGenerationRef = useRef(0);
   const [pendingClaimSignIn, setPendingClaimSignIn] = useState(false);
   const [headerWalletButtonRevealed, setHeaderWalletButtonRevealed] = useState(false);
   const profileShipmentStripeSessionIds = useMemo(
@@ -2648,16 +2649,23 @@ function App({
   useEffect(() => {
     if (!pendingHeaderWalletSignIn || !connectedWallet || !publicKey) return;
     if (isSignedInWallet) {
+      headerWalletSignInGenerationRef.current += 1;
       setPendingHeaderWalletSignIn(false);
       return;
     }
     if (!authReady || authLoading) return;
-    setPendingHeaderWalletSignIn(false);
-    void ensureSignedIn();
+    const generation = headerWalletSignInGenerationRef.current + 1;
+    headerWalletSignInGenerationRef.current = generation;
+    void ensureSignedIn().finally(() => {
+      if (headerWalletSignInGenerationRef.current === generation) {
+        setPendingHeaderWalletSignIn(false);
+      }
+    });
   }, [authLoading, authReady, connectedWallet, isSignedInWallet, pendingHeaderWalletSignIn, publicKey]);
 
   useEffect(() => {
     if (!pendingHeaderWalletSignIn || walletModalVisible || connectedWallet || wallet.connecting) return;
+    headerWalletSignInGenerationRef.current += 1;
     setPendingHeaderWalletSignIn(false);
   }, [connectedWallet, pendingHeaderWalletSignIn, wallet.connecting, walletModalVisible]);
 
@@ -2710,7 +2718,7 @@ function App({
       return;
     }
     if (pendingHeaderWalletSignIn) {
-      setHeaderWalletButtonRevealed(true);
+      setHeaderWalletButtonRevealed(false);
       return;
     }
     if (connectedWallet) {
@@ -6371,11 +6379,21 @@ function App({
   const handleHeaderWalletSignIn = async () => {
     if (authLoading || walletBusy || pendingHeaderWalletSignIn) return;
     if (!connectedWallet || !publicKey) {
+      headerWalletSignInGenerationRef.current += 1;
       setPendingHeaderWalletSignIn(true);
       setVisible(true);
       return;
     }
-    await ensureSignedIn();
+    const generation = headerWalletSignInGenerationRef.current + 1;
+    headerWalletSignInGenerationRef.current = generation;
+    setPendingHeaderWalletSignIn(true);
+    try {
+      await ensureSignedIn();
+    } finally {
+      if (headerWalletSignInGenerationRef.current === generation) {
+        setPendingHeaderWalletSignIn(false);
+      }
+    }
   };
 
   const handleClaim = async ({ code, recipient }: { code: string; recipient?: string }) => {
@@ -7378,7 +7396,11 @@ function App({
         ? profileError
         : viewedProfileErrorMessage || (anonymousStripeHistoryVisible ? anonymousStripeHistoryErrorMessage : '');
   const showHeaderWalletButton =
-    authReady && !authLoading && !hasAuthenticatedAccount && headerWalletButtonRevealed;
+    authReady &&
+    !authLoading &&
+    !pendingHeaderWalletSignIn &&
+    !hasAuthenticatedAccount &&
+    headerWalletButtonRevealed;
   const dropPageFrameViewport = Boolean(routeDrop || upcomingDropRoute || normalizedCurrentPath === '/');
   const dropsPanelFrameActive = !routeDrop && !upcomingDropRoute && normalizedCurrentPath === '/';
   const primaryFrameClassName = [
