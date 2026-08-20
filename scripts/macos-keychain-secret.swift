@@ -14,7 +14,6 @@ let base: [String: Any] = [
     kSecClass as String: kSecClassGenericPassword,
     kSecAttrService as String: service,
     kSecAttrAccount as String: account,
-    kSecUseDataProtectionKeychain as String: true,
 ]
 
 switch command {
