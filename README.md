@@ -135,9 +135,8 @@ Both queues use 24-hour retention to match Resend's idempotency window. Do not
 automatically replay the DLQ after that window, and do not restore direct
 Firebase delivery while the primary queue contains messages.
 
-Wrangler can upload a preview version only after the Worker exists. The
-`mons-shop-api` Worker was bootstrapped once without routes during this migration;
-subsequent releases can use the preview command directly.
+Wrangler can upload a preview version only after the Worker exists.
+`mons-shop-api` is already provisioned, so releases can use the preview command directly.
 
 The deployment helpers keep short-lived, exact-version verification records
 under the ignored `.cache` directory. Frontend and API candidate records are bound
@@ -170,12 +169,9 @@ rollback. An evidence-write failure also leaves the verified candidate live;
 resolve the local write problem and rerun the same production command with the
 same version ID.
 
-Tracked release and rollback IDs live in `cloud/release-manifest.json`. The
-notification cutover records its combined API version as both current and
-approved rollback, so the rollback command deliberately refuses to restore the
-pre-consumer API and requires a fix forward. The next successful API release
-keeps that combined version as the approved rollback and restores a distinct,
-queue-capable recovery target.
+Tracked release and rollback IDs live in `cloud/release-manifest.json`. API
+rollback accepts only the approved version and refuses to run when it is the
+current production version.
 
 To roll back an application version, provide `CLOUDFLARE_API_TOKEN` in the shell,
 inspect `node_modules/.bin/wrangler deployments list --config wrangler.jsonc`,
