@@ -97,8 +97,8 @@ preserved across version uploads. The Cloudflare token, Helius secret, and
 notification secrets are stripped from all other child-process environment
 data and are never printed.
 
-The fulfillment, checkout, and Stripe webhook routes also use `ADDRESS_DECRYPTION_SECRET`, `COSIGNER_SECRET`, `SHIPSTATION_API_KEY`,
-`SHIPSTATION_SHIP_FROM`, the four Stripe API-key secrets, `STRIPE_WEBHOOK_SECRET_DEVNET`, and `STRIPE_WEBHOOK_SECRET`. Synchronize their existing Google Secret Manager values
+The fulfillment and checkout routes also use `ADDRESS_DECRYPTION_SECRET`, `COSIGNER_SECRET`, `SHIPSTATION_API_KEY`,
+`SHIPSTATION_SHIP_FROM`, and the four Stripe API-key secrets. Synchronize their existing Google Secret Manager values
 into an undeployed Worker version with `npm run sync:api:firebase-secrets`; the
 command uses a temporary mode-`0600` bulk file, verifies production is unchanged,
 and removes the file immediately.
@@ -110,8 +110,6 @@ frontend releases are both verified, run
 `npm run decommission:firebase-shipstation-label-purchase`. The checkout cutover separately uses
 `npm run decommission:firebase-create-stripe-checkout-session` immediately after its frontend verification, then deploy the complete
 Functions set with `npm run deploy:functions`.
-
-The Stripe webhook source is removed from Functions, but its deployed rollback copy must remain available until both Stripe endpoint URLs have been verified against the Worker. Do not run a complete Functions deployment during that window. After verification, run `npm run decommission:firebase-stripe-webhook`; later complete Functions deployments are then safe.
 
 ### Notification delivery
 
@@ -223,10 +221,9 @@ suite passes.
   - Optional fallback: `firebase functions:secrets:set STRIPE_SECRET_KEY_LIVE`
   - If both are configured, Checkout tries the secret live key first and keeps the restricted live key only as a fallback. Use a Dashboard-created restricted key with Checkout Session permissions; Stripe CLI restricted keys can expire.
 - `STRIPE_WEBHOOK_SECRET_DEVNET` (`mons-shop-api` secret for the Stripe test-mode endpoint serving devnet drops)
-  - Synchronize to Cloudflare with `npm run sync:api:firebase-secrets` before releasing the webhook route.
+  - Set or rotate with `wrangler versions secret put STRIPE_WEBHOOK_SECRET_DEVNET --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env`, then promote the resulting combined version through the guarded API release flow.
 - `STRIPE_WEBHOOK_SECRET` (`mons-shop-api` secret for the Stripe live endpoint serving mainnet drops)
-  - Synchronize to Cloudflare with `npm run sync:api:firebase-secrets` before releasing the webhook route.
-  - After the Worker is deployed, manually change the existing Stripe test endpoint and then the live endpoint to `https://api.mons.shop/webhooks/stripe`, preserving their event lists and API versions. Keep the deployed Firebase function available for URL rollback until both endpoints are verified, then run `npm run decommission:firebase-stripe-webhook`.
+  - Set or rotate with `wrangler versions secret put STRIPE_WEBHOOK_SECRET --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env`, then promote the resulting combined version through the guarded API release flow.
 - `RESEND_API_KEY` (`mons-shop-api` outbound transactional-email secret; use a Resend Sending Access key restricted to `support.mons.shop`)
   - Later API versions inherit it; rotate it as an API Worker secret and promote only the exact reviewed combined version.
 - `NOTIFICATION_ENQUEUE_SECRET` (shared HMAC secret for the three Firebase notification producers and the internal `mons-shop-api` queue endpoint)

@@ -70,7 +70,6 @@
     "decommission:firebase-shipstation-label-purchase": "firebase functions:delete purchaseFulfillmentShipStationLabel --project mons-shop --force",
     "decommission:firebase-buyer-shipped-notification": "firebase functions:delete notifyBuyerOnDeliveryShipped --project mons-shop --region us-central1 --force",
     "decommission:firebase-create-stripe-checkout-session": "firebase functions:delete createStripeCheckoutSession --project mons-shop --region us-central1 --force",
-    "decommission:firebase-stripe-webhook": "firebase functions:delete stripeWebhook --project mons-shop --region us-central1 --force",
     "deploy:firebaseNewDrops": "firebase deploy --project mons-shop --only firestore:indexes,functions:solanaAuth,functions:reconcileProfileState,functions:revealDudes,functions:prepareAdminIrlRedeemTx,functions:prepareReceiptTransferTx,functions:finalizeAdminIrlRedeem,functions:prepareDeliveryTx,functions:issueReceipts,functions:recoverMyDeliveryOrders,functions:prepareIrlClaimTx,functions:claimStripeReceipt,functions:processStripeCheckoutFulfillment,functions:notifyShippersOnDeliveryReadyToShip,functions:notifyStripeCheckoutManualReview",
     "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",
     "extend:shared-devnet": "node --experimental-strip-types scripts/extend-shared-devnet-program.ts",

@@ -13,8 +13,6 @@ const SECRET_NAMES = [
   'STRIPE_RESTRICTED_KEY',
   'STRIPE_SECRET_KEY_LIVE',
   'STRIPE_RESTRICTED_KEY_LIVE',
-  'STRIPE_WEBHOOK_SECRET_DEVNET',
-  'STRIPE_WEBHOOK_SECRET',
 ] as const;
 const CONFIG_ARGS = ['--config', 'cloud/workers/api/wrangler.jsonc', '--env-file', 'cloud/workers/api/release.env'];
 const WRANGLER = resolve('node_modules/.bin/wrangler');
@@ -67,7 +65,7 @@ function main(): void {
     chmodSync(path, 0o600);
     run(WRANGLER, [
       'versions', 'secret', 'bulk', path,
-      '--message', 'Stage Firebase migration secrets',
+      '--message', 'Stage shared API secrets',
       ...CONFIG_ARGS,
     ]);
   } finally {

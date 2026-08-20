@@ -1154,7 +1154,7 @@ async function fulfillStripeCheckoutSession<
     const { blockhash } = await deps.withTimeout(
       conn.getLatestBlockhash('confirmed'),
       deps.rpcTimeoutMs,
-      'getLatestBlockhash:stripeWebhook',
+      'getLatestBlockhash:stripeCheckoutFulfillment',
     );
     const tx = deps.buildTx([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ix], signer.publicKey, blockhash, [signer]);
     try {
