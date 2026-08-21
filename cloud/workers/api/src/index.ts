@@ -114,6 +114,10 @@ import {
   RECEIPT_TRANSFER_PREPARE_PATH,
   handleReceiptTransferPrepare,
 } from './receiptTransfer.js';
+import {
+  DELIVERY_PREPARE_PATH,
+  handleDeliveryPrepare,
+} from './deliveryPrepare.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -174,6 +178,7 @@ const KNOWN_LOG_ROUTES = new Set([
   '/profile/reconcile',
   IRL_CLAIM_PREPARE_PATH,
   RECEIPT_TRANSFER_PREPARE_PATH,
+  DELIVERY_PREPARE_PATH,
 ]);
 
 export type ProviderFetch = RpcProviderFetch;
@@ -1306,6 +1311,7 @@ export async function handleRequest(
   let checkoutMode: string | undefined;
   let irlClaimDropId: string | undefined;
   let receiptTransferDropId: string | undefined;
+  let deliveryPrepareDropId: string | undefined;
   let webhookEventId: string | undefined;
   let webhookEventType: string | undefined;
   let webhookOutcome: string | undefined;
@@ -1322,7 +1328,8 @@ export async function handleRequest(
     profileLifecyclePath ||
     pathname === STRIPE_CHECKOUT_SESSION_PATH ||
     pathname === IRL_CLAIM_PREPARE_PATH ||
-    pathname === RECEIPT_TRANSFER_PREPARE_PATH
+    pathname === RECEIPT_TRANSFER_PREPARE_PATH ||
+    pathname === DELIVERY_PREPARE_PATH
   )) {
     response = handleProfileCorsPreflight(request);
   } else if (request.method === 'OPTIONS' && rpcCluster) {
@@ -1390,6 +1397,17 @@ export async function handleRequest(
       metrics.providerDurationMs += result.metrics.providerDurationMs;
       profileAuthOutcome = result.authOutcome;
       receiptTransferDropId = result.dropId;
+      response = applyProfileCors(request, result.response);
+    }
+  } else if (pathname === DELIVERY_PREPARE_PATH) {
+    if (!isProfileRequestOriginAllowed(request)) {
+      response = applyProfileCors(request, new Response(null));
+    } else {
+      const result = await handleDeliveryPrepare(request, env);
+      metrics.upstreamCalls += result.metrics.upstreamCalls;
+      metrics.providerDurationMs += result.metrics.providerDurationMs;
+      profileAuthOutcome = result.authOutcome;
+      deliveryPrepareDropId = result.dropId;
       response = applyProfileCors(request, result.response);
     }
   } else if (profileLifecyclePath) {
@@ -1477,6 +1495,7 @@ export async function handleRequest(
     ...(checkoutMode ? { checkoutMode } : {}),
     ...(irlClaimDropId ? { irlClaimDropId } : {}),
     ...(receiptTransferDropId ? { receiptTransferDropId } : {}),
+    ...(deliveryPrepareDropId ? { deliveryPrepareDropId } : {}),
     ...(webhookEventId ? { webhookEventId } : {}),
     ...(webhookEventType ? { webhookEventType } : {}),
     ...(webhookOutcome ? { webhookOutcome } : {}),

@@ -318,7 +318,11 @@ export async function authenticatedFirestoreRequest(args: {
     if (args.surfaceWriteConflict && (response.status === 400 || response.status === 409)) {
       const payload = await readBoundedJson(response, MAX_FIRESTORE_RESPONSE_BYTES, args.signal);
       const error = isRecord(payload) && isRecord(payload.error) ? payload.error : {};
-      if (error.status === 'ABORTED' || error.status === 'FAILED_PRECONDITION') {
+      if (
+        error.status === 'ABORTED' ||
+        error.status === 'ALREADY_EXISTS' ||
+        error.status === 'FAILED_PRECONDITION'
+      ) {
         throw new FirestoreWriteConflict();
       }
       throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');

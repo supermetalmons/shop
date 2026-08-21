@@ -322,6 +322,45 @@ test('receipt transfer preparation uses the authenticated Cloudflare route with 
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareReceiptTransferTx['"]/);
 });
 
+test('delivery preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
+  const response = {
+    encodedTx: 'AQ==',
+    deliveryLamports: 200_000_000,
+    deliveryId: 17,
+  };
+  const body = {
+    owner: OWNER,
+    dropId: 'card_nft_2',
+    itemIds: [DESTINATION],
+    addressId: 'AbCdEfGhIjKlMnOpQrSt',
+  };
+  const payload = await profileApiTestHooks.requestProfileApi('/delivery/prepare', body, {
+    fetch: async (input, init) => {
+      assert.equal(String(input), 'https://api.mons.shop/delivery/prepare');
+      assert.equal(init?.method, 'POST');
+      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+      assert.deepEqual(JSON.parse(String(init?.body)), body);
+      return Response.json(response);
+    },
+    getToken: async () => 'token',
+    origin: () => 'https://api.mons.shop',
+    timeoutMs: 1000,
+  });
+  assert.deepEqual(profileApiTestHooks.parseDeliveryPrepareResponse(payload), response);
+  assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, encodedTx: '' }), null);
+  assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, deliveryLamports: -1 }), null);
+  assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, deliveryId: 0 }), null);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/delivery/prepare'), 65_000);
+
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function requestDeliveryTx');
+  const end = source.indexOf('\nexport ', start + 1);
+  const implementation = source.slice(start, end === -1 ? source.length : end);
+  assert.match(implementation, /\/delivery\/prepare/);
+  assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareDeliveryTx['"]/);
+});
+
 test('wallet lifecycle clients use the authenticated Cloudflare routes without callable fallbacks', async () => {
   for (const [pathname, body] of [
     ['/auth/solana', { wallet: OWNER, message: 'signed-message', signature: Array(64).fill(1) }],
@@ -707,6 +746,19 @@ test('receipt transfer preparation callable is absent from Firebase exports and 
   assert.equal(
     packageJson.scripts['decommission:firebase-prepare-receipt-transfer'],
     'node --import tsx scripts/decommission-firebase-prepare-receipt-transfer.ts',
+  );
+});
+
+test('delivery preparation callable is absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts: Record<string, string>;
+  };
+  assert.doesNotMatch(functionsSource, /export const prepareDeliveryTx\b/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:prepareDeliveryTx(?:,|$)/);
+  assert.equal(
+    packageJson.scripts['decommission:firebase-prepare-delivery'],
+    'node --import tsx scripts/decommission-firebase-prepare-delivery.ts',
   );
 });
 

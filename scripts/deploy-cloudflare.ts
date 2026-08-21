@@ -60,6 +60,10 @@ type FrontendSmokeDependencies = {
   sleep?: (milliseconds: number) => Promise<void>;
 };
 
+type ProfileApiSmokeDependencies = Pick<FrontendSmokeDependencies, 'fetch'> & {
+  deliveryPrepare?: () => Promise<void> | void;
+};
+
 type FrontendProductionSequenceInput = {
   candidateHtmlSha256: string;
   expectedCurrentVersionId: string;
@@ -798,7 +802,7 @@ export async function smokeFrontendOrigin(
 }
 
 export async function smokeProfileStateApi(
-  dependencies: Pick<FrontendSmokeDependencies, 'fetch'> = {},
+  dependencies: ProfileApiSmokeDependencies = {},
 ): Promise<void> {
   const authBody = JSON.stringify({
     wallet: '11111111111111111111111111111111',
@@ -816,6 +820,12 @@ export async function smokeProfileStateApi(
       dropId: 'card_nft_2',
       receiptAssetId: '11111111111111111111111111111112',
       destination: '11111111111111111111111111111113',
+    })],
+    ['/delivery/prepare', JSON.stringify({
+      owner: '11111111111111111111111111111111',
+      dropId: 'card_nft_2',
+      itemIds: ['11111111111111111111111111111112'],
+      addressId: 'AbCdEfGhIjKlMnOpQrSt',
     })],
     ['/profile/reconcile', '{}'],
     ['/profile/state', '{}'],
@@ -859,6 +869,23 @@ export async function smokeProfileStateApi(
       fail(`Profile API capability check returned an incompatible response for ${pathname}.`);
     }
   }
+  if (dependencies.deliveryPrepare) {
+    await dependencies.deliveryPrepare();
+    return;
+  }
+  const result = spawnSync(process.execPath, [
+    '--import',
+    'tsx',
+    resolve(repoRoot, 'scripts', 'decommission-firebase-prepare-delivery.ts'),
+    '--smoke-only',
+  ], {
+    cwd: repoRoot,
+    env: credentialFreeEnvironment(process.env),
+    shell: false,
+    stdio: 'inherit',
+  });
+  if (result.error) fail(`Delivery preparation smoke could not start: ${result.error.message}`);
+  if (result.status !== 0) fail(`Delivery preparation smoke failed with exit code ${result.status ?? 1}.`);
 }
 
 export function frontendProductionWranglerCommands(versionId: string): readonly {

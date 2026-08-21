@@ -1206,6 +1206,12 @@ async function smokeApi(
         receiptAssetId: defaultSmokeOwner,
         destination: '11111111111111111111111111111112',
       }],
+      ['/delivery/prepare', {
+        owner: defaultSmokeOwner,
+        dropId: expectedReleaseDropId,
+        itemIds: ['11111111111111111111111111111112'],
+        addressId: 'AbCdEfGhIjKlMnOpQrSt',
+      }],
       ['/checkout/session', { dropId: 'card_nft_binder_devnet' }],
       ['/profile/reconcile', {}],
       ['/profile/state', {}],

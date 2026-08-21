@@ -23,6 +23,8 @@ import {
   IssueReceiptsResult,
   PackStatusBreakdown,
   PackStatusDisplayLabels,
+  PrepareDeliveryRequest,
+  PrepareDeliveryResponse,
   PrepareIrlClaimRequest,
   PrepareIrlClaimResponse,
   PrepareReceiptTransferRequest,
@@ -68,6 +70,8 @@ import { fetchPackStatus } from './shopApi';
 import { monsApiOrigin } from './monsApiOrigin';
 
 export type {
+  PrepareDeliveryRequest,
+  PrepareDeliveryResponse,
   ReconcileProfileStateRequest,
   ReconcileProfileStateResponse,
   StripeCheckoutSessionRequest,
@@ -250,6 +254,7 @@ type AuthenticatedApiPath =
   | '/auth/solana'
   | '/checkout/session'
   | '/claims/irl/prepare'
+  | '/delivery/prepare'
   | '/receipts/transfer/prepare'
   | '/profile/reconcile'
   | '/profile/state'
@@ -278,6 +283,7 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 const STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS = 35_000;
 const PROFILE_RECONCILE_API_TIMEOUT_MS = 65_000;
 const IRL_CLAIM_PREPARE_API_TIMEOUT_MS = 65_000;
+const DELIVERY_PREPARE_API_TIMEOUT_MS = 65_000;
 const RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
@@ -288,6 +294,7 @@ const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
   if (pathname === '/claims/irl/prepare') return IRL_CLAIM_PREPARE_API_TIMEOUT_MS;
+  if (pathname === '/delivery/prepare') return DELIVERY_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/receipts/transfer/prepare') return RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/checkout/session') return STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
@@ -1269,12 +1276,37 @@ export async function requestDeliveryTx(
   owner: string,
   selection: DeliverySelection,
   dropId: string,
-): Promise<PreparedTxResponse> {
-  return callFunction<{ owner: string; dropId: string } & DeliverySelection, PreparedTxResponse>('prepareDeliveryTx', {
+): Promise<PrepareDeliveryResponse> {
+  const response = await callProfileApi<PrepareDeliveryRequest>('/delivery/prepare', {
     owner,
-    ...selection,
     dropId,
+    itemIds: selection.itemIds,
+    addressId: selection.addressId,
   });
+  const parsed = parseDeliveryPrepareResponse(response);
+  if (!parsed) throw new Error('Invalid delivery preparation response');
+  return parsed;
+}
+
+function parseDeliveryPrepareResponse(response: unknown): PrepareDeliveryResponse | null {
+  if (
+    !isRecord(response) ||
+    !hasExactKeys(response, ['encodedTx', 'deliveryLamports', 'deliveryId']) ||
+    typeof response.encodedTx !== 'string' ||
+    response.encodedTx.length === 0 ||
+    response.encodedTx.length > 16 * 1024 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(response.encodedTx) ||
+    !Number.isSafeInteger(response.deliveryLamports) ||
+    Number(response.deliveryLamports) < 0 ||
+    !Number.isSafeInteger(response.deliveryId) ||
+    Number(response.deliveryId) < 1 ||
+    Number(response.deliveryId) >= 2 ** 31
+  ) return null;
+  return {
+    encodedTx: response.encodedTx,
+    deliveryLamports: Number(response.deliveryLamports),
+    deliveryId: Number(response.deliveryId),
+  };
 }
 
 export async function prepareReceiptTransferTx(args: {
@@ -1543,6 +1575,7 @@ export const profileApiTestHooks = {
   parseVoidFulfillmentShipStationLabel,
   parseFulfillmentStatusUpdate,
   parseFulfillmentShipStationAddressCorrectionDetails,
+  parseDeliveryPrepareResponse,
   parseIrlClaimPrepareResponse,
   parseReceiptTransferPrepareResponse,
   parseProfileAddress,

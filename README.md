@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions are used for flows that require off-chain coordination (open box assignments, delivery order pricing, IRL claim locking). Public inventory, pack status, pending-open reads, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions remain for off-chain assignment, receipt issuance, recovery, and Firestore-triggered fulfillment work. Public inventory, pack status, pending-open reads, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
 
 ## Shared domain core
 
@@ -60,7 +60,7 @@ The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_API_KEY`,
 `RESEND_CONTACTS_API_KEY`, and `NOTIFICATION_ENQUEUE_SECRET` secrets, both the
 producer and consumer sides of `NOTIFICATION_EMAIL_QUEUE`, Smart Placement, and
 a version-first release flow. It serves
-`/auth/solana`, `/profile/reconcile`, `/claims/irl/prepare`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
+`/auth/solana`, `/profile/reconcile`, `/claims/irl/prepare`, `/delivery/prepare`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
 `/pending-open-boxes`, authenticated profile/admin/fulfillment reads,
 `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
 responses remain uncached. Pack-status reads use the public Firestore REST API
@@ -113,6 +113,7 @@ frontend releases are both verified, run
 Functions set with `npm run deploy:functions`.
 The wallet lifecycle cutover separately uses `npm run decommission:firebase-profile-lifecycle` only after both `/auth/solana` and `/profile/reconcile` are live, the frontend release is verified, and rollback metadata no longer approves pre-migration Worker versions.
 The IRL claim preparation cutover uses `npm run decommission:firebase-prepare-irl-claim` only after `/claims/irl/prepare` and the matching frontend are live. The guard requires `IRL_CLAIM_SMOKE_FIREBASE_TOKEN`, `IRL_CLAIM_SMOKE_OWNER`, and an unused `IRL_CLAIM_SMOKE_CODE`, prepares and validates a production transaction without submitting it, and requires the approved rollback pair to equal current production before deleting the Firebase callable.
+The delivery preparation cutover uses `npm run decommission:firebase-prepare-delivery` only after `/delivery/prepare` and the matching frontend are live. The frontend production preflight and decommission guard require `DELIVERY_PREPARE_SMOKE_FIREBASE_TOKEN`, `DELIVERY_PREPARE_SMOKE_OWNER`, `DELIVERY_PREPARE_SMOKE_DROP_ID`, `DELIVERY_PREPARE_SMOKE_ADDRESS_ID`, and `DELIVERY_PREPARE_SMOKE_ITEM_IDS` as a JSON array. They validate the production transaction and conditionally remove the exact prepared Firestore order with the writer credential stored by `npm run setup:api:firestore-keychain`; decommissioning additionally requires authenticated Wrangler access, the live API/frontend pair to match tracked production, and the approved rollback pair to equal current production before deleting the Firebase callable.
 
 ### Notification delivery
 

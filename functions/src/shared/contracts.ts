@@ -449,6 +449,19 @@ export type PreparedTxResponse = {
   certificateId?: string;
 };
 
+export type PrepareDeliveryRequest = DeliverySelection & {
+  owner: string;
+  dropId: string;
+};
+
+export const DELIVERY_PREPARE_ATTEMPT_HEADER = 'X-Mons-Delivery-Prepare-Attempt';
+
+export type PrepareDeliveryResponse = {
+  encodedTx: string;
+  deliveryLamports: number;
+  deliveryId: number;
+};
+
 export type PrepareIrlClaimRequest = {
   owner: string;
   code: string;
