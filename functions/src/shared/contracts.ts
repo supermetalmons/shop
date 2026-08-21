@@ -488,12 +488,20 @@ export type PrepareReceiptTransferResponse = {
   certificateId: string;
 };
 
+export const ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER = 'X-Mons-Admin-Irl-Redeem-Prepare-Attempt';
+
+export type AdminIrlRedeemPrepareRequest = {
+  owner: string;
+  dropId: string;
+  itemIds: string[];
+};
+
 export type AdminIrlRedeemPreparedTxResponse = PreparedTxResponse & {
   requestId: string;
   dropId: string;
   adminWallet: string;
   itemCount: number;
-  targetKind?: 'pack' | 'card_receipt';
+  targetKind: 'pack' | 'card_receipt';
 };
 
 export type AdminIrlRedeemFinalizeResult = {

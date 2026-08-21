@@ -280,6 +280,45 @@ test('IRL claim preparation uses the authenticated Cloudflare route with an exac
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareIrlClaimTx/);
 });
 
+test('Admin IRL preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
+  const response = {
+    encodedTx: 'AQ==',
+    requestId: 'AbCdEfGhIjKlMnOpQrSt',
+    dropId: 'card_nft_2',
+    adminWallet: OWNER,
+    itemCount: 1,
+    targetKind: 'pack',
+  } as const;
+  const payload = await profileApiTestHooks.requestProfileApi(
+    '/admin/irl-redeem/prepare',
+    { owner: OWNER, dropId: 'card_nft_2', itemIds: [DESTINATION] },
+    {
+      fetch: async (input, init) => {
+        assert.equal(String(input), 'https://api.mons.shop/admin/irl-redeem/prepare');
+        assert.equal(init?.method, 'POST');
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        return Response.json(response);
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1000,
+    },
+  );
+  assert.deepEqual(profileApiTestHooks.parseAdminIrlRedeemPrepareResponse(payload), response);
+  assert.equal(profileApiTestHooks.parseAdminIrlRedeemPrepareResponse({ ...response, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseAdminIrlRedeemPrepareResponse({ ...response, requestId: 'invalid' }), null);
+  assert.equal(profileApiTestHooks.parseAdminIrlRedeemPrepareResponse({ ...response, itemCount: 0 }), null);
+  assert.equal(profileApiTestHooks.parseAdminIrlRedeemPrepareResponse({ ...response, targetKind: 'card_receipt', itemCount: 2 }), null);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/admin/irl-redeem/prepare'), 65_000);
+
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function prepareAdminIrlRedeemTx');
+  const end = source.indexOf('\nexport ', start + 1);
+  const implementation = source.slice(start, end === -1 ? source.length : end);
+  assert.match(implementation, /\/admin\/irl-redeem\/prepare/);
+  assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareAdminIrlRedeemTx['"]/);
+});
+
 test('receipt transfer preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
   const response = {
     encodedTx: 'AQ==',
@@ -759,6 +798,19 @@ test('delivery preparation callable is absent from Firebase exports and deployme
   assert.equal(
     packageJson.scripts['decommission:firebase-prepare-delivery'],
     'node --import tsx scripts/decommission-firebase-prepare-delivery.ts',
+  );
+});
+
+test('Admin IRL preparation callable is absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts: Record<string, string>;
+  };
+  assert.doesNotMatch(functionsSource, /export const prepareAdminIrlRedeemTx\b/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:prepareAdminIrlRedeemTx(?:,|$)/);
+  assert.equal(
+    packageJson.scripts['decommission:firebase-prepare-admin-irl-redeem'],
+    'node --import tsx scripts/decommission-firebase-prepare-admin-irl-redeem.ts',
   );
 });
 

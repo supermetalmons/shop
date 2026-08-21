@@ -1212,6 +1212,11 @@ async function smokeApi(
         itemIds: ['11111111111111111111111111111112'],
         addressId: 'AbCdEfGhIjKlMnOpQrSt',
       }],
+      ['/admin/irl-redeem/prepare', {
+        owner: defaultSmokeOwner,
+        dropId: 'card_nft_2',
+        itemIds: ['11111111111111111111111111111112'],
+      }],
       ['/checkout/session', { dropId: 'card_nft_binder_devnet' }],
       ['/profile/reconcile', {}],
       ['/profile/state', {}],

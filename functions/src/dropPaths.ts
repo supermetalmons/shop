@@ -51,12 +51,8 @@ export function dropDeliveryOrderPath(dropId: string, deliveryId: number): strin
   return `${dropDeliveryOrdersCollectionPath(dropId)}/${deliveryId}`;
 }
 
-export function dropAdminIrlRedeemRequestsCollectionPath(dropId: string): string {
-  return `${dropRootPath(dropId)}/adminIrlRedeemRequests`;
-}
-
 export function dropAdminIrlRedeemRequestPath(dropId: string, requestId: string): string {
-  return `${dropAdminIrlRedeemRequestsCollectionPath(dropId)}/${requestId}`;
+  return `${dropRootPath(dropId)}/adminIrlRedeemRequests/${requestId}`;
 }
 
 export function dropAdminIrlRedeemPackMarkerPath(dropId: string, originalAssetId: string): string {

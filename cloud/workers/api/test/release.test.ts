@@ -686,7 +686,11 @@ test('frontend candidate upload validates, dry-runs triggers, uploads, smokes, r
 test('frontend production capability check requires the profile lifecycle API contracts', async () => {
   const requests: Array<{ input: string; init?: RequestInit }> = [];
   let deliverySmokes = 0;
+  let adminIrlSmokes = 0;
   await frontendDeployTestHooks.smokeProfileStateApi({
+    adminIrlRedeemPrepare: () => {
+      adminIrlSmokes += 1;
+    },
     deliveryPrepare: () => {
       deliverySmokes += 1;
     },
@@ -709,6 +713,7 @@ test('frontend production capability check requires the profile lifecycle API co
     'https://api.mons.shop/claims/irl/prepare',
     'https://api.mons.shop/receipts/transfer/prepare',
     'https://api.mons.shop/delivery/prepare',
+    'https://api.mons.shop/admin/irl-redeem/prepare',
     'https://api.mons.shop/profile/reconcile',
     'https://api.mons.shop/profile/state',
   ]);
@@ -729,10 +734,17 @@ test('frontend production capability check requires the profile lifecycle API co
     itemIds: ['11111111111111111111111111111112'],
     addressId: 'AbCdEfGhIjKlMnOpQrSt',
   });
-  assert.equal(requests[4]?.init?.body, '{}');
+  assert.deepEqual(JSON.parse(String(requests[4]?.init?.body)), {
+    owner: '11111111111111111111111111111111',
+    dropId: 'card_nft_2',
+    itemIds: ['11111111111111111111111111111112'],
+  });
+  assert.equal(requests[5]?.init?.body, '{}');
   assert.equal(deliverySmokes, 1);
+  assert.equal(adminIrlSmokes, 1);
   await assert.rejects(
     () => frontendDeployTestHooks.smokeProfileStateApi({
+      adminIrlRedeemPrepare: () => undefined,
       deliveryPrepare: () => undefined,
       fetch: async () => Response.json({ ok: false, error: 'not-found' }, { status: 404 }),
     }),
@@ -1727,6 +1739,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         '/claims/irl/prepare',
         '/receipts/transfer/prepare',
         '/delivery/prepare',
+        '/admin/irl-redeem/prepare',
         '/checkout/session',
         '/profile/reconcile',
         '/profile/state',

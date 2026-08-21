@@ -252,6 +252,7 @@ type ProfileApiClientDependencies = {
 
 type AuthenticatedApiPath =
   | '/auth/solana'
+  | '/admin/irl-redeem/prepare'
   | '/checkout/session'
   | '/claims/irl/prepare'
   | '/delivery/prepare'
@@ -283,6 +284,7 @@ const defaultProfileApiDependencies: ProfileApiClientDependencies = {
 const STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS = 35_000;
 const PROFILE_RECONCILE_API_TIMEOUT_MS = 65_000;
 const IRL_CLAIM_PREPARE_API_TIMEOUT_MS = 65_000;
+const ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS = 65_000;
 const DELIVERY_PREPARE_API_TIMEOUT_MS = 65_000;
 const RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
@@ -294,6 +296,7 @@ const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
   if (pathname === '/claims/irl/prepare') return IRL_CLAIM_PREPARE_API_TIMEOUT_MS;
+  if (pathname === '/admin/irl-redeem/prepare') return ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/delivery/prepare') return DELIVERY_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/receipts/transfer/prepare') return RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/checkout/session') return STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS;
@@ -1344,15 +1347,48 @@ function parseReceiptTransferPrepareResponse(response: unknown): PrepareReceiptT
   };
 }
 
+function parseAdminIrlRedeemPrepareResponse(value: unknown): AdminIrlRedeemPreparedTxResponse | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['encodedTx', 'requestId', 'dropId', 'adminWallet', 'itemCount', 'targetKind']) ||
+    typeof value.encodedTx !== 'string' ||
+    value.encodedTx.length === 0 ||
+    value.encodedTx.length > 16 * 1024 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(value.encodedTx) ||
+    typeof value.requestId !== 'string' ||
+    !/^[A-Za-z0-9]{20}$/.test(value.requestId) ||
+    typeof value.dropId !== 'string' ||
+    normalizeDropId(value.dropId) !== value.dropId ||
+    !FRONTEND_DROPS[value.dropId] ||
+    typeof value.adminWallet !== 'string' ||
+    !isBase58Bytes(value.adminWallet, 32) ||
+    !Number.isSafeInteger(value.itemCount) ||
+    Number(value.itemCount) < 1 ||
+    Number(value.itemCount) > 32 ||
+    (value.targetKind !== 'pack' && value.targetKind !== 'card_receipt') ||
+    (value.targetKind === 'card_receipt' && value.itemCount !== 1)
+  ) return null;
+  return {
+    encodedTx: value.encodedTx,
+    requestId: value.requestId,
+    dropId: value.dropId,
+    adminWallet: value.adminWallet,
+    itemCount: Number(value.itemCount),
+    targetKind: value.targetKind,
+  };
+}
+
 export async function prepareAdminIrlRedeemTx(args: {
   owner: string;
   dropId: string;
   itemIds: string[];
 }): Promise<AdminIrlRedeemPreparedTxResponse> {
-  return callFunction<
-    { owner: string; dropId: string; itemIds: string[] },
-    AdminIrlRedeemPreparedTxResponse
-  >('prepareAdminIrlRedeemTx', args);
+  const response = await callProfileApi('/admin/irl-redeem/prepare', args);
+  const parsed = parseAdminIrlRedeemPrepareResponse(response);
+  if (!parsed || parsed.dropId !== args.dropId || parsed.itemCount !== args.itemIds.length) {
+    throw new Error('Invalid Admin IRL redeem preparation response');
+  }
+  return parsed;
 }
 
 export async function finalizeAdminIrlRedeem(args: {
@@ -1576,6 +1612,7 @@ export const profileApiTestHooks = {
   parseFulfillmentStatusUpdate,
   parseFulfillmentShipStationAddressCorrectionDetails,
   parseDeliveryPrepareResponse,
+  parseAdminIrlRedeemPrepareResponse,
   parseIrlClaimPrepareResponse,
   parseReceiptTransferPrepareResponse,
   parseProfileAddress,

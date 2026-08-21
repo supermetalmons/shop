@@ -61,6 +61,7 @@ type FrontendSmokeDependencies = {
 };
 
 type ProfileApiSmokeDependencies = Pick<FrontendSmokeDependencies, 'fetch'> & {
+  adminIrlRedeemPrepare?: () => Promise<void> | void;
   deliveryPrepare?: () => Promise<void> | void;
 };
 
@@ -827,6 +828,11 @@ export async function smokeProfileStateApi(
       itemIds: ['11111111111111111111111111111112'],
       addressId: 'AbCdEfGhIjKlMnOpQrSt',
     })],
+    ['/admin/irl-redeem/prepare', JSON.stringify({
+      owner: '11111111111111111111111111111111',
+      dropId: 'card_nft_2',
+      itemIds: ['11111111111111111111111111111112'],
+    })],
     ['/profile/reconcile', '{}'],
     ['/profile/state', '{}'],
   ] as const) {
@@ -871,12 +877,29 @@ export async function smokeProfileStateApi(
   }
   if (dependencies.deliveryPrepare) {
     await dependencies.deliveryPrepare();
+  } else {
+    const result = spawnSync(process.execPath, [
+      '--import',
+      'tsx',
+      resolve(repoRoot, 'scripts', 'decommission-firebase-prepare-delivery.ts'),
+      '--smoke-only',
+    ], {
+      cwd: repoRoot,
+      env: credentialFreeEnvironment(process.env),
+      shell: false,
+      stdio: 'inherit',
+    });
+    if (result.error) fail(`Delivery preparation smoke could not start: ${result.error.message}`);
+    if (result.status !== 0) fail(`Delivery preparation smoke failed with exit code ${result.status ?? 1}.`);
+  }
+  if (dependencies.adminIrlRedeemPrepare) {
+    await dependencies.adminIrlRedeemPrepare();
     return;
   }
-  const result = spawnSync(process.execPath, [
+  const adminIrlResult = spawnSync(process.execPath, [
     '--import',
     'tsx',
-    resolve(repoRoot, 'scripts', 'decommission-firebase-prepare-delivery.ts'),
+    resolve(repoRoot, 'scripts', 'decommission-firebase-prepare-admin-irl-redeem.ts'),
     '--smoke-only',
   ], {
     cwd: repoRoot,
@@ -884,8 +907,8 @@ export async function smokeProfileStateApi(
     shell: false,
     stdio: 'inherit',
   });
-  if (result.error) fail(`Delivery preparation smoke could not start: ${result.error.message}`);
-  if (result.status !== 0) fail(`Delivery preparation smoke failed with exit code ${result.status ?? 1}.`);
+  if (adminIrlResult.error) fail(`Admin IRL preparation smoke could not start: ${adminIrlResult.error.message}`);
+  if (adminIrlResult.status !== 0) fail(`Admin IRL preparation smoke failed with exit code ${adminIrlResult.status ?? 1}.`);
 }
 
 export function frontendProductionWranglerCommands(versionId: string): readonly {
