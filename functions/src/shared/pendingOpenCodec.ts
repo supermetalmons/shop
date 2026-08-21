@@ -12,14 +12,14 @@ export const PENDING_OPEN_BOX_DISCRIMINATOR = Uint8Array.from([
 
 export type PendingOpenBoxLayout = 'legacyFixed' | 'vec';
 
-export type PendingOpenCodecErrorReason =
+type PendingOpenCodecErrorReason =
   | 'too-short'
   | 'invalid-discriminator'
   | 'truncated-vector'
   | 'truncated-config'
   | 'unexpected-trailing-bytes';
 
-export class PendingOpenCodecError extends Error {
+class PendingOpenCodecError extends Error {
   constructor(readonly reason: PendingOpenCodecErrorReason) {
     super(reason);
     this.name = 'PendingOpenCodecError';

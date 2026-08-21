@@ -71,7 +71,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
     assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
 
-    for (const pathname of ['/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/transfer/prepare', '/delivery/prepare', '/admin/irl-redeem/prepare']) {
+    for (const pathname of ['/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/transfer/prepare', '/delivery/prepare', '/admin/irl-redeem/prepare', '/boxes/reveal']) {
       const lifecyclePreflight = await worker.fetch(`https://api.mons.shop${pathname}`, {
         method: 'OPTIONS',
         headers: { Origin: 'https://mons.shop' },
@@ -132,6 +132,11 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
         owner: '11111111111111111111111111111111',
         dropId: 'card_nft_2',
         itemIds: ['11111111111111111111111111111112'],
+      }],
+      ['/boxes/reveal', {
+        owner: '11111111111111111111111111111111',
+        boxAssetId: '11111111111111111111111111111112',
+        dropId: 'clear_cards_devnet_v2',
       }],
     ] as const) {
       const response = await worker.fetch(`https://api.mons.shop${pathname}`, {

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { randomInt } from 'node:crypto';
 import { getApps, initializeApp } from 'firebase-admin/app';
 import {
   FieldValue,
@@ -896,6 +897,7 @@ async function buildDryRunManifest(db: Firestore, runtime: ScriptDropRuntime, ar
           itemsPerBox: runtime.itemsPerBox,
           maxDudeId: runtime.maxDudeId,
           pool,
+          randomInt: (maxExclusive) => randomInt(0, maxExclusive),
           isAssigned,
         });
         dudeIds = picked.chosen;

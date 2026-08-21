@@ -253,6 +253,7 @@ type ProfileApiClientDependencies = {
 type AuthenticatedApiPath =
   | '/auth/solana'
   | '/admin/irl-redeem/prepare'
+  | '/boxes/reveal'
   | '/checkout/session'
   | '/claims/irl/prepare'
   | '/delivery/prepare'
@@ -285,6 +286,7 @@ const STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS = 35_000;
 const PROFILE_RECONCILE_API_TIMEOUT_MS = 65_000;
 const IRL_CLAIM_PREPARE_API_TIMEOUT_MS = 65_000;
 const ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS = 65_000;
+const REVEAL_DUDES_API_TIMEOUT_MS = 65_000;
 const DELIVERY_PREPARE_API_TIMEOUT_MS = 65_000;
 const RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
@@ -297,6 +299,7 @@ function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
   if (pathname === '/claims/irl/prepare') return IRL_CLAIM_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/admin/irl-redeem/prepare') return ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS;
+  if (pathname === '/boxes/reveal') return REVEAL_DUDES_API_TIMEOUT_MS;
   if (pathname === '/delivery/prepare') return DELIVERY_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/receipts/transfer/prepare') return RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/checkout/session') return STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS;
@@ -979,16 +982,43 @@ function parseProfileState(value: unknown): GetProfileStateResponse | null {
 export { fetchPendingOpenBoxes } from './shopApi';
 export type { DropFetchOptions } from './shopApi';
 
+function parseRevealDudesResponse(
+  value: unknown,
+  dropId: string,
+): { signature: string; dudeIds: number[] } | null {
+  const drop = FRONTEND_DROPS[dropId];
+  if (
+    !drop ||
+    !isRecord(value) ||
+    !hasExactKeys(value, ['signature', 'dudeIds']) ||
+    typeof value.signature !== 'string' ||
+    !isBase58Bytes(value.signature, 64) ||
+    !Array.isArray(value.dudeIds) ||
+    value.dudeIds.length !== drop.itemsPerBox
+  ) return null;
+  const maxDudeId = drop.maxSupply * drop.itemsPerBox;
+  const dudeIds = value.dudeIds.map(Number);
+  if (
+    dudeIds.some((id) => !Number.isSafeInteger(id) || id < 1 || id > maxDudeId) ||
+    new Set(dudeIds).size !== dudeIds.length
+  ) return null;
+  return { signature: value.signature, dudeIds };
+}
+
 export async function revealDudes(
   owner: string,
   boxAssetId: string,
   dropId: string,
 ): Promise<{ signature: string; dudeIds: number[] }> {
-  return callFunction<{ owner: string; boxAssetId: string; dropId: string }, { signature: string; dudeIds: number[] }>('revealDudes', {
+  const normalizedDropId = normalizeDropId(dropId);
+  const response = await callProfileApi('/boxes/reveal', {
     owner,
     boxAssetId,
-    dropId,
+    dropId: normalizedDropId,
   });
+  const parsed = parseRevealDudesResponse(response, normalizedDropId);
+  if (!parsed) throw new Error('Invalid reveal response');
+  return parsed;
 }
 
 export async function saveEncryptedAddress(
@@ -1616,6 +1646,7 @@ export const profileApiTestHooks = {
   parseAdminIrlRedeemPrepareResponse,
   parseIrlClaimPrepareResponse,
   parseReceiptTransferPrepareResponse,
+  parseRevealDudesResponse,
   parseProfileAddress,
   parseProfileState,
   parseStripeCheckoutSessionResponse,

@@ -714,6 +714,7 @@ test('frontend production capability check requires the profile lifecycle API co
     'https://api.mons.shop/receipts/transfer/prepare',
     'https://api.mons.shop/delivery/prepare',
     'https://api.mons.shop/admin/irl-redeem/prepare',
+    'https://api.mons.shop/boxes/reveal',
     'https://api.mons.shop/profile/reconcile',
     'https://api.mons.shop/profile/state',
   ]);
@@ -739,7 +740,12 @@ test('frontend production capability check requires the profile lifecycle API co
     dropId: 'card_nft_2',
     itemIds: ['11111111111111111111111111111112'],
   });
-  assert.equal(requests[5]?.init?.body, '{}');
+  assert.deepEqual(JSON.parse(String(requests[5]?.init?.body)), {
+    owner: '11111111111111111111111111111111',
+    boxAssetId: '11111111111111111111111111111112',
+    dropId: 'clear_cards_devnet_v2',
+  });
+  assert.equal(requests[6]?.init?.body, '{}');
   assert.equal(deliverySmokes, 1);
   assert.equal(adminIrlSmokes, 1);
   await assert.rejects(
@@ -1740,6 +1746,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         '/receipts/transfer/prepare',
         '/delivery/prepare',
         '/admin/irl-redeem/prepare',
+        '/boxes/reveal',
         '/checkout/session',
         '/profile/reconcile',
         '/profile/state',

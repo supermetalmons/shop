@@ -7,7 +7,8 @@ import {
   DudeAssignmentValidationError,
   pickDudeIdsForAssignment,
   validateDudeIdsForAssignment,
-} from './assignDudesPicker.js';
+} from './shared/assignDudesPicker.js';
+import { sanitizeDudeAssignmentPool } from './shared/dudeAssignmentPool.js';
 import { IRL_CLAIM_CODE_DIGITS, IRL_CLAIM_CODE_NAMESPACE, normalizeIrlClaimCode } from './claimCodes.js';
 import { dropBoxAssignmentPath, dropDudeAssignmentPath, dropDudePoolPath } from './dropPaths.js';
 import type { DropFamily } from './config/deployment.js';
@@ -32,6 +33,8 @@ export type SpecificDudeAssignmentResult = {
   dudeIds: number[];
   created: boolean;
 };
+
+export { sanitizeDudeAssignmentPool };
 
 export type StripeAssignedIrlClaim = {
   boxId: number;
@@ -258,27 +261,6 @@ function normalizeStaleDudeIds(params: {
     });
   }
   return staleDudeIds;
-}
-
-export function sanitizeDudeAssignmentPool(rawPool: unknown, maxDudeId: number): {
-  pool: number[];
-  usedDefaultPool: boolean;
-  rawPoolLen: number | null;
-  poolInitLen: number;
-  invalidRemoved: number;
-  dupRemoved: number;
-} {
-  const usedDefaultPool = !Array.isArray(rawPool);
-  const rawPoolLen = Array.isArray(rawPool) ? rawPool.length : null;
-  const initialPool = Array.isArray(rawPool)
-    ? rawPool.map((n) => Math.floor(Number(n)))
-    : Array.from({ length: maxDudeId }, (_, index) => index + 1);
-  const poolInitLen = initialPool.length;
-  const sanitized = initialPool.filter((id) => Number.isFinite(id) && id >= 1 && id <= maxDudeId);
-  const invalidRemoved = poolInitLen - sanitized.length;
-  const pool = Array.from(new Set(sanitized));
-  const dupRemoved = sanitized.length - pool.length;
-  return { pool, usedDefaultPool, rawPoolLen, poolInitLen, invalidRemoved, dupRemoved };
 }
 
 function sameDudeIds(a: readonly number[], b: readonly number[]): boolean {
@@ -536,6 +518,7 @@ export async function assignDudesForBox(params: {
             itemsPerBox,
             maxDudeId,
             pool,
+            randomInt: (maxExclusive) => randomInt(0, maxExclusive),
             isAssigned: async (candidate) => {
               const dudeRef = db.doc(dropDudeAssignmentPath(dropId, candidate));
               const dudeSnap = await tx.get(dudeRef);

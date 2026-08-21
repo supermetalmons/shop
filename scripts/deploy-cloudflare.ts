@@ -833,6 +833,11 @@ export async function smokeProfileStateApi(
       dropId: 'card_nft_2',
       itemIds: ['11111111111111111111111111111112'],
     })],
+    ['/boxes/reveal', JSON.stringify({
+      owner: '11111111111111111111111111111111',
+      boxAssetId: '11111111111111111111111111111112',
+      dropId: 'clear_cards_devnet_v2',
+    })],
     ['/profile/reconcile', '{}'],
     ['/profile/state', '{}'],
   ] as const) {

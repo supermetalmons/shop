@@ -1217,6 +1217,11 @@ async function smokeApi(
         dropId: 'card_nft_2',
         itemIds: ['11111111111111111111111111111112'],
       }],
+      ['/boxes/reveal', {
+        owner: defaultSmokeOwner,
+        boxAssetId: '11111111111111111111111111111112',
+        dropId: expectedReleaseDropId,
+      }],
       ['/checkout/session', { dropId: 'card_nft_binder_devnet' }],
       ['/profile/reconcile', {}],
       ['/profile/state', {}],

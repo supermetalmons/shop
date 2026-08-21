@@ -2,14 +2,31 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PublicKey } from '@solana/web3.js';
 import { FUNCTIONS_DROPS } from '../functions/src/config/deployment.ts';
-import { encodeFinalizeOpenBoxArgs } from '../functions/src/finalizeOpenBoxArgs.ts';
-import { ACCOUNT_PENDING_OPEN_BOX, decodePendingOpenBox } from '../functions/src/pendingOpenBox.ts';
+import { encodeFinalizeOpenBoxArgs } from '../functions/src/shared/finalizeOpenBoxArgs.ts';
+import {
+  PENDING_OPEN_BOX_DISCRIMINATOR,
+  decodePendingOpenData,
+} from '../functions/src/shared/pendingOpenCodec.ts';
 import { BOX_MINTER_CONFIG_SEED } from '../functions/src/shared/boxMinterProtocol.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
 import { decodePendingOpenRecordData } from '../functions/src/shared/shopDomain.ts';
 
 const LIVE_LITTLE_SWAG_BOXES_LEGACY_PENDING =
   'RQdFGvAMQ6Ge0Y5xVn5l/WqYRLjb7HsYQ8nLgzuLwMnRD7Ow2WA4t/d94N7kPVYpYdwdU4ja0Dhqq35JtKtJ7dgEh3CmAh5hWITpOHGmTOxKTZcquT0CAU7flx38JqkeNnCs35PJ1Qw1DARXjX2i6mRBhwls4tXoZUQHOOugR2fJxqKKzakLpDn+bRCMKIqxIt5kmUIiNMc3d3054wf9ZEULXH5lF+EAGuhkGQAAAAD7';
+const ACCOUNT_PENDING_OPEN_BOX = Buffer.from(PENDING_OPEN_BOX_DISCRIMINATOR);
+
+function decodePendingOpenBox(data: Uint8Array, options: { expectedDudeCount: number }) {
+  const decoded = decodePendingOpenData(data, { legacyDudeCounts: [options.expectedDudeCount] });
+  return {
+    owner: new PublicKey(decoded.owner),
+    boxAsset: new PublicKey(decoded.boxAsset),
+    dudeAssets: decoded.dudeAssets.map((asset) => new PublicKey(asset)),
+    createdSlot: decoded.createdSlot,
+    bump: decoded.bump,
+    layout: decoded.layout,
+    config: decoded.config ? new PublicKey(decoded.config) : undefined,
+  };
+}
 
 function u32LE(value: number): Buffer {
   const buf = Buffer.alloc(4);
@@ -150,7 +167,7 @@ test('finalize args match the pending account layout for legacy and current prog
     pendingLayout: 'vec',
   });
   assert.equal(vec.length, 8 + 4 + 2 * dudeIds.length);
-  assert.equal(vec.readUInt32LE(8), dudeIds.length);
+  assert.equal(new DataView(vec.buffer, vec.byteOffset, vec.byteLength).getUint32(8, true), dudeIds.length);
   assert.deepEqual(
     Array.from(vec.subarray(12)),
     [0x0b, 0x00, 0x16, 0x00, 0x4d, 0x01],

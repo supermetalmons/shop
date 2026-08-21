@@ -121,26 +121,6 @@ async function countPackStatusEvent(params: {
   });
 }
 
-export function countOnlineRevealPackStatus(params: {
-  db: Firestore;
-  dropRuntime: PackStatusDropRuntime;
-  boxAssetId: string;
-  signature?: string;
-}): Promise<PackStatusCountResult> {
-  const boxAssetId = String(params.boxAssetId || '').trim();
-  return countPackStatusEvent({
-    db: params.db,
-    dropRuntime: params.dropRuntime,
-    type: 'onlineReveal',
-    eventKey: boxAssetId,
-    increments: [{ field: 'unsealedOnline', quantity: 1 }],
-    extraEventData: {
-      boxAssetId,
-      ...(params.signature ? { signature: params.signature } : {}),
-    },
-  });
-}
-
 export function countNormalIrlPackStatus(params: {
   db: Firestore;
   dropRuntime: PackStatusDropRuntime;

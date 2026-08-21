@@ -531,6 +531,49 @@ test('Admin IRL preparation route enforces restricted CORS, bearer authenticatio
   assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
 });
 
+test('reveal route enforces restricted CORS, bearer authentication, methods, and stable logging', async () => {
+  const pathname = '/boxes/reveal';
+  const body = {
+    owner: OWNER,
+    boxAssetId: CARD_COLLECTION,
+    dropId: 'clear_cards_devnet_v2',
+  };
+  const preflight = await handleRequest(new Request(`https://api.mons.shop${pathname}`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+
+  const logs: Record<string, unknown>[] = [];
+  const unauthenticated = await handleRequest(request(pathname, body, {
+    Origin: 'https://mons.shop',
+  }), env(), {
+    ...quietDependencies(fetch),
+    log: (entry) => logs.push(entry),
+  });
+  assert.equal(unauthenticated.status, 401);
+  assert.equal((await unauthenticated.json() as { error: { code: string } }).error.code, 'unauthenticated');
+  assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(logs[0]?.route, pathname);
+  assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
+  assert.equal(logs[0]?.revealDropId, 'clear_cards_devnet_v2');
+  assert.equal(logs[0]?.revealBoxAssetId, CARD_COLLECTION);
+  assert.equal(JSON.stringify(logs).includes('firebase-token'), false);
+
+  const denied = await handleRequest(request(pathname, body, {
+    Origin: 'https://evil.example',
+  }), env(), quietDependencies(fetch));
+  assert.equal(denied.status, 403);
+
+  const wrongMethod = await handleRequest(new Request(`https://api.mons.shop${pathname}`, {
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
+});
+
 test('profile write routes use restricted CORS, bearer authentication, and stable route logs', async () => {
   const preflight = await handleRequest(new Request('https://api.mons.shop/profile/addresses', {
     method: 'OPTIONS',

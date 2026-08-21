@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import test from 'node:test';
+import bs58 from 'bs58';
 import { profileApiTestHooks } from '../src/lib/api.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const DESTINATION = '11111111111111111111111111111112';
+const REVEAL_SIGNATURE = bs58.encode(new Uint8Array(64).fill(5));
 
 test('profile API client sends bearer JSON without caching and refreshes once after 401', async () => {
   const refreshes: boolean[] = [];
@@ -318,6 +320,45 @@ test('Admin IRL preparation uses the authenticated Cloudflare route with an exac
   assert.match(implementation, /\/admin\/irl-redeem\/prepare/);
   assert.match(implementation, /const dropId = normalizeDropId\(args\.dropId\)/);
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareAdminIrlRedeemTx['"]/);
+});
+
+test('box reveal uses the authenticated Cloudflare route with an exact response contract', async () => {
+  const response = { signature: REVEAL_SIGNATURE, dudeIds: [1] };
+  const payload = await profileApiTestHooks.requestProfileApi(
+    '/boxes/reveal',
+    { owner: OWNER, boxAssetId: DESTINATION, dropId: 'clear_cards_devnet_v2' },
+    {
+      fetch: async (input, init) => {
+        assert.equal(String(input), 'https://api.mons.shop/boxes/reveal');
+        assert.equal(init?.method, 'POST');
+        assert.equal(init?.cache, 'no-store');
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          owner: OWNER,
+          boxAssetId: DESTINATION,
+          dropId: 'clear_cards_devnet_v2',
+        });
+        return Response.json(response);
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1000,
+    },
+  );
+  assert.deepEqual(profileApiTestHooks.parseRevealDudesResponse(payload, 'clear_cards_devnet_v2'), response);
+  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, extra: true }, 'clear_cards_devnet_v2'), null);
+  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, signature: OWNER }, 'clear_cards_devnet_v2'), null);
+  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [0] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [1, 2] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(profileApiTestHooks.parseRevealDudesResponse(response, 'unknown_drop'), null);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/boxes/reveal'), 65_000);
+
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function revealDudes');
+  const end = source.indexOf('\nexport ', start + 1);
+  const implementation = source.slice(start, end === -1 ? source.length : end);
+  assert.match(implementation, /\/boxes\/reveal/);
+  assert.doesNotMatch(implementation, /callFunction|httpsCallable|revealDudes['"]/);
 });
 
 test('receipt transfer preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -812,6 +853,19 @@ test('Admin IRL preparation callable is absent from Firebase exports and deploym
   assert.equal(
     packageJson.scripts['decommission:firebase-prepare-admin-irl-redeem'],
     'node --import tsx scripts/decommission-firebase-prepare-admin-irl-redeem.ts',
+  );
+});
+
+test('reveal callable is absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts: Record<string, string>;
+  };
+  assert.doesNotMatch(functionsSource, /export const revealDudes\b/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:revealDudes(?:,|$)/);
+  assert.equal(
+    packageJson.scripts['decommission:firebase-reveal-dudes'],
+    'node --import tsx scripts/decommission-firebase-reveal-dudes.ts',
   );
 });
 

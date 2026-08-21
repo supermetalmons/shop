@@ -122,6 +122,10 @@ import {
   ADMIN_IRL_REDEEM_PREPARE_PATH,
   handleAdminIrlRedeemPrepare,
 } from './adminIrlRedeemPrepare.js';
+import {
+  REVEAL_DUDES_PATH,
+  handleRevealDudes,
+} from './revealDudes.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -184,6 +188,7 @@ const KNOWN_LOG_ROUTES = new Set([
   RECEIPT_TRANSFER_PREPARE_PATH,
   DELIVERY_PREPARE_PATH,
   ADMIN_IRL_REDEEM_PREPARE_PATH,
+  REVEAL_DUDES_PATH,
 ]);
 
 export type ProviderFetch = RpcProviderFetch;
@@ -1293,6 +1298,7 @@ export async function handleRequest(
   request: Request,
   env: Env,
   dependencyOverrides: Partial<WorkerDependencies> = {},
+  waitUntil?: (promise: Promise<unknown>) => void,
 ): Promise<Response> {
   const dependencies = { ...defaultDependencies, ...dependencyOverrides };
   const startedAt = performance.now();
@@ -1320,6 +1326,10 @@ export async function handleRequest(
   let adminIrlRedeemPrepareDropId: string | undefined;
   let adminIrlRedeemPrepareTargetKind: string | undefined;
   let adminIrlRedeemPrepareItemCount: number | undefined;
+  let revealDropId: string | undefined;
+  let revealBoxAssetId: string | undefined;
+  let revealAssignmentOutcome: string | undefined;
+  let revealTransactionOutcome: string | undefined;
   let webhookEventId: string | undefined;
   let webhookEventType: string | undefined;
   let webhookOutcome: string | undefined;
@@ -1338,7 +1348,8 @@ export async function handleRequest(
     pathname === IRL_CLAIM_PREPARE_PATH ||
     pathname === RECEIPT_TRANSFER_PREPARE_PATH ||
     pathname === DELIVERY_PREPARE_PATH ||
-    pathname === ADMIN_IRL_REDEEM_PREPARE_PATH
+    pathname === ADMIN_IRL_REDEEM_PREPARE_PATH ||
+    pathname === REVEAL_DUDES_PATH
   )) {
     response = handleProfileCorsPreflight(request);
   } else if (request.method === 'OPTIONS' && rpcCluster) {
@@ -1432,6 +1443,20 @@ export async function handleRequest(
       adminIrlRedeemPrepareItemCount = result.itemCount;
       response = applyProfileCors(request, result.response);
     }
+  } else if (pathname === REVEAL_DUDES_PATH) {
+    if (!isProfileRequestOriginAllowed(request)) {
+      response = applyProfileCors(request, new Response(null));
+    } else {
+      const result = await handleRevealDudes(request, env, {}, waitUntil);
+      metrics.upstreamCalls += result.metrics.upstreamCalls;
+      metrics.providerDurationMs += result.metrics.providerDurationMs;
+      profileAuthOutcome = result.authOutcome;
+      revealDropId = result.dropId;
+      revealBoxAssetId = result.boxAssetId;
+      revealAssignmentOutcome = result.assignmentOutcome;
+      revealTransactionOutcome = result.transactionOutcome;
+      response = applyProfileCors(request, result.response);
+    }
   } else if (profileLifecyclePath) {
     if (!isProfileRequestOriginAllowed(request)) {
       response = applyProfileCors(request, new Response(null));
@@ -1521,6 +1546,10 @@ export async function handleRequest(
     ...(adminIrlRedeemPrepareDropId ? { adminIrlRedeemPrepareDropId } : {}),
     ...(adminIrlRedeemPrepareTargetKind ? { adminIrlRedeemPrepareTargetKind } : {}),
     ...(adminIrlRedeemPrepareItemCount === undefined ? {} : { adminIrlRedeemPrepareItemCount }),
+    ...(revealDropId ? { revealDropId } : {}),
+    ...(revealBoxAssetId ? { revealBoxAssetId } : {}),
+    ...(revealAssignmentOutcome ? { revealAssignmentOutcome } : {}),
+    ...(revealTransactionOutcome ? { revealTransactionOutcome } : {}),
     ...(webhookEventId ? { webhookEventId } : {}),
     ...(webhookEventType ? { webhookEventType } : {}),
     ...(webhookOutcome ? { webhookOutcome } : {}),
@@ -1532,8 +1561,8 @@ export async function handleRequest(
 }
 
 export default {
-  fetch(request, env) {
-    return handleRequest(request, env);
+  fetch(request, env, ctx) {
+    return handleRequest(request, env, {}, (promise) => ctx.waitUntil(promise));
   },
   queue(batch, env) {
     return processNotificationEmailBatch(batch, env);

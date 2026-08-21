@@ -25,8 +25,6 @@ import { fileURLToPath } from 'url';
 import { FUNCTIONS_DROPS, normalizeDropBase, type FunctionsDropConfig } from './config/deployment.js';
 import {
   HELIUS_COLLECTION_GROUPING_OPTIONS,
-  assetGroupingCollectionMints,
-  uniqueAssetGroupingCollectionMint,
 } from './dasAssetCollections.js';
 import {
   dropAdminIrlRedeemPackMarkerPath,
@@ -38,7 +36,6 @@ import {
   countDeliveryOrderDudeItems,
   countDeliveryOrderBoxItems,
   countNormalIrlPackStatus,
-  countOnlineRevealPackStatus,
 } from './packStatus.js';
 import {
   assignDudesForBox,
@@ -46,8 +43,6 @@ import {
   stripeAssignedIrlClaimForBox,
   type StripeAssignedIrlClaim,
 } from './cardAssignment.js';
-import { decodePendingOpenBox } from './pendingOpenBox.js';
-import { encodeFinalizeOpenBoxArgs } from './finalizeOpenBoxArgs.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
@@ -163,7 +158,6 @@ import type {
 } from './shared/contracts.js';
 import {
   dasAssetBoxId,
-  dasAssetKind,
   dasAssetLooksBurntOrClosed,
 } from './shared/dasAsset.js';
 import {
@@ -178,7 +172,6 @@ import {
   BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX as MIN_ITEMS_PER_BOX,
   BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET as MIN_DISCOUNT_MINTS_PER_WALLET,
   BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX as MIN_OPENABLE_ITEMS_PER_BOX,
-  BOX_MINTER_PENDING_OPEN_SEED,
   isBoxMinterDiscountMintsPerWallet,
   isConfiguredBoxMinterItemsPerBox,
   type BoxMinterMintVariantTuple,
@@ -466,20 +459,11 @@ if (!Object.keys(DROP_RUNTIMES).length) {
   throw new Error('functions/src/config/deployment.ts has no configured drops');
 }
 const DROP_RUNTIME_COUNTS_BY_CLUSTER_AND_COLLECTION = new Map<string, number>();
-const DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE = new Map<string, number>();
-const DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE_AND_COLLECTION = new Map<string, number>();
 Object.values(DROP_RUNTIMES).forEach((runtime) => {
   const clusterCollectionKey = dropRuntimeClusterCollectionKey(runtime);
   DROP_RUNTIME_COUNTS_BY_CLUSTER_AND_COLLECTION.set(
     clusterCollectionKey,
     (DROP_RUNTIME_COUNTS_BY_CLUSTER_AND_COLLECTION.get(clusterCollectionKey) || 0) + 1,
-  );
-  const scopeKey = revealScopeKey(runtime);
-  DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE.set(scopeKey, (DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE.get(scopeKey) || 0) + 1);
-  const collectionScopeKey = revealScopeCollectionKey(runtime);
-  DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE_AND_COLLECTION.set(
-    collectionScopeKey,
-    (DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE_AND_COLLECTION.get(collectionScopeKey) || 0) + 1,
   );
 });
 
@@ -492,29 +476,10 @@ function getDropRuntime(dropId: string): DropRuntime {
   return runtime;
 }
 
-function requiresRevealAssetDisambiguation(
-  dropRuntime: Pick<DropRuntime, 'cluster' | 'boxMinterProgramId' | 'itemsPerBox'>,
-): boolean {
-  const scopeKey = revealScopeKey(dropRuntime);
-  return (DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE.get(scopeKey) || 0) > 1;
-}
-
-function revealScopeKey(
-  dropRuntime: Pick<DropRuntime, 'cluster' | 'boxMinterProgramId' | 'itemsPerBox'>,
-): string {
-  return `${dropRuntime.cluster}:${dropRuntime.boxMinterProgramId.toBase58()}:${dropRuntime.itemsPerBox}`;
-}
-
 function dropRuntimeClusterCollectionKey(
   dropRuntime: Pick<DropRuntime, 'cluster' | 'collectionMintStr'>,
 ): string {
   return `${dropRuntime.cluster}:${dropRuntime.collectionMintStr}`;
-}
-
-function revealScopeCollectionKey(
-  dropRuntime: Pick<DropRuntime, 'cluster' | 'boxMinterProgramId' | 'itemsPerBox' | 'collectionMintStr'>,
-): string {
-  return `${revealScopeKey(dropRuntime)}:${dropRuntime.collectionMintStr}`;
 }
 
 function clusterSharesCollectionMint(
@@ -522,13 +487,6 @@ function clusterSharesCollectionMint(
 ): boolean {
   if (!dropRuntime.collectionMintStr) return false;
   return (DROP_RUNTIME_COUNTS_BY_CLUSTER_AND_COLLECTION.get(dropRuntimeClusterCollectionKey(dropRuntime)) || 0) > 1;
-}
-
-function revealScopeSharesCollectionMint(
-  dropRuntime: Pick<DropRuntime, 'cluster' | 'boxMinterProgramId' | 'itemsPerBox' | 'collectionMintStr'>,
-): boolean {
-  if (!dropRuntime.collectionMintStr) return false;
-  return (DROP_RUNTIME_COUNTS_BY_REVEAL_SCOPE_AND_COLLECTION.get(revealScopeCollectionKey(dropRuntime)) || 0) > 1;
 }
 
 function requireDropId(rawDropId: unknown): string {
@@ -1573,25 +1531,8 @@ async function fetchAssetProof(assetId: string, dropRuntime: DropRuntime) {
   return proof;
 }
 
-function getAssetKind(asset: any): 'box' | 'dude' | 'certificate' | null {
-  return dasAssetKind(asset, FUNCTIONS_DAS_NAME_POLICY);
-}
-
 function getBoxIdFromAsset(asset: any): string | undefined {
   return dasAssetBoxId(asset, FUNCTIONS_DAS_NAME_POLICY);
-}
-
-function assetMatchesDropCollection(
-  asset: any,
-  dropRuntime: DropRuntime,
-  allowedKinds?: ReadonlyArray<'box' | 'dude' | 'certificate'>,
-): boolean {
-  const kind = getAssetKind(asset);
-  if (!kind) return false;
-  if (allowedKinds && !allowedKinds.includes(kind)) return false;
-
-  const collectionMint = uniqueAssetGroupingCollectionMint(asset);
-  return Boolean(dropRuntime.collectionMintStr) && collectionMint === dropRuntime.collectionMintStr;
 }
 
 function receiptDropIdentity(dropRuntime: DropRuntime) {
@@ -2353,13 +2294,6 @@ function requireCardNft2AdminIrlRedeemDrop(dropRuntime: DropRuntime): void {
     sharesCollectionMint: clusterSharesCollectionMint(dropRuntime),
   });
   if (unsupportedReason) throw new HttpsError('failed-precondition', unsupportedReason);
-}
-
-function pendingOpenPdaForBox(dropRuntime: DropRuntime, boxAsset: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from(BOX_MINTER_PENDING_OPEN_SEED), boxAsset.toBuffer()],
-    dropRuntime.boxMinterProgramId,
-  )[0];
 }
 
 function normalizeAdminIrlResponseDudeIds(raw: unknown): number[] {
@@ -4692,182 +4626,6 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
       error: result.error,
     });
   },
-);
-
-export const revealDudes = onCallLogged(
-  'revealDudes',
-  async (request) => {
-  const { wallet } = await requireWalletSession(request);
-  const schema = z.object({ owner: z.string(), boxAssetId: z.string(), dropId: z.string().min(1).max(64) });
-  const { owner, boxAssetId, dropId: requestDropId } = parseRequest(schema, request.data);
-  const dropId = requireDropId(requestDropId);
-  const dropRuntime = getDropRuntime(dropId);
-  const ownerWallet = normalizeWallet(owner);
-  if (wallet !== ownerWallet) throw new HttpsError('permission-denied', 'Owners only');
-  const ownerPk = new PublicKey(ownerWallet);
-
-  await ensureOnchainCoreConfig(dropRuntime);
-
-  let boxAssetPk: PublicKey;
-  try {
-    boxAssetPk = new PublicKey(boxAssetId);
-  } catch {
-    throw new HttpsError('invalid-argument', 'Invalid boxAssetId');
-  }
-
-  const conn = connection(dropRuntime);
-
-  // Load on-chain config and enforce server cosigner matches on-chain admin.
-  const cfg = await fetchDecodedBoxMinterConfigAccount({
-    dropRuntime,
-    conn,
-    context: 'getAccountInfo:boxMinterConfig:reveal',
-  });
-  const cfgAdmin = cfg.admin;
-  const cfgCoreCollection = cfg.coreCollection;
-  const signer = cosigner();
-  if (!signer.publicKey.equals(cfgAdmin)) {
-    throw new HttpsError(
-      'failed-precondition',
-      `COSIGNER_SECRET pubkey ${signer.publicKey.toBase58()} does not match box minter admin ${cfgAdmin.toBase58()}`,
-      { expectedAdmin: cfgAdmin.toBase58(), cosigner: signer.publicKey.toBase58() },
-    );
-  }
-  assertConfiguredPublicKey(dropRuntime.collectionMint, 'COLLECTION_MINT');
-  if (!dropRuntime.collectionMint.equals(cfgCoreCollection)) {
-    throw new HttpsError('failed-precondition', 'COLLECTION_MINT does not match on-chain config (functions/src/config/deployment.ts)', {
-      configured: dropRuntime.collectionMint.toBase58(),
-      onchain: cfgCoreCollection.toBase58(),
-      dropId,
-    });
-  }
-
-  // Read pending open record from chain.
-  const pendingPda = pendingOpenPdaForBox(dropRuntime, boxAssetPk);
-  const pendingInfo = await withTimeout(
-    conn.getAccountInfo(pendingPda, { commitment: 'confirmed' }),
-    RPC_TIMEOUT_MS,
-    'getAccountInfo:pendingOpenBox',
-  );
-  if (!pendingInfo?.data) {
-    throw new HttpsError(
-      'not-found',
-      'Pending open not found. Start opening the box first (send it to the vault), then reveal.',
-      { pending: pendingPda.toBase58(), boxAssetId },
-    );
-  }
-  const pending = decodePendingOpenBox(pendingInfo.data, { expectedDudeCount: dropRuntime.itemsPerBox });
-  if (!pending.owner.equals(ownerPk) || !pending.boxAsset.equals(boxAssetPk)) {
-    throw new HttpsError('permission-denied', 'Pending open belongs to a different wallet', {
-      owner: ownerWallet,
-      pendingOwner: pending.owner.toBase58(),
-      boxAssetId,
-      pending: pendingPda.toBase58(),
-    });
-  }
-  if (pending.dudeAssets.length !== dropRuntime.itemsPerBox) {
-    throw new HttpsError(
-      'failed-precondition',
-      `Pending open has invalid figure placeholder count (expected ${dropRuntime.itemsPerBox})`,
-      {
-        pending: pendingPda.toBase58(),
-        boxAssetId,
-        expected: dropRuntime.itemsPerBox,
-        actual: pending.dudeAssets.length,
-        dropId,
-      },
-    );
-  }
-
-  if (pending.config && !pending.config.equals(dropRuntime.boxMinterConfigPda)) {
-    throw new HttpsError('failed-precondition', 'Pending open belongs to a different drop config', {
-      boxAssetId,
-      dropId,
-      pending: pendingPda.toBase58(),
-      pendingConfig: pending.config.toBase58(),
-      expectedConfig: dropRuntime.boxMinterConfigPda.toBase58(),
-    });
-  }
-
-  if (!pending.config && requiresRevealAssetDisambiguation(dropRuntime)) {
-    const revealScopeCollectionShared = revealScopeSharesCollectionMint(dropRuntime);
-    if (revealScopeCollectionShared) {
-      throw new HttpsError('failed-precondition', 'Legacy pending open cannot be disambiguated for a shared collection mint', {
-        boxAssetId,
-        dropId,
-        pending: pendingPda.toBase58(),
-        expectedCollectionMint: dropRuntime.collectionMintStr || null,
-        revealScopeSharesCollectionMint: revealScopeCollectionShared,
-      });
-    }
-
-    const boxAsset = await fetchAssetRetry(boxAssetId, dropRuntime);
-    if (getAssetKind(boxAsset) !== 'box') {
-      throw new HttpsError('failed-precondition', 'Pending open asset is not a box', {
-        boxAssetId,
-        dropId,
-        pending: pendingPda.toBase58(),
-      });
-    }
-    if (!assetMatchesDropCollection(boxAsset, dropRuntime, ['box'])) {
-      const collectionMints = assetGroupingCollectionMints(boxAsset);
-      throw new HttpsError('failed-precondition', 'Box asset does not belong to the requested drop', {
-        boxAssetId,
-        dropId,
-        pending: pendingPda.toBase58(),
-        expectedCollectionMint: dropRuntime.collectionMintStr || null,
-        assetGroupingCollectionMints: collectionMints,
-        assetUniqueGroupingCollectionMint: uniqueAssetGroupingCollectionMint(boxAsset),
-        revealScopeSharesCollectionMint: revealScopeCollectionShared,
-      });
-    }
-  }
-
-  // Assign dudes NOW (after the box has already been transferred away); keep this admin-only.
-  const dudeIds = await assignDudes(dropId, boxAssetId);
-
-  const finalizeIx = new TransactionInstruction({
-    programId: dropRuntime.boxMinterProgramId,
-    keys: [
-      { pubkey: dropRuntime.boxMinterConfigPda, isSigner: false, isWritable: false },
-      { pubkey: signer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: boxAssetPk, isSigner: false, isWritable: true },
-      { pubkey: cfgCoreCollection, isSigner: false, isWritable: true },
-      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: pendingPda, isSigner: false, isWritable: true },
-      { pubkey: ownerPk, isSigner: false, isWritable: false },
-      ...pending.dudeAssets.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
-    ],
-    data: encodeFinalizeOpenBoxArgs(dudeIds, {
-      itemsPerBox: dropRuntime.itemsPerBox,
-      maxDudeId: dropRuntime.maxDudeId,
-      pendingLayout: pending.layout,
-    }),
-  });
-
-  const instructions: TransactionInstruction[] = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-    finalizeIx,
-  ];
-
-  const { blockhash } = await withTimeout(conn.getLatestBlockhash('confirmed'), RPC_TIMEOUT_MS, 'getLatestBlockhash:revealDudes');
-  const tx = buildTx(instructions, signer.publicKey, blockhash, [signer]);
-
-  const sig = await sendAndConfirmSignedTx(conn, tx, 'revealDudes');
-  void countOnlineRevealPackStatus({ db, dropRuntime, boxAssetId, signature: sig }).catch((err) => {
-    logger.warn('revealDudes:packStatusCountFailed', {
-      dropId,
-      boxAssetId,
-      signature: sig,
-      error: summarizeError(err),
-    });
-  });
-
-  return { signature: sig, dudeIds };
-  },
-  { secrets: [COSIGNER_SECRET] },
 );
 
 export const finalizeAdminIrlRedeem = onCallLogged(
