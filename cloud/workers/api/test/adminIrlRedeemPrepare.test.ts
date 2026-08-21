@@ -148,6 +148,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
 
 test('Admin IRL preparation returns the exact unsigned pack transfer and request input', async () => {
   let created: Record<string, unknown> | undefined;
+  const operations: string[] = [];
   const result = await handleAdminIrlRedeemPrepare(
     request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] }, {
       [ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER]: ATTEMPT_ID,
@@ -155,7 +156,16 @@ test('Admin IRL preparation returns the exact unsigned pack transfer and request
     env(),
     dependencies({
       createRequest: async (_context: unknown, input: Record<string, unknown>) => {
+        operations.push('create');
         created = input;
+      },
+      loadPendingOpenAccounts: async () => {
+        operations.push('pending');
+        return [false];
+      },
+      loadLatestBlockhash: async () => {
+        operations.push('blockhash');
+        return BLOCKHASH;
       },
     }),
   );
@@ -175,6 +185,7 @@ test('Admin IRL preparation returns the exact unsigned pack transfer and request
   assert.equal(payload.requestId, REQUEST_ID);
   assert.equal(payload.adminWallet, ADMIN.toBase58());
   assert.equal(payload.targetKind, 'pack');
+  assert.deepEqual(operations, ['pending', 'blockhash', 'create']);
   assert.deepEqual(created, {
     requestId: REQUEST_ID,
     dropId: DROP_ID,
@@ -197,14 +208,27 @@ test('Admin IRL preparation returns the exact unsigned pack transfer and request
 
 test('Admin IRL preparation supports one card receipt and checks its marker and proof', async () => {
   let markerAsset = '';
+  const operations: string[] = [];
   const result = await handleAdminIrlRedeemPrepare(
     request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [RECEIPT.toBase58()] }),
     env(),
     dependencies({
       fetchAsset: async () => receiptAsset(),
+      fetchAssetProof: async () => {
+        operations.push('proof');
+        return proof();
+      },
       loadReceiptMarker: async (_context: unknown, _dropId: string, assetId: string) => {
+        operations.push('marker');
         markerAsset = assetId;
         return false;
+      },
+      loadLatestBlockhash: async () => {
+        operations.push('blockhash');
+        return BLOCKHASH;
+      },
+      createRequest: async () => {
+        operations.push('create');
       },
     }),
   );
@@ -212,6 +236,7 @@ test('Admin IRL preparation supports one card receipt and checks its marker and 
   const payload = await result.response.json() as Record<string, unknown>;
   assert.equal(payload.targetKind, 'card_receipt');
   assert.equal(markerAsset, RECEIPT.toBase58());
+  assert.deepEqual(operations, ['marker', 'proof', 'blockhash', 'create']);
   const transaction = VersionedTransaction.deserialize(Buffer.from(String(payload.encodedTx), 'base64'));
   const programs = transaction.message.compiledInstructions.map((instruction) =>
     transaction.message.staticAccountKeys[instruction.programIdIndex].toBase58());

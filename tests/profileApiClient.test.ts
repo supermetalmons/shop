@@ -316,6 +316,7 @@ test('Admin IRL preparation uses the authenticated Cloudflare route with an exac
   const end = source.indexOf('\nexport ', start + 1);
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/admin\/irl-redeem\/prepare/);
+  assert.match(implementation, /const dropId = normalizeDropId\(args\.dropId\)/);
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareAdminIrlRedeemTx['"]/);
 });
 

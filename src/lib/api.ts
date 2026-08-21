@@ -1383,9 +1383,10 @@ export async function prepareAdminIrlRedeemTx(args: {
   dropId: string;
   itemIds: string[];
 }): Promise<AdminIrlRedeemPreparedTxResponse> {
-  const response = await callProfileApi('/admin/irl-redeem/prepare', args);
+  const dropId = normalizeDropId(args.dropId);
+  const response = await callProfileApi('/admin/irl-redeem/prepare', { ...args, dropId });
   const parsed = parseAdminIrlRedeemPrepareResponse(response);
-  if (!parsed || parsed.dropId !== args.dropId || parsed.itemCount !== args.itemIds.length) {
+  if (!parsed || parsed.dropId !== dropId || parsed.itemCount !== args.itemIds.length) {
     throw new Error('Invalid Admin IRL redeem preparation response');
   }
   return parsed;

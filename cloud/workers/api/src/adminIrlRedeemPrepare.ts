@@ -1262,7 +1262,6 @@ async function prepareAdminIrlRedeem(args: {
   }
 
   let raw: Uint8Array;
-  const blockhash = await args.dependencies.loadLatestBlockhash(args.providerContext, runtime);
   if (targetKind === 'pack') {
     const assetKeys = itemIds.map((assetId) => new PublicKey(assetId));
     const pending = await args.dependencies.loadPendingOpenAccounts(args.providerContext, runtime, assetKeys);
@@ -1309,6 +1308,7 @@ async function prepareAdminIrlRedeem(args: {
       if (!transactionEncodingTooLarge(error)) throw error;
       throw new AdminIrlRedeemPrepareError('failed-precondition', 'Admin IRL redeem transfer transaction is too large to encode. Try fewer packs.');
     }
+    const blockhash = await args.dependencies.loadLatestBlockhash(args.providerContext, runtime);
     raw = serializePackTransaction(instructions, owner, blockhash);
   } else {
     const assetId = itemIds[0];
@@ -1321,6 +1321,7 @@ async function prepareAdminIrlRedeem(args: {
       throw new AdminIrlRedeemPrepareError('failed-precondition', 'Receipt does not belong to the configured receipts tree');
     }
     const proofContext = parseProof(assets[0], proof, runtime, ownerWallet);
+    const blockhash = await args.dependencies.loadLatestBlockhash(args.providerContext, runtime);
     raw = await serializeCardTransaction({
       context: args.providerContext,
       runtime,
