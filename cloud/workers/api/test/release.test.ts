@@ -3331,8 +3331,8 @@ test('tracked release metadata is exact and excludes direct-Helius frontend roll
   const manifest = deployApiTestHooks.readReleaseManifest();
   assert.equal(deployApiTestHooks.isReleaseManifest(manifest), true);
   assert.deepEqual(manifest.approvedRollback, {
-    apiVersionId: '6f61ba6e-a74b-4bbe-b86c-a38e5a20fde4',
-    frontendVersionId: 'acfe3160-bd57-44a2-adcd-525e9e816228',
+    apiVersionId: '61a7647e-cfcc-41f4-ad7b-30d28a186a89',
+    frontendVersionId: '8d62eeeb-fd9e-446f-a90a-7d539882cfac',
   });
   assert.equal(manifest.allowDirectHeliusFrontendRollback, false);
 });
