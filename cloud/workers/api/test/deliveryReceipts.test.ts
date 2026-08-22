@@ -20,6 +20,21 @@ import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
 
 const OWNER = Keypair.generate().publicKey.toBase58();
 const SIGNATURE = bs58.encode(new Uint8Array(64).fill(7));
+const BUYER_NOTIFICATION_JOB_ID = '123e4567-e89b-42d3-a456-426614174000';
+const SHIPPER_NOTIFICATION_JOB_ID = '123e4567-e89b-42d3-a456-426614174001';
+type ReadyNotificationPublishArgs = Parameters<
+  typeof deliveryReceiptTestHooks.publishReadyToShipNotifications
+>[0];
+
+function notificationQueue(overrides: Partial<Queue> = {}): Queue {
+  const metrics = { backlogCount: 0, backlogBytes: 0 };
+  return {
+    metrics: async () => metrics,
+    send: async () => ({ metadata: { metrics } }),
+    sendBatch: async () => ({ metadata: { metrics } }),
+    ...overrides,
+  };
+}
 
 function request(path: string, body: unknown, init: RequestInit = {}): Request {
   return new Request(`https://api.mons.shop${path}`, {
@@ -35,11 +50,14 @@ function request(path: string, body: unknown, init: RequestInit = {}): Request {
   });
 }
 
-function env(overrides: Partial<Record<'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY', string>> = {}) {
+function env(overrides: Partial<Pick<Env,
+  'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE'
+>> = {}) {
   return {
     COSIGNER_SECRET: bs58.encode(Keypair.generate().secretKey),
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: 'helius-test-key',
+    NOTIFICATION_EMAIL_QUEUE: notificationQueue(),
     ...overrides,
   };
 }
@@ -195,10 +213,195 @@ test('recovery route accepts the empty filter and reports recovery metrics', asy
   assert.equal(payload.walletRecovery.nextCheckAt, null);
 });
 
+test('ready-to-ship persistence atomically includes both notification outboxes', async () => {
+  const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
+  const commits: Array<{ writes: Array<Record<string, any>> }> = [];
+  const context = {
+    accessTokenProvider: {
+      get: async () => 'google-access-token',
+      invalidate: () => undefined,
+    },
+    nowMs: Date.now(),
+    providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      assert.equal(url.endsWith('/documents:commit'), true);
+      commits.push(JSON.parse(String(init?.body)));
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-22T00:00:01.000Z' });
+    },
+    serviceAccountJson: '{"credential":"test"}',
+    signal: new AbortController().signal,
+  };
+  const document = {
+    id: '7',
+    path: 'drops/card_nft_2/deliveryOrders/7',
+    updateTime: '2026-08-22T00:00:00.000Z',
+    fields: {
+      deliveryId: 7,
+      owner: OWNER,
+      status: 'processing',
+      addressSnapshot: { email: 'buyer@example.com' },
+      items: [{ kind: 'box', refId: 3 }],
+    },
+  };
+  const ready = await deliveryReceiptTestHooks.markDeliveryReady(context, document, runtime, {
+    signature: SIGNATURE,
+    receiptsMinted: 1,
+    receiptTxs: [SIGNATURE],
+    irlClaims: [],
+  });
+  assert.equal(commits.length, 1);
+  const write = commits[0].writes[0];
+  assert.equal(write.update.fields.status.stringValue, 'ready_to_ship');
+  assert.equal(write.update.fields.buyerOrderReceivedEmailState.stringValue, 'pending');
+  assert.equal(write.update.fields.shipperReadyToShipEmailState.stringValue, 'pending');
+  assert.ok(write.updateMask.fieldPaths.includes('buyerOrderReceivedEmailQueuedAt'));
+  assert.ok(write.updateMask.fieldPaths.includes('shipperReadyToShipEmailQueuedAt'));
+  assert.equal(ready.fields.status, 'ready_to_ship');
+  assert.equal(ready.fields.buyerOrderReceivedEmailState, 'pending');
+  assert.equal(ready.fields.shipperReadyToShipEmailState, 'pending');
+});
+
+test('notification queue failure maps both delivery routes to retryable 503 after completion', async () => {
+  const queue = notificationQueue({
+    sendBatch: async () => {
+      throw new Error('queue unavailable');
+    },
+  });
+  const result = await handleDeliveryReceiptRequest(
+    request(DELIVERY_RECEIPTS_ISSUE_PATH, {
+      owner: OWNER,
+      deliveryId: 7,
+      signature: SIGNATURE,
+      dropId: 'card_nft_2',
+    }),
+    env({ NOTIFICATION_EMAIL_QUEUE: queue }),
+    DELIVERY_RECEIPTS_ISSUE_PATH,
+    () => undefined,
+    dependencies({
+      issue: async (
+        _body: unknown,
+        _identity: unknown,
+        workerEnv: Env,
+        firestore: ReadyNotificationPublishArgs['context'],
+      ) => {
+        await deliveryReceiptTestHooks.publishReadyToShipNotifications({
+          context: firestore,
+          deliveryId: 7,
+          document: {
+            id: '7',
+            path: 'drops/card_nft_2/deliveryOrders/7',
+            updateTime: '2026-08-22T00:00:00.000Z',
+            fields: {
+              deliveryId: 7,
+              owner: OWNER,
+              status: 'ready_to_ship',
+              addressSnapshot: { email: 'buyer@example.com' },
+              items: [{ kind: 'box', refId: 3 }],
+              buyerOrderReceivedEmailState: 'pending',
+              buyerOrderReceivedEmailJobId: BUYER_NOTIFICATION_JOB_ID,
+              buyerOrderReceivedEmailIdempotencyKey: 'card_nft_2:7:order_received',
+            },
+          },
+          dropId: 'card_nft_2',
+          queue: workerEnv.NOTIFICATION_EMAIL_QUEUE,
+        });
+        throw new Error('unreachable');
+      },
+    }),
+  );
+  assert.equal(result.response.status, 503);
+  assert.deepEqual(await result.response.json(), {
+    error: {
+      code: 'unavailable',
+      message: 'Delivery completed, but notification emails could not be queued. Retry to finish notification delivery.',
+    },
+  });
+  const recovery = await handleDeliveryReceiptRequest(
+    request(DELIVERY_RECEIPTS_RECOVER_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
+    env(),
+    DELIVERY_RECEIPTS_RECOVER_PATH,
+    () => undefined,
+    dependencies({
+      recover: async () => {
+        throw new deliveryReceiptTestHooks.ReadyToShipNotificationEnqueueError();
+      },
+    }),
+  );
+  assert.equal(recovery.response.status, 503);
+  assert.deepEqual(await recovery.response.json(), {
+    error: {
+      code: 'unavailable',
+      message: 'Delivery completed, but notification emails could not be queued. Retry to finish notification delivery.',
+    },
+  });
+});
+
+test('successful queue publication remains successful when marker finalization fails', async () => {
+  let queueSends = 0;
+  const context: ReadyNotificationPublishArgs['context'] = {
+    accessTokenProvider: {
+      get: async () => 'google-access-token',
+      invalidate: () => undefined,
+    },
+    nowMs: Date.now(),
+    providerFetch: async (input) => {
+      const url = String(input);
+      if (url.includes('/deliveryOrders/7')) {
+        return Response.json({
+          name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
+          updateTime: '2026-08-22T00:00:00.000Z',
+          fields: {
+            deliveryId: { integerValue: '7' },
+            status: { stringValue: 'ready_to_ship' },
+            buyerOrderReceivedEmailState: { stringValue: 'pending' },
+            buyerOrderReceivedEmailJobId: { stringValue: BUYER_NOTIFICATION_JOB_ID },
+            buyerOrderReceivedEmailIdempotencyKey: { stringValue: 'card_nft_2:7:order_received' },
+          },
+        });
+      }
+      if (url.endsWith('/documents:commit')) {
+        return Response.json({ error: { status: 'PERMISSION_DENIED' } }, { status: 403 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    serviceAccountJson: '{"credential":"test"}',
+    signal: new AbortController().signal,
+  };
+  await assert.doesNotReject(deliveryReceiptTestHooks.publishReadyToShipNotifications({
+    context,
+    deliveryId: 7,
+    document: {
+      id: '7',
+      path: 'drops/card_nft_2/deliveryOrders/7',
+      updateTime: '2026-08-22T00:00:00.000Z',
+      fields: {
+        deliveryId: 7,
+        owner: OWNER,
+        status: 'ready_to_ship',
+        addressSnapshot: { email: 'buyer@example.com' },
+        items: [{ kind: 'box', refId: 3 }],
+        buyerOrderReceivedEmailState: 'pending',
+        buyerOrderReceivedEmailJobId: BUYER_NOTIFICATION_JOB_ID,
+        buyerOrderReceivedEmailIdempotencyKey: 'card_nft_2:7:order_received',
+      },
+    },
+    dropId: 'card_nft_2',
+    queue: notificationQueue({
+      sendBatch: async () => {
+        queueSends += 1;
+        return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+      },
+    }),
+  }));
+  assert.equal(queueSends, 1);
+});
+
 test('ready-to-ship issue requests use the production Firestore and bounded Solana adapters idempotently', async () => {
   const signer = Keypair.generate();
   const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
   const configuration = configData(signer, runtime.dropId);
+  const commits: Array<Record<string, unknown>> = [];
+  const queued: Array<Record<string, unknown>> = [];
   let rpcCalls = 0;
   const providerFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
@@ -218,10 +421,25 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
           deliveryId: { integerValue: '7' },
           owner: { stringValue: OWNER },
           status: { stringValue: 'ready_to_ship' },
+          addressSnapshot: { mapValue: { fields: { email: { stringValue: 'buyer@example.com' } } } },
+          items: { arrayValue: { values: [{ mapValue: { fields: {
+            kind: { stringValue: 'box' },
+            refId: { integerValue: '3' },
+          } } }] } },
+          buyerOrderReceivedEmailState: { stringValue: 'pending' },
+          buyerOrderReceivedEmailJobId: { stringValue: BUYER_NOTIFICATION_JOB_ID },
+          buyerOrderReceivedEmailIdempotencyKey: { stringValue: 'card_nft_2:7:order_received' },
+          shipperReadyToShipEmailState: { stringValue: 'pending' },
+          shipperReadyToShipEmailJobId: { stringValue: SHIPPER_NOTIFICATION_JOB_ID },
+          shipperReadyToShipEmailIdempotencyKey: { stringValue: 'card_nft_2:7:ready_to_ship' },
           receiptsMinted: { integerValue: '3' },
           receiptTxs: { arrayValue: { values: [{ stringValue: SIGNATURE }] } },
         },
       });
+    }
+    if (url.endsWith('/documents:commit')) {
+      commits.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-22T00:00:01.000Z' });
     }
     if (url.includes('helius-rpc.com')) {
       rpcCalls += 1;
@@ -258,7 +476,15 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
       signature: SIGNATURE,
       dropId: 'card_nft_2',
     }),
-    env({ COSIGNER_SECRET: bs58.encode(signer.secretKey) }),
+    env({
+      COSIGNER_SECRET: bs58.encode(signer.secretKey),
+      NOTIFICATION_EMAIL_QUEUE: notificationQueue({
+        sendBatch: async (messages) => {
+          queued.push(...Array.from(messages, (message) => message.body as Record<string, unknown>));
+          return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+        },
+      }),
+    }),
     DELIVERY_RECEIPTS_ISSUE_PATH,
     () => undefined,
     {
@@ -279,6 +505,25 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
     closeDeliveryTx: null,
   });
   assert.equal(rpcCalls, 2);
+  assert.deepEqual(queued.map((job) => ({
+    jobId: job.jobId,
+    kind: job.kind,
+    idempotencyKey: job.idempotencyKey,
+  })), [
+    {
+      jobId: BUYER_NOTIFICATION_JOB_ID,
+      kind: 'buyer_order_received',
+      idempotencyKey: 'card_nft_2:7:order_received',
+    },
+    {
+      jobId: SHIPPER_NOTIFICATION_JOB_ID,
+      kind: 'shipper_ready_to_ship',
+      idempotencyKey: 'card_nft_2:7:ready_to_ship',
+    },
+  ]);
+  assert.equal(commits.length, 1);
+  assert.match(JSON.stringify(commits[0]), /buyerOrderReceivedEmailQueuedAt/);
+  assert.match(JSON.stringify(commits[0]), /shipperReadyToShipEmailQueuedAt/);
 });
 
 test('explicit recovery uses the production Firestore adapter and preserves not-found scheduling', async () => {

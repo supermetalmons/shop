@@ -69,19 +69,6 @@ export function planReadyToShipOrderNotifications(args: {
   };
 }
 
-export function firstRejectedReadyToShipNotificationError<T>(
-  results: PromiseSettledResult<T>[],
-  isRetryableError: (reason: unknown) => boolean,
-): unknown | undefined {
-  const retryable = results.find(
-    (result): result is PromiseRejectedResult => result.status === 'rejected' && isRetryableError(result.reason),
-  );
-  if (retryable) return retryable.reason;
-
-  const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
-  return rejected?.reason;
-}
-
 export function shouldSendResendNotificationEmail(kind: ResendNotificationEmailKind): boolean {
   if (kind === 'stripe_checkout_manual_review') return true;
   return RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED;

@@ -35,27 +35,14 @@ import {
 } from './cardAssignment.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
-  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
   STRIPE_CHECKOUT_STATUS,
   shouldProcessStripeCheckoutFulfillmentWrite,
 } from './stripeCheckout/contract.js';
 import {
-  firstRejectedReadyToShipNotificationError,
   normalizeNotificationEmailRecipient,
-  planReadyToShipOrderNotifications,
-  resolveNotificationDeliveryId,
-  shouldNotifyShippersForDeliveryReadyToShipWrite,
 } from './notifications.js';
 import {
-  buildBuyerOrderReceivedEmailContent,
-  buildShipperReadyToShipEmailContent,
   buildStripeCheckoutManualReviewEmailContent,
-  fulfillmentAppUrlForOrder,
-  summarizeShipperReadyOrderItems,
-  type BuyerOrderReceivedEmailMessage,
-  type BuyerVisibleOrderEmailItem,
-  type ShipperReadyToShipEmailMessage,
-  type ShipperVisibleOrderEmailItem,
   type StripeCheckoutManualReviewEmailMessage,
 } from './notificationEmails.js';
 import { enqueueNotificationEmailJob } from './cloudflareNotifications.js';
@@ -64,10 +51,6 @@ import {
   type NotificationEmailJobContext,
   type NotificationEmailKind,
 } from './shared/notificationEmailJob.js';
-import {
-  buildBuyerVisibleOrderEmailItems,
-  buildShipperVisibleOrderEmailItems,
-} from './orderEmailItems.js';
 import {
   processStripeCheckoutFulfillmentDocument,
   requireStripeCheckoutSessionId,
@@ -92,8 +75,6 @@ import {
   type BoxMinterMintVariantTuple,
 } from './shared/boxMinterProtocol.js';
 import {
-  CARD_FULFILLMENT_DROP_IDS,
-  CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
 } from './shared/fulfillmentAccess.js';
@@ -380,27 +361,7 @@ function normalizeWallet(wallet: string): string {
 }
 
 
-type ShipperReadyToShipNotificationConfig = {
-  dropIds: string[];
-  emails: string[];
-};
-
-const SHIPPER_READY_TO_SHIP_NOTIFICATIONS: ShipperReadyToShipNotificationConfig[] = [
-  {
-    dropIds: [
-      'little_swag_boxes',
-      'poncho_drifella',
-      'drifella_shirt',
-      'little_swag_hoodies',
-      ...CARD_FULFILLMENT_DROP_IDS,
-      ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
-    ],
-    emails: ['supermetalxbosch@gmail.com'],
-  },
-];
-
 const SHIPPER_DROP_IDS_BY_WALLET = new Map<string, Set<string>>();
-const SHIPPER_READY_EMAILS_BY_DROP_ID = new Map<string, Set<string>>();
 SHIPPER_FULFILLMENT_ACCESS.forEach(({ wallet: rawWallet, dropIds: rawDropIds }) => {
   try {
     const wallet = new PublicKey(rawWallet).toBase58();
@@ -415,36 +376,6 @@ SHIPPER_FULFILLMENT_ACCESS.forEach(({ wallet: rawWallet, dropIds: rawDropIds }) 
     SHIPPER_DROP_IDS_BY_WALLET.set(wallet, normalizedDropIds);
   } catch (err) {
     console.error('[mons/functions] invalid shipper fulfillment access config', { rawWallet, rawDropIds, error: summarizeError(err) });
-  }
-});
-SHIPPER_READY_TO_SHIP_NOTIFICATIONS.forEach(({ dropIds: rawDropIds, emails: rawEmails }) => {
-  try {
-    const emails = rawEmails
-      .map((rawEmail) => {
-        const email = normalizeNotificationEmailRecipient(rawEmail);
-        if (!email) {
-          console.error('[mons/functions] invalid shipper ready-to-ship notification email', { rawEmail });
-        }
-        return email;
-      })
-      .filter((email): email is string => Boolean(email));
-    if (!emails.length) return;
-
-    rawDropIds.forEach((rawDropId) => {
-      const dropId = normalizeDropId(rawDropId);
-      if (!DROP_RUNTIMES[dropId]) {
-        throw new Error(`Unsupported shipper ready-to-ship notification dropId: ${dropId}`);
-      }
-      const emailsForDrop = SHIPPER_READY_EMAILS_BY_DROP_ID.get(dropId) || new Set<string>();
-      emails.forEach((email) => emailsForDrop.add(email));
-      SHIPPER_READY_EMAILS_BY_DROP_ID.set(dropId, emailsForDrop);
-    });
-  } catch (err) {
-    console.error('[mons/functions] invalid shipper ready-to-ship notification config', {
-      rawDropIds,
-      rawEmails,
-      error: summarizeError(err),
-    });
   }
 });
 
@@ -1477,7 +1408,6 @@ function transactionEncodingTooLarge(err: unknown): boolean {
   );
 }
 
-const BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON = 'buyer_order_received_email_recipient_missing_or_invalid';
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
 
 async function enqueueRenderedNotificationEmail(params: {
@@ -1513,36 +1443,6 @@ async function enqueueRenderedNotificationEmail(params: {
   }
 }
 
-async function sendBuyerOrderReceivedEmail(
-  message: BuyerOrderReceivedEmailMessage,
-): Promise<void> {
-  const email = buildBuyerOrderReceivedEmailContent(message);
-  return enqueueRenderedNotificationEmail({
-    kind: 'buyer_order_received',
-    idempotencyKey: message.idempotencyKey,
-    recipients: message.recipients,
-    subject: email.subject,
-    text: email.text,
-    html: email.html,
-    context: { dropId: message.dropId, deliveryId: message.deliveryId },
-  });
-}
-
-async function sendShipperReadyToShipEmail(
-  message: ShipperReadyToShipEmailMessage,
-): Promise<void> {
-  const email = buildShipperReadyToShipEmailContent(message);
-  return enqueueRenderedNotificationEmail({
-    kind: 'shipper_ready_to_ship',
-    idempotencyKey: message.idempotencyKey,
-    recipients: message.recipients,
-    subject: email.subject,
-    text: email.text,
-    html: email.html,
-    context: { dropId: message.dropId, deliveryId: message.deliveryId },
-  });
-}
-
 function optionalTrimmedString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
@@ -1561,147 +1461,6 @@ async function sendStripeCheckoutManualReviewEmail(
     context: { dropId: message.dropId, sessionId: message.sessionId },
   });
 }
-
-type BuyerOrderEmailItems = BuyerVisibleOrderEmailItem[];
-type ShipperOrderEmailItems = ShipperVisibleOrderEmailItem[];
-
-async function sendShipperReadyToShipNotification(params: {
-  order: any;
-  dropId: string;
-  dropName: string;
-  deliveryId: number;
-  recipients: string[];
-  itemPreviews: ShipperOrderEmailItems;
-}): Promise<void> {
-  const idempotencyKey = `${params.dropId}:${params.deliveryId}:ready_to_ship`;
-  await sendShipperReadyToShipEmail({
-    idempotencyKey,
-    recipients: params.recipients,
-    dropId: params.dropId,
-    dropName: params.dropName,
-    deliveryId: params.deliveryId,
-    owner: typeof params.order.owner === 'string' ? params.order.owner : '',
-    items: summarizeShipperReadyOrderItems(params.order),
-    itemPreviews: params.itemPreviews,
-    fulfillmentUrl: fulfillmentAppUrlForOrder(params.dropId, params.deliveryId),
-  });
-}
-
-async function sendBuyerOrderReceivedNotification(params: {
-  order: any;
-  dropId: string;
-  dropName: string;
-  deliveryId: number;
-  recipient: string | null;
-  items: BuyerOrderEmailItems;
-}): Promise<void> {
-  if (!params.recipient) {
-    logger.info('notifyShippersOnDeliveryReadyToShip:buyerOrderReceivedSkipped', {
-      dropId: params.dropId,
-      deliveryId: params.deliveryId,
-      reason: BUYER_ORDER_RECEIVED_MISSING_RECIPIENT_REASON,
-      hasEmailField: typeof params.order?.addressSnapshot?.email === 'string',
-    });
-    return;
-  }
-  await sendBuyerOrderReceivedEmail({
-    idempotencyKey: `${params.dropId}:${params.deliveryId}:order_received`,
-    recipients: [params.recipient],
-    dropId: params.dropId,
-    dropName: params.dropName,
-    deliveryId: params.deliveryId,
-    items: params.items,
-  });
-}
-
-export const notifyShippersOnDeliveryReadyToShip = onDocumentWritten(
-  {
-    document: 'drops/{dropId}/deliveryOrders/{deliveryId}',
-    secrets: [NOTIFICATION_ENQUEUE_SECRET],
-    retry: true,
-  },
-  async (event) => {
-    const beforeSnap = event.data?.before;
-    const afterSnap = event.data?.after;
-    if (!afterSnap?.exists) return;
-    if (
-      !shouldNotifyShippersForDeliveryReadyToShipWrite({
-        before: beforeSnap?.exists ? { status: beforeSnap.get('status') } : null,
-        after: { status: afterSnap.get('status'), source: afterSnap.get('source') },
-        ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
-      })
-    ) {
-      return;
-    }
-    const after = afterSnap.data() as any;
-
-    let dropId: string;
-    let dropName: string;
-    try {
-      dropId = requireDropId(event.params.dropId);
-      const dropRuntime = getDropRuntime(dropId);
-      dropName = dropRuntime.config.displayName || dropRuntime.config.collectionName || dropId;
-    } catch (err) {
-      logger.warn('notifyShippersOnDeliveryReadyToShip:invalidDrop', {
-        dropId: event.params.dropId,
-        error: summarizeError(err),
-      });
-      return;
-    }
-
-    const deliveryDocId = String(event.params.deliveryId || '').trim();
-    const deliveryId = resolveNotificationDeliveryId({
-      deliveryDocId,
-      storedDeliveryId: after.deliveryId,
-    });
-    if (!deliveryId) {
-      logger.warn('notifyShippersOnDeliveryReadyToShip:invalidDeliveryId', {
-        dropId,
-        deliveryDocId,
-        storedDeliveryId: after.deliveryId ?? null,
-      });
-      return;
-    }
-
-    const notificationPlan = planReadyToShipOrderNotifications({
-      buyerEmail: after?.addressSnapshot?.email,
-      shipperRecipients: Array.from(SHIPPER_READY_EMAILS_BY_DROP_ID.get(dropId) || []).sort(),
-    });
-    const buyerOrderEmailItems: BuyerOrderEmailItems = notificationPlan.buyerRecipient
-      ? await buildBuyerVisibleOrderEmailItems(after, { dropId })
-      : [];
-    const shipperOrderEmailItems: ShipperOrderEmailItems = notificationPlan.shipperRecipients.length
-      ? await buildShipperVisibleOrderEmailItems(after, { dropId })
-      : [];
-    const tasks: Promise<void>[] = [
-      sendBuyerOrderReceivedNotification({
-        order: after,
-        dropId,
-        dropName,
-        deliveryId,
-        recipient: notificationPlan.buyerRecipient,
-        items: buyerOrderEmailItems,
-      }),
-    ];
-
-    if (notificationPlan.shipperRecipients.length) {
-      tasks.push(
-        sendShipperReadyToShipNotification({
-          order: after,
-          dropId,
-          dropName,
-          deliveryId,
-          recipients: notificationPlan.shipperRecipients,
-          itemPreviews: shipperOrderEmailItems,
-        }),
-      );
-    }
-
-    const results = await Promise.allSettled(tasks);
-    const rejected = firstRejectedReadyToShipNotificationError(results, () => true);
-    if (rejected) throw rejected;
-  },
-);
 
 export const notifyStripeCheckoutManualReview = onDocumentUpdated(
   {

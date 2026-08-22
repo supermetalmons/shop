@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   RESEND_NON_CHECKOUT_ERROR_NOTIFICATION_EMAILS_ENABLED,
-  firstRejectedReadyToShipNotificationError,
   normalizeNotificationEmailRecipient,
   planReadyToShipOrderNotifications,
   resolveNotificationDeliveryId,
@@ -182,36 +181,6 @@ test('ready-to-ship notification plan skips item previews when only buyer skip w
       shipperRecipients: [],
       shouldBuildOrderEmailItems: false,
     },
-  );
-});
-
-test('ready-to-ship notification rejection selection prefers retryable failures', () => {
-  const permanent = new Error('permanent');
-  const retryable = new Error('retryable');
-  const results: PromiseSettledResult<void>[] = [
-    { status: 'rejected', reason: permanent },
-    { status: 'fulfilled', value: undefined },
-    { status: 'rejected', reason: retryable },
-  ];
-
-  assert.equal(
-    firstRejectedReadyToShipNotificationError(results, (reason) => reason === retryable),
-    retryable,
-  );
-});
-
-test('ready-to-ship notification rejection selection falls back to first failure', () => {
-  const first = new Error('first');
-  const second = new Error('second');
-  const results: PromiseSettledResult<void>[] = [
-    { status: 'rejected', reason: first },
-    { status: 'rejected', reason: second },
-  ];
-
-  assert.equal(firstRejectedReadyToShipNotificationError(results, () => false), first);
-  assert.equal(
-    firstRejectedReadyToShipNotificationError([{ status: 'fulfilled', value: undefined }], () => true),
-    undefined,
   );
 });
 

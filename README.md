@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions remain for Firestore-triggered fulfillment work. Public inventory, pack status, pending-open reads, receipt claiming, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions remain only for Stripe fulfillment and its manual-review notification. Public inventory, pack status, pending-open reads, receipt claiming, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
 
 ## Shared domain core
 
@@ -45,6 +45,8 @@ Advanced frontend release controls remain available for recovery or separately m
   - `npm run deploy -- production --version-id <uuid> --token-file /path/to/cloudflare-token`
 - Atomically reconcile an already verified API/frontend pair when fresh production evidence exists:
   - `npm run release:finalize -- --api-version-id <uuid> --frontend-version-id <uuid> --confirm`
+- Approve the freshly verified current API as the rollback target before retiring an external compatibility path:
+  - `npm run release:approve-api-rollback -- --version-id <uuid> --confirm`
 
 The token file must contain only a scoped Cloudflare API token. Alternatively,
 set `CLOUDFLARE_API_TOKEN` in the invoking shell. The deploy helper strips
@@ -111,12 +113,14 @@ The migrated Firebase callables, including `issueReceipts`, `recoverMyDeliveryOr
 
 ### Notification delivery
 
-Transactional order and manual-review emails are rendered by the three existing
-Firebase document triggers, authenticated with `NOTIFICATION_ENQUEUE_SECRET`,
-and queued through the internal `mons-shop-api` producer route. `mons-shop-api`
-consumes `mons-shop-notification-emails` and sends through Resend from its queue
-handler. Failed transient deliveries retry five times before moving to
-`mons-shop-notification-emails-dlq`.
+Ready-to-ship buyer and shipper emails are rendered by `mons-shop-api` when the
+delivery order atomically enters `ready_to_ship`, then published directly through
+the `NOTIFICATION_EMAIL_QUEUE` binding. Pending Firestore outbox markers let a
+receipt retry resume Queue publication without repeating on-chain work. The
+remaining Stripe manual-review Firebase trigger authenticates with
+`NOTIFICATION_ENQUEUE_SECRET` and uses the internal producer route. The Worker
+consumes `mons-shop-notification-emails` and sends through Resend. Failed transient
+deliveries retry five times before moving to `mons-shop-notification-emails-dlq`.
 
 - Validate the HTTP and notification handlers, generated bindings, TypeScript,
   unit tests, bundling, and startup together with `npm run check:api`.
@@ -150,7 +154,9 @@ hash checks or API smoke and benchmark before touching triggers or evidence.
 Production evidence is written only after both `mons.shop` and `www.mons.shop`
 pass their smoke tests. The release finalization command
 requires both IDs, matching fresh evidence, and a deliberate `--confirm`; it never
-deploys or changes the approved rollback pair.
+deploys or changes the approved rollback pair. The separate API rollback approval
+command requires fresh API evidence, accepts only the current API version, preserves
+the approved frontend, and commits only the release manifest.
 
 Production promotion reads the pinned Wrangler's `deployments status --json`
 before and after every mutation. It proceeds only from a stable 100% deployment
@@ -217,7 +223,7 @@ suite passes.
   - Set or rotate with `wrangler versions secret put STRIPE_WEBHOOK_SECRET --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env`, then promote the resulting combined version through the guarded API release flow.
 - `RESEND_API_KEY` (`mons-shop-api` outbound transactional-email secret; use a Resend Sending Access key restricted to `support.mons.shop`)
   - Later API versions inherit it; rotate it as an API Worker secret and promote only the exact reviewed combined version.
-- `NOTIFICATION_ENQUEUE_SECRET` (shared HMAC secret for the three Firebase notification producers and the internal `mons-shop-api` queue endpoint)
+- `NOTIFICATION_ENQUEUE_SECRET` (shared HMAC secret for the remaining Firebase manual-review producer and the internal `mons-shop-api` queue endpoint)
   - Store the same randomly generated 32-byte value in Firebase Secret Manager and the API Worker's secret set before uploading its candidate. Never pass it as a command argument or print it.
   - The test-email command reads this secret from the shell or Firebase Secret Manager and never accesses the Resend key.
 - `RESEND_CONTACTS_API_KEY` (`mons-shop-api` Worker secret used only by `POST /notifications/subscribe`; requires Resend Full Access to manage Contacts)

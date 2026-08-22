@@ -39,6 +39,8 @@ type RecordFrontendProductionOptions = FinalizeOptions & {
   expectedCurrentProduction: ReleaseVersionPair;
 };
 
+type ApproveCurrentApiRollbackOptions = FinalizeOptions;
+
 export type ProductionEvidenceKind = 'api' | 'frontend';
 
 export type ProductionEvidence = {
@@ -316,6 +318,37 @@ export function recordFrontendProductionVersion(
     },
   };
   return writeReleaseManifest(path, next);
+}
+
+export function approveCurrentApiRollback(
+  versionId: string,
+  options: ApproveCurrentApiRollbackOptions = {},
+): ReleaseManifest {
+  if (!cloudflareVersionIdPattern.test(versionId)) fail('The API rollback version ID must be an exact UUID.');
+  const path = resolve(options.manifestPath || releaseManifestPath);
+  const now = options.now || new Date();
+  if (!Number.isFinite(now.getTime())) fail('The release timestamp is invalid.');
+  const normalizedVersionId = versionId.toLowerCase();
+  requireProductionEvidence('api', normalizedVersionId, { directory: options.evidenceDirectory, now });
+  const current = readReleaseManifest(path);
+  if (current.currentProduction.apiVersionId.toLowerCase() !== normalizedVersionId) {
+    fail('Only the current production API version can be approved as the rollback target.');
+  }
+  if (
+    current.currentProduction.frontendVersionId.toLowerCase() !==
+    current.approvedRollback.frontendVersionId.toLowerCase()
+  ) {
+    fail('The current frontend does not match the approved rollback frontend.');
+  }
+  if (current.approvedRollback.apiVersionId.toLowerCase() === normalizedVersionId) return current;
+  return writeReleaseManifest(path, {
+    ...current,
+    recordedAt: now.toISOString(),
+    approvedRollback: {
+      apiVersionId: normalizedVersionId,
+      frontendVersionId: current.approvedRollback.frontendVersionId.toLowerCase(),
+    },
+  });
 }
 
 function writeReleaseManifest(path: string, next: ReleaseManifest): ReleaseManifest {

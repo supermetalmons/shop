@@ -1317,6 +1317,14 @@ test('migrated buyer shipped notification is absent from Firebase exports and de
   assert.equal(scripts['decommission:firebase-buyer-shipped-notification'], undefined);
 });
 
+test('migrated ready-to-ship notification is absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+  const scripts = (JSON.parse(packageJson) as { scripts: Record<string, string> }).scripts;
+  assert.doesNotMatch(functionsSource, /export const notifyShippersOnDeliveryReadyToShip\b/);
+  assert.doesNotMatch(scripts['deploy:firebaseNewDrops'], /functions:notifyShippersOnDeliveryReadyToShip(?:,|$)/);
+});
+
 test('browser source has no direct Firestore data access', () => {
   const sourceRoot = new URL('../src/', import.meta.url);
   const files = (directory: URL): URL[] => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {

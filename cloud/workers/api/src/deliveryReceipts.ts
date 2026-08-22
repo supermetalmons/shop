@@ -110,6 +110,14 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
+import {
+  READY_TO_SHIP_NOTIFICATION_PENDING,
+  READY_TO_SHIP_NOTIFICATION_QUEUED,
+  createReadyToShipNotificationJobs,
+  createReadyToShipNotificationOutbox,
+  pendingReadyToShipNotifications,
+  type PendingReadyToShipNotification,
+} from './readyToShipNotifications.js';
 
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
@@ -166,7 +174,7 @@ type RecoverRequest = z.infer<typeof recoverSchema>;
 
 type DeliveryReceiptsEnv = Pick<
   Env,
-  'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
+  'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE'
 >;
 
 type DeliveryReceiptErrorCode =
@@ -198,6 +206,16 @@ class ReceiptBatchRetryExhaustedError extends DeliveryReceiptError {
       lastError: transactionErrorMessage(lastError),
     });
     this.name = 'ReceiptBatchRetryExhaustedError';
+  }
+}
+
+class ReadyToShipNotificationEnqueueError extends DeliveryReceiptError {
+  constructor() {
+    super(
+      'unavailable',
+      'Delivery completed, but notification emails could not be queued. Retry to finish notification delivery.',
+    );
+    this.name = 'ReadyToShipNotificationEnqueueError';
   }
 }
 
@@ -2282,7 +2300,7 @@ async function markDeliveryReady(
     receiptTxs: string[];
     irlClaims: Array<{ code: string; boxId: number; boxAssetId: string; dudeIds: number[] }>;
   },
-): Promise<void> {
+): Promise<DeliveryOrderDocument> {
   const fields: Record<string, unknown> = {
     dropId: runtime.dropId,
     status: 'ready_to_ship',
@@ -2291,8 +2309,18 @@ async function markDeliveryReady(
     receiptTxs: result.receiptTxs,
     ...(result.irlClaims.length ? { irlClaims: result.irlClaims } : {}),
   };
+  const readyOrder = { ...document.fields, ...fields };
+  const notificationOutbox = createReadyToShipNotificationOutbox({
+    before: document.fields,
+    after: readyOrder,
+    deliveryId: Number(document.id),
+    dropId: runtime.dropId,
+  });
+  Object.assign(fields, notificationOutbox.fields);
+  Object.assign(readyOrder, notificationOutbox.fields);
   const updateMask = [
     ...Object.keys(fields),
+    ...notificationOutbox.fieldPaths.filter((fieldPath) => !Object.hasOwn(fields, fieldPath)),
     'receiptRecovery.leaseExpiresAt',
     'receiptRecovery.lastErrorCode',
     'receiptRecovery.lastErrorMessage',
@@ -2313,6 +2341,114 @@ async function markDeliveryReady(
     ],
     currentDocument: { exists: true },
   })]);
+  return { ...document, fields: readyOrder };
+}
+
+async function markReadyToShipNotificationsQueued(
+  context: FirestoreContext,
+  documentPath: string,
+  pending: readonly PendingReadyToShipNotification[],
+): Promise<string[]> {
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    const document = await readDocument(context, documentPath);
+    if (!document) return [];
+    const matching = pending.filter((marker) => (
+      document.fields[marker.stateField] === READY_TO_SHIP_NOTIFICATION_PENDING &&
+      document.fields[marker.jobIdField] === marker.jobId &&
+      document.fields[marker.idempotencyKeyField] === marker.idempotencyKey
+    ));
+    if (!matching.length) return [];
+    try {
+      await commitWrites(context, [updateWrite({
+        path: documentPath,
+        fields: Object.fromEntries(matching.flatMap((marker) => [
+          [marker.stateField, READY_TO_SHIP_NOTIFICATION_QUEUED],
+          [marker.jobIdField, marker.jobId],
+        ])),
+        updateMask: matching.flatMap((marker) => [marker.stateField, marker.jobIdField]),
+        transforms: matching.map((marker) => ({
+          fieldPath: marker.queuedAtField,
+          setToServerValue: 'REQUEST_TIME',
+        })),
+        currentDocument: { updateTime: document.updateTime },
+      })]);
+      return matching.map((marker) => marker.kind);
+    } catch (error) {
+      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      throw error;
+    }
+  }
+  return [];
+}
+
+async function publishReadyToShipNotifications(args: {
+  context: FirestoreContext;
+  deliveryId: number;
+  document: DeliveryOrderDocument;
+  dropId: string;
+  queue: Env['NOTIFICATION_EMAIL_QUEUE'];
+}): Promise<void> {
+  let pending: PendingReadyToShipNotification[];
+  let jobs: Awaited<ReturnType<typeof createReadyToShipNotificationJobs>>;
+  try {
+    pending = pendingReadyToShipNotifications(args.document.fields);
+    if (!pending.length) {
+      console.log({
+        event: 'ready_to_ship_notifications_skipped',
+        dropId: args.dropId,
+        deliveryId: args.deliveryId,
+        reason: 'no-pending-markers',
+      });
+      return;
+    }
+    jobs = await createReadyToShipNotificationJobs({
+      order: args.document.fields,
+      deliveryId: args.deliveryId,
+      dropId: args.dropId,
+      pending,
+    });
+    await args.queue.sendBatch(jobs.map((job) => ({ body: job, contentType: 'json' })));
+  } catch (error) {
+    console.error({
+      event: 'ready_to_ship_notifications_enqueue_failed',
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
+      error: summarizeError(error),
+    });
+    throw new ReadyToShipNotificationEnqueueError();
+  }
+  console.log({
+    event: 'ready_to_ship_notifications_queued',
+    dropId: args.dropId,
+    deliveryId: args.deliveryId,
+    jobs: jobs.map((job) => ({ jobId: job.jobId, kind: job.kind })),
+  });
+  try {
+    const finalizedKinds = await markReadyToShipNotificationsQueued(
+      args.context,
+      args.document.path,
+      pending,
+    );
+    if (finalizedKinds.length !== pending.length) {
+      console.warn({
+        event: 'ready_to_ship_notifications_marker_finalization_failed',
+        dropId: args.dropId,
+        deliveryId: args.deliveryId,
+        reason: 'pending-marker-changed',
+        finalizedKinds,
+      });
+    }
+  } catch (error) {
+    console.error({
+      event: 'ready_to_ship_notifications_marker_finalization_failed',
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
+      error: summarizeError(error),
+    });
+  }
 }
 
 async function recordDeliveryClose(
@@ -2547,6 +2683,13 @@ async function retryIssueReceipts(args: {
     throw new DeliveryReceiptError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.');
   }
   if (document.fields.status === 'ready_to_ship') {
+    await publishReadyToShipNotifications({
+      context: args.firestore,
+      deliveryId,
+      document,
+      dropId: runtime.dropId,
+      queue: args.env.NOTIFICATION_EMAIL_QUEUE,
+    });
     let closeDeliveryTx = typeof document.fields.closeDeliveryTx === 'string'
       ? document.fields.closeDeliveryTx
       : null;
@@ -2670,7 +2813,7 @@ async function retryIssueReceipts(args: {
       irlClaims.push({ code, boxId, boxAssetId: item.assetId, dudeIds });
     }
   }
-  await markDeliveryReady(args.firestore, document, runtime, {
+  const readyDocument = await markDeliveryReady(args.firestore, document, runtime, {
     signature: verified.signature,
     receiptsMinted,
     receiptTxs,
@@ -2685,6 +2828,13 @@ async function retryIssueReceipts(args: {
     }, runtime, deliveryId, document.fields),
     { dropId: runtime.dropId, deliveryId },
   );
+  await publishReadyToShipNotifications({
+    context: args.firestore,
+    deliveryId,
+    document: readyDocument,
+    dropId: runtime.dropId,
+    queue: args.env.NOTIFICATION_EMAIL_QUEUE,
+  });
   let closeDeliveryTx: string | null = null;
   try {
     closeDeliveryTx = await closeDeliveryPda({
@@ -2991,6 +3141,11 @@ async function recoverReceiptsRequest(
           errorCode,
         ).catch(() => undefined);
       }
+      await finalizeDeliveryRecoveryAttempt(cleanup, document.path, {
+        errorCode,
+        message,
+      }).catch(() => undefined);
+      if (error instanceof ReadyToShipNotificationEnqueueError) throw error;
       results.push({
         ...base,
         outcome,
@@ -2998,10 +3153,6 @@ async function recoverReceiptsRequest(
         ...(errorCode ? { errorCode } : {}),
         ...(message ? { message } : {}),
       });
-      await finalizeDeliveryRecoveryAttempt(cleanup, document.path, {
-        errorCode,
-        message,
-      }).catch(() => undefined);
       console.warn({
         event: 'delivery_receipt_recovery_failed',
         dropId: base.dropId,
@@ -3185,10 +3336,14 @@ export const deliveryReceiptTestHooks = {
   DeliveryReceiptError,
   handlePreparedRecoveryFailure,
   issueReceiptsRequest,
+  markDeliveryReady,
+  markReadyToShipNotificationsQueued,
   normalizeAssignedDudeIds,
   pendingReceiptItems,
   ReceiptBatchRetryExhaustedError,
+  ReadyToShipNotificationEnqueueError,
   recoverReceiptsRequest,
+  publishReadyToShipNotifications,
   runtimeForDrop,
   rollbackTransactionBestEffort,
   runDeliveryRecoveryStateQuery,

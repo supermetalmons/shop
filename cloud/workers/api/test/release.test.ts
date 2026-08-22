@@ -29,6 +29,7 @@ import {
   smokeFrontendOrigin,
 } from '../../../../scripts/deploy-cloudflare.ts';
 import {
+  approveCurrentApiRollback,
   finalizeReleaseManifest,
   isProductionEvidence,
   parseFinalizeReleaseArgs,
@@ -36,6 +37,7 @@ import {
   recordFrontendProductionVersion,
   writeProductionEvidence,
 } from '../../../../scripts/finalize-cloudflare-release.ts';
+import { parseApproveApiRollbackArgs } from '../../../../scripts/approve-cloudflare-api-rollback.ts';
 import {
   CloudflareProcessFailure,
   cloudflareReleaseExitCode,
@@ -3567,10 +3569,10 @@ test('API release resolves the Helius key without exposing it as an argument', (
 test('tracked release metadata is exact and excludes direct-Helius frontend rollback', () => {
   const manifest = deployApiTestHooks.readReleaseManifest();
   assert.equal(deployApiTestHooks.isReleaseManifest(manifest), true);
-  assert.deepEqual(manifest.approvedRollback, {
-    apiVersionId: '2a6a6162-3c5c-4d00-b143-68c4a5f1d7f8',
-    frontendVersionId: '9eb48e48-4574-49a4-a400-bf5fdd2a7eaf',
-  });
+  assert.match(manifest.currentProduction.apiVersionId, /^[0-9a-f-]{36}$/);
+  assert.match(manifest.currentProduction.frontendVersionId, /^[0-9a-f-]{36}$/);
+  assert.match(manifest.approvedRollback.apiVersionId, /^[0-9a-f-]{36}$/);
+  assert.match(manifest.approvedRollback.frontendVersionId, /^[0-9a-f-]{36}$/);
   assert.equal(manifest.allowDirectHeliusFrontendRollback, false);
 });
 
@@ -3596,6 +3598,67 @@ test('release finalization requires both explicit IDs and deliberate confirmatio
     ]),
     /without --confirm/,
   );
+});
+
+test('API rollback approval requires the current verified API and a matching frontend', () => {
+  const versionId = randomUUID();
+  assert.deepEqual(
+    parseApproveApiRollbackArgs(['--version-id', versionId, '--confirm']),
+    { versionId, confirm: true },
+  );
+  assert.throws(
+    () => parseApproveApiRollbackArgs(['--version-id', versionId]),
+    /without --confirm/,
+  );
+
+  const directory = mkdtempSync(join(tmpdir(), 'mons-shop-api-rollback-approval-test-'));
+  const path = join(directory, 'release-manifest.json');
+  const evidenceDirectory = join(directory, 'evidence');
+  const now = new Date('2026-08-22T18:00:00.000Z');
+  const before = deployApiTestHooks.readReleaseManifest();
+  const current = {
+    ...before,
+    currentProduction: {
+      apiVersionId: versionId,
+      frontendVersionId: before.approvedRollback.frontendVersionId,
+    },
+  };
+  try {
+    writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { encoding: 'utf8', mode: 0o640 });
+    assert.throws(
+      () => approveCurrentApiRollback(versionId, { evidenceDirectory, manifestPath: path, now }),
+      /requires api evidence/,
+    );
+    writeProductionEvidence('api', versionId, { directory: evidenceDirectory, now });
+    const nonCurrentVersionId = randomUUID();
+    writeProductionEvidence('api', nonCurrentVersionId, { directory: evidenceDirectory, now });
+    assert.throws(
+      () => approveCurrentApiRollback(nonCurrentVersionId, { evidenceDirectory, manifestPath: path, now }),
+      /Only the current production API version/,
+    );
+    const mismatchedFrontend = {
+      ...current,
+      currentProduction: { ...current.currentProduction, frontendVersionId: randomUUID() },
+    };
+    writeFileSync(path, `${JSON.stringify(mismatchedFrontend, null, 2)}\n`, { encoding: 'utf8', mode: 0o640 });
+    assert.throws(
+      () => approveCurrentApiRollback(versionId, { evidenceDirectory, manifestPath: path, now }),
+      /does not match the approved rollback frontend/,
+    );
+    writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { encoding: 'utf8', mode: 0o640 });
+    const approved = approveCurrentApiRollback(versionId, { evidenceDirectory, manifestPath: path, now });
+    assert.deepEqual(approved.currentProduction, current.currentProduction);
+    assert.deepEqual(approved.approvedRollback, current.currentProduction);
+    assert.equal(approved.recordedAt, now.toISOString());
+    assert.equal(statSync(path).mode & 0o777, 0o640);
+    assert.deepEqual(approveCurrentApiRollback(versionId, {
+      evidenceDirectory,
+      manifestPath: path,
+      now: new Date(now.getTime() + 1_000),
+    }), approved);
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
 });
 
 test('release finalization atomically updates production IDs while preserving rollback metadata', () => {

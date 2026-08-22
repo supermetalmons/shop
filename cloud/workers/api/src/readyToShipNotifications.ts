@@ -1,0 +1,253 @@
+import {
+  buildBuyerVisibleOrderEmailItems,
+  buildShipperVisibleOrderEmailItems,
+} from '../../../../functions/src/orderEmailItems.js';
+import {
+  buildBuyerOrderReceivedEmailContent,
+  buildShipperReadyToShipEmailContent,
+  fulfillmentAppUrlForOrder,
+  summarizeShipperReadyOrderItems,
+} from '../../../../functions/src/notificationEmails.js';
+import {
+  planReadyToShipOrderNotifications,
+  resolveNotificationDeliveryId,
+  shouldNotifyShippersForDeliveryReadyToShipWrite,
+} from '../../../../functions/src/notifications.js';
+import {
+  CARD_FULFILLMENT_DROP_IDS,
+  CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
+} from '../../../../functions/src/shared/fulfillmentAccess.js';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../functions/src/shared/fulfillmentSources.js';
+import { DEPLOYMENT_DROPS } from '../../../../functions/src/shared/deploymentRegistry.js';
+import {
+  createNotificationEmailJobV1,
+  isNotificationEmailIdempotencyKey,
+  isNotificationEmailJobId,
+  type NotificationEmailJobV1,
+} from '../../../../functions/src/shared/notificationEmailJob.js';
+
+export const READY_TO_SHIP_NOTIFICATION_PENDING = 'pending' as const;
+export const READY_TO_SHIP_NOTIFICATION_QUEUED = 'queued' as const;
+
+export const BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD = 'buyerOrderReceivedEmailState';
+export const BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD = 'buyerOrderReceivedEmailJobId';
+export const BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD = 'buyerOrderReceivedEmailIdempotencyKey';
+export const BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD = 'buyerOrderReceivedEmailQueuedAt';
+export const SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD = 'shipperReadyToShipEmailState';
+export const SHIPPER_READY_TO_SHIP_EMAIL_JOB_ID_FIELD = 'shipperReadyToShipEmailJobId';
+export const SHIPPER_READY_TO_SHIP_EMAIL_IDEMPOTENCY_KEY_FIELD = 'shipperReadyToShipEmailIdempotencyKey';
+export const SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD = 'shipperReadyToShipEmailQueuedAt';
+
+type ReadyToShipNotificationKind = 'buyer_order_received' | 'shipper_ready_to_ship';
+
+type ReadyToShipNotificationMarkerDefinition = {
+  kind: ReadyToShipNotificationKind;
+  stateField: string;
+  jobIdField: string;
+  idempotencyKeyField: string;
+  queuedAtField: string;
+  idempotencySuffix: 'order_received' | 'ready_to_ship';
+};
+
+export type PendingReadyToShipNotification = ReadyToShipNotificationMarkerDefinition & {
+  jobId: string;
+  idempotencyKey: string;
+};
+
+export type ReadyToShipNotificationOutbox = {
+  fields: Record<string, unknown>;
+  fieldPaths: string[];
+  pending: PendingReadyToShipNotification[];
+};
+
+const MARKERS: readonly ReadyToShipNotificationMarkerDefinition[] = [
+  {
+    kind: 'buyer_order_received',
+    stateField: BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
+    jobIdField: BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD,
+    idempotencyKeyField: BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD,
+    queuedAtField: BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD,
+    idempotencySuffix: 'order_received',
+  },
+  {
+    kind: 'shipper_ready_to_ship',
+    stateField: SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD,
+    jobIdField: SHIPPER_READY_TO_SHIP_EMAIL_JOB_ID_FIELD,
+    idempotencyKeyField: SHIPPER_READY_TO_SHIP_EMAIL_IDEMPOTENCY_KEY_FIELD,
+    queuedAtField: SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD,
+    idempotencySuffix: 'ready_to_ship',
+  },
+];
+
+const SHIPPER_READY_TO_SHIP_DROP_IDS = new Set([
+  'little_swag_boxes',
+  'poncho_drifella',
+  'drifella_shirt',
+  'little_swag_hoodies',
+  ...CARD_FULFILLMENT_DROP_IDS,
+  ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
+]);
+const SHIPPER_READY_TO_SHIP_RECIPIENTS = ['supermetalxbosch@gmail.com'] as const;
+
+function markerForKind(kind: ReadyToShipNotificationKind): ReadyToShipNotificationMarkerDefinition {
+  const marker = MARKERS.find((candidate) => candidate.kind === kind);
+  if (!marker) throw new Error(`Ready-to-ship notification marker is missing for ${kind}`);
+  return marker;
+}
+
+export function shipperReadyToShipRecipients(dropId: string): string[] {
+  return SHIPPER_READY_TO_SHIP_DROP_IDS.has(dropId)
+    ? [...SHIPPER_READY_TO_SHIP_RECIPIENTS]
+    : [];
+}
+
+function readyToShipNotificationPlan(order: Record<string, unknown>, dropId: string) {
+  const address = order.addressSnapshot;
+  const buyerEmail = address && typeof address === 'object' && !Array.isArray(address)
+    ? (address as Record<string, unknown>).email
+    : undefined;
+  return planReadyToShipOrderNotifications({
+    buyerEmail,
+    shipperRecipients: shipperReadyToShipRecipients(dropId),
+  });
+}
+
+function notificationDeliveryId(order: Record<string, unknown>, deliveryId: number): number {
+  const resolved = resolveNotificationDeliveryId({
+    deliveryDocId: deliveryId,
+    storedDeliveryId: order.deliveryId,
+  });
+  if (!resolved) throw new Error('Ready-to-ship notification delivery ID is invalid');
+  return resolved;
+}
+
+function pendingMarker(
+  marker: ReadyToShipNotificationMarkerDefinition,
+  dropId: string,
+  deliveryId: number,
+  createJobId: () => string,
+): PendingReadyToShipNotification {
+  const jobId = createJobId();
+  const idempotencyKey = `${dropId}:${deliveryId}:${marker.idempotencySuffix}`;
+  if (!isNotificationEmailJobId(jobId)) throw new Error('Ready-to-ship notification job ID is invalid');
+  if (!isNotificationEmailIdempotencyKey(idempotencyKey)) {
+    throw new Error('Ready-to-ship notification idempotency key is invalid');
+  }
+  return { ...marker, jobId, idempotencyKey };
+}
+
+export function createReadyToShipNotificationOutbox(args: {
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  deliveryId: number;
+  dropId: string;
+  createJobId?: () => string;
+}): ReadyToShipNotificationOutbox {
+  if (!shouldNotifyShippersForDeliveryReadyToShipWrite({
+    before: args.before,
+    after: args.after,
+    ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
+  })) {
+    return { fields: {}, fieldPaths: [], pending: [] };
+  }
+  const deliveryId = notificationDeliveryId(args.after, args.deliveryId);
+  const plan = readyToShipNotificationPlan(args.after, args.dropId);
+  const createJobId = args.createJobId || (() => crypto.randomUUID());
+  const pending = [
+    ...(plan.buyerRecipient
+      ? [pendingMarker(markerForKind('buyer_order_received'), args.dropId, deliveryId, createJobId)]
+      : []),
+    ...(plan.shipperRecipients.length
+      ? [pendingMarker(markerForKind('shipper_ready_to_ship'), args.dropId, deliveryId, createJobId)]
+      : []),
+  ];
+  const fields: Record<string, unknown> = {};
+  const fieldPaths: string[] = [];
+  for (const marker of pending) {
+    fields[marker.stateField] = READY_TO_SHIP_NOTIFICATION_PENDING;
+    fields[marker.jobIdField] = marker.jobId;
+    fields[marker.idempotencyKeyField] = marker.idempotencyKey;
+    fieldPaths.push(marker.stateField, marker.jobIdField, marker.idempotencyKeyField, marker.queuedAtField);
+  }
+  return { fields, fieldPaths, pending };
+}
+
+export function pendingReadyToShipNotifications(
+  order: Record<string, unknown>,
+): PendingReadyToShipNotification[] {
+  if (order.status !== 'ready_to_ship') return [];
+  const pending: PendingReadyToShipNotification[] = [];
+  for (const marker of MARKERS) {
+    if (order[marker.stateField] !== READY_TO_SHIP_NOTIFICATION_PENDING) continue;
+    const jobId = order[marker.jobIdField];
+    const idempotencyKey = order[marker.idempotencyKeyField];
+    if (!isNotificationEmailJobId(jobId) || !isNotificationEmailIdempotencyKey(idempotencyKey)) {
+      throw new Error(`Pending ${marker.kind} notification marker is invalid`);
+    }
+    pending.push({ ...marker, jobId, idempotencyKey });
+  }
+  return pending;
+}
+
+export async function createReadyToShipNotificationJobs(args: {
+  order: Record<string, unknown>;
+  deliveryId: number;
+  dropId: string;
+  pending: readonly PendingReadyToShipNotification[];
+}): Promise<NotificationEmailJobV1[]> {
+  const deliveryId = notificationDeliveryId(args.order, args.deliveryId);
+  const drop = DEPLOYMENT_DROPS[args.dropId];
+  if (!drop) throw new Error('Ready-to-ship notification drop is unsupported');
+  const plan = readyToShipNotificationPlan(args.order, args.dropId);
+  const dropName = drop.displayName || drop.collectionName || args.dropId;
+  const jobs: NotificationEmailJobV1[] = [];
+  for (const marker of args.pending) {
+    if (marker.kind === 'buyer_order_received') {
+      if (!plan.buyerRecipient) throw new Error('Buyer order received notification recipient is unavailable');
+      const message = {
+        idempotencyKey: marker.idempotencyKey,
+        recipients: [plan.buyerRecipient],
+        dropId: args.dropId,
+        dropName,
+        deliveryId,
+        items: await buildBuyerVisibleOrderEmailItems(args.order, { dropId: args.dropId }),
+      };
+      const email = buildBuyerOrderReceivedEmailContent(message);
+      jobs.push(createNotificationEmailJobV1({
+        jobId: marker.jobId,
+        kind: marker.kind,
+        idempotencyKey: marker.idempotencyKey,
+        recipients: message.recipients,
+        subject: email.subject,
+        text: email.text,
+        html: email.html,
+        context: { dropId: args.dropId, deliveryId },
+      }));
+      continue;
+    }
+    if (!plan.shipperRecipients.length) throw new Error('Shipper ready-to-ship notification recipient is unavailable');
+    const message = {
+      idempotencyKey: marker.idempotencyKey,
+      recipients: plan.shipperRecipients,
+      dropId: args.dropId,
+      dropName,
+      deliveryId,
+      owner: typeof args.order.owner === 'string' ? args.order.owner : '',
+      items: summarizeShipperReadyOrderItems(args.order),
+      itemPreviews: await buildShipperVisibleOrderEmailItems(args.order, { dropId: args.dropId }),
+      fulfillmentUrl: fulfillmentAppUrlForOrder(args.dropId, deliveryId),
+    };
+    const email = buildShipperReadyToShipEmailContent(message);
+    jobs.push(createNotificationEmailJobV1({
+      jobId: marker.jobId,
+      kind: marker.kind,
+      idempotencyKey: marker.idempotencyKey,
+      recipients: message.recipients,
+      subject: email.subject,
+      text: email.text,
+      html: email.html,
+      context: { dropId: args.dropId, deliveryId },
+    }));
+  }
+  return jobs;
+}
