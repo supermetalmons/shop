@@ -60,7 +60,7 @@ function git(args: readonly string[]): string {
   if (result.status !== 0) {
     fail(String(result.stderr || result.stdout || `git ${args[0]} failed`).trim());
   }
-  return String(result.stdout || '').trim();
+  return String(result.stdout || '').trimEnd();
 }
 
 function commitApprovedRollback(versionId: string): void {
