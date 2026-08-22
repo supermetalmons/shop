@@ -33,6 +33,7 @@ const CONFIG = Keypair.generate().publicKey;
 const TREASURY = Keypair.generate().publicKey;
 const CERTIFICATE = Keypair.generate().publicKey;
 const BLOCKHASH = Keypair.generate().publicKey.toBase58();
+const BLOCKHASH_CONTEXT_SLOT = 123;
 const HASH = bs58.encode(new Uint8Array(32).fill(7));
 const DROP_ID = 'irl_claim_test';
 
@@ -144,7 +145,10 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     fetchOwnedAssets: async () => [certificateAsset()],
     fetchAssetProof: async () => ({ tree_id: RECEIPTS_TREE.toBase58(), root: HASH, proof: [] }),
     loadOnchainState: async () => ({ config: ONCHAIN_CONFIG, coreCollection: COLLECTION }),
-    loadLatestBlockhash: async () => BLOCKHASH,
+    loadLatestBlockhash: async () => ({
+      blockhash: BLOCKHASH,
+      blockhashContextSlot: BLOCKHASH_CONTEXT_SLOT,
+    }),
     loadLookupTable: async () => [],
     providerFetch: async () => {
       throw new Error('unexpected provider fetch');
@@ -165,6 +169,7 @@ test('IRL claim handler returns the expected partially signed transaction', asyn
   assert.equal(result.dropId, DROP_ID);
   const payload = await result.response.json() as {
     encodedTx: string;
+    blockhashContextSlot: number;
     dropId: string;
     certificates: number[];
     certificateId: string;
@@ -172,6 +177,7 @@ test('IRL claim handler returns the expected partially signed transaction', asyn
   };
   assert.deepEqual(payload, {
     encodedTx: payload.encodedTx,
+    blockhashContextSlot: BLOCKHASH_CONTEXT_SLOT,
     dropId: DROP_ID,
     certificates: [1, 2, 3],
     certificateId: CERTIFICATE.toBase58(),
@@ -254,10 +260,20 @@ test('IRL claim provider adapters bound responses and retry transient reads once
       calls += 1;
       if (calls === 1) return new Response(null, { status: 503 });
       const body = JSON.parse(String(init?.body)) as { id: string };
-      return Response.json({ jsonrpc: '2.0', id: body.id, result: { value: { blockhash: BLOCKHASH } } });
+      return Response.json({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: {
+          context: { slot: BLOCKHASH_CONTEXT_SLOT },
+          value: { blockhash: BLOCKHASH, lastValidBlockHeight: 456 },
+        },
+      });
     },
   }, runtime);
-  assert.equal(blockhash, BLOCKHASH);
+  assert.deepEqual(blockhash, {
+    blockhash: BLOCKHASH,
+    blockhashContextSlot: BLOCKHASH_CONTEXT_SLOT,
+  });
   assert.equal(calls, 2);
 
   await assert.rejects(

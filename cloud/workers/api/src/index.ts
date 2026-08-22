@@ -64,7 +64,7 @@ import {
   type FirestorePackStatusFetch,
 } from './firestorePackStatus.js';
 import { handleNotificationEnqueue, NOTIFICATION_ENQUEUE_PATH } from './notificationEnqueue.js';
-import { processNotificationEmailBatch } from './notificationEmailConsumer.js';
+import { processNotificationEmailMessage } from './notificationEmailConsumer.js';
 import {
   STRIPE_CHECKOUT_SESSION_PATH,
   handleStripeCheckoutSession,
@@ -125,6 +125,7 @@ import {
 import {
   REVEAL_DUDES_PATH,
   handleRevealDudes,
+  processRevealBackgroundJobMessage,
 } from './revealDudes.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
@@ -156,6 +157,8 @@ const BASE_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
 };
 const PENDING_OPEN_DISCRIMINATOR_BASE58 = bs58.encode(PENDING_OPEN_BOX_DISCRIMINATOR);
+const NOTIFICATION_EMAIL_QUEUE_NAME = 'mons-shop-notification-emails';
+const REVEAL_BACKGROUND_QUEUE_NAME = 'mons-shop-reveal-reconciliation';
 const KNOWN_LOG_ROUTES = new Set([
   '/health',
   NOTIFICATION_ENQUEUE_PATH,
@@ -190,6 +193,52 @@ const KNOWN_LOG_ROUTES = new Set([
   ADMIN_IRL_REDEEM_PREPARE_PATH,
   REVEAL_DUDES_PATH,
 ]);
+
+type BackgroundJobProcessors = {
+  notification: typeof processNotificationEmailMessage;
+  reveal: typeof processRevealBackgroundJobMessage;
+  error: (entry: Record<string, unknown>) => void;
+};
+
+const defaultBackgroundJobProcessors: BackgroundJobProcessors = {
+  notification: processNotificationEmailMessage,
+  reveal: processRevealBackgroundJobMessage,
+  error: (entry) => console.error(entry),
+};
+
+export async function processBackgroundJobBatch(
+  batch: MessageBatch<unknown>,
+  env: Env,
+  overrides: Partial<BackgroundJobProcessors> = {},
+): Promise<void> {
+  const processors = { ...defaultBackgroundJobProcessors, ...overrides };
+  const processor = batch.queue === NOTIFICATION_EMAIL_QUEUE_NAME
+    ? processors.notification
+    : batch.queue === REVEAL_BACKGROUND_QUEUE_NAME ? processors.reveal : null;
+  if (!processor) {
+    processors.error({
+      event: 'background_job_unknown_queue',
+      queue: batch.queue,
+      messageCount: batch.messages.length,
+    });
+    for (const message of batch.messages) message.retry();
+    return;
+  }
+  for (const message of batch.messages) {
+    try {
+      await processor(message, env);
+    } catch (error) {
+      processors.error({
+        event: 'background_job_unhandled_error',
+        queue: batch.queue,
+        queueMessageId: message.id,
+        attempts: message.attempts,
+        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+      });
+      message.retry();
+    }
+  }
+}
 
 export type ProviderFetch = RpcProviderFetch;
 
@@ -1565,6 +1614,6 @@ export default {
     return handleRequest(request, env, {}, (promise) => ctx.waitUntil(promise));
   },
   queue(batch, env) {
-    return processNotificationEmailBatch(batch, env);
+    return processBackgroundJobBatch(batch, env);
   },
 } satisfies ExportedHandler<Env, unknown>;

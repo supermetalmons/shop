@@ -42,6 +42,8 @@ export type {
   RecoverDeliveryOrdersResult,
   ReconcileProfileStateRequest,
   ReconcileProfileStateResponse,
+  RevealDudesResponse,
+  RevealDudesSubmissionUnknownDetails,
   StripeCheckoutSessionRequest,
   StripeCheckoutSessionResponse,
   StripeReceiptClaimResult,

@@ -63,6 +63,7 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../functions/src/shared/solanaProgramAddresses.js';
+import { isNonZeroBase58Bytes } from '../../../../functions/src/shared/solanaRpcProxy.js';
 import {
   resolveWalletSessionBinding,
   WALLET_SESSION_COLLECTION,
@@ -185,7 +186,10 @@ type IrlClaimDependencies = {
   fetchOwnedAssets: (context: ProviderContext, runtime: IrlClaimRuntime, owner: string) => Promise<DasAsset[]>;
   fetchAssetProof: (context: ProviderContext, runtime: IrlClaimRuntime, assetId: string) => Promise<Record<string, unknown>>;
   loadOnchainState: (context: ProviderContext, runtime: IrlClaimRuntime) => Promise<OnchainState>;
-  loadLatestBlockhash: (context: ProviderContext, runtime: IrlClaimRuntime) => Promise<string>;
+  loadLatestBlockhash: (
+    context: ProviderContext,
+    runtime: IrlClaimRuntime,
+  ) => Promise<{ blockhash: string; blockhashContextSlot: number }>;
   loadLookupTable: (context: ProviderContext, runtime: IrlClaimRuntime) => Promise<AddressLookupTableAccount[]>;
 };
 
@@ -672,16 +676,29 @@ async function loadOnchainState(
   return { config: decoded, coreCollection: validateOnchainConfig(runtime, decoded) };
 }
 
-async function loadLatestBlockhash(context: ProviderContext, runtime: IrlClaimRuntime): Promise<string> {
+async function loadLatestBlockhash(
+  context: ProviderContext,
+  runtime: IrlClaimRuntime,
+): Promise<{ blockhash: string; blockhashContextSlot: number }> {
   const result = await rpcCall(context, runtime, 'getLatestBlockhash', [{ commitment: 'confirmed' }]);
+  const contextValue = isRecord(result) ? result.context : undefined;
   const value = isRecord(result) ? result.value : undefined;
   const blockhash = isRecord(value) && typeof value.blockhash === 'string' ? value.blockhash : '';
-  try {
-    if (!blockhash || new PublicKey(blockhash).toBytes().length !== 32) throw new Error('invalid');
-  } catch {
+  const lastValidBlockHeight = isRecord(value) ? value.lastValidBlockHeight : undefined;
+  if (
+    !isRecord(contextValue) ||
+    !Number.isSafeInteger(contextValue.slot) ||
+    Number(contextValue.slot) < 0 ||
+    !Number.isSafeInteger(lastValidBlockHeight) ||
+    Number(lastValidBlockHeight) < 0 ||
+    !isNonZeroBase58Bytes(blockhash, 32)
+  ) {
     throw new IrlClaimError('unavailable', 'Claim provider returned an invalid blockhash.');
   }
-  return blockhash;
+  return {
+    blockhash,
+    blockhashContextSlot: Number(contextValue.slot),
+  };
 }
 
 async function loadLookupTable(
@@ -1147,18 +1164,19 @@ async function prepareClaim(args: {
     burnInstruction(ownerKey, onchain.coreCollection, proof),
     mintReceiptsInstruction(runtime, cosigner.publicKey, ownerKey, onchain.coreCollection, dudeIds),
   ];
-  const blockhash = await args.dependencies.loadLatestBlockhash(args.providerContext, runtime);
+  const latestBlockhash = await args.dependencies.loadLatestBlockhash(args.providerContext, runtime);
   const raw = await buildPreparedTransaction({
     context: args.providerContext,
     runtime,
     instructions,
     owner: ownerKey,
     cosigner,
-    blockhash,
+    blockhash: latestBlockhash.blockhash,
     loadLookupTable: args.dependencies.loadLookupTable,
   });
   return {
     encodedTx: Buffer.from(raw).toString('base64'),
+    blockhashContextSlot: latestBlockhash.blockhashContextSlot,
     dropId,
     certificates: dudeIds,
     certificateId,

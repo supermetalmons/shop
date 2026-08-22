@@ -11,19 +11,20 @@ import {
   resolveUpcomingDropRouteByPath,
 } from './lib/dropConfig';
 import { installMobileInteractionGuards } from './lib/mobileInteractionGuards';
+import { canonicalProductionUrl } from './lib/canonicalOrigin';
 import ShopRoute from './ShopRoute';
 import { BackgroundBlurProvider } from './components/BackgroundBlurLayer';
 import './styles.css';
 
-if (!window.Buffer) {
-  window.Buffer = Buffer;
+const canonicalUrl = canonicalProductionUrl(window.location.href);
+if (canonicalUrl) {
+  window.location.replace(canonicalUrl);
+} else {
+  if (!window.Buffer) window.Buffer = Buffer;
+  installMobileInteractionGuards();
+  document.title = getBuildInfo() === 'local dev' ? 'localshop' : 'mons.shop';
 }
 
-installMobileInteractionGuards();
-
-document.title = getBuildInfo() === 'local dev' ? 'localshop' : 'mons.shop';
-
-const queryClient = new QueryClient();
 const canonicalFulfillmentPath = '/fulfillment';
 const canonicalDrifPath = '/notify_me';
 const canonicalCardNft2WipPath = '/card_nft_2/wip';
@@ -155,12 +156,15 @@ function RoutedContent({ route }: RoutedContentProps) {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-  <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BackgroundBlurProvider>
-        <RoutedApp />
-      </BackgroundBlurProvider>
-    </QueryClientProvider>
-  </React.StrictMode>,
-);
+if (!canonicalUrl) {
+  const queryClient = new QueryClient();
+  ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+    <React.StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <BackgroundBlurProvider>
+          <RoutedApp />
+        </BackgroundBlurProvider>
+      </QueryClientProvider>
+    </React.StrictMode>,
+  );
+}

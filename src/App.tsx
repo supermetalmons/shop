@@ -53,6 +53,7 @@ import {
   requestClaimTx,
   requestDeliveryTx,
   revealDudes,
+  revealDudesSubmissionUnknownDetails,
   saveEncryptedAddress,
   supportsFrontendPackStatus,
   issueReceipts,
@@ -218,6 +219,24 @@ import {
   type ReceiptOperation,
   type ReceiptOperationRegistry,
 } from './lib/receiptTransfer';
+import {
+  PENDING_PREPARED_TRANSACTION_PREPARING_TTL_MS,
+  forgetPendingPreparedTransaction as forgetStoredPendingPreparedTransaction,
+  loadPendingPreparedTransaction,
+  pendingDeliveryAssetIds,
+  pendingPreparingTransactionExpired,
+  pendingPreparedTransactionStorageKey,
+  pendingSubmittedClaim,
+  persistPendingPreparedTransaction,
+  replacePendingPreparedTransaction,
+  samePendingPreparedTransaction,
+  type PendingPreparingClaimTransaction,
+  type PendingPreparingDeliveryTransaction,
+  type PendingPreparedTransaction,
+  type PendingSubmittedClaimTransaction,
+  type PendingSubmittedDeliveryTransaction,
+  type PendingSubmittedTransaction,
+} from './lib/pendingPreparedTransactions';
 import { calculateDeliveryLamports, canDeliverItemKind, isDirectDeliveryItemsPerBox } from './lib/shipping';
 import {
   normalizeOptionalFulfillmentTrackingCode,
@@ -305,7 +324,7 @@ const ADMIN_MENU_WIP_PATHS: { path: string; dropId?: string }[] = [
   { path: '/clear_cards/wip' },
 ];
 const REVEAL_CLOSE_FALLBACK_MS = 380;
-const RECEIPT_SIGNED_SEND_TIMEOUT_MS = 10_000;
+const PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS = 10_000;
 const RECEIPT_STATUS_CHECK_TIMEOUT_MS = 12_000;
 const STRIPE_CHECKOUT_INVENTORY_RETRY_MS = 5_000;
 const RECEIPT_HIDDEN_OPERATION_PHASES = new Set<ReceiptOperation['phase']>(['hidden']);
@@ -335,8 +354,29 @@ type StripeCheckoutOptimisticMintProgress = StripeCheckoutMintProgress & {
   expiresAt: number;
 };
 type CardNft2PackVideoSources = readonly PreviewVideoSource[];
+type PendingPreparedResolution = Awaited<ReturnType<typeof reconcileSubmittedTransaction>>;
+
+function pendingSubmittedTransactionKey(record: PendingSubmittedTransaction): string {
+  return `${record.wallet}:${record.operationId}:${record.signature}`;
+}
+
+function createPendingPreparedOperationId(): string {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
 
 const STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS = 2 * 60_000;
+
+async function withBrowserLock<T>(name: string, run: () => Promise<T>): Promise<T> {
+  if (typeof navigator === 'undefined' || typeof navigator.locks?.request !== 'function') {
+    throw new Error('This browser cannot safely coordinate wallet transactions. Update your browser and try again.');
+  }
+  return navigator.locks.request(name, { ifAvailable: true }, async (lock) => {
+    if (!lock) throw new Error('Another wallet transaction is already in progress. Wait for it to finish and try again.');
+    return run();
+  });
+}
 
 function anonymousStripeDeliveryHistoryQueryKey(firebaseUid: string | null, markerKey: string) {
   return ['anonymousStripeDeliveryHistory', firebaseUid, markerKey] as const;
@@ -1710,6 +1750,9 @@ function App({
   const activeDiscountAllowance = routeDrop ? mintStats?.discountMintsPerWallet ?? routeDrop.discountMintsPerWallet : 0;
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingPreparedTransaction, setPendingPreparedTransaction] = useState<PendingPreparedTransaction | null>(
+    () => (connectedWallet ? loadPendingPreparedTransaction(connectedWallet) : null),
+  );
   const [minting, setMinting] = useState(false);
   const [discountMinting, setDiscountMinting] = useState(false);
   const [stripePaymentLoading, setStripePaymentLoading] = useState(false);
@@ -1833,6 +1876,10 @@ function App({
   const [localMintedBoxes, setLocalMintedBoxes] = useState<LocalMintedBox[]>([]);
   const [inventorySnapshot, setInventorySnapshot] = useState<InventoryItem[]>([]);
   const [pendingOpenSnapshot, setPendingOpenSnapshot] = useState<PendingOpenBox[]>([]);
+  const pendingDeliveryItemIds = useMemo(
+    () => pendingDeliveryAssetIds(pendingPreparedTransaction, connectedWallet),
+    [connectedWallet, pendingPreparedTransaction],
+  );
   const inventoryView = revealOverlay ? inventorySnapshot : inventory;
   const pendingOpenBoxesView = revealOverlay ? pendingOpenSnapshot : pendingOpenBoxes;
   const revealOverlayOpen = Boolean(revealOverlay);
@@ -1856,6 +1903,12 @@ function App({
   const figureMetadataLoadingRef = useRef<Set<string>>(new Set());
   const figureMetadataRetryAtRef = useRef<Map<string, number>>(new Map());
   const connectedWalletRef = useRef<string | null>(connectedWallet || null);
+  const pendingPreparedTransactionRef = useRef(pendingPreparedTransaction);
+  pendingPreparedTransactionRef.current = pendingPreparedTransaction;
+  const pendingPreparedSubmissionKeysRef = useRef<Set<string>>(new Set());
+  const pendingPreparedReconciliationsRef = useRef<Map<string, Promise<PendingPreparedResolution>>>(new Map());
+  const pendingPreparedRetryTimersRef = useRef<Map<string, number>>(new Map());
+  const deliveryActionGenerationRef = useRef(0);
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
   const localAccountWalletRef = useRef<string | null>(localAccountWallet || null);
@@ -1901,12 +1954,15 @@ function App({
   const videoPreloadKeyRef = useRef<string>('');
   const deferredOverlayActionsRef = useRef<DeferredOverlayAction[]>([]);
   const revealOverlayRef = useRef<RevealOverlayState | null>(null);
+  const presentationLoadingRef = useRef(Boolean(revealLoading || startOpenLoading));
+  presentationLoadingRef.current = Boolean(revealLoading || startOpenLoading);
   const earlyClearCardRevealGateRef = useRef<EarlyClearCardRevealGate | null>(null);
   const suspendedRef = useRef(suspended);
   suspendedRef.current = suspended;
   const revealOverlaySessionRef = useRef(0);
   const revealLoadingRequestCounterRef = useRef(0);
   const revealLoadingRequestIdRef = useRef<number | null>(null);
+  const revealSubmissionReconciliationAbortControllerRef = useRef<AbortController | null>(null);
   const revealDismissLockedUntilRef = useRef<number>(0);
   const interactiveRevealDismissReadyRef = useRef(false);
   const revealOverlayActiveRef = useRef(false);
@@ -1919,6 +1975,72 @@ function App({
   const stripeCheckoutRecoveryLoadedKeysRef = useRef<Set<string>>(new Set());
   const stripeCheckoutInventoryRecoveryPromiseRef = useRef<KeyedInventoryRefreshRun | null>(null);
   const receiptTransferInFlightRef = useRef(false);
+
+  const syncPendingPreparedTransaction = useCallback((entry: PendingPreparedTransaction | null) => {
+    pendingPreparedTransactionRef.current = entry;
+    setPendingPreparedTransaction(entry);
+  }, []);
+
+  const readPendingPreparedTransaction = useCallback((wallet: string, sync = true) => {
+    const memory = pendingPreparedTransactionRef.current;
+    const stored = loadPendingPreparedTransaction(wallet);
+    const entry =
+      memory?.wallet === wallet &&
+      memory.phase === 'submitted' &&
+      (!stored || (
+        stored.phase === 'preparing' &&
+        stored.kind === memory.kind &&
+        stored.operationId === memory.operationId
+      ))
+        ? memory
+        : stored;
+    if (sync && connectedWalletRef.current === wallet) {
+      syncPendingPreparedTransaction(entry);
+    }
+    return entry;
+  }, [syncPendingPreparedTransaction]);
+
+  const rememberPendingPreparedTransaction = useCallback((entry: PendingPreparedTransaction) => {
+    const durable = persistPendingPreparedTransaction(entry);
+    if (durable && connectedWalletRef.current === entry.wallet) {
+      syncPendingPreparedTransaction(entry);
+    }
+    return durable;
+  }, [syncPendingPreparedTransaction]);
+
+  const submitPendingPreparedTransaction = useCallback((
+    preparing: PendingPreparingClaimTransaction | PendingPreparingDeliveryTransaction,
+    submitted: PendingSubmittedTransaction,
+  ) => {
+    const durable = replacePendingPreparedTransaction(preparing, submitted);
+    if (durable && connectedWalletRef.current === submitted.wallet) {
+      syncPendingPreparedTransaction(submitted);
+    }
+    return durable;
+  }, [syncPendingPreparedTransaction]);
+
+  const forgetPendingPreparedTransaction = useCallback((entry: PendingPreparedTransaction) => {
+    const durable = forgetStoredPendingPreparedTransaction(entry);
+    if (durable && connectedWalletRef.current === entry.wallet) {
+      syncPendingPreparedTransaction(loadPendingPreparedTransaction(entry.wallet));
+    }
+    return durable;
+  }, [syncPendingPreparedTransaction]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const syncFromStorage = (event: StorageEvent) => {
+      if (connectedWallet && event.key === pendingPreparedTransactionStorageKey(connectedWallet)) {
+        syncPendingPreparedTransaction(loadPendingPreparedTransaction(connectedWallet));
+        return;
+      }
+      if (localAccountWallet && event.key === hiddenInventoryKey(localAccountWallet)) {
+        setHiddenAssets(loadHiddenAssets(localAccountWallet));
+      }
+    };
+    window.addEventListener('storage', syncFromStorage);
+    return () => window.removeEventListener('storage', syncFromStorage);
+  }, [connectedWallet, localAccountWallet, syncPendingPreparedTransaction]);
 
   const updateReceiptOperations = useCallback(
     (update: (current: ReceiptOperationRegistry) => ReceiptOperationRegistry) => {
@@ -2548,6 +2670,7 @@ function App({
       previousContext.adapter !== receiptTransferWalletAdapter ||
       previousContext.supported !== receiptTransferWalletSupported;
     if (walletContextChanged) {
+      deliveryActionGenerationRef.current += 1;
       claimModalGenerationRef.current += 1;
       receiptTransferWalletSessionGenerationRef.current += 1;
       receiptTransferReturnFocusRef.current = null;
@@ -2826,11 +2949,13 @@ function App({
 
   const queueOverlayAction = useCallback(
     (run: () => void, kind: DeferredOverlayActionKind = 'reconcile') => {
-      if (revealOverlayRef.current) {
+      if (
+        revealOverlayRef.current ||
+        (kind === 'presentation' && (suspendedRef.current || presentationLoadingRef.current))
+      ) {
         deferredOverlayActionsRef.current.push({ kind, run });
         return;
       }
-      if (kind === 'presentation' && suspendedRef.current) return;
       run();
     },
     [],
@@ -2840,15 +2965,28 @@ function App({
     ({
       includePresentationActions = true,
     }: { includePresentationActions?: boolean } = {}) => {
+      if (revealOverlayRef.current) return;
       const actions = deferredOverlayActionsRef.current;
       if (!actions.length) return;
-      deferredOverlayActionsRef.current = [];
+      const includePresentation = (
+        includePresentationActions &&
+        !suspendedRef.current &&
+        !presentationLoadingRef.current
+      );
+      deferredOverlayActionsRef.current = includePresentation
+        ? []
+        : actions.filter((action) => action.kind === 'presentation');
       runDeferredOverlayActions(actions, {
-        includePresentation: includePresentationActions && !suspendedRef.current,
+        includePresentation,
       });
     },
     [],
   );
+
+  useEffect(() => {
+    if (suspended || revealOverlay || revealLoading || startOpenLoading) return;
+    flushOverlayActions();
+  }, [flushOverlayActions, revealLoading, revealOverlay, startOpenLoading, suspended]);
 
   const preloadBoxFrames = useCallback(
     (fromFrame = 1, toFrame?: number, dropId?: string) => {
@@ -3264,11 +3402,22 @@ function App({
     updateAssetGatedRevealComplete(false);
   }, [updateAssetGatedRevealComplete]);
 
+  const abortRevealSubmissionReconciliation = useCallback(() => {
+    revealSubmissionReconciliationAbortControllerRef.current?.abort();
+    revealSubmissionReconciliationAbortControllerRef.current = null;
+  }, []);
+
   const resetRevealRequestState = useCallback(() => {
+    abortRevealSubmissionReconciliation();
     revealOverlaySessionRef.current += 1;
     revealLoadingRequestIdRef.current = null;
     setRevealLoading(null);
-  }, []);
+  }, [abortRevealSubmissionReconciliation]);
+
+  useEffect(
+    () => () => abortRevealSubmissionReconciliation(),
+    [abortRevealSubmissionReconciliation],
+  );
 
   const finalizeRevealOverlayDismissal = useCallback(
     ({
@@ -3278,6 +3427,7 @@ function App({
       flushActions?: boolean;
       includePresentationActions?: boolean;
     } = {}) => {
+      abortRevealSubmissionReconciliation();
       clearRevealOverlayCloseTimeout();
       revealOverlayRef.current = null;
       resetAssetGatedRevealDismissState();
@@ -3296,7 +3446,12 @@ function App({
       }
       deferredOverlayActionsRef.current = [];
     },
-    [clearRevealOverlayCloseTimeout, flushOverlayActions, resetAssetGatedRevealDismissState],
+    [
+      abortRevealSubmissionReconciliation,
+      clearRevealOverlayCloseTimeout,
+      flushOverlayActions,
+      resetAssetGatedRevealDismissState,
+    ],
   );
 
   const cancelRevealOverlayAnimationFrame = useCallback(() => {
@@ -3320,6 +3475,7 @@ function App({
     const overlay = revealOverlayRef.current;
     if (!overlay) return;
     if (revealOverlayClosingRef.current) return;
+    abortRevealSubmissionReconciliation();
     if (overlay.phase === 'preparing') {
       setStartOpenLoading((prev) => (prev === overlay.id ? null : prev));
     }
@@ -3334,7 +3490,12 @@ function App({
       revealOverlayCloseTimeoutRef.current = null;
       finalizeRevealOverlayDismissal();
     }, REVEAL_CLOSE_FALLBACK_MS);
-  }, [cancelRevealOverlayAnimationFrame, clearRevealOverlayCloseTimeout, finalizeRevealOverlayDismissal]);
+  }, [
+    abortRevealSubmissionReconciliation,
+    cancelRevealOverlayAnimationFrame,
+    clearRevealOverlayCloseTimeout,
+    finalizeRevealOverlayDismissal,
+  ]);
 
   const canDismissAssetGatedRevealOverlay = useCallback((overlay: Pick<RevealOverlayState, 'revealedIds'>) => {
     const hasResults = Boolean(overlay.revealedIds?.length);
@@ -3866,22 +4027,30 @@ function App({
       if (revealOverlayCloseTimeoutRef.current !== null) {
         clearTimeout(revealOverlayCloseTimeoutRef.current);
       }
+      pendingPreparedRetryTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      pendingPreparedRetryTimersRef.current.clear();
     };
   }, [cancelRevealOverlayAnimationFrame, cancelToastTimers]);
 
+  const hideAssetsForWallet = useCallback((wallet: string, ids: readonly string[]) => {
+    const stored = loadHiddenAssets(wallet);
+    const nextStored = new Set(stored);
+    ids.forEach((id) => {
+      if (typeof id === 'string' && id) nextStored.add(id);
+    });
+    if (nextStored.size !== stored.size) persistHiddenAssets(wallet, nextStored);
+    if (localAccountWalletRef.current !== wallet) return;
+    setHiddenAssets((prev) => {
+      if (localAccountWalletRef.current !== wallet) return prev;
+      const next = new Set([...prev, ...nextStored]);
+      return next.size === prev.size ? prev : next;
+    });
+  }, []);
+
   const markAssetsHidden = useMemo(() => {
     if (!connectedWallet || isViewerMode) return (_ids: string[]) => undefined;
-    return (ids: string[]) => {
-      setHiddenAssets((prev) => {
-        const next = new Set(prev);
-        ids.forEach((id) => {
-          if (typeof id === 'string' && id) next.add(id);
-        });
-        persistHiddenAssets(connectedWallet, next);
-        return next;
-      });
-    };
-  }, [connectedWallet, isViewerMode]);
+    return (ids: string[]) => hideAssetsForWallet(connectedWallet, ids);
+  }, [connectedWallet, hideAssetsForWallet, isViewerMode]);
 
   const unhideAssetsForWallet = useCallback((wallet: string, ids: readonly string[]) => {
     const stored = loadHiddenAssets(wallet);
@@ -3952,7 +4121,10 @@ function App({
     const baseRaw =
       isViewerMode || (!hiddenAssets.size && !receiptOperationHiddenAssets.size)
         ? inventoryView
-        : inventoryView.filter((item) => !hiddenAssets.has(item.id) && !receiptOperationHiddenAssets.has(item.id));
+        : inventoryView.filter((item) => (
+            !hiddenAssets.has(item.id) &&
+            !receiptOperationHiddenAssets.has(item.id)
+          ));
     const base = withoutLocallyMintedUnresolvedCardNft2Boxes(baseRaw, pendingCardNft2LocalMintedBoxes);
     const enriched = base.map((item) => {
       if (item.kind === 'box') {
@@ -4188,9 +4360,10 @@ function App({
   const deliverableItems = useMemo(
     () => selectedItems.filter((item) => (
       !pendingRevealIds.has(item.id) &&
+      !pendingDeliveryItemIds.has(item.id) &&
       canDeliverItemKind(getDropConfig(item.dropId)?.dropFamily, item.kind)
     )),
-    [getDropConfig, selectedItems, pendingRevealIds],
+    [getDropConfig, pendingDeliveryItemIds, pendingRevealIds, selectedItems],
   );
   const selectedDropIds = useMemo(
     () => Array.from(new Set(deliverableItems.map((item) => item.dropId).filter(Boolean))),
@@ -4356,6 +4529,7 @@ function App({
   const canOpenSelected =
     selectedCount === 1 &&
     selectedItems[0]?.kind === 'box' &&
+    !pendingDeliveryItemIds.has(selectedItems[0].id) &&
     canOpenBoxesForDropId(selectedItems[0]?.dropId);
   const selectedBox = canOpenSelected ? selectedItems[0] : null;
   const canShipSelected =
@@ -4436,9 +4610,9 @@ function App({
   }, []);
 
   useEffect(() => {
-    if (!deliveryOpen || canShipSelected) return;
+    if (!deliveryOpen || canShipSelected || pendingDeliveryItemIds.size) return;
     setDeliveryOpen(false);
-  }, [canShipSelected, deliveryOpen]);
+  }, [canShipSelected, deliveryOpen, pendingDeliveryItemIds]);
 
   // Prefer signing locally + sending via our app RPC connection. This avoids wallet-side cluster mismatches
   // (e.g. Phantom set to mainnet while the app is on devnet) and surfaces clearer RPC errors.
@@ -4476,6 +4650,10 @@ function App({
           return recoverConnectionSendError(signed, targetConnection, err, options);
         }
       }
+      if (options?.onBroadcastAttempt) {
+        throw new Error('This wallet cannot safely track the transaction before broadcast. Use a wallet with transaction signing support.');
+      }
+      options?.assertWalletCurrent?.();
       try {
         return await sendTransaction(tx, targetConnection, { skipPreflight: false });
       } catch (err) {
@@ -4608,6 +4786,7 @@ function App({
   ]);
 
   const toggleSelected = (id: string) => {
+    if (pendingDeliveryItemIds.has(id)) return;
     setSelected((prev) => toggleInventorySelection({
       selected: prev,
       itemId: id,
@@ -4945,33 +5124,64 @@ function App({
   const handleRevealDudes = async (boxAssetId: string, dropId: string): Promise<PonchoDrifellaRevealRequestStatus> => {
     if (blockViewerModeAction()) return 'retry';
     if (!canOpenBoxesForDropId(dropId)) return 'resolved';
-    const requestSession = revealOverlaySessionRef.current;
-    const signedIn = await ensureSignedIn();
-    if (!signedIn) return 'retry';
+    if (revealLoadingRequestIdRef.current !== null) return 'resolved';
     if (!connectedWallet || !publicKey) return 'retry';
-    if (revealOverlaySessionRef.current !== requestSession) {
-      return 'resolved';
-    }
+    const walletAddress = publicKey.toBase58();
+    const requestSession = revealOverlaySessionRef.current;
     revealLoadingRequestCounterRef.current += 1;
     const loadingRequestId = revealLoadingRequestCounterRef.current;
     revealLoadingRequestIdRef.current = loadingRequestId;
     setRevealLoading(boxAssetId);
+    abortRevealSubmissionReconciliation();
+    const reconciliationController = new AbortController();
+    revealSubmissionReconciliationAbortControllerRef.current = reconciliationController;
+    const requestIsCurrent = () =>
+      !reconciliationController.signal.aborted &&
+      !suspendedRef.current &&
+      revealOverlaySessionRef.current === requestSession &&
+      connectedWalletRef.current === walletAddress;
     try {
+      const signedIn = await ensureSignedIn();
+      if (!signedIn) return 'retry';
       const revealDrop = requireKnownDropConfig(dropId, `reveal request for ${boxAssetId}`);
       const revealContent = getDropContent(revealDrop.dropId);
       const usesInteractiveCardPackFlow = usesInteractiveCardPackRevealFlow(revealContent.reveal.renderer);
       const usesClearCard3dFlow = usesClearCard3dRevealFlow(revealContent.reveal.renderer);
       const usesAssetGatedFlow = usesAssetGatedRevealFlow(revealContent.reveal.renderer);
-      const resp = await revealDudes(publicKey.toBase58(), boxAssetId, revealDrop.dropId);
+      if (!requestIsCurrent()) return 'resolved';
+      let resp: Awaited<ReturnType<typeof revealDudes>>;
+      try {
+        resp = await revealDudes(walletAddress, boxAssetId, revealDrop.dropId);
+      } catch (error) {
+        const recoveryDetails = revealDudesSubmissionUnknownDetails(error, revealDrop.dropId);
+        if (!recoveryDetails) throw error;
+        if (!requestIsCurrent()) return 'resolved';
+        let outcome: Awaited<ReturnType<typeof reconcileSubmittedTransaction>>;
+        try {
+          outcome = await reconcileSubmittedTransaction(
+            getDropConnection(revealDrop.dropId),
+            recoveryDetails.submission,
+            {
+              detectExpiry: false,
+              timeoutMs: 75_000,
+              signal: reconciliationController.signal,
+            },
+          );
+        } catch (recoveryError) {
+          if (!requestIsCurrent()) return 'resolved';
+          throw recoveryError;
+        }
+        if (!requestIsCurrent()) return 'resolved';
+        if (outcome !== 'confirmed') throw error;
+        resp = await revealDudes(walletAddress, boxAssetId, revealDrop.dropId);
+      }
+      if (!requestIsCurrent()) return 'resolved';
       const clearCardId = usesClearCard3dFlow
         ? clearCardModelIdFromRevealResult(resp?.dudeIds)
         : undefined;
       const revealed = usesClearCard3dFlow
         ? (clearCardId === undefined ? [] : [clearCardId])
         : (resp?.dudeIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n));
-      if (revealOverlaySessionRef.current !== requestSession) {
-        return 'resolved';
-      }
       if (
         usesClearCard3dFlow &&
         clearCardId === undefined
@@ -5029,9 +5239,7 @@ function App({
       });
       return 'resolved';
     } catch (err) {
-      if (revealOverlaySessionRef.current !== requestSession) {
-        return 'resolved';
-      }
+      if (!requestIsCurrent()) return 'resolved';
       console.error(err);
       const code = (err as { code?: string })?.code;
       if (code !== 'not-found' && !isUserRejectedError(err)) {
@@ -5039,6 +5247,9 @@ function App({
       }
       return 'retry';
     } finally {
+      if (revealSubmissionReconciliationAbortControllerRef.current === reconciliationController) {
+        revealSubmissionReconciliationAbortControllerRef.current = null;
+      }
       if (revealLoadingRequestIdRef.current === loadingRequestId) {
         revealLoadingRequestIdRef.current = null;
         setRevealLoading((current) => (current === boxAssetId ? null : current));
@@ -5106,7 +5317,23 @@ function App({
     });
 
     if (shouldSendReveal) {
-      void handleRevealDudes(revealOverlay.id, revealOverlay.dropId);
+      const boxAssetId = revealOverlay.id;
+      const dropId = revealOverlay.dropId;
+      const requestSession = revealOverlaySessionRef.current;
+      void (async () => {
+        const status = await handleRevealDudes(boxAssetId, dropId);
+        if (status !== 'retry' || revealOverlaySessionRef.current !== requestSession) return;
+        setRevealOverlay((prev) => {
+          if (
+            !prev ||
+            prev.id !== boxAssetId ||
+            prev.dropId !== dropId ||
+            prev.phase !== 'ready' ||
+            prev.revealedIds?.length
+          ) return prev;
+          return { ...prev, hasRevealAttempted: false };
+        });
+      })();
     }
   };
 
@@ -5408,8 +5635,7 @@ function App({
       allowMissingImage?: boolean;
     },
   ) => {
-    if (revealOverlayRef.current || revealLoading) return false;
-    if (startOpenLoading) return false;
+    if (revealOverlayRef.current || presentationLoadingRef.current) return false;
     if (typeof window === 'undefined') return false;
     const missingImage = options?.receiptImages?.length
       ? options.receiptImages.some((receiptImage) => !receiptImage.image)
@@ -5463,9 +5689,7 @@ function App({
     pendingOpenBoxes,
     presentRevealOverlay,
     resetAssetGatedRevealDismissState,
-    revealLoading,
     showToast,
-    startOpenLoading,
   ]);
 
   const openReceiptImageViewerGroup = useCallback((
@@ -5567,8 +5791,223 @@ function App({
     if (!canShipSelected) return;
     const signedIn = await ensureSignedIn();
     if (!signedIn) return;
+    deliveryActionGenerationRef.current += 1;
     setDeliveryOpen(true);
   };
+
+  function presentConfirmedNumericClaim(
+    record: PendingSubmittedClaimTransaction,
+    previousReceiptIds: ReadonlySet<string> = new Set(),
+    uiIsCurrent: () => boolean = () => connectedWalletRef.current === record.wallet,
+  ) {
+    const claimDrop = requireKnownDropConfig(record.dropId, 'pending claim');
+    const claimedFigureIds = normalizeClaimedReceiptIds(record.certificates);
+    const canPresent = (
+      connectedWalletRef.current === record.wallet &&
+      ownerRef.current === record.wallet &&
+      uiIsCurrent()
+    );
+    if (canPresent && claimOpen) closeClaimModal();
+    const previewGeneration = claimModalGenerationRef.current;
+    const claimPreviewIsCurrent = () => (
+      canPresent &&
+      connectedWalletRef.current === record.wallet &&
+      ownerRef.current === record.wallet &&
+      claimModalGenerationRef.current === previewGeneration
+    );
+
+    let opened = false;
+    const openClaimedReceiptPreview = (
+      previewItems: readonly ReceiptViewerSource[],
+      snapshot: InventoryItem[],
+      options?: { allowPlaceholders?: boolean },
+    ) => {
+      if (!claimPreviewIsCurrent()) return;
+      if (opened) return;
+      if (!previewItems.length) return;
+      if (!options?.allowPlaceholders && previewItems.some((item) => !item.image)) return;
+      queueOverlayAction(() => {
+        if (!claimPreviewIsCurrent() || opened) return;
+        opened = openReceiptImageViewerGroup(previewItems, null, {
+          inventorySnapshot: snapshot,
+          allowPlaceholders: options?.allowPlaceholders,
+        });
+      }, 'presentation');
+    };
+
+    const initialPreviewItems = buildClaimedReceiptPreviewItems(
+      inventory,
+      claimDrop.dropId,
+      claimedFigureIds,
+      previousReceiptIds,
+      record.certificateId,
+    );
+    openClaimedReceiptPreview(initialPreviewItems, inventory);
+
+    const missingFallbackFigureIds = claimedFigureIds.filter((_, index) => !initialPreviewItems[index]?.image);
+    if (missingFallbackFigureIds.length && !opened) {
+      void Promise.all(
+        missingFallbackFigureIds.map(async (figureId): Promise<[number, string | undefined]> => [
+          figureId,
+          await loadClaimedReceiptImage(claimDrop.dropId, figureId),
+        ]),
+      )
+        .then((entries) => {
+          const fallbackImages = new Map(
+            entries.filter((entry): entry is [number, string] => Boolean(entry[1])),
+          );
+          openClaimedReceiptPreview(
+            buildClaimedReceiptPreviewItems(
+              inventory,
+              claimDrop.dropId,
+              claimedFigureIds,
+              previousReceiptIds,
+              record.certificateId,
+              fallbackImages,
+            ),
+            inventory,
+            { allowPlaceholders: true },
+          );
+        })
+        .catch(() => undefined);
+    }
+
+    void refetchInventory()
+      .then((result) => {
+        const refreshedInventory = result.data ?? inventory;
+        openClaimedReceiptPreview(
+          buildClaimedReceiptPreviewItems(
+            refreshedInventory,
+            claimDrop.dropId,
+            claimedFigureIds,
+            previousReceiptIds,
+            record.certificateId,
+          ),
+          refreshedInventory,
+        );
+      })
+      .catch((err) => {
+        console.warn('[mons] failed to refresh inventory after claim', err);
+      });
+
+    return {
+      itemsPerBox: claimDrop.itemsPerBox,
+      boxNamePrefix: claimDrop.namePrefix,
+      figureNamePrefix: claimDrop.figureNamePrefix,
+      deferred: true,
+    };
+  }
+
+  function reconcilePendingPreparedTransaction(
+    record: PendingSubmittedTransaction,
+    options: {
+      announce?: boolean;
+      claimUiIsCurrent?: () => boolean;
+      previousReceiptIds?: ReadonlySet<string>;
+    } = {},
+  ): Promise<PendingPreparedResolution> {
+    const key = pendingSubmittedTransactionKey(record);
+    const existing = pendingPreparedReconciliationsRef.current.get(key);
+    if (existing) return existing;
+    const scheduledRetry = pendingPreparedRetryTimersRef.current.get(key);
+    if (scheduledRetry !== undefined) {
+      window.clearTimeout(scheduledRetry);
+      pendingPreparedRetryTimersRef.current.delete(key);
+    }
+
+    const run = (async (): Promise<PendingPreparedResolution> => {
+      let resolution: PendingPreparedResolution = 'unknown';
+      try {
+        const connection = getDropConnection(requireKnownDropConfig(record.dropId, 'pending transaction').dropId);
+        resolution = await reconcileSubmittedTransaction(
+          connection,
+          {
+            signature: record.signature,
+            recentBlockhash: record.recentBlockhash,
+            blockhashContextSlot: record.blockhashContextSlot,
+          },
+          { timeoutMs: 75_000 },
+        );
+      } catch (err) {
+        console.warn(`[mons] failed to reconcile pending ${record.kind} transaction`, err);
+      }
+
+      const walletIsCurrent = (
+        connectedWalletRef.current === record.wallet &&
+        ownerRef.current === record.wallet
+      );
+      if (resolution === 'confirmed') {
+        if (record.kind === 'delivery') hideAssetsForWallet(record.wallet, record.itemIds);
+        await forgetPendingPreparedTransaction(record);
+        if (record.kind === 'delivery') {
+          void runDeliveryRecovery({ dropId: record.dropId, deliveryId: record.deliveryId, force: true });
+          await refetchInventory().catch((err) => {
+            console.warn('[mons] failed to refresh inventory after pending shipment', err);
+          });
+          if (options.announce !== false && walletIsCurrent) {
+            showToast(`Shipment confirmed · id ${record.deliveryId} · ${shortAddress(record.signature)}`);
+          }
+        } else {
+          presentConfirmedNumericClaim(
+            record,
+            options.previousReceiptIds,
+            options.claimUiIsCurrent,
+          );
+          if (options.announce !== false && walletIsCurrent) {
+            showToast(`Claim confirmed · ${shortAddress(record.signature)}`);
+          }
+        }
+        return resolution;
+      }
+
+      if (resolution === 'failed' || resolution === 'expired') {
+        await forgetPendingPreparedTransaction(record);
+        if (options.announce !== false && walletIsCurrent) {
+          const label = record.kind === 'delivery' ? 'Shipment' : 'Claim';
+          showToast(`${label} transaction ${resolution} · you can retry`);
+        }
+        return resolution;
+      }
+
+      if (record.kind === 'delivery') {
+        void runDeliveryRecovery({ dropId: record.dropId, deliveryId: record.deliveryId, force: true });
+      }
+      if (
+        typeof window !== 'undefined' &&
+        !pendingPreparedRetryTimersRef.current.has(key)
+      ) {
+        const retry = window.setTimeout(() => {
+          pendingPreparedRetryTimersRef.current.delete(key);
+          if (
+            connectedWalletRef.current !== record.wallet ||
+            ownerRef.current !== record.wallet ||
+            !hasAuthenticatedWalletSession(record.wallet)
+          ) return;
+          const current = readPendingPreparedTransaction(record.wallet, false);
+          if (current?.phase !== 'submitted' || current.signature !== record.signature) return;
+          void reconcilePendingPreparedTransaction(current, {
+            ...options,
+            announce: false,
+          });
+        }, 30_000);
+        pendingPreparedRetryTimersRef.current.set(key, retry);
+      }
+      if (options.announce !== false && walletIsCurrent) {
+        const label = record.kind === 'delivery' ? 'Shipment' : 'Claim';
+        showToast(`${label} confirmation is still pending · do not submit again`);
+      }
+      return resolution;
+    })();
+
+    pendingPreparedReconciliationsRef.current.set(key, run);
+    const clearRun = () => {
+      if (pendingPreparedReconciliationsRef.current.get(key) === run) {
+        pendingPreparedReconciliationsRef.current.delete(key);
+      }
+    };
+    void run.then(clearRun, clearRun);
+    return run;
+  }
 
   const handleShip = async ({
     formatted,
@@ -5594,7 +6033,28 @@ function App({
       showToast('Select items to ship');
       return;
     }
+    const deliveryWallet = publicKey.toBase58();
+    const deliveryGeneration = ++deliveryActionGenerationRef.current;
     const deliverableIds = deliverableItems.map((item) => item.id);
+    let activeDeliveryReservation: PendingPreparingDeliveryTransaction | null = null;
+    const deliveryUiIsCurrent = () => (
+      deliveryActionGenerationRef.current === deliveryGeneration &&
+      connectedWalletRef.current === deliveryWallet &&
+      ownerRef.current === deliveryWallet
+    );
+    const assertDeliveryWalletCurrent = () => {
+      if (!deliveryUiIsCurrent()) throw new Error('Wallet changed while preparing shipment');
+      let pending = readPendingPreparedTransaction(deliveryWallet, false);
+      if (pending && pendingPreparingTransactionExpired(pending)) {
+        if (activeDeliveryReservation && samePendingPreparedTransaction(pending, activeDeliveryReservation)) {
+          throw new Error('Shipment preparation expired');
+        }
+        if (forgetPendingPreparedTransaction(pending)) pending = null;
+      }
+      if (pending && (!activeDeliveryReservation || !samePendingPreparedTransaction(pending, activeDeliveryReservation))) {
+        throw new Error('Another wallet transaction is already pending');
+      }
+    };
     if (!deliverableIds.length) {
       showToast(`Select ${boxLabelForDropId(undefined, 2)} or ${figureLabelForDropId(undefined, 2)} to ship`);
       return;
@@ -5605,6 +6065,14 @@ function App({
       return;
     }
     if (deliverableItems.some((item) => item.dropId !== deliveryDropId)) {
+      return;
+    }
+    let existingPending = readPendingPreparedTransaction(deliveryWallet, false);
+    if (existingPending && pendingPreparingTransactionExpired(existingPending)) {
+      if (forgetPendingPreparedTransaction(existingPending)) existingPending = null;
+    }
+    if (existingPending) {
+      if (deliveryUiIsCurrent()) showToast('Another wallet transaction is already pending');
       return;
     }
     if (deliverableIds.length !== selected.size) {
@@ -5622,38 +6090,146 @@ function App({
       const deliveryConnection = getDropConnection(deliveryDrop.dropId);
       const signedIn = await ensureSignedIn();
       if (!signedIn) return;
+      assertDeliveryWalletCurrent();
       const { cipherText, hint } = encryptAddressPayload(formatted, encryptionKey);
       const saved = await saveEncryptedAddress(cipherText, country, hint, email, countryCode);
+      assertDeliveryWalletCurrent();
 
-      const requestTx = () =>
-        requestDeliveryTx(publicKey.toBase58(), { itemIds: deliverableIds, addressId: saved.id }, deliveryDrop.dropId);
-      let resp = await requestTx();
-      let sig: string;
-      try {
-        sig = await sendPreparedTransaction(resp.encodedTx, deliveryConnection, (tx) =>
-          signAndSendPreparedViaConnection(tx, deliveryConnection),
+      const requestTx = async () => {
+        assertDeliveryWalletCurrent();
+        const prepared = await requestDeliveryTx(
+          deliveryWallet,
+          { itemIds: deliverableIds, addressId: saved.id },
+          deliveryDrop.dropId,
         );
-      } catch (err) {
-        if (!isBlockhashExpiredError(err)) throw err;
-        showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
-        resp = await requestTx();
-        sig = await sendPreparedTransaction(resp.encodedTx, deliveryConnection, (tx) =>
-          signAndSendPreparedViaConnection(tx, deliveryConnection),
-        );
-      }
+        assertDeliveryWalletCurrent();
+        return prepared;
+      };
+      let resp!: Awaited<ReturnType<typeof requestTx>>;
+      let submittedDelivery: PendingSubmittedDeliveryTransaction | null = null;
+      const getSubmittedDelivery = (): PendingSubmittedDeliveryTransaction | null => submittedDelivery;
+      const recordSubmittedDelivery = (
+        signature: string,
+        submittedTx: VersionedTransaction,
+      ) => {
+        const recentBlockhash = submittedTx.message.recentBlockhash;
+        if (submittedDelivery) {
+          if (submittedDelivery.signature !== signature || submittedDelivery.recentBlockhash !== recentBlockhash) {
+            throw new Error('Shipment submission changed unexpectedly');
+          }
+          return;
+        }
+        const reservation = activeDeliveryReservation;
+        if (!reservation) throw new Error('Shipment reservation is missing');
+        const submission: PendingSubmittedDeliveryTransaction = {
+          ...reservation,
+          kind: 'delivery',
+          phase: 'submitted',
+          signature,
+          recentBlockhash,
+        };
+        if (!submitPendingPreparedTransaction(reservation, submission)) {
+          throw new Error('Unable to save submitted shipment');
+        }
+        submittedDelivery = submission;
+      };
+      const submitDelivery = (encodedTx: string) => sendPreparedTransaction(
+        encodedTx,
+        deliveryConnection,
+        (tx) => signAndSendPreparedViaConnection(tx, deliveryConnection, {
+          assertWalletCurrent: assertDeliveryWalletCurrent,
+          signedSendTimeoutMs: PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS,
+          onBroadcastAttempt: recordSubmittedDelivery,
+        }),
+        {
+          onSubmitted: recordSubmittedDelivery,
+        },
+      );
+      const submitWithBlockhashRetry = async (): Promise<string | null> => {
+        for (let attempt = 0; ; attempt += 1) {
+          submittedDelivery = null;
+          activeDeliveryReservation = {
+            kind: 'delivery',
+            phase: 'preparing',
+            wallet: deliveryWallet,
+            dropId: deliveryDrop.dropId,
+            createdAt: Date.now(),
+            operationId: createPendingPreparedOperationId(),
+            blockhashContextSlot: resp.blockhashContextSlot,
+            deliveryId: resp.deliveryId,
+            itemIds: [...deliverableIds],
+          };
+          if (!rememberPendingPreparedTransaction(activeDeliveryReservation)) {
+            activeDeliveryReservation = null;
+            throw new Error('Unable to save shipment reservation');
+          }
+          pendingPreparedSubmissionKeysRef.current.add(deliveryWallet);
+          try {
+            const signature = await submitDelivery(resp.encodedTx);
+            const confirmedSubmission = getSubmittedDelivery();
+            if (confirmedSubmission) {
+              pendingPreparedSubmissionKeysRef.current.delete(deliveryWallet);
+              hideAssetsForWallet(deliveryWallet, deliverableIds);
+              forgetPendingPreparedTransaction(confirmedSubmission);
+            }
+            activeDeliveryReservation = null;
+            return signature;
+          } catch (err) {
+            const pendingSubmission = getSubmittedDelivery();
+            pendingPreparedSubmissionKeysRef.current.delete(deliveryWallet);
+            if (pendingSubmission && isPotentiallySubmittedTransactionError(err)) {
+              activeDeliveryReservation = null;
+              if (deliveryUiIsCurrent()) {
+                showToast(
+                  `Shipment submitted · id ${pendingSubmission.deliveryId} · confirmation pending · ${shortAddress(pendingSubmission.signature)}`,
+                );
+              }
+              void runDeliveryRecovery({
+                dropId: pendingSubmission.dropId,
+                deliveryId: pendingSubmission.deliveryId,
+                force: true,
+              });
+              void reconcilePendingPreparedTransaction(pendingSubmission);
+              return null;
+            }
+            const reservation = pendingSubmission || activeDeliveryReservation;
+            if (reservation && !forgetPendingPreparedTransaction(reservation)) {
+              throw new Error('Unable to clear shipment reservation');
+            }
+            activeDeliveryReservation = null;
+            if (attempt > 0 || !isBlockhashExpiredError(err)) throw err;
+            if (deliveryUiIsCurrent()) {
+              showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
+            }
+            resp = await requestTx();
+          }
+        }
+      };
+      const sig = await withBrowserLock(
+        `mons:pending-prepared-submission:${deliveryWallet}`,
+        async () => {
+          assertDeliveryWalletCurrent();
+          resp = await requestTx();
+          return submitWithBlockhashRetry();
+        },
+      );
+      if (!sig) return;
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
-      showToast(`Shipment submitted${idSuffix} · ${sig}`);
+      if (deliveryUiIsCurrent()) showToast(`Shipment submitted${idSuffix} · ${sig}`);
 
-      // Delivery transfers the selected assets to the vault; hide them immediately once confirmed.
-      markAssetsHidden(deliverableIds);
-      setSelected(new Set());
-      await refetchInventory();
+      if (deliveryUiIsCurrent()) {
+        setDeliveryOpen(false);
+        setSelected((current) => new Set([...current].filter((itemId) => !deliverableIds.includes(itemId))));
+      }
+      await refetchInventory().catch((err) => {
+        console.warn('[mons] failed to refresh inventory after shipment', err);
+      });
       const deliveryId = resp.deliveryId;
       if (deliveryId) {
         try {
-          showToast(`Shipment submitted${idSuffix} · ${sig} · issuing receipts…`);
+          if (deliveryUiIsCurrent()) showToast(`Shipment submitted${idSuffix} · ${sig} · issuing receipts…`);
           const issued = await retryWithBackoff(
-            () => issueReceipts(publicKey.toBase58(), deliveryId, sig, deliveryDrop.dropId),
+            () => issueReceipts(deliveryWallet, deliveryId, sig, deliveryDrop.dropId),
             {
               maxAttempts: 3,
               baseDelayMs: 500,
@@ -5662,8 +6238,12 @@ function App({
             },
           );
           const minted = Number(issued?.receiptsMinted || 0);
-          showToast(`Shipment submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
-          await refetchInventory();
+          if (deliveryUiIsCurrent()) {
+            showToast(`Shipment submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
+          }
+          await refetchInventory().catch((err) => {
+            console.warn('[mons] failed to refresh inventory after issuing shipment receipts', err);
+          });
         } catch (err) {
           console.warn('Direct issueReceipts failed, starting background recovery', err);
           void runDeliveryRecovery({
@@ -5671,12 +6251,14 @@ function App({
             deliveryId,
             force: true,
           });
-          showToast(`Shipment submitted${idSuffix} · ${sig} · receipts recovering in background`);
+          if (deliveryUiIsCurrent()) {
+            showToast(`Shipment submitted${idSuffix} · ${sig} · receipts recovering in background`);
+          }
         }
       }
     } catch (err) {
       console.error(err);
-      if (!isUserRejectedError(err)) {
+      if (deliveryUiIsCurrent() && !isUserRejectedError(err)) {
         showToast(err instanceof Error ? err.message : 'Failed to ship');
       }
     }
@@ -6023,7 +6605,7 @@ function App({
                         operationWalletAdapter,
                         operationWalletSessionGeneration,
                       ),
-                    signedSendTimeoutMs: RECEIPT_SIGNED_SEND_TIMEOUT_MS,
+                    signedSendTimeoutMs: PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS,
                     onBroadcastAttempt: (signature, submittedTx) => {
                       recordReceiptSubmissionState('in-flight', signature, submittedTx, requestId);
                       rememberPendingAdminIrlRedeem(wallet, {
@@ -6280,7 +6862,7 @@ function App({
                   operationWalletAdapter,
                   operationWalletSessionGeneration,
                 ),
-              signedSendTimeoutMs: RECEIPT_SIGNED_SEND_TIMEOUT_MS,
+              signedSendTimeoutMs: PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS,
               onBroadcastAttempt: (signature, submittedTx) => {
                 recordReceiptSubmissionState('in-flight', signature, submittedTx);
               },
@@ -6440,115 +7022,172 @@ function App({
     if (!signedIn || !connectedWallet || !publicKey) return { deferred: true };
     if (!claimUiIsCurrent()) return { deferred: true };
     const previousReceiptIds = new Set(inventory.filter((item) => item.kind === 'certificate').map((item) => item.id));
-    const requestTx = () => requestClaimTx(publicKey.toBase58(), code);
-    let resp = await requestTx();
-    if (!claimUiIsCurrent()) return { deferred: true };
-    let claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction response');
-    let claimConnection = getDropConnection(claimDrop.dropId);
-    try {
-      await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
-        signAndSendPreparedViaConnection(tx, claimConnection),
-      );
-    } catch (err) {
-      if (!isBlockhashExpiredError(err)) throw err;
-      if (!claimUiIsCurrent()) return { deferred: true };
-      showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
-      resp = await requestTx();
-      if (!claimUiIsCurrent()) return { deferred: true };
-      claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction retry response');
-      claimConnection = getDropConnection(claimDrop.dropId);
-      await sendPreparedTransaction(resp.encodedTx, claimConnection, (tx) =>
-        signAndSendPreparedViaConnection(tx, claimConnection),
-      );
+    const claimWallet = publicKey.toBase58();
+    const numericClaimUiIsCurrent = () => (
+      claimUiIsCurrent() &&
+      connectedWalletRef.current === claimWallet &&
+      ownerRef.current === claimWallet
+    );
+    let activeClaimReservation: PendingPreparingClaimTransaction | null = null;
+    const assertClaimReservationCurrent = () => {
+      if (!numericClaimUiIsCurrent()) throw new Error('Wallet changed while preparing claim');
+      let pending = readPendingPreparedTransaction(claimWallet, false);
+      if (pending && pendingPreparingTransactionExpired(pending)) {
+        if (activeClaimReservation && samePendingPreparedTransaction(pending, activeClaimReservation)) {
+          throw new Error('Claim preparation expired');
+        }
+        if (forgetPendingPreparedTransaction(pending)) pending = null;
+      }
+      if (pending && (!activeClaimReservation || !samePendingPreparedTransaction(pending, activeClaimReservation))) {
+        throw new Error('Another wallet transaction is already pending');
+      }
+    };
+    let existingPending = readPendingPreparedTransaction(claimWallet);
+    if (existingPending && pendingPreparingTransactionExpired(existingPending)) {
+      if (forgetPendingPreparedTransaction(existingPending)) existingPending = null;
     }
-    const claimedFigureIds = normalizeClaimedReceiptIds(resp.certificates);
-    if (!claimUiIsCurrent()) {
-      void refetchInventory().catch((err) => {
-        console.warn('[mons] failed to refresh inventory after claim', err);
+    const existingPendingClaim = pendingSubmittedClaim(existingPending, claimWallet);
+    if (existingPendingClaim) {
+      if (numericClaimUiIsCurrent()) {
+        showToast(`Checking pending claim · ${shortAddress(existingPendingClaim.signature)}`);
+      }
+      const resolution = await reconcilePendingPreparedTransaction(existingPendingClaim, {
+        claimUiIsCurrent: numericClaimUiIsCurrent,
+        previousReceiptIds,
       });
+      if (resolution === 'confirmed') {
+        if (numericClaimUiIsCurrent()) {
+          return presentConfirmedNumericClaim(
+            existingPendingClaim,
+            previousReceiptIds,
+            numericClaimUiIsCurrent,
+          );
+        }
+        return { deferred: true };
+      }
+      if (resolution === 'unknown') return { deferred: true };
+      if (!numericClaimUiIsCurrent()) return { deferred: true };
+    } else if (existingPending) {
+      if (numericClaimUiIsCurrent()) showToast('Another wallet transaction is already pending');
       return { deferred: true };
     }
-    closeClaimModal();
-    const previewGeneration = claimModalGenerationRef.current;
-    const claimPreviewIsCurrent = () => claimModalGenerationRef.current === previewGeneration;
-
-    let opened = false;
-    const openClaimedReceiptPreview = (
-      previewItems: readonly ReceiptViewerSource[],
-      snapshot: InventoryItem[],
-      options?: { allowPlaceholders?: boolean },
+    const requestTx = async () => {
+      assertClaimReservationCurrent();
+      const prepared = await requestClaimTx(claimWallet, code);
+      assertClaimReservationCurrent();
+      return prepared;
+    };
+    let resp!: Awaited<ReturnType<typeof requestTx>>;
+    let claimDrop!: FrontendDeploymentConfig;
+    let claimConnection!: Connection;
+    let submittedClaim: PendingSubmittedClaimTransaction | null = null;
+    const getSubmittedClaim = (): PendingSubmittedClaimTransaction | null => submittedClaim;
+    const recordSubmittedClaim = (
+      signature: string,
+      submittedTx: VersionedTransaction,
     ) => {
-      if (!claimPreviewIsCurrent()) return;
-      if (opened || revealOverlayRef.current) return;
-      if (!previewItems.length) return;
-      if (!options?.allowPlaceholders && previewItems.some((item) => !item.image)) return;
-      opened = openReceiptImageViewerGroup(previewItems, null, {
-        inventorySnapshot: snapshot,
-        allowPlaceholders: options?.allowPlaceholders,
-      });
+      const recentBlockhash = submittedTx.message.recentBlockhash;
+      if (submittedClaim) {
+        if (submittedClaim.signature !== signature || submittedClaim.recentBlockhash !== recentBlockhash) {
+          throw new Error('Claim submission changed unexpectedly');
+        }
+        return;
+      }
+      const reservation = activeClaimReservation;
+      if (!reservation) throw new Error('Claim reservation is missing');
+      const submission: PendingSubmittedClaimTransaction = {
+        ...reservation,
+        kind: 'claim',
+        phase: 'submitted',
+        signature,
+        recentBlockhash,
+      };
+      if (!submitPendingPreparedTransaction(reservation, submission)) {
+        throw new Error('Unable to save submitted claim');
+      }
+      submittedClaim = submission;
     };
-
-    const initialPreviewItems = buildClaimedReceiptPreviewItems(
-      inventory,
-      claimDrop.dropId,
-      claimedFigureIds,
-      previousReceiptIds,
-      resp.certificateId,
+    const submitClaim = (encodedTx: string, connection: Connection) => sendPreparedTransaction(
+      encodedTx,
+      connection,
+      (tx) => signAndSendPreparedViaConnection(tx, connection, {
+        assertWalletCurrent: assertClaimReservationCurrent,
+        signedSendTimeoutMs: PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS,
+        onBroadcastAttempt: recordSubmittedClaim,
+      }),
+      {
+        onSubmitted: recordSubmittedClaim,
+      },
     );
-    openClaimedReceiptPreview(initialPreviewItems, inventory);
-
-    const missingFallbackFigureIds = claimedFigureIds.filter((_, index) => !initialPreviewItems[index]?.image);
-    if (missingFallbackFigureIds.length && !opened) {
-      void Promise.all(
-        missingFallbackFigureIds.map(async (figureId): Promise<[number, string | undefined]> => [
-          figureId,
-          await loadClaimedReceiptImage(claimDrop.dropId, figureId),
-        ]),
-      )
-        .then((entries) => {
-          const fallbackImages = new Map(
-            entries.filter((entry): entry is [number, string] => Boolean(entry[1])),
-          );
-          openClaimedReceiptPreview(
-            buildClaimedReceiptPreviewItems(
-              inventory,
-              claimDrop.dropId,
-              claimedFigureIds,
-              previousReceiptIds,
-              resp.certificateId,
-              fallbackImages,
-            ),
-            inventory,
-            { allowPlaceholders: true },
-          );
-        })
-        .catch(() => undefined);
-    }
-
-    void refetchInventory()
-      .then((result) => {
-        const refreshedInventory = result.data ?? inventory;
-        openClaimedReceiptPreview(
-          buildClaimedReceiptPreviewItems(
-            refreshedInventory,
-            claimDrop.dropId,
-            claimedFigureIds,
-            previousReceiptIds,
-            resp.certificateId,
-          ),
-          refreshedInventory,
-        );
-      })
-      .catch((err) => {
-        console.warn('[mons] failed to refresh inventory after claim', err);
-      });
-
-    return {
-      itemsPerBox: claimDrop.itemsPerBox,
-      boxNamePrefix: claimDrop.namePrefix,
-      figureNamePrefix: claimDrop.figureNamePrefix,
-      deferred: true,
-    };
+    const claimDeferred = await withBrowserLock(
+      `mons:pending-prepared-submission:${claimWallet}`,
+      async () => {
+        assertClaimReservationCurrent();
+        resp = await requestTx();
+        if (!numericClaimUiIsCurrent()) return true;
+        claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction response');
+        claimConnection = getDropConnection(claimDrop.dropId);
+        for (let attempt = 0; ; attempt += 1) {
+          submittedClaim = null;
+          activeClaimReservation = {
+            kind: 'claim',
+            phase: 'preparing',
+            wallet: claimWallet,
+            dropId: claimDrop.dropId,
+            createdAt: Date.now(),
+            operationId: createPendingPreparedOperationId(),
+            blockhashContextSlot: resp.blockhashContextSlot,
+            certificates: [...resp.certificates],
+            certificateId: resp.certificateId,
+          };
+          if (!rememberPendingPreparedTransaction(activeClaimReservation)) {
+            activeClaimReservation = null;
+            throw new Error('Unable to save claim reservation');
+          }
+          pendingPreparedSubmissionKeysRef.current.add(claimWallet);
+          try {
+            await submitClaim(resp.encodedTx, claimConnection);
+            const confirmedSubmission = getSubmittedClaim();
+            if (confirmedSubmission) {
+              pendingPreparedSubmissionKeysRef.current.delete(claimWallet);
+              forgetPendingPreparedTransaction(confirmedSubmission);
+            }
+            activeClaimReservation = null;
+            return false;
+          } catch (err) {
+            const pendingSubmission = getSubmittedClaim();
+            pendingPreparedSubmissionKeysRef.current.delete(claimWallet);
+            if (pendingSubmission && isPotentiallySubmittedTransactionError(err)) {
+              activeClaimReservation = null;
+              if (numericClaimUiIsCurrent()) {
+                showToast(`Claim submitted · confirmation pending · ${shortAddress(pendingSubmission.signature)}`);
+              }
+              void reconcilePendingPreparedTransaction(pendingSubmission, {
+                claimUiIsCurrent: numericClaimUiIsCurrent,
+                previousReceiptIds,
+              });
+              return true;
+            }
+            const reservation = pendingSubmission || activeClaimReservation;
+            if (reservation && !forgetPendingPreparedTransaction(reservation)) {
+              throw new Error('Unable to clear claim reservation');
+            }
+            activeClaimReservation = null;
+            if (attempt > 0 || !isBlockhashExpiredError(err)) throw err;
+            if (!numericClaimUiIsCurrent()) return true;
+            showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
+            resp = await requestTx();
+            if (!numericClaimUiIsCurrent()) return true;
+            claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction retry response');
+            claimConnection = getDropConnection(claimDrop.dropId);
+          }
+        }
+      },
+    );
+    if (claimDeferred) return { deferred: true };
+    const confirmedClaim = getSubmittedClaim();
+    if (!confirmedClaim) throw new Error('Claim confirmed without a recoverable submission');
+    return presentConfirmedNumericClaim(confirmedClaim, previousReceiptIds, numericClaimUiIsCurrent);
   };
 
   const isOwnProfileView = canReadOwnProfile;
@@ -6664,6 +7303,43 @@ function App({
       navigate('/', { replace: true });
     }
   }, [claimDeepLinkCode, claimOpenedFromDeepLink]);
+
+  useEffect(() => {
+    syncPendingPreparedTransaction(
+      connectedWallet ? loadPendingPreparedTransaction(connectedWallet) : null,
+    );
+  }, [connectedWallet, syncPendingPreparedTransaction]);
+
+  useEffect(() => {
+    const entry = pendingPreparedTransaction;
+    if (!connectedWallet || !entry || entry.wallet !== connectedWallet || isViewerMode || suspended) return;
+    if (pendingPreparedSubmissionKeysRef.current.has(entry.wallet)) return;
+    if (entry.phase === 'preparing') {
+      const key = `${entry.wallet}:preparing:${entry.operationId}`;
+      if (pendingPreparingTransactionExpired(entry)) {
+        forgetPendingPreparedTransaction(entry);
+        return;
+      }
+      if (pendingPreparedRetryTimersRef.current.has(key)) return;
+      const retry = window.setTimeout(() => {
+        pendingPreparedRetryTimersRef.current.delete(key);
+        const current = readPendingPreparedTransaction(entry.wallet);
+        if (current && samePendingPreparedTransaction(current, entry) && pendingPreparingTransactionExpired(current)) {
+          forgetPendingPreparedTransaction(current);
+        }
+      }, Math.max(1, entry.createdAt + PENDING_PREPARED_TRANSACTION_PREPARING_TTL_MS - Date.now()));
+      pendingPreparedRetryTimersRef.current.set(key, retry);
+      return;
+    }
+    if (!isSignedInWallet) return;
+    const claimGeneration = claimModalGenerationRef.current;
+    void reconcilePendingPreparedTransaction(entry, {
+      claimUiIsCurrent: () => (
+        connectedWalletRef.current === entry.wallet &&
+        claimModalGenerationRef.current === claimGeneration
+      ),
+    });
+  }, [connectedWallet, isSignedInWallet, isViewerMode, pendingPreparedTransaction, suspended]);
 
   useEffect(() => {
     if (!shipmentFigureTargetsNeedingMetadata.length) return;
@@ -7758,6 +8434,7 @@ function App({
         open={deliveryOpen}
         title="Shipment"
         onClose={() => {
+          deliveryActionGenerationRef.current += 1;
           setDeliveryOpen(false);
         }}
         suspended={isModalLayerSuspended({

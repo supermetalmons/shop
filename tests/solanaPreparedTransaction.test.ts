@@ -451,9 +451,9 @@ test('sendPreparedTransaction propagates a definitive failure for an ambiguous s
         context: { slot: 1 },
         value: {
           slot: 1,
-          confirmations: 0,
+          confirmations: 1,
           err: transactionError,
-          confirmationStatus: 'processed' as const,
+          confirmationStatus: 'confirmed' as const,
         },
       };
     },
@@ -483,6 +483,111 @@ test('sendPreparedTransaction propagates a definitive failure for an ambiguous s
     },
   );
   assert.equal(submittedNotifications, 1);
+});
+
+test('sendPreparedTransaction keeps processed errors nonterminal', async () => {
+  const payer = Keypair.generate();
+  const transportError = new Error('RPC response was lost after broadcast');
+  let expectedSignature = '';
+  let statusCalls = 0;
+  const connection = {
+    async getSignatureStatus() {
+      statusCalls += 1;
+      return {
+        context: { slot: 1 },
+        value: statusCalls === 1
+          ? {
+              slot: 1,
+              confirmations: 0,
+              err: { InstructionError: [0, { Custom: 6_001 }] },
+              confirmationStatus: 'processed' as const,
+            }
+          : {
+              slot: 2,
+              confirmations: 1,
+              err: null,
+              confirmationStatus: 'confirmed' as const,
+            },
+      };
+    },
+  } as unknown as Connection;
+
+  const result = await sendPreparedTransaction(
+    buildEncodedPreparedTransaction(payer.publicKey),
+    connection,
+    async (tx) => {
+      tx.sign([payer]);
+      expectedSignature = bs58.encode(tx.signatures[0]);
+      throw classifySignedTransactionSendError(tx, transportError);
+    },
+  );
+  assert.equal(result, expectedSignature);
+  assert.equal(statusCalls, 2);
+});
+
+test('sendPreparedTransaction preserves a normally returned signature when a processed error remains unresolved', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const payer = Keypair.generate();
+  const transactionError = { InstructionError: [0, { Custom: 6_001 }] };
+  let expectedSignature = '';
+  let submittedNotifications = 0;
+  let statusCalls = 0;
+  let historyCalls = 0;
+  const connection = {
+    async getSignatureStatus(_signature: string, config?: { searchTransactionHistory?: boolean }) {
+      statusCalls += 1;
+      if (config?.searchTransactionHistory) historyCalls += 1;
+      return {
+        context: { slot: 1 },
+        value: {
+          slot: 1,
+          confirmations: 0,
+          err: transactionError,
+          confirmationStatus: 'processed' as const,
+        },
+      };
+    },
+  } as unknown as Connection;
+
+  const pendingResult = sendPreparedTransaction(
+    buildEncodedPreparedTransaction(payer.publicKey),
+    connection,
+    async (tx) => {
+      tx.sign([payer]);
+      expectedSignature = bs58.encode(tx.signatures[0]);
+      return expectedSignature;
+    },
+    {
+      onSubmitted: () => {
+        submittedNotifications += 1;
+      },
+    },
+  );
+  let settled = false;
+  void pendingResult.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  for (let turn = 0; turn < 100 && !settled; turn += 1) {
+    await Promise.resolve();
+    t.mock.timers.runAll();
+  }
+
+  await assert.rejects(pendingResult, (error: unknown) => {
+    assert.equal(isPotentiallySubmittedTransactionError(error), true);
+    if (!isPotentiallySubmittedTransactionError(error)) return false;
+    assert.equal(error.signature, expectedSignature);
+    assert.match(String(error.cause), /confirmation timed out/i);
+    return true;
+  });
+  assert.equal(settled, true);
+  assert.equal(submittedNotifications, 1);
+  assert.ok(statusCalls >= 2);
+  assert.equal(historyCalls, 1);
 });
 
 test('sendPreparedTransaction preserves an ambiguous signed send when status remains unresolved', async (t) => {
@@ -601,9 +706,9 @@ test('reconcileSubmittedTransaction returns confirmed and failed live outcomes',
         context: { slot: 1 },
         value: {
           slot: 1,
-          confirmations: 0,
+          confirmations: 1,
           err: { InstructionError: [0, { Custom: 6_001 }] },
-          confirmationStatus: 'processed' as const,
+          confirmationStatus: 'confirmed' as const,
         },
       };
     },
@@ -616,6 +721,84 @@ test('reconcileSubmittedTransaction returns confirmed and failed live outcomes',
   assert.equal(
     await reconcileSubmittedTransaction(failedConnection, { signature: SIGNATURE, recentBlockhash }),
     'failed',
+  );
+});
+
+test('reconcileSubmittedTransaction keeps processed errors nonterminal', async () => {
+  const recentBlockhash = Keypair.generate().publicKey.toBase58();
+  const connection = {
+    async getSignatureStatus() {
+      return {
+        context: { slot: 1 },
+        value: {
+          slot: 1,
+          confirmations: 1,
+          err: { InstructionError: [0, { Custom: 6_001 }] },
+          confirmationStatus: 'processed' as const,
+        },
+      };
+    },
+  } as unknown as Connection;
+
+  assert.equal(
+    await reconcileSubmittedTransaction(
+      connection,
+      { signature: SIGNATURE, recentBlockhash },
+      { timeoutMs: 5, pollIntervalMs: 1 },
+    ),
+    'unknown',
+  );
+});
+
+test('reconcileSubmittedTransaction does not confirm an explicit processed status through legacy confirmations', async () => {
+  const recentBlockhash = Keypair.generate().publicKey.toBase58();
+  const connection = {
+    async getSignatureStatus() {
+      return {
+        context: { slot: 1 },
+        value: {
+          slot: 1,
+          confirmations: null,
+          err: null,
+          confirmationStatus: 'processed' as const,
+        },
+      };
+    },
+  } as unknown as Connection;
+
+  assert.equal(
+    await reconcileSubmittedTransaction(
+      connection,
+      { signature: SIGNATURE, recentBlockhash },
+      { timeoutMs: 5, pollIntervalMs: 1 },
+    ),
+    'unknown',
+  );
+});
+
+test('reconcileSubmittedTransaction requires an explicit null status error to confirm', async () => {
+  const recentBlockhash = Keypair.generate().publicKey.toBase58();
+  const connection = {
+    async getSignatureStatus() {
+      return {
+        context: { slot: 1 },
+        value: {
+          slot: 1,
+          confirmations: 1,
+          err: false,
+          confirmationStatus: 'confirmed' as const,
+        },
+      };
+    },
+  } as unknown as Connection;
+
+  assert.equal(
+    await reconcileSubmittedTransaction(
+      connection,
+      { signature: SIGNATURE, recentBlockhash },
+      { timeoutMs: 5, pollIntervalMs: 1 },
+    ),
+    'unknown',
   );
 });
 
@@ -637,6 +820,158 @@ test('reconcileSubmittedTransaction confirms expiration only after an empty hist
     'expired',
   );
   assert.deepEqual(calls, [false, true]);
+});
+
+test('reconcileSubmittedTransaction requires ordered RPC contexts before expiring', async () => {
+  const recentBlockhash = Keypair.generate().publicKey.toBase58();
+  for (const [historyContextSlot, expected] of [
+    [119, 'confirmed'],
+    [120, 'expired'],
+    [121, 'expired'],
+  ] as const) {
+    let statusCalls = 0;
+    const requestedMinContextSlots: number[] = [];
+    const connection = {
+      async getSignatureStatus(_signature: string, config?: { searchTransactionHistory?: boolean }) {
+        statusCalls += 1;
+        if (config?.searchTransactionHistory) {
+          return { context: { slot: historyContextSlot }, value: null };
+        }
+        if (statusCalls > 2 && expected === 'confirmed') {
+          return {
+            context: { slot: 121 },
+            value: {
+              slot: 121,
+              confirmations: 1,
+              err: null,
+              confirmationStatus: 'confirmed' as const,
+            },
+          };
+        }
+        return { context: { slot: 100 }, value: null };
+      },
+      async isBlockhashValid(_blockhash: string, config: { minContextSlot: number }) {
+        requestedMinContextSlots.push(config.minContextSlot);
+        return { context: { slot: 120 }, value: false };
+      },
+    } as unknown as Connection;
+
+    assert.equal(
+      await reconcileSubmittedTransaction(
+        connection,
+        { signature: SIGNATURE, recentBlockhash, blockhashContextSlot: 110 },
+        { timeoutMs: 100, pollIntervalMs: 0, requestTimeoutMs: 20 },
+      ),
+      expected,
+    );
+    assert.deepEqual(requestedMinContextSlots, [110]);
+  }
+});
+
+test('reconcileSubmittedTransaction ignores blockhash validity below its requested context', async () => {
+  const recentBlockhash = Keypair.generate().publicKey.toBase58();
+  let liveCalls = 0;
+  let historyCalls = 0;
+  const connection = {
+    async getSignatureStatus(_signature: string, config?: { searchTransactionHistory?: boolean }) {
+      if (config?.searchTransactionHistory) {
+        historyCalls += 1;
+        return { context: { slot: 130 }, value: null };
+      }
+      liveCalls += 1;
+      return liveCalls === 1
+        ? { context: { slot: 100 }, value: null }
+        : {
+            context: { slot: 131 },
+            value: {
+              slot: 131,
+              confirmations: 1,
+              err: null,
+              confirmationStatus: 'confirmed' as const,
+            },
+          };
+    },
+    async isBlockhashValid(_blockhash: string, config: { minContextSlot: number }) {
+      assert.equal(config.minContextSlot, 120);
+      return { context: { slot: 119 }, value: false };
+    },
+  } as unknown as Connection;
+
+  assert.equal(
+    await reconcileSubmittedTransaction(
+      connection,
+      { signature: SIGNATURE, recentBlockhash, blockhashContextSlot: 120 },
+      { timeoutMs: 100, pollIntervalMs: 0, requestTimeoutMs: 20 },
+    ),
+    'confirmed',
+  );
+  assert.equal(historyCalls, 0);
+});
+
+test('reconcileSubmittedTransaction can observe without inferring expiry', async () => {
+  const recentBlockhash = Keypair.generate().publicKey.toBase58();
+  const historyCalls: boolean[] = [];
+  let validityCalls = 0;
+  const connection = {
+    async getSignatureStatus(_signature: string, config?: { searchTransactionHistory?: boolean }) {
+      historyCalls.push(Boolean(config?.searchTransactionHistory));
+      return { context: { slot: 1 }, value: null };
+    },
+    async isBlockhashValid() {
+      validityCalls += 1;
+      return { context: { slot: 1 }, value: false };
+    },
+  } as unknown as Connection;
+
+  assert.equal(
+    await reconcileSubmittedTransaction(
+      connection,
+      { signature: SIGNATURE, recentBlockhash },
+      { detectExpiry: false, timeoutMs: 5, pollIntervalMs: 1 },
+    ),
+    'unknown',
+  );
+  assert.ok(historyCalls.length > 0);
+  assert.equal(historyCalls.every(Boolean), true);
+  assert.equal(validityCalls, 0);
+});
+
+test('reconcileSubmittedTransaction observes confirmed historical outcomes without inferring expiry', async () => {
+  const recentBlockhash = Keypair.generate().publicKey.toBase58();
+  const transactionError = { InstructionError: [0, { Custom: 6_001 }] };
+  const reconcile = async (err: unknown) => {
+    const historyCalls: boolean[] = [];
+    let validityCalls = 0;
+    const connection = {
+      async getSignatureStatus(_signature: string, config?: { searchTransactionHistory?: boolean }) {
+        historyCalls.push(Boolean(config?.searchTransactionHistory));
+        return {
+          context: { slot: 1 },
+          value: {
+            slot: 1,
+            confirmations: 1,
+            err,
+            confirmationStatus: 'confirmed' as const,
+          },
+        };
+      },
+      async isBlockhashValid() {
+        validityCalls += 1;
+        return { context: { slot: 1 }, value: false };
+      },
+    } as unknown as Connection;
+    const outcome = await reconcileSubmittedTransaction(
+      connection,
+      { signature: SIGNATURE, recentBlockhash },
+      { detectExpiry: false, timeoutMs: 5, pollIntervalMs: 1 },
+    );
+    assert.deepEqual(historyCalls, [true]);
+    assert.equal(validityCalls, 0);
+    return outcome;
+  };
+
+  assert.equal(await reconcile(null), 'confirmed');
+  assert.equal(await reconcile(transactionError), 'failed');
 });
 
 test('reconcileSubmittedTransaction honors confirmed and failed historical outcomes', async () => {
@@ -721,6 +1056,21 @@ test('reconcileSubmittedTransaction strictly validates submission identifiers', 
       recentBlockhash: bs58.encode(new Uint8Array(31).fill(7)),
     }),
     /invalid recent blockhash/i,
+  );
+  await assert.rejects(
+    reconcileSubmittedTransaction(connection, {
+      signature: SIGNATURE,
+      recentBlockhash: '1'.repeat(32),
+    }),
+    /invalid recent blockhash/i,
+  );
+  await assert.rejects(
+    reconcileSubmittedTransaction(connection, {
+      signature: SIGNATURE,
+      recentBlockhash,
+      blockhashContextSlot: -1,
+    }),
+    /invalid blockhash context slot/i,
   );
 });
 

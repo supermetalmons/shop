@@ -54,7 +54,10 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../functions/src/shared/solanaProgramAddresses.js';
-import { isTransientShopRpcError } from '../../../../functions/src/shared/solanaRpcProxy.js';
+import {
+  isNonZeroBase58Bytes,
+  isTransientShopRpcError,
+} from '../../../../functions/src/shared/solanaRpcProxy.js';
 import {
   canDeliverItemKind,
   calculateDeliveryLamports,
@@ -221,7 +224,10 @@ type DeliveryPrepareDependencies = {
     wallet: string,
     addressId: string,
   ) => Promise<AddressDocument>;
-  loadLatestBlockhash: (context: ProviderContext, runtime: DeliveryRuntime) => Promise<string>;
+  loadLatestBlockhash: (
+    context: ProviderContext,
+    runtime: DeliveryRuntime,
+  ) => Promise<{ blockhash: string; blockhashContextSlot: number }>;
   loadLookupTable: (
     context: ProviderContext,
     runtime: DeliveryRuntime,
@@ -729,16 +735,29 @@ async function loadOnchainState(
   return { admin, treasury, coreCollection };
 }
 
-async function loadLatestBlockhash(context: ProviderContext, runtime: DeliveryRuntime): Promise<string> {
+async function loadLatestBlockhash(
+  context: ProviderContext,
+  runtime: DeliveryRuntime,
+): Promise<{ blockhash: string; blockhashContextSlot: number }> {
   const result = await rpcCall(context, runtime, 'getLatestBlockhash', [{ commitment: 'confirmed' }]);
+  const contextValue = isRecord(result) ? result.context : undefined;
   const value = isRecord(result) ? result.value : undefined;
   const blockhash = isRecord(value) && typeof value.blockhash === 'string' ? value.blockhash : '';
-  try {
-    if (!blockhash || new PublicKey(blockhash).toBytes().length !== 32) throw new Error('invalid');
-  } catch {
+  const lastValidBlockHeight = isRecord(value) ? value.lastValidBlockHeight : undefined;
+  if (
+    !isRecord(contextValue) ||
+    !Number.isSafeInteger(contextValue.slot) ||
+    Number(contextValue.slot) < 0 ||
+    !Number.isSafeInteger(lastValidBlockHeight) ||
+    Number(lastValidBlockHeight) < 0 ||
+    !isNonZeroBase58Bytes(blockhash, 32)
+  ) {
     throw new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid blockhash.');
   }
-  return blockhash;
+  return {
+    blockhash,
+    blockhashContextSlot: Number(contextValue.slot),
+  };
 }
 
 async function loadLookupTable(
@@ -1339,16 +1358,17 @@ async function prepareDelivery(args: {
       throw error;
     }
     try {
-      const blockhash = await args.dependencies.loadLatestBlockhash(args.providerContext, runtime);
+      const latestBlockhash = await args.dependencies.loadLatestBlockhash(args.providerContext, runtime);
       const transaction = buildTransaction(
         [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), instruction],
         owner,
-        blockhash,
+        latestBlockhash.blockhash,
         signer,
         lookupTables,
       );
       return {
         encodedTx: Buffer.from(transaction.serialize()).toString('base64'),
+        blockhashContextSlot: latestBlockhash.blockhashContextSlot,
         deliveryLamports,
         deliveryId,
       };
@@ -1513,6 +1533,7 @@ export const deliveryPrepareTestHooks = {
   deriveDeliveryPda,
   encodeDeliverArgs,
   fetchAsset,
+  loadLatestBlockhash,
   loadLookupTable,
   loadOnchainState,
   orderItem,

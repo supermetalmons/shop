@@ -128,6 +128,18 @@ export type ReconcileProfileStateResponse = {
   };
 };
 
+export type RevealDudesResponse = {
+  signature: string;
+  dudeIds: number[];
+};
+
+export type RevealDudesSubmissionUnknownDetails = {
+  kind: 'reveal-submission-unknown';
+  submission: RevealDudesResponse & {
+    recentBlockhash: string;
+  };
+};
+
 export type GetAdminProfileViewRequest = {
   ownerWallet: string;
 };
@@ -458,6 +470,7 @@ export const DELIVERY_PREPARE_ATTEMPT_HEADER = 'X-Mons-Delivery-Prepare-Attempt'
 
 export type PrepareDeliveryResponse = {
   encodedTx: string;
+  blockhashContextSlot: number;
   deliveryLamports: number;
   deliveryId: number;
 };
@@ -469,6 +482,7 @@ export type PrepareIrlClaimRequest = {
 
 export type PrepareIrlClaimResponse = {
   encodedTx: string;
+  blockhashContextSlot: number;
   dropId: string;
   certificates: number[];
   certificateId: string;

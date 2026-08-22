@@ -7,6 +7,9 @@ import { profileApiTestHooks } from '../src/lib/api.ts';
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const DESTINATION = '11111111111111111111111111111112';
 const REVEAL_SIGNATURE = bs58.encode(new Uint8Array(64).fill(5));
+const RECENT_BLOCKHASH = bs58.encode(new Uint8Array(32).fill(7));
+const ZERO_SIGNATURE = bs58.encode(new Uint8Array(64));
+const ZERO_BLOCKHASH = bs58.encode(new Uint8Array(32));
 
 test('profile API client sends bearer JSON without caching and refreshes once after 401', async () => {
   const refreshes: boolean[] = [];
@@ -246,6 +249,7 @@ test('Stripe checkout uses the authenticated Cloudflare route with an exact resp
 test('IRL claim preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
   const response = {
     encodedTx: 'AQ==',
+    blockhashContextSlot: 123,
     dropId: 'card_nft_2',
     certificates: [1, 2, 3],
     certificateId: OWNER,
@@ -269,6 +273,7 @@ test('IRL claim preparation uses the authenticated Cloudflare route with an exac
   );
   assert.deepEqual(profileApiTestHooks.parseIrlClaimPrepareResponse(payload), response);
   assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, blockhashContextSlot: -1 }), null);
   assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, certificates: [1, 2] }), null);
   assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, certificateId: 'invalid' }), null);
   assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, dropId: 'unknown_drop' }), null);
@@ -348,8 +353,13 @@ test('box reveal uses the authenticated Cloudflare route with an exact response 
   assert.deepEqual(profileApiTestHooks.parseRevealDudesResponse(payload, 'clear_cards_devnet_v2'), response);
   assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, extra: true }, 'clear_cards_devnet_v2'), null);
   assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, signature: OWNER }, 'clear_cards_devnet_v2'), null);
+  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, signature: ZERO_SIGNATURE }, 'clear_cards_devnet_v2'), null);
   assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [0] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: ['1'] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [true] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [1.5] }, 'clear_cards_devnet_v2'), null);
   assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [1, 2] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [1, 1, 3] }, 'card_nft_2'), null);
   assert.equal(profileApiTestHooks.parseRevealDudesResponse(response, 'unknown_drop'), null);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/boxes/reveal'), 65_000);
 
@@ -359,6 +369,223 @@ test('box reveal uses the authenticated Cloudflare route with an exact response 
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/boxes\/reveal/);
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|revealDudes['"]/);
+});
+
+test('box reveal unknown-submission details require an exact drop-specific contract', async () => {
+  const details = {
+    kind: 'reveal-submission-unknown',
+    submission: {
+      signature: REVEAL_SIGNATURE,
+      recentBlockhash: RECENT_BLOCKHASH,
+      dudeIds: [1, 2, 3],
+    },
+  };
+  assert.deepEqual(
+    profileApiTestHooks.parseRevealDudesSubmissionUnknownDetails(details, 'card_nft_2'),
+    details,
+  );
+
+  const malformed = [
+    { ...details, extra: true },
+    { ...details, kind: 'other' },
+    { ...details, submission: { ...details.submission, extra: true } },
+    { ...details, submission: { ...details.submission, signature: OWNER } },
+    { ...details, submission: { ...details.submission, signature: ZERO_SIGNATURE } },
+    { ...details, submission: { ...details.submission, recentBlockhash: REVEAL_SIGNATURE } },
+    { ...details, submission: { ...details.submission, recentBlockhash: ZERO_BLOCKHASH } },
+    { ...details, submission: { ...details.submission, dudeIds: ['1', 2, 3] } },
+    { ...details, submission: { ...details.submission, dudeIds: [true, 2, 3] } },
+    { ...details, submission: { ...details.submission, dudeIds: [1.5, 2, 3] } },
+    { ...details, submission: { ...details.submission, dudeIds: [1, 1, 3] } },
+    { ...details, submission: { ...details.submission, dudeIds: [0, 2, 3] } },
+  ];
+  for (const value of malformed) {
+    assert.equal(profileApiTestHooks.parseRevealDudesSubmissionUnknownDetails(value, 'card_nft_2'), null);
+  }
+  assert.equal(profileApiTestHooks.parseRevealDudesSubmissionUnknownDetails(details, 'clear_cards_devnet_v2'), null);
+  assert.equal(profileApiTestHooks.parseRevealDudesSubmissionUnknownDetails(details, 'unknown_drop'), null);
+
+  let profileError: unknown;
+  try {
+    await profileApiTestHooks.requestProfileApi(
+      '/boxes/reveal',
+      { owner: OWNER, boxAssetId: DESTINATION, dropId: 'card_nft_2' },
+      {
+        fetch: async () => Response.json({
+          error: { code: 'unavailable', message: 'Reveal status is unknown.', details },
+        }, { status: 503 }),
+        getToken: async () => 'token',
+        origin: () => 'https://api.mons.shop',
+        timeoutMs: 1000,
+      },
+    );
+  } catch (error) {
+    profileError = error;
+  }
+  assert.deepEqual(
+    profileApiTestHooks.revealDudesSubmissionUnknownDetails(profileError, 'card_nft_2'),
+    details,
+  );
+  assert.equal(
+    profileApiTestHooks.revealDudesSubmissionUnknownDetails(new Error('unknown'), 'card_nft_2'),
+    null,
+  );
+});
+
+test('box reveal ambiguity recovery observes and acknowledges a received submission without resending it', () => {
+  const source = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const start = source.indexOf('const handleRevealDudes = async');
+  const end = source.indexOf('\n  const ensureRevealOverlayAdvanceAllowed', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const implementation = source.slice(start, end);
+  assert.match(implementation, /revealDudesSubmissionUnknownDetails\(error, revealDrop\.dropId\)/);
+  assert.match(implementation, /getDropConnection\(revealDrop\.dropId\)/);
+  assert.match(implementation, /reconcileSubmittedTransaction/);
+  assert.match(implementation, /detectExpiry: false/);
+  assert.match(implementation, /timeoutMs: 75_000/);
+  assert.match(implementation, /signal: reconciliationController\.signal/);
+  assert.match(implementation, /outcome !== 'confirmed'\) throw error/);
+  assert.doesNotMatch(implementation, /outcome !== 'confirmed'\) return 'retry'/);
+  assert.match(
+    implementation,
+    /if \(outcome !== 'confirmed'\) throw error;\s*resp = await revealDudes\(walletAddress, boxAssetId, revealDrop\.dropId\)/,
+  );
+  assert.doesNotMatch(implementation, /signature: recoveryDetails\.submission\.signature/);
+  assert.match(
+    implementation,
+    /const requestIsCurrent = \(\) =>\s*!reconciliationController\.signal\.aborted &&\s*!suspendedRef\.current &&\s*revealOverlaySessionRef\.current === requestSession &&\s*connectedWalletRef\.current === walletAddress/,
+  );
+  assert.match(implementation, /revealLoadingRequestIdRef\.current !== null\) return 'resolved'/);
+  assert.ok(
+    implementation.indexOf('revealLoadingRequestIdRef.current !== null') <
+      implementation.indexOf('await revealDudes('),
+  );
+  assert.ok(
+    implementation.indexOf('const reconciliationController = new AbortController()') <
+      implementation.indexOf('await ensureSignedIn()'),
+  );
+  assert.ok(
+    implementation.indexOf('const requestIsCurrent = () =>') <
+      implementation.indexOf('await revealDudes('),
+  );
+  assert.equal(implementation.match(/reconciliationController\.signal\.aborted/g)?.length, 1);
+  assert.equal(implementation.match(/!suspendedRef\.current/g)?.length, 1);
+  assert.equal(implementation.match(/connectedWalletRef\.current === walletAddress/g)?.length, 1);
+  assert.ok((implementation.match(/if \(!requestIsCurrent\(\)\) return 'resolved';/g)?.length ?? 0) >= 5);
+  const resultApplication = implementation.indexOf('const clearCardId =');
+  const resultGuard = implementation.lastIndexOf("if (!requestIsCurrent()) return 'resolved';", resultApplication);
+  const acknowledgement = implementation.indexOf(
+    'resp = await revealDudes(walletAddress, boxAssetId, revealDrop.dropId)',
+    implementation.indexOf("if (outcome !== 'confirmed') throw error;"),
+  );
+  assert.ok(acknowledgement > implementation.indexOf("if (outcome !== 'confirmed') throw error;"));
+  assert.ok(resultGuard > acknowledgement);
+  const outerCatch = implementation.lastIndexOf('} catch (err) {');
+  assert.notEqual(outerCatch, -1);
+  assert.match(implementation.slice(outerCatch), /if \(!requestIsCurrent\(\)\) return 'resolved';/);
+  assert.equal(implementation.match(/await revealDudes\(/g)?.length, 2);
+  assert.doesNotMatch(implementation, /sendPreparedTransaction|sendSignedTransaction|sendAndConfirm/);
+  assert.match(source, /revealSubmissionReconciliationAbortControllerRef\.current\?\.abort\(\)/);
+  assert.match(source, /\(\) => \(\) => abortRevealSubmissionReconciliation\(\)/);
+});
+
+test('default box reveal lets the same overlay retry after a retry result', () => {
+  const source = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const start = source.indexOf('const handleRevealOverlayClick = () =>');
+  const end = source.indexOf('\n  const handleRevealOverlayDismiss', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+  const implementation = source.slice(start, end);
+  assert.match(implementation, /const status = await handleRevealDudes\(boxAssetId, dropId\)/);
+  assert.match(implementation, /status !== 'retry' \|\| revealOverlaySessionRef\.current !== requestSession/);
+  assert.match(implementation, /prev\.id !== boxAssetId/);
+  assert.match(implementation, /prev\.dropId !== dropId/);
+  assert.match(implementation, /prev\.phase !== 'ready'/);
+  assert.match(implementation, /prev\.revealedIds\?\.length/);
+  assert.match(implementation, /hasRevealAttempted: false/);
+});
+
+test('prepared delivery and numeric claim submissions stay durable without coupling normal polling to pending UI', () => {
+  const source = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const deliveryStart = source.indexOf('const handleShip = async');
+  const deliveryEnd = source.indexOf('\n  const assertReceiptTransferWalletReady', deliveryStart);
+  const claimStart = source.indexOf('const handleClaim = async');
+  const claimEnd = source.indexOf('\n  const isOwnProfileView', claimStart);
+  assert.notEqual(deliveryStart, -1);
+  assert.notEqual(deliveryEnd, -1);
+  assert.notEqual(claimStart, -1);
+  assert.notEqual(claimEnd, -1);
+  const delivery = source.slice(deliveryStart, deliveryEnd);
+  const claim = source.slice(claimStart, claimEnd);
+
+  const deliveryReservation = delivery.indexOf("phase: 'preparing'");
+  const deliveryPersistence = delivery.indexOf('rememberPendingPreparedTransaction(activeDeliveryReservation)');
+  const deliverySign = delivery.indexOf('const signature = await submitDelivery', deliveryReservation);
+  assert.ok(deliveryReservation > 0 && deliveryPersistence > deliveryReservation && deliverySign > deliveryPersistence);
+  assert.match(delivery, /withBrowserLock\(\s*`mons:pending-prepared-submission:\$\{deliveryWallet\}`,[\s\S]*?resp = await requestTx\(\);\s*return submitWithBlockhashRetry\(\)/);
+  assert.match(delivery, /submitPendingPreparedTransaction\(reservation, submission\)/);
+  assert.match(delivery, /onBroadcastAttempt: recordSubmittedDelivery/);
+  assert.match(delivery, /onSubmitted: recordSubmittedDelivery/);
+  assert.doesNotMatch(delivery, /syncPendingPreparedTransaction\(pendingSubmission\)/);
+
+  const existingDeliveryStart = delivery.indexOf('if (existingPending)');
+  const existingDeliveryEnd = delivery.indexOf('\n    if (deliverableIds.length', existingDeliveryStart);
+  const existingDelivery = delivery.slice(existingDeliveryStart, existingDeliveryEnd);
+  assert.match(existingDelivery, /Another wallet transaction is already pending/);
+  assert.doesNotMatch(existingDelivery, /setDeliveryOpen|setSelected|syncPendingPreparedTransaction/);
+
+  const deliveryAmbiguityStart = delivery.indexOf('if (pendingSubmission && isPotentiallySubmittedTransactionError(err))');
+  const deliveryFailureStart = delivery.indexOf('const reservation = pendingSubmission || activeDeliveryReservation', deliveryAmbiguityStart);
+  const deliveryRetryEnd = delivery.indexOf('\n          }\n        }\n      };', deliveryFailureStart);
+  assert.ok(deliveryAmbiguityStart > 0 && deliveryFailureStart > deliveryAmbiguityStart && deliveryRetryEnd > deliveryFailureStart);
+  const deliveryAmbiguity = delivery.slice(deliveryAmbiguityStart, deliveryFailureStart);
+  const deliveryDefinitiveFailure = delivery.slice(deliveryFailureStart, deliveryRetryEnd);
+  assert.match(deliveryAmbiguity, /reconcilePendingPreparedTransaction\(pendingSubmission\)/);
+  assert.doesNotMatch(deliveryAmbiguity, /setDeliveryOpen|setSelected/);
+  assert.doesNotMatch(deliveryDefinitiveFailure, /syncPendingPreparedTransaction|setDeliveryOpen|setSelected/);
+  assert.match(deliveryDefinitiveFailure, /forgetPendingPreparedTransaction\(reservation\)/);
+
+  const pendingCheck = claim.indexOf('const existingPendingClaim = pendingSubmittedClaim');
+  const prepare = claim.indexOf('resp = await requestTx()');
+  assert.ok(pendingCheck > 0 && prepare > pendingCheck);
+  assert.match(claim, /withBrowserLock\(\s*`mons:pending-prepared-submission:\$\{claimWallet\}`/);
+  const claimReservation = claim.indexOf("phase: 'preparing'", prepare);
+  const claimPersistence = claim.indexOf('rememberPendingPreparedTransaction(activeClaimReservation)', claimReservation);
+  const claimSign = claim.indexOf('await submitClaim', claimReservation);
+  assert.ok(claimReservation > prepare && claimPersistence > claimReservation && claimSign > claimPersistence);
+  assert.match(claim, /submitPendingPreparedTransaction\(reservation, submission\)/);
+  assert.match(claim, /onBroadcastAttempt: recordSubmittedClaim/);
+  assert.match(claim, /onSubmitted: recordSubmittedClaim/);
+  assert.doesNotMatch(claim, /syncPendingPreparedTransaction\(pendingSubmission\)/);
+  assert.match(claim, /reconcilePendingPreparedTransaction\(pendingSubmission/);
+  assert.match(claim, /const resolution = await reconcilePendingPreparedTransaction\(existingPendingClaim/);
+  assert.match(claim, /if \(resolution === 'confirmed'\) \{\s*if \(numericClaimUiIsCurrent\(\)\) \{\s*return presentConfirmedNumericClaim\(/);
+  assert.match(claim, /if \(resolution === 'unknown'\) return \{ deferred: true \}/);
+
+  assert.match(source, /const durable = persistPendingPreparedTransaction\(entry\);\s*if \(durable && connectedWalletRef\.current === entry\.wallet\) \{\s*syncPendingPreparedTransaction\(entry\)/);
+  assert.match(source, /const durable = replacePendingPreparedTransaction\(preparing, submitted\);\s*if \(durable && connectedWalletRef\.current === submitted\.wallet\) \{\s*syncPendingPreparedTransaction\(submitted\)/);
+  assert.match(delivery, /blockhashContextSlot: resp\.blockhashContextSlot/);
+  assert.match(claim, /blockhashContextSlot: resp\.blockhashContextSlot/);
+  assert.match(source, /signature: record\.signature,\s*recentBlockhash: record\.recentBlockhash,\s*blockhashContextSlot: record\.blockhashContextSlot/);
+  assert.match(source, /if \(typeof navigator === 'undefined' \|\| typeof navigator\.locks\?\.request !== 'function'\) \{\s*throw new Error\('This browser cannot safely coordinate wallet transactions\. Update your browser and try again\.'\)/);
+  assert.match(source, /navigator\.locks\.request\(name, \{ ifAvailable: true \}, async \(lock\) => \{\s*if \(!lock\) throw new Error\('Another wallet transaction is already in progress\. Wait for it to finish and try again\.'\)/);
+  assert.doesNotMatch(source, /navigator\.locks\.request\(name, run\)/);
+  assert.match(source, /if \(options\?\.onBroadcastAttempt\) \{\s*throw new Error\('This wallet cannot safely track the transaction before broadcast\. Use a wallet with transaction signing support\.'\)/);
+  assert.match(source, /if \(resolution === 'confirmed'\) \{\s*if \(record\.kind === 'delivery'\) hideAssetsForWallet\(record\.wallet, record\.itemIds\);\s*await forgetPendingPreparedTransaction\(record\)/);
+  assert.match(source, /if \(resolution === 'failed' \|\| resolution === 'expired'\) \{\s*await forgetPendingPreparedTransaction\(record\)/);
+  assert.match(source, /const current = readPendingPreparedTransaction\(record\.wallet, false\)/);
+  assert.match(source, /selectedItems\[0\]\?\.kind === 'box' &&\s*!pendingDeliveryItemIds\.has\(selectedItems\[0\]\.id\)/);
+  assert.match(source, /if \(!deliveryOpen \|\| canShipSelected \|\| pendingDeliveryItemIds\.size\) return/);
+  assert.doesNotMatch(source, /pendingDeliveryItemIds\.forEach\(\(id\) => \{\s*if \(next\.delete\(id\)\)/);
+  assert.doesNotMatch(source, /!receiptOperationHiddenAssets\.has\(item\.id\) &&\s*!pendingDeliveryItemIds\.has\(item\.id\)/);
+  assert.match(source, /queueOverlayAction\(\(\) => \{\s*if \(!claimPreviewIsCurrent\(\) \|\| opened\) return;[\s\S]*?\}, 'presentation'\)/);
+  assert.match(source, /connectedWalletRef\.current === record\.wallet &&\s*ownerRef\.current === record\.wallet &&\s*uiIsCurrent\(\)/);
+  assert.doesNotMatch(source, /claimPresented/);
+  assert.match(source, /kind === 'presentation' && \(suspendedRef\.current \|\| presentationLoadingRef\.current\)/);
+  assert.match(source, /actions\.filter\(\(action\) => action\.kind === 'presentation'\)/);
+  assert.match(source, /if \(suspended \|\| revealOverlay \|\| revealLoading \|\| startOpenLoading\) return;\s*flushOverlayActions\(\)/);
+  assert.match(source, /if \(revealOverlayRef\.current \|\| presentationLoadingRef\.current\) return false/);
 });
 
 test('receipt transfer preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -406,6 +633,7 @@ test('receipt transfer preparation uses the authenticated Cloudflare route with 
 test('delivery preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
   const response = {
     encodedTx: 'AQ==',
+    blockhashContextSlot: 123,
     deliveryLamports: 200_000_000,
     deliveryId: 17,
   };
@@ -429,6 +657,7 @@ test('delivery preparation uses the authenticated Cloudflare route with an exact
   });
   assert.deepEqual(profileApiTestHooks.parseDeliveryPrepareResponse(payload), response);
   assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, blockhashContextSlot: -1 }), null);
   assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, encodedTx: '' }), null);
   assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, deliveryLamports: -1 }), null);
   assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, deliveryId: 0 }), null);

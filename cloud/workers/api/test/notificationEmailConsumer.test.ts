@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createNotificationEmailJobV1 } from '../../../../functions/src/shared/notificationEmailJob.ts';
-import worker from '../src/index.ts';
+import worker, { processBackgroundJobBatch } from '../src/index.ts';
 import {
   notificationEmailRetryDelaySeconds,
-  processNotificationEmailBatch,
+  processNotificationEmailMessage,
   resendSend,
   type NotificationEmailSend,
 } from '../src/notificationEmailConsumer.ts';
@@ -45,9 +45,9 @@ function queueMessage(body: unknown, attempts = 1): { message: Message<unknown>;
   };
 }
 
-function batch(...messages: Message<unknown>[]): MessageBatch<unknown> {
+function batch(queue: string, ...messages: Message<unknown>[]): MessageBatch<unknown> {
   return {
-    queue: 'mons-shop-notification-emails',
+    queue,
     messages,
     metadata: { metrics: { backlogCount: messages.length, backlogBytes: 100 } },
     ackAll: () => undefined,
@@ -67,7 +67,7 @@ test('notification consumer acknowledges successful sends with the exact job and
     sent.push({ job, apiKey });
     return { data: { id: 'email-message-id' }, error: null };
   };
-  await processNotificationEmailBatch(batch(queued.message), env(), {
+  await processNotificationEmailMessage(queued.message, env(), {
     send,
     log: (entry) => logs.push(entry),
     warn: (entry) => logs.push(entry),
@@ -142,12 +142,14 @@ test('notification consumer retries transient provider and transport failures pe
     };
   };
   const logs: Record<string, unknown>[] = [];
-  await processNotificationEmailBatch(batch(transport.message, rateLimited.message), env(), {
+  const overrides: NonNullable<Parameters<typeof processNotificationEmailMessage>[2]> = {
     send,
     log: (entry) => logs.push(entry),
     warn: (entry) => logs.push(entry),
     error: (entry) => logs.push(entry),
-  });
+  };
+  await processNotificationEmailMessage(transport.message, env(), overrides);
+  await processNotificationEmailMessage(rateLimited.message, env(), overrides);
   assert.equal(transport.actions.acks, 0);
   assert.deepEqual(transport.actions.retries, [{ delaySeconds: 30 }]);
   assert.equal(rateLimited.actions.acks, 0);
@@ -160,7 +162,7 @@ test('notification consumer retries transient provider and transport failures pe
 test('notification consumer retries transient HTTP statuses before provider names', async () => {
   for (const statusCode of [408, 429, 503]) {
     const queued = queueMessage({ ...JOB, jobId: `423e4567-e89b-42d3-a456-426614174${statusCode}` });
-    await processNotificationEmailBatch(batch(queued.message), env(), {
+    await processNotificationEmailMessage(queued.message, env(), {
       send: async () => ({
         data: null,
         error: { name: 'validation_error', message: 'recognized but transient', statusCode },
@@ -178,7 +180,7 @@ test('notification consumer acknowledges permanent errors and malformed jobs', a
   const permanent = queueMessage(JOB);
   const malformed = queueMessage({ ...JOB, recipients: ['not an email'] });
   let sends = 0;
-  await processNotificationEmailBatch(batch(permanent.message, malformed.message), env(), {
+  const overrides: NonNullable<Parameters<typeof processNotificationEmailMessage>[2]> = {
     send: async () => {
       sends += 1;
       return {
@@ -189,7 +191,9 @@ test('notification consumer acknowledges permanent errors and malformed jobs', a
     log: () => undefined,
     warn: () => undefined,
     error: () => undefined,
-  });
+  };
+  await processNotificationEmailMessage(permanent.message, env(), overrides);
+  await processNotificationEmailMessage(malformed.message, env(), overrides);
   assert.equal(sends, 1);
   assert.equal(permanent.actions.acks, 1);
   assert.deepEqual(permanent.actions.retries, []);
@@ -200,13 +204,13 @@ test('notification consumer acknowledges permanent errors and malformed jobs', a
 test('notification consumer retries missing configuration and malformed successes', async () => {
   const missingSecret = queueMessage(JOB, 2);
   const malformedSuccess = queueMessage({ ...JOB, jobId: '323e4567-e89b-42d3-a456-426614174000' }, 5);
-  await processNotificationEmailBatch(batch(missingSecret.message), env(''), {
+  await processNotificationEmailMessage(missingSecret.message, env(''), {
     send: async () => ({ data: { id: 'unused' }, error: null }),
     log: () => undefined,
     warn: () => undefined,
     error: () => undefined,
   });
-  await processNotificationEmailBatch(batch(malformedSuccess.message), env(), {
+  await processNotificationEmailMessage(malformedSuccess.message, env(), {
     send: async () => ({ data: {}, error: null }),
     log: () => undefined,
     warn: () => undefined,
@@ -223,6 +227,62 @@ test('notification retry delays are bounded to the approved schedule', () => {
   );
 });
 
+test('queue batches route by exact queue name and isolate individual failures', async () => {
+  const reveal = queueMessage({
+    version: 1,
+    kind: 'reveal_submission_reconcile',
+    dropId: 'clear_cards_devnet_v2',
+    boxAssetId: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
+    reservationId: '123e4567-e89b-42d3-a456-426614174000',
+    signature: 'US517G5965aydkZ46HS38QLi7UQiSojurfbQfKCELFx5akrrpkWp7jjhVdiSgpJVSBgV7W2QU7qDN1ZTZe3bG9R',
+  });
+  const notification = queueMessage(JOB);
+  const revealSibling = queueMessage(JOB);
+  const unknown = queueMessage(JOB);
+  const routes: string[] = [];
+  const errors: Record<string, unknown>[] = [];
+  const overrides: NonNullable<Parameters<typeof processBackgroundJobBatch>[2]> = {
+    reveal: async (message) => {
+      routes.push('reveal');
+      if (message === reveal.message) throw new Error('reveal failed');
+      message.ack();
+    },
+    notification: async (message) => {
+      routes.push('notification');
+      message.ack();
+    },
+    error: (entry) => errors.push(entry),
+  };
+  await processBackgroundJobBatch(
+    batch('mons-shop-reveal-reconciliation', reveal.message, revealSibling.message),
+    env() as Env,
+    overrides,
+  );
+  await processBackgroundJobBatch(
+    batch('mons-shop-notification-emails', notification.message),
+    env() as Env,
+    overrides,
+  );
+  await processBackgroundJobBatch(
+    batch('unexpected-queue', unknown.message),
+    env() as Env,
+    overrides,
+  );
+  assert.deepEqual(routes, ['reveal', 'reveal', 'notification']);
+  assert.equal(reveal.actions.acks, 0);
+  assert.deepEqual(reveal.actions.retries, [undefined]);
+  assert.equal(revealSibling.actions.acks, 1);
+  assert.deepEqual(revealSibling.actions.retries, []);
+  assert.equal(notification.actions.acks, 1);
+  assert.deepEqual(notification.actions.retries, []);
+  assert.equal(unknown.actions.acks, 0);
+  assert.deepEqual(unknown.actions.retries, [undefined]);
+  assert.deepEqual(errors.map((entry) => entry.event), [
+    'background_job_unhandled_error',
+    'background_job_unknown_queue',
+  ]);
+});
+
 test('API Worker exposes the queue handler and uses the reviewed queue policy', () => {
   const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   assert.equal(typeof worker.queue, 'function');
@@ -231,14 +291,28 @@ test('API Worker exposes the queue handler and uses the reviewed queue policy', 
   assert.equal(config.preview_urls, true);
   assert.deepEqual(config.routes, [{ pattern: 'api.mons.shop', custom_domain: true }]);
   assert.equal(config.secrets.required.includes('RESEND_API_KEY'), true);
-  assert.deepEqual(config.queues.consumers, [{
-    queue: 'mons-shop-notification-emails',
-    max_batch_size: 5,
-    max_batch_timeout: 5,
-    max_retries: 5,
-    max_concurrency: 1,
-    dead_letter_queue: 'mons-shop-notification-emails-dlq',
-  }]);
+  assert.deepEqual(config.queues.consumers, [
+    {
+      queue: 'mons-shop-notification-emails',
+      max_batch_size: 5,
+      max_batch_timeout: 5,
+      max_retries: 5,
+      max_concurrency: 1,
+      dead_letter_queue: 'mons-shop-notification-emails-dlq',
+    },
+    {
+      queue: 'mons-shop-reveal-reconciliation',
+      max_batch_size: 1,
+      max_batch_timeout: 1,
+      max_retries: 10,
+      max_concurrency: 1,
+      dead_letter_queue: 'mons-shop-reveal-reconciliation-dlq',
+    },
+  ]);
+  assert.deepEqual(config.queues.producers, [
+    { binding: 'NOTIFICATION_EMAIL_QUEUE', queue: 'mons-shop-notification-emails' },
+    { binding: 'REVEAL_BACKGROUND_QUEUE', queue: 'mons-shop-reveal-reconciliation' },
+  ]);
   assert.equal(config.observability.logs.head_sampling_rate, 1);
   assert.equal(config.observability.logs.invocation_logs, false);
 });

@@ -58,7 +58,7 @@ function isSafeNonNegativeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) >= 0;
 }
 
-export function isBase58Bytes(value: unknown, length: number): boolean {
+export function isBase58Bytes(value: unknown, length: number): value is string {
   if (typeof value !== 'string') return false;
   const encodedLengthRange = BASE58_BYTE_LENGTH_RANGES.get(length);
   if (
@@ -72,6 +72,11 @@ export function isBase58Bytes(value: unknown, length: number): boolean {
   } catch {
     return false;
   }
+}
+
+export function isNonZeroBase58Bytes(value: unknown, length: number): value is string {
+  if (!isBase58Bytes(value, length)) return false;
+  return bs58.decode(value).some((byte) => byte !== 0);
 }
 
 function isCommitmentConfig(

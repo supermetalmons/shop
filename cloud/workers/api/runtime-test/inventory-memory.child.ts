@@ -167,6 +167,11 @@ const env: Env = {
     sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
     metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
   },
+  REVEAL_BACKGROUND_QUEUE: {
+    send: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+  },
   HELIUS_API_KEY: 'memory-test-key',
   RESEND_API_KEY: '',
   RESEND_CONTACTS_API_KEY: 'memory-resend-test-key',

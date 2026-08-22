@@ -116,6 +116,36 @@ function splitDeployment(firstVersionId: string, secondVersionId: string): Cloud
   };
 }
 
+function completeApiReleaseInput(
+  fixForwardFromVersionId?: string,
+): Parameters<typeof deployApiTestHooks.runCompleteApiRelease>[0] {
+  return {
+    apiToken: 'scoped-token',
+    checkEnvironment: {
+      CI: 'true',
+      HELIUS_API_KEY: '',
+      RESEND_CONTACTS_API_KEY: '',
+      NOTIFICATION_ENQUEUE_SECRET: '',
+      FIRESTORE_SERVICE_ACCOUNT_JSON: '',
+      ...EMPTY_NEW_API_SECRET_ENV,
+    },
+    firestoreServiceAccountJson: 'firestore-test-credential',
+    firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
+    ...(fixForwardFromVersionId ? { fixForwardFromVersionId } : {}),
+    heliusApiKey: 'helius-test-key',
+    logsDirectory: '/tmp/logs',
+    smokeOwner: OWNER,
+    wranglerEnvironment: {
+      CLOUDFLARE_API_TOKEN: 'scoped-token',
+      HELIUS_API_KEY: '',
+      RESEND_CONTACTS_API_KEY: '',
+      NOTIFICATION_ENQUEUE_SECRET: '',
+      FIRESTORE_SERVICE_ACCOUNT_JSON: '',
+      ...EMPTY_NEW_API_SECRET_ENV,
+    },
+  };
+}
+
 async function verifyFrontendProductionGuards(input: {
   verifyBeforeMutation?: () => Promise<void>;
   verifyBeforePromotion?: () => Promise<void>;
@@ -135,7 +165,7 @@ test('release CLI starts under its production TypeScript runner', () => {
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Release, update, or roll back the mons-shop-api Worker/);
+  assert.match(result.stdout, /Release or update the mons-shop-api Worker/);
 });
 
 test('Wrangler deployment status parsing requires exact percentage state and captures the pinned command', () => {
@@ -466,8 +496,21 @@ test('frontend production supports one-step release and exact version-keyed reco
       parseFrontendDeployArgs(['production', '--token-file', '/tmp/token']),
       { mode: 'production', versionId: undefined, tokenFile: '/tmp/token' },
     );
+    assert.deepEqual(
+      parseFrontendDeployArgs(['production', '--skip-authenticated-prepared-transaction-smokes']),
+      {
+        mode: 'production',
+        skipAuthenticatedPreparedTransactionSmokes: true,
+        versionId: undefined,
+        tokenFile: undefined,
+      },
+    );
     assert.throws(
       () => parseFrontendDeployArgs(['preview', '--version-id', versionId]),
+      /only valid for production/,
+    );
+    assert.throws(
+      () => parseFrontendDeployArgs(['preview', '--skip-authenticated-prepared-transaction-smokes']),
       /only valid for production/,
     );
     const record = frontendDeployTestHooks.writeFrontendCandidateRecord(metadata, { directory, now });
@@ -748,6 +791,31 @@ test('frontend production capability check requires the profile lifecycle API co
   assert.equal(requests[6]?.init?.body, '{}');
   assert.equal(deliverySmokes, 1);
   assert.equal(adminIrlSmokes, 1);
+  let skippedDeliverySmokes = 0;
+  let skippedAdminIrlSmokes = 0;
+  const bypassRequests: string[] = [];
+  await frontendDeployTestHooks.smokeProfileStateApi({
+    adminIrlRedeemPrepare: () => {
+      skippedAdminIrlSmokes += 1;
+    },
+    deliveryPrepare: () => {
+      skippedDeliverySmokes += 1;
+    },
+    skipAuthenticatedPreparedTransactionSmokes: true,
+    fetch: async (input) => {
+      bypassRequests.push(String(input));
+      return Response.json({
+        ok: false,
+        error: { code: 'unauthenticated', message: 'Authentication is required.' },
+      }, {
+        status: 401,
+        headers: { 'Access-Control-Allow-Origin': 'https://mons.shop' },
+      });
+    },
+  });
+  assert.equal(bypassRequests.length, 8);
+  assert.equal(skippedDeliverySmokes, 0);
+  assert.equal(skippedAdminIrlSmokes, 0);
   await assert.rejects(
     () => frontendDeployTestHooks.smokeProfileStateApi({
       adminIrlRedeemPrepare: () => undefined,
@@ -876,7 +944,7 @@ test('API deployment validates exact Worker and custom-domain targets before mut
   assert.equal(
     deployApiTestHooks.isExactApiDeploymentConfig({
       ...config,
-      queues: { producers: [{ binding: 'NOTIFICATION_EMAIL_QUEUE', queue: 'unexpected-queue' }] },
+      queues: { producers: [{ binding: 'REVEAL_BACKGROUND_QUEUE', queue: 'unexpected-queue' }] },
     }),
     false,
   );
@@ -899,8 +967,8 @@ test('API deployment validates exact Worker and custom-domain targets before mut
   );
 });
 
-test('notification consumer and delivery log inspection require the exact reviewed surface', () => {
-  const consumers = deployApiTestHooks.parseNotificationQueueConsumers(JSON.stringify([{
+test('queue consumers and delivery log inspection require the exact reviewed surface', () => {
+  const notificationConsumers = deployApiTestHooks.parseQueueConsumers(JSON.stringify([{
     script: 'mons-shop-api',
     type: 'worker',
     dead_letter_queue: 'mons-shop-notification-emails-dlq',
@@ -912,9 +980,26 @@ test('notification consumer and delivery log inspection require the exact review
       retry_delay: 0,
     },
   }]));
-  assert.doesNotThrow(() => deployApiTestHooks.assertSoleNotificationConsumer(consumers, 'mons-shop-api'));
+  const revealConsumers = deployApiTestHooks.parseQueueConsumers(JSON.stringify([{
+    script: 'mons-shop-api',
+    type: 'worker',
+    dead_letter_queue: 'mons-shop-reveal-reconciliation-dlq',
+    settings: {
+      batch_size: 1,
+      max_retries: 10,
+      max_wait_time_ms: 1000,
+      max_concurrency: 1,
+      retry_delay: 0,
+    },
+  }]));
+  assert.doesNotThrow(() => deployApiTestHooks.assertSoleNotificationConsumer(notificationConsumers, 'mons-shop-api'));
+  assert.doesNotThrow(() => deployApiTestHooks.assertSoleRevealConsumer(revealConsumers, 'mons-shop-api'));
   assert.throws(
-    () => deployApiTestHooks.assertSoleNotificationConsumer(consumers, 'unexpected-worker'),
+    () => deployApiTestHooks.assertSoleNotificationConsumer(notificationConsumers, 'unexpected-worker'),
+    /exactly one reviewed/,
+  );
+  assert.throws(
+    () => deployApiTestHooks.assertSoleRevealConsumer(revealConsumers, 'unexpected-worker'),
     /exactly one reviewed/,
   );
 
@@ -928,6 +1013,78 @@ test('notification consumer and delivery log inspection require the exact review
     JSON.stringify({ logs: [{ message: [{ event: 'notification_email_sent', jobId: smokeJobId }] }] }, null, 2),
     smokeJobId,
   ), 'sent');
+});
+
+test('API release and preview bootstrap missing reveal queues', () => {
+  const existing = new Set([
+    'mons-shop-notification-emails',
+    'mons-shop-notification-emails-dlq',
+  ]);
+  const created: string[] = [];
+  deployApiTestHooks.ensureApiQueueResources(
+    deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+    {
+      create: (name) => {
+        created.push(name);
+        existing.add(name);
+      },
+      info: (name) => {
+        if (!existing.has(name)) throw new Error('missing');
+        return `Queue Name: ${name}\nQueue ID: test-id`;
+      },
+    },
+  );
+  assert.deepEqual(created, [
+    'mons-shop-reveal-reconciliation',
+    'mons-shop-reveal-reconciliation-dlq',
+  ]);
+  assert.throws(
+    () => deployApiTestHooks.assertQueueResource(
+      'mons-shop-reveal-reconciliation',
+      'Queue Name: unexpected-queue',
+    ),
+    /did not confirm the exact/,
+  );
+
+  const previewExisting = new Set([
+    'mons-shop-notification-emails',
+    'mons-shop-notification-emails-dlq',
+  ]);
+  const previewCreated: string[] = [];
+  deployApiTestHooks.ensureApiQueueResources(
+    deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+    {
+      create: (name) => {
+        previewCreated.push(name);
+        previewExisting.add(name);
+      },
+      info: (name) => {
+        if (!previewExisting.has(name)) throw new Error('missing');
+        return `Queue Name: ${name}`;
+      },
+    },
+  );
+  assert.deepEqual(previewCreated, created);
+});
+
+test('queue bootstrap tolerates a concurrent creator only after exact reinspection', () => {
+  let inspections = 0;
+  assert.doesNotThrow(() => deployApiTestHooks.ensureQueueResource(
+    'mons-shop-reveal-reconciliation',
+    true,
+    deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+    {
+      create: () => {
+        throw new Error('already exists');
+      },
+      info: (name) => {
+        inspections += 1;
+        if (inspections === 1) throw new Error('missing');
+        return `Queue Name: ${name}`;
+      },
+    },
+  ));
+  assert.equal(inspections, 2);
 });
 
 test('frontend production deploys reviewed triggers before exact promotion', () => {
@@ -974,6 +1131,7 @@ test('frontend production reconciles exact state and retries hash propagation be
       deployment: deploymentReader([
         baselineVersionId,
         baselineVersionId,
+        candidateVersionId,
         candidateVersionId,
         candidateVersionId,
       ], events),
@@ -1883,6 +2041,201 @@ test('complete API release blocks stale API or frontend state before upload', as
   }
 });
 
+test('fix-forward release pauses before rejecting the wrong live API version', async () => {
+  const trackedApiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const failedLiveVersionId = randomUUID();
+  const events: string[] = [];
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId: trackedApiVersionId, frontendVersionId },
+  };
+
+  await assert.rejects(
+    () => deployApiTestHooks.runCompleteApiRelease(
+      completeApiReleaseInput(failedLiveVersionId),
+      {
+        apiDeployment: async () => {
+          events.push('api-status');
+          return stableDeployment(randomUUID());
+        },
+        frontendDeployment: async () => {
+          events.push('frontend-status');
+          return stableDeployment(frontendVersionId);
+        },
+        manifest: () => {
+          events.push('manifest');
+          return manifest;
+        },
+        pauseRevealQueue: () => events.push('pause'),
+        production: async () => assert.fail('wrong live API reached production'),
+        record: () => assert.fail('wrong live API was recorded'),
+        triggerDryRun: () => assert.fail('wrong live API reached trigger validation'),
+        upload: async () => assert.fail('wrong live API uploaded a candidate'),
+        validate: () => assert.fail('wrong live API reached local validation'),
+      },
+    ),
+    new RegExp(`expected live API ${failedLiveVersionId}[\\s\\S]*remains paused`),
+  );
+  assert.deepEqual(events, ['manifest', 'pause', 'api-status', 'frontend-status']);
+});
+
+test('fix-forward release pauses before rejecting frontend drift', async () => {
+  const trackedApiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const failedLiveVersionId = randomUUID();
+  const events: string[] = [];
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId: trackedApiVersionId, frontendVersionId },
+  };
+
+  await assert.rejects(
+    () => deployApiTestHooks.runCompleteApiRelease(
+      completeApiReleaseInput(failedLiveVersionId),
+      {
+        apiDeployment: async () => {
+          events.push('api-status');
+          return stableDeployment(failedLiveVersionId);
+        },
+        frontendDeployment: async () => {
+          events.push('frontend-status');
+          return stableDeployment(randomUUID());
+        },
+        manifest: () => {
+          events.push('manifest');
+          return manifest;
+        },
+        pauseRevealQueue: () => events.push('pause'),
+        production: async () => assert.fail('frontend drift reached production'),
+        record: () => assert.fail('frontend drift was recorded'),
+        triggerDryRun: () => assert.fail('frontend drift reached trigger validation'),
+        upload: async () => assert.fail('frontend drift uploaded a candidate'),
+        validate: () => assert.fail('frontend drift reached local validation'),
+      },
+    ),
+    new RegExp(`expected frontend ${frontendVersionId}[\\s\\S]*remains paused`),
+  );
+  assert.deepEqual(events, ['manifest', 'pause', 'api-status', 'frontend-status']);
+});
+
+test('fix-forward upload failure leaves reveal delivery paused', async () => {
+  const trackedApiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const failedLiveVersionId = randomUUID();
+  let revealDeliveryPaused = false;
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId: trackedApiVersionId, frontendVersionId },
+  };
+
+  await assert.rejects(
+    () => deployApiTestHooks.runCompleteApiRelease(
+      completeApiReleaseInput(failedLiveVersionId),
+      {
+        apiDeployment: async () => stableDeployment(failedLiveVersionId),
+        frontendDeployment: async () => stableDeployment(frontendVersionId),
+        manifest: () => manifest,
+        pauseRevealQueue: () => {
+          revealDeliveryPaused = true;
+        },
+        prepareQueues: () => undefined,
+        production: async () => assert.fail('failed upload reached production'),
+        record: () => assert.fail('failed upload was recorded'),
+        triggerDryRun: () => undefined,
+        upload: async () => {
+          assert.equal(revealDeliveryPaused, true);
+          throw new Error('injected fix-forward upload failure');
+        },
+        validate: () => undefined,
+      },
+    ),
+    /injected fix-forward upload failure/,
+  );
+  assert.equal(revealDeliveryPaused, true);
+});
+
+test('fix-forward release pauses before upload and records the fixed candidate against the unchanged manifest', async () => {
+  const trackedApiVersionId = randomUUID();
+  const frontendVersionId = randomUUID();
+  const failedLiveVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const events: string[] = [];
+  let revealDeliveryPaused = false;
+  const manifest = {
+    ...deployApiTestHooks.readReleaseManifest(),
+    currentProduction: { apiVersionId: trackedApiVersionId, frontendVersionId },
+  };
+  const apiStatuses = [failedLiveVersionId, candidateVersionId];
+  const frontendStatuses = [frontendVersionId, frontendVersionId, frontendVersionId];
+
+  const metadata = await deployApiTestHooks.runCompleteApiRelease(
+    completeApiReleaseInput(failedLiveVersionId),
+    {
+      apiDeployment: async () => {
+        events.push('api-status');
+        return stableDeployment(apiStatuses.shift() || assert.fail('unexpected API status read'));
+      },
+      frontendDeployment: async () => {
+        events.push('frontend-status');
+        return stableDeployment(frontendStatuses.shift() || assert.fail('unexpected frontend status read'));
+      },
+      manifest: () => {
+        events.push('manifest');
+        return manifest;
+      },
+      pauseRevealQueue: () => {
+        revealDeliveryPaused = true;
+        events.push('pause');
+      },
+      prepareQueues: () => events.push('prepare-queues'),
+      production: async (input) => {
+        events.push('production');
+        assert.equal(input.expectedCurrentVersionId, failedLiveVersionId);
+        await input.verifyBeforePromotion?.();
+        events.push('promotion-guard-passed');
+      },
+      record: (versionId, options) => {
+        events.push('record');
+        assert.equal(versionId, candidateVersionId);
+        assert.deepEqual(options.expectedCurrentProduction, manifest.currentProduction);
+        return {
+          ...manifest,
+          currentProduction: { apiVersionId: versionId, frontendVersionId },
+        };
+      },
+      triggerDryRun: () => events.push('trigger-dry-run'),
+      upload: async () => {
+        assert.equal(revealDeliveryPaused, true);
+        events.push('upload');
+        return {
+          previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+          versionId: candidateVersionId,
+        };
+      },
+      validate: () => events.push('validate'),
+    },
+  );
+
+  assert.equal(metadata.versionId, candidateVersionId);
+  assert.deepEqual(events, [
+    'manifest',
+    'pause',
+    'api-status',
+    'frontend-status',
+    'validate',
+    'trigger-dry-run',
+    'prepare-queues',
+    'upload',
+    'production',
+    'frontend-status',
+    'promotion-guard-passed',
+    'api-status',
+    'frontend-status',
+    'record',
+  ]);
+});
+
 test('complete frontend release verifies the production pair around upload, promotion, manifest recording, and commit', async () => {
   const apiVersionId = randomUUID();
   const frontendVersionId = randomUUID();
@@ -1901,6 +2254,7 @@ test('complete frontend release verifies the production pair around upload, prom
   const frontendStatuses = [frontendVersionId, candidateVersionId];
   const result = await frontendDeployTestHooks.runCompleteFrontendRelease({
     authenticatedEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
+    skipAuthenticatedPreparedTransactionSmokes: true,
     unauthenticatedEnvironment: { CLOUDFLARE_API_TOKEN: '', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
     validationEnvironment: { CI: 'true', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
     wranglerLogDirectory: '/tmp/logs',
@@ -1922,8 +2276,9 @@ test('complete frontend release verifies the production pair around upload, prom
       events.push('manifest');
       return manifest;
     },
-    profileApi: async () => {
+    profileApi: async (options) => {
       events.push('profile-api');
+      assert.equal(options?.skipAuthenticatedPreparedTransactionSmokes, true);
     },
     production: async (input) => {
       events.push('production');
@@ -2371,6 +2726,10 @@ test('complete API release verifies the full pair around one exact API promotion
       events.push('manifest');
       return manifest;
     },
+    prepareQueues: (environment) => {
+      assert.equal(environment.CLOUDFLARE_API_TOKEN, 'scoped-token');
+      events.push('prepare-queues');
+    },
     production: async (input) => {
       events.push('production');
       assert.deepEqual(input.candidateSmoke, {
@@ -2416,6 +2775,7 @@ test('complete API release verifies the full pair around one exact API promotion
     'frontend-status',
     'validate',
     'trigger-dry-run',
+    'prepare-queues',
     'upload',
     'production',
     'frontend-status',
@@ -2599,6 +2959,18 @@ test('API production benchmarks the exact preview before mutation and writes evi
           assert.deepEqual(args.slice(0, 2), ['triggers', 'deploy']);
         }
       },
+      pauseRevealQueue: (environment) => {
+        assert.equal(environment, wranglerEnvironment);
+        events.push('pause-reveal');
+      },
+      resumeRevealQueue: (environment) => {
+        assert.equal(environment, wranglerEnvironment);
+        events.push('resume-reveal');
+      },
+      verifyQueueConsumers: (environment) => {
+        assert.equal(environment, wranglerEnvironment);
+        events.push('queue-consumers');
+      },
       evidence: (kind, evidenceVersionId) => {
         assert.equal(kind, 'api');
         assert.equal(evidenceVersionId, candidateVersionId);
@@ -2618,11 +2990,15 @@ test('API production benchmarks the exact preview before mutation and writes evi
     `smoke:${previewUrl}`,
     `benchmark:${previewUrl}`,
     'deployment-status',
+    'pause-reveal',
     'Reviewed trigger deployment',
+    'queue-consumers',
     'smoke:https://api.mons.shop',
     'deployment-status',
     'Exact version promotion',
     'deployment-status',
+    'deployment-status',
+    'resume-reveal',
     'smoke:https://api.mons.shop',
     'deployment-status',
     `evidence:${candidateVersionId}`,
@@ -2745,7 +3121,58 @@ test('API trigger deployment gets exactly one declarative retry before promotion
   ]);
 });
 
-test('API guarded resume never rolls back when its trigger retry fails', async () => {
+test('API guarded resume reverifies the exact candidate before resuming reveal delivery', async () => {
+  const candidateVersionId = randomUUID();
+  const events: string[] = [];
+  await deployApiTestHooks.runProductionSequence(
+    {
+      expectedCurrentVersionId: candidateVersionId,
+      heliusApiKey: 'helius-test-key',
+      previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+      smokeOwner: OWNER,
+      versionId: candidateVersionId,
+      wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+    },
+    {
+      deployment: deploymentReader([
+        candidateVersionId,
+        candidateVersionId,
+        candidateVersionId,
+      ], events),
+      smoke: async (origin) => {
+        events.push(`smoke:${origin}`);
+      },
+      benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+      pauseRevealQueue: () => events.push('pause-reveal'),
+      resumeRevealQueue: () => events.push('resume-reveal'),
+      wrangler: (_args, _environment, label) => events.push(label),
+      evidence: (_kind, versionId) => {
+        events.push('evidence');
+        return {
+          schemaVersion: 1,
+          kind: 'api',
+          workerName: 'mons-shop-api',
+          versionId,
+          verifiedAt: new Date().toISOString(),
+        };
+      },
+      sleep: async () => undefined,
+    },
+  );
+  assert.deepEqual(events, [
+    `smoke:${deployApiTestHooks.expectedPreviewOrigin(candidateVersionId)}`,
+    'deployment-status',
+    'pause-reveal',
+    'Reviewed trigger deployment',
+    'deployment-status',
+    'resume-reveal',
+    'smoke:https://api.mons.shop',
+    'deployment-status',
+    'evidence',
+  ]);
+});
+
+test('API guarded resume leaves reveal delivery paused when its trigger retry fails', async () => {
   const candidateVersionId = randomUUID();
   const labels: string[] = [];
 
@@ -2763,24 +3190,25 @@ test('API guarded resume never rolls back when its trigger retry fails', async (
         deployment: deploymentReader([candidateVersionId]),
         smoke: async () => undefined,
         benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        pauseRevealQueue: () => labels.push('pause'),
         wrangler: (_args, _environment, label) => {
           labels.push(label);
-          if (label === 'API compensating rollback') assert.fail('guarded resume attempted rollback');
           throw new Error('injected resumed API trigger failure');
         },
         evidence: () => assert.fail('guarded resume wrote evidence after failed triggers'),
         sleep: async () => undefined,
       },
     ),
-    /already live[\s\S]*Automatic rollback was suppressed/,
+    /is live[\s\S]*reviewed triggers could not be verified[\s\S]*remains paused[\s\S]*guarded resume/,
   );
-  assert.deepEqual(labels, ['Reviewed trigger deployment', 'Reviewed trigger deployment retry']);
+  assert.deepEqual(labels, ['pause', 'Reviewed trigger deployment', 'Reviewed trigger deployment retry']);
 });
 
-test('API guarded resume never rolls back when candidate verification fails', async () => {
+test('API guarded resume re-pauses when candidate verification fails', async () => {
   const candidateVersionId = randomUUID();
   const labels: string[] = [];
   let smokeCalls = 0;
+  let revealDeliveryPaused = false;
 
   await assert.rejects(
     () => deployApiTestHooks.runProductionSequence(
@@ -2793,141 +3221,39 @@ test('API guarded resume never rolls back when candidate verification fails', as
         wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
       },
       {
-        deployment: deploymentReader([candidateVersionId]),
+        deployment: deploymentReader([candidateVersionId, candidateVersionId]),
         smoke: async () => {
           smokeCalls += 1;
           if (smokeCalls === 2) throw new Error('injected resumed API smoke failure');
         },
         benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
-        wrangler: (_args, _environment, label) => {
-          labels.push(label);
-          if (label === 'API compensating rollback') assert.fail('guarded resume attempted rollback');
+        pauseRevealQueue: () => {
+          revealDeliveryPaused = true;
         },
+        repauseRevealQueue: () => {
+          revealDeliveryPaused = true;
+          labels.push('re-pause');
+        },
+        resumeRevealQueue: () => {
+          revealDeliveryPaused = false;
+          labels.push('resume');
+        },
+        wrangler: (_args, _environment, label) => labels.push(label),
         evidence: () => assert.fail('guarded resume wrote evidence after failed smoke'),
         sleep: async () => undefined,
       },
     ),
-    /already live[\s\S]*Automatic rollback was suppressed/,
+    /failed post-resume verification[\s\S]*remains paused[\s\S]*guarded resume/,
   );
-  assert.deepEqual(labels, ['Reviewed trigger deployment']);
+  assert.deepEqual(labels, ['Reviewed trigger deployment', 'resume', 're-pause']);
+  assert.equal(revealDeliveryPaused, true);
 });
 
-test('API recovery confirms the candidate immediately before exact rollback and verifies baseline', async () => {
-  const baselineVersionId = randomUUID();
-  const candidateVersionId = randomUUID();
-  const promotionError = new Error('injected API promotion failure');
-  const labels: string[] = [];
-  const statusEvents: string[] = [];
-
-  await assert.rejects(
-    () => deployApiTestHooks.runProductionSequence(
-      {
-        expectedCurrentVersionId: baselineVersionId,
-        heliusApiKey: 'helius-test-key',
-        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
-        smokeOwner: OWNER,
-        versionId: candidateVersionId,
-        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
-      },
-      {
-        deployment: deploymentReader([
-          baselineVersionId,
-          baselineVersionId,
-          candidateVersionId,
-          candidateVersionId,
-          candidateVersionId,
-          baselineVersionId,
-          baselineVersionId,
-        ], statusEvents),
-        smoke: async () => undefined,
-        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
-        wrangler: (args, _environment, label) => {
-          labels.push(label);
-          if (label === 'Exact version promotion') throw promotionError;
-          if (label === 'API compensating rollback') {
-            assert.equal(statusEvents.length, 5);
-            assert.deepEqual(args, [
-              'rollback',
-              baselineVersionId,
-              '--yes',
-              '--message',
-              'Automatic recovery after failed mons-shop-api release',
-              '--config',
-              'cloud/workers/api/wrangler.jsonc',
-              '--env-file',
-              'cloud/workers/api/release.env',
-            ]);
-          }
-        },
-        evidence: () => assert.fail('API recovery wrote production evidence'),
-        sleep: async () => undefined,
-      },
-    ),
-    (error) => error === promotionError,
-  );
-  assert.equal(statusEvents.length, 7);
-  assert.deepEqual(labels, [
-    'Reviewed trigger deployment',
-    'Exact version promotion',
-    'API compensating rollback',
-  ]);
-});
-
-test('API recovery verifies a committed rollback while retaining the rollback command failure', async () => {
-  const baselineVersionId = randomUUID();
-  const candidateVersionId = randomUUID();
-  const promotionError = new Error('injected API promotion failure');
-  const rollbackError = new CloudflareProcessFailure('injected API rollback command failure', 19);
-  const statusEvents: string[] = [];
-  let smokeCalls = 0;
-
-  await assert.rejects(
-    () => deployApiTestHooks.runProductionSequence(
-      {
-        expectedCurrentVersionId: baselineVersionId,
-        heliusApiKey: 'helius-test-key',
-        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
-        smokeOwner: OWNER,
-        versionId: candidateVersionId,
-        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
-      },
-      {
-        deployment: deploymentReader([
-          baselineVersionId,
-          baselineVersionId,
-          candidateVersionId,
-          candidateVersionId,
-          candidateVersionId,
-          baselineVersionId,
-          baselineVersionId,
-        ], statusEvents),
-        smoke: async () => {
-          smokeCalls += 1;
-        },
-        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
-        wrangler: (_args, _environment, label) => {
-          if (label === 'Exact version promotion') throw promotionError;
-          if (label === 'API compensating rollback') throw rollbackError;
-        },
-        evidence: () => assert.fail('ambiguous rollback wrote production evidence'),
-        sleep: async () => undefined,
-      },
-    ),
-    (error) => error instanceof AggregateError &&
-      /baseline recovery was verified, but the rollback command reported failure/.test(error.message) &&
-      error.errors[0] === promotionError &&
-      error.errors[1] === rollbackError &&
-      cloudflareReleaseExitCode(error) === 19,
-  );
-  assert.equal(statusEvents.length, 7);
-  assert.equal(smokeCalls, 3);
-});
-
-test('API refuses rollback when failed promotion has any unreadable baseline observation', async () => {
+test('API promotion command failure is fix-forward and leaves reveal delivery paused', async () => {
   const baselineVersionId = randomUUID();
   const candidateVersionId = randomUUID();
   const labels: string[] = [];
-  const sleeps: number[] = [];
+  let revealDeliveryPaused = false;
 
   await assert.rejects(
     () => deployApiTestHooks.runProductionSequence(
@@ -2943,28 +3269,28 @@ test('API refuses rollback when failed promotion has any unreadable baseline obs
         deployment: deploymentReader([
           baselineVersionId,
           baselineVersionId,
-          baselineVersionId,
-          new Error('injected unreadable deployment state'),
-          baselineVersionId,
-          baselineVersionId,
+          candidateVersionId,
+          candidateVersionId,
         ]),
         smoke: async () => undefined,
         benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        pauseRevealQueue: () => {
+          revealDeliveryPaused = true;
+          labels.push('pause');
+        },
+        resumeRevealQueue: () => assert.fail('failed promotion resumed reveal delivery'),
         wrangler: (_args, _environment, label) => {
           labels.push(label);
-          if (label === 'Exact version promotion') throw new Error('injected API promotion failure');
-          if (label === 'API compensating rollback') assert.fail('unreadable state was overwritten');
+          if (label === 'Exact version promotion') throw new Error('injected promotion failure');
         },
-        evidence: () => assert.fail('unreadable release wrote production evidence'),
-        sleep: async (milliseconds) => {
-          sleeps.push(milliseconds);
-        },
+        evidence: () => assert.fail('failed promotion wrote evidence'),
+        sleep: async () => undefined,
       },
     ),
-    /live mutation state could not be safely reconciled/,
+    /appears live[\s\S]*promotion command failed[\s\S]*remains paused[\s\S]*Fix forward/,
   );
-  assert.deepEqual(labels, ['Reviewed trigger deployment', 'Exact version promotion']);
-  assert.deepEqual(sleeps, [500, 1_500, 3_000]);
+  assert.equal(revealDeliveryPaused, true);
+  assert.deepEqual(labels, ['pause', 'Reviewed trigger deployment', 'Exact version promotion']);
 });
 
 test('API successful promotion command reports manual intervention for ambiguous live state', async () => {
@@ -2990,15 +3316,12 @@ test('API successful promotion command reports manual intervention for ambiguous
         ]),
         smoke: async () => undefined,
         benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
-        wrangler: (_args, _environment, label) => {
-          labels.push(label);
-          if (label === 'API compensating rollback') assert.fail('ambiguous split state was overwritten');
-        },
+        wrangler: (_args, _environment, label) => labels.push(label),
         evidence: () => assert.fail('ambiguous split state wrote production evidence'),
         sleep: async () => undefined,
       },
     ),
-    /No blind rollback was attempted; inspect deployment status and recover manually/,
+    /live mutation state could not be safely reconciled[\s\S]*remains paused[\s\S]*Fix forward/,
   );
   assert.deepEqual(labels, ['Reviewed trigger deployment', 'Exact version promotion']);
 });
@@ -3034,7 +3357,7 @@ test('API refuses split or third-version state before any mutation', async () =>
   }
 });
 
-test('API evidence failure never rolls back and directs a guarded-resume rerun', async () => {
+test('API evidence failure re-pauses and directs a guarded-resume rerun', async () => {
   const baselineVersionId = randomUUID();
   const candidateVersionId = randomUUID();
   const labels: string[] = [];
@@ -3050,24 +3373,22 @@ test('API evidence failure never rolls back and directs a guarded-resume rerun',
         wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
       },
       {
-        deployment: deploymentReader([candidateVersionId, candidateVersionId]),
+        deployment: deploymentReader([candidateVersionId, candidateVersionId, candidateVersionId]),
         smoke: async () => undefined,
         benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
-        wrangler: (_args, _environment, label) => {
-          labels.push(label);
-          if (label.includes('rollback') || label.includes('promotion')) {
-            assert.fail('guarded API evidence retry mutated the live version');
-          }
-        },
+        pauseRevealQueue: () => labels.push('pause'),
+        repauseRevealQueue: () => labels.push('re-pause'),
+        resumeRevealQueue: () => labels.push('resume'),
+        wrangler: (_args, _environment, label) => labels.push(label),
         evidence: () => {
           throw new Error('injected API evidence failure');
         },
         sleep: async () => undefined,
       },
     ),
-    /remains live and verified[\s\S]*rerun the same production command[\s\S]*guarded resume/,
+    /failed post-resume verification[\s\S]*remains paused[\s\S]*same exact candidate[\s\S]*guarded resume/,
   );
-  assert.deepEqual(labels, ['Reviewed trigger deployment']);
+  assert.deepEqual(labels, ['pause', 'Reviewed trigger deployment', 'resume', 're-pause']);
 });
 
 test('temporary secret setup enforces modes and removes partial files after injected failures', () => {
@@ -3249,6 +3570,48 @@ test('release CLI requires exact production version metadata', () => {
   assert.throws(
     () => deployApiTestHooks.parseArgs(['production', '--version-id', 'latest', '--smoke-owner', OWNER]),
     /exact UUID/,
+  );
+  assert.throws(
+    () => deployApiTestHooks.parseArgs(['rollback', '--version-id', versionId, '--smoke-owner', OWNER]),
+    /rollback is disabled[\s\S]*fix-forward/,
+  );
+  assert.deepEqual(
+    deployApiTestHooks.parseArgs([
+      'release',
+      '--fix-forward-from-version-id',
+      versionId,
+      '--smoke-owner',
+      OWNER,
+    ]),
+    {
+      firestoreServiceAccountFile: undefined,
+      firestoreWriterServiceAccountFile: undefined,
+      fixForwardFromVersionId: versionId,
+      mode: 'release',
+      smokeOwner: OWNER,
+      tokenFile: undefined,
+      versionId: undefined,
+    },
+  );
+  assert.throws(
+    () => deployApiTestHooks.parseArgs([
+      'preview',
+      '--fix-forward-from-version-id',
+      versionId,
+      '--smoke-owner',
+      OWNER,
+    ]),
+    /valid only in release mode/,
+  );
+  assert.throws(
+    () => deployApiTestHooks.parseArgs([
+      'release',
+      '--fix-forward-from-version-id',
+      'latest',
+      '--smoke-owner',
+      OWNER,
+    ]),
+    /must be an exact UUID/,
   );
 });
 
@@ -3457,22 +3820,6 @@ test('one-step API release advances only the verified API production baseline', 
   } finally {
     rmSync(directory, { recursive: true });
   }
-});
-
-test('API rollback requires a distinct approved version', () => {
-  const manifest = deployApiTestHooks.readReleaseManifest();
-  const currentVersionId = randomUUID();
-  const approvedVersionId = randomUUID();
-  assert.doesNotThrow(() => deployApiTestHooks.assertApprovedApiRollback({
-    ...manifest,
-    currentProduction: { ...manifest.currentProduction, apiVersionId: currentVersionId },
-    approvedRollback: { ...manifest.approvedRollback, apiVersionId: approvedVersionId },
-  }, approvedVersionId));
-  assert.throws(() => deployApiTestHooks.assertApprovedApiRollback({
-    ...manifest,
-    currentProduction: { ...manifest.currentProduction, apiVersionId: currentVersionId },
-    approvedRollback: { ...manifest.approvedRollback, apiVersionId: currentVersionId },
-  }, currentVersionId), /No distinct API rollback/);
 });
 
 test('one-step frontend release advances only the verified frontend production baseline', () => {

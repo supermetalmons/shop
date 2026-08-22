@@ -21,6 +21,9 @@ import {
   DEPLOYMENT_DROPS,
   type DeploymentRegistryDrop,
 } from '../../../../functions/src/shared/deploymentRegistry.js';
+import type {
+  RevealDudesSubmissionUnknownDetails,
+} from '../../../../functions/src/shared/contracts.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
@@ -49,6 +52,12 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../functions/src/shared/solanaProgramAddresses.js';
+import {
+  isBase58Bytes,
+  isExactShopRpcResponse,
+  isNonZeroBase58Bytes,
+  isTransientShopRpcError,
+} from '../../../../functions/src/shared/solanaRpcProxy.js';
 import { transformShopInventoryItem } from '../../../../functions/src/shared/shopDomain.js';
 import {
   WALLET_SESSION_COLLECTION,
@@ -84,6 +93,10 @@ const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
 const TX_SEND_TIMEOUT_MS = 12_000;
 const TX_CONFIRM_TIMEOUT_MS = 25_000;
 const TX_CONFIRM_POLL_MS = 800;
+const REVEAL_BACKGROUND_JOB_TIMEOUT_MS = 60_000;
+const BACKGROUND_PACK_STATUS_TIMEOUT_MS = 10_000;
+const REVEAL_BACKGROUND_JOB_INITIAL_DELAY_SECONDS = 5;
+const REVEAL_BACKGROUND_JOB_RETRY_DELAYS_SECONDS = [5, 15, 30, 60, 120, 300] as const;
 const FIRESTORE_TRANSACTION_ATTEMPTS = 6;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
@@ -154,13 +167,18 @@ export type RevealDudesResult = {
 type RevealDudesDependencies = {
   accessTokenProvider: GoogleAccessTokenProvider;
   assignDudes: typeof assignDudes;
+  confirmRevealSubmission: typeof confirmRevealSubmission;
   countOnlineRevealPackStatus: typeof countOnlineRevealPackStatus;
+  failRevealSubmission: typeof failRevealSubmission;
   loadLatestBlockhash: typeof loadLatestBlockhash;
   loadPendingOpen: typeof loadPendingOpen;
+  loadRevealSubmission: typeof loadRevealSubmission;
   loadWalletSession: typeof loadWalletSession;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   randomInt: (maxExclusive: number) => number;
+  reconcileRevealSubmission: typeof reconcileRevealSubmission;
+  reserveRevealSubmission: typeof reserveRevealSubmission;
   sendAndConfirmTransaction: typeof sendAndConfirmTransaction;
   sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   validateOnchainConfig: typeof validateOnchainConfig;
@@ -194,6 +212,26 @@ type AssignmentResult = {
 };
 
 type AssignmentDependencies = Pick<RevealDudesDependencies, 'randomInt' | 'sleep'>;
+
+type RevealSubmission = {
+  owner: string;
+  signature: string;
+  recentBlockhash: string;
+  blockhashContextSlot: number;
+  dudeIds: number[];
+  reservationId: string;
+  status: 'pending' | 'confirmed' | 'failed';
+};
+
+type RevealSubmissionOutcome = 'confirmed' | 'failed' | 'expired' | 'unknown';
+
+export type RevealBackgroundJob = {
+  kind: 'reveal_submission_reconcile';
+  dropId: string;
+  boxAssetId: string;
+  reservationId: string;
+  signature: string;
+};
 
 const accessTokenProvider = createGoogleAccessTokenProvider();
 
@@ -231,13 +269,18 @@ async function pause(milliseconds: number, signal: AbortSignal): Promise<void> {
 const defaultDependencies: RevealDudesDependencies = {
   accessTokenProvider,
   assignDudes,
+  confirmRevealSubmission,
   countOnlineRevealPackStatus,
+  failRevealSubmission,
   loadLatestBlockhash,
   loadPendingOpen,
+  loadRevealSubmission,
   loadWalletSession,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   randomInt: secureRandomInt,
+  reconcileRevealSubmission,
+  reserveRevealSubmission,
   sendAndConfirmTransaction,
   sleep: pause,
   validateOnchainConfig,
@@ -421,6 +464,8 @@ async function rpcCall(
     }, options.timeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS);
     const id = crypto.randomUUID();
     try {
+      if (context.signal.aborted) onAbort();
+      if (controller.signal.aborted) throw controller.signal.reason;
       const providerResponse = await context.fetch(
         `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
         {
@@ -441,24 +486,24 @@ async function rpcCall(
         throw new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
       }
       const payload = await readBoundedJson(providerResponse, PROVIDER_MAX_BYTES, controller.signal);
-      if (!isRecord(payload) || payload.jsonrpc !== '2.0' || payload.id !== id) {
+      if (!isExactShopRpcResponse(payload, id)) {
         throw new RevealDudesError('unavailable', 'Reveal provider returned an invalid response.');
       }
-      if (isRecord(payload.error)) {
-        const rpcCode = Number(payload.error.code);
+      if (payload.error) {
         throw new RevealRpcError(
-          typeof payload.error.message === 'string' ? payload.error.message : 'Reveal RPC request failed.',
-          Number.isFinite(rpcCode) ? rpcCode : undefined,
+          payload.error.message,
+          payload.error.code,
           payload.error.data,
         );
       }
-      if (!Object.hasOwn(payload, 'result')) {
-        throw new RevealDudesError('unavailable', 'Reveal provider returned an invalid response.');
-      }
+      if (context.signal.aborted) throw context.signal.reason;
       return payload.result;
     } catch (error) {
       if (context.signal.aborted) throw context.signal.reason;
-      if (error instanceof RevealRpcError) throw error;
+      if (
+        error instanceof RevealRpcError &&
+        !isTransientShopRpcError({ code: error.rpcCode, message: error.message })
+      ) throw error;
       if (error instanceof RevealDudesError && error.code !== 'unavailable') throw error;
       if (attempt + 1 < attempts) {
         await pause(100, context.signal);
@@ -743,6 +788,286 @@ async function readFirestoreDocument(
   return fields;
 }
 
+const REVEAL_SUBMISSION_VERSION = 1;
+const RESERVATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function normalizeRevealSubmission(
+  raw: Record<string, unknown>,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+): RevealSubmission {
+  const allowedFields = new Set([
+    'version',
+    'owner',
+    'signature',
+    'recentBlockhash',
+    'blockhashContextSlot',
+    'dudeIds',
+    'reservationId',
+    'status',
+    'createdAt',
+    'updatedAt',
+    'confirmedAt',
+  ]);
+  const owner = isBase58Bytes(raw.owner, 32) ? raw.owner : null;
+  const signature = isNonZeroBase58Bytes(raw.signature, 64) ? raw.signature : null;
+  const recentBlockhash = isNonZeroBase58Bytes(raw.recentBlockhash, 32) ? raw.recentBlockhash : null;
+  const blockhashContextSlot = raw.blockhashContextSlot;
+  const dudeIds = Array.isArray(raw.dudeIds) ? raw.dudeIds : [];
+  const reservationId = typeof raw.reservationId === 'string' && RESERVATION_ID_PATTERN.test(raw.reservationId)
+    ? raw.reservationId
+    : '';
+  const status = raw.status === 'pending' || raw.status === 'confirmed' || raw.status === 'failed'
+    ? raw.status
+    : '';
+  if (
+    Object.keys(raw).some((field) => !allowedFields.has(field)) ||
+    raw.version !== REVEAL_SUBMISSION_VERSION ||
+    !owner ||
+    !signature ||
+    !recentBlockhash ||
+    !Number.isSafeInteger(blockhashContextSlot) ||
+    Number(blockhashContextSlot) < 0 ||
+    !reservationId ||
+    !status ||
+    dudeIds.length !== runtime.itemsPerBox ||
+    dudeIds.some((id) => !Number.isSafeInteger(id) || id < 1 || id > runtime.maxDudeId) ||
+    new Set(dudeIds).size !== dudeIds.length ||
+    (raw.createdAt !== undefined && !Number.isFinite(raw.createdAt)) ||
+    (raw.updatedAt !== undefined && !Number.isFinite(raw.updatedAt)) ||
+    (raw.confirmedAt !== undefined && !Number.isFinite(raw.confirmedAt))
+  ) {
+    throw new RevealDudesError('failed-precondition', 'Stored reveal submission is invalid.', { boxAssetId });
+  }
+  return {
+    owner,
+    signature,
+    recentBlockhash,
+    blockhashContextSlot: Number(blockhashContextSlot),
+    dudeIds: [...dudeIds],
+    reservationId,
+    status,
+  };
+}
+
+function revealSubmissionFields(submission: RevealSubmission): Record<string, unknown> {
+  return {
+    version: firestoreInteger(REVEAL_SUBMISSION_VERSION),
+    owner: { stringValue: submission.owner },
+    signature: { stringValue: submission.signature },
+    recentBlockhash: { stringValue: submission.recentBlockhash },
+    blockhashContextSlot: firestoreInteger(submission.blockhashContextSlot),
+    dudeIds: firestoreIntegerArray(submission.dudeIds),
+    reservationId: { stringValue: submission.reservationId },
+    status: { stringValue: submission.status },
+  };
+}
+
+function revealSubmissionPath(runtime: RevealRuntime, boxAssetId: string): string {
+  return `drops/${runtime.dropId}/revealSubmissions/${boxAssetId}`;
+}
+
+async function readRevealSubmission(
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  transaction?: string,
+): Promise<RevealSubmission | null> {
+  const document = await authenticatedFirestoreRequest({
+    ...context,
+    method: 'GET',
+    url: firestoreDocumentUrl(revealSubmissionPath(runtime, boxAssetId), transaction),
+  });
+  if (!document) return null;
+  const fields = isRecord(document) ? decodeFirestoreFields(document.fields) : null;
+  if (!fields) {
+    throw new RevealDudesError('failed-precondition', 'Stored reveal submission is invalid.', { boxAssetId });
+  }
+  return normalizeRevealSubmission(fields, runtime, boxAssetId);
+}
+
+async function loadRevealSubmission(
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+): Promise<RevealSubmission | null> {
+  return readRevealSubmission(context, runtime, boxAssetId);
+}
+
+function sameRevealTransaction(left: RevealSubmission, right: RevealSubmission): boolean {
+  return left.owner === right.owner &&
+    left.signature === right.signature &&
+    left.recentBlockhash === right.recentBlockhash &&
+    left.blockhashContextSlot === right.blockhashContextSlot &&
+    left.dudeIds.length === right.dudeIds.length &&
+    left.dudeIds.every((id, index) => id === right.dudeIds[index]);
+}
+
+async function reserveRevealSubmission(
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  candidate: RevealSubmission,
+  replaceSubmission: RevealSubmission | undefined,
+  dependencies: Pick<RevealDudesDependencies, 'sleep'>,
+): Promise<{ submission: RevealSubmission; owned: boolean }> {
+  const normalizedCandidate = normalizeRevealSubmission(
+    { ...candidate, version: REVEAL_SUBMISSION_VERSION },
+    runtime,
+    boxAssetId,
+  );
+  const path = revealSubmissionPath(runtime, boxAssetId);
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    let transaction: string | undefined;
+    try {
+      transaction = await beginFirestoreTransaction(context);
+      const existing = await readRevealSubmission(context, runtime, boxAssetId, transaction);
+      if (existing?.owner !== undefined && existing.owner !== normalizedCandidate.owner) {
+        throw new RevealDudesError('permission-denied', 'Owners only.');
+      }
+      if (existing?.status === 'confirmed') {
+        await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
+        transaction = undefined;
+        return { submission: existing, owned: false };
+      }
+      if (existing?.reservationId === normalizedCandidate.reservationId) {
+        if (!sameRevealTransaction(existing, normalizedCandidate)) {
+          throw new RevealDudesError('failed-precondition', 'Stored reveal submission is invalid.', { boxAssetId });
+        }
+        await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
+        transaction = undefined;
+        return { submission: existing, owned: existing.status === 'pending' };
+      }
+      if (
+        existing &&
+        (
+          !replaceSubmission ||
+          existing.signature !== replaceSubmission.signature ||
+          existing.reservationId !== replaceSubmission.reservationId
+        )
+      ) {
+        await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
+        transaction = undefined;
+        return { submission: existing, owned: false };
+      }
+      await authenticatedFirestoreRequest({
+        ...context,
+        body: JSON.stringify({
+          transaction,
+          writes: [{
+            update: {
+              name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`,
+              fields: revealSubmissionFields(normalizedCandidate),
+            },
+            currentDocument: { exists: Boolean(existing) },
+            updateTransforms: [{
+              fieldPath: existing ? 'updatedAt' : 'createdAt',
+              setToServerValue: 'REQUEST_TIME',
+            }],
+          }],
+        }),
+        method: 'POST',
+        surfaceWriteConflict: true,
+        url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
+      });
+      transaction = undefined;
+      return { submission: normalizedCandidate, owned: true };
+    } catch (error) {
+      if (transaction) await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
+      if (error instanceof RevealDudesError) throw error;
+      if (
+        (error instanceof FirestoreWriteConflict || error instanceof ProfileReadError) &&
+        attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS
+      ) {
+        await dependencies.sleep(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      if (error instanceof ProfileReadError) {
+        throw new RevealDudesError(error.code === 'deadline-exceeded' ? error.code : 'unavailable', 'Reveal submission is temporarily unavailable.');
+      }
+      throw new RevealDudesError('unavailable', 'Reveal submission is temporarily unavailable.');
+    }
+  }
+  throw new RevealDudesError('unavailable', 'Reveal submission is temporarily unavailable.');
+}
+
+async function setRevealSubmissionStatus(
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  submission: RevealSubmission,
+  status: 'confirmed' | 'failed',
+): Promise<'confirmed' | 'failed' | 'stale'> {
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    let transaction: string | undefined;
+    try {
+      transaction = await beginFirestoreTransaction(context);
+      const existing = await readRevealSubmission(context, runtime, boxAssetId, transaction);
+      if (
+        !existing ||
+        existing.reservationId !== submission.reservationId ||
+        existing.signature !== submission.signature
+      ) return 'stale';
+      if (existing.status !== 'pending') return existing.status;
+      await authenticatedFirestoreRequest({
+        ...context,
+        body: JSON.stringify({
+          transaction,
+          writes: [{
+            update: {
+              name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${revealSubmissionPath(runtime, boxAssetId)}`,
+              fields: { status: { stringValue: status } },
+            },
+            updateMask: { fieldPaths: ['status'] },
+            currentDocument: { exists: true },
+            updateTransforms: [{
+              fieldPath: status === 'confirmed' ? 'confirmedAt' : 'updatedAt',
+              setToServerValue: 'REQUEST_TIME',
+            }],
+          }],
+        }),
+        method: 'POST',
+        surfaceWriteConflict: true,
+        url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
+      });
+      transaction = undefined;
+      return status;
+    } catch (error) {
+      if (transaction) {
+        await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
+        transaction = undefined;
+      }
+      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      throw error;
+    } finally {
+      if (transaction) await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
+    }
+  }
+  return 'stale';
+}
+
+async function confirmRevealSubmission(
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  submission: RevealSubmission,
+): Promise<void> {
+  const status = await setRevealSubmissionStatus(context, runtime, boxAssetId, submission, 'confirmed');
+  if (status !== 'confirmed') throw new RevealDudesError('aborted', 'Reveal submission changed. Try again.');
+}
+
+async function failRevealSubmission(
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  submission: RevealSubmission,
+): Promise<'confirmed' | 'failed' | 'stale'> {
+  return setRevealSubmissionStatus(context, runtime, boxAssetId, submission, 'failed');
+}
+
 async function assignDudes(
   context: FirestoreContext,
   runtime: RevealRuntime,
@@ -851,14 +1176,238 @@ async function assignDudes(
   throw new RevealDudesError('unavailable', 'Figure assignment is temporarily unavailable.');
 }
 
-function rpcLogs(error: unknown): string[] {
-  if (!(error instanceof RevealRpcError) || !isRecord(error.rpcData)) return [];
-  const logs = error.rpcData.logs;
-  return Array.isArray(logs) ? logs.filter((value): value is string => typeof value === 'string') : [];
-}
-
 function transactionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+const TRANSACTION_ERROR_NAMES = new Set([
+  'AccountInUse',
+  'AccountLoadedTwice',
+  'AccountNotFound',
+  'ProgramAccountNotFound',
+  'InsufficientFundsForFee',
+  'InvalidAccountForFee',
+  'AlreadyProcessed',
+  'BlockhashNotFound',
+  'CallChainTooDeep',
+  'MissingSignatureForFee',
+  'InvalidAccountIndex',
+  'SignatureFailure',
+  'InvalidProgramForExecution',
+  'SanitizeFailure',
+  'ClusterMaintenance',
+  'AccountBorrowOutstanding',
+  'WouldExceedMaxBlockCostLimit',
+  'UnsupportedVersion',
+  'InvalidWritableAccount',
+  'WouldExceedMaxAccountCostLimit',
+  'WouldExceedAccountDataBlockLimit',
+  'TooManyAccountLocks',
+  'AddressLookupTableNotFound',
+  'InvalidAddressLookupTableOwner',
+  'InvalidAddressLookupTableData',
+  'InvalidAddressLookupTableIndex',
+  'InvalidRentPayingAccount',
+  'WouldExceedMaxVoteCostLimit',
+  'WouldExceedAccountDataTotalLimit',
+  'MaxLoadedAccountsDataSizeExceeded',
+  'InvalidLoadedAccountsDataSizeLimit',
+  'ResanitizationNeeded',
+  'UnbalancedTransaction',
+  'ProgramCacheHitMaxLimit',
+  'CommitCancelled',
+]);
+
+const INSTRUCTION_ERROR_NAMES = new Set([
+  'GenericError',
+  'InvalidArgument',
+  'InvalidInstructionData',
+  'InvalidAccountData',
+  'AccountDataTooSmall',
+  'InsufficientFunds',
+  'IncorrectProgramId',
+  'MissingRequiredSignature',
+  'AccountAlreadyInitialized',
+  'UninitializedAccount',
+  'UnbalancedInstruction',
+  'ModifiedProgramId',
+  'ExternalAccountLamportSpend',
+  'ExternalAccountDataModified',
+  'ReadonlyLamportChange',
+  'ReadonlyDataModified',
+  'DuplicateAccountIndex',
+  'ExecutableModified',
+  'RentEpochModified',
+  'NotEnoughAccountKeys',
+  'AccountDataSizeChanged',
+  'AccountNotExecutable',
+  'AccountBorrowFailed',
+  'AccountBorrowOutstanding',
+  'DuplicateAccountOutOfSync',
+  'InvalidError',
+  'ExecutableDataModified',
+  'ExecutableLamportChange',
+  'ExecutableAccountNotRentExempt',
+  'UnsupportedProgramId',
+  'CallDepth',
+  'MissingAccount',
+  'ReentrancyNotAllowed',
+  'MaxSeedLengthExceeded',
+  'InvalidSeeds',
+  'InvalidRealloc',
+  'ComputationalBudgetExceeded',
+  'PrivilegeEscalation',
+  'ProgramEnvironmentSetupFailure',
+  'ProgramFailedToComplete',
+  'ProgramFailedToCompile',
+  'Immutable',
+  'IncorrectAuthority',
+  'BorshIoError',
+  'AccountNotRentExempt',
+  'InvalidAccountOwner',
+  'ArithmeticOverflow',
+  'UnsupportedSysvar',
+  'IllegalOwner',
+  'MaxAccountsDataAllocationsExceeded',
+  'MaxAccountsExceeded',
+  'MaxInstructionTraceLengthExceeded',
+  'BuiltinProgramsMustConsumeComputeUnits',
+]);
+
+function isByteIndex(value: unknown): boolean {
+  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= 0xff;
+}
+
+function isInstructionError(value: unknown): boolean {
+  if (typeof value === 'string') return INSTRUCTION_ERROR_NAMES.has(value);
+  if (!isRecord(value) || Object.keys(value).length !== 1) return false;
+  if (Number.isSafeInteger(value.Custom)) {
+    return Number(value.Custom) >= 0 && Number(value.Custom) <= 0xffff_ffff;
+  }
+  return typeof value.BorshIoError === 'string';
+}
+
+function isTransactionError(value: unknown): boolean {
+  if (typeof value === 'string') return TRANSACTION_ERROR_NAMES.has(value);
+  if (!isRecord(value) || Object.keys(value).length !== 1) return false;
+  if (Array.isArray(value.InstructionError)) {
+    const [index, error] = value.InstructionError;
+    return value.InstructionError.length === 2 && isByteIndex(index) && isInstructionError(error);
+  }
+  if (isByteIndex(value.DuplicateInstruction)) return true;
+  for (const name of ['InsufficientFundsForRent', 'ProgramExecutionTemporarilyRestricted']) {
+    const detail = value[name];
+    if (
+      isRecord(detail) &&
+      Object.keys(detail).length === 1 &&
+      isByteIndex(detail.account_index)
+    ) return true;
+  }
+  return false;
+}
+
+type ConfirmedTransactionOutcome =
+  | { outcome: 'confirmed'; logs: string[] }
+  | { outcome: 'failed'; error: unknown; logs: string[] }
+  | { outcome: 'unknown'; logs: string[] };
+
+function confirmedTransactionOutcome(value: unknown, signature: string): ConfirmedTransactionOutcome {
+  if (!isRecord(value) || !Number.isSafeInteger(value.slot) || Number(value.slot) < 0) {
+    return { outcome: 'unknown', logs: [] };
+  }
+  const transaction = value.transaction;
+  const meta = value.meta;
+  if (
+    !isRecord(transaction) ||
+    !Array.isArray(transaction.signatures) ||
+    transaction.signatures[0] !== signature ||
+    !isRecord(meta) ||
+    !Object.hasOwn(meta, 'err')
+  ) {
+    return { outcome: 'unknown', logs: [] };
+  }
+  const logs = Array.isArray(meta.logMessages)
+    ? meta.logMessages.filter((entry): entry is string => typeof entry === 'string').slice(0, 80)
+    : [];
+  if (meta.err === null) return { outcome: 'confirmed', logs };
+  return isTransactionError(meta.err)
+    ? { outcome: 'failed', error: meta.err, logs }
+    : { outcome: 'unknown', logs };
+}
+
+type ParsedSignatureStatus = {
+  err: unknown;
+  confirmations: number | null;
+  confirmationStatus?: 'processed' | 'confirmed' | 'finalized' | null;
+};
+
+type ParsedSignatureStatusResult = {
+  contextSlot: number;
+  status: ParsedSignatureStatus | null;
+};
+
+function parseSignatureStatusResult(result: unknown): ParsedSignatureStatusResult | undefined {
+  if (
+    !isRecord(result) ||
+    !isRecord(result.context) ||
+    !Number.isSafeInteger(result.context.slot) ||
+    Number(result.context.slot) < 0 ||
+    !Array.isArray(result.value) ||
+    result.value.length !== 1
+  ) return undefined;
+  const contextSlot = Number(result.context.slot);
+  const status = result.value[0];
+  if (status === null) return { contextSlot, status: null };
+  if (
+    !isRecord(status) ||
+    !Number.isSafeInteger(status.slot) ||
+    Number(status.slot) < 0 ||
+    !(status.confirmations === null || (
+      Number.isSafeInteger(status.confirmations) && Number(status.confirmations) >= 0
+    )) ||
+    !Object.hasOwn(status, 'err') ||
+    !(
+      status.confirmationStatus === undefined ||
+      status.confirmationStatus === null ||
+      status.confirmationStatus === 'processed' ||
+      status.confirmationStatus === 'confirmed' ||
+      status.confirmationStatus === 'finalized'
+    )
+  ) return undefined;
+  return {
+    contextSlot,
+    status: {
+      err: status.err,
+      confirmations: status.confirmations === null ? null : Number(status.confirmations),
+      confirmationStatus: status.confirmationStatus,
+    },
+  };
+}
+
+function hasConfirmedSignatureCommitment(status: ParsedSignatureStatus): boolean {
+  if (status.confirmationStatus != null) {
+    return status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized';
+  }
+  return status.confirmations === null || status.confirmations > 0;
+}
+
+function signatureStatusOutcome(
+  status: ParsedSignatureStatus | null,
+): 'confirmed' | 'failed' | 'pending' | 'absent' {
+  if (status === null) return 'absent';
+  if (!hasConfirmedSignatureCommitment(status)) return 'pending';
+  if (status.err === null) return 'confirmed';
+  return isTransactionError(status.err) ? 'failed' : 'pending';
+}
+
+function preflightFailure(error: unknown): { logs: string[] } | null {
+  if (!(error instanceof RevealRpcError) || error.rpcCode !== -32002 || !isRecord(error.rpcData)) return null;
+  if (error.rpcData.err === 'AlreadyProcessed') return null;
+  if (!isTransactionError(error.rpcData.err) || !Array.isArray(error.rpcData.logs)) return null;
+  if (!error.rpcData.logs.every((value) => typeof value === 'string')) return null;
+  return {
+    logs: error.rpcData.logs.filter((value): value is string => typeof value === 'string').slice(0, 80),
+  };
 }
 
 async function waitForSignature(
@@ -875,33 +1424,29 @@ async function waitForSignature(
         [signature],
         { searchTransactionHistory },
       ], { attempts: 1 });
-      const status = isRecord(result) && Array.isArray(result.value) ? result.value[0] : null;
-      if (isRecord(status) && status.err) {
+      const parsed = parseSignatureStatusResult(result);
+      const outcome = parsed === undefined ? 'pending' : signatureStatusOutcome(parsed.status);
+      if (outcome === 'failed') {
         const transaction = await loadTransaction(context, runtime, signature).catch(() => null);
-        return {
-          ok: false,
-          error: status.err,
-          logs: isRecord(transaction?.meta) && Array.isArray(transaction.meta.logMessages)
-            ? transaction.meta.logMessages.filter((value): value is string => typeof value === 'string')
-            : [],
-        };
+        const corroborated = confirmedTransactionOutcome(transaction, signature);
+        if (corroborated.outcome === 'confirmed') return { ok: true };
+        if (corroborated.outcome === 'failed') {
+          return { ok: false, error: corroborated.error, logs: corroborated.logs };
+        }
       }
-      if (isRecord(status) && (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized')) {
-        return { ok: true };
-      }
+      if (outcome === 'confirmed') return { ok: true };
     } catch {
       if (context.signal.aborted) throw context.signal.reason;
     }
     await pause(TX_CONFIRM_POLL_MS, context.signal);
   }
   const transaction = await loadTransaction(context, runtime, signature).catch(() => null);
-  if (isRecord(transaction?.meta) && !transaction.meta.err) return { ok: true };
+  const corroborated = confirmedTransactionOutcome(transaction, signature);
+  if (corroborated.outcome === 'confirmed') return { ok: true };
   return {
     ok: false,
-    error: isRecord(transaction?.meta) ? transaction.meta.err || 'timeout' : 'timeout',
-    logs: isRecord(transaction?.meta) && Array.isArray(transaction.meta.logMessages)
-      ? transaction.meta.logMessages.filter((value): value is string => typeof value === 'string')
-      : [],
+    error: corroborated.outcome === 'failed' ? corroborated.error : 'timeout',
+    logs: corroborated.logs,
   };
 }
 
@@ -918,11 +1463,88 @@ async function loadTransaction(
   return isRecord(value) ? value : null;
 }
 
+async function corroborateRevealSubmissionOutcome(
+  context: ProviderContext,
+  runtime: RevealRuntime,
+  signature: string,
+): Promise<'confirmed' | 'failed' | 'unknown'> {
+  const transaction = await loadTransaction(context, runtime, signature).catch(() => null);
+  return confirmedTransactionOutcome(transaction, signature).outcome;
+}
+
+type ParsedBlockhashValidity = {
+  contextSlot: number;
+  valid: boolean;
+};
+
+function parseBlockhashValidity(result: unknown): ParsedBlockhashValidity | undefined {
+  if (
+    !isRecord(result) ||
+    !isRecord(result.context) ||
+    !Number.isSafeInteger(result.context.slot) ||
+    Number(result.context.slot) < 0 ||
+    typeof result.value !== 'boolean'
+  ) return undefined;
+  return {
+    contextSlot: Number(result.context.slot),
+    valid: result.value,
+  };
+}
+
+async function reconcileRevealSubmission(
+  context: ProviderContext,
+  runtime: RevealRuntime,
+  submission: RevealSubmission,
+): Promise<RevealSubmissionOutcome> {
+  try {
+    const current = parseSignatureStatusResult(await rpcCall(context, runtime, 'getSignatureStatuses', [
+      [submission.signature],
+      { searchTransactionHistory: false },
+    ], { attempts: 1 }));
+    if (!current) return 'unknown';
+    const currentOutcome = signatureStatusOutcome(current.status);
+    if (currentOutcome === 'confirmed') return currentOutcome;
+    if (currentOutcome === 'failed') {
+      return corroborateRevealSubmissionOutcome(context, runtime, submission.signature);
+    }
+    if (currentOutcome !== 'absent') return 'unknown';
+    const minContextSlot = Math.max(submission.blockhashContextSlot, current.contextSlot);
+    const blockhashValidity = parseBlockhashValidity(await rpcCall(context, runtime, 'isBlockhashValid', [
+      submission.recentBlockhash,
+      { commitment: 'confirmed', minContextSlot },
+    ], { attempts: 1 }));
+    if (
+      !blockhashValidity ||
+      blockhashValidity.valid ||
+      blockhashValidity.contextSlot < minContextSlot
+    ) return 'unknown';
+    const historical = parseSignatureStatusResult(await rpcCall(context, runtime, 'getSignatureStatuses', [
+      [submission.signature],
+      { searchTransactionHistory: true },
+    ], { attempts: 1 }));
+    if (!historical) return 'unknown';
+    const historicalOutcome = signatureStatusOutcome(historical.status);
+    if (historicalOutcome === 'confirmed') return historicalOutcome;
+    if (historicalOutcome === 'failed') {
+      return corroborateRevealSubmissionOutcome(context, runtime, submission.signature);
+    }
+    return historicalOutcome === 'absent' && historical.contextSlot >= blockhashValidity.contextSlot
+      ? 'expired'
+      : 'unknown';
+  } catch {
+    if (context.signal.aborted) throw context.signal.reason;
+    return 'unknown';
+  }
+}
+
 async function sendAndConfirmTransaction(
   context: ProviderContext,
   runtime: RevealRuntime,
   transaction: VersionedTransaction,
+  overrides: { waitForSignature?: typeof waitForSignature } = {},
 ): Promise<string> {
+  if (context.signal.aborted) throw context.signal.reason;
+  const waitForTransaction = overrides.waitForSignature ?? waitForSignature;
   const signature = bs58.encode(transaction.signatures[0]);
   let sendError: unknown;
   try {
@@ -935,42 +1557,84 @@ async function sendAndConfirmTransaction(
     sendError = error;
   }
   if (sendError) {
-    const logs = rpcLogs(sendError);
-    if (logs.length) {
+    const preflight = preflightFailure(sendError);
+    if (preflight) {
       throw new RevealDudesError('failed-precondition', 'Reveal transaction preflight failed.', {
         signature,
         lastError: transactionErrorMessage(sendError),
-        lastLogs: logs.slice(0, 80),
+        lastLogs: preflight.logs,
       });
     }
-    const maybe = await waitForSignature(context, runtime, signature, TX_SEND_TIMEOUT_MS);
+    let maybe: Awaited<ReturnType<typeof waitForSignature>>;
+    try {
+      maybe = await waitForTransaction(context, runtime, signature, TX_SEND_TIMEOUT_MS);
+    } catch {
+      throw new RevealDudesError(
+        context.signal.aborted ? 'deadline-exceeded' : 'unavailable',
+        'Reveal transaction submission status is unknown. Try again.',
+        {
+          signature,
+          lastError: transactionErrorMessage(sendError),
+          maybeSubmitted: true,
+        },
+      );
+    }
     if (maybe.ok) return signature;
+    const maybeMessage = transactionErrorMessage(maybe.error);
+    if (!/timeout/i.test(maybeMessage)) {
+      throw new RevealDudesError('failed-precondition', 'Reveal transaction was not confirmed. Try again.', {
+        signature,
+        lastError: maybeMessage,
+        lastLogs: maybe.logs.slice(0, 80),
+      });
+    }
     throw new RevealDudesError('unavailable', 'Reveal transaction submission status is unknown. Try again.', {
       signature,
       lastError: transactionErrorMessage(sendError),
       maybeSubmitted: true,
     });
   }
-  const confirmed = await waitForSignature(context, runtime, signature, TX_CONFIRM_TIMEOUT_MS);
+  let confirmed: Awaited<ReturnType<typeof waitForSignature>>;
+  try {
+    confirmed = await waitForTransaction(context, runtime, signature, TX_CONFIRM_TIMEOUT_MS);
+  } catch {
+    throw new RevealDudesError('deadline-exceeded', 'Reveal transaction was not confirmed. Try again.', {
+      signature,
+      lastError: 'timeout',
+      maybeSubmitted: true,
+    });
+  }
   if (confirmed.ok) return signature;
   const message = transactionErrorMessage(confirmed.error);
-  throw new RevealDudesError(/timeout/i.test(message) ? 'deadline-exceeded' : 'failed-precondition', 'Reveal transaction was not confirmed. Try again.', {
+  const timedOut = /timeout/i.test(message);
+  throw new RevealDudesError(timedOut ? 'deadline-exceeded' : 'failed-precondition', 'Reveal transaction was not confirmed. Try again.', {
     signature,
     lastError: message,
     lastLogs: confirmed.logs.slice(0, 80),
+    ...(timedOut ? { maybeSubmitted: true } : {}),
   });
 }
 
-async function loadLatestBlockhash(context: ProviderContext, runtime: RevealRuntime): Promise<string> {
+async function loadLatestBlockhash(
+  context: ProviderContext,
+  runtime: RevealRuntime,
+): Promise<{ blockhash: string; blockhashContextSlot: number }> {
   const result = await rpcCall(context, runtime, 'getLatestBlockhash', [{ commitment: 'confirmed' }]);
+  const contextValue = isRecord(result) ? result.context : undefined;
   const value = isRecord(result) ? result.value : undefined;
   const blockhash = isRecord(value) && typeof value.blockhash === 'string' ? value.blockhash : '';
-  try {
-    if (!blockhash || new PublicKey(blockhash).toBytes().length !== 32) throw new Error('invalid');
-  } catch {
+  const lastValidBlockHeight = isRecord(value) ? value.lastValidBlockHeight : undefined;
+  if (
+    !isRecord(contextValue) ||
+    !Number.isSafeInteger(contextValue.slot) ||
+    Number(contextValue.slot) < 0 ||
+    !isNonZeroBase58Bytes(blockhash, 32) ||
+    !Number.isSafeInteger(lastValidBlockHeight) ||
+    Number(lastValidBlockHeight) < 0
+  ) {
     throw new RevealDudesError('unavailable', 'Reveal provider returned an invalid blockhash.');
   }
-  return blockhash;
+  return { blockhash, blockhashContextSlot: Number(contextValue.slot) };
 }
 
 async function countOnlineRevealPackStatus(
@@ -1046,10 +1710,343 @@ async function countOnlineRevealPackStatus(
   }
 }
 
+async function failRevealSubmissionSafely(
+  dependency: typeof failRevealSubmission,
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  submission: RevealSubmission,
+): Promise<void> {
+  try {
+    await dependency(context, runtime, boxAssetId, submission);
+  } catch (error) {
+    console.warn({
+      event: 'reveal_submission_fail_status_failed',
+      dropId: runtime.dropId,
+      boxAssetId,
+      signature: submission.signature,
+      error: summarizeError(error),
+    });
+  }
+}
+
 function completeWaitUntil(promise: Promise<unknown>): void {
   void promise.catch((error) => {
     console.error({ event: 'reveal_background_error', error: summarizeError(error) });
   });
+}
+
+function scheduleRevealBackground(
+  waitUntil: RevealWaitUntil,
+  promise: Promise<unknown>,
+): void {
+  const guarded = promise.catch((error) => {
+    console.error({ event: 'reveal_background_error', error: summarizeError(error) });
+  });
+  try {
+    waitUntil(guarded);
+  } catch (error) {
+    console.error({ event: 'reveal_wait_until_failed', error: summarizeError(error) });
+    completeWaitUntil(guarded);
+  }
+}
+
+function scheduleConfirmedPackStatusRepair(
+  dependencies: RevealDudesDependencies,
+  waitUntil: RevealWaitUntil,
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  submission: RevealSubmission,
+): void {
+  scheduleRevealBackground(
+    waitUntil,
+    dependencies.countOnlineRevealPackStatus(
+      {
+        ...context,
+        nowMs: dependencies.nowMs(),
+        providerFetch: dependencies.providerFetch,
+        signal: AbortSignal.timeout(BACKGROUND_PACK_STATUS_TIMEOUT_MS),
+      },
+      runtime,
+      boxAssetId,
+      submission.signature,
+    ),
+  );
+}
+
+function unknownSubmissionError(
+  submission: RevealSubmission,
+  code: RevealErrorCode = 'unavailable',
+  message = 'Reveal transaction submission status is unknown. Try again.',
+): RevealDudesError {
+  const details: RevealDudesSubmissionUnknownDetails = {
+    kind: 'reveal-submission-unknown',
+    submission: {
+      signature: submission.signature,
+      recentBlockhash: submission.recentBlockhash,
+      dudeIds: [...submission.dudeIds],
+    },
+  };
+  return new RevealDudesError(code, message, details);
+}
+
+function revealBackgroundJob(
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  submission: RevealSubmission,
+): RevealBackgroundJob {
+  return {
+    kind: 'reveal_submission_reconcile',
+    dropId: runtime.dropId,
+    boxAssetId,
+    reservationId: submission.reservationId,
+    signature: submission.signature,
+  };
+}
+
+export function isRevealBackgroundJob(value: unknown): value is RevealBackgroundJob {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  if (
+    keys.length !== 5 ||
+    !['kind', 'dropId', 'boxAssetId', 'reservationId', 'signature'].every((key) => Object.hasOwn(value, key)) ||
+    value.kind !== 'reveal_submission_reconcile' ||
+    typeof value.dropId !== 'string' ||
+    value.dropId.length < 1 ||
+    value.dropId.length > 64 ||
+    typeof value.boxAssetId !== 'string' ||
+    typeof value.reservationId !== 'string' ||
+    !RESERVATION_ID_PATTERN.test(value.reservationId) ||
+    !isNonZeroBase58Bytes(value.signature, 64) ||
+    !isBase58Bytes(value.boxAssetId, 32)
+  ) return false;
+  return true;
+}
+
+async function enqueueRevealBackgroundJob(
+  queue: Queue,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  submission: RevealSubmission,
+  delaySeconds = 0,
+): Promise<void> {
+  await queue.send(revealBackgroundJob(runtime, boxAssetId, submission), {
+    contentType: 'json',
+    ...(delaySeconds > 0 ? { delaySeconds } : {}),
+  });
+}
+
+async function finalizeConfirmedSubmissionForResponse(
+  dependencies: RevealDudesDependencies,
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  submission: RevealSubmission,
+): Promise<void> {
+  try {
+    await dependencies.confirmRevealSubmission(context, runtime, boxAssetId, submission);
+  } catch (error) {
+    const code = context.signal.aborted ||
+      (error instanceof RevealDudesError && error.code === 'deadline-exceeded') ||
+      (error instanceof ProfileReadError && error.code === 'deadline-exceeded')
+      ? 'deadline-exceeded'
+      : 'unavailable';
+    throw unknownSubmissionError(
+      submission,
+      code,
+      'Reveal transaction is confirmed, but finalization is incomplete. Try again.',
+    );
+  }
+}
+
+type RevealBackgroundJobDependencies = Pick<
+  RevealDudesDependencies,
+  | 'accessTokenProvider'
+  | 'confirmRevealSubmission'
+  | 'countOnlineRevealPackStatus'
+  | 'failRevealSubmission'
+  | 'loadRevealSubmission'
+  | 'nowMs'
+  | 'providerFetch'
+  | 'reconcileRevealSubmission'
+> & {
+  log: (entry: Record<string, unknown>) => void;
+  warn: (entry: Record<string, unknown>) => void;
+  error: (entry: Record<string, unknown>) => void;
+};
+
+const defaultRevealBackgroundJobDependencies: RevealBackgroundJobDependencies = {
+  accessTokenProvider,
+  confirmRevealSubmission,
+  countOnlineRevealPackStatus,
+  failRevealSubmission,
+  loadRevealSubmission,
+  nowMs: () => Date.now(),
+  providerFetch: (input, init) => fetch(input, init),
+  reconcileRevealSubmission,
+  log: (entry) => console.info(entry),
+  warn: (entry) => console.warn(entry),
+  error: (entry) => console.error(entry),
+};
+
+export function revealBackgroundJobRetryDelaySeconds(attempts: number): number {
+  const index = Math.min(
+    Math.max(1, Math.floor(attempts)) - 1,
+    REVEAL_BACKGROUND_JOB_RETRY_DELAYS_SECONDS.length - 1,
+  );
+  return REVEAL_BACKGROUND_JOB_RETRY_DELAYS_SECONDS[index];
+}
+
+function retryRevealBackgroundJob(
+  message: Message<unknown>,
+  dependencies: RevealBackgroundJobDependencies,
+  job: RevealBackgroundJob,
+  reason: string,
+): void {
+  const delaySeconds = revealBackgroundJobRetryDelaySeconds(message.attempts);
+  dependencies.warn({
+    event: 'reveal_background_job_retry',
+    dropId: job.dropId,
+    boxAssetId: job.boxAssetId,
+    signature: job.signature,
+    attempts: message.attempts,
+    delaySeconds,
+    reason,
+  });
+  message.retry({ delaySeconds });
+}
+
+export async function processRevealBackgroundJobMessage(
+  message: Message<unknown>,
+  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'>,
+  overrides: Partial<RevealBackgroundJobDependencies> = {},
+): Promise<void> {
+  const dependencies = { ...defaultRevealBackgroundJobDependencies, ...overrides };
+  if (!isRevealBackgroundJob(message.body)) {
+    dependencies.error({
+      event: 'reveal_background_job_invalid',
+      queueMessageId: message.id,
+      attempts: message.attempts,
+    });
+    message.ack();
+    return;
+  }
+  const job = message.body;
+  const signal = AbortSignal.timeout(REVEAL_BACKGROUND_JOB_TIMEOUT_MS);
+  const serviceAccountJson = typeof env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON === 'string'
+    ? env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON.trim()
+    : '';
+  const firestoreContext: FirestoreContext = {
+    accessTokenProvider: dependencies.accessTokenProvider,
+    nowMs: dependencies.nowMs(),
+    providerFetch: dependencies.providerFetch,
+    serviceAccountJson,
+    signal,
+  };
+  try {
+    if (!serviceAccountJson) throw new Error('firestore_writer_service_account_not_configured');
+    const runtime = runtimeForDrop(job.dropId);
+    const submission = await dependencies.loadRevealSubmission(firestoreContext, runtime, job.boxAssetId);
+    if (
+      !submission ||
+      submission.reservationId !== job.reservationId ||
+      submission.signature !== job.signature
+    ) {
+      dependencies.log({
+        event: 'reveal_background_job_stale',
+        dropId: job.dropId,
+        boxAssetId: job.boxAssetId,
+        signature: job.signature,
+      });
+      message.ack();
+      return;
+    }
+    if (submission.status === 'failed') {
+      message.ack();
+      return;
+    }
+    if (submission.status === 'pending') {
+      const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
+      if (!apiKey) throw new Error('helius_api_key_not_configured');
+      const outcome = await dependencies.reconcileRevealSubmission(
+        { apiKey, fetch: dependencies.providerFetch, signal },
+        runtime,
+        submission,
+      );
+      if (outcome === 'unknown') {
+        retryRevealBackgroundJob(message, dependencies, job, 'transaction_status_unknown');
+        return;
+      }
+      if (outcome === 'failed' || outcome === 'expired') {
+        const status = await dependencies.failRevealSubmission(
+          firestoreContext,
+          runtime,
+          job.boxAssetId,
+          submission,
+        );
+        if (status !== 'confirmed') {
+          dependencies.log({
+            event: 'reveal_background_job_terminal',
+            dropId: job.dropId,
+            boxAssetId: job.boxAssetId,
+            signature: job.signature,
+            outcome: 'failed',
+          });
+          message.ack();
+          return;
+        }
+      }
+      if (outcome === 'confirmed') {
+        await dependencies.confirmRevealSubmission(firestoreContext, runtime, job.boxAssetId, submission);
+      }
+    }
+    await dependencies.countOnlineRevealPackStatus(
+      firestoreContext,
+      runtime,
+      job.boxAssetId,
+      job.signature,
+    );
+    dependencies.log({
+      event: 'reveal_background_job_terminal',
+      dropId: job.dropId,
+      boxAssetId: job.boxAssetId,
+      signature: job.signature,
+      outcome: 'confirmed',
+    });
+    message.ack();
+  } catch (error) {
+    retryRevealBackgroundJob(
+      message,
+      dependencies,
+      job,
+      error instanceof Error ? error.message : 'unknown_error',
+    );
+  }
+}
+
+function scheduleFailedSubmission(
+  dependencies: RevealDudesDependencies,
+  waitUntil: RevealWaitUntil,
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  submission: RevealSubmission,
+): void {
+  scheduleRevealBackground(
+    waitUntil,
+    failRevealSubmissionSafely(
+      dependencies.failRevealSubmission,
+      {
+        ...context,
+        providerFetch: dependencies.providerFetch,
+        signal: AbortSignal.timeout(PROVIDER_ATTEMPT_TIMEOUT_MS),
+      },
+      runtime,
+      boxAssetId,
+      submission,
+    ),
+  );
 }
 
 export async function handleRevealDudes(
@@ -1131,9 +2128,70 @@ export async function handleRevealDudes(
       throw new RevealDudesError('permission-denied', 'Owners only.');
     }
     authOutcome = 'accepted';
+    const storedSubmission = await dependencies.loadRevealSubmission(firestoreContext, runtime, boxAssetId);
+    if (storedSubmission && storedSubmission.owner !== owner.toBase58()) {
+      authOutcome = 'rejected';
+      throw new RevealDudesError('permission-denied', 'Owners only.');
+    }
+    if (storedSubmission?.status === 'confirmed') {
+      transactionOutcome = 'confirmed';
+      scheduleConfirmedPackStatusRepair(
+        dependencies,
+        waitUntil,
+        firestoreContext,
+        runtime,
+        boxAssetId,
+        storedSubmission,
+      );
+      return {
+        response: response({ signature: storedSubmission.signature, dudeIds: storedSubmission.dudeIds }, 200),
+        metrics,
+        authOutcome,
+        dropId,
+        boxAssetId,
+        transactionOutcome,
+      };
+    }
     const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
     if (!apiKey) throw new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
     const providerContext: ProviderContext = { apiKey, fetch: meteredFetch, signal: controller.signal };
+    let replaceSubmission: RevealSubmission | undefined;
+    if (storedSubmission) {
+      const outcome = storedSubmission.status === 'failed'
+        ? 'failed'
+        : await dependencies.reconcileRevealSubmission(providerContext, runtime, storedSubmission);
+      if (outcome === 'confirmed') {
+        transactionOutcome = 'confirmed';
+        await finalizeConfirmedSubmissionForResponse(
+          dependencies,
+          firestoreContext,
+          runtime,
+          boxAssetId,
+          storedSubmission,
+        );
+        scheduleConfirmedPackStatusRepair(
+          dependencies,
+          waitUntil,
+          firestoreContext,
+          runtime,
+          boxAssetId,
+          storedSubmission,
+        );
+        return {
+          response: response({ signature: storedSubmission.signature, dudeIds: storedSubmission.dudeIds }, 200),
+          metrics,
+          authOutcome,
+          dropId,
+          boxAssetId,
+          transactionOutcome,
+        };
+      }
+      if (outcome === 'unknown') {
+        transactionOutcome = 'unknown';
+        throw unknownSubmissionError(storedSubmission);
+      }
+      replaceSubmission = storedSubmission;
+    }
     const onchain = await dependencies.validateOnchainConfig(providerContext, runtime);
     const signer = cosigner(env);
     if (!signer.publicKey.equals(onchain.admin)) {
@@ -1166,38 +2224,189 @@ export async function handleRevealDudes(
         pendingLayout: pending.layout,
       })),
     });
-    const blockhash = await dependencies.loadLatestBlockhash(providerContext, runtime);
+    const latestBlockhash = await dependencies.loadLatestBlockhash(providerContext, runtime);
     const transaction = new VersionedTransaction(new TransactionMessage({
       payerKey: signer.publicKey,
-      recentBlockhash: blockhash,
+      recentBlockhash: latestBlockhash.blockhash,
       instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), instruction],
     }).compileToV0Message());
     transaction.sign([signer]);
+    const candidate: RevealSubmission = {
+      owner: owner.toBase58(),
+      signature: bs58.encode(transaction.signatures[0]),
+      recentBlockhash: latestBlockhash.blockhash,
+      blockhashContextSlot: latestBlockhash.blockhashContextSlot,
+      dudeIds: [...assignment.dudeIds],
+      reservationId: crypto.randomUUID(),
+      status: 'pending',
+    };
+    let reservation: Awaited<ReturnType<typeof reserveRevealSubmission>>;
+    try {
+      reservation = await dependencies.reserveRevealSubmission(
+        firestoreContext,
+        runtime,
+        boxAssetId,
+        candidate,
+        replaceSubmission,
+        dependencies,
+      );
+    } catch (error) {
+      if (controller.signal.aborted) {
+        scheduleFailedSubmission(
+          dependencies,
+          waitUntil,
+          firestoreContext,
+          runtime,
+          boxAssetId,
+          candidate,
+        );
+      }
+      throw error;
+    }
+    if (reservation.submission.status === 'confirmed') {
+      transactionOutcome = 'confirmed';
+      scheduleConfirmedPackStatusRepair(
+        dependencies,
+        waitUntil,
+        firestoreContext,
+        runtime,
+        boxAssetId,
+        reservation.submission,
+      );
+      return {
+        response: response({
+          signature: reservation.submission.signature,
+          dudeIds: reservation.submission.dudeIds,
+        }, 200),
+        metrics,
+        authOutcome,
+        dropId,
+        boxAssetId,
+        assignmentOutcome,
+        transactionOutcome,
+      };
+    }
+    if (!reservation.owned) {
+      if (reservation.submission.owner !== owner.toBase58()) {
+        authOutcome = 'rejected';
+        throw new RevealDudesError('permission-denied', 'Owners only.');
+      }
+      const outcome = reservation.submission.status === 'failed'
+        ? 'failed'
+        : await dependencies.reconcileRevealSubmission(providerContext, runtime, reservation.submission);
+      if (outcome === 'confirmed') {
+        transactionOutcome = 'confirmed';
+        await finalizeConfirmedSubmissionForResponse(
+          dependencies,
+          firestoreContext,
+          runtime,
+          boxAssetId,
+          reservation.submission,
+        );
+        scheduleConfirmedPackStatusRepair(
+          dependencies,
+          waitUntil,
+          firestoreContext,
+          runtime,
+          boxAssetId,
+          reservation.submission,
+        );
+        return {
+          response: response({
+            signature: reservation.submission.signature,
+            dudeIds: reservation.submission.dudeIds,
+          }, 200),
+          metrics,
+          authOutcome,
+          dropId,
+          boxAssetId,
+          assignmentOutcome,
+          transactionOutcome,
+        };
+      }
+      if (outcome === 'unknown') {
+        transactionOutcome = 'unknown';
+        throw unknownSubmissionError(reservation.submission);
+      }
+      transactionOutcome = 'failed';
+      throw new RevealDudesError('aborted', 'Reveal submission changed. Try again.');
+    }
+    const submission = reservation.submission;
+    try {
+      await enqueueRevealBackgroundJob(
+        env.REVEAL_BACKGROUND_QUEUE,
+        runtime,
+        boxAssetId,
+        submission,
+        REVEAL_BACKGROUND_JOB_INITIAL_DELAY_SECONDS,
+      );
+    } catch {
+      transactionOutcome = 'failed';
+      scheduleFailedSubmission(
+        dependencies,
+        waitUntil,
+        firestoreContext,
+        runtime,
+        boxAssetId,
+        submission,
+      );
+      throw new RevealDudesError('unavailable', 'Reveal processing is temporarily unavailable. Try again.');
+    }
     let signature: string;
     try {
       signature = await dependencies.sendAndConfirmTransaction(providerContext, runtime, transaction);
       transactionOutcome = 'confirmed';
     } catch (error) {
-      transactionOutcome = error instanceof RevealDudesError && isRecord(error.details) && error.details.maybeSubmitted === true
-        ? 'unknown'
-        : 'failed';
+      const submissionUnknown = error instanceof RevealDudesError &&
+        isRecord(error.details) && error.details.maybeSubmitted === true;
+      transactionOutcome = submissionUnknown ? 'unknown' : 'failed';
+      if (submissionUnknown) {
+        console.warn({
+          event: 'reveal_transaction_unknown',
+          dropId: runtime.dropId,
+          boxAssetId,
+          signature: submission.signature,
+          error: summarizeError(error),
+        });
+        throw unknownSubmissionError(submission, error.code, error.message);
+      }
+      if (controller.signal.aborted) {
+        scheduleFailedSubmission(
+          dependencies,
+          waitUntil,
+          firestoreContext,
+          runtime,
+          boxAssetId,
+          submission,
+        );
+      } else {
+        await failRevealSubmissionSafely(
+          dependencies.failRevealSubmission,
+          firestoreContext,
+          runtime,
+          boxAssetId,
+          submission,
+        );
+      }
       throw error;
     }
-    const backgroundContext: FirestoreContext = {
-      ...firestoreContext,
-      providerFetch: dependencies.providerFetch,
-    };
-    waitUntil(dependencies.countOnlineRevealPackStatus(backgroundContext, runtime, boxAssetId, signature).catch((error) => {
-      console.warn({
-        event: 'reveal_pack_status_count_failed',
-        dropId: runtime.dropId,
-        boxAssetId,
-        signature,
-        error: summarizeError(error),
-      });
-    }));
+    await finalizeConfirmedSubmissionForResponse(
+      dependencies,
+      firestoreContext,
+      runtime,
+      boxAssetId,
+      submission,
+    );
+    scheduleConfirmedPackStatusRepair(
+      dependencies,
+      waitUntil,
+      firestoreContext,
+      runtime,
+      boxAssetId,
+      submission,
+    );
     return {
-      response: response({ signature, dudeIds: assignment.dudeIds }, 200),
+      response: response({ signature, dudeIds: submission.dudeIds }, 200),
       metrics,
       authOutcome,
       dropId,
@@ -1235,7 +2444,17 @@ export async function handleRevealDudes(
 export const revealDudesTestHooks = {
   assignDudes,
   countOnlineRevealPackStatus,
+  confirmRevealSubmission,
+  enqueueRevealBackgroundJob,
+  loadLatestBlockhash,
   loadPendingOpen,
+  loadRevealSubmission,
+  reconcileRevealSubmission,
+  reserveRevealSubmission,
+  revealBackgroundJobTimeoutMs: REVEAL_BACKGROUND_JOB_TIMEOUT_MS,
+  failRevealSubmission,
+  rpcCall,
   runtimeForDrop,
   sendAndConfirmTransaction,
+  waitForSignature,
 };

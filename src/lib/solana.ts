@@ -14,6 +14,7 @@ import {
 } from '../../functions/src/shared/addressCipher.js';
 import {
   isExactShopRpcResponse,
+  isNonZeroBase58Bytes,
   type ShopRpcRequest,
 } from '../../functions/src/shared/solanaRpcProxy.ts';
 import { monsApiOrigin } from './monsApiOrigin';
@@ -93,12 +94,7 @@ function isValidTransactionSignatureBytes(value: unknown): value is Uint8Array {
 }
 
 function isLikelyBase58Signature(value: string): boolean {
-  if (value.length < 64 || value.length > 88 || !/^[1-9A-HJ-NP-Za-km-z]+$/.test(value)) return false;
-  try {
-    return isValidTransactionSignatureBytes(bs58.decode(value));
-  } catch {
-    return false;
-  }
+  return isNonZeroBase58Bytes(value, SIGNATURE_LENGTH_IN_BYTES);
 }
 
 function requireValidTransactionSignature(value: unknown): string {
@@ -483,13 +479,18 @@ type PolledSignatureStatus = {
   confirmationStatus?: 'processed' | 'confirmed' | 'finalized' | null;
 };
 
+type RpcContextResult<T> = {
+  contextSlot: number;
+  value: T;
+};
+
 type PolledConfirmationStatus = NonNullable<PolledSignatureStatus['confirmationStatus']> | null;
 
 function isPolledConfirmationStatus(value: unknown): value is PolledConfirmationStatus {
   return value === null || value === 'processed' || value === 'confirmed' || value === 'finalized';
 }
 
-function requireSignatureStatusResult(value: unknown): PolledSignatureStatus | null {
+function requireSignatureStatusResult(value: unknown): RpcContextResult<PolledSignatureStatus | null> {
   if (
     !isRecord(value) ||
     !isRecord(value.context) ||
@@ -502,7 +503,12 @@ function requireSignatureStatusResult(value: unknown): PolledSignatureStatus | n
     throw new Error('Solana RPC returned an invalid signature-status response');
   }
   const status = value.value[0];
-  if (status === null) return null;
+  if (status === null) {
+    return {
+      contextSlot: Number(value.context.slot),
+      value: null,
+    };
+  }
   const confirmationStatus = isRecord(status) ? status.confirmationStatus : undefined;
   if (
     !isRecord(status) ||
@@ -520,10 +526,13 @@ function requireSignatureStatusResult(value: unknown): PolledSignatureStatus | n
     ? confirmationStatus
     : undefined;
   return {
-    slot: Number(status.slot),
-    confirmations: status.confirmations === null ? null : Number(status.confirmations),
-    err: status.err,
-    ...(parsedConfirmationStatus !== undefined ? { confirmationStatus: parsedConfirmationStatus } : {}),
+    contextSlot: Number(value.context.slot),
+    value: {
+      slot: Number(status.slot),
+      confirmations: status.confirmations === null ? null : Number(status.confirmations),
+      err: status.err,
+      ...(parsedConfirmationStatus !== undefined ? { confirmationStatus: parsedConfirmationStatus } : {}),
+    },
   };
 }
 
@@ -620,13 +629,13 @@ function shopRpcEndpointForConnection(connection: Connection): string | null {
   return null;
 }
 
-async function fetchSignatureStatusValue(
+async function fetchSignatureStatusResult(
   endpoint: string,
   signature: string,
   searchTransactionHistory: boolean,
   requestTimeoutMs: number,
   signals: readonly (AbortSignal | undefined)[],
-): Promise<PolledSignatureStatus | null> {
+): Promise<RpcContextResult<PolledSignatureStatus | null>> {
   const requestBody: ShopRpcRequest = {
     jsonrpc: '2.0',
     id: 1,
@@ -637,16 +646,16 @@ async function fetchSignatureStatusValue(
   return requireSignatureStatusResult(result);
 }
 
-async function getSignatureStatusValue(
+async function getSignatureStatusResult(
   connection: Connection,
   signature: string,
   searchTransactionHistory: boolean,
   requestTimeoutMs = DEFAULT_SIGNATURE_STATUS_REQUEST_TIMEOUT_MS,
   signals: readonly (AbortSignal | undefined)[] = [],
-): Promise<PolledSignatureStatus | null> {
+): Promise<RpcContextResult<PolledSignatureStatus | null>> {
   const endpoint = shopRpcEndpointForConnection(connection);
   if (endpoint) {
-    return fetchSignatureStatusValue(endpoint, signature, searchTransactionHistory, requestTimeoutMs, signals);
+    return fetchSignatureStatusResult(endpoint, signature, searchTransactionHistory, requestTimeoutMs, signals);
   }
   const getSignatureStatus = Reflect.get(connection, 'getSignatureStatus');
   if (typeof getSignatureStatus !== 'function') {
@@ -655,23 +664,50 @@ async function getSignatureStatusValue(
   const statusPromise = Reflect.apply(getSignatureStatus, connection, [
     signature,
     { searchTransactionHistory },
-  ]) as Promise<{ value: PolledSignatureStatus | null }>;
-  const status = await withRequestTimeout(statusPromise, requestTimeoutMs);
-  return status.value ?? null;
+  ]) as Promise<unknown>;
+  const result = await withRequestTimeout(statusPromise, requestTimeoutMs);
+  if (!isRecord(result) || !Object.prototype.hasOwnProperty.call(result, 'value')) {
+    throw new Error('Solana RPC returned an invalid signature-status response');
+  }
+  return requireSignatureStatusResult({
+    context: result.context,
+    value: [result.value],
+  });
+}
+
+async function getSignatureStatusValue(
+  connection: Connection,
+  signature: string,
+  searchTransactionHistory: boolean,
+  requestTimeoutMs = DEFAULT_SIGNATURE_STATUS_REQUEST_TIMEOUT_MS,
+  signals: readonly (AbortSignal | undefined)[] = [],
+): Promise<PolledSignatureStatus | null> {
+  return (await getSignatureStatusResult(
+    connection,
+    signature,
+    searchTransactionHistory,
+    requestTimeoutMs,
+    signals,
+  )).value;
 }
 
 function isConfirmedSignatureStatus(status: PolledSignatureStatus | null): boolean {
-  if (!status || status.err) return false;
+  if (!status || status.err !== null) return false;
+  return hasConfirmedSignatureCommitment(status);
+}
+
+function hasConfirmedSignatureCommitment(status: PolledSignatureStatus): boolean {
+  if (status.confirmationStatus != null) {
+    return status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized';
+  }
   return (
-    status.confirmationStatus === 'confirmed' ||
-    status.confirmationStatus === 'finalized' ||
     status.confirmations === null ||
     (typeof status.confirmations === 'number' && status.confirmations > 0)
   );
 }
 
 function assertSignatureStatusSucceeded(signature: string, status: PolledSignatureStatus | null) {
-  if (status?.err) {
+  if (status?.err && hasConfirmedSignatureCommitment(status)) {
     throw new SubmittedTransactionFailureError(signature, status.err);
   }
 }
@@ -851,6 +887,7 @@ export async function confirmSubmittedTransactionByPolling(
 export type SubmittedTransactionReconciliationResult = 'confirmed' | 'failed' | 'expired' | 'unknown';
 
 export type SubmittedTransactionReconciliationOptions = {
+  detectExpiry?: boolean;
   timeoutMs?: number;
   pollIntervalMs?: number;
   requestTimeoutMs?: number;
@@ -858,18 +895,14 @@ export type SubmittedTransactionReconciliationOptions = {
 };
 
 function requireValidRecentBlockhash(value: unknown): string {
-  if (typeof value !== 'string' || !value) {
-    throw new Error('Invalid recent blockhash');
-  }
-  try {
-    if (bs58.decode(value).length === 32) return value;
-  } catch {
-    // Fall through to the stable validation error below.
-  }
+  if (typeof value === 'string' && isNonZeroBase58Bytes(value, 32)) return value;
   throw new Error('Invalid recent blockhash');
 }
 
-function requireBlockhashValidityResult(value: unknown): boolean {
+function requireBlockhashValidityResult(
+  value: unknown,
+  minContextSlot: number,
+): RpcContextResult<boolean> {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, ['context', 'value']) ||
@@ -878,38 +911,44 @@ function requireBlockhashValidityResult(value: unknown): boolean {
     !hasExactKeys(value.context, ['slot'], ['apiVersion']) ||
     !Number.isSafeInteger(value.context.slot) ||
     Number(value.context.slot) < 0 ||
-    (value.context.apiVersion !== undefined && typeof value.context.apiVersion !== 'string')
+    (value.context.apiVersion !== undefined && typeof value.context.apiVersion !== 'string') ||
+    Number(value.context.slot) < minContextSlot
   ) {
     throw new Error('Solana RPC returned an invalid blockhash-validity response');
   }
-  return value.value;
+  return {
+    contextSlot: Number(value.context.slot),
+    value: value.value,
+  };
 }
 
 async function fetchBlockhashValidityValue(
   endpoint: string,
   recentBlockhash: string,
+  minContextSlot: number,
   requestTimeoutMs: number,
   signals: readonly (AbortSignal | undefined)[],
-): Promise<boolean> {
+): Promise<RpcContextResult<boolean>> {
   const requestBody: ShopRpcRequest = {
     jsonrpc: '2.0',
     id: 1,
     method: 'isBlockhashValid',
-    params: [recentBlockhash, { commitment: 'confirmed' }],
+    params: [recentBlockhash, { commitment: 'confirmed', minContextSlot }],
   };
   const result = await fetchShopRpcResult(endpoint, requestBody, requestTimeoutMs, signals);
-  return requireBlockhashValidityResult(result);
+  return requireBlockhashValidityResult(result, minContextSlot);
 }
 
 async function getBlockhashValidityValue(
   connection: Connection,
   recentBlockhash: string,
+  minContextSlot: number,
   requestTimeoutMs: number,
   signals: readonly (AbortSignal | undefined)[],
-): Promise<boolean> {
+): Promise<RpcContextResult<boolean>> {
   const endpoint = shopRpcEndpointForConnection(connection);
   if (endpoint) {
-    return fetchBlockhashValidityValue(endpoint, recentBlockhash, requestTimeoutMs, signals);
+    return fetchBlockhashValidityValue(endpoint, recentBlockhash, minContextSlot, requestTimeoutMs, signals);
   }
   const isBlockhashValid = Reflect.get(connection, 'isBlockhashValid');
   if (typeof isBlockhashValid !== 'function') {
@@ -918,10 +957,13 @@ async function getBlockhashValidityValue(
   const activeSignal = signals.find((signal) => signal?.aborted);
   if (activeSignal?.aborted) throw activeSignal.reason;
   const result = await withRequestTimeout(
-    Reflect.apply(isBlockhashValid, connection, [recentBlockhash, { commitment: 'confirmed' }]),
+    Reflect.apply(isBlockhashValid, connection, [
+      recentBlockhash,
+      { commitment: 'confirmed', minContextSlot },
+    ]),
     requestTimeoutMs,
   );
-  return requireBlockhashValidityResult(result);
+  return requireBlockhashValidityResult(result, minContextSlot);
 }
 
 /**
@@ -931,11 +973,18 @@ async function getBlockhashValidityValue(
  */
 export async function reconcileSubmittedTransaction(
   connection: Connection,
-  submission: { signature: string; recentBlockhash: string },
+  submission: { signature: string; recentBlockhash: string; blockhashContextSlot?: number },
   options: SubmittedTransactionReconciliationOptions = {},
 ): Promise<SubmittedTransactionReconciliationResult> {
   const signature = requireValidTransactionSignature(submission.signature);
   const recentBlockhash = requireValidRecentBlockhash(submission.recentBlockhash);
+  const blockhashContextSlot = submission.blockhashContextSlot === undefined
+    ? 0
+    : normalizeIntegerOption(submission.blockhashContextSlot, 0, 0);
+  if (
+    submission.blockhashContextSlot !== undefined &&
+    (!Number.isSafeInteger(submission.blockhashContextSlot) || submission.blockhashContextSlot < 0)
+  ) throw new Error('Invalid blockhash context slot');
   const timeoutMs = normalizeIntegerOption(
     options.timeoutMs,
     DEFAULT_RECONCILIATION_TIMEOUT_MS,
@@ -951,30 +1000,31 @@ export async function reconcileSubmittedTransaction(
     DEFAULT_SIGNATURE_STATUS_REQUEST_TIMEOUT_MS,
     1,
   );
+  const shouldDetectExpiry = options.detectExpiry !== false;
+  const searchTransactionHistory = !shouldDetectExpiry;
   const deadline = createDeadline(timeoutMs);
 
   try {
     if (options.signal?.aborted) throw options.signal.reason;
     while (!deadline.reached()) {
-      let status: PolledSignatureStatus | null;
+      let statusResult: RpcContextResult<PolledSignatureStatus | null>;
       try {
-        const statusResult = await raceDeadline(
-          getSignatureStatusValue(
+        const currentResult = await raceDeadline(
+          getSignatureStatusResult(
             connection,
             signature,
-            false,
+            searchTransactionHistory,
             requestTimeoutMs,
             [options.signal, deadline.signal],
           ),
           deadline,
           options.signal,
         );
-        if (statusResult === DEADLINE_REACHED) return 'unknown';
-        status = statusResult;
+        if (currentResult === DEADLINE_REACHED) return 'unknown';
+        statusResult = currentResult;
       } catch {
         if (options.signal?.aborted) throw options.signal.reason;
         if (deadline.reached()) return 'unknown';
-        status = null;
         if (pollIntervalMs > 0) {
           const delayResult = await raceDeadline(
             sleep(pollIntervalMs, options.signal),
@@ -986,34 +1036,37 @@ export async function reconcileSubmittedTransaction(
         continue;
       }
 
-      if (status?.err) return 'failed';
+      const status = statusResult.value;
+
+      if (status?.err && hasConfirmedSignatureCommitment(status)) return 'failed';
       if (isConfirmedSignatureStatus(status)) return 'confirmed';
 
-      if (status == null) {
-        let blockhashValid: boolean;
+      if (status == null && shouldDetectExpiry) {
+        let validityResult: RpcContextResult<boolean> | null;
         try {
-          const validityResult = await raceDeadline(
+          const validityResponse = await raceDeadline(
             getBlockhashValidityValue(
               connection,
               recentBlockhash,
+              Math.max(blockhashContextSlot, statusResult.contextSlot),
               requestTimeoutMs,
               [options.signal, deadline.signal],
             ),
             deadline,
             options.signal,
           );
-          if (validityResult === DEADLINE_REACHED) return 'unknown';
-          blockhashValid = validityResult;
+          if (validityResponse === DEADLINE_REACHED) return 'unknown';
+          validityResult = validityResponse;
         } catch {
           if (options.signal?.aborted) throw options.signal.reason;
           if (deadline.reached()) return 'unknown';
-          blockhashValid = true;
+          validityResult = null;
         }
 
-        if (!blockhashValid) {
+        if (validityResult?.value === false) {
           try {
             const historicalResult = await raceDeadline(
-              getSignatureStatusValue(
+              getSignatureStatusResult(
                 connection,
                 signature,
                 true,
@@ -1024,9 +1077,13 @@ export async function reconcileSubmittedTransaction(
               options.signal,
             );
             if (historicalResult === DEADLINE_REACHED) return 'unknown';
-            if (historicalResult?.err) return 'failed';
-            if (isConfirmedSignatureStatus(historicalResult)) return 'confirmed';
-            if (historicalResult == null) return 'expired';
+            const historicalStatus = historicalResult.value;
+            if (historicalStatus?.err && hasConfirmedSignatureCommitment(historicalStatus)) return 'failed';
+            if (isConfirmedSignatureStatus(historicalStatus)) return 'confirmed';
+            if (
+              historicalStatus == null &&
+              historicalResult.contextSlot >= validityResult.contextSlot
+            ) return 'expired';
           } catch {
             if (options.signal?.aborted) throw options.signal.reason;
             if (deadline.reached()) return 'unknown';
@@ -1142,6 +1199,7 @@ export async function sendPreparedTransaction(
     await options.onSubmitted?.(signature, tx);
   };
 
+  let submissionStatusPolled = false;
   try {
     if (options.simulateBeforeSigning) {
       const simulationTimeoutMs = normalizeIntegerOption(
@@ -1163,16 +1221,19 @@ export async function sendPreparedTransaction(
 
     const signature = requireValidTransactionSignature(await signer(tx));
     await notifySubmitted(signature);
+    submissionStatusPolled = true;
     const submitted = await waitForSuccessfulSignature(connection, signature, SUBMITTED_SIGNATURE_WAIT);
     if (!submitted) {
-      throw new Error(
-        `Transaction was submitted, but confirmation timed out (${signature}). It may still complete; wait a moment before retrying.`,
+      throw new PotentiallySubmittedTransactionError(
+        signature,
+        new Error('Transaction confirmation timed out; it may still complete. Wait a moment before retrying.'),
       );
     }
     return signature;
   } catch (err) {
     if (isPotentiallySubmittedTransactionError(err)) {
       await notifySubmitted(err.signature);
+      if (submissionStatusPolled) throw err;
       const submitted = await waitForSuccessfulSignature(connection, err.signature, SUBMITTED_SIGNATURE_WAIT);
       if (submitted) return err.signature;
       throw err;

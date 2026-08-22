@@ -14,6 +14,7 @@ import { rpcEndpointForCluster } from '../src/lib/shopRpc.ts';
 import {
   isBase58Bytes,
   isExactShopRpcRequest,
+  isNonZeroBase58Bytes,
 } from '../functions/src/shared/solanaRpcProxy.ts';
 
 const SIGNATURE = bs58.encode(new Uint8Array(64).fill(7));
@@ -35,25 +36,25 @@ function rpcConnection() {
   return { connection, web3StatusCalls: () => web3StatusCalls };
 }
 
-function signatureStatusResponse(request: unknown, status: unknown): Response {
+function signatureStatusResponse(request: unknown, status: unknown, contextSlot = 1): Response {
   const id = (request as { id: unknown }).id;
   return Response.json({
     jsonrpc: '2.0',
     id,
     result: {
-      context: { slot: 1 },
+      context: { slot: contextSlot },
       value: [status],
     },
   });
 }
 
-function blockhashValidityResponse(request: unknown, value: boolean): Response {
+function blockhashValidityResponse(request: unknown, value: boolean, contextSlot = 1): Response {
   const id = (request as { id: unknown }).id;
   return Response.json({
     jsonrpc: '2.0',
     id,
     result: {
-      context: { slot: 1 },
+      context: { slot: contextSlot },
       value,
     },
   });
@@ -149,7 +150,7 @@ test('HTTP signature polling rejects unknown confirmationStatus values', async (
 test('HTTP signature polling surfaces deterministic on-chain failure without confirmationStatus', async () => {
   const status: SignatureStatus = {
     slot: 1,
-    confirmations: 0,
+    confirmations: 1,
     err: { InstructionError: [0, 'Custom'] },
   };
   const fake = rpcConnection();
@@ -168,6 +169,33 @@ test('HTTP signature polling surfaces deterministic on-chain failure without con
   });
 });
 
+test('HTTP signature polling keeps processed errors nonterminal', async () => {
+  const fake = rpcConnection();
+  let calls = 0;
+  await withFetch((async (_input, init) => {
+    calls += 1;
+    const request = JSON.parse(String(init?.body));
+    return signatureStatusResponse(request, calls === 1 ? {
+      slot: 1,
+      confirmations: 0,
+      err: { InstructionError: [0, 'Custom'] },
+      confirmationStatus: 'processed',
+    } : {
+      slot: 2,
+      confirmations: 1,
+      err: null,
+      confirmationStatus: 'confirmed',
+    });
+  }) as typeof fetch, async () => {
+    await confirmSubmittedTransactionByPolling(fake.connection, SIGNATURE, {
+      delayMs: 0,
+      timeoutMs: 50,
+      requestTimeoutMs: 10,
+    });
+  });
+  assert.equal(calls, 2);
+});
+
 test('shop RPC Base58 validation rejects impossible encodings before decoding', () => {
   const zeroAddress = bs58.encode(new Uint8Array(32));
   const zeroSignature = bs58.encode(new Uint8Array(64));
@@ -176,6 +204,10 @@ test('shop RPC Base58 validation rejects impossible encodings before decoding', 
   assert.equal(isBase58Bytes(RECENT_BLOCKHASH, 32), true);
   assert.equal(isBase58Bytes(zeroSignature, 64), true);
   assert.equal(isBase58Bytes(SIGNATURE, 64), true);
+  assert.equal(isNonZeroBase58Bytes(zeroAddress, 32), false);
+  assert.equal(isNonZeroBase58Bytes(RECENT_BLOCKHASH, 32), true);
+  assert.equal(isNonZeroBase58Bytes(zeroSignature, 64), false);
+  assert.equal(isNonZeroBase58Bytes(SIGNATURE, 64), true);
   assert.equal(isBase58Bytes('1'.repeat(31), 32), false);
   assert.equal(isBase58Bytes('1'.repeat(45), 32), false);
   assert.equal(isBase58Bytes('1'.repeat(63), 64), false);
@@ -544,20 +576,20 @@ test('reconciliation checks blockhash validity through the exact mons API contra
     const request = JSON.parse(String(init?.body));
     if (request.method === 'getSignatureStatuses') {
       statusCalls += 1;
-      return signatureStatusResponse(request, null);
+      return signatureStatusResponse(request, null, statusCalls === 1 ? 20 : 30);
     }
     assert.deepEqual(request, {
       jsonrpc: '2.0',
       id: 1,
       method: 'isBlockhashValid',
-      params: [RECENT_BLOCKHASH, { commitment: 'confirmed' }],
+      params: [RECENT_BLOCKHASH, { commitment: 'confirmed', minContextSlot: 20 }],
     });
-    return blockhashValidityResponse(request, false);
+    return blockhashValidityResponse(request, false, 25);
   }) as typeof fetch, async () => {
     assert.equal(
       await reconcileSubmittedTransaction(
         fake.connection,
-        { signature: SIGNATURE, recentBlockhash: RECENT_BLOCKHASH },
+        { signature: SIGNATURE, recentBlockhash: RECENT_BLOCKHASH, blockhashContextSlot: 10 },
         { timeoutMs: 100, pollIntervalMs: 0, requestTimeoutMs: 20 },
       ),
       'expired',

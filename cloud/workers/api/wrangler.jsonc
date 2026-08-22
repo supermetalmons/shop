@@ -41,6 +41,10 @@
       {
         "binding": "NOTIFICATION_EMAIL_QUEUE",
         "queue": "mons-shop-notification-emails"
+      },
+      {
+        "binding": "REVEAL_BACKGROUND_QUEUE",
+        "queue": "mons-shop-reveal-reconciliation"
       }
     ],
     "consumers": [
@@ -51,6 +55,14 @@
         "max_retries": 5,
         "max_concurrency": 1,
         "dead_letter_queue": "mons-shop-notification-emails-dlq"
+      },
+      {
+        "queue": "mons-shop-reveal-reconciliation",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 10,
+        "max_concurrency": 1,
+        "dead_letter_queue": "mons-shop-reveal-reconciliation-dlq"
       }
     ]
   },

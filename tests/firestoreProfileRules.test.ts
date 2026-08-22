@@ -142,6 +142,7 @@ test(
           setDoc(doc(firestore, 'profiles', malformedLegacyWallet, 'shipments', 'shipment-5'), { deliveryId: 5, sortAt: 5 }),
           setDoc(doc(firestore, 'profiles', activeWallet, 'addresses', 'address-1'), { city: 'private' }),
           setDoc(doc(firestore, 'drops', 'card_nft_2', 'deliveryOrders', '1'), { owner: activeWallet }),
+          setDoc(doc(firestore, 'drops', 'card_nft_2', 'revealSubmissions', 'box-1'), { owner: activeWallet }),
           setDoc(doc(firestore, 'claimCodes', 'secret'), { owner: activeWallet }),
           setDoc(doc(firestore, 'drops', 'card_nft_2', 'meta', 'packStatus'), { total: 1 }),
           setDoc(doc(firestore, 'drops', 'poncho_drifella', 'meta', 'packStatus'), { total: 1 }),
@@ -172,6 +173,8 @@ test(
       await assertFails(getDocs(collection(active, 'profiles', activeWallet, 'addresses')));
       await assertFails(getDoc(doc(active, 'drops', 'card_nft_2', 'deliveryOrders', '1')));
       await assertFails(getDocs(collection(active, 'drops', 'card_nft_2', 'deliveryOrders')));
+      await assertFails(getDoc(doc(active, 'drops', 'card_nft_2', 'revealSubmissions', 'box-1')));
+      await assertFails(getDocs(collection(active, 'drops', 'card_nft_2', 'revealSubmissions')));
       await assertFails(getDoc(doc(active, 'claimCodes', 'secret')));
       await assertFails(getDocs(collection(active, 'claimCodes')));
 
@@ -207,6 +210,12 @@ test(
         {
           createPath: 'drops/card_nft_2/deliveryOrders/2',
           existingPath: 'drops/card_nft_2/deliveryOrders/1',
+          createData: { owner: activeWallet },
+          updateData: { owner: otherWallet },
+        },
+        {
+          createPath: 'drops/card_nft_2/revealSubmissions/box-2',
+          existingPath: 'drops/card_nft_2/revealSubmissions/box-1',
           createData: { owner: activeWallet },
           updateData: { owner: otherWallet },
         },

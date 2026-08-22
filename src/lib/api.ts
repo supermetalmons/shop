@@ -40,6 +40,8 @@ import {
   RecoverDeliveryOrdersResult,
   ReconcileProfileStateRequest,
   ReconcileProfileStateResponse,
+  RevealDudesResponse,
+  RevealDudesSubmissionUnknownDetails,
   SHIPSTATION_EDITABLE_ADDRESS_FIELDS,
   ShipStationAddressPatch,
   ShipStationEditableAddressField,
@@ -65,7 +67,10 @@ import {
 import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.ts';
 import { parseDeliveryOrderSummary } from '../../functions/src/shared/deliveryOrderSummary.ts';
 import { parseShipStationPackage } from '../../functions/src/shared/shipstationPackage.ts';
-import { isBase58Bytes } from '../../functions/src/shared/solanaRpcProxy.ts';
+import {
+  isBase58Bytes,
+  isNonZeroBase58Bytes,
+} from '../../functions/src/shared/solanaRpcProxy.ts';
 import { fetchPackStatus } from './shopApi';
 import { monsApiOrigin } from './monsApiOrigin';
 
@@ -74,6 +79,8 @@ export type {
   PrepareDeliveryResponse,
   ReconcileProfileStateRequest,
   ReconcileProfileStateResponse,
+  RevealDudesResponse,
+  RevealDudesSubmissionUnknownDetails,
   StripeCheckoutSessionRequest,
   StripeCheckoutSessionResponse,
 } from '../types';
@@ -985,31 +992,68 @@ export type { DropFetchOptions } from './shopApi';
 function parseRevealDudesResponse(
   value: unknown,
   dropId: string,
-): { signature: string; dudeIds: number[] } | null {
+): RevealDudesResponse | null {
   const drop = FRONTEND_DROPS[dropId];
   if (
     !drop ||
     !isRecord(value) ||
     !hasExactKeys(value, ['signature', 'dudeIds']) ||
     typeof value.signature !== 'string' ||
-    !isBase58Bytes(value.signature, 64) ||
+    !isNonZeroBase58Bytes(value.signature, 64) ||
     !Array.isArray(value.dudeIds) ||
     value.dudeIds.length !== drop.itemsPerBox
   ) return null;
   const maxDudeId = drop.maxSupply * drop.itemsPerBox;
-  const dudeIds = value.dudeIds.map(Number);
-  if (
-    dudeIds.some((id) => !Number.isSafeInteger(id) || id < 1 || id > maxDudeId) ||
-    new Set(dudeIds).size !== dudeIds.length
-  ) return null;
+  const dudeIds: number[] = [];
+  for (const id of value.dudeIds) {
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1 || id > maxDudeId) return null;
+    dudeIds.push(id);
+  }
+  if (new Set(dudeIds).size !== dudeIds.length) return null;
   return { signature: value.signature, dudeIds };
+}
+
+function parseRevealDudesSubmissionUnknownDetails(
+  value: unknown,
+  dropId: string,
+): RevealDudesSubmissionUnknownDetails | null {
+  if (!isRecord(value)) return null;
+  if (
+    !hasExactKeys(value, ['kind', 'submission']) ||
+    value.kind !== 'reveal-submission-unknown' ||
+    !isRecord(value.submission) ||
+    !hasExactKeys(value.submission, ['signature', 'recentBlockhash', 'dudeIds']) ||
+    typeof value.submission.recentBlockhash !== 'string' ||
+    !isNonZeroBase58Bytes(value.submission.recentBlockhash, 32)
+  ) return null;
+  const parsed = parseRevealDudesResponse({
+    signature: value.submission.signature,
+    dudeIds: value.submission.dudeIds,
+  }, dropId);
+  if (!parsed) return null;
+  return {
+    kind: 'reveal-submission-unknown',
+    submission: {
+      signature: parsed.signature,
+      recentBlockhash: value.submission.recentBlockhash,
+      dudeIds: parsed.dudeIds,
+    },
+  };
+}
+
+export function revealDudesSubmissionUnknownDetails(
+  error: unknown,
+  dropId: string,
+): RevealDudesSubmissionUnknownDetails | null {
+  if (!(error instanceof ProfileApiError)) return null;
+  return parseRevealDudesSubmissionUnknownDetails(error.details, dropId);
 }
 
 export async function revealDudes(
   owner: string,
   boxAssetId: string,
   dropId: string,
-): Promise<{ signature: string; dudeIds: number[] }> {
+): Promise<RevealDudesResponse> {
   const normalizedDropId = normalizeDropId(dropId);
   const response = await callProfileApi('/boxes/reveal', {
     owner,
@@ -1324,11 +1368,13 @@ export async function requestDeliveryTx(
 function parseDeliveryPrepareResponse(response: unknown): PrepareDeliveryResponse | null {
   if (
     !isRecord(response) ||
-    !hasExactKeys(response, ['encodedTx', 'deliveryLamports', 'deliveryId']) ||
+    !hasExactKeys(response, ['encodedTx', 'blockhashContextSlot', 'deliveryLamports', 'deliveryId']) ||
     typeof response.encodedTx !== 'string' ||
     response.encodedTx.length === 0 ||
     response.encodedTx.length > 16 * 1024 ||
     !/^[A-Za-z0-9+/]+={0,2}$/.test(response.encodedTx) ||
+    !Number.isSafeInteger(response.blockhashContextSlot) ||
+    Number(response.blockhashContextSlot) < 0 ||
     !Number.isSafeInteger(response.deliveryLamports) ||
     Number(response.deliveryLamports) < 0 ||
     !Number.isSafeInteger(response.deliveryId) ||
@@ -1337,6 +1383,7 @@ function parseDeliveryPrepareResponse(response: unknown): PrepareDeliveryRespons
   ) return null;
   return {
     encodedTx: response.encodedTx,
+    blockhashContextSlot: Number(response.blockhashContextSlot),
     deliveryLamports: Number(response.deliveryLamports),
     deliveryId: Number(response.deliveryId),
   };
@@ -1462,7 +1509,14 @@ export async function recoverMyDeliveryOrders(args?: RecoverDeliveryOrdersArgs):
 function parseIrlClaimPrepareResponse(response: unknown): PrepareIrlClaimResponse | null {
   if (
     !isRecord(response) ||
-    !hasExactKeys(response, ['encodedTx', 'dropId', 'certificates', 'certificateId', 'message']) ||
+    !hasExactKeys(response, [
+      'encodedTx',
+      'blockhashContextSlot',
+      'dropId',
+      'certificates',
+      'certificateId',
+      'message',
+    ]) ||
     typeof response.dropId !== 'string'
   ) {
     return null;
@@ -1473,6 +1527,8 @@ function parseIrlClaimPrepareResponse(response: unknown): PrepareIrlClaimRespons
     response.encodedTx.length === 0 ||
     response.encodedTx.length > 16 * 1024 ||
     !/^[A-Za-z0-9+/]+={0,2}$/.test(response.encodedTx) ||
+    !Number.isSafeInteger(response.blockhashContextSlot) ||
+    Number(response.blockhashContextSlot) < 0 ||
     normalizeDropId(response.dropId) !== response.dropId ||
     !drop ||
     !Array.isArray(response.certificates) ||
@@ -1494,6 +1550,7 @@ function parseIrlClaimPrepareResponse(response: unknown): PrepareIrlClaimRespons
   }
   return {
     encodedTx: response.encodedTx,
+    blockhashContextSlot: Number(response.blockhashContextSlot),
     dropId: response.dropId,
     certificates: response.certificates as number[],
     certificateId: response.certificateId,
@@ -1647,6 +1704,8 @@ export const profileApiTestHooks = {
   parseIrlClaimPrepareResponse,
   parseReceiptTransferPrepareResponse,
   parseRevealDudesResponse,
+  parseRevealDudesSubmissionUnknownDetails,
+  revealDudesSubmissionUnknownDetails,
   parseProfileAddress,
   parseProfileState,
   parseStripeCheckoutSessionResponse,

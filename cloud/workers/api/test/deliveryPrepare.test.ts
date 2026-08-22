@@ -36,6 +36,7 @@ const COLLECTION = Keypair.generate().publicKey;
 const TREASURY = Keypair.generate().publicKey;
 const ASSET = Keypair.generate().publicKey;
 const BLOCKHASH = Keypair.generate().publicKey.toBase58();
+const BLOCKHASH_CONTEXT_SLOT = 123;
 const DROP_ID = 'delivery_prepare_test';
 const ADDRESS_ID = 'AbCdEfGhIjKlMnOpQrSt';
 const NOW_MS = 1_700_000_000_000;
@@ -184,7 +185,10 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     candidateId: () => 7,
     createDeliveryOrder: async () => '2026-08-20T00:00:01.000Z',
     deleteDeliveryOrder: async () => undefined,
-    loadLatestBlockhash: async () => BLOCKHASH,
+    loadLatestBlockhash: async () => ({
+      blockhash: BLOCKHASH,
+      blockhashContextSlot: BLOCKHASH_CONTEXT_SLOT,
+    }),
     providerFetch: async () => {
       throw new Error('unexpected provider fetch');
     },
@@ -206,10 +210,15 @@ test('delivery preparation returns the server-signed owner transaction and exact
   assert.equal(result.response.status, 200);
   const payload = await result.response.json() as {
     encodedTx: string;
+    blockhashContextSlot: number;
     deliveryLamports: number;
     deliveryId: number;
   };
-  assert.deepEqual(Object.keys(payload).sort(), ['deliveryId', 'deliveryLamports', 'encodedTx']);
+  assert.deepEqual(
+    Object.keys(payload).sort(),
+    ['blockhashContextSlot', 'deliveryId', 'deliveryLamports', 'encodedTx'],
+  );
+  assert.equal(payload.blockhashContextSlot, BLOCKHASH_CONTEXT_SLOT);
   assert.equal(payload.deliveryId, 7);
   assert.equal(payload.deliveryLamports > 0, true);
   assert.equal(created?.path, `drops/${DROP_ID}/deliveryOrders/7`);
@@ -442,7 +451,7 @@ test('delivery preparation uses a fresh signal to clean up after the overall dea
   let cleanupSignalAborted: boolean | undefined;
   const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
     timeoutMs: 5,
-    loadLatestBlockhash: async (context: { signal: AbortSignal }) => new Promise<string>((_resolve, reject) => {
+    loadLatestBlockhash: async (context: { signal: AbortSignal }) => new Promise<never>((_resolve, reject) => {
       context.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
     }),
     deleteDeliveryOrder: async (context: { signal: AbortSignal }) => {
@@ -647,6 +656,29 @@ test('delivery on-chain validation accepts the committed config and rejects coll
     }, runtime),
     /not an MPL Core collection/,
   );
+});
+
+test('delivery latest blockhash preserves the RPC context slot', async () => {
+  const runtime = deliveryPrepareTestHooks.buildRuntime(DROP);
+  const latestBlockhash = await deliveryPrepareTestHooks.loadLatestBlockhash({
+    apiKey: 'helius-test-key',
+    providerFetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { id: string };
+      return Response.json({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: {
+          context: { slot: BLOCKHASH_CONTEXT_SLOT },
+          value: { blockhash: BLOCKHASH, lastValidBlockHeight: 456 },
+        },
+      });
+    },
+    signal: new AbortController().signal,
+  }, runtime);
+  assert.deepEqual(latestBlockhash, {
+    blockhash: BLOCKHASH,
+    blockhashContextSlot: BLOCKHASH_CONTEXT_SLOT,
+  });
 });
 
 test('delivery preparation rejects inactive lookup tables', async () => {

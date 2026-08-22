@@ -57,9 +57,9 @@ Never commit the token or expose secrets through a `VITE_*` variable.
 ### Shop API deployment
 
 The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_API_KEY`,
-`RESEND_CONTACTS_API_KEY`, and `NOTIFICATION_ENQUEUE_SECRET` secrets, both the
-producer and consumer sides of `NOTIFICATION_EMAIL_QUEUE`, Smart Placement, and
-a version-first release flow. It serves
+`RESEND_CONTACTS_API_KEY`, and `NOTIFICATION_ENQUEUE_SECRET` secrets, the
+separate `NOTIFICATION_EMAIL_QUEUE` and `REVEAL_BACKGROUND_QUEUE` producers and
+consumers, Smart Placement, and a version-first release flow. It serves
 `/auth/solana`, `/profile/reconcile`, `/boxes/reveal`, `/claims/irl/prepare`, `/delivery/prepare`, `/admin/irl-redeem/prepare`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
 `/pending-open-boxes`, authenticated profile/admin/fulfillment reads,
 `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
@@ -80,12 +80,16 @@ Advanced release controls remain available for separately managed releases:
 
 - Upload an undeployed candidate, smoke-test its Version Preview, run the mandatory five-request comparison, and write version-keyed promotion evidence:
   - `npm run deploy:api -- preview --smoke-owner <wallet>`
+  - Preview creates the reveal queue and DLQ when they are missing; it does not attach a consumer or enqueue reveal work.
 - Re-smoke and repeat the mandatory five-request comparison against that exact Version Preview, apply the reviewed `api.mons.shop` trigger, verify the tracked baseline, promote the exact version, smoke-test production, and write production evidence:
   - `npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet>`
+- Fix forward from an exact failed live API while keeping the manifest pair as the file precondition:
+  - `npm run deploy:api -- release --fix-forward-from-version-id <failed-live-uuid> --smoke-owner <wallet>`
+  - The command pauses reveal delivery before live-state checks or upload, requires that exact API and the manifest frontend to be live, then runs the normal guarded release with the failed API as its baseline.
 - Reapply reviewed triggers without changing code:
   - `npm run deploy:api -- triggers --smoke-owner <wallet>`
-- Roll back only to an explicit known-good API version:
-  - `npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet>`
+  - This verifies both queue consumers without pausing or resuming reveal delivery.
+- API rollback is disabled during the reveal queue migration. Deploy a fix-forward version instead.
 - Run the standalone comparison against an explicit origin:
   - `npm run benchmark:api -- --api-origin https://api.mons.shop --owner <wallet> --runs 5`
   - Add `--include-devnet` when the comparison should include both mainnet and devnet inventory.
@@ -128,8 +132,8 @@ handler. Failed transient deliveries retry five times before moving to
 
 - Validate the HTTP and notification handlers, generated bindings, TypeScript,
   unit tests, bundling, and startup together with `npm run check:api`.
-- API production releases and approved rollbacks send a synthetic email through
-  the production queue before writing release evidence.
+- API production releases send a synthetic email through the production queue
+  before writing release evidence.
 - Queue the synthetic test email through the production API and print its job ID:
   - `npm run test-resend-notification-email -- --kind stripe-manual-review`
 - Inspect queue state and live structured logs:
@@ -140,6 +144,12 @@ handler. Failed transient deliveries retry five times before moving to
 Both queues use 24-hour retention to match Resend's idempotency window. Do not
 automatically replay the DLQ after that window, and do not restore direct
 Firebase delivery while the primary queue contains messages.
+
+Reveal reconciliation uses `mons-shop-reveal-reconciliation` with
+`mons-shop-reveal-reconciliation-dlq`. Inspect both queues with `wrangler queues
+info <queue>` and inspect the Worker with `wrangler tail mons-shop-api --format
+json`. If a job reaches the DLQ, deploy and verify the fix before manually
+replaying only the affected jobs; reconciliation is idempotent.
 
 Wrangler can upload a preview version only after the Worker exists.
 `mons-shop-api` is already provisioned, so releases can use the preview command directly.
@@ -157,27 +167,15 @@ deploys or changes the approved rollback pair.
 Production promotion reads the pinned Wrangler's `deployments status --json`
 before and after every mutation. It proceeds only from a stable 100% deployment
 that matches either the manifest's current production version or the exact
-requested candidate. Split traffic, unreadable state, and an unexpected third
-version stop the release before promotion when observed initially. If state
-becomes ambiguous after promotion is mutation-eligible, the helpers suppress a
-blind rollback and require manual inspection. Reviewed triggers get one
-declarative retry before promotion, followed by a baseline smoke and live version
-recheck. Promotion state is reconciled at 0, 500, 1500, and 3000ms.
+requested candidate. The release creates the reveal queues, pauses reveal
+delivery before attaching consumers or promoting, verifies the exact candidate,
+then resumes and verifies again. Any failure after resume re-pauses delivery.
+Once promotion begins, recovery is fix-forward only: the command never rolls the
+API back. Resolve the issue and rerun production with the same exact candidate,
+or deploy a new fixed candidate.
 
-Automatic recovery uses the observed live baseline that was required to equal
-the manifest's current production version at the start of this invocation. It
-runs only after the requested candidate is confirmed live, rechecks that
-candidate immediately before rollback, and then verifies the recovered baseline
-with status, smoke, and status checks. If the requested candidate was already
-live when the command started, the command uses guarded resume to reapply
-triggers and regenerate evidence but never guesses a predecessor for automatic
-rollback. An evidence-write failure also leaves the verified candidate live;
-resolve the local write problem and rerun the same production command with the
-same version ID.
-
-Tracked release and rollback IDs live in `cloud/release-manifest.json`. API
-rollback accepts only the approved version and refuses to run when it is the
-current production version.
+Tracked release and rollback IDs remain in `cloud/release-manifest.json` for
+cutover guards, but the API deploy helper refuses rollback during this migration.
 
 To roll back an application version, provide `CLOUDFLARE_API_TOKEN` in the shell,
 inspect `node_modules/.bin/wrangler deployments list --config wrangler.jsonc`,

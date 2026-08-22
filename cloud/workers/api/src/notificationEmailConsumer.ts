@@ -177,59 +177,57 @@ async function deliverNotificationEmail(
   return { status: 'sent', messageId };
 }
 
-export async function processNotificationEmailBatch(
-  batch: MessageBatch<unknown>,
+export async function processNotificationEmailMessage(
+  message: Message<unknown>,
   env: NotificationConsumerEnv,
   overrides: Partial<NotificationConsumerDependencies> = {},
 ): Promise<void> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  for (const message of batch.messages) {
-    if (!isNotificationEmailJobV1(message.body)) {
+  if (!isNotificationEmailJobV1(message.body)) {
+    dependencies.error({
+      event: 'notification_email_invalid_job',
+      queueMessageId: message.id,
+      attempts: message.attempts,
+    });
+    message.ack();
+    return;
+  }
+  const job = message.body;
+  try {
+    const result = await deliverNotificationEmail(job, env.RESEND_API_KEY, dependencies);
+    if (result.status === 'failed_permanent') {
       dependencies.error({
-        event: 'notification_email_invalid_job',
-        queueMessageId: message.id,
-        attempts: message.attempts,
-      });
-      message.ack();
-      continue;
-    }
-    const job = message.body;
-    try {
-      const result = await deliverNotificationEmail(job, env.RESEND_API_KEY, dependencies);
-      if (result.status === 'failed_permanent') {
-        dependencies.error({
-          event: 'notification_email_failed_permanent',
-          ...jobLogContext(job),
-          attempts: message.attempts,
-          providerError: {
-            name: result.providerError.name,
-            statusCode: result.providerError.statusCode,
-          },
-        });
-        message.ack();
-        continue;
-      }
-      dependencies.log({
-        event: 'notification_email_sent',
+        event: 'notification_email_failed_permanent',
         ...jobLogContext(job),
         attempts: message.attempts,
-        messageId: result.messageId,
+        providerError: {
+          name: result.providerError.name,
+          statusCode: result.providerError.statusCode,
+        },
       });
       message.ack();
-    } catch (error) {
-      const delaySeconds = notificationEmailRetryDelaySeconds(message.attempts);
-      const providerError = error instanceof RetryableNotificationDeliveryError ? error.providerError : undefined;
-      dependencies.warn({
-        event: 'notification_email_retry',
-        ...jobLogContext(job),
-        attempts: message.attempts,
-        delaySeconds,
-        reason: error instanceof Error ? error.message : 'unknown_error',
-        ...(providerError ? {
-          providerError: { name: providerError.name, statusCode: providerError.statusCode },
-        } : {}),
-      });
-      message.retry({ delaySeconds });
+      return;
     }
+    dependencies.log({
+      event: 'notification_email_sent',
+      ...jobLogContext(job),
+      attempts: message.attempts,
+      messageId: result.messageId,
+    });
+    message.ack();
+  } catch (error) {
+    const delaySeconds = notificationEmailRetryDelaySeconds(message.attempts);
+    const providerError = error instanceof RetryableNotificationDeliveryError ? error.providerError : undefined;
+    dependencies.warn({
+      event: 'notification_email_retry',
+      ...jobLogContext(job),
+      attempts: message.attempts,
+      delaySeconds,
+      reason: error instanceof Error ? error.message : 'unknown_error',
+      ...(providerError ? {
+        providerError: { name: providerError.name, statusCode: providerError.statusCode },
+      } : {}),
+    });
+    message.retry({ delaySeconds });
   }
 }
