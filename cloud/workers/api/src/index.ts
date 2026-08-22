@@ -128,6 +128,10 @@ import {
   handleAdminIrlRedeemPrepare,
 } from './adminIrlRedeemPrepare.js';
 import {
+  ADMIN_IRL_REDEEM_FINALIZE_PATH,
+  handleAdminIrlRedeemFinalize,
+} from './adminIrlRedeemFinalize.js';
+import {
   REVEAL_DUDES_PATH,
   handleRevealDudes,
   processRevealBackgroundJobMessage,
@@ -198,6 +202,7 @@ const KNOWN_LOG_ROUTES = new Set([
   DELIVERY_RECEIPTS_ISSUE_PATH,
   DELIVERY_RECEIPTS_RECOVER_PATH,
   ADMIN_IRL_REDEEM_PREPARE_PATH,
+  ADMIN_IRL_REDEEM_FINALIZE_PATH,
   REVEAL_DUDES_PATH,
 ]);
 
@@ -1387,6 +1392,10 @@ export async function handleRequest(
   let adminIrlRedeemPrepareDropId: string | undefined;
   let adminIrlRedeemPrepareTargetKind: string | undefined;
   let adminIrlRedeemPrepareItemCount: number | undefined;
+  let adminIrlRedeemFinalizeDropId: string | undefined;
+  let adminIrlRedeemFinalizeTargetKind: string | undefined;
+  let adminIrlRedeemFinalizeDeliveryId: number | undefined;
+  let adminIrlRedeemFinalizeOutcome: string | undefined;
   let revealDropId: string | undefined;
   let revealBoxAssetId: string | undefined;
   let revealAssignmentOutcome: string | undefined;
@@ -1412,6 +1421,7 @@ export async function handleRequest(
     pathname === DELIVERY_RECEIPTS_ISSUE_PATH ||
     pathname === DELIVERY_RECEIPTS_RECOVER_PATH ||
     pathname === ADMIN_IRL_REDEEM_PREPARE_PATH ||
+    pathname === ADMIN_IRL_REDEEM_FINALIZE_PATH ||
     pathname === REVEAL_DUDES_PATH
   )) {
     response = handleProfileCorsPreflight(request);
@@ -1529,6 +1539,27 @@ export async function handleRequest(
       adminIrlRedeemPrepareItemCount = result.itemCount;
       response = applyProfileCors(request, result.response);
     }
+  } else if (pathname === ADMIN_IRL_REDEEM_FINALIZE_PATH) {
+    if (!isProfileRequestOriginAllowed(request)) {
+      response = applyProfileCors(request, new Response(null));
+    } else {
+      const result = await handleAdminIrlRedeemFinalize(
+        request,
+        env,
+        (promise) => {
+          if (waitUntil) waitUntil(promise);
+          else void promise;
+        },
+      );
+      metrics.upstreamCalls += result.metrics.upstreamCalls;
+      metrics.providerDurationMs += result.metrics.providerDurationMs;
+      profileAuthOutcome = result.authOutcome;
+      adminIrlRedeemFinalizeDropId = result.dropId;
+      adminIrlRedeemFinalizeTargetKind = result.targetKind;
+      adminIrlRedeemFinalizeDeliveryId = result.deliveryId;
+      adminIrlRedeemFinalizeOutcome = result.outcome;
+      response = applyProfileCors(request, result.response);
+    }
   } else if (pathname === REVEAL_DUDES_PATH) {
     if (!isProfileRequestOriginAllowed(request)) {
       response = applyProfileCors(request, new Response(null));
@@ -1637,6 +1668,10 @@ export async function handleRequest(
     ...(adminIrlRedeemPrepareDropId ? { adminIrlRedeemPrepareDropId } : {}),
     ...(adminIrlRedeemPrepareTargetKind ? { adminIrlRedeemPrepareTargetKind } : {}),
     ...(adminIrlRedeemPrepareItemCount === undefined ? {} : { adminIrlRedeemPrepareItemCount }),
+    ...(adminIrlRedeemFinalizeDropId ? { adminIrlRedeemFinalizeDropId } : {}),
+    ...(adminIrlRedeemFinalizeTargetKind ? { adminIrlRedeemFinalizeTargetKind } : {}),
+    ...(adminIrlRedeemFinalizeDeliveryId === undefined ? {} : { adminIrlRedeemFinalizeDeliveryId }),
+    ...(adminIrlRedeemFinalizeOutcome ? { adminIrlRedeemFinalizeOutcome } : {}),
     ...(revealDropId ? { revealDropId } : {}),
     ...(revealBoxAssetId ? { revealBoxAssetId } : {}),
     ...(revealAssignmentOutcome ? { revealAssignmentOutcome } : {}),

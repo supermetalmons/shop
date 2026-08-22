@@ -176,6 +176,7 @@ type AdminIrlRedeemRuntime = {
   receiptsTreeMaxDepth?: number;
   receiptsTreeCanopyDepth: number;
   itemsPerBox: number;
+  maxSupply: number;
   maxDudeId: number;
   receiptMaxId: number;
 };
@@ -408,6 +409,7 @@ function buildRuntime(config: FunctionsDropConfig): AdminIrlRedeemRuntime {
     ...(Number.isInteger(receiptsTreeMaxDepth) && receiptsTreeMaxDepth > 0 ? { receiptsTreeMaxDepth } : {}),
     receiptsTreeCanopyDepth,
     itemsPerBox,
+    maxSupply,
     maxDudeId,
     receiptMaxId,
   };
@@ -1517,4 +1519,17 @@ export const adminIrlRedeemPrepareTestHooks = {
   rpcCall,
   serializeCardTransaction,
   serializePackTransaction,
+};
+
+export const adminIrlRedeemRuntime = {
+  assertSupportedRuntime,
+  buildRuntime,
+  fetchAsset,
+  fetchAssetProof,
+  loadLookupTable,
+  loadOnchainState,
+  loadWalletSession,
+  parseProof,
+  receiptDropIdentity,
+  rpcCall,
 };

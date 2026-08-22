@@ -847,6 +847,11 @@ export async function smokeProfileStateApi(
       dropId: 'card_nft_2',
       itemIds: ['11111111111111111111111111111112'],
     })],
+    ['/admin/irl-redeem/finalize', JSON.stringify({
+      requestId: 'AbCdEfGhIjKlMnOpQrSt',
+      dropId: 'card_nft_2',
+      transferSignature: '1'.repeat(64),
+    })],
     ['/boxes/reveal', JSON.stringify({
       owner: '11111111111111111111111111111111',
       boxAssetId: '11111111111111111111111111111112',

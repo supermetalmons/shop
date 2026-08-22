@@ -67,6 +67,7 @@ import {
 import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.ts';
 import { parseDeliveryOrderSummary } from '../../functions/src/shared/deliveryOrderSummary.ts';
 import { parseShipStationPackage } from '../../functions/src/shared/shipstationPackage.ts';
+import { isStripeReceiptClaimCode } from '../../functions/src/shared/stripeReceiptClaims.ts';
 import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
@@ -259,6 +260,7 @@ type ProfileApiClientDependencies = {
 
 type AuthenticatedApiPath =
   | '/auth/solana'
+  | '/admin/irl-redeem/finalize'
   | '/admin/irl-redeem/prepare'
   | '/boxes/reveal'
   | '/checkout/session'
@@ -295,6 +297,7 @@ const STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS = 35_000;
 const PROFILE_RECONCILE_API_TIMEOUT_MS = 65_000;
 const IRL_CLAIM_PREPARE_API_TIMEOUT_MS = 65_000;
 const ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS = 65_000;
+const ADMIN_IRL_REDEEM_FINALIZE_API_TIMEOUT_MS = 550_000;
 const REVEAL_DUDES_API_TIMEOUT_MS = 65_000;
 const DELIVERY_PREPARE_API_TIMEOUT_MS = 65_000;
 const DELIVERY_RECEIPTS_API_TIMEOUT_MS = 65_000;
@@ -309,6 +312,7 @@ function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
   if (pathname === '/claims/irl/prepare') return IRL_CLAIM_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/admin/irl-redeem/prepare') return ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS;
+  if (pathname === '/admin/irl-redeem/finalize') return ADMIN_IRL_REDEEM_FINALIZE_API_TIMEOUT_MS;
   if (pathname === '/boxes/reveal') return REVEAL_DUDES_API_TIMEOUT_MS;
   if (pathname === '/delivery/prepare') return DELIVERY_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/delivery/receipts/issue' || pathname === '/delivery/receipts/recover') {
@@ -1562,15 +1566,62 @@ function parseRecoverDeliveryOrdersResult(value: unknown): RecoverDeliveryOrders
   return value as RecoverDeliveryOrdersResult;
 }
 
+function parseAdminIrlRedeemFinalizeResult(value: unknown): AdminIrlRedeemFinalizeResult | null {
+  if (
+    !isRecord(value) ||
+    !hasExactRequiredAndOptionalKeys(
+      value,
+      ['processed', 'dropId', 'requestId', 'receiptTxs', 'claimCodes', 'boxes', 'cards'],
+      ['deliveryId'],
+    ) ||
+    value.processed !== true ||
+    typeof value.dropId !== 'string' || normalizeDropId(value.dropId) !== value.dropId || !FRONTEND_DROPS[value.dropId] ||
+    typeof value.requestId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(value.requestId) ||
+    (value.deliveryId !== undefined && (!Number.isSafeInteger(value.deliveryId) || Number(value.deliveryId) < 1)) ||
+    !Array.isArray(value.receiptTxs) ||
+    !value.receiptTxs.every((signature) => isNonZeroBase58Bytes(signature, 64)) ||
+    new Set(value.receiptTxs).size !== value.receiptTxs.length ||
+    !Array.isArray(value.claimCodes) ||
+    !value.claimCodes.every(isStripeReceiptClaimCode) ||
+    new Set(value.claimCodes).size !== value.claimCodes.length ||
+    !Array.isArray(value.boxes) ||
+    !Array.isArray(value.cards)
+  ) return null;
+  for (const box of value.boxes) {
+    if (
+      !isRecord(box) ||
+      !hasExactRequiredAndOptionalKeys(box, ['boxId'], ['receiptAssetId', 'claimCode', 'dudeIds']) ||
+      !Number.isSafeInteger(box.boxId) || Number(box.boxId) < 1 || Number(box.boxId) > 0xffff_ffff ||
+      (box.receiptAssetId !== undefined && !isBase58Bytes(box.receiptAssetId, 32)) ||
+      (box.claimCode !== undefined && !isStripeReceiptClaimCode(box.claimCode)) ||
+      (box.dudeIds !== undefined && (
+        !Array.isArray(box.dudeIds) ||
+        !box.dudeIds.every((id) => Number.isSafeInteger(id) && Number(id) > 0 && Number(id) <= 0xffff) ||
+        new Set(box.dudeIds).size !== box.dudeIds.length
+      ))
+    ) return null;
+  }
+  for (const card of value.cards) {
+    if (
+      !isRecord(card) ||
+      !hasExactRequiredAndOptionalKeys(card, ['figureId', 'receiptAssetId'], ['claimCode']) ||
+      !Number.isSafeInteger(card.figureId) || Number(card.figureId) < 1 || Number(card.figureId) > 0xffff_ffff ||
+      !isBase58Bytes(card.receiptAssetId, 32) ||
+      (card.claimCode !== undefined && !isStripeReceiptClaimCode(card.claimCode))
+    ) return null;
+  }
+  return value as AdminIrlRedeemFinalizeResult;
+}
+
 export async function finalizeAdminIrlRedeem(args: {
   requestId: string;
   dropId: string;
   transferSignature: string;
 }): Promise<AdminIrlRedeemFinalizeResult> {
-  return callFunction<
-    { requestId: string; dropId: string; transferSignature: string },
-    AdminIrlRedeemFinalizeResult
-  >('finalizeAdminIrlRedeem', args);
+  const response = await callProfileApi('/admin/irl-redeem/finalize', args);
+  const parsed = parseAdminIrlRedeemFinalizeResult(response);
+  if (!parsed) throw new Error('Invalid Admin IRL redeem finalization response');
+  return parsed;
 }
 
 export async function issueReceipts(
@@ -1801,6 +1852,7 @@ export const profileApiTestHooks = {
   parseFulfillmentStatusUpdate,
   parseFulfillmentShipStationAddressCorrectionDetails,
   parseDeliveryPrepareResponse,
+  parseAdminIrlRedeemFinalizeResult,
   parseIssueReceiptsResult,
   parseRecoverDeliveryOrdersResult,
   parseAdminIrlRedeemPrepareResponse,

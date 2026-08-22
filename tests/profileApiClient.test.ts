@@ -327,6 +327,55 @@ test('Admin IRL preparation uses the authenticated Cloudflare route with an exac
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareAdminIrlRedeemTx['"]/);
 });
 
+test('Admin IRL finalization uses the authenticated Cloudflare route with an exact response contract', async () => {
+  const response = {
+    processed: true,
+    dropId: 'card_nft_2',
+    requestId: 'AbCdEfGhIjKlMnOpQrSt',
+    deliveryId: 7,
+    receiptTxs: [],
+    claimCodes: ['ABCDEF-1234567890'],
+    boxes: [{
+      boxId: 3,
+      receiptAssetId: DESTINATION,
+      claimCode: 'ABCDEF-1234567890',
+      dudeIds: [1, 2, 3],
+    }],
+    cards: [],
+  } as const;
+  const payload = await profileApiTestHooks.requestProfileApi(
+    '/admin/irl-redeem/finalize',
+    {
+      requestId: response.requestId,
+      dropId: response.dropId,
+      transferSignature: REVEAL_SIGNATURE,
+    },
+    {
+      fetch: async (input, init) => {
+        assert.equal(String(input), 'https://api.mons.shop/admin/irl-redeem/finalize');
+        assert.equal(init?.method, 'POST');
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        return Response.json(response);
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1_000,
+    },
+  );
+  assert.deepEqual(profileApiTestHooks.parseAdminIrlRedeemFinalizeResult(payload), response);
+  assert.equal(profileApiTestHooks.parseAdminIrlRedeemFinalizeResult({ ...response, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseAdminIrlRedeemFinalizeResult({ ...response, processed: false }), null);
+  assert.equal(profileApiTestHooks.parseAdminIrlRedeemFinalizeResult({ ...response, claimCodes: ['invalid'] }), null);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/admin/irl-redeem/finalize'), 550_000);
+
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function finalizeAdminIrlRedeem');
+  const end = source.indexOf('\nexport ', start + 1);
+  const implementation = source.slice(start, end === -1 ? source.length : end);
+  assert.match(implementation, /\/admin\/irl-redeem\/finalize/);
+  assert.doesNotMatch(implementation, /callFunction|httpsCallable|['"]finalizeAdminIrlRedeem['"]/);
+});
+
 test('box reveal uses the authenticated Cloudflare route with an exact response contract', async () => {
   const response = { signature: REVEAL_SIGNATURE, dudeIds: [1] };
   const payload = await profileApiTestHooks.requestProfileApi(
@@ -1164,6 +1213,15 @@ test('Admin IRL preparation callable is absent from Firebase exports and deploym
   assert.doesNotMatch(functionsSource, /export const prepareAdminIrlRedeemTx\b/);
   assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:prepareAdminIrlRedeemTx(?:,|$)/);
   assert.equal(packageJson.scripts['decommission:firebase-prepare-admin-irl-redeem'], undefined);
+});
+
+test('Admin IRL finalization callable is absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts: Record<string, string>;
+  };
+  assert.doesNotMatch(functionsSource, /export const finalizeAdminIrlRedeem\b/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:finalizeAdminIrlRedeem(?:,|$)/);
 });
 
 test('reveal callable is absent from Firebase exports and deployment selection', () => {

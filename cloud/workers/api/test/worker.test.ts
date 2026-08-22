@@ -532,6 +532,50 @@ test('Admin IRL preparation route enforces restricted CORS, bearer authenticatio
   assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
 });
 
+test('Admin IRL finalization route enforces restricted CORS, bearer authentication, methods, and safe logging', async () => {
+  const pathname = '/admin/irl-redeem/finalize';
+  const body = {
+    requestId: 'AbCdEfGhIjKlMnOpQrSt',
+    dropId: 'card_nft_2',
+    transferSignature: '1'.repeat(64),
+  };
+  const preflight = await handleRequest(new Request(`https://api.mons.shop${pathname}`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+
+  const logs: Record<string, unknown>[] = [];
+  const unauthenticated = await handleRequest(request(pathname, body, {
+    Origin: 'https://mons.shop',
+  }), env(), {
+    ...quietDependencies(fetch),
+    log: (entry) => logs.push(entry),
+  });
+  assert.equal(unauthenticated.status, 401);
+  assert.equal((await unauthenticated.json() as { error: { code: string } }).error.code, 'unauthenticated');
+  assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(logs[0]?.route, pathname);
+  assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
+  assert.equal(logs[0]?.adminIrlRedeemFinalizeDropId, 'card_nft_2');
+  assert.equal(logs[0]?.adminIrlRedeemFinalizeOutcome, 'unauthenticated');
+  assert.equal(JSON.stringify(logs).includes(body.requestId), false);
+  assert.equal(JSON.stringify(logs).includes(body.transferSignature), false);
+
+  const denied = await handleRequest(request(pathname, body, {
+    Origin: 'https://evil.example',
+  }), env(), quietDependencies(fetch));
+  assert.equal(denied.status, 403);
+
+  const wrongMethod = await handleRequest(new Request(`https://api.mons.shop${pathname}`, {
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
+});
+
 test('reveal route enforces restricted CORS, bearer authentication, methods, and stable logging', async () => {
   const pathname = '/boxes/reveal';
   const body = {

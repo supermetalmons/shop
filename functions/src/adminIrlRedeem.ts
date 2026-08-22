@@ -1,10 +1,10 @@
 import { createHash } from 'crypto';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from './shared/fulfillmentSources.js';
 import {
-  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   buildStripeReceiptClaimsByBoxId,
   requireStripeReceiptClaimCode,
-} from './stripeCheckout/contract.js';
+} from './shared/stripeReceiptClaims.js';
 import type { DropFamily } from './config/deployment.js';
 import { isAdminIrlRedeemDropFamily } from './shared/adminIrlEligibility.js';
 

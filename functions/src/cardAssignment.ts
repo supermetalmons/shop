@@ -110,6 +110,7 @@ async function runAssignmentWithRetry<T>(params: {
       throw err;
     }
   }
+  throw new Error('Figure assignment retries were exhausted.');
 }
 
 function assertOpenableDrop(dropRuntime: Pick<CardAssignmentDropRuntime, 'itemsPerBox'>, message: string): void {
@@ -463,9 +464,8 @@ export async function assignDudesForBox(params: {
     logger: params.logger,
     summarizeError,
     runAttempt: async (attempt) => {
-      let lastAttemptMeta:
-        | null
-        | {
+      const lastAttemptMetaRef: {
+        value: null | {
             boxAssetId: string;
             outerAttempt: number;
             internalAttempts: number;
@@ -480,7 +480,8 @@ export async function assignDudesForBox(params: {
             candidatesChecked: number;
             staleAssigned: number;
             chosen: number[];
-          } = null;
+          };
+      } = { value: null };
 
       const result = await db.runTransaction(async (tx) => {
         attempt.internalAttempts += 1;
@@ -556,7 +557,7 @@ export async function assignDudesForBox(params: {
         tx.set(poolRef, { available: pool, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
         tx.set(ref, { dudeIds: chosen, createdAt: FieldValue.serverTimestamp() });
 
-        lastAttemptMeta = {
+        lastAttemptMetaRef.value = {
           boxAssetId,
           outerAttempt: attempt.outerAttempt,
           internalAttempts: attempt.internalAttempts,
@@ -575,6 +576,7 @@ export async function assignDudesForBox(params: {
         return chosen;
       });
 
+      const lastAttemptMeta = lastAttemptMetaRef.value;
       if (lastAttemptMeta) {
         const selfHealed =
           (lastAttemptMeta.poolDocExists && lastAttemptMeta.usedDefaultPool) ||

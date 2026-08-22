@@ -1397,6 +1397,11 @@ async function smokeApi(
         dropId: 'card_nft_2',
         itemIds: ['11111111111111111111111111111112'],
       }],
+      ['/admin/irl-redeem/finalize', {
+        requestId: 'AbCdEfGhIjKlMnOpQrSt',
+        dropId: 'card_nft_2',
+        transferSignature: '1'.repeat(64),
+      }],
       ['/boxes/reveal', {
         owner: defaultSmokeOwner,
         boxAssetId: '11111111111111111111111111111112',

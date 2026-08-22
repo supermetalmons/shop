@@ -1,9 +1,11 @@
-import { createHash, randomInt } from 'crypto';
+import { createHash } from 'crypto';
 import { PublicKey } from '@solana/web3.js';
 import { normalizeCountryCode } from '../normalizers.js';
 import {
-  normalizeStripeReceiptClaimCode,
+  buildStripeReceiptClaimsByBoxId,
   requireStripeReceiptClaimCode,
+  stripeReceiptClaimBoxMapKey,
+  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
 } from '../shared/stripeReceiptClaims.js';
 import {
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
@@ -19,8 +21,13 @@ import {
   isStripeOffchainFulfillmentSession,
 } from '../shared/stripeWebhook.js';
 export {
+  generateStripeReceiptClaimCode,
+  generateUniqueStripeReceiptClaimCodes,
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
+  stripeReceiptClaimBoxMapKey,
+  stripeReceiptClaimCodeMaybe,
+  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
 } from '../shared/stripeReceiptClaims.js';
 export {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
@@ -53,7 +60,6 @@ const ADMIN_ORDER_SEED = 'admin_order';
 export const IX_ADMIN_DELIVER_VARIANT_ORDER = Buffer.from('bf80de4f9c1a0722', 'hex');
 export const ACCOUNT_ADMIN_DELIVERY_ORDER = Buffer.from('cde7b3967ff802f4', 'hex');
 const ADMIN_DELIVERY_ORDER_RECORD_SIZE = 8 + 32 + 1 + 1 + 4 + 32 + 8 + 1;
-export const STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE = 'stripe_receipt_v1';
 
 export type DecodedAdminDeliveryOrderRecord = {
   orderHash: Buffer;
@@ -127,33 +133,6 @@ function normalizedString(value: unknown): string {
   return String(value || '').trim();
 }
 
-const STRIPE_RECEIPT_CLAIM_CODE_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const STRIPE_RECEIPT_CLAIM_DIGIT_MAX = 10 ** 10;
-
-export function generateStripeReceiptClaimCode(): string {
-  let prefix = '';
-  for (let index = 0; index < 6; index += 1) {
-    prefix += STRIPE_RECEIPT_CLAIM_CODE_LETTERS[randomInt(0, STRIPE_RECEIPT_CLAIM_CODE_LETTERS.length)];
-  }
-  return `${prefix}-${String(randomInt(0, STRIPE_RECEIPT_CLAIM_DIGIT_MAX)).padStart(10, '0')}`;
-}
-
-export function generateUniqueStripeReceiptClaimCodes(quantity: number): string[] {
-  const normalizedQuantity = Math.floor(Number(quantity));
-  if (!Number.isFinite(normalizedQuantity) || normalizedQuantity <= 0) {
-    throw new Error('Stripe receipt claim code quantity must be positive');
-  }
-  const codes = new Set<string>();
-  while (codes.size < normalizedQuantity) {
-    codes.add(requireStripeReceiptClaimCode(generateStripeReceiptClaimCode()));
-  }
-  return [...codes];
-}
-
-export function stripeReceiptClaimBoxMapKey(boxId: number): string {
-  return `box_${boxId}`;
-}
-
 function plainObject(value: unknown): value is Record<string, any> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -161,10 +140,6 @@ function plainObject(value: unknown): value is Record<string, any> {
 function positiveBoxIdOrNull(value: unknown): number | null {
   const boxId = Math.floor(Number(value));
   return Number.isFinite(boxId) && boxId > 0 ? boxId : null;
-}
-
-export function stripeReceiptClaimCodeMaybe(rawClaim: any): string {
-  return typeof rawClaim?.code === 'string' ? normalizeStripeReceiptClaimCode(rawClaim.code) : '';
 }
 
 export function orderStripeReceiptClaimByBoxId(
@@ -505,12 +480,6 @@ function normalizeStripeReceiptClaims(
     throw new Error('Stripe receipt claims contain duplicate codes');
   }
   return claims;
-}
-
-export function buildStripeReceiptClaimsByBoxId(
-  claims: Array<{ namespace: string; code: string; boxId: number; status: string }>,
-): Record<string, { namespace: string; code: string; boxId: number; status: string }> {
-  return Object.fromEntries(claims.map((claim) => [stripeReceiptClaimBoxMapKey(claim.boxId), claim]));
 }
 
 export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDeliveryOrderDocumentInput): Record<string, unknown> {

@@ -714,6 +714,7 @@ test('frontend production capability check requires the profile lifecycle API co
     'https://api.mons.shop/receipts/transfer/prepare',
     'https://api.mons.shop/delivery/prepare',
     'https://api.mons.shop/admin/irl-redeem/prepare',
+    'https://api.mons.shop/admin/irl-redeem/finalize',
     'https://api.mons.shop/boxes/reveal',
     'https://api.mons.shop/profile/reconcile',
     'https://api.mons.shop/profile/state',
@@ -741,11 +742,16 @@ test('frontend production capability check requires the profile lifecycle API co
     itemIds: ['11111111111111111111111111111112'],
   });
   assert.deepEqual(JSON.parse(String(requests[5]?.init?.body)), {
+    requestId: 'AbCdEfGhIjKlMnOpQrSt',
+    dropId: 'card_nft_2',
+    transferSignature: '1'.repeat(64),
+  });
+  assert.deepEqual(JSON.parse(String(requests[6]?.init?.body)), {
     owner: '11111111111111111111111111111111',
     boxAssetId: '11111111111111111111111111111112',
     dropId: 'clear_cards_devnet_v2',
   });
-  assert.equal(requests[6]?.init?.body, '{}');
+  assert.equal(requests[7]?.init?.body, '{}');
   assert.equal(deliverySmokes, 1);
   assert.equal(adminIrlSmokes, 1);
   await assert.rejects(
@@ -773,7 +779,7 @@ test('frontend production capability check treats authenticated preparation smok
   };
 
   await frontendDeployTestHooks.smokeProfileStateApi({ environment: emptyEnvironment, fetch });
-  assert.equal(requests.length, 8);
+  assert.equal(requests.length, 9);
 
   await assert.rejects(
     () => frontendDeployTestHooks.smokeProfileStateApi({
@@ -1871,6 +1877,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         '/delivery/receipts/issue',
         '/delivery/receipts/recover',
         '/admin/irl-redeem/prepare',
+        '/admin/irl-redeem/finalize',
         '/boxes/reveal',
         '/checkout/session',
         '/profile/reconcile',

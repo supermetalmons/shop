@@ -1,0 +1,349 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import bs58 from 'bs58';
+import {
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+  type CompiledInnerInstruction,
+  type Connection,
+} from '@solana/web3.js';
+import { IX_BUBBLEGUM_TRANSFER_V2 } from '../../../../functions/src/bubblegum.ts';
+import {
+  BUBBLEGUM_PROGRAM_ADDRESS,
+  MPL_CORE_PROGRAM_ADDRESS,
+  MPL_NOOP_PROGRAM_ADDRESS,
+} from '../../../../functions/src/shared/solanaProgramAddresses.ts';
+import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import {
+  ADMIN_IRL_REDEEM_FINALIZE_PATH,
+  AdminIrlRedeemFinalizeError,
+  adminIrlRedeemFinalizeTestHooks,
+  handleAdminIrlRedeemFinalize,
+  type AdminIrlRedeemFinalizeResponse,
+} from '../src/adminIrlRedeemFinalize.ts';
+
+const OWNER = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
+const DROP_ID = 'card_nft_2';
+const REQUEST_ID = 'AbCdEfGhIjKlMnOpQrSt';
+const SIGNATURE = Keypair.generate().publicKey.toBase58().repeat(2).slice(0, 88);
+const RESPONSE: AdminIrlRedeemFinalizeResponse = {
+  processed: true,
+  dropId: DROP_ID,
+  requestId: REQUEST_ID,
+  deliveryId: 7,
+  receiptTxs: [],
+  claimCodes: [],
+  boxes: [],
+  cards: [],
+};
+
+function confirmedTransaction(
+  payer: PublicKey,
+  instructions: TransactionInstruction[],
+  innerInstructions: CompiledInnerInstruction[] = [],
+): NonNullable<Awaited<ReturnType<Connection['getTransaction']>>> {
+  const transaction = new VersionedTransaction(new TransactionMessage({
+    payerKey: payer,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions,
+  }).compileToV0Message());
+  return {
+    blockTime: null,
+    meta: {
+      computeUnitsConsumed: undefined,
+      costUnits: undefined,
+      err: null,
+      fee: 0,
+      innerInstructions,
+      loadedAddresses: { writable: [], readonly: [] },
+      logMessages: [],
+      postBalances: [],
+      postTokenBalances: [],
+      preBalances: [],
+      preTokenBalances: [],
+    },
+    slot: 1,
+    transaction: {
+      message: transaction.message,
+      signatures: [],
+    },
+    version: 0,
+  };
+}
+
+function request(body: unknown = {
+  requestId: REQUEST_ID,
+  dropId: DROP_ID,
+  transferSignature: SIGNATURE,
+}, init: RequestInit = {}): Request {
+  return new Request(`https://api.mons.shop${ADMIN_IRL_REDEEM_FINALIZE_PATH}`, {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer firebase-token',
+      'Content-Type': 'application/json',
+      Origin: 'https://mons.shop',
+      ...init.headers,
+    },
+    body: JSON.stringify(body),
+    ...init,
+  });
+}
+
+function env() {
+  return {
+    COSIGNER_SECRET: 'cosigner',
+    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
+    HELIUS_API_KEY: 'helius',
+  };
+}
+
+function dependencies(overrides: Record<string, unknown> = {}) {
+  return {
+    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    providerFetch: async () => { throw new Error('unexpected provider fetch'); },
+    nowMs: () => 1_700_000_000_000,
+    timeoutMs: 1_000,
+    finalize: async () => ({ response: RESPONSE, targetKind: 'pack' as const, outcome: 'completed' }),
+    ...overrides,
+  };
+}
+
+test('Admin IRL finalization returns the exact synchronous response and metrics', async () => {
+  const deferred: Promise<unknown>[] = [];
+  const result = await handleAdminIrlRedeemFinalize(
+    request(),
+    env(),
+    (promise) => deferred.push(promise),
+    dependencies(),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), RESPONSE);
+  assert.equal(result.authOutcome, 'accepted');
+  assert.equal(result.dropId, DROP_ID);
+  assert.equal(result.targetKind, 'pack');
+  assert.equal(result.deliveryId, 7);
+  assert.equal(result.outcome, 'completed');
+  assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
+  assert.deepEqual(deferred, []);
+});
+
+test('Admin IRL finalization enforces method, content type, and exact bounded input', async () => {
+  const wrongMethod = await handleAdminIrlRedeemFinalize(
+    new Request(`https://api.mons.shop${ADMIN_IRL_REDEEM_FINALIZE_PATH}`),
+    env(),
+    () => undefined,
+    dependencies(),
+  );
+  assert.equal(wrongMethod.response.status, 405);
+  assert.equal(wrongMethod.response.headers.get('allow'), 'POST, OPTIONS');
+
+  const wrongType = await handleAdminIrlRedeemFinalize(
+    request(undefined, { headers: { 'Content-Type': 'text/plain' } }),
+    env(),
+    () => undefined,
+    dependencies(),
+  );
+  assert.equal(wrongType.response.status, 400);
+
+  const extra = await handleAdminIrlRedeemFinalize(
+    request({ requestId: REQUEST_ID, dropId: DROP_ID, transferSignature: SIGNATURE, extra: true }),
+    env(),
+    () => undefined,
+    dependencies(),
+  );
+  assert.equal(extra.response.status, 400);
+
+  const oversized = new Request(`https://api.mons.shop${ADMIN_IRL_REDEEM_FINALIZE_PATH}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': '5000' },
+    body: '{}',
+  });
+  const tooLarge = await handleAdminIrlRedeemFinalize(oversized, env(), () => undefined, dependencies());
+  assert.equal(tooLarge.response.status, 400);
+});
+
+test('Admin IRL finalization maps authentication, business, provider, and deadline failures', async () => {
+  const unauthenticated = await handleAdminIrlRedeemFinalize(
+    request(),
+    env(),
+    () => undefined,
+    dependencies({ verifyIdToken: async () => { throw new FirebaseIdTokenError('invalid-token'); } }),
+  );
+  assert.equal(unauthenticated.response.status, 401);
+  assert.deepEqual(await unauthenticated.response.json(), {
+    ok: false,
+    error: { code: 'unauthenticated', message: 'Authentication is required.' },
+  });
+
+  const conflict = await handleAdminIrlRedeemFinalize(
+    request(),
+    env(),
+    () => undefined,
+    dependencies({
+      finalize: async () => { throw new AdminIrlRedeemFinalizeError('aborted', 'Already processing.'); },
+    }),
+  );
+  assert.equal(conflict.response.status, 409);
+  assert.equal(conflict.outcome, 'aborted');
+
+  const unavailable = await handleAdminIrlRedeemFinalize(
+    request(),
+    env(),
+    () => undefined,
+    dependencies({
+      finalize: async () => { throw new AdminIrlRedeemFinalizeError('unavailable', 'Provider unavailable.'); },
+    }),
+  );
+  assert.equal(unavailable.response.status, 502);
+  assert.equal(unavailable.authOutcome, 'provider-failure');
+
+  const deadline = await handleAdminIrlRedeemFinalize(
+    request(),
+    env(),
+    () => undefined,
+    dependencies({
+      timeoutMs: 1,
+      finalize: async () => new Promise(() => undefined),
+    }),
+  );
+  assert.equal(deadline.response.status, 504);
+  assert.equal(deadline.outcome, 'deadline-exceeded');
+});
+
+test('Admin IRL finalization normalizes prepared pack and card requests strictly', () => {
+  assert.deepEqual(adminIrlRedeemFinalizeTestHooks.normalizeItems({
+    targetKind: 'pack',
+    itemIds: [OWNER],
+    items: [{ assetId: OWNER, kind: 'box', refId: 7 }],
+  }), {
+    targetKind: 'pack',
+    itemIds: [OWNER],
+    items: [{ assetId: OWNER, kind: 'box', refId: 7 }],
+  });
+  assert.deepEqual(adminIrlRedeemFinalizeTestHooks.normalizeItems({
+    targetKind: 'card_receipt',
+    itemIds: [OWNER],
+    items: [{ assetId: OWNER, kind: 'card_receipt', refId: 9 }],
+  }).targetKind, 'card_receipt');
+  assert.throws(() => adminIrlRedeemFinalizeTestHooks.normalizeItems({
+    targetKind: 'pack',
+    itemIds: [OWNER, OWNER],
+    items: [
+      { assetId: OWNER, kind: 'box', refId: 7 },
+      { assetId: OWNER, kind: 'box', refId: 8 },
+    ],
+  }), /duplicate/);
+  assert.throws(() => adminIrlRedeemFinalizeTestHooks.normalizeItems({
+    targetKind: 'pack',
+    itemIds: [OWNER],
+    items: [{ assetId: OWNER, kind: 'card_receipt', refId: 9 }],
+  }), /target kind mismatch/);
+});
+
+test('Admin IRL finalization rebuilds completed responses idempotently', () => {
+  const response = adminIrlRedeemFinalizeTestHooks.completeResponse(DROP_ID, REQUEST_ID, {
+    deliveryId: 7,
+    receiptTxs: [SIGNATURE, SIGNATURE],
+    claimCodes: ['ABCDEF-1234567890'],
+    boxes: [{ boxId: 3, receiptAssetId: OWNER, claimCode: 'ABCDEF-1234567890', dudeIds: [1, 2] }],
+    cards: [],
+  });
+  assert.equal(response.processed, true);
+  assert.deepEqual(response.receiptTxs, [SIGNATURE]);
+  assert.equal(response.boxes[0].boxId, 3);
+});
+
+test('Admin IRL finalization verifies the exact ordered Core transfer', async () => {
+  const owner = new PublicKey(OWNER);
+  const admin = Keypair.generate().publicKey;
+  const collection = Keypair.generate().publicKey;
+  const asset = Keypair.generate().publicKey;
+  const transaction = confirmedTransaction(owner, [new TransactionInstruction({
+    programId: new PublicKey(MPL_CORE_PROGRAM_ADDRESS),
+    keys: [
+      { pubkey: asset, isSigner: false, isWritable: true },
+      { pubkey: collection, isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: true, isWritable: true },
+      { pubkey: owner, isSigner: true, isWritable: false },
+      { pubkey: admin, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([14, 0]),
+  })]);
+  const connection: Pick<Connection, 'getTransaction'> = {
+    getTransaction: (async () => transaction) as Connection['getTransaction'],
+  };
+  await adminIrlRedeemFinalizeTestHooks.verifyPackTransfer(
+    connection,
+    SIGNATURE,
+    owner.toBase58(),
+    admin.toBase58(),
+    collection,
+    [asset.toBase58()],
+  );
+  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.verifyPackTransfer(
+    connection,
+    SIGNATURE,
+    owner.toBase58(),
+    admin.toBase58(),
+    collection,
+    [Keypair.generate().publicKey.toBase58()],
+  ), /asset mismatch/);
+});
+
+test('Admin IRL finalization verifies the exact Bubblegum receipt leaf transfer', async () => {
+  const owner = new PublicKey(OWNER);
+  const admin = Keypair.generate().publicKey;
+  const collection = Keypair.generate().publicKey;
+  const merkleTree = Keypair.generate().publicKey;
+  const receipt = Keypair.generate().publicKey;
+  const bubblegum = new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS);
+  const noop = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
+  const transfer = new TransactionInstruction({
+    programId: bubblegum,
+    keys: [
+      { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
+      { pubkey: owner, isSigner: true, isWritable: true },
+      { pubkey: owner, isSigner: true, isWritable: false },
+      { pubkey: owner, isSigner: false, isWritable: false },
+      { pubkey: owner, isSigner: false, isWritable: false },
+      { pubkey: admin, isSigner: false, isWritable: false },
+      { pubkey: merkleTree, isSigner: false, isWritable: true },
+      { pubkey: collection, isSigner: false, isWritable: false },
+    ],
+    data: IX_BUBBLEGUM_TRANSFER_V2,
+  });
+  const noopInstruction = new TransactionInstruction({ programId: noop, keys: [], data: Buffer.alloc(0) });
+  const base = confirmedTransaction(owner, [transfer, noopInstruction]);
+  const noopProgramIndex = base.transaction.message.staticAccountKeys.findIndex((key) => key.equals(noop));
+  const event = Buffer.alloc(41);
+  event[0] = 1;
+  event[1] = 0;
+  event.writeUInt32LE(35, 2);
+  event[6] = 1;
+  event[7] = 1;
+  event[8] = 1;
+  receipt.toBuffer().copy(event, 9);
+  base.meta!.innerInstructions = [{
+    index: 0,
+    instructions: [{ programIdIndex: noopProgramIndex, accounts: [], data: bs58.encode(event) }],
+  }];
+  const connection: Pick<Connection, 'getTransaction'> = {
+    getTransaction: (async () => base) as Connection['getTransaction'],
+  };
+  const runtime = { receiptsMerkleTree: merkleTree } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.verifyCardTransfer>[1];
+  await adminIrlRedeemFinalizeTestHooks.verifyCardTransfer(
+    connection,
+    runtime,
+    SIGNATURE,
+    owner.toBase58(),
+    admin.toBase58(),
+    collection,
+    receipt.toBase58(),
+  );
+});
