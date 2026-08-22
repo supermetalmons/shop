@@ -48,7 +48,7 @@ const KNOWN_DROP_IDS = new Set(Object.keys(FUNCTIONS_DROPS));
 
 function usage(): string {
   return [
-    'Retry `issueReceipts` for Firestore delivery orders that are stuck in `processing`,',
+    'Retry receipt issuance for Firestore delivery orders that are stuck in `processing`,',
     '`prepared`, or `prepared_abandoned` even though their delivery transaction already landed on-chain.',
     '',
     'Usage:',

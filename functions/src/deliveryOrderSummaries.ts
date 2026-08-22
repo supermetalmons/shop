@@ -36,7 +36,7 @@ export function resolveDeliveryOrderIdentity(
   return { identity: { ...pathIdentity, dropId } };
 }
 
-export function dropIdFromDeliveryOrderPath(path: string): string | null {
+function dropIdFromDeliveryOrderPath(path: string): string | null {
   return normalizeDropIdMaybe(parseDropDeliveryOrderPath(path)?.dropId);
 }
 
