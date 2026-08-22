@@ -18,6 +18,8 @@ import {
   MPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../functions/src/shared/solanaProgramAddresses.ts';
 import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { FIRESTORE_DOCUMENT_NAME_PREFIX } from '../src/firestoreRest.ts';
+import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_PATH,
   AdminIrlRedeemFinalizeError,
@@ -112,6 +114,35 @@ function dependencies(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function firestoreContext(
+  fields: Record<string, unknown>,
+  calls: Array<{ url: string; init?: RequestInit }> = [],
+) {
+  return {
+    accessTokenProvider: {
+      get: async () => 'firestore-token',
+      invalidate: () => undefined,
+    },
+    nowMs: 1_700_000_000_000,
+    providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.endsWith(':beginTransaction')) return Response.json({ transaction: 'transaction' });
+      if (url.includes('/documents/') && init?.method === 'GET') {
+        return Response.json({
+          name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+          fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, deliveryReceiptRuntime.firestoreValue(value)])),
+          updateTime: '2026-08-22T00:00:00.000Z',
+        });
+      }
+      if (url.endsWith(':commit') || url.endsWith(':rollback')) return Response.json({});
+      throw new Error(`Unexpected Firestore request: ${url}`);
+    },
+    serviceAccountJson: '{}',
+    signal: new AbortController().signal,
+  };
+}
+
 test('Admin IRL finalization returns the exact synchronous response and metrics', async () => {
   const deferred: Promise<unknown>[] = [];
   const result = await handleAdminIrlRedeemFinalize(
@@ -201,17 +232,65 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   assert.equal(unavailable.response.status, 502);
   assert.equal(unavailable.authOutcome, 'provider-failure');
 
+  const deferred: Promise<unknown>[] = [];
+  let finalizeAborted = false;
   const deadline = await handleAdminIrlRedeemFinalize(
     request(),
     env(),
-    () => undefined,
+    (promise) => deferred.push(promise),
     dependencies({
       timeoutMs: 1,
-      finalize: async () => new Promise(() => undefined),
+      finalize: async (...args: Parameters<typeof adminIrlRedeemFinalizeTestHooks.finalizeAdminIrlRedeem>) => {
+        const firestore = args[3];
+        await new Promise<void>((resolve) => {
+          const onAbort = () => {
+            finalizeAborted = true;
+            resolve();
+          };
+          firestore.signal.addEventListener('abort', onAbort, { once: true });
+          if (firestore.signal.aborted) onAbort();
+        });
+        throw new AdminIrlRedeemFinalizeError('deadline-exceeded', 'Timed out.');
+      },
     }),
   );
   assert.equal(deadline.response.status, 504);
   assert.equal(deadline.outcome, 'deadline-exceeded');
+  assert.equal(finalizeAborted, true);
+  assert.equal(deferred.length, 1);
+  await Promise.all(deferred);
+});
+
+test('Admin IRL receipt owner scans finish pagination before checking uniqueness', async () => {
+  const pages: number[] = [];
+  const visited: string[] = [];
+  const providerFetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const body = JSON.parse(String(init?.body)) as {
+      id: string;
+      params: { page: number };
+    };
+    pages.push(body.params.page);
+    return Response.json({
+      jsonrpc: '2.0',
+      id: body.id,
+      result: {
+        page: body.params.page,
+        limit: 1,
+        total: 2,
+        items: [{ id: body.params.page === 1 ? 'first-match' : 'later-duplicate' }],
+      },
+    });
+  };
+  await adminIrlRedeemFinalizeTestHooks.scanAssetsByOwner(
+    { apiKey: 'helius', providerFetch, signal: new AbortController().signal },
+    { cluster: 'devnet' } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.scanAssetsByOwner>[1],
+    OWNER,
+    (asset) => {
+      if (asset && typeof asset === 'object' && 'id' in asset) visited.push(String(asset.id));
+    },
+  );
+  assert.deepEqual(pages, [1, 2]);
+  assert.deepEqual(visited, ['first-match', 'later-duplicate']);
 });
 
 test('Admin IRL finalization normalizes prepared pack and card requests strictly', () => {
@@ -242,6 +321,73 @@ test('Admin IRL finalization normalizes prepared pack and card requests strictly
     itemIds: [OWNER],
     items: [{ assetId: OWNER, kind: 'card_receipt', refId: 9 }],
   }), /target kind mismatch/);
+});
+
+test('Admin IRL finalization acquires, rejects, recovers, and clears processing leases', async () => {
+  const body = { requestId: REQUEST_ID, dropId: DROP_ID, transferSignature: SIGNATURE };
+  const prepared = {
+    dropId: DROP_ID,
+    owner: OWNER,
+    status: 'prepared',
+    targetKind: 'pack',
+    itemIds: [OWNER],
+    items: [{ assetId: OWNER, kind: 'box', refId: 7 }],
+    receiptTxs: [],
+  };
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const started = await adminIrlRedeemFinalizeTestHooks.startFinalize(
+    firestoreContext(prepared, calls),
+    body,
+    OWNER,
+    'attempt',
+    1_700_000_000_000,
+  );
+  assert.equal(started.status, 'started');
+  const commit = calls.find((call) => call.url.endsWith(':commit'));
+  const commitBody = JSON.parse(String(commit?.init?.body)) as {
+    writes: Array<{ update: { fields: Record<string, { stringValue?: string; timestampValue?: string }> } }>;
+  };
+  assert.equal(commitBody.writes[0].update.fields.status.stringValue, 'processing');
+  assert.equal(commitBody.writes[0].update.fields.processingAttemptId.stringValue, 'attempt');
+
+  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.startFinalize(
+    firestoreContext({
+      ...prepared,
+      status: 'processing',
+      processingLeaseExpiresAt: 1_700_000_100_000,
+    }),
+    body,
+    OWNER,
+    'another-attempt',
+    1_700_000_000_000,
+  ), /already being finalized/);
+
+  const recovered = await adminIrlRedeemFinalizeTestHooks.startFinalize(
+    firestoreContext({
+      ...prepared,
+      status: 'processing',
+      processingLeaseExpiresAt: 1_699_999_999_999,
+    }),
+    body,
+    OWNER,
+    'recovered-attempt',
+    1_700_000_000_000,
+  );
+  assert.equal(recovered.status, 'started');
+
+  const cleanupCalls: Array<{ url: string; init?: RequestInit }> = [];
+  await adminIrlRedeemFinalizeTestHooks.clearProcessing(
+    firestoreContext({ ...prepared, status: 'processing', processingAttemptId: 'attempt' }, cleanupCalls),
+    body,
+    'attempt',
+    new Error('failed'),
+  );
+  const cleanupCommit = cleanupCalls.find((call) => call.url.endsWith(':commit'));
+  const cleanupBody = JSON.parse(String(cleanupCommit?.init?.body)) as {
+    writes: Array<{ update: { fields: Record<string, { stringValue?: string }> }; updateMask: { fieldPaths: string[] } }>;
+  };
+  assert.equal(cleanupBody.writes[0].update.fields.status.stringValue, 'prepared');
+  assert.equal(cleanupBody.writes[0].updateMask.fieldPaths.includes('processingLeaseExpiresAt'), true);
 });
 
 test('Admin IRL finalization rebuilds completed responses idempotently', () => {

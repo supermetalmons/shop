@@ -948,7 +948,7 @@ async function scanAssetsByOwner(
   provider: ProviderContext,
   runtime: Runtime,
   owner: string,
-  visit: (asset: unknown) => boolean,
+  visit: (asset: unknown) => void,
   grouping?: readonly [string, string],
 ): Promise<void> {
   for (let page = 1; page <= HELIUS_ASSET_MAX_PAGES; page += 1) {
@@ -961,7 +961,7 @@ async function scanAssetsByOwner(
     };
     const result = await adminIrlRedeemRuntime.rpcCall(provider, runtime, 'searchAssets', params);
     const items = heliusSearchAssetsItems(result);
-    if (items.some(visit)) return;
+    items.forEach(visit);
     if (!heliusSearchAssetsHasNextPage(result, page, items, HELIUS_ASSET_PAGE_LIMIT)) return;
   }
   throw new AdminIrlRedeemFinalizeError('unavailable', 'Too many assets to search for Admin IRL receipts.');
@@ -1017,22 +1017,15 @@ async function findReceiptAssets(
   const startedAt = Date.now();
   while (Date.now() - startedAt <= RECEIPT_INDEX_MAX_WAIT_MS) {
     direct.clear();
-    const allFound = () => items.every((item) => (direct.get(item.refId) || []).length === 1);
     await scanAssetsByOwner(
       provider,
       runtime,
       owner,
-      (asset) => {
-        add(asset);
-        return allFound();
-      },
+      add,
       ['collection', runtime.collectionMint.toBase58()],
     );
     if (!items.every((item) => (direct.get(item.refId) || []).length === 1)) {
-      await scanAssetsByOwner(provider, runtime, owner, (asset) => {
-        add(asset);
-        return allFound();
-      });
+      await scanAssetsByOwner(provider, runtime, owner, add);
     }
     if (items.every((item) => (direct.get(item.refId) || []).length === 1)) return direct;
     await deliveryReceiptRuntime.pause(RECEIPT_INDEX_POLL_MS, provider.signal);
@@ -1648,6 +1641,7 @@ export async function handleAdminIrlRedeemFinalize(
   const timeout = setTimeout(() => controller.abort(new DOMException('Admin IRL redeem finalization timed out', 'TimeoutError')), dependencies.timeoutMs);
   let identity: FirebaseIdentity | undefined;
   let body: FinalizeRequest | undefined;
+  let finalization: ReturnType<FinalizeDependencies['finalize']> | undefined;
   try {
     body = await readRequestBody(request, controller.signal);
     identity = await dependencies.verifyIdToken(request.headers.get('Authorization'), trackedFetch, controller.signal, dependencies.nowMs());
@@ -1658,7 +1652,7 @@ export async function handleAdminIrlRedeemFinalize(
       throw new AdminIrlRedeemFinalizeError('unavailable', 'Admin IRL redeem finalization is temporarily unavailable.');
     }
     const nowMs = dependencies.nowMs();
-    const result = await waitForSignal(dependencies.finalize(
+    finalization = dependencies.finalize(
       body,
       identity,
       { ...env, COSIGNER_SECRET: cosignerSecret, FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: serviceAccountJson, HELIUS_API_KEY: apiKey },
@@ -1671,7 +1665,8 @@ export async function handleAdminIrlRedeemFinalize(
       },
       { apiKey, providerFetch: trackedFetch, signal: controller.signal },
       waitUntil,
-    ), controller.signal);
+    );
+    const result = await waitForSignal(finalization, controller.signal);
     return {
       response: jsonResponse(result.response),
       metrics,
@@ -1684,6 +1679,15 @@ export async function handleAdminIrlRedeemFinalize(
   } catch (error) {
     let normalized: AdminIrlRedeemFinalizeError;
     if (controller.signal.aborted) {
+      if (finalization) {
+        const cleanup = finalization.then(() => undefined, () => undefined);
+        try {
+          waitUntil(cleanup);
+        } catch (trackingError) {
+          void cleanup;
+          console.warn({ event: 'admin_irl_redeem_finalize_cleanup_tracking_failed', error: summarizeError(trackingError) });
+        }
+      }
       normalized = new AdminIrlRedeemFinalizeError('deadline-exceeded', 'Admin IRL redeem finalization timed out.');
     } else if (error instanceof FirebaseIdTokenError) {
       normalized = new AdminIrlRedeemFinalizeError(
@@ -1710,11 +1714,13 @@ export async function handleAdminIrlRedeemFinalize(
 }
 
 export const adminIrlRedeemFinalizeTestHooks = {
+  clearProcessing,
   completeResponse,
   finalizeAdminIrlRedeem,
   normalizeItems,
   readRequestBody,
   runtimeSupportsFinalize,
+  scanAssetsByOwner,
   startFinalize,
   verifyCardTransfer,
   verifyPackTransfer,
