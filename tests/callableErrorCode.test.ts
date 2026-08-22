@@ -5,7 +5,10 @@ import {
   WALLET_SESSION_SUPERSEDED_ERROR_REASON,
   normalizeCallableErrorCode,
 } from '../functions/src/shared/callableErrorCode.ts';
-import { isRetryableCallableError } from '../src/lib/callableErrors.ts';
+import {
+  isRetryableCallableError,
+  isRetryableReceiptIssuanceError,
+} from '../src/lib/callableErrors.ts';
 
 test('callable error codes normalize Firebase client prefixes once', () => {
   assert.equal(normalizeCallableErrorCode('functions/unavailable'), 'unavailable');
@@ -42,4 +45,16 @@ test('frontend callable retry classification accepts prefixed and bare codes', (
   assert.equal(isRetryableCallableError({ code: 'functions/aborted' }), true);
   assert.equal(isRetryableCallableError({ code: 'functions/failed-precondition' }), false);
   assert.equal(isRetryableCallableError({ code: 'functions/invalid-argument' }), false);
+});
+
+test('receipt issuance retries temporary transaction indexing failures', () => {
+  assert.equal(isRetryableReceiptIssuanceError({ code: 'unavailable' }), true);
+  assert.equal(isRetryableReceiptIssuanceError({
+    code: 'functions/failed-precondition',
+    message: 'Delivery transaction not found or failed.',
+  }), true);
+  assert.equal(isRetryableReceiptIssuanceError({
+    code: 'failed-precondition',
+    message: 'Delivery payer does not match owner.',
+  }), false);
 });

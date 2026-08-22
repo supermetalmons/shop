@@ -47,6 +47,13 @@ export function isRetryableCallableError(err: unknown): boolean {
   return false;
 }
 
+export function isRetryableReceiptIssuanceError(err: unknown): boolean {
+  if (isRetryableCallableError(err)) return true;
+  const anyErr = err as { code?: unknown; message?: unknown };
+  return normalizeCallableErrorCode(typeof anyErr?.code === 'string' ? anyErr.code : '') === 'failed-precondition' &&
+    anyErr?.message === 'Delivery transaction not found or failed.';
+}
+
 export async function retryWithBackoff<T>(operation: () => Promise<T>, options: RetryWithBackoffOptions): Promise<T> {
   const {
     maxAttempts,

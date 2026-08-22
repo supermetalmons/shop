@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type DropFamily } from '../config/deployment';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 import { dropAssetLabel } from '../lib/dropLabels';
@@ -20,8 +20,16 @@ interface DeliveryFormProps {
   countryCode?: string;
   onCountryCodeChange?: (code: string) => void;
   submitLabel?: string;
+  shipmentPending?: boolean;
   dropFamily?: DropFamily;
 }
+
+type DeliveryShippingContext = Pick<
+  DeliveryFormProps,
+  'itemsPerBox' | 'boxNamePrefix' | 'figureNamePrefix' | 'dropFamily'
+>;
+
+const useCommittedLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 export function DeliveryForm({
   onSubmit,
@@ -35,8 +43,31 @@ export function DeliveryForm({
   countryCode,
   onCountryCodeChange,
   submitLabel,
+  shipmentPending = false,
   dropFamily,
 }: DeliveryFormProps) {
+  const shippingContextRef = useRef<DeliveryShippingContext | null>(null);
+  const liveShippingContext = {
+    itemsPerBox,
+    boxNamePrefix,
+    figureNamePrefix,
+    dropFamily,
+  };
+  const hasLiveShippingContext =
+    itemsPerBox !== undefined ||
+    boxNamePrefix !== undefined ||
+    figureNamePrefix !== undefined ||
+    dropFamily !== undefined;
+  const shippingContext = hasLiveShippingContext
+    ? liveShippingContext
+    : shipmentPending
+      ? shippingContextRef.current ?? liveShippingContext
+      : liveShippingContext;
+  useCommittedLayoutEffect(() => {
+    if (hasLiveShippingContext) {
+      shippingContextRef.current = { itemsPerBox, boxNamePrefix, figureNamePrefix, dropFamily };
+    }
+  }, [boxNamePrefix, dropFamily, figureNamePrefix, hasLiveShippingContext, itemsPerBox]);
   const [email, setEmail] = useState(defaultEmail || '');
   const [emailTouched, setEmailTouched] = useState(false);
   const [fullName, setFullName] = useState('');
@@ -49,26 +80,29 @@ export function DeliveryForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const selectedCountryCode = countryCode ?? localCountryCode;
-  const directDelivery = isDirectDeliveryItemsPerBox(itemsPerBox);
-  const unitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox);
-  const cardNft2DeliveryFees = usesCardNft2DeliveryFees(dropFamily);
+  const directDelivery = isDirectDeliveryItemsPerBox(shippingContext.itemsPerBox);
+  const unitsPerBox = normalizeDeliveryUnitsPerBox(shippingContext.itemsPerBox);
+  const cardNft2DeliveryFees = usesCardNft2DeliveryFees(shippingContext.dropFamily);
   const baseDeliveryUnitCount = cardNft2DeliveryFees ? 3 : unitsPerBox;
   const countryOption = useMemo(
     () => findCountryByCode(selectedCountryCode) || findCountryByCode('INTL'),
     [selectedCountryCode],
   );
   const countryName = countryOption?.name || selectedCountryCode;
-  const labelSource = { namePrefix: boxNamePrefix, figureNamePrefix };
+  const labelSource = {
+    namePrefix: shippingContext.boxNamePrefix,
+    figureNamePrefix: shippingContext.figureNamePrefix,
+  };
   const deliveryUnitKind = directDelivery ? 'box' : 'figure';
   const deliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, baseDeliveryUnitCount);
   const singleDeliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, 1);
   let shippingNote = `International delivery: 0.25 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.05 SOL each additional ${singleDeliveryUnitLabel}.`;
-  if (dropFamily === 'drifella_shirt') {
+  if (shippingContext.dropFamily === 'drifella_shirt') {
     shippingNote =
       selectedCountryCode === 'US'
         ? 'US delivery: 0.1 SOL.'
         : 'International delivery: 0.25 SOL.';
-  } else if (dropFamily === 'little_swag_hoodies') {
+  } else if (shippingContext.dropFamily === 'little_swag_hoodies') {
     shippingNote =
       selectedCountryCode === 'US'
         ? 'Free US shipping'
@@ -81,9 +115,9 @@ export function DeliveryForm({
   } else if (selectedCountryCode === 'US') {
     if (directDelivery) {
       shippingNote = 'Free US shipping';
-    } else if (dropFamily === 'little_swag_boxes') {
+    } else if (shippingContext.dropFamily === 'little_swag_boxes') {
       shippingNote = `US delivery: 0.1 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.025 SOL each additional ${singleDeliveryUnitLabel}.`;
-    } else if (dropFamily === 'poncho_drifella') {
+    } else if (shippingContext.dropFamily === 'poncho_drifella') {
       shippingNote = 'US delivery: 0.05 SOL flat.';
     } else {
       shippingNote = 'Free US shipping';
@@ -96,7 +130,7 @@ export function DeliveryForm({
 
   const handleSubmit = async (evt: FormEvent<HTMLFormElement>) => {
     evt.preventDefault();
-    if (submitDisabled) return;
+    if (submitDisabled || shipmentPending) return;
     if (!evt.currentTarget.checkValidity()) {
       setError('Please complete the required fields.');
       return;
@@ -200,8 +234,12 @@ export function DeliveryForm({
             Cancel
           </button>
         ) : null}
-        <button type="submit" disabled={saving || submitDisabled}>
-          {saving ? 'Sending…' : submitLabel || 'Send'}
+        <button type="submit" disabled={saving || submitDisabled || shipmentPending}>
+          {saving
+            ? 'Sending…'
+            : shipmentPending
+              ? 'Shipment pending…'
+              : submitLabel || 'Send'}
         </button>
       </div>
     </form>

@@ -528,6 +528,16 @@ test('prepared delivery and numeric claim submissions stay durable without coupl
   assert.match(delivery, /onBroadcastAttempt: recordSubmittedDelivery/);
   assert.match(delivery, /onSubmitted: recordSubmittedDelivery/);
   assert.doesNotMatch(delivery, /syncPendingPreparedTransaction\(pendingSubmission\)/);
+  assert.match(source, /const shipmentRefreshStopsRef = useRef<Set<\(\) => void>>\(new Set\(\)\)/);
+  assert.match(source, /const shipmentRefreshStopsByTransactionKeyRef = useRef<Map<string, \(\) => void>>\(new Map\(\)\)/);
+  assert.match(source, /shipmentRefreshMountedRef\.current = true;/);
+  assert.match(source, /shipmentRefreshMountedRef\.current = false;[\s\S]*?shipmentRefreshStopsRef\.current\.forEach\(\(stop\) => stop\(\)\)/);
+  assert.match(source, /const startShipmentRefresh = useCallback\([\s\S]*?retryTimer = window\.setTimeout\([\s\S]*?refreshDelay = Math\.min\(refreshDelay \* 2, DELIVERY_SHIPMENT_REFRESH_MAX_DELAY_MS\)[\s\S]*?deadline = window\.setTimeout\(stop, DELIVERY_SHIPMENT_REFRESH_TIMEOUT_MS\);\s*shipmentRefreshStopsRef\.current\.add\(stop\);[\s\S]*?void refresh\(\)/);
+  assert.match(source, /shipmentRefreshStopsRef\.current\.forEach\(\(stop\) => stop\(\)\);\s*shipmentRefreshStopsRef\.current\.clear\(\)/);
+  assert.match(delivery, /void refetchInventory\(\)\.catch\([\s\S]*?startShipmentRefresh\(deliveryWallet, deliveryDrop\.dropId, deliveryId\);[\s\S]*?const issued = await retryWithBackoff\(/);
+  assert.match(delivery, /shouldRetry: isRetryableReceiptIssuanceError/);
+  assert.doesNotMatch(delivery, /finally \{\s*stopShipmentRefresh\(\)/);
+  assert.match(delivery, /const issued = await retryWithBackoff\([\s\S]*?await Promise\.all\(\[[\s\S]*?refetchInventory\(\)\.catch\([\s\S]*?refreshProfileState\(\)\.catch\(/);
 
   const existingDeliveryStart = delivery.indexOf('if (existingPending)');
   const existingDeliveryEnd = delivery.indexOf('\n    if (deliverableIds.length', existingDeliveryStart);
@@ -541,7 +551,9 @@ test('prepared delivery and numeric claim submissions stay durable without coupl
   assert.ok(deliveryAmbiguityStart > 0 && deliveryFailureStart > deliveryAmbiguityStart && deliveryRetryEnd > deliveryFailureStart);
   const deliveryAmbiguity = delivery.slice(deliveryAmbiguityStart, deliveryFailureStart);
   const deliveryDefinitiveFailure = delivery.slice(deliveryFailureStart, deliveryRetryEnd);
-  assert.match(deliveryAmbiguity, /reconcilePendingPreparedTransaction\(pendingSubmission\)/);
+  assert.match(deliveryAmbiguity, /startShipmentRefresh\(\s*pendingSubmission\.wallet,\s*pendingSubmission\.dropId,\s*pendingSubmission\.deliveryId,\s*pendingSubmittedTransactionKey\(pendingSubmission\)/);
+  assert.match(source, /if \(resolution === 'failed' \|\| resolution === 'expired'\) \{\s*if \(record\.kind === 'delivery'\) shipmentRefreshStopsByTransactionKeyRef\.current\.get\(key\)\?\.\(\)/);
+  assert.match(deliveryAmbiguity, /reconcilePendingPreparedTransaction\(pendingSubmission\)\.catch/);
   assert.doesNotMatch(deliveryAmbiguity, /setDeliveryOpen|setSelected/);
   assert.doesNotMatch(deliveryDefinitiveFailure, /syncPendingPreparedTransaction|setDeliveryOpen|setSelected/);
   assert.match(deliveryDefinitiveFailure, /forgetPendingPreparedTransaction\(reservation\)/);
@@ -573,8 +585,9 @@ test('prepared delivery and numeric claim submissions stay durable without coupl
   assert.doesNotMatch(source, /navigator\.locks\.request\(name, run\)/);
   assert.match(source, /if \(options\?\.onBroadcastAttempt\) \{\s*throw new Error\('This wallet cannot safely track the transaction before broadcast\. Use a wallet with transaction signing support\.'\)/);
   assert.match(source, /if \(resolution === 'confirmed'\) \{\s*if \(record\.kind === 'delivery'\) hideAssetsForWallet\(record\.wallet, record\.itemIds\);\s*await forgetPendingPreparedTransaction\(record\)/);
-  assert.match(source, /if \(resolution === 'failed' \|\| resolution === 'expired'\) \{\s*await forgetPendingPreparedTransaction\(record\)/);
+  assert.match(source, /if \(resolution === 'failed' \|\| resolution === 'expired'\) \{\s*if \(record\.kind === 'delivery'\) shipmentRefreshStopsByTransactionKeyRef\.current\.get\(key\)\?\.\(\);\s*await forgetPendingPreparedTransaction\(record\)/);
   assert.match(source, /const current = readPendingPreparedTransaction\(record\.wallet, false\)/);
+  assert.match(source, /if \(current\?\.phase === 'submitted' && current\.signature === record\.signature\) \{\s*retryReconciliation\(current\);\s*return;\s*\}\s*if \(shipmentRefreshStopsByTransactionKeyRef\.current\.has\(key\)\) retryReconciliation\(record\)/);
   assert.match(source, /selectedItems\[0\]\?\.kind === 'box' &&\s*!pendingDeliveryItemIds\.has\(selectedItems\[0\]\.id\)/);
   assert.match(source, /if \(!deliveryOpen \|\| canShipSelected \|\| pendingDeliveryItemIds\.size\) return/);
   assert.doesNotMatch(source, /pendingDeliveryItemIds\.forEach\(\(id\) => \{\s*if \(next\.delete\(id\)\)/);

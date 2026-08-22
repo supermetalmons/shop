@@ -95,7 +95,11 @@ import {
   type OwnerRecoveryKey,
   type WalletScopedSerialRun,
 } from './lib/profileClientLifecycle';
-import { isRetryableCallableError, retryWithBackoff } from './lib/callableErrors';
+import {
+  isRetryableCallableError,
+  isRetryableReceiptIssuanceError,
+  retryWithBackoff,
+} from './lib/callableErrors';
 import {
   applyOptimisticStripeCheckoutMintProgress,
   completeStripeCheckoutMarker,
@@ -331,6 +335,9 @@ const RECEIPT_HIDDEN_OPERATION_PHASES = new Set<ReceiptOperation['phase']>(['hid
 const PONCHO_OUTSIDE_TAP_DISMISS_LOCK_MS = 1_300;
 const TOAST_VISIBLE_MS = 1800;
 const TOAST_FADE_MS = 250;
+const DELIVERY_SHIPMENT_REFRESH_INITIAL_DELAY_MS = 2_000;
+const DELIVERY_SHIPMENT_REFRESH_MAX_DELAY_MS = 30_000;
+const DELIVERY_SHIPMENT_REFRESH_TIMEOUT_MS = 5 * 60_000;
 
 type ReceiptViewerSource = Pick<InventoryItem, 'id' | 'dropId' | 'name' | 'image'>;
 type ReceiptViewerImage = {
@@ -1908,6 +1915,9 @@ function App({
   const pendingPreparedSubmissionKeysRef = useRef<Set<string>>(new Set());
   const pendingPreparedReconciliationsRef = useRef<Map<string, Promise<PendingPreparedResolution>>>(new Map());
   const pendingPreparedRetryTimersRef = useRef<Map<string, number>>(new Map());
+  const shipmentRefreshStopsRef = useRef<Set<() => void>>(new Set());
+  const shipmentRefreshStopsByTransactionKeyRef = useRef<Map<string, () => void>>(new Map());
+  const shipmentRefreshMountedRef = useRef(false);
   const deliveryActionGenerationRef = useRef(0);
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
@@ -4018,7 +4028,9 @@ function App({
   }, [connectedWallet, walletBusy]);
 
   useEffect(() => {
+    shipmentRefreshMountedRef.current = true;
     return () => {
+      shipmentRefreshMountedRef.current = false;
       cancelToastTimers();
       cancelRevealOverlayAnimationFrame();
       if (revealOverlayResizeRafRef.current) {
@@ -4029,6 +4041,9 @@ function App({
       }
       pendingPreparedRetryTimersRef.current.forEach((timer) => window.clearTimeout(timer));
       pendingPreparedRetryTimersRef.current.clear();
+      shipmentRefreshStopsRef.current.forEach((stop) => stop());
+      shipmentRefreshStopsRef.current.clear();
+      shipmentRefreshStopsByTransactionKeyRef.current.clear();
     };
   }, [cancelRevealOverlayAnimationFrame, cancelToastTimers]);
 
@@ -5961,6 +5976,7 @@ function App({
       }
 
       if (resolution === 'failed' || resolution === 'expired') {
+        if (record.kind === 'delivery') shipmentRefreshStopsByTransactionKeyRef.current.get(key)?.();
         await forgetPendingPreparedTransaction(record);
         if (options.announce !== false && walletIsCurrent) {
           const label = record.kind === 'delivery' ? 'Shipment' : 'Claim';
@@ -5984,11 +6000,17 @@ function App({
             !hasAuthenticatedWalletSession(record.wallet)
           ) return;
           const current = readPendingPreparedTransaction(record.wallet, false);
-          if (current?.phase !== 'submitted' || current.signature !== record.signature) return;
-          void reconcilePendingPreparedTransaction(current, {
-            ...options,
-            announce: false,
-          });
+          const retryReconciliation = (entry: PendingSubmittedTransaction) => {
+            void reconcilePendingPreparedTransaction(entry, {
+              ...options,
+              announce: false,
+            });
+          };
+          if (current?.phase === 'submitted' && current.signature === record.signature) {
+            retryReconciliation(current);
+            return;
+          }
+          if (shipmentRefreshStopsByTransactionKeyRef.current.has(key)) retryReconciliation(record);
         }, 30_000);
         pendingPreparedRetryTimersRef.current.set(key, retry);
       }
@@ -6008,6 +6030,68 @@ function App({
     void run.then(clearRun, clearRun);
     return run;
   }
+
+  const startShipmentRefresh = useCallback((
+    wallet: string,
+    dropId: string,
+    deliveryId: number,
+    transactionKey?: string,
+  ) => {
+    if (!shipmentRefreshMountedRef.current) return;
+    let refreshDelay = DELIVERY_SHIPMENT_REFRESH_INITIAL_DELAY_MS;
+    let retryTimer: number | null = null;
+    let deadline: number | null = null;
+    let stopped = false;
+    const isVisible = () => profileShipmentsRef.current.shipments.some(
+      (shipment) => shipment.dropId === dropId && shipment.deliveryId === deliveryId,
+    );
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+      if (deadline !== null) {
+        window.clearTimeout(deadline);
+        deadline = null;
+      }
+      shipmentRefreshStopsRef.current.delete(stop);
+      if (
+        transactionKey &&
+        shipmentRefreshStopsByTransactionKeyRef.current.get(transactionKey) === stop
+      ) {
+        shipmentRefreshStopsByTransactionKeyRef.current.delete(transactionKey);
+      }
+    };
+    const refresh = async () => {
+      if (stopped) return;
+      if (!hasAuthenticatedWalletSession(wallet) || isVisible()) {
+        stop();
+        return;
+      }
+      try {
+        await refreshProfileState();
+      } catch (err) {
+        console.warn('[mons] failed to refresh pending shipment', err);
+      }
+      if (stopped) return;
+      if (!hasAuthenticatedWalletSession(wallet) || isVisible()) {
+        stop();
+        return;
+      }
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        void refresh();
+      }, refreshDelay);
+      refreshDelay = Math.min(refreshDelay * 2, DELIVERY_SHIPMENT_REFRESH_MAX_DELAY_MS);
+    };
+    if (transactionKey) shipmentRefreshStopsByTransactionKeyRef.current.get(transactionKey)?.();
+    deadline = window.setTimeout(stop, DELIVERY_SHIPMENT_REFRESH_TIMEOUT_MS);
+    shipmentRefreshStopsRef.current.add(stop);
+    if (transactionKey) shipmentRefreshStopsByTransactionKeyRef.current.set(transactionKey, stop);
+    void refresh();
+  }, [hasAuthenticatedWalletSession, refreshProfileState]);
 
   const handleShip = async ({
     formatted,
@@ -6179,17 +6263,24 @@ function App({
             pendingPreparedSubmissionKeysRef.current.delete(deliveryWallet);
             if (pendingSubmission && isPotentiallySubmittedTransactionError(err)) {
               activeDeliveryReservation = null;
+              startShipmentRefresh(
+                pendingSubmission.wallet,
+                pendingSubmission.dropId,
+                pendingSubmission.deliveryId,
+                pendingSubmittedTransactionKey(pendingSubmission),
+              );
               if (deliveryUiIsCurrent()) {
                 showToast(
                   `Shipment submitted · id ${pendingSubmission.deliveryId} · confirmation pending · ${shortAddress(pendingSubmission.signature)}`,
                 );
               }
-              void runDeliveryRecovery({
+              const recovery = runDeliveryRecovery({
                 dropId: pendingSubmission.dropId,
                 deliveryId: pendingSubmission.deliveryId,
                 force: true,
               });
-              void reconcilePendingPreparedTransaction(pendingSubmission);
+              void recovery.catch(() => undefined);
+              void reconcilePendingPreparedTransaction(pendingSubmission).catch(() => undefined);
               return null;
             }
             const reservation = pendingSubmission || activeDeliveryReservation;
@@ -6221,11 +6312,12 @@ function App({
         setDeliveryOpen(false);
         setSelected((current) => new Set([...current].filter((itemId) => !deliverableIds.includes(itemId))));
       }
-      await refetchInventory().catch((err) => {
+      void refetchInventory().catch((err) => {
         console.warn('[mons] failed to refresh inventory after shipment', err);
       });
       const deliveryId = resp.deliveryId;
       if (deliveryId) {
+        startShipmentRefresh(deliveryWallet, deliveryDrop.dropId, deliveryId);
         try {
           if (deliveryUiIsCurrent()) showToast(`Shipment submitted${idSuffix} · ${sig} · issuing receipts…`);
           const issued = await retryWithBackoff(
@@ -6234,18 +6326,26 @@ function App({
               maxAttempts: 3,
               baseDelayMs: 500,
               maxDelayMs: 2_000,
-              shouldRetry: isRetryableCallableError,
+              shouldRetry: isRetryableReceiptIssuanceError,
             },
           );
           const minted = Number(issued?.receiptsMinted || 0);
           if (deliveryUiIsCurrent()) {
             showToast(`Shipment submitted${idSuffix} · ${sig} · receipts issued (${minted})`);
           }
-          await refetchInventory().catch((err) => {
-            console.warn('[mons] failed to refresh inventory after issuing shipment receipts', err);
-          });
+          await Promise.all([
+            refetchInventory().catch((err) => {
+              console.warn('[mons] failed to refresh inventory after issuing shipment receipts', err);
+            }),
+            refreshProfileState().catch((err) => {
+              console.warn('[mons] failed to refresh shipments after issuing shipment receipts', err);
+            }),
+          ]);
         } catch (err) {
           console.warn('Direct issueReceipts failed, starting background recovery', err);
+          void refreshProfileState().catch((refreshErr) => {
+            console.warn('[mons] failed to refresh shipment before recovery', refreshErr);
+          });
           void runDeliveryRecovery({
             dropId: deliveryDrop.dropId,
             deliveryId,
@@ -8460,7 +8560,14 @@ function App({
             boxNamePrefix={selectedDropConfig?.namePrefix}
             figureNamePrefix={selectedDropConfig?.figureNamePrefix}
             dropFamily={selectedDropConfig?.dropFamily}
-            submitDisabled={!canShipSelected || !connectedWallet || !publicKey || adminIrlRedeeming}
+            shipmentPending={pendingDeliveryItemIds.size > 0}
+            submitDisabled={
+              !canShipSelected ||
+              !connectedWallet ||
+              !publicKey ||
+              pendingDeliveryItemIds.size > 0 ||
+              adminIrlRedeeming
+            }
             countryCode={deliveryCountryCode}
             onCountryCodeChange={setDeliveryCountryCode}
             submitLabel={deliveryCtaLabel}
