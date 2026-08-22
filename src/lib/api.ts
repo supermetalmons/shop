@@ -264,6 +264,8 @@ type AuthenticatedApiPath =
   | '/checkout/session'
   | '/claims/irl/prepare'
   | '/delivery/prepare'
+  | '/delivery/receipts/issue'
+  | '/delivery/receipts/recover'
   | '/receipts/transfer/prepare'
   | '/profile/reconcile'
   | '/profile/state'
@@ -295,6 +297,7 @@ const IRL_CLAIM_PREPARE_API_TIMEOUT_MS = 65_000;
 const ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS = 65_000;
 const REVEAL_DUDES_API_TIMEOUT_MS = 65_000;
 const DELIVERY_PREPARE_API_TIMEOUT_MS = 65_000;
+const DELIVERY_RECEIPTS_API_TIMEOUT_MS = 65_000;
 const RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
@@ -308,6 +311,9 @@ function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/admin/irl-redeem/prepare') return ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/boxes/reveal') return REVEAL_DUDES_API_TIMEOUT_MS;
   if (pathname === '/delivery/prepare') return DELIVERY_PREPARE_API_TIMEOUT_MS;
+  if (pathname === '/delivery/receipts/issue' || pathname === '/delivery/receipts/recover') {
+    return DELIVERY_RECEIPTS_API_TIMEOUT_MS;
+  }
   if (pathname === '/receipts/transfer/prepare') return RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/checkout/session') return STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
@@ -1469,6 +1475,93 @@ export async function prepareAdminIrlRedeemTx(args: {
   return parsed;
 }
 
+function parseIssueReceiptsResult(value: unknown): IssueReceiptsResult | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['processed', 'deliveryId', 'receiptsMinted', 'receiptTxs', 'closeDeliveryTx']) ||
+    value.processed !== true ||
+    !Number.isSafeInteger(value.deliveryId) ||
+    Number(value.deliveryId) < 1 ||
+    Number(value.deliveryId) > 0xffff_ffff ||
+    !Number.isSafeInteger(value.receiptsMinted) ||
+    Number(value.receiptsMinted) < 0 ||
+    !Array.isArray(value.receiptTxs) ||
+    !value.receiptTxs.every((signature) => typeof signature === 'string' && isNonZeroBase58Bytes(signature, 64)) ||
+    (value.closeDeliveryTx !== null && (
+      typeof value.closeDeliveryTx !== 'string' ||
+      !isNonZeroBase58Bytes(value.closeDeliveryTx, 64)
+    ))
+  ) return null;
+  return {
+    processed: true,
+    deliveryId: Number(value.deliveryId),
+    receiptsMinted: Number(value.receiptsMinted),
+    receiptTxs: value.receiptTxs as string[],
+    closeDeliveryTx: value.closeDeliveryTx as string | null,
+  };
+}
+
+const DELIVERY_RECOVERY_OUTCOMES = new Set([
+  'recovered',
+  'failed',
+  'lease_active',
+  'attempt_capped',
+  'not_eligible',
+  'missing_delivery',
+  'not_found',
+  'skipped_status',
+]);
+
+function parseRecoverDeliveryOrdersResult(value: unknown): RecoverDeliveryOrdersResult | null {
+  if (
+    !isRecord(value) ||
+    !hasExactRequiredAndOptionalKeys(
+      value,
+      ['attempted', 'recovered', 'remainingProcessing', 'walletRecovery', 'results'],
+      ['nextCheckAt'],
+    ) ||
+    !Number.isSafeInteger(value.attempted) || Number(value.attempted) < 0 ||
+    !Number.isSafeInteger(value.recovered) || Number(value.recovered) < 0 ||
+    !Number.isSafeInteger(value.remainingProcessing) || Number(value.remainingProcessing) < 0 ||
+    (value.nextCheckAt !== undefined && (!Number.isFinite(value.nextCheckAt) || Number(value.nextCheckAt) < 0)) ||
+    !isRecord(value.walletRecovery) ||
+    !hasExactKeys(value.walletRecovery, ['remainingProcessing', 'nextCheckAt']) ||
+    !Number.isSafeInteger(value.walletRecovery.remainingProcessing) ||
+    Number(value.walletRecovery.remainingProcessing) < 0 ||
+    (value.walletRecovery.nextCheckAt !== null && (
+      !Number.isFinite(value.walletRecovery.nextCheckAt) ||
+      Number(value.walletRecovery.nextCheckAt) < 0
+    )) ||
+    !Array.isArray(value.results)
+  ) return null;
+  for (const result of value.results) {
+    if (
+      !isRecord(result) ||
+      !hasExactRequiredAndOptionalKeys(
+        result,
+        ['dropId', 'deliveryId', 'statusBefore', 'outcome', 'verification'],
+        ['message', 'errorCode'],
+      ) ||
+      typeof result.dropId !== 'string' || normalizeDropId(result.dropId) !== result.dropId ||
+      !FRONTEND_DROPS[result.dropId] ||
+      !Number.isSafeInteger(result.deliveryId) || Number(result.deliveryId) < 1 ||
+      Number(result.deliveryId) > 0xffff_ffff ||
+      typeof result.statusBefore !== 'string' || !result.statusBefore || result.statusBefore.length > 64 ||
+      typeof result.outcome !== 'string' || !DELIVERY_RECOVERY_OUTCOMES.has(result.outcome) ||
+      result.verification !== 'delivery_pda' ||
+      (result.message !== undefined && (typeof result.message !== 'string' || result.message.length > 300)) ||
+      (result.errorCode !== undefined && (typeof result.errorCode !== 'string' || result.errorCode.length > 64))
+    ) return null;
+  }
+  if (
+    value.remainingProcessing !== value.walletRecovery.remainingProcessing ||
+    (value.nextCheckAt === undefined
+      ? value.walletRecovery.nextCheckAt !== null
+      : value.nextCheckAt !== value.walletRecovery.nextCheckAt)
+  ) return null;
+  return value as RecoverDeliveryOrdersResult;
+}
+
 export async function finalizeAdminIrlRedeem(args: {
   requestId: string;
   dropId: string;
@@ -1486,10 +1579,15 @@ export async function issueReceipts(
   signature: string,
   dropId: string,
 ): Promise<IssueReceiptsResult> {
-  return callFunction<{ owner: string; deliveryId: number; signature: string; dropId: string }, IssueReceiptsResult>(
-    'issueReceipts',
-    { owner, deliveryId, signature, dropId },
-  );
+  const response = await callProfileApi('/delivery/receipts/issue', {
+    owner,
+    deliveryId,
+    signature,
+    dropId,
+  });
+  const parsed = parseIssueReceiptsResult(response);
+  if (!parsed || parsed.deliveryId !== deliveryId) throw new Error('Invalid receipt issuance response');
+  return parsed;
 }
 
 export async function recoverMyDeliveryOrders(args?: RecoverDeliveryOrdersArgs): Promise<RecoverDeliveryOrdersResult> {
@@ -1503,7 +1601,10 @@ export async function recoverMyDeliveryOrders(args?: RecoverDeliveryOrdersArgs):
   if (args?.force === true) {
     payload.force = true;
   }
-  return callFunction<RecoverDeliveryOrdersArgs, RecoverDeliveryOrdersResult>('recoverMyDeliveryOrders', payload);
+  const response = await callProfileApi('/delivery/receipts/recover', payload);
+  const parsed = parseRecoverDeliveryOrdersResult(response);
+  if (!parsed) throw new Error('Invalid delivery recovery response');
+  return parsed;
 }
 
 function parseIrlClaimPrepareResponse(response: unknown): PrepareIrlClaimResponse | null {
@@ -1700,6 +1801,8 @@ export const profileApiTestHooks = {
   parseFulfillmentStatusUpdate,
   parseFulfillmentShipStationAddressCorrectionDetails,
   parseDeliveryPrepareResponse,
+  parseIssueReceiptsResult,
+  parseRecoverDeliveryOrdersResult,
   parseAdminIrlRedeemPrepareResponse,
   parseIrlClaimPrepareResponse,
   parseReceiptTransferPrepareResponse,

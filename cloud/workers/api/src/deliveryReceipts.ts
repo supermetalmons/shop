@@ -1,0 +1,3198 @@
+import bs58 from 'bs58';
+import {
+  ComputeBudgetProgram,
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+  type AccountInfo,
+  type FetchFn,
+  type VersionedTransactionResponse,
+} from '@solana/web3.js';
+import { z } from 'zod';
+import {
+  getFunctionsDrop,
+  type FunctionsDropConfig,
+} from '../../../../functions/src/config/deployment.js';
+import {
+  IRL_CLAIM_CODE_DIGITS,
+  IRL_CLAIM_CODE_NAMESPACE,
+  normalizeIrlClaimCode,
+} from '../../../../functions/src/claimCodes.js';
+import {
+  dropBoxAssignmentPath,
+  dropDeliveryOrderPath,
+  dropDudeAssignmentPath,
+  dropDudePoolPath,
+} from '../../../../functions/src/dropPaths.js';
+import {
+  resolveDeliveryOrderDropId,
+  resolveDeliveryOrderIdentity,
+} from '../../../../functions/src/deliveryOrderSummaries.js';
+import {
+  DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS,
+  DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS,
+  buildRecoverDeliveryOrdersResult,
+  buildWalletDeliveryRecoveryState,
+  nextPreparedDeliveryRecoveryDelayMs,
+  preparedDeliveryRecoveryNextCheckMs,
+  processingDeliveryRecoveryNextCheckMs,
+} from '../../../../functions/src/shared/deliveryRecovery.js';
+import {
+  DudeAssignmentPoolExhaustedError,
+  pickDudeIdsForAssignment,
+} from '../../../../functions/src/shared/assignDudesPicker.js';
+import {
+  BoxMinterConfigCodecError,
+  decodeBoxMinterConfigData,
+  type DecodedBoxMinterConfigData,
+} from '../../../../functions/src/shared/boxMinterConfigCodec.js';
+import {
+  BOX_MINTER_CONFIG_SEED,
+  isBoxMinterDiscountMintsPerWallet,
+  isConfiguredBoxMinterItemsPerBox,
+} from '../../../../functions/src/shared/boxMinterProtocol.js';
+import type {
+  DeliveryRecoveryOutcome,
+  IssueReceiptsResult,
+  RecoverDeliveryOrdersItemResult,
+  RecoverDeliveryOrdersResult,
+  WalletDeliveryRecoveryState,
+} from '../../../../functions/src/shared/contracts.js';
+import {
+  boxMinterMetadataBaseMatchesDrop,
+  normalizeDropId,
+  type SolanaCluster,
+} from '../../../../functions/src/shared/deploymentCore.js';
+import { sanitizeDudeAssignmentPool } from '../../../../functions/src/shared/dudeAssignmentPool.js';
+import {
+  PACK_STATUS_SCHEMA_VERSION,
+  countDeliveryOrderBoxItems,
+  countDeliveryOrderDudeItems,
+  packStatusCardsPerPack,
+  shouldTrackPackStatusForDrop,
+} from '../../../../functions/src/shared/packStatus.js';
+import {
+  BUBBLEGUM_PROGRAM_ADDRESS,
+  MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
+  MPL_CORE_CPI_SIGNER_ADDRESS,
+  MPL_CORE_PROGRAM_ADDRESS,
+  MPL_NOOP_PROGRAM_ADDRESS,
+  SPL_NOOP_PROGRAM_ADDRESS,
+} from '../../../../functions/src/shared/solanaProgramAddresses.js';
+import {
+  isBase58Bytes,
+  isNonZeroBase58Bytes,
+} from '../../../../functions/src/shared/solanaRpcProxy.js';
+import {
+  WALLET_SESSION_COLLECTION,
+  resolveWalletSessionBinding,
+} from '../../../../functions/src/shared/walletLifecycle.js';
+import {
+  FirebaseIdTokenError,
+  verifyFirebaseIdToken,
+  type FirebaseIdentity,
+} from './firebaseIdToken.js';
+import {
+  FIRESTORE_DATABASE_NAME,
+  FIRESTORE_DOCUMENTS_BASE_URL,
+  FIRESTORE_DOCUMENT_NAME_PREFIX,
+  FirestoreWriteConflict,
+  ProfileReadError,
+  authenticatedFirestoreRequest,
+  cancelResponseBody,
+  createGoogleAccessTokenProvider,
+  decodeFirestoreFields,
+  isRecord,
+  type GoogleAccessTokenProvider,
+  type ProfileProviderFetch,
+} from './firestoreRest.js';
+
+export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
+export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
+
+const REQUEST_MAX_BYTES = 4096;
+const PROVIDER_MAX_BYTES = 2 * 1024 * 1024;
+const HANDLER_TIMEOUT_MS = 55_000;
+const CLEANUP_TIMEOUT_MS = 5_000;
+const PACK_STATUS_TIMEOUT_MS = 10_000;
+const RPC_TIMEOUT_MS = 8_000;
+const TX_SEND_TIMEOUT_MS = 12_000;
+const TX_CONFIRM_TIMEOUT_MS = 25_000;
+const TX_CONFIRM_POLL_MS = 800;
+const TX_MAX_SEND_ATTEMPTS = 3;
+const DELIVERY_RECOVERY_LEASE_MS = 90_000;
+const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
+const MAX_PREPARED_DELIVERY_RECOVERY_CHECKS = DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS.length;
+const FIRESTORE_TRANSACTION_ATTEMPTS = 6;
+const SOLANA_MAX_RAW_TX_BYTES = 1232;
+const MAX_U32 = 0xffff_ffff;
+const CANONICAL_DROP_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const MPL_CORE_COLLECTION_V1_DISCRIMINATOR = 5;
+const MPL_CORE_COLLECTION_V1_MIN_BYTES = 49;
+const ACCOUNT_DELIVERY_RECORD = Buffer.from('2b0f869afad50393', 'hex');
+const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
+const IX_CLOSE_DELIVERY = Buffer.from('ae641ab98ea5f208', 'hex');
+const IX_MINT_RECEIPTS = Buffer.from('c7c2556f92996a77', 'hex');
+const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
+const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
+const MPL_NOOP_PROGRAM_ID = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
+const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey(MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS);
+const BUBBLEGUM_PROGRAM_ID = new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS);
+const MPL_CORE_CPI_SIGNER = new PublicKey(MPL_CORE_CPI_SIGNER_ADDRESS);
+
+const deliveryIdSchema = z.number().int().min(1).max(MAX_U32);
+const dropIdSchema = z.string().min(1).max(64).refine((value) =>
+  CANONICAL_DROP_ID_PATTERN.test(value) && normalizeDropId(value) === value);
+
+const issueSchema = z.object({
+  owner: z.string().min(32).max(64),
+  deliveryId: deliveryIdSchema,
+  signature: z.string().min(64).max(128),
+  dropId: dropIdSchema,
+}).strict();
+
+const recoverSchema = z.object({
+  dropId: dropIdSchema.optional(),
+  deliveryId: deliveryIdSchema.optional(),
+  force: z.boolean().optional(),
+}).strict();
+
+type IssueRequest = z.infer<typeof issueSchema>;
+type RecoverRequest = z.infer<typeof recoverSchema>;
+
+type DeliveryReceiptsEnv = Pick<
+  Env,
+  'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
+>;
+
+type DeliveryReceiptErrorCode =
+  | 'invalid-argument'
+  | 'unauthenticated'
+  | 'permission-denied'
+  | 'not-found'
+  | 'aborted'
+  | 'failed-precondition'
+  | 'resource-exhausted'
+  | 'deadline-exceeded'
+  | 'unavailable'
+  | 'internal';
+
+class DeliveryReceiptError extends Error {
+  constructor(
+    readonly code: DeliveryReceiptErrorCode,
+    message: string,
+    readonly details?: unknown,
+  ) {
+    super(message);
+    this.name = 'DeliveryReceiptError';
+  }
+}
+
+class ReceiptBatchRetryExhaustedError extends DeliveryReceiptError {
+  constructor(lastError: unknown) {
+    super('unavailable', 'Unable to issue receipts. Retry later.', {
+      lastError: transactionErrorMessage(lastError),
+    });
+    this.name = 'ReceiptBatchRetryExhaustedError';
+  }
+}
+
+type DeliveryRuntime = {
+  config: FunctionsDropConfig;
+  dropId: string;
+  cluster: SolanaCluster;
+  boxMinterProgramId: PublicKey;
+  boxMinterConfigPda: PublicKey;
+  collectionMint: PublicKey;
+  receiptsMerkleTree: PublicKey;
+  itemsPerBox: number;
+  maxSupply: number;
+  maxDudeId: number;
+};
+
+type DecodedOnchainConfig = {
+  admin: PublicKey;
+  coreCollection: PublicKey;
+  decoded: DecodedBoxMinterConfigData;
+};
+
+type FirestoreContext = {
+  accessTokenProvider: GoogleAccessTokenProvider;
+  nowMs: number;
+  providerFetch: ProfileProviderFetch;
+  serviceAccountJson: string;
+  signal: AbortSignal;
+};
+
+type ProviderContext = {
+  apiKey: string;
+  fetch: ProfileProviderFetch;
+  signal: AbortSignal;
+};
+
+type FirestoreValue = Record<string, unknown>;
+
+type FirestoreDocument = {
+  id: string;
+  path: string;
+  fields: Record<string, unknown>;
+  updateTime: string;
+};
+
+type DeliveryOrderDocument = FirestoreDocument;
+
+type VerifiedReceiptIssuanceTarget = {
+  verification: 'signature' | 'delivery_pda';
+  signature: string | null;
+  expectedDeliveryPda: PublicKey;
+  expectedDeliveryBump: number;
+  targetAssetIds: string[];
+};
+
+type RetryIssueReceiptsArgs = {
+  ownerWallet: string;
+  deliveryId: number;
+  dropId: string;
+} & ({ verification: 'signature'; signature: string } | { verification: 'delivery_pda' });
+
+type ReceiptIssueResult = {
+  processed: true;
+  deliveryId: number;
+  receiptsMinted: number;
+  receiptTxs: string[];
+  closeDeliveryTx: string | null;
+};
+
+type DeliveryRequestMetrics = {
+  upstreamCalls: number;
+  providerDurationMs: number;
+};
+
+export type DeliveryReceiptRequestResult = {
+  response: Response;
+  metrics: DeliveryRequestMetrics;
+  authOutcome: 'accepted' | 'rejected' | 'provider-failure';
+  dropId?: string;
+  deliveryId?: number;
+  verification?: 'signature' | 'delivery_pda';
+  attempted?: number;
+  recovered?: number;
+};
+
+type DeliveryReceiptWaitUntil = (promise: Promise<unknown>) => void;
+
+type DeliveryReceiptDependencies = {
+  accessTokenProvider: GoogleAccessTokenProvider;
+  issue: (
+    body: IssueRequest,
+    identity: FirebaseIdentity,
+    env: DeliveryReceiptsEnv,
+    firestore: FirestoreContext,
+    provider: ProviderContext,
+    waitUntil: DeliveryReceiptWaitUntil,
+  ) => Promise<ReceiptIssueResult>;
+  nowMs: () => number;
+  providerFetch: ProfileProviderFetch;
+  recover: (
+    body: RecoverRequest,
+    identity: FirebaseIdentity,
+    env: DeliveryReceiptsEnv,
+    firestore: FirestoreContext,
+    provider: ProviderContext,
+    waitUntil: DeliveryReceiptWaitUntil,
+  ) => Promise<RecoverDeliveryOrdersResult>;
+  timeoutMs: number;
+  verifyIdToken: typeof verifyFirebaseIdToken;
+};
+
+function statusForCode(code: DeliveryReceiptErrorCode): number {
+  if (code === 'invalid-argument') return 400;
+  if (code === 'unauthenticated') return 401;
+  if (code === 'permission-denied') return 403;
+  if (code === 'not-found') return 404;
+  if (code === 'aborted' || code === 'failed-precondition') return 409;
+  if (code === 'resource-exhausted') return 429;
+  if (code === 'deadline-exceeded') return 504;
+  if (code === 'unavailable') return 503;
+  return 500;
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return Response.json(body, {
+    status,
+    headers: {
+      'Cache-Control': 'no-store',
+      'Content-Type': 'application/json; charset=utf-8',
+      'Timing-Allow-Origin': '*',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
+
+function errorResponse(error: DeliveryReceiptError): Response {
+  return jsonResponse({
+    error: {
+      code: error.code,
+      message: error.message,
+    },
+  }, statusForCode(error.code));
+}
+
+function summarizeError(error: unknown): Record<string, unknown> {
+  if (error instanceof DeliveryReceiptError) {
+    return {
+      kind: error.name,
+      code: error.code,
+      message: error.message,
+    };
+  }
+  if (error instanceof Error) return { kind: error.name, message: error.message };
+  return { kind: typeof error, message: String(error) };
+}
+
+async function readRequestBody(
+  request: Request,
+  signal: AbortSignal,
+  kind: 'issue' | 'recover',
+): Promise<IssueRequest | RecoverRequest> {
+  const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
+  if (contentType !== 'application/json') {
+    await request.body?.cancel().catch(() => undefined);
+    throw new DeliveryReceiptError('invalid-argument', 'Content-Type must be application/json.');
+  }
+  const contentLength = Number(request.headers.get('Content-Length'));
+  if (Number.isFinite(contentLength) && contentLength > REQUEST_MAX_BYTES) {
+    await request.body?.cancel().catch(() => undefined);
+    throw new DeliveryReceiptError('invalid-argument', 'Delivery receipt request is too large.');
+  }
+  if (!request.body) throw new DeliveryReceiptError('invalid-argument', 'Invalid delivery receipt request.');
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  const chunks: string[] = [];
+  let size = 0;
+  const onAbort = () => {
+    void reader.cancel(signal.reason).catch(() => undefined);
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  try {
+    while (true) {
+      if (signal.aborted) throw signal.reason;
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > REQUEST_MAX_BYTES) {
+        throw new DeliveryReceiptError('invalid-argument', 'Delivery receipt request is too large.');
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+    const value: unknown = JSON.parse(chunks.join(''));
+    const parsed = kind === 'issue' ? issueSchema.safeParse(value) : recoverSchema.safeParse(value);
+    if (!parsed.success) throw new DeliveryReceiptError('invalid-argument', 'Invalid delivery receipt request.');
+    return parsed.data;
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    if (error instanceof DeliveryReceiptError) throw error;
+    if (signal.aborted) throw signal.reason;
+    throw new DeliveryReceiptError('invalid-argument', 'Invalid delivery receipt request.');
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+function canonicalPublicKey(value: string, label: string): PublicKey {
+  try {
+    const key = new PublicKey(value);
+    if (key.toBase58() !== value) throw new Error('non-canonical');
+    return key;
+  } catch {
+    throw new DeliveryReceiptError('invalid-argument', `Invalid ${label}.`);
+  }
+}
+
+function configuredPublicKey(value: string | undefined, label: string, required = true): PublicKey {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    if (!required) return PublicKey.default;
+    throw new DeliveryReceiptError('failed-precondition', `${label} is not configured.`);
+  }
+  try {
+    const key = new PublicKey(normalized);
+    if (required && key.equals(PublicKey.default)) {
+      throw new DeliveryReceiptError('failed-precondition', `${label} is not configured.`);
+    }
+    return key;
+  } catch (error) {
+    if (error instanceof DeliveryReceiptError) throw error;
+    throw new DeliveryReceiptError('failed-precondition', `${label} is invalid.`);
+  }
+}
+
+function runtimeForDrop(rawDropId: string): DeliveryRuntime {
+  const dropId = normalizeDropId(rawDropId);
+  const config = getFunctionsDrop(dropId);
+  if (!config) throw new DeliveryReceiptError('invalid-argument', `Unsupported dropId: ${dropId}`);
+  const itemsPerBox = Number(config.itemsPerBox);
+  const maxSupply = Number(config.maxSupply);
+  const maxDudeId = itemsPerBox * maxSupply;
+  if (
+    !isConfiguredBoxMinterItemsPerBox(itemsPerBox) ||
+    !Number.isInteger(maxSupply) || maxSupply < 1 || maxSupply > 0xffff_ffff ||
+    !Number.isSafeInteger(maxDudeId) || maxDudeId > 0xffff
+  ) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery drop configuration is invalid.', { dropId });
+  }
+  const boxMinterProgramId = configuredPublicKey(config.boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
+  const boxMinterConfigPda = configuredPublicKey(config.boxMinterConfigPda, 'BOX_MINTER_CONFIG_PDA', false);
+  return {
+    config,
+    dropId,
+    cluster: config.solanaCluster,
+    boxMinterProgramId,
+    boxMinterConfigPda: boxMinterConfigPda.equals(PublicKey.default)
+      ? PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0]
+      : boxMinterConfigPda,
+    collectionMint: configuredPublicKey(config.collectionMint, 'COLLECTION_MINT'),
+    receiptsMerkleTree: configuredPublicKey(config.receiptsMerkleTree, 'RECEIPTS_MERKLE_TREE'),
+    itemsPerBox,
+    maxSupply,
+    maxDudeId,
+  };
+}
+
+function decodeCosigner(secret: string): Keypair {
+  let decoded: Uint8Array;
+  try {
+    decoded = bs58.decode(secret.trim());
+  } catch {
+    throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
+  }
+  if (decoded.length !== 64) {
+    throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
+  }
+  try {
+    return Keypair.fromSecretKey(decoded);
+  } catch {
+    throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
+  }
+}
+
+function firestoreString(value: string): FirestoreValue {
+  return { stringValue: value };
+}
+
+function firestoreInteger(value: number): FirestoreValue {
+  return { integerValue: String(Math.floor(value)) };
+}
+
+function firestoreBoolean(value: boolean): FirestoreValue {
+  return { booleanValue: value };
+}
+
+function firestoreTimestamp(value: number): FirestoreValue {
+  return { timestampValue: new Date(value).toISOString() };
+}
+
+function firestoreArray(values: readonly unknown[]): FirestoreValue {
+  return { arrayValue: { values: values.map(firestoreValue) } };
+}
+
+function firestoreMap(value: Record<string, unknown>): FirestoreValue {
+  return {
+    mapValue: {
+      fields: Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, firestoreValue(entry)])),
+    },
+  };
+}
+
+function firestoreValue(value: unknown): FirestoreValue {
+  if (value === null) return { nullValue: null };
+  if (typeof value === 'string') return firestoreString(value);
+  if (typeof value === 'boolean') return firestoreBoolean(value);
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Number.isInteger(value) ? firestoreInteger(value) : { doubleValue: value };
+  }
+  if (Array.isArray(value)) return firestoreArray(value);
+  if (isRecord(value)) {
+    const keys = Object.keys(value);
+    if (
+      keys.length === 1 &&
+      [
+        'arrayValue',
+        'booleanValue',
+        'doubleValue',
+        'integerValue',
+        'mapValue',
+        'nullValue',
+        'stringValue',
+        'timestampValue',
+      ].includes(keys[0])
+    ) return value;
+    return firestoreMap(value);
+  }
+  throw new DeliveryReceiptError('internal', 'Receipt persistence failed.');
+}
+
+function nestedFirestoreFields(entries: Record<string, unknown>): Record<string, FirestoreValue> {
+  const root: Record<string, unknown> = {};
+  for (const [path, value] of Object.entries(entries)) {
+    const parts = path.split('.');
+    let cursor = root;
+    for (let index = 0; index < parts.length - 1; index += 1) {
+      const part = parts[index];
+      const existing = cursor[part];
+      if (!isRecord(existing)) cursor[part] = {};
+      cursor = cursor[part] as Record<string, unknown>;
+    }
+    cursor[parts[parts.length - 1]] = value;
+  }
+  return Object.fromEntries(Object.entries(root).map(([key, value]) => [key, firestoreValue(value)]));
+}
+
+function documentName(path: string): string {
+  return `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`;
+}
+
+function firestoreDocumentUrl(path: string, transaction?: string): string {
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/${encodedPath}`);
+  if (transaction) url.searchParams.set('transaction', transaction);
+  return url.toString();
+}
+
+function documentPathFromName(name: string): string | null {
+  return name.startsWith(FIRESTORE_DOCUMENT_NAME_PREFIX)
+    ? name.slice(FIRESTORE_DOCUMENT_NAME_PREFIX.length)
+    : null;
+}
+
+function decodeDocument(value: unknown): FirestoreDocument | null {
+  if (!isRecord(value) || typeof value.name !== 'string' || typeof value.updateTime !== 'string') return null;
+  const path = documentPathFromName(value.name);
+  const fields = decodeFirestoreFields(value.fields);
+  if (!path || !fields) return null;
+  const id = path.split('/').at(-1) || '';
+  return id ? { id, path, fields, updateTime: value.updateTime } : null;
+}
+
+async function readDocument(
+  context: FirestoreContext,
+  path: string,
+  transaction?: string,
+): Promise<FirestoreDocument | null> {
+  const value = await authenticatedFirestoreRequest({
+    ...context,
+    method: 'GET',
+    url: firestoreDocumentUrl(path, transaction),
+  });
+  if (!value) return null;
+  const document = decodeDocument(value);
+  if (!document) throw new DeliveryReceiptError('unavailable', 'Receipt data is temporarily unavailable.');
+  return document;
+}
+
+async function beginTransaction(context: FirestoreContext): Promise<string> {
+  const value = await authenticatedFirestoreRequest({
+    ...context,
+    body: JSON.stringify({ options: { readWrite: {} } }),
+    method: 'POST',
+    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:beginTransaction`,
+  });
+  if (!isRecord(value) || typeof value.transaction !== 'string' || !value.transaction) {
+    throw new DeliveryReceiptError('unavailable', 'Receipt data is temporarily unavailable.');
+  }
+  return value.transaction;
+}
+
+async function rollbackTransaction(context: FirestoreContext, transaction: string): Promise<void> {
+  await authenticatedFirestoreRequest({
+    ...context,
+    body: JSON.stringify({ transaction }),
+    method: 'POST',
+    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:rollback`,
+  });
+}
+
+async function rollbackTransactionBestEffort(context: FirestoreContext, transaction: string): Promise<void> {
+  await rollbackTransaction(context, transaction).catch(() => undefined);
+}
+
+async function commitWrites(
+  context: FirestoreContext,
+  writes: readonly Record<string, unknown>[],
+  transaction?: string,
+): Promise<void> {
+  await authenticatedFirestoreRequest({
+    ...context,
+    body: JSON.stringify({ ...(transaction ? { transaction } : {}), writes }),
+    method: 'POST',
+    surfaceWriteConflict: true,
+    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
+  });
+}
+
+function updateWrite(args: {
+  path: string;
+  fields?: Record<string, unknown>;
+  updateMask: readonly string[];
+  transforms?: readonly Record<string, unknown>[];
+  currentDocument?: Record<string, unknown>;
+}): Record<string, unknown> {
+  return {
+    update: {
+      name: documentName(args.path),
+      fields: nestedFirestoreFields(args.fields || {}),
+    },
+    updateMask: { fieldPaths: [...args.updateMask] },
+    ...(args.transforms?.length ? { updateTransforms: [...args.transforms] } : {}),
+    ...(args.currentDocument ? { currentDocument: args.currentDocument } : {}),
+  };
+}
+
+function createWrite(args: {
+  path: string;
+  fields: Record<string, unknown>;
+  transforms?: readonly Record<string, unknown>[];
+}): Record<string, unknown> {
+  return {
+    update: {
+      name: documentName(args.path),
+      fields: nestedFirestoreFields(args.fields),
+    },
+    currentDocument: { exists: false },
+    ...(args.transforms?.length ? { updateTransforms: [...args.transforms] } : {}),
+  };
+}
+
+async function loadWalletSession(context: FirestoreContext, uid: string): Promise<string> {
+  const document = await readDocument(context, `${WALLET_SESSION_COLLECTION}/${uid}`);
+  const resolution = resolveWalletSessionBinding({
+    uid,
+    sessionExists: Boolean(document),
+    sessionData: document?.fields || null,
+  });
+  if ('reason' in resolution) {
+    throw new DeliveryReceiptError('unauthenticated', 'Sign in with your wallet first.');
+  }
+  return resolution.wallet;
+}
+
+function mapProviderError(error: unknown, message: string): DeliveryReceiptError {
+  if (error instanceof DeliveryReceiptError) return error;
+  if (error instanceof ProfileReadError) {
+    return new DeliveryReceiptError(
+      error.code === 'deadline-exceeded' ? 'deadline-exceeded' : 'unavailable',
+      message,
+    );
+  }
+  return new DeliveryReceiptError('unavailable', message);
+}
+
+async function runDeliveryOrderQuery(
+  context: FirestoreContext,
+  ownerWallet: string,
+  status: 'prepared' | 'processing',
+): Promise<DeliveryOrderDocument[]> {
+  const value = await authenticatedFirestoreRequest({
+    ...context,
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: 'deliveryOrders', allDescendants: true }],
+        where: {
+          compositeFilter: {
+            op: 'AND',
+            filters: [
+              {
+                fieldFilter: {
+                  field: { fieldPath: 'owner' },
+                  op: 'EQUAL',
+                  value: firestoreString(ownerWallet),
+                },
+              },
+              {
+                fieldFilter: {
+                  field: { fieldPath: 'status' },
+                  op: 'EQUAL',
+                  value: firestoreString(status),
+                },
+              },
+            ],
+          },
+        },
+      },
+    }),
+    method: 'POST',
+    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+  });
+  return decodeDeliveryOrderQuery(value, true);
+}
+
+function decodeDeliveryOrderQuery(value: unknown, requireIdentity: boolean): DeliveryOrderDocument[] {
+  if (!Array.isArray(value)) {
+    throw new DeliveryReceiptError('unavailable', 'Delivery recovery data is temporarily unavailable.');
+  }
+  const documents: DeliveryOrderDocument[] = [];
+  for (const result of value) {
+    if (!isRecord(result) || result.document === undefined) continue;
+    const document = decodeDocument(result.document);
+    if (!document) {
+      throw new DeliveryReceiptError('unavailable', 'Delivery recovery data is temporarily unavailable.');
+    }
+    if (requireIdentity && !('identity' in resolveDeliveryOrderIdentity(document.id, document.fields, document.path))) {
+      continue;
+    }
+    documents.push(document);
+  }
+  return documents;
+}
+
+async function runDeliveryRecoveryStateQuery(
+  context: FirestoreContext,
+  ownerWallet: string,
+): Promise<DeliveryOrderDocument[]> {
+  const value = await authenticatedFirestoreRequest({
+    ...context,
+    body: JSON.stringify({
+      structuredQuery: {
+        select: {
+          fields: ['status', 'createdAt', 'processingAt', 'receiptRecovery'].map((fieldPath) => ({ fieldPath })),
+        },
+        from: [{ collectionId: 'deliveryOrders', allDescendants: true }],
+        where: {
+          compositeFilter: {
+            op: 'AND',
+            filters: [
+              {
+                fieldFilter: {
+                  field: { fieldPath: 'owner' },
+                  op: 'EQUAL',
+                  value: firestoreString(ownerWallet),
+                },
+              },
+              {
+                fieldFilter: {
+                  field: { fieldPath: 'status' },
+                  op: 'IN',
+                  value: firestoreArray(['processing', 'prepared']),
+                },
+              },
+            ],
+          },
+        },
+      },
+    }),
+    method: 'POST',
+    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+  });
+  return decodeDeliveryOrderQuery(value, false);
+}
+
+function toMillisMaybe(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function preparedDeliveryRecoveryCheckCount(order: Record<string, unknown>): number {
+  const recovery = isRecord(order.receiptRecovery) ? order.receiptRecovery : {};
+  const raw = Number(recovery.preparedProbeCount || 0);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+}
+
+function processingDeliveryRecoveryReferenceMs(order: Record<string, unknown>): number {
+  const recovery = isRecord(order.receiptRecovery) ? order.receiptRecovery : {};
+  return Math.max(
+    toMillisMaybe(order.createdAt) ?? 0,
+    toMillisMaybe(order.processingAt) ?? 0,
+    toMillisMaybe(recovery.lastAttemptAt) ?? 0,
+  );
+}
+
+function deliveryRecoveryPriorityMs(order: Record<string, unknown>): number {
+  if (order.status === 'processing') return processingDeliveryRecoveryReferenceMs(order);
+  if (order.status === 'prepared') return preparedDeliveryRecoveryNextCheckMs(order) ?? (toMillisMaybe(order.createdAt) ?? 0);
+  return toMillisMaybe(order.createdAt) ?? 0;
+}
+
+function compareDeliveryRecoveryCandidates(
+  left: DeliveryOrderDocument,
+  right: DeliveryOrderDocument,
+): number {
+  const leftStatus = typeof left.fields.status === 'string' ? left.fields.status : '';
+  const rightStatus = typeof right.fields.status === 'string' ? right.fields.status : '';
+  if (leftStatus !== rightStatus) {
+    if (leftStatus === 'processing') return -1;
+    if (rightStatus === 'processing') return 1;
+  }
+  const priority = deliveryRecoveryPriorityMs(left.fields) - deliveryRecoveryPriorityMs(right.fields);
+  return priority || left.path.localeCompare(right.path);
+}
+
+function deliveryRecoveryEligibility(
+  order: Record<string, unknown>,
+  nowMs: number,
+  force: boolean,
+): { eligible: boolean; outcome?: DeliveryRecoveryOutcome; message?: string } {
+  const status = typeof order.status === 'string' ? order.status : 'unknown';
+  if (status === 'processing') {
+    if (force) return { eligible: true };
+    const recovery = isRecord(order.receiptRecovery) ? order.receiptRecovery : {};
+    const lastAttemptAt = toMillisMaybe(recovery.lastAttemptAt) ?? 0;
+    if (lastAttemptAt > 0 && nowMs - lastAttemptAt < DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS) {
+      return { eligible: false, outcome: 'not_eligible', message: 'processing order retry backoff is active' };
+    }
+    return { eligible: true };
+  }
+  if (status === 'prepared') {
+    if (force) return { eligible: true };
+    const nextCheckAt = preparedDeliveryRecoveryNextCheckMs(order);
+    if (nextCheckAt === null) {
+      return { eligible: false, outcome: 'not_eligible', message: 'prepared order recovery checks are exhausted' };
+    }
+    if (nextCheckAt > nowMs) {
+      return { eligible: false, outcome: 'not_eligible', message: 'prepared order is not due for recovery yet' };
+    }
+    return { eligible: true };
+  }
+  if (status === 'prepared_abandoned') {
+    return force
+      ? { eligible: true }
+      : { eligible: false, outcome: 'not_eligible', message: 'prepared order recovery checks are exhausted' };
+  }
+  return {
+    eligible: false,
+    outcome: 'skipped_status',
+    message: `order status \`${status}\` is not recoverable`,
+  };
+}
+
+function orderResultBase(document: DeliveryOrderDocument): {
+  dropId: string;
+  deliveryId: number;
+  statusBefore: string;
+} | null {
+  const identity = resolveDeliveryOrderIdentity(document.id, document.fields, document.path);
+  if (!('identity' in identity)) return null;
+  if (resolveDeliveryOrderDropId(document.fields, document.path) !== identity.identity.dropId) return null;
+  return {
+    dropId: identity.identity.dropId,
+    deliveryId: identity.identity.deliveryId,
+    statusBefore: typeof document.fields.status === 'string' ? document.fields.status : 'unknown',
+  };
+}
+
+async function acquireDeliveryRecoveryLease(
+  context: FirestoreContext,
+  path: string,
+  ownerWallet: string,
+  nowMs: number,
+  force: boolean,
+): Promise<{ acquired: true } | { acquired: false; result: RecoverDeliveryOrdersItemResult }> {
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    let transaction: string | undefined;
+    try {
+      transaction = await beginTransaction(context);
+      const document = await readDocument(context, path, transaction);
+      const fallback = path.split('/');
+      const fallbackDropId = fallback.length === 4 ? fallback[1] : '';
+      const fallbackDeliveryId = Number(fallback.at(-1)) || 0;
+      if (!document) {
+        await rollbackTransactionBestEffort(context, transaction);
+        transaction = undefined;
+        return {
+          acquired: false,
+          result: {
+            dropId: fallbackDropId,
+            deliveryId: fallbackDeliveryId,
+            statusBefore: 'missing',
+            outcome: 'not_found',
+            verification: 'delivery_pda',
+            message: 'delivery order not found',
+          },
+        };
+      }
+      const base = orderResultBase(document);
+      if (!base) {
+        await rollbackTransactionBestEffort(context, transaction);
+        transaction = undefined;
+        return {
+          acquired: false,
+          result: {
+            dropId: '',
+            deliveryId: Number(document.id) || 0,
+            statusBefore: typeof document.fields.status === 'string' ? document.fields.status : 'unknown',
+            outcome: 'failed',
+            verification: 'delivery_pda',
+            message: 'delivery order is missing recovery identifiers',
+          },
+        };
+      }
+      if (document.fields.owner && document.fields.owner !== ownerWallet) {
+        await rollbackTransactionBestEffort(context, transaction);
+        transaction = undefined;
+        return {
+          acquired: false,
+          result: {
+            ...base,
+            outcome: 'failed',
+            verification: 'delivery_pda',
+            message: 'order belongs to a different wallet',
+            errorCode: 'permission-denied',
+          },
+        };
+      }
+      const eligibility = deliveryRecoveryEligibility(document.fields, nowMs, force);
+      if (!eligibility.eligible) {
+        await rollbackTransactionBestEffort(context, transaction);
+        transaction = undefined;
+        return {
+          acquired: false,
+          result: {
+            ...base,
+            outcome: eligibility.outcome || 'not_eligible',
+            verification: 'delivery_pda',
+            ...(eligibility.message ? { message: eligibility.message } : {}),
+          },
+        };
+      }
+      const recovery = isRecord(document.fields.receiptRecovery) ? document.fields.receiptRecovery : {};
+      const leaseExpiresAt = toMillisMaybe(recovery.leaseExpiresAt) ?? 0;
+      if (leaseExpiresAt > nowMs) {
+        await rollbackTransactionBestEffort(context, transaction);
+        transaction = undefined;
+        return {
+          acquired: false,
+          result: {
+            ...base,
+            outcome: 'lease_active',
+            verification: 'delivery_pda',
+            message: 'another client is already retrying this order',
+          },
+        };
+      }
+      const rawAttemptCount = Number(recovery.attemptCount || 0);
+      const attemptCount = Number.isFinite(rawAttemptCount) && rawAttemptCount > 0
+        ? Math.floor(rawAttemptCount) + 1
+        : 1;
+      await commitWrites(context, [updateWrite({
+        path,
+        fields: {
+          'receiptRecovery.leaseExpiresAt': firestoreTimestamp(nowMs + DELIVERY_RECOVERY_LEASE_MS),
+          'receiptRecovery.lastAttemptAt': firestoreTimestamp(nowMs),
+          'receiptRecovery.attemptCount': attemptCount,
+        },
+        updateMask: [
+          'receiptRecovery.leaseExpiresAt',
+          'receiptRecovery.lastAttemptAt',
+          'receiptRecovery.attemptCount',
+        ],
+        currentDocument: { exists: true },
+      })], transaction);
+      transaction = undefined;
+      return { acquired: true };
+    } catch (error) {
+      if (transaction) await rollbackTransactionBestEffort(context, transaction);
+      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      throw mapProviderError(error, 'Delivery recovery data is temporarily unavailable.');
+    }
+  }
+  throw new DeliveryReceiptError('unavailable', 'Delivery recovery data is temporarily unavailable.');
+}
+
+async function finalizeDeliveryRecoveryAttempt(
+  context: FirestoreContext,
+  path: string,
+  result: { errorCode?: string; message?: string },
+): Promise<void> {
+  const updateMask = [
+    'receiptRecovery.leaseExpiresAt',
+    'receiptRecovery.lastErrorCode',
+    'receiptRecovery.lastErrorMessage',
+  ];
+  await commitWrites(context, [updateWrite({
+    path,
+    fields: {
+      ...(result.errorCode ? { 'receiptRecovery.lastErrorCode': result.errorCode } : {}),
+      ...(result.message ? { 'receiptRecovery.lastErrorMessage': result.message } : {}),
+    },
+    updateMask,
+    currentDocument: { exists: true },
+  })]);
+}
+
+async function recordPreparedDeliveryRecoveryMiss(
+  context: FirestoreContext,
+  document: DeliveryOrderDocument,
+  nowMs: number,
+): Promise<number | null> {
+  const probeCount = preparedDeliveryRecoveryCheckCount(document.fields);
+  const nextProbeCount = probeCount + 1;
+  const nextDelayMs = nextPreparedDeliveryRecoveryDelayMs(nextProbeCount);
+  const fields: Record<string, unknown> = {
+    'receiptRecovery.preparedProbeCount': nextProbeCount,
+    'receiptRecovery.lastPreparedProbeAt': firestoreTimestamp(nowMs),
+    ...(nextDelayMs === null
+      ? {
+          status: 'prepared_abandoned',
+          preparedRecoveryAbandonedAt: firestoreTimestamp(nowMs),
+        }
+      : {
+          'receiptRecovery.nextPreparedProbeAt': firestoreTimestamp(nowMs + nextDelayMs),
+        }),
+  };
+  const updateMask = [
+    'receiptRecovery.preparedProbeCount',
+    'receiptRecovery.lastPreparedProbeAt',
+    'receiptRecovery.nextPreparedProbeAt',
+    ...(nextDelayMs === null ? ['status', 'preparedRecoveryAbandonedAt'] : []),
+  ];
+  await commitWrites(context, [updateWrite({
+    path: document.path,
+    fields,
+    updateMask,
+    currentDocument: { updateTime: document.updateTime },
+  })]);
+  return nextDelayMs === null ? null : nowMs + nextDelayMs;
+}
+
+async function stopPreparedDeliveryRecoveryChecks(
+  context: FirestoreContext,
+  document: DeliveryOrderDocument,
+  nowMs: number,
+): Promise<void> {
+  const probeCount = Math.max(
+    preparedDeliveryRecoveryCheckCount(document.fields),
+    MAX_PREPARED_DELIVERY_RECOVERY_CHECKS,
+  );
+  await commitWrites(context, [updateWrite({
+    path: document.path,
+    fields: {
+      status: 'prepared_abandoned',
+      preparedRecoveryAbandonedAt: firestoreTimestamp(nowMs),
+      'receiptRecovery.preparedProbeCount': probeCount,
+      'receiptRecovery.lastPreparedProbeAt': firestoreTimestamp(nowMs),
+    },
+    updateMask: [
+      'status',
+      'preparedRecoveryAbandonedAt',
+      'receiptRecovery.preparedProbeCount',
+      'receiptRecovery.lastPreparedProbeAt',
+      'receiptRecovery.nextPreparedProbeAt',
+    ],
+    currentDocument: { updateTime: document.updateTime },
+  })]);
+}
+
+async function deferPreparedDeliveryRecovery(
+  context: FirestoreContext,
+  document: DeliveryOrderDocument,
+  nowMs: number,
+): Promise<void> {
+  const recovery = isRecord(document.fields.receiptRecovery) ? document.fields.receiptRecovery : {};
+  const nextCheckAt = Math.max(
+    nowMs + DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS,
+    toMillisMaybe(recovery.leaseExpiresAt) ?? 0,
+  );
+  await commitWrites(context, [updateWrite({
+    path: document.path,
+    fields: {
+      'receiptRecovery.nextPreparedProbeAt': firestoreTimestamp(nextCheckAt),
+    },
+    updateMask: ['receiptRecovery.nextPreparedProbeAt'],
+    currentDocument: { updateTime: document.updateTime },
+  })]);
+}
+
+async function fetchDeliveryRecoveryState(
+  context: FirestoreContext,
+  ownerWallet: string,
+  nowMs: number,
+): Promise<WalletDeliveryRecoveryState> {
+  const documents = await runDeliveryRecoveryStateQuery(context, ownerWallet);
+  const processing = documents.filter((document) => document.fields.status === 'processing');
+  const prepared = documents.filter((document) => document.fields.status === 'prepared');
+  return buildWalletDeliveryRecoveryState({
+    remainingProcessing: processing.length,
+    nextCheckCandidates: [
+      ...processing.map((document) => processingDeliveryRecoveryNextCheckMs(document.fields, nowMs)),
+      ...prepared.map((document) => preparedDeliveryRecoveryNextCheckMs(document.fields)),
+    ],
+  });
+}
+
+function pause(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const timeout = setTimeout(finish, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
+
+function secureRandomInt(maxExclusive: number): number {
+  const maximum = Math.floor(maxExclusive);
+  if (!Number.isSafeInteger(maximum) || maximum < 1) {
+    throw new DeliveryReceiptError('internal', 'Secure random range is invalid.');
+  }
+  const range = 1n << 64n;
+  const maximumBigInt = BigInt(maximum);
+  const limit = (range / maximumBigInt) * maximumBigInt;
+  const words = new Uint32Array(2);
+  let value: bigint;
+  do {
+    crypto.getRandomValues(words);
+    value = (BigInt(words[0]) << 32n) | BigInt(words[1]);
+  } while (value >= limit);
+  return Number(value % maximumBigInt);
+}
+
+function normalizeAssignedDudeIds(
+  value: unknown,
+  runtime: DeliveryRuntime,
+  boxAssetId: string,
+): number[] {
+  const dudeIds = Array.isArray(value) ? value.map((entry) => Math.floor(Number(entry))) : [];
+  if (
+    dudeIds.length !== runtime.itemsPerBox ||
+    dudeIds.some((id) => !Number.isSafeInteger(id) || id < 1 || id > runtime.maxDudeId) ||
+    new Set(dudeIds).size !== dudeIds.length
+  ) {
+    throw new DeliveryReceiptError('failed-precondition', 'Stored figure assignment is invalid.', { boxAssetId });
+  }
+  return dudeIds;
+}
+
+async function assignDudesForBox(
+  context: FirestoreContext,
+  runtime: DeliveryRuntime,
+  boxAssetId: string,
+  randomInt: (maxExclusive: number) => number,
+): Promise<number[]> {
+  const assignmentPath = dropBoxAssignmentPath(runtime.dropId, boxAssetId);
+  const poolPath = dropDudePoolPath(runtime.dropId);
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    let transaction: string | undefined;
+    try {
+      transaction = await beginTransaction(context);
+      const existing = await readDocument(context, assignmentPath, transaction);
+      if (existing) {
+        await rollbackTransactionBestEffort(context, transaction);
+        transaction = undefined;
+        return normalizeAssignedDudeIds(existing.fields.dudeIds, runtime, boxAssetId);
+      }
+      const poolDocument = await readDocument(context, poolPath, transaction);
+      const pool = sanitizeDudeAssignmentPool(poolDocument?.fields.available, runtime.maxDudeId).pool;
+      if (pool.length < runtime.itemsPerBox) {
+        throw new DeliveryReceiptError('resource-exhausted', 'No figures remaining to assign.', {
+          boxAssetId,
+          poolLen: pool.length,
+          required: runtime.itemsPerBox,
+        });
+      }
+      let picked;
+      try {
+        picked = await pickDudeIdsForAssignment({
+          dropFamily: runtime.config.dropFamily,
+          itemsPerBox: runtime.itemsPerBox,
+          maxDudeId: runtime.maxDudeId,
+          pool,
+          randomInt,
+          isAssigned: async (dudeId) => Boolean(await readDocument(
+            context,
+            dropDudeAssignmentPath(runtime.dropId, dudeId),
+            transaction,
+          )),
+        });
+      } catch (error) {
+        if (error instanceof DudeAssignmentPoolExhaustedError) {
+          throw new DeliveryReceiptError('resource-exhausted', error.message, {
+            boxAssetId,
+            bucket: error.bucket,
+            chosen: error.chosen,
+            candidatesChecked: error.candidatesChecked,
+            staleAssigned: error.staleAssigned,
+            poolLen: error.poolLen,
+          });
+        }
+        throw error;
+      }
+      const writes = picked.chosen.map((dudeId) => createWrite({
+        path: dropDudeAssignmentPath(runtime.dropId, dudeId),
+        fields: { dudeId, boxAssetId },
+        transforms: [{ fieldPath: 'assignedAt', setToServerValue: 'REQUEST_TIME' }],
+      }));
+      writes.push(updateWrite({
+        path: poolPath,
+        fields: { available: pool },
+        updateMask: ['available'],
+        transforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+      }));
+      writes.push(createWrite({
+        path: assignmentPath,
+        fields: { dudeIds: picked.chosen },
+        transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+      }));
+      await commitWrites(context, writes, transaction);
+      transaction = undefined;
+      return picked.chosen;
+    } catch (error) {
+      if (transaction) await rollbackTransactionBestEffort(context, transaction);
+      if (error instanceof DeliveryReceiptError) throw error;
+      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(2_500, 150 * 2 ** Math.min(attempt, 4)), context.signal);
+        continue;
+      }
+      throw mapProviderError(error, 'Figure assignment is temporarily unavailable.');
+    }
+  }
+  throw new DeliveryReceiptError('unavailable', 'Figure assignment is temporarily unavailable.');
+}
+
+function sameNumbers(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function normalizeDropIdMaybe(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const normalized = normalizeDropId(value);
+  return /^[a-z0-9][a-z0-9_-]{0,63}$/.test(normalized) ? normalized : null;
+}
+
+type ClaimCodeExpected = {
+  code: string;
+  dropId: string;
+  boxAssetId: string;
+  boxId: number;
+  deliveryId: number;
+  dudeIds: readonly number[];
+};
+
+function claimCodeCompatible(claim: Record<string, unknown>, expected: ClaimCodeExpected): boolean {
+  const rawDudeIds = Array.isArray(claim.dudeIds) ? claim.dudeIds.map(Number) : [];
+  const claimBoxId = Number(claim.boxId);
+  const claimDeliveryId = Number(claim.deliveryId);
+  return (
+    (claim.namespace === undefined || claim.namespace === IRL_CLAIM_CODE_NAMESPACE) &&
+    (claim.code === undefined || normalizeIrlClaimCode(claim.code) === expected.code) &&
+    normalizeDropIdMaybe(claim.dropId) === expected.dropId &&
+    claim.boxAssetId === expected.boxAssetId &&
+    Number.isFinite(claimBoxId) && Math.floor(claimBoxId) === expected.boxId &&
+    (claim.deliveryId === undefined || (Number.isFinite(claimDeliveryId) && Math.floor(claimDeliveryId) === expected.deliveryId)) &&
+    sameNumbers(rawDudeIds, expected.dudeIds)
+  );
+}
+
+function assignmentClaimCompatible(
+  claim: Record<string, unknown>,
+  expected: ClaimCodeExpected,
+  ownerWallet: string,
+): boolean {
+  const rawDudeIds = Array.isArray(claim.dudeIds) ? claim.dudeIds.map(Number) : [];
+  return claim.namespace === IRL_CLAIM_CODE_NAMESPACE &&
+    normalizeIrlClaimCode(claim.code) === expected.code &&
+    normalizeDropIdMaybe(claim.dropId) === expected.dropId &&
+    Number(claim.boxId) === expected.boxId &&
+    Number(claim.deliveryId) === expected.deliveryId &&
+    claim.owner === ownerWallet &&
+    sameNumbers(rawDudeIds, expected.dudeIds);
+}
+
+function claimCodeConflictReason(claim: Record<string, unknown>, expected: ClaimCodeExpected): string | null {
+  const claimBoxId = Number(claim.boxId);
+  if (
+    (claim.namespace !== undefined && claim.namespace !== IRL_CLAIM_CODE_NAMESPACE) ||
+    (claim.code !== undefined && normalizeIrlClaimCode(claim.code) !== expected.code) ||
+    normalizeDropIdMaybe(claim.dropId) !== expected.dropId ||
+    claim.boxAssetId !== expected.boxAssetId ||
+    !Number.isFinite(claimBoxId) || Math.floor(claimBoxId) !== expected.boxId
+  ) return 'box identity';
+  if (claim.deliveryId !== undefined && Math.floor(Number(claim.deliveryId)) !== expected.deliveryId) return 'deliveryId';
+  const rawDudeIds = claim.dudeIds ?? claim.dude_ids ?? claim.dudes;
+  if (rawDudeIds !== undefined) {
+    if (!Array.isArray(rawDudeIds)) return 'dudeIds';
+    if (rawDudeIds.length && !sameNumbers(rawDudeIds.map(Number), expected.dudeIds)) return 'dudeIds';
+  }
+  return null;
+}
+
+function claimCodeFields(expected: ClaimCodeExpected, ownerWallet: string): Record<string, unknown> {
+  return {
+    version: 2,
+    namespace: IRL_CLAIM_CODE_NAMESPACE,
+    code: expected.code,
+    dropId: expected.dropId,
+    boxId: expected.boxId,
+    boxAssetId: expected.boxAssetId,
+    owner: ownerWallet,
+    deliveryId: expected.deliveryId,
+    dudeIds: [...expected.dudeIds],
+  };
+}
+
+function assignmentClaimFields(expected: ClaimCodeExpected, ownerWallet: string): Record<string, unknown> {
+  return {
+    irlClaimCode: expected.code,
+    irlClaim: {
+      namespace: IRL_CLAIM_CODE_NAMESPACE,
+      code: expected.code,
+      dropId: expected.dropId,
+      boxId: expected.boxId,
+      deliveryId: expected.deliveryId,
+      owner: ownerWallet,
+      dudeIds: [...expected.dudeIds],
+    },
+  };
+}
+
+async function ensureIrlClaimCodeForBox(
+  context: FirestoreContext,
+  runtime: DeliveryRuntime,
+  args: {
+    ownerWallet: string;
+    deliveryId: number;
+    boxAssetId: string;
+    boxId: number;
+    dudeIds: number[];
+  },
+  randomInt: (maxExclusive: number) => number,
+): Promise<string> {
+  const assignmentPath = dropBoxAssignmentPath(runtime.dropId, args.boxAssetId);
+  for (let transactionAttempt = 0; transactionAttempt < FIRESTORE_TRANSACTION_ATTEMPTS; transactionAttempt += 1) {
+    let transaction: string | undefined;
+    try {
+      transaction = await beginTransaction(context);
+      const assignment = await readDocument(context, assignmentPath, transaction);
+      if (!assignment) {
+        throw new DeliveryReceiptError('failed-precondition', 'Figure assignment is missing.', {
+          boxAssetId: args.boxAssetId,
+        });
+      }
+      const normalizedExisting = typeof assignment.fields.irlClaimCode === 'string'
+        ? normalizeIrlClaimCode(assignment.fields.irlClaimCode)
+        : '';
+      const existingCode = normalizedExisting.length === IRL_CLAIM_CODE_DIGITS ? normalizedExisting : '';
+      if (existingCode) {
+        const expected: ClaimCodeExpected = { code: existingCode, dropId: runtime.dropId, ...args };
+        const claimPath = `claimCodes/${existingCode}`;
+        const claim = await readDocument(context, claimPath, transaction);
+        const writes: Record<string, unknown>[] = [];
+        if (!claim) {
+          writes.push(createWrite({
+            path: claimPath,
+            fields: claimCodeFields(expected, args.ownerWallet),
+            transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+          }));
+        } else if (!claimCodeCompatible(claim.fields, expected)) {
+          const reason = claimCodeConflictReason(claim.fields, expected);
+          if (reason) {
+            throw new DeliveryReceiptError(
+              'failed-precondition',
+              'Existing IRL claim code conflicts with this box assignment; manual review required',
+              { boxAssetId: args.boxAssetId, boxId: args.boxId, existingCode, conflictReason: reason },
+            );
+          }
+          writes.push(updateWrite({
+            path: claimPath,
+            fields: claimCodeFields(expected, args.ownerWallet),
+            updateMask: Object.keys(claimCodeFields(expected, args.ownerWallet)),
+            transforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+            currentDocument: { exists: true },
+          }));
+        }
+        const assignmentClaim = isRecord(assignment.fields.irlClaim) ? assignment.fields.irlClaim : {};
+        if (writes.length || !assignmentClaimCompatible(assignmentClaim, expected, args.ownerWallet)) {
+          const assignmentFields = assignmentClaimFields(expected, args.ownerWallet);
+          writes.push(updateWrite({
+            path: assignmentPath,
+            fields: assignmentFields,
+            updateMask: Object.keys(assignmentFields),
+            transforms: [{ fieldPath: 'irlClaim.createdAt', setToServerValue: 'REQUEST_TIME' }],
+            currentDocument: { exists: true },
+          }));
+        }
+        if (writes.length) await commitWrites(context, writes, transaction);
+        else await rollbackTransactionBestEffort(context, transaction);
+        transaction = undefined;
+        return existingCode;
+      }
+      let expected: ClaimCodeExpected | undefined;
+      for (let claimAttempt = 0; claimAttempt < 40; claimAttempt += 1) {
+        const code = String(randomInt(10 ** IRL_CLAIM_CODE_DIGITS)).padStart(IRL_CLAIM_CODE_DIGITS, '0');
+        if (await readDocument(context, `claimCodes/${code}`, transaction)) continue;
+        expected = { code, dropId: runtime.dropId, ...args };
+        break;
+      }
+      if (!expected) {
+        throw new DeliveryReceiptError('unavailable', 'Failed to allocate unique IRL claim code (try again)');
+      }
+      const assignmentFields = assignmentClaimFields(expected, args.ownerWallet);
+      await commitWrites(context, [
+        createWrite({
+          path: `claimCodes/${expected.code}`,
+          fields: claimCodeFields(expected, args.ownerWallet),
+          transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+        }),
+        updateWrite({
+          path: assignmentPath,
+          fields: assignmentFields,
+          updateMask: Object.keys(assignmentFields),
+          transforms: [{ fieldPath: 'irlClaim.createdAt', setToServerValue: 'REQUEST_TIME' }],
+          currentDocument: { exists: true },
+        }),
+      ], transaction);
+      transaction = undefined;
+      return expected.code;
+    } catch (error) {
+      if (transaction) await rollbackTransactionBestEffort(context, transaction);
+      if (error instanceof DeliveryReceiptError) throw error;
+      if (error instanceof FirestoreWriteConflict && transactionAttempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(2_500, 150 * 2 ** Math.min(transactionAttempt, 4)), context.signal);
+        continue;
+      }
+      throw mapProviderError(error, 'IRL claim code is temporarily unavailable.');
+    }
+  }
+  throw new DeliveryReceiptError('unavailable', 'IRL claim code is temporarily unavailable.');
+}
+
+async function countNormalIrlPackStatus(
+  context: FirestoreContext,
+  runtime: DeliveryRuntime,
+  deliveryId: number,
+  order: Record<string, unknown>,
+): Promise<void> {
+  if (!shouldTrackPackStatusForDrop({
+    dropId: runtime.dropId,
+    cluster: runtime.cluster,
+    itemsPerBox: runtime.itemsPerBox,
+    maxSupply: runtime.maxSupply,
+  })) return;
+  const packQuantity = countDeliveryOrderBoxItems(order.items);
+  const cardQuantity = countDeliveryOrderDudeItems(order.items);
+  if (packQuantity < 1 && cardQuantity < 1) return;
+  const eventPath = `drops/${runtime.dropId}/packStatusEvents/redeemedIrlNormal_${deliveryId}`;
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    let transaction: string | undefined;
+    try {
+      transaction = await beginTransaction(context);
+      if (await readDocument(context, eventPath, transaction)) {
+        await rollbackTransactionBestEffort(context, transaction);
+        return;
+      }
+      const increments = [
+        ...(packQuantity ? [{ fieldPath: 'redeemedIrlNormal', increment: firestoreInteger(packQuantity) }] : []),
+        ...(cardQuantity ? [{ fieldPath: 'redeemedUnsealedCards', increment: firestoreInteger(cardQuantity) }] : []),
+        { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+      ];
+      const quantity = packQuantity * packStatusCardsPerPack(runtime) + cardQuantity;
+      await commitWrites(context, [
+        {
+          transform: {
+            document: documentName(`drops/${runtime.dropId}/meta/packStatus`),
+            fieldTransforms: increments,
+          },
+          currentDocument: { exists: true },
+        },
+        createWrite({
+          path: eventPath,
+          fields: {
+            version: PACK_STATUS_SCHEMA_VERSION,
+            dropId: runtime.dropId,
+            type: 'redeemedIrlNormal',
+            eventKey: String(deliveryId),
+            quantity,
+            increments: {
+              ...(packQuantity ? { redeemedIrlNormal: packQuantity } : {}),
+              ...(cardQuantity ? { redeemedUnsealedCards: cardQuantity } : {}),
+            },
+            deliveryId,
+          },
+          transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+        }),
+      ], transaction);
+      return;
+    } catch (error) {
+      if (transaction) await rollbackTransactionBestEffort(context, transaction);
+      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      throw mapProviderError(error, 'Pack status is temporarily unavailable.');
+    }
+  }
+}
+
+async function readBoundedProviderResponse(response: Response, signal: AbortSignal): Promise<Uint8Array> {
+  const contentLength = Number(response.headers.get('Content-Length'));
+  if (Number.isFinite(contentLength) && contentLength > PROVIDER_MAX_BYTES) {
+    await cancelResponseBody(response);
+    throw new DeliveryReceiptError('unavailable', 'Receipt provider returned too much data.');
+  }
+  if (!response.body) throw new DeliveryReceiptError('unavailable', 'Receipt provider returned an invalid response.');
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const onAbort = () => {
+    void reader.cancel(signal.reason).catch(() => undefined);
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
+  if (signal.aborted) onAbort();
+  try {
+    while (true) {
+      if (signal.aborted) throw signal.reason;
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > PROVIDER_MAX_BYTES) {
+        throw new DeliveryReceiptError('unavailable', 'Receipt provider returned too much data.');
+      }
+      chunks.push(value);
+    }
+    const body = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return body;
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+function heliusOrigin(cluster: SolanaCluster): string {
+  return `https://${cluster === 'mainnet-beta' ? 'mainnet' : cluster}.helius-rpc.com/`;
+}
+
+function createConnection(context: ProviderContext, runtime: DeliveryRuntime): Connection {
+  const boundedFetch: FetchFn = async (input, init) => {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(context.signal.reason);
+    context.signal.addEventListener('abort', onAbort, { once: true });
+    const timeout = setTimeout(
+      () => controller.abort(new DOMException('Receipt provider request timed out', 'TimeoutError')),
+      RPC_TIMEOUT_MS,
+    );
+    try {
+      if (context.signal.aborted) onAbort();
+      const response = await context.fetch(input, {
+        ...init,
+        redirect: 'manual',
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        await cancelResponseBody(response);
+        throw new DeliveryReceiptError('unavailable', 'Receipt provider is temporarily unavailable.');
+      }
+      const body = await readBoundedProviderResponse(response, controller.signal);
+      return new Response(Uint8Array.from(body).buffer, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    } catch (error) {
+      if (context.signal.aborted || controller.signal.reason?.name === 'TimeoutError') {
+        throw new DeliveryReceiptError('deadline-exceeded', 'Receipt provider request timed out.');
+      }
+      throw mapProviderError(error, 'Receipt provider is temporarily unavailable.');
+    } finally {
+      clearTimeout(timeout);
+      context.signal.removeEventListener('abort', onAbort);
+    }
+  };
+  return new Connection(`${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`, {
+    commitment: 'confirmed',
+    disableRetryOnRateLimit: true,
+    fetch: boundedFetch,
+  });
+}
+
+function u16LE(value: number): Buffer {
+  const buffer = Buffer.alloc(2);
+  buffer.writeUInt16LE(value & 0xffff, 0);
+  return buffer;
+}
+
+function u32LE(value: number): Buffer {
+  if (!Number.isInteger(value) || value < 0 || value > MAX_U32) {
+    throw new DeliveryReceiptError('invalid-argument', 'Invalid unsigned 32-bit integer.');
+  }
+  const buffer = Buffer.alloc(4);
+  buffer.writeUInt32LE(value, 0);
+  return buffer;
+}
+
+function deriveDeliveryPda(runtime: DeliveryRuntime, deliveryId: number): [PublicKey, number] {
+  const singleton = PublicKey.findProgramAddressSync(
+    [Buffer.from(BOX_MINTER_CONFIG_SEED)],
+    runtime.boxMinterProgramId,
+  )[0];
+  const seeds: Uint8Array[] = [Buffer.from('delivery')];
+  if (!runtime.boxMinterConfigPda.equals(singleton)) seeds.push(runtime.boxMinterConfigPda.toBuffer());
+  seeds.push(u32LE(deliveryId));
+  return PublicKey.findProgramAddressSync(seeds, runtime.boxMinterProgramId);
+}
+
+function deriveTreeConfigPda(merkleTree: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync([merkleTree.toBuffer()], BUBBLEGUM_PROGRAM_ID)[0];
+}
+
+function decodeDeliverArgs(data: Buffer): { deliveryId: number; feeLamports: number; deliveryBump: number } {
+  if (data.length < 21 || !data.subarray(0, 8).equals(IX_DELIVER)) {
+    throw new DeliveryReceiptError('failed-precondition', 'Transaction has an invalid deliver instruction.');
+  }
+  const fee = data.readBigUInt64LE(12);
+  if (fee > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery fee is too large.');
+  }
+  return {
+    deliveryId: data.readUInt32LE(8),
+    feeLamports: Number(fee),
+    deliveryBump: data.readUInt8(20),
+  };
+}
+
+function expectedDeliveryLamports(order: Record<string, unknown>): number {
+  const value = Number(order.deliveryLamports ?? order.shippingLamports);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new DeliveryReceiptError('failed-precondition', 'Stored delivery fee is invalid.');
+  }
+  return value;
+}
+
+function assertDeliverArgsMatchOrder(args: {
+  decoded: ReturnType<typeof decodeDeliverArgs>;
+  deliveryId: number;
+  expectedDeliveryBump: number;
+  order: Record<string, unknown>;
+}): void {
+  if (args.decoded.deliveryId !== args.deliveryId) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery id mismatch.', {
+      reason: 'delivery_id_mismatch',
+    });
+  }
+  if (args.decoded.deliveryBump !== args.expectedDeliveryBump) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery PDA bump mismatch.', {
+      reason: 'delivery_bump_mismatch',
+    });
+  }
+  if (args.decoded.feeLamports !== expectedDeliveryLamports(args.order)) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery fee mismatch.', {
+      reason: 'delivery_fee_mismatch',
+    });
+  }
+}
+
+function decodeDeliveryRecord(data: Buffer): {
+  payer: PublicKey;
+  deliveryFeeLamports: number;
+  itemCount: number;
+} {
+  if (data.length < 50 || !data.subarray(0, 8).equals(ACCOUNT_DELIVERY_RECORD)) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery record account data is invalid.');
+  }
+  const fee = data.readBigUInt64LE(40);
+  if (fee > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery record fee is too large.');
+  }
+  return {
+    payer: new PublicKey(data.subarray(8, 40)),
+    deliveryFeeLamports: Number(fee),
+    itemCount: data.readUInt16LE(48),
+  };
+}
+
+function decodeOnchainConfig(data: Buffer): DecodedOnchainConfig {
+  try {
+    const decoded = decodeBoxMinterConfigData(data, { validateDiscriminator: true });
+    return {
+      admin: new PublicKey(decoded.admin),
+      coreCollection: new PublicKey(decoded.coreCollection),
+      decoded,
+    };
+  } catch (error) {
+    if (error instanceof BoxMinterConfigCodecError) {
+      throw new DeliveryReceiptError('failed-precondition', error.message, error.details);
+    }
+    throw error;
+  }
+}
+
+function paymentRoutingMatches(config: FunctionsDropConfig, decoded: DecodedBoxMinterConfigData): boolean {
+  const routing = decoded.paymentRouting;
+  if (!routing) return false;
+  if (!config.paymentRouting) return routing.schema === 'legacy';
+  if (routing.schema !== 'split-payments-v1') return false;
+  if (
+    new PublicKey(routing.deliveryPaymentReceiver).toBase58() !== config.paymentRouting.deliveryPaymentReceiver ||
+    routing.mintProceeds.length !== config.paymentRouting.mintProceeds.length
+  ) return false;
+  return config.paymentRouting.mintProceeds.every((expected, index) => {
+    const actual = routing.mintProceeds[index];
+    return Boolean(actual) &&
+      new PublicKey(actual.address).toBase58() === expected.address &&
+      actual.percentage === expected.percentage;
+  });
+}
+
+function assertOnchainConfigMatchesRuntime(runtime: DeliveryRuntime, config: DecodedOnchainConfig): void {
+  const decoded = config.decoded;
+  if (
+    !config.coreCollection.equals(runtime.collectionMint) ||
+    decoded.itemsPerBox !== runtime.itemsPerBox ||
+    decoded.maxSupply !== runtime.maxSupply ||
+    decoded.discountMintsPerWallet !== runtime.config.discountMintsPerWallet ||
+    !isBoxMinterDiscountMintsPerWallet(decoded.discountMintsPerWallet) ||
+    !boxMinterMetadataBaseMatchesDrop(
+      decoded.uriBase,
+      runtime.config.metadataBase,
+      runtime.config.metadataBaseAliases,
+    ) ||
+    new PublicKey(decoded.treasury).toBase58() !== runtime.config.treasury ||
+    !paymentRoutingMatches(runtime.config, decoded)
+  ) {
+    throw new DeliveryReceiptError('failed-precondition', 'Committed drop configuration does not match the on-chain config.');
+  }
+}
+
+async function fetchOnchainConfig(
+  connection: Connection,
+  runtime: DeliveryRuntime,
+): Promise<DecodedOnchainConfig> {
+  const [collection, info] = await connection.getMultipleAccountsInfo(
+    [runtime.collectionMint, runtime.boxMinterConfigPda],
+    { commitment: 'confirmed' },
+  );
+  if (
+    !collection?.data ||
+    !collection.owner.equals(MPL_CORE_PROGRAM_ID) ||
+    collection.data.length < MPL_CORE_COLLECTION_V1_MIN_BYTES ||
+    collection.data[0] !== MPL_CORE_COLLECTION_V1_DISCRIMINATOR
+  ) {
+    throw new DeliveryReceiptError('failed-precondition', 'Configured collection is not an MPL Core collection.');
+  }
+  if (!info?.data || info.data.length < 104) {
+    throw new DeliveryReceiptError('failed-precondition', 'Box minter config PDA was not found.', {
+      dropId: runtime.dropId,
+      configPda: runtime.boxMinterConfigPda.toBase58(),
+    });
+  }
+  if (!info.owner.equals(runtime.boxMinterProgramId)) {
+    throw new DeliveryReceiptError('failed-precondition', 'Box minter config PDA has an unexpected owner.', {
+      dropId: runtime.dropId,
+    });
+  }
+  const config = decodeOnchainConfig(Buffer.from(info.data));
+  assertOnchainConfigMatchesRuntime(runtime, config);
+  return config;
+}
+
+function storedDeliveryItemIds(order: Record<string, unknown>): string[] {
+  if (order.itemIds === undefined) return [];
+  if (
+    !Array.isArray(order.itemIds) ||
+    !order.itemIds.every((value): value is string => typeof value === 'string' && isBase58Bytes(value, 32))
+  ) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery order contains invalid itemIds.');
+  }
+  if (new Set(order.itemIds).size !== order.itemIds.length) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery order contains duplicate itemIds.');
+  }
+  return [...order.itemIds];
+}
+
+async function fetchDeliveryRecord(
+  connection: Connection,
+  runtime: DeliveryRuntime,
+  deliveryId: number,
+  includeData = true,
+): Promise<{
+  expectedDeliveryPda: PublicKey;
+  expectedDeliveryBump: number;
+  deliveryInfo: AccountInfo<Buffer>;
+} | null> {
+  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(runtime, deliveryId);
+  const deliveryInfo = await connection.getAccountInfo(
+    expectedDeliveryPda,
+    includeData
+      ? { commitment: 'confirmed' }
+      : { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
+  );
+  if (!deliveryInfo) return null;
+  if (!deliveryInfo.owner.equals(runtime.boxMinterProgramId)) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery record PDA is owned by the wrong program.');
+  }
+  return { expectedDeliveryPda, expectedDeliveryBump, deliveryInfo };
+}
+
+function assertStoredDeliveryPda(order: Record<string, unknown>, expectedDeliveryPda: PublicKey): void {
+  const stored = typeof order.deliveryPda === 'string' ? order.deliveryPda.trim() : '';
+  if (stored && stored !== expectedDeliveryPda.toBase58()) {
+    throw new DeliveryReceiptError('failed-precondition', 'Stored delivery PDA does not match the expected delivery PDA.');
+  }
+}
+
+function resolveInstructionAccounts(transaction: VersionedTransactionResponse): PublicKey[] {
+  const accountKeys = transaction.transaction.message.getAccountKeys({
+    accountKeysFromLookups: transaction.meta?.loadedAddresses,
+  });
+  return [
+    ...accountKeys.staticAccountKeys,
+    ...(accountKeys.accountKeysFromLookups?.writable || []),
+    ...(accountKeys.accountKeysFromLookups?.readonly || []),
+  ];
+}
+
+function assertDeliveryPayers(
+  ownerWallet: string,
+  feePayer: PublicKey | undefined,
+  deliveryPayer: PublicKey | undefined,
+): void {
+  if (!feePayer || feePayer.toBase58() !== ownerWallet) {
+    throw new DeliveryReceiptError('failed-precondition', 'Transaction fee payer does not match owner.', {
+      reason: 'payer_mismatch',
+    });
+  }
+  if (!deliveryPayer || deliveryPayer.toBase58() !== ownerWallet) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery payer does not match owner.', {
+      reason: 'payer_mismatch',
+    });
+  }
+}
+
+async function verifyReceiptIssuanceBySignature(args: {
+  connection: Connection;
+  deliveryId: number;
+  order: Record<string, unknown>;
+  ownerWallet: string;
+  runtime: DeliveryRuntime;
+  signature: string;
+}): Promise<VerifiedReceiptIssuanceTarget> {
+  const transaction = await args.connection.getTransaction(args.signature, { maxSupportedTransactionVersion: 0 });
+  if (!transaction || transaction.meta?.err) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery transaction not found or failed.', {
+      reason: 'transaction_not_found_or_failed',
+    });
+  }
+  const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(args.runtime, args.deliveryId);
+  const keys = resolveInstructionAccounts(transaction);
+  const fixedAccountCount = 9;
+  let deliverAccounts: PublicKey[] | undefined;
+  let deliverData: Buffer | undefined;
+  for (const instruction of transaction.transaction.message.compiledInstructions) {
+    const program = keys[instruction.programIdIndex];
+    if (!program?.equals(args.runtime.boxMinterProgramId)) continue;
+    const data = Buffer.from(instruction.data);
+    if (!data.subarray(0, 8).equals(IX_DELIVER)) continue;
+    const accounts = Array.from(instruction.accountKeyIndexes).map((index) => keys[index]);
+    if (accounts.length >= fixedAccountCount && accounts[8]?.equals(expectedDeliveryPda)) {
+      deliverAccounts = accounts;
+      deliverData = data;
+      break;
+    }
+  }
+  if (!deliverAccounts || !deliverData) {
+    throw new DeliveryReceiptError(
+      'failed-precondition',
+      'Delivery transaction is missing a deliver instruction for the expected delivery PDA.',
+      { reason: 'missing_target_deliver_instruction' },
+    );
+  }
+  assertDeliveryPayers(
+    args.ownerWallet,
+    transaction.transaction.message.staticAccountKeys[0],
+    deliverAccounts[2],
+  );
+  const decoded = decodeDeliverArgs(deliverData);
+  assertDeliverArgsMatchOrder({
+    decoded,
+    deliveryId: args.deliveryId,
+    expectedDeliveryBump,
+    order: args.order,
+  });
+  const itemIds = storedDeliveryItemIds(args.order);
+  const deliveredAssets = deliverAccounts.slice(fixedAccountCount).map((key) => key.toBase58());
+  if (itemIds.length && deliveredAssets.length && itemIds.length !== deliveredAssets.length) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery item count mismatch.', {
+      reason: 'item_count_mismatch',
+    });
+  }
+  if (itemIds.some((itemId, index) => deliveredAssets[index] && deliveredAssets[index] !== itemId)) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivered asset list mismatch.', {
+      reason: 'asset_list_mismatch',
+    });
+  }
+  const targetAssetIds = itemIds.length ? itemIds : deliveredAssets;
+  if (!targetAssetIds.length) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery order is missing delivered item ids.', {
+      reason: 'missing_delivered_item_ids',
+    });
+  }
+  return {
+    verification: 'signature',
+    signature: args.signature,
+    expectedDeliveryPda,
+    expectedDeliveryBump,
+    targetAssetIds,
+  };
+}
+
+async function verifyReceiptIssuanceByDeliveryRecord(args: {
+  connection: Connection;
+  deliveryId: number;
+  order: Record<string, unknown>;
+  ownerWallet: string;
+  runtime: DeliveryRuntime;
+}): Promise<VerifiedReceiptIssuanceTarget> {
+  const itemIds = storedDeliveryItemIds(args.order);
+  if (!itemIds.length) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery order is missing itemIds for recovery.');
+  }
+  const account = await fetchDeliveryRecord(args.connection, args.runtime, args.deliveryId);
+  if (!account) throw new DeliveryReceiptError('failed-precondition', 'Delivery record PDA not found.');
+  assertStoredDeliveryPda(args.order, account.expectedDeliveryPda);
+  const record = decodeDeliveryRecord(Buffer.from(account.deliveryInfo.data));
+  if (record.payer.toBase58() !== args.ownerWallet) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery record payer does not match owner.');
+  }
+  if (record.itemCount !== itemIds.length) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery record item count mismatch.', {
+      expected: itemIds.length,
+      got: record.itemCount,
+    });
+  }
+  const expectedLamports = expectedDeliveryLamports(args.order);
+  if (record.deliveryFeeLamports !== expectedLamports) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery record fee mismatch.', {
+      expected: expectedLamports,
+      got: record.deliveryFeeLamports,
+    });
+  }
+  return {
+    verification: 'delivery_pda',
+    signature: typeof args.order.deliverySignature === 'string' ? args.order.deliverySignature : null,
+    expectedDeliveryPda: account.expectedDeliveryPda,
+    expectedDeliveryBump: account.expectedDeliveryBump,
+    targetAssetIds: itemIds,
+  };
+}
+
+function mplCoreBurnInstruction(args: {
+  asset: PublicKey;
+  coreCollection: PublicKey;
+  signer: PublicKey;
+}): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: MPL_CORE_PROGRAM_ID,
+    keys: [
+      { pubkey: args.asset, isSigner: false, isWritable: true },
+      { pubkey: args.coreCollection, isSigner: false, isWritable: true },
+      { pubkey: args.signer, isSigner: true, isWritable: true },
+      { pubkey: args.signer, isSigner: true, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: SPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([12, 0]),
+  });
+}
+
+function encodeMintReceiptsArgs(
+  runtime: DeliveryRuntime,
+  boxIds: readonly number[],
+  dudeIds: readonly number[],
+): Buffer {
+  for (const id of boxIds) {
+    if (!Number.isSafeInteger(id) || id < 1 || id > 0xffff_ffff) {
+      throw new DeliveryReceiptError('invalid-argument', `Invalid box id: ${id}`);
+    }
+  }
+  for (const id of dudeIds) {
+    if (!Number.isSafeInteger(id) || id < 1 || id > runtime.maxDudeId) {
+      throw new DeliveryReceiptError('invalid-argument', `Invalid figure id: ${id}`);
+    }
+  }
+  return Buffer.concat([
+    IX_MINT_RECEIPTS,
+    u32LE(boxIds.length),
+    ...boxIds.map(u32LE),
+    u32LE(dudeIds.length),
+    ...dudeIds.map(u16LE),
+  ]);
+}
+
+function mintReceiptsInstruction(args: {
+  runtime: DeliveryRuntime;
+  signer: PublicKey;
+  recipient: PublicKey;
+  coreCollection: PublicKey;
+  boxIds: readonly number[];
+  dudeIds: readonly number[];
+}): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: args.runtime.boxMinterProgramId,
+    keys: [
+      { pubkey: args.runtime.boxMinterConfigPda, isSigner: false, isWritable: false },
+      { pubkey: args.signer, isSigner: true, isWritable: true },
+      { pubkey: args.recipient, isSigner: false, isWritable: false },
+      { pubkey: args.runtime.receiptsMerkleTree, isSigner: false, isWritable: true },
+      { pubkey: deriveTreeConfigPda(args.runtime.receiptsMerkleTree), isSigner: false, isWritable: true },
+      { pubkey: args.coreCollection, isSigner: false, isWritable: true },
+      { pubkey: BUBBLEGUM_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: MPL_NOOP_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: MPL_CORE_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: MPL_CORE_CPI_SIGNER, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: encodeMintReceiptsArgs(args.runtime, args.boxIds, args.dudeIds),
+  });
+}
+
+function closeDeliveryInstruction(args: {
+  runtime: DeliveryRuntime;
+  signer: PublicKey;
+  deliveryPda: PublicKey;
+  deliveryId: number;
+  deliveryBump: number;
+}): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: args.runtime.boxMinterProgramId,
+    keys: [
+      { pubkey: args.runtime.boxMinterConfigPda, isSigner: false, isWritable: false },
+      { pubkey: args.signer, isSigner: true, isWritable: true },
+      { pubkey: args.deliveryPda, isSigner: false, isWritable: true },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.concat([
+      IX_CLOSE_DELIVERY,
+      u32LE(args.deliveryId),
+      Buffer.from([args.deliveryBump & 0xff]),
+    ]),
+  });
+}
+
+function buildTransaction(
+  instructions: readonly TransactionInstruction[],
+  payer: PublicKey,
+  blockhash: string,
+  signer: Keypair,
+): VersionedTransaction {
+  const transaction = new VersionedTransaction(new TransactionMessage({
+    payerKey: payer,
+    recentBlockhash: blockhash,
+    instructions: [...instructions],
+  }).compileToV0Message());
+  transaction.sign([signer]);
+  return transaction;
+}
+
+function transactionErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function transactionErrorLogs(error: unknown): string[] {
+  if (!isRecord(error) || !Array.isArray(error.logs)) return [];
+  return error.logs.map(String);
+}
+
+function looksLikeComputeLimitError(message: string, logs: readonly string[]): boolean {
+  const value = `${message}\n${logs.join('\n')}`.toLowerCase();
+  return value.includes('computational budget exceeded') ||
+    value.includes('exceeded maximum compute') ||
+    value.includes('program failed to complete') ||
+    (value.includes('compute units') && value.includes('consumed') && value.includes('failed'));
+}
+
+function looksLikeAccountInUseError(message: string, logs: readonly string[]): boolean {
+  const value = `${message}\n${logs.join('\n')}`.toLowerCase();
+  return value.includes('account in use') || value.includes('already in use');
+}
+
+function looksLikeBlockhashError(message: string): boolean {
+  const value = message.toLowerCase();
+  return value.includes('blockhash not found') ||
+    value.includes('blockhash expired') ||
+    value.includes('transaction expired') ||
+    value.includes('block height exceeded') ||
+    value.includes('transactionexpiredblockheightexceedederror');
+}
+
+function looksLikeRateLimitOrRpcError(message: string): boolean {
+  const value = message.toLowerCase();
+  return value.includes('429') ||
+    value.includes('rate limit') ||
+    value.includes('too many requests') ||
+    value.includes('timed out') ||
+    value.includes('timeout') ||
+    value.includes('fetch failed') ||
+    value.includes('socket hang up') ||
+    value.includes('econnreset') ||
+    value.includes('etimedout') ||
+    value.includes('service unavailable') ||
+    value.includes('gateway timeout') ||
+    (value.includes('rpc') && value.includes('error'));
+}
+
+async function waitForSignature(
+  connection: Connection,
+  signature: string,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<{ ok: true } | { ok: false; error: unknown; logs: string[] }> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (signal.aborted) throw signal.reason;
+    try {
+      const statuses = await connection.getSignatureStatuses([signature], {
+        searchTransactionHistory: Date.now() - startedAt > 6_000,
+      });
+      const status = statuses.value[0];
+      if (status?.err) {
+        let logs: string[] = [];
+        try {
+          const transaction = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+          logs = Array.isArray(transaction?.meta?.logMessages)
+            ? transaction.meta.logMessages.filter((entry): entry is string => typeof entry === 'string')
+            : [];
+        } catch {}
+        return { ok: false, error: status.err, logs };
+      }
+      if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
+        return { ok: true };
+      }
+    } catch {
+      if (signal.aborted) throw signal.reason;
+    }
+    await pause(TX_CONFIRM_POLL_MS, signal);
+  }
+  try {
+    const transaction = await connection.getTransaction(signature, { maxSupportedTransactionVersion: 0 });
+    if (transaction?.meta && !transaction.meta.err) return { ok: true };
+    return {
+      ok: false,
+      error: transaction?.meta?.err || 'timeout',
+      logs: Array.isArray(transaction?.meta?.logMessages)
+        ? transaction.meta.logMessages.filter((entry): entry is string => typeof entry === 'string')
+        : [],
+    };
+  } catch {
+    return { ok: false, error: 'timeout', logs: [] };
+  }
+}
+
+async function sendAndConfirmSignedTransaction(
+  connection: Connection,
+  transaction: VersionedTransaction,
+  signal: AbortSignal,
+  label: string,
+): Promise<string> {
+  const signature = bs58.encode(transaction.signatures[0]);
+  let sendError: unknown;
+  try {
+    await connection.sendTransaction(transaction, { maxRetries: 2 });
+  } catch (error) {
+    sendError = error;
+  }
+  if (sendError) {
+    const logs = transactionErrorLogs(sendError);
+    if (logs.length) {
+      const message = transactionErrorMessage(sendError);
+      const code = looksLikeBlockhashError(message) || looksLikeAccountInUseError(message, logs)
+        ? 'aborted'
+        : looksLikeRateLimitOrRpcError(message) ? 'unavailable' : 'failed-precondition';
+      throw new DeliveryReceiptError(code, `${label} transaction preflight failed.`, {
+        lastError: message,
+        lastLogs: logs.slice(0, 80),
+      });
+    }
+    const maybe = await waitForSignature(connection, signature, signal, TX_SEND_TIMEOUT_MS);
+    if (maybe.ok) return signature;
+    throw new DeliveryReceiptError('unavailable', `${label} transaction submission status is unknown. Try again.`, {
+      maybeSubmitted: true,
+      lastError: transactionErrorMessage(sendError),
+    });
+  }
+  const confirmed = await waitForSignature(connection, signature, signal, TX_CONFIRM_TIMEOUT_MS);
+  if (confirmed.ok) return signature;
+  const message = transactionErrorMessage(confirmed.error);
+  throw new DeliveryReceiptError(
+    /timeout/i.test(message) ? 'deadline-exceeded' : 'failed-precondition',
+    `${label} transaction was not confirmed. Try again.`,
+    { lastError: message, lastLogs: confirmed.logs.slice(0, 80) },
+  );
+}
+
+async function markDeliveryProcessing(
+  context: FirestoreContext,
+  document: DeliveryOrderDocument,
+  runtime: DeliveryRuntime,
+  signature: string | null,
+): Promise<void> {
+  const fields: Record<string, unknown> = {
+    dropId: runtime.dropId,
+    status: 'processing',
+    ...(signature ? { deliverySignature: signature } : {}),
+  };
+  const updateMask = [
+    'dropId',
+    'status',
+    ...(signature ? ['deliverySignature'] : []),
+    'receiptRecovery.lastPreparedProbeAt',
+    'receiptRecovery.preparedProbeCount',
+    'receiptRecovery.nextPreparedProbeAt',
+    'receiptRecovery.status',
+  ];
+  await commitWrites(context, [updateWrite({
+    path: document.path,
+    fields,
+    updateMask,
+    transforms: document.fields.processingAt === undefined
+      ? [{ fieldPath: 'processingAt', setToServerValue: 'REQUEST_TIME' }]
+      : undefined,
+    currentDocument: { exists: true },
+  })]);
+}
+
+async function markDeliveryReady(
+  context: FirestoreContext,
+  document: DeliveryOrderDocument,
+  runtime: DeliveryRuntime,
+  result: {
+    signature: string | null;
+    receiptsMinted: number;
+    receiptTxs: string[];
+    irlClaims: Array<{ code: string; boxId: number; boxAssetId: string; dudeIds: number[] }>;
+  },
+): Promise<void> {
+  const fields: Record<string, unknown> = {
+    dropId: runtime.dropId,
+    status: 'ready_to_ship',
+    ...(result.signature ? { deliverySignature: result.signature } : {}),
+    receiptsMinted: result.receiptsMinted,
+    receiptTxs: result.receiptTxs,
+    ...(result.irlClaims.length ? { irlClaims: result.irlClaims } : {}),
+  };
+  const updateMask = [
+    ...Object.keys(fields),
+    'receiptRecovery.leaseExpiresAt',
+    'receiptRecovery.lastErrorCode',
+    'receiptRecovery.lastErrorMessage',
+    'receiptRecovery.lastPreparedProbeAt',
+    'receiptRecovery.preparedProbeCount',
+    'receiptRecovery.nextPreparedProbeAt',
+    'receiptRecovery.status',
+  ];
+  await commitWrites(context, [updateWrite({
+    path: document.path,
+    fields,
+    updateMask,
+    transforms: [
+      { fieldPath: 'processedAt', setToServerValue: 'REQUEST_TIME' },
+      ...(result.irlClaims.length
+        ? [{ fieldPath: 'irlClaimsUpdatedAt', setToServerValue: 'REQUEST_TIME' }]
+        : []),
+    ],
+    currentDocument: { exists: true },
+  })]);
+}
+
+async function recordDeliveryClose(
+  context: FirestoreContext,
+  documentPath: string,
+  dropId: string,
+  closeDeliveryTx: string,
+): Promise<void> {
+  await commitWrites(context, [updateWrite({
+    path: documentPath,
+    fields: { dropId, closeDeliveryTx },
+    updateMask: ['dropId', 'closeDeliveryTx'],
+    transforms: [{ fieldPath: 'deliveryClosedAt', setToServerValue: 'REQUEST_TIME' }],
+    currentDocument: { exists: true },
+  })]);
+}
+
+function pendingReceiptItems(
+  order: Record<string, unknown>,
+  targetAssetIds: readonly string[],
+  infos: readonly (AccountInfo<Buffer> | null)[],
+  runtime: DeliveryRuntime,
+): Array<{ assetId: string; asset: PublicKey; kind: 'box' | 'dude'; refId: number }> {
+  const storedItems = Array.isArray(order.items) ? order.items.filter(isRecord) : [];
+  const byAssetId = new Map<string, Record<string, unknown>>();
+  for (const item of storedItems) {
+    if (typeof item.assetId === 'string') byAssetId.set(item.assetId, item);
+  }
+  const pending: Array<{ assetId: string; asset: PublicKey; kind: 'box' | 'dude'; refId: number }> = [];
+  for (let index = 0; index < targetAssetIds.length; index += 1) {
+    if (!infos[index]) continue;
+    const assetId = targetAssetIds[index];
+    const stored = byAssetId.get(assetId);
+    const kind = stored?.kind;
+    const refId = Number(stored?.refId);
+    if (kind !== 'box' && kind !== 'dude') {
+      throw new DeliveryReceiptError('failed-precondition', 'Delivery order is missing item kind for receipt minting.', {
+        assetId,
+      });
+    }
+    if (!Number.isSafeInteger(refId) || refId < 1 || refId > 0xffff_ffff) {
+      throw new DeliveryReceiptError('failed-precondition', 'Delivery order is missing item refId for receipt minting.', {
+        assetId,
+      });
+    }
+    if (kind === 'dude' && refId > runtime.maxDudeId) {
+      throw new DeliveryReceiptError('failed-precondition', 'Invalid figure id for receipt minting.', {
+        assetId,
+      });
+    }
+    pending.push({ assetId, asset: new PublicKey(assetId), kind, refId });
+  }
+  return pending;
+}
+
+async function sendReceiptBatch(args: {
+  connection: Connection;
+  runtime: DeliveryRuntime;
+  signer: Keypair;
+  owner: PublicKey;
+  coreCollection: PublicKey;
+  batch: readonly { asset: PublicKey; kind: 'box' | 'dude'; refId: number }[];
+  signal: AbortSignal;
+}): Promise<string> {
+  const burnInstructions = args.batch.map((item) => mplCoreBurnInstruction({
+    asset: item.asset,
+    coreCollection: args.coreCollection,
+    signer: args.signer.publicKey,
+  }));
+  const boxIds = args.batch.filter((item) => item.kind === 'box').map((item) => item.refId);
+  const dudeIds = args.batch.filter((item) => item.kind === 'dude').map((item) => item.refId);
+  const instructions = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+    ...burnInstructions,
+    mintReceiptsInstruction({
+      runtime: args.runtime,
+      signer: args.signer.publicKey,
+      recipient: args.owner,
+      coreCollection: args.coreCollection,
+      boxIds,
+      dudeIds,
+    }),
+  ];
+  let lastError: unknown;
+  for (let attempt = 0; attempt < TX_MAX_SEND_ATTEMPTS; attempt += 1) {
+    if (args.signal.aborted) throw args.signal.reason;
+    const { blockhash } = await args.connection.getLatestBlockhash('confirmed');
+    let transaction: VersionedTransaction;
+    try {
+      transaction = buildTransaction(instructions, args.signer.publicKey, blockhash, args.signer);
+      if (transaction.serialize().length > SOLANA_MAX_RAW_TX_BYTES) {
+        throw new RangeError('Receipt issuance transaction is too large.');
+      }
+    } catch (error) {
+      throw error;
+    }
+    const signature = bs58.encode(transaction.signatures[0]);
+    let sendError: unknown;
+    try {
+      await args.connection.sendTransaction(transaction, { maxRetries: 2 });
+    } catch (error) {
+      sendError = error;
+      lastError = error;
+    }
+    if (sendError) {
+      const message = transactionErrorMessage(sendError);
+      const logs = transactionErrorLogs(sendError);
+      if (logs.length) {
+        if (
+          looksLikeAccountInUseError(message, logs) ||
+          looksLikeRateLimitOrRpcError(message) ||
+          looksLikeBlockhashError(message)
+        ) {
+          await pause(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000), args.signal);
+          continue;
+        }
+        throw new DeliveryReceiptError(
+          looksLikeComputeLimitError(message, logs) ? 'resource-exhausted' : 'failed-precondition',
+          'Unable to issue receipts. Try fewer items or retry later.',
+          { lastError: message, lastLogs: logs.slice(0, 80) },
+        );
+      }
+      const maybe = await waitForSignature(args.connection, signature, args.signal, TX_SEND_TIMEOUT_MS);
+      if (maybe.ok) return signature;
+      const postInfos = await args.connection.getMultipleAccountsInfo(
+        args.batch.map((item) => item.asset),
+        { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
+      );
+      if (postInfos.every((info) => !info)) return signature;
+      await pause(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000), args.signal);
+      continue;
+    }
+    const confirmed = await waitForSignature(args.connection, signature, args.signal, TX_CONFIRM_TIMEOUT_MS);
+    if (confirmed.ok) return signature;
+    const postInfos = await args.connection.getMultipleAccountsInfo(
+      args.batch.map((item) => item.asset),
+      { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
+    );
+    if (postInfos.every((info) => !info)) return signature;
+    lastError = confirmed.error;
+    const message = transactionErrorMessage(confirmed.error);
+    if (looksLikeComputeLimitError(message, confirmed.logs)) {
+      throw new DeliveryReceiptError('resource-exhausted', 'Receipt issuance batch exceeded compute limits.', {
+        lastError: message,
+        lastLogs: confirmed.logs.slice(0, 80),
+      });
+    }
+    await pause(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000), args.signal);
+  }
+  throw new ReceiptBatchRetryExhaustedError(lastError);
+}
+
+function shouldShrinkReceiptBatch(error: unknown): boolean {
+  return error instanceof RangeError ||
+    error instanceof ReceiptBatchRetryExhaustedError ||
+    (error instanceof DeliveryReceiptError && error.code === 'resource-exhausted');
+}
+
+function schedulePackStatus(
+  waitUntil: DeliveryReceiptWaitUntil,
+  promise: Promise<void>,
+  context: { dropId: string; deliveryId: number },
+): void {
+  const guarded = promise.catch((error) => {
+    console.warn({
+      event: 'delivery_receipt_pack_status_failed',
+      ...context,
+      error: summarizeError(error),
+    });
+  });
+  try {
+    waitUntil(guarded);
+  } catch (error) {
+    console.warn({
+      event: 'delivery_receipt_wait_until_failed',
+      ...context,
+      error: summarizeError(error),
+    });
+    void guarded;
+  }
+}
+
+async function closeDeliveryPda(args: {
+  connection: Connection;
+  runtime: DeliveryRuntime;
+  signer: Keypair;
+  deliveryPda: PublicKey;
+  deliveryId: number;
+  deliveryBump: number;
+  signal: AbortSignal;
+}): Promise<string | null> {
+  const info = await args.connection.getAccountInfo(args.deliveryPda, {
+    commitment: 'confirmed',
+    dataSlice: { offset: 0, length: 0 },
+  });
+  if (!info) return null;
+  const { blockhash } = await args.connection.getLatestBlockhash('confirmed');
+  const transaction = buildTransaction([
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
+    closeDeliveryInstruction({
+      runtime: args.runtime,
+      signer: args.signer.publicKey,
+      deliveryPda: args.deliveryPda,
+      deliveryId: args.deliveryId,
+      deliveryBump: args.deliveryBump,
+    }),
+  ], args.signer.publicKey, blockhash, args.signer);
+  return sendAndConfirmSignedTransaction(args.connection, transaction, args.signal, 'Close delivery');
+}
+
+async function retryIssueReceipts(args: {
+  request: RetryIssueReceiptsArgs;
+  env: DeliveryReceiptsEnv;
+  firestore: FirestoreContext;
+  provider: ProviderContext;
+  waitUntil: DeliveryReceiptWaitUntil;
+  randomInt: (maxExclusive: number) => number;
+}): Promise<ReceiptIssueResult> {
+  const owner = canonicalPublicKey(args.request.ownerWallet, 'wallet address');
+  const deliveryId = Math.floor(args.request.deliveryId);
+  const runtime = runtimeForDrop(args.request.dropId);
+  const path = dropDeliveryOrderPath(runtime.dropId, deliveryId);
+  const document = await readDocument(args.firestore, path);
+  if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
+  if (document.fields.owner && document.fields.owner !== owner.toBase58()) {
+    throw new DeliveryReceiptError('permission-denied', 'Order belongs to a different wallet.');
+  }
+  const connection = createConnection(args.provider, runtime);
+  const onchain = await fetchOnchainConfig(connection, runtime);
+  const signer = decodeCosigner(args.env.COSIGNER_SECRET);
+  if (!signer.publicKey.equals(onchain.admin)) {
+    throw new DeliveryReceiptError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.');
+  }
+  if (document.fields.status === 'ready_to_ship') {
+    let closeDeliveryTx = typeof document.fields.closeDeliveryTx === 'string'
+      ? document.fields.closeDeliveryTx
+      : null;
+    if (!closeDeliveryTx) {
+      const [deliveryPda, deliveryBump] = deriveDeliveryPda(runtime, deliveryId);
+      try {
+        closeDeliveryTx = await closeDeliveryPda({
+          connection,
+          runtime,
+          signer,
+          deliveryPda,
+          deliveryId,
+          deliveryBump,
+          signal: args.provider.signal,
+        });
+        if (closeDeliveryTx) {
+          await recordDeliveryClose(args.firestore, document.path, runtime.dropId, closeDeliveryTx);
+        }
+      } catch (error) {
+        console.warn({
+          event: 'delivery_receipt_late_close_failed',
+          dropId: runtime.dropId,
+          deliveryId,
+          error: summarizeError(error),
+        });
+      }
+    }
+    return {
+      processed: true,
+      deliveryId,
+      receiptsMinted: Number(document.fields.receiptsMinted || 0),
+      receiptTxs: Array.isArray(document.fields.receiptTxs)
+        ? document.fields.receiptTxs.filter((value): value is string => typeof value === 'string')
+        : [],
+      closeDeliveryTx,
+    };
+  }
+  const verified = args.request.verification === 'signature'
+    ? await verifyReceiptIssuanceBySignature({
+        connection,
+        deliveryId,
+        order: document.fields,
+        ownerWallet: owner.toBase58(),
+        runtime,
+        signature: args.request.signature,
+      })
+    : await verifyReceiptIssuanceByDeliveryRecord({
+        connection,
+        deliveryId,
+        order: document.fields,
+        ownerWallet: owner.toBase58(),
+        runtime,
+      });
+  await markDeliveryProcessing(args.firestore, document, runtime, verified.signature);
+  const assetKeys = verified.targetAssetIds.map((assetId) => canonicalPublicKey(assetId, 'delivery asset id'));
+  const infos = await connection.getMultipleAccountsInfo(assetKeys, {
+    commitment: 'confirmed',
+    dataSlice: { offset: 0, length: 0 },
+  });
+  const pending = pendingReceiptItems(document.fields, verified.targetAssetIds, infos, runtime);
+  const alreadyProcessed = verified.targetAssetIds.length - pending.length;
+  const receiptTxs: string[] = [];
+  let totalProcessed = 0;
+  while (pending.length) {
+    if (args.provider.signal.aborted) throw args.provider.signal.reason;
+    let batchSize = Math.min(pending.length, 3);
+    let lastError: unknown;
+    while (batchSize >= 1) {
+      try {
+        const signature = await sendReceiptBatch({
+          connection,
+          runtime,
+          signer,
+          owner,
+          coreCollection: onchain.coreCollection,
+          batch: pending.slice(0, batchSize),
+          signal: args.provider.signal,
+        });
+        receiptTxs.push(signature);
+        totalProcessed += batchSize;
+        pending.splice(0, batchSize);
+        break;
+      } catch (error) {
+        lastError = error;
+        if (shouldShrinkReceiptBatch(error)) {
+          batchSize -= 1;
+          continue;
+        }
+        throw error;
+      }
+    }
+    if (batchSize < 1) {
+      throw new DeliveryReceiptError(
+        'failed-precondition',
+        'Unable to issue receipts. Try fewer items or retry later.',
+        { lastError: transactionErrorMessage(lastError) },
+      );
+    }
+  }
+  const receiptsMinted = alreadyProcessed + totalProcessed;
+  const irlClaims: Array<{ code: string; boxId: number; boxAssetId: string; dudeIds: number[] }> = [];
+  if (runtime.itemsPerBox > 0) {
+    const items = Array.isArray(document.fields.items) ? document.fields.items.filter(isRecord) : [];
+    for (const item of items) {
+      if (item.kind !== 'box' || typeof item.assetId !== 'string') continue;
+      const boxId = Number(item.refId);
+      if (!Number.isSafeInteger(boxId) || boxId < 1 || boxId > 0xffff_ffff) continue;
+      const dudeIds = await assignDudesForBox(
+        args.firestore,
+        runtime,
+        item.assetId,
+        args.randomInt,
+      );
+      const code = await ensureIrlClaimCodeForBox(args.firestore, runtime, {
+        ownerWallet: owner.toBase58(),
+        deliveryId,
+        boxAssetId: item.assetId,
+        boxId,
+        dudeIds,
+      }, args.randomInt);
+      irlClaims.push({ code, boxId, boxAssetId: item.assetId, dudeIds });
+    }
+  }
+  await markDeliveryReady(args.firestore, document, runtime, {
+    signature: verified.signature,
+    receiptsMinted,
+    receiptTxs,
+    irlClaims,
+  });
+  schedulePackStatus(
+    args.waitUntil,
+    countNormalIrlPackStatus({
+      ...args.firestore,
+      nowMs: Date.now(),
+      signal: AbortSignal.timeout(PACK_STATUS_TIMEOUT_MS),
+    }, runtime, deliveryId, document.fields),
+    { dropId: runtime.dropId, deliveryId },
+  );
+  let closeDeliveryTx: string | null = null;
+  try {
+    closeDeliveryTx = await closeDeliveryPda({
+      connection,
+      runtime,
+      signer,
+      deliveryPda: verified.expectedDeliveryPda,
+      deliveryId,
+      deliveryBump: verified.expectedDeliveryBump,
+      signal: args.provider.signal,
+    });
+  } catch (error) {
+    console.warn({
+      event: 'delivery_receipt_close_failed',
+      dropId: runtime.dropId,
+      deliveryId,
+      error: summarizeError(error),
+    });
+  }
+  if (closeDeliveryTx) {
+    await recordDeliveryClose(args.firestore, document.path, runtime.dropId, closeDeliveryTx);
+  }
+  return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };
+}
+
+function cleanupContext(context: FirestoreContext): FirestoreContext {
+  return {
+    ...context,
+    nowMs: Date.now(),
+    signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
+  };
+}
+
+function normalizeRecoveryErrorCode(error: unknown): string | undefined {
+  if (error instanceof DeliveryReceiptError) return error.code;
+  if (error instanceof DOMException && error.name === 'TimeoutError') return 'deadline-exceeded';
+  if (error instanceof DOMException && error.name === 'AbortError') return 'aborted';
+  return error instanceof Error ? 'internal' : undefined;
+}
+
+function isRetryableRecoveryErrorCode(errorCode: string | undefined): boolean {
+  return errorCode === 'aborted' ||
+    errorCode === 'deadline-exceeded' ||
+    errorCode === 'internal' ||
+    errorCode === 'resource-exhausted' ||
+    errorCode === 'unavailable';
+}
+
+async function handlePreparedRecoveryFailure(
+  context: FirestoreContext,
+  documentPath: string,
+  outcome: DeliveryRecoveryOutcome,
+  errorCode: string | undefined,
+  nowMs = Date.now(),
+): Promise<void> {
+  const current = await readDocument(context, documentPath);
+  if (current?.fields.status !== 'prepared') return;
+  if (outcome === 'missing_delivery') {
+    await recordPreparedDeliveryRecoveryMiss(context, current, nowMs);
+  } else if (isRetryableRecoveryErrorCode(errorCode)) {
+    await deferPreparedDeliveryRecovery(context, current, nowMs);
+  } else {
+    await stopPreparedDeliveryRecoveryChecks(context, current, nowMs);
+  }
+}
+
+function normalizeRecoveryMessage(error: unknown): string | undefined {
+  const value = String(error instanceof Error ? error.message : error || '').trim();
+  return value ? value.slice(0, 300) : undefined;
+}
+
+async function issueReceiptsRequest(
+  body: IssueRequest,
+  identity: FirebaseIdentity,
+  env: DeliveryReceiptsEnv,
+  firestore: FirestoreContext,
+  provider: ProviderContext,
+  waitUntil: DeliveryReceiptWaitUntil,
+): Promise<ReceiptIssueResult> {
+  const wallet = await loadWalletSession(firestore, identity.uid);
+  const ownerWallet = canonicalPublicKey(body.owner, 'wallet address').toBase58();
+  if (wallet !== ownerWallet) throw new DeliveryReceiptError('permission-denied', 'Owners only.');
+  if (!isNonZeroBase58Bytes(body.signature, 64)) {
+    throw new DeliveryReceiptError('invalid-argument', 'Invalid delivery signature.');
+  }
+  const runtime = runtimeForDrop(body.dropId);
+  const path = dropDeliveryOrderPath(runtime.dropId, body.deliveryId);
+  const order = await readDocument(firestore, path);
+  if (!order) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
+  let leaseAcquired = false;
+  if (order.fields.status !== 'ready_to_ship') {
+    const lease = await acquireDeliveryRecoveryLease(firestore, path, ownerWallet, Date.now(), true);
+    if (!lease.acquired) {
+      if (lease.result.outcome === 'lease_active') {
+        throw new DeliveryReceiptError('aborted', lease.result.message || 'Another client is already retrying this order.');
+      }
+      if (lease.result.outcome === 'not_found') {
+        throw new DeliveryReceiptError('not-found', lease.result.message || 'Delivery order not found.');
+      }
+      if (lease.result.errorCode === 'permission-denied') {
+        throw new DeliveryReceiptError('permission-denied', lease.result.message || 'Order belongs to a different wallet.');
+      }
+      if (lease.result.outcome !== 'skipped_status') {
+        throw new DeliveryReceiptError('failed-precondition', lease.result.message || 'Unable to start receipt issuance.');
+      }
+    } else {
+      leaseAcquired = true;
+    }
+  }
+  try {
+    const result = await retryIssueReceipts({
+      request: {
+        ownerWallet,
+        deliveryId: body.deliveryId,
+        dropId: runtime.dropId,
+        verification: 'signature',
+        signature: body.signature,
+      },
+      env,
+      firestore,
+      provider,
+      waitUntil,
+      randomInt: secureRandomInt,
+    });
+    if (leaseAcquired) {
+      await finalizeDeliveryRecoveryAttempt(cleanupContext(firestore), path, {}).catch(() => undefined);
+    }
+    return result;
+  } catch (error) {
+    if (leaseAcquired) {
+      await finalizeDeliveryRecoveryAttempt(cleanupContext(firestore), path, {
+        errorCode: normalizeRecoveryErrorCode(error),
+        message: normalizeRecoveryMessage(error),
+      }).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+async function hasConfirmedDeliveryRecord(
+  provider: ProviderContext,
+  runtime: DeliveryRuntime,
+  deliveryId: number,
+  order: Record<string, unknown>,
+): Promise<boolean> {
+  const connection = createConnection(provider, runtime);
+  const [expectedDeliveryPda] = deriveDeliveryPda(runtime, deliveryId);
+  assertStoredDeliveryPda(order, expectedDeliveryPda);
+  return Boolean(await fetchDeliveryRecord(connection, runtime, deliveryId, false));
+}
+
+async function recoverReceiptsRequest(
+  body: RecoverRequest,
+  identity: FirebaseIdentity,
+  env: DeliveryReceiptsEnv,
+  firestore: FirestoreContext,
+  provider: ProviderContext,
+  waitUntil: DeliveryReceiptWaitUntil,
+): Promise<RecoverDeliveryOrdersResult> {
+  const wallet = await loadWalletSession(firestore, identity.uid);
+  if (body.deliveryId !== undefined && body.dropId === undefined) {
+    throw new DeliveryReceiptError('invalid-argument', 'deliveryId requires dropId.');
+  }
+  const filterDropId = body.dropId ? runtimeForDrop(body.dropId).dropId : undefined;
+  const force = body.force === true;
+  const nowMs = Date.now();
+  const results: RecoverDeliveryOrdersItemResult[] = [];
+  let attempted = 0;
+  let recovered = 0;
+  let candidates: DeliveryOrderDocument[] = [];
+  if (filterDropId && body.deliveryId !== undefined) {
+    const document = await readDocument(firestore, dropDeliveryOrderPath(filterDropId, body.deliveryId));
+    if (document) candidates = [document];
+    else {
+      results.push({
+        dropId: filterDropId,
+        deliveryId: body.deliveryId,
+        statusBefore: 'missing',
+        outcome: 'not_found',
+        verification: 'delivery_pda',
+        message: 'delivery order not found',
+      });
+    }
+  } else {
+    const [processing, prepared] = await Promise.all([
+      runDeliveryOrderQuery(firestore, wallet, 'processing'),
+      runDeliveryOrderQuery(firestore, wallet, 'prepared'),
+    ]);
+    candidates = [...processing, ...prepared].filter((document) =>
+      !filterDropId || resolveDeliveryOrderDropId(document.fields, document.path) === filterDropId);
+  }
+  candidates.sort(compareDeliveryRecoveryCandidates);
+  for (const document of candidates) {
+    const base = orderResultBase(document);
+    if (!base) continue;
+    if (document.fields.owner && document.fields.owner !== wallet) {
+      results.push({
+        ...base,
+        outcome: 'failed',
+        verification: 'delivery_pda',
+        errorCode: 'permission-denied',
+        message: 'order belongs to a different wallet',
+      });
+      continue;
+    }
+    if (base.statusBefore === 'ready_to_ship') {
+      results.push({
+        ...base,
+        outcome: 'recovered',
+        verification: 'delivery_pda',
+        message: 'order is already ready to ship',
+      });
+      recovered += 1;
+      continue;
+    }
+    const runtime = runtimeForDrop(base.dropId);
+    if (base.statusBefore === 'prepared' && !force) {
+      let exists: boolean | null = null;
+      try {
+        exists = await hasConfirmedDeliveryRecord(provider, runtime, base.deliveryId, document.fields);
+      } catch (error) {
+        console.warn({
+          event: 'delivery_receipt_recovery_eligibility_failed',
+          dropId: base.dropId,
+          deliveryId: base.deliveryId,
+          error: summarizeError(error),
+        });
+      }
+      if (exists === false) {
+        const nextCheckAt = await recordPreparedDeliveryRecoveryMiss(
+          firestore,
+          document,
+          nowMs,
+        ).catch((error) => {
+          console.warn({
+            event: 'delivery_receipt_recovery_probe_failed',
+            dropId: base.dropId,
+            deliveryId: base.deliveryId,
+            error: summarizeError(error),
+          });
+          return null;
+        });
+        results.push({
+          ...base,
+          outcome: 'not_eligible',
+          verification: 'delivery_pda',
+          message: nextCheckAt === null
+            ? 'prepared order never produced a confirmed on-chain delivery record'
+            : 'prepared order has no confirmed on-chain delivery record yet',
+        });
+        continue;
+      }
+    }
+    if (attempted >= MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL) {
+      results.push({
+        ...base,
+        outcome: 'attempt_capped',
+        verification: 'delivery_pda',
+        message: 'recovery attempt cap reached for this pass',
+      });
+      continue;
+    }
+    const lease = await acquireDeliveryRecoveryLease(firestore, document.path, wallet, nowMs, force);
+    if (!lease.acquired) {
+      results.push(lease.result);
+      continue;
+    }
+    attempted += 1;
+    try {
+      const result = await retryIssueReceipts({
+        request: {
+          ownerWallet: wallet,
+          deliveryId: base.deliveryId,
+          dropId: base.dropId,
+          verification: 'delivery_pda',
+        },
+        env,
+        firestore,
+        provider,
+        waitUntil,
+        randomInt: secureRandomInt,
+      });
+      recovered += 1;
+      results.push({
+        ...base,
+        outcome: 'recovered',
+        verification: 'delivery_pda',
+        message: result.processed ? 'receipts issued' : 'order already processed',
+      });
+      await finalizeDeliveryRecoveryAttempt(cleanupContext(firestore), document.path, {}).catch(() => undefined);
+    } catch (error) {
+      const errorCode = normalizeRecoveryErrorCode(error);
+      const message = normalizeRecoveryMessage(error);
+      const outcome: DeliveryRecoveryOutcome = errorCode === 'failed-precondition' &&
+        /delivery record pda not found/i.test(message || '')
+        ? 'missing_delivery'
+        : 'failed';
+      const cleanup = cleanupContext(firestore);
+      if (base.statusBefore === 'prepared') {
+        await handlePreparedRecoveryFailure(
+          cleanup,
+          document.path,
+          outcome,
+          errorCode,
+        ).catch(() => undefined);
+      }
+      results.push({
+        ...base,
+        outcome,
+        verification: 'delivery_pda',
+        ...(errorCode ? { errorCode } : {}),
+        ...(message ? { message } : {}),
+      });
+      await finalizeDeliveryRecoveryAttempt(cleanup, document.path, {
+        errorCode,
+        message,
+      }).catch(() => undefined);
+      console.warn({
+        event: 'delivery_receipt_recovery_failed',
+        dropId: base.dropId,
+        deliveryId: base.deliveryId,
+        error: summarizeError(error),
+      });
+    }
+  }
+  const walletRecovery = await fetchDeliveryRecoveryState(firestore, wallet, Date.now());
+  return buildRecoverDeliveryOrdersResult({ attempted, recovered, walletRecovery, results });
+}
+
+const defaultDependencies: DeliveryReceiptDependencies = {
+  accessTokenProvider: createGoogleAccessTokenProvider(),
+  issue: issueReceiptsRequest,
+  nowMs: () => Date.now(),
+  providerFetch: (input, init) => fetch(input, init),
+  recover: recoverReceiptsRequest,
+  timeoutMs: HANDLER_TIMEOUT_MS,
+  verifyIdToken: verifyFirebaseIdToken,
+};
+
+export async function handleDeliveryReceiptRequest(
+  request: Request,
+  env: DeliveryReceiptsEnv,
+  path: typeof DELIVERY_RECEIPTS_ISSUE_PATH | typeof DELIVERY_RECEIPTS_RECOVER_PATH,
+  waitUntil: DeliveryReceiptWaitUntil,
+  overrides: Partial<DeliveryReceiptDependencies> = {},
+): Promise<DeliveryReceiptRequestResult> {
+  const dependencies = { ...defaultDependencies, ...overrides };
+  const metrics: DeliveryRequestMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
+  if (request.method !== 'POST') {
+    await request.body?.cancel().catch(() => undefined);
+    const response = errorResponse(new DeliveryReceiptError('invalid-argument', 'Method not allowed.'));
+    response.headers.set('Allow', 'POST, OPTIONS');
+    return {
+      response: new Response(response.body, { headers: response.headers, status: 405 }),
+      metrics,
+      authOutcome: 'rejected',
+    };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException('Delivery receipt request timed out', 'TimeoutError')),
+    dependencies.timeoutMs,
+  );
+  const trackedFetch: ProfileProviderFetch = async (input, init) => {
+    const startedAt = performance.now();
+    metrics.upstreamCalls += 1;
+    try {
+      return await dependencies.providerFetch(input, init);
+    } finally {
+      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
+    }
+  };
+  let identity: FirebaseIdentity | undefined;
+  let dropId: string | undefined;
+  let deliveryId: number | undefined;
+  try {
+    identity = await dependencies.verifyIdToken(
+      request.headers.get('Authorization'),
+      trackedFetch,
+      controller.signal,
+      dependencies.nowMs(),
+    );
+    const rawBody = await readRequestBody(
+      request,
+      controller.signal,
+      path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'issue' : 'recover',
+    );
+    const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
+    const apiKey = String(env.HELIUS_API_KEY || '').trim();
+    const cosignerSecret = String(env.COSIGNER_SECRET || '').trim();
+    if (!serviceAccountJson || !apiKey || !cosignerSecret) {
+      throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
+    }
+    const common: FirestoreContext = {
+      accessTokenProvider: dependencies.accessTokenProvider,
+      nowMs: dependencies.nowMs(),
+      providerFetch: trackedFetch,
+      serviceAccountJson,
+      signal: controller.signal,
+    };
+    const provider: ProviderContext = { apiKey, fetch: trackedFetch, signal: controller.signal };
+    if (path === DELIVERY_RECEIPTS_ISSUE_PATH) {
+      const body = rawBody as IssueRequest;
+      dropId = normalizeDropId(body.dropId);
+      deliveryId = body.deliveryId;
+      const result: IssueReceiptsResult = await dependencies.issue(
+        body,
+        identity,
+        env,
+        common,
+        provider,
+        waitUntil,
+      );
+      return {
+        response: jsonResponse(result),
+        metrics,
+        authOutcome: 'accepted',
+        dropId,
+        deliveryId,
+        verification: 'signature',
+      };
+    }
+    const body = rawBody as RecoverRequest;
+    dropId = body.dropId ? normalizeDropId(body.dropId) : undefined;
+    deliveryId = body.deliveryId;
+    const result = await dependencies.recover(
+      body,
+      identity,
+      env,
+      common,
+      provider,
+      waitUntil,
+    );
+    return {
+      response: jsonResponse(result),
+      metrics,
+      authOutcome: 'accepted',
+      ...(dropId ? { dropId } : {}),
+      ...(deliveryId === undefined ? {} : { deliveryId }),
+      verification: 'delivery_pda',
+      attempted: result.attempted,
+      recovered: result.recovered,
+    };
+  } catch (error) {
+    let receiptError: DeliveryReceiptError;
+    if (controller.signal.aborted) {
+      receiptError = new DeliveryReceiptError('deadline-exceeded', 'Delivery receipt request timed out.');
+    } else if (error instanceof FirebaseIdTokenError) {
+      receiptError = new DeliveryReceiptError(
+        error.kind === 'invalid-token' ? 'unauthenticated' : 'unavailable',
+        error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',
+      );
+    } else if (error instanceof DeliveryReceiptError) {
+      receiptError = error;
+    } else if (error instanceof ProfileReadError) {
+      receiptError = new DeliveryReceiptError(
+        error.code === 'deadline-exceeded' ? 'deadline-exceeded' : 'unavailable',
+        'Receipt data is temporarily unavailable.',
+      );
+    } else {
+      console.error({
+        event: 'delivery_receipt_unhandled_error',
+        path,
+        ...(dropId ? { dropId } : {}),
+        ...(deliveryId === undefined ? {} : { deliveryId }),
+        error: summarizeError(error),
+      });
+      receiptError = new DeliveryReceiptError('internal', 'Delivery receipt request failed.');
+    }
+    return {
+      response: errorResponse(receiptError),
+      metrics,
+      authOutcome: identity
+        ? 'accepted'
+        : error instanceof FirebaseIdTokenError && error.kind !== 'invalid-token'
+          ? 'provider-failure'
+          : 'rejected',
+      ...(dropId ? { dropId } : {}),
+      ...(deliveryId === undefined ? {} : { deliveryId }),
+      verification: path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'signature' : 'delivery_pda',
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export const deliveryReceiptTestHooks = {
+  assignmentClaimCompatible,
+  assertDeliveryPayers,
+  assertDeliverArgsMatchOrder,
+  assertOnchainConfigMatchesRuntime,
+  acquireDeliveryRecoveryLease,
+  compareDeliveryRecoveryCandidates,
+  decodeDeliveryRecord,
+  decodeCosigner,
+  deliveryRecoveryEligibility,
+  deriveDeliveryPda,
+  DeliveryReceiptError,
+  handlePreparedRecoveryFailure,
+  issueReceiptsRequest,
+  normalizeAssignedDudeIds,
+  pendingReceiptItems,
+  ReceiptBatchRetryExhaustedError,
+  recoverReceiptsRequest,
+  runtimeForDrop,
+  rollbackTransactionBestEffort,
+  runDeliveryRecoveryStateQuery,
+  secureRandomInt,
+  shouldShrinkReceiptBatch,
+  storedDeliveryItemIds,
+};

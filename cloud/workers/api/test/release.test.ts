@@ -1835,6 +1835,8 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         '/claims/irl/prepare',
         '/receipts/transfer/prepare',
         '/delivery/prepare',
+        '/delivery/receipts/issue',
+        '/delivery/receipts/recover',
         '/admin/irl-redeem/prepare',
         '/boxes/reveal',
         '/checkout/session',

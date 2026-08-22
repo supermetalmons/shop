@@ -119,6 +119,11 @@ import {
   handleDeliveryPrepare,
 } from './deliveryPrepare.js';
 import {
+  DELIVERY_RECEIPTS_ISSUE_PATH,
+  DELIVERY_RECEIPTS_RECOVER_PATH,
+  handleDeliveryReceiptRequest,
+} from './deliveryReceipts.js';
+import {
   ADMIN_IRL_REDEEM_PREPARE_PATH,
   handleAdminIrlRedeemPrepare,
 } from './adminIrlRedeemPrepare.js';
@@ -190,6 +195,8 @@ const KNOWN_LOG_ROUTES = new Set([
   IRL_CLAIM_PREPARE_PATH,
   RECEIPT_TRANSFER_PREPARE_PATH,
   DELIVERY_PREPARE_PATH,
+  DELIVERY_RECEIPTS_ISSUE_PATH,
+  DELIVERY_RECEIPTS_RECOVER_PATH,
   ADMIN_IRL_REDEEM_PREPARE_PATH,
   REVEAL_DUDES_PATH,
 ]);
@@ -1372,6 +1379,11 @@ export async function handleRequest(
   let irlClaimDropId: string | undefined;
   let receiptTransferDropId: string | undefined;
   let deliveryPrepareDropId: string | undefined;
+  let deliveryReceiptDropId: string | undefined;
+  let deliveryReceiptDeliveryId: number | undefined;
+  let deliveryReceiptVerification: string | undefined;
+  let deliveryRecoveryAttempted: number | undefined;
+  let deliveryRecoveryRecovered: number | undefined;
   let adminIrlRedeemPrepareDropId: string | undefined;
   let adminIrlRedeemPrepareTargetKind: string | undefined;
   let adminIrlRedeemPrepareItemCount: number | undefined;
@@ -1397,6 +1409,8 @@ export async function handleRequest(
     pathname === IRL_CLAIM_PREPARE_PATH ||
     pathname === RECEIPT_TRANSFER_PREPARE_PATH ||
     pathname === DELIVERY_PREPARE_PATH ||
+    pathname === DELIVERY_RECEIPTS_ISSUE_PATH ||
+    pathname === DELIVERY_RECEIPTS_RECOVER_PATH ||
     pathname === ADMIN_IRL_REDEEM_PREPARE_PATH ||
     pathname === REVEAL_DUDES_PATH
   )) {
@@ -1477,6 +1491,29 @@ export async function handleRequest(
       metrics.providerDurationMs += result.metrics.providerDurationMs;
       profileAuthOutcome = result.authOutcome;
       deliveryPrepareDropId = result.dropId;
+      response = applyProfileCors(request, result.response);
+    }
+  } else if (pathname === DELIVERY_RECEIPTS_ISSUE_PATH || pathname === DELIVERY_RECEIPTS_RECOVER_PATH) {
+    if (!isProfileRequestOriginAllowed(request)) {
+      response = applyProfileCors(request, new Response(null));
+    } else {
+      const result = await handleDeliveryReceiptRequest(
+        request,
+        env,
+        pathname,
+        (promise) => {
+          if (waitUntil) waitUntil(promise);
+          else void promise;
+        },
+      );
+      metrics.upstreamCalls += result.metrics.upstreamCalls;
+      metrics.providerDurationMs += result.metrics.providerDurationMs;
+      profileAuthOutcome = result.authOutcome;
+      deliveryReceiptDropId = result.dropId;
+      deliveryReceiptDeliveryId = result.deliveryId;
+      deliveryReceiptVerification = result.verification;
+      deliveryRecoveryAttempted = result.attempted;
+      deliveryRecoveryRecovered = result.recovered;
       response = applyProfileCors(request, result.response);
     }
   } else if (pathname === ADMIN_IRL_REDEEM_PREPARE_PATH) {
@@ -1592,6 +1629,11 @@ export async function handleRequest(
     ...(irlClaimDropId ? { irlClaimDropId } : {}),
     ...(receiptTransferDropId ? { receiptTransferDropId } : {}),
     ...(deliveryPrepareDropId ? { deliveryPrepareDropId } : {}),
+    ...(deliveryReceiptDropId ? { deliveryReceiptDropId } : {}),
+    ...(deliveryReceiptDeliveryId === undefined ? {} : { deliveryReceiptDeliveryId }),
+    ...(deliveryReceiptVerification ? { deliveryReceiptVerification } : {}),
+    ...(deliveryRecoveryAttempted === undefined ? {} : { deliveryRecoveryAttempted }),
+    ...(deliveryRecoveryRecovered === undefined ? {} : { deliveryRecoveryRecovered }),
     ...(adminIrlRedeemPrepareDropId ? { adminIrlRedeemPrepareDropId } : {}),
     ...(adminIrlRedeemPrepareTargetKind ? { adminIrlRedeemPrepareTargetKind } : {}),
     ...(adminIrlRedeemPrepareItemCount === undefined ? {} : { adminIrlRedeemPrepareItemCount }),

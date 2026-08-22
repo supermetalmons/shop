@@ -671,6 +671,92 @@ test('delivery preparation uses the authenticated Cloudflare route with an exact
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareDeliveryTx['"]/);
 });
 
+test('receipt issuance and recovery use authenticated Cloudflare routes with exact contracts', async () => {
+  const issueResponse = {
+    processed: true,
+    deliveryId: 17,
+    receiptsMinted: 3,
+    receiptTxs: [REVEAL_SIGNATURE],
+    closeDeliveryTx: null,
+  };
+  const issuePayload = await profileApiTestHooks.requestProfileApi(
+    '/delivery/receipts/issue',
+    { owner: OWNER, deliveryId: 17, signature: REVEAL_SIGNATURE, dropId: 'card_nft_2' },
+    {
+      fetch: async (input, init) => {
+        assert.equal(String(input), 'https://api.mons.shop/delivery/receipts/issue');
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        return Response.json(issueResponse);
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1000,
+    },
+  );
+  assert.deepEqual(profileApiTestHooks.parseIssueReceiptsResult(issuePayload), issueResponse);
+  assert.equal(profileApiTestHooks.parseIssueReceiptsResult({ ...issueResponse, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseIssueReceiptsResult({ ...issueResponse, processed: false }), null);
+  assert.equal(profileApiTestHooks.parseIssueReceiptsResult({ ...issueResponse, receiptTxs: [ZERO_SIGNATURE] }), null);
+  assert.equal(profileApiTestHooks.parseIssueReceiptsResult({ ...issueResponse, deliveryId: 0x1_0000_0000 }), null);
+
+  const recoveryResponse = {
+    attempted: 1,
+    recovered: 1,
+    remainingProcessing: 0,
+    walletRecovery: { remainingProcessing: 0, nextCheckAt: null },
+    results: [{
+      dropId: 'card_nft_2',
+      deliveryId: 17,
+      statusBefore: 'processing',
+      outcome: 'recovered',
+      verification: 'delivery_pda',
+      message: 'receipts issued',
+    }],
+  };
+  const recoveryPayload = await profileApiTestHooks.requestProfileApi(
+    '/delivery/receipts/recover',
+    { dropId: 'card_nft_2', deliveryId: 17, force: true },
+    {
+      fetch: async (input, init) => {
+        assert.equal(String(input), 'https://api.mons.shop/delivery/receipts/recover');
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        return Response.json(recoveryResponse);
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1000,
+    },
+  );
+  assert.deepEqual(profileApiTestHooks.parseRecoverDeliveryOrdersResult(recoveryPayload), recoveryResponse);
+  assert.equal(profileApiTestHooks.parseRecoverDeliveryOrdersResult({ ...recoveryResponse, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseRecoverDeliveryOrdersResult({
+    ...recoveryResponse,
+    remainingProcessing: 1,
+  }), null);
+  assert.equal(profileApiTestHooks.parseRecoverDeliveryOrdersResult({
+    ...recoveryResponse,
+    results: [{ ...recoveryResponse.results[0], outcome: 'unknown' }],
+  }), null);
+  assert.equal(profileApiTestHooks.parseRecoverDeliveryOrdersResult({
+    ...recoveryResponse,
+    results: [{ ...recoveryResponse.results[0], deliveryId: 0x1_0000_0000 }],
+  }), null);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/delivery/receipts/issue'), 65_000);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/delivery/receipts/recover'), 65_000);
+
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  for (const [name, pathname] of [
+    ['issueReceipts', '/delivery/receipts/issue'],
+    ['recoverMyDeliveryOrders', '/delivery/receipts/recover'],
+  ] as const) {
+    const start = source.indexOf(`export async function ${name}`);
+    const end = source.indexOf('\nexport ', start + 1);
+    const implementation = source.slice(start, end === -1 ? source.length : end);
+    assert.match(implementation, new RegExp(pathname.replaceAll('/', '\\/')));
+    assert.doesNotMatch(implementation, /callFunction|httpsCallable/);
+  }
+});
+
 test('wallet lifecycle clients use the authenticated Cloudflare routes without callable fallbacks', async () => {
   for (const [pathname, body] of [
     ['/auth/solana', { wallet: OWNER, message: 'signed-message', signature: Array(64).fill(1) }],

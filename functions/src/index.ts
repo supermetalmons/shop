@@ -5655,7 +5655,7 @@ export async function retryIssueReceiptsForDeliveryOrder(
   return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };
 }
 
-export const issueReceipts = onCallLogged(
+const retiredIssueReceipts = onCallLogged(
   'issueReceipts',
   async (request) => {
     const { wallet } = await requireWalletSession(request);
@@ -5723,7 +5723,7 @@ export const issueReceipts = onCallLogged(
   { secrets: [COSIGNER_SECRET] },
 );
 
-export const recoverMyDeliveryOrders = onCallLogged('recoverMyDeliveryOrders', async (request) => {
+const retiredRecoverMyDeliveryOrders = onCallLogged('recoverMyDeliveryOrders', async (request) => {
   const { wallet } = await requireWalletSession(request);
   const schema = z.object({
     dropId: z.string().min(1).max(64).optional(),
@@ -5923,6 +5923,9 @@ export const recoverMyDeliveryOrders = onCallLogged('recoverMyDeliveryOrders', a
     results,
   }) satisfies RecoverMyDeliveryOrdersResult;
 });
+
+void retiredIssueReceipts;
+void retiredRecoverMyDeliveryOrders;
 
 type StripeReceiptClaimStart =
   | {

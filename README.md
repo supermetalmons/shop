@@ -60,7 +60,7 @@ The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_API_KEY`,
 `RESEND_CONTACTS_API_KEY`, and `NOTIFICATION_ENQUEUE_SECRET` secrets, the
 separate `NOTIFICATION_EMAIL_QUEUE` and `REVEAL_BACKGROUND_QUEUE` producers and
 consumers, Smart Placement, and a version-first release flow. It serves
-`/auth/solana`, `/profile/reconcile`, `/boxes/reveal`, `/claims/irl/prepare`, `/delivery/prepare`, `/admin/irl-redeem/prepare`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
+`/auth/solana`, `/profile/reconcile`, `/boxes/reveal`, `/claims/irl/prepare`, `/delivery/prepare`, `/delivery/receipts/issue`, `/delivery/receipts/recover`, `/admin/irl-redeem/prepare`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
 `/pending-open-boxes`, authenticated profile/admin/fulfillment reads,
 `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
 responses remain uncached. Pack-status reads use the public Firestore REST API
@@ -107,7 +107,7 @@ into an undeployed Worker version with `npm run sync:api:firebase-secrets`; the
 command uses a temporary mode-`0600` bulk file, verifies production is unchanged,
 and removes the file immediately.
 
-The migrated Firebase callables have been retired and must not be restored. Frontend production releases still require authenticated, non-submitting delivery and Admin IRL preparation smokes. Configure `DELIVERY_PREPARE_SMOKE_FIREBASE_TOKEN`, `DELIVERY_PREPARE_SMOKE_OWNER`, `DELIVERY_PREPARE_SMOKE_DROP_ID`, `DELIVERY_PREPARE_SMOKE_ADDRESS_ID`, and `DELIVERY_PREPARE_SMOKE_ITEM_IDS`, plus `ADMIN_IRL_REDEEM_PREPARE_SMOKE_FIREBASE_TOKEN`, `ADMIN_IRL_REDEEM_PREPARE_SMOKE_OWNER`, `ADMIN_IRL_REDEEM_PREPARE_SMOKE_DROP_ID`, and `ADMIN_IRL_REDEEM_PREPARE_SMOKE_ITEM_IDS`. The smokes conditionally remove their exact prepared Firestore records and never submit transactions.
+The migrated Firebase callables have been retired and must not be restored. Receipt issuance and recovery now use the authenticated Cloudflare routes; keep the live `issueReceipts` and `recoverMyDeliveryOrders` Firebase functions only during the staged rollback window, then delete those exact functions after both the current and approved rollback frontends use the Cloudflare routes. Frontend production releases still require authenticated, non-submitting delivery and Admin IRL preparation smokes. Configure `DELIVERY_PREPARE_SMOKE_FIREBASE_TOKEN`, `DELIVERY_PREPARE_SMOKE_OWNER`, `DELIVERY_PREPARE_SMOKE_DROP_ID`, `DELIVERY_PREPARE_SMOKE_ADDRESS_ID`, and `DELIVERY_PREPARE_SMOKE_ITEM_IDS`, plus `ADMIN_IRL_REDEEM_PREPARE_SMOKE_FIREBASE_TOKEN`, `ADMIN_IRL_REDEEM_PREPARE_SMOKE_OWNER`, `ADMIN_IRL_REDEEM_PREPARE_SMOKE_DROP_ID`, and `ADMIN_IRL_REDEEM_PREPARE_SMOKE_ITEM_IDS`. The smokes conditionally remove their exact prepared Firestore records and never submit transactions.
 
 ### Notification delivery
 

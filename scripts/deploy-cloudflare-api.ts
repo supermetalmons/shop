@@ -1385,6 +1385,13 @@ async function smokeApi(
         itemIds: ['11111111111111111111111111111112'],
         addressId: 'AbCdEfGhIjKlMnOpQrSt',
       }],
+      ['/delivery/receipts/issue', {
+        owner: defaultSmokeOwner,
+        dropId: expectedReleaseDropId,
+        deliveryId: 1,
+        signature: '1'.repeat(64),
+      }],
+      ['/delivery/receipts/recover', { dropId: expectedReleaseDropId }],
       ['/admin/irl-redeem/prepare', {
         owner: defaultSmokeOwner,
         dropId: 'card_nft_2',
