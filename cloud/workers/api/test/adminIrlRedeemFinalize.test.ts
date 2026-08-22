@@ -234,6 +234,11 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
 
   const deferred: Promise<unknown>[] = [];
   let finalizeAborted = false;
+  let cleanupSettled = false;
+  let releaseCleanup: (() => void) | undefined;
+  const cleanupGate = new Promise<void>((resolve) => {
+    releaseCleanup = resolve;
+  });
   const deadline = await handleAdminIrlRedeemFinalize(
     request(),
     env(),
@@ -250,6 +255,8 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
           firestore.signal.addEventListener('abort', onAbort, { once: true });
           if (firestore.signal.aborted) onAbort();
         });
+        await cleanupGate;
+        cleanupSettled = true;
         throw new AdminIrlRedeemFinalizeError('deadline-exceeded', 'Timed out.');
       },
     }),
@@ -258,7 +265,11 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   assert.equal(deadline.outcome, 'deadline-exceeded');
   assert.equal(finalizeAborted, true);
   assert.equal(deferred.length, 1);
+  assert.equal(cleanupSettled, false);
+  assert.ok(releaseCleanup);
+  releaseCleanup();
   await Promise.all(deferred);
+  assert.equal(cleanupSettled, true);
 });
 
 test('Admin IRL receipt owner scans finish pagination before checking uniqueness', async () => {
@@ -291,6 +302,24 @@ test('Admin IRL receipt owner scans finish pagination before checking uniqueness
   );
   assert.deepEqual(pages, [1, 2]);
   assert.deepEqual(visited, ['first-match', 'later-duplicate']);
+
+  let callsAfterDeadline = 0;
+  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.scanAssetsByOwner(
+    {
+      apiKey: 'helius',
+      providerFetch: async () => {
+        callsAfterDeadline += 1;
+        return Response.json({});
+      },
+      signal: new AbortController().signal,
+    },
+    { cluster: 'devnet' } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.scanAssetsByOwner>[1],
+    OWNER,
+    () => undefined,
+    undefined,
+    Date.now() - 1,
+  ), /indexing timed out/);
+  assert.equal(callsAfterDeadline, 0);
 });
 
 test('Admin IRL finalization normalizes prepared pack and card requests strictly', () => {

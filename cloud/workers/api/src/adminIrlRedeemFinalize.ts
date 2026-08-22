@@ -950,8 +950,12 @@ async function scanAssetsByOwner(
   owner: string,
   visit: (asset: unknown) => void,
   grouping?: readonly [string, string],
+  deadlineMs = Number.POSITIVE_INFINITY,
 ): Promise<void> {
   for (let page = 1; page <= HELIUS_ASSET_MAX_PAGES; page += 1) {
+    if (Date.now() >= deadlineMs) {
+      throw new AdminIrlRedeemFinalizeError('unavailable', 'Admin IRL redeem receipt indexing timed out.');
+    }
     const params: Record<string, unknown> = {
       ownerAddress: owner,
       page,
@@ -1015,7 +1019,8 @@ async function findReceiptAssets(
     console.warn({ event: 'admin_irl_redeem_receipt_transaction_lookup_failed', dropId: runtime.dropId, error: summarizeError(error) });
   }
   const startedAt = Date.now();
-  while (Date.now() - startedAt <= RECEIPT_INDEX_MAX_WAIT_MS) {
+  const deadlineMs = startedAt + RECEIPT_INDEX_MAX_WAIT_MS;
+  while (Date.now() <= deadlineMs) {
     direct.clear();
     await scanAssetsByOwner(
       provider,
@@ -1023,9 +1028,10 @@ async function findReceiptAssets(
       owner,
       add,
       ['collection', runtime.collectionMint.toBase58()],
+      deadlineMs,
     );
     if (!items.every((item) => (direct.get(item.refId) || []).length === 1)) {
-      await scanAssetsByOwner(provider, runtime, owner, add);
+      await scanAssetsByOwner(provider, runtime, owner, add, undefined, deadlineMs);
     }
     if (items.every((item) => (direct.get(item.refId) || []).length === 1)) return direct;
     await deliveryReceiptRuntime.pause(RECEIPT_INDEX_POLL_MS, provider.signal);
