@@ -862,7 +862,9 @@ function notificationSmokeEvent(value: unknown, jobId: string): NotificationSmok
 }
 
 function notificationSmokeLogOutcome(output: string, jobId: string): NotificationSmokeOutcome {
-  for (const document of output.trim().split(/(?<=\})\s*(?=\{)/)) {
+  const firstDocument = output.indexOf('{');
+  if (firstDocument < 0) return null;
+  for (const document of output.slice(firstDocument).trim().split(/(?<=\})\s*(?=\{)/)) {
     if (!document) continue;
     try {
       const outcome = notificationSmokeEvent(JSON.parse(document) as unknown, jobId);

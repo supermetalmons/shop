@@ -991,6 +991,10 @@ test('queue consumers and delivery log inspection require the exact reviewed sur
     JSON.stringify({ logs: [{ message: [{ event: 'notification_email_sent', jobId: smokeJobId }] }] }, null, 2),
     smokeJobId,
   ), 'sent');
+  assert.equal(deployApiTestHooks.notificationSmokeLogOutcome(
+    `Tail connected\n${JSON.stringify({ logs: [{ message: [{ event: 'notification_email_sent', jobId: smokeJobId }] }] }, null, 2)}`,
+    smokeJobId,
+  ), 'sent');
 });
 
 test('API release and preview bootstrap missing reveal queues', () => {
@@ -3570,7 +3574,7 @@ test('tracked release metadata is exact and excludes direct-Helius frontend roll
   const manifest = deployApiTestHooks.readReleaseManifest();
   assert.equal(deployApiTestHooks.isReleaseManifest(manifest), true);
   assert.deepEqual(manifest.currentProduction, {
-    apiVersionId: '4a826539-ce0e-42f5-86ac-c23e0f0c4af0',
+    apiVersionId: '839c6586-102c-4daa-9feb-297c21bd2697',
     frontendVersionId: '9eb48e48-4574-49a4-a400-bf5fdd2a7eaf',
   });
   assert.deepEqual(manifest.approvedRollback, manifest.currentProduction);
