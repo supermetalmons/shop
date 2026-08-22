@@ -26,11 +26,9 @@ import {
   isStripeOffchainFulfillmentSession,
   normalizeStripeCheckoutQuantity,
   normalizeStripeReceiptClaimCode,
-  orderStripeReceiptClaimByBoxId,
   requireStripeReceiptClaimCode,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
-  stripeAssignedIrlClaimForBox,
   stripeCheckoutOwnerId,
   stripeCheckoutSessionOrderHash,
   stripeFulfillmentAddressFromSession,
@@ -38,6 +36,10 @@ import {
   validateStripeCheckoutDocumentData,
   validateStripeTestCheckoutContract,
 } from '../functions/src/stripeCheckout/contract.ts';
+import {
+  orderStripeReceiptClaimByBoxId,
+  stripeAssignedIrlClaimForBox,
+} from '../functions/src/shared/stripeReceiptClaims.ts';
 import {
   STRIPE_CHECKOUT_PROCESSING_LEASE_MS,
   buildStripeCheckoutManualReviewSummary,
@@ -65,7 +67,9 @@ import {
 import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from '../functions/src/claimCodes.ts';
 import {
   IX_BUBBLEGUM_MINT_V2,
+  IX_BUBBLEGUM_BURN_V2,
   IX_BUBBLEGUM_TRANSFER_V2,
+  bubblegumBurnV2Ix,
   bubblegumMintV2Ix,
   bubblegumTransferV2Ix,
   encodeBubblegumMintV2Args,
@@ -260,6 +264,48 @@ test('Bubblegum transferV2 helper uses expected discriminator and account order'
   assert.equal(ix.keys[5].pubkey.toBase58(), newLeafOwner.toBase58());
   assert.equal(ix.keys[6].pubkey.toBase58(), merkleTree.toBase58());
   assert.equal(ix.keys[7].pubkey.toBase58(), coreCollection.toBase58());
+  assert.equal(ix.keys.at(-2)?.pubkey.toBase58(), proof[0].toBase58());
+  assert.equal(ix.keys.at(-1)?.pubkey.toBase58(), proof[1].toBase58());
+});
+
+test('Bubblegum burnV2 helper uses expected discriminator and account order', () => {
+  const payer = pubkey(1);
+  const authority = pubkey(2);
+  const leafOwner = pubkey(3);
+  const leafDelegate = pubkey(4);
+  const merkleTree = pubkey(5);
+  const coreCollection = pubkey(6);
+  const proof = [pubkey(7), pubkey(8)];
+  const ix = bubblegumBurnV2Ix({
+    bubblegumProgramId: pubkey(20),
+    mplNoopProgramId: pubkey(21),
+    mplAccountCompressionProgramId: pubkey(22),
+    mplCoreProgramId: pubkey(23),
+    mplCoreCpiSigner: pubkey(24),
+    treeConfig: pubkey(25),
+    payer,
+    authority,
+    leafOwner,
+    leafDelegate,
+    merkleTree,
+    coreCollection,
+    root: Buffer.alloc(32, 1),
+    dataHash: Buffer.alloc(32, 2),
+    creatorHash: Buffer.alloc(32, 3),
+    assetDataHash: Buffer.alloc(32, 4),
+    flags: 1,
+    nonce: 12,
+    index: 12,
+    proof,
+  });
+
+  assert.deepEqual(ix.data.subarray(0, 8), IX_BUBBLEGUM_BURN_V2);
+  assert.equal(ix.keys[1].pubkey.toBase58(), payer.toBase58());
+  assert.equal(ix.keys[2].pubkey.toBase58(), authority.toBase58());
+  assert.equal(ix.keys[3].pubkey.toBase58(), leafOwner.toBase58());
+  assert.equal(ix.keys[4].pubkey.toBase58(), leafDelegate.toBase58());
+  assert.equal(ix.keys[5].pubkey.toBase58(), merkleTree.toBase58());
+  assert.equal(ix.keys[6].pubkey.toBase58(), coreCollection.toBase58());
   assert.equal(ix.keys.at(-2)?.pubkey.toBase58(), proof[0].toBase58());
   assert.equal(ix.keys.at(-1)?.pubkey.toBase58(), proof[1].toBase58());
 });

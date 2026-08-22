@@ -71,7 +71,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
     assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
 
-    for (const pathname of ['/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/boxes/reveal']) {
+    for (const pathname of ['/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/boxes/reveal']) {
       const lifecyclePreflight = await worker.fetch(`https://api.mons.shop${pathname}`, {
         method: 'OPTIONS',
         headers: { Origin: 'https://mons.shop' },
@@ -115,6 +115,10 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
       ['/claims/irl/prepare', {
         owner: '11111111111111111111111111111111',
         code: '0000000000',
+      }],
+      ['/receipts/stripe/claim', {
+        code: 'ABCDEF-1234567890',
+        recipient: '11111111111111111111111111111111',
       }],
       ['/receipts/transfer/prepare', {
         owner: '11111111111111111111111111111111',

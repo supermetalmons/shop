@@ -46,9 +46,9 @@ import {
 } from '../src/dropPaths.ts';
 import {
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
-  orderStripeReceiptClaimByBoxId,
   requireStripeReceiptClaimCode,
 } from '../src/stripeCheckout/contract.ts';
+import { orderStripeReceiptClaimByBoxId } from '../src/shared/stripeReceiptClaims.ts';
 
 const MANIFEST_VERSION = 1;
 const HELIUS_ASSETS_PAGE_LIMIT = 1000;

@@ -1373,6 +1373,7 @@ async function smokeApi(
     for (const [pathname, body] of [
       ['/auth/solana', { wallet: defaultSmokeOwner, message: 'smoke', signature: Array(64).fill(0) }],
       ['/claims/irl/prepare', { owner: defaultSmokeOwner, code: '0000000000' }],
+      ['/receipts/stripe/claim', { code: 'ABCDEF-1234567890', recipient: defaultSmokeOwner }],
       ['/receipts/transfer/prepare', {
         owner: defaultSmokeOwner,
         dropId: expectedReleaseDropId,

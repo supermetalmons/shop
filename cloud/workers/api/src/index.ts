@@ -115,6 +115,10 @@ import {
   handleReceiptTransferPrepare,
 } from './receiptTransfer.js';
 import {
+  STRIPE_RECEIPT_CLAIM_PATH,
+  handleStripeReceiptClaim,
+} from './stripeReceiptClaim.js';
+import {
   DELIVERY_PREPARE_PATH,
   handleDeliveryPrepare,
 } from './deliveryPrepare.js';
@@ -197,6 +201,7 @@ const KNOWN_LOG_ROUTES = new Set([
   '/auth/solana',
   '/profile/reconcile',
   IRL_CLAIM_PREPARE_PATH,
+  STRIPE_RECEIPT_CLAIM_PATH,
   RECEIPT_TRANSFER_PREPARE_PATH,
   DELIVERY_PREPARE_PATH,
   DELIVERY_RECEIPTS_ISSUE_PATH,
@@ -1382,6 +1387,9 @@ export async function handleRequest(
   let checkoutDropId: string | undefined;
   let checkoutMode: string | undefined;
   let irlClaimDropId: string | undefined;
+  let stripeReceiptClaimDropId: string | undefined;
+  let stripeReceiptClaimDeliveryId: number | undefined;
+  let stripeReceiptClaimOutcome: string | undefined;
   let receiptTransferDropId: string | undefined;
   let deliveryPrepareDropId: string | undefined;
   let deliveryReceiptDropId: string | undefined;
@@ -1416,6 +1424,7 @@ export async function handleRequest(
     profileLifecyclePath ||
     pathname === STRIPE_CHECKOUT_SESSION_PATH ||
     pathname === IRL_CLAIM_PREPARE_PATH ||
+    pathname === STRIPE_RECEIPT_CLAIM_PATH ||
     pathname === RECEIPT_TRANSFER_PREPARE_PATH ||
     pathname === DELIVERY_PREPARE_PATH ||
     pathname === DELIVERY_RECEIPTS_ISSUE_PATH ||
@@ -1479,6 +1488,26 @@ export async function handleRequest(
       metrics.providerDurationMs += result.metrics.providerDurationMs;
       profileAuthOutcome = result.authOutcome;
       irlClaimDropId = result.dropId;
+      response = applyProfileCors(request, result.response);
+    }
+  } else if (pathname === STRIPE_RECEIPT_CLAIM_PATH) {
+    if (!isProfileRequestOriginAllowed(request)) {
+      response = applyProfileCors(request, new Response(null));
+    } else {
+      const result = await handleStripeReceiptClaim(
+        request,
+        env,
+        (promise) => {
+          if (waitUntil) waitUntil(promise);
+          else void promise;
+        },
+      );
+      metrics.upstreamCalls += result.metrics.upstreamCalls;
+      metrics.providerDurationMs += result.metrics.providerDurationMs;
+      profileAuthOutcome = result.authOutcome;
+      stripeReceiptClaimDropId = result.dropId;
+      stripeReceiptClaimDeliveryId = result.deliveryId;
+      stripeReceiptClaimOutcome = result.outcome;
       response = applyProfileCors(request, result.response);
     }
   } else if (pathname === RECEIPT_TRANSFER_PREPARE_PATH) {
@@ -1658,6 +1687,9 @@ export async function handleRequest(
     ...(checkoutDropId ? { checkoutDropId } : {}),
     ...(checkoutMode ? { checkoutMode } : {}),
     ...(irlClaimDropId ? { irlClaimDropId } : {}),
+    ...(stripeReceiptClaimDropId ? { stripeReceiptClaimDropId } : {}),
+    ...(stripeReceiptClaimDeliveryId === undefined ? {} : { stripeReceiptClaimDeliveryId }),
+    ...(stripeReceiptClaimOutcome ? { stripeReceiptClaimOutcome } : {}),
     ...(receiptTransferDropId ? { receiptTransferDropId } : {}),
     ...(deliveryPrepareDropId ? { deliveryPrepareDropId } : {}),
     ...(deliveryReceiptDropId ? { deliveryReceiptDropId } : {}),

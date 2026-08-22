@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions remain for receipt claiming and Firestore-triggered fulfillment work. Public inventory, pack status, pending-open reads, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions remain for Firestore-triggered fulfillment work. Public inventory, pack status, pending-open reads, receipt claiming, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
 
 ## Shared domain core
 
@@ -60,7 +60,7 @@ The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_API_KEY`,
 `RESEND_CONTACTS_API_KEY`, and `NOTIFICATION_ENQUEUE_SECRET` secrets, the
 separate `NOTIFICATION_EMAIL_QUEUE` and `REVEAL_BACKGROUND_QUEUE` producers and
 consumers, Smart Placement, and a version-first release flow. It serves
-`/auth/solana`, `/profile/reconcile`, `/boxes/reveal`, `/claims/irl/prepare`, `/delivery/prepare`, `/delivery/receipts/issue`, `/delivery/receipts/recover`, `/admin/irl-redeem/prepare`, `/admin/irl-redeem/finalize`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
+`/auth/solana`, `/profile/reconcile`, `/boxes/reveal`, `/claims/irl/prepare`, `/receipts/stripe/claim`, `/delivery/prepare`, `/delivery/receipts/issue`, `/delivery/receipts/recover`, `/admin/irl-redeem/prepare`, `/admin/irl-redeem/finalize`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
 `/pending-open-boxes`, authenticated profile/admin/fulfillment reads,
 `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
 responses remain uncached. Pack-status reads use the public Firestore REST API
@@ -108,6 +108,8 @@ command uses a temporary mode-`0600` bulk file, verifies production is unchanged
 and removes the file immediately.
 
 The migrated Firebase callables, including `issueReceipts`, `recoverMyDeliveryOrders`, and `finalizeAdminIrlRedeem`, have been deleted and must not be restored. Receipt issuance, recovery, and Admin IRL finalization use only authenticated Cloudflare routes, and the approved rollback pair uses those same routes. Frontend production releases always verify the unauthenticated delivery and Admin IRL route contracts. Authenticated, non-submitting preparation smokes are optional: configure the complete `DELIVERY_PREPARE_SMOKE_FIREBASE_TOKEN`, `DELIVERY_PREPARE_SMOKE_OWNER`, `DELIVERY_PREPARE_SMOKE_DROP_ID`, `DELIVERY_PREPARE_SMOKE_ADDRESS_ID`, and `DELIVERY_PREPARE_SMOKE_ITEM_IDS` set, and/or the complete `ADMIN_IRL_REDEEM_PREPARE_SMOKE_FIREBASE_TOKEN`, `ADMIN_IRL_REDEEM_PREPARE_SMOKE_OWNER`, `ADMIN_IRL_REDEEM_PREPARE_SMOKE_DROP_ID`, and `ADMIN_IRL_REDEEM_PREPARE_SMOKE_ITEM_IDS` set to enable them. Partial sets fail the release preflight. Enabled smokes conditionally remove their exact prepared Firestore records and never submit transactions.
+
+The Stripe receipt claim cutover uses `npm run decommission:firebase-claim-stripe-receipt` only after the matching API and frontend versions are live and approved as their own rollback pair. Configure `STRIPE_RECEIPT_CLAIM_SMOKE_FIREBASE_TOKEN`, `STRIPE_RECEIPT_CLAIM_SMOKE_CODE`, `STRIPE_RECEIPT_CLAIM_SMOKE_RECIPIENT`, `STRIPE_RECEIPT_CLAIM_SMOKE_DROP_ID`, and `STRIPE_RECEIPT_CLAIM_SMOKE_DELIVERY_ID` for an already-claimed receipt. The guard requires two identical production responses before deleting the Firebase callable.
 
 ### Notification delivery
 

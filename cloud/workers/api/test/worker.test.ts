@@ -404,6 +404,47 @@ test('IRL claim route enforces restricted CORS, bearer authentication, methods, 
   assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
 });
 
+test('Stripe receipt claim route enforces restricted CORS, bearer authentication, methods, and safe logging', async () => {
+  const pathname = '/receipts/stripe/claim';
+  const code = 'ABCDEF-1234567890';
+  const preflight = await handleRequest(new Request(`https://api.mons.shop${pathname}`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+
+  const logs: Record<string, unknown>[] = [];
+  const unauthenticated = await handleRequest(request(pathname, {
+    code,
+    recipient: OWNER,
+  }, { Origin: 'https://mons.shop' }), env(), {
+    ...quietDependencies(fetch),
+    log: (entry) => logs.push(entry),
+  });
+  assert.equal(unauthenticated.status, 401);
+  assert.equal((await unauthenticated.json() as { error: { code: string } }).error.code, 'unauthenticated');
+  assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(logs[0]?.route, pathname);
+  assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
+  assert.equal(logs[0]?.stripeReceiptClaimOutcome, 'unauthenticated');
+  assert.equal(JSON.stringify(logs).includes(code), false);
+  assert.equal(JSON.stringify(logs).includes(OWNER), false);
+
+  const denied = await handleRequest(request(pathname, {
+    code,
+    recipient: OWNER,
+  }, { Origin: 'https://evil.example' }), env(), quietDependencies(fetch));
+  assert.equal(denied.status, 403);
+
+  const wrongMethod = await handleRequest(new Request(`https://api.mons.shop${pathname}`, {
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(wrongMethod.status, 405);
+  assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
+});
+
 test('receipt transfer route enforces restricted CORS, bearer authentication, methods, and stable logging', async () => {
   const preflight = await handleRequest(new Request('https://api.mons.shop/receipts/transfer/prepare', {
     method: 'OPTIONS',

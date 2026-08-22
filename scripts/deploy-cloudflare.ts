@@ -830,6 +830,10 @@ export async function smokeProfileStateApi(
       owner: '11111111111111111111111111111111',
       code: '0000000000',
     })],
+    ['/receipts/stripe/claim', JSON.stringify({
+      code: 'ABCDEF-1234567890',
+      recipient: '11111111111111111111111111111111',
+    })],
     ['/receipts/transfer/prepare', JSON.stringify({
       owner: '11111111111111111111111111111111',
       dropId: 'card_nft_2',

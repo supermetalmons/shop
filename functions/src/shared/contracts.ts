@@ -549,6 +549,11 @@ export type StripeReceiptClaimResult = {
   receiptAssetIds?: string[];
 };
 
+export type StripeReceiptClaimRequest = {
+  code: string;
+  recipient: string;
+};
+
 export type DeliverySelection = {
   itemIds: string[];
   addressId: string;

@@ -2,7 +2,6 @@ import { initializeApp, getApps } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 
 const DEFAULT_FIREBASE_API_KEY = 'AIzaSyA3NTv_zfVYMB2VNORxbKg3rJUsiMXIhko';
-const FIREBASE_FUNCTIONS_REGION = 'us-central1' as const;
 const firebaseApiKey = (import.meta.env?.VITE_FIREBASE_API_KEY || '').trim() || DEFAULT_FIREBASE_API_KEY;
 
 const firebaseConfig = {
@@ -14,10 +13,9 @@ const firebaseConfig = {
   appId: '1:804781326988:web:abeb4da8cfe43318a671a9',
 };
 
-export const firebaseApp =
+const firebaseApp =
   getApps().length === 0 && firebaseConfig.apiKey
     ? initializeApp(firebaseConfig)
     : getApps()[0];
 
 export const auth = firebaseApp ? getAuth(firebaseApp) : undefined;
-export { FIREBASE_FUNCTIONS_REGION };

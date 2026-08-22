@@ -1,6 +1,5 @@
 import { onAuthStateChanged, signInAnonymously, type Auth } from 'firebase/auth';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { auth, FIREBASE_FUNCTIONS_REGION, firebaseApp } from './firebase';
+import { auth } from './firebase';
 import {
   AddFulfillmentOrderToShipStationRequest,
   AddFulfillmentOrderToShipStationResponse,
@@ -86,9 +85,6 @@ export type {
   StripeCheckoutSessionResponse,
 } from '../types';
 
-const region = FIREBASE_FUNCTIONS_REGION;
-const functionsInstance = firebaseApp ? getFunctions(firebaseApp, region) : undefined;
-
 let authReadyPromise: Promise<string> | null = null;
 let authStateReadyPromise: Promise<void> | null = null;
 
@@ -149,43 +145,6 @@ function summarizeError(err: unknown) {
 
 function makeCallId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-async function callFunction<Req, Res>(name: string, data?: Req): Promise<Res> {
-  if (!functionsInstance) throw new Error('Firebase client is not configured');
-  await ensureAuthenticated();
-  const callable = httpsCallable<Req, Res>(functionsInstance, name);
-  const startedAt = Date.now();
-  const callId = DEBUG_FUNCTIONS ? makeCallId() : undefined;
-  const basePayload = (data ?? ({} as Req)) as any;
-  const payload =
-    DEBUG_FUNCTIONS && basePayload && typeof basePayload === 'object' && !Array.isArray(basePayload)
-      ? ({ ...basePayload, __debug: { callId, fn: name, ts: new Date().toISOString() } } as Req)
-      : (basePayload as Req);
-
-  if (DEBUG_FUNCTIONS) {
-    console.info(`[mons/functions] → ${name}`, { callId, payload: summarizePayloadShape(payload) });
-  }
-
-  try {
-    const result = await callable(payload);
-    if (DEBUG_FUNCTIONS) {
-      console.info(`[mons/functions] ← ${name}`, {
-        callId,
-        ms: Date.now() - startedAt,
-        data: summarizePayloadShape(result.data),
-      });
-    }
-    return result.data;
-  } catch (err) {
-    // Always log callable failures on the client; they're rare and essential for debugging prod issues.
-    console.error(`[mons/functions] ✖ ${name}`, {
-      ...(callId ? { callId } : {}),
-      ms: Date.now() - startedAt,
-      error: summarizeError(err),
-    });
-    throw err;
-  }
 }
 
 type ProfileApiErrorPayload = {
@@ -265,6 +224,7 @@ type AuthenticatedApiPath =
   | '/boxes/reveal'
   | '/checkout/session'
   | '/claims/irl/prepare'
+  | '/receipts/stripe/claim'
   | '/delivery/prepare'
   | '/delivery/receipts/issue'
   | '/delivery/receipts/recover'
@@ -302,6 +262,7 @@ const REVEAL_DUDES_API_TIMEOUT_MS = 65_000;
 const DELIVERY_PREPARE_API_TIMEOUT_MS = 65_000;
 const DELIVERY_RECEIPTS_API_TIMEOUT_MS = 65_000;
 const RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS = 65_000;
+const STRIPE_RECEIPT_CLAIM_API_TIMEOUT_MS = 190_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_VOID_API_TIMEOUT_MS = 65_000;
@@ -319,6 +280,7 @@ function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
     return DELIVERY_RECEIPTS_API_TIMEOUT_MS;
   }
   if (pathname === '/receipts/transfer/prepare') return RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS;
+  if (pathname === '/receipts/stripe/claim') return STRIPE_RECEIPT_CLAIM_API_TIMEOUT_MS;
   if (pathname === '/checkout/session') return STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label') return SHIPSTATION_LABEL_API_TIMEOUT_MS;
   if (pathname === '/fulfillment/shipstation-label-purchase') return SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS;
@@ -1720,11 +1682,55 @@ export async function requestClaimTx(
   return parsed;
 }
 
+function parseStripeReceiptClaimResponse(value: unknown): StripeReceiptClaimResult | null {
+  if (!isRecord(value) || !hasExactRequiredAndOptionalKeys(
+    value,
+    ['processed', 'dropId', 'deliveryId', 'receiptsTransferred', 'receiptTxs'],
+    ['receiptKind', 'figureIds', 'receiptAssetIds'],
+  )) return null;
+  if (
+    value.processed !== true ||
+    typeof value.dropId !== 'string' ||
+    normalizeDropId(value.dropId) !== value.dropId ||
+    !FRONTEND_DROPS[value.dropId] ||
+    !Number.isSafeInteger(value.deliveryId) ||
+    Number(value.deliveryId) < 1 ||
+    !Number.isSafeInteger(value.receiptsTransferred) ||
+    Number(value.receiptsTransferred) < 1 ||
+    !Array.isArray(value.receiptTxs) ||
+    !value.receiptTxs.every((signature) => typeof signature === 'string' && isBase58Bytes(signature, 64)) ||
+    (value.receiptKind !== undefined && value.receiptKind !== 'box' && value.receiptKind !== 'figure') ||
+    (value.figureIds !== undefined && (
+      !Array.isArray(value.figureIds) ||
+      !value.figureIds.every((figureId) => Number.isSafeInteger(figureId) && Number(figureId) > 0) ||
+      new Set(value.figureIds).size !== value.figureIds.length
+    )) ||
+    (value.receiptAssetIds !== undefined && (
+      !Array.isArray(value.receiptAssetIds) ||
+      !value.receiptAssetIds.every((assetId) => typeof assetId === 'string' && isBase58Bytes(assetId, 32)) ||
+      new Set(value.receiptAssetIds).size !== value.receiptAssetIds.length
+    ))
+  ) return null;
+  return {
+    processed: true,
+    dropId: value.dropId,
+    deliveryId: Number(value.deliveryId),
+    receiptsTransferred: Number(value.receiptsTransferred),
+    receiptTxs: value.receiptTxs as string[],
+    ...(value.receiptKind ? { receiptKind: value.receiptKind as 'box' | 'figure' } : {}),
+    ...(value.figureIds ? { figureIds: value.figureIds as number[] } : {}),
+    ...(value.receiptAssetIds ? { receiptAssetIds: value.receiptAssetIds as string[] } : {}),
+  };
+}
+
 export async function claimStripeReceipt(args: { code: string; recipient: string }): Promise<StripeReceiptClaimResult> {
-  return callFunction<{ code: string; recipient: string }, StripeReceiptClaimResult>('claimStripeReceipt', {
+  const response = await callProfileApi('/receipts/stripe/claim', {
     code: args.code,
     recipient: args.recipient,
   });
+  const parsed = parseStripeReceiptClaimResponse(response);
+  if (!parsed) throw new Error('Invalid Stripe receipt claim response');
+  return parsed;
 }
 
 export async function solanaAuth(
@@ -1857,6 +1863,7 @@ export const profileApiTestHooks = {
   parseRecoverDeliveryOrdersResult,
   parseAdminIrlRedeemPrepareResponse,
   parseIrlClaimPrepareResponse,
+  parseStripeReceiptClaimResponse,
   parseReceiptTransferPrepareResponse,
   parseRevealDudesResponse,
   parseRevealDudesSubmissionUnknownDetails,

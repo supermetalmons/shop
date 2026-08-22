@@ -287,6 +287,49 @@ test('IRL claim preparation uses the authenticated Cloudflare route with an exac
   assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareIrlClaimTx/);
 });
 
+test('Stripe receipt claiming uses the authenticated Cloudflare route with an exact response contract', async () => {
+  const response = {
+    processed: true,
+    dropId: 'card_nft_2',
+    deliveryId: 7,
+    receiptsTransferred: 1,
+    receiptTxs: [REVEAL_SIGNATURE],
+    receiptKind: 'box',
+  } as const;
+  const payload = await profileApiTestHooks.requestProfileApi(
+    '/receipts/stripe/claim',
+    { code: 'ABCDEF-1234567890', recipient: OWNER },
+    {
+      fetch: async (input, init) => {
+        assert.equal(String(input), 'https://api.mons.shop/receipts/stripe/claim');
+        assert.equal(init?.method, 'POST');
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          code: 'ABCDEF-1234567890',
+          recipient: OWNER,
+        });
+        return Response.json(response);
+      },
+      getToken: async () => 'token',
+      origin: () => 'https://api.mons.shop',
+      timeoutMs: 1_000,
+    },
+  );
+  assert.deepEqual(profileApiTestHooks.parseStripeReceiptClaimResponse(payload), response);
+  assert.equal(profileApiTestHooks.parseStripeReceiptClaimResponse({ ...response, extra: true }), null);
+  assert.equal(profileApiTestHooks.parseStripeReceiptClaimResponse({ ...response, deliveryId: 0 }), null);
+  assert.equal(profileApiTestHooks.parseStripeReceiptClaimResponse({ ...response, receiptTxs: ['invalid'] }), null);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/receipts/stripe/claim'), 190_000);
+
+  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function claimStripeReceipt');
+  const end = source.indexOf('\nexport ', start + 1);
+  const implementation = source.slice(start, end === -1 ? source.length : end);
+  assert.match(implementation, /\/receipts\/stripe\/claim/);
+  assert.doesNotMatch(implementation, /callFunction|httpsCallable|firebase\/functions/);
+  assert.doesNotMatch(source, /from ['"]firebase\/functions['"]/);
+});
+
 test('Admin IRL preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
   const response = {
     encodedTx: 'AQ==',
@@ -1161,6 +1204,16 @@ test('Stripe checkout callable is absent from Firebase exports and deployment se
   assert.doesNotMatch(functionsSource, /export const createStripeCheckoutSession\b/);
   assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:createStripeCheckoutSession(?:,|$)/);
   assert.equal(packageJson.scripts['decommission:firebase-create-stripe-checkout-session'], undefined);
+});
+
+test('Stripe receipt claim callable is absent from Firebase exports and deployment selection', () => {
+  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts: Record<string, string>;
+  };
+  assert.doesNotMatch(functionsSource, /export const claimStripeReceipt\b/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:claimStripeReceipt(?:,|$)/);
+  assert.match(packageJson.scripts['decommission:firebase-claim-stripe-receipt'], /decommission-firebase-claim-stripe-receipt/);
 });
 
 test('wallet lifecycle callables are absent from Firebase exports and deployment selection', () => {

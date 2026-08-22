@@ -25,8 +25,6 @@ export {
   generateUniqueStripeReceiptClaimCodes,
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
-  stripeReceiptClaimBoxMapKey,
-  stripeReceiptClaimCodeMaybe,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
 } from '../shared/stripeReceiptClaims.js';
 export {
@@ -54,8 +52,6 @@ export {
   validateStripeCheckoutDocumentData,
   type StripeCheckoutDocumentData,
 } from '../shared/stripeWebhook.js';
-export { stripeAssignedIrlClaimForBox } from '../cardAssignment.js';
-
 const ADMIN_ORDER_SEED = 'admin_order';
 export const IX_ADMIN_DELIVER_VARIANT_ORDER = Buffer.from('bf80de4f9c1a0722', 'hex');
 export const ACCOUNT_ADMIN_DELIVERY_ORDER = Buffer.from('cde7b3967ff802f4', 'hex');
@@ -131,45 +127,6 @@ export type StripeAddressEncryptionResult = {
 
 function normalizedString(value: unknown): string {
   return String(value || '').trim();
-}
-
-function plainObject(value: unknown): value is Record<string, any> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
-function positiveBoxIdOrNull(value: unknown): number | null {
-  const boxId = Math.floor(Number(value));
-  return Number.isFinite(boxId) && boxId > 0 ? boxId : null;
-}
-
-export function orderStripeReceiptClaimByBoxId(
-  order: any,
-  boxId: number,
-  options: { includeSingularFallback?: boolean; acceptClaim?: (claim: any) => boolean } = {},
-): any | null {
-  const normalizedBoxId = positiveBoxIdOrNull(boxId);
-  if (!normalizedBoxId) return null;
-  const acceptClaim = options.acceptClaim || (() => true);
-
-  const byBoxId = order?.stripeReceiptClaimsByBoxId;
-  if (plainObject(byBoxId)) {
-    const claim = byBoxId[stripeReceiptClaimBoxMapKey(normalizedBoxId)] || byBoxId[String(normalizedBoxId)];
-    if (plainObject(claim) && acceptClaim(claim)) return claim;
-  }
-
-  const claims = Array.isArray(order?.stripeReceiptClaims) ? order.stripeReceiptClaims : [];
-  const pluralClaim = claims.find((claim: any) => positiveBoxIdOrNull(claim?.boxId) === normalizedBoxId && acceptClaim(claim));
-  if (pluralClaim) return pluralClaim;
-
-  if (!options.includeSingularFallback || !plainObject(order?.stripeReceiptClaim)) return null;
-  const singularBoxId = positiveBoxIdOrNull(order.stripeReceiptClaim.boxId) || positiveBoxIdOrNull(order?.items?.[0]?.refId);
-  return singularBoxId === normalizedBoxId && acceptClaim(order.stripeReceiptClaim) ? order.stripeReceiptClaim : null;
-}
-
-export function hasPluralStripeReceiptClaims(order: any): boolean {
-  const byBoxId = order?.stripeReceiptClaimsByBoxId;
-  if (plainObject(byBoxId) && Object.keys(byBoxId).length > 0) return true;
-  return Array.isArray(order?.stripeReceiptClaims) && order.stripeReceiptClaims.length > 0;
 }
 
 function normalizedCurrency(value: unknown): string {
