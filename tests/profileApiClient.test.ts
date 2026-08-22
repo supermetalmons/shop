@@ -1213,7 +1213,7 @@ test('Stripe receipt claim callable is absent from Firebase exports and deployme
   };
   assert.doesNotMatch(functionsSource, /export const claimStripeReceipt\b/);
   assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:claimStripeReceipt(?:,|$)/);
-  assert.match(packageJson.scripts['decommission:firebase-claim-stripe-receipt'], /decommission-firebase-claim-stripe-receipt/);
+  assert.equal(packageJson.scripts['decommission:firebase-claim-stripe-receipt'], undefined);
 });
 
 test('wallet lifecycle callables are absent from Firebase exports and deployment selection', () => {
