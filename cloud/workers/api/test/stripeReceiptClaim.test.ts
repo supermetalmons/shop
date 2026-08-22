@@ -16,6 +16,8 @@ const DROP_ID = 'card_nft_2';
 const DELIVERY_ID = 7;
 const BOX_ID = 16;
 const RECIPIENT = Keypair.generate().publicKey.toBase58();
+const OTHER_RECIPIENT = Keypair.generate().publicKey.toBase58();
+const RECEIPT_ASSET_ID = Keypair.generate().publicKey.toBase58();
 const SIGNATURE = Keypair.generate().publicKey.toBase58().repeat(2).slice(0, 88);
 
 function request(body: unknown = { code: CODE, recipient: RECIPIENT }, init: RequestInit = {}): Request {
@@ -65,7 +67,9 @@ function dependencies(overrides: Record<string, unknown> = {}) {
 function firestoreContext(
   documents: Record<string, Record<string, unknown>>,
   calls: Array<{ url: string; init?: RequestInit }> = [],
+  options: { commitConflicts?: number } = {},
 ) {
+  let commitConflicts = options.commitConflicts || 0;
   return {
     accessTokenProvider: {
       get: async () => 'firestore-token',
@@ -76,7 +80,14 @@ function firestoreContext(
       const url = String(input);
       calls.push({ url, init });
       if (url.endsWith(':beginTransaction')) return Response.json({ transaction: 'transaction' });
-      if (url.endsWith(':commit') || url.endsWith(':rollback')) return Response.json({});
+      if (url.endsWith(':commit')) {
+        if (commitConflicts > 0) {
+          commitConflicts -= 1;
+          return Response.json({ error: { status: 'ABORTED' } }, { status: 409 });
+        }
+        return Response.json({});
+      }
+      if (url.endsWith(':rollback')) return Response.json({});
       if (url.includes('/documents/') && init?.method === 'GET') {
         const path = decodeURIComponent(new URL(url).pathname.split('/documents/')[1]);
         const fields = documents[path];
@@ -91,6 +102,58 @@ function firestoreContext(
     },
     serviceAccountJson: '{}',
     signal: new AbortController().signal,
+  };
+}
+
+function directDocuments(submissionStatus: 'submitted' | 'not_landed' = 'submitted') {
+  const documents = unclaimedDocuments();
+  documents[`claimCodes/${CODE}`] = {
+    ...documents[`claimCodes/${CODE}`],
+    receiptKind: 'figure',
+    receiptAssetId: RECEIPT_ASSET_ID,
+    figureId: BOX_ID,
+    recipient: RECIPIENT,
+    receiptTxs: [SIGNATURE],
+    receiptTxSubmissions: [{
+      signature: SIGNATURE,
+      lastValidBlockHeight: 200,
+      submittedAtMs: 1_700_000_000_000,
+      status: submissionStatus,
+    }],
+  };
+  documents[`drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`] = {
+    ...documents[`drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`],
+    stripeReceiptClaim: {
+      namespace: 'stripe_receipt_v1',
+      code: CODE,
+      boxId: BOX_ID,
+      status: 'unclaimed',
+      receiptKind: 'figure',
+      receiptAssetId: RECEIPT_ASSET_ID,
+      figureId: BOX_ID,
+    },
+  };
+  return documents;
+}
+
+type StartedClaim = Parameters<typeof stripeReceiptClaimTestHooks.finalizeClaim>[1];
+
+function startedClaim(overrides: Partial<StartedClaim> = {}): StartedClaim {
+  return {
+    status: 'started',
+    dropId: DROP_ID,
+    deliveryId: DELIVERY_ID,
+    boxId: BOX_ID,
+    attemptId: 'attempt',
+    orderPath: `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`,
+    orderIrlClaims: [],
+    resumingPreviousProcessingClaim: false,
+    hasPreviousClaimFailure: false,
+    updatePluralOrderClaim: false,
+    updateSingularOrderClaim: true,
+    receiptTxs: [],
+    receiptTxSubmissions: [],
+    ...overrides,
   };
 }
 
@@ -203,7 +266,14 @@ test('Stripe receipt claim handler returns its deadline and tracks unfinished cl
     (promise) => deferred.push(promise),
     dependencies({
       timeoutMs: 1,
-      claim: async (_body: unknown, _env: unknown, firestore: { signal: AbortSignal }) => {
+      claim: async (
+        _body: unknown,
+        _env: unknown,
+        firestore: { signal: AbortSignal },
+        _provider: unknown,
+        onContext: (context: { dropId: string; deliveryId: number }) => void,
+      ) => {
+        onContext({ dropId: DROP_ID, deliveryId: DELIVERY_ID });
         await new Promise<void>((resolve) => {
           const onAbort = () => { aborted = true; resolve(); };
           firestore.signal.addEventListener('abort', onAbort, { once: true });
@@ -215,6 +285,8 @@ test('Stripe receipt claim handler returns its deadline and tracks unfinished cl
   );
   assert.equal(result.response.status, 504);
   assert.equal(result.outcome, 'deadline-exceeded');
+  assert.equal(result.dropId, DROP_ID);
+  assert.equal(result.deliveryId, DELIVERY_ID);
   assert.equal(aborted, true);
   assert.equal(deferred.length, 1);
   await Promise.all(deferred);
@@ -295,6 +367,149 @@ test('Stripe receipt claim start is idempotent and preserves recipient locks', a
   ), /already being processed/);
 });
 
+test('Stripe receipt claim start rejects missing and inconsistent records and resumes an expired lease', async () => {
+  await assert.rejects(() => stripeReceiptClaimTestHooks.startClaim(
+    firestoreContext({}),
+    CODE,
+    RECIPIENT,
+    'attempt',
+    1_700_000_000_000,
+  ), /Invalid receipt claim code/);
+
+  const inconsistent = unclaimedDocuments();
+  inconsistent[`claimCodes/${CODE}`] = { ...inconsistent[`claimCodes/${CODE}`], code: 'ZZZZZZ-1234567890' };
+  await assert.rejects(() => stripeReceiptClaimTestHooks.startClaim(
+    firestoreContext(inconsistent),
+    CODE,
+    RECIPIENT,
+    'attempt',
+    1_700_000_000_000,
+  ), /inconsistent/);
+
+  const expired = unclaimedDocuments();
+  expired[`claimCodes/${CODE}`] = {
+    ...expired[`claimCodes/${CODE}`],
+    status: 'processing',
+    recipient: RECIPIENT,
+    processingAttemptId: 'expired-attempt',
+    processingLeaseExpiresAt: 1_699_999_999_999,
+  };
+  const resumed = await stripeReceiptClaimTestHooks.startClaim(
+    firestoreContext(expired),
+    CODE,
+    RECIPIENT,
+    'attempt',
+    1_700_000_000_000,
+  );
+  assert.equal(resumed.status, 'started');
+  assert.equal(resumed.resumingPreviousProcessingClaim, true);
+});
+
+test('Stripe receipt claim direct recipient lock clears only after proven non-landing', async () => {
+  await assert.rejects(() => stripeReceiptClaimTestHooks.startClaim(
+    firestoreContext(directDocuments()),
+    CODE,
+    OTHER_RECIPIENT,
+    'attempt',
+    1_700_000_100_000,
+  ), /locked to the receiver/);
+
+  const restarted = await stripeReceiptClaimTestHooks.startClaim(
+    firestoreContext(directDocuments('not_landed')),
+    CODE,
+    OTHER_RECIPIENT,
+    'attempt',
+    1_700_000_100_000,
+  );
+  assert.equal(restarted.status, 'started');
+  assert.deepEqual(restarted.receiptTxs, []);
+});
+
+test('Stripe receipt claim retries Firestore conflicts and updates plural and singular claims', async () => {
+  const documents = unclaimedDocuments();
+  const orderPath = `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`;
+  documents[orderPath] = {
+    ...documents[orderPath],
+    stripeReceiptClaimsByBoxId: {
+      box_16: { namespace: 'stripe_receipt_v1', code: CODE, boxId: BOX_ID, status: 'unclaimed' },
+    },
+  };
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const result = await stripeReceiptClaimTestHooks.startClaim(
+    firestoreContext(documents, calls, { commitConflicts: 1 }),
+    CODE,
+    RECIPIENT,
+    'attempt',
+    1_700_000_000_000,
+  );
+  assert.equal(result.status, 'started');
+  assert.equal(calls.filter((call) => call.url.endsWith(':commit')).length, 2);
+  const successfulCommit = calls.filter((call) => call.url.endsWith(':commit')).at(-1);
+  const payload = JSON.parse(String(successfulCommit?.init?.body)) as {
+    writes: Array<{ updateMask: { fieldPaths: string[] } }>;
+  };
+  const orderMask = payload.writes[1].updateMask.fieldPaths;
+  assert.equal(orderMask.includes('stripeReceiptClaimsByBoxId.box_16.status'), true);
+  assert.equal(orderMask.includes('stripeReceiptClaim.status'), true);
+});
+
+test('Stripe receipt claim cleanup and candidate persistence are attempt-owned', async () => {
+  const documents = unclaimedDocuments();
+  documents[`claimCodes/${CODE}`] = {
+    ...documents[`claimCodes/${CODE}`],
+    status: 'processing',
+    recipient: RECIPIENT,
+    processingAttemptId: 'other-attempt',
+  };
+  const staleCalls: Array<{ url: string; init?: RequestInit }> = [];
+  await stripeReceiptClaimTestHooks.clearProcessing(
+    firestoreContext(documents, staleCalls),
+    startedClaim(),
+    CODE,
+    new Error('failed'),
+  );
+  assert.equal(staleCalls.some((call) => call.url.endsWith(':commit')), false);
+
+  documents[`claimCodes/${CODE}`] = {
+    ...documents[`claimCodes/${CODE}`],
+    processingAttemptId: 'attempt',
+  };
+  const ownerCalls: Array<{ url: string; init?: RequestInit }> = [];
+  await stripeReceiptClaimTestHooks.clearProcessing(
+    firestoreContext(documents, ownerCalls),
+    startedClaim(),
+    CODE,
+    new Error('failed'),
+  );
+  const cleanupCommit = ownerCalls.find((call) => call.url.endsWith(':commit'));
+  const cleanupPayload = JSON.parse(String(cleanupCommit?.init?.body)) as {
+    writes: Array<{ updateMask: { fieldPaths: string[] } }>;
+  };
+  assert.equal(cleanupPayload.writes[0].updateMask.fieldPaths.includes('processingAttemptId'), true);
+
+  documents[`claimCodes/${CODE}`] = {
+    ...directDocuments()[`claimCodes/${CODE}`],
+    status: 'processing',
+    processingAttemptId: 'attempt',
+    receiptTxs: [],
+    receiptTxSubmissions: [],
+  };
+  const candidateCalls: Array<{ url: string; init?: RequestInit }> = [];
+  await stripeReceiptClaimTestHooks.rememberSubmittedTransaction(
+    firestoreContext(documents, candidateCalls),
+    CODE,
+    'attempt',
+    SIGNATURE,
+    { lastValidBlockHeight: 200, submittedAtMs: 1_700_000_000_000, status: 'submitted' },
+  );
+  const candidateCommit = candidateCalls.find((call) => call.url.endsWith(':commit'));
+  const candidatePayload = JSON.parse(String(candidateCommit?.init?.body)) as {
+    writes: Array<{ update: { fields: Record<string, unknown> }; updateMask: { fieldPaths: string[] } }>;
+  };
+  assert.equal(candidatePayload.writes[0].updateMask.fieldPaths.includes('receiptTxSubmissions'), true);
+  assert.equal(candidatePayload.writes[0].updateMask.fieldPaths.includes('processingLeaseExpiresAt'), true);
+});
+
 test('Stripe receipt claim execution returns a claimed record without provider or Solana work', async () => {
   const documents = unclaimedDocuments();
   documents[`claimCodes/${CODE}`] = {
@@ -339,21 +554,7 @@ test('Stripe receipt claim finalization only accepts the owning attempt', async 
     recipient: RECIPIENT,
     processingAttemptId: 'attempt',
   };
-  const started = {
-    status: 'started' as const,
-    dropId: DROP_ID,
-    deliveryId: DELIVERY_ID,
-    boxId: BOX_ID,
-    attemptId: 'attempt',
-    orderPath: `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`,
-    orderIrlClaims: [],
-    resumingPreviousProcessingClaim: false,
-    hasPreviousClaimFailure: false,
-    updatePluralOrderClaim: false,
-    updateSingularOrderClaim: true,
-    receiptTxs: [],
-    receiptTxSubmissions: [],
-  };
+  const started = startedClaim();
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const receiptTxs = await stripeReceiptClaimTestHooks.finalizeClaim(
     firestoreContext(documents, calls),
@@ -382,6 +583,12 @@ test('Stripe receipt claim finalization only accepts the owning attempt', async 
     'box',
     1,
   ), /lease changed/);
+});
+
+test('Stripe receipt claim selects legacy, openable, and direct flows', () => {
+  assert.equal(stripeReceiptClaimTestHooks.claimFlowFor(undefined, 0), 'legacy_pack');
+  assert.equal(stripeReceiptClaimTestHooks.claimFlowFor(undefined, 1), 'openable_pack');
+  assert.equal(stripeReceiptClaimTestHooks.claimFlowFor({ receiptAssetId: RECEIPT_ASSET_ID, figureId: BOX_ID }, 0), 'direct_figure');
 });
 
 test('Stripe receipt claim response and order target validators reject inconsistent data', () => {

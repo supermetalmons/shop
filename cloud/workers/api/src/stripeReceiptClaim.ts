@@ -152,6 +152,8 @@ type StartedClaim = {
 };
 type ClaimStart = StartedClaim | ({ status: 'already_claimed'; dropId: string; deliveryId: number; boxId: number; receiptTxs: string[] } & StoredResult);
 type ClaimMetrics = { upstreamCalls: number; providerDurationMs: number };
+type ClaimLogContext = { dropId: string; deliveryId: number };
+type ClaimFlow = 'direct_figure' | 'openable_pack' | 'legacy_pack';
 
 export type StripeReceiptClaimRequestResult = {
   response: Response;
@@ -1619,6 +1621,11 @@ function keepsProcessing(error: unknown): boolean {
   return isRecord(details) && details.keepReceiptClaimProcessing === true;
 }
 
+function claimFlowFor(directFigureReceipt: StartedClaim['directFigureReceipt'], itemsPerBox: number): ClaimFlow {
+  if (directFigureReceipt) return 'direct_figure';
+  return itemsPerBox >= BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX ? 'openable_pack' : 'legacy_pack';
+}
+
 type ClaimExecution = {
   response: StripeReceiptClaimResult;
   outcome: 'already_claimed' | 'claimed_box' | 'claimed_figures' | 'claimed_direct_figure';
@@ -1629,6 +1636,7 @@ async function claimStripeReceipt(
   env: ClaimEnv,
   firestore: FirestoreContext,
   provider: ProviderContext,
+  onContext: (context: ClaimLogContext) => void = () => undefined,
 ): Promise<ClaimExecution> {
   const recipient = canonicalRecipient(body.recipient);
   const code = normalizedCode(body.code);
@@ -1692,12 +1700,14 @@ async function claimStripeReceipt(
       };
     }
     started = claim;
+    onContext({ dropId: claim.dropId, deliveryId: claim.deliveryId });
     keepDirectRecipientLock = Boolean(claim.directFigureReceipt && shouldKeepDirectCardReceiptClaimProcessing({
       resumingPreviousProcessingClaim: claim.resumingPreviousProcessingClaim,
       recipientOwnershipConfirmed: false,
     }));
     const runtime = runtimeForDrop(claim.dropId);
-    const assignment = !claim.directFigureReceipt && runtime.itemsPerBox >= BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX
+    const flow = claimFlowFor(claim.directFigureReceipt, runtime.itemsPerBox);
+    const assignment = flow === 'openable_pack'
       ? requireOpenableAssignment(claim.orderIrlClaims, runtime, claim.boxId)
       : null;
     const connection = createConnection(provider, runtime);
@@ -1719,7 +1729,7 @@ async function claimStripeReceipt(
       });
     }
     const adminWallet = signer.publicKey.toBase58();
-    if (claim.directFigureReceipt) {
+    if (flow === 'direct_figure' && claim.directFigureReceipt) {
       const target = claim.directFigureReceipt;
       const finalizeDirect = async (receiptTx: string | null): Promise<ClaimExecution> => {
         const receiptTxs = await finalizeClaim(
@@ -1807,7 +1817,7 @@ async function claimStripeReceipt(
     const adminReceipt = assignment
       ? await findPackReceiptById(provider, adminWallet, runtime, claim.boxId, assignment.boxAssetId)
       : await findPackReceipt(provider, adminWallet, runtime, claim.boxId);
-    if (assignment) {
+    if (flow === 'openable_pack' && assignment) {
       const finalizeFigures = async (receiptTx: string | null): Promise<ClaimExecution> => {
         const receiptTxs = await finalizeClaim(
           firestore,
@@ -2018,6 +2028,7 @@ export async function handleStripeReceiptClaim(
   );
   let identity: FirebaseIdentity | undefined;
   let execution: Promise<ClaimExecution> | undefined;
+  let claimContext: ClaimLogContext | undefined;
   try {
     const body = await readRequestBody(request, controller.signal);
     identity = await dependencies.verifyIdToken(
@@ -2044,6 +2055,7 @@ export async function handleStripeReceiptClaim(
         signal: controller.signal,
       },
       { apiKey, providerFetch: trackedFetch, signal: controller.signal },
+      (context) => { claimContext = context; },
     );
     const result = await waitForSignal(execution, controller.signal);
     return {
@@ -2079,6 +2091,7 @@ export async function handleStripeReceiptClaim(
       response: errorResponse(normalized),
       metrics,
       authOutcome: identity ? (rejected ? 'rejected' : 'provider-failure') : normalized.code === 'unauthenticated' ? 'rejected' : 'provider-failure',
+      ...claimContext,
       outcome: normalized.code,
     };
   } finally {
@@ -2088,9 +2101,11 @@ export async function handleStripeReceiptClaim(
 
 export const stripeReceiptClaimTestHooks = {
   buildWithOptionalLookupTable,
+  claimFlowFor,
   claimStripeReceipt,
   clearProcessing,
   finalizeClaim,
+  rememberSubmittedTransaction,
   normalizeSubmissions,
   orderTarget,
   readRequestBody,
