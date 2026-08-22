@@ -3569,10 +3569,11 @@ test('API release resolves the Helius key without exposing it as an argument', (
 test('tracked release metadata is exact and excludes direct-Helius frontend rollback', () => {
   const manifest = deployApiTestHooks.readReleaseManifest();
   assert.equal(deployApiTestHooks.isReleaseManifest(manifest), true);
-  assert.match(manifest.currentProduction.apiVersionId, /^[0-9a-f-]{36}$/);
-  assert.match(manifest.currentProduction.frontendVersionId, /^[0-9a-f-]{36}$/);
-  assert.match(manifest.approvedRollback.apiVersionId, /^[0-9a-f-]{36}$/);
-  assert.match(manifest.approvedRollback.frontendVersionId, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(manifest.currentProduction, {
+    apiVersionId: '4a826539-ce0e-42f5-86ac-c23e0f0c4af0',
+    frontendVersionId: '9eb48e48-4574-49a4-a400-bf5fdd2a7eaf',
+  });
+  assert.deepEqual(manifest.approvedRollback, manifest.currentProduction);
   assert.equal(manifest.allowDirectHeliusFrontendRollback, false);
 });
 

@@ -817,6 +817,33 @@ test('read-only Firestore rollback is best effort', async () => {
   assert.equal(calls, 1);
 });
 
+test('pending ready notification recovery queries both outbox marker states', async () => {
+  let query: Record<string, any> | undefined;
+  const result = await deliveryReceiptTestHooks.runPendingReadyNotificationQuery({
+    accessTokenProvider: {
+      get: async () => 'google-access-token',
+      invalidate: () => undefined,
+    },
+    nowMs: Date.now(),
+    providerFetch: async (input, init) => {
+      assert.equal(String(input).endsWith('/documents:runQuery'), true);
+      query = JSON.parse(String(init?.body));
+      return Response.json([]);
+    },
+    serviceAccountJson: '{"credential":"test"}',
+    signal: new AbortController().signal,
+  }, OWNER);
+  assert.deepEqual(result, []);
+  const filters = query?.structuredQuery.where.compositeFilter.filters;
+  assert.equal(filters[0].fieldFilter.field.fieldPath, 'owner');
+  assert.equal(filters[1].fieldFilter.field.fieldPath, 'status');
+  assert.equal(filters[1].fieldFilter.value.stringValue, 'ready_to_ship');
+  assert.deepEqual(
+    filters[2].compositeFilter.filters.map((entry: Record<string, any>) => entry.fieldFilter.field.fieldPath),
+    ['buyerOrderReceivedEmailState', 'shipperReadyToShipEmailState'],
+  );
+});
+
 test('receipt routes enforce bounded JSON and required runtime configuration', async () => {
   const oversized = await handleDeliveryReceiptRequest(
     request(DELIVERY_RECEIPTS_RECOVER_PATH, { dropId: 'x'.repeat(5000) }),

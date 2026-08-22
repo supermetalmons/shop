@@ -46,8 +46,10 @@ import {
   type StripeCheckoutManualReviewEmailMessage,
 } from './notificationEmails.js';
 import { enqueueNotificationEmailJob } from './cloudflareNotifications.js';
+import { createStripeReadyToShipNotificationJobs } from './stripeReadyNotifications.js';
 import {
   createNotificationEmailJobV1,
+  type NotificationEmailJobV1,
   type NotificationEmailJobContext,
   type NotificationEmailKind,
 } from './shared/notificationEmailJob.js';
@@ -1420,6 +1422,10 @@ async function enqueueRenderedNotificationEmail(params: {
   context: NotificationEmailJobContext;
 }): Promise<void> {
   const job = createNotificationEmailJobV1(params);
+  return enqueuePreparedNotificationEmail(job);
+}
+
+async function enqueuePreparedNotificationEmail(job: NotificationEmailJobV1): Promise<void> {
   try {
     await enqueueNotificationEmailJob({
       job,
@@ -1462,6 +1468,20 @@ async function sendStripeCheckoutManualReviewEmail(
   });
 }
 
+async function sendStripeReadyToShipNotifications(
+  dropId: string,
+  deliveryId: number,
+): Promise<void> {
+  const orderSnap = await db.doc(dropDeliveryOrderPath(dropId, deliveryId)).get();
+  if (!orderSnap.exists) throw new Error('Stripe delivery order is missing after fulfillment');
+  const jobs = await createStripeReadyToShipNotificationJobs({
+    order: orderSnap.data() as Record<string, unknown>,
+    dropId,
+    deliveryId,
+  });
+  await Promise.all(jobs.map(enqueuePreparedNotificationEmail));
+}
+
 export const notifyStripeCheckoutManualReview = onDocumentUpdated(
   {
     document: 'drops/{dropId}/stripeCheckouts/{sessionId}',
@@ -1472,6 +1492,15 @@ export const notifyStripeCheckoutManualReview = onDocumentUpdated(
     const beforeSnap = event.data?.before;
     const afterSnap = event.data?.after;
     if (!beforeSnap || !afterSnap) return;
+    if (
+      afterSnap.get('status') === STRIPE_CHECKOUT_STATUS.FULFILLED &&
+      beforeSnap.get('status') !== STRIPE_CHECKOUT_STATUS.FULFILLED
+    ) {
+      const dropId = requireDropId(event.params.dropId);
+      const deliveryId = requirePositiveDeliveryId(afterSnap.get('deliveryId'));
+      await sendStripeReadyToShipNotifications(dropId, deliveryId);
+      return;
+    }
     if (
       afterSnap.get('status') !== STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED ||
       afterSnap.get('manualRefundReviewRequired') !== true

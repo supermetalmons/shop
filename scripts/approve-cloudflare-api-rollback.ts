@@ -63,12 +63,17 @@ function git(args: readonly string[]): string {
   return String(result.stdout || '').trimEnd();
 }
 
-function commitApprovedRollback(versionId: string): void {
+function manifestOnlyWorktreeEntries(): string[] {
   const status = git(['status', '--porcelain', '--untracked-files=all']);
   const entries = status ? status.split('\n') : [];
   if (entries.some((entry) => entry.slice(3) !== manifestPath)) {
     fail('Refusing to commit rollback approval while unrelated worktree changes exist.');
   }
+  return entries;
+}
+
+function commitApprovedRollback(versionId: string): void {
+  const entries = manifestOnlyWorktreeEntries();
   if (!entries.length) {
     console.log(`[release] API ${versionId} is already the clean approved rollback target.`);
     return;
@@ -94,6 +99,7 @@ function main(): void {
     return;
   }
   const options = parseApproveApiRollbackArgs(process.argv.slice(2));
+  manifestOnlyWorktreeEntries();
   const manifest = approveCurrentApiRollback(options.versionId);
   commitApprovedRollback(options.versionId);
   console.log(`[release] Approved API rollback ${manifest.approvedRollback.apiVersionId}.`);

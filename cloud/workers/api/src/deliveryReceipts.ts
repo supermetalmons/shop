@@ -750,6 +750,60 @@ async function runDeliveryOrderQuery(
   return decodeDeliveryOrderQuery(value, true);
 }
 
+async function runPendingReadyNotificationQuery(
+  context: FirestoreContext,
+  ownerWallet: string,
+): Promise<DeliveryOrderDocument[]> {
+  const pendingFilter = (fieldPath: string) => ({
+    fieldFilter: {
+      field: { fieldPath },
+      op: 'EQUAL',
+      value: firestoreString(READY_TO_SHIP_NOTIFICATION_PENDING),
+    },
+  });
+  const value = await authenticatedFirestoreRequest({
+    ...context,
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: 'deliveryOrders', allDescendants: true }],
+        where: {
+          compositeFilter: {
+            op: 'AND',
+            filters: [
+              {
+                fieldFilter: {
+                  field: { fieldPath: 'owner' },
+                  op: 'EQUAL',
+                  value: firestoreString(ownerWallet),
+                },
+              },
+              {
+                fieldFilter: {
+                  field: { fieldPath: 'status' },
+                  op: 'EQUAL',
+                  value: firestoreString('ready_to_ship'),
+                },
+              },
+              {
+                compositeFilter: {
+                  op: 'OR',
+                  filters: [
+                    pendingFilter('buyerOrderReceivedEmailState'),
+                    pendingFilter('shipperReadyToShipEmailState'),
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    }),
+    method: 'POST',
+    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+  });
+  return decodeDeliveryOrderQuery(value, true);
+}
+
 function decodeDeliveryOrderQuery(value: unknown, requireIdentity: boolean): DeliveryOrderDocument[] {
   if (!Array.isArray(value)) {
     throw new DeliveryReceiptError('unavailable', 'Delivery recovery data is temporarily unavailable.');
@@ -2683,13 +2737,6 @@ async function retryIssueReceipts(args: {
     throw new DeliveryReceiptError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.');
   }
   if (document.fields.status === 'ready_to_ship') {
-    await publishReadyToShipNotifications({
-      context: args.firestore,
-      deliveryId,
-      document,
-      dropId: runtime.dropId,
-      queue: args.env.NOTIFICATION_EMAIL_QUEUE,
-    });
     let closeDeliveryTx = typeof document.fields.closeDeliveryTx === 'string'
       ? document.fields.closeDeliveryTx
       : null;
@@ -2717,6 +2764,13 @@ async function retryIssueReceipts(args: {
         });
       }
     }
+    await publishReadyToShipNotifications({
+      context: args.firestore,
+      deliveryId,
+      document,
+      dropId: runtime.dropId,
+      queue: args.env.NOTIFICATION_EMAIL_QUEUE,
+    });
     return {
       processed: true,
       deliveryId,
@@ -2828,13 +2882,6 @@ async function retryIssueReceipts(args: {
     }, runtime, deliveryId, document.fields),
     { dropId: runtime.dropId, deliveryId },
   );
-  await publishReadyToShipNotifications({
-    context: args.firestore,
-    deliveryId,
-    document: readyDocument,
-    dropId: runtime.dropId,
-    queue: args.env.NOTIFICATION_EMAIL_QUEUE,
-  });
   let closeDeliveryTx: string | null = null;
   try {
     closeDeliveryTx = await closeDeliveryPda({
@@ -2857,6 +2904,13 @@ async function retryIssueReceipts(args: {
   if (closeDeliveryTx) {
     await recordDeliveryClose(args.firestore, document.path, runtime.dropId, closeDeliveryTx);
   }
+  await publishReadyToShipNotifications({
+    context: args.firestore,
+    deliveryId,
+    document: readyDocument,
+    dropId: runtime.dropId,
+    queue: args.env.NOTIFICATION_EMAIL_QUEUE,
+  });
   return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };
 }
 
@@ -3019,12 +3073,14 @@ async function recoverReceiptsRequest(
       });
     }
   } else {
-    const [processing, prepared] = await Promise.all([
+    const [processing, prepared, pendingReady] = await Promise.all([
       runDeliveryOrderQuery(firestore, wallet, 'processing'),
       runDeliveryOrderQuery(firestore, wallet, 'prepared'),
+      runPendingReadyNotificationQuery(firestore, wallet),
     ]);
-    candidates = [...processing, ...prepared].filter((document) =>
-      !filterDropId || resolveDeliveryOrderDropId(document.fields, document.path) === filterDropId);
+    candidates = Array.from(
+      new Map([...processing, ...prepared, ...pendingReady].map((document) => [document.path, document])).values(),
+    ).filter((document) => !filterDropId || resolveDeliveryOrderDropId(document.fields, document.path) === filterDropId);
   }
   candidates.sort(compareDeliveryRecoveryCandidates);
   for (const document of candidates) {
@@ -3041,11 +3097,24 @@ async function recoverReceiptsRequest(
       continue;
     }
     if (base.statusBefore === 'ready_to_ship') {
+      const result = await retryIssueReceipts({
+        request: {
+          ownerWallet: wallet,
+          deliveryId: base.deliveryId,
+          dropId: base.dropId,
+          verification: 'delivery_pda',
+        },
+        env,
+        firestore,
+        provider,
+        waitUntil,
+        randomInt: secureRandomInt,
+      });
       results.push({
         ...base,
         outcome: 'recovered',
         verification: 'delivery_pda',
-        message: 'order is already ready to ship',
+        message: result.processed ? 'ready-order notifications resumed' : 'order already processed',
       });
       recovered += 1;
       continue;
@@ -3347,6 +3416,7 @@ export const deliveryReceiptTestHooks = {
   runtimeForDrop,
   rollbackTransactionBestEffort,
   runDeliveryRecoveryStateQuery,
+  runPendingReadyNotificationQuery,
   secureRandomInt,
   shouldShrinkReceiptBatch,
   storedDeliveryItemIds,
