@@ -758,6 +758,39 @@ test('frontend production capability check requires the profile lifecycle API co
   );
 });
 
+test('frontend production capability check treats authenticated preparation smokes as optional', async () => {
+  const requests: string[] = [];
+  const emptyEnvironment = {} as NodeJS.ProcessEnv;
+  const fetch = async (input: string | URL | Request) => {
+    requests.push(String(input));
+    return Response.json({
+      ok: false,
+      error: { code: 'unauthenticated', message: 'Authentication is required.' },
+    }, {
+      status: 401,
+      headers: { 'Access-Control-Allow-Origin': 'https://mons.shop' },
+    });
+  };
+
+  await frontendDeployTestHooks.smokeProfileStateApi({ environment: emptyEnvironment, fetch });
+  assert.equal(requests.length, 8);
+
+  await assert.rejects(
+    () => frontendDeployTestHooks.smokeProfileStateApi({
+      environment: { ...emptyEnvironment, DELIVERY_PREPARE_SMOKE_OWNER: OWNER },
+      fetch,
+    }),
+    /Delivery preparation smoke configuration is incomplete.*DELIVERY_PREPARE_SMOKE_FIREBASE_TOKEN/,
+  );
+  await assert.rejects(
+    () => frontendDeployTestHooks.smokeProfileStateApi({
+      environment: { ...emptyEnvironment, ADMIN_IRL_REDEEM_PREPARE_SMOKE_OWNER: OWNER },
+      fetch,
+    }),
+    /Admin IRL preparation smoke configuration is incomplete.*ADMIN_IRL_REDEEM_PREPARE_SMOKE_FIREBASE_TOKEN/,
+  );
+});
+
 test('API production candidate resolution permits cache-free resume only for the exact live version', async () => {
   const baselineVersionId = randomUUID();
   const candidateVersionId = randomUUID();

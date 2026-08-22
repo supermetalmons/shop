@@ -63,6 +63,7 @@ type FrontendSmokeDependencies = {
 type ProfileApiSmokeDependencies = Pick<FrontendSmokeDependencies, 'fetch'> & {
   adminIrlRedeemPrepare?: () => Promise<void> | void;
   deliveryPrepare?: () => Promise<void> | void;
+  environment?: NodeJS.ProcessEnv;
 };
 
 type FrontendProductionSequenceInput = {
@@ -166,6 +167,19 @@ const frontendSmokeResponseLimit = 256 * 1024;
 const frontendSmokeAssetResponseLimit = 2 * 1024 * 1024;
 const frontendSmokeRetryDelaysMs = [0, 500, 1_500] as const;
 const frontendProductionPropagationDelaysMs = [0, 500, 1_500, 3_000, 5_000, 10_000, 20_000, 30_000] as const;
+const deliveryPreparationSmokeVariables = [
+  'DELIVERY_PREPARE_SMOKE_FIREBASE_TOKEN',
+  'DELIVERY_PREPARE_SMOKE_OWNER',
+  'DELIVERY_PREPARE_SMOKE_DROP_ID',
+  'DELIVERY_PREPARE_SMOKE_ADDRESS_ID',
+  'DELIVERY_PREPARE_SMOKE_ITEM_IDS',
+] as const;
+const adminIrlPreparationSmokeVariables = [
+  'ADMIN_IRL_REDEEM_PREPARE_SMOKE_FIREBASE_TOKEN',
+  'ADMIN_IRL_REDEEM_PREPARE_SMOKE_OWNER',
+  'ADMIN_IRL_REDEEM_PREPARE_SMOKE_DROP_ID',
+  'ADMIN_IRL_REDEEM_PREPARE_SMOKE_ITEM_IDS',
+] as const;
 const gitCommitPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const releaseManifestRelativePath = 'cloud/release-manifest.json';
 const frontendValidationSteps = [
@@ -880,24 +894,39 @@ export async function smokeProfileStateApi(
       fail(`Profile API capability check returned an incompatible response for ${pathname}.`);
     }
   }
+  const environment = dependencies.environment ?? process.env;
   if (dependencies.deliveryPrepare) {
     await dependencies.deliveryPrepare();
-  } else {
+  } else if (optionalPreparationSmokeEnabled(
+    environment,
+    deliveryPreparationSmokeVariables,
+    'Delivery preparation smoke',
+  )) {
     const result = spawnSync(process.execPath, [
       '--import',
       'tsx',
       resolve(repoRoot, 'scripts', 'smoke-cloudflare-delivery-prepare.ts'),
     ], {
       cwd: repoRoot,
-      env: credentialFreeEnvironment(process.env),
+      env: credentialFreeEnvironment(environment),
       shell: false,
       stdio: 'inherit',
     });
     if (result.error) fail(`Delivery preparation smoke could not start: ${result.error.message}`);
     if (result.status !== 0) fail(`Delivery preparation smoke failed with exit code ${result.status ?? 1}.`);
+  } else {
+    console.log('[deploy] Optional delivery preparation smoke skipped (not configured).');
   }
   if (dependencies.adminIrlRedeemPrepare) {
     await dependencies.adminIrlRedeemPrepare();
+    return;
+  }
+  if (!optionalPreparationSmokeEnabled(
+    environment,
+    adminIrlPreparationSmokeVariables,
+    'Admin IRL preparation smoke',
+  )) {
+    console.log('[deploy] Optional Admin IRL preparation smoke skipped (not configured).');
     return;
   }
   const adminIrlResult = spawnSync(process.execPath, [
@@ -906,12 +935,23 @@ export async function smokeProfileStateApi(
     resolve(repoRoot, 'scripts', 'smoke-cloudflare-admin-irl-redeem-prepare.ts'),
   ], {
     cwd: repoRoot,
-    env: credentialFreeEnvironment(process.env),
+    env: credentialFreeEnvironment(environment),
     shell: false,
     stdio: 'inherit',
   });
   if (adminIrlResult.error) fail(`Admin IRL preparation smoke could not start: ${adminIrlResult.error.message}`);
   if (adminIrlResult.status !== 0) fail(`Admin IRL preparation smoke failed with exit code ${adminIrlResult.status ?? 1}.`);
+}
+
+function optionalPreparationSmokeEnabled(
+  environment: NodeJS.ProcessEnv,
+  variables: readonly string[],
+  label: string,
+): boolean {
+  const missing = variables.filter((name) => !String(environment[name] || '').trim());
+  if (missing.length === variables.length) return false;
+  if (missing.length) fail(`${label} configuration is incomplete. Missing: ${missing.join(', ')}.`);
+  return true;
 }
 
 export function frontendProductionWranglerCommands(versionId: string): readonly {
