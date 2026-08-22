@@ -1,7 +1,5 @@
-import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SignJWT, importPKCS8 } from 'jose';
 import {
@@ -28,35 +26,19 @@ import {
   firestoreWriterServiceAccountEmail,
   readCloudflareFirestoreKeychainCredential,
 } from './cloudflare-firestore-keychain.js';
-import {
-  readWranglerDeploymentStatus,
-  stableCloudflareVersionId,
-} from './cloudflare-deployment-state.js';
-import type { ReleaseVersionPair } from './finalize-cloudflare-release.js';
-
-type ReleaseGateManifest = {
-  currentProduction: ReleaseVersionPair;
-  approvedRollback: ReleaseVersionPair;
-};
-
 type PreparedAdminIrlDocument = {
   fields: Record<string, unknown>;
   updateTime: string;
 };
 
-type DecommissionDependencies = {
+type SmokeDependencies = {
   deletePreparedDocument: (credential: string, path: string, updateTime: string) => Promise<void>;
   fetch: typeof fetch;
   loadPreparedDocument: (credential: string, path: string) => Promise<PreparedAdminIrlDocument>;
-  readLiveReleasePair: (environment: NodeJS.ProcessEnv) => ReleaseVersionPair;
-  readManifest: () => ReleaseGateManifest;
   readWriterCredential: () => string;
-  runFirebaseDelete: (environment: NodeJS.ProcessEnv) => void;
   simulatePreparedTransaction: (fetchImpl: typeof fetch, encodedTx: string, cluster: 'mainnet-beta' | 'devnet') => Promise<void>;
 };
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
 const smokeTokenName = 'ADMIN_IRL_REDEEM_PREPARE_SMOKE_FIREBASE_TOKEN';
 const smokeOwnerName = 'ADMIN_IRL_REDEEM_PREPARE_SMOKE_OWNER';
 const smokeDropIdName = 'ADMIN_IRL_REDEEM_PREPARE_SMOKE_DROP_ID';
@@ -64,11 +46,6 @@ const smokeItemIdsName = 'ADMIN_IRL_REDEEM_PREPARE_SMOKE_ITEM_IDS';
 const googleOAuthTokenUrl = 'https://oauth2.googleapis.com/token';
 const googleDatastoreScope = 'https://www.googleapis.com/auth/datastore';
 const mplCoreProgram = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
-
-function releasePairsEqual(left: ReleaseVersionPair, right: ReleaseVersionPair): boolean {
-  return left.apiVersionId.toLowerCase() === right.apiVersionId.toLowerCase() &&
-    left.frontendVersionId.toLowerCase() === right.frontendVersionId.toLowerCase();
-}
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).sort().join('\0') === [...keys].sort().join('\0');
@@ -189,24 +166,6 @@ async function deletePreparedDocument(
     throw new Error('Prepared Admin IRL redeem cleanup failed.');
   }
   await response.body?.cancel().catch(() => undefined);
-}
-
-function readLiveReleasePair(environment: NodeJS.ProcessEnv): ReleaseVersionPair {
-  const read = (configArgs: readonly string[]) => stableCloudflareVersionId(readWranglerDeploymentStatus({
-    configArgs,
-    cwd: repoRoot,
-    environment,
-    wranglerBinary,
-  }));
-  return {
-    apiVersionId: read([
-      '--config',
-      'cloud/workers/api/wrangler.jsonc',
-      '--env-file',
-      'cloud/workers/api/release.env',
-    ]),
-    frontendVersionId: read(['--config', 'wrangler.jsonc']),
-  };
 }
 
 function parseItemIds(value: string): string[] {
@@ -388,41 +347,23 @@ async function simulatePreparedTransaction(
   }
 }
 
-function defaultDependencies(): DecommissionDependencies {
+function defaultDependencies(): SmokeDependencies {
   return {
     deletePreparedDocument,
     fetch: (input, init) => fetch(input, init),
     loadPreparedDocument,
-    readLiveReleasePair,
-    readManifest: () => JSON.parse(
-      readFileSync(resolve(repoRoot, 'cloud', 'release-manifest.json'), 'utf8'),
-    ) as ReleaseGateManifest,
     readWriterCredential: () => {
       const credential = readCloudflareFirestoreKeychainCredential(firestoreWriterServiceAccountEmail);
       parseWriterCredential(credential);
       return credential;
     },
-    runFirebaseDelete: (environment) => {
-      const binary = resolve(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'firebase.cmd' : 'firebase');
-      const result = spawnSync(binary, [
-        'functions:delete',
-        'prepareAdminIrlRedeemTx',
-        '--project',
-        'mons-shop',
-        '--region',
-        'us-central1',
-        '--force',
-      ], { cwd: repoRoot, env: environment, stdio: 'inherit' });
-      if (result.error) throw result.error;
-      if (result.status !== 0) throw new Error(`Firebase deletion failed with exit code ${result.status ?? 'unknown'}.`);
-    },
     simulatePreparedTransaction,
   };
 }
 
-export async function smokeAndCleanupAdminIrlRedeemPrepare(
+async function smokeAndCleanupAdminIrlRedeemPrepare(
   environment: NodeJS.ProcessEnv = process.env,
-  overrides: Partial<DecommissionDependencies> = {},
+  overrides: Partial<SmokeDependencies> = {},
 ): Promise<void> {
   const dependencies = { ...defaultDependencies(), ...overrides };
   const token = String(environment[smokeTokenName] || '').trim();
@@ -478,49 +419,9 @@ export async function smokeAndCleanupAdminIrlRedeemPrepare(
   }
 }
 
-export async function decommissionFirebasePrepareAdminIrlRedeem(
-  environment: NodeJS.ProcessEnv = process.env,
-  overrides: Partial<DecommissionDependencies> = {},
-): Promise<void> {
-  const dependencies = { ...defaultDependencies(), ...overrides };
-  const manifest = dependencies.readManifest();
-  if (!releasePairsEqual(manifest.currentProduction, manifest.approvedRollback)) {
-    throw new Error('Approved rollback still references a pre-cutover release pair.');
-  }
-  const assertLiveReleasePair = () => {
-    if (!releasePairsEqual(dependencies.readLiveReleasePair(environment), manifest.currentProduction)) {
-      throw new Error('Live Cloudflare production does not match the tracked release pair.');
-    }
-  };
-  assertLiveReleasePair();
-  await smokeAndCleanupAdminIrlRedeemPrepare(environment, dependencies);
-  assertLiveReleasePair();
-  const childEnvironment = { ...environment };
-  delete childEnvironment[smokeTokenName];
-  delete childEnvironment[smokeOwnerName];
-  delete childEnvironment[smokeDropIdName];
-  delete childEnvironment[smokeItemIdsName];
-  for (const name of Object.keys(childEnvironment)) {
-    const normalized = name.toUpperCase();
-    if (normalized.startsWith('CLOUDFLARE_') || normalized.startsWith('CF_') || normalized.startsWith('WRANGLER_')) {
-      delete childEnvironment[name];
-    }
-  }
-  dependencies.runFirebaseDelete(childEnvironment);
-}
-
-export const adminIrlRedeemDecommissionTestHooks = {
-  preparedResponse,
-  validatePreparedDocument,
-  validatePreparedTransaction,
-};
-
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const run = process.argv.includes('--smoke-only')
-    ? smokeAndCleanupAdminIrlRedeemPrepare
-    : decommissionFirebasePrepareAdminIrlRedeem;
-  run().catch((error) => {
-    console.error(`[decommission-admin-irl-redeem-prepare] ${error instanceof Error ? error.message : String(error)}`);
+  smokeAndCleanupAdminIrlRedeemPrepare().catch((error) => {
+    console.error(`[smoke-admin-irl-redeem-prepare] ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   });
 }

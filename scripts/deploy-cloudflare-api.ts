@@ -50,12 +50,11 @@ import {
   readCloudflareFirestoreKeychainCredential,
 } from './cloudflare-firestore-keychain.ts';
 
-type Mode = 'release' | 'preview' | 'production' | 'triggers';
+type Mode = 'release' | 'preview' | 'production' | 'triggers' | 'rollback';
 
 type CliOptions = {
   firestoreServiceAccountFile?: string;
   firestoreWriterServiceAccountFile?: string;
-  fixForwardFromVersionId?: string;
   mode: Mode;
   smokeOwner: string;
   tokenFile?: string;
@@ -144,6 +143,28 @@ type ProductionSequenceDependencies = {
   wrangler: typeof runWrangler;
 };
 
+type RollbackSequenceInput = {
+  manifest: ReleaseManifest;
+  smokeOwner: string;
+  versionId: string;
+  wranglerEnvironment: NodeJS.ProcessEnv;
+};
+
+type RollbackSequenceDependencies = {
+  apiDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  evidence: typeof writeProductionEvidence;
+  frontendDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  notificationSmoke?: typeof smokeNotificationDelivery;
+  pauseRevealQueue: (environment: NodeJS.ProcessEnv) => void;
+  record: typeof recordApiProductionVersion;
+  repauseRevealQueue: (environment: NodeJS.ProcessEnv) => void;
+  resumeRevealQueue: (environment: NodeJS.ProcessEnv) => void;
+  sleep: CloudflareSleep;
+  smoke: typeof smokeApi;
+  verifyQueueConsumers: (environment: NodeJS.ProcessEnv) => void;
+  wrangler: typeof runWrangler;
+};
+
 type ApiProductionCandidateDependencies = {
   deployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
   readCandidate: (versionId: string, smokeOwner: string) => CandidateRecord | undefined;
@@ -158,7 +179,6 @@ type CompleteApiReleaseInput = {
   checkEnvironment: NodeJS.ProcessEnv;
   firestoreServiceAccountJson: string;
   firestoreWriterServiceAccountJson: string;
-  fixForwardFromVersionId?: string;
   heliusApiKey: string;
   logsDirectory: string;
   smokeOwner: string;
@@ -169,7 +189,6 @@ type CompleteApiReleaseDependencies = {
   apiDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
   frontendDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
   manifest: () => ReleaseManifest;
-  pauseRevealQueue?: (environment: NodeJS.ProcessEnv) => void;
   prepareQueues?: (environment: NodeJS.ProcessEnv) => void;
   production: typeof runProductionSequence;
   record: typeof recordApiProductionVersion;
@@ -242,15 +261,15 @@ const secretFileOperations: SecretFileOperations = {
 
 function usage(): string {
   return [
-    'Release or update the mons-shop-api Worker.',
+    'Release, update, or roll back the mons-shop-api Worker.',
     '',
     'Usage:',
     '  npm run deploy:api',
     '  npm run deploy:api -- release --firestore-service-account-file <path> --firestore-writer-service-account-file <path> [--smoke-owner <wallet>] [--token-file <path>]',
-    '  npm run deploy:api -- release --fix-forward-from-version-id <uuid> [--smoke-owner <wallet>] [--token-file <path>]',
     '  npm run deploy:api -- preview --firestore-service-account-file <path> --firestore-writer-service-account-file <path> --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- triggers --smoke-owner <wallet> [--token-file <path>]',
+    '  npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
     '',
     'The default release validates, uploads, verifies, promotes, and records one exact Worker version.',
     'Release, preview, and production require HELIUS_API_KEY in the process environment.',
@@ -269,19 +288,15 @@ function parseArgs(argv: string[]): CliOptions {
     process.exit(0);
   }
   const requestedMode = argv[0];
-  if (requestedMode === 'rollback') {
-    fail('API rollback is disabled during the reveal queue migration; deploy a fix-forward version.', 2);
-  }
-  const knownModes: readonly Mode[] = ['release', 'preview', 'production', 'triggers'];
+  const knownModes: readonly Mode[] = ['release', 'preview', 'production', 'triggers', 'rollback'];
   const mode: Mode = requestedMode && knownModes.includes(requestedMode as Mode) ? requestedMode as Mode : 'release';
   const optionStart = mode === requestedMode ? 1 : 0;
   if (requestedMode && !requestedMode.startsWith('--') && optionStart === 0) {
-    fail(`Expected release, preview, production, or triggers.\n\n${usage()}`, 2);
+    fail(`Expected release, preview, production, triggers, or rollback.\n\n${usage()}`, 2);
   }
   let smokeOwner = mode === 'release' ? defaultSmokeOwner : '';
   let firestoreServiceAccountFile: string | undefined;
   let firestoreWriterServiceAccountFile: string | undefined;
-  let fixForwardFromVersionId: string | undefined;
   let tokenFile: string | undefined;
   let versionId: string | undefined;
   for (let index = optionStart; index < argv.length; index += 1) {
@@ -290,7 +305,6 @@ function parseArgs(argv: string[]): CliOptions {
     if (
       option !== '--firestore-service-account-file' &&
       option !== '--firestore-writer-service-account-file' &&
-      option !== '--fix-forward-from-version-id' &&
       option !== '--smoke-owner' &&
       option !== '--token-file' &&
       option !== '--version-id'
@@ -301,20 +315,13 @@ function parseArgs(argv: string[]): CliOptions {
     index += 1;
     if (option === '--firestore-service-account-file') firestoreServiceAccountFile = value;
     if (option === '--firestore-writer-service-account-file') firestoreWriterServiceAccountFile = value;
-    if (option === '--fix-forward-from-version-id') fixForwardFromVersionId = value.trim().toLowerCase();
     if (option === '--smoke-owner') smokeOwner = value.trim();
     if (option === '--token-file') tokenFile = value;
     if (option === '--version-id') versionId = value.trim().toLowerCase();
   }
   if (!isBase58Bytes(smokeOwner, 32)) fail('--smoke-owner must be a valid 32-byte Solana address.', 2);
-  if (mode === 'production' && (!versionId || !versionIdPattern.test(versionId))) {
+  if ((mode === 'production' || mode === 'rollback') && (!versionId || !versionIdPattern.test(versionId))) {
     fail(`${mode} requires an exact UUID --version-id.`, 2);
-  }
-  if (fixForwardFromVersionId !== undefined && !versionIdPattern.test(fixForwardFromVersionId)) {
-    fail('--fix-forward-from-version-id must be an exact UUID.', 2);
-  }
-  if (fixForwardFromVersionId !== undefined && mode !== 'release') {
-    fail('--fix-forward-from-version-id is valid only in release mode.', 2);
   }
   if ((mode === 'release' || mode === 'preview' || mode === 'triggers') && versionId) fail(`--version-id is not valid in ${mode} mode.`, 2);
   if (mode !== 'release' && mode !== 'preview' && (firestoreServiceAccountFile || firestoreWriterServiceAccountFile)) {
@@ -329,7 +336,6 @@ function parseArgs(argv: string[]): CliOptions {
   return {
     firestoreServiceAccountFile,
     firestoreWriterServiceAccountFile,
-    ...(fixForwardFromVersionId === undefined ? {} : { fixForwardFromVersionId }),
     mode,
     smokeOwner,
     tokenFile,
@@ -798,6 +804,22 @@ function readRevealQueueConsumers(environment: NodeJS.ProcessEnv): QueueConsumer
 function assertExactQueueConsumers(environment: NodeJS.ProcessEnv): void {
   assertSoleNotificationConsumer(readNotificationQueueConsumers(environment), workerName);
   assertSoleRevealConsumer(readRevealQueueConsumers(environment), workerName);
+}
+
+function assertApprovedApiRollback(manifest: ReleaseManifest, versionId: string): void {
+  const targetVersionId = versionId.toLowerCase();
+  if (targetVersionId !== manifest.approvedRollback.apiVersionId.toLowerCase()) {
+    fail('API rollback version is not the approved target in cloud/release-manifest.json.');
+  }
+  if (manifest.currentProduction.apiVersionId.toLowerCase() === targetVersionId) {
+    fail('No distinct API rollback is approved; deploy a new API version.');
+  }
+  if (
+    manifest.currentProduction.frontendVersionId.toLowerCase() !==
+    manifest.approvedRollback.frontendVersionId.toLowerCase()
+  ) {
+    fail('The live frontend must first be restored to the approved rollback frontend version.');
+  }
 }
 
 async function closeTail(tail: ChildProcessWithoutNullStreams): Promise<void> {
@@ -1889,16 +1911,103 @@ function assertReleasePair(
   }
 }
 
+async function runRollbackSequence(
+  input: RollbackSequenceInput,
+  dependencies: RollbackSequenceDependencies = {
+    apiDeployment: readApiDeploymentStatus,
+    evidence: writeProductionEvidence,
+    frontendDeployment: readFrontendDeploymentStatus,
+    notificationSmoke: smokeNotificationDelivery,
+    pauseRevealQueue: (environment) => pauseRevealDelivery(
+      environment,
+      'Reveal queue pause before approved API rollback',
+    ),
+    record: recordApiProductionVersion,
+    repauseRevealQueue: (environment) => pauseRevealDelivery(
+      environment,
+      'Reveal queue re-pause after rollback verification failure',
+    ),
+    resumeRevealQueue: (environment) => runWrangler(
+      ['queues', 'resume-delivery', revealQueueName, ...configArgs],
+      environment,
+      'Reveal queue resume after approved API rollback',
+    ),
+    sleep,
+    smoke: smokeApi,
+    verifyQueueConsumers: assertExactQueueConsumers,
+    wrangler: runWrangler,
+  },
+): Promise<void> {
+  const targetVersionId = input.versionId.toLowerCase();
+  assertApprovedApiRollback(input.manifest, targetVersionId);
+  const initialLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
+  assertReleasePair(initialLivePair, input.manifest.currentProduction, 'Rollback preflight');
+
+  try {
+    dependencies.pauseRevealQueue(input.wranglerEnvironment);
+  } catch (error) {
+    throw new Error('Reveal delivery could not be paused, so API rollback was not attempted.', { cause: error });
+  }
+
+  let resumeAttempted = false;
+  try {
+    dependencies.wrangler([
+      'rollback',
+      targetVersionId,
+      '--yes',
+      '--message',
+      'Explicit approved mons-shop-api rollback',
+      ...configArgs,
+    ], input.wranglerEnvironment, 'Approved API rollback');
+    const observedVersionId = await reconcileCloudflareStableVersion({
+      allowedPendingVersionIds: [input.manifest.currentProduction.apiVersionId],
+      preferredVersionId: targetVersionId,
+      read: () => dependencies.apiDeployment(input.wranglerEnvironment),
+      sleep: dependencies.sleep,
+      workerLabel: workerName,
+    });
+    if (observedVersionId !== targetVersionId) {
+      throw new Error(`API rollback left version ${observedVersionId} live.`);
+    }
+    const pausedPair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
+    assertReleasePair(pausedPair, input.manifest.approvedRollback, 'Paused rollback verification');
+    dependencies.verifyQueueConsumers(input.wranglerEnvironment);
+    await dependencies.smoke(productionUrl, { includeDevnet: true, owner: input.smokeOwner });
+
+    resumeAttempted = true;
+    dependencies.resumeRevealQueue(input.wranglerEnvironment);
+    await dependencies.smoke(productionUrl, { includeDevnet: true, owner: input.smokeOwner });
+    await dependencies.notificationSmoke?.(input.wranglerEnvironment, workerName);
+    const finalLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
+    assertReleasePair(finalLivePair, input.manifest.approvedRollback, 'Rollback commit verification');
+    dependencies.evidence('api', targetVersionId);
+    dependencies.record(targetVersionId, {
+      expectedCurrentProduction: input.manifest.currentProduction,
+    });
+  } catch (error) {
+    if (resumeAttempted) {
+      try {
+        dependencies.repauseRevealQueue(input.wranglerEnvironment);
+      } catch (repauseError) {
+        throw new AggregateError(
+          [error, repauseError],
+          'API rollback failed and reveal delivery could not be re-paused. Inspect production immediately.',
+        );
+      }
+    }
+    throw new Error(
+      'Approved API rollback failed. Reveal delivery remains paused; inspect the live pair before retrying the exact approved rollback.',
+      { cause: error },
+    );
+  }
+}
+
 async function runCompleteApiRelease(
   input: CompleteApiReleaseInput,
   dependencies: CompleteApiReleaseDependencies = {
     apiDeployment: readApiDeploymentStatus,
     frontendDeployment: readFrontendDeploymentStatus,
     manifest: readReleaseManifest,
-    pauseRevealQueue: (environment) => pauseRevealDelivery(
-      environment,
-      'Reveal queue pause before fix-forward release',
-    ),
     prepareQueues: ensureApiQueueResources,
     production: runProductionSequence,
     record: recordApiProductionVersion,
@@ -1912,27 +2021,8 @@ async function runCompleteApiRelease(
   },
 ): Promise<UploadMetadata> {
   const expectedCurrentProduction = dependencies.manifest().currentProduction;
-  if (input.fixForwardFromVersionId) {
-    if (!dependencies.pauseRevealQueue) fail('Fix-forward release requires reveal delivery to be paused.');
-    dependencies.pauseRevealQueue(input.wranglerEnvironment);
-  }
   const initialLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
-  if (input.fixForwardFromVersionId) {
-    if (initialLivePair.apiVersionId !== input.fixForwardFromVersionId) {
-      fail(
-        `Fix-forward preflight expected live API ${input.fixForwardFromVersionId}, ` +
-        `but Cloudflare reported ${initialLivePair.apiVersionId}. Reveal delivery remains paused.`,
-      );
-    }
-    if (initialLivePair.frontendVersionId !== expectedCurrentProduction.frontendVersionId.toLowerCase()) {
-      fail(
-        `Fix-forward preflight expected frontend ${expectedCurrentProduction.frontendVersionId}, ` +
-        `but Cloudflare reported ${initialLivePair.frontendVersionId}. Reveal delivery remains paused.`,
-      );
-    }
-  } else {
-    assertReleasePair(initialLivePair, expectedCurrentProduction, 'Release preflight');
-  }
+  assertReleasePair(initialLivePair, expectedCurrentProduction, 'Release preflight');
 
   dependencies.validate();
   dependencies.triggerDryRun(input.checkEnvironment);
@@ -1960,7 +2050,7 @@ async function runCompleteApiRelease(
   });
   await dependencies.production({
     candidateSmoke,
-    expectedCurrentVersionId: input.fixForwardFromVersionId || expectedCurrentProduction.apiVersionId,
+    expectedCurrentVersionId: expectedCurrentProduction.apiVersionId,
     heliusApiKey: input.heliusApiKey,
     previewUrl: metadata.previewUrl,
     smokeOwner: input.smokeOwner,
@@ -2014,27 +2104,15 @@ async function main(): Promise<void> {
     if (!heliusApiKey) fail('Release requires HELIUS_API_KEY in the process environment.');
     const firestoreServiceAccountJson = readFirestoreServiceAccount(options.firestoreServiceAccountFile);
     const firestoreWriterServiceAccountJson = readFirestoreWriterServiceAccount(options.firestoreWriterServiceAccountFile);
-    let apiToken: string;
-    let wranglerEnvironment: NodeJS.ProcessEnv;
-    if (options.fixForwardFromVersionId) {
-      apiToken = readApiToken(options.tokenFile);
-      wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
-      pauseRevealDelivery(wranglerEnvironment, 'Reveal queue pause before fix-forward preflight');
-      await verifyFirestoreWriterAccess(firestoreWriterServiceAccountJson);
-    } else {
-      await verifyFirestoreWriterAccess(firestoreWriterServiceAccountJson);
-      apiToken = readApiToken(options.tokenFile);
-      wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
-    }
+    await verifyFirestoreWriterAccess(firestoreWriterServiceAccountJson);
+    const apiToken = readApiToken(options.tokenFile);
+    const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
     assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
     const metadata = await runCompleteApiRelease({
       apiToken,
       checkEnvironment,
       firestoreServiceAccountJson,
       firestoreWriterServiceAccountJson,
-      ...(options.fixForwardFromVersionId
-        ? { fixForwardFromVersionId: options.fixForwardFromVersionId }
-        : {}),
       heliusApiKey,
       logsDirectory,
       smokeOwner: options.smokeOwner,
@@ -2074,6 +2152,18 @@ async function main(): Promise<void> {
   const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
   ensureApiQueueResources(wranglerEnvironment);
   assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
+
+  if (options.mode === 'rollback') {
+    const manifest = readReleaseManifest();
+    await runRollbackSequence({
+      manifest,
+      smokeOwner: options.smokeOwner,
+      versionId: options.versionId!,
+      wranglerEnvironment,
+    });
+    console.log(`[api-deploy] Rolled back and verified version ${options.versionId}; release metadata was updated.`);
+    return;
+  }
 
   if (options.mode === 'production') {
     if (!heliusApiKey) fail('Production mode requires HELIUS_API_KEY for the mandatory direct-path benchmark.');
@@ -2140,12 +2230,14 @@ export const deployApiTestHooks = {
   runApiValidation,
   runCompleteApiRelease,
   runProductionSequence,
+  runRollbackSequence,
   secretFileOperations,
   smokeApi,
   validationEnvironment,
   validateFirestoreServiceAccountJson,
   validateFirestoreWriterServiceAccountJson,
   assertQueueResource,
+  assertApprovedApiRollback,
   assertSoleRevealConsumer,
   assertSoleNotificationConsumer,
   verifyFirestoreWriterAccess,

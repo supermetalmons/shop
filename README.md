@@ -83,13 +83,12 @@ Advanced release controls remain available for separately managed releases:
   - Preview creates the reveal queue and DLQ when they are missing; it does not attach a consumer or enqueue reveal work.
 - Re-smoke and repeat the mandatory five-request comparison against that exact Version Preview, apply the reviewed `api.mons.shop` trigger, verify the tracked baseline, promote the exact version, smoke-test production, and write production evidence:
   - `npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet>`
-- Fix forward from an exact failed live API while keeping the manifest pair as the file precondition:
-  - `npm run deploy:api -- release --fix-forward-from-version-id <failed-live-uuid> --smoke-owner <wallet>`
-  - The command pauses reveal delivery before live-state checks or upload, requires that exact API and the manifest frontend to be live, then runs the normal guarded release with the failed API as its baseline.
 - Reapply reviewed triggers without changing code:
   - `npm run deploy:api -- triggers --smoke-owner <wallet>`
   - This verifies both queue consumers without pausing or resuming reveal delivery.
-- API rollback is disabled during the reveal queue migration. Deploy a fix-forward version instead.
+- Roll back to the exact approved API version only when the approved frontend is live:
+  - `npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet>`
+  - The command pauses reveal delivery, verifies the approved pair and both consumers, rolls back and smokes the API, resumes delivery, verifies again, and updates release metadata. Any post-resume failure re-pauses delivery.
 - Run the standalone comparison against an explicit origin:
   - `npm run benchmark:api -- --api-origin https://api.mons.shop --owner <wallet> --runs 5`
   - Add `--include-devnet` when the comparison should include both mainnet and devnet inventory.
@@ -108,18 +107,7 @@ into an undeployed Worker version with `npm run sync:api:firebase-secrets`; the
 command uses a temporary mode-`0600` bulk file, verifies production is unchanged,
 and removes the file immediately.
 
-Do not run a full Functions deployment during this cutover: the source removals
-would retire the legacy callables before the frontend is ready. After the API and
-frontend releases are both verified, run
-`npm run decommission:firebase-fulfillment-callables` and
-`npm run decommission:firebase-shipstation-label-purchase`. The checkout cutover separately uses
-`npm run decommission:firebase-create-stripe-checkout-session` immediately after its frontend verification, then deploy the complete
-Functions set with `npm run deploy:functions`.
-The wallet lifecycle cutover separately uses `npm run decommission:firebase-profile-lifecycle` only after both `/auth/solana` and `/profile/reconcile` are live, the frontend release is verified, and rollback metadata no longer approves pre-migration Worker versions.
-The IRL claim preparation cutover uses `npm run decommission:firebase-prepare-irl-claim` only after `/claims/irl/prepare` and the matching frontend are live. The guard requires `IRL_CLAIM_SMOKE_FIREBASE_TOKEN`, `IRL_CLAIM_SMOKE_OWNER`, and an unused `IRL_CLAIM_SMOKE_CODE`, prepares and validates a production transaction without submitting it, and requires the approved rollback pair to equal current production before deleting the Firebase callable.
-The delivery preparation cutover uses `npm run decommission:firebase-prepare-delivery` only after `/delivery/prepare` and the matching frontend are live. The frontend production preflight and decommission guard require `DELIVERY_PREPARE_SMOKE_FIREBASE_TOKEN`, `DELIVERY_PREPARE_SMOKE_OWNER`, `DELIVERY_PREPARE_SMOKE_DROP_ID`, `DELIVERY_PREPARE_SMOKE_ADDRESS_ID`, and `DELIVERY_PREPARE_SMOKE_ITEM_IDS` as a JSON array. They validate the production transaction and conditionally remove the exact prepared Firestore order with the writer credential stored by `npm run setup:api:firestore-keychain`; decommissioning additionally requires authenticated Wrangler access, the live API/frontend pair to match tracked production, and the approved rollback pair to equal current production before deleting the Firebase callable.
-The Admin IRL preparation cutover uses `npm run decommission:firebase-prepare-admin-irl-redeem` only after `/admin/irl-redeem/prepare` and the matching frontend are live. Its frontend preflight and decommission guard require `ADMIN_IRL_REDEEM_PREPARE_SMOKE_FIREBASE_TOKEN`, `ADMIN_IRL_REDEEM_PREPARE_SMOKE_OWNER`, `ADMIN_IRL_REDEEM_PREPARE_SMOKE_DROP_ID`, and `ADMIN_IRL_REDEEM_PREPARE_SMOKE_ITEM_IDS` as a JSON array. The smoke prepares and simulates an unsigned pack transfer, verifies the exact Firestore request, conditionally removes that request with the writer credential, and never submits the transaction. Decommissioning also requires the live API/frontend pair and approved rollback pair to equal current production before deleting `prepareAdminIrlRedeemTx`.
-The reveal cutover uses `npm run decommission:firebase-reveal-dudes` only after `/boxes/reveal` and the matching frontend are live. The guard requires `REVEAL_DUDES_SMOKE_FIREBASE_TOKEN` and its bound `REVEAL_DUDES_SMOKE_OWNER`, verifies the live API/frontend pair and approved rollback pair, then sends an authenticated non-mutating `clear_cards_devnet_v2` request for a freshly generated nonexistent box. It deletes `revealDudes` only when the Worker validates authentication, Firestore writer access, Helius, the committed on-chain config, and the cosigner before returning the exact pending-open `not-found` response.
+The migrated Firebase callables have been retired and must not be restored. Frontend production releases still require authenticated, non-submitting delivery and Admin IRL preparation smokes. Configure `DELIVERY_PREPARE_SMOKE_FIREBASE_TOKEN`, `DELIVERY_PREPARE_SMOKE_OWNER`, `DELIVERY_PREPARE_SMOKE_DROP_ID`, `DELIVERY_PREPARE_SMOKE_ADDRESS_ID`, and `DELIVERY_PREPARE_SMOKE_ITEM_IDS`, plus `ADMIN_IRL_REDEEM_PREPARE_SMOKE_FIREBASE_TOKEN`, `ADMIN_IRL_REDEEM_PREPARE_SMOKE_OWNER`, `ADMIN_IRL_REDEEM_PREPARE_SMOKE_DROP_ID`, and `ADMIN_IRL_REDEEM_PREPARE_SMOKE_ITEM_IDS`. The smokes conditionally remove their exact prepared Firestore records and never submit transactions.
 
 ### Notification delivery
 
@@ -170,12 +158,11 @@ that matches either the manifest's current production version or the exact
 requested candidate. The release creates the reveal queues, pauses reveal
 delivery before attaching consumers or promoting, verifies the exact candidate,
 then resumes and verifies again. Any failure after resume re-pauses delivery.
-Once promotion begins, recovery is fix-forward only: the command never rolls the
-API back. Resolve the issue and rerun production with the same exact candidate,
-or deploy a new fixed candidate.
+Failed releases resume through the same exact candidate or a new fixed candidate.
 
-Tracked release and rollback IDs remain in `cloud/release-manifest.json` for
-cutover guards, but the API deploy helper refuses rollback during this migration.
+Tracked production and approved rollback IDs live in `cloud/release-manifest.json`.
+API rollback accepts only the approved API version and only while the approved
+frontend is live.
 
 To roll back an application version, provide `CLOUDFLARE_API_TOKEN` in the shell,
 inspect `node_modules/.bin/wrangler deployments list --config wrangler.jsonc`,

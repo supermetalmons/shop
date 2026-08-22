@@ -35,7 +35,6 @@ type DeployMode = 'dry-run' | 'preview' | 'production';
 
 type CliOptions = {
   mode: DeployMode;
-  skipAuthenticatedPreparedTransactionSmokes?: true;
   tokenFile?: string;
   versionId?: string;
 };
@@ -64,7 +63,6 @@ type FrontendSmokeDependencies = {
 type ProfileApiSmokeDependencies = Pick<FrontendSmokeDependencies, 'fetch'> & {
   adminIrlRedeemPrepare?: () => Promise<void> | void;
   deliveryPrepare?: () => Promise<void> | void;
-  skipAuthenticatedPreparedTransactionSmokes?: boolean;
 };
 
 type FrontendProductionSequenceInput = {
@@ -105,7 +103,6 @@ type FrontendCandidateUploadDependencies = {
 };
 
 type CompleteFrontendReleaseInput = FrontendCandidateUploadInput & {
-  skipAuthenticatedPreparedTransactionSmokes?: true;
   tokenFile?: string;
   versionId?: string;
 };
@@ -186,7 +183,6 @@ function usage(): string {
     '  npm run deploy -- dry-run',
     '  npm run deploy -- preview --token-file /path/to/cloudflare-token',
     '  npm run deploy -- production [--token-file /path/to/cloudflare-token]',
-    '  npm run deploy -- production --skip-authenticated-prepared-transaction-smokes [--token-file /path/to/cloudflare-token]',
     '  npm run deploy -- production --version-id <uuid> --token-file /path/to/cloudflare-token',
     '',
     'Production without --version-id validates, uploads, verifies, promotes, records, and commits one exact frontend version.',
@@ -251,16 +247,8 @@ export function parseFrontendDeployArgs(argv: string[]): CliOptions {
 
   let tokenFile: string | undefined;
   let versionId: string | undefined;
-  let skipAuthenticatedPreparedTransactionSmokes = false;
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '--skip-authenticated-prepared-transaction-smokes') {
-      if (skipAuthenticatedPreparedTransactionSmokes) {
-        fail('--skip-authenticated-prepared-transaction-smokes may only be provided once.', 2);
-      }
-      skipAuthenticatedPreparedTransactionSmokes = true;
-      continue;
-    }
     if (arg === '--token-file') {
       if (tokenFile !== undefined) fail('--token-file may only be provided once.', 2);
       const value = argv[++i];
@@ -279,15 +267,7 @@ export function parseFrontendDeployArgs(argv: string[]): CliOptions {
   }
 
   if (mode !== 'production' && versionId) fail('--version-id is only valid for production promotion.', 2);
-  if (mode !== 'production' && skipAuthenticatedPreparedTransactionSmokes) {
-    fail('--skip-authenticated-prepared-transaction-smokes is only valid for production.', 2);
-  }
-  return {
-    mode,
-    ...(skipAuthenticatedPreparedTransactionSmokes ? { skipAuthenticatedPreparedTransactionSmokes: true } : {}),
-    tokenFile,
-    versionId,
-  };
+  return { mode, tokenFile, versionId };
 }
 
 function run(command: string, args: string[], env: NodeJS.ProcessEnv, label: string): void {
@@ -900,15 +880,13 @@ export async function smokeProfileStateApi(
       fail(`Profile API capability check returned an incompatible response for ${pathname}.`);
     }
   }
-  if (dependencies.skipAuthenticatedPreparedTransactionSmokes) return;
   if (dependencies.deliveryPrepare) {
     await dependencies.deliveryPrepare();
   } else {
     const result = spawnSync(process.execPath, [
       '--import',
       'tsx',
-      resolve(repoRoot, 'scripts', 'decommission-firebase-prepare-delivery.ts'),
-      '--smoke-only',
+      resolve(repoRoot, 'scripts', 'smoke-cloudflare-delivery-prepare.ts'),
     ], {
       cwd: repoRoot,
       env: credentialFreeEnvironment(process.env),
@@ -925,8 +903,7 @@ export async function smokeProfileStateApi(
   const adminIrlResult = spawnSync(process.execPath, [
     '--import',
     'tsx',
-    resolve(repoRoot, 'scripts', 'decommission-firebase-prepare-admin-irl-redeem.ts'),
-    '--smoke-only',
+    resolve(repoRoot, 'scripts', 'smoke-cloudflare-admin-irl-redeem-prepare.ts'),
   ], {
     cwd: repoRoot,
     env: credentialFreeEnvironment(process.env),
@@ -1511,9 +1488,7 @@ async function runCompleteFrontendRelease(
   } else {
     assertReleasePair(initialLivePair, expectedCurrentProduction, 'Frontend release preflight');
   }
-  await dependencies.profileApi?.({
-    skipAuthenticatedPreparedTransactionSmokes: input.skipAuthenticatedPreparedTransactionSmokes === true,
-  });
+  await dependencies.profileApi?.();
 
   let candidate: VerifiedFrontendCandidate;
   if (requestedVersionId) {
@@ -1636,9 +1611,6 @@ async function main(): Promise<void> {
   };
 
   console.log(`[deploy] Mode: ${options.mode}`);
-  if (options.skipAuthenticatedPreparedTransactionSmokes) {
-    console.warn('[deploy] Authenticated delivery and Admin IRL prepared-transaction smokes are explicitly skipped.');
-  }
   if (options.mode === 'dry-run') {
     runFrontendValidation(validationEnvironment);
     run(
@@ -1676,9 +1648,6 @@ async function main(): Promise<void> {
   };
   const candidate = await runCompleteFrontendRelease({
     authenticatedEnvironment,
-    ...(options.skipAuthenticatedPreparedTransactionSmokes
-      ? { skipAuthenticatedPreparedTransactionSmokes: true }
-      : {}),
     tokenFile: options.tokenFile,
     unauthenticatedEnvironment: unauthenticatedWranglerEnvironment,
     validationEnvironment,
