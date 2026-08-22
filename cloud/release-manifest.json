@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "recordedAt": "2026-08-22T16:36:23.000Z",
+  "recordedAt": "2026-08-22T18:06:37.148Z",
   "currentProduction": {
-    "apiVersionId": "2a6a6162-3c5c-4d00-b143-68c4a5f1d7f8",
+    "apiVersionId": "4a826539-ce0e-42f5-86ac-c23e0f0c4af0",
     "frontendVersionId": "9eb48e48-4574-49a4-a400-bf5fdd2a7eaf"
   },
   "approvedRollback": {
-    "apiVersionId": "2a6a6162-3c5c-4d00-b143-68c4a5f1d7f8",
+    "apiVersionId": "4a826539-ce0e-42f5-86ac-c23e0f0c4af0",
     "frontendVersionId": "9eb48e48-4574-49a4-a400-bf5fdd2a7eaf"
   },
   "allowDirectHeliusFrontendRollback": false
