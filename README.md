@@ -152,9 +152,7 @@ json`. If a job reaches the DLQ, deploy and verify the fix before manually
 replaying only the affected jobs; reconciliation is idempotent.
 
 Stripe fulfillment uses `mons-shop-stripe-fulfillment` with
-`mons-shop-stripe-fulfillment-dlq`. The guarded retirement proof for
-`processStripeCheckoutFulfillment` completed against a quantity-one
-`card_nft_binder_devnet` checkout before the function was deleted.
+`mons-shop-stripe-fulfillment-dlq`.
 
 Wrangler can upload a preview version only after the Worker exists.
 `mons-shop-api` is already provisioned, so releases can use the preview command directly.
