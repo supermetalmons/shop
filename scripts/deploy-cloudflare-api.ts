@@ -254,6 +254,10 @@ const revealQueueName = 'mons-shop-reveal-reconciliation';
 const revealDeadLetterQueueName = 'mons-shop-reveal-reconciliation-dlq';
 const stripeFulfillmentQueueName = 'mons-shop-stripe-fulfillment';
 const stripeFulfillmentDeadLetterQueueName = 'mons-shop-stripe-fulfillment-dlq';
+const d1DatabaseName = 'mons-shop-data';
+const d1BindingName = 'DATA_DB';
+const d1MigrationsDirectory = 'migrations';
+const d1DatabaseIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const notificationSmokeTimeoutMs = 90_000;
 const firestoreProjectId = 'mons-shop';
 const firestoreDatabaseName = `projects/${firestoreProjectId}/databases/(default)`;
@@ -1150,9 +1154,12 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
   }
   const route = value.routes[0];
   const queues = value.queues;
+  const d1Databases = value.d1_databases;
   const secrets = value.secrets;
   const triggers = value.triggers;
   if (
+    !Array.isArray(d1Databases) ||
+    d1Databases.length !== 1 ||
     !isRecord(queues) ||
     !hasExactKeys(queues, ['consumers', 'producers']) ||
     !Array.isArray(queues.producers) ||
@@ -1162,6 +1169,7 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
   ) {
     return false;
   }
+  const d1 = d1Databases[0];
   const notificationProducer = queues.producers[0];
   const revealProducer = queues.producers[1];
   const stripeFulfillmentProducer = queues.producers[2];
@@ -1173,6 +1181,19 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
     Array.isArray(triggers.crons) &&
     triggers.crons.length === 1 &&
     triggers.crons[0] === '*/5 * * * *' &&
+    isRecord(d1) &&
+    hasExactKeys(d1, [
+      'binding',
+      'database_name',
+      'migrations_dir',
+      ...(Object.hasOwn(d1, 'database_id') ? ['database_id'] : []),
+    ]) &&
+    d1.binding === d1BindingName &&
+    d1.database_name === d1DatabaseName &&
+    d1.migrations_dir === d1MigrationsDirectory &&
+    (!Object.hasOwn(d1, 'database_id') || (
+      typeof d1.database_id === 'string' && d1DatabaseIdPattern.test(d1.database_id)
+    )) &&
     isRecord(secrets) &&
     hasExactKeys(secrets, ['required']) &&
     Array.isArray(secrets.required) &&
@@ -1259,6 +1280,45 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
     stripeFulfillmentConsumer.retry_delay === 60;
 }
 
+function configuredD1DatabaseId(path = resolve(repoRoot, configPath)): string {
+  const value = JSON.parse(readFileSync(path, 'utf8')) as { d1_databases?: Array<{ database_id?: unknown }> };
+  const databaseId = value.d1_databases?.[0]?.database_id;
+  if (typeof databaseId !== 'string' || !d1DatabaseIdPattern.test(databaseId)) {
+    fail(
+      `D1 database ${d1DatabaseName} is not provisioned. Grant D1 Edit and create it with the reviewed ${d1BindingName} binding before release.`,
+    );
+  }
+  return databaseId;
+}
+
+function assertD1DatabaseReady(environment: NodeJS.ProcessEnv): void {
+  configuredD1DatabaseId();
+  const output = runProcessForOutput(
+    wranglerBinary,
+    [
+      'd1', 'execute', d1DatabaseName,
+      '--remote', '--json',
+      '--command', "SELECT read_source, cache_generation FROM pack_status_rollout WHERE singleton = 1",
+      ...configArgs,
+    ],
+    environment,
+    'D1 pack-status migration verification',
+  );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    fail('D1 pack-status migration verification returned malformed JSON.');
+  }
+  const row = Array.isArray(parsed) && parsed.length === 1 && isRecord(parsed[0]) &&
+    parsed[0].success === true && Array.isArray(parsed[0].results) && parsed[0].results.length === 1
+    ? parsed[0].results[0]
+    : null;
+  if (!isRecord(row) || (row.read_source !== 'firestore' && row.read_source !== 'd1')) {
+    fail('D1 pack-status migration is not applied or its rollout row is invalid.');
+  }
+}
+
 function assertApiDeploymentConfig(path = resolve(repoRoot, configPath)): void {
   let value: unknown;
   try {
@@ -1269,7 +1329,7 @@ function assertApiDeploymentConfig(path = resolve(repoRoot, configPath)): void {
   }
   if (!isExactApiDeploymentConfig(value)) {
     fail(
-      `API Wrangler config must target only ${workerName}, account ${accountId}, the ${new URL(productionUrl).hostname} custom domain, the reviewed queues, and the Stripe fulfillment reconciliation schedule.`,
+      `API Wrangler config must target only ${workerName}, account ${accountId}, the ${new URL(productionUrl).hostname} custom domain, ${d1DatabaseName}, the reviewed queues, and the Stripe fulfillment reconciliation schedule.`,
     );
   }
 }
@@ -2381,6 +2441,7 @@ async function main(): Promise<void> {
     await verifyFirestoreWriterAccess(firestoreWriterServiceAccountJson);
     const apiToken = readApiToken(options.tokenFile);
     const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
+    assertD1DatabaseReady(wranglerEnvironment);
     assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
     const metadata = await runCompleteApiRelease({
       apiToken,
@@ -2405,6 +2466,7 @@ async function main(): Promise<void> {
     runApiValidation();
     const apiToken = readApiToken(options.tokenFile);
     const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
+    assertD1DatabaseReady(wranglerEnvironment);
     ensureApiQueueResources(wranglerEnvironment);
     assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
     await uploadApiCandidate({
@@ -2425,6 +2487,7 @@ async function main(): Promise<void> {
   }
   const apiToken = readApiToken(options.tokenFile);
   const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
+  assertD1DatabaseReady(wranglerEnvironment);
   ensureApiQueueResources(wranglerEnvironment);
   assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
 
@@ -2467,8 +2530,10 @@ async function main(): Promise<void> {
 
 export const deployApiTestHooks = {
   assertApiDeploymentConfig,
+  assertD1DatabaseReady,
   assertInventorySmokeDrops,
   authenticatedWranglerEnvironment,
+  configuredD1DatabaseId,
   candidateRecordPath,
   createSecretFile,
   defaultSmokeOwner,

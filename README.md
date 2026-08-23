@@ -146,6 +146,34 @@ the exact pair, rolls back and smokes production, then resumes and verifies the
 queues. A failure after resume re-pauses delivery. Scheduled Stripe
 reconciliation is restored by the next guarded production release.
 
+### Pack-status D1
+
+The API Worker binds the shared `mons-shop-data` D1 database as `DATA_DB`.
+Cloudflare tokens used by API release and migration commands require account-level
+D1 Edit permission. Provision the database without a location or jurisdiction
+hint, copy the returned UUID into the existing `DATA_DB.database_id` field, and
+apply the tracked migration before uploading a Worker version:
+
+```bash
+node_modules/.bin/wrangler d1 create mons-shop-data
+node_modules/.bin/wrangler d1 migrations apply mons-shop-data --remote --config cloud/workers/api/wrangler.jsonc
+```
+
+The production migration is guarded and reversible:
+
+```bash
+npm run migrate:pack-status -- backfill
+npm run migrate:pack-status -- verify
+npm run migrate:pack-status -- cutover
+npm run migrate:pack-status -- rollback
+```
+
+`backfill` and `verify` use the device-local Firestore reader credential unless
+`--firestore-service-account-file <path>` is supplied. Cutover first requires
+exact Firestore/D1 summary and event parity and automatically restores Firestore
+reads if any production smoke fails. Firestore remains a dual-write target,
+shadow comparison source, and emergency fallback until a separate cleanup.
+
 `NOTIFICATION_ENQUEUE_SECRET` is mandatory for API release, production,
 rollback, and notification-smoke commands. Supply it in the invoking environment
 or root `.env.local`; commands fail before any release mutation when it is
@@ -199,6 +227,8 @@ The retained tools are intentionally narrow:
 - `npm run check-irl-claims` inspects IRL claim state.
 - `npm run rebuild-pack-status` rebuilds public pack-status counters and is
   read-only unless its explicit write option is supplied.
+- `npm run migrate:pack-status -- <command>` backfills, verifies, cuts over, or
+  rolls back the D1 pack-status projection.
 - `npm run test-resend-notification-email` sends a synthetic notification through
   the production API queue.
 - `npm run wipe-drop` is the guarded drop cleanup utility. Use `--dry-run` to

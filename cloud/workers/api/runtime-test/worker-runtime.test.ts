@@ -26,6 +26,10 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     ...productionConfig,
     main: resolve('cloud/workers/api/src/index.ts'),
     routes: undefined,
+    d1_databases: productionConfig.d1_databases.map((database: Record<string, unknown>) => ({
+      ...database,
+      migrations_dir: resolve('cloud/workers/api/migrations'),
+    })),
     vars: {
       STRIPE_WEBHOOK_SECRET_DEVNET: 'whsec_runtime_devnet',
       STRIPE_WEBHOOK_SECRET: 'whsec_runtime_mainnet',
@@ -43,7 +47,8 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
   });
   try {
     await server.listen();
-    const worker = server.getWorker('mons-shop-api');
+    const worker = server.getWorker<Env>('mons-shop-api');
+    await worker.applyD1Migrations('DATA_DB');
     const health = await worker.fetch('https://api.mons.shop/health');
     assert.equal(health.status, 200);
     assert.deepEqual(await health.json(), { ok: true });

@@ -47,6 +47,7 @@ import {
   PACK_STATUS_SCHEMA_VERSION,
   packStatusCardsPerPack,
   shouldTrackPackStatusForDrop,
+  type PackStatusEvent,
 } from '../../../../shared/packStatus.js';
 import {
   MPL_CORE_PROGRAM_ADDRESS,
@@ -83,6 +84,7 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
+import { applyPackStatusDualWrite } from './packStatusProjection.js';
 
 export const REVEAL_DUDES_PATH = '/boxes/reveal';
 
@@ -204,6 +206,7 @@ type FirestoreContext = {
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
   signal: AbortSignal;
+  dataDb?: D1Database;
 };
 
 type AssignmentResult = {
@@ -1637,27 +1640,20 @@ async function loadLatestBlockhash(
   return { blockhash, blockhashContextSlot: Number(contextValue.slot) };
 }
 
-async function countOnlineRevealPackStatus(
+async function writeFirestoreOnlineRevealPackStatus(
   context: FirestoreContext,
   runtime: RevealRuntime,
-  boxAssetId: string,
-  signature: string,
+  event: PackStatusEvent,
 ): Promise<void> {
-  if (!shouldTrackPackStatusForDrop({
-    dropId: runtime.dropId,
-    cluster: runtime.cluster,
-    itemsPerBox: runtime.itemsPerBox,
-    maxSupply: runtime.config.maxSupply,
-  })) return;
-  const eventPath = `drops/${runtime.dropId}/packStatusEvents/onlineReveal_${encodeURIComponent(boxAssetId)}`;
+  const eventPath = `drops/${runtime.dropId}/packStatusEvents/onlineReveal_${encodeURIComponent(event.eventKey)}`;
+  const unsealedOnlineIncrement = event.increments.unsealedOnline ?? 0;
   for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
     let transaction: string | undefined;
     try {
       transaction = await beginFirestoreTransaction(context);
-      const event = await readFirestoreDocument(context, eventPath, transaction);
-      if (event) return;
+      const existingEvent = await readFirestoreDocument(context, eventPath, transaction);
+      if (existingEvent) return;
       const statsName = `${FIRESTORE_DOCUMENT_NAME_PREFIX}drops/${runtime.dropId}/meta/packStatus`;
-      const quantity = packStatusCardsPerPack({ itemsPerBox: runtime.itemsPerBox });
       await authenticatedFirestoreRequest({
         ...context,
         body: JSON.stringify({
@@ -1667,7 +1663,7 @@ async function countOnlineRevealPackStatus(
               transform: {
                 document: statsName,
                 fieldTransforms: [
-                  { fieldPath: 'unsealedOnline', increment: firestoreInteger(1) },
+                  { fieldPath: 'unsealedOnline', increment: firestoreInteger(unsealedOnlineIncrement) },
                   { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
                 ],
               },
@@ -1679,12 +1675,12 @@ async function countOnlineRevealPackStatus(
                 fields: {
                   version: firestoreInteger(PACK_STATUS_SCHEMA_VERSION),
                   dropId: { stringValue: runtime.dropId },
-                  type: { stringValue: 'onlineReveal' },
-                  eventKey: { stringValue: boxAssetId },
-                  quantity: firestoreInteger(quantity),
-                  increments: { mapValue: { fields: { unsealedOnline: firestoreInteger(1) } } },
-                  boxAssetId: { stringValue: boxAssetId },
-                  signature: { stringValue: signature },
+                  type: { stringValue: event.type },
+                  eventKey: { stringValue: event.eventKey },
+                  quantity: firestoreInteger(event.quantity),
+                  increments: { mapValue: { fields: { unsealedOnline: firestoreInteger(unsealedOnlineIncrement) } } },
+                  boxAssetId: { stringValue: event.boxAssetId },
+                  signature: { stringValue: event.signature },
                 },
               },
               currentDocument: { exists: false },
@@ -1708,6 +1704,36 @@ async function countOnlineRevealPackStatus(
       if (transaction) await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
     }
   }
+}
+
+async function countOnlineRevealPackStatus(
+  context: FirestoreContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  signature: string,
+): Promise<void> {
+  if (!shouldTrackPackStatusForDrop({
+    dropId: runtime.dropId,
+    cluster: runtime.cluster,
+    itemsPerBox: runtime.itemsPerBox,
+    maxSupply: runtime.config.maxSupply,
+  })) return;
+  const event: PackStatusEvent = {
+    dropId: runtime.dropId,
+    type: 'onlineReveal',
+    eventKey: boxAssetId,
+    quantity: packStatusCardsPerPack({ itemsPerBox: runtime.itemsPerBox }),
+    increments: { unsealedOnline: 1 },
+    boxAssetId,
+    signature,
+    createdAtMs: context.nowMs,
+  };
+  await applyPackStatusDualWrite({
+    dataDb: context.dataDb,
+    event,
+    firestore: () => writeFirestoreOnlineRevealPackStatus(context, runtime, event),
+    log: (entry) => console.warn(entry),
+  });
 }
 
 async function failRevealSubmissionSafely(
@@ -1919,7 +1945,7 @@ function retryRevealBackgroundJob(
 
 export async function processRevealBackgroundJobMessage(
   message: Message<unknown>,
-  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'>,
+  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'> & Partial<Pick<Env, 'DATA_DB'>>,
   overrides: Partial<RevealBackgroundJobDependencies> = {},
 ): Promise<void> {
   const dependencies = { ...defaultRevealBackgroundJobDependencies, ...overrides };
@@ -1943,6 +1969,7 @@ export async function processRevealBackgroundJobMessage(
     providerFetch: dependencies.providerFetch,
     serviceAccountJson,
     signal,
+    dataDb: env.DATA_DB,
   };
   try {
     if (!serviceAccountJson) throw new Error('firestore_writer_service_account_not_configured');
@@ -2121,6 +2148,7 @@ export async function handleRevealDudes(
       providerFetch: meteredFetch,
       serviceAccountJson,
       signal: controller.signal,
+      dataDb: env.DATA_DB,
     };
     const sessionWallet = await dependencies.loadWalletSession(firestoreContext, identity.uid);
     if (sessionWallet !== owner.toBase58()) {

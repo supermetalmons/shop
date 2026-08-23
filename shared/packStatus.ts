@@ -66,6 +66,29 @@ export type PackStatusStatsFields = {
   redeemedUnsealedCards: number;
 };
 
+export type PackStatusEventType =
+  | 'onlineReveal'
+  | 'redeemedIrlNormal'
+  | 'redeemedIrlStripe';
+
+export type PackStatusEvent = {
+  dropId: string;
+  type: PackStatusEventType;
+  eventKey: string;
+  quantity: number;
+  increments: {
+    unsealedOnline?: number;
+    redeemedIrlNormal?: number;
+    redeemedIrlStripe?: number;
+    redeemedUnsealedCards?: number;
+  };
+  deliveryId?: number;
+  checkoutSessionId?: string;
+  boxAssetId?: string;
+  signature?: string;
+  createdAtMs: number;
+};
+
 const PACK_STATUS_SUPPORTED_DROP_ID_SET = new Set<string>(
   PACK_STATUS_SUPPORTED_DROP_IDS,
 );

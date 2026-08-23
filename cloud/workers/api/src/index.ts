@@ -63,6 +63,14 @@ import {
   isPackStatusRouteDropId,
   type FirestorePackStatusFetch,
 } from './firestorePackStatus.js';
+import {
+  D1_PACK_STATUS_CACHE_TTL_SECONDS,
+  packStatusCacheRequest,
+  readD1PackStatus,
+  readPackStatusRollout,
+  type PackStatusReadSource,
+  type PackStatusRollout,
+} from './d1PackStatus.js';
 import { handleNotificationEnqueue, NOTIFICATION_ENQUEUE_PATH } from './notificationEnqueue.js';
 import { processNotificationEmailMessage } from './notificationEmailConsumer.js';
 import {
@@ -452,6 +460,7 @@ function createAttemptScope(overallSignal: AbortSignal, timeoutMs: number): Atte
 }
 
 type WorkerDependencies = RpcProxyDependencies & {
+  cache: Pick<Cache, 'match' | 'put'> | null;
   expectedAssetRecoveryTimeoutMs: number;
   firestoreFetch: FirestorePackStatusFetch;
   firestoreTimeoutMs: number;
@@ -1243,6 +1252,9 @@ export function sleepWithAbort(milliseconds: number, signal: AbortSignal): Promi
 }
 
 const defaultDependencies: WorkerDependencies = {
+  cache: typeof caches === 'undefined'
+    ? null
+    : (caches as CacheStorage & { readonly default: Cache }).default,
   expectedAssetRecoveryTimeoutMs: EXPECTED_ASSET_RECOVERY_TIMEOUT_MS,
   firestoreFetch: (input, init) => fetch(input, init),
   firestoreTimeoutMs: FIRESTORE_PACK_STATUS_TIMEOUT_MS,
@@ -1273,9 +1285,91 @@ function packStatusDropIdFromPathname(pathname: string): string | null | undefin
 
 async function handlePackStatus(
   dropId: string,
+  env: Pick<Env, 'DATA_DB'>,
   dependencies: WorkerDependencies,
   metrics: WorkerRequestMetrics,
-): Promise<{ response: Response; cacheStatus?: string }> {
+  waitUntil?: (promise: Promise<unknown>) => void,
+): Promise<{ response: Response; cacheStatus?: string; source: PackStatusReadSource }> {
+  const hasD1Binding = typeof env.DATA_DB?.prepare === 'function';
+  let rollout: PackStatusRollout = { readSource: 'firestore', cacheGeneration: 1 };
+  if (hasD1Binding) {
+    try {
+      rollout = await readPackStatusRollout(env.DATA_DB);
+    } catch (error) {
+      dependencies.log({
+        event: 'pack_status_d1_rollout_unavailable',
+        dropId,
+        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+      });
+    }
+  }
+
+  const shadowCompare = async (): Promise<void> => {
+    try {
+      const [d1, firestore] = await Promise.all([
+        readD1PackStatus(env.DATA_DB, dropId),
+        fetchFirestorePackStatus(dropId, dependencies.firestoreFetch, dependencies.firestoreTimeoutMs, 0),
+      ]);
+      if (!firestore.ok || JSON.stringify(d1) !== JSON.stringify(firestore.packStatus)) {
+        dependencies.log({
+          event: 'pack_status_shadow_mismatch',
+          dropId,
+          d1Available: d1 !== null,
+          firestoreOutcome: firestore.ok ? 'available' : firestore.error,
+        });
+      }
+    } catch (error) {
+      dependencies.log({
+        event: 'pack_status_shadow_compare_failed',
+        dropId,
+        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+      });
+    }
+  };
+  if (waitUntil && hasD1Binding) waitUntil(shadowCompare());
+
+  if (rollout.readSource === 'd1') {
+    try {
+      const cacheRequest = packStatusCacheRequest('d1', rollout.cacheGeneration, dropId);
+      const cached = await dependencies.cache?.match(cacheRequest);
+      if (cached) {
+        const packStatus = await cached.json();
+        return {
+          response: jsonResponse({ ok: true, packStatus }, 200),
+          cacheStatus: 'D1-HIT',
+          source: 'd1',
+        };
+      }
+      const packStatus = await readD1PackStatus(env.DATA_DB, dropId);
+      if (!packStatus) throw new Error('pack_status_d1_row_missing');
+      if (dependencies.cache) {
+        const cacheResponse = Response.json(packStatus, {
+          headers: { 'Cache-Control': `max-age=${D1_PACK_STATUS_CACHE_TTL_SECONDS}` },
+        });
+        const write = dependencies.cache.put(cacheRequest, cacheResponse).catch((error) => {
+          dependencies.log({
+            event: 'pack_status_d1_cache_write_failed',
+            dropId,
+            error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+          });
+        });
+        if (waitUntil) waitUntil(write);
+        else await write;
+      }
+      return {
+        response: jsonResponse({ ok: true, packStatus }, 200),
+        cacheStatus: 'D1-MISS',
+        source: 'd1',
+      };
+    } catch (error) {
+      dependencies.log({
+        event: 'pack_status_d1_fallback',
+        dropId,
+        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+      });
+    }
+  }
+
   const startedAt = performance.now();
   metrics.upstreamCalls += 1;
   const result = await fetchFirestorePackStatus(
@@ -1287,7 +1381,11 @@ async function handlePackStatus(
   const response = result.ok
     ? jsonResponse({ ok: true, packStatus: result.packStatus }, 200)
     : jsonResponse({ ok: false, error: result.error }, result.error === 'provider-timeout' ? 504 : 502);
-  return { response, ...(result.cacheStatus ? { cacheStatus: result.cacheStatus } : {}) };
+  return {
+    response,
+    ...(result.cacheStatus ? { cacheStatus: result.cacheStatus } : {}),
+    source: 'firestore',
+  };
 }
 
 async function handlePost(
@@ -1467,6 +1565,7 @@ export async function handleRequest(
   const isPackStatusRoute = packStatusDropId !== undefined;
   let includeDevnet = false;
   let providerCacheStatus: string | undefined;
+  let packStatusSource: PackStatusReadSource | undefined;
   let profileAuthOutcome: string | undefined;
   let profileStateSections: { profile: string; shipments: string } | undefined;
   let mergedStripeDeliveryOrders: number | undefined;
@@ -1536,9 +1635,10 @@ export async function handleRequest(
     } else if (request.method !== 'GET') {
       response = jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET, OPTIONS' });
     } else {
-      const result = await handlePackStatus(packStatusDropId, dependencies, metrics);
+      const result = await handlePackStatus(packStatusDropId, env, dependencies, metrics, waitUntil);
       response = result.response;
       providerCacheStatus = result.cacheStatus;
+      packStatusSource = result.source;
     }
   } else if (pathname === '/health') {
     response = request.method === 'GET'
@@ -1765,6 +1865,7 @@ export async function handleRequest(
     includeDevnet,
     ...(packStatusDropId ? { dropId: packStatusDropId } : {}),
     ...(providerCacheStatus ? { providerCacheStatus } : {}),
+    ...(packStatusSource ? { packStatusSource } : {}),
     ...(pathname === '/inventory' ? {
       expectedAssetIds: metrics.expectedAssetIds,
       expectedAssetRecoveryFailures: metrics.expectedAssetRecoveryFailures,

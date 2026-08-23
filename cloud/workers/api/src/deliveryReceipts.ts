@@ -74,6 +74,7 @@ import {
   countDeliveryOrderDudeItems,
   packStatusCardsPerPack,
   shouldTrackPackStatusForDrop,
+  type PackStatusEvent,
 } from '../../../../shared/packStatus.js';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
@@ -118,6 +119,7 @@ import {
   pendingReadyToShipNotifications,
   type PendingReadyToShipNotification,
 } from './readyToShipNotifications.js';
+import { applyPackStatusDualWrite } from './packStatusProjection.js';
 
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
@@ -175,7 +177,7 @@ type RecoverRequest = z.infer<typeof recoverSchema>;
 type DeliveryReceiptsEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE'
->;
+> & Partial<Pick<Env, 'DATA_DB'>>;
 
 type DeliveryReceiptErrorCode =
   | 'invalid-argument'
@@ -244,6 +246,7 @@ type FirestoreContext = {
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
   signal: AbortSignal;
+  dataDb?: D1Database;
 };
 
 type ProviderContext = {
@@ -1557,56 +1560,71 @@ async function countNormalIrlPackStatus(
   const packQuantity = countDeliveryOrderBoxItems(order.items);
   const cardQuantity = countDeliveryOrderDudeItems(order.items);
   if (packQuantity < 1 && cardQuantity < 1) return;
-  const eventPath = `drops/${runtime.dropId}/packStatusEvents/redeemedIrlNormal_${deliveryId}`;
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: string | undefined;
-    try {
-      transaction = await beginTransaction(context);
-      if (await readDocument(context, eventPath, transaction)) {
-        await rollbackTransactionBestEffort(context, transaction);
-        return;
-      }
-      const increments = [
-        ...(packQuantity ? [{ fieldPath: 'redeemedIrlNormal', increment: firestoreInteger(packQuantity) }] : []),
-        ...(cardQuantity ? [{ fieldPath: 'redeemedUnsealedCards', increment: firestoreInteger(cardQuantity) }] : []),
-        { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
-      ];
-      const quantity = packQuantity * packStatusCardsPerPack(runtime) + cardQuantity;
-      await commitWrites(context, [
-        {
-          transform: {
-            document: documentName(`drops/${runtime.dropId}/meta/packStatus`),
-            fieldTransforms: increments,
-          },
-          currentDocument: { exists: true },
-        },
-        createWrite({
-          path: eventPath,
-          fields: {
-            version: PACK_STATUS_SCHEMA_VERSION,
-            dropId: runtime.dropId,
-            type: 'redeemedIrlNormal',
-            eventKey: String(deliveryId),
-            quantity,
-            increments: {
-              ...(packQuantity ? { redeemedIrlNormal: packQuantity } : {}),
-              ...(cardQuantity ? { redeemedUnsealedCards: cardQuantity } : {}),
+  const event: PackStatusEvent = {
+    dropId: runtime.dropId,
+    type: 'redeemedIrlNormal',
+    eventKey: String(deliveryId),
+    quantity: packQuantity * packStatusCardsPerPack(runtime) + cardQuantity,
+    increments: {
+      ...(packQuantity ? { redeemedIrlNormal: packQuantity } : {}),
+      ...(cardQuantity ? { redeemedUnsealedCards: cardQuantity } : {}),
+    },
+    deliveryId,
+    createdAtMs: context.nowMs,
+  };
+  await applyPackStatusDualWrite({
+    dataDb: context.dataDb,
+    event,
+    firestore: async () => {
+      const eventPath = `drops/${runtime.dropId}/packStatusEvents/redeemedIrlNormal_${deliveryId}`;
+      for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+        let transaction: string | undefined;
+        try {
+          transaction = await beginTransaction(context);
+          if (await readDocument(context, eventPath, transaction)) {
+            await rollbackTransactionBestEffort(context, transaction);
+            return;
+          }
+          const increments = [
+            ...(packQuantity ? [{ fieldPath: 'redeemedIrlNormal', increment: firestoreInteger(packQuantity) }] : []),
+            ...(cardQuantity ? [{ fieldPath: 'redeemedUnsealedCards', increment: firestoreInteger(cardQuantity) }] : []),
+            { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+          ];
+          await commitWrites(context, [
+            {
+              transform: {
+                document: documentName(`drops/${runtime.dropId}/meta/packStatus`),
+                fieldTransforms: increments,
+              },
+              currentDocument: { exists: true },
             },
-            deliveryId,
-          },
-          transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
-        }),
-      ], transaction);
-      return;
-    } catch (error) {
-      if (transaction) await rollbackTransactionBestEffort(context, transaction);
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
+            createWrite({
+              path: eventPath,
+              fields: {
+                version: PACK_STATUS_SCHEMA_VERSION,
+                dropId: event.dropId,
+                type: event.type,
+                eventKey: event.eventKey,
+                quantity: event.quantity,
+                increments: event.increments,
+                deliveryId,
+              },
+              transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+            }),
+          ], transaction);
+          return;
+        } catch (error) {
+          if (transaction) await rollbackTransactionBestEffort(context, transaction);
+          if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+            await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+            continue;
+          }
+          throw mapProviderError(error, 'Pack status is temporarily unavailable.');
+        }
       }
-      throw mapProviderError(error, 'Pack status is temporarily unavailable.');
-    }
-  }
+    },
+    log: (entry) => console.warn(entry),
+  });
 }
 
 async function readBoundedProviderResponse(response: Response, signal: AbortSignal): Promise<Uint8Array> {
@@ -3304,6 +3322,7 @@ export async function handleDeliveryReceiptRequest(
       providerFetch: trackedFetch,
       serviceAccountJson,
       signal: controller.signal,
+      dataDb: env.DATA_DB,
     };
     const provider: ProviderContext = { apiKey, fetch: trackedFetch, signal: controller.signal };
     if (path === DELIVERY_RECEIPTS_ISSUE_PATH) {

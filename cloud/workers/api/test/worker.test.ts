@@ -36,6 +36,7 @@ const TRANSACTION = Buffer.from([1, 2, 3]).toString('base64');
 
 function env(options: {
   apiKey?: string;
+  dataDb?: D1Database;
   resendContactsApiKey?: string;
   notificationEnqueueSecret?: string;
   notificationQueue?: Queue;
@@ -46,6 +47,7 @@ function env(options: {
     metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
   };
   return {
+    DATA_DB: options.dataDb || {} as D1Database,
     NOTIFICATION_EMAIL_QUEUE: notificationQueue,
     REVEAL_BACKGROUND_QUEUE: notificationQueue,
     STRIPE_FULFILLMENT_QUEUE: notificationQueue,
@@ -69,6 +71,57 @@ function env(options: {
     STRIPE_RESTRICTED_KEY_LIVE: '',
     STRIPE_WEBHOOK_SECRET_DEVNET: 'whsec_test_devnet',
     STRIPE_WEBHOOK_SECRET: 'whsec_test_mainnet',
+  };
+}
+
+function packStatusD1(options: {
+  readSource?: 'firestore' | 'd1';
+  row?: Record<string, unknown> | null;
+} = {}): D1Database {
+  return {
+    prepare(query: string) {
+      let bindings: unknown[] = [];
+      return {
+        bind(...values: unknown[]) {
+          bindings = values;
+          return this;
+        },
+        async first() {
+          if (query.includes('pack_status_rollout')) {
+            return { read_source: options.readSource || 'd1', cache_generation: 7 };
+          }
+          if (query.includes('FROM pack_status')) {
+            const dropId = String(bindings[0] || 'card_nft_2');
+            return options.row === null ? null : options.row || {
+              drop_id: dropId,
+              version: 1,
+              total_initial_supply: 10,
+              total_cards: 30,
+              cards_per_pack: 3,
+              unsealed_online: 2,
+              redeemed_irl_normal: 1,
+              redeemed_irl_stripe: 2,
+              redeemed_unsealed_cards: 1,
+              rebuilt_at_ms: 100,
+              updated_at_ms: 200,
+            };
+          }
+          return null;
+        },
+      } as D1PreparedStatement;
+    },
+  } as D1Database;
+}
+
+function memoryPackStatusCache(): Pick<Cache, 'match' | 'put'> {
+  const values = new Map<string, Response>();
+  return {
+    async match(request) {
+      return values.get(String(request))?.clone();
+    },
+    async put(request, response) {
+      values.set(String(request), response.clone());
+    },
   };
 }
 
@@ -768,6 +821,103 @@ test('pack-status route reads bounded Firestore fields with a 15-second edge cac
     assert.equal(logs[0]?.providerCacheStatus, 'HIT');
     assert.equal(logs[0]?.upstreamCalls, 1);
   }
+});
+
+test('pack-status route reads and internally caches D1 while preserving the response contract', async () => {
+  const dataDb = packStatusD1();
+  const cache = memoryPackStatusCache();
+  const logs: Record<string, unknown>[] = [];
+  let firestoreCalls = 0;
+  const dependencies = {
+    ...quietDependencies(fetch),
+    cache,
+    firestoreFetch: async () => {
+      firestoreCalls += 1;
+      return firestorePackStatusResponse('card_nft_2', 3);
+    },
+    log: (entry: Record<string, unknown>) => logs.push(entry),
+  };
+  const first = await handleRequest(
+    new Request('https://api.mons.shop/pack-status/card_nft_2'),
+    env({ dataDb }),
+    dependencies,
+  );
+  assert.equal(first.status, 200);
+  assert.deepEqual(await first.json(), {
+    ok: true,
+    packStatus: {
+      dropId: 'card_nft_2',
+      total: 30,
+      totalInitialSupply: 10,
+      totalCards: 30,
+      cardsPerPack: 3,
+      unsealedOnline: 2,
+      unsealedCards: 6,
+      redeemedIrl: 3,
+      redeemedIrlNormal: 1,
+      redeemedIrlStripe: 2,
+      redeemedUnsealedCards: 1,
+      redeemedCards: 10,
+      items: [
+        { key: 'unsealed', label: 'Unpacked', amount: 6, percentage: 20 },
+        { key: 'redeemed', label: 'Redeemed', amount: 10, percentage: 33.33 },
+        { key: 'total', label: 'Total', amount: 30, percentage: 100 },
+      ],
+    },
+  });
+  assert.equal(logs.at(-1)?.packStatusSource, 'd1');
+  assert.equal(logs.at(-1)?.providerCacheStatus, 'D1-MISS');
+  assert.equal(logs.at(-1)?.upstreamCalls, 0);
+  const second = await handleRequest(
+    new Request('https://api.mons.shop/pack-status/card_nft_2'),
+    env({ dataDb }),
+    dependencies,
+  );
+  assert.equal(second.status, 200);
+  assert.equal(logs.at(-1)?.providerCacheStatus, 'D1-HIT');
+  assert.equal(firestoreCalls, 0);
+});
+
+test('pack-status route falls back to Firestore when the selected D1 row is missing', async () => {
+  const logs: Record<string, unknown>[] = [];
+  const response = await handleRequest(
+    new Request('https://api.mons.shop/pack-status/card_nft_2'),
+    env({ dataDb: packStatusD1({ row: null }) }),
+    {
+      ...quietDependencies(fetch),
+      firestoreFetch: async () => firestorePackStatusResponse('card_nft_2', 3),
+      log: (entry) => logs.push(entry),
+    },
+  );
+  assert.equal(response.status, 200);
+  assert.equal(logs.some((entry) => entry.event === 'pack_status_d1_fallback'), true);
+  assert.equal(logs.at(-1)?.packStatusSource, 'firestore');
+});
+
+test('pack-status route shadow-compares D1 and uncached Firestore in background', async () => {
+  const logs: Record<string, unknown>[] = [];
+  const background: Promise<unknown>[] = [];
+  const calls: RequestInit[] = [];
+  const response = await handleRequest(
+    new Request('https://api.mons.shop/pack-status/card_nft_2'),
+    env({ dataDb: packStatusD1({ readSource: 'firestore' }) }),
+    {
+      ...quietDependencies(fetch),
+      firestoreFetch: async (_input, init) => {
+        calls.push(init || {});
+        return firestorePackStatusResponse('card_nft_2', 3);
+      },
+      log: (entry) => logs.push(entry),
+    },
+    (promise) => background.push(promise),
+  );
+  assert.equal(response.status, 200);
+  await Promise.all(background);
+  assert.equal(calls.length, 2);
+  assert.equal(calls.some((init) => (
+    init.cf?.cacheTtlByStatus as Record<string, number> | undefined
+  )?.['200-299'] === 0), true);
+  assert.equal(logs.some((entry) => entry.event === 'pack_status_shadow_mismatch'), false);
 });
 
 test('pack-status route enforces allowlisted paths, methods, and CORS', async () => {

@@ -928,6 +928,36 @@ test('API deployment validates exact Worker and custom-domain targets before mut
     false,
   );
   assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({ ...config, d1_databases: [] }),
+    false,
+  );
+  assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({
+      ...config,
+      d1_databases: [{ binding: 'DB', database_name: 'mons-shop-data', migrations_dir: 'migrations' }],
+    }),
+    false,
+  );
+  assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({
+      ...config,
+      d1_databases: [{ binding: 'DATA_DB', database_name: 'unexpected', migrations_dir: 'migrations' }],
+    }),
+    false,
+  );
+  assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({
+      ...config,
+      d1_databases: [{
+        binding: 'DATA_DB',
+        database_name: 'mons-shop-data',
+        migrations_dir: 'migrations',
+        database_id: 'not-a-uuid',
+      }],
+    }),
+    false,
+  );
+  assert.equal(
     deployApiTestHooks.isExactApiDeploymentConfig({
       ...config,
       queues: { producers: [{ binding: 'REVEAL_BACKGROUND_QUEUE', queue: 'unexpected-queue' }] },
@@ -3909,10 +3939,13 @@ test('tracked release metadata uses the exact v2 production and rollback pairs',
     'schemaVersion',
   ]);
   assert.deepEqual(manifest.currentProduction, {
+    apiVersionId: '579f5135-90ed-4cf0-9e77-9203c742abfe',
+    frontendVersionId: '4a56dcb4-1887-406c-8433-ac911eb6b8b7',
+  });
+  assert.deepEqual(manifest.approvedRollback, {
     apiVersionId: '676e6114-7186-4000-b0b1-61bf0236574f',
     frontendVersionId: '9eb48e48-4574-49a4-a400-bf5fdd2a7eaf',
   });
-  assert.deepEqual(manifest.approvedRollback, manifest.currentProduction);
   assert.equal(deployApiTestHooks.isReleaseManifest({
     ...manifest,
     schemaVersion: 1,

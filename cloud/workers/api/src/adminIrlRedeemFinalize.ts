@@ -118,7 +118,8 @@ const requestSchema = z.object({
 }).strict();
 
 type FinalizeRequest = z.infer<typeof requestSchema>;
-type FinalizeEnv = Pick<Env, 'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'>;
+type FinalizeEnv = Pick<Env, 'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'> &
+  Partial<Pick<Env, 'DATA_DB'>>;
 type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
 type ProviderContext = Parameters<typeof adminIrlRedeemRuntime.fetchAsset>[0];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
@@ -1668,6 +1669,7 @@ export async function handleAdminIrlRedeemFinalize(
         providerFetch: trackedFetch,
         serviceAccountJson,
         signal: controller.signal,
+        dataDb: env.DATA_DB,
       },
       { apiKey, providerFetch: trackedFetch, signal: controller.signal },
       waitUntil,

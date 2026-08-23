@@ -162,6 +162,7 @@ const providerFetch: ProviderFetch = async (_input, init) => {
 };
 
 const env: Env = {
+  DATA_DB: {} as D1Database,
   NOTIFICATION_EMAIL_QUEUE: {
     send: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
     sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),

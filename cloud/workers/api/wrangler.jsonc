@@ -10,6 +10,14 @@
   "placement": {
     "mode": "smart"
   },
+  "d1_databases": [
+    {
+      "binding": "DATA_DB",
+      "database_name": "mons-shop-data",
+      "database_id": "4b09f942-b0c6-4a1e-81df-cb802fbf7099",
+      "migrations_dir": "migrations"
+    }
+  ],
   "routes": [
     {
       "pattern": "api.mons.shop",

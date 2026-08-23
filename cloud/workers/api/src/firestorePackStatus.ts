@@ -125,6 +125,7 @@ export async function fetchFirestorePackStatus(
   dropId: string,
   providerFetch: FirestorePackStatusFetch,
   timeoutMs = FIRESTORE_PACK_STATUS_TIMEOUT_MS,
+  cacheTtlSeconds = FIRESTORE_PACK_STATUS_CACHE_TTL_SECONDS,
 ): Promise<FirestorePackStatusResult> {
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -141,10 +142,10 @@ export async function fetchFirestorePackStatus(
       cf: {
         cacheEverything: true,
         cacheTtlByStatus: {
-          '200-299': FIRESTORE_PACK_STATUS_CACHE_TTL_SECONDS,
+          '200-299': cacheTtlSeconds,
           '300-399': 0,
           '400-403': 0,
-          '404': FIRESTORE_PACK_STATUS_CACHE_TTL_SECONDS,
+          '404': cacheTtlSeconds,
           '405-499': 0,
           '500-599': 0,
         },
