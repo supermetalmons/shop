@@ -9,6 +9,7 @@ import {
   readD1PackStatusRecord,
   readPackStatusRollout,
 } from '../src/d1PackStatus.ts';
+import { snapshotSql } from '../../../../scripts/migrate-pack-status-to-d1.ts';
 
 test('D1 pack-status migration enforces idempotent projection updates', async () => {
   const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
@@ -91,6 +92,25 @@ test('D1 pack-status migration enforces idempotent projection updates', async ()
     const breakdown = await readD1PackStatus(env.DATA_DB, 'card_nft_2');
     assert.equal(breakdown?.unsealedCards, 6);
     assert.equal(breakdown?.redeemedCards, 23);
+
+    const beforeGuardedBackfill = await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2');
+    await env.DATA_DB.prepare(snapshotSql({
+      summaries: [{
+        version: 1,
+        dropId: 'card_nft_2',
+        totalInitialSupply: 10,
+        totalCards: 30,
+        cardsPerPack: 3,
+        unsealedOnline: 0,
+        redeemedIrlNormal: 0,
+        redeemedIrlStripe: 0,
+        redeemedUnsealedCards: 0,
+        rebuiltAtMs: 100,
+        updatedAtMs: 200,
+      }],
+      events: [],
+    })).run();
+    assert.deepEqual(await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2'), beforeGuardedBackfill);
 
     await assert.rejects(
       applyD1PackStatusEvent(env.DATA_DB, {

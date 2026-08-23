@@ -264,6 +264,13 @@ const d1DatabaseName = 'mons-shop-data';
 const d1BindingName = 'DATA_DB';
 const d1MigrationsDirectory = 'migrations';
 const d1DatabaseId = '4b09f942-b0c6-4a1e-81df-cb802fbf7099';
+const d1MigrationName = '0001_pack_status.sql';
+const d1SchemaDefinitions = [
+  { name: 'pack_status', type: 'table', start: 'CREATE TABLE pack_status (', end: 'CREATE TABLE pack_status_events (' },
+  { name: 'pack_status_events', type: 'table', start: 'CREATE TABLE pack_status_events (', end: 'CREATE TABLE pack_status_rollout (' },
+  { name: 'pack_status_rollout', type: 'table', start: 'CREATE TABLE pack_status_rollout (', end: 'INSERT INTO pack_status_rollout' },
+  { name: 'pack_status_event_apply', type: 'trigger', start: 'CREATE TRIGGER pack_status_event_apply', end: undefined },
+] as const;
 const notificationSmokeTimeoutMs = 90_000;
 const firestoreProjectId = 'mons-shop';
 const firestoreDatabaseName = `projects/${firestoreProjectId}/databases/(default)`;
@@ -283,6 +290,50 @@ const secretFileOperations: SecretFileOperations = {
   stat: statSync,
   write: writeFileSync,
 };
+
+function normalizeD1SchemaSql(value: string): string {
+  return value
+    .trim()
+    .replace(/;$/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s*([(),;])\s*/g, '$1')
+    .replace(/\s*(=|\+|\*|>=|>)\s*/g, '$1');
+}
+
+function expectedD1SchemaObjects(
+  migrationPath = resolve(repoRoot, 'cloud/workers/api/migrations', d1MigrationName),
+): Array<{ name: string; type: string; sql: string }> {
+  const migration = readFileSync(migrationPath, 'utf8');
+  return d1SchemaDefinitions.map((definition) => {
+    const start = migration.indexOf(definition.start);
+    const end = definition.end ? migration.indexOf(definition.end, start + definition.start.length) : migration.length;
+    if (start < 0 || end < 0) fail(`Could not resolve ${definition.name} from ${d1MigrationName}.`);
+    return {
+      name: definition.name,
+      type: definition.type,
+      sql: normalizeD1SchemaSql(migration.slice(start, end).trim()),
+    };
+  });
+}
+
+function hasExactD1Schema(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(parsed)) return false;
+  const actual = parsed.map((entry) => isRecord(entry) ? {
+    name: String(entry.name || ''),
+    type: String(entry.type || ''),
+    sql: typeof entry.sql === 'string' ? normalizeD1SchemaSql(entry.sql) : '',
+  } : null);
+  const byName = (left: { name?: string } | null, right: { name?: string } | null) =>
+    String(left?.name || '').localeCompare(String(right?.name || ''));
+  return JSON.stringify(actual.sort(byName)) === JSON.stringify(expectedD1SchemaObjects().sort(byName));
+}
 
 function usage(): string {
   return [
@@ -1404,9 +1455,11 @@ function assertD1DatabaseReady(environment: NodeJS.ProcessEnv): void {
       '--command', `SELECT
         rollout.read_source,
         rollout.cache_generation,
-        (SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN ('pack_status', 'pack_status_events', 'pack_status_rollout')) AS table_count,
-        (SELECT COUNT(*) FROM sqlite_schema WHERE type = 'trigger' AND name = 'pack_status_event_apply') AS trigger_count,
-        (SELECT COUNT(*) FROM d1_migrations WHERE name = '0001_pack_status.sql') AS migration_count
+        (SELECT json_group_array(json_object('name', name, 'type', type, 'sql', sql))
+          FROM (SELECT name, type, sql FROM sqlite_schema
+            WHERE name IN ('pack_status', 'pack_status_events', 'pack_status_rollout', 'pack_status_event_apply')
+            ORDER BY name)) AS schema_json,
+        (SELECT COUNT(*) FROM d1_migrations WHERE name = '${d1MigrationName}') AS migration_count
         FROM pack_status_rollout AS rollout WHERE rollout.singleton = 1`,
       ...configArgs,
     ],
@@ -1429,8 +1482,7 @@ function assertD1DatabaseReady(environment: NodeJS.ProcessEnv): void {
     (row.read_source !== 'firestore' && row.read_source !== 'd1') ||
     !Number.isSafeInteger(row.cache_generation) ||
     Number(row.cache_generation) < 1 ||
-    row.table_count !== 3 ||
-    row.trigger_count !== 1 ||
+    !hasExactD1Schema(row.schema_json) ||
     row.migration_count !== 1
   ) {
     fail('D1 pack-status migration is not applied or its rollout row is invalid.');
@@ -2669,11 +2721,13 @@ export const deployApiTestHooks = {
   defaultSmokeTimeoutMs: DEFAULT_SMOKE_TIMEOUT_MS,
   expectedReleaseDropId,
   expectedPreviewOrigin,
+  expectedD1SchemaObjects,
   ensureApiQueueResources,
   ensureQueueResource,
   installTerminationCleanup,
   inventorySmokeTimeoutMs: INVENTORY_SMOKE_TIMEOUT_MS,
   isExactApiDeploymentConfig,
+  hasExactD1Schema,
   isCandidateRecord,
   isReleaseManifest,
   parseArgs,

@@ -86,6 +86,59 @@ test('Stripe fulfillment pack-status events use card-equivalent quantity', () =>
   assert.equal(stripeCheckoutFulfillmentTestHooks.packStatusEventQuantity(runtime, 2), 6);
 });
 
+test('Stripe pack-status repair skips unsupported drops and rejects inconsistent orders', async () => {
+  let reads = 0;
+  const store = {
+    doc: () => {
+      reads += 1;
+      return {
+        get: async () => ({
+          exists: true,
+          data: () => ({
+            dropId: 'card_nft_2',
+            deliveryId: 123,
+            source: 'stripe_offchain',
+            stripeCheckoutSessionId: 'wrong-session',
+            offchainOrderHash: '00'.repeat(32),
+            metadataIds: [1, 'invalid'],
+          }),
+        }),
+      };
+    },
+  } as any;
+  const dependencies = stripeCheckoutFulfillmentTestHooks.flowDependencies(
+    { ADDRESS_DECRYPTION_SECRET: '' } as any,
+    store,
+    new AbortController().signal,
+  );
+  const repairPackStatus = dependencies.repairPackStatus;
+  assert.ok(repairPackStatus);
+  await repairPackStatus({
+    dropRuntime: stripeCheckoutFulfillmentTestHooks.fulfillmentRuntime('card_nft_binder_devnet'),
+    checkoutRef: { get: async () => assert.fail('unsupported drops must not be read') } as any,
+    sessionId: 'cs_test_skip',
+  });
+  assert.equal(reads, 0);
+  await assert.rejects(
+    repairPackStatus({
+      dropRuntime: stripeCheckoutFulfillmentTestHooks.fulfillmentRuntime('card_nft_2'),
+      checkoutRef: {
+        get: async () => ({
+          exists: true,
+          data: () => ({
+            dropId: 'card_nft_2',
+            sessionId: 'cs_test_repair',
+            deliveryId: 123,
+            livemode: true,
+          }),
+        }),
+      } as any,
+      sessionId: 'cs_test_repair',
+    }),
+    /stripe_pack_status_repair_order_invalid/,
+  );
+});
+
 test('Stripe fulfillment defers address encryption setup until the address is persisted', () => {
   const encryptAddress = stripeCheckoutFulfillmentTestHooks.lazyAddressEncryptor('');
   assert.throws(

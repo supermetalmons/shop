@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  PACK_STATUS_EVENT_TIMESTAMP_TOLERANCE_MS,
   parseArgs,
   runMigrationCommand,
   snapshotSql,
@@ -54,6 +55,7 @@ test('pack-status migration arguments are exact and bounded', () => {
 test('pack-status backfill SQL upserts summaries and imports idempotency events without deltas', () => {
   const sql = snapshotSql(source);
   assert.match(sql, /ON CONFLICT\(drop_id\) DO UPDATE SET/);
+  assert.match(sql, /WHERE \(SELECT COUNT\(\*\) FROM pack_status_events\) = 1/);
   assert.match(sql, /INSERT OR IGNORE INTO pack_status_events/);
   assert.match(sql, /box-''one/);
   assert.match(sql, /\n      0, 150\n/);
@@ -73,7 +75,19 @@ test('pack-status snapshot verification rejects summary and event drift', () => 
   assert.throws(() => verifySnapshots(source, {
     ...target,
     events: [{ ...target.events[0], quantity: 4 }],
-  }), /events/);
+  }), /event/);
+  assert.throws(() => verifySnapshots(source, {
+    ...target,
+    events: [{ ...target.events[0], createdAtMs: 151 }],
+  }), /timestamp or apply mode/);
+  assert.doesNotThrow(() => verifySnapshots(source, {
+    ...target,
+    events: [{ ...target.events[0], applyDelta: 1, createdAtMs: 150 + PACK_STATUS_EVENT_TIMESTAMP_TOLERANCE_MS }],
+  }));
+  assert.throws(() => verifySnapshots(source, {
+    ...target,
+    events: [{ ...target.events[0], applyDelta: 1, createdAtMs: 151 + PACK_STATUS_EVENT_TIMESTAMP_TOLERANCE_MS }],
+  }), /timestamp or apply mode/);
 });
 
 test('pack-status backfill rejects D1-only and conflicting events before mutation', () => {

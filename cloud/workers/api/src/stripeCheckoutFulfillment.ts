@@ -26,6 +26,7 @@ import {
   normalizeDropId,
 } from '../../../../shared/deploymentCore.js';
 import { dropDeliveryOrderPath } from './dropPaths.js';
+import { isStripeOffchainDeliveryOrderSource } from '../../../../shared/fulfillmentSources.js';
 import {
   packStatusCardsPerPack,
   shouldTrackPackStatusForDrop,
@@ -49,6 +50,7 @@ import {
 } from './stripeCheckout/service.js';
 import { StripeCheckoutFulfillmentError } from './stripeCheckout/errors.js';
 import { stripeCheckoutFieldValue } from './stripeCheckout/store.js';
+import { stripeCheckoutSessionOrderHash } from './stripeCheckout/contract.js';
 import {
   publishStripeCheckoutTerminalNotifications,
   type StripeCheckoutTerminalNotificationResult,
@@ -542,20 +544,48 @@ function flowDependencies(
     signal,
     countPackStatus,
     repairPackStatus: async ({ dropRuntime, checkoutRef, sessionId }) => {
+      if (!shouldTrackPackStatusForDrop(dropRuntime)) return;
       const checkout = await checkoutRef.get();
       const checkoutData = checkout.data() || {};
       const deliveryId = Math.floor(Number(checkoutData.deliveryId));
-      if (!checkout.exists || !Number.isSafeInteger(deliveryId) || deliveryId <= 0) {
+      if (
+        !checkout.exists ||
+        checkoutData.dropId !== dropRuntime.dropId ||
+        checkoutData.sessionId !== sessionId ||
+        !Number.isSafeInteger(deliveryId) ||
+        deliveryId <= 0
+      ) {
         throw new Error('stripe_pack_status_repair_checkout_invalid');
       }
       const deliveryOrder = await store.doc(dropDeliveryOrderPath(dropRuntime.dropId, deliveryId)).get();
       const order = deliveryOrder.data() || {};
       const orderHashHex = typeof order.offchainOrderHash === 'string' ? order.offchainOrderHash.trim() : '';
-      const metadataIds = Array.isArray(order.metadataIds)
-        ? order.metadataIds.filter((value) => Number.isSafeInteger(Number(value)) && Number(value) > 0)
-        : [];
-      const quantity = metadataIds.length || (Number(order.metadataId) > 0 ? 1 : Math.floor(Number(order.quantity)));
-      if (!deliveryOrder.exists || !orderHashHex || !Number.isSafeInteger(quantity) || quantity <= 0) {
+      const expectedOrderHashHex = stripeCheckoutSessionOrderHash(
+        sessionId,
+        checkoutData.livemode === true,
+      ).toString('hex');
+      const rawMetadataIds = Array.isArray(order.metadataIds) ? order.metadataIds : null;
+      const metadataIds = rawMetadataIds?.map(Number) || [];
+      const legacyMetadataId = Math.floor(Number(order.metadataId));
+      const legacyQuantity = Math.floor(Number(order.quantity));
+      const quantity = rawMetadataIds
+        ? metadataIds.length
+        : Number.isSafeInteger(legacyMetadataId) && legacyMetadataId > 0 ? 1 : legacyQuantity;
+      if (
+        !deliveryOrder.exists ||
+        order.dropId !== dropRuntime.dropId ||
+        Number(order.deliveryId) !== deliveryId ||
+        !isStripeOffchainDeliveryOrderSource(order.source) ||
+        order.stripeCheckoutSessionId !== sessionId ||
+        orderHashHex !== expectedOrderHashHex ||
+        (rawMetadataIds !== null && (
+          metadataIds.length === 0 ||
+          metadataIds.some((value) => !Number.isSafeInteger(value) || value <= 0) ||
+          new Set(metadataIds).size !== metadataIds.length
+        )) ||
+        !Number.isSafeInteger(quantity) ||
+        quantity <= 0
+      ) {
         throw new Error('stripe_pack_status_repair_order_invalid');
       }
       await countPackStatus({
@@ -647,6 +677,7 @@ export async function processStripeCheckoutFulfillmentJob(
 }
 
 export const stripeCheckoutFulfillmentTestHooks = {
+  flowDependencies,
   fulfillmentRuntime,
   isMplCoreCollectionAccount,
   lazyAddressEncryptor,

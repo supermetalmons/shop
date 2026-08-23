@@ -72,6 +72,8 @@ const configPath = 'cloud/workers/api/wrangler.jsonc';
 const databaseName = 'mons-shop-data';
 const apiOrigin = 'https://api.mons.shop';
 const projectId = 'mons-shop';
+export const PACK_STATUS_EVENT_TIMESTAMP_TOLERANCE_MS = 24 * 60 * 60 * 1000;
+const D1_MAX_SQL_STATEMENT_BYTES = 100_000;
 const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
 
 function fail(message: string): never {
@@ -286,25 +288,31 @@ function eventDelta(event: PackStatusEvent, key: keyof PackStatusEvent['incremen
 }
 
 export function snapshotSql(snapshot: SourceSnapshot): string {
-  const statements = snapshot.summaries.map((summary) => `INSERT INTO pack_status (
-    drop_id, version, total_initial_supply, total_cards, cards_per_pack,
+  if (snapshot.summaries.length === 0) fail('Pack-status backfill requires at least one summary.');
+  const summaryRows = snapshot.summaries.map((summary, index) => `SELECT
+    ${sqlString(summary.dropId)}${index === 0 ? ' AS drop_id' : ''},
+    ${summary.version}${index === 0 ? ' AS version' : ''},
+    ${summary.totalInitialSupply}${index === 0 ? ' AS total_initial_supply' : ''},
+    ${summary.totalCards}${index === 0 ? ' AS total_cards' : ''},
+    ${summary.cardsPerPack}${index === 0 ? ' AS cards_per_pack' : ''},
+    ${summary.unsealedOnline}${index === 0 ? ' AS unsealed_online' : ''},
+    ${summary.redeemedIrlNormal}${index === 0 ? ' AS redeemed_irl_normal' : ''},
+    ${summary.redeemedIrlStripe}${index === 0 ? ' AS redeemed_irl_stripe' : ''},
+    ${summary.redeemedUnsealedCards}${index === 0 ? ' AS redeemed_unsealed_cards' : ''},
+    ${sqlNumber(summary.rebuiltAtMs)}${index === 0 ? ' AS rebuilt_at_ms' : ''},
+    ${summary.updatedAtMs}${index === 0 ? ' AS updated_at_ms' : ''}`).join('\nUNION ALL\n');
+  const summaryColumns = `drop_id, version, total_initial_supply, total_cards, cards_per_pack,
     unsealed_online, redeemed_irl_normal, redeemed_irl_stripe, redeemed_unsealed_cards,
-    rebuilt_at_ms, updated_at_ms
-  ) VALUES (
-    ${sqlString(summary.dropId)}, ${summary.version}, ${summary.totalInitialSupply}, ${summary.totalCards}, ${summary.cardsPerPack},
-    ${summary.unsealedOnline}, ${summary.redeemedIrlNormal}, ${summary.redeemedIrlStripe}, ${summary.redeemedUnsealedCards},
-    ${sqlNumber(summary.rebuiltAtMs)}, ${summary.updatedAtMs}
-  ) ON CONFLICT(drop_id) DO UPDATE SET
-    version = excluded.version,
-    total_initial_supply = excluded.total_initial_supply,
-    total_cards = excluded.total_cards,
-    cards_per_pack = excluded.cards_per_pack,
-    unsealed_online = excluded.unsealed_online,
-    redeemed_irl_normal = excluded.redeemed_irl_normal,
-    redeemed_irl_stripe = excluded.redeemed_irl_stripe,
-    redeemed_unsealed_cards = excluded.redeemed_unsealed_cards,
-    rebuilt_at_ms = excluded.rebuilt_at_ms,
-    updated_at_ms = excluded.updated_at_ms;`);
+    rebuilt_at_ms, updated_at_ms`;
+  const summarySource = `SELECT source.* FROM (
+    ${summaryRows}
+  ) AS source`;
+  const statements = [`INSERT INTO pack_status (
+    ${summaryColumns}
+  )
+  ${summarySource}
+  WHERE 1
+  ON CONFLICT(drop_id) DO NOTHING;`];
   for (const event of snapshot.events) {
     statements.push(`INSERT OR IGNORE INTO pack_status_events (
       drop_id, event_type, event_key, quantity,
@@ -318,6 +326,26 @@ export function snapshotSql(snapshot: SourceSnapshot): string {
       ${event.boxAssetId ? sqlString(event.boxAssetId) : 'NULL'}, ${event.signature ? sqlString(event.signature) : 'NULL'},
       0, ${event.createdAtMs}
     );`);
+  }
+  statements.push(`INSERT INTO pack_status (
+    ${summaryColumns}
+  )
+  ${summarySource}
+  WHERE (SELECT COUNT(*) FROM pack_status_events) = ${snapshot.events.length}
+  ON CONFLICT(drop_id) DO UPDATE SET
+    version = excluded.version,
+    total_initial_supply = excluded.total_initial_supply,
+    total_cards = excluded.total_cards,
+    cards_per_pack = excluded.cards_per_pack,
+    unsealed_online = excluded.unsealed_online,
+    redeemed_irl_normal = excluded.redeemed_irl_normal,
+    redeemed_irl_stripe = excluded.redeemed_irl_stripe,
+    redeemed_unsealed_cards = excluded.redeemed_unsealed_cards,
+    rebuilt_at_ms = excluded.rebuilt_at_ms,
+    updated_at_ms = excluded.updated_at_ms;`);
+  const encoder = new TextEncoder();
+  if (statements.some((statement) => encoder.encode(statement).byteLength > D1_MAX_SQL_STATEMENT_BYTES)) {
+    fail('Pack-status backfill generated an oversized D1 statement.');
   }
   return `${statements.join('\n')}\n`;
 }
@@ -459,13 +487,24 @@ function canonicalEvent(value: PackStatusEvent): string {
   });
 }
 
+function assertEventMatches(source: PackStatusEvent, target: D1PackStatusEvent): void {
+  if (canonicalEvent(source) !== canonicalEvent(target)) {
+    fail('D1 contains a pack-status event that differs from Firestore.');
+  }
+  const timestampDelta = Math.abs(source.createdAtMs - target.createdAtMs);
+  if (
+    (target.applyDelta === 0 && timestampDelta !== 0) ||
+    (target.applyDelta === 1 && timestampDelta > PACK_STATUS_EVENT_TIMESTAMP_TOLERANCE_MS)
+  ) fail('D1 contains a pack-status event with inconsistent timestamp or apply mode.');
+}
+
 export function assertTargetEventsCompatible(source: SourceSnapshot, target: D1Snapshot): void {
-  const sourceEvents = new Map(source.events.map((event) => [eventIdentity(event), canonicalEvent(event)]));
+  const sourceEvents = new Map(source.events.map((event) => [eventIdentity(event), event]));
   if (sourceEvents.size !== source.events.length) fail('Firestore contains duplicate pack-status event identities.');
   for (const event of target.events) {
     const expected = sourceEvents.get(eventIdentity(event));
     if (!expected) fail('D1 contains a pack-status event that is missing from Firestore.');
-    if (expected !== canonicalEvent(event)) fail('D1 contains a pack-status event that differs from Firestore.');
+    assertEventMatches(expected, event);
   }
 }
 
@@ -476,12 +515,8 @@ export function verifySnapshots(source: SourceSnapshot, target: D1Snapshot): voi
     sourceSummaries.length !== targetSummaries.length ||
     sourceSummaries.some((summary, index) => canonicalSummary(summary) !== canonicalSummary(targetSummaries[index]))
   ) fail('D1 pack-status summaries do not exactly match Firestore.');
-  const sourceEvents = source.events.map(canonicalEvent).sort();
-  const targetEvents = target.events.map(canonicalEvent).sort();
-  if (
-    sourceEvents.length !== targetEvents.length ||
-    sourceEvents.some((event, index) => event !== targetEvents[index])
-  ) fail('D1 pack-status events do not exactly match Firestore.');
+  if (source.events.length !== target.events.length) fail('D1 pack-status events do not exactly match Firestore.');
+  assertTargetEventsCompatible(source, target);
 }
 
 function applySnapshot(snapshot: SourceSnapshot): void {

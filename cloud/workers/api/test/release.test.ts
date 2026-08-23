@@ -995,6 +995,20 @@ test('API deployment validates exact Worker and custom-domain targets before mut
   );
 });
 
+test('API release validates exact D1 table and trigger definitions', () => {
+  const expected = deployApiTestHooks.expectedD1SchemaObjects();
+  assert.deepEqual(expected.map((entry) => entry.name), [
+    'pack_status',
+    'pack_status_events',
+    'pack_status_rollout',
+    'pack_status_event_apply',
+  ]);
+  assert.equal(deployApiTestHooks.hasExactD1Schema(JSON.stringify(expected)), true);
+  assert.equal(deployApiTestHooks.hasExactD1Schema(JSON.stringify(expected.map((entry) => (
+    entry.name === 'pack_status_event_apply' ? { ...entry, sql: `${entry.sql} SELECT 1` } : entry
+  )))), false);
+});
+
 test('API rollback trigger configuration disables reconciliation cron before version rollback', () => {
   let inspected = false;
   deployApiTestHooks.deployApiTriggersWithoutReconciliationSchedule(
