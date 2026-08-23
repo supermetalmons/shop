@@ -6,7 +6,7 @@ import {
   notificationEnqueueTimestamp,
   signNotificationEnqueueRequest,
   verifyNotificationEnqueueRequest,
-} from '../functions/src/shared/notificationEnqueueAuth.ts';
+} from '../shared/notificationEnqueueAuth.ts';
 
 const SECRET = 'test-notification-secret';
 const NOW = Date.UTC(2026, 7, 18, 12, 0, 0);

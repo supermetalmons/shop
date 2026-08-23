@@ -11,8 +11,8 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
-import { FUNCTIONS_DROPS } from '../../../../functions/src/config/deployment.js';
-import { IX_BUBBLEGUM_TRANSFER_V2 } from '../../../../functions/src/bubblegum.js';
+import { API_DROPS } from './dropConfig.js';
+import { IX_BUBBLEGUM_TRANSFER_V2 } from './bubblegum.js';
 import {
   ADMIN_IRL_REDEEM_CARD_MARKER_VERSION,
   buildAdminIrlRedeemCardClaimCodeDocument,
@@ -27,47 +27,47 @@ import {
   type AdminIrlRedeemBoxBaseInput,
   type AdminIrlRedeemCardInput,
   type AdminIrlRedeemMarkerReuseResolution,
-} from '../../../../functions/src/adminIrlRedeem.js';
+} from './adminIrlRedeem.js';
 import {
   adminIrlCardReceiptProofHasIdentity,
   classifyAdminIrlCardReceiptLookupError,
-} from '../../../../functions/src/adminIrlCardReceipt.js';
+} from './adminIrlCardReceipt.js';
 import {
   dropAdminIrlRedeemPackMarkerPath,
   dropAdminIrlRedeemReceiptMarkerPath,
   dropAdminIrlRedeemRequestPath,
   dropDeliveryOrderPath,
-} from '../../../../functions/src/dropPaths.js';
+} from './dropPaths.js';
 import {
   assetMatchesReceiptDropIdentity,
   assetMatchesReceiptMetadataIdentity,
-} from '../../../../functions/src/receiptProof.js';
+} from './receiptProof.js';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   walletHasAdminIrlRedeemAccess,
-} from '../../../../functions/src/shared/fulfillmentAccess.js';
+} from '../../../../shared/fulfillmentAccess.js';
 import {
   getAdminIrlRedeemTargetEligibility,
   type AdminIrlRedeemTargetKind,
-} from '../../../../functions/src/shared/adminIrlEligibility.js';
-import { dasAssetBoxId } from '../../../../functions/src/shared/dasAsset.js';
-import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../functions/src/shared/dasAssetCollections.js';
-import { heliusSearchAssetsHasNextPage, heliusSearchAssetsItems } from '../../../../functions/src/shared/heliusDas.js';
+} from '../../../../shared/adminIrlEligibility.js';
+import { dasAssetBoxId } from '../../../../shared/dasAsset.js';
+import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../shared/dasAssetCollections.js';
+import { heliusSearchAssetsHasNextPage, heliusSearchAssetsItems } from '../../../../shared/heliusDas.js';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.js';
+} from '../../../../shared/solanaProgramAddresses.js';
 import {
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   generateUniqueStripeReceiptClaimCodes,
   normalizeStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
   stripeReceiptClaimCodeMaybe,
-} from '../../../../functions/src/shared/stripeReceiptClaims.js';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../functions/src/shared/fulfillmentSources.js';
+} from '../../../../shared/stripeReceiptClaims.js';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
@@ -256,7 +256,7 @@ function normalizedError(error: unknown, fallback: string): AdminIrlRedeemFinali
     return new AdminIrlRedeemFinalizeError(error.code, error.message, error.details);
   }
   if (isRecord(error) && typeof error.code === 'string') {
-    const code = error.code.replace(/^functions\//, '') as AdminIrlRedeemFinalizeErrorCode;
+    const code = error.code as AdminIrlRedeemFinalizeErrorCode;
     if ([
       'invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'aborted',
       'failed-precondition', 'resource-exhausted', 'deadline-exceeded', 'unavailable', 'internal',
@@ -666,7 +666,7 @@ function runtimeSupportsFinalize(runtime: Runtime): void {
   const unsupported = getAdminIrlRedeemUnsupportedReason({
     dropFamily: runtime.config.dropFamily,
     itemsPerBox: runtime.itemsPerBox,
-    sharesCollectionMint: Object.values(FUNCTIONS_DROPS).filter((drop) =>
+    sharesCollectionMint: Object.values(API_DROPS).filter((drop) =>
       drop.solanaCluster === runtime.cluster && drop.collectionMint === runtime.collectionMint.toBase58()
     ).length > 1,
   });
@@ -1502,7 +1502,7 @@ async function finalizeAdminIrlRedeem(
   provider: ProviderContext,
   waitUntil: FinalizeWaitUntil,
 ): Promise<{ response: AdminIrlRedeemFinalizeResponse; targetKind: AdminIrlRedeemTargetKind; outcome: string }> {
-  const config = FUNCTIONS_DROPS[body.dropId];
+  const config = API_DROPS[body.dropId];
   if (!config) throw new AdminIrlRedeemFinalizeError('invalid-argument', `Unsupported dropId: ${body.dropId}`);
   const runtime = adminIrlRedeemRuntime.buildRuntime(config);
   runtimeSupportsFinalize(runtime);

@@ -1,5 +1,5 @@
 import Stripe from 'stripe';
-import { getFunctionsDrop } from '../../../../functions/src/config/deployment.js';
+import { getApiDrop } from './dropConfig.js';
 import {
   STRIPE_WEBHOOK_PATH,
   resolveStripeWebhookAction,
@@ -10,11 +10,11 @@ import {
   type StripeWebhookSecretScope,
   type StripeWebhookSession,
   type StripeWebhookTransition,
-} from '../../../../functions/src/shared/stripeWebhook.js';
+} from '../../../../shared/stripeWebhook.js';
 import {
   createStripeCheckoutFulfillmentJobV1,
   isStripeCheckoutFulfillmentEventType,
-} from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.js';
+} from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
@@ -93,7 +93,7 @@ class StripeWebhookRequestError extends Error {
 const defaultDependencies: StripeWebhookDependencies = {
   accessTokenProvider: createGoogleAccessTokenProvider(),
   getDrop: (dropId) => {
-    const drop = getFunctionsDrop(dropId);
+    const drop = getApiDrop(dropId);
     if (!drop) return undefined;
     return {
       dropId: drop.dropId,

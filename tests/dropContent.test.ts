@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { CARD_NFT_2_COMMON_CARD_ID_VALUES } from '../functions/src/shared/cardNft2CommonIds.ts';
+import { CARD_NFT_2_COMMON_CARD_ID_VALUES } from '../shared/cardNft2CommonIds.ts';
 import { DROP_METADATA_IPFS_GATEWAY, FRONTEND_DROPS } from '../src/config/deployment.ts';
 import {
   CARD_NFT_2_BOX_MEDIA,

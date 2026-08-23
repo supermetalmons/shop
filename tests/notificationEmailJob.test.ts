@@ -12,7 +12,7 @@ import {
   isNotificationEmailJobV1,
   notificationEmailJobByteLength,
   type NotificationEmailKind,
-} from '../functions/src/shared/notificationEmailJob.ts';
+} from '../shared/notificationEmailJob.ts';
 
 const JOB_ID = '123e4567-e89b-42d3-a456-426614174000';
 

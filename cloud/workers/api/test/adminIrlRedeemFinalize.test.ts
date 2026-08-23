@@ -11,12 +11,12 @@ import {
   type CompiledInnerInstruction,
   type Connection,
 } from '@solana/web3.js';
-import { IX_BUBBLEGUM_TRANSFER_V2 } from '../../../../functions/src/bubblegum.ts';
+import { IX_BUBBLEGUM_TRANSFER_V2 } from '../src/bubblegum.ts';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.ts';
+} from '../../../../shared/solanaProgramAddresses.ts';
 import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
 import { FIRESTORE_DOCUMENT_NAME_PREFIX } from '../src/firestoreRest.ts';
 import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';

@@ -15,16 +15,16 @@ import {
   DEPLOYMENT_DROPS,
   getDeploymentDrop,
   type DeploymentRegistryDrop,
-} from '../functions/src/shared/deploymentRegistry.ts';
+} from '../shared/deploymentRegistry.ts';
 import {
   normalizeDropId,
   type SolanaCluster,
-} from '../functions/src/shared/deploymentCore.ts';
+} from '../shared/deploymentCore.ts';
 import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS,
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
-} from '../functions/src/shared/boxMinterConfigCodec.ts';
+} from '../shared/boxMinterConfigCodec.ts';
 
 type DeploymentDropConfig = Pick<
   DeploymentRegistryDrop,
@@ -84,7 +84,7 @@ function loadDropFromRegistry(dropId: string): DeploymentDropConfig {
       a.localeCompare(b),
     );
     throw new Error(
-      `Drop ${dropId} is not present in functions/src/shared/deploymentRegistry.ts.\n` +
+      `Drop ${dropId} is not present in shared/deploymentRegistry.ts.\n` +
         `Known drops: ${knownDropIds.length ? knownDropIds.join(', ') : '(none)'}`,
     );
   }

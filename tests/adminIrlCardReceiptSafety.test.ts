@@ -11,7 +11,7 @@ import {
   directCardReceiptClaimSubmissionProvesNoDelivery,
   resolveDirectCardReceiptClaimRecoveryAction,
   shouldKeepDirectCardReceiptClaimProcessing,
-} from '../functions/src/adminIrlCardReceipt.ts';
+} from '../cloud/workers/api/src/adminIrlCardReceipt.ts';
 
 test('Admin IRL card receipt lookup errors distinguish indexing, transient, and fatal failures', () => {
   assert.equal(classifyAdminIrlCardReceiptLookupError({ code: 'not-found' }), 'indexing');
@@ -46,10 +46,6 @@ test('Admin IRL card receipt proof waits for tree and root identity before valid
 
 test('direct card claim transfer verification distinguishes rejected proof from unresolved history', () => {
   assert.equal(classifyDirectCardReceiptClaimTransferVerificationError({ code: 'failed-precondition' }), 'rejected');
-  assert.equal(
-    classifyDirectCardReceiptClaimTransferVerificationError({ code: 'functions/failed-precondition' }),
-    'rejected',
-  );
   assert.equal(classifyDirectCardReceiptClaimTransferVerificationError({ code: 'unavailable' }), 'unresolved');
   assert.equal(classifyDirectCardReceiptClaimTransferVerificationError({ code: 'deadline-exceeded' }), 'unresolved');
   assert.equal(classifyDirectCardReceiptClaimTransferVerificationError(new TypeError('fetch failed')), 'unresolved');

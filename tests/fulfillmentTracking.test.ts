@@ -7,26 +7,26 @@ import {
   shouldDisplayFulfillmentTrackingCode,
 } from '../src/lib/fulfillmentTracking.ts';
 import {
-  normalizeOptionalFulfillmentTrackingCode as normalizeFunctionTrackingCode,
-  resolveFulfillmentTrackingHref as resolveFunctionTrackingHref,
-  sanitizeFulfillmentTrackingCode as sanitizeFunctionTrackingCode,
-} from '../functions/src/fulfillmentTracking.ts';
+  normalizeOptionalFulfillmentTrackingCode as normalizeSharedTrackingCode,
+  resolveFulfillmentTrackingHref as resolveSharedTrackingHref,
+  sanitizeFulfillmentTrackingCode as sanitizeSharedTrackingCode,
+} from '../shared/fulfillmentTracking.ts';
 
 test('fulfillment tracking code sanitizers trim outer whitespace only', () => {
   const trackingLink = 'https://carrier.example/track?id=AB 123&ref=CD';
   assert.equal(sanitizeClientTrackingCode(`  ${trackingLink}\t\n`), trackingLink);
-  assert.equal(sanitizeFunctionTrackingCode(`  ${trackingLink}\t\n`), trackingLink);
+  assert.equal(sanitizeSharedTrackingCode(`  ${trackingLink}\t\n`), trackingLink);
 });
 
 test('fulfillment tracking code normalizers omit empty sanitized values', () => {
   assert.equal(normalizeClientTrackingCode('   \t\n'), undefined);
-  assert.equal(normalizeFunctionTrackingCode('   \t\n'), undefined);
+  assert.equal(normalizeSharedTrackingCode('   \t\n'), undefined);
 });
 
 test('fulfillment tracking hrefs allow absolute https urls only', () => {
   const resolvers = [
     { name: 'client', resolve: resolveFulfillmentTrackingHref },
-    { name: 'functions', resolve: resolveFunctionTrackingHref },
+    { name: 'shared', resolve: resolveSharedTrackingHref },
   ];
   const cases: Array<{ name: string; value: unknown; expected: string | undefined }> = [
     {

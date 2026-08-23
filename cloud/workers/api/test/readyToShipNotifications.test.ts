@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../functions/src/shared/fulfillmentSources.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
 import {
   BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD,
   BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD,

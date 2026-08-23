@@ -5,13 +5,12 @@ import {
   PACK_STATUS_SUPPORTED_DROP_IDS,
   buildPackStatusBreakdown,
   buildPackStatusCountersFromRebuildInputs,
-  countNormalIrlPackStatus,
   normalizePackStatusBreakdown,
   shouldTrackPackStatusForDrop,
   type PackStatusDropRuntime,
-} from '../functions/src/packStatus.ts';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../functions/src/stripeCheckout/contract.ts';
-import { requireSupportedPackStatusDrop } from '../functions/scripts/rebuildPackStatus.ts';
+} from '../shared/packStatus.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
+import { requireSupportedPackStatusDrop } from '../scripts/ops/rebuildPackStatus.ts';
 
 const CARD_NFT_2_RUNTIME: PackStatusDropRuntime = {
   dropId: 'card_nft_2',
@@ -329,132 +328,6 @@ test('historical little swag pack status counting uses three figures per box', (
     redeemedIrlStripe: 1,
     redeemedUnsealedCards: 2,
   });
-});
-
-test('normal IRL pack status increments counters and records card-equivalent event quantity', async () => {
-  const updates: Array<{ ref: any; data: any }> = [];
-  const creates: Array<{ ref: any; data: any }> = [];
-  const db = {
-    doc: (path: string) => ({ path }),
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async () => ({ exists: false }),
-        update: (ref: any, data: any) => updates.push({ ref, data }),
-        create: (ref: any, data: any) => creates.push({ ref, data }),
-      }),
-  } as any;
-
-  const result = await countNormalIrlPackStatus({
-    db,
-    dropRuntime: CARD_NFT_2_RUNTIME,
-    deliveryId: 123,
-    packQuantity: 2,
-    unsealedCardQuantity: 4,
-  });
-
-  assert.deepEqual(result, { counted: true, quantity: 10 });
-  assert.equal(updates.length, 1);
-  assert.equal(String(updates[0].ref.path).endsWith('/meta/packStatus'), true);
-  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'redeemedIrlNormal'), true);
-  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'redeemedUnsealedCards'), true);
-  assert.equal(creates.length, 1);
-  assert.equal(String(creates[0].ref.path).includes('/packStatusEvents/redeemedIrlNormal_123'), true);
-  assert.equal(creates[0].data.quantity, 10);
-  assert.deepEqual(creates[0].data.increments, {
-    redeemedIrlNormal: 2,
-    redeemedUnsealedCards: 4,
-  });
-});
-
-test('normal card-only IRL status counts one redeemed unsealed card idempotently', async () => {
-  const updates: Array<{ ref: any; data: any }> = [];
-  const creates: Array<{ ref: any; data: any }> = [];
-  let eventExists = false;
-  const db = {
-    doc: (path: string) => ({ path }),
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async () => ({ exists: eventExists }),
-        update: (ref: any, data: any) => updates.push({ ref, data }),
-        create: (ref: any, data: any) => {
-          eventExists = true;
-          creates.push({ ref, data });
-        },
-      }),
-  } as any;
-
-  const first = await countNormalIrlPackStatus({
-    db,
-    dropRuntime: CARD_NFT_2_RUNTIME,
-    deliveryId: 137,
-    packQuantity: 0,
-    unsealedCardQuantity: 1,
-  });
-  const duplicate = await countNormalIrlPackStatus({
-    db,
-    dropRuntime: CARD_NFT_2_RUNTIME,
-    deliveryId: 137,
-    packQuantity: 0,
-    unsealedCardQuantity: 1,
-  });
-
-  assert.deepEqual(first, { counted: true, quantity: 1 });
-  assert.deepEqual(duplicate, { counted: false, quantity: 0 });
-  assert.equal(updates.length, 1);
-  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'redeemedIrlNormal'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'redeemedUnsealedCards'), true);
-  assert.equal(creates.length, 1);
-  assert.deepEqual(creates[0].data.increments, { redeemedUnsealedCards: 1 });
-});
-
-test('normal IRL poncho pack status records one-card pack event quantity', async () => {
-  const creates: Array<{ ref: any; data: any }> = [];
-  const db = {
-    doc: (path: string) => ({ path }),
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async () => ({ exists: false }),
-        update: () => undefined,
-        create: (ref: any, data: any) => creates.push({ ref, data }),
-      }),
-  } as any;
-
-  const result = await countNormalIrlPackStatus({
-    db,
-    dropRuntime: PONCHO_DRIFELLA_RUNTIME,
-    deliveryId: 456,
-    packQuantity: 2,
-    unsealedCardQuantity: 4,
-  });
-
-  assert.deepEqual(result, { counted: true, quantity: 6 });
-  assert.equal(creates[0].data.quantity, 6);
-});
-
-test('normal IRL pack status skips duplicate events without incrementing counters', async () => {
-  const updates: Array<{ ref: any; data: any }> = [];
-  const creates: Array<{ ref: any; data: any }> = [];
-  const db = {
-    doc: (path: string) => ({ path }),
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async () => ({ exists: true }),
-        update: (ref: any, data: any) => updates.push({ ref, data }),
-        create: (ref: any, data: any) => creates.push({ ref, data }),
-      }),
-  } as any;
-
-  const result = await countNormalIrlPackStatus({
-    db,
-    dropRuntime: CARD_NFT_2_RUNTIME,
-    deliveryId: 123,
-    packQuantity: 2,
-    unsealedCardQuantity: 4,
-  });
-
-  assert.deepEqual(result, { counted: false, quantity: 0 });
-  assert.equal(updates.length, 0);
-  assert.equal(creates.length, 0);
 });
 
 test('pack status rebuild script accepts supported mainnet drops and rejects unsupported drops', () => {

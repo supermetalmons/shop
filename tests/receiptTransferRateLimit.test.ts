@@ -12,7 +12,7 @@ import {
   receiptTransferCallerRateLimitDocumentPath,
   receiptTransferCallerRateLimitSubjectHash,
   receiptTransferStoredBucketMatches,
-} from '../functions/src/shared/receiptTransferRateLimit.ts';
+} from '../cloud/workers/api/src/receiptTransferRateLimit.ts';
 
 const UID = 'anonymous-firebase-uid';
 const OWNER = 'owner-wallet';

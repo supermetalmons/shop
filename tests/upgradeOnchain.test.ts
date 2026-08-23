@@ -64,14 +64,14 @@ import {
   BOX_MINTER_CONFIG_DISCRIMINATOR,
   BOX_MINTER_SPLIT_PAYMENTS_V1_MAGIC,
   BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION,
-} from '../functions/src/shared/boxMinterConfigCodec.ts';
-import { BOX_MINTER_CONFIG_SEED } from '../functions/src/shared/boxMinterProtocol.ts';
+} from '../shared/boxMinterConfigCodec.ts';
+import { BOX_MINTER_CONFIG_SEED } from '../shared/boxMinterProtocol.ts';
 import {
   BOX_MINTER_CONFIG_TOMBSTONES,
   DEPLOYMENT_DROPS,
   type DeploymentRegistryDrop,
   type PaymentRoutingConfig,
-} from '../functions/src/shared/deploymentRegistry.ts';
+} from '../shared/deploymentRegistry.ts';
 import {
   readDeploymentDropRegistry,
   renderDeploymentRegistryFileFromSource,
@@ -79,7 +79,7 @@ import {
 
 const REGISTRY_PATH = path.join(
   process.cwd(),
-  'functions/src/shared/deploymentRegistry.ts',
+  'shared/deploymentRegistry.ts',
 );
 const DEVNET_PROGRAM_ID = new PublicKey(
   UPGRADE_PROGRAM_TARGETS.devnet.programId,

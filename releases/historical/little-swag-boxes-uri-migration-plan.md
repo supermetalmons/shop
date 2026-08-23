@@ -44,7 +44,7 @@ Original deployment:
 - Transaction: [5ag2aKg…Mthvz4h](https://explorer.solana.com/tx/5ag2aKgQVnfz1AWK1W3H5FpHFuLaxtHzh1tmvu3Z5kxbSNz1PZsFz7C8eQksBtkuvc8uL4UcM8mGB5YokMthvz4h)
 - No later ProgramData transaction or upgrade was found.
 
-Useful protocol IDs when building the migration client are in `functions/src/shared/solanaProgramAddresses.ts`:
+Useful protocol IDs when building the migration client are in `shared/solanaProgramAddresses.ts`:
 
 | Program/account | Address |
 | --- | --- |
@@ -131,17 +131,17 @@ The setter changes future generated URIs only. Existing NFTs, cNFT leaves, and t
 
 | Purpose | Path / note |
 | --- | --- |
-| Canonical drop registry row | `functions/src/shared/deploymentRegistry.ts` (`little_swag_boxes`) |
-| Frontend/functions projections | `src/config/deployment.ts`, `functions/src/config/deployment.ts`; do not hand-edit generated/projected values |
-| Legacy/compact path derivation | `functions/src/shared/deploymentCore.ts` |
-| URI classification and ID parsing | `functions/src/shared/dropMetadataUri.ts` |
-| Config decoder | `functions/src/shared/boxMinterConfigCodec.ts` |
+| Canonical drop registry row | `shared/deploymentRegistry.ts` (`little_swag_boxes`) |
+| Frontend/API projections | `src/config/deployment.ts`, `cloud/workers/api/src/dropConfig.ts`; do not hand-edit generated/projected values |
+| Legacy/compact path derivation | `shared/deploymentCore.ts` |
+| URI classification and ID parsing | `shared/dropMetadataUri.ts` |
+| Config decoder | `shared/boxMinterConfigCodec.ts` |
 | Read-only DAS inventory helper | `scripts/exportCollectionFiles.ts` |
 | Metadata JSON conventions | `scripts/docs/drop_metadata.md` (preserve LSB legacy layout) |
 | Existing unsafe generic upgrader | `scripts/upgrade-onchain.ts`; must be adapted to a historical worktree and secure signer |
 | Current program source | `onchain/programs/box_minter/src/lib.rs`; incompatible with the legacy deployment |
 
-The canonical registry currently contains the old base and `metadataPathFormat: 'legacy'`. Frontend and Functions project from it. Both also check that the registry base matches the live config, so the setter and registry/app rollout must be coordinated tightly or temporarily support old-or-new during rollout.
+The canonical registry currently contains the old base and `metadataPathFormat: 'legacy'`. The frontend and API project from it. Both also check that the registry base matches the live config, so the setter and registry/app rollout must be coordinated tightly or temporarily support old-or-new during rollout.
 
 There is no existing bulk MPL Core/Bubblegum metadata updater. Build a purpose-specific tool that is dry-run-first, resumable, idempotent, simulation-gated, and writes a manifest/checkpoint with each asset, old URI, target URI, authority, proof/root where applicable, and confirmed signature.
 

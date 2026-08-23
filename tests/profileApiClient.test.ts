@@ -169,7 +169,7 @@ test('profile API retries one 401 with a fresh token and then fails terminally',
   assert.deepEqual(refreshes, [false, true]);
 });
 
-test('admin and fulfillment reads use authenticated Cloudflare routes without callable fallbacks', () => {
+test('admin and fulfillment reads use authenticated Cloudflare routes', () => {
   const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
   for (const [exportName, pathname] of [
     ['listDeliveryOrderOwners', '/admin/delivery-order-owners'],
@@ -181,11 +181,10 @@ test('admin and fulfillment reads use authenticated Cloudflare routes without ca
     assert.notEqual(start, -1);
     const implementation = source.slice(start, end === -1 ? source.length : end);
     assert.match(implementation, new RegExp(pathname.replaceAll('/', '\\/')));
-    assert.doesNotMatch(implementation, /callFunction|httpsCallable/);
   }
 });
 
-test('migrated fulfillment actions use authenticated Cloudflare routes without callable fallbacks', () => {
+test('fulfillment actions use authenticated Cloudflare routes', () => {
   const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
   for (const [exportName, pathname] of [
     ['saveEncryptedAddress', '/profile/addresses'],
@@ -202,7 +201,6 @@ test('migrated fulfillment actions use authenticated Cloudflare routes without c
     assert.notEqual(start, -1);
     const implementation = source.slice(start, end === -1 ? source.length : end);
     assert.match(implementation, new RegExp(pathname.replaceAll('/', '\\/')));
-    assert.doesNotMatch(implementation, /callFunction|httpsCallable/);
   }
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label'), 50_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label-purchase'), 65_000);
@@ -243,7 +241,6 @@ test('Stripe checkout uses the authenticated Cloudflare route with an exact resp
   const end = source.indexOf('\nexport ', start + 1);
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/checkout\/session/);
-  assert.doesNotMatch(implementation, /callFunction|httpsCallable|createStripeCheckoutSession['"]/);
 });
 
 test('IRL claim preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -284,7 +281,6 @@ test('IRL claim preparation uses the authenticated Cloudflare route with an exac
   const end = source.indexOf('\nexport ', start + 1);
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/claims\/irl\/prepare/);
-  assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareIrlClaimTx/);
 });
 
 test('Stripe receipt claiming uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -326,8 +322,6 @@ test('Stripe receipt claiming uses the authenticated Cloudflare route with an ex
   const end = source.indexOf('\nexport ', start + 1);
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/receipts\/stripe\/claim/);
-  assert.doesNotMatch(implementation, /callFunction|httpsCallable|firebase\/functions/);
-  assert.doesNotMatch(source, /from ['"]firebase\/functions['"]/);
 });
 
 test('Admin IRL preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -367,7 +361,6 @@ test('Admin IRL preparation uses the authenticated Cloudflare route with an exac
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/admin\/irl-redeem\/prepare/);
   assert.match(implementation, /const dropId = normalizeDropId\(args\.dropId\)/);
-  assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareAdminIrlRedeemTx['"]/);
 });
 
 test('Admin IRL finalization uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -416,7 +409,6 @@ test('Admin IRL finalization uses the authenticated Cloudflare route with an exa
   const end = source.indexOf('\nexport ', start + 1);
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/admin\/irl-redeem\/finalize/);
-  assert.doesNotMatch(implementation, /callFunction|httpsCallable|['"]finalizeAdminIrlRedeem['"]/);
 });
 
 test('box reveal uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -460,7 +452,6 @@ test('box reveal uses the authenticated Cloudflare route with an exact response 
   const end = source.indexOf('\nexport ', start + 1);
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/boxes\/reveal/);
-  assert.doesNotMatch(implementation, /callFunction|httpsCallable|revealDudes['"]/);
 });
 
 test('box reveal unknown-submission details require an exact drop-specific contract', async () => {
@@ -732,7 +723,6 @@ test('receipt transfer preparation uses the authenticated Cloudflare route with 
   const end = source.indexOf('\nexport ', start + 1);
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/receipts\/transfer\/prepare/);
-  assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareReceiptTransferTx['"]/);
 });
 
 test('delivery preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -773,7 +763,6 @@ test('delivery preparation uses the authenticated Cloudflare route with an exact
   const end = source.indexOf('\nexport ', start + 1);
   const implementation = source.slice(start, end === -1 ? source.length : end);
   assert.match(implementation, /\/delivery\/prepare/);
-  assert.doesNotMatch(implementation, /callFunction|httpsCallable|prepareDeliveryTx['"]/);
 });
 
 test('receipt issuance and recovery use authenticated Cloudflare routes with exact contracts', async () => {
@@ -858,11 +847,10 @@ test('receipt issuance and recovery use authenticated Cloudflare routes with exa
     const end = source.indexOf('\nexport ', start + 1);
     const implementation = source.slice(start, end === -1 ? source.length : end);
     assert.match(implementation, new RegExp(pathname.replaceAll('/', '\\/')));
-    assert.doesNotMatch(implementation, /callFunction|httpsCallable/);
   }
 });
 
-test('wallet lifecycle clients use the authenticated Cloudflare routes without callable fallbacks', async () => {
+test('wallet lifecycle clients use the authenticated Cloudflare routes', async () => {
   for (const [pathname, body] of [
     ['/auth/solana', { wallet: OWNER, message: 'signed-message', signature: Array(64).fill(1) }],
     ['/profile/reconcile', { mergeStripeDeliveryOrders: true }],
@@ -888,11 +876,10 @@ test('wallet lifecycle clients use the authenticated Cloudflare routes without c
     const end = source.indexOf('\nexport async function ', start + 1);
     const implementation = source.slice(start, end < 0 ? source.length : end);
     assert.match(implementation, /callProfileApi\(/);
-    assert.doesNotMatch(implementation, /callFunction\(/);
   }
 });
 
-test('migrated write response validators accept only exact public contracts', () => {
+test('API write response validators accept only exact public contracts', () => {
   const shipment = {
     deliveryId: 7,
     shipmentId: 'shipment-1',
@@ -1185,144 +1172,6 @@ test('profile state validator rejects mismatches, malformed summaries, and extra
     profile: { status: 'ready', value: { wallet: OWNER } },
     shipments: null,
   }), null);
-});
-
-test('migrated profile reads are absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
-  for (const name of ['getProfile', 'getAdminProfileView', 'getAnonymousStripeDeliveryHistory']) {
-    assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
-    assert.doesNotMatch(packageJson, new RegExp(`functions:${name}(?:,|\\\")`));
-  }
-});
-
-test('Stripe checkout callable is absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    scripts: Record<string, string>;
-  };
-  assert.doesNotMatch(functionsSource, /export const createStripeCheckoutSession\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:createStripeCheckoutSession(?:,|$)/);
-  assert.equal(packageJson.scripts['decommission:firebase-create-stripe-checkout-session'], undefined);
-});
-
-test('Stripe receipt claim callable is absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    scripts: Record<string, string>;
-  };
-  assert.doesNotMatch(functionsSource, /export const claimStripeReceipt\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:claimStripeReceipt(?:,|$)/);
-  assert.equal(packageJson.scripts['decommission:firebase-claim-stripe-receipt'], undefined);
-});
-
-test('wallet lifecycle callables are absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    scripts: Record<string, string>;
-  };
-  for (const name of ['solanaAuth', 'reconcileProfileState']) {
-    assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
-    assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', new RegExp(`functions:${name}(?:,|$)`));
-  }
-  assert.equal(packageJson.scripts['decommission:firebase-profile-lifecycle'], undefined);
-});
-
-test('IRL claim preparation callable is absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    scripts: Record<string, string>;
-  };
-  assert.doesNotMatch(functionsSource, /export const prepareIrlClaimTx\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:prepareIrlClaimTx(?:,|$)/);
-  assert.equal(packageJson.scripts['decommission:firebase-prepare-irl-claim'], undefined);
-});
-
-test('receipt transfer preparation callable is absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    scripts: Record<string, string>;
-  };
-  assert.doesNotMatch(functionsSource, /export const prepareReceiptTransferTx\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:prepareReceiptTransferTx(?:,|$)/);
-  assert.equal(packageJson.scripts['decommission:firebase-prepare-receipt-transfer'], undefined);
-});
-
-test('delivery preparation callable is absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    scripts: Record<string, string>;
-  };
-  assert.doesNotMatch(functionsSource, /export const prepareDeliveryTx\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:prepareDeliveryTx(?:,|$)/);
-  assert.equal(packageJson.scripts['decommission:firebase-prepare-delivery'], undefined);
-});
-
-test('Admin IRL preparation callable is absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    scripts: Record<string, string>;
-  };
-  assert.doesNotMatch(functionsSource, /export const prepareAdminIrlRedeemTx\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:prepareAdminIrlRedeemTx(?:,|$)/);
-  assert.equal(packageJson.scripts['decommission:firebase-prepare-admin-irl-redeem'], undefined);
-});
-
-test('Admin IRL finalization callable is absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    scripts: Record<string, string>;
-  };
-  assert.doesNotMatch(functionsSource, /export const finalizeAdminIrlRedeem\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:finalizeAdminIrlRedeem(?:,|$)/);
-});
-
-test('reveal callable is absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    scripts: Record<string, string>;
-  };
-  assert.doesNotMatch(functionsSource, /export const revealDudes\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:revealDudes(?:,|$)/);
-  assert.equal(packageJson.scripts['decommission:firebase-reveal-dudes'], undefined);
-});
-
-test('migrated profile writes are absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
-  const scripts = (JSON.parse(packageJson) as { scripts: Record<string, string> }).scripts;
-  for (const name of [
-    'saveAddress',
-    'updateFulfillmentStatus',
-    'updateFulfillmentAddress',
-    'addFulfillmentOrderToShipStation',
-    'getFulfillmentShipStationLabel',
-    'getFulfillmentShipStationRates',
-    'purchaseFulfillmentShipStationLabel',
-    'voidFulfillmentShipStationLabel',
-  ]) {
-    assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
-    assert.doesNotMatch(packageJson, new RegExp(`functions:${name}(?:,|\\")`));
-  }
-  assert.equal(scripts['decommission:firebase-fulfillment-callables'], undefined);
-  assert.equal(scripts['decommission:firebase-shipstation-label-purchase'], undefined);
-});
-
-test('migrated buyer shipped notification is absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
-  const scripts = (JSON.parse(packageJson) as { scripts: Record<string, string> }).scripts;
-  assert.doesNotMatch(functionsSource, /export const notifyBuyerOnDeliveryShipped\b/);
-  assert.doesNotMatch(scripts['deploy:firebaseNewDrops'] || '', /functions:notifyBuyerOnDeliveryShipped(?:,|$)/);
-  assert.equal(scripts['decommission:firebase-buyer-shipped-notification'], undefined);
-});
-
-test('migrated ready-to-ship notification is absent from Firebase exports and deployment selection', () => {
-  const functionsSource = readFileSync(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
-  const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
-  const scripts = (JSON.parse(packageJson) as { scripts: Record<string, string> }).scripts;
-  assert.doesNotMatch(functionsSource, /export const notifyShippersOnDeliveryReadyToShip\b/);
-  assert.doesNotMatch(scripts['deploy:firebaseNewDrops'] || '', /functions:notifyShippersOnDeliveryReadyToShip(?:,|$)/);
 });
 
 test('browser source has no direct Firestore data access', () => {

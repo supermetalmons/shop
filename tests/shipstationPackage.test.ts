@@ -4,7 +4,7 @@ import {
   defaultShipStationPackage,
   normalizeShipStationPackage,
   parseShipStationPackage,
-} from '../functions/src/shared/shipstationPackage.ts';
+} from '../shared/shipstationPackage.ts';
 import {
   adoptOrPurchaseShipStationLabel,
   createShipStationLabelFromRate,
@@ -15,7 +15,7 @@ import {
   shouldClearShipStationPurchaseState,
   shouldTransitionShipStationPurchaseState,
   voidShipStationLabel,
-} from '../functions/src/shared/shipstationLabels.ts';
+} from '../shared/shipstationLabels.ts';
 import {
   buildShipStationPackages,
   getShipStationShipmentRates,
@@ -26,7 +26,7 @@ import {
   shipStationProductsTotalWeightOunces,
   shipStationRateSummaries,
   updateShipStationShipment,
-} from '../functions/src/shared/shipstationRates.ts';
+} from '../shared/shipstationRates.ts';
 
 test('the default parcel scales its weight with the unit count and keeps a floor of one unit', () => {
   assert.deepEqual(defaultShipStationPackage(1), { length: 12, width: 9, height: 2, weight: 4 });

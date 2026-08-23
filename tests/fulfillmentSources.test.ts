@@ -6,13 +6,13 @@ import {
   isAdminIrlRedeemDeliveryOrderSource,
   isReceiptClaimDeliveryOrderSource as isCanonicalReceiptClaimDeliveryOrderSource,
   isStripeOffchainDeliveryOrderSource,
-} from '../functions/src/shared/fulfillmentSources.ts';
-import { buildPackStatusCountersFromRebuildInputs } from '../functions/src/shared/packStatus.ts';
+} from '../shared/fulfillmentSources.ts';
+import { buildPackStatusCountersFromRebuildInputs } from '../shared/packStatus.ts';
 import {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
   isReceiptClaimDeliveryOrderSource,
-} from '../functions/src/stripeCheckout/contract.ts';
+} from '../cloud/workers/api/src/stripeCheckout/contract.ts';
 import {
   ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
   filterFulfillmentOrdersByVisibility,

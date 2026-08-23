@@ -2,4 +2,4 @@ export {
   assetGroupingAllowsTreeVerifiedCollectionMatch,
   assetGroupingCollectionMints,
   uniqueAssetGroupingCollectionMint,
-} from '../../functions/src/shared/dasAssetCollections.js';
+} from '../../shared/dasAssetCollections.js';

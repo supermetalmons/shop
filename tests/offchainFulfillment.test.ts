@@ -36,11 +36,11 @@ import {
   validateStripeCheckoutContract,
   validateStripeCheckoutDocumentData,
   validateStripeTestCheckoutContract,
-} from '../functions/src/stripeCheckout/contract.ts';
+} from '../cloud/workers/api/src/stripeCheckout/contract.ts';
 import {
   orderStripeReceiptClaimByBoxId,
   stripeAssignedIrlClaimForBox,
-} from '../functions/src/shared/stripeReceiptClaims.ts';
+} from '../shared/stripeReceiptClaims.ts';
 import {
   STRIPE_CHECKOUT_PROCESSING_LEASE_MS,
   buildStripeCheckoutManualReviewSummary,
@@ -58,8 +58,8 @@ import {
   stripeApiKeyForMode,
   stripeCheckoutKindForDrop,
   stripeTestApiKey,
-} from '../functions/src/stripeCheckout/service.ts';
-import { stripeCheckoutFieldValue } from '../functions/src/stripeCheckout/store.ts';
+} from '../cloud/workers/api/src/stripeCheckout/service.ts';
+import { stripeCheckoutFieldValue } from '../cloud/workers/api/src/stripeCheckout/store.ts';
 import {
   createStripeCheckoutSessionCore,
   normalizeStripeCheckoutReturnUrl,
@@ -67,8 +67,8 @@ import {
   stripeCheckoutProductTaxCodeForDrop,
   stripeCheckoutShippingCountriesForDropFamily,
   stripeCheckoutUnitAmountCentsForDrop,
-} from '../functions/src/shared/stripeCheckoutSession.ts';
-import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from '../functions/src/claimCodes.ts';
+} from '../shared/stripeCheckoutSession.ts';
+import { IRL_CLAIM_CODE_DIGITS, normalizeIrlClaimCode } from '../cloud/workers/api/src/claimCodes.ts';
 import {
   IX_BUBBLEGUM_MINT_V2,
   IX_BUBBLEGUM_BURN_V2,
@@ -77,7 +77,7 @@ import {
   bubblegumMintV2Ix,
   bubblegumTransferV2Ix,
   encodeBubblegumMintV2Args,
-} from '../functions/src/bubblegum.ts';
+} from '../cloud/workers/api/src/bubblegum.ts';
 import { COUNTRIES } from '../src/lib/countries.ts';
 
 function pubkey(seed: number): PublicKey {

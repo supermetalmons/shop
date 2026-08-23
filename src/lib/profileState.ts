@@ -1,5 +1,5 @@
 import type { DeliveryOrderSummary } from '../types';
-import { deliveryOrderSummaryEqual } from '../../functions/src/shared/deliveryOrderSummary.js';
+import { deliveryOrderSummaryEqual } from '../../shared/deliveryOrderSummary.js';
 import type { StripeCheckoutProfileRecoveryStatus } from './stripeCheckoutRecovery';
 
 export type OwnProfileShipmentsEmptyState = 'loading' | 'error' | 'preparing' | 'empty';

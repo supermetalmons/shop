@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   getAdminIrlRedeemTargetEligibility,
   isAdminIrlRedeemDropFamily,
-} from '../functions/src/shared/adminIrlEligibility.ts';
+} from '../shared/adminIrlEligibility.ts';
 
 test('Admin IRL drop eligibility is limited to the card_nft_2 family', () => {
   assert.equal(isAdminIrlRedeemDropFamily('card_nft_2'), true);

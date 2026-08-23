@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../functions/src/shared/fulfillmentSources.ts';
-import { createStripeReadyToShipNotificationJobs } from '../functions/src/stripeReadyNotifications.ts';
+import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
+import { createStripeReadyToShipNotificationJobs } from '../cloud/workers/api/src/stripeReadyNotifications.ts';
 
 const JOB_IDS = [
   '123e4567-e89b-42d3-a456-426614174000',

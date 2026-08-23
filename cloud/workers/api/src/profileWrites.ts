@@ -1,21 +1,21 @@
 import { z } from 'zod';
 import nacl from 'tweetnacl';
-import { normalizeCountryCode } from '../../../../functions/src/shared/countryNormalization.js';
-import { normalizeDropId } from '../../../../functions/src/shared/deploymentCore.js';
-import { DEPLOYMENT_DROPS } from '../../../../functions/src/shared/deploymentRegistry.js';
+import { normalizeCountryCode } from '../../../../shared/countryNormalization.js';
+import { normalizeDropId } from '../../../../shared/deploymentCore.js';
+import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
 import {
   FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   walletHasFulfillmentAddressAdminAccess,
   walletHasFulfillmentDropAccess,
-} from '../../../../functions/src/shared/fulfillmentAccess.js';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../functions/src/shared/fulfillmentSources.js';
-import { FULFILLMENT_STATUS_OPTIONS } from '../../../../functions/src/shared/fulfillmentStatus.js';
+} from '../../../../shared/fulfillmentAccess.js';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
+import { FULFILLMENT_STATUS_OPTIONS } from '../../../../shared/fulfillmentStatus.js';
 import {
   normalizeOptionalFulfillmentTrackingCode,
   sanitizeFulfillmentTrackingCode,
-} from '../../../../functions/src/shared/fulfillmentTracking.js';
+} from '../../../../shared/fulfillmentTracking.js';
 import {
   ADDRESS_CIPHER_SECRET_KEY_LENGTH,
   addressCipherHint,
@@ -23,7 +23,7 @@ import {
   encryptAddressCipherText,
   parseAddressCipherPayload,
   serializeAddressCipherPayload,
-} from '../../../../functions/src/shared/addressCipher.js';
+} from '../../../../shared/addressCipher.js';
 import {
   adoptOrPurchaseShipStationLabel,
   createShipStationLabelFromRate,
@@ -37,11 +37,11 @@ import {
   ShipStationLabelProviderError,
   type ShipStationLabelResult,
   voidShipStationLabel,
-} from '../../../../functions/src/shared/shipstationLabels.js';
+} from '../../../../shared/shipstationLabels.js';
 import {
   buildShipStationCustomsDeclaration,
   type ShipStationCustomsDeclaration,
-} from '../../../../functions/src/shared/shipstationCustoms.js';
+} from '../../../../shared/shipstationCustoms.js';
 import {
   buildShipStationPackages,
   createShipStationShipment,
@@ -65,15 +65,15 @@ import {
   type ShipStationCustoms,
   type ShipStationPackageProduct,
   type ShipStationRateResponse,
-} from '../../../../functions/src/shared/shipstationRates.js';
+} from '../../../../shared/shipstationRates.js';
 import {
   defaultShipStationPackage,
   normalizeShipStationPackage,
   parseShipStationPackage,
   SHIPSTATION_PACKAGE_RANGE_MESSAGE,
   type ShipStationPackageInput,
-} from '../../../../functions/src/shared/shipstationPackage.js';
-import { isBase58Bytes } from '../../../../functions/src/shared/solanaRpcProxy.js';
+} from '../../../../shared/shipstationPackage.js';
+import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
 import type {
   AddFulfillmentOrderToShipStationResponse,
   FulfillmentShipStationAddressCorrectionDetails,
@@ -86,7 +86,7 @@ import type {
   ShipStationAddressPatch,
   UpdateFulfillmentAddressResponse,
   VoidFulfillmentShipStationLabelResponse,
-} from '../../../../functions/src/shared/contracts.js';
+} from '../../../../shared/contracts.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,

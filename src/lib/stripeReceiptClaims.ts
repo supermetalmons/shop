@@ -2,4 +2,4 @@ export {
   hasAlphabeticClaimCodeCharacters,
   isStripeReceiptClaimCode,
   normalizeStripeReceiptClaimCode,
-} from '../../functions/src/shared/stripeReceiptClaims.js';
+} from '../../shared/stripeReceiptClaims.js';

@@ -14,11 +14,11 @@ import {
   FIRESTORE_DOCUMENTS_BASE_URL,
   isRecord,
 } from '../cloud/workers/api/src/firestoreRest.js';
-import { getFunctionsDrop } from '../functions/src/config/deployment.js';
-import { BOX_MINTER_CONFIG_SEED } from '../functions/src/shared/boxMinterProtocol.js';
-import { DELIVERY_PREPARE_ATTEMPT_HEADER } from '../functions/src/shared/contracts.js';
-import type { SolanaCluster } from '../functions/src/shared/deploymentCore.js';
-import { isBase58Bytes } from '../functions/src/shared/solanaRpcProxy.js';
+import { getApiDrop } from '../cloud/workers/api/src/dropConfig.js';
+import { BOX_MINTER_CONFIG_SEED } from '../shared/boxMinterProtocol.js';
+import { DELIVERY_PREPARE_ATTEMPT_HEADER } from '../shared/contracts.js';
+import type { SolanaCluster } from '../shared/deploymentCore.js';
+import { isBase58Bytes } from '../shared/solanaRpcProxy.js';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
@@ -26,8 +26,8 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
-} from '../functions/src/shared/solanaProgramAddresses.js';
-import { calculateDeliveryLamports } from '../functions/src/shared/shipping.js';
+} from '../shared/solanaProgramAddresses.js';
+import { calculateDeliveryLamports } from '../shared/shipping.js';
 import {
   firestoreWriterServiceAccountEmail,
   readCloudflareFirestoreKeychainCredential,
@@ -225,7 +225,7 @@ function deliveryConfig(dropId: string): {
   lookupAddresses: PublicKey[];
   cluster: SolanaCluster;
 } {
-  const config = getFunctionsDrop(dropId);
+  const config = getApiDrop(dropId);
   if (!config) throw new Error('Authenticated smoke used an unsupported drop.');
   const programId = new PublicKey(config.boxMinterProgramId);
   const configPda = config.boxMinterConfigPda
@@ -487,7 +487,7 @@ function validatePreparedDocument(
     prepareAttemptId: string;
   },
 ): void {
-  const config = getFunctionsDrop(expected.dropId);
+  const config = getApiDrop(expected.dropId);
   const fields = document.fields;
   if (!config || !hasExactKeys(fields, [
     'addressId',

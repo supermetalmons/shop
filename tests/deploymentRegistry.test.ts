@@ -39,8 +39,6 @@ import {
   normalizeAndValidateDropId,
   normalizeDropBase,
   readDeploymentDropRegistry,
-  readFrontendDropRegistry,
-  readFunctionsDropRegistry,
   renderDeploymentRegistryFile,
   renderDeploymentRegistryFileFromSource,
   renderReceiptPoolDeploymentsFileFromSource,
@@ -61,21 +59,21 @@ import {
   projectDeploymentPaymentRouting,
   type DeploymentRegistryDrop,
   type PaymentRoutingConfig,
-} from '../functions/src/shared/deploymentRegistry.ts';
+} from '../shared/deploymentRegistry.ts';
 import {
-  FUNCTIONS_DROPS,
-  getFunctionsDrop,
-} from '../functions/src/config/deployment.ts';
+  API_DROPS,
+  getApiDrop,
+} from '../cloud/workers/api/src/dropConfig.ts';
 import {
   FRONTEND_DROPS,
   getFrontendDrop,
   secondaryMarketplaceLinksForDropId,
 } from '../src/config/deployment.ts';
-import { BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS } from '../functions/src/shared/boxMinterConfigCodec.ts';
+import { BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS } from '../shared/boxMinterConfigCodec.ts';
 import {
   CARD_NFT_2_BOX_MEDIA,
   LITTLE_SWAG_BOXES_FIGURE_MEDIA,
-} from '../functions/src/shared/dropMediaDefaults.ts';
+} from '../shared/dropMediaDefaults.ts';
 
 const VALID_IPFS_CID =
   'bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku';
@@ -91,35 +89,35 @@ const VALID_PAYMENT_ROUTING = {
   deliveryPaymentReceiver: ROUTING_ADDRESS_B,
 } satisfies PaymentRoutingConfig;
 const CANONICAL_SOURCE_URL = new URL(
-  '../functions/src/shared/deploymentRegistry.ts',
+  '../shared/deploymentRegistry.ts',
   import.meta.url,
 );
 const DEPLOYMENT_CORE_SOURCE_URL = new URL(
-  '../functions/src/shared/deploymentCore.ts',
+  '../shared/deploymentCore.ts',
   import.meta.url,
 );
 const STRIPE_CHECKOUT_CORE_SOURCE_URL = new URL(
-  '../functions/src/shared/stripeCheckoutCore.ts',
+  '../shared/stripeCheckoutCore.ts',
   import.meta.url,
 );
 const FRONTEND_SOURCE_URL = new URL(
   '../src/config/deployment.ts',
   import.meta.url,
 );
-const FUNCTIONS_SOURCE_URL = new URL(
-  '../functions/src/config/deployment.ts',
+const API_SOURCE_URL = new URL(
+  '../cloud/workers/api/src/dropConfig.ts',
   import.meta.url,
 );
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 test('deployment registry CLIs remain importable by raw Node strip-types execution', () => {
   const moduleUrls = [
-    'functions/src/shared/boxMinterConfigCodec.ts',
-    'functions/src/shared/deploymentRegistry.ts',
+    'shared/boxMinterConfigCodec.ts',
+    'shared/deploymentRegistry.ts',
     'scripts/shared/optimisticTextFile.ts',
     'scripts/shared/deploymentRegistry.ts',
     'scripts/deploy-all-onchain.ts',
-    'functions/scripts/wipeDrop.ts',
+    'scripts/ops/wipeDrop.ts',
     'scripts/setMintPrices.ts',
     'scripts/startMint.ts',
   ].map((relativePath) =>
@@ -256,7 +254,7 @@ async function withTempCanonical(
   const root = await mkdtemp(
     path.join(os.tmpdir(), 'deployment-registry-test-'),
   );
-  const sharedDir = path.join(root, 'functions', 'src', 'shared');
+  const sharedDir = path.join(root, 'shared');
   const filePath = path.join(sharedDir, 'deploymentRegistry.ts');
   try {
     await mkdir(sharedDir, { recursive: true });
@@ -387,19 +385,19 @@ test('one nonempty canonical registry owns both public projections', async () =>
   const dropIds = Object.keys(DEPLOYMENT_DROPS).sort();
   assert.ok(dropIds.length > 0);
   assert.deepEqual(Object.keys(FRONTEND_DROPS).sort(), dropIds);
-  assert.deepEqual(Object.keys(FUNCTIONS_DROPS).sort(), dropIds);
+  assert.deepEqual(Object.keys(API_DROPS).sort(), dropIds);
 
   for (const dropId of dropIds) {
     const canonical = DEPLOYMENT_DROPS[dropId];
     const frontend = FRONTEND_DROPS[dropId];
-    const functionsDrop = FUNCTIONS_DROPS[dropId];
+    const apiDrop = API_DROPS[dropId];
     assert.equal(canonical.dropId, dropId);
     assert.equal(frontend.dropId, dropId);
-    assert.equal(functionsDrop.dropId, dropId);
+    assert.equal(apiDrop.dropId, dropId);
     assert.equal(frontend.treasury, deploymentTreasuryAlias(canonical));
-    assert.equal(functionsDrop.treasury, deploymentTreasuryAlias(canonical));
+    assert.equal(apiDrop.treasury, deploymentTreasuryAlias(canonical));
     assert.deepEqual(frontend.paymentRouting, canonical.paymentRouting);
-    assert.deepEqual(functionsDrop.paymentRouting, canonical.paymentRouting);
+    assert.deepEqual(apiDrop.paymentRouting, canonical.paymentRouting);
     for (const field of [
       'solanaCluster',
       'dropFamily',
@@ -421,16 +419,16 @@ test('one nonempty canonical registry owns both public projections', async () =>
       'collectionMint',
       'receiptsMerkleTree',
     ] as const) {
-      assert.deepEqual(frontend[field], functionsDrop[field], `${dropId}.${field}`);
+      assert.deepEqual(frontend[field], apiDrop[field], `${dropId}.${field}`);
       assert.deepEqual(frontend[field], canonical[field], `${dropId}.${field}`);
     }
     assert.equal('deliveryLookupTable' in frontend, false);
     assert.equal('stripeProductTaxCode' in frontend, false);
-    assert.equal('figureMedia' in functionsDrop, false);
-    assert.equal('boxMedia' in functionsDrop, false);
-    assert.equal('forceSoldOut' in functionsDrop, false);
-    assert.equal('secondaryMarketHref' in functionsDrop, false);
-    assert.equal('paths' in functionsDrop, false);
+    assert.equal('figureMedia' in apiDrop, false);
+    assert.equal('boxMedia' in apiDrop, false);
+    assert.equal('forceSoldOut' in apiDrop, false);
+    assert.equal('secondaryMarketHref' in apiDrop, false);
+    assert.equal('paths' in apiDrop, false);
   }
 });
 
@@ -455,7 +453,7 @@ test('historical BoxMinter configs remain tombstoned and never project as drops'
   assert.deepEqual(registry.tombstones, BOX_MINTER_CONFIG_TOMBSTONES);
   assert.equal('clear_cards_devnet' in registry.drops, false);
   assert.equal('clear_cards_devnet' in FRONTEND_DROPS, false);
-  assert.equal('clear_cards_devnet' in FUNCTIONS_DROPS, false);
+  assert.equal('clear_cards_devnet' in API_DROPS, false);
 });
 
 test('canonical registry rejects active and tombstoned config identity collisions', async () => {
@@ -563,7 +561,7 @@ test('canonical field descriptor owns allowed fields and requiredness', () => {
   }
 });
 
-test('frontend and Functions projections retain media, sold-out, Stripe, and server defaults', () => {
+test('frontend and API projections retain media, sold-out, Stripe, and server defaults', () => {
   assert.equal(
     DEPLOYMENT_DROPS.card_nft_2.metadataBase,
     'https://cdn.lil.org/nft/card_nft_2/json',
@@ -577,7 +575,7 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
     DEPLOYMENT_DROPS.card_nft_2.metadataBaseAliases,
   );
   assert.deepEqual(
-    FUNCTIONS_DROPS.card_nft_2.metadataBaseAliases,
+    API_DROPS.card_nft_2.metadataBaseAliases,
     DEPLOYMENT_DROPS.card_nft_2.metadataBaseAliases,
   );
   assert.equal(
@@ -593,7 +591,7 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
     DEPLOYMENT_DROPS.little_swag_boxes.metadataBaseAliases,
   );
   assert.deepEqual(
-    FUNCTIONS_DROPS.little_swag_boxes.metadataBaseAliases,
+    API_DROPS.little_swag_boxes.metadataBaseAliases,
     DEPLOYMENT_DROPS.little_swag_boxes.metadataBaseAliases,
   );
   assert.equal(
@@ -609,7 +607,7 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
     DEPLOYMENT_DROPS.poncho_drifella.metadataBaseAliases,
   );
   assert.deepEqual(
-    FUNCTIONS_DROPS.poncho_drifella.metadataBaseAliases,
+    API_DROPS.poncho_drifella.metadataBaseAliases,
     DEPLOYMENT_DROPS.poncho_drifella.metadataBaseAliases,
   );
   assert.deepEqual(
@@ -643,19 +641,19 @@ test('frontend and Functions projections retain media, sold-out, Stripe, and ser
     soldOutDropIds,
   );
   assert.equal(
-    Object.values(FUNCTIONS_DROPS).some((drop) =>
+    Object.values(API_DROPS).some((drop) =>
       Object.prototype.hasOwnProperty.call(drop, 'forceSoldOut'),
     ),
     false,
   );
   assert.equal(FRONTEND_DROPS.card_nft_2.stripeCheckoutEnabled, true);
-  assert.equal(FUNCTIONS_DROPS.card_nft_2.stripeCheckoutEnabled, true);
+  assert.equal(API_DROPS.card_nft_2.stripeCheckoutEnabled, true);
   assert.equal(
-    FUNCTIONS_DROPS.card_nft_2.stripeProductTaxCode,
+    API_DROPS.card_nft_2.stripeProductTaxCode,
     CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
   );
   assert.equal(
-    FUNCTIONS_DROPS.little_swag_hoodies.stripeProductTaxCode,
+    API_DROPS.little_swag_hoodies.stripeProductTaxCode,
     'txcd_30011000',
   );
 });
@@ -702,11 +700,11 @@ test('deployment lookup facades never expose Object.prototype properties', () =>
   for (const inheritedName of ['constructor', '__proto__', 'toString']) {
     assert.equal(getDeploymentDrop(inheritedName), undefined);
     assert.equal(getFrontendDrop(inheritedName), undefined);
-    assert.equal(getFunctionsDrop(inheritedName), undefined);
+    assert.equal(getApiDrop(inheritedName), undefined);
   }
   assert.equal(getDeploymentDrop(' CARD_NFT_2 '), DEPLOYMENT_DROPS.card_nft_2);
   assert.equal(getFrontendDrop(' CARD_NFT_2 '), FRONTEND_DROPS.card_nft_2);
-  assert.equal(getFunctionsDrop(' CARD_NFT_2 '), FUNCTIONS_DROPS.card_nft_2);
+  assert.equal(getApiDrop(' CARD_NFT_2 '), API_DROPS.card_nft_2);
 });
 
 test('shared family and marketplace helpers ignore inherited prototype values', () => {
@@ -762,10 +760,10 @@ test('clear cards Tensor marketplace uses the drop slug URL', () => {
 });
 
 test('checked-in projection modules contain no registry rows or generated core templates', async () => {
-  const [canonicalSource, frontendSource, functionsSource] = await Promise.all([
+  const [canonicalSource, frontendSource, apiSource] = await Promise.all([
     readFile(CANONICAL_SOURCE_URL, 'utf8'),
     readFile(FRONTEND_SOURCE_URL, 'utf8'),
-    readFile(FUNCTIONS_SOURCE_URL, 'utf8'),
+    readFile(API_SOURCE_URL, 'utf8'),
   ]);
   for (const dropId of Object.keys(DEPLOYMENT_DROPS)) {
     assert.match(canonicalSource, new RegExp(`\\b${dropId}\\b`));
@@ -773,7 +771,7 @@ test('checked-in projection modules contain no registry rows or generated core t
       `dropId:\\s*["']${dropId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']`,
     );
     assert.doesNotMatch(frontendSource, embeddedRow);
-    assert.doesNotMatch(functionsSource, embeddedRow);
+    assert.doesNotMatch(apiSource, embeddedRow);
   }
   assert.equal(
     canonicalSource.match(/export const DEPLOYMENT_DROPS/g)?.length,
@@ -784,14 +782,14 @@ test('checked-in projection modules contain no registry rows or generated core t
     'utf8',
   );
   assert.doesNotMatch(generatorSource, /createFrontendDrop/);
-  assert.doesNotMatch(generatorSource, /createFunctionsDrop/);
+  assert.doesNotMatch(generatorSource, /createApiDrop/);
   assert.doesNotMatch(
     generatorSource,
     /BEGIN AUTO-GENERATED FRONTEND DROP REGISTRY/,
   );
   assert.doesNotMatch(
     generatorSource,
-    /BEGIN AUTO-GENERATED FUNCTIONS DROP REGISTRY/,
+    /BEGIN AUTO-GENERATED API DROP REGISTRY/,
   );
   assert.doesNotMatch(frontendSource, /FORCE_SOLD_OUT_DROP_OVERRIDES/);
 });
@@ -1289,7 +1287,7 @@ test('canonical renderer and writer round-trip a superset row without duplicatin
     registrySection.indexOf('future_card_drop: {'),
   );
   assert.match(source, /future_card_drop: \{/);
-  assert.doesNotMatch(registrySection, /createFrontendDrop|createFunctionsDrop/);
+  assert.doesNotMatch(registrySection, /createFrontendDrop|createApiDrop/);
   assert.doesNotMatch(defaultCardEntry, /\n    boxMedia: \{/);
   assert.doesNotMatch(defaultCardEntry, /stripeProductTaxCode/);
   assert.match(registrySection, /custom_media_drop: \{/);
@@ -1703,251 +1701,6 @@ test('canonical generated registry rejects shared-program drops without explicit
   });
 });
 
-test('legacy projection readers preserve defaults while canonical reads remain the mutation source', async () => {
-  const root = await mkdtemp(
-    path.join(os.tmpdir(), 'legacy-registry-reader-test-'),
-  );
-  const frontendPath = path.join(root, 'frontend.mjs');
-  const functionsPath = path.join(root, 'functions.mjs');
-  const customMarket = 'https://market.example.com/legacy-card';
-  const figureMedia = {
-    strategy: 'direct' as const,
-    count: 7,
-  };
-  const boxMedia = {
-    strategy: 'cyclic' as const,
-    count: 3,
-    overrides: { 4: 2 },
-  };
-  const common = registryDrop('legacy_card', {
-    dropFamily: 'card_nft_2',
-    secondaryMarketHref: customMarket,
-    figureMedia,
-    boxMedia,
-    forceSoldOut: true,
-  });
-  const receiptsMerkleTree = common.receiptsMerkleTree;
-  const {
-    deliveryLookupTable,
-    stripeProductTaxCode: _stripeProductTaxCode,
-    ...frontend
-  } = common;
-  const {
-    receiptsMerkleTree: _defaultReceipts,
-    deliveryLookupTable: _defaultLookupTable,
-    stripeProductTaxCode: _defaultTaxCode,
-    ...defaultMarketFrontend
-  } = registryDrop('default_market');
-  defaultMarketFrontend.secondaryMarketHref =
-    'https://www.tensor.trade/trade/default_market';
-  try {
-    await Promise.all([
-      writeFile(
-        frontendPath,
-        `export const FRONTEND_DROPS = ${JSON.stringify({
-          legacy_card: frontend,
-          default_market: defaultMarketFrontend,
-        })};\n`,
-        'utf8',
-      ),
-      writeFile(
-        functionsPath,
-        `export const FUNCTIONS_DROPS = ${JSON.stringify({
-          legacy_card: {
-            ...frontend,
-            receiptsMerkleTree,
-            deliveryLookupTable,
-          },
-        })};\n`,
-        'utf8',
-      ),
-    ]);
-    const [frontendRegistry, functionsRegistry] = await Promise.all([
-      readFrontendDropRegistry(frontendPath),
-      readFunctionsDropRegistry(functionsPath),
-    ]);
-    assert.deepEqual(
-      frontendRegistry.drops.legacy_card.figureMedia,
-      figureMedia,
-    );
-    assert.deepEqual(
-      frontendRegistry.drops.legacy_card.boxMedia,
-      boxMedia,
-    );
-    assert.equal(
-      frontendRegistry.drops.legacy_card.stripeCheckoutEnabled,
-      true,
-    );
-    assert.equal(frontendRegistry.drops.legacy_card.secondaryMarketHref, customMarket);
-    assert.equal(frontendRegistry.drops.legacy_card.forceSoldOut, true);
-    assert.equal(
-      frontendRegistry.drops.legacy_card.receiptsMerkleTree,
-      receiptsMerkleTree,
-    );
-    assert.equal(
-      Object.prototype.hasOwnProperty.call(
-        frontendRegistry.drops.default_market,
-        'secondaryMarketHref',
-      ),
-      false,
-    );
-    assert.equal(
-      functionsRegistry.drops.legacy_card.secondaryMarketHref,
-      customMarket,
-    );
-    assert.deepEqual(
-      functionsRegistry.drops.legacy_card.figureMedia,
-      figureMedia,
-    );
-    assert.deepEqual(
-      functionsRegistry.drops.legacy_card.boxMedia,
-      boxMedia,
-    );
-    assert.equal(functionsRegistry.drops.legacy_card.forceSoldOut, true);
-    assert.equal(
-      functionsRegistry.drops.legacy_card.stripeProductTaxCode,
-      CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
-    );
-    assert.equal(
-      functionsRegistry.drops.legacy_card.receiptsMerkleTree,
-      receiptsMerkleTree,
-    );
-    assert.equal(
-      functionsRegistry.drops.legacy_card.deliveryLookupTable,
-      deliveryLookupTable,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test('legacy sold-out compatibility is derived only from canonical rows', async (t) => {
-  const root = await mkdtemp(
-    path.join(os.tmpdir(), 'legacy-sold-out-compatibility-test-'),
-  );
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const frontendPath = path.join(root, 'frontend.mjs');
-  const functionsPath = path.join(root, 'functions.mjs');
-  const canonicalCard = DEPLOYMENT_DROPS.card_nft_2;
-  const ordinaryCard = registryDrop('ordinary_card', {
-    dropFamily: 'card_nft_2',
-  });
-  const {
-    forceSoldOut: _canonicalFrontendForceSoldOut,
-    stripeProductTaxCode: _canonicalFrontendTaxCode,
-    receiptsMerkleTree: _canonicalFrontendReceipts,
-    deliveryLookupTable: _canonicalFrontendLookupTable,
-    ...canonicalFrontend
-  } = canonicalCard;
-  const {
-    forceSoldOut: _canonicalFunctionsForceSoldOut,
-    ...canonicalFunctions
-  } = canonicalCard;
-  const {
-    stripeProductTaxCode: _ordinaryFrontendTaxCode,
-    receiptsMerkleTree: _ordinaryFrontendReceipts,
-    deliveryLookupTable: _ordinaryFrontendLookupTable,
-    ...ordinaryFrontend
-  } = ordinaryCard;
-
-  await Promise.all([
-    writeFile(
-      frontendPath,
-      `export const FRONTEND_DROPS = ${JSON.stringify({
-        card_nft_2: canonicalFrontend,
-        ordinary_card: ordinaryFrontend,
-      })};\n`,
-      'utf8',
-    ),
-    writeFile(
-      functionsPath,
-      `export const FUNCTIONS_DROPS = ${JSON.stringify({
-        card_nft_2: canonicalFunctions,
-        ordinary_card: ordinaryCard,
-      })};\n`,
-      'utf8',
-    ),
-  ]);
-
-  const [frontendRegistry, functionsRegistry] = await Promise.all([
-    readFrontendDropRegistry(frontendPath),
-    readFunctionsDropRegistry(functionsPath),
-  ]);
-  assert.equal(frontendRegistry.drops.card_nft_2.forceSoldOut, true);
-  assert.equal(functionsRegistry.drops.card_nft_2.forceSoldOut, true);
-  assert.equal(frontendRegistry.drops.ordinary_card.forceSoldOut, undefined);
-  assert.equal(functionsRegistry.drops.ordinary_card.forceSoldOut, undefined);
-});
-
-test('legacy projection readers store prototype-named IDs as own rows', async (t) => {
-  const root = await mkdtemp(
-    path.join(os.tmpdir(), 'legacy-prototype-drop-id-test-'),
-  );
-  t.after(() => rm(root, { recursive: true, force: true }));
-  const frontendPath = path.join(root, 'frontend.mjs');
-  const functionsPath = path.join(root, 'functions.mjs');
-  const protoDrop = registryDrop('__proto__');
-  const {
-    receiptsMerkleTree,
-    deliveryLookupTable,
-    stripeProductTaxCode: _stripeProductTaxCode,
-    ...frontendDrop
-  } = protoDrop;
-  await Promise.all([
-    writeFile(
-      frontendPath,
-      `export const FRONTEND_DROPS = { source: ${JSON.stringify(frontendDrop)} };\n`,
-      'utf8',
-    ),
-    writeFile(
-      functionsPath,
-      `export const FUNCTIONS_DROPS = { source: ${JSON.stringify({
-        ...frontendDrop,
-        receiptsMerkleTree,
-        deliveryLookupTable,
-      })} };\n`,
-      'utf8',
-    ),
-  ]);
-
-  const [frontendRegistry, functionsRegistry] = await Promise.all([
-    readFrontendDropRegistry(frontendPath),
-    readFunctionsDropRegistry(functionsPath),
-  ]);
-  for (const registry of [frontendRegistry.drops, functionsRegistry.drops]) {
-    assert.equal(Object.getPrototypeOf(registry), Object.prototype);
-    assert.equal(
-      Object.prototype.hasOwnProperty.call(registry, '__proto__'),
-      true,
-    );
-    assert.equal(registry['__proto__'].dropId, '__proto__');
-  }
-});
-
-test('legacy Functions reader rejects Stripe-enabled mainnet rows without live pricing', async () => {
-  const root = await mkdtemp(
-    path.join(os.tmpdir(), 'stripe-registry-reader-test-'),
-  );
-  const filePath = path.join(root, 'functions.mjs');
-  const drop = registryDrop('mainnet_card', {
-    solanaCluster: 'mainnet-beta',
-    dropFamily: 'card_nft_2',
-  });
-  try {
-    await writeFile(
-      filePath,
-      `export const FUNCTIONS_DROPS = ${JSON.stringify({ mainnet_card: drop })};\n`,
-      'utf8',
-    );
-    await assert.rejects(
-      readFunctionsDropRegistry(filePath),
-      /stripeLiveUnitAmountCents is required for Stripe-enabled mainnet drop mainnet_card/,
-    );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
 test('metadata base and asset URL helpers preserve legacy and compact behavior', () => {
   assert.equal(normalizeDropBase(VALID_IPFS_CID), `ipfs://${VALID_IPFS_CID}`);
   assert.equal(
@@ -2248,8 +2001,6 @@ async function writeStartMintCanonical(
 ): Promise<string> {
   const canonicalPath = path.join(
     root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -2293,8 +2044,6 @@ test('start-mint never downgrades when an existing canonical registry is malform
   t.after(() => rm(root, { recursive: true, force: true }));
   const canonicalPath = path.join(
     root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -2332,8 +2081,6 @@ test('start-mint never downgrades when the canonical path is a dangling symlink'
   t.after(() => rm(root, { recursive: true, force: true }));
   const canonicalPath = path.join(
     root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );

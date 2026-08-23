@@ -15,13 +15,12 @@ import ts from 'typescript';
 import {
   defaultBoxMediaConfigForDropFamily,
   defaultFigureMediaConfigForDropFamily,
-} from '../../functions/src/shared/dropMediaDefaults.ts';
+} from '../../shared/dropMediaDefaults.ts';
 import {
   BOX_MINTER_CONFIG_TOMBSTONES,
   DEPLOYMENT_REGISTRY_DROP_FIELDS,
   clonePaymentRoutingConfig,
   deploymentTreasuryAlias,
-  getDeploymentDrop,
   normalizeAndValidatePaymentRouting,
   projectDeploymentPaymentRouting,
   type BoxMinterConfigTombstone,
@@ -30,10 +29,10 @@ import {
   type DeploymentRegistryDrop,
   type PaymentRoutingConfig,
   type ReceiptPoolDeployment,
-} from '../../functions/src/shared/deploymentRegistry.ts';
+} from '../../shared/deploymentRegistry.ts';
 import {
   normalizeMediaMapConfig,
-} from '../../functions/src/shared/mediaMap.ts';
+} from '../../shared/mediaMap.ts';
 import {
   assertStripeLivePriceConfigured,
   CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
@@ -45,14 +44,14 @@ import {
   STRIPE_UNIT_AMOUNT_CENTS_MAX,
   STRIPE_UNIT_AMOUNT_CENTS_MIN,
   type StripeCheckoutEnabledResolution,
-} from '../../functions/src/shared/stripeCheckoutCore.ts';
+} from '../../shared/stripeCheckoutCore.ts';
 import {
   BOX_MINTER_CONFIG_SEED,
   BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET,
   BOX_MINTER_MAX_ITEMS_PER_BOX,
   BOX_MINTER_MIN_CONFIGURED_ITEMS_PER_BOX,
   BOX_MINTER_MIN_DISCOUNT_MINTS_PER_WALLET,
-} from '../../functions/src/shared/boxMinterProtocol.ts';
+} from '../../shared/boxMinterProtocol.ts';
 import {
   canonicalizeDropAssetUrl,
   defaultDropFamilyForDropId,
@@ -72,7 +71,7 @@ import {
   type MetadataPathFormat,
   type MintSelectionConfig,
   type SolanaCluster,
-} from '../../functions/src/shared/deploymentCore.ts';
+} from '../../shared/deploymentCore.ts';
 import {
   isOptimisticTextFilePostCommitVerificationError,
   writeOptimisticTextFile,
@@ -118,32 +117,7 @@ export type FigureMediaConfigSerialized = MediaMapConfigSerialized;
 export type BoxMediaConfigSerialized = MediaMapConfigSerialized;
 export type MintSelectionConfigSerialized = MintSelectionConfig;
 
-type DeploymentDropWithTreasuryAlias = Omit<
-  DeploymentRegistryDrop,
-  'treasury'
-> & {
-  treasury: string;
-};
-
-export type FrontendDropConfigSerialized = Omit<
-  DeploymentDropWithTreasuryAlias,
-  | 'stripeProductTaxCode'
-  | 'receiptsTreeMaxDepth'
-  | 'receiptsTreeCanopyDepth'
-  | 'deliveryLookupTable'
->;
-
-export type FunctionsDropConfigSerialized = DeploymentDropWithTreasuryAlias;
-
 export type DeploymentDropConfigSerialized = DeploymentRegistryDrop;
-
-export type FrontendDropRegistry = {
-  drops: Record<string, FrontendDropConfigSerialized>;
-};
-
-export type FunctionsDropRegistry = {
-  drops: Record<string, FunctionsDropConfigSerialized>;
-};
 
 export type DeploymentDropRegistry = {
   drops: Record<string, DeploymentDropConfigSerialized>;
@@ -507,59 +481,6 @@ function normalizeDeploymentDropForRegistry(
       : {}),
     deliveryLookupTable: asTrimmedString(object.deliveryLookupTable),
   };
-}
-
-function projectFrontendSerialized(
-  drop: DeploymentDropConfigSerialized,
-): FrontendDropConfigSerialized {
-  const {
-    secondaryMarketHref,
-    stripeProductTaxCode: _stripeProductTaxCode,
-    receiptsTreeMaxDepth: _receiptsTreeMaxDepth,
-    receiptsTreeCanopyDepth: _receiptsTreeCanopyDepth,
-    deliveryLookupTable: _deliveryLookupTable,
-    ...frontend
-  } = drop;
-  const defaultMarket = defaultSecondaryMarketHref(drop.dropId);
-  return {
-    ...frontend,
-    ...projectDeploymentPaymentRouting(drop),
-    ...(secondaryMarketHref && secondaryMarketHref !== defaultMarket
-      ? { secondaryMarketHref }
-      : {}),
-  };
-}
-
-function projectFunctionsSerialized(
-  drop: DeploymentDropConfigSerialized,
-): FunctionsDropConfigSerialized {
-  return {
-    ...projectFrontendSerialized(drop),
-    ...(drop.stripeProductTaxCode
-      ? { stripeProductTaxCode: drop.stripeProductTaxCode }
-      : {}),
-    receiptsMerkleTree: drop.receiptsMerkleTree,
-    ...(drop.receiptsTreeMaxDepth != null
-      ? { receiptsTreeMaxDepth: drop.receiptsTreeMaxDepth }
-      : {}),
-    ...(drop.receiptsTreeCanopyDepth != null
-      ? { receiptsTreeCanopyDepth: drop.receiptsTreeCanopyDepth }
-      : {}),
-    deliveryLookupTable: drop.deliveryLookupTable,
-  };
-}
-
-function setOwnDrop<T>(
-  drops: Record<string, T>,
-  dropId: string,
-  drop: T,
-): void {
-  Object.defineProperty(drops, dropId, {
-    value: drop,
-    configurable: true,
-    enumerable: true,
-    writable: true,
-  });
 }
 
 async function importModuleFresh(
@@ -1510,94 +1431,6 @@ export async function readDeploymentDropRegistry(
   return { drops, tombstones, receiptPools, sourceContent };
 }
 
-function canonicalForceSoldOutForLegacyDropId(dropId: string): boolean {
-  return getDeploymentDrop(dropId)?.forceSoldOut === true;
-}
-
-export async function readFrontendDropRegistry(
-  filePath: string,
-): Promise<FrontendDropRegistry> {
-  const drops: Record<string, FrontendDropConfigSerialized> = {};
-  if (!existsSync(filePath)) return { drops };
-  const mod = await readModule(filePath, 'frontend deployment config');
-  const candidate = mod.FRONTEND_DROPS;
-  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
-    Object.values(candidate as Record<string, unknown>).forEach((value) => {
-      const normalized = normalizeDeploymentDropForRegistry({
-        receiptsMerkleTree: '',
-        deliveryLookupTable: '',
-        ...(value as Record<string, unknown>),
-      }, {
-        forceSoldOutFallback: canonicalForceSoldOutForLegacyDropId,
-      });
-      if (normalized) {
-        setOwnDrop(
-          drops,
-          normalized.dropId,
-          projectFrontendSerialized(normalized),
-        );
-      }
-    });
-  }
-  if (!Object.keys(drops).length) {
-    const legacy = mod.FRONTEND_DEPLOYMENT || mod.DEPLOYMENT || mod.default;
-    const normalized = normalizeDeploymentDropForRegistry({
-      receiptsMerkleTree: '',
-      deliveryLookupTable: '',
-      ...(legacy && typeof legacy === 'object'
-        ? (legacy as Record<string, unknown>)
-        : {}),
-    }, {
-      forceSoldOutFallback: canonicalForceSoldOutForLegacyDropId,
-    });
-    if (normalized) {
-      setOwnDrop(
-        drops,
-        normalized.dropId,
-        projectFrontendSerialized(normalized),
-      );
-    }
-  }
-  return { drops };
-}
-
-export async function readFunctionsDropRegistry(
-  filePath: string,
-): Promise<FunctionsDropRegistry> {
-  const drops: Record<string, FunctionsDropConfigSerialized> = {};
-  if (!existsSync(filePath)) return { drops };
-  const mod = await readModule(filePath, 'Functions deployment config');
-  const candidate = mod.FUNCTIONS_DROPS;
-  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
-    Object.values(candidate as Record<string, unknown>).forEach((value) => {
-      const normalized = normalizeDeploymentDropForRegistry(value, {
-        forceSoldOutFallback: canonicalForceSoldOutForLegacyDropId,
-      });
-      if (normalized) {
-        setOwnDrop(
-          drops,
-          normalized.dropId,
-          projectFunctionsSerialized(normalized),
-        );
-      }
-    });
-  }
-  if (!Object.keys(drops).length) {
-    const legacy = mod.FUNCTIONS_DEPLOYMENT || mod.DEPLOYMENT || mod.default;
-    const normalized = normalizeDeploymentDropForRegistry(legacy, {
-      forceSoldOutFallback: canonicalForceSoldOutForLegacyDropId,
-    });
-    if (normalized) {
-      setOwnDrop(
-        drops,
-        normalized.dropId,
-        projectFunctionsSerialized(normalized),
-      );
-    }
-  }
-  return { drops };
-}
-
 function tsStringLiteral(value: string): string {
   return `'${value
     .replace(/\\/g, '\\\\')
@@ -2153,7 +1986,7 @@ export function renderReceiptPoolDeploymentsFileFromSource(args: {
 function canonicalRegistryTemplatePath(): string {
   return fileURLToPath(
     new URL(
-      '../../functions/src/shared/deploymentRegistry.ts',
+      '../../shared/deploymentRegistry.ts',
       import.meta.url,
     ),
   );

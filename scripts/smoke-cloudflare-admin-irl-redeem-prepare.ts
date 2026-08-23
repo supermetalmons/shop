@@ -8,15 +8,15 @@ import {
   SystemProgram,
   VersionedTransaction,
 } from '@solana/web3.js';
-import { getFunctionsDrop } from '../functions/src/config/deployment.js';
+import { getApiDrop } from '../cloud/workers/api/src/dropConfig.js';
 import {
   ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER,
-} from '../functions/src/shared/contracts.js';
-import { isBase58Bytes } from '../functions/src/shared/solanaRpcProxy.js';
+} from '../shared/contracts.js';
+import { isBase58Bytes } from '../shared/solanaRpcProxy.js';
 import {
   MPL_CORE_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
-} from '../functions/src/shared/solanaProgramAddresses.js';
+} from '../shared/solanaProgramAddresses.js';
 import {
   FIRESTORE_DOCUMENTS_BASE_URL,
   decodeFirestoreFields,
@@ -373,7 +373,7 @@ async function smokeAndCleanupAdminIrlRedeemPrepare(
   if (!token || token.length > 16 * 1024) throw new Error(`${smokeTokenName} is required.`);
   if (!isBase58Bytes(owner, 32)) throw new Error(`${smokeOwnerName} must be a valid wallet.`);
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId)) throw new Error(`${smokeDropIdName} must be a valid drop id.`);
-  const config = getFunctionsDrop(dropId);
+  const config = getApiDrop(dropId);
   if (!config || (config.solanaCluster !== 'mainnet-beta' && config.solanaCluster !== 'devnet')) {
     throw new Error(`${smokeDropIdName} must identify a supported drop.`);
   }

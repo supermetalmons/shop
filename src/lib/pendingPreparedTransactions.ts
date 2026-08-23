@@ -1,7 +1,7 @@
 import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
-} from '../../functions/src/shared/solanaRpcProxy.ts';
+} from '../../shared/solanaRpcProxy.ts';
 
 const PENDING_PREPARED_TRANSACTION_STORAGE_PREFIX = 'monsPendingPreparedTransaction:v1';
 export const PENDING_PREPARED_TRANSACTION_PREPARING_TTL_MS = 5 * 60_000;

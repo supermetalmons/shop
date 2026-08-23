@@ -2,13 +2,13 @@ import {
   NOTIFICATION_EMAIL_MAX_JOB_BYTES,
   isNotificationEmailJobV1,
   type NotificationEmailJobV1,
-} from '../../../../functions/src/shared/notificationEmailJob.js';
+} from '../../../../shared/notificationEmailJob.js';
 import {
   NOTIFICATION_ENQUEUE_PATH,
   NOTIFICATION_ENQUEUE_SIGNATURE_HEADER,
   NOTIFICATION_ENQUEUE_TIMESTAMP_HEADER,
   verifyNotificationEnqueueRequest,
-} from '../../../../functions/src/shared/notificationEnqueueAuth.js';
+} from '../../../../shared/notificationEnqueueAuth.js';
 
 const RESPONSE_HEADERS = {
   'Cache-Control': 'no-store',

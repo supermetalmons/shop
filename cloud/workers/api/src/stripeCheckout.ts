@@ -1,14 +1,14 @@
 import bs58 from 'bs58';
 import { Keypair } from '@solana/web3.js';
 import Stripe from 'stripe';
-import { getFunctionsDrop } from '../../../../functions/src/config/deployment.js';
+import { getApiDrop } from './dropConfig.js';
 import {
   ADDRESS_CIPHER_SECRET_KEY_LENGTH,
-} from '../../../../functions/src/shared/addressCipher.js';
+} from '../../../../shared/addressCipher.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
-} from '../../../../functions/src/shared/boxMinterConfigCodec.js';
+} from '../../../../shared/boxMinterConfigCodec.js';
 import {
   StripeCheckoutSessionError,
   createStripeCheckoutSessionCore,
@@ -16,8 +16,8 @@ import {
   type StripeCheckoutProviderRequest,
   type StripeCheckoutProviderResponse,
   type StripeCheckoutSessionDrop,
-} from '../../../../functions/src/shared/stripeCheckoutSession.js';
-import type { StripeCheckoutMode } from '../../../../functions/src/shared/stripeCheckoutCore.js';
+} from '../../../../shared/stripeCheckoutSession.js';
+import type { StripeCheckoutMode } from '../../../../shared/stripeCheckoutCore.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
@@ -171,7 +171,7 @@ async function readBoundedRequestJson(request: Request, signal: AbortSignal): Pr
 }
 
 function checkoutDrop(dropId: string): StripeCheckoutSessionDrop | undefined {
-  const drop = getFunctionsDrop(dropId);
+  const drop = getApiDrop(dropId);
   if (!drop) return undefined;
   return {
     dropId: drop.dropId,

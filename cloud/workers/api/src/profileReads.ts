@@ -2,19 +2,19 @@ import {
   deliveryOrderSummarySortAt,
   parseDeliveryOrderSummary,
   PROFILE_SHIPMENT_STATUSES,
-} from '../../../../functions/src/shared/deliveryOrderSummary.js';
+} from '../../../../shared/deliveryOrderSummary.js';
 import {
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
   walletHasAdminAccess,
   walletCanViewSensitiveFulfillmentAddress,
   walletHasFulfillmentDropAccess,
-} from '../../../../functions/src/shared/fulfillmentAccess.js';
+} from '../../../../shared/fulfillmentAccess.js';
 import {
   fulfillmentOrderFromRecord,
   isManualReviewCheckout,
   manualReviewCheckoutFromRecord,
-} from '../../../../functions/src/shared/fulfillmentReadModel.js';
+} from '../../../../shared/fulfillmentReadModel.js';
 import type {
   DeliveryOrderSummary,
   FulfillmentManualReviewCheckout,
@@ -25,16 +25,16 @@ import type {
   GetProfileShipmentsResponse,
   ProfileStateProfile,
   ProfileStateSection,
-} from '../../../../functions/src/shared/contracts.js';
-import { normalizeDropId } from '../../../../functions/src/shared/deploymentCore.js';
-import { DEPLOYMENT_DROPS } from '../../../../functions/src/shared/deploymentRegistry.js';
+} from '../../../../shared/contracts.js';
+import { normalizeDropId } from '../../../../shared/deploymentCore.js';
+import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
 import {
   ADDRESS_CIPHER_SECRET_KEY_LENGTH,
   decryptAddressCipherText,
   parseAddressCipherPayload,
-} from '../../../../functions/src/shared/addressCipher.js';
-import { parseCanonicalPositiveInteger } from '../../../../functions/src/shared/positiveInteger.js';
-import { isBase58Bytes } from '../../../../functions/src/shared/solanaRpcProxy.js';
+} from '../../../../shared/addressCipher.js';
+import { parseCanonicalPositiveInteger } from '../../../../shared/positiveInteger.js';
+import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,

@@ -9,60 +9,60 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import { z } from 'zod';
-import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../functions/src/shared/dasAssetCollections.js';
-import type { DasAsset } from '../../../../functions/src/shared/dasAsset.js';
+import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../shared/dasAssetCollections.js';
+import type { DasAsset } from '../../../../shared/dasAsset.js';
 import {
   boxMinterMetadataBaseMatchesDrop,
   normalizeBoxMinterMetadataBaseForComparison,
   normalizeDropId,
   type SolanaCluster,
-} from '../../../../functions/src/shared/deploymentCore.js';
+} from '../../../../shared/deploymentCore.js';
 import {
   DEPLOYMENT_DROPS,
   type DeploymentRegistryDrop,
-} from '../../../../functions/src/shared/deploymentRegistry.js';
+} from '../../../../shared/deploymentRegistry.js';
 import type {
   RevealDudesSubmissionUnknownDetails,
-} from '../../../../functions/src/shared/contracts.js';
+} from '../../../../shared/contracts.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
   type DecodedBoxMinterConfigData,
-} from '../../../../functions/src/shared/boxMinterConfigCodec.js';
+} from '../../../../shared/boxMinterConfigCodec.js';
 import {
   BOX_MINTER_CONFIG_SEED,
   BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX,
   BOX_MINTER_PENDING_OPEN_SEED,
-} from '../../../../functions/src/shared/boxMinterProtocol.js';
+} from '../../../../shared/boxMinterProtocol.js';
 import {
   DudeAssignmentPoolExhaustedError,
   pickDudeIdsForAssignment,
-} from '../../../../functions/src/shared/assignDudesPicker.js';
-import { sanitizeDudeAssignmentPool } from '../../../../functions/src/shared/dudeAssignmentPool.js';
+} from '../../../../shared/assignDudesPicker.js';
+import { sanitizeDudeAssignmentPool } from '../../../../shared/dudeAssignmentPool.js';
 import {
   encodeFinalizeOpenBoxArgs,
-} from '../../../../functions/src/shared/finalizeOpenBoxArgs.js';
-import { decodePendingOpenData } from '../../../../functions/src/shared/pendingOpenCodec.js';
+} from '../../../../shared/finalizeOpenBoxArgs.js';
+import { decodePendingOpenData } from '../../../../shared/pendingOpenCodec.js';
 import {
   PACK_STATUS_SCHEMA_VERSION,
   packStatusCardsPerPack,
   shouldTrackPackStatusForDrop,
-} from '../../../../functions/src/shared/packStatus.js';
+} from '../../../../shared/packStatus.js';
 import {
   MPL_CORE_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.js';
+} from '../../../../shared/solanaProgramAddresses.js';
 import {
   isBase58Bytes,
   isExactShopRpcResponse,
   isNonZeroBase58Bytes,
   isTransientShopRpcError,
-} from '../../../../functions/src/shared/solanaRpcProxy.js';
-import { transformShopInventoryItem } from '../../../../functions/src/shared/shopDomain.js';
+} from '../../../../shared/solanaRpcProxy.js';
+import { transformShopInventoryItem } from '../../../../shared/shopDomain.js';
 import {
   WALLET_SESSION_COLLECTION,
   resolveWalletSessionBinding,
-} from '../../../../functions/src/shared/walletLifecycle.js';
+} from '../../../../shared/walletLifecycle.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,

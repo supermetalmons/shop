@@ -5,8 +5,8 @@ import {
   HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES,
   HELIUS_SEARCH_ASSETS_MAX_TOTAL_BYTES,
   HELIUS_SEARCH_ASSETS_PAGE_LIMITS,
-} from '../../../../functions/src/shared/heliusDas.js';
-import { listShopCollectionQueryRuntimes } from '../../../../functions/src/shared/shopDomain.js';
+} from '../../../../shared/heliusDas.js';
+import { listShopCollectionQueryRuntimes } from '../../../../shared/shopDomain.js';
 import {
   handleRequest,
   type ProviderFetch,

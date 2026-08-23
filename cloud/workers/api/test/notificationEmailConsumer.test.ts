@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createNotificationEmailJobV1 } from '../../../../functions/src/shared/notificationEmailJob.ts';
-import { createStripeCheckoutFulfillmentJobV1 } from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.ts';
+import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
+import { createStripeCheckoutFulfillmentJobV1 } from '../../../../shared/stripeCheckoutFulfillmentJob.ts';
 import worker, { processBackgroundJobBatch, processStripeFulfillmentMessage } from '../src/index.ts';
 import {
   notificationEmailRetryDelaySeconds,

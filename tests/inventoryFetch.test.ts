@@ -8,7 +8,7 @@ import {
   resolvePendingOpenDropId,
   type InventoryDropResolutionCandidate,
   type PendingOpenRecordCandidate,
-} from '../functions/src/shared/shopDomain.ts';
+} from '../shared/shopDomain.ts';
 
 const LITTLE_SWAG_BOXES_COLLECTION = '7c3tY7nEZ6yDuUCrsL6dX7AFcCqKbwMwS6HRvdZXeQXr';
 const PONCHO_DRIFELLA_COLLECTION = 'JCTP3kK3xGtWs5mDHxJBuRro38HftaiCDdKsfkXuK2gH';

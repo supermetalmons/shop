@@ -7,7 +7,7 @@ import {
   BOX_MINTER_CONFIG_DISCRIMINATOR,
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
-} from '../functions/src/shared/boxMinterConfigCodec.ts';
+} from '../shared/boxMinterConfigCodec.ts';
 import { decodeBoxMinterConfigForDeployPreflight } from '../scripts/deploy-all-onchain.ts';
 import { decodeBoxMinterConfigForPriceUpdate } from '../scripts/setMintPrices.ts';
 import { decodeStartMintMetadataBase } from '../scripts/startMint.ts';

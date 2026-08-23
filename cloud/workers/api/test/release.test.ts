@@ -53,6 +53,7 @@ import {
 } from '../../../../scripts/cloudflare-deployment-state.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+const NOTIFICATION_ENQUEUE_SECRET = 'notification-enqueue-secret';
 const EMPTY_NEW_API_SECRET_ENV = {
   RESEND_API_KEY: '',
   FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '',
@@ -360,11 +361,14 @@ test('candidate promotion evidence is exact, version-keyed, and owner-bound', ()
     testedAt: new Date().toISOString(),
     runs: 5,
     workerMedianMs: 10,
-    legacyMedianMs: 20,
+    directHeliusMedianMs: 20,
   };
   try {
     writeFileSync(path, JSON.stringify(record), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     assert.equal(deployApiTestHooks.isCandidateRecord(record), true);
+    const retiredCandidateRecord: Partial<typeof record> = { ...record };
+    delete retiredCandidateRecord.directHeliusMedianMs;
+    assert.equal(deployApiTestHooks.isCandidateRecord(retiredCandidateRecord), false);
     assert.equal(deployApiTestHooks.isCandidateRecord({ ...record, testedAt: new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString() }), false);
     assert.equal(deployApiTestHooks.isCandidateRecord({ ...record, previewUrl: 'https://candidate-mons-shop-api.lil-org.workers.dev' }), false);
     assert.equal(deployApiTestHooks.requireCandidateRecord(versionId, OWNER).versionId, versionId);
@@ -1540,11 +1544,31 @@ test('validation environments exclude deployment and provider credentials', () =
   assert.equal(validation.VITE_HELIUS_API_KEY, undefined);
   assert.equal(validation.WRANGLER_OUTPUT_FILE_PATH, undefined);
   assert.equal(validation.DOTENV_KEY, undefined);
-  const smoke = deployApiTestHooks.notificationSmokeEnvironment(source);
-  assert.equal(smoke.NOTIFICATION_ENQUEUE_SECRET, 'notification-enqueue-secret');
-  assert.equal(smoke.GOOGLE_APPLICATION_CREDENTIALS, '/tmp/google-credentials.json');
-  assert.equal(smoke.HELIUS_API_KEY, undefined);
-  assert.equal(smoke.RESEND_API_KEY, undefined);
+  const request = deployApiTestHooks.notificationRequestEnvironment(NOTIFICATION_ENQUEUE_SECRET, source);
+  assert.equal(request.NOTIFICATION_ENQUEUE_SECRET, NOTIFICATION_ENQUEUE_SECRET);
+  assert.equal(request.CLOUDFLARE_API_TOKEN, undefined);
+  assert.equal(request.CF_API_TOKEN, undefined);
+  assert.equal(request.WRANGLER_OUTPUT_FILE_PATH, undefined);
+  assert.equal(request.GOOGLE_APPLICATION_CREDENTIALS, undefined);
+  assert.equal(request.HELIUS_API_KEY, undefined);
+  assert.equal(request.RESEND_API_KEY, undefined);
+  const tail = deployApiTestHooks.notificationTailEnvironment(source);
+  assert.equal(tail.CLOUDFLARE_API_TOKEN, 'cloudflare-secret');
+  assert.equal(tail.CF_API_TOKEN, 'cloudflare-secret-two');
+  assert.equal(tail.WRANGLER_OUTPUT_FILE_PATH, '/tmp/output');
+  assert.equal(tail.NOTIFICATION_ENQUEUE_SECRET, undefined);
+  assert.equal(tail.GOOGLE_APPLICATION_CREDENTIALS, undefined);
+  assert.equal(tail.HELIUS_API_KEY, undefined);
+  assert.deepEqual(deployApiTestHooks.notificationTailArgs('mons-shop-api'), [
+    'tail',
+    'mons-shop-api',
+    '--format',
+    'json',
+    '--config',
+    'cloud/workers/api/wrangler.jsonc',
+    '--env-file',
+    'cloud/workers/api/release.env',
+  ]);
   let childEnvironment: NodeJS.ProcessEnv | undefined;
   deployApiTestHooks.runApiValidation(source, (_command, args, environment) => {
     assert.deepEqual(args, ['run', 'check:api']);
@@ -1640,6 +1664,92 @@ test('termination cleanup failures are surfaced without leaking details', () => 
   assert.doesNotMatch(logged, /release-test-secret/);
 });
 
+test('release, production, and rollback reject a missing notification enqueue secret before mutation', async () => {
+  let calls = 0;
+  const forbidden = (): never => {
+    calls += 1;
+    return assert.fail('missing notification secret reached a release dependency');
+  };
+  const manifest = deployApiTestHooks.readReleaseManifest();
+  const candidateVersionId = randomUUID();
+  const baseInput = {
+    notificationEnqueueSecret: '',
+    smokeOwner: OWNER,
+    wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+  };
+
+  await assert.rejects(
+    () => deployApiTestHooks.runCompleteApiRelease({
+      ...baseInput,
+      apiToken: 'scoped-token',
+      checkEnvironment: {
+        HELIUS_API_KEY: '',
+        RESEND_CONTACTS_API_KEY: '',
+        NOTIFICATION_ENQUEUE_SECRET: '',
+        FIRESTORE_SERVICE_ACCOUNT_JSON: '',
+        ...EMPTY_NEW_API_SECRET_ENV,
+      },
+      firestoreServiceAccountJson: 'firestore-test-credential',
+      firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
+      heliusApiKey: 'helius-test-key',
+      logsDirectory: '/tmp/logs',
+    }, {
+      apiDeployment: forbidden,
+      frontendDeployment: forbidden,
+      manifest: forbidden,
+      production: forbidden,
+      record: forbidden,
+      triggerDryRun: forbidden,
+      upload: forbidden,
+      validate: forbidden,
+    }),
+    /NOTIFICATION_ENQUEUE_SECRET is required.*before release mutation/,
+  );
+  assert.equal(calls, 0);
+
+  await assert.rejects(
+    () => deployApiTestHooks.runProductionSequence({
+      ...baseInput,
+      expectedCurrentVersionId: manifest.currentProduction.apiVersionId,
+      heliusApiKey: 'helius-test-key',
+      previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+      versionId: candidateVersionId,
+    }, {
+      benchmark: forbidden,
+      deployment: forbidden,
+      evidence: forbidden,
+      sleep: forbidden,
+      smoke: forbidden,
+      wrangler: forbidden,
+    }),
+    /NOTIFICATION_ENQUEUE_SECRET is required.*before release mutation/,
+  );
+  assert.equal(calls, 0);
+
+  await assert.rejects(
+    () => deployApiTestHooks.runRollbackSequence({
+      ...baseInput,
+      manifest,
+      versionId: manifest.approvedRollback.apiVersionId,
+    }, {
+      apiDeployment: forbidden,
+      disableReconciliationSchedule: forbidden,
+      evidence: forbidden,
+      frontendDeployment: forbidden,
+      pauseRevealQueue: forbidden,
+      record: forbidden,
+      repauseRevealQueue: forbidden,
+      resumeRevealQueue: forbidden,
+      sleep: forbidden,
+      smoke: forbidden,
+      verifyQueueConsumers: forbidden,
+      wrangler: forbidden,
+    }),
+    /NOTIFICATION_ENQUEUE_SECRET is required.*before release mutation/,
+  );
+  assert.equal(calls, 0);
+});
+
 test('frontend deployment gates upload on typechecking, tests, build, and bundle validation', () => {
   assert.deepEqual(
     frontendDeployTestHooks.frontendValidationSteps.map((step) => step.args),
@@ -1682,19 +1792,28 @@ test('benchmark warms both paths and alternates measured request order', async (
         clock += 1;
         return [];
       },
-      legacyInventory: async (_apiKey, _owner, _network, includeDevnet) => {
-        calls.push('legacy');
+      directHeliusReferenceInventory: async (_apiKey, _owner, _network, includeDevnet) => {
+        calls.push('direct-helius-reference');
         includeDevnetValues.push(includeDevnet === true);
         clock += 3;
         return [];
       },
     },
   );
-  assert.deepEqual(calls, ['worker', 'legacy', 'worker', 'legacy', 'legacy', 'worker', 'worker', 'legacy']);
+  assert.deepEqual(calls, [
+    'worker',
+    'direct-helius-reference',
+    'worker',
+    'direct-helius-reference',
+    'direct-helius-reference',
+    'worker',
+    'worker',
+    'direct-helius-reference',
+  ]);
   assert.equal(includeDevnetValues.every((value) => value === true), true);
   assert.equal(result.runs, 3);
   assert.equal(result.workerMedianMs, 1);
-  assert.equal(result.legacyMedianMs, 3);
+  assert.equal(result.directHeliusMedianMs, 3);
 });
 
 test('direct benchmark uses bounded cursor requests and keeps a successful size-down limit', async () => {
@@ -1702,7 +1821,7 @@ test('direct benchmark uses bounded cursor requests and keeps a successful size-
   const scheduledTimeouts: number[] = [];
   const clearedTimers: unknown[] = [];
   let nextTimer = 0;
-  const items = await benchmarkApiTestHooks.legacyInventory('helius-test-key', OWNER, {
+  const items = await benchmarkApiTestHooks.directHeliusReferenceInventory('helius-test-key', OWNER, {
     clearTimer: (handle) => clearedTimers.push(handle),
     fetch: async (_input, init) => {
       const rpc = JSON.parse(String(init?.body)) as { id: string; params: Record<string, unknown> };
@@ -1735,7 +1854,7 @@ test('direct benchmark uses bounded cursor requests and keeps a successful size-
   assert.deepEqual(requests[0].params.options, { showUnverifiedCollections: true });
   assert.equal(Object.hasOwn(requests[0].params, 'page'), false);
   assert.equal(requests.some((request) => !request.params.grouping), false);
-  assert.equal(scheduledTimeouts[0], benchmarkApiTestHooks.legacyInventoryTimeoutMs);
+  assert.equal(scheduledTimeouts[0], benchmarkApiTestHooks.directHeliusReferenceInventoryTimeoutMs);
   assert.equal(
     scheduledTimeouts.slice(1).every((timeout) => timeout === benchmarkApiTestHooks.heliusAttemptTimeoutMs),
     true,
@@ -1746,7 +1865,7 @@ test('direct benchmark uses bounded cursor requests and keeps a successful size-
 test('direct benchmark never invokes whole-wallet fallback for successful empty grouped scopes', async () => {
   const requests: Array<{ params: Record<string, unknown> }> = [];
   let nextTimer = 0;
-  const items = await benchmarkApiTestHooks.legacyInventory('helius-test-key', OWNER, {
+  const items = await benchmarkApiTestHooks.directHeliusReferenceInventory('helius-test-key', OWNER, {
     clearTimer: () => undefined,
     fetch: async (_input, init) => {
       const rpc = JSON.parse(String(init?.body)) as { id: string; params: Record<string, unknown> };
@@ -1767,7 +1886,7 @@ test('direct benchmark never invokes whole-wallet fallback for successful empty 
 test('direct benchmark includes both Helius clusters when devnet is enabled', async () => {
   const origins = new Set<string>();
   let nextTimer = 0;
-  await benchmarkApiTestHooks.legacyInventory('helius-test-key', OWNER, {
+  await benchmarkApiTestHooks.directHeliusReferenceInventory('helius-test-key', OWNER, {
     clearTimer: () => undefined,
     fetch: async (input, init) => {
       origins.add(new URL(String(input)).hostname);
@@ -1786,7 +1905,7 @@ test('direct benchmark retains cluster fallback after an initial grouped provide
   const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
   const retryDelays: number[] = [];
   let nextTimer = 0;
-  await benchmarkApiTestHooks.legacyInventory('helius-test-key', OWNER, {
+  await benchmarkApiTestHooks.directHeliusReferenceInventory('helius-test-key', OWNER, {
     clearTimer: () => undefined,
     fetch: async (_input, init) => {
       const rpc = JSON.parse(String(init?.body)) as { id: string; params: Record<string, unknown> };
@@ -1821,7 +1940,7 @@ test('direct benchmark retains cluster fallback after an initial grouped provide
 test('direct benchmark does not hide a malformed grouped result behind whole-wallet fallback', async () => {
   let providerCalls = 0;
   await assert.rejects(
-    () => benchmarkApiTestHooks.legacyInventory('helius-test-key', OWNER, {
+    () => benchmarkApiTestHooks.directHeliusReferenceInventory('helius-test-key', OWNER, {
       clearTimer: () => undefined,
       fetch: async (_input, init) => {
         providerCalls += 1;
@@ -2042,6 +2161,7 @@ test('complete API release blocks stale API or frontend state before upload', as
         firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
         heliusApiKey: 'helius-test-key',
         logsDirectory: '/tmp/logs',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         smokeOwner: OWNER,
         wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
       }, {
@@ -2536,6 +2656,7 @@ test('complete API release verifies the full pair around one exact API promotion
     firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
     heliusApiKey: 'helius-test-key',
     logsDirectory: '/tmp/logs',
+    notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
     smokeOwner: OWNER,
     wranglerEnvironment: { CLOUDFLARE_API_TOKEN: 'scoped-token', HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
   }, {
@@ -2630,6 +2751,7 @@ test('complete API release refuses post-promotion pair drift and manifest-write 
         firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
         heliusApiKey: 'helius-test-key',
         logsDirectory: '/tmp/logs',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         smokeOwner: OWNER,
         wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
       }, {
@@ -2667,6 +2789,7 @@ test('complete API release refuses post-promotion pair drift and manifest-write 
         firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
         heliusApiKey: 'helius-test-key',
         logsDirectory: '/tmp/logs',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         smokeOwner: OWNER,
         wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
       }, {
@@ -2700,6 +2823,7 @@ test('complete API release refuses post-promotion pair drift and manifest-write 
       firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
       heliusApiKey: 'helius-test-key',
       logsDirectory: '/tmp/logs',
+      notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
       smokeOwner: OWNER,
       wranglerEnvironment: { HELIUS_API_KEY: '', RESEND_CONTACTS_API_KEY: '', NOTIFICATION_ENQUEUE_SECRET: '', FIRESTORE_SERVICE_ACCOUNT_JSON: '', ...EMPTY_NEW_API_SECRET_ENV },
     }, {
@@ -2749,6 +2873,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
       },
       expectedCurrentVersionId: baselineVersionId,
       heliusApiKey: 'helius-test-key',
+      notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
       previewUrl,
       smokeOwner: OWNER,
       versionId: candidateVersionId,
@@ -2771,7 +2896,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
         assert.deepEqual(options, { apiOrigin: previewUrl, includeDevnet: true, owner: OWNER, runs: 5 });
         assert.equal(apiKey, 'helius-test-key');
         events.push(`benchmark:${options.apiOrigin}`);
-        return { runs: 5, workerMedianMs: 10, legacyMedianMs: 20 };
+        return { runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 };
       },
       wrangler: (args, environment, label) => {
         assert.equal(environment, wranglerEnvironment);
@@ -2873,6 +2998,7 @@ test('API production benchmark failure performs no deployment mutation', async (
       {
         expectedCurrentVersionId: randomUUID(),
         heliusApiKey: 'helius-test-key',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         previewUrl,
         smokeOwner: OWNER,
         versionId,
@@ -2907,6 +3033,7 @@ test('API production fails closed when the pause phase is ambiguous', async () =
       {
         expectedCurrentVersionId: baselineVersionId,
         heliusApiKey: 'helius-test-key',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
         smokeOwner: OWNER,
         versionId: candidateVersionId,
@@ -2915,7 +3042,7 @@ test('API production fails closed when the pause phase is ambiguous', async () =
       {
         deployment: deploymentReader([baselineVersionId]),
         smoke: async () => undefined,
-        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 }),
         pauseRevealQueue: () => events.push('pause-reveal'),
         pauseFulfillmentQueue: () => {
           events.push('pause-fulfillment');
@@ -2946,6 +3073,7 @@ test('API trigger deployment gets exactly one declarative retry after promotion'
     {
       expectedCurrentVersionId: baselineVersionId,
       heliusApiKey: 'helius-test-key',
+      notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
       previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
       smokeOwner: OWNER,
       versionId: candidateVersionId,
@@ -2959,7 +3087,7 @@ test('API trigger deployment gets exactly one declarative retry after promotion'
         candidateVersionId,
       ]),
       smoke: async () => undefined,
-      benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+      benchmark: async () => ({ runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 }),
       wrangler: (_args, _environment, label) => {
         labels.push(label);
         if (label.startsWith('Reviewed trigger deployment')) {
@@ -2991,6 +3119,7 @@ test('API guarded resume reverifies the exact candidate before resuming reveal d
     {
       expectedCurrentVersionId: candidateVersionId,
       heliusApiKey: 'helius-test-key',
+      notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
       previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
       smokeOwner: OWNER,
       versionId: candidateVersionId,
@@ -3005,7 +3134,7 @@ test('API guarded resume reverifies the exact candidate before resuming reveal d
       smoke: async (origin) => {
         events.push(`smoke:${origin}`);
       },
-      benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+      benchmark: async () => ({ runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 }),
       pauseRevealQueue: () => events.push('pause-reveal'),
       pauseFulfillmentQueue: () => events.push('pause-fulfillment'),
       resumeRevealQueue: () => events.push('resume-reveal'),
@@ -3048,6 +3177,7 @@ test('API guarded resume leaves reveal delivery paused when its trigger retry fa
       {
         expectedCurrentVersionId: candidateVersionId,
         heliusApiKey: 'helius-test-key',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
         smokeOwner: OWNER,
         versionId: candidateVersionId,
@@ -3056,7 +3186,7 @@ test('API guarded resume leaves reveal delivery paused when its trigger retry fa
       {
         deployment: deploymentReader([candidateVersionId]),
         smoke: async () => undefined,
-        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 }),
         pauseRevealQueue: () => labels.push('pause'),
         wrangler: (_args, _environment, label) => {
           labels.push(label);
@@ -3082,6 +3212,7 @@ test('API guarded resume re-pauses when candidate verification fails', async () 
       {
         expectedCurrentVersionId: candidateVersionId,
         heliusApiKey: 'helius-test-key',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
         smokeOwner: OWNER,
         versionId: candidateVersionId,
@@ -3093,7 +3224,7 @@ test('API guarded resume re-pauses when candidate verification fails', async () 
           smokeCalls += 1;
           if (smokeCalls === 2) throw new Error('injected resumed API smoke failure');
         },
-        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 }),
         pauseRevealQueue: () => {
           revealDeliveryPaused = true;
         },
@@ -3125,6 +3256,7 @@ test('API failure handling attempts fulfillment re-pause when reveal re-pause fa
       {
         expectedCurrentVersionId: candidateVersionId,
         heliusApiKey: 'helius-test-key',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
         smokeOwner: OWNER,
         versionId: candidateVersionId,
@@ -3133,7 +3265,7 @@ test('API failure handling attempts fulfillment re-pause when reveal re-pause fa
       {
         deployment: async () => stableDeployment(candidateVersionId),
         smoke: async () => undefined,
-        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 }),
         repauseRevealQueue: () => {
           events.push('re-pause');
           throw new Error('reveal re-pause failed');
@@ -3160,6 +3292,7 @@ test('API promotion command failure leaves reveal delivery paused for exact-cand
       {
         expectedCurrentVersionId: baselineVersionId,
         heliusApiKey: 'helius-test-key',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
         smokeOwner: OWNER,
         versionId: candidateVersionId,
@@ -3173,7 +3306,7 @@ test('API promotion command failure leaves reveal delivery paused for exact-cand
           candidateVersionId,
         ]),
         smoke: async () => undefined,
-        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 }),
         pauseRevealQueue: () => {
           revealDeliveryPaused = true;
           labels.push('pause');
@@ -3203,6 +3336,7 @@ test('API successful promotion command reports manual intervention for ambiguous
       {
         expectedCurrentVersionId: baselineVersionId,
         heliusApiKey: 'helius-test-key',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
         smokeOwner: OWNER,
         versionId: candidateVersionId,
@@ -3215,7 +3349,7 @@ test('API successful promotion command reports manual intervention for ambiguous
           splitDeployment(baselineVersionId, candidateVersionId),
         ]),
         smoke: async () => undefined,
-        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 }),
         wrangler: (_args, _environment, label) => labels.push(label),
         evidence: () => assert.fail('ambiguous split state wrote production evidence'),
         sleep: async () => undefined,
@@ -3238,6 +3372,7 @@ test('API refuses split or third-version state before any mutation', async () =>
         {
           expectedCurrentVersionId: baselineVersionId,
           heliusApiKey: 'helius-test-key',
+          notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
           previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
           smokeOwner: OWNER,
           versionId: candidateVersionId,
@@ -3246,7 +3381,7 @@ test('API refuses split or third-version state before any mutation', async () =>
         {
           deployment: deploymentReader([initialState]),
           smoke: async () => undefined,
-          benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+          benchmark: async () => ({ runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 }),
           wrangler: () => assert.fail('unsafe initial state was mutated'),
           evidence: () => assert.fail('unsafe initial state wrote evidence'),
           sleep: async () => undefined,
@@ -3267,6 +3402,7 @@ test('API evidence failure re-pauses and directs a guarded-resume rerun', async 
       {
         expectedCurrentVersionId: baselineVersionId,
         heliusApiKey: 'helius-test-key',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
         previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
         smokeOwner: OWNER,
         versionId: candidateVersionId,
@@ -3275,7 +3411,7 @@ test('API evidence failure re-pauses and directs a guarded-resume rerun', async 
       {
         deployment: deploymentReader([candidateVersionId, candidateVersionId, candidateVersionId]),
         smoke: async () => undefined,
-        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 }),
         pauseRevealQueue: () => labels.push('pause'),
         repauseRevealQueue: () => labels.push('re-pause'),
         resumeRevealQueue: () => labels.push('resume'),
@@ -3307,6 +3443,7 @@ test('approved API rollback pauses, verifies the exact pair, resumes, and record
 
   await deployApiTestHooks.runRollbackSequence({
     manifest,
+    notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
     smokeOwner: OWNER,
     versionId: rollbackApiVersionId,
     wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
@@ -3328,7 +3465,11 @@ test('approved API rollback pauses, verifies the exact pair, resumes, and record
     frontendDeployment: async () => stableDeployment(
       frontendStatuses.shift() || assert.fail('unexpected frontend status read'),
     ),
-    notificationSmoke: async () => {
+    notificationSmoke: async (environment, notificationEnqueueSecret, tailWorkerName) => {
+      assert.equal(environment.CLOUDFLARE_API_TOKEN, 'scoped-token');
+      assert.equal(environment.NOTIFICATION_ENQUEUE_SECRET, undefined);
+      assert.equal(notificationEnqueueSecret, NOTIFICATION_ENQUEUE_SECRET);
+      assert.equal(tailWorkerName, 'mons-shop-api');
       events.push('notification-smoke');
     },
     pauseRevealQueue: () => events.push('pause'),
@@ -3393,6 +3534,7 @@ test('approved API rollback re-pauses reveal delivery after a post-resume failur
   await assert.rejects(
     () => deployApiTestHooks.runRollbackSequence({
       manifest,
+      notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
       smokeOwner: OWNER,
       versionId: rollbackApiVersionId,
       wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
@@ -3732,15 +3874,54 @@ test('API release resolves the Helius key without exposing it as an argument', (
   assert.equal(deployApiTestHooks.resolveHeliusApiKey({ HELIUS_API_KEY: ' server-secret ' }), 'server-secret');
 });
 
-test('tracked release metadata is exact and excludes direct-Helius frontend rollback', () => {
+test('API release resolves the notification enqueue secret from invocation or root env input', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'mons-shop-notification-secret-test-'));
+  const envPath = join(directory, '.env.local');
+  try {
+    writeFileSync(envPath, 'NOTIFICATION_ENQUEUE_SECRET="local-secret"\nHELIUS_API_KEY="not-selected"\n');
+    assert.equal(
+      deployApiTestHooks.resolveNotificationEnqueueSecret({}, envPath),
+      'local-secret',
+    );
+    assert.equal(
+      deployApiTestHooks.resolveNotificationEnqueueSecret({
+        NOTIFICATION_ENQUEUE_SECRET: ' invocation-secret ',
+      }, envPath),
+      'invocation-secret',
+    );
+    assert.throws(
+      () => deployApiTestHooks.requireNotificationEnqueueSecret('   '),
+      /NOTIFICATION_ENQUEUE_SECRET is required.*before release mutation/,
+    );
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+
+test('tracked release metadata uses the exact v2 production and rollback pairs', () => {
   const manifest = deployApiTestHooks.readReleaseManifest();
   assert.equal(deployApiTestHooks.isReleaseManifest(manifest), true);
+  assert.equal(manifest.schemaVersion, 2);
+  assert.deepEqual(Object.keys(manifest).sort(), [
+    'approvedRollback',
+    'currentProduction',
+    'recordedAt',
+    'schemaVersion',
+  ]);
   assert.deepEqual(manifest.currentProduction, {
     apiVersionId: '676e6114-7186-4000-b0b1-61bf0236574f',
     frontendVersionId: '9eb48e48-4574-49a4-a400-bf5fdd2a7eaf',
   });
   assert.deepEqual(manifest.approvedRollback, manifest.currentProduction);
-  assert.equal(manifest.allowDirectHeliusFrontendRollback, false);
+  assert.equal(deployApiTestHooks.isReleaseManifest({
+    ...manifest,
+    schemaVersion: 1,
+  }), false);
+  const retiredManifest = {
+    ...manifest,
+    ['allowDirect' + 'HeliusFrontendRollback']: false,
+  };
+  assert.equal(deployApiTestHooks.isReleaseManifest(retiredManifest), false);
 });
 
 test('release finalization requires both explicit IDs and deliberate confirmation', () => {
@@ -3857,7 +4038,7 @@ test('release finalization atomically updates production IDs while preserving ro
     assert.deepEqual(after.currentProduction, { apiVersionId, frontendVersionId });
     assert.equal(after.recordedAt, now.toISOString());
     assert.deepEqual(after.approvedRollback, before.approvedRollback);
-    assert.equal(after.allowDirectHeliusFrontendRollback, false);
+    assert.equal(after.schemaVersion, 2);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), after);
     assert.deepEqual(readdirSync(directory).sort(), ['evidence', 'release-manifest.json']);
     assert.equal(statSync(path).mode & 0o777, 0o640);
@@ -3978,7 +4159,7 @@ test('one-step frontend release advances only the verified frontend production b
     assert.equal(after.currentProduction.apiVersionId, before.currentProduction.apiVersionId);
     assert.equal(after.currentProduction.frontendVersionId, frontendVersionId);
     assert.deepEqual(after.approvedRollback, before.approvedRollback);
-    assert.equal(after.allowDirectHeliusFrontendRollback, false);
+    assert.equal(after.schemaVersion, 2);
     assert.equal(after.recordedAt, now.toISOString());
     assert.equal(statSync(path).mode & 0o777, 0o640);
     assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), after);

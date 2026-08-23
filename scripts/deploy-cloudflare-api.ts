@@ -15,16 +15,17 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseEnv } from 'node:util';
 import { SignJWT, importPKCS8 } from 'jose';
 import {
   isExactShopInventoryResponse,
   isExactShopPackStatusResponse,
   isExactShopPendingOpenBoxesResponse,
-} from '../functions/src/shared/shopApi.ts';
-import { isExactSubscribeToNotificationsResponse } from '../functions/src/shared/notificationSubscription.ts';
-import { stripeCheckoutReconciliationQuery } from '../functions/src/shared/stripeCheckoutReconciliation.ts';
-import { FULFILLMENT_ADMIN_WALLET_ADDRESSES } from '../functions/src/shared/fulfillmentAccess.ts';
-import { isBase58Bytes } from '../functions/src/shared/solanaRpcProxy.ts';
+} from '../shared/shopApi.ts';
+import { isExactSubscribeToNotificationsResponse } from '../shared/notificationSubscription.ts';
+import { stripeCheckoutReconciliationQuery } from '../shared/stripeCheckoutReconciliation.ts';
+import { FULFILLMENT_ADMIN_WALLET_ADDRESSES } from '../shared/fulfillmentAccess.ts';
+import { isBase58Bytes } from '../shared/solanaRpcProxy.ts';
 import { benchmarkApi, type ApiBenchmarkResult } from './benchmark-cloudflare-api.ts';
 import {
   cloudflareVersionIdPattern as versionIdPattern,
@@ -123,6 +124,7 @@ type ProductionSequenceInput = {
   candidateSmoke?: SmokeApiOptions;
   expectedCurrentVersionId: string;
   heliusApiKey: string;
+  notificationEnqueueSecret: string;
   previewUrl: string;
   smokeOwner: string;
   versionId: string;
@@ -149,6 +151,7 @@ type ProductionSequenceDependencies = {
 
 type RollbackSequenceInput = {
   manifest: ReleaseManifest;
+  notificationEnqueueSecret: string;
   smokeOwner: string;
   versionId: string;
   wranglerEnvironment: NodeJS.ProcessEnv;
@@ -189,6 +192,7 @@ type CompleteApiReleaseInput = {
   firestoreWriterServiceAccountJson: string;
   heliusApiKey: string;
   logsDirectory: string;
+  notificationEnqueueSecret: string;
   smokeOwner: string;
   wranglerEnvironment: NodeJS.ProcessEnv;
 };
@@ -283,6 +287,7 @@ function usage(): string {
     '',
     'The default release validates, uploads, verifies, promotes, and records one exact Worker version.',
     'Release, preview, and production require HELIUS_API_KEY in the process environment.',
+    'Release, production, and rollback require NOTIFICATION_ENQUEUE_SECRET in the process environment or root .env.local.',
     'Release and preview use macOS Keychain credentials by default or accept dedicated reader and writer JSON files.',
     'Preview mode uploads the secret through a temporary mode-0600 file inside a mode-0700 directory.',
   ].join('\n');
@@ -357,6 +362,30 @@ function resolveHeliusApiKey(
   source: Readonly<Record<string, string | undefined>> = process.env,
 ): string {
   return source.HELIUS_API_KEY?.trim() || '';
+}
+
+function resolveNotificationEnqueueSecret(
+  source: Readonly<Record<string, string | undefined>> = process.env,
+  envPath = resolve(repoRoot, '.env.local'),
+): string {
+  const invokedValue = source.NOTIFICATION_ENQUEUE_SECRET?.trim() || '';
+  if (invokedValue) return invokedValue;
+  if (!existsSync(envPath)) return '';
+  let values: NodeJS.Dict<string>;
+  try {
+    values = parseEnv(readFileSync(envPath, 'utf8'));
+  } catch {
+    fail('Root .env.local could not be read or parsed while resolving NOTIFICATION_ENQUEUE_SECRET.');
+  }
+  return values.NOTIFICATION_ENQUEUE_SECRET?.trim() || '';
+}
+
+function requireNotificationEnqueueSecret(value: string): string {
+  const secret = value.trim();
+  if (!secret) {
+    fail('NOTIFICATION_ENQUEUE_SECRET is required in the invoking environment or root .env.local before release mutation.');
+  }
+  return secret;
 }
 
 function readApiToken(path?: string): string {
@@ -581,11 +610,26 @@ function validationEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.
   };
 }
 
-function notificationSmokeEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+function notificationRequestEnvironment(
+  notificationEnqueueSecret: string,
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   const environment = credentialFreeEnvironment(source);
-  for (const name of ['NOTIFICATION_ENQUEUE_SECRET', 'GOOGLE_APPLICATION_CREDENTIALS'] as const) {
-    const value = String(source[name] || '').trim();
-    if (value) environment[name] = value;
+  environment.NOTIFICATION_ENQUEUE_SECRET = requireNotificationEnqueueSecret(notificationEnqueueSecret);
+  return environment;
+}
+
+function notificationTailEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const environment = credentialFreeEnvironment(source);
+  for (const [name, value] of Object.entries(source)) {
+    const normalized = name.toUpperCase();
+    if (
+      normalized.startsWith('CLOUDFLARE_') ||
+      normalized.startsWith('CF_') ||
+      normalized.startsWith('WRANGLER_')
+    ) {
+      environment[name] = value;
+    }
   }
   return environment;
 }
@@ -946,13 +990,20 @@ function notificationSmokeLogSucceeded(output: string, jobId: string): boolean {
   return notificationSmokeLogOutcome(output, jobId) === 'sent';
 }
 
+function notificationTailArgs(tailWorkerName: string): string[] {
+  return ['tail', tailWorkerName, '--format', 'json', ...configArgs];
+}
+
 async function smokeNotificationDelivery(
   environment: NodeJS.ProcessEnv,
+  notificationEnqueueSecret: string,
   tailWorkerName = workerName,
 ): Promise<void> {
-  const tail = spawn(wranglerBinary, ['tail', tailWorkerName, '--format', 'json'], {
+  const tailEnvironment = notificationTailEnvironment(environment);
+  const requestEnvironment = notificationRequestEnvironment(notificationEnqueueSecret, environment);
+  const tail = spawn(wranglerBinary, notificationTailArgs(tailWorkerName), {
     cwd: repoRoot,
-    env: environment,
+    env: tailEnvironment,
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -967,7 +1018,7 @@ async function smokeNotificationDelivery(
     const smokeOutput = runProcessForOutput(
       process.platform === 'win32' ? 'npm.cmd' : 'npm',
       ['run', 'test-resend-notification-email', '--', '--kind', 'stripe-manual-review'],
-      notificationSmokeEnvironment(),
+      requestEnvironment,
       'Notification end-to-end smoke',
     );
     const jobId = notificationSmokeJobId(smokeOutput);
@@ -1229,8 +1280,8 @@ function isCandidateRecord(value: unknown, now = new Date()): value is Candidate
   const testedAt = typeof record.testedAt === 'string' ? Date.parse(record.testedAt) : Number.NaN;
   const ageMs = now.getTime() - testedAt;
   return Object.keys(record).sort().join(',') === [
+    'directHeliusMedianMs',
     'includeDevnet',
-    'legacyMedianMs',
     'previewUrl',
     'runs',
     'smokeOwner',
@@ -1250,8 +1301,9 @@ function isCandidateRecord(value: unknown, now = new Date()): value is Candidate
     ageMs >= -candidateRecordClockSkewMs && ageMs <= candidateRecordMaxAgeMs &&
     Number.isSafeInteger(record.runs) && Number(record.runs) === 5 &&
     typeof record.workerMedianMs === 'number' && Number.isFinite(record.workerMedianMs) && record.workerMedianMs >= 0 &&
-    typeof record.legacyMedianMs === 'number' && Number.isFinite(record.legacyMedianMs) && record.legacyMedianMs >= 0 &&
-    record.workerMedianMs < record.legacyMedianMs;
+    typeof record.directHeliusMedianMs === 'number' && Number.isFinite(record.directHeliusMedianMs) &&
+    record.directHeliusMedianMs >= 0 &&
+    record.workerMedianMs < record.directHeliusMedianMs;
 }
 
 function candidateRecordPath(versionId: string): string {
@@ -1839,6 +1891,7 @@ async function runProductionSequence(
     wrangler: runWrangler,
   },
 ): Promise<void> {
+  const notificationEnqueueSecret = requireNotificationEnqueueSecret(input.notificationEnqueueSecret);
   const candidateSmoke = productionCandidateSmoke(input);
   if (candidateSmoke.owner !== input.smokeOwner) fail('Candidate smoke owner did not match the release owner.');
   await dependencies.smoke(input.previewUrl, candidateSmoke);
@@ -1972,7 +2025,11 @@ async function runProductionSequence(
       dependencies.resumeFulfillmentQueue(input.wranglerEnvironment);
     }
     await dependencies.smoke(productionUrl, candidateSmoke);
-    await dependencies.notificationSmoke?.(input.wranglerEnvironment, workerName);
+    await dependencies.notificationSmoke?.(
+      input.wranglerEnvironment,
+      notificationEnqueueSecret,
+      workerName,
+    );
     await assertApiLiveVersion(
       candidateVersionId,
       input,
@@ -2134,6 +2191,7 @@ async function runRollbackSequence(
     wrangler: runWrangler,
   },
 ): Promise<void> {
+  const notificationEnqueueSecret = requireNotificationEnqueueSecret(input.notificationEnqueueSecret);
   const targetVersionId = input.versionId.toLowerCase();
   assertApprovedApiRollback(input.manifest, targetVersionId);
   const initialLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
@@ -2184,7 +2242,11 @@ async function runRollbackSequence(
       dependencies.resumeFulfillmentQueue(input.wranglerEnvironment);
     }
     await dependencies.smoke(productionUrl, { includeDevnet: true, owner: input.smokeOwner });
-    await dependencies.notificationSmoke?.(input.wranglerEnvironment, workerName);
+    await dependencies.notificationSmoke?.(
+      input.wranglerEnvironment,
+      notificationEnqueueSecret,
+      workerName,
+    );
     const finalLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
     assertReleasePair(finalLivePair, input.manifest.approvedRollback, 'Rollback commit verification');
     dependencies.evidence('api', targetVersionId);
@@ -2227,6 +2289,7 @@ async function runCompleteApiRelease(
     validate: runApiValidation,
   },
 ): Promise<UploadMetadata> {
+  const notificationEnqueueSecret = requireNotificationEnqueueSecret(input.notificationEnqueueSecret);
   const expectedCurrentProduction = dependencies.manifest().currentProduction;
   const initialLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
   assertReleasePair(initialLivePair, expectedCurrentProduction, 'Release preflight');
@@ -2259,6 +2322,7 @@ async function runCompleteApiRelease(
     candidateSmoke,
     expectedCurrentVersionId: expectedCurrentProduction.apiVersionId,
     heliusApiKey: input.heliusApiKey,
+    notificationEnqueueSecret,
     previewUrl: metadata.previewUrl,
     smokeOwner: input.smokeOwner,
     verifyBeforePromotion: async () => {
@@ -2301,6 +2365,9 @@ async function main(): Promise<void> {
   if (!Number.isFinite(nodeMajor) || nodeMajor < 22) fail(`Node 22 or newer is required; current version is ${process.versions.node}.`);
   if (!existsSync(wranglerBinary)) fail('Pinned Wrangler binary not found. Run npm install first.');
   assertApiDeploymentConfig();
+  const notificationEnqueueSecret = options.mode === 'preview'
+    ? ''
+    : requireNotificationEnqueueSecret(resolveNotificationEnqueueSecret());
   const logsDirectory = resolve(repoRoot, '.cache', 'wrangler-logs');
   mkdirSync(logsDirectory, { recursive: true });
   const checkEnvironment = validationEnvironment();
@@ -2322,6 +2389,7 @@ async function main(): Promise<void> {
       firestoreWriterServiceAccountJson,
       heliusApiKey,
       logsDirectory,
+      notificationEnqueueSecret,
       smokeOwner: options.smokeOwner,
       wranglerEnvironment,
     });
@@ -2364,6 +2432,7 @@ async function main(): Promise<void> {
     const manifest = readReleaseManifest();
     await runRollbackSequence({
       manifest,
+      notificationEnqueueSecret,
       smokeOwner: options.smokeOwner,
       versionId: options.versionId!,
       wranglerEnvironment,
@@ -2385,6 +2454,7 @@ async function main(): Promise<void> {
       candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, includeProfileState: true, includeStripeWebhook: true, owner: options.smokeOwner },
       expectedCurrentVersionId,
       heliusApiKey,
+      notificationEnqueueSecret,
       previewUrl,
       smokeOwner: options.smokeOwner,
       versionId: options.versionId!,
@@ -2403,10 +2473,12 @@ export const deployApiTestHooks = {
   createSecretFile,
   defaultSmokeOwner,
   notificationSmokeEmail,
-  notificationSmokeEnvironment,
+  notificationRequestEnvironment,
+  notificationTailEnvironment,
   notificationSmokeJobId,
   notificationSmokeLogOutcome,
   notificationSmokeLogSucceeded,
+  notificationTailArgs,
   smokePropagationDelaysMs: SMOKE_PROPAGATION_DELAYS_MS,
   defaultSmokeTimeoutMs: DEFAULT_SMOKE_TIMEOUT_MS,
   expectedReleaseDropId,
@@ -2430,6 +2502,8 @@ export const deployApiTestHooks = {
   repauseRevealQueueAfterFailure,
   requireCandidateRecord,
   resolveHeliusApiKey,
+  resolveNotificationEnqueueSecret,
+  requireNotificationEnqueueSecret,
   resolveApiProductionPreviewUrl,
   runApiValidation,
   runCompleteApiRelease,

@@ -10,7 +10,7 @@ import {
   parseAddressCipherPayload,
   serializeAddressCipherPayload,
   type AddressCipherParts,
-} from '../functions/src/shared/addressCipher.ts';
+} from '../shared/addressCipher.ts';
 import { encryptAddressPayload } from '../src/lib/solana.ts';
 
 const encodeBase64 = (value: Uint8Array) =>

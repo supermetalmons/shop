@@ -14,5 +14,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "runtime-test/**/*.ts", "../../../functions/src/shared/**/*.ts", "worker-configuration.d.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "runtime-test/**/*.ts", "../../../shared/**/*.ts", "worker-configuration.d.ts"]
 }

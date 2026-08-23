@@ -11,28 +11,19 @@
         "cloud/workers/api/runtime-test/*.test.ts",
         "scripts/*.{ts,cjs}",
         "scripts/newDrops/*.ts",
+        "scripts/ops/*.ts",
         "tests/*.test.ts"
       ],
       "project": [
         "src/**/*.{ts,tsx}",
         "cloud/workers/api/**/*.{ts,tsx}",
         "scripts/**/*.{ts,cjs}",
+        "shared/**/*.ts",
         "tests/**/*.ts"
       ],
       "ignoreDependencies": ["buffer"],
       "ignoreBinaries": ["anchor", "gcloud", "mkfifo", "solana", "swift"],
       "ignoreExportsUsedInFile": { "type": true }
-    },
-    "functions": {
-      "entry": [
-        "scripts/*.ts",
-        "src/fulfillmentStatus.ts",
-        "src/shared/contracts.ts",
-        "src/shared/packStatus.ts",
-        "../tests/*.test.ts"
-      ],
-      "project": ["src/**/*.{ts,js}", "scripts/**/*.ts", "../tests/**/*.ts"],
-      "ignoreBinaries": ["gcloud"]
     }
   }
 }

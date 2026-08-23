@@ -11,15 +11,13 @@ import {
   addressCipherHint,
   encryptAddressCipherText,
   serializeAddressCipherPayload,
-} from '../../functions/src/shared/addressCipher.js';
+} from '../../shared/addressCipher.js';
 import {
   isExactShopRpcResponse,
   isNonZeroBase58Bytes,
   type ShopRpcRequest,
-} from '../../functions/src/shared/solanaRpcProxy.ts';
+} from '../../shared/solanaRpcProxy.ts';
 import { monsApiOrigin } from './monsApiOrigin';
-
-export { normalizeCountryCode } from '../../functions/src/shared/countryNormalization.ts';
 
 function unwrapTxErrorMessage(err: unknown): string {
   if (!err) return 'Unexpected error';

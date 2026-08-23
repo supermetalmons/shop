@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -17,7 +16,7 @@ import {
   ShipStationAddressCorrectionProviderError,
   ShipStationRatesProviderError,
   updateShipStationShipment,
-} from '../functions/src/shared/shipstationRates.ts';
+} from '../shared/shipstationRates.ts';
 
 const ALL_EDITABLE_ADDRESS_FIELDS = [
   'name',
@@ -45,9 +44,7 @@ const SHIP_TO = {
   geolocation: [{ type: 'what3words', value: 'cats.with.thumbs' }],
 };
 
-test('shared ShipStation rates client is runtime-neutral and validates the origin secret', () => {
-  const source = readFileSync(new URL('../functions/src/shared/shipstationRates.ts', import.meta.url), 'utf8');
-  assert.doesNotMatch(source, /firebase-functions|HttpsError/);
+test('shared ShipStation rates client validates the origin secret', () => {
   assert.deepEqual(parseShipStationShipFrom(JSON.stringify({
     name: 'mons.shop',
     address_line1: '1061 10th Street',

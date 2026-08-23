@@ -1,11 +1,11 @@
-import { STRIPE_CHECKOUT_STATUS } from '../../../../functions/src/shared/stripeCheckoutSession.js';
-import { stripeCheckoutReconciliationQuery } from '../../../../functions/src/shared/stripeCheckoutReconciliation.js';
+import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.js';
+import { stripeCheckoutReconciliationQuery } from '../../../../shared/stripeCheckoutReconciliation.js';
 import {
   STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   createStripeCheckoutFulfillmentJobV1,
   type StripeCheckoutFulfillmentEventType,
-} from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.js';
-import { stripeCheckoutFieldValue } from '../../../../functions/src/stripeCheckout/store.js';
+} from '../../../../shared/stripeCheckoutFulfillmentJob.js';
+import { stripeCheckoutFieldValue } from './stripeCheckout/store.js';
 import {
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   FIRESTORE_DOCUMENTS_BASE_URL,

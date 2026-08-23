@@ -1,4 +1,4 @@
-import type { SolanaCluster } from '../../../../functions/src/shared/deploymentCore.js';
+import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
 import {
   isExactShopRpcRequest,
   isExactShopRpcResponse,
@@ -6,7 +6,7 @@ import {
   SHOP_RPC_METHODS,
   type ShopRpcId,
   type ShopRpcMethod,
-} from '../../../../functions/src/shared/solanaRpcProxy.js';
+} from '../../../../shared/solanaRpcProxy.js';
 
 const MAX_RPC_REQUEST_BODY_BYTES = 32 * 1024;
 const MAX_RPC_RESPONSE_BODY_BYTES = 4 * 1024 * 1024;

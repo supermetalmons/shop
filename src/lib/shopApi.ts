@@ -7,8 +7,8 @@ import {
   type ShopInventoryRequest,
   type ShopInventoryItem,
   type ShopPendingOpenBoxesRequest,
-} from '../../functions/src/shared/shopApi.ts';
-import type { PackStatusBreakdown } from '../../functions/src/shared/contracts.ts';
+} from '../../shared/shopApi.ts';
+import type { PackStatusBreakdown } from '../../shared/contracts.ts';
 import type { InventoryItem, PendingOpenBox } from '../types';
 import {
   normalizeBoxDisplayImage,

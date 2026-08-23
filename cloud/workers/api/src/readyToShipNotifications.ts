@@ -1,30 +1,30 @@
 import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
-} from '../../../../functions/src/orderEmailItems.js';
+} from './orderEmailItems.js';
 import {
   buildBuyerOrderReceivedEmailContent,
   buildShipperReadyToShipEmailContent,
   fulfillmentAppUrlForOrder,
   summarizeShipperReadyOrderItems,
-} from '../../../../functions/src/notificationEmails.js';
+} from './notificationEmails.js';
 import {
   planReadyToShipOrderNotifications,
   resolveNotificationDeliveryId,
   shouldNotifyShippersForDeliveryReadyToShipWrite,
-} from '../../../../functions/src/notifications.js';
+} from './notifications.js';
 import {
   CARD_FULFILLMENT_DROP_IDS,
   CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
-} from '../../../../functions/src/shared/fulfillmentAccess.js';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../functions/src/shared/fulfillmentSources.js';
-import { DEPLOYMENT_DROPS } from '../../../../functions/src/shared/deploymentRegistry.js';
+} from '../../../../shared/fulfillmentAccess.js';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
+import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
 import {
   createNotificationEmailJobV1,
   isNotificationEmailIdempotencyKey,
   isNotificationEmailJobId,
   type NotificationEmailJobV1,
-} from '../../../../functions/src/shared/notificationEmailJob.js';
+} from '../../../../shared/notificationEmailJob.js';
 
 export const READY_TO_SHIP_NOTIFICATION_PENDING = 'pending' as const;
 export const READY_TO_SHIP_NOTIFICATION_QUEUED = 'queued' as const;

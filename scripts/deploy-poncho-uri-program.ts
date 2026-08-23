@@ -67,27 +67,23 @@ function repositoryRoot(): string {
 }
 
 function configuredHeliusRpc(): { rpcUrl: string; rpcSource: string } | undefined {
-  for (const name of ['HELIUS_API_KEY', 'VITE_HELIUS_API_KEY']) {
-    const raw = process.env[name]?.trim();
-    if (raw) {
-      return {
-        rpcUrl: `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(raw)}`,
-        rpcSource: `${name} (process environment)`,
-      };
-    }
+  const processApiKey = process.env.HELIUS_API_KEY?.trim();
+  if (processApiKey) {
+    return {
+      rpcUrl: `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(processApiKey)}`,
+      rpcSource: 'HELIUS_API_KEY (process environment)',
+    };
   }
   const envPath = path.join(repositoryRoot(), '.env.local');
   if (!existsSync(envPath)) return undefined;
   const contents = readFileSync(envPath, 'utf8');
-  for (const name of ['HELIUS_API_KEY', 'VITE_HELIUS_API_KEY']) {
-    const match = contents.match(new RegExp(`^${name}\\s*=\\s*(.+?)\\s*$`, 'm'));
-    const raw = match?.[1]?.trim().replace(/^(['"])(.*)\1$/, '$2');
-    if (raw) {
-      return {
-        rpcUrl: `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(raw)}`,
-        rpcSource: `${name} (.env.local)`,
-      };
-    }
+  const match = contents.match(/^HELIUS_API_KEY\s*=\s*(.+?)\s*$/m);
+  const fileApiKey = match?.[1]?.trim().replace(/^(['"])(.*)\1$/, '$2');
+  if (fileApiKey) {
+    return {
+      rpcUrl: `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(fileApiKey)}`,
+      rpcSource: 'HELIUS_API_KEY (.env.local)',
+    };
   }
   return undefined;
 }

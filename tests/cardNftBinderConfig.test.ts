@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { NEW_DROP as DEVNET_BINDER } from '../scripts/newDrops/card_nft_binder_devnet.ts';
 import { NEW_DROP as MAINNET_BINDER } from '../scripts/newDrops/card_nft_binder.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
-import { FUNCTIONS_DROPS } from '../functions/src/config/deployment.ts';
+import { API_DROPS } from '../cloud/workers/api/src/dropConfig.ts';
 import {
   MONS_SHOP_RECEIPTS_POOL_ID,
   requireReceiptPoolSpec,
@@ -52,8 +52,8 @@ test('card NFT binder configs are Stripe-only members of the shared receipt pool
   assert.equal(FRONTEND_DROPS.card_nft_binder_devnet.forceSoldOut, undefined);
   assert.equal(FRONTEND_DROPS.card_nft_binder.maxSupply, 15);
   assert.equal(FRONTEND_DROPS.card_nft_binder.receiptMaxId, 20);
-  assert.equal(FUNCTIONS_DROPS.card_nft_binder.maxSupply, 15);
-  assert.equal(FUNCTIONS_DROPS.card_nft_binder.receiptMaxId, 20);
+  assert.equal(API_DROPS.card_nft_binder.maxSupply, 15);
+  assert.equal(API_DROPS.card_nft_binder.receiptMaxId, 20);
   assert.equal(FRONTEND_DROPS.card_nft_binder_devnet.receiptMaxId, undefined);
   assert.equal(
     MAINNET_BINDER.deploy.reuseProgramIdFromDropId,

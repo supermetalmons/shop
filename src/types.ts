@@ -24,7 +24,6 @@ export type {
   GetFulfillmentShipStationRatesResponse,
   IssueReceiptsResult,
   PackStatusBreakdown,
-  PackStatusBreakdownItem,
   PrepareDeliveryRequest,
   PrepareDeliveryResponse,
   PrepareIrlClaimRequest,
@@ -56,9 +55,9 @@ export type {
   UpdateFulfillmentAddressResponse,
   VoidFulfillmentShipStationLabelRequest,
   VoidFulfillmentShipStationLabelResponse,
-} from '../functions/src/shared/contracts';
-export { SHIPSTATION_EDITABLE_ADDRESS_FIELDS } from '../functions/src/shared/contracts';
-export type { ShipStationPackageInput } from '../functions/src/shared/shipstationPackage';
+} from '../shared/contracts';
+export { SHIPSTATION_EDITABLE_ADDRESS_FIELDS } from '../shared/contracts';
+export type { ShipStationPackageInput } from '../shared/shipstationPackage';
 
 type AssetKind = 'box' | 'dude' | 'certificate';
 

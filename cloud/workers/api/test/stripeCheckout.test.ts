@@ -7,7 +7,7 @@ import {
   StripeCheckoutSessionError,
   type StripeCheckoutOnchainConfig,
   type StripeCheckoutSessionDrop,
-} from '../../../../functions/src/shared/stripeCheckoutSession.ts';
+} from '../../../../shared/stripeCheckoutSession.ts';
 import {
   handleStripeCheckoutSession,
   stripeCheckoutTestHooks,

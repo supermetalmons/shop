@@ -1,19 +1,19 @@
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import { z } from 'zod';
-import { WALLET_SESSION_SUPERSEDED_ERROR_REASON } from '../../../../functions/src/shared/callableErrorCode.js';
+import { WALLET_SESSION_SUPERSEDED_ERROR_REASON } from '../../../../shared/apiErrorCode.js';
 import {
   buildWalletDeliveryRecoveryState,
   preparedDeliveryRecoveryNextCheckMs,
   processingDeliveryRecoveryNextCheckMs,
-} from '../../../../functions/src/shared/deliveryRecovery.js';
-import { parseDropDeliveryOrderPath } from '../../../../functions/src/dropPaths.js';
-import { normalizeDropId } from '../../../../functions/src/shared/deploymentCore.js';
-import { stripeCheckoutOwnerId } from '../../../../functions/src/shared/stripeCheckoutSession.js';
+} from '../../../../shared/deliveryRecovery.js';
+import { parseDropDeliveryOrderPath } from './dropPaths.js';
+import { normalizeDropId } from '../../../../shared/deploymentCore.js';
+import { stripeCheckoutOwnerId } from '../../../../shared/stripeCheckoutSession.js';
 import type {
   ReconcileProfileStateRequest,
   ReconcileProfileStateResponse,
-} from '../../../../functions/src/shared/contracts.js';
+} from '../../../../shared/contracts.js';
 import {
   WALLET_SESSION_COLLECTION,
   WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS,
@@ -22,7 +22,7 @@ import {
   parseSolanaSignInMessage,
   resolveWalletSessionBinding,
   validateSolanaSignInMessage,
-} from '../../../../functions/src/shared/walletLifecycle.js';
+} from '../../../../shared/walletLifecycle.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,

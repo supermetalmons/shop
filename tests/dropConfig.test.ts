@@ -7,10 +7,10 @@ import {
   normalizeDropFamily as normalizeFrontendDropFamily,
 } from '../src/config/deployment.ts';
 import {
-  FUNCTIONS_DROPS,
-  defaultDropFamilyForDropId as defaultFunctionsDropFamilyForDropId,
-  normalizeDropFamily as normalizeFunctionsDropFamily,
-} from '../functions/src/config/deployment.ts';
+  API_DROPS,
+  defaultDropFamilyForDropId as defaultApiDropFamilyForDropId,
+  normalizeDropFamily as normalizeApiDropFamily,
+} from '../cloud/workers/api/src/dropConfig.ts';
 import {
   defaultDropFamilyForDropId as defaultRegistryDropFamilyForDropId,
   normalizeDropFamily as normalizeRegistryDropFamily,
@@ -130,10 +130,10 @@ test('upcoming routes resolve with trailing slashes and reflect deployment state
 
   assert.equal(
     FRONTEND_DROPS.card_nft_binder?.dropId,
-    FUNCTIONS_DROPS.card_nft_binder?.dropId,
+    API_DROPS.card_nft_binder?.dropId,
   );
   assert.equal(FRONTEND_DROPS.drifella_shirt?.dropId, 'drifella_shirt');
-  assert.equal(FUNCTIONS_DROPS.drifella_shirt?.dropId, 'drifella_shirt');
+  assert.equal(API_DROPS.drifella_shirt?.dropId, 'drifella_shirt');
   assert.equal(
     resolveUpcomingRouteDrop(resolveUpcomingDropRouteByPath('/card_nft_binder/'))?.dropId,
     FRONTEND_DROPS.card_nft_binder?.dropId,
@@ -152,7 +152,7 @@ test('card NFT binder resolves its live mainnet deployment config', () => {
     'card_nft_binder_devnet',
   );
   assert.equal(FRONTEND_DROPS.card_nft_binder?.dropId, 'card_nft_binder');
-  assert.equal(FUNCTIONS_DROPS.card_nft_binder?.dropId, 'card_nft_binder');
+  assert.equal(API_DROPS.card_nft_binder?.dropId, 'card_nft_binder');
 });
 
 test('drop family names normalize and default from IDs across registry contracts', () => {
@@ -161,9 +161,9 @@ test('drop family names normalize and default from IDs across registry contracts
     assert.equal(normalizeFrontendDropFamily(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeFrontendDropFamily(undefined, ` ${family.toUpperCase()} `), family);
 
-    assert.equal(defaultFunctionsDropFamilyForDropId(` ${family.toUpperCase()} `), family);
-    assert.equal(normalizeFunctionsDropFamily(` ${family.toUpperCase()} `), family);
-    assert.equal(normalizeFunctionsDropFamily(undefined, ` ${family.toUpperCase()} `), family);
+    assert.equal(defaultApiDropFamilyForDropId(` ${family.toUpperCase()} `), family);
+    assert.equal(normalizeApiDropFamily(` ${family.toUpperCase()} `), family);
+    assert.equal(normalizeApiDropFamily(undefined, ` ${family.toUpperCase()} `), family);
 
     assert.equal(defaultRegistryDropFamilyForDropId(` ${family.toUpperCase()} `), family);
     assert.equal(normalizeRegistryDropFamily(` ${family.toUpperCase()} `), family);

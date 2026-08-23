@@ -8,7 +8,7 @@ import {
   assetProofTreePublicKey,
   normalizedAssetProofAccounts,
   receiptMetadataReference,
-} from '../functions/src/receiptProof.ts';
+} from '../cloud/workers/api/src/receiptProof.ts';
 
 const TREE = new PublicKey('11111111111111111111111111111112');
 const OTHER_TREE = new PublicKey('11111111111111111111111111111113');

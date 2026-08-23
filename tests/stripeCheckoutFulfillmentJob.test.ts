@@ -6,7 +6,7 @@ import {
   STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   createStripeCheckoutFulfillmentJobV1,
   isExactStripeCheckoutFulfillmentJobV1,
-} from '../functions/src/shared/stripeCheckoutFulfillmentJob.ts';
+} from '../shared/stripeCheckoutFulfillmentJob.ts';
 
 test('Stripe fulfillment queue job uses an exact versioned contract', () => {
   const job = createStripeCheckoutFulfillmentJobV1({

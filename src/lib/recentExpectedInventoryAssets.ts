@@ -1,8 +1,8 @@
 import {
   SHOP_EXPECTED_ASSET_IDS_MAX,
   type ShopExpectedAssetIds,
-} from '../../functions/src/shared/shopApi';
-import { isBase58Bytes } from '../../functions/src/shared/solanaRpcProxy';
+} from '../../shared/shopApi';
+import { isBase58Bytes } from '../../shared/solanaRpcProxy';
 
 export const RECENT_EXPECTED_INVENTORY_ASSET_TTL_MS = 10 * 60 * 1000;
 export const RECENT_EXPECTED_INVENTORY_ASSET_MAX_ENTRIES = 60;

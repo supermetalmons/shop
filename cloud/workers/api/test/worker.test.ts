@@ -11,18 +11,18 @@ import {
 import {
   listShopCollectionQueryRuntimes,
   listShopPendingOpenProgramScopes,
-} from '../../../../functions/src/shared/shopDomain.ts';
-import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../functions/src/shared/pendingOpenCodec.ts';
-import { SHOP_EXPECTED_ASSET_IDS_MAX } from '../../../../functions/src/shared/shopApi.ts';
-import { isExactShopRpcRequest } from '../../../../functions/src/shared/solanaRpcProxy.ts';
-import { createNotificationEmailJobV1 } from '../../../../functions/src/shared/notificationEmailJob.ts';
+} from '../../../../shared/shopDomain.ts';
+import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.ts';
+import { SHOP_EXPECTED_ASSET_IDS_MAX } from '../../../../shared/shopApi.ts';
+import { isExactShopRpcRequest } from '../../../../shared/solanaRpcProxy.ts';
+import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import {
   NOTIFICATION_ENQUEUE_PATH,
   NOTIFICATION_ENQUEUE_SIGNATURE_HEADER,
   NOTIFICATION_ENQUEUE_TIMESTAMP_HEADER,
   notificationEnqueueTimestamp,
   signNotificationEnqueueRequest,
-} from '../../../../functions/src/shared/notificationEnqueueAuth.ts';
+} from '../../../../shared/notificationEnqueueAuth.ts';
 import { handleRequest, sleepWithAbort, type ProviderFetch } from '../src/index.ts';
 import {
   FIRESTORE_PACK_STATUS_CACHE_TTL_SECONDS,

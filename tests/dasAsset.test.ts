@@ -8,17 +8,17 @@ import {
   dasAssetMatchesCollection,
   dasAssetMetadataName,
   dasAssetMetadataUri,
-} from '../functions/src/shared/dasAsset.ts';
+} from '../shared/dasAsset.ts';
 import {
   SHOP_INVENTORY_BOX_ID_MAX_UTF8_BYTES,
   SHOP_INVENTORY_NAME_MAX_UTF8_BYTES,
   SHOP_INVENTORY_RAW_IMAGE_MAX_UTF8_BYTES,
   shopApiUtf8ByteLength,
-} from '../functions/src/shared/shopApi.ts';
+} from '../shared/shopApi.ts';
 import {
   listShopCollectionQueryRuntimes,
   transformShopInventoryItem,
-} from '../functions/src/shared/shopDomain.ts';
+} from '../shared/shopDomain.ts';
 
 const STRING_ONLY_NAME = { metadataNameMode: 'string-only' } as const;
 const COERCED_NAME = { metadataNameMode: 'coerce' } as const;

@@ -9,10 +9,10 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
-  FUNCTIONS_DROPS,
-  type FunctionsDropConfig,
-} from '../../../../functions/src/config/deployment.ts';
-import { BUBBLEGUM_PROGRAM_ADDRESS } from '../../../../functions/src/shared/solanaProgramAddresses.ts';
+  API_DROPS,
+  type ApiDropConfig,
+} from '../src/dropConfig.ts';
+import { BUBBLEGUM_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
 import {
   handleReceiptTransferPrepare,
@@ -38,8 +38,8 @@ function testPublicKey(index: number): PublicKey {
   return new PublicKey(bytes);
 }
 
-const baseDrop = Object.values(FUNCTIONS_DROPS).find((drop) => drop.itemsPerBox > 0)!;
-const DROP: FunctionsDropConfig = {
+const baseDrop = Object.values(API_DROPS).find((drop) => drop.itemsPerBox > 0)!;
+const DROP: ApiDropConfig = {
   ...baseDrop,
   dropId: DROP_ID,
   solanaCluster: 'devnet',
@@ -170,7 +170,7 @@ test('receipt transfer handler returns the exact unsigned owner transaction', as
 });
 
 test('receipt transfer runtime accepts every deployed drop configuration', () => {
-  for (const drop of Object.values(FUNCTIONS_DROPS)) {
+  for (const drop of Object.values(API_DROPS)) {
     assert.doesNotThrow(() => receiptTransferTestHooks.buildRuntime(drop), drop.dropId);
   }
 });

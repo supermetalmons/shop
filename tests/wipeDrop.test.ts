@@ -30,84 +30,18 @@ import {
   applyWipePhases,
   asFirestoreDocumentId,
   assertRepoWipeRegistryWritable,
-  assertWipeRegistryConsistency,
   buildRepoPlan,
   normalizeStoredDropIdField,
   prepareRepoWipe,
   RepoWipePostCommitCleanupError,
   type RepoPlan,
-} from '../functions/scripts/wipeDrop.ts';
+} from '../scripts/ops/wipeDrop.ts';
 import {
   DeploymentRegistryPostCommitVerificationError,
   readDeploymentDropRegistry,
-  type DropFamily,
 } from '../scripts/shared/deploymentRegistry.ts';
 
 const ROOT_A = '11'.repeat(32);
-const ROOT_B = '22'.repeat(32);
-
-function drop(
-  dropId: string,
-  dropFamily: DropFamily = 'card_nft_2',
-  discountMerkleRoot = ROOT_A,
-) {
-  return { dropId, dropFamily, discountMerkleRoot };
-}
-
-test('wipe registry validation permits one-sidedness only for the requested target', () => {
-  const sibling = drop('sibling');
-
-  assert.doesNotThrow(() =>
-    assertWipeRegistryConsistency({
-      dropId: 'target',
-      frontendDrops: { target: drop('target'), sibling },
-      functionsDrops: { sibling },
-    }),
-  );
-  assert.doesNotThrow(() =>
-    assertWipeRegistryConsistency({
-      dropId: 'target',
-      frontendDrops: { sibling },
-      functionsDrops: { target: drop('target'), sibling },
-    }),
-  );
-
-  assert.throws(
-    () =>
-      assertWipeRegistryConsistency({
-        dropId: 'target',
-        frontendDrops: { target: drop('target'), sibling },
-        functionsDrops: { target: drop('target') },
-      }),
-    /unrelated drop sibling is missing from the Functions deployment registry/,
-  );
-});
-
-test('wipe registry validation rejects target and unrelated proof identity mismatches', () => {
-  assert.throws(
-    () =>
-      assertWipeRegistryConsistency({
-        dropId: 'target',
-        frontendDrops: { target: drop('target') },
-        functionsDrops: { target: drop('target', 'little_swag_boxes', ROOT_B) },
-      }),
-    /target drop target has mismatched discount Merkle references/,
-  );
-
-  assert.throws(
-    () =>
-      assertWipeRegistryConsistency({
-        dropId: 'target',
-        frontendDrops: { target: drop('target'), sibling: drop('sibling') },
-        functionsDrops: {
-          target: drop('target'),
-          sibling: drop('sibling', 'little_swag_boxes', ROOT_B),
-        },
-      }),
-    /unrelated drop sibling has mismatched discount Merkle references/,
-  );
-});
-
 test('Firestore document IDs remain exact while stored dropId fields normalize permissively', () => {
   assert.equal(asFirestoreDocumentId('Legacy.Drop-V1'), 'Legacy.Drop-V1');
   assert.equal(asFirestoreDocumentId(' drop with spaces '), ' drop with spaces ');
@@ -2741,13 +2675,11 @@ test('wipe atomically replaces current-generation active rows with config tombst
             },
           };
     if (row.treasury === undefined) delete row.treasury;
-    const registryPath = path.join(
-      root,
-      'functions',
-      'src',
-      'shared',
-      'deploymentRegistry.ts',
-    );
+  const registryPath = path.join(
+    root,
+    'shared',
+    'deploymentRegistry.ts',
+  );
     mkdirSync(path.dirname(registryPath), { recursive: true });
     writeFileSync(
       registryPath,
@@ -2804,8 +2736,6 @@ test('untracked legacy Merkle cleanup requires exact journal provenance', async 
   const siblingRoot = '44'.repeat(32);
   const registryPath = path.join(
     root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -3030,8 +2960,6 @@ test('row-absent retry rejects an untracked canonical Merkle replacement without
   const siblingRoot = '88'.repeat(32);
   const registryPath = path.join(
     root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -3175,7 +3103,7 @@ test('row-absent retry rejects an untracked canonical Merkle replacement without
         'await buildRepoPlan({ root: process.argv[2], dropId: process.argv[3] });',
       ].join(' '),
       new URL(
-        '../functions/scripts/wipeDrop.ts',
+        '../scripts/ops/wipeDrop.ts',
         import.meta.url,
       ).href,
       root,
@@ -3202,8 +3130,6 @@ test('row-absent planning uses exact recovery provenance for legacy Merkle clean
   const siblingRoot = '44'.repeat(32);
   const registryPath = path.join(
     root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -3286,7 +3212,7 @@ test('row-absent planning uses exact recovery provenance for legacy Merkle clean
         'const plan = await buildRepoPlan({ root: process.argv[2], dropId: process.argv[3] });',
         'console.log(JSON.stringify(plan));',
       ].join(' '),
-      new URL('../functions/scripts/wipeDrop.ts', import.meta.url).href,
+      new URL('../scripts/ops/wipeDrop.ts', import.meta.url).href,
       root,
       targetDropId,
     ],
@@ -3428,8 +3354,6 @@ test('row-absent recovery restores rather than deletes a family Merkle quarantin
   const siblingRoot = '66'.repeat(32);
   const registryPath = path.join(
     root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -3520,7 +3444,7 @@ test('row-absent recovery restores rather than deletes a family Merkle quarantin
         'console.log(JSON.stringify(plan));',
       ].join(' '),
       new URL(
-        '../functions/scripts/wipeDrop.ts',
+        '../scripts/ops/wipeDrop.ts',
         import.meta.url,
       ).href,
       root,

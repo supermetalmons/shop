@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deliveryOrderById, parseArgs } from '../functions/scripts/sendTestResendNotificationEmail.ts';
+import {
+  deliveryOrderById,
+  notificationEnqueueSecret,
+  parseArgs,
+} from '../scripts/ops/sendTestResendNotificationEmail.ts';
 
 function deliveryOrderSnap(docPath: string, data: Record<string, unknown>, exists = true) {
   return {
@@ -13,6 +17,17 @@ function deliveryOrderSnap(docPath: string, data: Record<string, unknown>, exist
 
 test('Resend test email args default to latest shipper-ready lookup', () => {
   assert.deepEqual(parseArgs([]), { kind: 'shipper-ready' });
+});
+
+test('Resend test email requires the Cloudflare enqueue secret from the environment', () => {
+  assert.equal(
+    notificationEnqueueSecret({ NOTIFICATION_ENQUEUE_SECRET: '  test-secret  ' }),
+    'test-secret',
+  );
+  assert.throws(
+    () => notificationEnqueueSecret({}, []),
+    /NOTIFICATION_ENQUEUE_SECRET is not configured/,
+  );
 });
 
 test('Resend test email args accept numeric order id with explicit drop id', () => {

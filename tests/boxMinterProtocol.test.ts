@@ -16,7 +16,7 @@ import {
   isConfiguredBoxMinterItemsPerBox,
   isOpenableBoxMinterItemsPerBox,
   type BoxMinterMintVariantTuple,
-} from '../functions/src/shared/boxMinterProtocol.ts';
+} from '../shared/boxMinterProtocol.ts';
 
 test('box-minter item predicates preserve configured and openable boundaries', () => {
   assert.equal(BOX_MINTER_CONFIG_SEED, 'config');

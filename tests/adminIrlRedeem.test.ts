@@ -7,13 +7,13 @@ import {
   buildAdminIrlRedeemSelectionKey,
   getAdminIrlRedeemUnsupportedReason,
   resolveAdminIrlRedeemMarkerReuse,
-} from '../functions/src/adminIrlRedeem.ts';
+} from '../cloud/workers/api/src/adminIrlRedeem.ts';
 import {
   ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   isReceiptClaimDeliveryOrderSource,
-} from '../functions/src/stripeCheckout/contract.ts';
+} from '../cloud/workers/api/src/stripeCheckout/contract.ts';
 import {
   canAdminIrlRedeemCardReceipt,
   canAdminIrlRedeemSelection,

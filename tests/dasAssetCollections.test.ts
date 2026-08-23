@@ -6,10 +6,10 @@ import {
   uniqueAssetGroupingCollectionMint as frontendUniqueAssetGroupingCollectionMint,
 } from '../src/lib/dasAssetCollections.ts';
 import {
-  assetGroupingAllowsTreeVerifiedCollectionMatch as functionsAssetGroupingAllowsTreeVerifiedCollectionMatch,
-  assetGroupingCollectionMints as functionsAssetGroupingCollectionMints,
+  assetGroupingAllowsTreeVerifiedCollectionMatch as sharedAssetGroupingAllowsTreeVerifiedCollectionMatch,
+  assetGroupingCollectionMints as sharedAssetGroupingCollectionMints,
   uniqueAssetGroupingCollectionMint as functionsUniqueAssetGroupingCollectionMint,
-} from '../functions/src/dasAssetCollections.ts';
+} from '../shared/dasAssetCollections.ts';
 
 const helperPairs = [
   {
@@ -19,14 +19,14 @@ const helperPairs = [
     uniqueAssetGroupingCollectionMint: frontendUniqueAssetGroupingCollectionMint,
   },
   {
-    label: 'functions',
-    assetGroupingAllowsTreeVerifiedCollectionMatch: functionsAssetGroupingAllowsTreeVerifiedCollectionMatch,
-    assetGroupingCollectionMints: functionsAssetGroupingCollectionMints,
+    label: 'shared',
+    assetGroupingAllowsTreeVerifiedCollectionMatch: sharedAssetGroupingAllowsTreeVerifiedCollectionMatch,
+    assetGroupingCollectionMints: sharedAssetGroupingCollectionMints,
     uniqueAssetGroupingCollectionMint: functionsUniqueAssetGroupingCollectionMint,
   },
 ];
 
-test('DAS collection helpers stay aligned across frontend and functions copies', () => {
+test('DAS collection helpers stay aligned across frontend facade and shared core', () => {
   const cases = [
     {
       name: 'null asset',

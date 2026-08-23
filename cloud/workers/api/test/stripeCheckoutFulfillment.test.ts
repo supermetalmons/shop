@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PublicKey } from '@solana/web3.js';
-import type { DecodedBoxMinterConfigData } from '../../../../functions/src/shared/boxMinterConfigCodec.ts';
-import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../functions/src/shared/solanaProgramAddresses.ts';
-import { StripeCheckoutFulfillmentError } from '../../../../functions/src/stripeCheckout/errors.ts';
+import type { DecodedBoxMinterConfigData } from '../../../../shared/boxMinterConfigCodec.ts';
+import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
+import { StripeCheckoutFulfillmentError } from '../src/stripeCheckout/errors.ts';
 import {
   StripeCheckoutServerTimestamp,
-} from '../../../../functions/src/stripeCheckout/store.ts';
+} from '../src/stripeCheckout/store.ts';
 import { stripeCheckoutFulfillmentTestHooks } from '../src/stripeCheckoutFulfillment.ts';
 
 function matchingConfig(): {

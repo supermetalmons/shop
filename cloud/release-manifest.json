@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "recordedAt": "2026-08-23T13:33:06.624Z",
   "currentProduction": {
     "apiVersionId": "676e6114-7186-4000-b0b1-61bf0236574f",
@@ -8,6 +8,5 @@
   "approvedRollback": {
     "apiVersionId": "676e6114-7186-4000-b0b1-61bf0236574f",
     "frontendVersionId": "9eb48e48-4574-49a4-a400-bf5fdd2a7eaf"
-  },
-  "allowDirectHeliusFrontendRollback": false
+  }
 }

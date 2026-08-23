@@ -9,14 +9,14 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
-  FUNCTIONS_DROPS,
-  type FunctionsDropConfig,
-} from '../../../../functions/src/config/deployment.ts';
+  API_DROPS,
+  type ApiDropConfig,
+} from '../src/dropConfig.ts';
 import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
   BOX_MINTER_CONFIG_DISCRIMINATOR,
-} from '../../../../functions/src/shared/boxMinterConfigCodec.ts';
-import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../functions/src/shared/solanaProgramAddresses.ts';
+} from '../../../../shared/boxMinterConfigCodec.ts';
+import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import {
   authenticatedFirestoreRequest,
   FirestoreWriteConflict,
@@ -41,8 +41,8 @@ const DROP_ID = 'delivery_prepare_test';
 const ADDRESS_ID = 'AbCdEfGhIjKlMnOpQrSt';
 const NOW_MS = 1_700_000_000_000;
 
-const baseDrop = Object.values(FUNCTIONS_DROPS).find((drop) => drop.itemsPerBox > 0)!;
-const DROP: FunctionsDropConfig = {
+const baseDrop = Object.values(API_DROPS).find((drop) => drop.itemsPerBox > 0)!;
+const DROP: ApiDropConfig = {
   ...baseDrop,
   dropId: DROP_ID,
   solanaCluster: 'devnet',
@@ -838,7 +838,7 @@ test('delivery preparation cancels sibling asset reads after the first validatio
 });
 
 test('delivery runtime accepts every deployed drop and secure ids stay in range', () => {
-  for (const drop of Object.values(FUNCTIONS_DROPS)) {
+  for (const drop of Object.values(API_DROPS)) {
     const runtime = deliveryPrepareTestHooks.buildRuntime(drop);
     assert.equal(runtime.dropId, drop.dropId);
   }

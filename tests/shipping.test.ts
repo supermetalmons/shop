@@ -9,7 +9,7 @@ import {
 import {
   countDeliveryFigures,
   normalizeDeliveryUnitsPerBox as normalizeDeliveryUnitsPerBoxShared,
-} from '../functions/src/shared/shipping.ts';
+} from '../shared/shipping.ts';
 
 const dude = { kind: 'dude' as const };
 const box = { kind: 'box' as const };

@@ -1,5 +1,5 @@
 import { defineNewDropConfig } from '../shared/newDropConfig.ts';
-import { PONCHO_DRIFELLA_CDN_BASE_URL } from '../../functions/src/shared/dropMediaDefaults.ts';
+import { PONCHO_DRIFELLA_CDN_BASE_URL } from '../../shared/dropMediaDefaults.ts';
 
 export const NEW_DROP = defineNewDropConfig({
   shared: {

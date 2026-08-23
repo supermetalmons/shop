@@ -5,7 +5,7 @@ import {
   StripeCheckoutIncrement,
   StripeCheckoutServerTimestamp,
   stripeCheckoutFieldValue,
-} from '../../../../functions/src/stripeCheckout/store.ts';
+} from '../src/stripeCheckout/store.ts';
 import { FirestoreWriteConflict, ProfileReadError } from '../src/firestoreRest.ts';
 import {
   createWorkerStripeCheckoutStore,

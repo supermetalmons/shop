@@ -10,7 +10,7 @@ import {
   resolveStripeCheckoutUnitAmountCents,
   stripeCheckoutModeForCluster,
   stripeCheckoutModeForDrop,
-} from '../functions/src/shared/stripeCheckoutCore.ts';
+} from '../shared/stripeCheckoutCore.ts';
 
 test('Stripe checkout mode preserves enablement and supported-cluster nullability', () => {
   assert.equal(stripeCheckoutModeForCluster('devnet'), 'test');

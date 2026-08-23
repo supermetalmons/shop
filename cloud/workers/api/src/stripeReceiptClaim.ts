@@ -15,7 +15,7 @@ import {
   bubblegumBurnV2Ix,
   bubblegumTransferV2Ix,
   IX_BUBBLEGUM_TRANSFER_V2,
-} from '../../../../functions/src/bubblegum.js';
+} from './bubblegum.js';
 import {
   activeDirectCardReceiptClaimSignatures,
   classifyDirectCardReceiptClaimSubmission,
@@ -26,32 +26,32 @@ import {
   shouldKeepDirectCardReceiptClaimProcessing,
   type DirectCardReceiptClaimSubmission,
   type DirectCardReceiptClaimTransferEvidence,
-} from '../../../../functions/src/adminIrlCardReceipt.js';
-import { getFunctionsDrop } from '../../../../functions/src/config/deployment.js';
-import { dropDeliveryOrderPath } from '../../../../functions/src/dropPaths.js';
+} from './adminIrlCardReceipt.js';
+import { getApiDrop } from './dropConfig.js';
+import { dropDeliveryOrderPath } from './dropPaths.js';
 import {
   assetMatchesReceiptDropIdentity,
   assetMatchesReceiptMetadataIdentity,
   receiptMetadataReference,
-} from '../../../../functions/src/receiptProof.js';
-import { dasAssetLooksBurntOrClosed, type DasAsset } from '../../../../functions/src/shared/dasAsset.js';
-import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../functions/src/shared/dasAssetCollections.js';
-import { normalizeDropId } from '../../../../functions/src/shared/deploymentCore.js';
-import { isReceiptClaimDeliveryOrderSource } from '../../../../functions/src/shared/fulfillmentSources.js';
+} from './receiptProof.js';
+import { dasAssetLooksBurntOrClosed, type DasAsset } from '../../../../shared/dasAsset.js';
+import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../shared/dasAssetCollections.js';
+import { normalizeDropId } from '../../../../shared/deploymentCore.js';
+import { isReceiptClaimDeliveryOrderSource } from '../../../../shared/fulfillmentSources.js';
 import {
   heliusSearchAssetsHasNextPage,
   heliusSearchAssetsItems,
-} from '../../../../functions/src/shared/heliusDas.js';
+} from '../../../../shared/heliusDas.js';
 import {
   BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX,
-} from '../../../../functions/src/shared/boxMinterProtocol.js';
+} from '../../../../shared/boxMinterProtocol.js';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
   MPL_CORE_CPI_SIGNER_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.js';
+} from '../../../../shared/solanaProgramAddresses.js';
 import {
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   hasPluralStripeReceiptClaims,
@@ -62,11 +62,11 @@ import {
   stripeReceiptClaimBoxMapKey,
   stripeReceiptClaimCodeMaybe,
   type StripeAssignedIrlClaim,
-} from '../../../../functions/src/shared/stripeReceiptClaims.js';
+} from '../../../../shared/stripeReceiptClaims.js';
 import type {
   StripeReceiptClaimRequest,
   StripeReceiptClaimResult,
-} from '../../../../functions/src/shared/contracts.js';
+} from '../../../../shared/contracts.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
@@ -228,7 +228,7 @@ function normalizedError(error: unknown, fallback: string): StripeReceiptClaimEr
     return new StripeReceiptClaimError(error.code, error.message, error.details);
   }
   if (isRecord(error) && typeof error.code === 'string') {
-    const code = error.code.replace(/^functions\//, '') as ClaimErrorCode;
+    const code = error.code as ClaimErrorCode;
     if ([
       'invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'aborted',
       'failed-precondition', 'resource-exhausted', 'deadline-exceeded', 'unavailable', 'internal',
@@ -519,7 +519,7 @@ async function startClaim(
     }
     const rawDropId = typeof claim.dropId === 'string' ? claim.dropId : '';
     const dropId = normalizeDropId(rawDropId);
-    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId) || !getFunctionsDrop(dropId)) {
+    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId) || !getApiDrop(dropId)) {
       throw new StripeReceiptClaimError('failed-precondition', 'Claim code has an invalid drop id.');
     }
     const deliveryId = positiveInteger(claim.deliveryId, 'delivery id');
@@ -849,7 +849,7 @@ async function finalizeClaim(
 }
 
 function runtimeForDrop(dropId: string): Runtime {
-  const config = getFunctionsDrop(dropId);
+  const config = getApiDrop(dropId);
   if (!config) throw new StripeReceiptClaimError('failed-precondition', 'Claim code has an unsupported drop id.');
   try {
     return adminIrlRedeemRuntime.buildRuntime(config);

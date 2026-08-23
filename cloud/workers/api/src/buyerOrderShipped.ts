@@ -1,19 +1,19 @@
-import { buildBuyerVisibleOrderEmailItems } from '../../../../functions/src/orderEmailItems.js';
-import { buildBuyerOrderShippedEmailContent } from '../../../../functions/src/notificationEmails.js';
+import { buildBuyerVisibleOrderEmailItems } from './orderEmailItems.js';
+import { buildBuyerOrderShippedEmailContent } from './notificationEmails.js';
 import {
   resolveNotificationDeliveryId,
   shouldNotifyBuyerForDeliveryShippedWrite,
-} from '../../../../functions/src/notifications.js';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../functions/src/shared/fulfillmentSources.js';
-import { resolveFulfillmentTrackingHref } from '../../../../functions/src/shared/fulfillmentTracking.js';
+} from './notifications.js';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
+import { resolveFulfillmentTrackingHref } from '../../../../shared/fulfillmentTracking.js';
 import {
   createNotificationEmailJobV1,
   isNotificationEmailIdempotencyKey,
   isNotificationEmailJobId,
   type NotificationEmailJobV1,
-} from '../../../../functions/src/shared/notificationEmailJob.js';
-import { validateNotificationEmailRecipient } from '../../../../functions/src/shared/notificationSubscription.js';
-import { DEPLOYMENT_DROPS } from '../../../../functions/src/shared/deploymentRegistry.js';
+} from '../../../../shared/notificationEmailJob.js';
+import { validateNotificationEmailRecipient } from '../../../../shared/notificationSubscription.js';
+import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
 
 export const BUYER_ORDER_SHIPPED_EMAIL_PENDING = 'pending' as const;
 export const BUYER_ORDER_SHIPPED_EMAIL_QUEUED = 'queued' as const;

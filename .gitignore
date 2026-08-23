@@ -28,10 +28,6 @@ pnpm-debug.log*
 .firebase/
 firebase-debug.log
 firestore-debug.log
-functions/node_modules/
-functions/lib/
-functions/.runtimeconfig.json
-
 onchain/target/
 onchain/.anchor/
 onchain/test-ledger/

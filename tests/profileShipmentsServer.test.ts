@@ -5,18 +5,18 @@ import {
   buildWalletDeliveryRecoveryState,
   preparedDeliveryRecoveryNextCheckMs,
   processingDeliveryRecoveryNextCheckMs,
-} from '../functions/src/shared/deliveryRecovery.ts';
-import { dropDeliveryOrderPath } from '../functions/src/dropPaths.ts';
+} from '../shared/deliveryRecovery.ts';
+import { dropDeliveryOrderPath } from '../cloud/workers/api/src/dropPaths.ts';
 import {
   parseSolanaSignInMessage,
   resolveWalletSessionBinding,
   validateSolanaSignInMessage,
   WalletLifecycleValidationError,
-} from '../functions/src/shared/walletLifecycle.ts';
+} from '../shared/walletLifecycle.ts';
 import {
   isPositiveSafeInteger,
   parseCanonicalPositiveInteger,
-} from '../functions/src/shared/positiveInteger.ts';
+} from '../shared/positiveInteger.ts';
 
 const OWNER_ONE = '11111111111111111111111111111111';
 const OWNER_TWO = 'So11111111111111111111111111111111111111112';

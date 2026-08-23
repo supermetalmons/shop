@@ -2,8 +2,8 @@ import bs58 from 'bs58';
 import {
   HELIUS_COLLECTION_GROUPING_OPTIONS,
   uniqueAssetGroupingCollectionMint,
-} from '../../../../functions/src/shared/dasAssetCollections.js';
-import type { DasAsset } from '../../../../functions/src/shared/dasAsset.js';
+} from '../../../../shared/dasAssetCollections.js';
+import type { DasAsset } from '../../../../shared/dasAsset.js';
 import {
   HELIUS_SEARCH_ASSETS_MAX_CANDIDATES,
   HELIUS_SEARCH_ASSETS_MAX_CURSOR_PAGES,
@@ -13,8 +13,8 @@ import {
   HELIUS_SEARCH_ASSETS_PAGE_LIMITS,
   heliusSearchAssetsCursorPageInfo,
   heliusSearchAssetsItems,
-} from '../../../../functions/src/shared/heliusDas.js';
-import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../functions/src/shared/pendingOpenCodec.js';
+} from '../../../../shared/heliusDas.js';
+import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.js';
 import {
   isExactShopInventoryRequest,
   isExactShopInventoryResponse,
@@ -27,7 +27,7 @@ import {
   type ShopInventoryResponse,
   type ShopPendingOpenBoxesRequest,
   type ShopPendingOpenBoxesResponse,
-} from '../../../../functions/src/shared/shopApi.js';
+} from '../../../../shared/shopApi.js';
 import {
   decodePendingOpenRecordData,
   listShopCollectionQueryRuntimes,
@@ -38,13 +38,13 @@ import {
   transformShopInventoryItem,
   type PendingOpenRecordCandidate,
   type ShopDropRuntime,
-} from '../../../../functions/src/shared/shopDomain.js';
-import type { SolanaCluster } from '../../../../functions/src/shared/deploymentCore.js';
+} from '../../../../shared/shopDomain.js';
+import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
 import {
   isExactSubscribeToNotificationsRequest,
   normalizeNotificationEmailRecipient,
-} from '../../../../functions/src/shared/notificationSubscription.js';
-import { isBase58Bytes } from '../../../../functions/src/shared/solanaRpcProxy.js';
+} from '../../../../shared/notificationSubscription.js';
+import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
 import {
   handleRpcPost,
   handleRpcPreflight,
@@ -143,7 +143,7 @@ import {
 } from './revealDudes.js';
 import {
   isExactStripeCheckoutFulfillmentJobV1,
-} from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.js';
+} from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import { processStripeCheckoutFulfillmentJob } from './stripeCheckoutFulfillment.js';
 
 const HELIUS_BATCH_LIMIT = 1000;

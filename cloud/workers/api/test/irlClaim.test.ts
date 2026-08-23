@@ -10,13 +10,13 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
-  FUNCTIONS_DROPS,
-  type FunctionsDropConfig,
-} from '../../../../functions/src/config/deployment.ts';
-import type { DecodedBoxMinterConfigData } from '../../../../functions/src/shared/boxMinterConfigCodec.ts';
+  API_DROPS,
+  type ApiDropConfig,
+} from '../src/dropConfig.ts';
+import type { DecodedBoxMinterConfigData } from '../../../../shared/boxMinterConfigCodec.ts';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.ts';
+} from '../../../../shared/solanaProgramAddresses.ts';
 import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
 import {
   handleIrlClaimPrepare,
@@ -43,8 +43,8 @@ function testPublicKey(index: number): PublicKey {
   return new PublicKey(bytes);
 }
 
-const baseDrop = Object.values(FUNCTIONS_DROPS).find((drop) => drop.itemsPerBox > 0)!;
-const DROP: FunctionsDropConfig = {
+const baseDrop = Object.values(API_DROPS).find((drop) => drop.itemsPerBox > 0)!;
+const DROP: ApiDropConfig = {
   ...baseDrop,
   dropId: DROP_ID,
   solanaCluster: 'devnet',

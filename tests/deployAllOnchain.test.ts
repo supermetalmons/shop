@@ -41,7 +41,7 @@ import {
   BOX_MINTER_CONFIG_DISCRIMINATOR,
   BOX_MINTER_SPLIT_PAYMENTS_V1_MAGIC,
   BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION,
-} from '../functions/src/shared/boxMinterConfigCodec.ts';
+} from '../shared/boxMinterConfigCodec.ts';
 import { LITTLE_SWAG_HOODIE_COLLECTION_IMAGE_URL } from '../src/config/dropMediaDefaults.ts';
 import { NEW_DROP as CARD_NFT_2_NEW_DROP } from '../scripts/newDrops/card_nft_2.ts';
 import { NEW_DROP as LITTLE_SWAG_HOODIES_NEW_DROP } from '../scripts/newDrops/little_swag_hoodies.ts';
@@ -610,8 +610,6 @@ function makeDeploymentRegistryFixture(
   const rootDir = mkdtempSync(path.join(tmpdir(), 'mons-shop-deploy-registry-'));
   const registryPath = path.join(
     rootDir,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );

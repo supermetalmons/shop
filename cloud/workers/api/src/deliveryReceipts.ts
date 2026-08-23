@@ -14,24 +14,24 @@ import {
 } from '@solana/web3.js';
 import { z } from 'zod';
 import {
-  getFunctionsDrop,
-  type FunctionsDropConfig,
-} from '../../../../functions/src/config/deployment.js';
+  getApiDrop,
+  type ApiDropConfig,
+} from './dropConfig.js';
 import {
   IRL_CLAIM_CODE_DIGITS,
   IRL_CLAIM_CODE_NAMESPACE,
   normalizeIrlClaimCode,
-} from '../../../../functions/src/claimCodes.js';
+} from './claimCodes.js';
 import {
   dropBoxAssignmentPath,
   dropDeliveryOrderPath,
   dropDudeAssignmentPath,
   dropDudePoolPath,
-} from '../../../../functions/src/dropPaths.js';
+} from './dropPaths.js';
 import {
   resolveDeliveryOrderDropId,
   resolveDeliveryOrderIdentity,
-} from '../../../../functions/src/deliveryOrderSummaries.js';
+} from './deliveryOrderSummaries.js';
 import {
   DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS,
   DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS,
@@ -40,41 +40,41 @@ import {
   nextPreparedDeliveryRecoveryDelayMs,
   preparedDeliveryRecoveryNextCheckMs,
   processingDeliveryRecoveryNextCheckMs,
-} from '../../../../functions/src/shared/deliveryRecovery.js';
+} from '../../../../shared/deliveryRecovery.js';
 import {
   DudeAssignmentPoolExhaustedError,
   pickDudeIdsForAssignment,
-} from '../../../../functions/src/shared/assignDudesPicker.js';
+} from '../../../../shared/assignDudesPicker.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
   type DecodedBoxMinterConfigData,
-} from '../../../../functions/src/shared/boxMinterConfigCodec.js';
+} from '../../../../shared/boxMinterConfigCodec.js';
 import {
   BOX_MINTER_CONFIG_SEED,
   isBoxMinterDiscountMintsPerWallet,
   isConfiguredBoxMinterItemsPerBox,
-} from '../../../../functions/src/shared/boxMinterProtocol.js';
+} from '../../../../shared/boxMinterProtocol.js';
 import type {
   DeliveryRecoveryOutcome,
   IssueReceiptsResult,
   RecoverDeliveryOrdersItemResult,
   RecoverDeliveryOrdersResult,
   WalletDeliveryRecoveryState,
-} from '../../../../functions/src/shared/contracts.js';
+} from '../../../../shared/contracts.js';
 import {
   boxMinterMetadataBaseMatchesDrop,
   normalizeDropId,
   type SolanaCluster,
-} from '../../../../functions/src/shared/deploymentCore.js';
-import { sanitizeDudeAssignmentPool } from '../../../../functions/src/shared/dudeAssignmentPool.js';
+} from '../../../../shared/deploymentCore.js';
+import { sanitizeDudeAssignmentPool } from '../../../../shared/dudeAssignmentPool.js';
 import {
   PACK_STATUS_SCHEMA_VERSION,
   countDeliveryOrderBoxItems,
   countDeliveryOrderDudeItems,
   packStatusCardsPerPack,
   shouldTrackPackStatusForDrop,
-} from '../../../../functions/src/shared/packStatus.js';
+} from '../../../../shared/packStatus.js';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
@@ -82,15 +82,15 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.js';
+} from '../../../../shared/solanaProgramAddresses.js';
 import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
-} from '../../../../functions/src/shared/solanaRpcProxy.js';
+} from '../../../../shared/solanaRpcProxy.js';
 import {
   WALLET_SESSION_COLLECTION,
   resolveWalletSessionBinding,
-} from '../../../../functions/src/shared/walletLifecycle.js';
+} from '../../../../shared/walletLifecycle.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
@@ -220,7 +220,7 @@ class ReadyToShipNotificationEnqueueError extends DeliveryReceiptError {
 }
 
 type DeliveryRuntime = {
-  config: FunctionsDropConfig;
+  config: ApiDropConfig;
   dropId: string;
   cluster: SolanaCluster;
   boxMinterProgramId: PublicKey;
@@ -453,7 +453,7 @@ function configuredPublicKey(value: string | undefined, label: string, required 
 
 function runtimeForDrop(rawDropId: string): DeliveryRuntime {
   const dropId = normalizeDropId(rawDropId);
-  const config = getFunctionsDrop(dropId);
+  const config = getApiDrop(dropId);
   if (!config) throw new DeliveryReceiptError('invalid-argument', `Unsupported dropId: ${dropId}`);
   const itemsPerBox = Number(config.itemsPerBox);
   const maxSupply = Number(config.maxSupply);
@@ -1808,7 +1808,7 @@ function decodeOnchainConfig(data: Buffer): DecodedOnchainConfig {
   }
 }
 
-function paymentRoutingMatches(config: FunctionsDropConfig, decoded: DecodedBoxMinterConfigData): boolean {
+function paymentRoutingMatches(config: ApiDropConfig, decoded: DecodedBoxMinterConfigData): boolean {
   const routing = decoded.paymentRouting;
   if (!routing) return false;
   if (!config.paymentRouting) return routing.schema === 'legacy';

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DEPLOYMENT_DROPS,
   deploymentTreasuryAlias,
-} from '../functions/src/shared/deploymentRegistry.ts';
+} from '../shared/deploymentRegistry.ts';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   CARD_FULFILLMENT_DROP_IDS,
@@ -13,7 +13,7 @@ import {
   SHIPPER_FULFILLMENT_ACCESS,
   walletCanViewSensitiveFulfillmentAddress,
   walletHasFulfillmentDropAccess,
-} from '../functions/src/shared/fulfillmentAccess.ts';
+} from '../shared/fulfillmentAccess.ts';
 import {
   ADMIN_WALLETS,
   DEVNET_INVENTORY_WALLETS,

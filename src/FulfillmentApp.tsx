@@ -119,8 +119,8 @@ import {
   defaultShipStationPackage,
   normalizeShipStationPackage,
   SHIPSTATION_PACKAGE_RANGE_MESSAGE,
-} from '../functions/src/shared/shipstationPackage.js';
-import { buildShipStationCustomsDeclaration } from '../functions/src/shared/shipstationCustoms.js';
+} from '../shared/shipstationPackage.js';
+import { buildShipStationCustomsDeclaration } from '../shared/shipstationCustoms.js';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const SHIPSTATION_AWAITING_SHIPMENT_URL = 'https://ship.shipstation.com/orders/awaiting-shipment';

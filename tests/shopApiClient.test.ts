@@ -11,7 +11,7 @@ import {
   SHOP_PENDING_OPEN_MAX_DUDE_ASSET_IDS,
   isExactShopInventoryResponse,
   isExactShopPendingOpenBoxesResponse,
-} from '../functions/src/shared/shopApi.ts';
+} from '../shared/shopApi.ts';
 import { fetchInventory, fetchPackStatus, fetchPendingOpenBoxes } from '../src/lib/shopApi.ts';
 import { rpcEndpointForCluster, SHOP_SOLANA_CONNECTION_CONFIG } from '../src/lib/shopRpc.ts';
 

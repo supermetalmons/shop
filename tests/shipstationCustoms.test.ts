@@ -6,8 +6,8 @@ import {
   buildShipStationCustomsDeclaration,
   shipStationCustomsCatalogEntry,
   shipStationPhysicalProductQuantity,
-} from '../functions/src/shared/shipstationCustoms.ts';
-import { DEPLOYMENT_DROPS } from '../functions/src/shared/deploymentRegistry.ts';
+} from '../shared/shipstationCustoms.ts';
+import { DEPLOYMENT_DROPS } from '../shared/deploymentRegistry.ts';
 
 test('the ShipStation customs catalog contains every deployed drop family', () => {
   const deployedFamilies = Array.from(new Set(

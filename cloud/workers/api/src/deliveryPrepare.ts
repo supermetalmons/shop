@@ -12,61 +12,61 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
-  FUNCTIONS_DROPS,
-  getFunctionsDrop,
-  type FunctionsDropConfig,
-} from '../../../../functions/src/config/deployment.js';
-import { dropDeliveryOrderPath } from '../../../../functions/src/dropPaths.js';
+  API_DROPS,
+  getApiDrop,
+  type ApiDropConfig,
+} from './dropConfig.js';
+import { dropDeliveryOrderPath } from './dropPaths.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
   type DecodedBoxMinterConfigData,
-} from '../../../../functions/src/shared/boxMinterConfigCodec.js';
+} from '../../../../shared/boxMinterConfigCodec.js';
 import {
   BOX_MINTER_CONFIG_SEED,
   isBoxMinterDiscountMintsPerWallet,
   isConfiguredBoxMinterItemsPerBox,
-} from '../../../../functions/src/shared/boxMinterProtocol.js';
+} from '../../../../shared/boxMinterProtocol.js';
 import type {
   PrepareDeliveryRequest,
   PrepareDeliveryResponse,
-} from '../../../../functions/src/shared/contracts.js';
-import { DELIVERY_PREPARE_ATTEMPT_HEADER } from '../../../../functions/src/shared/contracts.js';
-import { normalizeCountryCode } from '../../../../functions/src/shared/countryNormalization.js';
+} from '../../../../shared/contracts.js';
+import { DELIVERY_PREPARE_ATTEMPT_HEADER } from '../../../../shared/contracts.js';
+import { normalizeCountryCode } from '../../../../shared/countryNormalization.js';
 import {
   boxMinterMetadataBaseMatchesDrop,
   normalizeDropId,
   type SolanaCluster,
-} from '../../../../functions/src/shared/deploymentCore.js';
+} from '../../../../shared/deploymentCore.js';
 import {
   dasAssetBoxId,
   dasAssetDudeId,
   dasAssetKind,
   type DasAsset,
-} from '../../../../functions/src/shared/dasAsset.js';
+} from '../../../../shared/dasAsset.js';
 import {
   HELIUS_COLLECTION_GROUPING_OPTIONS,
   uniqueAssetGroupingCollectionMint,
-} from '../../../../functions/src/shared/dasAssetCollections.js';
-import { DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS } from '../../../../functions/src/shared/deliveryRecovery.js';
-import { HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES } from '../../../../functions/src/shared/heliusDas.js';
+} from '../../../../shared/dasAssetCollections.js';
+import { DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS } from '../../../../shared/deliveryRecovery.js';
+import { HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES } from '../../../../shared/heliusDas.js';
 import {
   MPL_CORE_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.js';
+} from '../../../../shared/solanaProgramAddresses.js';
 import {
   isNonZeroBase58Bytes,
   isTransientShopRpcError,
-} from '../../../../functions/src/shared/solanaRpcProxy.js';
+} from '../../../../shared/solanaRpcProxy.js';
 import {
   canDeliverItemKind,
   calculateDeliveryLamports,
   normalizeDeliveryUnitsPerBox,
-} from '../../../../functions/src/shared/shipping.js';
+} from '../../../../shared/shipping.js';
 import {
   resolveWalletSessionBinding,
   WALLET_SESSION_COLLECTION,
-} from '../../../../functions/src/shared/walletLifecycle.js';
+} from '../../../../shared/walletLifecycle.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
@@ -151,7 +151,7 @@ class DeliveryPrepareError extends Error {
 }
 
 type DeliveryRuntime = {
-  config: FunctionsDropConfig;
+  config: ApiDropConfig;
   dropId: string;
   cluster: SolanaCluster;
   boxMinterProgramId: PublicKey;
@@ -218,7 +218,7 @@ type DeliveryPrepareDependencies = {
     runtime: DeliveryRuntime,
     assetId: string,
   ) => Promise<DasAsset>;
-  getDrop: (dropId: string) => FunctionsDropConfig | undefined;
+  getDrop: (dropId: string) => ApiDropConfig | undefined;
   loadAddress: (
     context: FirestoreContext,
     wallet: string,
@@ -385,7 +385,7 @@ function configuredPublicKey(label: string, value: string | undefined, required 
   }
 }
 
-function buildRuntime(config: FunctionsDropConfig): DeliveryRuntime {
+function buildRuntime(config: ApiDropConfig): DeliveryRuntime {
   const dropId = normalizeDropId(config.dropId);
   const itemsPerBox = Number(config.itemsPerBox);
   const maxSupply = Number(config.maxSupply);
@@ -415,7 +415,7 @@ function buildRuntime(config: FunctionsDropConfig): DeliveryRuntime {
 }
 
 function clusterSharesCollection(runtime: DeliveryRuntime): boolean {
-  return Object.values(FUNCTIONS_DROPS).some((candidate) =>
+  return Object.values(API_DROPS).some((candidate) =>
     candidate.dropId !== runtime.dropId &&
     candidate.solanaCluster === runtime.cluster &&
     candidate.collectionMint === runtime.collectionMint.toBase58());
@@ -647,7 +647,7 @@ function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; dat
   }
 }
 
-function paymentRoutingMatches(config: FunctionsDropConfig, decoded: DecodedBoxMinterConfigData): boolean {
+function paymentRoutingMatches(config: ApiDropConfig, decoded: DecodedBoxMinterConfigData): boolean {
   const paymentRouting = decoded.paymentRouting;
   if (!paymentRouting) return false;
   if (!config.paymentRouting) return paymentRouting.schema === 'legacy';
@@ -1401,7 +1401,7 @@ const defaultDependencies: DeliveryPrepareDependencies = {
   deleteDeliveryOrder,
   deliveryPdaExists,
   fetchAsset,
-  getDrop: getFunctionsDrop,
+  getDrop: getApiDrop,
   loadAddress,
   loadLatestBlockhash,
   loadLookupTable,

@@ -8,7 +8,7 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
-} from '../functions/src/shared/solanaProgramAddresses.ts';
+} from '../shared/solanaProgramAddresses.ts';
 
 test('canonical Solana program addresses are valid public keys', () => {
   for (const address of [

@@ -1,6 +1,6 @@
 import type { FulfillmentOrderAddress, ShipStationAddressPatch, ShipStationEditableAddressField } from '../types';
 import { SHIPSTATION_EDITABLE_ADDRESS_FIELDS } from '../types';
-import { parseShipStationShipTo } from '../../functions/src/shared/shipstationRates.js';
+import { parseShipStationShipTo } from '../../shared/shipstationRates.js';
 
 export type FulfillmentShipStationAddressDraft = Record<ShipStationEditableAddressField, string>;
 

@@ -8,36 +8,36 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
-import { getFunctionsDrop, type FunctionsDropConfig } from '../../../../functions/src/config/deployment.js';
+import { getApiDrop, type ApiDropConfig } from './dropConfig.js';
 import {
   ADDRESS_CIPHER_SECRET_KEY_LENGTH,
   addressCipherHint,
   encryptAddressCipherText,
   serializeAddressCipherPayload,
-} from '../../../../functions/src/shared/addressCipher.js';
+} from '../../../../shared/addressCipher.js';
 import {
   decodeBoxMinterConfigData,
   type DecodedBoxMinterConfigData,
-} from '../../../../functions/src/shared/boxMinterConfigCodec.js';
-import { BOX_MINTER_CONFIG_SEED } from '../../../../functions/src/shared/boxMinterProtocol.js';
-import { normalizeCountryCode } from '../../../../functions/src/shared/countryNormalization.js';
+} from '../../../../shared/boxMinterConfigCodec.js';
+import { BOX_MINTER_CONFIG_SEED } from '../../../../shared/boxMinterProtocol.js';
+import { normalizeCountryCode } from '../../../../shared/countryNormalization.js';
 import {
   boxMinterMetadataBaseMatchesDrop,
   normalizeDropId,
-} from '../../../../functions/src/shared/deploymentCore.js';
-import { dropDeliveryOrderPath } from '../../../../functions/src/dropPaths.js';
+} from '../../../../shared/deploymentCore.js';
+import { dropDeliveryOrderPath } from './dropPaths.js';
 import {
   packStatusCardsPerPack,
   shouldTrackPackStatusForDrop,
   PACK_STATUS_SCHEMA_VERSION,
-} from '../../../../functions/src/shared/packStatus.js';
+} from '../../../../shared/packStatus.js';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
   MPL_CORE_CPI_SIGNER_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.js';
+} from '../../../../shared/solanaProgramAddresses.js';
 import {
   processStripeCheckoutFulfillmentDocument,
   type StripeCheckoutDropRuntime,
@@ -45,17 +45,17 @@ import {
   type StripeCheckoutFulfillmentCompletionFields,
   type StripeCheckoutFulfillmentProcessResult,
   type StripeCheckoutOnchainConfig,
-} from '../../../../functions/src/stripeCheckout/service.js';
-import { StripeCheckoutFulfillmentError } from '../../../../functions/src/stripeCheckout/errors.js';
-import { stripeCheckoutFieldValue } from '../../../../functions/src/stripeCheckout/store.js';
+} from './stripeCheckout/service.js';
+import { StripeCheckoutFulfillmentError } from './stripeCheckout/errors.js';
+import { stripeCheckoutFieldValue } from './stripeCheckout/store.js';
 import {
   publishStripeCheckoutTerminalNotifications,
   type StripeCheckoutTerminalNotificationResult,
-} from '../../../../functions/src/stripeCheckout/terminalNotifications.js';
+} from './stripeCheckout/terminalNotifications.js';
 import {
   STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   type StripeCheckoutFulfillmentJobV1,
-} from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.js';
+} from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import { FirestoreWriteConflict, createGoogleAccessTokenProvider } from './firestoreRest.js';
 import { createWorkerStripeCheckoutStore } from './stripeCheckoutFirestore.js';
 
@@ -73,7 +73,7 @@ const MPL_CORE_COLLECTION_V1_DISCRIMINATOR = 5;
 const MPL_CORE_COLLECTION_V1_MIN_BYTES = 49;
 
 type FulfillmentRuntime = StripeCheckoutDropRuntime & {
-  config: FunctionsDropConfig;
+  config: ApiDropConfig;
 };
 
 type FulfillmentEnv = Pick<Env,
@@ -118,7 +118,7 @@ function fulfillmentRuntime(rawDropId: unknown): FulfillmentRuntime {
   if (!dropId || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId)) {
     throw fulfillmentError('invalid-argument', 'Invalid dropId');
   }
-  const config = getFunctionsDrop(dropId);
+  const config = getApiDrop(dropId);
   if (!config) throw fulfillmentError('invalid-argument', `Unsupported dropId: ${dropId}`);
   const cluster = config.solanaCluster;
   if (cluster !== 'devnet' && cluster !== 'mainnet-beta') {
@@ -569,7 +569,7 @@ export async function processStripeCheckoutFulfillmentJob(
         await env.NOTIFICATION_EMAIL_QUEUE.send(notificationJob);
       },
       getDropName: (dropId) => {
-        const config = getFunctionsDrop(dropId);
+        const config = getApiDrop(dropId);
         return config?.displayName || config?.collectionName || dropId;
       },
     },

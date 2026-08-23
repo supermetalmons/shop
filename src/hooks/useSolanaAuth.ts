@@ -10,11 +10,11 @@ import {
   type ReconcileProfileStateRequest,
   type ReconcileProfileStateResponse,
 } from '../lib/api';
-import { isRetryableCallableError, retryWithBackoff } from '../lib/callableErrors';
+import { isRetryableApiError, retryWithBackoff } from '../lib/apiErrors';
 import type { DeliveryOrderSummary, GetProfileStateResponse, Profile } from '../types';
 import { buildSignInMessage } from '../lib/solana';
-import { normalizeCallableErrorCode } from '../../functions/src/shared/callableErrorCode';
-import { deliveryOrderSummarySortAt } from '../../functions/src/shared/deliveryOrderSummary.js';
+import { normalizeApiErrorCode } from '../../shared/apiErrorCode';
+import { deliveryOrderSummarySortAt } from '../../shared/deliveryOrderSummary.js';
 import {
   deliveryOrderSummariesEqual,
   firebaseAuthChangeInvalidatesSession,
@@ -145,7 +145,7 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 function errorCode(error: unknown): string {
-  return normalizeCallableErrorCode(
+  return normalizeApiErrorCode(
     typeof error === 'object' && error ? (error as { code?: unknown }).code : undefined,
   );
 }
@@ -540,7 +540,7 @@ export function useSolanaAuthWithRuntime(
         },
         (refreshError) => {
           if (cancelled) return;
-          if (isRetryableCallableError(refreshError)) {
+          if (isRetryableApiError(refreshError)) {
             const delay = retryDelay(PROFILE_REFRESH_RETRY_DELAYS_MS, retryCount);
             retryCount += 1;
             schedule(delay);
@@ -579,7 +579,7 @@ export function useSolanaAuthWithRuntime(
         })
         .catch((reconcileError) => {
           if (cancelled) return;
-          if (!isRetryableCallableError(reconcileError)) {
+          if (!isRetryableApiError(reconcileError)) {
             console.warn('[mons] failed to reconcile profile state', reconcileError);
             return;
           }
@@ -669,7 +669,7 @@ export function useSolanaAuthWithRuntime(
             jitterRatio: 0.2,
             shouldRetry: (retryError) => {
               ensureAttemptCurrent();
-              return isRetryableCallableError(retryError);
+              return isRetryableApiError(retryError);
             },
           },
         );

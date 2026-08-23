@@ -181,10 +181,8 @@ function verifyInstallScripts(cwd, label) {
 
 verifyToolchain();
 await runNcu('package.json', !checkOnly);
-await runNcu('functions/package.json', !checkOnly);
 const latestCompatibilityVersions = getLatestCompatibilityVersions();
 syncCompatibilityLanes('package.json', 'root', latestCompatibilityVersions, !checkOnly);
-syncCompatibilityLanes('functions/package.json', 'Functions', latestCompatibilityVersions, !checkOnly);
 
 if (checkOnly) {
   console.log('\nNode/npm remain pinned, and all dependency lanes were checked without changing files.');
@@ -192,10 +190,6 @@ if (checkOnly) {
 }
 
 run('Installing root dependencies', npmCommand, ['install']);
-run('Installing Functions dependencies', npmCommand, ['install'], {
-  cwd: new URL('../functions/', import.meta.url),
-});
 verifyInstallScripts(process.cwd(), 'root');
-verifyInstallScripts(new URL('../functions/', import.meta.url), 'Functions');
 run('Running the full project check', npmCommand, ['run', 'check']);
 console.log('\nAll dependencies and checks are current.');

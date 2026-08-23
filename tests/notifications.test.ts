@@ -9,7 +9,7 @@ import {
   shouldNotifyShippersForDeliveryReadyToShipWrite,
   shouldSendResendNotificationEmail,
   validateNotificationEmailRecipient,
-} from '../functions/src/notifications.ts';
+} from '../cloud/workers/api/src/notifications.ts';
 import {
   buildBuyerOrderReceivedEmailContent,
   buildBuyerOrderShippedEmailContent,
@@ -21,18 +21,18 @@ import {
   type NotificationEmailItem,
   type ShipperVisibleOrderEmailItem,
   summarizeShipperReadyOrderItems,
-} from '../functions/src/notificationEmails.ts';
+} from '../cloud/workers/api/src/notificationEmails.ts';
 import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
-} from '../functions/src/orderEmailItems.ts';
+} from '../cloud/workers/api/src/orderEmailItems.ts';
 import {
   CARD_NFT_BINDER_CLEAN_IMAGE_URL,
   CLEAR_CARDS_CARD_CLEAN_BASE_URL,
   CLEAR_CARDS_PACK_CLEAN_IMAGE_URL,
   DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
-} from '../functions/src/shared/dropMediaDefaults.ts';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../functions/src/stripeCheckout/contract.ts';
+} from '../shared/dropMediaDefaults.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../cloud/workers/api/src/stripeCheckout/contract.ts';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

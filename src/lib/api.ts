@@ -62,15 +62,15 @@ import {
 import {
   isPackStatusSupportedDropId,
   normalizePackStatusAmount,
-} from '../../functions/src/shared/packStatus.ts';
-import { summarizePayloadShape } from '../../functions/src/shared/logSummaries.ts';
-import { parseDeliveryOrderSummary } from '../../functions/src/shared/deliveryOrderSummary.ts';
-import { parseShipStationPackage } from '../../functions/src/shared/shipstationPackage.ts';
-import { isStripeReceiptClaimCode } from '../../functions/src/shared/stripeReceiptClaims.ts';
+} from '../../shared/packStatus.ts';
+import { summarizePayloadShape } from '../../shared/logSummaries.ts';
+import { parseDeliveryOrderSummary } from '../../shared/deliveryOrderSummary.ts';
+import { parseShipStationPackage } from '../../shared/shipstationPackage.ts';
+import { isStripeReceiptClaimCode } from '../../shared/stripeReceiptClaims.ts';
 import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
-} from '../../functions/src/shared/solanaRpcProxy.ts';
+} from '../../shared/solanaRpcProxy.ts';
 import { fetchPackStatus } from './shopApi';
 import { monsApiOrigin } from './monsApiOrigin';
 
@@ -125,9 +125,9 @@ export async function ensureAuthenticated(): Promise<string> {
   return authReadyPromise;
 }
 
-const DEBUG_FUNCTIONS =
+const DEBUG_API =
   import.meta.env?.DEV ||
-  (typeof window !== 'undefined' && window.localStorage?.getItem('monsDebugFunctions') === '1');
+  (typeof window !== 'undefined' && window.localStorage?.getItem('monsDebugApi') === '1');
 
 function summarizeError(err: unknown) {
   const anyErr = err as any;
@@ -321,7 +321,7 @@ async function requestProfileApi<Req>(
   dependencies: ProfileApiClientDependencies,
 ): Promise<unknown> {
   const startedAt = Date.now();
-  const callId = DEBUG_FUNCTIONS ? makeCallId() : undefined;
+  const callId = DEBUG_API ? makeCallId() : undefined;
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(new DOMException('Timed out', 'TimeoutError')),
@@ -331,7 +331,7 @@ async function requestProfileApi<Req>(
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const token = await waitForProfileApiValue(dependencies.getToken(attempt > 0), controller.signal);
-        if (DEBUG_FUNCTIONS) {
+        if (DEBUG_API) {
           console.info(`[mons/api] → ${pathname}`, { callId, payload: summarizePayloadShape(data) });
         }
         const response = await dependencies.fetch(`${dependencies.origin()}${pathname}`, {
@@ -353,7 +353,7 @@ async function requestProfileApi<Req>(
         }
         if (response.status === 401 && attempt === 0) continue;
         if (!response.ok) throw new ProfileApiError(profileApiErrorPayload(payload, response.status));
-        if (DEBUG_FUNCTIONS) {
+        if (DEBUG_API) {
           console.info(`[mons/api] ← ${pathname}`, {
             callId,
             ms: Date.now() - startedAt,

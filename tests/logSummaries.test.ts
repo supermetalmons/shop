@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   summarizePayloadShape,
   summarizeValueShape,
-} from '../functions/src/shared/logSummaries.ts';
+} from '../shared/logSummaries.ts';
 
 test('shared log summaries preserve value shape labels', () => {
   assert.equal(summarizeValueShape(null), 'null');

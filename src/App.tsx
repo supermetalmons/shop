@@ -96,10 +96,10 @@ import {
   type WalletScopedSerialRun,
 } from './lib/profileClientLifecycle';
 import {
-  isRetryableCallableError,
+  isRetryableApiError,
   isRetryableReceiptIssuanceError,
   retryWithBackoff,
-} from './lib/callableErrors';
+} from './lib/apiErrors';
 import {
   applyOptimisticStripeCheckoutMintProgress,
   completeStripeCheckoutMarker,
@@ -254,7 +254,7 @@ import {
   resolveStripeCheckoutUnitAmountCents,
   stripeCheckoutModeForDrop,
   type StripeCheckoutMode as StripePaymentMode,
-} from '../functions/src/shared/stripeCheckoutCore.ts';
+} from '../shared/stripeCheckoutCore.ts';
 import {
   DeliveryOrderSummary,
   InventoryItem,
@@ -1214,7 +1214,7 @@ function isUserRejectedError(err: unknown): boolean {
 
 function shouldRetryAdminIrlRedeemFinalizeError(err: unknown): boolean {
   const message = errorMessage(err);
-  return isRetryableCallableError(err) || /not uniquely indexed yet|already being finalized|transfer transaction not found yet/i.test(message);
+  return isRetryableApiError(err) || /not uniquely indexed yet|already being finalized|transfer transaction not found yet/i.test(message);
 }
 
 async function finalizeAdminIrlRedeemWithRetry(args: {
@@ -1848,7 +1848,7 @@ function App({
           stripeCheckoutRecoverySessionIds,
           presentSessionIds,
         ).length > 0,
-        retryable: !error || isRetryableCallableError(error),
+        retryable: !error || isRetryableApiError(error),
         now: Date.now(),
         stopAt: anonymousStripeHistoryPollUntil,
         retryIndex: Math.max(0, completedAttempts - 1),
@@ -2490,7 +2490,7 @@ function App({
           if (expectedSessionsPresent) markRecovered();
         })
         .catch((err) => {
-          retryable = isRetryableCallableError(err);
+          retryable = isRetryableApiError(err);
           console.warn('[mons] failed to reconcile profile after Stripe checkout', err);
         })
         .finally(() => {

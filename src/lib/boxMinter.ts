@@ -12,7 +12,7 @@ import { normalizeDropBase, type FrontendDeploymentConfig, type MintSelectionCon
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
-} from '../../functions/src/shared/boxMinterConfigCodec.ts';
+} from '../../shared/boxMinterConfigCodec.ts';
 import {
   BOX_MINTER_CONFIG_SEED as CONFIG_SEED,
   BOX_MINTER_MAX_ITEMS_PER_BOX as MAX_ITEMS_PER_BOX,
@@ -23,12 +23,12 @@ import {
   BOX_MINTER_PENDING_OPEN_SEED as PENDING_OPEN_SEED,
   isOpenableBoxMinterItemsPerBox,
   type BoxMinterMintVariantTuple,
-} from '../../functions/src/shared/boxMinterProtocol.ts';
-import { boxMinterMetadataBaseMatchesDrop } from '../../functions/src/shared/deploymentCore.ts';
+} from '../../shared/boxMinterProtocol.ts';
+import { boxMinterMetadataBaseMatchesDrop } from '../../shared/deploymentCore.ts';
 import {
   MPL_CORE_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
-} from '../../functions/src/shared/solanaProgramAddresses.ts';
+} from '../../shared/solanaProgramAddresses.ts';
 
 const BOX_ASSET_SEED = 'box';
 const DISCOUNT_RECORD_SEED = 'discount';

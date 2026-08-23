@@ -11,74 +11,74 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
-  FUNCTIONS_DROPS,
-  getFunctionsDrop,
-  type FunctionsDropConfig,
-} from '../../../../functions/src/config/deployment.js';
-import { bubblegumTransferV2Ix } from '../../../../functions/src/bubblegum.js';
+  API_DROPS,
+  getApiDrop,
+  type ApiDropConfig,
+} from './dropConfig.js';
+import { bubblegumTransferV2Ix } from './bubblegum.js';
 import {
   dropAdminIrlRedeemReceiptMarkerPath,
   dropAdminIrlRedeemRequestPath,
-} from '../../../../functions/src/dropPaths.js';
+} from './dropPaths.js';
 import {
   assetMatchesReceiptDropIdentity,
   assetMatchesReceiptMetadataIdentity,
   assetProofTreePublicKey,
   normalizedAssetProofAccounts,
   receiptMetadataReference,
-} from '../../../../functions/src/receiptProof.js';
+} from './receiptProof.js';
 import {
   getAdminIrlRedeemTargetEligibility,
   isAdminIrlRedeemDropFamily,
   type AdminIrlRedeemTargetKind,
-} from '../../../../functions/src/shared/adminIrlEligibility.js';
+} from '../../../../shared/adminIrlEligibility.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
   type DecodedBoxMinterConfigData,
-} from '../../../../functions/src/shared/boxMinterConfigCodec.js';
+} from '../../../../shared/boxMinterConfigCodec.js';
 import {
   BOX_MINTER_CONFIG_SEED,
   BOX_MINTER_PENDING_OPEN_SEED,
   isConfiguredBoxMinterItemsPerBox,
-} from '../../../../functions/src/shared/boxMinterProtocol.js';
+} from '../../../../shared/boxMinterProtocol.js';
 import {
   ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER,
   type AdminIrlRedeemPrepareRequest,
   type AdminIrlRedeemPreparedTxResponse,
-} from '../../../../functions/src/shared/contracts.js';
+} from '../../../../shared/contracts.js';
 import {
   assetGroupingCollectionMints,
   HELIUS_COLLECTION_GROUPING_OPTIONS,
   uniqueAssetGroupingCollectionMint,
-} from '../../../../functions/src/shared/dasAssetCollections.js';
+} from '../../../../shared/dasAssetCollections.js';
 import {
   dasAssetBoxId,
   dasAssetKind,
   dasAssetLooksBurntOrClosed,
   type DasAsset,
-} from '../../../../functions/src/shared/dasAsset.js';
+} from '../../../../shared/dasAsset.js';
 import {
   normalizeDropId,
   type SolanaCluster,
-} from '../../../../functions/src/shared/deploymentCore.js';
+} from '../../../../shared/deploymentCore.js';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   walletHasAdminIrlRedeemAccess,
-} from '../../../../functions/src/shared/fulfillmentAccess.js';
-import { HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES } from '../../../../functions/src/shared/heliusDas.js';
+} from '../../../../shared/fulfillmentAccess.js';
+import { HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES } from '../../../../shared/heliusDas.js';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.js';
+} from '../../../../shared/solanaProgramAddresses.js';
 import {
   resolveWalletSessionBinding,
   WALLET_SESSION_COLLECTION,
-} from '../../../../functions/src/shared/walletLifecycle.js';
+} from '../../../../shared/walletLifecycle.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
@@ -165,7 +165,7 @@ class AdminIrlRedeemPrepareError extends Error {
 }
 
 type AdminIrlRedeemRuntime = {
-  config: FunctionsDropConfig;
+  config: ApiDropConfig;
   dropId: string;
   cluster: SolanaCluster;
   boxMinterProgramId: PublicKey;
@@ -239,7 +239,7 @@ type AdminIrlRedeemPrepareDependencies = {
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
   verifyIdToken: typeof verifyFirebaseIdToken;
-  getDrop: (dropId: string) => FunctionsDropConfig | undefined;
+  getDrop: (dropId: string) => ApiDropConfig | undefined;
   loadWalletSession: (context: FirestoreContext, uid: string) => Promise<string>;
   loadReceiptMarker: (context: FirestoreContext, dropId: string, assetId: string) => Promise<boolean>;
   createRequest: (context: FirestoreContext, input: CreateRequestInput) => Promise<void>;
@@ -376,7 +376,7 @@ function configuredPublicKey(label: string, value: string | undefined, required 
   }
 }
 
-function buildRuntime(config: FunctionsDropConfig): AdminIrlRedeemRuntime {
+function buildRuntime(config: ApiDropConfig): AdminIrlRedeemRuntime {
   const dropId = normalizeDropId(config.dropId);
   const maxSupply = Number(config.maxSupply);
   const itemsPerBox = Number(config.itemsPerBox);
@@ -416,7 +416,7 @@ function buildRuntime(config: FunctionsDropConfig): AdminIrlRedeemRuntime {
 }
 
 function clusterSharesCollectionMint(runtime: AdminIrlRedeemRuntime): boolean {
-  return Object.values(FUNCTIONS_DROPS).filter((config) =>
+  return Object.values(API_DROPS).filter((config) =>
     config.solanaCluster === runtime.cluster && config.collectionMint === runtime.collectionMint.toBase58()
   ).length > 1;
 }
@@ -1362,7 +1362,7 @@ const defaultDependencies: AdminIrlRedeemPrepareDependencies = {
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdToken: verifyFirebaseIdToken,
-  getDrop: getFunctionsDrop,
+  getDrop: getApiDrop,
   loadWalletSession,
   loadReceiptMarker,
   createRequest,

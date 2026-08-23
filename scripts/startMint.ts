@@ -9,12 +9,12 @@ import {
   normalizeAndValidateDropId,
   readDeploymentDropRegistry,
 } from './shared/deploymentRegistry.ts';
-import { decodeBoxMinterConfigData } from '../functions/src/shared/boxMinterConfigCodec.ts';
+import { decodeBoxMinterConfigData } from '../shared/boxMinterConfigCodec.ts';
 import {
   boxMinterMetadataBaseMatchesDrop,
   normalizeBoxMinterMetadataBaseForComparison,
-} from '../functions/src/shared/deploymentCore.ts';
-import { BOX_MINTER_CONFIG_SEED } from '../functions/src/shared/boxMinterProtocol.ts';
+} from '../shared/deploymentCore.ts';
+import { BOX_MINTER_CONFIG_SEED } from '../shared/boxMinterProtocol.ts';
 
 type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 
@@ -72,8 +72,6 @@ export async function resolveDeploymentConfig(args: {
   );
   const canonicalPath = path.join(
     args.root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );

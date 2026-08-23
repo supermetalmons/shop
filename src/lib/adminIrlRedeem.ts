@@ -3,7 +3,7 @@ import type { InventoryItem } from '../types';
 import {
   getAdminIrlRedeemTargetEligibility,
   isAdminIrlRedeemDropFamily,
-} from '../../functions/src/shared/adminIrlEligibility';
+} from '../../shared/adminIrlEligibility';
 import { hasAdminIrlRedeemAccess } from './fulfillmentAccess';
 
 type EligibilityItem = Pick<InventoryItem, 'dropId' | 'kind'>;

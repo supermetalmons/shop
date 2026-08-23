@@ -8,7 +8,7 @@ import {
 import {
   normalizeStripeReceiptClaimCode as normalizeBackendStripeReceiptClaimCode,
   requireStripeReceiptClaimCode,
-} from '../functions/src/stripeCheckout/contract.ts';
+} from '../cloud/workers/api/src/stripeCheckout/contract.ts';
 
 test('Stripe receipt claim helpers normalize and detect canonical codes', () => {
   assert.equal(normalizeStripeReceiptClaimCode('  abcdef-0123456789  '), 'ABCDEF-0123456789');

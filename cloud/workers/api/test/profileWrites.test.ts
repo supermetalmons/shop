@@ -19,7 +19,7 @@ import {
   decryptAddressCipherText,
   parseAddressCipherPayload,
   serializeAddressCipherPayload,
-} from '../../../../functions/src/shared/addressCipher.ts';
+} from '../../../../shared/addressCipher.ts';
 import type {
   GoogleAccessTokenProvider,
   ProfileProviderFetch,

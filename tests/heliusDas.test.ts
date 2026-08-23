@@ -5,7 +5,7 @@ import {
   heliusSearchAssetsCursorPageInfo,
   heliusSearchAssetsHasNextPage,
   heliusSearchAssetsItems,
-} from '../functions/src/shared/heliusDas.ts';
+} from '../shared/heliusDas.ts';
 
 test('Helius search result helpers preserve pagination fallbacks and total handling', () => {
   assert.deepEqual(heliusSearchAssetsItems(null), []);

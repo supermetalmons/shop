@@ -3,12 +3,12 @@ import {
   NOTIFICATION_EMAIL_FROM,
   isNotificationEmailJobV1,
   type NotificationEmailJobV1,
-} from '../../../../functions/src/shared/notificationEmailJob.js';
+} from '../../../../shared/notificationEmailJob.js';
 import {
   isRetryableResendError,
   summarizeResendError,
   type ResendErrorSummary,
-} from '../../../../functions/src/shared/resendErrors.js';
+} from '../../../../shared/resendErrors.js';
 
 const RETRY_DELAYS_SECONDS = [30, 2 * 60, 10 * 60, 30 * 60, 2 * 60 * 60] as const;
 const RESEND_EMAILS_API_URL = 'https://api.resend.com/emails';

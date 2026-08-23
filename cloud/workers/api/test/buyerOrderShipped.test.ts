@@ -6,7 +6,7 @@ import {
   createBuyerOrderShippedNotificationJob,
   decideBuyerOrderShippedNotification,
 } from '../src/buyerOrderShipped.ts';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../functions/src/shared/fulfillmentSources.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
 
 const JOB_ID = '123e4567-e89b-42d3-a456-426614174000';
 const DELIVERY_ID = 456;

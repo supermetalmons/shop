@@ -8,13 +8,13 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
-  FUNCTIONS_DROPS,
-  type FunctionsDropConfig,
-} from '../../../../functions/src/config/deployment.ts';
+  API_DROPS,
+  type ApiDropConfig,
+} from '../src/dropConfig.ts';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.ts';
+} from '../../../../shared/solanaProgramAddresses.ts';
 import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
 import {
   ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER,
@@ -38,8 +38,8 @@ const METADATA_BASE = 'https://cdn.lil.org/nft/admin_irl_redeem_prepare_test/jso
 const REQUEST_ID = 'AbCdEfGhIjKlMnOpQrSt';
 const ATTEMPT_ID = '8dc66f5f-0f2d-46aa-85c3-f8744dc46ad5';
 
-const DROP: FunctionsDropConfig = {
-  ...FUNCTIONS_DROPS.card_nft_2,
+const DROP: ApiDropConfig = {
+  ...API_DROPS.card_nft_2,
   dropId: DROP_ID,
   dropFamily: 'card_nft_2',
   solanaCluster: 'devnet',
@@ -445,7 +445,7 @@ test('Admin IRL helpers generate compatible ids and reject unsupported drop fami
     ...DROP,
     dropId: 'admin_irl_unsupported',
     dropFamily: 'clear_cards',
-  } as FunctionsDropConfig;
+  } as ApiDropConfig;
   assert.throws(
     () => adminIrlRedeemPrepareTestHooks.assertSupportedRuntime(
       adminIrlRedeemPrepareTestHooks.buildRuntime(unsupported),

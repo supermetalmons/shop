@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { STRIPE_CHECKOUT_STATUS } from '../../../../functions/src/shared/stripeCheckoutSession.ts';
-import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.ts';
+import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.ts';
+import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.ts';
 import {
   reconcileStaleStripeFulfillments,
   stripeCheckoutReconciliationTestHooks,

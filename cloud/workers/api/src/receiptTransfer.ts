@@ -9,42 +9,42 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
-  getFunctionsDrop,
-  type FunctionsDropConfig,
-} from '../../../../functions/src/config/deployment.js';
-import { bubblegumTransferV2Ix } from '../../../../functions/src/bubblegum.js';
+  getApiDrop,
+  type ApiDropConfig,
+} from './dropConfig.js';
+import { bubblegumTransferV2Ix } from './bubblegum.js';
 import {
   assetGroupingCollectionMints,
   HELIUS_COLLECTION_GROUPING_OPTIONS,
-} from '../../../../functions/src/shared/dasAssetCollections.js';
+} from '../../../../shared/dasAssetCollections.js';
 import {
   dasAssetKind,
   dasAssetLooksBurntOrClosed,
   type DasAsset,
-} from '../../../../functions/src/shared/dasAsset.js';
+} from '../../../../shared/dasAsset.js';
 import {
   normalizeDropId,
   normalizeDropSalesMode,
   type SolanaCluster,
-} from '../../../../functions/src/shared/deploymentCore.js';
+} from '../../../../shared/deploymentCore.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
   type DecodedBoxMinterConfigData,
-} from '../../../../functions/src/shared/boxMinterConfigCodec.js';
+} from '../../../../shared/boxMinterConfigCodec.js';
 import {
   BOX_MINTER_CONFIG_SEED,
   isConfiguredBoxMinterItemsPerBox,
-} from '../../../../functions/src/shared/boxMinterProtocol.js';
+} from '../../../../shared/boxMinterProtocol.js';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.js';
+} from '../../../../shared/solanaProgramAddresses.js';
 import {
   HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES,
-} from '../../../../functions/src/shared/heliusDas.js';
+} from '../../../../shared/heliusDas.js';
 import {
   assetMatchesReceiptDropIdentity,
   assetMatchesReceiptMetadataIdentity,
@@ -52,11 +52,11 @@ import {
   normalizedAssetProofAccounts,
   receiptMetadataReference,
   type ReceiptMetadataReference,
-} from '../../../../functions/src/receiptProof.js';
+} from './receiptProof.js';
 import type {
   PrepareReceiptTransferRequest,
   PrepareReceiptTransferResponse,
-} from '../../../../functions/src/shared/contracts.js';
+} from '../../../../shared/contracts.js';
 import {
   RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION,
   evaluateReceiptTransferRateLimit,
@@ -64,7 +64,7 @@ import {
   receiptTransferCallerRateLimitBucket,
   receiptTransferStoredBucketMatches,
   type ReceiptTransferRateLimitBucket,
-} from '../../../../functions/src/shared/receiptTransferRateLimit.js';
+} from './receiptTransferRateLimit.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
@@ -138,7 +138,7 @@ class ReceiptTransferError extends Error {
 }
 
 type ReceiptTransferRuntime = {
-  config: FunctionsDropConfig;
+  config: ApiDropConfig;
   dropId: string;
   cluster: SolanaCluster;
   boxMinterProgramId: PublicKey;
@@ -177,7 +177,7 @@ type ReceiptTransferDependencies = {
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
   verifyIdToken: typeof verifyFirebaseIdToken;
-  getDrop: (dropId: string) => FunctionsDropConfig | undefined;
+  getDrop: (dropId: string) => ApiDropConfig | undefined;
   enforceRateLimit: (context: FirestoreContext, bucket: ReceiptTransferRateLimitBucket) => Promise<void>;
   fetchAsset: (context: ProviderContext, runtime: ReceiptTransferRuntime, assetId: string) => Promise<DasAsset>;
   fetchAssetProof: (context: ProviderContext, runtime: ReceiptTransferRuntime, assetId: string) => Promise<Record<string, unknown>>;
@@ -321,7 +321,7 @@ function configuredPublicKey(label: string, value: string | undefined, required 
   }
 }
 
-function buildRuntime(config: FunctionsDropConfig): ReceiptTransferRuntime {
+function buildRuntime(config: ApiDropConfig): ReceiptTransferRuntime {
   const dropId = normalizeDropId(config.dropId);
   const maxSupply = Number(config.maxSupply);
   const itemsPerBox = Number(config.itemsPerBox);
@@ -1125,7 +1125,7 @@ const defaultDependencies: ReceiptTransferDependencies = {
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdToken: verifyFirebaseIdToken,
-  getDrop: getFunctionsDrop,
+  getDrop: getApiDrop,
   enforceRateLimit,
   fetchAsset,
   fetchAssetProof,

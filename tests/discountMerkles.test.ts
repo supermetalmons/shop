@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { PublicKey } from '@solana/web3.js';
 
-import { FUNCTIONS_DROPS } from '../functions/src/config/deployment.ts';
+import { API_DROPS } from '../cloud/workers/api/src/dropConfig.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
 
 const DISCOUNT_MERKLE_DIR = path.resolve('src/drops/discountMerkles');
@@ -35,40 +35,40 @@ function assertValidProof(address: string, proof: unknown, expectedRoot: string,
 
 test('discount merkle registries and datasets are canonical and complete', async () => {
   const frontendDropIds = Object.keys(FRONTEND_DROPS).sort();
-  const functionsDropIds = Object.keys(FUNCTIONS_DROPS).sort();
+  const apiDropIds = Object.keys(API_DROPS).sort();
   assert.deepEqual(
-    functionsDropIds,
+    apiDropIds,
     frontendDropIds,
-    'frontend and Functions registries must contain exactly the same drop IDs',
+    'frontend and API registries must contain exactly the same drop IDs',
   );
 
   const rootByFamily = new Map<string, string>();
   const familyByRoot = new Map<string, string>();
   for (const dropId of frontendDropIds) {
     const frontendDrop = FRONTEND_DROPS[dropId];
-    const functionsDrop = FUNCTIONS_DROPS[dropId];
+    const apiDrop = API_DROPS[dropId];
 
     assert.equal(frontendDrop.dropId, dropId, `frontend registry key ${dropId} must match its embedded dropId`);
-    assert.equal(functionsDrop.dropId, dropId, `Functions registry key ${dropId} must match its embedded dropId`);
+    assert.equal(apiDrop.dropId, dropId, `API registry key ${dropId} must match its embedded dropId`);
     assert.match(
       frontendDrop.discountMerkleRoot,
       ROOT_RE,
       `frontend discount Merkle root for ${dropId} must be canonical lowercase 64-character hex`,
     );
     assert.match(
-      functionsDrop.discountMerkleRoot,
+      apiDrop.discountMerkleRoot,
       ROOT_RE,
-      `Functions discount Merkle root for ${dropId} must be canonical lowercase 64-character hex`,
+      `API discount Merkle root for ${dropId} must be canonical lowercase 64-character hex`,
     );
     assert.equal(
-      functionsDrop.discountMerkleRoot,
+      apiDrop.discountMerkleRoot,
       frontendDrop.discountMerkleRoot,
-      `frontend and Functions discount Merkle roots must match for ${dropId}`,
+      `frontend and API discount Merkle roots must match for ${dropId}`,
     );
     assert.equal(
-      functionsDrop.dropFamily,
+      apiDrop.dropFamily,
       frontendDrop.dropFamily,
-      `frontend and Functions drop families must match for ${dropId}`,
+      `frontend and API drop families must match for ${dropId}`,
     );
     assert.match(
       frontendDrop.dropFamily,

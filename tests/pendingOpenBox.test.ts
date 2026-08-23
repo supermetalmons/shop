@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PublicKey } from '@solana/web3.js';
-import { FUNCTIONS_DROPS } from '../functions/src/config/deployment.ts';
-import { encodeFinalizeOpenBoxArgs } from '../functions/src/shared/finalizeOpenBoxArgs.ts';
+import { API_DROPS } from '../cloud/workers/api/src/dropConfig.ts';
+import { encodeFinalizeOpenBoxArgs } from '../shared/finalizeOpenBoxArgs.ts';
 import {
   PENDING_OPEN_BOX_DISCRIMINATOR,
   decodePendingOpenData,
-} from '../functions/src/shared/pendingOpenCodec.ts';
-import { BOX_MINTER_CONFIG_SEED } from '../functions/src/shared/boxMinterProtocol.ts';
+} from '../shared/pendingOpenCodec.ts';
+import { BOX_MINTER_CONFIG_SEED } from '../shared/boxMinterProtocol.ts';
 import { FRONTEND_DROPS } from '../src/config/deployment.ts';
-import { decodePendingOpenRecordData } from '../functions/src/shared/shopDomain.ts';
+import { decodePendingOpenRecordData } from '../shared/shopDomain.ts';
 
 const LIVE_LITTLE_SWAG_BOXES_LEGACY_PENDING =
   'RQdFGvAMQ6Ge0Y5xVn5l/WqYRLjb7HsYQ8nLgzuLwMnRD7Ow2WA4t/d94N7kPVYpYdwdU4ja0Dhqq35JtKtJ7dgEh3CmAh5hWITpOHGmTOxKTZcquT0CAU7flx38JqkeNnCs35PJ1Qw1DARXjX2i6mRBhwls4tXoZUQHOOugR2fJxqKKzakLpDn+bRCMKIqxIt5kmUIiNMc3d3054wf9ZEULXH5lF+EAGuhkGQAAAAD7';
@@ -45,7 +45,7 @@ function pk(value: string): PublicKey {
 }
 
 function liveOpenableFunctionDrops() {
-  return Object.values(FUNCTIONS_DROPS).filter((drop) => drop.solanaCluster === 'mainnet-beta' && Number(drop.itemsPerBox) > 0);
+  return Object.values(API_DROPS).filter((drop) => drop.solanaCluster === 'mainnet-beta' && Number(drop.itemsPerBox) > 0);
 }
 
 function liveOpenableFrontendDrop(dropId: string) {

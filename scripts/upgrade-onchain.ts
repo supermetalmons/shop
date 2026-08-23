@@ -34,15 +34,15 @@ import {
 import type {
   DeploymentRegistryDrop,
   PaymentRoutingConfig,
-} from '../functions/src/shared/deploymentRegistry.ts';
+} from '../shared/deploymentRegistry.ts';
 import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_SPLIT_PAYMENTS_V1,
   BOX_MINTER_CONFIG_DISCRIMINATOR,
   decodeBoxMinterConfigData,
   type DecodedBoxMinterConfigData,
-} from '../functions/src/shared/boxMinterConfigCodec.ts';
-import { BOX_MINTER_CONFIG_SEED } from '../functions/src/shared/boxMinterProtocol.ts';
+} from '../shared/boxMinterConfigCodec.ts';
+import { BOX_MINTER_CONFIG_SEED } from '../shared/boxMinterProtocol.ts';
 import {
   parsePrivateKeyInput,
   promptMaskedInput,
@@ -2952,8 +2952,6 @@ async function main(): Promise<void> {
   const onchainDir = path.join(root, 'onchain');
   const registryPath = path.join(
     root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );

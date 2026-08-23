@@ -1,1 +1,1 @@
-export { getMediaIdForTokenId } from '../../functions/src/shared/mediaMap.ts';
+export { getMediaIdForTokenId } from '../../shared/mediaMap.ts';

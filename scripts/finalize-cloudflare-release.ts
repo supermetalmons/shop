@@ -18,11 +18,10 @@ export type ReleaseVersionPair = {
 };
 
 export type ReleaseManifest = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   recordedAt: string;
   currentProduction: ReleaseVersionPair;
   approvedRollback: ReleaseVersionPair;
-  allowDirectHeliusFrontendRollback: false;
 };
 
 type FinalizeOptions = {
@@ -98,17 +97,15 @@ export function isReleaseManifest(value: unknown): value is ReleaseManifest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const manifest = value as Record<string, unknown>;
   return Object.keys(manifest).sort().join(',') === [
-    'allowDirectHeliusFrontendRollback',
     'approvedRollback',
     'currentProduction',
     'recordedAt',
     'schemaVersion',
   ].sort().join(',') &&
-    manifest.schemaVersion === 1 &&
+    manifest.schemaVersion === 2 &&
     typeof manifest.recordedAt === 'string' && Number.isFinite(Date.parse(manifest.recordedAt)) &&
     isReleaseVersionPair(manifest.currentProduction) &&
-    isReleaseVersionPair(manifest.approvedRollback) &&
-    manifest.allowDirectHeliusFrontendRollback === false;
+    isReleaseVersionPair(manifest.approvedRollback);
 }
 
 export function readReleaseManifest(path = releaseManifestPath): ReleaseManifest {

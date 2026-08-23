@@ -1,23 +1,23 @@
 /**
  * Frontend projection of the canonical deployment registry.
  *
- * Deployment rows live in functions/src/shared/deploymentRegistry.ts so the
- * frontend and Cloud Functions cannot drift.
+ * Deployment rows live in shared/deploymentRegistry.ts so the frontend and
+ * API Worker cannot drift.
  */
 
 import {
   defaultBoxMediaConfigForDropFamily,
   defaultFigureMediaConfigForDropFamily,
-} from '../../functions/src/shared/dropMediaDefaults.js';
+} from '../../shared/dropMediaDefaults.js';
 import {
   DEPLOYMENT_DROPS,
   projectDeploymentPaymentRouting,
-} from '../../functions/src/shared/deploymentRegistry.js';
+} from '../../shared/deploymentRegistry.js';
 import type {
   DeploymentMediaMapConfig,
   DeploymentRegistryDrop,
   PaymentRoutingConfig,
-} from '../../functions/src/shared/deploymentRegistry.js';
+} from '../../shared/deploymentRegistry.js';
 import {
   canonicalizeDropAssetUrl as canonicalizeSharedDropAssetUrl,
   defaultDropFamilyForDropId as defaultSharedDropFamilyForDropId,
@@ -30,7 +30,7 @@ import {
   normalizeMetadataPathFormat,
   normalizeMintSelectionConfig,
   normalizeMetadataBaseAliases,
-} from '../../functions/src/shared/deploymentCore.js';
+} from '../../shared/deploymentCore.js';
 import type {
   DropFamily as SharedDropFamily,
   DropPaths,
@@ -38,12 +38,12 @@ import type {
   MetadataPathFormat,
   MintSelectionConfig as SharedMintSelectionConfig,
   SolanaCluster as SharedSolanaCluster,
-} from '../../functions/src/shared/deploymentCore.js';
-import { normalizeMediaMapConfig } from '../../functions/src/shared/mediaMap.js';
+} from '../../shared/deploymentCore.js';
+import { normalizeMediaMapConfig } from '../../shared/mediaMap.js';
 import {
   assertStripeLivePriceConfigured,
   resolveStripeCheckoutEnabledForDropFamily,
-} from '../../functions/src/shared/stripeCheckoutCore.js';
+} from '../../shared/stripeCheckoutCore.js';
 
 export type SolanaCluster = SharedSolanaCluster;
 export type DropFamily = SharedDropFamily;

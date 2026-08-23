@@ -1,6 +1,6 @@
 import {
   isExactSubscribeToNotificationsResponse,
-} from '../../functions/src/shared/notificationSubscription.ts';
+} from '../../shared/notificationSubscription.ts';
 import type {
   SubscribeToNotificationsRequest,
   SubscribeToNotificationsResponse,

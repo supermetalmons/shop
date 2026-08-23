@@ -18,6 +18,6 @@
     "types": ["vite/client", "dom-webcodecs", "wicg-file-system-access"],
     "tsBuildInfoFile": "./.cache/tsconfig.tsbuildinfo"
   },
-  "include": ["src", "functions/src/shared"],
+  "include": ["src", "shared"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

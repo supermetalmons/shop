@@ -24,11 +24,11 @@ import {
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
-} from '../functions/src/shared/solanaProgramAddresses.ts';
+} from '../shared/solanaProgramAddresses.ts';
 import {
   receiptPoolDeploymentKey,
   type ReceiptPoolDeployment,
-} from '../functions/src/shared/deploymentRegistry.ts';
+} from '../shared/deploymentRegistry.ts';
 import {
   acquireDeploymentRegistryMutationLock,
   assertReceiptPoolDropRelations,
@@ -295,8 +295,6 @@ async function commitPoolDeployment(args: {
 }): Promise<void> {
   const registryPath = path.join(
     args.root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -380,8 +378,6 @@ async function main(): Promise<void> {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const registryPath = path.join(
     root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );

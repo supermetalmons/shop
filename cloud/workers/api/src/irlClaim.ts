@@ -11,67 +11,67 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
-  FUNCTIONS_DROPS,
-  getFunctionsDrop,
-  type FunctionsDropConfig,
-} from '../../../../functions/src/config/deployment.js';
+  API_DROPS,
+  getApiDrop,
+  type ApiDropConfig,
+} from './dropConfig.js';
 import {
   IRL_CLAIM_CODE_DIGITS,
   normalizeIrlClaimCode,
-} from '../../../../functions/src/claimCodes.js';
+} from './claimCodes.js';
 import {
   assetProofTreePublicKey,
   normalizedAssetProofAccounts,
-} from '../../../../functions/src/receiptProof.js';
+} from './receiptProof.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
   type DecodedBoxMinterConfigData,
-} from '../../../../functions/src/shared/boxMinterConfigCodec.js';
+} from '../../../../shared/boxMinterConfigCodec.js';
 import {
   BOX_MINTER_CONFIG_SEED,
   BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX,
-} from '../../../../functions/src/shared/boxMinterProtocol.js';
+} from '../../../../shared/boxMinterProtocol.js';
 import {
   boxMinterMetadataBaseMatchesDrop,
   normalizeBoxMinterMetadataBaseForComparison,
   normalizeDropId,
   type SolanaCluster,
-} from '../../../../functions/src/shared/deploymentCore.js';
+} from '../../../../shared/deploymentCore.js';
 import {
   dasAssetBoxId,
   dasAssetDudeId,
   dasAssetKind,
   dasAssetLooksBurntOrClosed,
   type DasAsset,
-} from '../../../../functions/src/shared/dasAsset.js';
+} from '../../../../shared/dasAsset.js';
 import {
   HELIUS_COLLECTION_GROUPING_OPTIONS,
   uniqueAssetGroupingCollectionMint,
-} from '../../../../functions/src/shared/dasAssetCollections.js';
+} from '../../../../shared/dasAssetCollections.js';
 import {
   HELIUS_SEARCH_ASSETS_MAX_CANDIDATES,
   HELIUS_SEARCH_ASSETS_MAX_CURSOR_PAGES,
   HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES,
   HELIUS_SEARCH_ASSETS_PAGE_LIMITS,
   heliusSearchAssetsCursorPageInfo,
-} from '../../../../functions/src/shared/heliusDas.js';
+} from '../../../../shared/heliusDas.js';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
   MPL_CORE_CPI_SIGNER_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
-} from '../../../../functions/src/shared/solanaProgramAddresses.js';
-import { isNonZeroBase58Bytes } from '../../../../functions/src/shared/solanaRpcProxy.js';
+} from '../../../../shared/solanaProgramAddresses.js';
+import { isNonZeroBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
 import {
   resolveWalletSessionBinding,
   WALLET_SESSION_COLLECTION,
-} from '../../../../functions/src/shared/walletLifecycle.js';
+} from '../../../../shared/walletLifecycle.js';
 import type {
   PrepareIrlClaimRequest,
   PrepareIrlClaimResponse,
-} from '../../../../functions/src/shared/contracts.js';
+} from '../../../../shared/contracts.js';
 import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
@@ -139,7 +139,7 @@ class IrlClaimError extends Error {
 }
 
 type IrlClaimRuntime = {
-  config: FunctionsDropConfig;
+  config: ApiDropConfig;
   dropId: string;
   cluster: SolanaCluster;
   boxMinterProgramId: PublicKey;
@@ -179,7 +179,7 @@ type IrlClaimDependencies = {
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
   verifyIdToken: typeof verifyFirebaseIdToken;
-  getDrop: (dropId: string) => FunctionsDropConfig | undefined;
+  getDrop: (dropId: string) => ApiDropConfig | undefined;
   loadWalletSession: (context: FirestoreReadContext, uid: string) => Promise<string>;
   loadClaim: (context: FirestoreReadContext, code: string) => Promise<Record<string, unknown> | null>;
   resolveLegacyDropIds: (context: FirestoreReadContext, code: string) => Promise<string[]>;
@@ -318,7 +318,7 @@ function publicKey(label: string, value: string | undefined, required = true): P
   }
 }
 
-function buildRuntime(config: FunctionsDropConfig): IrlClaimRuntime {
+function buildRuntime(config: ApiDropConfig): IrlClaimRuntime {
   const dropId = normalizeDropId(config.dropId);
   const itemsPerBox = Number(config.itemsPerBox);
   const maxSupply = Number(config.maxSupply);
@@ -349,13 +349,13 @@ function buildRuntime(config: FunctionsDropConfig): IrlClaimRuntime {
   };
 }
 
-function collectionScopeKey(config: Pick<FunctionsDropConfig, 'solanaCluster' | 'collectionMint'>): string {
+function collectionScopeKey(config: Pick<ApiDropConfig, 'solanaCluster' | 'collectionMint'>): string {
   return `${config.solanaCluster}:${config.collectionMint}`;
 }
 
 function clusterSharesCollection(runtime: IrlClaimRuntime): boolean {
   const key = collectionScopeKey(runtime.config);
-  return Object.values(FUNCTIONS_DROPS).filter((drop) => collectionScopeKey(drop) === key).length > 1;
+  return Object.values(API_DROPS).filter((drop) => collectionScopeKey(drop) === key).length > 1;
 }
 
 function heliusOrigin(cluster: SolanaCluster): string {
@@ -1190,7 +1190,7 @@ const defaultDependencies: IrlClaimDependencies = {
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdToken: verifyFirebaseIdToken,
-  getDrop: getFunctionsDrop,
+  getDrop: getApiDrop,
   loadWalletSession,
   loadClaim,
   resolveLegacyDropIds,

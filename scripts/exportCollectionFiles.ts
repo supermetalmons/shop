@@ -45,7 +45,7 @@ function usage() {
     '  npm run export_collection_files -- --cluster mainnet-beta --output scripts/collection-files <collection>...',
     '',
     'Requirements:',
-    '  - HELIUS_API_KEY or VITE_HELIUS_API_KEY in .env',
+    '  - HELIUS_API_KEY in .env',
   ].join('\n');
 }
 
@@ -69,8 +69,6 @@ function loadLocalEnv() {
   const envPaths = [
     fileURLToPath(new URL('../.env', import.meta.url)),
     fileURLToPath(new URL('../.env.local', import.meta.url)),
-    fileURLToPath(new URL('../functions/.env', import.meta.url)),
-    fileURLToPath(new URL('../functions/.env.local', import.meta.url)),
   ];
 
   const loadEnvFile = (process as any).loadEnvFile as ((path: string) => void) | undefined;
@@ -105,8 +103,8 @@ function loadLocalEnv() {
 }
 
 function heliusApiKey(): string {
-  const raw = (process.env.HELIUS_API_KEY || process.env.VITE_HELIUS_API_KEY || '').trim();
-  if (!raw) fail('Missing HELIUS_API_KEY or VITE_HELIUS_API_KEY');
+  const raw = (process.env.HELIUS_API_KEY || '').trim();
+  if (!raw) fail('Missing HELIUS_API_KEY');
   return raw;
 }
 

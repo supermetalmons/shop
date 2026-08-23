@@ -1,9 +1,9 @@
-import type { PackStatusBreakdown } from '../../../../functions/src/shared/contracts.js';
+import type { PackStatusBreakdown } from '../../../../shared/contracts.js';
 import {
   isPackStatusSupportedDropId,
   normalizePackStatusBreakdown,
-} from '../../../../functions/src/shared/packStatus.js';
-import { shopDropById } from '../../../../functions/src/shared/shopDomain.js';
+} from '../../../../shared/packStatus.js';
+import { shopDropById } from '../../../../shared/shopDomain.js';
 
 export const FIRESTORE_PACK_STATUS_CACHE_TTL_SECONDS = 15;
 export const FIRESTORE_PACK_STATUS_MAX_RESPONSE_BYTES = 16 * 1024;

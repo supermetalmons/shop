@@ -7,11 +7,11 @@ import {
   walletHasAdminIrlRedeemAccess,
   walletHasFulfillmentAddressAdminAccess,
   walletHasFulfillmentAppAccess,
-} from '../../functions/src/shared/fulfillmentAccess';
+} from '../../shared/fulfillmentAccess';
 import {
   DEPLOYMENT_DROPS,
   deploymentTreasuryAlias,
-} from '../../functions/src/shared/deploymentRegistry';
+} from '../../shared/deploymentRegistry';
 
 export const ADMIN_WALLETS = new Set<string>(FULFILLMENT_ADMIN_WALLET_ADDRESSES);
 

@@ -24,8 +24,8 @@ import {
   BOX_MINTER_SPLIT_PAYMENTS_V1_VERSION,
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
-} from '../functions/src/shared/boxMinterConfigCodec.ts';
-import type { PaymentRoutingConfig } from '../functions/src/shared/deploymentRegistry.ts';
+} from '../shared/boxMinterConfigCodec.ts';
+import type { PaymentRoutingConfig } from '../shared/deploymentRegistry.ts';
 
 const ACCOUNT_BOX_MINTER_CONFIG = Uint8Array.from([0x3e, 0x1d, 0x74, 0xbc, 0xdb, 0xf7, 0x30, 0xe3]);
 const LEGACY_FIXED_ITEMS_CONFIG_SIZE = 289;

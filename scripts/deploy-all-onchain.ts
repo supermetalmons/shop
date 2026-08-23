@@ -42,12 +42,12 @@ import {
 import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_ITEMS,
   decodeBoxMinterConfigData,
-} from '../functions/src/shared/boxMinterConfigCodec.ts';
+} from '../shared/boxMinterConfigCodec.ts';
 import {
   assertStripeLivePriceConfigured,
   STRIPE_UNIT_AMOUNT_CENTS_MAX,
   STRIPE_UNIT_AMOUNT_CENTS_MIN,
-} from '../functions/src/shared/stripeCheckoutCore.ts';
+} from '../shared/stripeCheckoutCore.ts';
 import {
   BOX_MINTER_CONFIG_SEED,
   BOX_MINTER_MAX_DISCOUNT_MINTS_PER_WALLET,
@@ -57,7 +57,7 @@ import {
   BOX_MINTER_MINT_VARIANT_KIND_NONE,
   BOX_MINTER_MINT_VARIANT_KIND_SIZE,
   BOX_MINTER_MINT_VARIANT_OPTION_COUNT,
-} from '../functions/src/shared/boxMinterProtocol.ts';
+} from '../shared/boxMinterProtocol.ts';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
@@ -65,7 +65,7 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
-} from '../functions/src/shared/solanaProgramAddresses.ts';
+} from '../shared/solanaProgramAddresses.ts';
 import {
   clusterApiUrl,
   AddressLookupTableProgram,
@@ -1289,8 +1289,6 @@ export async function validateDiscountMerkleDatasetForDeploy(args: {
   });
   const registryPath = path.join(
     args.root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -1528,8 +1526,6 @@ async function prepareDeploymentRegistry(args: {
 }> {
   const filePath = path.join(
     args.root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -2488,8 +2484,6 @@ async function assertProgramReuseMatchesMetadataPathFormat(args: {
 }): Promise<void> {
   const registryPath = path.join(
     args.root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -2520,7 +2514,7 @@ async function assertProgramReuseMatchesMetadataPathFormat(args: {
       `Deployment registry metadata path formats are inconsistent for program ${args.programId} on ${args.solanaCluster}.\n` +
         inconsistentDrops.map(([dropId, formats]) => `- ${dropId}: ${Array.from(formats).sort().join(', ')}`).join('\n') +
         `\n` +
-        `Fix functions/src/shared/deploymentRegistry.ts before reusing this program id.`,
+        `Fix shared/deploymentRegistry.ts before reusing this program id.`,
     );
   }
 
@@ -2893,8 +2887,6 @@ async function resolveReusableProgramId(args: {
     : undefined;
   const registryPath = path.join(
     args.root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );
@@ -3471,8 +3463,6 @@ async function main() {
   const onchainDir = path.join(root, 'onchain');
   const deploymentRegistryPath = path.join(
     root,
-    'functions',
-    'src',
     'shared',
     'deploymentRegistry.ts',
   );

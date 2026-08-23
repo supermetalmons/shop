@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import bs58 from 'bs58';
 import { Keypair, PublicKey } from '@solana/web3.js';
@@ -7,9 +6,9 @@ import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
   BOX_MINTER_CONFIG_DISCRIMINATOR,
   decodeBoxMinterConfigData,
-} from '../../../../functions/src/shared/boxMinterConfigCodec.ts';
-import { IRL_CLAIM_CODE_NAMESPACE, IRL_CLAIM_CODE_DIGITS } from '../../../../functions/src/claimCodes.ts';
-import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../functions/src/shared/solanaProgramAddresses.ts';
+} from '../../../../shared/boxMinterConfigCodec.ts';
+import { IRL_CLAIM_CODE_NAMESPACE, IRL_CLAIM_CODE_DIGITS } from '../src/claimCodes.ts';
+import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import {
   DELIVERY_RECEIPTS_ISSUE_PATH,
   DELIVERY_RECEIPTS_RECOVER_PATH,
@@ -1118,14 +1117,4 @@ test('delivery record decoding validates discriminator, payer, fee, and item cou
     expectedDeliveryBump: 255,
     order: { deliveryLamports: 1234 },
   }), /Delivery PDA bump mismatch/);
-});
-
-test('Firebase callable exports and deployment filters no longer expose migrated receipt routes', () => {
-  const functions = readFileSync('functions/src/index.ts', 'utf8');
-  assert.doesNotMatch(functions, /export const issueReceipts\s*=/);
-  assert.doesNotMatch(functions, /export const recoverMyDeliveryOrders\s*=/);
-  assert.doesNotMatch(functions, /onCallLogged\(\s*['"]issueReceipts['"]/);
-  assert.doesNotMatch(functions, /onCallLogged\(\s*['"]recoverMyDeliveryOrders['"]/);
-  const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> };
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:(?:issueReceipts|recoverMyDeliveryOrders)/);
 });

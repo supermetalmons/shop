@@ -8,7 +8,7 @@ import {
   type StripeCheckoutDocumentSnapshot,
   type StripeCheckoutFirestore,
   type StripeCheckoutTransaction,
-} from '../../../../functions/src/stripeCheckout/store.js';
+} from './stripeCheckout/store.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENT_NAME_PREFIX,

@@ -12,11 +12,6 @@ export type DiscountMerkleDatasetIdentity = {
 };
 
 export type DiscountMerkleDatasetRemovalPlan = DiscountMerkleDatasetIdentity & {
-  targetRegistryState:
-    | 'canonical'
-    | 'paired'
-    | 'frontend-only'
-    | 'functions-only';
   deleteCanonicalFile: boolean;
   remainingRootReferences: number;
 };
@@ -86,58 +81,6 @@ export function validateDiscountMerkleFamilyRootInvariant(
   return Array.from(identities.values()).sort((left, right) => left.dropFamily.localeCompare(right.dropFamily));
 }
 
-export function planDiscountMerkleDatasetRemoval(args: {
-  removedFrontend?: DiscountMerkleDatasetReference;
-  removedFunctions?: DiscountMerkleDatasetReference;
-  remainingFrontend: readonly DiscountMerkleDatasetReference[];
-  remainingFunctions: readonly DiscountMerkleDatasetReference[];
-}): DiscountMerkleDatasetRemovalPlan | null {
-  if (!args.removedFrontend && !args.removedFunctions) return null;
-
-  const removedFrontend = args.removedFrontend
-    ? requireDiscountMerkleDatasetIdentity(args.removedFrontend, 'removed frontend reference')
-    : undefined;
-  const removedFunctions = args.removedFunctions
-    ? requireDiscountMerkleDatasetIdentity(args.removedFunctions, 'removed Functions reference')
-    : undefined;
-  if (
-    removedFrontend &&
-    removedFunctions &&
-    (removedFrontend.dropFamily !== removedFunctions.dropFamily ||
-      removedFrontend.rootHex !== removedFunctions.rootHex)
-  ) {
-    throw new Error(
-      `Removed frontend and Functions discount Merkle references disagree: ` +
-        `${removedFrontend.dropFamily}/${removedFrontend.rootHex} vs ` +
-        `${removedFunctions.dropFamily}/${removedFunctions.rootHex}.`,
-    );
-  }
-  const removedIdentity = removedFrontend || removedFunctions;
-  if (!removedIdentity) return null;
-  const targetRegistryState = removedFrontend
-    ? removedFunctions
-      ? 'paired'
-      : 'frontend-only'
-    : 'functions-only';
-
-  const remainingReferences = [...args.remainingFrontend, ...args.remainingFunctions];
-  validateDiscountMerkleFamilyRootInvariant([
-    ...(args.removedFrontend ? [args.removedFrontend] : []),
-    ...(args.removedFunctions ? [args.removedFunctions] : []),
-    ...remainingReferences,
-  ]);
-  const remainingRootReferences = remainingReferences.filter(
-    (reference) => reference.rootHex === removedIdentity.rootHex,
-  ).length;
-
-  return {
-    ...removedIdentity,
-    targetRegistryState,
-    deleteCanonicalFile: remainingRootReferences === 0,
-    remainingRootReferences,
-  };
-}
-
 export function planCanonicalDiscountMerkleDatasetRemoval(args: {
   removed?: DiscountMerkleDatasetReference;
   remaining: readonly DiscountMerkleDatasetReference[];
@@ -156,7 +99,6 @@ export function planCanonicalDiscountMerkleDatasetRemoval(args: {
   ).length;
   return {
     ...removedIdentity,
-    targetRegistryState: 'canonical',
     deleteCanonicalFile: remainingRootReferences === 0,
     remainingRootReferences,
   };

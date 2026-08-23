@@ -8,7 +8,7 @@ import {
 import {
   normalizeDropSalesMode,
   type DropSalesMode,
-} from '../../functions/src/shared/deploymentCore.ts';
+} from '../../shared/deploymentCore.ts';
 
 export type SolanaCluster = 'devnet' | 'testnet' | 'mainnet-beta';
 

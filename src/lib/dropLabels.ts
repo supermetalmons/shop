@@ -6,4 +6,4 @@ export {
   dropOpenActionLabel,
   dropOpenActionProgress,
   dropOpenGerund,
-} from '../../functions/src/shared/dropLabels.ts';
+} from '../../shared/dropLabels.ts';

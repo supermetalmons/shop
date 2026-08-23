@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { STRIPE_CHECKOUT_STATUS } from '../functions/src/stripeCheckout/contract.ts';
+import { STRIPE_CHECKOUT_STATUS } from '../cloud/workers/api/src/stripeCheckout/contract.ts';
 import {
   publishStripeCheckoutTerminalNotifications,
   shouldPublishStripeCheckoutTerminalNotificationsWrite,
-} from '../functions/src/stripeCheckout/terminalNotifications.ts';
-import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../functions/src/shared/fulfillmentSources.ts';
-import type { NotificationEmailJobV1 } from '../functions/src/shared/notificationEmailJob.ts';
+} from '../cloud/workers/api/src/stripeCheckout/terminalNotifications.ts';
+import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
+import type { NotificationEmailJobV1 } from '../shared/notificationEmailJob.ts';
 
 const DROP_ID = 'card_nft_2';
 const SESSION_ID = 'cs_test_terminal_notifications';
@@ -227,7 +227,7 @@ test('missing checkout, delivery ID, or delivery order returns a permanent inval
   );
 });
 
-test('Cloudflare enqueue failures propagate for Firebase retry', async () => {
+test('Cloudflare enqueue failures propagate for Queue retry', async () => {
   await assert.rejects(
     publishStripeCheckoutTerminalNotifications({
       dropId: DROP_ID,
@@ -247,7 +247,7 @@ test('Cloudflare enqueue failures propagate for Firebase retry', async () => {
   );
 });
 
-test('Firestore read failures propagate for Firebase retry', async () => {
+test('Firestore read failures propagate for Queue retry', async () => {
   await assert.rejects(
     publishStripeCheckoutTerminalNotifications({
       dropId: DROP_ID,

@@ -5,5 +5,4 @@ export {
   cardNft2AssetUrl,
   isCardNft2CommonCardId,
   normalizeCardNft2CardId,
-} from '../../functions/src/shared/cardNft2Assets.ts';
-export type { CardNft2AssetKind } from '../../functions/src/shared/cardNft2Assets.ts';
+} from '../../shared/cardNft2Assets.ts';

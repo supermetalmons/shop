@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { pickDudeIdsForAssignment, validateDudeIdsForAssignment } from '../functions/src/assignDudesPicker.ts';
-import { CARD_NFT_2_COMMON_CARD_ID_VALUES } from '../functions/src/shared/cardNft2CommonIds.ts';
+import { pickDudeIdsForAssignment, validateDudeIdsForAssignment } from '../shared/assignDudesPicker.ts';
+import { CARD_NFT_2_MAX_CARD_ID } from '../shared/cardNft2AssetCore.ts';
+import { CARD_NFT_2_COMMON_CARD_ID_VALUES } from '../shared/cardNft2CommonIds.ts';
 import {
   CARD_NFT_2_AD_HOC_CURATED_CARD_IDS,
   CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET,
@@ -10,12 +11,11 @@ import {
   CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_ID_SET,
   CARD_NFT_2_COMMON_CARD_IDS,
   CARD_NFT_2_COMMON_CARD_ID_SET,
-  CARD_NFT_2_MAX_CARD_ID,
   CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS,
   CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET,
   CARD_NFT_2_SUPER_RARE_CARD_IDS,
   CARD_NFT_2_SUPER_RARE_CARD_ID_SET,
-} from '../functions/src/cardNft2RevealIds.ts';
+} from '../shared/cardNft2RevealIds.ts';
 
 type CardNft2AssignmentCategory = 'as_good_as_super_rare' | 'common' | 'neither';
 
@@ -70,7 +70,7 @@ function generatedPixelMosaicIds(): number[] {
   return Array.from({ length: 111 }, (_, index) => 11001 + index);
 }
 
-test('function-local card_nft_2 reveal ids match canonical sources and are valid', () => {
+test('card_nft_2 reveal ids match canonical sources and are valid', () => {
   const expectedAsGoodAsSuperRareIds = [
     ...new Set([
       ...CARD_NFT_2_SUPER_RARE_CARD_IDS,

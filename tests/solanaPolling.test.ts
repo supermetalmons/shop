@@ -15,7 +15,7 @@ import {
   isBase58Bytes,
   isExactShopRpcRequest,
   isNonZeroBase58Bytes,
-} from '../functions/src/shared/solanaRpcProxy.ts';
+} from '../shared/solanaRpcProxy.ts';
 
 const SIGNATURE = bs58.encode(new Uint8Array(64).fill(7));
 const RECENT_BLOCKHASH = bs58.encode(new Uint8Array(32).fill(8));

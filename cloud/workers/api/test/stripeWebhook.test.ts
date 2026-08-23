@@ -6,12 +6,12 @@ import {
   STRIPE_OFFCHAIN_CURRENCY,
   STRIPE_OFFCHAIN_FULFILLMENT_MODE,
   buildStripeCheckoutDocument,
-} from '../../../../functions/src/shared/stripeCheckoutSession.ts';
+} from '../../../../shared/stripeCheckoutSession.ts';
 import {
   resolveStripeWebhookAction,
   stripeWebhookTransition,
   type StripeWebhookEvent,
-} from '../../../../functions/src/shared/stripeWebhook.ts';
+} from '../../../../shared/stripeWebhook.ts';
 import { handleStripeWebhookRequest } from '../src/stripeWebhook.ts';
 
 const DEVNET_SECRET = 'whsec_devnet_test_secret';

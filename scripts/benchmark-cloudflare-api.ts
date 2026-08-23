@@ -4,13 +4,13 @@ import { fileURLToPath } from 'node:url';
 import {
   isExactShopInventoryResponse,
   type ShopInventoryItem,
-} from '../functions/src/shared/shopApi.ts';
+} from '../shared/shopApi.ts';
 import {
   listShopCollectionQueryRuntimes,
   shopDropById,
   transformShopInventoryItem,
-} from '../functions/src/shared/shopDomain.ts';
-import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../functions/src/shared/dasAssetCollections.ts';
+} from '../shared/shopDomain.ts';
+import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../shared/dasAssetCollections.ts';
 import {
   HELIUS_SEARCH_ASSETS_MAX_CANDIDATES,
   HELIUS_SEARCH_ASSETS_MAX_CURSOR_PAGES,
@@ -20,10 +20,10 @@ import {
   HELIUS_SEARCH_ASSETS_PAGE_LIMITS,
   heliusSearchAssetsCursorPageInfo,
   heliusSearchAssetsItems,
-} from '../functions/src/shared/heliusDas.ts';
-import type { DasAsset } from '../functions/src/shared/dasAsset.ts';
-import type { SolanaCluster } from '../functions/src/shared/deploymentCore.ts';
-import { isBase58Bytes } from '../functions/src/shared/solanaRpcProxy.ts';
+} from '../shared/heliusDas.ts';
+import type { DasAsset } from '../shared/dasAsset.ts';
+import type { SolanaCluster } from '../shared/deploymentCore.ts';
+import { isBase58Bytes } from '../shared/solanaRpcProxy.ts';
 
 export type ApiBenchmarkOptions = {
   apiOrigin: string;
@@ -35,11 +35,11 @@ export type ApiBenchmarkOptions = {
 export type ApiBenchmarkResult = {
   runs: number;
   workerMedianMs: number;
-  legacyMedianMs: number;
+  directHeliusMedianMs: number;
 };
 
 type ApiBenchmarkDependencies = {
-  legacyInventory?: typeof legacyInventory;
+  directHeliusReferenceInventory?: typeof directHeliusReferenceInventory;
   now?: () => number;
   workerInventory?: typeof workerInventory;
 };
@@ -54,7 +54,7 @@ type InventoryNetworkDependencies = {
   sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 };
 
-type LegacyInventoryContext = {
+type DirectHeliusReferenceInventoryContext = {
   apiKey: string;
   candidateCount: number;
   cursorPages: number;
@@ -65,7 +65,7 @@ type LegacyInventoryContext = {
 };
 
 const HELIUS_ATTEMPT_TIMEOUT_MS = 15_000;
-const LEGACY_INVENTORY_TIMEOUT_MS = 60_000;
+const DIRECT_HELIUS_REFERENCE_INVENTORY_TIMEOUT_MS = 60_000;
 const WORKER_INVENTORY_TIMEOUT_MS = 70_000;
 const HELIUS_ID_ASCENDING_SORT = { sortBy: 'id', sortDirection: 'asc' } as const;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
@@ -206,12 +206,12 @@ function retryAfterMs(response: Response): number | undefined {
   return Number.isFinite(seconds) && seconds >= 0 ? Math.min(1000, seconds * 1000) : undefined;
 }
 
-function retryDelayMs(context: LegacyInventoryContext, failure: HeliusProviderFailure): number {
+function retryDelayMs(context: DirectHeliusReferenceInventoryContext, failure: HeliusProviderFailure): number {
   return failure.retryAfterMs ?? 100 + (context.network.randomUint32() % 151);
 }
 
 async function readBoundedJsonResponse(
-  context: LegacyInventoryContext,
+  context: DirectHeliusReferenceInventoryContext,
   response: Response,
   method: string,
 ): Promise<unknown> {
@@ -260,16 +260,16 @@ async function readBoundedJsonResponse(
 }
 
 async function heliusRpcAttempt(
-  context: LegacyInventoryContext,
+  context: DirectHeliusReferenceInventoryContext,
   cluster: SolanaCluster,
   method: string,
   params: unknown,
 ): Promise<unknown> {
   if (context.overallSignal.aborted) {
-    providerFail('deadline', 'Legacy direct inventory exceeded its overall deadline.');
+    providerFail('deadline', 'Direct Helius reference inventory exceeded its overall deadline.');
   }
   if (context.providerCalls >= HELIUS_SEARCH_ASSETS_MAX_PROVIDER_CALLS) {
-    providerFail('limit', 'Legacy direct inventory exceeded its provider-call bound.');
+    providerFail('limit', 'Direct Helius reference inventory exceeded its provider-call bound.');
   }
   context.providerCalls += 1;
   const attemptTimeout = createManagedTimeout(context.network, HELIUS_ATTEMPT_TIMEOUT_MS);
@@ -317,7 +317,7 @@ async function heliusRpcAttempt(
     return rpc.result;
   } catch (error) {
     if (context.overallSignal.aborted) {
-      providerFail('deadline', 'Legacy direct inventory exceeded its overall deadline.');
+      providerFail('deadline', 'Direct Helius reference inventory exceeded its overall deadline.');
     }
     if (attemptTimeout.timedOut()) {
       providerFail('attempt-timeout', `Helius ${method} attempt timed out.`);
@@ -330,7 +330,7 @@ async function heliusRpcAttempt(
 }
 
 async function heliusRpc(
-  context: LegacyInventoryContext,
+  context: DirectHeliusReferenceInventoryContext,
   cluster: SolanaCluster,
   method: string,
   params: unknown,
@@ -350,9 +350,9 @@ async function heliusRpc(
             await context.network.sleep(retryDelayMs(context, error), context.overallSignal);
           } catch {
             if (context.overallSignal.aborted) {
-              providerFail('deadline', 'Legacy direct inventory exceeded its overall deadline.');
+              providerFail('deadline', 'Direct Helius reference inventory exceeded its overall deadline.');
             }
-            providerFail('unavailable', 'Legacy direct inventory retry delay failed.');
+            providerFail('unavailable', 'Direct Helius reference inventory retry delay failed.');
           }
         }
         continue;
@@ -371,19 +371,19 @@ function parseSearchAssetsResult(value: unknown): { raw: unknown; items: DasAsse
 }
 
 function compactInventoryPage(
-  context: LegacyInventoryContext,
+  context: DirectHeliusReferenceInventoryContext,
   assets: DasAsset[],
   cluster: SolanaCluster,
   seenIds: Set<string>,
 ): ShopInventoryItem[] {
   context.candidateCount += assets.length;
   if (context.candidateCount > HELIUS_SEARCH_ASSETS_MAX_CANDIDATES) {
-    fail('Legacy direct inventory exceeded its candidate bound.');
+    fail('Direct Helius reference inventory exceeded its candidate bound.');
   }
   const items: ShopInventoryItem[] = [];
   for (const asset of assets) {
     if (!isBase58Bytes(asset?.id, 32) || seenIds.has(asset.id)) {
-      fail('Legacy direct inventory returned invalid or duplicate paginated assets.');
+      fail('Direct Helius reference inventory returned invalid or duplicate paginated assets.');
     }
     seenIds.add(asset.id);
     const item = transformShopInventoryItem(asset, cluster);
@@ -395,7 +395,7 @@ function compactInventoryPage(
 }
 
 async function fetchCursorInventory(
-  context: LegacyInventoryContext,
+  context: DirectHeliusReferenceInventoryContext,
   owner: string,
   cluster: SolanaCluster,
   grouping?: readonly ['collection', string],
@@ -411,7 +411,7 @@ async function fetchCursorInventory(
   while (true) {
     if (!hasPageReservation) {
       if (context.cursorPages >= HELIUS_SEARCH_ASSETS_MAX_CURSOR_PAGES) {
-        fail('Legacy direct inventory exceeded its pagination bound.');
+        fail('Direct Helius reference inventory exceeded its pagination bound.');
       }
       context.cursorPages += 1;
       hasPageReservation = true;
@@ -462,7 +462,7 @@ async function fetchCursorInventory(
         seenCursors,
       );
     } catch {
-      fail('Legacy direct inventory returned inconsistent cursor metadata.');
+      fail('Direct Helius reference inventory returned inconsistent cursor metadata.');
     }
     if (!pageInfo.hasMore) return items;
     seenCursors.add(pageInfo.cursor);
@@ -472,15 +472,15 @@ async function fetchCursorInventory(
   }
 }
 
-async function legacyInventory(
+async function directHeliusReferenceInventory(
   apiKey: string,
   owner: string,
   networkOverrides: Partial<InventoryNetworkDependencies> = {},
   includeDevnet = false,
 ): Promise<ShopInventoryItem[]> {
   const network = { ...defaultInventoryNetworkDependencies, ...networkOverrides };
-  const overallTimeout = createManagedTimeout(network, LEGACY_INVENTORY_TIMEOUT_MS);
-  const context: LegacyInventoryContext = {
+  const overallTimeout = createManagedTimeout(network, DIRECT_HELIUS_REFERENCE_INVENTORY_TIMEOUT_MS);
+  const context: DirectHeliusReferenceInventoryContext = {
     apiKey,
     candidateCount: 0,
     cursorPages: 0,
@@ -508,7 +508,7 @@ async function legacyInventory(
     }
     for (const cluster of fallbackClusters) {
       const fallback = await fetchCursorInventory(context, owner, cluster);
-      if (fallback === undefined) fail('Legacy direct inventory fallback failed.');
+      if (fallback === undefined) fail('Direct Helius reference inventory fallback failed.');
       for (const item of fallback) itemsById.set(item.id, item);
     }
     return Array.from(itemsById.values());
@@ -552,15 +552,21 @@ export async function benchmarkApi(
 ): Promise<ApiBenchmarkResult> {
   const apiKey = apiKeyValue.trim();
   if (!apiKey) fail('HELIUS_API_KEY is required in the invoking shell.');
-  const loadLegacyInventory = dependencies.legacyInventory || legacyInventory;
+  const loadDirectHeliusReferenceInventory =
+    dependencies.directHeliusReferenceInventory || directHeliusReferenceInventory;
   const loadWorkerInventory = dependencies.workerInventory || workerInventory;
   const now = dependencies.now || (() => performance.now());
   const includeDevnet = options.includeDevnet === true;
   const workerDurations: number[] = [];
-  const legacyDurations: number[] = [];
+  const directHeliusDurations: number[] = [];
   const warmWorker = await loadWorkerInventory(options.apiOrigin, options.owner, {}, includeDevnet);
-  const warmLegacy = await loadLegacyInventory(apiKey, options.owner, {}, includeDevnet);
-  if (JSON.stringify(itemIds(warmWorker)) !== JSON.stringify(itemIds(warmLegacy))) {
+  const warmDirectHeliusReference = await loadDirectHeliusReferenceInventory(
+    apiKey,
+    options.owner,
+    {},
+    includeDevnet,
+  );
+  if (JSON.stringify(itemIds(warmWorker)) !== JSON.stringify(itemIds(warmDirectHeliusReference))) {
     fail('Inventory IDs differed during benchmark warmup.');
   }
   for (let index = 0; index < options.runs; index += 1) {
@@ -570,38 +576,44 @@ export async function benchmarkApi(
       workerDurations.push(now() - startedAt);
       return items;
     };
-    const measureLegacy = async (): Promise<ShopInventoryItem[]> => {
+    const measureDirectHeliusReference = async (): Promise<ShopInventoryItem[]> => {
       const startedAt = now();
-      const items = await loadLegacyInventory(apiKey, options.owner, {}, includeDevnet);
-      legacyDurations.push(now() - startedAt);
+      const items = await loadDirectHeliusReferenceInventory(apiKey, options.owner, {}, includeDevnet);
+      directHeliusDurations.push(now() - startedAt);
       return items;
     };
     let worker: ShopInventoryItem[];
-    let legacy: ShopInventoryItem[];
+    let directHeliusReference: ShopInventoryItem[];
     if (index % 2 === 0) {
       worker = await measureWorker();
-      legacy = await measureLegacy();
+      directHeliusReference = await measureDirectHeliusReference();
     } else {
-      legacy = await measureLegacy();
+      directHeliusReference = await measureDirectHeliusReference();
       worker = await measureWorker();
     }
-    if (JSON.stringify(itemIds(worker)) !== JSON.stringify(itemIds(legacy))) {
+    if (JSON.stringify(itemIds(worker)) !== JSON.stringify(itemIds(directHeliusReference))) {
       fail(`Inventory IDs differed on comparison ${index + 1}.`);
     }
   }
   const workerMedian = median(workerDurations);
-  const legacyMedian = median(legacyDurations);
+  const directHeliusMedian = median(directHeliusDurations);
   console.log(`[api-benchmark] Matching IDs across ${options.runs} comparisons.`);
   console.log(`[api-benchmark] Worker median: ${Math.round(workerMedian)}ms`);
-  console.log(`[api-benchmark] Legacy median: ${Math.round(legacyMedian)}ms`);
-  if (workerMedian >= legacyMedian) fail('Worker median was not lower than the legacy direct median.');
-  return { runs: options.runs, workerMedianMs: workerMedian, legacyMedianMs: legacyMedian };
+  console.log(`[api-benchmark] Direct Helius median: ${Math.round(directHeliusMedian)}ms`);
+  if (workerMedian >= directHeliusMedian) {
+    fail('Worker median was not lower than the direct Helius reference median.');
+  }
+  return {
+    runs: options.runs,
+    workerMedianMs: workerMedian,
+    directHeliusMedianMs: directHeliusMedian,
+  };
 }
 
 export const benchmarkApiTestHooks = {
   heliusAttemptTimeoutMs: HELIUS_ATTEMPT_TIMEOUT_MS,
-  legacyInventory,
-  legacyInventoryTimeoutMs: LEGACY_INVENTORY_TIMEOUT_MS,
+  directHeliusReferenceInventory,
+  directHeliusReferenceInventoryTimeoutMs: DIRECT_HELIUS_REFERENCE_INVENTORY_TIMEOUT_MS,
   pageLimits: HELIUS_SEARCH_ASSETS_PAGE_LIMITS,
   workerInventory,
   workerInventoryTimeoutMs: WORKER_INVENTORY_TIMEOUT_MS,
