@@ -150,12 +150,13 @@ reconciliation is restored by the next guarded production release.
 
 The API Worker binds the shared `mons-shop-data` D1 database as `DATA_DB`.
 Cloudflare tokens used by API release and migration commands require account-level
-D1 Edit permission. Provision the database without a location or jurisdiction
-hint, copy the returned UUID into the existing `DATA_DB.database_id` field, and
-apply the tracked migration before uploading a Worker version:
+D1 Edit permission. The production database was provisioned with the Eastern North
+America location hint and no jurisdiction. Copy the returned UUID into the existing
+`DATA_DB.database_id` field, and apply the tracked migration before uploading a
+Worker version:
 
 ```bash
-node_modules/.bin/wrangler d1 create mons-shop-data
+node_modules/.bin/wrangler d1 create mons-shop-data --location enam
 node_modules/.bin/wrangler d1 migrations apply mons-shop-data --remote --config cloud/workers/api/wrangler.jsonc
 ```
 
