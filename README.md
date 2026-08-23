@@ -175,10 +175,12 @@ exact Firestore/D1 summary and event parity and automatically restores Firestore
 reads if any production smoke fails. Firestore remains a dual-write target,
 shadow comparison source, and emergency fallback until a separate cleanup.
 
-`NOTIFICATION_ENQUEUE_SECRET` is mandatory for API release, production,
-rollback, and notification-smoke commands. Supply it in the invoking environment
-or root `.env.local`; commands fail before any release mutation when it is
-missing. Never pass it as a command argument, print it, or commit it.
+`NOTIFICATION_ENQUEUE_SECRET` remains stored only as a Worker secret and is
+inherited by uploaded versions. Guarded API releases publish their synthetic
+notification directly to the Cloudflare Queue with the scoped API token, so they
+do not need to retrieve or locally duplicate the secret. The standalone
+notification-smoke command still accepts it from the invoking environment or
+root `.env.local`. Never pass it as a command argument, print it, or commit it.
 
 ### Worker secrets
 

@@ -1694,90 +1694,76 @@ test('termination cleanup failures are surfaced without leaking details', () => 
   assert.doesNotMatch(logged, /release-test-secret/);
 });
 
-test('release, production, and rollback reject a missing notification enqueue secret before mutation', async () => {
-  let calls = 0;
-  const forbidden = (): never => {
-    calls += 1;
-    return assert.fail('missing notification secret reached a release dependency');
-  };
+test('production can keep the notification enqueue secret only in the deployed Worker', async () => {
   const manifest = deployApiTestHooks.readReleaseManifest();
   const candidateVersionId = randomUUID();
-  const baseInput = {
+  let smokeCalls = 0;
+  await assert.rejects(() => deployApiTestHooks.runProductionSequence({
     notificationEnqueueSecret: '',
+    expectedCurrentVersionId: manifest.currentProduction.apiVersionId,
+    heliusApiKey: 'helius-test-key',
+    previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
     smokeOwner: OWNER,
+    versionId: candidateVersionId,
     wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
-  };
+  }, {
+    benchmark: async () => assert.fail('candidate smoke should run before benchmark'),
+    deployment: async () => assert.fail('candidate smoke should run before deployment inspection'),
+    evidence: () => assert.fail('candidate smoke should run before evidence'),
+    sleep: async () => undefined,
+    smoke: async () => {
+      smokeCalls += 1;
+      throw new Error('candidate smoke reached without a local notification secret');
+    },
+    wrangler: () => assert.fail('candidate smoke should run before mutation'),
+  }), /candidate smoke reached without a local notification secret/);
+  assert.equal(smokeCalls, 1);
+});
 
-  await assert.rejects(
-    () => deployApiTestHooks.runCompleteApiRelease({
-      ...baseInput,
-      apiToken: 'scoped-token',
-      checkEnvironment: {
-        HELIUS_API_KEY: '',
-        RESEND_CONTACTS_API_KEY: '',
-        NOTIFICATION_ENQUEUE_SECRET: '',
-        FIRESTORE_SERVICE_ACCOUNT_JSON: '',
-        ...EMPTY_NEW_API_SECRET_ENV,
+test('notification release smoke publishes an exact job directly to the Cloudflare Queue', async () => {
+  const jobId = randomUUID();
+  const queueId = 'bebb8ca5443045ff867dc0d0fc7ad96b';
+  const job = deployApiTestHooks.createNotificationSmokeJob(1_750_000_000_000, () => jobId);
+  let requestedUrl = '';
+  let requestedInit: RequestInit | undefined;
+  const publishedJobId = await deployApiTestHooks.pushNotificationSmokeToQueue(
+    deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+    {
+      fetch: async (input, init) => {
+        requestedUrl = String(input);
+        requestedInit = init;
+        return new Response(JSON.stringify({ success: true, result: { metadata: {} } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
       },
-      firestoreServiceAccountJson: 'firestore-test-credential',
-      firestoreWriterServiceAccountJson: 'firestore-writer-test-credential',
-      heliusApiKey: 'helius-test-key',
-      logsDirectory: '/tmp/logs',
-    }, {
-      apiDeployment: forbidden,
-      frontendDeployment: forbidden,
-      manifest: forbidden,
-      production: forbidden,
-      record: forbidden,
-      triggerDryRun: forbidden,
-      upload: forbidden,
-      validate: forbidden,
-    }),
-    /NOTIFICATION_ENQUEUE_SECRET is required.*before release mutation/,
+      queueInfo: () => `Queue Name: mons-shop-notification-emails\nQueue ID: ${queueId}\n`,
+      createJob: () => job,
+    },
   );
-  assert.equal(calls, 0);
+  assert.equal(publishedJobId, jobId);
+  assert.equal(requestedUrl, `https://api.cloudflare.com/client/v4/accounts/e25f90fc073ea309b54b8b5144bf28e0/queues/${queueId}/messages`);
+  assert.equal(requestedInit?.method, 'POST');
+  assert.equal(new Headers(requestedInit?.headers).get('authorization'), 'Bearer scoped-token');
+  assert.deepEqual(JSON.parse(String(requestedInit?.body)), { body: job, content_type: 'json' });
+  assert.equal(job.kind, 'stripe_checkout_manual_review');
+  assert.equal(job.recipients[0], deployApiTestHooks.notificationSmokeEmail);
 
   await assert.rejects(
-    () => deployApiTestHooks.runProductionSequence({
-      ...baseInput,
-      expectedCurrentVersionId: manifest.currentProduction.apiVersionId,
-      heliusApiKey: 'helius-test-key',
-      previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
-      versionId: candidateVersionId,
-    }, {
-      benchmark: forbidden,
-      deployment: forbidden,
-      evidence: forbidden,
-      sleep: forbidden,
-      smoke: forbidden,
-      wrangler: forbidden,
-    }),
-    /NOTIFICATION_ENQUEUE_SECRET is required.*before release mutation/,
+    () => deployApiTestHooks.pushNotificationSmokeToQueue(
+      deployApiTestHooks.authenticatedWranglerEnvironment(''),
+      {
+        fetch: async () => assert.fail('missing token must fail before fetch'),
+        queueInfo: () => assert.fail('missing token must fail before queue inspection'),
+        createJob: () => job,
+      },
+    ),
+    /requires the scoped Cloudflare API token/,
   );
-  assert.equal(calls, 0);
-
-  await assert.rejects(
-    () => deployApiTestHooks.runRollbackSequence({
-      ...baseInput,
-      manifest,
-      versionId: manifest.approvedRollback.apiVersionId,
-    }, {
-      apiDeployment: forbidden,
-      disableReconciliationSchedule: forbidden,
-      evidence: forbidden,
-      frontendDeployment: forbidden,
-      pauseRevealQueue: forbidden,
-      record: forbidden,
-      repauseRevealQueue: forbidden,
-      resumeRevealQueue: forbidden,
-      sleep: forbidden,
-      smoke: forbidden,
-      verifyQueueConsumers: forbidden,
-      wrangler: forbidden,
-    }),
-    /NOTIFICATION_ENQUEUE_SECRET is required.*before release mutation/,
+  assert.throws(
+    () => deployApiTestHooks.notificationQueueIdFromInfo('Queue ID: unexpected'),
+    /did not report an exact ID/,
   );
-  assert.equal(calls, 0);
 });
 
 test('frontend deployment gates upload on typechecking, tests, build, and bundle validation', () => {

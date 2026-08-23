@@ -23,9 +23,11 @@ import {
   isExactShopPendingOpenBoxesResponse,
 } from '../shared/shopApi.ts';
 import { isExactSubscribeToNotificationsResponse } from '../shared/notificationSubscription.ts';
+import { createNotificationEmailJobV1, type NotificationEmailJobV1 } from '../shared/notificationEmailJob.ts';
 import { stripeCheckoutReconciliationQuery } from '../shared/stripeCheckoutReconciliation.ts';
 import { FULFILLMENT_ADMIN_WALLET_ADDRESSES } from '../shared/fulfillmentAccess.ts';
 import { isBase58Bytes } from '../shared/solanaRpcProxy.ts';
+import { buildStripeCheckoutManualReviewEmailContent } from '../cloud/workers/api/src/notificationEmails.ts';
 import { benchmarkApi, type ApiBenchmarkResult } from './benchmark-cloudflare-api.ts';
 import {
   cloudflareVersionIdPattern as versionIdPattern,
@@ -291,7 +293,7 @@ function usage(): string {
     '',
     'The default release validates, uploads, verifies, promotes, and records one exact Worker version.',
     'Release, preview, and production require HELIUS_API_KEY in the process environment.',
-    'Release, production, and rollback require NOTIFICATION_ENQUEUE_SECRET in the process environment or root .env.local.',
+    'The deployed Worker keeps NOTIFICATION_ENQUEUE_SECRET inside Cloudflare; release smokes publish directly to its Queue when no local copy exists.',
     'Release and preview use macOS Keychain credentials by default or accept dedicated reader and writer JSON files.',
     'Preview mode uploads the secret through a temporary mode-0600 file inside a mode-0700 directory.',
   ].join('\n');
@@ -998,13 +1000,106 @@ function notificationTailArgs(tailWorkerName: string): string[] {
   return ['tail', tailWorkerName, '--format', 'json', ...configArgs];
 }
 
+function notificationQueueIdFromInfo(output: string): string {
+  const match = output.match(/^Queue ID:\s*([0-9a-f]{32})$/im);
+  if (!match) fail(`Cloudflare did not report an exact ID for ${notificationQueueName}.`);
+  return match[1].toLowerCase();
+}
+
+function createNotificationSmokeJob(
+  nowMs = Date.now(),
+  createId: () => string = randomUUID,
+): NotificationEmailJobV1 {
+  const jobId = createId();
+  const idempotencyKey = `api-release-smoke:${nowMs}:${jobId}`;
+  const sessionId = `cs_test_release_${nowMs}`;
+  const content = buildStripeCheckoutManualReviewEmailContent(
+    {
+      idempotencyKey,
+      recipients: [notificationSmokeEmail],
+      dropId: 'local_resend_test',
+      dropName: 'API Release Smoke',
+      sessionId,
+      checkoutPath: `drops/local_resend_test/stripeCheckouts/${sessionId}`,
+      livemode: false,
+      variantKey: 'release-smoke',
+      owner: 'release-smoke-owner',
+      firebaseUid: 'release-smoke-firebase-uid',
+      manualRefundReviewReason: 'API release notification smoke',
+      lastFulfillmentError: {
+        message: 'Synthetic API release notification smoke',
+        generatedAt: new Date(nowMs).toISOString(),
+      },
+      createdAt: nowMs - 5 * 60 * 1000,
+      fulfillmentRequestedAt: nowMs - 4 * 60 * 1000,
+      processingStartedAt: nowMs - 3 * 60 * 1000,
+      failedAt: nowMs - 2 * 60 * 1000,
+    },
+    { subjectPrefix: '[TEST] ' },
+  );
+  return createNotificationEmailJobV1({
+    jobId,
+    kind: 'stripe_checkout_manual_review',
+    idempotencyKey,
+    recipients: [notificationSmokeEmail],
+    subject: content.subject,
+    text: content.text,
+    html: content.html,
+    context: { dropId: 'local_resend_test', sessionId },
+  });
+}
+
+async function pushNotificationSmokeToQueue(
+  environment: NodeJS.ProcessEnv,
+  dependencies: {
+    fetch: typeof fetch;
+    queueInfo: (environment: NodeJS.ProcessEnv) => string;
+    createJob: () => NotificationEmailJobV1;
+  } = {
+    fetch,
+    queueInfo: (queueEnvironment) => runProcessForOutput(
+      wranglerBinary,
+      ['queues', 'info', notificationQueueName, ...configArgs],
+      queueEnvironment,
+      'Notification queue inspection',
+    ),
+    createJob: () => createNotificationSmokeJob(),
+  },
+): Promise<string> {
+  const apiToken = String(environment.CLOUDFLARE_API_TOKEN || '').trim();
+  if (!apiToken) fail('Notification Queue smoke requires the scoped Cloudflare API token.');
+  const queueId = notificationQueueIdFromInfo(dependencies.queueInfo(environment));
+  const job = dependencies.createJob();
+  const response = await dependencies.fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/queues/${queueId}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ body: job, content_type: 'json' }),
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = undefined;
+  }
+  if (!response.ok || !isRecord(payload) || payload.success !== true) {
+    fail(`Cloudflare Queue smoke publish failed with status ${response.status}.`);
+  }
+  return job.jobId;
+}
+
 async function smokeNotificationDelivery(
   environment: NodeJS.ProcessEnv,
   notificationEnqueueSecret: string,
   tailWorkerName = workerName,
 ): Promise<void> {
   const tailEnvironment = notificationTailEnvironment(environment);
-  const requestEnvironment = notificationRequestEnvironment(notificationEnqueueSecret, environment);
   const tail = spawn(wranglerBinary, notificationTailArgs(tailWorkerName), {
     cwd: repoRoot,
     env: tailEnvironment,
@@ -1019,13 +1114,14 @@ async function smokeNotificationDelivery(
   try {
     await sleep(7_000);
     if (tail.exitCode !== null) fail('Notification live tail ended before the smoke request.');
-    const smokeOutput = runProcessForOutput(
-      process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      ['run', 'test-resend-notification-email', '--', '--kind', 'stripe-manual-review'],
-      requestEnvironment,
-      'Notification end-to-end smoke',
-    );
-    const jobId = notificationSmokeJobId(smokeOutput);
+    const jobId = notificationEnqueueSecret.trim()
+      ? notificationSmokeJobId(runProcessForOutput(
+          process.platform === 'win32' ? 'npm.cmd' : 'npm',
+          ['run', 'test-resend-notification-email', '--', '--kind', 'stripe-manual-review'],
+          notificationRequestEnvironment(notificationEnqueueSecret, environment),
+          'Notification end-to-end smoke',
+        ))
+      : await pushNotificationSmokeToQueue(environment);
     const deadline = Date.now() + notificationSmokeTimeoutMs;
     while (Date.now() < deadline) {
       const outcome = notificationSmokeLogOutcome(tailOutput, jobId);
@@ -1951,7 +2047,7 @@ async function runProductionSequence(
     wrangler: runWrangler,
   },
 ): Promise<void> {
-  const notificationEnqueueSecret = requireNotificationEnqueueSecret(input.notificationEnqueueSecret);
+  const notificationEnqueueSecret = input.notificationEnqueueSecret.trim();
   const candidateSmoke = productionCandidateSmoke(input);
   if (candidateSmoke.owner !== input.smokeOwner) fail('Candidate smoke owner did not match the release owner.');
   await dependencies.smoke(input.previewUrl, candidateSmoke);
@@ -2251,7 +2347,7 @@ async function runRollbackSequence(
     wrangler: runWrangler,
   },
 ): Promise<void> {
-  const notificationEnqueueSecret = requireNotificationEnqueueSecret(input.notificationEnqueueSecret);
+  const notificationEnqueueSecret = input.notificationEnqueueSecret.trim();
   const targetVersionId = input.versionId.toLowerCase();
   assertApprovedApiRollback(input.manifest, targetVersionId);
   const initialLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
@@ -2349,7 +2445,7 @@ async function runCompleteApiRelease(
     validate: runApiValidation,
   },
 ): Promise<UploadMetadata> {
-  const notificationEnqueueSecret = requireNotificationEnqueueSecret(input.notificationEnqueueSecret);
+  const notificationEnqueueSecret = input.notificationEnqueueSecret.trim();
   const expectedCurrentProduction = dependencies.manifest().currentProduction;
   const initialLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
   assertReleasePair(initialLivePair, expectedCurrentProduction, 'Release preflight');
@@ -2427,7 +2523,7 @@ async function main(): Promise<void> {
   assertApiDeploymentConfig();
   const notificationEnqueueSecret = options.mode === 'preview'
     ? ''
-    : requireNotificationEnqueueSecret(resolveNotificationEnqueueSecret());
+    : resolveNotificationEnqueueSecret();
   const logsDirectory = resolve(repoRoot, '.cache', 'wrangler-logs');
   mkdirSync(logsDirectory, { recursive: true });
   const checkEnvironment = validationEnvironment();
@@ -2538,6 +2634,9 @@ export const deployApiTestHooks = {
   createSecretFile,
   defaultSmokeOwner,
   notificationSmokeEmail,
+  createNotificationSmokeJob,
+  notificationQueueIdFromInfo,
+  pushNotificationSmokeToQueue,
   notificationRequestEnvironment,
   notificationTailEnvironment,
   notificationSmokeJobId,
