@@ -4,6 +4,7 @@ import {
   parseArgs,
   runMigrationCommand,
   snapshotSql,
+  assertTargetEventsCompatible,
   verifySnapshots,
   type D1Snapshot,
   type SourceSnapshot,
@@ -37,11 +38,7 @@ const source: SourceSnapshot = {
 
 const target: D1Snapshot = {
   summaries: source.summaries.map((summary) => ({ ...summary })),
-  events: source.events.map((event) => ({
-    dropId: event.dropId,
-    type: event.type,
-    eventKey: event.eventKey,
-  })),
+  events: source.events.map((event) => ({ ...event, applyDelta: 0 })),
 };
 
 test('pack-status migration arguments are exact and bounded', () => {
@@ -64,11 +61,30 @@ test('pack-status backfill SQL upserts summaries and imports idempotency events 
 
 test('pack-status snapshot verification rejects summary and event drift', () => {
   assert.doesNotThrow(() => verifySnapshots(source, target));
+  assert.doesNotThrow(() => verifySnapshots(source, {
+    ...target,
+    summaries: [{ ...target.summaries[0], updatedAtMs: 999 }],
+  }));
   assert.throws(() => verifySnapshots(source, {
     ...target,
     summaries: [{ ...target.summaries[0], unsealedOnline: 3 }],
   }), /summaries/);
-  assert.throws(() => verifySnapshots(source, { ...target, events: [] }), /event identities/);
+  assert.throws(() => verifySnapshots(source, { ...target, events: [] }), /events/);
+  assert.throws(() => verifySnapshots(source, {
+    ...target,
+    events: [{ ...target.events[0], quantity: 4 }],
+  }), /events/);
+});
+
+test('pack-status backfill rejects D1-only and conflicting events before mutation', () => {
+  assert.throws(() => assertTargetEventsCompatible(source, {
+    ...target,
+    events: [...target.events, { ...target.events[0], eventKey: 'd1-only' }],
+  }), /missing from Firestore/);
+  assert.throws(() => assertTargetEventsCompatible(source, {
+    ...target,
+    events: [{ ...target.events[0], quantity: 4 }],
+  }), /differs from Firestore/);
 });
 
 test('pack-status backfill retries an interrupted import and converges', async () => {
@@ -95,7 +111,10 @@ test('pack-status cutover verifies first and automatically rolls back a failed s
       readSource: async () => source,
       readTarget: () => target,
       setReadSource: (value) => { sources.push(value); },
-      smoke: async () => { throw new Error('smoke failed'); },
+      smoke: async (_snapshot, expectedSource) => {
+        assert.equal(expectedSource, 'd1');
+        throw new Error('smoke failed');
+      },
     }),
     /Firestore reads were restored/,
   );
@@ -111,7 +130,10 @@ test('pack-status cutover and rollback expose only their reviewed source transit
     readSource: async () => source,
     readTarget: () => target,
     setReadSource: (value: 'firestore' | 'd1') => { sources.push(value); },
-    smoke: async () => { smokes += 1; },
+    smoke: async (_snapshot: SourceSnapshot, expectedSource: 'firestore' | 'd1') => {
+      assert.equal(expectedSource, smokes === 0 ? 'd1' : 'firestore');
+      smokes += 1;
+    },
   };
   await runMigrationCommand('cutover', dependencies);
   await runMigrationCommand('rollback', dependencies);

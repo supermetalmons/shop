@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { FieldPath, Firestore, Timestamp } from '@google-cloud/firestore';
 import {
   PACK_STATUS_SUPPORTED_DROP_IDS,
+  PACK_STATUS_SOURCE_HEADER,
   buildPackStatusStatsFields,
   type PackStatusCounters,
   type PackStatusEvent,
@@ -50,7 +51,11 @@ export type PackStatusSourceSummary = PackStatusStatsFields & {
 
 export type D1Snapshot = {
   summaries: PackStatusSourceSummary[];
-  events: Array<{ dropId: string; type: PackStatusEventType; eventKey: string }>;
+  events: D1PackStatusEvent[];
+};
+
+export type D1PackStatusEvent = PackStatusEvent & {
+  applyDelta: 0 | 1;
 };
 
 export type MigrationDependencies = {
@@ -59,7 +64,7 @@ export type MigrationDependencies = {
   readSource: () => Promise<SourceSnapshot>;
   readTarget: () => D1Snapshot | Promise<D1Snapshot>;
   setReadSource: (source: 'firestore' | 'd1') => void | Promise<void>;
-  smoke: (snapshot: SourceSnapshot) => Promise<void>;
+  smoke: (snapshot: SourceSnapshot, expectedSource: 'firestore' | 'd1') => Promise<void>;
 };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -368,28 +373,100 @@ function d1Summary(row: D1Row): PackStatusSourceSummary {
   };
 }
 
+function d1OptionalString(value: unknown, label: string): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== 'string' || !value) fail(`${label} must be null or a non-empty string.`);
+  return value;
+}
+
+function d1Event(row: D1Row): D1PackStatusEvent {
+  const eventKey = d1OptionalString(row.event_key, 'd1.event_key');
+  const dropId = d1OptionalString(row.drop_id, 'd1.drop_id');
+  if (!eventKey || !dropId) fail('D1 pack-status event identity is invalid.');
+  const applyDelta = nonnegativeInteger(row.apply_delta, 'd1.apply_delta');
+  if (applyDelta !== 0 && applyDelta !== 1) fail('d1.apply_delta must be zero or one.');
+  const increments = {
+    ...(nonnegativeInteger(row.unsealed_online_delta, 'd1.unsealed_online_delta')
+      ? { unsealedOnline: Number(row.unsealed_online_delta) }
+      : {}),
+    ...(nonnegativeInteger(row.redeemed_irl_normal_delta, 'd1.redeemed_irl_normal_delta')
+      ? { redeemedIrlNormal: Number(row.redeemed_irl_normal_delta) }
+      : {}),
+    ...(nonnegativeInteger(row.redeemed_irl_stripe_delta, 'd1.redeemed_irl_stripe_delta')
+      ? { redeemedIrlStripe: Number(row.redeemed_irl_stripe_delta) }
+      : {}),
+    ...(nonnegativeInteger(row.redeemed_unsealed_cards_delta, 'd1.redeemed_unsealed_cards_delta')
+      ? { redeemedUnsealedCards: Number(row.redeemed_unsealed_cards_delta) }
+      : {}),
+  };
+  if (Object.keys(increments).length === 0) fail('D1 pack-status event increments are empty.');
+  return {
+    dropId,
+    type: eventType(row.event_type),
+    eventKey,
+    quantity: positiveInteger(row.quantity, 'd1.quantity'),
+    increments,
+    ...(row.delivery_id == null ? {} : { deliveryId: positiveInteger(row.delivery_id, 'd1.delivery_id') }),
+    ...(d1OptionalString(row.checkout_session_id, 'd1.checkout_session_id')
+      ? { checkoutSessionId: String(row.checkout_session_id) }
+      : {}),
+    ...(d1OptionalString(row.box_asset_id, 'd1.box_asset_id') ? { boxAssetId: String(row.box_asset_id) } : {}),
+    ...(d1OptionalString(row.signature, 'd1.signature') ? { signature: String(row.signature) } : {}),
+    createdAtMs: nonnegativeInteger(row.created_at_ms, 'd1.created_at_ms'),
+    applyDelta,
+  };
+}
+
 export function readD1Snapshot(): D1Snapshot {
   const summaries = d1Rows(`SELECT
     drop_id, version, total_initial_supply, total_cards, cards_per_pack,
     unsealed_online, redeemed_irl_normal, redeemed_irl_stripe, redeemed_unsealed_cards,
     rebuilt_at_ms, updated_at_ms
     FROM pack_status ORDER BY drop_id`).map(d1Summary);
-  const events = d1Rows(
-    'SELECT drop_id, event_type, event_key FROM pack_status_events ORDER BY drop_id, event_type, event_key',
-  ).map((row) => ({
-    dropId: String(row.drop_id || ''),
-    type: eventType(row.event_type),
-    eventKey: String(row.event_key || ''),
-  }));
+  const events = d1Rows(`SELECT
+    drop_id, event_type, event_key, quantity,
+    unsealed_online_delta, redeemed_irl_normal_delta, redeemed_irl_stripe_delta, redeemed_unsealed_cards_delta,
+    delivery_id, checkout_session_id, box_asset_id, signature, apply_delta, created_at_ms
+    FROM pack_status_events ORDER BY drop_id, event_type, event_key`).map(d1Event);
   return { summaries, events };
 }
 
 function canonicalSummary(value: PackStatusSourceSummary): string {
-  return JSON.stringify(value);
+  const { updatedAtMs: _updatedAtMs, ...comparable } = value;
+  return JSON.stringify(comparable);
 }
 
-function canonicalEvent(value: { dropId: string; type: PackStatusEventType; eventKey: string }): string {
+function eventIdentity(value: Pick<PackStatusEvent, 'dropId' | 'type' | 'eventKey'>): string {
   return `${value.dropId}\0${value.type}\0${value.eventKey}`;
+}
+
+function canonicalEvent(value: PackStatusEvent): string {
+  return JSON.stringify({
+    dropId: value.dropId,
+    type: value.type,
+    eventKey: value.eventKey,
+    quantity: value.quantity,
+    increments: {
+      unsealedOnline: value.increments.unsealedOnline || 0,
+      redeemedIrlNormal: value.increments.redeemedIrlNormal || 0,
+      redeemedIrlStripe: value.increments.redeemedIrlStripe || 0,
+      redeemedUnsealedCards: value.increments.redeemedUnsealedCards || 0,
+    },
+    deliveryId: value.deliveryId || null,
+    checkoutSessionId: value.checkoutSessionId || null,
+    boxAssetId: value.boxAssetId || null,
+    signature: value.signature || null,
+  });
+}
+
+export function assertTargetEventsCompatible(source: SourceSnapshot, target: D1Snapshot): void {
+  const sourceEvents = new Map(source.events.map((event) => [eventIdentity(event), canonicalEvent(event)]));
+  if (sourceEvents.size !== source.events.length) fail('Firestore contains duplicate pack-status event identities.');
+  for (const event of target.events) {
+    const expected = sourceEvents.get(eventIdentity(event));
+    if (!expected) fail('D1 contains a pack-status event that is missing from Firestore.');
+    if (expected !== canonicalEvent(event)) fail('D1 contains a pack-status event that differs from Firestore.');
+  }
 }
 
 export function verifySnapshots(source: SourceSnapshot, target: D1Snapshot): void {
@@ -404,7 +481,7 @@ export function verifySnapshots(source: SourceSnapshot, target: D1Snapshot): voi
   if (
     sourceEvents.length !== targetEvents.length ||
     sourceEvents.some((event, index) => event !== targetEvents[index])
-  ) fail('D1 pack-status event identities do not exactly match Firestore.');
+  ) fail('D1 pack-status events do not exactly match Firestore.');
 }
 
 function applySnapshot(snapshot: SourceSnapshot): void {
@@ -423,19 +500,27 @@ function applySnapshot(snapshot: SourceSnapshot): void {
 
 function updateReadSource(source: 'firestore' | 'd1'): void {
   const nowMs = Date.now();
-  d1Rows(`UPDATE pack_status_rollout
+  const rows = d1Rows(`UPDATE pack_status_rollout
     SET read_source = ${sqlString(source)}, cache_generation = cache_generation + 1, updated_at_ms = ${nowMs}
     WHERE singleton = 1
     RETURNING read_source, cache_generation`);
+  if (
+    rows.length !== 1 ||
+    rows[0].read_source !== source ||
+    positiveInteger(rows[0].cache_generation, 'd1.cache_generation') < 1
+  ) fail(`Failed to switch pack-status reads to ${source}.`);
 }
 
-async function smoke(source: SourceSnapshot): Promise<void> {
+async function smoke(source: SourceSnapshot, expectedSource: 'firestore' | 'd1'): Promise<void> {
   for (const summary of source.summaries) {
     const response = await fetch(`${apiOrigin}/pack-status/${encodeURIComponent(summary.dropId)}`, {
       headers: { Accept: 'application/json' },
       redirect: 'error',
     });
     if (!response.ok) fail(`Pack-status smoke failed for ${summary.dropId} with ${response.status}.`);
+    if (response.headers.get(PACK_STATUS_SOURCE_HEADER) !== expectedSource) {
+      fail(`Pack-status smoke used an unexpected source for ${summary.dropId}.`);
+    }
     const payload: unknown = await response.json();
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) fail('Pack-status smoke returned invalid JSON.');
     const packStatus = (payload as Record<string, unknown>).packStatus;
@@ -465,6 +550,7 @@ export async function runMigrationCommand(
   if (command === 'backfill') {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const current = await dependencies.readSource();
+      assertTargetEventsCompatible(current, await dependencies.readTarget());
       await dependencies.apply(current);
       try {
         const verified = await dependencies.readSource();
@@ -485,14 +571,14 @@ export async function runMigrationCommand(
   }
   if (command === 'rollback') {
     await dependencies.setReadSource('firestore');
-    await dependencies.smoke(source);
+    await dependencies.smoke(source, 'firestore');
     dependencies.log('[pack-status] Firestore reads restored and production smoke passed.');
     return;
   }
   verifySnapshots(source, await dependencies.readTarget());
   await dependencies.setReadSource('d1');
   try {
-    await dependencies.smoke(source);
+    await dependencies.smoke(source, 'd1');
   } catch (error) {
     await dependencies.setReadSource('firestore');
     throw new AggregateError([error], 'D1 cutover smoke failed; Firestore reads were restored.');

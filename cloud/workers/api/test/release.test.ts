@@ -934,6 +934,18 @@ test('API deployment validates exact Worker and custom-domain targets before mut
   assert.equal(
     deployApiTestHooks.isExactApiDeploymentConfig({
       ...config,
+      d1_databases: [{
+        binding: 'DATA_DB',
+        database_name: 'mons-shop-data',
+        migrations_dir: 'migrations',
+        database_id: '00000000-0000-4000-8000-000000000001',
+      }],
+    }),
+    false,
+  );
+  assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({
+      ...config,
       d1_databases: [{ binding: 'DB', database_name: 'mons-shop-data', migrations_dir: 'migrations' }],
     }),
     false,
@@ -1745,7 +1757,10 @@ test('notification release smoke publishes an exact job directly to the Cloudfla
   assert.equal(requestedUrl, `https://api.cloudflare.com/client/v4/accounts/e25f90fc073ea309b54b8b5144bf28e0/queues/${queueId}/messages`);
   assert.equal(requestedInit?.method, 'POST');
   assert.equal(new Headers(requestedInit?.headers).get('authorization'), 'Bearer scoped-token');
-  assert.deepEqual(JSON.parse(String(requestedInit?.body)), { body: job, content_type: 'json' });
+  assert.deepEqual(JSON.parse(String(requestedInit?.body)), {
+    body: { version: 1, kind: 'notification_enqueue_smoke', job },
+    content_type: 'json',
+  });
   assert.equal(job.kind, 'stripe_checkout_manual_review');
   assert.equal(job.recipients[0], deployApiTestHooks.notificationSmokeEmail);
 
@@ -3925,7 +3940,7 @@ test('tracked release metadata uses the exact v2 production and rollback pairs',
     'schemaVersion',
   ]);
   assert.deepEqual(manifest.currentProduction, {
-    apiVersionId: '579f5135-90ed-4cf0-9e77-9203c742abfe',
+    apiVersionId: '5dbad869-1e79-43d8-85c0-4fa0f733d377',
     frontendVersionId: '4a56dcb4-1887-406c-8433-ac911eb6b8b7',
   });
   assert.deepEqual(manifest.approvedRollback, {

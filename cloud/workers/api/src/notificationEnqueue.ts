@@ -1,14 +1,19 @@
 import {
   NOTIFICATION_EMAIL_MAX_JOB_BYTES,
+  isNotificationEnqueueSmokeJobV1,
   isNotificationEmailJobV1,
+  notificationEmailJobJson,
   type NotificationEmailJobV1,
 } from '../../../../shared/notificationEmailJob.js';
 import {
   NOTIFICATION_ENQUEUE_PATH,
   NOTIFICATION_ENQUEUE_SIGNATURE_HEADER,
   NOTIFICATION_ENQUEUE_TIMESTAMP_HEADER,
+  notificationEnqueueTimestamp,
+  signNotificationEnqueueRequest,
   verifyNotificationEnqueueRequest,
 } from '../../../../shared/notificationEnqueueAuth.js';
+import { processNotificationEmailMessage } from './notificationEmailConsumer.js';
 
 const RESPONSE_HEADERS = {
   'Cache-Control': 'no-store',
@@ -65,7 +70,7 @@ async function readBoundedBody(request: Request): Promise<string> {
 
 export async function handleNotificationEnqueue(
   request: Request,
-  env: Env,
+  env: Pick<Env, 'NOTIFICATION_EMAIL_QUEUE' | 'NOTIFICATION_ENQUEUE_SECRET'>,
   overrides: Partial<NotificationEnqueueDependencies> = {},
 ): Promise<Response> {
   if (request.method !== 'POST') {
@@ -127,6 +132,46 @@ export async function handleNotificationEnqueue(
     ...job.context,
   });
   return response(202, { queued: true });
+}
+
+export async function processNotificationQueueMessage(
+  message: Message<unknown>,
+  env: Pick<Env, 'NOTIFICATION_EMAIL_QUEUE' | 'NOTIFICATION_ENQUEUE_SECRET' | 'RESEND_API_KEY'>,
+  overrides: {
+    notification?: typeof processNotificationEmailMessage;
+    nowMs?: () => number;
+    log?: (entry: Record<string, unknown>) => void;
+  } = {},
+): Promise<void> {
+  if (!isNotificationEnqueueSmokeJobV1(message.body)) {
+    return (overrides.notification || processNotificationEmailMessage)(message, env);
+  }
+  const body = notificationEmailJobJson(message.body.job);
+  const timestamp = notificationEnqueueTimestamp((overrides.nowMs || Date.now)());
+  const signature = await signNotificationEnqueueRequest({
+    secret: env.NOTIFICATION_ENQUEUE_SECRET,
+    timestamp,
+    body,
+  });
+  const response = await handleNotificationEnqueue(new Request(
+    `https://api.mons.shop${NOTIFICATION_ENQUEUE_PATH}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        [NOTIFICATION_ENQUEUE_TIMESTAMP_HEADER]: timestamp,
+        [NOTIFICATION_ENQUEUE_SIGNATURE_HEADER]: signature,
+      },
+      body,
+    },
+  ), env, { nowMs: overrides.nowMs || Date.now, log: overrides.log || console.log });
+  await response.body?.cancel().catch(() => undefined);
+  if (response.status !== 202) throw new Error(`notification_enqueue_smoke_failed_${response.status}`);
+  (overrides.log || console.log)({
+    event: 'notification_enqueue_smoke_forwarded',
+    jobId: message.body.job.jobId,
+  });
+  message.ack();
 }
 
 export { NOTIFICATION_ENQUEUE_PATH };

@@ -10,6 +10,7 @@ import {
   resendSend,
   type NotificationEmailSend,
 } from '../src/notificationEmailConsumer.ts';
+import { processNotificationQueueMessage } from '../src/notificationEnqueue.ts';
 
 const JOB = createNotificationEmailJobV1({
   jobId: '123e4567-e89b-42d3-a456-426614174000',
@@ -91,6 +92,34 @@ test('notification consumer acknowledges successful sends with the exact job and
   for (const privateValue of [JOB.recipients[0], JOB.subject, JOB.text, JOB.html, JOB.idempotencyKey]) {
     assert.equal(serialized.includes(privateValue), false);
   }
+});
+
+test('notification enqueue smoke self-signs with the Worker secret and forwards through the real handler', async () => {
+  const queued = queueMessage({ version: 1, kind: 'notification_enqueue_smoke', job: JOB });
+  const sent: unknown[] = [];
+  const logs: Record<string, unknown>[] = [];
+  const queue: Queue = {
+    send: async (body, options) => {
+      sent.push({ body, options });
+      return { metadata: { metrics: { backlogCount: 1, backlogBytes: 100 } } };
+    },
+    sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+  };
+  await processNotificationQueueMessage(queued.message, {
+    NOTIFICATION_EMAIL_QUEUE: queue,
+    NOTIFICATION_ENQUEUE_SECRET: 'worker-only-secret',
+    RESEND_API_KEY: 'resend-test-key',
+  }, {
+    nowMs: () => 1_700_000_000_000,
+    log: (entry) => logs.push(entry),
+  });
+  assert.equal(queued.actions.acks, 1);
+  assert.deepEqual(sent, [{ body: JOB, options: { contentType: 'json' } }]);
+  assert.deepEqual(logs.map((entry) => entry.event), [
+    'notification_email_enqueued',
+    'notification_enqueue_smoke_forwarded',
+  ]);
 });
 
 test('Resend transport sends the exact bounded HTTP request', async () => {

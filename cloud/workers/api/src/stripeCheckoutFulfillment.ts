@@ -451,6 +451,56 @@ function flowDependencies(
   store: ReturnType<typeof createWorkerStripeCheckoutStore>,
   signal: AbortSignal,
 ): StripeCheckoutFlowDeps<FulfillmentRuntime, StripeCheckoutOnchainConfig> {
+  const countPackStatus = async ({
+    dropRuntime,
+    orderHashHex,
+    quantity,
+    deliveryId,
+    checkoutSessionId,
+  }: {
+    dropRuntime: FulfillmentRuntime;
+    orderHashHex: string;
+    quantity: number;
+    deliveryId: number;
+    checkoutSessionId: string;
+  }): Promise<void> => {
+    if (!shouldTrackPackStatusForDrop(dropRuntime)) return;
+    const event: PackStatusEvent = {
+      dropId: dropRuntime.dropId,
+      type: 'redeemedIrlStripe',
+      eventKey: orderHashHex,
+      quantity: packStatusEventQuantity(dropRuntime, quantity),
+      increments: { redeemedIrlStripe: quantity },
+      deliveryId,
+      checkoutSessionId,
+      createdAtMs: Date.now(),
+    };
+    await applyPackStatusDualWrite({
+      dataDb: env.DATA_DB,
+      event,
+      firestore: () => store.runTransaction(async (transaction) => {
+        const eventPath = `drops/${dropRuntime.dropId}/packStatusEvents/redeemedIrlStripe_${encodeURIComponent(orderHashHex)}`;
+        const eventReference = store.doc(eventPath);
+        if ((await transaction.get(eventReference)).exists) return;
+        transaction.update(store.doc(`drops/${dropRuntime.dropId}/meta/packStatus`), {
+          redeemedIrlStripe: stripeCheckoutFieldValue.increment(quantity),
+          updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
+        });
+        transaction.create(eventReference, {
+          version: PACK_STATUS_SCHEMA_VERSION,
+          dropId: event.dropId,
+          type: event.type,
+          eventKey: event.eventKey,
+          quantity: event.quantity,
+          increments: event.increments,
+          deliveryId,
+          checkoutSessionId,
+          createdAt: stripeCheckoutFieldValue.serverTimestamp(),
+        });
+      }),
+      log: (entry) => console.warn(entry),
+    });
+  };
   return {
     requireDropId: (dropId) => fulfillmentRuntime(dropId).dropId,
     getDropRuntime: fulfillmentRuntime,
@@ -490,42 +540,30 @@ function flowDependencies(
     txSendTimeoutMs: TX_SEND_TIMEOUT_MS,
     txConfirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
     signal,
-    countPackStatus: async ({ dropRuntime, orderHashHex, quantity, deliveryId, checkoutSessionId }) => {
-      if (!shouldTrackPackStatusForDrop(dropRuntime)) return;
-      const event: PackStatusEvent = {
-        dropId: dropRuntime.dropId,
-        type: 'redeemedIrlStripe',
-        eventKey: orderHashHex,
-        quantity: packStatusEventQuantity(dropRuntime, quantity),
-        increments: { redeemedIrlStripe: quantity },
+    countPackStatus,
+    repairPackStatus: async ({ dropRuntime, checkoutRef, sessionId }) => {
+      const checkout = await checkoutRef.get();
+      const checkoutData = checkout.data() || {};
+      const deliveryId = Math.floor(Number(checkoutData.deliveryId));
+      if (!checkout.exists || !Number.isSafeInteger(deliveryId) || deliveryId <= 0) {
+        throw new Error('stripe_pack_status_repair_checkout_invalid');
+      }
+      const deliveryOrder = await store.doc(dropDeliveryOrderPath(dropRuntime.dropId, deliveryId)).get();
+      const order = deliveryOrder.data() || {};
+      const orderHashHex = typeof order.offchainOrderHash === 'string' ? order.offchainOrderHash.trim() : '';
+      const metadataIds = Array.isArray(order.metadataIds)
+        ? order.metadataIds.filter((value) => Number.isSafeInteger(Number(value)) && Number(value) > 0)
+        : [];
+      const quantity = metadataIds.length || (Number(order.metadataId) > 0 ? 1 : Math.floor(Number(order.quantity)));
+      if (!deliveryOrder.exists || !orderHashHex || !Number.isSafeInteger(quantity) || quantity <= 0) {
+        throw new Error('stripe_pack_status_repair_order_invalid');
+      }
+      await countPackStatus({
+        dropRuntime,
+        orderHashHex,
+        quantity,
         deliveryId,
-        checkoutSessionId,
-        createdAtMs: Date.now(),
-      };
-      await applyPackStatusDualWrite({
-        dataDb: env.DATA_DB,
-        event,
-        firestore: () => store.runTransaction(async (transaction) => {
-          const eventPath = `drops/${dropRuntime.dropId}/packStatusEvents/redeemedIrlStripe_${encodeURIComponent(orderHashHex)}`;
-          const eventReference = store.doc(eventPath);
-          if ((await transaction.get(eventReference)).exists) return;
-          transaction.update(store.doc(`drops/${dropRuntime.dropId}/meta/packStatus`), {
-            redeemedIrlStripe: stripeCheckoutFieldValue.increment(quantity),
-            updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
-          });
-          transaction.create(eventReference, {
-            version: PACK_STATUS_SCHEMA_VERSION,
-            dropId: event.dropId,
-            type: event.type,
-            eventKey: event.eventKey,
-            quantity: event.quantity,
-            increments: event.increments,
-            deliveryId,
-            checkoutSessionId,
-            createdAt: stripeCheckoutFieldValue.serverTimestamp(),
-          });
-        }),
-        log: (entry) => console.warn(entry),
+        checkoutSessionId: sessionId,
       });
     },
     logPackStatusError: (entry) => console.warn(entry),

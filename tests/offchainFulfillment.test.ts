@@ -43,6 +43,7 @@ import {
 } from '../shared/stripeReceiptClaims.ts';
 import {
   STRIPE_CHECKOUT_PROCESSING_LEASE_MS,
+  StripeCheckoutPackStatusProjectionError,
   buildStripeCheckoutManualReviewSummary,
   createOrGetStripeOffchainDeliveryOrder,
   isRetryableStripeCheckoutFulfillmentError,
@@ -1268,7 +1269,6 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
         },
       }),
   } as any;
-
   const result = await createOrGetStripeOffchainDeliveryOrder({
     db,
     checkoutRef,
@@ -1356,7 +1356,6 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
         },
       }),
   } as any;
-
   const result = await createOrGetStripeOffchainDeliveryOrder({
     db,
     checkoutRef,
@@ -1523,6 +1522,7 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
   });
   const creates: Array<{ ref: any; data: any }> = [];
   const updates: Array<{ ref: any; data: any }> = [];
+  const packStatusCalls: unknown[] = [];
   const db = {
     doc: (path: string) => {
       if (path === markerRef.path) return markerRef;
@@ -1561,9 +1561,13 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
 
   const result = await createOrGetStripeOffchainDeliveryOrder({
     db,
+    dropRuntime: { dropId, cluster: 'mainnet-beta', itemsPerBox: 3, maxSupply: 12_000 },
     checkoutRef,
     isAlreadyExistsError: () => false,
     processingAttemptId: 'attempt_current',
+    countPackStatus: async (input) => {
+      packStatusCalls.push(input);
+    },
     order: {
       dropId,
       orderHashHex,
@@ -1584,6 +1588,33 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
   assert.deepEqual(updates[0].data.metadataIds, [1, 2]);
   assert.equal(updates[0].data.quantity, 2);
   assert.equal('variantKey' in markerData, false);
+  assert.equal(packStatusCalls.length, 1);
+  assert.equal((packStatusCalls[0] as { deliveryId: number }).deliveryId, 789);
+  await assert.rejects(
+    createOrGetStripeOffchainDeliveryOrder({
+      db,
+      dropRuntime: { dropId, cluster: 'mainnet-beta', itemsPerBox: 3, maxSupply: 12_000 },
+      checkoutRef,
+      isAlreadyExistsError: () => false,
+      processingAttemptId: 'attempt_current',
+      countPackStatus: async () => {
+        throw new Error('d1 unavailable');
+      },
+      order: {
+        dropId,
+        orderHashHex,
+        owner: 'firebase:anon_uid_pack',
+        ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+        firebaseUid: 'anon_uid_pack',
+        receiptOwner: pubkey(94).toBase58(),
+        metadataIds: [1, 2],
+        stripeSession: { id: 'cs_test_pack_retry' },
+        receiptTx: 'txpackretry',
+        addressSnapshot: { encrypted: 'ciphertext', hint: 'Buyer, US' },
+      },
+    }),
+    StripeCheckoutPackStatusProjectionError,
+  );
 });
 
 test('validateStripeCheckoutDocumentData accepts only the app-created session contract', () => {
@@ -2302,6 +2333,39 @@ test('final Queue attempts persist retryable fulfillment failures for manual rev
   assert.equal(sets.length, 1);
   assert.equal(sets[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
   assert.equal(sets[0].data.manualRefundReviewRequired, true);
+});
+
+test('already-fulfilled Queue retries repair pack status idempotently', async () => {
+  const checkoutRef = { path: 'checkout' } as any;
+  checkoutRef.firestore = {
+    runTransaction: async (operation: any) => operation({
+      get: async () => ({
+        exists: true,
+        data: () => ({ status: STRIPE_CHECKOUT_STATUS.FULFILLED, deliveryId: 123 }),
+      }),
+    }),
+  };
+  const repairs: unknown[] = [];
+  const result = await processStripeCheckoutFulfillmentDocument({
+    db: checkoutRef.firestore,
+    dropId: 'card_nft_2',
+    sessionId: 'cs_test_repair',
+    checkoutRef,
+    apiKeys: [],
+    deps: {
+      getDropRuntime: () => ({ dropId: 'card_nft_2', cluster: 'mainnet-beta' }),
+      repairPackStatus: async (input: unknown) => {
+        repairs.push(input);
+      },
+    } as any,
+  });
+  assert.deepEqual(result, {
+    status: 'ignored',
+    dropId: 'card_nft_2',
+    sessionId: 'cs_test_repair',
+    reason: 'already_fulfilled',
+  });
+  assert.equal(repairs.length, 1);
 });
 
 test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async () => {

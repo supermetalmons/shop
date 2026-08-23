@@ -176,9 +176,10 @@ reads if any production smoke fails. Firestore remains a dual-write target,
 shadow comparison source, and emergency fallback until a separate cleanup.
 
 `NOTIFICATION_ENQUEUE_SECRET` remains stored only as a Worker secret and is
-inherited by uploaded versions. Guarded API releases publish their synthetic
-notification directly to the Cloudflare Queue with the scoped API token, so they
-do not need to retrieve or locally duplicate the secret. The standalone
+inherited by uploaded versions. Guarded API releases publish a smoke probe to
+the Cloudflare Queue; the Worker signs and forwards the test through its real
+enqueue handler with the bound secret. Releases therefore do not retrieve or
+locally duplicate the secret. The standalone
 notification-smoke command still accepts it from the invoking environment or
 root `.env.local`. Never pass it as a command argument, print it, or commit it.
 

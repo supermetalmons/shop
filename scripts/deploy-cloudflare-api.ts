@@ -23,7 +23,11 @@ import {
   isExactShopPendingOpenBoxesResponse,
 } from '../shared/shopApi.ts';
 import { isExactSubscribeToNotificationsResponse } from '../shared/notificationSubscription.ts';
-import { createNotificationEmailJobV1, type NotificationEmailJobV1 } from '../shared/notificationEmailJob.ts';
+import {
+  createNotificationEmailJobV1,
+  type NotificationEmailJobV1,
+  type NotificationEnqueueSmokeJobV1,
+} from '../shared/notificationEmailJob.ts';
 import { stripeCheckoutReconciliationQuery } from '../shared/stripeCheckoutReconciliation.ts';
 import { FULFILLMENT_ADMIN_WALLET_ADDRESSES } from '../shared/fulfillmentAccess.ts';
 import { isBase58Bytes } from '../shared/solanaRpcProxy.ts';
@@ -259,7 +263,7 @@ const stripeFulfillmentDeadLetterQueueName = 'mons-shop-stripe-fulfillment-dlq';
 const d1DatabaseName = 'mons-shop-data';
 const d1BindingName = 'DATA_DB';
 const d1MigrationsDirectory = 'migrations';
-const d1DatabaseIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const d1DatabaseId = '4b09f942-b0c6-4a1e-81df-cb802fbf7099';
 const notificationSmokeTimeoutMs = 90_000;
 const firestoreProjectId = 'mons-shop';
 const firestoreDatabaseName = `projects/${firestoreProjectId}/databases/(default)`;
@@ -293,7 +297,7 @@ function usage(): string {
     '',
     'The default release validates, uploads, verifies, promotes, and records one exact Worker version.',
     'Release, preview, and production require HELIUS_API_KEY in the process environment.',
-    'The deployed Worker keeps NOTIFICATION_ENQUEUE_SECRET inside Cloudflare; release smokes publish directly to its Queue when no local copy exists.',
+    'The deployed Worker keeps NOTIFICATION_ENQUEUE_SECRET inside Cloudflare; a Queue probe exercises its signed enqueue handler.',
     'Release and preview use macOS Keychain credentials by default or accept dedicated reader and writer JSON files.',
     'Preview mode uploads the secret through a temporary mode-0600 file inside a mode-0700 directory.',
   ].join('\n');
@@ -1070,6 +1074,11 @@ async function pushNotificationSmokeToQueue(
   if (!apiToken) fail('Notification Queue smoke requires the scoped Cloudflare API token.');
   const queueId = notificationQueueIdFromInfo(dependencies.queueInfo(environment));
   const job = dependencies.createJob();
+  const smokeJob: NotificationEnqueueSmokeJobV1 = {
+    version: 1,
+    kind: 'notification_enqueue_smoke',
+    job,
+  };
   const response = await dependencies.fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/queues/${queueId}/messages`,
     {
@@ -1078,7 +1087,7 @@ async function pushNotificationSmokeToQueue(
         Authorization: `Bearer ${apiToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ body: job, content_type: 'json' }),
+      body: JSON.stringify({ body: smokeJob, content_type: 'json' }),
       signal: AbortSignal.timeout(15_000),
     },
   );
@@ -1280,16 +1289,14 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
     isRecord(d1) &&
     hasExactKeys(d1, [
       'binding',
+      'database_id',
       'database_name',
       'migrations_dir',
-      ...(Object.hasOwn(d1, 'database_id') ? ['database_id'] : []),
     ]) &&
     d1.binding === d1BindingName &&
     d1.database_name === d1DatabaseName &&
     d1.migrations_dir === d1MigrationsDirectory &&
-    (!Object.hasOwn(d1, 'database_id') || (
-      typeof d1.database_id === 'string' && d1DatabaseIdPattern.test(d1.database_id)
-    )) &&
+    d1.database_id === d1DatabaseId &&
     isRecord(secrets) &&
     hasExactKeys(secrets, ['required']) &&
     Array.isArray(secrets.required) &&
@@ -1379,7 +1386,7 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
 function configuredD1DatabaseId(path = resolve(repoRoot, configPath)): string {
   const value = JSON.parse(readFileSync(path, 'utf8')) as { d1_databases?: Array<{ database_id?: unknown }> };
   const databaseId = value.d1_databases?.[0]?.database_id;
-  if (typeof databaseId !== 'string' || !d1DatabaseIdPattern.test(databaseId)) {
+  if (databaseId !== d1DatabaseId) {
     fail(
       `D1 database ${d1DatabaseName} is not provisioned. Grant D1 Edit and create it with the reviewed ${d1BindingName} binding before release.`,
     );
@@ -1388,13 +1395,19 @@ function configuredD1DatabaseId(path = resolve(repoRoot, configPath)): string {
 }
 
 function assertD1DatabaseReady(environment: NodeJS.ProcessEnv): void {
-  configuredD1DatabaseId();
+  const configuredDatabaseId = configuredD1DatabaseId();
   const output = runProcessForOutput(
     wranglerBinary,
     [
       'd1', 'execute', d1DatabaseName,
       '--remote', '--json',
-      '--command', "SELECT read_source, cache_generation FROM pack_status_rollout WHERE singleton = 1",
+      '--command', `SELECT
+        rollout.read_source,
+        rollout.cache_generation,
+        (SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name IN ('pack_status', 'pack_status_events', 'pack_status_rollout')) AS table_count,
+        (SELECT COUNT(*) FROM sqlite_schema WHERE type = 'trigger' AND name = 'pack_status_event_apply') AS trigger_count,
+        (SELECT COUNT(*) FROM d1_migrations WHERE name = '0001_pack_status.sql') AS migration_count
+        FROM pack_status_rollout AS rollout WHERE rollout.singleton = 1`,
       ...configArgs,
     ],
     environment,
@@ -1410,7 +1423,16 @@ function assertD1DatabaseReady(environment: NodeJS.ProcessEnv): void {
     parsed[0].success === true && Array.isArray(parsed[0].results) && parsed[0].results.length === 1
     ? parsed[0].results[0]
     : null;
-  if (!isRecord(row) || (row.read_source !== 'firestore' && row.read_source !== 'd1')) {
+  if (
+    configuredDatabaseId !== d1DatabaseId ||
+    !isRecord(row) ||
+    (row.read_source !== 'firestore' && row.read_source !== 'd1') ||
+    !Number.isSafeInteger(row.cache_generation) ||
+    Number(row.cache_generation) < 1 ||
+    row.table_count !== 3 ||
+    row.trigger_count !== 1 ||
+    row.migration_count !== 1
+  ) {
     fail('D1 pack-status migration is not applied or its rollout row is invalid.');
   }
 }

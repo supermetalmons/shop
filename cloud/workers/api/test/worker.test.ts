@@ -15,6 +15,7 @@ import {
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.ts';
 import { SHOP_EXPECTED_ASSET_IDS_MAX } from '../../../../shared/shopApi.ts';
 import { isExactShopRpcRequest } from '../../../../shared/solanaRpcProxy.ts';
+import { PACK_STATUS_SOURCE_HEADER } from '../../../../shared/packStatus.ts';
 import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import {
   NOTIFICATION_ENQUEUE_PATH,
@@ -794,6 +795,7 @@ test('pack-status route reads bounded Firestore fields with a 15-second edge cac
       },
     );
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get(PACK_STATUS_SOURCE_HEADER), 'firestore');
     assert.match(response.headers.get('cache-control') || '', /no-store/);
     assert.match(response.headers.get('server-timing') || '', /provider;dur=/);
     const payload = await response.json() as { ok: boolean; packStatus: { dropId: string; cardsPerPack: number } };
@@ -843,6 +845,7 @@ test('pack-status route reads and internally caches D1 while preserving the resp
     dependencies,
   );
   assert.equal(first.status, 200);
+  assert.equal(first.headers.get(PACK_STATUS_SOURCE_HEADER), 'd1');
   assert.deepEqual(await first.json(), {
     ok: true,
     packStatus: {
@@ -890,6 +893,7 @@ test('pack-status route falls back to Firestore when the selected D1 row is miss
     },
   );
   assert.equal(response.status, 200);
+  assert.equal(response.headers.get(PACK_STATUS_SOURCE_HEADER), 'firestore');
   assert.equal(logs.some((entry) => entry.event === 'pack_status_d1_fallback'), true);
   assert.equal(logs.at(-1)?.packStatusSource, 'firestore');
 });

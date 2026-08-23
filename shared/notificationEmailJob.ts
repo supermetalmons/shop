@@ -35,6 +35,12 @@ export type NotificationEmailJobV1 = {
   context: NotificationEmailJobContext;
 };
 
+export type NotificationEnqueueSmokeJobV1 = {
+  version: 1;
+  kind: 'notification_enqueue_smoke';
+  job: NotificationEmailJobV1;
+};
+
 const JOB_KEYS = [
   'version',
   'jobId',
@@ -121,6 +127,14 @@ export function isNotificationEmailJobV1(value: unknown): value is NotificationE
   if (typeof value.html !== 'string' || !value.html || utf8Length(value.html) > NOTIFICATION_EMAIL_MAX_HTML_BYTES) return false;
   if (!isNotificationEmailContext(value.context, value.kind)) return false;
   return utf8Length(JSON.stringify(value)) <= NOTIFICATION_EMAIL_MAX_JOB_BYTES;
+}
+
+export function isNotificationEnqueueSmokeJobV1(value: unknown): value is NotificationEnqueueSmokeJobV1 {
+  return isRecord(value) &&
+    hasExactKeys(value, ['version', 'kind', 'job']) &&
+    value.version === 1 &&
+    value.kind === 'notification_enqueue_smoke' &&
+    isNotificationEmailJobV1(value.job);
 }
 
 function requireNotificationEmailJobV1(value: unknown): NotificationEmailJobV1 {

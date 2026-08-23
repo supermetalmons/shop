@@ -154,6 +154,19 @@ type StripeCheckoutPackStatusCounter<Runtime extends StripeCheckoutPackStatusRun
   checkoutSessionId: string;
 }) => Promise<void>;
 
+type StripeCheckoutPackStatusRepair<Runtime extends StripeCheckoutPackStatusRuntime> = (params: {
+  dropRuntime: Runtime;
+  checkoutRef: StripeCheckoutDocumentReference;
+  sessionId: string;
+}) => Promise<void>;
+
+export class StripeCheckoutPackStatusProjectionError extends Error {
+  constructor(readonly cause: unknown) {
+    super('Stripe checkout pack-status projection failed');
+    this.name = 'StripeCheckoutPackStatusProjectionError';
+  }
+}
+
 export type StripeCheckoutOnchainConfig = {
   admin: PublicKey;
   coreCollection: PublicKey;
@@ -209,6 +222,7 @@ export type StripeCheckoutFlowDeps<
   txConfirmTimeoutMs: number;
   signal?: AbortSignal;
   countPackStatus?: StripeCheckoutPackStatusCounter<Runtime>;
+  repairPackStatus?: StripeCheckoutPackStatusRepair<Runtime>;
   logPackStatusError?: (entry: Record<string, unknown>) => void;
 };
 
@@ -1023,8 +1037,8 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
       if (
         params.dropRuntime &&
         params.countPackStatus &&
-        result.checkoutStatus === 'fulfilled' &&
-        result.created === true
+        (result.checkoutStatus === 'fulfilled' || result.checkoutStatus === 'already_fulfilled') &&
+        result.deliveryId
       ) {
         try {
           await params.countPackStatus({
@@ -1042,6 +1056,7 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
             deliveryId: result.deliveryId,
             error: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
           });
+          throw new StripeCheckoutPackStatusProjectionError(err);
         }
       }
       return result;
@@ -1524,6 +1539,9 @@ export async function processStripeCheckoutFulfillmentDocument<
         sessionId,
       });
     }
+    if (started.reason === 'already_fulfilled' && deps.repairPackStatus) {
+      await deps.repairPackStatus({ dropRuntime, checkoutRef, sessionId });
+    }
     return { status: 'ignored', dropId, sessionId, reason: started.reason };
   }
 
@@ -1556,6 +1574,7 @@ export async function processStripeCheckoutFulfillmentDocument<
     );
     return { status: 'fulfilled', sessionId, ...result };
   } catch (err) {
+    if (err instanceof StripeCheckoutPackStatusProjectionError) throw err;
     if (err instanceof StripeCheckoutProcessingAttemptOwnershipCheckError) {
       throw err;
     }

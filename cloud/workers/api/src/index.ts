@@ -40,6 +40,7 @@ import {
   type ShopDropRuntime,
 } from '../../../../shared/shopDomain.js';
 import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
+import { PACK_STATUS_SOURCE_HEADER } from '../../../../shared/packStatus.js';
 import {
   isExactSubscribeToNotificationsRequest,
   normalizeNotificationEmailRecipient,
@@ -71,8 +72,11 @@ import {
   type PackStatusReadSource,
   type PackStatusRollout,
 } from './d1PackStatus.js';
-import { handleNotificationEnqueue, NOTIFICATION_ENQUEUE_PATH } from './notificationEnqueue.js';
-import { processNotificationEmailMessage } from './notificationEmailConsumer.js';
+import {
+  handleNotificationEnqueue,
+  NOTIFICATION_ENQUEUE_PATH,
+  processNotificationQueueMessage,
+} from './notificationEnqueue.js';
 import {
   STRIPE_CHECKOUT_SESSION_PATH,
   handleStripeCheckoutSession,
@@ -232,7 +236,7 @@ const KNOWN_LOG_ROUTES = new Set([
 ]);
 
 type BackgroundJobProcessors = {
-  notification: typeof processNotificationEmailMessage;
+  notification: typeof processNotificationQueueMessage;
   reveal: typeof processRevealBackgroundJobMessage;
   fulfillment: typeof processStripeFulfillmentMessage;
   log: (entry: Record<string, unknown>) => void;
@@ -298,7 +302,7 @@ export async function processStripeFulfillmentMessage(
 }
 
 const defaultBackgroundJobProcessors: BackgroundJobProcessors = {
-  notification: processNotificationEmailMessage,
+  notification: processNotificationQueueMessage,
   reveal: processRevealBackgroundJobMessage,
   fulfillment: processStripeFulfillmentMessage,
   log: (entry) => console.log(entry),
@@ -1637,6 +1641,7 @@ export async function handleRequest(
     } else {
       const result = await handlePackStatus(packStatusDropId, env, dependencies, metrics, waitUntil);
       response = result.response;
+      response.headers.set(PACK_STATUS_SOURCE_HEADER, result.source);
       providerCacheStatus = result.cacheStatus;
       packStatusSource = result.source;
     }
