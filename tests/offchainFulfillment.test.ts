@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { PublicKey, SystemProgram } from '@solana/web3.js';
+import Stripe from 'stripe';
 import {
   ACCOUNT_ADMIN_DELIVERY_ORDER,
   IX_ADMIN_DELIVER_VARIANT_ORDER,
@@ -2536,6 +2537,9 @@ test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale
 });
 
 test('isRetryableStripeCheckoutFulfillmentError classifies transient errors only', () => {
+  assert.equal(isRetryableStripeCheckoutFulfillmentError(new Stripe.errors.StripeConnectionError({
+    message: 'An error occurred with our connection to Stripe.',
+  })), true);
   assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('rpc timeout'), { code: 'unavailable' })), true);
   assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('rate limited'), { statusCode: 429 })), true);
   assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('write conflict'), { status: 'ABORTED' })), true);

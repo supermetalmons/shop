@@ -303,6 +303,9 @@ function looksLikeTransientProviderMessage(message: string): boolean {
 }
 
 export function isRetryableStripeCheckoutFulfillmentError(err: unknown): boolean {
+  const errorType = String((err as any)?.type || (err as any)?.rawType || '');
+  if (errorType === 'StripeConnectionError') return true;
+
   const statusCode = errorStatusCode(err);
   if (statusCode === 408 || statusCode === 409 || statusCode === 429) return true;
   if (statusCode != null && statusCode >= 500) return true;
