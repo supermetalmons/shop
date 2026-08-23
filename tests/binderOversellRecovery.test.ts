@@ -6,8 +6,12 @@ import {
   CARD_NFT_BINDER_OVERSELL_RECOVERY_ITEMS,
   CARD_NFT_BINDER_OVERSELL_SESSION_IDS,
   buildCardNftBinderOversellFirestoreCommit,
+  publishCardNftBinderOversellTerminalNotifications,
+  shouldPublishCardNftBinderOversellRecoveryNotifications,
 } from '../scripts/shared/binderOversellRecovery.ts';
 import { decodeFirestoreRestDocument } from '../scripts/shared/firebaseCliFirestoreRest.ts';
+import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../functions/src/shared/fulfillmentSources.ts';
+import type { NotificationEmailJobV1 } from '../functions/src/shared/notificationEmailJob.ts';
 
 const EXPECTED_SESSIONS = [
   'cs_live_a1ZanWVK9yZbZslwrR7NcxjU4ufFlJGNpgC7QFuXVC8Ff4ZPBpO61ssKU0',
@@ -151,5 +155,96 @@ test('binder recovery commit refuses malformed claim codes', () => {
         addressSnapshot: {},
       }),
     /Invalid Stripe receipt claim code/,
+  );
+});
+
+test('binder recovery resumes only explicitly pending notification publication', () => {
+  assert.equal(
+    shouldPublishCardNftBinderOversellRecoveryNotifications(false),
+    true,
+  );
+  assert.equal(
+    shouldPublishCardNftBinderOversellRecoveryNotifications(true),
+    false,
+  );
+  assert.equal(
+    shouldPublishCardNftBinderOversellRecoveryNotifications(undefined),
+    false,
+  );
+});
+
+test('binder recovery publishes buyer and shipper notifications with retry-safe idempotency', async () => {
+  const item = CARD_NFT_BINDER_OVERSELL_RECOVERY_ITEMS[0];
+  const deliveryId = 123456;
+  const jobIds = [
+    '123e4567-e89b-42d3-a456-426614174020',
+    '123e4567-e89b-42d3-a456-426614174021',
+    '123e4567-e89b-42d3-a456-426614174022',
+    '123e4567-e89b-42d3-a456-426614174023',
+  ];
+  const queued: NotificationEmailJobV1[] = [];
+  let failShipperOnce = true;
+  const dependencies = {
+    loadCheckout: async () => ({
+      path: `drops/${CARD_NFT_BINDER_OVERSELL_DROP_ID}/stripeCheckouts/${item.sessionId}`,
+      data: {
+        status: 'fulfilled',
+        deliveryId,
+      },
+    }),
+    loadDeliveryOrder: async () => ({
+      source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
+      status: 'ready_to_ship',
+      deliveryId,
+      owner: 'firebase:user-1',
+      addressSnapshot: { email: 'buyer@example.com' },
+      items: [{ kind: 'box', refId: item.metadataId }],
+    }),
+    enqueueJob: async (job: NotificationEmailJobV1) => {
+      if (job.kind === 'shipper_ready_to_ship' && failShipperOnce) {
+        failShipperOnce = false;
+        throw new Error('temporary enqueue failure');
+      }
+      queued.push(job);
+    },
+    createJobId: () => jobIds.shift() || '',
+  };
+
+  await assert.rejects(
+    publishCardNftBinderOversellTerminalNotifications({
+      item,
+      dependencies,
+    }),
+    /temporary enqueue failure/,
+  );
+  const result = await publishCardNftBinderOversellTerminalNotifications({
+    item,
+    dependencies,
+  });
+
+  assert.deepEqual(result, { outcome: 'fulfilled', queuedJobs: 2 });
+  assert.deepEqual(
+    queued.map((job) => ({
+      kind: job.kind,
+      idempotencyKey: job.idempotencyKey,
+      recipients: job.recipients,
+    })),
+    [
+      {
+        kind: 'buyer_order_received',
+        idempotencyKey: `${CARD_NFT_BINDER_OVERSELL_DROP_ID}:${deliveryId}:order_received`,
+        recipients: ['buyer@example.com'],
+      },
+      {
+        kind: 'buyer_order_received',
+        idempotencyKey: `${CARD_NFT_BINDER_OVERSELL_DROP_ID}:${deliveryId}:order_received`,
+        recipients: ['buyer@example.com'],
+      },
+      {
+        kind: 'shipper_ready_to_ship',
+        idempotencyKey: `${CARD_NFT_BINDER_OVERSELL_DROP_ID}:${deliveryId}:ready_to_ship`,
+        recipients: ['supermetalxbosch@gmail.com'],
+      },
+    ],
   );
 });

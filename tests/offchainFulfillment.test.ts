@@ -58,6 +58,7 @@ import {
   stripeCheckoutKindForDrop,
   stripeTestApiKey,
 } from '../functions/src/stripeCheckout/service.ts';
+import { stripeCheckoutFieldValue } from '../functions/src/stripeCheckout/store.ts';
 import {
   createStripeCheckoutSessionCore,
   normalizeStripeCheckoutReturnUrl,
@@ -1272,6 +1273,10 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
     checkoutRef,
     isAlreadyExistsError: () => false,
     processingAttemptId: 'attempt_current',
+    fulfillmentCompletionFields: {
+      fulfillmentCompletedBy: 'cloudflare_queue_v1',
+      fulfillmentCompletedAt: stripeCheckoutFieldValue.serverTimestamp(),
+    },
     order: {
       dropId,
       orderHashHex,
@@ -1308,6 +1313,8 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
   });
   assert.equal(markerCreate.data.stripeReceiptClaimCode, claimCreate.data.code);
   assert.equal(updates.length, 1);
+  assert.equal(updates[0].data.fulfillmentCompletedBy, 'cloudflare_queue_v1');
+  assert.equal(updates[0].data.fulfillmentCompletedAt?.kind, 'server_timestamp');
 });
 
 test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple claim codes', async () => {
@@ -1393,6 +1400,8 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
   assert.deepEqual(Object.keys(markerCreate.data.stripeReceiptClaimCodesByBoxId).sort(), ['box_16', 'box_17', 'box_18']);
   assert.equal('stripeReceiptClaims' in markerCreate.data, false);
   assert.equal(updates.length, 1);
+  assert.equal('fulfillmentCompletedBy' in updates[0].data, false);
+  assert.equal('fulfillmentCompletedAt' in updates[0].data, false);
   assert.deepEqual(updates[0].data.metadataIds, [16, 17, 18]);
   assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'metadataId'), true);
   assert.notEqual(updates[0].data.metadataId, 16);
@@ -2383,6 +2392,10 @@ test('markStripeCheckoutFulfillmentFulfilled writes only the current processing 
     metadataId: 16,
     receiptTx: 'tx123',
     processingAttemptId: 'attempt_current',
+    fulfillmentCompletionFields: {
+      fulfillmentCompletedBy: 'cloudflare_queue_v1',
+      fulfillmentCompletedAt: stripeCheckoutFieldValue.serverTimestamp(),
+    },
   });
 
   assert.deepEqual(result, { status: 'fulfilled' });
@@ -2390,6 +2403,8 @@ test('markStripeCheckoutFulfillmentFulfilled writes only the current processing 
   assert.equal(updates[0].ref, checkoutRef);
   assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLED);
   assert.equal(updates[0].data.deliveryId, 123);
+  assert.equal(updates[0].data.fulfillmentCompletedBy, 'cloudflare_queue_v1');
+  assert.equal(updates[0].data.fulfillmentCompletedAt?.kind, 'server_timestamp');
   assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingAttemptId'), true);
 });
 
@@ -2422,6 +2437,8 @@ test('markStripeCheckoutFulfillmentFulfilled clears singular metadataId for mult
   assert.deepEqual(result, { status: 'fulfilled' });
   assert.equal(updates.length, 1);
   assert.deepEqual(updates[0].data.metadataIds, [16, 17, 18]);
+  assert.equal('fulfillmentCompletedBy' in updates[0].data, false);
+  assert.equal('fulfillmentCompletedAt' in updates[0].data, false);
   assert.equal(updates[0].data.quantity, 3);
   assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'metadataId'), true);
   assert.notEqual(updates[0].data.metadataId, 16);
@@ -2521,6 +2538,9 @@ test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale
 test('isRetryableStripeCheckoutFulfillmentError classifies transient errors only', () => {
   assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('rpc timeout'), { code: 'unavailable' })), true);
   assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('rate limited'), { statusCode: 429 })), true);
+  assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('write conflict'), { status: 'ABORTED' })), true);
+  assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('create conflict'), { status: 'ALREADY_EXISTS' })), false);
+  assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('precondition'), { status: 'FAILED_PRECONDITION' })), false);
   assert.equal(isRetryableStripeCheckoutFulfillmentError(new Error('fetch failed: socket hang up')), true);
   assert.equal(
     isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('contract mismatch'), { code: 'failed-precondition' })),

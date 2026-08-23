@@ -7,6 +7,11 @@ import {
   requireStripeReceiptClaimCode,
   type StripeOffchainDeliveryOrderDocumentInput,
 } from '../../functions/src/stripeCheckout/contract.ts';
+import {
+  publishStripeCheckoutTerminalNotifications,
+  type StripeCheckoutTerminalNotificationDependencies,
+  type StripeCheckoutTerminalNotificationResult,
+} from '../../functions/src/stripeCheckout/terminalNotifications.ts';
 import { encodeFirestoreRestFields } from './firebaseCliFirestoreRest.ts';
 
 export const CARD_NFT_BINDER_OVERSELL_DROP_ID = 'card_nft_binder';
@@ -69,6 +74,40 @@ export const CARD_NFT_BINDER_OVERSELL_RECOVERY_ITEMS: readonly CardNftBinderOver
 export const CARD_NFT_BINDER_OVERSELL_SESSION_IDS = new Set(
   CARD_NFT_BINDER_OVERSELL_RECOVERY_ITEMS.map((item) => item.sessionId),
 );
+
+export function shouldPublishCardNftBinderOversellRecoveryNotifications(
+  notificationsPublished: boolean | undefined,
+): boolean {
+  return notificationsPublished === false;
+}
+
+type CardNftBinderOversellNotificationDependencies = Pick<
+  StripeCheckoutTerminalNotificationDependencies,
+  'loadCheckout' | 'loadDeliveryOrder' | 'enqueueJob' | 'createJobId'
+>;
+
+export async function publishCardNftBinderOversellTerminalNotifications(args: {
+  item: CardNftBinderOversellRecoveryItem;
+  dependencies: CardNftBinderOversellNotificationDependencies;
+}): Promise<StripeCheckoutTerminalNotificationResult> {
+  if (!CARD_NFT_BINDER_OVERSELL_SESSION_IDS.has(args.item.sessionId)) {
+    throw new Error('Binder oversell notification session is out of scope');
+  }
+  const result = await publishStripeCheckoutTerminalNotifications({
+    dropId: CARD_NFT_BINDER_OVERSELL_DROP_ID,
+    sessionId: args.item.sessionId,
+    dependencies: {
+      ...args.dependencies,
+      getDropName: () => 'Card NFT Binder',
+    },
+  });
+  if (result.outcome !== 'fulfilled' || result.queuedJobs !== 2) {
+    throw new Error(
+      `${args.item.sessionId} terminal notifications were not fully queued: ${result.reason || result.outcome}`,
+    );
+  }
+  return result;
+}
 
 const CHECKOUT_FAILURE_FIELDS = [
   'lastFulfillmentError',

@@ -9,6 +9,7 @@ import { deployApiTestHooks } from './deploy-cloudflare-api.ts';
 import {
   createFirebaseCliFirestoreRestClient,
   decodeFirestoreRestDocument,
+  type FirebaseCliFirestoreRestClient,
 } from './shared/firebaseCliFirestoreRest.ts';
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -18,6 +19,13 @@ const configArgs = ['--config', 'cloud/workers/api/wrangler.jsonc', '--env-file'
 const functionName = 'processStripeCheckoutFulfillment';
 const functionRegion = 'us-central1';
 const projectId = 'mons-shop';
+const cloudflareAccountId = 'e25f90fc073ea309b54b8b5144bf28e0';
+const cloudflareWorkerName = 'mons-shop-api';
+const fulfillmentQueueName = 'mons-shop-stripe-fulfillment';
+const reconciliationCron = '*/5 * * * *';
+const firestoreQueryPageSize = 200;
+const proofMaxAgeMs = 60 * 60 * 1_000;
+const proofFutureToleranceMs = 5 * 60 * 1_000;
 const versionPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const sessionPattern = /^[A-Za-z0-9_:-]{4,256}$/;
 
@@ -31,6 +39,10 @@ type Options = {
 
 function fail(message: string): never {
   throw new Error(message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function usage(): string {
@@ -123,8 +135,11 @@ function firebaseFunctions(): Array<Record<string, unknown>> {
   return result.filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object' && !Array.isArray(entry));
 }
 
-async function verifyFirestoreProof(options: Options): Promise<void> {
-  const client = createFirebaseCliFirestoreRestClient({ projectId });
+async function verifyFirestoreProof(
+  options: Options,
+  client: FirebaseCliFirestoreRestClient = createFirebaseCliFirestoreRestClient({ projectId }),
+  nowMs = Date.now(),
+): Promise<void> {
   const checkoutPath = `drops/${options.dropId}/stripeCheckouts/${options.sessionId}`;
   const checkout = decodeFirestoreRestDocument(await client.request({
     url: client.documentUrl(checkoutPath),
@@ -133,6 +148,17 @@ async function verifyFirestoreProof(options: Options): Promise<void> {
   if (!checkout) fail(`Missing checkout proof at ${checkoutPath}.`);
   if (checkout.data.fulfillmentProcessor !== STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR) {
     fail('Checkout proof was not delegated to the Cloudflare fulfillment processor.');
+  }
+  if (checkout.data.fulfillmentCompletedBy !== STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR) {
+    fail('Checkout proof was not completed by the Cloudflare fulfillment processor.');
+  }
+  const fulfillmentCompletedAtMs = Date.parse(String(checkout.data.fulfillmentCompletedAt || ''));
+  if (
+    !Number.isFinite(fulfillmentCompletedAtMs) ||
+    fulfillmentCompletedAtMs > nowMs + proofFutureToleranceMs ||
+    nowMs - fulfillmentCompletedAtMs > proofMaxAgeMs
+  ) {
+    fail('Checkout proof must have a valid Cloudflare completion timestamp from the last hour.');
   }
   if (checkout.data.status !== STRIPE_CHECKOUT_STATUS.FULFILLED) {
     fail(`Checkout proof is not fulfilled; current status is ${String(checkout.data.status || 'missing')}.`);
@@ -152,6 +178,135 @@ async function verifyFirestoreProof(options: Options): Promise<void> {
   ) {
     fail('Delivery-order proof does not match the fulfilled Stripe checkout.');
   }
+}
+
+function activeStripeCheckoutQuery(limit: number, afterDocumentName?: string): Record<string, unknown> {
+  return {
+    structuredQuery: {
+      select: {
+        fields: ['fulfillmentProcessor', 'status'].map((fieldPath) => ({ fieldPath })),
+      },
+      from: [{ collectionId: 'stripeCheckouts', allDescendants: true }],
+      orderBy: [{ field: { fieldPath: '__name__' }, direction: 'ASCENDING' }],
+      limit,
+      ...(afterDocumentName
+        ? {
+            startAt: {
+              before: false,
+              values: [{ referenceValue: afterDocumentName }],
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+async function verifyNoLegacyActiveCheckouts(
+  client: Pick<FirebaseCliFirestoreRestClient, 'documentsUrl' | 'request'> = createFirebaseCliFirestoreRestClient({ projectId }),
+  pageSize = firestoreQueryPageSize,
+): Promise<void> {
+  if (!Number.isSafeInteger(pageSize) || pageSize <= 0 || pageSize > 1_000) fail('Invalid Firestore query page size.');
+  let afterDocumentName: string | undefined;
+  let readTime: string | undefined;
+  for (;;) {
+    const response: unknown = await client.request({
+      url: client.documentsUrl(':runQuery'),
+      method: 'POST',
+      body: {
+        ...activeStripeCheckoutQuery(pageSize, afterDocumentName),
+        ...(readTime ? { readTime } : {}),
+      },
+    });
+    if (!Array.isArray(response)) fail('Legacy checkout inspection returned an invalid response.');
+    const documents: Array<{ name: string; path: string; data: Record<string, unknown> }> = [];
+    let observedReadTime: string | undefined;
+    for (const entry of response) {
+      if (!isRecord(entry)) fail('Legacy checkout inspection returned an invalid entry.');
+      if (entry.readTime !== undefined) {
+        if (typeof entry.readTime !== 'string' || !Number.isFinite(Date.parse(entry.readTime))) {
+          fail('Legacy checkout inspection returned an invalid read time.');
+        }
+        if (readTime && entry.readTime !== readTime) {
+          fail('Legacy checkout inspection changed snapshots during pagination.');
+        }
+        observedReadTime = entry.readTime;
+      }
+      if (entry.document === undefined) continue;
+      if (!isRecord(entry.document) || typeof entry.document.name !== 'string') {
+        fail('Legacy checkout inspection returned an invalid document.');
+      }
+      const document = decodeFirestoreRestDocument(entry.document);
+      if (!document) fail('Legacy checkout inspection returned an undecodable document.');
+      documents.push({ name: entry.document.name, path: document.path, data: document.data });
+    }
+    if (!observedReadTime) fail('Legacy checkout inspection returned no snapshot read time.');
+    readTime ??= observedReadTime;
+    if (documents.length > pageSize) fail('Legacy checkout inspection exceeded its requested page size.');
+    for (const document of documents) {
+      const active = document.data.status === STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING ||
+        document.data.status === STRIPE_CHECKOUT_STATUS.PROCESSING;
+      if (active && document.data.fulfillmentProcessor !== STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR) {
+        fail(`Legacy active Stripe checkout remains at ${document.path}.`);
+      }
+    }
+    if (documents.length < pageSize) return;
+    const nextDocumentName = documents.at(-1)?.name;
+    if (!nextDocumentName || nextDocumentName === afterDocumentName) {
+      fail('Legacy checkout inspection did not make pagination progress.');
+    }
+    afterDocumentName = nextDocumentName;
+  }
+}
+
+function cloudflareResult(value: unknown, label: string): unknown {
+  if (!isRecord(value) || value.success !== true || !('result' in value)) {
+    fail(`${label} returned an invalid Cloudflare response.`);
+  }
+  return value.result;
+}
+
+function assertFulfillmentQueueResumed(value: unknown): void {
+  const queues = cloudflareResult(value, 'Stripe fulfillment queue inspection');
+  if (!Array.isArray(queues)) fail('Stripe fulfillment queue inspection returned an invalid result.');
+  const matches = queues.filter((queue) => isRecord(queue) && queue.queue_name === fulfillmentQueueName);
+  if (matches.length !== 1) {
+    fail('Cloudflare did not return the exact Stripe fulfillment queue.');
+  }
+  const queue = matches[0];
+  if (!isRecord(queue) || !isRecord(queue.settings) || queue.settings.delivery_paused !== false) {
+    fail('Stripe fulfillment queue delivery is not confirmed resumed.');
+  }
+}
+
+function assertReviewedCronInstalled(value: unknown): void {
+  const result = cloudflareResult(value, 'Stripe fulfillment reconciliation schedule inspection');
+  if (!isRecord(result) || !Array.isArray(result.schedules)) {
+    fail('Stripe fulfillment reconciliation schedule inspection returned an invalid result.');
+  }
+  const schedules = result.schedules;
+  if (schedules.length !== 1 || !isRecord(schedules[0]) || schedules[0].cron !== reconciliationCron) {
+    fail('The exact reviewed Stripe fulfillment reconciliation schedule is not installed.');
+  }
+}
+
+async function verifyCloudflareFulfillmentRuntime(
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const headers = { Authorization: `Bearer ${token}` };
+  const queueUrl = new URL(`https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId}/queues`);
+  queueUrl.searchParams.set('name', fulfillmentQueueName);
+  const cronUrl = new URL(
+    `https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId}/workers/scripts/${cloudflareWorkerName}/schedules`,
+  );
+  const [queueResponse, cronResponse] = await Promise.all([
+    fetchImpl(queueUrl, { headers }),
+    fetchImpl(cronUrl, { headers }),
+  ]);
+  if (!queueResponse.ok) fail(`Stripe fulfillment queue inspection failed with HTTP ${queueResponse.status}.`);
+  if (!cronResponse.ok) fail(`Stripe fulfillment schedule inspection failed with HTTP ${cronResponse.status}.`);
+  assertFulfillmentQueueResumed(await queueResponse.json());
+  assertReviewedCronInstalled(await cronResponse.json());
 }
 
 function deleteFunction(): void {
@@ -190,8 +345,6 @@ async function main(): Promise<void> {
   if (stableCloudflareVersionId(status) !== options.apiVersionId) {
     fail('The live Cloudflare API version does not match the requested retirement version.');
   }
-  deployApiTestHooks.assertExactQueueConsumers(environment);
-  await verifyFirestoreProof(options);
   const before = firebaseFunctions();
   if (!before.some((entry) => (
     entry.id === functionName &&
@@ -201,6 +354,10 @@ async function main(): Promise<void> {
   ))) {
     fail(`${functionName} is not an active ${functionRegion} Firebase function.`);
   }
+  deployApiTestHooks.assertExactQueueConsumers(environment);
+  await verifyCloudflareFulfillmentRuntime(token);
+  await verifyNoLegacyActiveCheckouts();
+  await verifyFirestoreProof(options);
   deleteFunction();
   if (firebaseFunctions().some((entry) => entry.id === functionName)) {
     fail(`${functionName} still appears in the Firebase function list after deletion.`);
@@ -209,8 +366,13 @@ async function main(): Promise<void> {
 }
 
 export const retireStripeFulfillmentTestHooks = {
+  activeStripeCheckoutQuery,
+  assertFulfillmentQueueResumed,
+  assertReviewedCronInstalled,
   parseArgs,
+  verifyCloudflareFulfillmentRuntime,
   verifyFirestoreProof,
+  verifyNoLegacyActiveCheckouts,
 };
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

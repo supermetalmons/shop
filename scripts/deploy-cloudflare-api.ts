@@ -1793,38 +1793,11 @@ function repauseRevealQueueAfterFailure(
   );
 }
 
-function restoreStatefulQueuesAfterPauseFailure(
-  error: unknown,
-  environment: NodeJS.ProcessEnv,
-  dependencies: Pick<
-    ProductionSequenceDependencies,
-    'pauseRevealQueue' | 'pauseFulfillmentQueue' | 'resumeRevealQueue' | 'resumeFulfillmentQueue'
-  >,
-  message: string,
-): never {
-  const restoreErrors: unknown[] = [];
-  for (const [pause, resume, label] of [
-    [dependencies.pauseFulfillmentQueue, dependencies.resumeFulfillmentQueue, 'fulfillment'],
-    [dependencies.pauseRevealQueue, dependencies.resumeRevealQueue, 'reveal'],
-  ] as const) {
-    if (!pause) continue;
-    if (!resume) {
-      restoreErrors.push(new Error(`No ${label} queue resume operation was configured.`));
-      continue;
-    }
-    try {
-      resume(environment);
-    } catch (restoreError) {
-      restoreErrors.push(restoreError);
-    }
-  }
-  if (restoreErrors.length) {
-    throw new AggregateError(
-      [error, ...restoreErrors],
-      `${message} Queue delivery could not be fully restored; inspect production immediately.`,
-    );
-  }
-  throw new Error(`${message} Queue delivery was restored; no version mutation was attempted.`, { cause: error });
+function failClosedAfterPauseFailure(error: unknown, message: string): never {
+  throw new Error(
+    `${message} Queue and trigger state is ambiguous; delivery may remain paused. Inspect production before retrying.`,
+    { cause: error },
+  );
 }
 
 async function runProductionSequence(
@@ -1892,10 +1865,8 @@ async function runProductionSequence(
     dependencies.pauseRevealQueue?.(input.wranglerEnvironment);
     dependencies.pauseFulfillmentQueue?.(input.wranglerEnvironment);
   } catch (error) {
-    restoreStatefulQueuesAfterPauseFailure(
+    failClosedAfterPauseFailure(
       error,
-      input.wranglerEnvironment,
-      dependencies,
       'Stateful queue delivery could not be paused.',
     );
   }
@@ -2174,10 +2145,8 @@ async function runRollbackSequence(
     dependencies.disableReconciliationSchedule(input.wranglerEnvironment);
     await dependencies.sleep(CRON_TRIGGER_PROPAGATION_MS);
   } catch (error) {
-    restoreStatefulQueuesAfterPauseFailure(
+    failClosedAfterPauseFailure(
       error,
-      input.wranglerEnvironment,
-      dependencies,
       'Stateful delivery could not be paused and the reconciliation schedule fully disabled.',
     );
   }

@@ -4,6 +4,9 @@ import { PublicKey } from '@solana/web3.js';
 import type { DecodedBoxMinterConfigData } from '../../../../functions/src/shared/boxMinterConfigCodec.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../functions/src/shared/solanaProgramAddresses.ts';
 import { StripeCheckoutFulfillmentError } from '../../../../functions/src/stripeCheckout/errors.ts';
+import {
+  StripeCheckoutServerTimestamp,
+} from '../../../../functions/src/stripeCheckout/store.ts';
 import { stripeCheckoutFulfillmentTestHooks } from '../src/stripeCheckoutFulfillment.ts';
 
 function matchingConfig(): {
@@ -81,4 +84,18 @@ test('Stripe fulfillment pack-status events use card-equivalent quantity', () =>
   const runtime = stripeCheckoutFulfillmentTestHooks.fulfillmentRuntime('card_nft_2');
   assert.equal(runtime.itemsPerBox, 3);
   assert.equal(stripeCheckoutFulfillmentTestHooks.packStatusEventQuantity(runtime, 2), 6);
+});
+
+test('Stripe fulfillment defers address encryption setup until the address is persisted', () => {
+  const encryptAddress = stripeCheckoutFulfillmentTestHooks.lazyAddressEncryptor('');
+  assert.throws(
+    () => encryptAddress('Buyer Name\n1 Main St\nNew York, NY 10001\nUS'),
+    (error: unknown) => error instanceof StripeCheckoutFulfillmentError && error.code === 'unavailable',
+  );
+});
+
+test('Stripe fulfillment provides Worker completion fields for the atomic fulfilled write', () => {
+  const fields = stripeCheckoutFulfillmentTestHooks.workerFulfillmentCompletionFields();
+  assert.equal(fields.fulfillmentCompletedBy, 'cloudflare_queue_v1');
+  assert.ok(fields.fulfillmentCompletedAt instanceof StripeCheckoutServerTimestamp);
 });

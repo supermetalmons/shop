@@ -2898,7 +2898,7 @@ test('API production benchmark failure performs no deployment mutation', async (
   assert.deepEqual(events, [`smoke:${previewUrl}`, `benchmark:${previewUrl}`]);
 });
 
-test('API production restores queue delivery when the pause phase fails', async () => {
+test('API production fails closed when the pause phase is ambiguous', async () => {
   const baselineVersionId = randomUUID();
   const candidateVersionId = randomUUID();
   const events: string[] = [];
@@ -2921,20 +2921,18 @@ test('API production restores queue delivery when the pause phase fails', async 
           events.push('pause-fulfillment');
           throw new Error('injected fulfillment pause failure');
         },
-        resumeRevealQueue: () => events.push('resume-reveal'),
-        resumeFulfillmentQueue: () => events.push('resume-fulfillment'),
+        resumeRevealQueue: () => assert.fail('ambiguous pause failure resumed reveal delivery'),
+        resumeFulfillmentQueue: () => assert.fail('ambiguous pause failure resumed fulfillment delivery'),
         wrangler: () => assert.fail('pause failure mutated the API version or triggers'),
         evidence: () => assert.fail('pause failure wrote evidence'),
         sleep: async () => undefined,
       },
     ),
-    /Queue delivery was restored; no version mutation was attempted/,
+    /Queue and trigger state is ambiguous; delivery may remain paused/,
   );
   assert.deepEqual(events, [
     'pause-reveal',
     'pause-fulfillment',
-    'resume-fulfillment',
-    'resume-reveal',
   ]);
 });
 

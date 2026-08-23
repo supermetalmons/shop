@@ -42,6 +42,7 @@ import {
   processStripeCheckoutFulfillmentDocument,
   type StripeCheckoutDropRuntime,
   type StripeCheckoutFlowDeps,
+  type StripeCheckoutFulfillmentCompletionFields,
   type StripeCheckoutFulfillmentProcessResult,
   type StripeCheckoutOnchainConfig,
 } from '../../../../functions/src/stripeCheckout/service.js';
@@ -51,7 +52,10 @@ import {
   publishStripeCheckoutTerminalNotifications,
   type StripeCheckoutTerminalNotificationResult,
 } from '../../../../functions/src/stripeCheckout/terminalNotifications.js';
-import type { StripeCheckoutFulfillmentJobV1 } from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.js';
+import {
+  STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
+  type StripeCheckoutFulfillmentJobV1,
+} from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.js';
 import { FirestoreWriteConflict, createGoogleAccessTokenProvider } from './firestoreRest.js';
 import { createWorkerStripeCheckoutStore } from './stripeCheckoutFirestore.js';
 
@@ -411,6 +415,14 @@ function addressEncryptor(secret: string): (plaintext: string) => { encrypted: s
   };
 }
 
+function lazyAddressEncryptor(secret: string): ReturnType<typeof addressEncryptor> {
+  let encrypt: ReturnType<typeof addressEncryptor> | undefined;
+  return (plaintext) => {
+    if (!encrypt) encrypt = addressEncryptor(secret);
+    return encrypt(plaintext);
+  };
+}
+
 function summary(error: unknown): Record<string, unknown> {
   if (error instanceof StripeCheckoutFulfillmentError) {
     return { kind: error.name, code: error.code, message: error.message, details: error.details };
@@ -452,7 +464,7 @@ function flowDependencies(
       }
     },
     cosigner: () => signer(env.COSIGNER_SECRET),
-    encryptAddress: addressEncryptor(env.ADDRESS_DECRYPTION_SECRET),
+    encryptAddress: lazyAddressEncryptor(env.ADDRESS_DECRYPTION_SECRET),
     normalizeCountryCode,
     buildTx: (instructions, payer, blockhash, signers) => {
       const transaction = new VersionedTransaction(
@@ -503,6 +515,13 @@ function flowDependencies(
   };
 }
 
+function workerFulfillmentCompletionFields(): StripeCheckoutFulfillmentCompletionFields {
+  return {
+    fulfillmentCompletedBy: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
+    fulfillmentCompletedAt: stripeCheckoutFieldValue.serverTimestamp(),
+  };
+}
+
 export async function processStripeCheckoutFulfillmentJob(
   job: StripeCheckoutFulfillmentJobV1,
   env: FulfillmentEnv,
@@ -516,14 +535,16 @@ export async function processStripeCheckoutFulfillmentJob(
     signal: options.persistenceSignal || signal,
   });
   const checkoutPath = `drops/${job.dropId}/stripeCheckouts/${job.sessionId}`;
+  const checkoutRef = store.doc(checkoutPath);
   const fulfillment = await processStripeCheckoutFulfillmentDocument({
     db: store,
     dropId: job.dropId,
     sessionId: job.sessionId,
-    checkoutRef: store.doc(checkoutPath),
+    checkoutRef,
     apiKeys: stripeKeys(env),
     deps: flowDependencies(env, store, signal),
     treatRetryableFailureAsTerminal: options.treatRetryableFailureAsTerminal,
+    fulfillmentCompletionFields: workerFulfillmentCompletionFields(),
   });
   if (fulfillment.status === 'ignored' && fulfillment.reason === 'not_pending') {
     throw fulfillmentError('aborted', 'Stripe checkout is not ready for fulfillment', {
@@ -573,6 +594,8 @@ export async function processStripeCheckoutFulfillmentJob(
 export const stripeCheckoutFulfillmentTestHooks = {
   fulfillmentRuntime,
   isMplCoreCollectionAccount,
+  lazyAddressEncryptor,
   packStatusEventQuantity,
   validateOnchainConfig,
+  workerFulfillmentCompletionFields,
 };

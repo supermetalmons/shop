@@ -273,7 +273,14 @@ function errorStatusCode(err: unknown): number | null {
 
 function errorCodeValues(err: unknown): Array<string | number> {
   const anyErr = err as any;
-  return [anyErr?.code, anyErr?.details?.code, anyErr?.cause?.code].filter((value) => value != null);
+  return [
+    anyErr?.code,
+    anyErr?.details?.code,
+    anyErr?.cause?.code,
+    typeof anyErr?.status === 'string' ? anyErr.status : undefined,
+    typeof anyErr?.details?.status === 'string' ? anyErr.details.status : undefined,
+    typeof anyErr?.cause?.status === 'string' ? anyErr.cause.status : undefined,
+  ].filter((value) => value != null);
 }
 
 function looksLikeTransientProviderMessage(message: string): boolean {
@@ -753,11 +760,17 @@ function stripeCheckoutFulfillmentClearUpdate(): Record<string, unknown> {
   };
 }
 
+export type StripeCheckoutFulfillmentCompletionFields = {
+  fulfillmentCompletedBy: string;
+  fulfillmentCompletedAt: unknown;
+};
+
 function stripeCheckoutFulfilledUpdate(params: {
   deliveryId: number;
   metadataId?: number;
   metadataIds?: number[];
   receiptTx?: string | null;
+  fulfillmentCompletionFields?: StripeCheckoutFulfillmentCompletionFields;
 }): Record<string, unknown> {
   const metadataIds = normalizedMetadataIds(params.metadataIds, params.metadataId);
   const metadataId = metadataIds.length === 1 ? metadataIds[0] : undefined;
@@ -767,6 +780,7 @@ function stripeCheckoutFulfilledUpdate(params: {
     ...(metadataId ? { metadataId } : metadataIds.length > 1 ? { metadataId: stripeCheckoutFieldValue.delete() } : {}),
     ...(metadataIds.length ? { metadataIds, quantity: metadataIds.length } : {}),
     ...(typeof params.receiptTx === 'string' || params.receiptTx === null ? { receiptTx: params.receiptTx } : {}),
+    ...params.fulfillmentCompletionFields,
     fulfilledAt: stripeCheckoutFieldValue.serverTimestamp(),
     ...stripeCheckoutFulfillmentClearUpdate(),
     updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
@@ -807,6 +821,7 @@ export async function markStripeCheckoutFulfillmentFulfilled(
     metadataIds?: number[];
     receiptTx?: string | null;
     processingAttemptId?: string;
+    fulfillmentCompletionFields?: StripeCheckoutFulfillmentCompletionFields;
   },
 ): Promise<StripeCheckoutFulfillmentSuccessMarkResult> {
   const update = stripeCheckoutFulfilledUpdate(params);
@@ -885,6 +900,7 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
   checkoutRef: StripeCheckoutDocumentReference;
   isAlreadyExistsError: (err: unknown) => boolean;
   processingAttemptId?: string;
+  fulfillmentCompletionFields?: StripeCheckoutFulfillmentCompletionFields;
   countPackStatus?: StripeCheckoutPackStatusCounter<Runtime>;
   logPackStatusError?: (entry: Record<string, unknown>) => void;
 }): Promise<StripeOffchainDeliveryOrderResult> {
@@ -929,6 +945,7 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
                   metadataId: existingOrder.metadataId,
                   metadataIds: existingOrder.metadataIds,
                   receiptTx: existingOrder.receiptTx,
+                  fulfillmentCompletionFields: params.fulfillmentCompletionFields,
                 }),
               );
             }
@@ -992,6 +1009,7 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
                 ...(metadataIds.length === 1 ? { metadataId: metadataIds[0] } : {}),
                 metadataIds,
                 receiptTx: order.receiptTx,
+                fulfillmentCompletionFields: params.fulfillmentCompletionFields,
               }),
             },
           );
@@ -1068,6 +1086,7 @@ async function fulfillStripeCheckoutSession<
   expectedSessionId: string;
   expectedVariantKey?: string;
   processingAttemptId?: string;
+  fulfillmentCompletionFields?: StripeCheckoutFulfillmentCompletionFields;
   deps: StripeCheckoutFlowDeps<Runtime, Config>;
 }): Promise<{
   dropId: string;
@@ -1127,6 +1146,7 @@ async function fulfillStripeCheckoutSession<
       metadataIds: existingOrder.metadataIds,
       receiptTx: existingOrder.receiptTx,
       processingAttemptId: params.processingAttemptId,
+      fulfillmentCompletionFields: params.fulfillmentCompletionFields,
     });
     if (markResult.status === 'stale_processing_attempt') {
       throw new StaleStripeCheckoutProcessingAttemptError();
@@ -1313,6 +1333,7 @@ async function fulfillStripeCheckoutSession<
     checkoutRef: checkout.ref,
     isAlreadyExistsError: deps.isAlreadyExistsError,
     processingAttemptId: params.processingAttemptId,
+    fulfillmentCompletionFields: params.fulfillmentCompletionFields,
     countPackStatus: deps.countPackStatus,
     logPackStatusError: deps.logPackStatusError,
   });
@@ -1469,6 +1490,7 @@ export async function processStripeCheckoutFulfillmentDocument<
   apiKeys: readonly string[];
   deps: StripeCheckoutFlowDeps<Runtime, Config>;
   treatRetryableFailureAsTerminal?: boolean;
+  fulfillmentCompletionFields?: StripeCheckoutFulfillmentCompletionFields;
 }): Promise<StripeCheckoutFulfillmentProcessResult> {
   const { db, dropId, sessionId, checkoutRef, deps } = params;
   const dropRuntime = deps.getDropRuntime(dropId);
@@ -1519,6 +1541,7 @@ export async function processStripeCheckoutFulfillmentDocument<
           expectedSessionId: sessionId,
           expectedVariantKey: started.variantKey,
           processingAttemptId: started.processingAttemptId,
+          fulfillmentCompletionFields: params.fulfillmentCompletionFields,
           deps,
         });
       },

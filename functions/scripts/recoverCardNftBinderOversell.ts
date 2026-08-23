@@ -24,6 +24,7 @@ import {
   encryptAddressCipherText,
   serializeAddressCipherPayload,
 } from '../src/shared/addressCipher.ts';
+import { enqueueNotificationEmailJob } from '../src/cloudflareNotifications.ts';
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
@@ -59,6 +60,8 @@ import {
   CARD_NFT_BINDER_OVERSELL_SESSION_IDS,
   CARD_NFT_BINDER_OVERSELL_TREE,
   buildCardNftBinderOversellFirestoreCommit,
+  publishCardNftBinderOversellTerminalNotifications,
+  shouldPublishCardNftBinderOversellRecoveryNotifications,
   type CardNftBinderOversellRecoveryItem,
 } from '../../scripts/shared/binderOversellRecovery.ts';
 import {
@@ -87,6 +90,7 @@ type JournalEntry = {
   assetId?: string;
   deliveryId?: number;
   claimCode?: string;
+  notificationsPublished?: boolean;
 };
 
 type RecoveryJournal = {
@@ -935,11 +939,53 @@ async function verifyCommittedRecovery(
   }
 }
 
+async function publishPendingRecoveryNotifications(
+  item: CardNftBinderOversellRecoveryItem,
+  entry: JournalEntry,
+  journal: RecoveryJournal,
+  notificationEnqueueSecret: string,
+): Promise<void> {
+  if (
+    !shouldPublishCardNftBinderOversellRecoveryNotifications(
+      entry.notificationsPublished,
+    )
+  ) {
+    return;
+  }
+  await publishCardNftBinderOversellTerminalNotifications({
+    item,
+    dependencies: {
+      loadCheckout: async () => {
+        const checkout = await fetchFirestoreDocument(
+          `drops/${CARD_NFT_BINDER_OVERSELL_DROP_ID}/stripeCheckouts/${item.sessionId}`,
+        );
+        return checkout
+          ? { path: checkout.path, data: checkout.data }
+          : null;
+      },
+      loadDeliveryOrder: async (dropId, deliveryId) => {
+        const order = await fetchFirestoreDocument(
+          `drops/${dropId}/deliveryOrders/${deliveryId}`,
+        );
+        return order?.data || null;
+      },
+      enqueueJob: (job) =>
+        enqueueNotificationEmailJob({
+          job,
+          secret: notificationEnqueueSecret,
+        }),
+    },
+  });
+  entry.notificationsPublished = true;
+  saveJournal(journal);
+}
+
 async function commitRecovery(
   item: CardNftBinderOversellRecoveryItem,
   context: RecoveryContext,
   entry: JournalEntry,
   journal: RecoveryJournal,
+  notificationEnqueueSecret: string,
 ): Promise<void> {
   if (!entry.signature || !entry.assetId) {
     throw new Error(`${item.sessionId} confirmed receipt journal is incomplete`);
@@ -964,6 +1010,12 @@ async function commitRecovery(
     );
     entry.status = 'committed';
     saveJournal(journal);
+    await publishPendingRecoveryNotifications(
+      item,
+      entry,
+      journal,
+      notificationEnqueueSecret,
+    );
     return;
   }
   assertFixedCheckoutState(item, currentCheckout, false);
@@ -980,6 +1032,8 @@ async function commitRecovery(
     stripeSession: context.stripeSession,
     addressSnapshot: context.addressSnapshot,
   });
+  entry.notificationsPublished = false;
+  saveJournal(journal);
   try {
     await firebase.request({
       url: firebase.documentsUrl(':commit'),
@@ -1008,6 +1062,12 @@ async function commitRecovery(
   );
   entry.status = 'committed';
   saveJournal(journal);
+  await publishPendingRecoveryNotifications(
+    item,
+    entry,
+    journal,
+    notificationEnqueueSecret,
+  );
 }
 
 async function recoverOne(
@@ -1020,6 +1080,7 @@ async function recoverOne(
   encryptAddress: ReturnType<typeof addressEncryptor>,
   connection: Connection,
   rpcUrl: string,
+  notificationEnqueueSecret: string,
 ): Promise<void> {
   const entry = journal.entries[item.sessionId];
   const context = await auditRecoveryContext(
@@ -1050,6 +1111,14 @@ async function recoverOne(
       entry.deliveryId,
       entry.claimCode,
     );
+    if (args.execute) {
+      await publishPendingRecoveryNotifications(
+        item,
+        entry,
+        journal,
+        notificationEnqueueSecret,
+      );
+    }
     console.log(
       `[${index + 1}/5] verified committed rb${item.metadataId}.json`,
     );
@@ -1126,7 +1195,13 @@ async function recoverOne(
     }
     await waitForDasAsset(rpcUrl, item, entry.assetId);
     await assertOnchainConfiguration(connection, 16 + index);
-    await commitRecovery(item, context, entry, journal);
+    await commitRecovery(
+      item,
+      context,
+      entry,
+      journal,
+      notificationEnqueueSecret,
+    );
   }
   console.log(
     `[${index + 1}/5] minted and fulfilled rb${item.metadataId}.json ${entry.signature}`,
@@ -1159,8 +1234,12 @@ async function finalVerification(
   }
   for (const item of CARD_NFT_BINDER_OVERSELL_RECOVERY_ITEMS) {
     const entry = journal.entries[item.sessionId];
-    if (entry.status !== 'committed' || !entry.assetId) {
-      throw new Error(`${item.sessionId} is not committed`);
+    if (
+      entry.status !== 'committed' ||
+      !entry.assetId ||
+      entry.notificationsPublished === false
+    ) {
+      throw new Error(`${item.sessionId} recovery is incomplete`);
     }
     const assets = await findAssetsWithUri(rpcUrl, item.uri);
     if (assets.length !== 1) {
@@ -1194,6 +1273,20 @@ async function main(): Promise<void> {
     throw new Error('No live Stripe API key is available');
   }
   const journal = loadJournal();
+  const notificationEnqueueRequired = CARD_NFT_BINDER_OVERSELL_RECOVERY_ITEMS.some(
+    (item) => {
+      const entry = journal.entries[item.sessionId];
+      return (
+        entry.status !== 'committed' ||
+        shouldPublishCardNftBinderOversellRecoveryNotifications(
+          entry.notificationsPublished,
+        )
+      );
+    },
+  );
+  const notificationEnqueueSecret = args.execute && notificationEnqueueRequired
+    ? readSecret('NOTIFICATION_ENQUEUE_SECRET')
+    : '';
   const initialCheckouts = await listStripeCheckouts();
   const createdCheckoutIds = initialCheckouts
     .filter((checkout) => checkout.data.status === STRIPE_CHECKOUT_STATUS.CREATED)
@@ -1229,6 +1322,7 @@ async function main(): Promise<void> {
       encryptAddress,
       connection,
       rpcUrl,
+      notificationEnqueueSecret,
     );
   }
   if (args.execute) {
