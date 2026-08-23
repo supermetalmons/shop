@@ -3,6 +3,7 @@ import {
   normalizePackStatusBreakdown,
   PACK_STATUS_SCHEMA_VERSION,
   type PackStatusEvent,
+  type PackStatusEventIncrements,
   type PackStatusStatsFields,
 } from '../../../../shared/packStatus.js';
 import { shopDropById } from '../../../../shared/shopDomain.js';
@@ -151,8 +152,8 @@ export async function readD1PackStatus(
   return normalizePackStatusBreakdown(record, dropId, shopDropById(dropId)?.itemsPerBox);
 }
 
-function increment(event: PackStatusEvent, key: keyof PackStatusEvent['increments']): number {
-  const value = event.increments[key];
+function increment(event: PackStatusEvent, key: keyof PackStatusEventIncrements): number {
+  const value = (event.increments as PackStatusEventIncrements)[key];
   if (value === undefined) return 0;
   const normalized = nonnegativeSafeInteger(value);
   if (normalized === null) throw new Error(`invalid_pack_status_increment_${key}`);

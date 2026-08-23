@@ -1002,6 +1002,7 @@ test('API release validates exact D1 table and trigger definitions', () => {
     'pack_status_events',
     'pack_status_rollout',
     'pack_status_event_apply',
+    'pack_status_event_type_guard',
   ]);
   assert.equal(deployApiTestHooks.hasExactD1Schema(JSON.stringify(expected)), true);
   assert.equal(deployApiTestHooks.hasExactD1Schema(JSON.stringify(expected.map((entry) => (

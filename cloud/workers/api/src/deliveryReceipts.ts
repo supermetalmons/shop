@@ -2679,30 +2679,6 @@ function shouldShrinkReceiptBatch(error: unknown): boolean {
     (error instanceof DeliveryReceiptError && error.code === 'resource-exhausted');
 }
 
-function schedulePackStatus(
-  waitUntil: DeliveryReceiptWaitUntil,
-  promise: Promise<void>,
-  context: { dropId: string; deliveryId: number },
-): void {
-  const guarded = promise.catch((error) => {
-    console.warn({
-      event: 'delivery_receipt_pack_status_failed',
-      ...context,
-      error: summarizeError(error),
-    });
-  });
-  try {
-    waitUntil(guarded);
-  } catch (error) {
-    console.warn({
-      event: 'delivery_receipt_wait_until_failed',
-      ...context,
-      error: summarizeError(error),
-    });
-    void guarded;
-  }
-}
-
 async function closeDeliveryPda(args: {
   connection: Connection;
   runtime: DeliveryRuntime;
@@ -2755,6 +2731,11 @@ async function retryIssueReceipts(args: {
     throw new DeliveryReceiptError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.');
   }
   if (document.fields.status === 'ready_to_ship') {
+    await countNormalIrlPackStatus({
+      ...args.firestore,
+      nowMs: Date.now(),
+      signal: AbortSignal.timeout(PACK_STATUS_TIMEOUT_MS),
+    }, runtime, deliveryId, document.fields);
     let closeDeliveryTx = typeof document.fields.closeDeliveryTx === 'string'
       ? document.fields.closeDeliveryTx
       : null;
@@ -2891,15 +2872,11 @@ async function retryIssueReceipts(args: {
     receiptTxs,
     irlClaims,
   });
-  schedulePackStatus(
-    args.waitUntil,
-    countNormalIrlPackStatus({
-      ...args.firestore,
-      nowMs: Date.now(),
-      signal: AbortSignal.timeout(PACK_STATUS_TIMEOUT_MS),
-    }, runtime, deliveryId, document.fields),
-    { dropId: runtime.dropId, deliveryId },
-  );
+  await countNormalIrlPackStatus({
+    ...args.firestore,
+    nowMs: Date.now(),
+    signal: AbortSignal.timeout(PACK_STATUS_TIMEOUT_MS),
+  }, runtime, deliveryId, document.fields);
   let closeDeliveryTx: string | null = null;
   try {
     closeDeliveryTx = await closeDeliveryPda({

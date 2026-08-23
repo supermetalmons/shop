@@ -264,12 +264,13 @@ const d1DatabaseName = 'mons-shop-data';
 const d1BindingName = 'DATA_DB';
 const d1MigrationsDirectory = 'migrations';
 const d1DatabaseId = '4b09f942-b0c6-4a1e-81df-cb802fbf7099';
-const d1MigrationName = '0001_pack_status.sql';
+const d1MigrationNames = ['0001_pack_status.sql', '0002_pack_status_event_type_guard.sql'] as const;
 const d1SchemaDefinitions = [
-  { name: 'pack_status', type: 'table', start: 'CREATE TABLE pack_status (', end: 'CREATE TABLE pack_status_events (' },
-  { name: 'pack_status_events', type: 'table', start: 'CREATE TABLE pack_status_events (', end: 'CREATE TABLE pack_status_rollout (' },
-  { name: 'pack_status_rollout', type: 'table', start: 'CREATE TABLE pack_status_rollout (', end: 'INSERT INTO pack_status_rollout' },
-  { name: 'pack_status_event_apply', type: 'trigger', start: 'CREATE TRIGGER pack_status_event_apply', end: undefined },
+  { migration: '0001_pack_status.sql', name: 'pack_status', type: 'table', start: 'CREATE TABLE pack_status (', end: 'CREATE TABLE pack_status_events (' },
+  { migration: '0001_pack_status.sql', name: 'pack_status_events', type: 'table', start: 'CREATE TABLE pack_status_events (', end: 'CREATE TABLE pack_status_rollout (' },
+  { migration: '0001_pack_status.sql', name: 'pack_status_rollout', type: 'table', start: 'CREATE TABLE pack_status_rollout (', end: 'INSERT INTO pack_status_rollout' },
+  { migration: '0001_pack_status.sql', name: 'pack_status_event_apply', type: 'trigger', start: 'CREATE TRIGGER pack_status_event_apply', end: undefined },
+  { migration: '0002_pack_status_event_type_guard.sql', name: 'pack_status_event_type_guard', type: 'trigger', start: 'CREATE TRIGGER pack_status_event_type_guard', end: undefined },
 ] as const;
 const notificationSmokeTimeoutMs = 90_000;
 const firestoreProjectId = 'mons-shop';
@@ -301,13 +302,13 @@ function normalizeD1SchemaSql(value: string): string {
 }
 
 function expectedD1SchemaObjects(
-  migrationPath = resolve(repoRoot, 'cloud/workers/api/migrations', d1MigrationName),
+  migrationsDirectory = resolve(repoRoot, 'cloud/workers/api/migrations'),
 ): Array<{ name: string; type: string; sql: string }> {
-  const migration = readFileSync(migrationPath, 'utf8');
   return d1SchemaDefinitions.map((definition) => {
+    const migration = readFileSync(resolve(migrationsDirectory, definition.migration), 'utf8');
     const start = migration.indexOf(definition.start);
     const end = definition.end ? migration.indexOf(definition.end, start + definition.start.length) : migration.length;
-    if (start < 0 || end < 0) fail(`Could not resolve ${definition.name} from ${d1MigrationName}.`);
+    if (start < 0 || end < 0) fail(`Could not resolve ${definition.name} from ${definition.migration}.`);
     return {
       name: definition.name,
       type: definition.type,
@@ -1457,9 +1458,10 @@ function assertD1DatabaseReady(environment: NodeJS.ProcessEnv): void {
         rollout.cache_generation,
         (SELECT json_group_array(json_object('name', name, 'type', type, 'sql', sql))
           FROM (SELECT name, type, sql FROM sqlite_schema
-            WHERE name IN ('pack_status', 'pack_status_events', 'pack_status_rollout', 'pack_status_event_apply')
+            WHERE name IN ('pack_status', 'pack_status_events', 'pack_status_rollout', 'pack_status_event_apply', 'pack_status_event_type_guard')
             ORDER BY name)) AS schema_json,
-        (SELECT COUNT(*) FROM d1_migrations WHERE name = '${d1MigrationName}') AS migration_count
+        (SELECT COUNT(*) FROM d1_migrations
+          WHERE name IN ('0001_pack_status.sql', '0002_pack_status_event_type_guard.sql')) AS migration_count
         FROM pack_status_rollout AS rollout WHERE rollout.singleton = 1`,
       ...configArgs,
     ],
@@ -1483,7 +1485,7 @@ function assertD1DatabaseReady(environment: NodeJS.ProcessEnv): void {
     !Number.isSafeInteger(row.cache_generation) ||
     Number(row.cache_generation) < 1 ||
     !hasExactD1Schema(row.schema_json) ||
-    row.migration_count !== 1
+    row.migration_count !== d1MigrationNames.length
   ) {
     fail('D1 pack-status migration is not applied or its rollout row is invalid.');
   }

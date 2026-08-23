@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  PACK_STATUS_EVENT_TIMESTAMP_TOLERANCE_MS,
   parseArgs,
   runMigrationCommand,
   snapshotSql,
@@ -76,18 +75,10 @@ test('pack-status snapshot verification rejects summary and event drift', () => 
     ...target,
     events: [{ ...target.events[0], quantity: 4 }],
   }), /event/);
-  assert.throws(() => verifySnapshots(source, {
-    ...target,
-    events: [{ ...target.events[0], createdAtMs: 151 }],
-  }), /timestamp or apply mode/);
   assert.doesNotThrow(() => verifySnapshots(source, {
     ...target,
-    events: [{ ...target.events[0], applyDelta: 1, createdAtMs: 150 + PACK_STATUS_EVENT_TIMESTAMP_TOLERANCE_MS }],
+    events: [{ ...target.events[0], createdAtMs: 999, applyDelta: 1 }],
   }));
-  assert.throws(() => verifySnapshots(source, {
-    ...target,
-    events: [{ ...target.events[0], applyDelta: 1, createdAtMs: 151 + PACK_STATUS_EVENT_TIMESTAMP_TOLERANCE_MS }],
-  }), /timestamp or apply mode/);
 });
 
 test('pack-status backfill rejects D1-only and conflicting events before mutation', () => {

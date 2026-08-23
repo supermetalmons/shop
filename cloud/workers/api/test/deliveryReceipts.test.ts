@@ -404,6 +404,12 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
   let rpcCalls = 0;
   const providerFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
+    if (url.endsWith('/documents:beginTransaction')) {
+      return Response.json({ transaction: 'pack-status-transaction' });
+    }
+    if (url.includes('/packStatusEvents/redeemedIrlNormal_7')) {
+      return Response.json({ error: { status: 'NOT_FOUND' } }, { status: 404 });
+    }
     if (url.includes('/authSessions/')) {
       return Response.json({
         name: 'projects/mons-shop/databases/(default)/documents/authSessions/firebase-uid',
@@ -520,9 +526,10 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
       idempotencyKey: 'card_nft_2:7:ready_to_ship',
     },
   ]);
-  assert.equal(commits.length, 1);
-  assert.match(JSON.stringify(commits[0]), /buyerOrderReceivedEmailQueuedAt/);
-  assert.match(JSON.stringify(commits[0]), /shipperReadyToShipEmailQueuedAt/);
+  assert.equal(commits.length, 2);
+  assert.match(JSON.stringify(commits), /buyerOrderReceivedEmailQueuedAt/);
+  assert.match(JSON.stringify(commits), /shipperReadyToShipEmailQueuedAt/);
+  assert.match(JSON.stringify(commits), /redeemedIrlNormal/);
 });
 
 test('explicit recovery uses the production Firestore adapter and preserves not-found scheduling', async () => {

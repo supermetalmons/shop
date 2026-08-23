@@ -1643,7 +1643,7 @@ async function loadLatestBlockhash(
 async function writeFirestoreOnlineRevealPackStatus(
   context: FirestoreContext,
   runtime: RevealRuntime,
-  event: PackStatusEvent,
+  event: Extract<PackStatusEvent, { type: 'onlineReveal' }>,
 ): Promise<void> {
   const eventPath = `drops/${runtime.dropId}/packStatusEvents/onlineReveal_${encodeURIComponent(event.eventKey)}`;
   const unsealedOnlineIncrement = event.increments.unsealedOnline ?? 0;

@@ -9,13 +9,14 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { FieldPath, Firestore, Timestamp } from '@google-cloud/firestore';
+import { FieldPath, Firestore, Timestamp, type QueryDocumentSnapshot } from '@google-cloud/firestore';
 import {
   PACK_STATUS_SUPPORTED_DROP_IDS,
   PACK_STATUS_SOURCE_HEADER,
   buildPackStatusStatsFields,
   type PackStatusCounters,
   type PackStatusEvent,
+  type PackStatusEventIncrements,
   type PackStatusEventType,
   type PackStatusStatsFields,
 } from '../shared/packStatus.ts';
@@ -72,8 +73,8 @@ const configPath = 'cloud/workers/api/wrangler.jsonc';
 const databaseName = 'mons-shop-data';
 const apiOrigin = 'https://api.mons.shop';
 const projectId = 'mons-shop';
-export const PACK_STATUS_EVENT_TIMESTAMP_TOLERANCE_MS = 24 * 60 * 60 * 1000;
 const D1_MAX_SQL_STATEMENT_BYTES = 100_000;
+const EVENT_PAGE_SIZE = 250;
 const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
 
 function fail(message: string): never {
@@ -204,10 +205,56 @@ function optionalString(value: unknown, label: string): string | undefined {
   return value;
 }
 
+function typedPackStatusEvent(params: {
+  dropId: string;
+  type: PackStatusEventType;
+  eventKey: string;
+  quantity: number;
+  increments: PackStatusEventIncrements;
+  deliveryId?: number;
+  checkoutSessionId?: string;
+  boxAssetId?: string;
+  signature?: string;
+  createdAtMs: number;
+}): PackStatusEvent {
+  const common = {
+    dropId: params.dropId,
+    eventKey: params.eventKey,
+    quantity: params.quantity,
+    ...(params.deliveryId === undefined ? {} : { deliveryId: params.deliveryId }),
+    ...(params.checkoutSessionId ? { checkoutSessionId: params.checkoutSessionId } : {}),
+    ...(params.boxAssetId ? { boxAssetId: params.boxAssetId } : {}),
+    ...(params.signature ? { signature: params.signature } : {}),
+    createdAtMs: params.createdAtMs,
+  };
+  const unsealedOnline = params.increments.unsealedOnline || 0;
+  const redeemedIrlNormal = params.increments.redeemedIrlNormal || 0;
+  const redeemedIrlStripe = params.increments.redeemedIrlStripe || 0;
+  const redeemedUnsealedCards = params.increments.redeemedUnsealedCards || 0;
+  if (params.type === 'onlineReveal' && unsealedOnline > 0 && redeemedIrlNormal === 0 && redeemedIrlStripe === 0 && redeemedUnsealedCards === 0) {
+    return { ...common, type: params.type, increments: { unsealedOnline } };
+  }
+  if (params.type === 'redeemedIrlNormal' && unsealedOnline === 0 && redeemedIrlStripe === 0 && redeemedIrlNormal + redeemedUnsealedCards > 0) {
+    return {
+      ...common,
+      type: params.type,
+      increments: {
+        ...(redeemedIrlNormal ? { redeemedIrlNormal } : {}),
+        ...(redeemedUnsealedCards ? { redeemedUnsealedCards } : {}),
+      },
+    };
+  }
+  if (params.type === 'redeemedIrlStripe' && unsealedOnline === 0 && redeemedIrlNormal === 0 && redeemedIrlStripe > 0 && redeemedUnsealedCards === 0) {
+    return { ...common, type: params.type, increments: { redeemedIrlStripe } };
+  }
+  return fail('Pack-status event type and increments are inconsistent.');
+}
+
 function sourceEvent(dropId: string, id: string, data: Record<string, unknown>): PackStatusEvent {
   const type = eventType(data.type);
   const eventKey = optionalString(data.eventKey, `${id}.eventKey`);
   if (!eventKey || data.dropId !== dropId) fail(`${id} pack-status event identity is invalid.`);
+  if (id !== `${type}_${encodeURIComponent(eventKey)}`) fail(`${id} pack-status event document ID is invalid.`);
   const rawIncrements = data.increments;
   if (rawIncrements == null && type === 'onlineReveal') {
     return {
@@ -242,7 +289,7 @@ function sourceEvent(dropId: string, id: string, data: Record<string, unknown>):
   if (Object.values(increments).reduce((sum, value) => sum + value, 0) <= 0) {
     fail(`${id} pack-status event increments are empty.`);
   }
-  return {
+  return typedPackStatusEvent({
     dropId,
     type,
     eventKey,
@@ -253,24 +300,38 @@ function sourceEvent(dropId: string, id: string, data: Record<string, unknown>):
     ...(optionalString(data.boxAssetId, `${id}.boxAssetId`) ? { boxAssetId: String(data.boxAssetId) } : {}),
     ...(optionalString(data.signature, `${id}.signature`) ? { signature: String(data.signature) } : {}),
     createdAtMs: timestampMs(data.createdAt, `${id}.createdAt`)!,
-  };
+  });
 }
 
-export async function readSourceSnapshot(db: Firestore): Promise<SourceSnapshot> {
-  const summaries: PackStatusSourceSummary[] = [];
-  const events: PackStatusEvent[] = [];
-  for (const dropId of PACK_STATUS_SUPPORTED_DROP_IDS) {
-    const [summary, eventSnapshot] = await Promise.all([
-      db.doc(`drops/${dropId}/meta/packStatus`).get(),
-      db.collection(`drops/${dropId}/packStatusEvents`).orderBy(FieldPath.documentId()).get(),
-    ]);
+async function readSourceSummaries(db: Firestore): Promise<PackStatusSourceSummary[]> {
+  return Promise.all([...PACK_STATUS_SUPPORTED_DROP_IDS].sort().map(async (dropId) => {
+    const summary = await db.doc(`drops/${dropId}/meta/packStatus`).get();
     if (!summary.exists || !summary.data()) fail(`Missing Firestore pack-status summary for ${dropId}.`);
-    summaries.push(sourceSummary(dropId, summary.data()!));
-    for (const document of eventSnapshot.docs) {
-      events.push(sourceEvent(dropId, document.id, document.data()));
+    return sourceSummary(dropId, summary.data()!);
+  }));
+}
+
+async function* readSourceEventPages(db: Firestore): AsyncGenerator<PackStatusEvent[]> {
+  for (const dropId of [...PACK_STATUS_SUPPORTED_DROP_IDS].sort()) {
+    let cursor: QueryDocumentSnapshot | undefined;
+    while (true) {
+      let query = db.collection(`drops/${dropId}/packStatusEvents`)
+        .orderBy(FieldPath.documentId())
+        .limit(EVENT_PAGE_SIZE);
+      if (cursor) query = query.startAfter(cursor);
+      const snapshot = await query.get();
+      if (snapshot.empty) break;
+      yield snapshot.docs.map((document) => sourceEvent(dropId, document.id, document.data()));
+      cursor = snapshot.docs.at(-1);
+      if (snapshot.size < EVENT_PAGE_SIZE) break;
     }
   }
-  return { summaries, events };
+}
+
+async function* readSourceEvents(db: Firestore): AsyncGenerator<PackStatusEvent> {
+  for await (const page of readSourceEventPages(db)) {
+    for (const event of page) yield event;
+  }
 }
 
 function sqlString(value: string): string {
@@ -283,11 +344,14 @@ function sqlNumber(value: number | null): string {
   return String(value);
 }
 
-function eventDelta(event: PackStatusEvent, key: keyof PackStatusEvent['increments']): number {
-  return nonnegativeInteger(event.increments[key] ?? 0, `${event.eventKey}.${key}`);
+function eventDelta(event: PackStatusEvent, key: keyof PackStatusEventIncrements): number {
+  return nonnegativeInteger((event.increments as PackStatusEventIncrements)[key] ?? 0, `${event.eventKey}.${key}`);
 }
 
-export function snapshotSql(snapshot: SourceSnapshot): string {
+export function snapshotSql(
+  snapshot: SourceSnapshot,
+  options: { includeParent?: boolean; finalizeEventCount?: number | null } = {},
+): string {
   if (snapshot.summaries.length === 0) fail('Pack-status backfill requires at least one summary.');
   const summaryRows = snapshot.summaries.map((summary, index) => `SELECT
     ${sqlString(summary.dropId)}${index === 0 ? ' AS drop_id' : ''},
@@ -307,12 +371,15 @@ export function snapshotSql(snapshot: SourceSnapshot): string {
   const summarySource = `SELECT source.* FROM (
     ${summaryRows}
   ) AS source`;
-  const statements = [`INSERT INTO pack_status (
-    ${summaryColumns}
-  )
-  ${summarySource}
-  WHERE 1
-  ON CONFLICT(drop_id) DO NOTHING;`];
+  const statements: string[] = [];
+  if (options.includeParent !== false) {
+    statements.push(`INSERT INTO pack_status (
+      ${summaryColumns}
+    )
+    ${summarySource}
+    WHERE 1
+    ON CONFLICT(drop_id) DO NOTHING;`);
+  }
   for (const event of snapshot.events) {
     statements.push(`INSERT OR IGNORE INTO pack_status_events (
       drop_id, event_type, event_key, quantity,
@@ -327,22 +394,29 @@ export function snapshotSql(snapshot: SourceSnapshot): string {
       0, ${event.createdAtMs}
     );`);
   }
-  statements.push(`INSERT INTO pack_status (
-    ${summaryColumns}
-  )
-  ${summarySource}
-  WHERE (SELECT COUNT(*) FROM pack_status_events) = ${snapshot.events.length}
-  ON CONFLICT(drop_id) DO UPDATE SET
-    version = excluded.version,
-    total_initial_supply = excluded.total_initial_supply,
-    total_cards = excluded.total_cards,
-    cards_per_pack = excluded.cards_per_pack,
-    unsealed_online = excluded.unsealed_online,
-    redeemed_irl_normal = excluded.redeemed_irl_normal,
-    redeemed_irl_stripe = excluded.redeemed_irl_stripe,
-    redeemed_unsealed_cards = excluded.redeemed_unsealed_cards,
-    rebuilt_at_ms = excluded.rebuilt_at_ms,
-    updated_at_ms = excluded.updated_at_ms;`);
+  const finalizeEventCount = options.finalizeEventCount === undefined
+    ? snapshot.events.length
+    : options.finalizeEventCount;
+  if (finalizeEventCount !== null) {
+    nonnegativeInteger(finalizeEventCount, 'finalizeEventCount');
+    statements.push(`INSERT INTO pack_status (
+      ${summaryColumns}
+    )
+    ${summarySource}
+    WHERE (SELECT COUNT(*) FROM pack_status_events) = ${finalizeEventCount}
+    ON CONFLICT(drop_id) DO UPDATE SET
+      version = excluded.version,
+      total_initial_supply = excluded.total_initial_supply,
+      total_cards = excluded.total_cards,
+      cards_per_pack = excluded.cards_per_pack,
+      unsealed_online = excluded.unsealed_online,
+      redeemed_irl_normal = excluded.redeemed_irl_normal,
+      redeemed_irl_stripe = excluded.redeemed_irl_stripe,
+      redeemed_unsealed_cards = excluded.redeemed_unsealed_cards,
+      rebuilt_at_ms = excluded.rebuilt_at_ms,
+      updated_at_ms = excluded.updated_at_ms;`);
+  }
+  if (statements.length === 0) fail('Pack-status backfill generated no D1 statements.');
   const encoder = new TextEncoder();
   if (statements.some((statement) => encoder.encode(statement).byteLength > D1_MAX_SQL_STATEMENT_BYTES)) {
     fail('Pack-status backfill generated an oversized D1 statement.');
@@ -428,7 +502,7 @@ function d1Event(row: D1Row): D1PackStatusEvent {
       : {}),
   };
   if (Object.keys(increments).length === 0) fail('D1 pack-status event increments are empty.');
-  return {
+  const event = typedPackStatusEvent({
     dropId,
     type: eventType(row.event_type),
     eventKey,
@@ -441,22 +515,41 @@ function d1Event(row: D1Row): D1PackStatusEvent {
     ...(d1OptionalString(row.box_asset_id, 'd1.box_asset_id') ? { boxAssetId: String(row.box_asset_id) } : {}),
     ...(d1OptionalString(row.signature, 'd1.signature') ? { signature: String(row.signature) } : {}),
     createdAtMs: nonnegativeInteger(row.created_at_ms, 'd1.created_at_ms'),
-    applyDelta,
-  };
+  });
+  return { ...event, applyDelta };
 }
 
-export function readD1Snapshot(): D1Snapshot {
-  const summaries = d1Rows(`SELECT
+function readD1Summaries(): PackStatusSourceSummary[] {
+  return d1Rows(`SELECT
     drop_id, version, total_initial_supply, total_cards, cards_per_pack,
     unsealed_online, redeemed_irl_normal, redeemed_irl_stripe, redeemed_unsealed_cards,
     rebuilt_at_ms, updated_at_ms
     FROM pack_status ORDER BY drop_id`).map(d1Summary);
-  const events = d1Rows(`SELECT
+}
+
+function readD1EventPage(cursor?: Pick<PackStatusEvent, 'dropId' | 'type' | 'eventKey'>): D1PackStatusEvent[] {
+  const where = cursor ? `WHERE
+    drop_id > ${sqlString(cursor.dropId)} OR
+    (drop_id = ${sqlString(cursor.dropId)} AND event_type > ${sqlString(cursor.type)}) OR
+    (drop_id = ${sqlString(cursor.dropId)} AND event_type = ${sqlString(cursor.type)} AND event_key > ${sqlString(cursor.eventKey)})` : '';
+  return d1Rows(`SELECT
     drop_id, event_type, event_key, quantity,
     unsealed_online_delta, redeemed_irl_normal_delta, redeemed_irl_stripe_delta, redeemed_unsealed_cards_delta,
     delivery_id, checkout_session_id, box_asset_id, signature, apply_delta, created_at_ms
-    FROM pack_status_events ORDER BY drop_id, event_type, event_key`).map(d1Event);
-  return { summaries, events };
+    FROM pack_status_events
+    ${where}
+    ORDER BY drop_id, event_type, event_key
+    LIMIT ${EVENT_PAGE_SIZE}`).map(d1Event);
+}
+
+async function* readD1Events(): AsyncGenerator<D1PackStatusEvent> {
+  let cursor: D1PackStatusEvent | undefined;
+  while (true) {
+    const page = readD1EventPage(cursor);
+    for (const event of page) yield event;
+    if (page.length < EVENT_PAGE_SIZE) break;
+    cursor = page.at(-1);
+  }
 }
 
 function canonicalSummary(value: PackStatusSourceSummary): string {
@@ -469,16 +562,17 @@ function eventIdentity(value: Pick<PackStatusEvent, 'dropId' | 'type' | 'eventKe
 }
 
 function canonicalEvent(value: PackStatusEvent): string {
+  const increments = value.increments as PackStatusEventIncrements;
   return JSON.stringify({
     dropId: value.dropId,
     type: value.type,
     eventKey: value.eventKey,
     quantity: value.quantity,
     increments: {
-      unsealedOnline: value.increments.unsealedOnline || 0,
-      redeemedIrlNormal: value.increments.redeemedIrlNormal || 0,
-      redeemedIrlStripe: value.increments.redeemedIrlStripe || 0,
-      redeemedUnsealedCards: value.increments.redeemedUnsealedCards || 0,
+      unsealedOnline: increments.unsealedOnline || 0,
+      redeemedIrlNormal: increments.redeemedIrlNormal || 0,
+      redeemedIrlStripe: increments.redeemedIrlStripe || 0,
+      redeemedUnsealedCards: increments.redeemedUnsealedCards || 0,
     },
     deliveryId: value.deliveryId || null,
     checkoutSessionId: value.checkoutSessionId || null,
@@ -491,11 +585,48 @@ function assertEventMatches(source: PackStatusEvent, target: D1PackStatusEvent):
   if (canonicalEvent(source) !== canonicalEvent(target)) {
     fail('D1 contains a pack-status event that differs from Firestore.');
   }
-  const timestampDelta = Math.abs(source.createdAtMs - target.createdAtMs);
+}
+
+function compareEventIdentity(
+  left: Pick<PackStatusEvent, 'dropId' | 'type' | 'eventKey'>,
+  right: Pick<PackStatusEvent, 'dropId' | 'type' | 'eventKey'>,
+): number {
+  for (const key of ['dropId', 'type', 'eventKey'] as const) {
+    if (left[key] < right[key]) return -1;
+    if (left[key] > right[key]) return 1;
+  }
+  return 0;
+}
+
+async function verifyEventStreams(db: Firestore, exact: boolean): Promise<number> {
+  const source = readSourceEvents(db)[Symbol.asyncIterator]();
+  const target = readD1Events()[Symbol.asyncIterator]();
+  let sourceResult = await source.next();
+  let targetResult = await target.next();
+  let matched = 0;
+  while (!targetResult.done) {
+    while (!sourceResult.done && compareEventIdentity(sourceResult.value, targetResult.value) < 0) {
+      sourceResult = await source.next();
+    }
+    if (sourceResult.done || compareEventIdentity(sourceResult.value, targetResult.value) > 0) {
+      fail('D1 contains a pack-status event that is missing from Firestore.');
+    }
+    assertEventMatches(sourceResult.value, targetResult.value);
+    matched += 1;
+    sourceResult = await source.next();
+    targetResult = await target.next();
+  }
+  if (exact && !sourceResult.done) fail('D1 pack-status events do not exactly match Firestore.');
+  return matched;
+}
+
+function verifySummaryArrays(source: PackStatusSourceSummary[], target: PackStatusSourceSummary[]): void {
+  const sourceSummaries = [...source].sort((left, right) => left.dropId.localeCompare(right.dropId));
+  const targetSummaries = [...target].sort((left, right) => left.dropId.localeCompare(right.dropId));
   if (
-    (target.applyDelta === 0 && timestampDelta !== 0) ||
-    (target.applyDelta === 1 && timestampDelta > PACK_STATUS_EVENT_TIMESTAMP_TOLERANCE_MS)
-  ) fail('D1 contains a pack-status event with inconsistent timestamp or apply mode.');
+    sourceSummaries.length !== targetSummaries.length ||
+    sourceSummaries.some((summary, index) => canonicalSummary(summary) !== canonicalSummary(targetSummaries[index]))
+  ) fail('D1 pack-status summaries do not exactly match Firestore.');
 }
 
 export function assertTargetEventsCompatible(source: SourceSnapshot, target: D1Snapshot): void {
@@ -509,22 +640,17 @@ export function assertTargetEventsCompatible(source: SourceSnapshot, target: D1S
 }
 
 export function verifySnapshots(source: SourceSnapshot, target: D1Snapshot): void {
-  const sourceSummaries = [...source.summaries].sort((left, right) => left.dropId.localeCompare(right.dropId));
-  const targetSummaries = [...target.summaries].sort((left, right) => left.dropId.localeCompare(right.dropId));
-  if (
-    sourceSummaries.length !== targetSummaries.length ||
-    sourceSummaries.some((summary, index) => canonicalSummary(summary) !== canonicalSummary(targetSummaries[index]))
-  ) fail('D1 pack-status summaries do not exactly match Firestore.');
+  verifySummaryArrays(source.summaries, target.summaries);
   if (source.events.length !== target.events.length) fail('D1 pack-status events do not exactly match Firestore.');
   assertTargetEventsCompatible(source, target);
 }
 
-function applySnapshot(snapshot: SourceSnapshot): void {
+function applySql(sql: string): void {
   const directory = mkdtempSync(join(tmpdir(), 'mons-shop-pack-status-d1-'));
   chmodSync(directory, 0o700);
   const path = join(directory, 'backfill.sql');
   try {
-    writeFileSync(path, snapshotSql(snapshot), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    writeFileSync(path, sql, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     runWrangler(['d1', 'execute', databaseName, '--remote', '--yes', '--file', path]);
   } finally {
     const resolved = resolve(directory);
@@ -621,17 +747,72 @@ export async function runMigrationCommand(
   dependencies.log('[pack-status] D1 reads enabled and production smoke passed.');
 }
 
+async function applySourceEventPages(
+  db: Firestore,
+  summaries: PackStatusSourceSummary[],
+): Promise<number> {
+  applySql(snapshotSql({ summaries, events: [] }, { finalizeEventCount: null }));
+  let eventCount = 0;
+  for await (const events of readSourceEventPages(db)) {
+    applySql(snapshotSql(
+      { summaries, events },
+      { includeParent: false, finalizeEventCount: null },
+    ));
+    eventCount += events.length;
+  }
+  applySql(snapshotSql(
+    { summaries, events: [] },
+    { includeParent: false, finalizeEventCount: eventCount },
+  ));
+  return eventCount;
+}
+
+async function runStreamingMigrationCommand(command: Command, db: Firestore): Promise<void> {
+  if (command === 'backfill') {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const summaries = await readSourceSummaries(db);
+      await verifyEventStreams(db, false);
+      await applySourceEventPages(db, summaries);
+      try {
+        const verifiedSummaries = await readSourceSummaries(db);
+        verifySummaryArrays(verifiedSummaries, readD1Summaries());
+        const verifiedEvents = await verifyEventStreams(db, true);
+        console.log(`[pack-status] Backfilled ${verifiedSummaries.length} summaries and ${verifiedEvents} events.`);
+        return;
+      } catch (error) {
+        if (attempt === 4) throw error;
+      }
+    }
+    return;
+  }
+  const summaries = await readSourceSummaries(db);
+  const source = { summaries, events: [] };
+  if (command === 'rollback') {
+    updateReadSource('firestore');
+    await smoke(source, 'firestore');
+    console.log('[pack-status] Firestore reads restored and production smoke passed.');
+    return;
+  }
+  verifySummaryArrays(summaries, readD1Summaries());
+  const eventCount = await verifyEventStreams(db, true);
+  if (command === 'verify') {
+    console.log(`[pack-status] Verified ${summaries.length} summaries and ${eventCount} events.`);
+    return;
+  }
+  updateReadSource('d1');
+  try {
+    await smoke(source, 'd1');
+  } catch (error) {
+    updateReadSource('firestore');
+    throw new AggregateError([error], 'D1 cutover smoke failed; Firestore reads were restored.');
+  }
+  console.log('[pack-status] D1 reads enabled and production smoke passed.');
+}
+
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const sourceDb = firestore(readCredential(args.firestoreServiceAccountFile));
-  await runMigrationCommand(args.command, {
-    apply: applySnapshot,
-    log: (message) => console.log(message),
-    readSource: () => readSourceSnapshot(sourceDb),
-    readTarget: readD1Snapshot,
-    setReadSource: updateReadSource,
-    smoke,
-  });
+  await runStreamingMigrationCommand(args.command, sourceDb);
 }
 
 function isDirectRun(): boolean {

@@ -120,6 +120,15 @@ test('D1 pack-status migration enforces idempotent projection updates', async ()
       }),
     );
     await assert.rejects(
+      env.DATA_DB.prepare(`INSERT INTO pack_status_events (
+        drop_id, event_type, event_key, quantity,
+        unsealed_online_delta, redeemed_irl_normal_delta, redeemed_irl_stripe_delta,
+        redeemed_unsealed_cards_delta, apply_delta, created_at_ms
+      ) VALUES (?, 'onlineReveal', 'wrong-delta', 3, 0, 0, 1, 0, 1, 500)`)
+        .bind('card_nft_2')
+        .run(),
+    );
+    await assert.rejects(
       applyD1PackStatusEvent(env.DATA_DB, {
         ...onlineReveal,
         dropId: 'missing-drop',
@@ -132,6 +141,7 @@ test('D1 pack-status migration enforces idempotent projection updates', async ()
     assert.deepEqual(schema.results.map((row) => row.name), [
       'pack_status',
       'pack_status_event_apply',
+      'pack_status_event_type_guard',
       'pack_status_events',
       'pack_status_rollout',
     ]);
