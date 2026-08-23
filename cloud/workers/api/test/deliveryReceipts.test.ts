@@ -12,8 +12,10 @@ import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddres
 import {
   DELIVERY_RECEIPTS_ISSUE_PATH,
   DELIVERY_RECEIPTS_RECOVER_PATH,
+  deliveryReceiptRuntime,
   deliveryReceiptTestHooks,
   handleDeliveryReceiptRequest,
+  processDeliveryPackStatusProjectionMessage,
 } from '../src/deliveryReceipts.ts';
 import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
 
@@ -50,13 +52,14 @@ function request(path: string, body: unknown, init: RequestInit = {}): Request {
 }
 
 function env(overrides: Partial<Pick<Env,
-  'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE'
+  'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE' | 'REVEAL_BACKGROUND_QUEUE'
 >> = {}) {
   return {
     COSIGNER_SECRET: bs58.encode(Keypair.generate().secretKey),
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: 'helius-test-key',
     NOTIFICATION_EMAIL_QUEUE: notificationQueue(),
+    REVEAL_BACKGROUND_QUEUE: notificationQueue(),
     ...overrides,
   };
 }
@@ -526,9 +529,73 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
       idempotencyKey: 'card_nft_2:7:ready_to_ship',
     },
   ]);
-  assert.equal(commits.length, 2);
+  assert.equal(commits.length, 1);
   assert.match(JSON.stringify(commits), /buyerOrderReceivedEmailQueuedAt/);
   assert.match(JSON.stringify(commits), /shipperReadyToShipEmailQueuedAt/);
+});
+
+test('delivery pack-status Queue repairs normal orders and skips direct-card receipts', async () => {
+  const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
+  await assert.doesNotReject(deliveryReceiptRuntime.countNormalIrlPackStatus({
+    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    nowMs: 1_700_000_000_000,
+    providerFetch: async () => assert.fail('direct-card receipts must not access projection stores'),
+    serviceAccountJson: 'credential',
+    signal: new AbortController().signal,
+  }, runtime, 7, {
+    source: 'admin_irl_redeem',
+    adminIrlRedeem: { targetKind: 'card_receipt' },
+    items: [{ kind: 'dude', refId: 1 }],
+  }));
+
+  let acks = 0;
+  const retries: Array<QueueRetryOptions | undefined> = [];
+  const commits: unknown[] = [];
+  const message: Message<unknown> = {
+    id: 'pack-status-job',
+    timestamp: new Date(),
+    attempts: 1,
+    body: {
+      version: 1,
+      kind: 'delivery_pack_status_projection',
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      enqueuedAtMs: 1_700_000_000_000,
+    },
+    ack: () => { acks += 1; },
+    retry: (options) => { retries.push(options); },
+  };
+  await processDeliveryPackStatusProjectionMessage(message, {
+    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+  }, {
+    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    nowMs: () => 1_700_000_000_000,
+    providerFetch: async (input, init) => {
+      const url = String(input);
+      if (url.includes('/deliveryOrders/7')) {
+        return Response.json({
+          name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
+          updateTime: '2026-08-22T00:00:00.000Z',
+          fields: {
+            status: { stringValue: 'ready_to_ship' },
+            items: { arrayValue: { values: [{ mapValue: { fields: { kind: { stringValue: 'box' }, refId: { integerValue: '1' } } } }] } },
+          },
+        });
+      }
+      if (url.endsWith('/documents:beginTransaction')) return Response.json({ transaction: 'transaction' });
+      if (url.includes('/packStatusEvents/redeemedIrlNormal_7')) {
+        return Response.json({ error: { status: 'NOT_FOUND' } }, { status: 404 });
+      }
+      if (url.endsWith('/documents:commit')) {
+        commits.push(JSON.parse(String(init?.body)));
+        return Response.json({ writeResults: [{}] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    },
+    log: () => undefined,
+  });
+  assert.equal(acks, 1);
+  assert.deepEqual(retries, []);
   assert.match(JSON.stringify(commits), /redeemedIrlNormal/);
 });
 

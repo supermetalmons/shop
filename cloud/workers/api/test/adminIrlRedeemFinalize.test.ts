@@ -96,10 +96,16 @@ function request(body: unknown = {
 }
 
 function env() {
+  const metrics = { backlogCount: 0, backlogBytes: 0 };
   return {
     COSIGNER_SECRET: 'cosigner',
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: 'helius',
+    REVEAL_BACKGROUND_QUEUE: {
+      send: async () => ({ metadata: { metrics } }),
+      sendBatch: async () => ({ metadata: { metrics } }),
+      metrics: async () => metrics,
+    } satisfies Queue,
   };
 }
 

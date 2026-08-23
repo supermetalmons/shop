@@ -67,6 +67,7 @@ import {
   normalizeDropId,
   type SolanaCluster,
 } from '../../../../shared/deploymentCore.js';
+import { isAdminIrlRedeemDeliveryOrderSource } from '../../../../shared/fulfillmentSources.js';
 import { sanitizeDudeAssignmentPool } from '../../../../shared/dudeAssignmentPool.js';
 import {
   PACK_STATUS_SCHEMA_VERSION,
@@ -124,6 +125,29 @@ import { applyPackStatusDualWrite } from './packStatusProjection.js';
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
 
+export type DeliveryPackStatusProjectionJob = {
+  version: 1;
+  kind: 'delivery_pack_status_projection';
+  dropId: string;
+  deliveryId: number;
+  enqueuedAtMs: number;
+};
+
+export function isDeliveryPackStatusProjectionJob(value: unknown): value is DeliveryPackStatusProjectionJob {
+  if (!isRecord(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === 5 &&
+    keys.every((key) => ['version', 'kind', 'dropId', 'deliveryId', 'enqueuedAtMs'].includes(key)) &&
+    value.version === 1 &&
+    value.kind === 'delivery_pack_status_projection' &&
+    typeof value.dropId === 'string' &&
+    value.dropId.length > 0 &&
+    Number.isSafeInteger(value.deliveryId) &&
+    Number(value.deliveryId) > 0 &&
+    Number.isSafeInteger(value.enqueuedAtMs) &&
+    Number(value.enqueuedAtMs) >= 0;
+}
+
 const REQUEST_MAX_BYTES = 4096;
 const PROVIDER_MAX_BYTES = 2 * 1024 * 1024;
 const HANDLER_TIMEOUT_MS = 55_000;
@@ -133,6 +157,7 @@ const RPC_TIMEOUT_MS = 8_000;
 const TX_SEND_TIMEOUT_MS = 12_000;
 const TX_CONFIRM_TIMEOUT_MS = 25_000;
 const TX_CONFIRM_POLL_MS = 800;
+const packStatusProjectionAccessTokenProvider = createGoogleAccessTokenProvider();
 const TX_MAX_SEND_ATTEMPTS = 3;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
 const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
@@ -177,7 +202,7 @@ type RecoverRequest = z.infer<typeof recoverSchema>;
 type DeliveryReceiptsEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE'
-> & Partial<Pick<Env, 'DATA_DB'>>;
+> & Partial<Pick<Env, 'DATA_DB' | 'REVEAL_BACKGROUND_QUEUE'>>;
 
 type DeliveryReceiptErrorCode =
   | 'invalid-argument'
@@ -1545,18 +1570,31 @@ async function ensureIrlClaimCodeForBox(
   throw new DeliveryReceiptError('unavailable', 'IRL claim code is temporarily unavailable.');
 }
 
+function shouldProjectNormalIrlPackStatus(
+  runtime: DeliveryRuntime,
+  order: Record<string, unknown>,
+): boolean {
+  if (!shouldTrackPackStatusForDrop({
+    dropId: runtime.dropId,
+    cluster: runtime.cluster,
+    itemsPerBox: runtime.itemsPerBox,
+    maxSupply: runtime.maxSupply,
+  })) return false;
+  if (
+    isAdminIrlRedeemDeliveryOrderSource(order.source) &&
+    isRecord(order.adminIrlRedeem) &&
+    order.adminIrlRedeem.targetKind === 'card_receipt'
+  ) return false;
+  return true;
+}
+
 async function countNormalIrlPackStatus(
   context: FirestoreContext,
   runtime: DeliveryRuntime,
   deliveryId: number,
   order: Record<string, unknown>,
 ): Promise<void> {
-  if (!shouldTrackPackStatusForDrop({
-    dropId: runtime.dropId,
-    cluster: runtime.cluster,
-    itemsPerBox: runtime.itemsPerBox,
-    maxSupply: runtime.maxSupply,
-  })) return;
+  if (!shouldProjectNormalIrlPackStatus(runtime, order)) return;
   const packQuantity = countDeliveryOrderBoxItems(order.items);
   const cardQuantity = countDeliveryOrderDudeItems(order.items);
   if (packQuantity < 1 && cardQuantity < 1) return;
@@ -1625,6 +1663,95 @@ async function countNormalIrlPackStatus(
     },
     log: (entry) => console.warn(entry),
   });
+}
+
+export async function enqueueDeliveryPackStatusProjectionJob(
+  queue: Queue | undefined,
+  dropId: string,
+  deliveryId: number,
+): Promise<void> {
+  if (!queue) throw new DeliveryReceiptError('unavailable', 'Pack-status repair Queue is unavailable.');
+  try {
+    await queue.send({
+      version: 1,
+      kind: 'delivery_pack_status_projection',
+      dropId,
+      deliveryId,
+      enqueuedAtMs: Date.now(),
+    } satisfies DeliveryPackStatusProjectionJob);
+  } catch {
+    throw new DeliveryReceiptError('unavailable', 'Pack-status repair Queue is unavailable.');
+  }
+}
+
+async function enqueueDeliveryPackStatusProjection(
+  queue: Queue | undefined,
+  runtime: DeliveryRuntime,
+  deliveryId: number,
+  order: Record<string, unknown>,
+): Promise<void> {
+  if (!shouldProjectNormalIrlPackStatus(runtime, order)) return;
+  await enqueueDeliveryPackStatusProjectionJob(queue, runtime.dropId, deliveryId);
+}
+
+export async function processDeliveryPackStatusProjectionMessage(
+  message: Message<unknown>,
+  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'DATA_DB'>>,
+  overrides: {
+    accessTokenProvider?: GoogleAccessTokenProvider;
+    log?: (entry: Record<string, unknown>) => void;
+    nowMs?: () => number;
+    providerFetch?: ProfileProviderFetch;
+  } = {},
+): Promise<void> {
+  const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
+  if (!isDeliveryPackStatusProjectionJob(message.body)) {
+    message.retry({ delaySeconds: 30 });
+    return;
+  }
+  const job = message.body;
+  const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException('Pack-status projection timed out', 'TimeoutError')),
+    PACK_STATUS_TIMEOUT_MS,
+  );
+  try {
+    if (!serviceAccountJson) throw new Error('firestore_writer_service_account_not_configured');
+    const runtime = runtimeForDrop(job.dropId);
+    const context: FirestoreContext = {
+      accessTokenProvider: overrides.accessTokenProvider || packStatusProjectionAccessTokenProvider,
+      nowMs: (overrides.nowMs || Date.now)(),
+      providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
+      serviceAccountJson,
+      signal: controller.signal,
+      dataDb: env.DATA_DB,
+    };
+    const order = await readDocument(context, dropDeliveryOrderPath(job.dropId, job.deliveryId));
+    if (!order || order.fields.status !== 'ready_to_ship') {
+      message.retry({ delaySeconds: 30 });
+      return;
+    }
+    await countNormalIrlPackStatus(context, runtime, job.deliveryId, order.fields);
+    log({
+      event: 'delivery_pack_status_projection_completed',
+      dropId: job.dropId,
+      deliveryId: job.deliveryId,
+      queueAttempts: message.attempts,
+    });
+    message.ack();
+  } catch (error) {
+    log({
+      event: 'delivery_pack_status_projection_retry',
+      dropId: job.dropId,
+      deliveryId: job.deliveryId,
+      queueAttempts: message.attempts,
+      error: summarizeError(error),
+    });
+    message.retry({ delaySeconds: 30 });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function readBoundedProviderResponse(response: Response, signal: AbortSignal): Promise<Uint8Array> {
@@ -2731,11 +2858,6 @@ async function retryIssueReceipts(args: {
     throw new DeliveryReceiptError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.');
   }
   if (document.fields.status === 'ready_to_ship') {
-    await countNormalIrlPackStatus({
-      ...args.firestore,
-      nowMs: Date.now(),
-      signal: AbortSignal.timeout(PACK_STATUS_TIMEOUT_MS),
-    }, runtime, deliveryId, document.fields);
     let closeDeliveryTx = typeof document.fields.closeDeliveryTx === 'string'
       ? document.fields.closeDeliveryTx
       : null;
@@ -2866,17 +2988,18 @@ async function retryIssueReceipts(args: {
       irlClaims.push({ code, boxId, boxAssetId: item.assetId, dudeIds });
     }
   }
+  await enqueueDeliveryPackStatusProjection(
+    args.env.REVEAL_BACKGROUND_QUEUE,
+    runtime,
+    deliveryId,
+    document.fields,
+  );
   const readyDocument = await markDeliveryReady(args.firestore, document, runtime, {
     signature: verified.signature,
     receiptsMinted,
     receiptTxs,
     irlClaims,
   });
-  await countNormalIrlPackStatus({
-    ...args.firestore,
-    nowMs: Date.now(),
-    signal: AbortSignal.timeout(PACK_STATUS_TIMEOUT_MS),
-  }, runtime, deliveryId, document.fields);
   let closeDeliveryTx: string | null = null;
   try {
     closeDeliveryTx = await closeDeliveryPda({

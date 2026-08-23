@@ -82,7 +82,7 @@ import {
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { adminIrlRedeemRuntime } from './adminIrlRedeemPrepare.js';
-import { deliveryReceiptRuntime } from './deliveryReceipts.js';
+import { deliveryReceiptRuntime, enqueueDeliveryPackStatusProjectionJob } from './deliveryReceipts.js';
 
 export const ADMIN_IRL_REDEEM_FINALIZE_PATH = '/admin/irl-redeem/finalize';
 
@@ -119,7 +119,7 @@ const requestSchema = z.object({
 
 type FinalizeRequest = z.infer<typeof requestSchema>;
 type FinalizeEnv = Pick<Env, 'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'> &
-  Partial<Pick<Env, 'DATA_DB'>>;
+  Partial<Pick<Env, 'DATA_DB' | 'REVEAL_BACKGROUND_QUEUE'>>;
 type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
 type ProviderContext = Parameters<typeof adminIrlRedeemRuntime.fetchAsset>[0];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
@@ -1230,28 +1230,6 @@ function createWithTimestamps(path: string, fields: Record<string, unknown>, tim
   });
 }
 
-function schedulePackStatus(
-  waitUntil: FinalizeWaitUntil,
-  firestore: FirestoreContext,
-  runtime: Runtime,
-  deliveryId: number,
-  order: Record<string, unknown>,
-): void {
-  const task = deliveryReceiptRuntime.countNormalIrlPackStatus({
-    ...firestore,
-    nowMs: Date.now(),
-    signal: AbortSignal.timeout(10_000),
-  }, runtime, deliveryId, order).catch((error) => {
-    console.warn({ event: 'admin_irl_redeem_pack_status_failed', dropId: runtime.dropId, deliveryId, error: summarizeError(error) });
-  });
-  try {
-    waitUntil(task);
-  } catch (error) {
-    console.warn({ event: 'admin_irl_redeem_wait_until_failed', dropId: runtime.dropId, deliveryId, error: summarizeError(error) });
-    void task;
-  }
-}
-
 async function publishPack(
   firestore: FirestoreContext,
   runtime: Runtime,
@@ -1263,7 +1241,7 @@ async function publishPack(
   closeDeliveryTx: string | null,
   receiptTxs: string[],
   boxes: AdminIrlRedeemBoxBaseInput[],
-  waitUntil: FinalizeWaitUntil,
+  projectionQueue: Queue | undefined,
 ): Promise<AdminIrlRedeemFinalizeResponse> {
   const selectionKey = buildAdminIrlRedeemSelectionKey({
     dropId: runtime.dropId,
@@ -1271,6 +1249,7 @@ async function publishPack(
   });
   for (let attempt = 0; attempt < MAX_DELIVERY_ALLOCATION_ATTEMPTS; attempt += 1) {
     const deliveryId = newDeliveryId();
+    await enqueueDeliveryPackStatusProjectionJob(projectionQueue, runtime.dropId, deliveryId);
     const claimCodes = newClaimCodes(boxes.length);
     const boxesWithCodes = boxes.map((box, index) => ({ ...box, receiptClaimCode: claimCodes[index] }));
     const orderPath = dropDeliveryOrderPath(runtime.dropId, deliveryId);
@@ -1365,7 +1344,6 @@ async function publishPack(
       return { result: { status: 'created' as const, request: completed, order }, writes };
     });
     if (result.status === 'collision') continue;
-    if (result.status === 'created') schedulePackStatus(waitUntil, firestore, runtime, deliveryId, result.order);
     return completeResponse(runtime.dropId, request.requestId, result.request);
   }
   throw new AdminIrlRedeemFinalizeError('unavailable', 'Failed to allocate Admin IRL redeem delivery id or claim codes.');
@@ -1501,7 +1479,7 @@ async function finalizeAdminIrlRedeem(
   env: FinalizeEnv,
   firestore: FirestoreContext,
   provider: ProviderContext,
-  waitUntil: FinalizeWaitUntil,
+  _waitUntil: FinalizeWaitUntil,
 ): Promise<{ response: AdminIrlRedeemFinalizeResponse; targetKind: AdminIrlRedeemTargetKind; outcome: string }> {
   const config = API_DROPS[body.dropId];
   if (!config) throw new AdminIrlRedeemFinalizeError('invalid-argument', `Unsupported dropId: ${body.dropId}`);
@@ -1583,7 +1561,7 @@ async function finalizeAdminIrlRedeem(
         closeDeliveryTx,
         receiptTxs,
         boxes,
-        waitUntil,
+        env.REVEAL_BACKGROUND_QUEUE,
       ),
       targetKind: 'pack',
       outcome: 'completed',

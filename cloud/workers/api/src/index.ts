@@ -139,6 +139,8 @@ import {
   DELIVERY_RECEIPTS_ISSUE_PATH,
   DELIVERY_RECEIPTS_RECOVER_PATH,
   handleDeliveryReceiptRequest,
+  isDeliveryPackStatusProjectionJob,
+  processDeliveryPackStatusProjectionMessage,
 } from './deliveryReceipts.js';
 import {
   ADMIN_IRL_REDEEM_PREPARE_PATH,
@@ -235,9 +237,16 @@ const KNOWN_LOG_ROUTES = new Set([
   REVEAL_DUDES_PATH,
 ]);
 
+async function processReconciliationMessage(message: Message<unknown>, env: Env): Promise<void> {
+  if (isDeliveryPackStatusProjectionJob(message.body)) {
+    return processDeliveryPackStatusProjectionMessage(message, env);
+  }
+  return processRevealBackgroundJobMessage(message, env);
+}
+
 type BackgroundJobProcessors = {
   notification: typeof processNotificationQueueMessage;
-  reveal: typeof processRevealBackgroundJobMessage;
+  reveal: typeof processReconciliationMessage;
   fulfillment: typeof processStripeFulfillmentMessage;
   log: (entry: Record<string, unknown>) => void;
   error: (entry: Record<string, unknown>) => void;
@@ -303,7 +312,7 @@ export async function processStripeFulfillmentMessage(
 
 const defaultBackgroundJobProcessors: BackgroundJobProcessors = {
   notification: processNotificationQueueMessage,
-  reveal: processRevealBackgroundJobMessage,
+  reveal: processReconciliationMessage,
   fulfillment: processStripeFulfillmentMessage,
   log: (entry) => console.log(entry),
   error: (entry) => console.error(entry),
