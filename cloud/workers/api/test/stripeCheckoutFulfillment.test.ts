@@ -76,3 +76,9 @@ test('Stripe fulfillment accepts only MPL Core collection accounts', () => {
     owner: PublicKey.unique(),
   }), false);
 });
+
+test('Stripe fulfillment pack-status events use card-equivalent quantity', () => {
+  const runtime = stripeCheckoutFulfillmentTestHooks.fulfillmentRuntime('card_nft_2');
+  assert.equal(runtime.itemsPerBox, 3);
+  assert.equal(stripeCheckoutFulfillmentTestHooks.packStatusEventQuantity(runtime, 2), 6);
+});

@@ -27,6 +27,7 @@ import {
 } from '../../../../functions/src/shared/deploymentCore.js';
 import { dropDeliveryOrderPath } from '../../../../functions/src/dropPaths.js';
 import {
+  packStatusCardsPerPack,
   shouldTrackPackStatusForDrop,
   PACK_STATUS_SCHEMA_VERSION,
 } from '../../../../functions/src/shared/packStatus.js';
@@ -427,6 +428,10 @@ function stripeKeys(env: FulfillmentEnv): string[] {
   ].map((value) => String(value || '').trim()).filter(Boolean)));
 }
 
+function packStatusEventQuantity(runtime: Pick<FulfillmentRuntime, 'itemsPerBox'>, quantity: number): number {
+  return quantity * packStatusCardsPerPack(runtime);
+}
+
 function flowDependencies(
   env: FulfillmentEnv,
   store: ReturnType<typeof createWorkerStripeCheckoutStore>,
@@ -486,7 +491,7 @@ function flowDependencies(
           dropId: dropRuntime.dropId,
           type: 'redeemedIrlStripe',
           eventKey: orderHashHex,
-          quantity,
+          quantity: packStatusEventQuantity(dropRuntime, quantity),
           increments: { redeemedIrlStripe: quantity },
           deliveryId,
           checkoutSessionId,
@@ -568,5 +573,6 @@ export async function processStripeCheckoutFulfillmentJob(
 export const stripeCheckoutFulfillmentTestHooks = {
   fulfillmentRuntime,
   isMplCoreCollectionAccount,
+  packStatusEventQuantity,
   validateOnchainConfig,
 };

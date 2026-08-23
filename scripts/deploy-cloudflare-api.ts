@@ -1793,6 +1793,40 @@ function repauseRevealQueueAfterFailure(
   );
 }
 
+function restoreStatefulQueuesAfterPauseFailure(
+  error: unknown,
+  environment: NodeJS.ProcessEnv,
+  dependencies: Pick<
+    ProductionSequenceDependencies,
+    'pauseRevealQueue' | 'pauseFulfillmentQueue' | 'resumeRevealQueue' | 'resumeFulfillmentQueue'
+  >,
+  message: string,
+): never {
+  const restoreErrors: unknown[] = [];
+  for (const [pause, resume, label] of [
+    [dependencies.pauseFulfillmentQueue, dependencies.resumeFulfillmentQueue, 'fulfillment'],
+    [dependencies.pauseRevealQueue, dependencies.resumeRevealQueue, 'reveal'],
+  ] as const) {
+    if (!pause) continue;
+    if (!resume) {
+      restoreErrors.push(new Error(`No ${label} queue resume operation was configured.`));
+      continue;
+    }
+    try {
+      resume(environment);
+    } catch (restoreError) {
+      restoreErrors.push(restoreError);
+    }
+  }
+  if (restoreErrors.length) {
+    throw new AggregateError(
+      [error, ...restoreErrors],
+      `${message} Queue delivery could not be fully restored; inspect production immediately.`,
+    );
+  }
+  throw new Error(`${message} Queue delivery was restored; no version mutation was attempted.`, { cause: error });
+}
+
 async function runProductionSequence(
   input: ProductionSequenceInput,
   dependencies: ProductionSequenceDependencies = {
@@ -1858,7 +1892,12 @@ async function runProductionSequence(
     dependencies.pauseRevealQueue?.(input.wranglerEnvironment);
     dependencies.pauseFulfillmentQueue?.(input.wranglerEnvironment);
   } catch (error) {
-    throw new Error('Stateful queue delivery could not be paused, so no trigger or version mutation was attempted.', { cause: error });
+    restoreStatefulQueuesAfterPauseFailure(
+      error,
+      input.wranglerEnvironment,
+      dependencies,
+      'Stateful queue delivery could not be paused.',
+    );
   }
   if (!releaseStart.resumeCandidate) {
     try {
@@ -2135,7 +2174,12 @@ async function runRollbackSequence(
     dependencies.disableReconciliationSchedule(input.wranglerEnvironment);
     await dependencies.sleep(CRON_TRIGGER_PROPAGATION_MS);
   } catch (error) {
-    throw new Error('Stateful delivery could not be paused and the reconciliation schedule fully disabled, so API rollback was not attempted.', { cause: error });
+    restoreStatefulQueuesAfterPauseFailure(
+      error,
+      input.wranglerEnvironment,
+      dependencies,
+      'Stateful delivery could not be paused and the reconciliation schedule fully disabled.',
+    );
   }
 
   let resumeAttempted = false;

@@ -2898,6 +2898,46 @@ test('API production benchmark failure performs no deployment mutation', async (
   assert.deepEqual(events, [`smoke:${previewUrl}`, `benchmark:${previewUrl}`]);
 });
 
+test('API production restores queue delivery when the pause phase fails', async () => {
+  const baselineVersionId = randomUUID();
+  const candidateVersionId = randomUUID();
+  const events: string[] = [];
+  await assert.rejects(
+    () => deployApiTestHooks.runProductionSequence(
+      {
+        expectedCurrentVersionId: baselineVersionId,
+        heliusApiKey: 'helius-test-key',
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        smokeOwner: OWNER,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: deploymentReader([baselineVersionId]),
+        smoke: async () => undefined,
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        pauseRevealQueue: () => events.push('pause-reveal'),
+        pauseFulfillmentQueue: () => {
+          events.push('pause-fulfillment');
+          throw new Error('injected fulfillment pause failure');
+        },
+        resumeRevealQueue: () => events.push('resume-reveal'),
+        resumeFulfillmentQueue: () => events.push('resume-fulfillment'),
+        wrangler: () => assert.fail('pause failure mutated the API version or triggers'),
+        evidence: () => assert.fail('pause failure wrote evidence'),
+        sleep: async () => undefined,
+      },
+    ),
+    /Queue delivery was restored; no version mutation was attempted/,
+  );
+  assert.deepEqual(events, [
+    'pause-reveal',
+    'pause-fulfillment',
+    'resume-fulfillment',
+    'resume-reveal',
+  ]);
+});
+
 test('API trigger deployment gets exactly one declarative retry after promotion', async () => {
   const baselineVersionId = randomUUID();
   const candidateVersionId = randomUUID();
