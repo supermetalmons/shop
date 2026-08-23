@@ -5,7 +5,6 @@ import {
   STRIPE_CHECKOUT_FULFILLMENT_JOB_VERSION,
   STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   createStripeCheckoutFulfillmentJobV1,
-  isCloudflareStripeCheckoutFulfillmentDocument,
   isExactStripeCheckoutFulfillmentJobV1,
 } from '../functions/src/shared/stripeCheckoutFulfillmentJob.ts';
 
@@ -27,10 +26,6 @@ test('Stripe fulfillment queue job uses an exact versioned contract', () => {
     enqueuedAtMs: 1_700_000_000_000,
   });
   assert.equal(STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR, 'cloudflare_queue_v1');
-  assert.equal(isCloudflareStripeCheckoutFulfillmentDocument({
-    fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
-  }), true);
-  assert.equal(isCloudflareStripeCheckoutFulfillmentDocument({ fulfillmentProcessor: 'firebase' }), false);
   assert.equal(isExactStripeCheckoutFulfillmentJobV1(job), true);
   assert.equal(isExactStripeCheckoutFulfillmentJobV1({ ...job, unexpected: true }), false);
   assert.equal(isExactStripeCheckoutFulfillmentJobV1({ ...job, version: 2 }), false);

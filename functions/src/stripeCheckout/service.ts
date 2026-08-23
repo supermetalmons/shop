@@ -414,7 +414,7 @@ export function stripeApiModeForCluster(cluster: SolanaCluster): StripeApiMode {
   throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout is only enabled for devnet and mainnet drops.');
 }
 
-export function requireStripeCheckoutSessionId(rawSessionId: unknown): string {
+function requireStripeCheckoutSessionId(rawSessionId: unknown): string {
   const sessionId = String(rawSessionId || '').trim();
   if (!STRIPE_CHECKOUT_SESSION_ID_RE.test(sessionId)) {
     throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout session id is invalid');

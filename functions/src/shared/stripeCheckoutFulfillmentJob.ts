@@ -76,7 +76,3 @@ export function createStripeCheckoutFulfillmentJobV1(args: {
   }
   return job;
 }
-
-export function isCloudflareStripeCheckoutFulfillmentDocument(value: unknown): boolean {
-  return isRecord(value) && value.fulfillmentProcessor === STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR;
-}

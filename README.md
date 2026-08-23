@@ -1,10 +1,10 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Stripe fulfillment is migrating through the `mons-shop-stripe-fulfillment` Cloudflare Queue; the remaining Cloud Function is a temporary compatibility bridge that ignores Cloudflare-owned checkout documents. Public inventory, pack status, pending-open reads, receipt claiming, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Stripe fulfillment runs through the `mons-shop-stripe-fulfillment` Cloudflare Queue. Public inventory, pack status, pending-open reads, receipt claiming, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
 
 ## Shared domain core
 
-Runtime-neutral code used by the frontend, Cloud Functions, and repository tools
+Runtime-neutral code used by the frontend, Cloudflare Worker, and repository tools
 lives in `functions/src/shared`. Keep Firebase, Node-only, browser/React, Solana
 SDK, secrets, and environment access in thin runtime adapters. See
 `functions/src/shared/README.md` for the boundary rules.
@@ -27,7 +27,7 @@ SDK, secrets, and environment access in thin runtime adapters. See
 The frontend is an asset-only Cloudflare Worker named `mons-shop`. Public Helius
 reads and authenticated profile and fulfillment routes are served by the separate
 `mons-shop-api` Worker at `api.mons.shop`.
-Firebase Auth and Firestore remain deployed to Firebase. The Stripe fulfillment Cloud Function remains only until the guarded Cloudflare checkout proof and retirement command succeed.
+Firebase Auth and Firestore remain deployed to Firebase. No Cloud Functions remain deployed.
 
 - Prerequisite: Node.js 22.12 or newer.
 - Install dependencies: `npm install --legacy-peer-deps`
@@ -122,8 +122,8 @@ Stripe webhook marks the checkout for `cloudflare_queue_v1` and publishes a
 versioned job through `STRIPE_FULFILLMENT_QUEUE`. The Worker acquires the
 existing Firestore lease, reconciles the on-chain order, creates the delivery
 records and claim codes, and publishes success or manual-review email jobs. The
-compatibility Cloud Function ignores marked documents. Fulfillment failures
-retry ten times with a 60-second delay before moving to
+fulfillment processor owns all marked documents. Fulfillment failures retry ten
+times with a 60-second delay before moving to
 `mons-shop-stripe-fulfillment-dlq`; email delivery failures retain their existing
 five-retry policy.
 
@@ -149,15 +149,9 @@ json`. If a job reaches the DLQ, deploy and verify the fix before manually
 replaying only the affected jobs; reconciliation is idempotent.
 
 Stripe fulfillment uses `mons-shop-stripe-fulfillment` with
-`mons-shop-stripe-fulfillment-dlq`. Before retiring the compatibility function,
-complete one quantity-one `card_nft_binder_devnet` checkout, approve that exact
-API version for rollback, and run:
-
-- `npm run retire:stripe-fulfillment-function -- --api-version-id <uuid> --drop-id card_nft_binder_devnet --session-id <stripe-session-id> --confirm`
-
-The retirement command verifies the live and approved API version, all Queue
-consumers, the Cloudflare processor marker, the fulfilled checkout, and its
-delivery order before deleting only `processStripeCheckoutFulfillment`.
+`mons-shop-stripe-fulfillment-dlq`. The guarded retirement proof for
+`processStripeCheckoutFulfillment` completed against a quantity-one
+`card_nft_binder_devnet` checkout before the function was deleted.
 
 Wrangler can upload a preview version only after the Worker exists.
 `mons-shop-api` is already provisioned, so releases can use the preview command directly.
@@ -211,12 +205,10 @@ suite passes.
 - Keep the secret key offline for ops to decrypt shipping addresses; never ship it to the frontend or Firebase config.
 - Only the public key is needed by the UI to encrypt addresses before they are stored.
 
-## Firebase functions
+## Firebase and repository tools
 - Install and build: `cd functions && npm install && npm run build`
-- `processStripeCheckoutFulfillment` is a temporary compatibility bridge during the Queue cutover and must not process documents marked `cloudflare_queue_v1`.
 - Deploy from the repo root:
-  - `npm run deploy:firebase` runs the Firestore Emulator rules suite, deploys Functions and indexes to `mons-shop`, and then deploys Firestore rules in a separate Firebase CLI invocation.
-  - `npm run deploy:functions` deploys Functions only to `mons-shop`.
+  - `npm run deploy:firebase` runs the Firestore Emulator rules suite, deploys indexes to `mons-shop`, and then deploys Firestore rules in a separate Firebase CLI invocation.
 - The retired profile shipment projection can be removed only with the guarded
   `npm run purge:profile-shipments` command. It defaults to read-only and requires
   the exact observed count plus explicit project confirmation before deleting.
@@ -224,13 +216,13 @@ suite passes.
 
 ### Runtime env + secrets
 - `HELIUS_API_KEY` (env/runtime config)
-- `COSIGNER_SECRET` (Firebase Functions and `mons-shop-api` Worker secret / Google Secret Manager; bs58 secret key for the server cosigner; must match the on-chain box minter admin)
+- `COSIGNER_SECRET` (`mons-shop-api` Worker secret / Google Secret Manager source for synchronization and repository operations; bs58 secret key for the server cosigner; must match the on-chain box minter admin)
   - Set (recommended): `firebase functions:secrets:set COSIGNER_SECRET`
   - Synchronize to Cloudflare with `npm run sync:api:firebase-secrets` before releasing checkout-session creation.
   - Local dev: set `COSIGNER_SECRET` in your shell (do not commit it in `.env`)
-- `STRIPE_RESTRICTED_KEY` or `STRIPE_SECRET_KEY` (Firebase Functions secret or local env; test-mode key used by devnet Checkout Sessions)
+- `STRIPE_RESTRICTED_KEY` or `STRIPE_SECRET_KEY` (`mons-shop-api` Worker secret or local env; test-mode key used by devnet Checkout Sessions)
   - Set (recommended): `firebase functions:secrets:set STRIPE_RESTRICTED_KEY`
-- `STRIPE_RESTRICTED_KEY_LIVE` or `STRIPE_SECRET_KEY_LIVE` (Firebase Functions secret or local env; live-mode key used by mainnet Checkout Sessions)
+- `STRIPE_RESTRICTED_KEY_LIVE` or `STRIPE_SECRET_KEY_LIVE` (`mons-shop-api` Worker secret or local env; live-mode key used by mainnet Checkout Sessions)
   - Set (recommended): `firebase functions:secrets:set STRIPE_RESTRICTED_KEY_LIVE`
   - Optional fallback: `firebase functions:secrets:set STRIPE_SECRET_KEY_LIVE`
   - If both are configured, Checkout tries the secret live key first and keeps the restricted live key only as a fallback. Use a Dashboard-created restricted key with Checkout Session permissions; Stripe CLI restricted keys can expire.
@@ -240,7 +232,7 @@ suite passes.
   - Set or rotate with `wrangler versions secret put STRIPE_WEBHOOK_SECRET --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env`, then promote the resulting combined version through the guarded API release flow.
 - `RESEND_API_KEY` (`mons-shop-api` outbound transactional-email secret; use a Resend Sending Access key restricted to `support.mons.shop`)
   - Later API versions inherit it; rotate it as an API Worker secret and promote only the exact reviewed combined version.
-- `NOTIFICATION_ENQUEUE_SECRET` (shared HMAC secret for the remaining Firebase Stripe fulfillment producer and the internal `mons-shop-api` queue endpoint)
+- `NOTIFICATION_ENQUEUE_SECRET` (HMAC secret for the internal `mons-shop-api` queue endpoint and repository notification test tools)
   - Store the same randomly generated 32-byte value in Firebase Secret Manager and the API Worker's secret set before uploading its candidate. Never pass it as a command argument or print it.
   - The test-email command reads this secret from the shell or Firebase Secret Manager and never accesses the Resend key.
 - `RESEND_CONTACTS_API_KEY` (`mons-shop-api` Worker secret used only by `POST /notifications/subscribe`; requires Resend Full Access to manage Contacts)
@@ -249,7 +241,7 @@ suite passes.
   - There is deliberately no fallback between the outbound and Contacts keys.
   - Inbound mail for `support.mons.shop` is delivered directly by iCloud and is not handled by Firebase.
 - `STRIPE_RETURN_URL_ALLOWED_ORIGINS` (optional comma/space-separated http(s) origins for Stripe success/cancel return URLs beyond `https://mons.shop`, `https://*.mons.shop`, and localhost; useful for preview hosts)
-- `ADDRESS_DECRYPTION_SECRET` (Firebase Functions secret or local env; base64 Curve25519 secret key matching the frontend address encryption public key)
+- `ADDRESS_DECRYPTION_SECRET` (`mons-shop-api` Worker secret or local env; base64 Curve25519 secret key matching the frontend address encryption public key)
   - Reused by fulfillment/admin address decryption and Stripe webhook fulfillment; set with `firebase functions:secrets:set ADDRESS_DECRYPTION_SECRET` only if the Firebase project does not already have it.
   - Stripe webhook fulfillment uses it to encrypt Stripe shipping addresses into the same delivery-order address format.
 - `SHIPSTATION_API_KEY` (`mons-shop-api` Worker secret or local env; ShipStation API v2 key used by fulfillment actions, including label purchases)

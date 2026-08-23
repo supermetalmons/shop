@@ -1202,7 +1202,7 @@ test('Stripe checkout callable is absent from Firebase exports and deployment se
     scripts: Record<string, string>;
   };
   assert.doesNotMatch(functionsSource, /export const createStripeCheckoutSession\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:createStripeCheckoutSession(?:,|$)/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:createStripeCheckoutSession(?:,|$)/);
   assert.equal(packageJson.scripts['decommission:firebase-create-stripe-checkout-session'], undefined);
 });
 
@@ -1212,7 +1212,7 @@ test('Stripe receipt claim callable is absent from Firebase exports and deployme
     scripts: Record<string, string>;
   };
   assert.doesNotMatch(functionsSource, /export const claimStripeReceipt\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:claimStripeReceipt(?:,|$)/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:claimStripeReceipt(?:,|$)/);
   assert.equal(packageJson.scripts['decommission:firebase-claim-stripe-receipt'], undefined);
 });
 
@@ -1223,7 +1223,7 @@ test('wallet lifecycle callables are absent from Firebase exports and deployment
   };
   for (const name of ['solanaAuth', 'reconcileProfileState']) {
     assert.doesNotMatch(functionsSource, new RegExp(`export const ${name}\\b`));
-    assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], new RegExp(`functions:${name}(?:,|$)`));
+    assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', new RegExp(`functions:${name}(?:,|$)`));
   }
   assert.equal(packageJson.scripts['decommission:firebase-profile-lifecycle'], undefined);
 });
@@ -1234,7 +1234,7 @@ test('IRL claim preparation callable is absent from Firebase exports and deploym
     scripts: Record<string, string>;
   };
   assert.doesNotMatch(functionsSource, /export const prepareIrlClaimTx\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:prepareIrlClaimTx(?:,|$)/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:prepareIrlClaimTx(?:,|$)/);
   assert.equal(packageJson.scripts['decommission:firebase-prepare-irl-claim'], undefined);
 });
 
@@ -1244,7 +1244,7 @@ test('receipt transfer preparation callable is absent from Firebase exports and 
     scripts: Record<string, string>;
   };
   assert.doesNotMatch(functionsSource, /export const prepareReceiptTransferTx\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:prepareReceiptTransferTx(?:,|$)/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:prepareReceiptTransferTx(?:,|$)/);
   assert.equal(packageJson.scripts['decommission:firebase-prepare-receipt-transfer'], undefined);
 });
 
@@ -1254,7 +1254,7 @@ test('delivery preparation callable is absent from Firebase exports and deployme
     scripts: Record<string, string>;
   };
   assert.doesNotMatch(functionsSource, /export const prepareDeliveryTx\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:prepareDeliveryTx(?:,|$)/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:prepareDeliveryTx(?:,|$)/);
   assert.equal(packageJson.scripts['decommission:firebase-prepare-delivery'], undefined);
 });
 
@@ -1264,7 +1264,7 @@ test('Admin IRL preparation callable is absent from Firebase exports and deploym
     scripts: Record<string, string>;
   };
   assert.doesNotMatch(functionsSource, /export const prepareAdminIrlRedeemTx\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:prepareAdminIrlRedeemTx(?:,|$)/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:prepareAdminIrlRedeemTx(?:,|$)/);
   assert.equal(packageJson.scripts['decommission:firebase-prepare-admin-irl-redeem'], undefined);
 });
 
@@ -1274,7 +1274,7 @@ test('Admin IRL finalization callable is absent from Firebase exports and deploy
     scripts: Record<string, string>;
   };
   assert.doesNotMatch(functionsSource, /export const finalizeAdminIrlRedeem\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:finalizeAdminIrlRedeem(?:,|$)/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:finalizeAdminIrlRedeem(?:,|$)/);
 });
 
 test('reveal callable is absent from Firebase exports and deployment selection', () => {
@@ -1283,7 +1283,7 @@ test('reveal callable is absent from Firebase exports and deployment selection',
     scripts: Record<string, string>;
   };
   assert.doesNotMatch(functionsSource, /export const revealDudes\b/);
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:revealDudes(?:,|$)/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:revealDudes(?:,|$)/);
   assert.equal(packageJson.scripts['decommission:firebase-reveal-dudes'], undefined);
 });
 
@@ -1313,7 +1313,7 @@ test('migrated buyer shipped notification is absent from Firebase exports and de
   const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const scripts = (JSON.parse(packageJson) as { scripts: Record<string, string> }).scripts;
   assert.doesNotMatch(functionsSource, /export const notifyBuyerOnDeliveryShipped\b/);
-  assert.doesNotMatch(scripts['deploy:firebaseNewDrops'], /functions:notifyBuyerOnDeliveryShipped(?:,|$)/);
+  assert.doesNotMatch(scripts['deploy:firebaseNewDrops'] || '', /functions:notifyBuyerOnDeliveryShipped(?:,|$)/);
   assert.equal(scripts['decommission:firebase-buyer-shipped-notification'], undefined);
 });
 
@@ -1322,7 +1322,7 @@ test('migrated ready-to-ship notification is absent from Firebase exports and de
   const packageJson = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
   const scripts = (JSON.parse(packageJson) as { scripts: Record<string, string> }).scripts;
   assert.doesNotMatch(functionsSource, /export const notifyShippersOnDeliveryReadyToShip\b/);
-  assert.doesNotMatch(scripts['deploy:firebaseNewDrops'], /functions:notifyShippersOnDeliveryReadyToShip(?:,|$)/);
+  assert.doesNotMatch(scripts['deploy:firebaseNewDrops'] || '', /functions:notifyShippersOnDeliveryReadyToShip(?:,|$)/);
 });
 
 test('browser source has no direct Firestore data access', () => {

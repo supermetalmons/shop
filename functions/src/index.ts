@@ -1,6 +1,5 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
-import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
@@ -16,7 +15,6 @@ import {
   AddressLookupTableAccount,
 } from '@solana/web3.js';
 import bs58 from 'bs58';
-import nacl from 'tweetnacl';
 import { existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 // IMPORTANT (Node ESM): include `.js` extension so the compiled `lib/` output resolves at runtime.
@@ -28,32 +26,11 @@ import {
   countDeliveryOrderDudeItems,
   countDeliveryOrderBoxItems,
   countNormalIrlPackStatus,
-  countStripeIrlPackStatus,
 } from './packStatus.js';
 import {
   assignDudesForBox,
   ensureIrlClaimCodeForBox as ensureIrlClaimCodeForBoxShared,
 } from './cardAssignment.js';
-import { normalizeCountryCode } from './normalizers.js';
-import {
-  shouldProcessStripeCheckoutFulfillmentWrite,
-} from './stripeCheckout/contract.js';
-import { enqueueNotificationEmailJob } from './cloudflareNotifications.js';
-import {
-  type NotificationEmailJobV1,
-} from './shared/notificationEmailJob.js';
-import { isCloudflareStripeCheckoutFulfillmentDocument } from './shared/stripeCheckoutFulfillmentJob.js';
-import {
-  processStripeCheckoutFulfillmentDocument,
-  requireStripeCheckoutSessionId,
-  type StripeCheckoutFlowDeps,
-  type StripeCheckoutOnchainConfig,
-} from './stripeCheckout/service.js';
-import { createFirebaseAdminStripeCheckoutStore } from './stripeCheckout/firebaseAdminStore.js';
-import {
-  publishStripeCheckoutTerminalNotifications,
-  shouldPublishStripeCheckoutTerminalNotificationsWrite,
-} from './stripeCheckout/terminalNotifications.js';
 import {
   boxMinterMetadataBaseMatchesDrop,
   normalizeBoxMinterMetadataBaseForComparison,
@@ -79,12 +56,6 @@ import {
   decodeBoxMinterConfigData as decodeBoxMinterConfigDataShared,
 } from './shared/boxMinterConfigCodec.js';
 import {
-  ADDRESS_CIPHER_SECRET_KEY_LENGTH,
-  addressCipherHint,
-  encryptAddressCipherText,
-  serializeAddressCipherPayload,
-} from './shared/addressCipher.js';
-import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS,
   MPL_CORE_CPI_SIGNER_ADDRESS,
@@ -93,16 +64,7 @@ import {
   SPL_NOOP_PROGRAM_ADDRESS,
 } from './shared/solanaProgramAddresses.js';
 
-// Firebase/Google Secret Manager secrets (Cloud Functions v2).
-// Configure via: `firebase functions:secrets:set COSIGNER_SECRET`
 const COSIGNER_SECRET = defineSecret('COSIGNER_SECRET');
-// Base64-encoded Curve25519 secret key for decrypting delivery addresses (TweetNaCl box).
-const ADDRESS_DECRYPTION_SECRET = defineSecret('ADDRESS_DECRYPTION_SECRET');
-const NOTIFICATION_ENQUEUE_SECRET = defineSecret('NOTIFICATION_ENQUEUE_SECRET');
-const STRIPE_RESTRICTED_KEY = defineSecret('STRIPE_RESTRICTED_KEY');
-const STRIPE_SECRET_KEY = defineSecret('STRIPE_SECRET_KEY');
-const STRIPE_RESTRICTED_KEY_LIVE = defineSecret('STRIPE_RESTRICTED_KEY_LIVE');
-const STRIPE_SECRET_KEY_LIVE = defineSecret('STRIPE_SECRET_KEY_LIVE');
 
 function loadLocalEnv() {
   const envPaths = [
@@ -151,7 +113,6 @@ loadLocalEnv();
 
 const app = getApps()[0] || initializeApp();
 const db = getFirestore(app);
-const stripeCheckoutStore = createFirebaseAdminStripeCheckoutStore(db);
 
 // Hardcoded (no env / no deployment config) to avoid config sprawl.
 const RPC_TIMEOUT_MS = 8_000;
@@ -426,21 +387,6 @@ function decodeSecretKey(secret: string | undefined, label: string) {
   return decoded;
 }
 
-function decodeBase64Secret(secret: string | undefined, label: string, expectedBytes: number): Uint8Array {
-  const value = (secret || '').trim();
-  if (!value) throw new Error(`${label} is not set`);
-  let decoded: Uint8Array;
-  try {
-    decoded = Buffer.from(value, 'base64');
-  } catch (err) {
-    throw new Error(`${label} must be valid base64: ${String(err)}`);
-  }
-  if (decoded.length !== expectedBytes) {
-    throw new Error(`${label} must decode to ${expectedBytes} bytes (got ${decoded.length})`);
-  }
-  return decoded;
-}
-
 let cachedCosigner: Keypair | null = null;
 function cosigner() {
   if (!cachedCosigner) {
@@ -449,84 +395,9 @@ function cosigner() {
   return cachedCosigner;
 }
 
-let cachedAddressDecryptKey: Uint8Array | null = null;
-let cachedAddressDecryptKeyState: 'unset' | 'ready' | 'missing' = 'unset';
-function addressDecryptKeyMaybe(): Uint8Array | null {
-  if (cachedAddressDecryptKeyState === 'ready') return cachedAddressDecryptKey;
-  if (cachedAddressDecryptKeyState === 'missing') return null;
-  try {
-    cachedAddressDecryptKey = decodeBase64Secret(
-      ADDRESS_DECRYPTION_SECRET.value(),
-      'ADDRESS_DECRYPTION_SECRET',
-      ADDRESS_CIPHER_SECRET_KEY_LENGTH,
-    );
-    cachedAddressDecryptKeyState = 'ready';
-    return cachedAddressDecryptKey;
-  } catch (err) {
-    cachedAddressDecryptKeyState = 'missing';
-    console.warn('[mons/functions] ADDRESS_DECRYPTION_SECRET unavailable; returning encrypted addresses', summarizeError(err));
-    return null;
-  }
-}
-
-function encryptAddressPayloadForFulfillment(plaintext: string): { encrypted: string; hint: string } | null {
-  try {
-    const messageText = String(plaintext || '').trim();
-    if (!messageText) return null;
-    const secret = addressDecryptKeyMaybe();
-    if (!secret) {
-      throw new HttpsError('unavailable', 'ADDRESS_DECRYPTION_SECRET is not configured for Stripe fulfillment');
-    }
-    const recipient = nacl.box.keyPair.fromSecretKey(secret).publicKey;
-    const parts = encryptAddressCipherText(messageText, recipient);
-    const encrypted = serializeAddressCipherPayload(
-      parts,
-      (value) => Buffer.from(value).toString('base64'),
-    );
-    const hint = addressCipherHint(messageText);
-    return { encrypted, hint };
-  } catch (err) {
-    if (err instanceof HttpsError) throw err;
-    console.warn('[mons/functions] failed to encrypt webhook shipping address', summarizeError(err));
-    throw new HttpsError('unavailable', 'Stripe checkout shipping address could not be encrypted', {
-      error: summarizeError(err),
-    });
-  }
-}
-
 function ensureAuthorityKeys() {
   // Prepared transactions require a server-side cosigner signature.
   cosigner();
-}
-
-function secretParamValueMaybe(secret: { value: () => string }): string {
-  try {
-    return (secret.value() || '').trim();
-  } catch {
-    return '';
-  }
-}
-
-function envOrSecretValue(envName: string, secret: { value: () => string }): string {
-  return (process.env[envName] || '').trim() || secretParamValueMaybe(secret);
-}
-
-function stripeApiKeys(): string[] {
-  const values = [
-    envOrSecretValue('STRIPE_SECRET_KEY', STRIPE_SECRET_KEY),
-    envOrSecretValue('STRIPE_RESTRICTED_KEY', STRIPE_RESTRICTED_KEY),
-    envOrSecretValue('STRIPE_SECRET_KEY_LIVE', STRIPE_SECRET_KEY_LIVE),
-    envOrSecretValue('STRIPE_RESTRICTED_KEY_LIVE', STRIPE_RESTRICTED_KEY_LIVE),
-  ]
-    .map((value) => String(value || '').trim())
-    .filter(Boolean);
-  return Array.from(new Set(values));
-}
-
-function isGrpcAlreadyExists(err: unknown): boolean {
-  const anyErr = err as any;
-  const code = anyErr?.code;
-  return code === 6 || code === '6' || code === 'ALREADY_EXISTS';
 }
 
 function summarizeError(err: unknown) {
@@ -1206,51 +1077,6 @@ async function fetchDecodedBoxMinterConfigAccount(params: {
   return decodeBoxMinterConfigData(Buffer.from(cfgInfo.data));
 }
 
-function requireStripeCheckoutCollectionMatchesConfig(
-  dropRuntime: DropRuntime,
-  cfg: DecodedBoxMinterConfig,
-  code: 'failed-precondition' | 'unavailable' = 'failed-precondition',
-): void {
-  if (dropRuntime.collectionMint.equals(cfg.coreCollection)) return;
-  throw new HttpsError(code, 'COLLECTION_MINT does not match on-chain config', {
-    configured: dropRuntime.collectionMint.toBase58(),
-    onchain: cfg.coreCollection.toBase58(),
-    dropId: dropRuntime.dropId,
-  });
-}
-
-function stripeCheckoutFlowDeps(): StripeCheckoutFlowDeps<DropRuntime, DecodedBoxMinterConfig & StripeCheckoutOnchainConfig> {
-  return {
-    requireDropId,
-    getDropRuntime,
-    connection,
-    ensureOnchainCoreConfig,
-    requireStripeCheckoutCollectionMatchesConfig,
-    cosigner,
-    encryptAddress: encryptAddressPayloadForFulfillment,
-    normalizeCountryCode,
-    buildTx,
-    sendAndConfirmSignedTx,
-    withTimeout,
-    isAlreadyExistsError: isGrpcAlreadyExists,
-    summarizeError,
-    programs: {
-      bubblegumProgramId: BUBBLEGUM_PROGRAM_ID,
-      mplNoopProgramId: MPL_NOOP_PROGRAM_ID,
-      mplAccountCompressionProgramId: MPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
-      mplCoreProgramId: MPL_CORE_PROGRAM_ID,
-      mplCoreCpiSigner: MPL_CORE_CPI_SIGNER,
-    },
-    rpcTimeoutMs: RPC_TIMEOUT_MS,
-    txSendTimeoutMs: TX_SEND_TIMEOUT_MS,
-    txConfirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
-    countPackStatus: async (params) => {
-      await countStripeIrlPackStatus({ db, ...params });
-    },
-    logPackStatusError: (entry) => logger.warn('stripeCheckout:packStatusCountFailed', entry),
-  };
-}
-
 function encodeMintReceiptsArgs(args: { boxIds: number[]; dudeIds: number[] }, dropRuntime: DropRuntime): Buffer {
   const boxIds = Array.isArray(args.boxIds) ? args.boxIds.map((n) => Number(n)) : [];
   const dudeIds = Array.isArray(args.dudeIds) ? args.dudeIds.map((n) => Number(n)) : [];
@@ -1408,30 +1234,6 @@ function transactionEncodingTooLarge(err: unknown): boolean {
   );
 }
 
-async function enqueuePreparedNotificationEmail(job: NotificationEmailJobV1): Promise<void> {
-  try {
-    await enqueueNotificationEmailJob({
-      job,
-      secret: envOrSecretValue('NOTIFICATION_ENQUEUE_SECRET', NOTIFICATION_ENQUEUE_SECRET),
-    });
-    logger.info('notificationEmail:queued', {
-      jobId: job.jobId,
-      kind: job.kind,
-      recipientCount: job.recipients.length,
-      ...job.context,
-    });
-  } catch (error) {
-    logger.error('notificationEmail:enqueueFailed', error instanceof Error ? error : new Error(String(error)), {
-      jobId: job.jobId,
-      kind: job.kind,
-      recipientCount: job.recipients.length,
-      ...job.context,
-      error: summarizeError(error),
-    });
-    throw error;
-  }
-}
-
 function resolveInstructionAccounts(tx: any): PublicKey[] {
   if (!tx?.transaction?.message) return [];
   const accountKeys = tx.transaction.message.getAccountKeys({
@@ -1471,125 +1273,6 @@ async function fetchConfirmedDeliveryRecordAccount(params: {
   }
   return { expectedDeliveryPda, expectedDeliveryBump, deliveryInfo };
 }
-
-export const processStripeCheckoutFulfillment = onDocumentWritten(
-  {
-    document: 'drops/{dropId}/stripeCheckouts/{sessionId}',
-    secrets: [
-      STRIPE_SECRET_KEY,
-      STRIPE_RESTRICTED_KEY,
-      STRIPE_SECRET_KEY_LIVE,
-      STRIPE_RESTRICTED_KEY_LIVE,
-      COSIGNER_SECRET,
-      ADDRESS_DECRYPTION_SECRET,
-      NOTIFICATION_ENQUEUE_SECRET,
-    ],
-    retry: true,
-    timeoutSeconds: 180,
-  },
-  async (event) => {
-    const beforeSnap = event.data?.before;
-    const checkoutSnap = event.data?.after;
-    if (!checkoutSnap?.exists) return;
-    const beforeCheckout = beforeSnap?.exists ? beforeSnap.data() as Record<string, unknown> : null;
-    const checkout = checkoutSnap.data() as Record<string, unknown>;
-    if (isCloudflareStripeCheckoutFulfillmentDocument(checkout)) {
-      logger.info('processStripeCheckoutFulfillment:delegatedToCloudflare', {
-        dropId: event.params.dropId,
-        sessionId: event.params.sessionId,
-      });
-      return;
-    }
-    const shouldPublishTerminalNotifications = shouldPublishStripeCheckoutTerminalNotificationsWrite({
-      before: beforeCheckout,
-      after: checkout,
-    });
-    const shouldProcessFulfillment = shouldProcessStripeCheckoutFulfillmentWrite({
-      beforeStatus: beforeSnap?.exists ? beforeSnap.get('status') : undefined,
-      afterStatus: checkoutSnap.get('status'),
-    });
-    if (!shouldPublishTerminalNotifications && !shouldProcessFulfillment) return;
-    let dropId: string;
-    let sessionId: string;
-    let terminalDropName: string | undefined;
-    try {
-      dropId = requireDropId(event.params.dropId);
-      sessionId = requireStripeCheckoutSessionId(event.params.sessionId);
-      if (shouldPublishTerminalNotifications) {
-        const runtime = getDropRuntime(dropId);
-        terminalDropName = runtime.config.displayName || runtime.config.collectionName || dropId;
-      }
-    } catch (error) {
-      if (!shouldPublishTerminalNotifications) throw error;
-      logger.warn('processStripeCheckoutFulfillment:invalidTerminalNotification', {
-        dropId: event.params.dropId,
-        sessionId: event.params.sessionId,
-        error: summarizeError(error),
-      });
-      return;
-    }
-    const checkoutRef = stripeCheckoutStore.doc(checkoutSnap.ref.path);
-
-    if (shouldPublishTerminalNotifications) {
-      const notificationResult = await publishStripeCheckoutTerminalNotifications({
-        dropId,
-        sessionId,
-        dependencies: {
-          loadCheckout: async () => {
-            const snapshot = await checkoutRef.get();
-            return snapshot.exists
-              ? { path: checkoutRef.path, data: snapshot.data() as Record<string, unknown> }
-              : null;
-          },
-          loadDeliveryOrder: async (resolvedDropId, deliveryId) => {
-            const snapshot = await db.doc(dropDeliveryOrderPath(resolvedDropId, deliveryId)).get();
-            return snapshot.exists ? snapshot.data() as Record<string, unknown> : null;
-          },
-          enqueueJob: enqueuePreparedNotificationEmail,
-          getDropName: () => terminalDropName || dropId,
-        },
-      });
-      const notificationLog = { dropId, sessionId, ...notificationResult };
-      if (notificationResult.outcome === 'invalid') {
-        logger.warn('processStripeCheckoutFulfillment:invalidTerminalNotification', notificationLog);
-      } else {
-        logger.info('processStripeCheckoutFulfillment:terminalNotifications', notificationLog);
-      }
-      return;
-    }
-
-    const result = await processStripeCheckoutFulfillmentDocument({
-      db: stripeCheckoutStore,
-      dropId,
-      sessionId,
-      checkoutRef,
-      apiKeys: stripeApiKeys(),
-      deps: stripeCheckoutFlowDeps(),
-    });
-    if (result.status === 'ignored') {
-      logger.info('processStripeCheckoutFulfillment:notProcessed', {
-        dropId,
-        sessionId,
-        reason: result.reason,
-      });
-    } else if (result.status === 'fulfilled') {
-      logger.info('processStripeCheckoutFulfillment:fulfilled', {
-        dropId: result.dropId || dropId,
-        sessionId,
-        deliveryId: result.deliveryId || null,
-        metadataId: result.metadataId || null,
-        metadataIds: result.metadataIds || null,
-      });
-    } else {
-      logger.warn('processStripeCheckoutFulfillment:manualReviewRequired', {
-        dropId,
-        sessionId,
-        error: result.error,
-      });
-    }
-  },
-);
-
 
 export type RetryIssueReceiptsArgs = {
   ownerWallet: string;

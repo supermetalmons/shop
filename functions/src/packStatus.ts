@@ -145,29 +145,6 @@ export function countNormalIrlPackStatus(params: {
   });
 }
 
-export function countStripeIrlPackStatus(params: {
-  db: Firestore;
-  dropRuntime: PackStatusDropRuntime;
-  orderHashHex: string;
-  quantity: number;
-  deliveryId?: number;
-  checkoutSessionId?: string;
-}): Promise<PackStatusCountResult> {
-  const orderHashHex = String(params.orderHashHex || '').trim();
-  return countPackStatusEvent({
-    db: params.db,
-    dropRuntime: params.dropRuntime,
-    type: 'redeemedIrlStripe',
-    eventKey: orderHashHex,
-    increments: [{ field: 'redeemedIrlStripe', quantity: params.quantity }],
-    extraEventData: {
-      orderHashHex,
-      ...(params.deliveryId ? { deliveryId: params.deliveryId } : {}),
-      ...(params.checkoutSessionId ? { checkoutSessionId: params.checkoutSessionId } : {}),
-    },
-  });
-}
-
 export function packStatusAssignmentRef(db: Pick<Firestore, 'doc'>, dropId: string, boxAssetId: string): DocumentReference {
   return db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
 }

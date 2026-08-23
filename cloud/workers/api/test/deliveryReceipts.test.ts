@@ -1127,5 +1127,5 @@ test('Firebase callable exports and deployment filters no longer expose migrated
   assert.doesNotMatch(functions, /onCallLogged\(\s*['"]issueReceipts['"]/);
   assert.doesNotMatch(functions, /onCallLogged\(\s*['"]recoverMyDeliveryOrders['"]/);
   const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> };
-  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'], /functions:(?:issueReceipts|recoverMyDeliveryOrders)/);
+  assert.doesNotMatch(packageJson.scripts['deploy:firebaseNewDrops'] || '', /functions:(?:issueReceipts|recoverMyDeliveryOrders)/);
 });
