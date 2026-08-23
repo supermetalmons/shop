@@ -1,6 +1,6 @@
 import { getApps, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
-import { onDocumentUpdated, onDocumentWritten } from 'firebase-functions/v2/firestore';
+import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import * as logger from 'firebase-functions/logger';
@@ -35,23 +35,11 @@ import {
 } from './cardAssignment.js';
 import { normalizeCountryCode } from './normalizers.js';
 import {
-  STRIPE_CHECKOUT_STATUS,
   shouldProcessStripeCheckoutFulfillmentWrite,
 } from './stripeCheckout/contract.js';
-import {
-  normalizeNotificationEmailRecipient,
-} from './notifications.js';
-import {
-  buildStripeCheckoutManualReviewEmailContent,
-  type StripeCheckoutManualReviewEmailMessage,
-} from './notificationEmails.js';
 import { enqueueNotificationEmailJob } from './cloudflareNotifications.js';
-import { createStripeReadyToShipNotificationJobs } from './stripeReadyNotifications.js';
 import {
-  createNotificationEmailJobV1,
   type NotificationEmailJobV1,
-  type NotificationEmailJobContext,
-  type NotificationEmailKind,
 } from './shared/notificationEmailJob.js';
 import {
   processStripeCheckoutFulfillmentDocument,
@@ -59,7 +47,10 @@ import {
   type StripeCheckoutFlowDeps,
   type StripeCheckoutOnchainConfig,
 } from './stripeCheckout/service.js';
-import { toMillisMaybe } from './time.js';
+import {
+  publishStripeCheckoutTerminalNotifications,
+  shouldPublishStripeCheckoutTerminalNotificationsWrite,
+} from './stripeCheckout/terminalNotifications.js';
 import {
   boxMinterMetadataBaseMatchesDrop,
   normalizeBoxMinterMetadataBaseForComparison,
@@ -1410,21 +1401,6 @@ function transactionEncodingTooLarge(err: unknown): boolean {
   );
 }
 
-const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
-
-async function enqueueRenderedNotificationEmail(params: {
-  kind: NotificationEmailKind;
-  idempotencyKey: string;
-  recipients: string[];
-  subject: string;
-  text: string;
-  html: string;
-  context: NotificationEmailJobContext;
-}): Promise<void> {
-  const job = createNotificationEmailJobV1(params);
-  return enqueuePreparedNotificationEmail(job);
-}
-
 async function enqueuePreparedNotificationEmail(job: NotificationEmailJobV1): Promise<void> {
   try {
     await enqueueNotificationEmailJob({
@@ -1448,119 +1424,6 @@ async function enqueuePreparedNotificationEmail(job: NotificationEmailJobV1): Pr
     throw error;
   }
 }
-
-function optionalTrimmedString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-async function sendStripeCheckoutManualReviewEmail(
-  message: StripeCheckoutManualReviewEmailMessage,
-): Promise<void> {
-  const email = buildStripeCheckoutManualReviewEmailContent(message);
-  return enqueueRenderedNotificationEmail({
-    kind: 'stripe_checkout_manual_review',
-    idempotencyKey: message.idempotencyKey,
-    recipients: message.recipients,
-    subject: email.subject,
-    text: email.text,
-    html: email.html,
-    context: { dropId: message.dropId, sessionId: message.sessionId },
-  });
-}
-
-async function sendStripeReadyToShipNotifications(
-  dropId: string,
-  deliveryId: number,
-): Promise<void> {
-  const orderSnap = await db.doc(dropDeliveryOrderPath(dropId, deliveryId)).get();
-  if (!orderSnap.exists) throw new Error('Stripe delivery order is missing after fulfillment');
-  const jobs = await createStripeReadyToShipNotificationJobs({
-    order: orderSnap.data() as Record<string, unknown>,
-    dropId,
-    deliveryId,
-  });
-  await Promise.all(jobs.map(enqueuePreparedNotificationEmail));
-}
-
-export const notifyStripeCheckoutManualReview = onDocumentUpdated(
-  {
-    document: 'drops/{dropId}/stripeCheckouts/{sessionId}',
-    secrets: [NOTIFICATION_ENQUEUE_SECRET],
-    retry: true,
-  },
-  async (event) => {
-    const beforeSnap = event.data?.before;
-    const afterSnap = event.data?.after;
-    if (!beforeSnap || !afterSnap) return;
-    if (
-      afterSnap.get('status') === STRIPE_CHECKOUT_STATUS.FULFILLED &&
-      beforeSnap.get('status') !== STRIPE_CHECKOUT_STATUS.FULFILLED
-    ) {
-      const dropId = requireDropId(event.params.dropId);
-      const deliveryId = requirePositiveDeliveryId(afterSnap.get('deliveryId'));
-      await sendStripeReadyToShipNotifications(dropId, deliveryId);
-      return;
-    }
-    if (
-      afterSnap.get('status') !== STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED ||
-      afterSnap.get('manualRefundReviewRequired') !== true
-    ) {
-      return;
-    }
-    if (
-      beforeSnap.get('status') === STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED &&
-      beforeSnap.get('manualRefundReviewRequired') === true
-    ) {
-      return;
-    }
-
-    let dropId: string;
-    let dropName: string;
-    let sessionId: string;
-    try {
-      dropId = requireDropId(event.params.dropId);
-      sessionId = requireStripeCheckoutSessionId(event.params.sessionId);
-      const dropRuntime = getDropRuntime(dropId);
-      dropName = dropRuntime.config.displayName || dropRuntime.config.collectionName || dropId;
-    } catch (err) {
-      logger.warn('notifyStripeCheckoutManualReview:invalidParams', {
-        dropId: event.params.dropId,
-        sessionId: event.params.sessionId,
-        error: summarizeError(err),
-      });
-      return;
-    }
-
-    const recipient = normalizeNotificationEmailRecipient(STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL);
-    if (!recipient) {
-      logger.warn('notifyStripeCheckoutManualReview:invalidRecipient', { email: STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL });
-      return;
-    }
-    const recipients = [recipient];
-    const checkout = afterSnap.data() as any;
-    const checkoutRef = afterSnap.ref;
-    const idempotencyKey = `${dropId}:${sessionId}:stripe_manual_review`;
-
-    await sendStripeCheckoutManualReviewEmail({
-      idempotencyKey,
-      recipients,
-      dropId,
-      dropName,
-      sessionId,
-      checkoutPath: checkoutRef.path,
-      livemode: checkout?.livemode === true,
-      variantKey: optionalTrimmedString(checkout?.variantKey),
-      owner: optionalTrimmedString(checkout?.owner),
-      firebaseUid: optionalTrimmedString(checkout?.firebaseUid || checkout?.uid),
-      manualRefundReviewReason: optionalTrimmedString(checkout?.manualRefundReviewReason),
-      lastFulfillmentError: checkout?.lastFulfillmentError,
-      createdAt: toMillisMaybe(checkout?.createdAt),
-      fulfillmentRequestedAt: toMillisMaybe(checkout?.fulfillmentRequestedAt),
-      processingStartedAt: toMillisMaybe(checkout?.processingStartedAt),
-      failedAt: toMillisMaybe(checkout?.failedAt),
-    });
-  },
-);
 
 function resolveInstructionAccounts(tx: any): PublicKey[] {
   if (!tx?.transaction?.message) return [];
@@ -1612,6 +1475,7 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
       STRIPE_RESTRICTED_KEY_LIVE,
       COSIGNER_SECRET,
       ADDRESS_DECRYPTION_SECRET,
+      NOTIFICATION_ENQUEUE_SECRET,
     ],
     retry: true,
     timeoutSeconds: 180,
@@ -1620,18 +1484,66 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
     const beforeSnap = event.data?.before;
     const checkoutSnap = event.data?.after;
     if (!checkoutSnap?.exists) return;
-    if (
-      !shouldProcessStripeCheckoutFulfillmentWrite({
-        beforeStatus: beforeSnap?.exists ? beforeSnap.get('status') : undefined,
-        afterStatus: checkoutSnap.get('status'),
-      })
-    ) {
+    const beforeCheckout = beforeSnap?.exists ? beforeSnap.data() as Record<string, unknown> : null;
+    const checkout = checkoutSnap.data() as Record<string, unknown>;
+    const shouldPublishTerminalNotifications = shouldPublishStripeCheckoutTerminalNotificationsWrite({
+      before: beforeCheckout,
+      after: checkout,
+    });
+    const shouldProcessFulfillment = shouldProcessStripeCheckoutFulfillmentWrite({
+      beforeStatus: beforeSnap?.exists ? beforeSnap.get('status') : undefined,
+      afterStatus: checkoutSnap.get('status'),
+    });
+    if (!shouldPublishTerminalNotifications && !shouldProcessFulfillment) return;
+    let dropId: string;
+    let sessionId: string;
+    let terminalDropName: string | undefined;
+    try {
+      dropId = requireDropId(event.params.dropId);
+      sessionId = requireStripeCheckoutSessionId(event.params.sessionId);
+      if (shouldPublishTerminalNotifications) {
+        const runtime = getDropRuntime(dropId);
+        terminalDropName = runtime.config.displayName || runtime.config.collectionName || dropId;
+      }
+    } catch (error) {
+      if (!shouldPublishTerminalNotifications) throw error;
+      logger.warn('processStripeCheckoutFulfillment:invalidTerminalNotification', {
+        dropId: event.params.dropId,
+        sessionId: event.params.sessionId,
+        error: summarizeError(error),
+      });
+      return;
+    }
+    const checkoutRef = checkoutSnap.ref;
+
+    if (shouldPublishTerminalNotifications) {
+      const notificationResult = await publishStripeCheckoutTerminalNotifications({
+        dropId,
+        sessionId,
+        dependencies: {
+          loadCheckout: async () => {
+            const snapshot = await checkoutRef.get();
+            return snapshot.exists
+              ? { path: checkoutRef.path, data: snapshot.data() as Record<string, unknown> }
+              : null;
+          },
+          loadDeliveryOrder: async (resolvedDropId, deliveryId) => {
+            const snapshot = await db.doc(dropDeliveryOrderPath(resolvedDropId, deliveryId)).get();
+            return snapshot.exists ? snapshot.data() as Record<string, unknown> : null;
+          },
+          enqueueJob: enqueuePreparedNotificationEmail,
+          getDropName: () => terminalDropName || dropId,
+        },
+      });
+      const notificationLog = { dropId, sessionId, ...notificationResult };
+      if (notificationResult.outcome === 'invalid') {
+        logger.warn('processStripeCheckoutFulfillment:invalidTerminalNotification', notificationLog);
+      } else {
+        logger.info('processStripeCheckoutFulfillment:terminalNotifications', notificationLog);
+      }
       return;
     }
 
-    const dropId = requireDropId(event.params.dropId);
-    const sessionId = requireStripeCheckoutSessionId(event.params.sessionId);
-    const checkoutRef = checkoutSnap.ref;
     const result = await processStripeCheckoutFulfillmentDocument({
       db,
       dropId,
@@ -1646,9 +1558,7 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
         sessionId,
         reason: result.reason,
       });
-      return;
-    }
-    if (result.status === 'fulfilled') {
+    } else if (result.status === 'fulfilled') {
       logger.info('processStripeCheckoutFulfillment:fulfilled', {
         dropId: result.dropId || dropId,
         sessionId,
@@ -1656,13 +1566,13 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
         metadataId: result.metadataId || null,
         metadataIds: result.metadataIds || null,
       });
-      return;
+    } else {
+      logger.warn('processStripeCheckoutFulfillment:manualReviewRequired', {
+        dropId,
+        sessionId,
+        error: result.error,
+      });
     }
-    logger.warn('processStripeCheckoutFulfillment:manualReviewRequired', {
-      dropId,
-      sessionId,
-      error: result.error,
-    });
   },
 );
 

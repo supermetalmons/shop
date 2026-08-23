@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Cloud Functions remain only for Stripe fulfillment and its notifications. Public inventory, pack status, pending-open reads, receipt claiming, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. One Cloud Function remains for Stripe fulfillment and publishes its notification jobs through Cloudflare. Public inventory, pack status, pending-open reads, receipt claiming, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
 
 ## Shared domain core
 
@@ -27,7 +27,7 @@ SDK, secrets, and environment access in thin runtime adapters. See
 The frontend is an asset-only Cloudflare Worker named `mons-shop`. Public Helius
 reads and authenticated profile and fulfillment routes are served by the separate
 `mons-shop-api` Worker at `api.mons.shop`.
-Firebase, Firestore, and Cloud Functions remain independently deployed to Firebase.
+Firebase Auth, Firestore, and the Stripe fulfillment Cloud Function remain independently deployed to Firebase.
 
 - Prerequisite: Node.js 22.12 or newer.
 - Install dependencies: `npm install --legacy-peer-deps`
@@ -117,8 +117,9 @@ Ready-to-ship buyer and shipper emails are rendered by `mons-shop-api` when the
 delivery order atomically enters `ready_to_ship`, then published directly through
 the `NOTIFICATION_EMAIL_QUEUE` binding. Pending Firestore outbox markers let a
 receipt retry resume Queue publication without repeating on-chain work. The
-remaining Stripe notification Firebase trigger authenticates with
-`NOTIFICATION_ENQUEUE_SECRET` and uses the internal producer route. The Worker
+Stripe fulfillment Cloud Function reloads the committed terminal checkout,
+authenticates with `NOTIFICATION_ENQUEUE_SECRET`, and publishes its success or
+manual-review jobs through the internal producer route. The Worker
 consumes `mons-shop-notification-emails` and sends through Resend. Failed transient
 deliveries retry five times before moving to `mons-shop-notification-emails-dlq`.
 
@@ -223,7 +224,7 @@ suite passes.
   - Set or rotate with `wrangler versions secret put STRIPE_WEBHOOK_SECRET --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env`, then promote the resulting combined version through the guarded API release flow.
 - `RESEND_API_KEY` (`mons-shop-api` outbound transactional-email secret; use a Resend Sending Access key restricted to `support.mons.shop`)
   - Later API versions inherit it; rotate it as an API Worker secret and promote only the exact reviewed combined version.
-- `NOTIFICATION_ENQUEUE_SECRET` (shared HMAC secret for the remaining Firebase Stripe notification producer and the internal `mons-shop-api` queue endpoint)
+- `NOTIFICATION_ENQUEUE_SECRET` (shared HMAC secret for the remaining Firebase Stripe fulfillment producer and the internal `mons-shop-api` queue endpoint)
   - Store the same randomly generated 32-byte value in Firebase Secret Manager and the API Worker's secret set before uploading its candidate. Never pass it as a command argument or print it.
   - The test-email command reads this secret from the shell or Firebase Secret Manager and never accesses the Resend key.
 - `RESEND_CONTACTS_API_KEY` (`mons-shop-api` Worker secret used only by `POST /notifications/subscribe`; requires Resend Full Access to manage Contacts)

@@ -68,7 +68,7 @@
     "release:approve-api-rollback": "node --import tsx scripts/approve-cloudflare-api-rollback.ts",
     "deploy:firebase": "npm run test:firestore-rules && firebase deploy --project mons-shop --only firestore:indexes,functions && firebase deploy --project mons-shop --only firestore:rules",
     "deploy:functions": "firebase deploy --project mons-shop --only functions",
-    "deploy:firebaseNewDrops": "firebase deploy --project mons-shop --only firestore:indexes,functions:processStripeCheckoutFulfillment,functions:notifyStripeCheckoutManualReview",
+    "deploy:firebaseNewDrops": "firebase deploy --project mons-shop --only firestore:indexes,functions:processStripeCheckoutFulfillment",
     "deploy-all-onchain": "node --experimental-strip-types scripts/deploy-all-onchain.ts",
     "extend:shared-devnet": "node --experimental-strip-types scripts/extend-shared-devnet-program.ts",
     "deploy:lsb-uri-program": "node --experimental-strip-types scripts/deploy-lsb-uri-program.ts",
