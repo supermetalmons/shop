@@ -140,6 +140,10 @@ import {
   handleRevealDudes,
   processRevealBackgroundJobMessage,
 } from './revealDudes.js';
+import {
+  isExactStripeCheckoutFulfillmentJobV1,
+} from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.js';
+import { processStripeCheckoutFulfillmentJob } from './stripeCheckoutFulfillment.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -172,6 +176,9 @@ const BASE_HEADERS = {
 const PENDING_OPEN_DISCRIMINATOR_BASE58 = bs58.encode(PENDING_OPEN_BOX_DISCRIMINATOR);
 const NOTIFICATION_EMAIL_QUEUE_NAME = 'mons-shop-notification-emails';
 const REVEAL_BACKGROUND_QUEUE_NAME = 'mons-shop-reveal-reconciliation';
+const STRIPE_FULFILLMENT_QUEUE_NAME = 'mons-shop-stripe-fulfillment';
+const STRIPE_FULFILLMENT_TIMEOUT_MS = 180_000;
+const STRIPE_FULFILLMENT_RETRY_DELAY_SECONDS = 60;
 const KNOWN_LOG_ROUTES = new Set([
   '/health',
   NOTIFICATION_ENQUEUE_PATH,
@@ -214,12 +221,63 @@ const KNOWN_LOG_ROUTES = new Set([
 type BackgroundJobProcessors = {
   notification: typeof processNotificationEmailMessage;
   reveal: typeof processRevealBackgroundJobMessage;
+  fulfillment: typeof processStripeFulfillmentMessage;
+  log: (entry: Record<string, unknown>) => void;
   error: (entry: Record<string, unknown>) => void;
 };
+
+export async function processStripeFulfillmentMessage(
+  message: Message<unknown>,
+  env: Env,
+  overrides: {
+    process?: typeof processStripeCheckoutFulfillmentJob;
+    log?: (entry: Record<string, unknown>) => void;
+  } = {},
+): Promise<void> {
+  const process = overrides.process || processStripeCheckoutFulfillmentJob;
+  const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
+  if (!isExactStripeCheckoutFulfillmentJobV1(message.body)) {
+    throw new Error('Invalid Stripe checkout fulfillment queue message');
+  }
+  const job = message.body;
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException('Stripe checkout fulfillment timed out', 'TimeoutError')),
+    STRIPE_FULFILLMENT_TIMEOUT_MS,
+  );
+  log({
+    event: 'stripe_fulfillment_job_started',
+    queueMessageId: message.id,
+    queueAttempts: message.attempts,
+    dropId: job.dropId,
+    sessionId: job.sessionId,
+    stripeEventId: job.stripeEventId,
+    stripeEventType: job.stripeEventType,
+    queueAgeMs: Math.max(0, Date.now() - job.enqueuedAtMs),
+  });
+  try {
+    const result = await process(job, env, controller.signal);
+    log({
+      event: 'stripe_fulfillment_job_completed',
+      queueMessageId: message.id,
+      queueAttempts: message.attempts,
+      dropId: job.dropId,
+      sessionId: job.sessionId,
+      fulfillmentStatus: result.fulfillment.status,
+      ...(result.fulfillment.status === 'ignored' ? { fulfillmentReason: result.fulfillment.reason } : {}),
+      notificationOutcome: result.notifications.outcome,
+      notificationQueuedJobs: result.notifications.queuedJobs,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 const defaultBackgroundJobProcessors: BackgroundJobProcessors = {
   notification: processNotificationEmailMessage,
   reveal: processRevealBackgroundJobMessage,
+  fulfillment: processStripeFulfillmentMessage,
+  log: (entry) => console.log(entry),
   error: (entry) => console.error(entry),
 };
 
@@ -231,7 +289,9 @@ export async function processBackgroundJobBatch(
   const processors = { ...defaultBackgroundJobProcessors, ...overrides };
   const processor = batch.queue === NOTIFICATION_EMAIL_QUEUE_NAME
     ? processors.notification
-    : batch.queue === REVEAL_BACKGROUND_QUEUE_NAME ? processors.reveal : null;
+    : batch.queue === REVEAL_BACKGROUND_QUEUE_NAME
+      ? processors.reveal
+      : batch.queue === STRIPE_FULFILLMENT_QUEUE_NAME ? processors.fulfillment : null;
   if (!processor) {
     processors.error({
       event: 'background_job_unknown_queue',
@@ -252,7 +312,17 @@ export async function processBackgroundJobBatch(
         attempts: message.attempts,
         error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
       });
-      message.retry();
+      if (batch.queue === STRIPE_FULFILLMENT_QUEUE_NAME) {
+        processors.log({
+          event: 'stripe_fulfillment_job_retry',
+          queueMessageId: message.id,
+          queueAttempts: message.attempts,
+          delaySeconds: STRIPE_FULFILLMENT_RETRY_DELAY_SECONDS,
+        });
+        message.retry({ delaySeconds: STRIPE_FULFILLMENT_RETRY_DELAY_SECONDS });
+      } else {
+        message.retry();
+      }
     }
   }
 }

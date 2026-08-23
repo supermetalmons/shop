@@ -43,6 +43,7 @@ function env(signer = COSIGNER, backgroundQueue = queue()): Env {
   return {
     NOTIFICATION_EMAIL_QUEUE: queue(),
     REVEAL_BACKGROUND_QUEUE: backgroundQueue,
+    STRIPE_FULFILLMENT_QUEUE: queue(),
     HELIUS_API_KEY: 'helius-test-key',
     COSIGNER_SECRET: bs58.encode(signer.secretKey),
     RESEND_API_KEY: '',

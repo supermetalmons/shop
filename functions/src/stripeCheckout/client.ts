@@ -1,5 +1,5 @@
-import { HttpsError } from 'firebase-functions/v2/https';
 import type Stripe from 'stripe';
+import { StripeCheckoutFulfillmentError } from './errors.js';
 
 const cachedStripeClientsByKey = new Map<string, Stripe>();
 let cachedStripeCtor: typeof import('stripe').default | null = null;
@@ -53,7 +53,7 @@ export function stripeCredentialErrorSummary(err: unknown): Record<string, unkno
 export async function stripeClientForKey(key: string, mode: StripeApiMode): Promise<Stripe> {
   const normalized = String(key || '').trim();
   if (!isStripeApiKeyForMode(normalized, mode)) {
-    throw new HttpsError('failed-precondition', `Stripe ${mode} key is not configured.`);
+    throw new StripeCheckoutFulfillmentError('failed-precondition', `Stripe ${mode} key is not configured.`);
   }
   const cached = cachedStripeClientsByKey.get(normalized);
   if (cached) return cached;

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createNotificationEmailJobV1 } from '../../../../functions/src/shared/notificationEmailJob.ts';
-import worker, { processBackgroundJobBatch } from '../src/index.ts';
+import { createStripeCheckoutFulfillmentJobV1 } from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.ts';
+import worker, { processBackgroundJobBatch, processStripeFulfillmentMessage } from '../src/index.ts';
 import {
   notificationEmailRetryDelaySeconds,
   processNotificationEmailMessage,
@@ -239,6 +240,13 @@ test('queue batches route by exact queue name and isolate individual failures', 
   const notification = queueMessage(JOB);
   const revealSibling = queueMessage(JOB);
   const unknown = queueMessage(JOB);
+  const fulfillment = queueMessage(createStripeCheckoutFulfillmentJobV1({
+    dropId: 'card_nft_binder_devnet',
+    sessionId: 'cs_test_123',
+    stripeEventId: 'evt_test_123',
+    stripeEventType: 'checkout.session.completed',
+    enqueuedAtMs: 1_700_000_000_000,
+  }), 2);
   const routes: string[] = [];
   const errors: Record<string, unknown>[] = [];
   const overrides: NonNullable<Parameters<typeof processBackgroundJobBatch>[2]> = {
@@ -251,6 +259,11 @@ test('queue batches route by exact queue name and isolate individual failures', 
       routes.push('notification');
       message.ack();
     },
+    fulfillment: async () => {
+      routes.push('fulfillment');
+      throw new Error('fulfillment failed');
+    },
+    log: () => undefined,
     error: (entry) => errors.push(entry),
   };
   await processBackgroundJobBatch(
@@ -268,7 +281,12 @@ test('queue batches route by exact queue name and isolate individual failures', 
     env() as Env,
     overrides,
   );
-  assert.deepEqual(routes, ['reveal', 'reveal', 'notification']);
+  await processBackgroundJobBatch(
+    batch('mons-shop-stripe-fulfillment', fulfillment.message),
+    env() as Env,
+    overrides,
+  );
+  assert.deepEqual(routes, ['reveal', 'reveal', 'notification', 'fulfillment']);
   assert.equal(reveal.actions.acks, 0);
   assert.deepEqual(reveal.actions.retries, [undefined]);
   assert.equal(revealSibling.actions.acks, 1);
@@ -277,10 +295,46 @@ test('queue batches route by exact queue name and isolate individual failures', 
   assert.deepEqual(notification.actions.retries, []);
   assert.equal(unknown.actions.acks, 0);
   assert.deepEqual(unknown.actions.retries, [undefined]);
+  assert.deepEqual(fulfillment.actions.retries, [{ delaySeconds: 60 }]);
   assert.deepEqual(errors.map((entry) => entry.event), [
     'background_job_unhandled_error',
     'background_job_unknown_queue',
+    'background_job_unhandled_error',
   ]);
+});
+
+test('Stripe fulfillment queue processing validates jobs and records terminal outcomes', async () => {
+  const queued = queueMessage(createStripeCheckoutFulfillmentJobV1({
+    dropId: 'card_nft_binder_devnet',
+    sessionId: 'cs_test_456',
+    stripeEventId: 'evt_test_456',
+    stripeEventType: 'checkout.session.async_payment_succeeded',
+    enqueuedAtMs: Date.now(),
+  }));
+  const logs: Record<string, unknown>[] = [];
+  await processStripeFulfillmentMessage(queued.message, env() as Env, {
+    process: async () => ({
+      fulfillment: {
+        status: 'ignored',
+        dropId: 'card_nft_binder_devnet',
+        sessionId: 'cs_test_456',
+        reason: 'already_fulfilled',
+      },
+      notifications: { outcome: 'fulfilled', queuedJobs: 2 },
+    }),
+    log: (entry) => logs.push(entry),
+  });
+  assert.deepEqual(logs.map((entry) => entry.event), [
+    'stripe_fulfillment_job_started',
+    'stripe_fulfillment_job_completed',
+  ]);
+  assert.equal(logs[1].fulfillmentReason, 'already_fulfilled');
+  await assert.rejects(
+    processStripeFulfillmentMessage(queueMessage({ invalid: true }).message, env() as Env, {
+      process: async () => assert.fail('invalid jobs must not be processed'),
+    }),
+    /Invalid Stripe checkout fulfillment queue message/,
+  );
 });
 
 test('API Worker exposes the queue handler and uses the reviewed queue policy', () => {
@@ -308,10 +362,20 @@ test('API Worker exposes the queue handler and uses the reviewed queue policy', 
       max_concurrency: 1,
       dead_letter_queue: 'mons-shop-reveal-reconciliation-dlq',
     },
+    {
+      queue: 'mons-shop-stripe-fulfillment',
+      max_batch_size: 1,
+      max_batch_timeout: 1,
+      max_retries: 10,
+      max_concurrency: 1,
+      retry_delay: 60,
+      dead_letter_queue: 'mons-shop-stripe-fulfillment-dlq',
+    },
   ]);
   assert.deepEqual(config.queues.producers, [
     { binding: 'NOTIFICATION_EMAIL_QUEUE', queue: 'mons-shop-notification-emails' },
     { binding: 'REVEAL_BACKGROUND_QUEUE', queue: 'mons-shop-reveal-reconciliation' },
+    { binding: 'STRIPE_FULFILLMENT_QUEUE', queue: 'mons-shop-stripe-fulfillment' },
   ]);
   assert.equal(config.observability.logs.head_sampling_rate, 1);
   assert.equal(config.observability.logs.invocation_logs, false);

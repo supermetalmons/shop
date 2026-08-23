@@ -1451,6 +1451,14 @@ test('createOrGetStripeOffchainDeliveryOrder keeps pack status out of the critic
     checkoutRef,
     isAlreadyExistsError: () => false,
     processingAttemptId: 'attempt_current',
+    countPackStatus: async ({ dropRuntime, orderHashHex: eventKey, quantity }) => {
+      await db.runTransaction(async (transaction: any) => {
+        const eventRef = db.doc(`drops/${dropRuntime.dropId}/packStatusEvents/redeemedIrlStripe_${eventKey}`);
+        if ((await transaction.get(eventRef)).exists) return;
+        transaction.update(db.doc(`drops/${dropRuntime.dropId}/meta/packStatus`), { redeemedIrlStripe: quantity });
+        transaction.create(eventRef, { quantity });
+      });
+    },
     order: {
       dropId,
       orderHashHex,

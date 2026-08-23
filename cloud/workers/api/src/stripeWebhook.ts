@@ -11,6 +11,7 @@ import {
   type StripeWebhookSession,
   type StripeWebhookTransition,
 } from '../../../../functions/src/shared/stripeWebhook.js';
+import { createStripeCheckoutFulfillmentJobV1 } from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
@@ -33,6 +34,7 @@ const FIRESTORE_MUTATION_ATTEMPTS = 3;
 
 type StripeWebhookEnv = Pick<Env,
   | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
+  | 'STRIPE_FULFILLMENT_QUEUE'
   | 'STRIPE_WEBHOOK_SECRET'
   | 'STRIPE_WEBHOOK_SECRET_DEVNET'
 >;
@@ -505,6 +507,27 @@ export async function handleStripeWebhookRequest(
         serviceAccountJson,
         signal: controller.signal,
       });
+      if (transition.outcome !== 'already_fulfilled') {
+        const queueResult = await env.STRIPE_FULFILLMENT_QUEUE.send(
+          createStripeCheckoutFulfillmentJobV1({
+            dropId: action.dropId,
+            sessionId: action.sessionId,
+            stripeEventId: action.eventId,
+            stripeEventType: action.eventType,
+            enqueuedAtMs: dependencies.nowMs(),
+          }),
+        );
+        dependencies.log({
+          event: 'stripe_fulfillment_job_enqueued',
+          dropId: action.dropId,
+          sessionId: action.sessionId,
+          stripeEventId: action.eventId,
+          stripeEventType: action.eventType,
+          transition: transition.outcome,
+          backlogCount: queueResult.metadata.metrics.backlogCount,
+          backlogBytes: queueResult.metadata.metrics.backlogBytes,
+        });
+      }
       const responseBody = transition.outcome === 'queued'
         ? {
             received: true,

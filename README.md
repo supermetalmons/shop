@@ -1,6 +1,6 @@
 # mons.shop
 
-React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. One Cloud Function remains for Stripe fulfillment and publishes its notification jobs through Cloudflare. Public inventory, pack status, pending-open reads, receipt claiming, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
+React + TypeScript Solana dapp for the mons IRL blind boxes. **Box minting is fully on-chain** via a custom Solana program that mints **MPL Core (uncompressed) assets**. Stripe fulfillment is migrating through the `mons-shop-stripe-fulfillment` Cloudflare Queue; the remaining Cloud Function is a temporary compatibility bridge that ignores Cloudflare-owned checkout documents. Public inventory, pack status, pending-open reads, receipt claiming, delivery transaction preparation, authenticated profile and fulfillment actions, and the browser's narrowly scoped Solana RPC traffic go through the dedicated `api.mons.shop` Cloudflare Worker, which keeps provider credentials out of the browser.
 
 ## Shared domain core
 
@@ -27,7 +27,7 @@ SDK, secrets, and environment access in thin runtime adapters. See
 The frontend is an asset-only Cloudflare Worker named `mons-shop`. Public Helius
 reads and authenticated profile and fulfillment routes are served by the separate
 `mons-shop-api` Worker at `api.mons.shop`.
-Firebase Auth, Firestore, and the Stripe fulfillment Cloud Function remain independently deployed to Firebase.
+Firebase Auth and Firestore remain deployed to Firebase. The Stripe fulfillment Cloud Function remains only until the guarded Cloudflare checkout proof and retirement command succeed.
 
 - Prerequisite: Node.js 22.12 or newer.
 - Install dependencies: `npm install --legacy-peer-deps`
@@ -60,8 +60,9 @@ Never commit the token or expose secrets through a `VITE_*` variable.
 
 The API Worker uses encrypted `HELIUS_API_KEY`, `RESEND_API_KEY`,
 `RESEND_CONTACTS_API_KEY`, and `NOTIFICATION_ENQUEUE_SECRET` secrets, the
-separate `NOTIFICATION_EMAIL_QUEUE` and `REVEAL_BACKGROUND_QUEUE` producers and
-consumers, Smart Placement, and a version-first release flow. It serves
+separate `NOTIFICATION_EMAIL_QUEUE`, `REVEAL_BACKGROUND_QUEUE`, and
+`STRIPE_FULFILLMENT_QUEUE` producers and consumers, Smart Placement, and a
+version-first release flow. It serves
 `/auth/solana`, `/profile/reconcile`, `/boxes/reveal`, `/claims/irl/prepare`, `/receipts/stripe/claim`, `/delivery/prepare`, `/delivery/receipts/issue`, `/delivery/receipts/recover`, `/admin/irl-redeem/prepare`, `/admin/irl-redeem/finalize`, `/checkout/session`, `/webhooks/stripe`, `/inventory`, `/notifications/subscribe`, `/pack-status/:dropId`,
 `/pending-open-boxes`, authenticated profile/admin/fulfillment reads,
 `/rpc/mainnet-beta`, and `/rpc/devnet`. Browser-facing
@@ -82,15 +83,15 @@ Advanced release controls remain available for separately managed releases:
 
 - Upload an undeployed candidate, smoke-test its Version Preview, run the mandatory five-request comparison, and write version-keyed promotion evidence:
   - `npm run deploy:api -- preview --smoke-owner <wallet>`
-  - Preview creates the reveal queue and DLQ when they are missing; it does not attach a consumer or enqueue reveal work.
+  - Preview creates the reveal and Stripe fulfillment queues and their DLQs when they are missing; it does not attach consumers or enqueue work.
 - Re-smoke and repeat the mandatory five-request comparison against that exact Version Preview, apply the reviewed `api.mons.shop` trigger, verify the tracked baseline, promote the exact version, smoke-test production, and write production evidence:
   - `npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet>`
 - Reapply reviewed triggers without changing code:
   - `npm run deploy:api -- triggers --smoke-owner <wallet>`
-  - This verifies both queue consumers without pausing or resuming reveal delivery.
+  - This verifies all three queue consumers without pausing or resuming stateful queue delivery.
 - Roll back to the exact approved API version only when the approved frontend is live:
   - `npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet>`
-  - The command pauses reveal delivery, verifies the approved pair and both consumers, rolls back and smokes the API, resumes delivery, verifies again, and updates release metadata. Any post-resume failure re-pauses delivery.
+  - The command pauses reveal and Stripe fulfillment delivery, verifies the approved pair and all consumers, rolls back and smokes the API, resumes delivery, verifies again, and updates release metadata. Any post-resume failure re-pauses both queues.
 - Run the standalone comparison against an explicit origin:
   - `npm run benchmark:api -- --api-origin https://api.mons.shop --owner <wallet> --runs 5`
   - Add `--include-devnet` when the comparison should include both mainnet and devnet inventory.
@@ -117,11 +118,14 @@ Ready-to-ship buyer and shipper emails are rendered by `mons-shop-api` when the
 delivery order atomically enters `ready_to_ship`, then published directly through
 the `NOTIFICATION_EMAIL_QUEUE` binding. Pending Firestore outbox markers let a
 receipt retry resume Queue publication without repeating on-chain work. The
-Stripe fulfillment Cloud Function reloads the committed terminal checkout,
-authenticates with `NOTIFICATION_ENQUEUE_SECRET`, and publishes its success or
-manual-review jobs through the internal producer route. The Worker
-consumes `mons-shop-notification-emails` and sends through Resend. Failed transient
-deliveries retry five times before moving to `mons-shop-notification-emails-dlq`.
+Stripe webhook marks the checkout for `cloudflare_queue_v1` and publishes a
+versioned job through `STRIPE_FULFILLMENT_QUEUE`. The Worker acquires the
+existing Firestore lease, reconciles the on-chain order, creates the delivery
+records and claim codes, and publishes success or manual-review email jobs. The
+compatibility Cloud Function ignores marked documents. Fulfillment failures
+retry ten times with a 60-second delay before moving to
+`mons-shop-stripe-fulfillment-dlq`; email delivery failures retain their existing
+five-retry policy.
 
 - Validate the HTTP and notification handlers, generated bindings, TypeScript,
   unit tests, bundling, and startup together with `npm run check:api`.
@@ -143,6 +147,17 @@ Reveal reconciliation uses `mons-shop-reveal-reconciliation` with
 info <queue>` and inspect the Worker with `wrangler tail mons-shop-api --format
 json`. If a job reaches the DLQ, deploy and verify the fix before manually
 replaying only the affected jobs; reconciliation is idempotent.
+
+Stripe fulfillment uses `mons-shop-stripe-fulfillment` with
+`mons-shop-stripe-fulfillment-dlq`. Before retiring the compatibility function,
+complete one quantity-one `card_nft_binder_devnet` checkout, approve that exact
+API version for rollback, and run:
+
+- `npm run retire:stripe-fulfillment-function -- --api-version-id <uuid> --drop-id card_nft_binder_devnet --session-id <stripe-session-id> --confirm`
+
+The retirement command verifies the live and approved API version, all Queue
+consumers, the Cloudflare processor marker, the fulfilled checkout, and its
+delivery order before deleting only `processStripeCheckoutFulfillment`.
 
 Wrangler can upload a preview version only after the Worker exists.
 `mons-shop-api` is already provisioned, so releases can use the preview command directly.
@@ -198,6 +213,7 @@ suite passes.
 
 ## Firebase functions
 - Install and build: `cd functions && npm install && npm run build`
+- `processStripeCheckoutFulfillment` is a temporary compatibility bridge during the Queue cutover and must not process documents marked `cloudflare_queue_v1`.
 - Deploy from the repo root:
   - `npm run deploy:firebase` runs the Firestore Emulator rules suite, deploys Functions and indexes to `mons-shop`, and then deploys Firestore rules in a separate Firebase CLI invocation.
   - `npm run deploy:functions` deploys Functions only to `mons-shop`.

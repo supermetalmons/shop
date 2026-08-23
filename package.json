@@ -66,6 +66,7 @@
     "benchmark:api": "node --import tsx scripts/benchmark-cloudflare-api.ts",
     "release:finalize": "node --import tsx scripts/finalize-cloudflare-release.ts",
     "release:approve-api-rollback": "node --import tsx scripts/approve-cloudflare-api-rollback.ts",
+    "retire:stripe-fulfillment-function": "node --import tsx scripts/retire-stripe-checkout-fulfillment-function.ts",
     "deploy:firebase": "npm run test:firestore-rules && firebase deploy --project mons-shop --only firestore:indexes,functions && firebase deploy --project mons-shop --only firestore:rules",
     "deploy:functions": "firebase deploy --project mons-shop --only functions",
     "deploy:firebaseNewDrops": "firebase deploy --project mons-shop --only firestore:indexes,functions:processStripeCheckoutFulfillment",

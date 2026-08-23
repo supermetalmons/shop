@@ -51,7 +51,7 @@ export class ProfileReadError extends Error {
 }
 
 export class FirestoreWriteConflict extends Error {
-  constructor() {
+  constructor(readonly status: 'ABORTED' | 'ALREADY_EXISTS' | 'FAILED_PRECONDITION' = 'ABORTED') {
     super('Firestore document changed during the write');
     this.name = 'FirestoreWriteConflict';
   }
@@ -323,7 +323,7 @@ export async function authenticatedFirestoreRequest(args: {
         error.status === 'ALREADY_EXISTS' ||
         error.status === 'FAILED_PRECONDITION'
       ) {
-        throw new FirestoreWriteConflict();
+        throw new FirestoreWriteConflict(error.status);
       }
       throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
     }

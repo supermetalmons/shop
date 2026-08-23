@@ -1,6 +1,4 @@
 import { randomInt } from 'crypto';
-import { FieldValue, Timestamp, type DocumentReference, type DocumentSnapshot, type Firestore } from 'firebase-admin/firestore';
-import { HttpsError } from 'firebase-functions/v2/https';
 import {
   ComputeBudgetProgram,
   Connection,
@@ -14,7 +12,6 @@ import type Stripe from 'stripe';
 import type { MintSelectionConfig, SolanaCluster } from '../config/deployment.js';
 import type { DropFamily, DropSalesMode } from '../shared/deploymentCore.js';
 import { dropDeliveryOrderPath, dropRootPath } from '../dropPaths.js';
-import { countStripeIrlPackStatus, type PackStatusDropRuntime } from '../packStatus.js';
 import {
   buildStripeOffchainAddressSnapshot,
   buildStripeOffchainDeliveryOrderDocument,
@@ -59,9 +56,16 @@ import {
   type StripeCheckoutKind as SharedStripeCheckoutKind,
 } from '../shared/stripeCheckoutCore.js';
 import { toMillisMaybe } from '../time.js';
+import { StripeCheckoutFulfillmentError } from './errors.js';
+import {
+  stripeCheckoutFieldValue,
+  type StripeCheckoutDocumentReference,
+  type StripeCheckoutDocumentSnapshot,
+  type StripeCheckoutFirestore,
+} from './store.js';
 
 type StripeCheckoutDocumentRecord = {
-  ref: DocumentReference;
+  ref: StripeCheckoutDocumentReference;
   checkout: any;
 } & StripeCheckoutDocumentData;
 
@@ -71,7 +75,7 @@ export type StripeCheckoutManualReviewSummary =
 export type StripeCheckoutFulfillmentStart =
   | {
       started: true;
-      checkoutRef: DocumentReference;
+      checkoutRef: StripeCheckoutDocumentReference;
       checkout: StripeCheckoutDocumentRecord;
       variantKey?: string;
       processingAttemptId: string;
@@ -137,6 +141,19 @@ export type StripeCheckoutDropRuntime = {
   };
 };
 
+export type StripeCheckoutPackStatusRuntime = Pick<
+  StripeCheckoutDropRuntime,
+  'dropId' | 'cluster' | 'itemsPerBox' | 'maxSupply'
+>;
+
+type StripeCheckoutPackStatusCounter<Runtime extends StripeCheckoutPackStatusRuntime> = (params: {
+  dropRuntime: Runtime;
+  orderHashHex: string;
+  quantity: number;
+  deliveryId: number;
+  checkoutSessionId: string;
+}) => Promise<void>;
+
 export type StripeCheckoutOnchainConfig = {
   admin: PublicKey;
   coreCollection: PublicKey;
@@ -162,7 +179,6 @@ export type StripeCheckoutFlowDeps<
   Config extends StripeCheckoutOnchainConfig,
 > = DropRuntimeDeps<Runtime> & {
   connection: (dropRuntime: Runtime) => Connection;
-  fetchCheckoutConfig: (params: { dropRuntime: Runtime; conn: Connection; context: string }) => Promise<Config>;
   ensureOnchainCoreConfig: (dropRuntime: Runtime) => Promise<Config>;
   requireStripeCheckoutCollectionMatchesConfig: (
     dropRuntime: Runtime,
@@ -191,6 +207,8 @@ export type StripeCheckoutFlowDeps<
   rpcTimeoutMs: number;
   txSendTimeoutMs: number;
   txConfirmTimeoutMs: number;
+  countPackStatus?: StripeCheckoutPackStatusCounter<Runtime>;
+  logPackStatusError?: (entry: Record<string, unknown>) => void;
 };
 
 type StripeOffchainDeliveryOrderMarker = {
@@ -305,7 +323,7 @@ class StripeCheckoutProcessingAttemptOwnershipCheckError extends Error {
 }
 
 async function recordStripeCheckoutRetryableFulfillmentError(params: {
-  checkoutRef: DocumentReference;
+  checkoutRef: StripeCheckoutDocumentReference;
   summarizeError: (err: unknown) => unknown;
   err: unknown;
   attempt: number;
@@ -314,10 +332,10 @@ async function recordStripeCheckoutRetryableFulfillmentError(params: {
 }): Promise<'recorded' | 'stale'> {
   const update = {
     lastRetryableFulfillmentError: params.summarizeError(params.err),
-    lastRetryableFulfillmentErrorAt: FieldValue.serverTimestamp(),
+    lastRetryableFulfillmentErrorAt: stripeCheckoutFieldValue.serverTimestamp(),
     lastRetryableFulfillmentAttempt: params.attempt,
-    nextFulfillmentRetryAt: Timestamp.fromMillis(Date.now() + params.retryDelayMs),
-    updatedAt: FieldValue.serverTimestamp(),
+    nextFulfillmentRetryAt: stripeCheckoutFieldValue.timestampFromMillis(Date.now() + params.retryDelayMs),
+    updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
   };
 
   if (!params.processingAttemptId) {
@@ -342,7 +360,7 @@ async function recordStripeCheckoutRetryableFulfillmentError(params: {
 export async function runStripeCheckoutFulfillmentWithRetry<T>(
   operation: (attempt: number) => Promise<T>,
   params: {
-    checkoutRef: DocumentReference;
+    checkoutRef: StripeCheckoutDocumentReference;
     summarizeError: (err: unknown) => unknown;
     maxAttempts?: number;
     retryDelayMs?: number;
@@ -382,7 +400,7 @@ export function stripeApiKeysForMode(apiKeys: readonly string[], mode: StripeApi
   const keys = Array.from(
     new Set(apiKeys.map((value) => String(value || '').trim()).filter((value) => isStripeApiKeyForMode(value, mode))),
   );
-  if (keys.length === 0) throw new HttpsError('failed-precondition', `Stripe ${mode} key is not configured.`);
+  if (keys.length === 0) throw new StripeCheckoutFulfillmentError('failed-precondition', `Stripe ${mode} key is not configured.`);
   return keys;
 }
 
@@ -393,13 +411,13 @@ export function stripeApiKeyForMode(apiKeys: readonly string[], mode: StripeApiM
 export function stripeApiModeForCluster(cluster: SolanaCluster): StripeApiMode {
   const mode = stripeCheckoutModeForCluster(cluster);
   if (mode) return mode;
-  throw new HttpsError('failed-precondition', 'Stripe checkout is only enabled for devnet and mainnet drops.');
+  throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout is only enabled for devnet and mainnet drops.');
 }
 
 export function requireStripeCheckoutSessionId(rawSessionId: unknown): string {
   const sessionId = String(rawSessionId || '').trim();
   if (!STRIPE_CHECKOUT_SESSION_ID_RE.test(sessionId)) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout session id is invalid');
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout session id is invalid');
   }
   return sessionId;
 }
@@ -412,12 +430,12 @@ function normalizeSizeStripeVariantKey(
   if (!value) return undefined;
   const selection = dropRuntime.config.mintSelection;
   if (selection?.kind !== 'size') {
-    throw new HttpsError('failed-precondition', 'Stripe checkout requires size variant minting.');
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout requires size variant minting.');
   }
   try {
     return selection.options[resolveMintSelectionVariantIndex(selection, value)].key;
   } catch {
-    throw new HttpsError('invalid-argument', 'Invalid variantKey');
+    throw new StripeCheckoutFulfillmentError('invalid-argument', 'Invalid variantKey');
   }
 }
 
@@ -428,7 +446,7 @@ export function stripeCheckoutKindForDrop(dropRuntime: StripeCheckoutDropRuntime
     salesMode: dropRuntime.config.salesMode,
   });
   if (checkoutKind) return checkoutKind;
-  throw new HttpsError(
+  throw new StripeCheckoutFulfillmentError(
     'failed-precondition',
     'Stripe checkout is only enabled for direct-delivery size drops, receipt-only drops, or standard pack drops.',
   );
@@ -441,17 +459,17 @@ function normalizeStripeCheckoutVariantKey(
 ): string | undefined {
   const raw = String(rawVariantKey || '').trim();
   if (checkoutKind !== 'size_variant') {
-    if (raw) throw new HttpsError('invalid-argument', 'variantKey is only supported for size Stripe checkout.');
+    if (raw) throw new StripeCheckoutFulfillmentError('invalid-argument', 'variantKey is only supported for size Stripe checkout.');
     return undefined;
   }
 
   const variantKey = normalizeSizeStripeVariantKey(dropRuntime, raw);
-  if (!variantKey) throw new HttpsError('invalid-argument', 'variantKey is required for Stripe checkout.');
+  if (!variantKey) throw new StripeCheckoutFulfillmentError('invalid-argument', 'variantKey is required for Stripe checkout.');
   return variantKey;
 }
 
 async function fetchStripeCheckoutLineItems(stripe: Stripe, session: Stripe.Checkout.Session) {
-  if (!session.id) throw new HttpsError('failed-precondition', 'Stripe checkout session id is missing');
+  if (!session.id) throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout session id is missing');
   return stripe.checkout.sessions.listLineItems(session.id, { limit: 10, expand: ['data.price'] });
 }
 
@@ -471,7 +489,7 @@ export async function fetchStripeCheckoutSession(sessionId: string, apiKeys: rea
       lastCredentialError = err;
     }
   }
-  throw new HttpsError('failed-precondition', `Stripe ${mode} key was rejected by Stripe.`, {
+  throw new StripeCheckoutFulfillmentError('failed-precondition', `Stripe ${mode} key was rejected by Stripe.`, {
     mode,
     configuredKeyKinds: keys.map(stripeApiKeyKindForLog),
     stripeError: stripeCredentialErrorSummary(lastCredentialError),
@@ -487,8 +505,8 @@ function requireStripeOffchainAddressSnapshot(params: {
   try {
     return buildStripeOffchainAddressSnapshot(params);
   } catch (err) {
-    if (err instanceof HttpsError) throw err;
-    throw new HttpsError('failed-precondition', err instanceof Error ? err.message : String(err), {
+    if (err instanceof StripeCheckoutFulfillmentError) throw err;
+    throw new StripeCheckoutFulfillmentError('failed-precondition', err instanceof Error ? err.message : String(err), {
       sessionId: params.session.id,
     });
   }
@@ -615,7 +633,7 @@ function requireStripeCheckoutFulfillmentContext<Runtime extends StripeCheckoutD
 ): { dropId: string; sessionId: string; dropRuntime: Runtime; checkoutKind: StripeCheckoutKind; variantKey?: string } {
   const sessionId = requireStripeCheckoutSessionId(session.id);
   if (!isStripeOffchainFulfillmentSession(session)) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout session is not app-created off-chain fulfillment', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout session is not app-created off-chain fulfillment', {
       sessionId,
     });
   }
@@ -623,7 +641,7 @@ function requireStripeCheckoutFulfillmentContext<Runtime extends StripeCheckoutD
   const dropIdRaw = session.metadata?.dropId;
   const variantKeyRaw = session.metadata?.variantKey;
   if (!dropIdRaw) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout session is missing off-chain fulfillment metadata', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout session is missing off-chain fulfillment metadata', {
       sessionId,
     });
   }
@@ -645,7 +663,7 @@ function requireAppCreatedStripeCheckoutDocumentData(params: {
   try {
     return validateStripeCheckoutDocumentData(params);
   } catch (err) {
-    throw new HttpsError('failed-precondition', err instanceof Error ? err.message : String(err), {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', err instanceof Error ? err.message : String(err), {
       dropId: params.dropId,
       sessionId: params.sessionId,
     });
@@ -657,11 +675,11 @@ function requireAppCreatedStripeCheckoutSnapshot(params: {
   variantKey?: string;
   sessionId: string;
   expectedLivemode?: boolean;
-  ref: DocumentReference;
-  snap: DocumentSnapshot;
+  ref: StripeCheckoutDocumentReference;
+  snap: StripeCheckoutDocumentSnapshot;
 }): StripeCheckoutDocumentRecord {
   if (!params.snap.exists) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout session was not created by this app', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout session was not created by this app', {
       dropId: params.dropId,
       sessionId: params.sessionId,
     });
@@ -679,21 +697,21 @@ function requireAppCreatedStripeCheckoutSnapshot(params: {
 
 function stripeCheckoutFailureStateClearUpdate(): Record<string, unknown> {
   return {
-    lastFulfillmentError: FieldValue.delete(),
-    lastRetryableFulfillmentAttempt: FieldValue.delete(),
-    lastRetryableFulfillmentError: FieldValue.delete(),
-    lastRetryableFulfillmentErrorAt: FieldValue.delete(),
-    manualRefundReviewRequired: FieldValue.delete(),
-    manualRefundReviewReason: FieldValue.delete(),
-    nextFulfillmentRetryAt: FieldValue.delete(),
-    failedAt: FieldValue.delete(),
+    lastFulfillmentError: stripeCheckoutFieldValue.delete(),
+    lastRetryableFulfillmentAttempt: stripeCheckoutFieldValue.delete(),
+    lastRetryableFulfillmentError: stripeCheckoutFieldValue.delete(),
+    lastRetryableFulfillmentErrorAt: stripeCheckoutFieldValue.delete(),
+    manualRefundReviewRequired: stripeCheckoutFieldValue.delete(),
+    manualRefundReviewReason: stripeCheckoutFieldValue.delete(),
+    nextFulfillmentRetryAt: stripeCheckoutFieldValue.delete(),
+    failedAt: stripeCheckoutFieldValue.delete(),
   };
 }
 
 function stripeCheckoutProcessingStateClearUpdate(): Record<string, unknown> {
   return {
-    processingAttemptId: FieldValue.delete(),
-    processingLeaseExpiresAt: FieldValue.delete(),
+    processingAttemptId: stripeCheckoutFieldValue.delete(),
+    processingLeaseExpiresAt: stripeCheckoutFieldValue.delete(),
   };
 }
 
@@ -715,12 +733,12 @@ function stripeCheckoutFulfilledUpdate(params: {
   return {
     status: STRIPE_CHECKOUT_STATUS.FULFILLED,
     deliveryId: params.deliveryId,
-    ...(metadataId ? { metadataId } : metadataIds.length > 1 ? { metadataId: FieldValue.delete() } : {}),
+    ...(metadataId ? { metadataId } : metadataIds.length > 1 ? { metadataId: stripeCheckoutFieldValue.delete() } : {}),
     ...(metadataIds.length ? { metadataIds, quantity: metadataIds.length } : {}),
     ...(typeof params.receiptTx === 'string' || params.receiptTx === null ? { receiptTx: params.receiptTx } : {}),
-    fulfilledAt: FieldValue.serverTimestamp(),
+    fulfilledAt: stripeCheckoutFieldValue.serverTimestamp(),
     ...stripeCheckoutFulfillmentClearUpdate(),
-    updatedAt: FieldValue.serverTimestamp(),
+    updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
   };
 }
 
@@ -751,7 +769,7 @@ function stripeCheckoutFulfilledWriteStatus(
 }
 
 export async function markStripeCheckoutFulfillmentFulfilled(
-  checkoutRef: DocumentReference,
+  checkoutRef: StripeCheckoutDocumentReference,
   params: {
     deliveryId: number;
     metadataId?: number;
@@ -821,7 +839,7 @@ function readStripeOffchainDeliveryOrderMarker(marker: { get(fieldPath: string):
 }
 
 async function fetchStripeOffchainDeliveryOrderMarker(params: {
-  db: Firestore;
+  db: StripeCheckoutFirestore;
   dropId: string;
   orderHashHex: string;
 }): Promise<StripeOffchainDeliveryOrderMarker | null> {
@@ -829,18 +847,20 @@ async function fetchStripeOffchainDeliveryOrderMarker(params: {
   return marker.exists ? readStripeOffchainDeliveryOrderMarker(marker) : null;
 }
 
-export async function createOrGetStripeOffchainDeliveryOrder(params: {
-  db: Firestore;
-  dropRuntime?: PackStatusDropRuntime;
+export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends StripeCheckoutPackStatusRuntime = StripeCheckoutPackStatusRuntime>(params: {
+  db: StripeCheckoutFirestore;
+  dropRuntime?: Runtime;
   order: StripeOffchainDeliveryOrderDraft;
-  checkoutRef: DocumentReference;
+  checkoutRef: StripeCheckoutDocumentReference;
   isAlreadyExistsError: (err: unknown) => boolean;
   processingAttemptId?: string;
+  countPackStatus?: StripeCheckoutPackStatusCounter<Runtime>;
+  logPackStatusError?: (entry: Record<string, unknown>) => void;
 }): Promise<StripeOffchainDeliveryOrderResult> {
   const { db, order, checkoutRef } = params;
   const { dropId, orderHashHex } = order;
   if (params.dropRuntime && params.dropRuntime.dropId !== dropId) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout drop runtime does not match the delivery order drop.', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout drop runtime does not match the delivery order drop.', {
       orderDropId: dropId,
       runtimeDropId: params.dropRuntime.dropId,
     });
@@ -906,12 +926,12 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
         };
         tx.create(orderRef, {
           ...buildStripeOffchainDeliveryOrderDocument(deliveryOrder),
-          processedAt: FieldValue.serverTimestamp(),
-          createdAt: FieldValue.serverTimestamp(),
+          processedAt: stripeCheckoutFieldValue.serverTimestamp(),
+          createdAt: stripeCheckoutFieldValue.serverTimestamp(),
         });
         tx.create(markerRef, {
           ...buildStripeOffchainOrderMarkerDocument(deliveryOrder),
-          createdAt: FieldValue.serverTimestamp(),
+          createdAt: stripeCheckoutFieldValue.serverTimestamp(),
         });
         stripeReceiptClaims.forEach((claim, index) => {
           tx.create(claimRefs[index], {
@@ -929,7 +949,7 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
             offchainOrderHash: order.orderHashHex,
             stripeCheckoutSessionId: order.stripeSession.id,
             status: 'unclaimed',
-            createdAt: FieldValue.serverTimestamp(),
+            createdAt: stripeCheckoutFieldValue.serverTimestamp(),
           });
         });
         if (checkoutStatus === 'fulfilled') {
@@ -948,22 +968,29 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
         return { deliveryId: candidate, checkoutStatus, created: true };
       });
       const result = await operation();
-      if (params.dropRuntime && result.checkoutStatus === 'fulfilled' && result.created === true) {
-        void countStripeIrlPackStatus({
-          db,
-          dropRuntime: params.dropRuntime,
-          orderHashHex,
-          quantity,
-          deliveryId: result.deliveryId,
-          checkoutSessionId: order.stripeSession.id,
-        }).catch((err) => {
-          console.warn('[mons/functions] createOrGetStripeOffchainDeliveryOrder:packStatusCountFailed', {
+      if (
+        params.dropRuntime &&
+        params.countPackStatus &&
+        result.checkoutStatus === 'fulfilled' &&
+        result.created === true
+      ) {
+        try {
+          await params.countPackStatus({
+            dropRuntime: params.dropRuntime,
+            orderHashHex,
+            quantity,
+            deliveryId: result.deliveryId,
+            checkoutSessionId: String(order.stripeSession.id || ''),
+          });
+        } catch (err) {
+          params.logPackStatusError?.({
+            event: 'stripe_checkout_pack_status_count_failed',
             dropId,
             orderHashHex,
             deliveryId: result.deliveryId,
             error: err instanceof Error ? { name: err.name, message: err.message, stack: err.stack } : String(err),
           });
-        });
+        }
       }
       return result;
     } catch (err) {
@@ -972,7 +999,7 @@ export async function createOrGetStripeOffchainDeliveryOrder(params: {
     }
   }
 
-  throw new HttpsError('unavailable', 'Failed to allocate off-chain delivery id or receipt claim code (try again)');
+  throw new StripeCheckoutFulfillmentError('unavailable', 'Failed to allocate off-chain delivery id or receipt claim code (try again)');
 }
 
 async function fetchAdminDeliveryOrderRecord(params: {
@@ -989,7 +1016,7 @@ async function fetchAdminDeliveryOrderRecord(params: {
     if (info.owner.equals(SystemProgram.programId) && info.data.length === 0) {
       return null;
     }
-    throw new HttpsError('failed-precondition', 'Admin order PDA has an unexpected owner', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order PDA has an unexpected owner', {
       adminOrderPda: adminOrderPda.toBase58(),
       owner: info.owner.toBase58(),
       expectedOwner: dropRuntime.boxMinterProgramId.toBase58(),
@@ -1002,7 +1029,7 @@ async function fulfillStripeCheckoutSession<
   Runtime extends StripeCheckoutDropRuntime,
   Config extends StripeCheckoutOnchainConfig,
 >(params: {
-  db: Firestore;
+  db: StripeCheckoutFirestore;
   session: Stripe.Checkout.Session;
   stripe: Stripe;
   checkout: StripeCheckoutDocumentRecord;
@@ -1021,7 +1048,7 @@ async function fulfillStripeCheckoutSession<
   const { db, session, stripe, checkout, deps } = params;
   const sessionId = requireStripeCheckoutSessionId(session.id);
   if (sessionId !== params.expectedSessionId) {
-    throw new HttpsError('failed-precondition', 'Fetched Stripe checkout session id does not match the pending fulfillment', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Fetched Stripe checkout session id does not match the pending fulfillment', {
       expectedSessionId: params.expectedSessionId,
       actualSessionId: sessionId,
     });
@@ -1034,7 +1061,7 @@ async function fulfillStripeCheckoutSession<
   const checkoutKind = stripeCheckoutKindForDrop(dropRuntime);
   const variantKey = normalizeStripeCheckoutVariantKey(dropRuntime, params.expectedVariantKey, checkoutKind);
   if (metadataContext.dropId !== dropId || metadataContext.variantKey !== variantKey) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout metadata does not match the pending fulfillment', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout metadata does not match the pending fulfillment', {
       sessionId,
       expectedDropId: dropId,
       actualDropId: metadataContext.dropId,
@@ -1043,7 +1070,7 @@ async function fulfillStripeCheckoutSession<
     });
   }
   if (Boolean(session.livemode) !== expectedLivemode || checkout.livemode !== expectedLivemode) {
-    throw new HttpsError('failed-precondition', 'Stripe checkout mode does not match the drop cluster', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout mode does not match the drop cluster', {
       dropId,
       sessionId,
       cluster: dropRuntime.cluster,
@@ -1052,7 +1079,7 @@ async function fulfillStripeCheckoutSession<
     });
   }
   if (!dropRuntime.receiptsMerkleTreeStr) {
-    throw new HttpsError('unavailable', 'Receipt cNFT tree is not configured', { dropId });
+    throw new StripeCheckoutFulfillmentError('unavailable', 'Receipt cNFT tree is not configured', { dropId });
   }
 
   const variantIndex =
@@ -1093,7 +1120,7 @@ async function fulfillStripeCheckoutSession<
       expectedLivemode,
     });
   } catch (err) {
-    throw new HttpsError('failed-precondition', err instanceof Error ? err.message : String(err), {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', err instanceof Error ? err.message : String(err), {
       sessionId: session.id,
     });
   }
@@ -1108,7 +1135,7 @@ async function fulfillStripeCheckoutSession<
   const cfg = await deps.ensureOnchainCoreConfig(dropRuntime);
   const signer = deps.cosigner();
   if (!signer.publicKey.equals(cfg.admin)) {
-    throw new HttpsError('unavailable', 'COSIGNER_SECRET does not match on-chain admin', {
+    throw new StripeCheckoutFulfillmentError('unavailable', 'COSIGNER_SECRET does not match on-chain admin', {
       expectedAdmin: cfg.admin.toBase58(),
       cosigner: signer.publicKey.toBase58(),
     });
@@ -1185,16 +1212,16 @@ async function fulfillStripeCheckoutSession<
     });
   }
   if (!record) {
-    throw new HttpsError('unavailable', 'Admin order record was not created', {
+    throw new StripeCheckoutFulfillmentError('unavailable', 'Admin order record was not created', {
       adminOrderPda: adminOrderPda.toBase58(),
       dropId,
     });
   }
   if (!record.orderHash.equals(orderHash)) {
-    throw new HttpsError('failed-precondition', 'Admin order record hash mismatch', { dropId, adminOrderPda: adminOrderPda.toBase58() });
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record hash mismatch', { dropId, adminOrderPda: adminOrderPda.toBase58() });
   }
   if (record.variantIndex !== variantIndex) {
-    throw new HttpsError('failed-precondition', 'Admin order record variant mismatch', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record variant mismatch', {
       dropId,
       adminOrderPda: adminOrderPda.toBase58(),
       expectedVariantIndex: variantIndex,
@@ -1202,7 +1229,7 @@ async function fulfillStripeCheckoutSession<
     });
   }
   if (record.quantity !== checkout.quantity) {
-    throw new HttpsError('failed-precondition', 'Admin order record quantity mismatch', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record quantity mismatch', {
       dropId,
       adminOrderPda: adminOrderPda.toBase58(),
       expectedQuantity: checkout.quantity,
@@ -1210,7 +1237,7 @@ async function fulfillStripeCheckoutSession<
     });
   }
   if (record.bump !== orderBump) {
-    throw new HttpsError('failed-precondition', 'Admin order record bump mismatch', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record bump mismatch', {
       dropId,
       adminOrderPda: adminOrderPda.toBase58(),
       expectedBump: orderBump,
@@ -1218,7 +1245,7 @@ async function fulfillStripeCheckoutSession<
     });
   }
   if (!record.receiptOwner.equals(receiptOwner)) {
-    throw new HttpsError('failed-precondition', 'Admin order record receipt owner mismatch', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record receipt owner mismatch', {
       dropId,
       adminOrderPda: adminOrderPda.toBase58(),
       expectedOwner: receiptOwner.toBase58(),
@@ -1226,7 +1253,7 @@ async function fulfillStripeCheckoutSession<
     });
   }
   if (record.firstMetadataId < 1) {
-    throw new HttpsError('failed-precondition', 'Admin order record metadata id is invalid', {
+    throw new StripeCheckoutFulfillmentError('failed-precondition', 'Admin order record metadata id is invalid', {
       dropId,
       adminOrderPda: adminOrderPda.toBase58(),
       firstMetadataId: record.firstMetadataId,
@@ -1255,6 +1282,8 @@ async function fulfillStripeCheckoutSession<
     checkoutRef: checkout.ref,
     isAlreadyExistsError: deps.isAlreadyExistsError,
     processingAttemptId: params.processingAttemptId,
+    countPackStatus: deps.countPackStatus,
+    logPackStatusError: deps.logPackStatusError,
   });
   if (order.checkoutStatus === 'stale_processing_attempt') {
     throw new StaleStripeCheckoutProcessingAttemptError();
@@ -1272,7 +1301,7 @@ async function fulfillStripeCheckoutSession<
 export async function startStripeCheckoutFulfillmentDocument(params: {
   dropId: string;
   sessionId: string;
-  checkoutRef: DocumentReference;
+  checkoutRef: StripeCheckoutDocumentReference;
   expectedLivemode?: boolean;
   nowMs?: number;
 }): Promise<StripeCheckoutFulfillmentStart> {
@@ -1305,12 +1334,12 @@ export async function startStripeCheckoutFulfillmentDocument(params: {
 
     tx.update(checkoutRef, {
       status: STRIPE_CHECKOUT_STATUS.PROCESSING,
-      processingStartedAt: FieldValue.serverTimestamp(),
-      processingAttemptCount: FieldValue.increment(1),
+      processingStartedAt: stripeCheckoutFieldValue.serverTimestamp(),
+      processingAttemptCount: stripeCheckoutFieldValue.increment(1),
       ...stripeCheckoutFailureStateClearUpdate(),
       processingAttemptId,
-      processingLeaseExpiresAt: Timestamp.fromMillis(nowMs + STRIPE_CHECKOUT_PROCESSING_LEASE_MS),
-      updatedAt: FieldValue.serverTimestamp(),
+      processingLeaseExpiresAt: stripeCheckoutFieldValue.timestampFromMillis(nowMs + STRIPE_CHECKOUT_PROCESSING_LEASE_MS),
+      updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
     });
     return { started: true, checkoutRef, checkout, ...(variantKey ? { variantKey } : {}), processingAttemptId };
   });
@@ -1322,7 +1351,7 @@ export type StripeCheckoutFulfillmentFailureMarkResult =
   | { status: 'stale_processing_attempt' };
 
 export async function markStripeCheckoutFulfillmentFailed(
-  checkoutRef: DocumentReference,
+  checkoutRef: StripeCheckoutDocumentReference,
   err: unknown,
   params: {
     summarizeError: (err: unknown) => unknown;
@@ -1350,13 +1379,13 @@ export async function markStripeCheckoutFulfillmentFailed(
       {
         ...identityUpdate,
         status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
-        failedAt: FieldValue.serverTimestamp(),
+        failedAt: stripeCheckoutFieldValue.serverTimestamp(),
         lastFulfillmentError: error,
         manualRefundReviewRequired: true,
         manualRefundReviewReason: STRIPE_MANUAL_REFUND_REASON,
-        nextFulfillmentRetryAt: FieldValue.delete(),
+        nextFulfillmentRetryAt: stripeCheckoutFieldValue.delete(),
         ...stripeCheckoutProcessingStateClearUpdate(),
-        updatedAt: FieldValue.serverTimestamp(),
+        updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
       },
       { merge: true },
     );
@@ -1368,10 +1397,10 @@ export async function processStripeCheckoutFulfillmentDocument<
   Runtime extends StripeCheckoutDropRuntime,
   Config extends StripeCheckoutOnchainConfig,
 >(params: {
-  db: Firestore;
+  db: StripeCheckoutFirestore;
   dropId: string;
   sessionId: string;
-  checkoutRef: DocumentReference;
+  checkoutRef: StripeCheckoutDocumentReference;
   apiKeys: readonly string[];
   deps: StripeCheckoutFlowDeps<Runtime, Config>;
 }): Promise<StripeCheckoutFulfillmentProcessResult> {
@@ -1399,7 +1428,7 @@ export async function processStripeCheckoutFulfillmentDocument<
 
   if (started.started === false) {
     if (started.reason === 'processing') {
-      throw new HttpsError('aborted', 'Stripe checkout fulfillment processing lease is still active', {
+      throw new StripeCheckoutFulfillmentError('aborted', 'Stripe checkout fulfillment processing lease is still active', {
         dropId,
         sessionId,
       });

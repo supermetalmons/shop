@@ -19,17 +19,28 @@ const MAINNET_SECRET = 'whsec_mainnet_test_secret';
 const DEVNET_DROP = 'card_nft_binder_devnet';
 const MAINNET_DROP = 'card_nft_binder';
 
+function queue(send: Queue['send'] = async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } })): Queue {
+  return {
+    send,
+    sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+  };
+}
+
 function env(overrides: Partial<Pick<Env,
   | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
+  | 'STRIPE_FULFILLMENT_QUEUE'
   | 'STRIPE_WEBHOOK_SECRET_DEVNET'
   | 'STRIPE_WEBHOOK_SECRET'
 >> = {}): Pick<Env,
   | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
+  | 'STRIPE_FULFILLMENT_QUEUE'
   | 'STRIPE_WEBHOOK_SECRET_DEVNET'
   | 'STRIPE_WEBHOOK_SECRET'
 > {
   return {
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'writer-service-account',
+    STRIPE_FULFILLMENT_QUEUE: queue(),
     STRIPE_WEBHOOK_SECRET_DEVNET: DEVNET_SECRET,
     STRIPE_WEBHOOK_SECRET: MAINNET_SECRET,
     ...overrides,
@@ -154,9 +165,15 @@ function accessTokenProvider() {
 test('signed devnet webhook atomically queues the existing checkout', async () => {
   const commits: Record<string, unknown>[] = [];
   const logs: Record<string, unknown>[] = [];
+  const jobs: unknown[] = [];
   const result = await handleStripeWebhookRequest(
     await signedRequest(stripeEvent()),
-    env(),
+    env({
+      STRIPE_FULFILLMENT_QUEUE: queue(async (body) => {
+        jobs.push(body);
+        return { metadata: { metrics: { backlogCount: 1, backlogBytes: 128 } } };
+      }),
+    }),
     {
       accessTokenProvider: accessTokenProvider(),
       log: (entry) => logs.push(entry),
@@ -190,6 +207,7 @@ test('signed devnet webhook atomically queues the existing checkout', async () =
   const update = write.update as { fields: Record<string, Record<string, unknown>> };
   assert.deepEqual(update.fields.status, { stringValue: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING });
   assert.deepEqual(update.fields.paymentStatus, { stringValue: 'paid' });
+  assert.deepEqual(update.fields.fulfillmentProcessor, { stringValue: 'cloudflare_queue_v1' });
   assert.ok((write.updateMask as { fieldPaths: string[] }).fieldPaths.includes('manualRefundReviewRequired'));
   assert.deepEqual((write.updateTransforms as Record<string, unknown>[])[0], {
     fieldPath: 'stripeWebhookEventIds',
@@ -198,7 +216,17 @@ test('signed devnet webhook atomically queues the existing checkout', async () =
   const serializedLogs = JSON.stringify(logs);
   assert.doesNotMatch(serializedLogs, /whsec_|Stripe-Signature|automatic_tax|amount_total/);
   assert.match(serializedLogs, /stripe_webhook_request/);
+  assert.match(serializedLogs, /stripe_fulfillment_job_enqueued/);
   assert.match(serializedLogs, /evt_test_123/);
+  assert.deepEqual(jobs, [{
+    version: 1,
+    kind: 'stripe_checkout_fulfillment',
+    dropId: DEVNET_DROP,
+    sessionId: 'cs_test_123',
+    stripeEventId: 'evt_test_123',
+    stripeEventType: 'checkout.session.completed',
+    enqueuedAtMs: (jobs[0] as { enqueuedAtMs: number }).enqueuedAtMs,
+  }]);
 });
 
 test('webhook rejects invalid signatures, cross-scope signatures, and invalid secret configuration', async () => {
@@ -356,6 +384,50 @@ test('webhook retries optimistic Firestore conflicts and surfaces exhausted conf
   });
   assert.equal(exhausted.response.status, 500);
   assert.equal(exhausted.outcome, 'write_conflict');
+});
+
+test('webhook retries repair a committed Firestore transition after Queue publication fails', async () => {
+  let status: string = STRIPE_CHECKOUT_STATUS.CREATED;
+  const failed = await handleStripeWebhookRequest(
+    await signedRequest(stripeEvent()),
+    env({
+      STRIPE_FULFILLMENT_QUEUE: queue(async () => {
+        throw new Error('queue unavailable');
+      }),
+    }),
+    {
+      accessTokenProvider: accessTokenProvider(),
+      log: () => undefined,
+      providerFetch: async (_input, init) => {
+        if (init?.method === 'GET') return Response.json(firestoreDocument(checkoutDocument({ status })));
+        status = STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING;
+        return Response.json({ writeResults: [{}] });
+      },
+    },
+  );
+  assert.equal(failed.response.status, 500);
+  assert.equal(failed.outcome, 'processing_error');
+
+  const jobs: unknown[] = [];
+  const repaired = await handleStripeWebhookRequest(
+    await signedRequest(stripeEvent()),
+    env({
+      STRIPE_FULFILLMENT_QUEUE: queue(async (body) => {
+        jobs.push(body);
+        return { metadata: { metrics: { backlogCount: 1, backlogBytes: 128 } } };
+      }),
+    }),
+    {
+      accessTokenProvider: accessTokenProvider(),
+      log: () => undefined,
+      providerFetch: async (_input, init) => init?.method === 'GET'
+        ? Response.json(firestoreDocument(checkoutDocument({ status })))
+        : Response.json({ writeResults: [{}] }),
+    },
+  );
+  assert.equal(repaired.response.status, 200);
+  assert.equal(repaired.outcome, 'already_pending');
+  assert.equal(jobs.length, 1);
 });
 
 test('signed mainnet webhook uses the live secret and preserves fulfilled idempotency', async () => {

@@ -12,6 +12,7 @@ import {
   normalizeStripeCheckoutQuantity,
   resolveMintSelectionVariantIndex,
 } from './stripeCheckoutSession.js';
+import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from './stripeCheckoutFulfillmentJob.js';
 
 export const STRIPE_WEBHOOK_PATH = '/webhooks/stripe';
 const STRIPE_WEBHOOK_SUPPORTED_EVENTS = [
@@ -320,7 +321,7 @@ export function stripeWebhookTransition(
   ) {
     return {
       outcome: 'already_pending',
-      fields: seenFields,
+      fields: { ...seenFields, fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR },
       deleteFields: [],
       serverTimestampFields: ['updatedAt'],
     };
@@ -329,6 +330,7 @@ export function stripeWebhookTransition(
     outcome: 'queued',
     fields: {
       ...seenFields,
+      fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
       status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
       paymentStatus: action.session.payment_status ?? null,
       stripeSessionSummary: sessionSnapshot(action.session),

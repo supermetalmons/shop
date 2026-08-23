@@ -970,8 +970,21 @@ test('queue consumers and delivery log inspection require the exact reviewed sur
       retry_delay: 0,
     },
   }]));
+  const stripeFulfillmentConsumers = deployApiTestHooks.parseQueueConsumers(JSON.stringify([{
+    script: 'mons-shop-api',
+    type: 'worker',
+    dead_letter_queue: 'mons-shop-stripe-fulfillment-dlq',
+    settings: {
+      batch_size: 1,
+      max_retries: 10,
+      max_wait_time_ms: 1000,
+      max_concurrency: 1,
+      retry_delay: 60,
+    },
+  }]));
   assert.doesNotThrow(() => deployApiTestHooks.assertSoleNotificationConsumer(notificationConsumers, 'mons-shop-api'));
   assert.doesNotThrow(() => deployApiTestHooks.assertSoleRevealConsumer(revealConsumers, 'mons-shop-api'));
+  assert.doesNotThrow(() => deployApiTestHooks.assertSoleStripeFulfillmentConsumer(stripeFulfillmentConsumers, 'mons-shop-api'));
   assert.throws(
     () => deployApiTestHooks.assertSoleNotificationConsumer(notificationConsumers, 'unexpected-worker'),
     /exactly one reviewed/,
@@ -1019,6 +1032,8 @@ test('API release and preview bootstrap missing reveal queues', () => {
   assert.deepEqual(created, [
     'mons-shop-reveal-reconciliation',
     'mons-shop-reveal-reconciliation-dlq',
+    'mons-shop-stripe-fulfillment',
+    'mons-shop-stripe-fulfillment-dlq',
   ]);
   assert.throws(
     () => deployApiTestHooks.assertQueueResource(
@@ -2933,7 +2948,9 @@ test('API guarded resume reverifies the exact candidate before resuming reveal d
       },
       benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
       pauseRevealQueue: () => events.push('pause-reveal'),
+      pauseFulfillmentQueue: () => events.push('pause-fulfillment'),
       resumeRevealQueue: () => events.push('resume-reveal'),
+      resumeFulfillmentQueue: () => events.push('resume-fulfillment'),
       wrangler: (_args, _environment, label) => events.push(label),
       evidence: (_kind, versionId) => {
         events.push('evidence');
@@ -2952,9 +2969,11 @@ test('API guarded resume reverifies the exact candidate before resuming reveal d
     `smoke:${deployApiTestHooks.expectedPreviewOrigin(candidateVersionId)}`,
     'deployment-status',
     'pause-reveal',
+    'pause-fulfillment',
     'Reviewed trigger deployment',
     'deployment-status',
     'resume-reveal',
+    'resume-fulfillment',
     'smoke:https://api.mons.shop',
     'deployment-status',
     'evidence',
@@ -3220,6 +3239,7 @@ test('approved API rollback pauses, verifies the exact pair, resumes, and record
       events.push('notification-smoke');
     },
     pauseRevealQueue: () => events.push('pause'),
+    pauseFulfillmentQueue: () => events.push('pause-fulfillment'),
     record: (versionId, options) => {
       assert.equal(versionId, rollbackApiVersionId);
       assert.deepEqual(options.expectedCurrentProduction, manifest.currentProduction);
@@ -3227,7 +3247,9 @@ test('approved API rollback pauses, verifies the exact pair, resumes, and record
       return { ...manifest, currentProduction: { apiVersionId: versionId, frontendVersionId } };
     },
     repauseRevealQueue: () => assert.fail('successful rollback re-paused reveal delivery'),
+    repauseFulfillmentQueue: () => assert.fail('successful rollback re-paused fulfillment delivery'),
     resumeRevealQueue: () => events.push('resume'),
+    resumeFulfillmentQueue: () => events.push('resume-fulfillment'),
     sleep: async () => undefined,
     smoke: async () => {
       smokeCalls += 1;
@@ -3243,10 +3265,12 @@ test('approved API rollback pauses, verifies the exact pair, resumes, and record
 
   assert.deepEqual(events, [
     'pause',
+    'pause-fulfillment',
     'rollback',
     'verify-consumers',
     'smoke-1',
     'resume',
+    'resume-fulfillment',
     'smoke-2',
     'notification-smoke',
     'evidence',
@@ -3282,9 +3306,12 @@ test('approved API rollback re-pauses reveal delivery after a post-resume failur
       ),
       notificationSmoke: async () => assert.fail('failed rollback sent notification smoke'),
       pauseRevealQueue: () => events.push('pause'),
+      pauseFulfillmentQueue: () => events.push('pause-fulfillment'),
       record: () => assert.fail('failed rollback recorded release metadata'),
       repauseRevealQueue: () => events.push('re-pause'),
+      repauseFulfillmentQueue: () => events.push('re-pause-fulfillment'),
       resumeRevealQueue: () => events.push('resume'),
+      resumeFulfillmentQueue: () => events.push('resume-fulfillment'),
       sleep: async () => undefined,
       smoke: async () => {
         smokeCalls += 1;
@@ -3295,7 +3322,15 @@ test('approved API rollback re-pauses reveal delivery after a post-resume failur
     }),
     /rollback failed[\s\S]*remains paused/,
   );
-  assert.deepEqual(events, ['pause', 'rollback', 'resume', 're-pause']);
+  assert.deepEqual(events, [
+    'pause',
+    'pause-fulfillment',
+    'rollback',
+    'resume',
+    'resume-fulfillment',
+    're-pause',
+    're-pause-fulfillment',
+  ]);
 });
 
 test('temporary secret setup enforces modes and removes partial files after injected failures', () => {

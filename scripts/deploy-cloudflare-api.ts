@@ -137,8 +137,11 @@ type ProductionSequenceDependencies = {
   smoke: typeof smokeApi;
   notificationSmoke?: typeof smokeNotificationDelivery;
   pauseRevealQueue?: (environment: NodeJS.ProcessEnv) => void;
+  pauseFulfillmentQueue?: (environment: NodeJS.ProcessEnv) => void;
   repauseRevealQueue?: (environment: NodeJS.ProcessEnv) => void;
+  repauseFulfillmentQueue?: (environment: NodeJS.ProcessEnv) => void;
   resumeRevealQueue?: (environment: NodeJS.ProcessEnv) => void;
+  resumeFulfillmentQueue?: (environment: NodeJS.ProcessEnv) => void;
   verifyQueueConsumers?: (environment: NodeJS.ProcessEnv) => void;
   wrangler: typeof runWrangler;
 };
@@ -156,9 +159,12 @@ type RollbackSequenceDependencies = {
   frontendDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
   notificationSmoke?: typeof smokeNotificationDelivery;
   pauseRevealQueue: (environment: NodeJS.ProcessEnv) => void;
+  pauseFulfillmentQueue?: (environment: NodeJS.ProcessEnv) => void;
   record: typeof recordApiProductionVersion;
   repauseRevealQueue: (environment: NodeJS.ProcessEnv) => void;
+  repauseFulfillmentQueue?: (environment: NodeJS.ProcessEnv) => void;
   resumeRevealQueue: (environment: NodeJS.ProcessEnv) => void;
+  resumeFulfillmentQueue?: (environment: NodeJS.ProcessEnv) => void;
   sleep: CloudflareSleep;
   smoke: typeof smokeApi;
   verifyQueueConsumers: (environment: NodeJS.ProcessEnv) => void;
@@ -240,6 +246,8 @@ const notificationQueueName = 'mons-shop-notification-emails';
 const notificationDeadLetterQueueName = 'mons-shop-notification-emails-dlq';
 const revealQueueName = 'mons-shop-reveal-reconciliation';
 const revealDeadLetterQueueName = 'mons-shop-reveal-reconciliation-dlq';
+const stripeFulfillmentQueueName = 'mons-shop-stripe-fulfillment';
+const stripeFulfillmentDeadLetterQueueName = 'mons-shop-stripe-fulfillment-dlq';
 const notificationSmokeTimeoutMs = 90_000;
 const firestoreProjectId = 'mons-shop';
 const firestoreDatabaseName = `projects/${firestoreProjectId}/databases/(default)`;
@@ -644,6 +652,14 @@ function pauseRevealDelivery(environment: NodeJS.ProcessEnv, label: string): voi
   );
 }
 
+function pauseStripeFulfillmentDelivery(environment: NodeJS.ProcessEnv, label: string): void {
+  runWrangler(
+    ['queues', 'pause-delivery', stripeFulfillmentQueueName, ...configArgs],
+    environment,
+    label,
+  );
+}
+
 function assertQueueResource(name: string, output: string): void {
   const lines = output
     .replace(/\u001b\[[0-9;]*m/g, '')
@@ -690,6 +706,8 @@ function ensureApiQueueResources(
   ensureQueueResource(notificationDeadLetterQueueName, false, environment, dependencies);
   ensureQueueResource(revealQueueName, true, environment, dependencies);
   ensureQueueResource(revealDeadLetterQueueName, true, environment, dependencies);
+  ensureQueueResource(stripeFulfillmentQueueName, true, environment, dependencies);
+  ensureQueueResource(stripeFulfillmentDeadLetterQueueName, true, environment, dependencies);
 }
 
 function readCleanSourceCommit(): string {
@@ -780,6 +798,23 @@ function assertSoleRevealConsumer(consumers: readonly QueueConsumer[], script: s
   }
 }
 
+function stripeFulfillmentConsumerMatches(consumer: QueueConsumer, script: string): boolean {
+  return consumer.script === script &&
+    consumer.type === 'worker' &&
+    consumer.deadLetterQueue === stripeFulfillmentDeadLetterQueueName &&
+    consumer.maxBatchSize === 1 &&
+    consumer.maxBatchTimeoutMs === 1_000 &&
+    consumer.maxRetries === 10 &&
+    consumer.maxConcurrency === 1 &&
+    consumer.retryDelay === 60;
+}
+
+function assertSoleStripeFulfillmentConsumer(consumers: readonly QueueConsumer[], script: string): void {
+  if (consumers.length !== 1 || !stripeFulfillmentConsumerMatches(consumers[0], script)) {
+    fail(`Stripe fulfillment queue must have exactly one reviewed ${script} consumer.`);
+  }
+}
+
 function readQueueConsumers(
   queueName: string,
   label: string,
@@ -801,9 +836,18 @@ function readRevealQueueConsumers(environment: NodeJS.ProcessEnv): QueueConsumer
   return readQueueConsumers(revealQueueName, 'Reveal queue consumer inspection', environment);
 }
 
+function readStripeFulfillmentQueueConsumers(environment: NodeJS.ProcessEnv): QueueConsumer[] {
+  return readQueueConsumers(
+    stripeFulfillmentQueueName,
+    'Stripe fulfillment queue consumer inspection',
+    environment,
+  );
+}
+
 function assertExactQueueConsumers(environment: NodeJS.ProcessEnv): void {
   assertSoleNotificationConsumer(readNotificationQueueConsumers(environment), workerName);
   assertSoleRevealConsumer(readRevealQueueConsumers(environment), workerName);
+  assertSoleStripeFulfillmentConsumer(readStripeFulfillmentQueueConsumers(environment), workerName);
 }
 
 function assertApprovedApiRollback(manifest: ReleaseManifest, versionId: string): void {
@@ -1036,16 +1080,18 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
     !isRecord(queues) ||
     !hasExactKeys(queues, ['consumers', 'producers']) ||
     !Array.isArray(queues.producers) ||
-    queues.producers.length !== 2 ||
+    queues.producers.length !== 3 ||
     !Array.isArray(queues.consumers) ||
-    queues.consumers.length !== 2
+    queues.consumers.length !== 3
   ) {
     return false;
   }
   const notificationProducer = queues.producers[0];
   const revealProducer = queues.producers[1];
+  const stripeFulfillmentProducer = queues.producers[2];
   const notificationConsumer = queues.consumers[0];
   const revealConsumer = queues.consumers[1];
+  const stripeFulfillmentConsumer = queues.consumers[2];
   return isRecord(secrets) &&
     hasExactKeys(secrets, ['required']) &&
     Array.isArray(secrets.required) &&
@@ -1079,6 +1125,10 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
     hasExactKeys(revealProducer, ['binding', 'queue']) &&
     revealProducer.binding === 'REVEAL_BACKGROUND_QUEUE' &&
     revealProducer.queue === revealQueueName &&
+    isRecord(stripeFulfillmentProducer) &&
+    hasExactKeys(stripeFulfillmentProducer, ['binding', 'queue']) &&
+    stripeFulfillmentProducer.binding === 'STRIPE_FULFILLMENT_QUEUE' &&
+    stripeFulfillmentProducer.queue === stripeFulfillmentQueueName &&
     isRecord(notificationConsumer) &&
     hasExactKeys(notificationConsumer, [
       'dead_letter_queue',
@@ -1108,7 +1158,24 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
     revealConsumer.max_batch_size === 1 &&
     revealConsumer.max_batch_timeout === 1 &&
     revealConsumer.max_retries === 10 &&
-    revealConsumer.max_concurrency === 1;
+    revealConsumer.max_concurrency === 1 &&
+    isRecord(stripeFulfillmentConsumer) &&
+    hasExactKeys(stripeFulfillmentConsumer, [
+      'dead_letter_queue',
+      'max_batch_size',
+      'max_batch_timeout',
+      'max_concurrency',
+      'max_retries',
+      'queue',
+      'retry_delay',
+    ]) &&
+    stripeFulfillmentConsumer.queue === stripeFulfillmentQueueName &&
+    stripeFulfillmentConsumer.dead_letter_queue === stripeFulfillmentDeadLetterQueueName &&
+    stripeFulfillmentConsumer.max_batch_size === 1 &&
+    stripeFulfillmentConsumer.max_batch_timeout === 1 &&
+    stripeFulfillmentConsumer.max_retries === 10 &&
+    stripeFulfillmentConsumer.max_concurrency === 1 &&
+    stripeFulfillmentConsumer.retry_delay === 60;
 }
 
 function assertApiDeploymentConfig(path = resolve(repoRoot, configPath)): void {
@@ -1121,7 +1188,7 @@ function assertApiDeploymentConfig(path = resolve(repoRoot, configPath)): void {
   }
   if (!isExactApiDeploymentConfig(value)) {
     fail(
-      `API Wrangler config must target only ${workerName}, account ${accountId}, the ${new URL(productionUrl).hostname} custom domain, and the reviewed notification and reveal queues.`,
+      `API Wrangler config must target only ${workerName}, account ${accountId}, the ${new URL(productionUrl).hostname} custom domain, and the reviewed notification, reveal, and Stripe fulfillment queues.`,
     );
   }
 }
@@ -1623,7 +1690,7 @@ async function reconcileApiVersion(
 
 function revealQueuePausedFailure(error: unknown, message: string): Error {
   return new Error(
-    `${message} Reveal delivery remains paused. Fix forward, then rerun the production command with the same exact candidate for guarded resume.`,
+    `${message} Stateful queue delivery remains paused. Fix forward, then rerun the production command with the same exact candidate for guarded resume.`,
     { cause: error },
   );
 }
@@ -1652,6 +1719,16 @@ function repauseRevealQueueAfterFailure(
       'Reveal delivery could not be re-paused after a post-resume failure. Inspect the live version and queue immediately.',
     );
   }
+  const repauseFulfillment = dependencies.repauseFulfillmentQueue ?? dependencies.pauseFulfillmentQueue;
+  if (!repauseFulfillment) return;
+  try {
+    repauseFulfillment(input.wranglerEnvironment);
+  } catch (repauseError) {
+    throw new AggregateError(
+      [error, repauseError],
+      'Stripe fulfillment delivery could not be re-paused after a post-resume failure. Inspect the live version and queue immediately.',
+    );
+  }
 }
 
 async function runProductionSequence(
@@ -1665,14 +1742,27 @@ async function runProductionSequence(
       environment,
       'Reveal queue pause before trigger deployment',
     ),
+    pauseFulfillmentQueue: (environment) => pauseStripeFulfillmentDelivery(
+      environment,
+      'Stripe fulfillment queue pause before trigger deployment',
+    ),
     repauseRevealQueue: (environment) => pauseRevealDelivery(
       environment,
       'Reveal queue re-pause after verification failure',
+    ),
+    repauseFulfillmentQueue: (environment) => pauseStripeFulfillmentDelivery(
+      environment,
+      'Stripe fulfillment queue re-pause after verification failure',
     ),
     resumeRevealQueue: (environment) => runWrangler(
       ['queues', 'resume-delivery', revealQueueName, ...configArgs],
       environment,
       'Reveal queue resume after exact candidate promotion',
+    ),
+    resumeFulfillmentQueue: (environment) => runWrangler(
+      ['queues', 'resume-delivery', stripeFulfillmentQueueName, ...configArgs],
+      environment,
+      'Stripe fulfillment queue resume after exact candidate promotion',
     ),
     sleep,
     smoke: smokeApi,
@@ -1704,8 +1794,9 @@ async function runProductionSequence(
 
   try {
     dependencies.pauseRevealQueue?.(input.wranglerEnvironment);
+    dependencies.pauseFulfillmentQueue?.(input.wranglerEnvironment);
   } catch (error) {
-    throw new Error('Reveal delivery could not be paused, so no trigger or version mutation was attempted.', { cause: error });
+    throw new Error('Stateful queue delivery could not be paused, so no trigger or version mutation was attempted.', { cause: error });
   }
   if (releaseStart.resumeCandidate) {
     try {
@@ -1785,7 +1876,7 @@ async function runProductionSequence(
     }
   }
 
-  if (dependencies.resumeRevealQueue) {
+  if (dependencies.resumeRevealQueue || dependencies.resumeFulfillmentQueue) {
     try {
       await assertApiLiveVersion(
         candidateVersionId,
@@ -1799,10 +1890,15 @@ async function runProductionSequence(
   }
 
   let revealResumeAttempted = false;
+  let fulfillmentResumeAttempted = false;
   try {
     if (dependencies.resumeRevealQueue) {
       revealResumeAttempted = true;
       dependencies.resumeRevealQueue(input.wranglerEnvironment);
+    }
+    if (dependencies.resumeFulfillmentQueue) {
+      fulfillmentResumeAttempted = true;
+      dependencies.resumeFulfillmentQueue(input.wranglerEnvironment);
     }
     await dependencies.smoke(productionUrl, candidateSmoke);
     await dependencies.notificationSmoke?.(input.wranglerEnvironment, workerName);
@@ -1814,7 +1910,7 @@ async function runProductionSequence(
     );
     dependencies.evidence('api', candidateVersionId);
   } catch (error) {
-    if (revealResumeAttempted) {
+    if (revealResumeAttempted || fulfillmentResumeAttempted) {
       repauseRevealQueueAfterFailure(error, input, dependencies);
     }
     throw revealQueuePausedFailure(
@@ -1937,15 +2033,28 @@ async function runRollbackSequence(
       environment,
       'Reveal queue pause before approved API rollback',
     ),
+    pauseFulfillmentQueue: (environment) => pauseStripeFulfillmentDelivery(
+      environment,
+      'Stripe fulfillment queue pause before approved API rollback',
+    ),
     record: recordApiProductionVersion,
     repauseRevealQueue: (environment) => pauseRevealDelivery(
       environment,
       'Reveal queue re-pause after rollback verification failure',
     ),
+    repauseFulfillmentQueue: (environment) => pauseStripeFulfillmentDelivery(
+      environment,
+      'Stripe fulfillment queue re-pause after rollback verification failure',
+    ),
     resumeRevealQueue: (environment) => runWrangler(
       ['queues', 'resume-delivery', revealQueueName, ...configArgs],
       environment,
       'Reveal queue resume after approved API rollback',
+    ),
+    resumeFulfillmentQueue: (environment) => runWrangler(
+      ['queues', 'resume-delivery', stripeFulfillmentQueueName, ...configArgs],
+      environment,
+      'Stripe fulfillment queue resume after approved API rollback',
     ),
     sleep,
     smoke: smokeApi,
@@ -1960,11 +2069,13 @@ async function runRollbackSequence(
 
   try {
     dependencies.pauseRevealQueue(input.wranglerEnvironment);
+    dependencies.pauseFulfillmentQueue?.(input.wranglerEnvironment);
   } catch (error) {
-    throw new Error('Reveal delivery could not be paused, so API rollback was not attempted.', { cause: error });
+    throw new Error('Stateful queue delivery could not be paused, so API rollback was not attempted.', { cause: error });
   }
 
   let resumeAttempted = false;
+  let fulfillmentResumeAttempted = false;
   try {
     dependencies.wrangler([
       'rollback',
@@ -1991,6 +2102,10 @@ async function runRollbackSequence(
 
     resumeAttempted = true;
     dependencies.resumeRevealQueue(input.wranglerEnvironment);
+    if (dependencies.resumeFulfillmentQueue) {
+      fulfillmentResumeAttempted = true;
+      dependencies.resumeFulfillmentQueue(input.wranglerEnvironment);
+    }
     await dependencies.smoke(productionUrl, { includeDevnet: true, owner: input.smokeOwner });
     await dependencies.notificationSmoke?.(input.wranglerEnvironment, workerName);
     const finalLivePair = await readStableReleasePair(input.wranglerEnvironment, dependencies);
@@ -2000,18 +2115,19 @@ async function runRollbackSequence(
       expectedCurrentProduction: input.manifest.currentProduction,
     });
   } catch (error) {
-    if (resumeAttempted) {
+    if (resumeAttempted || fulfillmentResumeAttempted) {
       try {
         dependencies.repauseRevealQueue(input.wranglerEnvironment);
+        dependencies.repauseFulfillmentQueue?.(input.wranglerEnvironment);
       } catch (repauseError) {
         throw new AggregateError(
           [error, repauseError],
-          'API rollback failed and reveal delivery could not be re-paused. Inspect production immediately.',
+          'API rollback failed and stateful queue delivery could not be re-paused. Inspect production immediately.',
         );
       }
     }
     throw new Error(
-      'Approved API rollback failed. Reveal delivery remains paused; inspect the live pair before retrying the exact approved rollback.',
+      'Approved API rollback failed. Stateful queue delivery remains paused; inspect the live pair before retrying the exact approved rollback.',
       { cause: error },
     );
   }
@@ -2205,7 +2321,7 @@ async function main(): Promise<void> {
   assertExactQueueConsumers(wranglerEnvironment);
   await smokeApi(productionUrl, { includeDevnet: true, owner: options.smokeOwner });
   await smokeNotificationDelivery(wranglerEnvironment, workerName);
-  console.log('[api-deploy] Custom-domain and queue triggers verified; reveal delivery state was unchanged.');
+  console.log('[api-deploy] Custom-domain and queue triggers verified; stateful queue delivery state was unchanged.');
 }
 
 export const deployApiTestHooks = {
@@ -2255,6 +2371,9 @@ export const deployApiTestHooks = {
   assertApprovedApiRollback,
   assertSoleRevealConsumer,
   assertSoleNotificationConsumer,
+  assertSoleStripeFulfillmentConsumer,
+  stripeFulfillmentConsumerMatches,
+  assertExactQueueConsumers,
   verifyFirestoreWriterAccess,
 };
 

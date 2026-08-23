@@ -28,6 +28,7 @@ import {
   countDeliveryOrderDudeItems,
   countDeliveryOrderBoxItems,
   countNormalIrlPackStatus,
+  countStripeIrlPackStatus,
 } from './packStatus.js';
 import {
   assignDudesForBox,
@@ -41,12 +42,14 @@ import { enqueueNotificationEmailJob } from './cloudflareNotifications.js';
 import {
   type NotificationEmailJobV1,
 } from './shared/notificationEmailJob.js';
+import { isCloudflareStripeCheckoutFulfillmentDocument } from './shared/stripeCheckoutFulfillmentJob.js';
 import {
   processStripeCheckoutFulfillmentDocument,
   requireStripeCheckoutSessionId,
   type StripeCheckoutFlowDeps,
   type StripeCheckoutOnchainConfig,
 } from './stripeCheckout/service.js';
+import { createFirebaseAdminStripeCheckoutStore } from './stripeCheckout/firebaseAdminStore.js';
 import {
   publishStripeCheckoutTerminalNotifications,
   shouldPublishStripeCheckoutTerminalNotificationsWrite,
@@ -148,6 +151,7 @@ loadLocalEnv();
 
 const app = getApps()[0] || initializeApp();
 const db = getFirestore(app);
+const stripeCheckoutStore = createFirebaseAdminStripeCheckoutStore(db);
 
 // Hardcoded (no env / no deployment config) to avoid config sprawl.
 const RPC_TIMEOUT_MS = 8_000;
@@ -1220,7 +1224,6 @@ function stripeCheckoutFlowDeps(): StripeCheckoutFlowDeps<DropRuntime, DecodedBo
     requireDropId,
     getDropRuntime,
     connection,
-    fetchCheckoutConfig: fetchDecodedBoxMinterConfigAccount,
     ensureOnchainCoreConfig,
     requireStripeCheckoutCollectionMatchesConfig,
     cosigner,
@@ -1241,6 +1244,10 @@ function stripeCheckoutFlowDeps(): StripeCheckoutFlowDeps<DropRuntime, DecodedBo
     rpcTimeoutMs: RPC_TIMEOUT_MS,
     txSendTimeoutMs: TX_SEND_TIMEOUT_MS,
     txConfirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
+    countPackStatus: async (params) => {
+      await countStripeIrlPackStatus({ db, ...params });
+    },
+    logPackStatusError: (entry) => logger.warn('stripeCheckout:packStatusCountFailed', entry),
   };
 }
 
@@ -1486,6 +1493,13 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
     if (!checkoutSnap?.exists) return;
     const beforeCheckout = beforeSnap?.exists ? beforeSnap.data() as Record<string, unknown> : null;
     const checkout = checkoutSnap.data() as Record<string, unknown>;
+    if (isCloudflareStripeCheckoutFulfillmentDocument(checkout)) {
+      logger.info('processStripeCheckoutFulfillment:delegatedToCloudflare', {
+        dropId: event.params.dropId,
+        sessionId: event.params.sessionId,
+      });
+      return;
+    }
     const shouldPublishTerminalNotifications = shouldPublishStripeCheckoutTerminalNotificationsWrite({
       before: beforeCheckout,
       after: checkout,
@@ -1514,7 +1528,7 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
       });
       return;
     }
-    const checkoutRef = checkoutSnap.ref;
+    const checkoutRef = stripeCheckoutStore.doc(checkoutSnap.ref.path);
 
     if (shouldPublishTerminalNotifications) {
       const notificationResult = await publishStripeCheckoutTerminalNotifications({
@@ -1545,7 +1559,7 @@ export const processStripeCheckoutFulfillment = onDocumentWritten(
     }
 
     const result = await processStripeCheckoutFulfillmentDocument({
-      db,
+      db: stripeCheckoutStore,
       dropId,
       sessionId,
       checkoutRef,

@@ -45,6 +45,10 @@
       {
         "binding": "REVEAL_BACKGROUND_QUEUE",
         "queue": "mons-shop-reveal-reconciliation"
+      },
+      {
+        "binding": "STRIPE_FULFILLMENT_QUEUE",
+        "queue": "mons-shop-stripe-fulfillment"
       }
     ],
     "consumers": [
@@ -63,6 +67,15 @@
         "max_retries": 10,
         "max_concurrency": 1,
         "dead_letter_queue": "mons-shop-reveal-reconciliation-dlq"
+      },
+      {
+        "queue": "mons-shop-stripe-fulfillment",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 10,
+        "max_concurrency": 1,
+        "retry_delay": 60,
+        "dead_letter_queue": "mons-shop-stripe-fulfillment-dlq"
       }
     ]
   },
