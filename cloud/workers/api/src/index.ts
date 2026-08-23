@@ -73,6 +73,7 @@ import {
   STRIPE_WEBHOOK_PATH,
   handleStripeWebhookRequest,
 } from './stripeWebhook.js';
+import { reconcileStaleStripeFulfillments } from './stripeCheckoutReconciliation.js';
 import {
   ADMIN_PROFILE_PATH,
   ADMIN_DELIVERY_ORDER_OWNERS_PATH,
@@ -178,6 +179,10 @@ const NOTIFICATION_EMAIL_QUEUE_NAME = 'mons-shop-notification-emails';
 const REVEAL_BACKGROUND_QUEUE_NAME = 'mons-shop-reveal-reconciliation';
 const STRIPE_FULFILLMENT_QUEUE_NAME = 'mons-shop-stripe-fulfillment';
 const STRIPE_FULFILLMENT_TIMEOUT_MS = 180_000;
+const STRIPE_FULFILLMENT_CLEANUP_GRACE_MS = 60_000;
+const STRIPE_FULFILLMENT_RECONCILIATION_TIMEOUT_MS = 60_000;
+const STRIPE_FULFILLMENT_MAX_RETRIES = 10;
+const STRIPE_FULFILLMENT_TERMINAL_ATTEMPT = STRIPE_FULFILLMENT_MAX_RETRIES + 1;
 const STRIPE_FULFILLMENT_RETRY_DELAY_SECONDS = 60;
 const KNOWN_LOG_ROUTES = new Set([
   '/health',
@@ -232,6 +237,7 @@ export async function processStripeFulfillmentMessage(
   overrides: {
     process?: typeof processStripeCheckoutFulfillmentJob;
     log?: (entry: Record<string, unknown>) => void;
+    timeoutMs?: number;
   } = {},
 ): Promise<void> {
   const process = overrides.process || processStripeCheckoutFulfillmentJob;
@@ -240,10 +246,16 @@ export async function processStripeFulfillmentMessage(
     throw new Error('Invalid Stripe checkout fulfillment queue message');
   }
   const job = message.body;
+  const timeoutMs = overrides.timeoutMs ?? STRIPE_FULFILLMENT_TIMEOUT_MS;
   const controller = new AbortController();
+  const persistenceController = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(new DOMException('Stripe checkout fulfillment timed out', 'TimeoutError')),
-    STRIPE_FULFILLMENT_TIMEOUT_MS,
+    timeoutMs,
+  );
+  const persistenceTimeout = setTimeout(
+    () => persistenceController.abort(new DOMException('Stripe checkout fulfillment persistence timed out', 'TimeoutError')),
+    timeoutMs + STRIPE_FULFILLMENT_CLEANUP_GRACE_MS,
   );
   log({
     event: 'stripe_fulfillment_job_started',
@@ -256,7 +268,10 @@ export async function processStripeFulfillmentMessage(
     queueAgeMs: Math.max(0, Date.now() - job.enqueuedAtMs),
   });
   try {
-    const result = await process(job, env, controller.signal);
+    const result = await process(job, env, controller.signal, {
+      persistenceSignal: persistenceController.signal,
+      treatRetryableFailureAsTerminal: message.attempts >= STRIPE_FULFILLMENT_TERMINAL_ATTEMPT,
+    });
     log({
       event: 'stripe_fulfillment_job_completed',
       queueMessageId: message.id,
@@ -270,6 +285,7 @@ export async function processStripeFulfillmentMessage(
     });
   } finally {
     clearTimeout(timeout);
+    clearTimeout(persistenceTimeout);
   }
 }
 
@@ -313,11 +329,12 @@ export async function processBackgroundJobBatch(
         error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
       });
       if (batch.queue === STRIPE_FULFILLMENT_QUEUE_NAME) {
+        const finalAttempt = message.attempts >= STRIPE_FULFILLMENT_TERMINAL_ATTEMPT;
         processors.log({
-          event: 'stripe_fulfillment_job_retry',
+          event: finalAttempt ? 'stripe_fulfillment_job_dlq_bound' : 'stripe_fulfillment_job_retry',
           queueMessageId: message.id,
           queueAttempts: message.attempts,
-          delaySeconds: STRIPE_FULFILLMENT_RETRY_DELAY_SECONDS,
+          ...(finalAttempt ? {} : { delaySeconds: STRIPE_FULFILLMENT_RETRY_DELAY_SECONDS }),
         });
         message.retry({ delaySeconds: STRIPE_FULFILLMENT_RETRY_DELAY_SECONDS });
       } else {
@@ -1794,5 +1811,17 @@ export default {
   },
   queue(batch, env) {
     return processBackgroundJobBatch(batch, env);
+  },
+  async scheduled(_controller, env) {
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(new DOMException('Stripe fulfillment reconciliation timed out', 'TimeoutError')),
+      STRIPE_FULFILLMENT_RECONCILIATION_TIMEOUT_MS,
+    );
+    try {
+      await reconcileStaleStripeFulfillments(env, controller.signal);
+    } finally {
+      clearTimeout(timeout);
+    }
   },
 } satisfies ExportedHandler<Env, unknown>;

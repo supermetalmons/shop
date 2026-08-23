@@ -207,6 +207,7 @@ export type StripeCheckoutFlowDeps<
   rpcTimeoutMs: number;
   txSendTimeoutMs: number;
   txConfirmTimeoutMs: number;
+  signal?: AbortSignal;
   countPackStatus?: StripeCheckoutPackStatusCounter<Runtime>;
   logPackStatusError?: (entry: Record<string, unknown>) => void;
 };
@@ -228,6 +229,12 @@ const STRIPE_MANUAL_REFUND_REASON = 'fulfillment_failed_after_payment';
 export const STRIPE_CHECKOUT_PROCESSING_LEASE_MS = 5 * 60 * 1000;
 const STRIPE_CHECKOUT_FULFILLMENT_MAX_ATTEMPTS = 2;
 const STRIPE_CHECKOUT_FULFILLMENT_RETRY_DELAY_MS = 1_000;
+const STRIPE_CHECKOUT_PROVIDER_TIMEOUT_MS = 30_000;
+const STRIPE_CHECKOUT_PROVIDER_MAX_NETWORK_RETRIES = 0;
+const STRIPE_CHECKOUT_PROVIDER_REQUEST_OPTIONS: Stripe.RequestOptions = {
+  maxNetworkRetries: STRIPE_CHECKOUT_PROVIDER_MAX_NETWORK_RETRIES,
+  timeout: STRIPE_CHECKOUT_PROVIDER_TIMEOUT_MS,
+};
 const RETRYABLE_STRIPE_FULFILLMENT_CODES = new Set([
   'aborted',
   'deadline-exceeded',
@@ -468,12 +475,28 @@ function normalizeStripeCheckoutVariantKey(
   return variantKey;
 }
 
-async function fetchStripeCheckoutLineItems(stripe: Stripe, session: Stripe.Checkout.Session) {
+async function fetchStripeCheckoutLineItems(
+  stripe: Stripe,
+  session: Stripe.Checkout.Session,
+  signal?: AbortSignal,
+) {
   if (!session.id) throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout session id is missing');
-  return stripe.checkout.sessions.listLineItems(session.id, { limit: 10, expand: ['data.price'] });
+  signal?.throwIfAborted();
+  const lineItems = await stripe.checkout.sessions.listLineItems(
+    session.id,
+    { limit: 10, expand: ['data.price'] },
+    STRIPE_CHECKOUT_PROVIDER_REQUEST_OPTIONS,
+  );
+  signal?.throwIfAborted();
+  return lineItems;
 }
 
-export async function fetchStripeCheckoutSession(sessionId: string, apiKeys: readonly string[], mode: StripeApiMode): Promise<{
+export async function fetchStripeCheckoutSession(
+  sessionId: string,
+  apiKeys: readonly string[],
+  mode: StripeApiMode,
+  signal?: AbortSignal,
+): Promise<{
   session: Stripe.Checkout.Session;
   stripe: Stripe;
 }> {
@@ -482,8 +505,16 @@ export async function fetchStripeCheckoutSession(sessionId: string, apiKeys: rea
   let lastCredentialError: unknown;
   for (const apiKey of keys) {
     try {
+      signal?.throwIfAborted();
       const stripe = await stripeClientForKey(apiKey, mode);
-      return { session: await stripe.checkout.sessions.retrieve(normalizedSessionId), stripe };
+      signal?.throwIfAborted();
+      const session = await stripe.checkout.sessions.retrieve(
+        normalizedSessionId,
+        {},
+        STRIPE_CHECKOUT_PROVIDER_REQUEST_OPTIONS,
+      );
+      signal?.throwIfAborted();
+      return { session, stripe };
     } catch (err) {
       if (!isStripeCredentialError(err)) throw err;
       lastCredentialError = err;
@@ -1109,7 +1140,7 @@ async function fulfillStripeCheckoutSession<
     };
   }
 
-  const lineItems = await fetchStripeCheckoutLineItems(stripe, session);
+  const lineItems = await fetchStripeCheckoutLineItems(stripe, session, deps.signal);
   try {
     validateStripeCheckoutContract({
       session,
@@ -1350,6 +1381,40 @@ export type StripeCheckoutFulfillmentFailureMarkResult =
   | { status: 'already_fulfilled' }
   | { status: 'stale_processing_attempt' };
 
+export type StripeCheckoutFulfillmentRetryReleaseResult =
+  | { status: 'released' }
+  | { status: 'already_fulfilled' }
+  | { status: 'stale_processing_attempt' };
+
+export async function releaseStripeCheckoutFulfillmentForRetry(
+  checkoutRef: StripeCheckoutDocumentReference,
+  err: unknown,
+  params: {
+    summarizeError: (err: unknown) => unknown;
+    processingAttemptId: string;
+  },
+): Promise<StripeCheckoutFulfillmentRetryReleaseResult> {
+  return checkoutRef.firestore.runTransaction(async (tx) => {
+    const checkoutSnap = await tx.get(checkoutRef);
+    const checkout = checkoutSnap.exists ? (checkoutSnap.data() as any) : null;
+    const writeStatus = stripeCheckoutProcessingAttemptWriteStatus(checkout, params.processingAttemptId);
+    if (writeStatus !== 'current') return { status: writeStatus };
+    tx.update(checkoutRef, {
+      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
+      lastRetryableFulfillmentAttempt: STRIPE_CHECKOUT_FULFILLMENT_MAX_ATTEMPTS,
+      lastRetryableFulfillmentError: params.summarizeError(err),
+      lastRetryableFulfillmentErrorAt: stripeCheckoutFieldValue.serverTimestamp(),
+      nextFulfillmentRetryAt: stripeCheckoutFieldValue.delete(),
+      processingStartedAt: stripeCheckoutFieldValue.delete(),
+      ...stripeCheckoutProcessingStateClearUpdate(),
+      updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
+    });
+    return { status: 'released' as const };
+  }).catch((error) => {
+    throw new StripeCheckoutProcessingAttemptOwnershipCheckError(error);
+  });
+}
+
 export async function markStripeCheckoutFulfillmentFailed(
   checkoutRef: StripeCheckoutDocumentReference,
   err: unknown,
@@ -1403,6 +1468,7 @@ export async function processStripeCheckoutFulfillmentDocument<
   checkoutRef: StripeCheckoutDocumentReference;
   apiKeys: readonly string[];
   deps: StripeCheckoutFlowDeps<Runtime, Config>;
+  treatRetryableFailureAsTerminal?: boolean;
 }): Promise<StripeCheckoutFulfillmentProcessResult> {
   const { db, dropId, sessionId, checkoutRef, deps } = params;
   const dropRuntime = deps.getDropRuntime(dropId);
@@ -1413,7 +1479,7 @@ export async function processStripeCheckoutFulfillmentDocument<
   try {
     started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef, expectedLivemode });
   } catch (err) {
-    if (isRetryableStripeCheckoutFulfillmentError(err)) {
+    if (isRetryableStripeCheckoutFulfillmentError(err) && !params.treatRetryableFailureAsTerminal) {
       throw err;
     }
     const markResult = await markStripeCheckoutFulfillmentFailed(checkoutRef, err, {
@@ -1441,7 +1507,7 @@ export async function processStripeCheckoutFulfillmentDocument<
     const result = await runStripeCheckoutFulfillmentWithRetry(
       async () => {
         if (!checkoutSessionResult) {
-          checkoutSessionResult = await fetchStripeCheckoutSession(sessionId, params.apiKeys, mode);
+          checkoutSessionResult = await fetchStripeCheckoutSession(sessionId, params.apiKeys, mode, deps.signal);
         }
         const { session, stripe } = checkoutSessionResult;
         return fulfillStripeCheckoutSession({
@@ -1469,6 +1535,16 @@ export async function processStripeCheckoutFulfillmentDocument<
     }
     if (err instanceof StaleStripeCheckoutProcessingAttemptError) {
       return { status: 'ignored', dropId, sessionId, reason: 'stale_processing_attempt' };
+    }
+    if (isRetryableStripeCheckoutFulfillmentError(err) && !params.treatRetryableFailureAsTerminal) {
+      const releaseResult = await releaseStripeCheckoutFulfillmentForRetry(started.checkoutRef, err, {
+        summarizeError: deps.summarizeError,
+        processingAttemptId: started.processingAttemptId,
+      });
+      if (releaseResult.status !== 'released') {
+        return { status: 'ignored', dropId, sessionId, reason: releaseResult.status };
+      }
+      throw err;
     }
     const markResult = await markStripeCheckoutFulfillmentFailed(started.checkoutRef, err, {
       summarizeError: deps.summarizeError,

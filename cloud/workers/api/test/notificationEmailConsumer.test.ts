@@ -313,15 +313,19 @@ test('Stripe fulfillment queue processing validates jobs and records terminal ou
   }));
   const logs: Record<string, unknown>[] = [];
   await processStripeFulfillmentMessage(queued.message, env() as Env, {
-    process: async () => ({
-      fulfillment: {
-        status: 'ignored',
-        dropId: 'card_nft_binder_devnet',
-        sessionId: 'cs_test_456',
-        reason: 'already_fulfilled',
-      },
-      notifications: { outcome: 'fulfilled', queuedJobs: 2 },
-    }),
+    process: async (_job, _env, signal, options) => {
+      assert.equal(options?.treatRetryableFailureAsTerminal, false);
+      assert.notEqual(options?.persistenceSignal, signal);
+      return {
+        fulfillment: {
+          status: 'ignored',
+          dropId: 'card_nft_binder_devnet',
+          sessionId: 'cs_test_456',
+          reason: 'already_fulfilled',
+        },
+        notifications: { outcome: 'fulfilled', queuedJobs: 2 },
+      };
+    },
     log: (entry) => logs.push(entry),
   });
   assert.deepEqual(logs.map((entry) => entry.event), [
@@ -337,13 +341,98 @@ test('Stripe fulfillment queue processing validates jobs and records terminal ou
   );
 });
 
+test('Stripe fulfillment persists retryable failures on the final Queue attempt', async () => {
+  const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8')) as {
+    queues: { consumers: Array<{ max_retries: number; queue: string }> };
+  };
+  const maxRetries = config.queues.consumers.find((consumer) => (
+    consumer.queue === 'mons-shop-stripe-fulfillment'
+  ))?.max_retries;
+  assert.equal(maxRetries, 10);
+  const queued = queueMessage(createStripeCheckoutFulfillmentJobV1({
+    dropId: 'card_nft_binder_devnet',
+    sessionId: 'cs_test_final_attempt',
+    stripeEventId: 'evt_test_final_attempt',
+    stripeEventType: 'checkout.session.completed',
+    enqueuedAtMs: Date.now(),
+  }), Number(maxRetries) + 1);
+  await processStripeFulfillmentMessage(queued.message, env() as Env, {
+    log: () => undefined,
+    process: async (_job, _env, _signal, options) => {
+      assert.equal(options?.treatRetryableFailureAsTerminal, true);
+      return {
+        fulfillment: {
+          status: 'failed',
+          dropId: 'card_nft_binder_devnet',
+          sessionId: 'cs_test_final_attempt',
+          error: { code: 'unavailable' },
+        },
+        notifications: { outcome: 'manual_review', queuedJobs: 1 },
+      };
+    },
+  });
+});
+
+test('Stripe fulfillment queue processing enforces its top-level deadline', async () => {
+  const queued = queueMessage(createStripeCheckoutFulfillmentJobV1({
+    dropId: 'card_nft_binder_devnet',
+    sessionId: 'cs_test_timeout',
+    stripeEventId: 'evt_test_timeout',
+    stripeEventType: 'checkout.session.completed',
+    enqueuedAtMs: Date.now(),
+  }));
+  await assert.rejects(
+    processStripeFulfillmentMessage(queued.message, env() as Env, {
+      process: async (_job, _env, signal, options) => new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          assert.equal(options?.persistenceSignal?.aborted, false);
+          reject(signal.reason);
+        }, { once: true });
+      }),
+      log: () => undefined,
+      timeoutMs: 5,
+    }),
+    (error: unknown) => error instanceof DOMException && error.name === 'TimeoutError',
+  );
+});
+
+test('Stripe fulfillment logs final unhandled failures as DLQ-bound', async () => {
+  const queued = queueMessage(createStripeCheckoutFulfillmentJobV1({
+    dropId: 'card_nft_binder_devnet',
+    sessionId: 'cs_test_dlq',
+    stripeEventId: 'evt_test_dlq',
+    stripeEventType: 'checkout.session.completed',
+    enqueuedAtMs: Date.now(),
+  }), 11);
+  const logs: Record<string, unknown>[] = [];
+  await processBackgroundJobBatch(
+    batch('mons-shop-stripe-fulfillment', queued.message),
+    env() as Env,
+    {
+      fulfillment: async () => {
+        throw new Error('persistence failed');
+      },
+      log: (entry) => logs.push(entry),
+      error: () => undefined,
+    },
+  );
+  assert.deepEqual(logs, [{
+    event: 'stripe_fulfillment_job_dlq_bound',
+    queueMessageId: 'queue-message-11',
+    queueAttempts: 11,
+  }]);
+  assert.deepEqual(queued.actions.retries, [{ delaySeconds: 60 }]);
+});
+
 test('API Worker exposes the queue handler and uses the reviewed queue policy', () => {
   const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   assert.equal(typeof worker.queue, 'function');
+  assert.equal(typeof worker.scheduled, 'function');
   assert.equal(config.name, 'mons-shop-api');
   assert.equal(config.workers_dev, false);
   assert.equal(config.preview_urls, true);
   assert.deepEqual(config.routes, [{ pattern: 'api.mons.shop', custom_domain: true }]);
+  assert.deepEqual(config.triggers, { crons: ['*/5 * * * *'] });
   assert.equal(config.secrets.required.includes('RESEND_API_KEY'), true);
   assert.deepEqual(config.queues.consumers, [
     {

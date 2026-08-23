@@ -11,7 +11,10 @@ import {
   type StripeWebhookSession,
   type StripeWebhookTransition,
 } from '../../../../functions/src/shared/stripeWebhook.js';
-import { createStripeCheckoutFulfillmentJobV1 } from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.js';
+import {
+  createStripeCheckoutFulfillmentJobV1,
+  isStripeCheckoutFulfillmentEventType,
+} from '../../../../functions/src/shared/stripeCheckoutFulfillmentJob.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
@@ -141,10 +144,7 @@ function normalizeStripeEvent(value: unknown): StripeWebhookEvent {
     throw new StripeWebhookRequestError(400, 'invalid_event');
   }
   const eventType = value.type.trim();
-  if (
-    eventType !== 'checkout.session.completed' &&
-    eventType !== 'checkout.session.async_payment_succeeded'
-  ) {
+  if (!isStripeCheckoutFulfillmentEventType(eventType)) {
     return {
       id: value.id,
       type: eventType,

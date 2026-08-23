@@ -62,7 +62,6 @@
     "wipe-drop": "node --experimental-strip-types functions/scripts/wipeDrop.ts",
     "deploy": "node --experimental-strip-types scripts/deploy-cloudflare.ts",
     "deploy:api": "node --import tsx scripts/deploy-cloudflare-api.ts",
-    "deploy:api:triggers": "node --import tsx scripts/deploy-cloudflare-api.ts triggers",
     "benchmark:api": "node --import tsx scripts/benchmark-cloudflare-api.ts",
     "release:finalize": "node --import tsx scripts/finalize-cloudflare-release.ts",
     "release:approve-api-rollback": "node --import tsx scripts/approve-cloudflare-api-rollback.ts",

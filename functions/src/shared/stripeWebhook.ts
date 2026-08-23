@@ -12,13 +12,13 @@ import {
   normalizeStripeCheckoutQuantity,
   resolveMintSelectionVariantIndex,
 } from './stripeCheckoutSession.js';
-import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from './stripeCheckoutFulfillmentJob.js';
+import {
+  STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
+  isStripeCheckoutFulfillmentEventType,
+  type StripeCheckoutFulfillmentEventType,
+} from './stripeCheckoutFulfillmentJob.js';
 
 export const STRIPE_WEBHOOK_PATH = '/webhooks/stripe';
-const STRIPE_WEBHOOK_SUPPORTED_EVENTS = [
-  'checkout.session.completed',
-  'checkout.session.async_payment_succeeded',
-] as const;
 
 export type StripeWebhookSecretScope = 'devnet' | 'mainnet';
 
@@ -72,7 +72,7 @@ export type StripeWebhookAction =
       kind: 'awaiting_payment';
       dropId: string;
       eventId: string;
-      eventType: string;
+      eventType: StripeCheckoutFulfillmentEventType;
       expectedSecretScope: StripeWebhookSecretScope;
       sessionId: string;
     }
@@ -81,7 +81,7 @@ export type StripeWebhookAction =
       checkoutKind: StripeCheckoutKind;
       dropId: string;
       eventId: string;
-      eventType: string;
+      eventType: StripeCheckoutFulfillmentEventType;
       expectedLivemode: boolean;
       expectedSecretScope: StripeWebhookSecretScope;
       session: StripeWebhookSession;
@@ -249,7 +249,7 @@ export function resolveStripeWebhookAction(
   const eventId = normalizedString(event.id);
   const eventType = normalizedString(event.type);
   if (!eventId || !eventType) throw new Error('Stripe webhook event is invalid');
-  if (!(STRIPE_WEBHOOK_SUPPORTED_EVENTS as readonly string[]).includes(eventType)) {
+  if (!isStripeCheckoutFulfillmentEventType(eventType)) {
     return { kind: 'ignored', reason: 'unsupported_event', eventId, eventType };
   }
 

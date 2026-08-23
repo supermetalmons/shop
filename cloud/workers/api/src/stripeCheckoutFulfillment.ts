@@ -2,6 +2,7 @@ import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import {
   Connection,
+  type FetchFn,
   Keypair,
   PublicKey,
   TransactionMessage,
@@ -14,10 +15,16 @@ import {
   encryptAddressCipherText,
   serializeAddressCipherPayload,
 } from '../../../../functions/src/shared/addressCipher.js';
-import { decodeBoxMinterConfigData } from '../../../../functions/src/shared/boxMinterConfigCodec.js';
+import {
+  decodeBoxMinterConfigData,
+  type DecodedBoxMinterConfigData,
+} from '../../../../functions/src/shared/boxMinterConfigCodec.js';
 import { BOX_MINTER_CONFIG_SEED } from '../../../../functions/src/shared/boxMinterProtocol.js';
 import { normalizeCountryCode } from '../../../../functions/src/shared/countryNormalization.js';
-import { normalizeDropId } from '../../../../functions/src/shared/deploymentCore.js';
+import {
+  boxMinterMetadataBaseMatchesDrop,
+  normalizeDropId,
+} from '../../../../functions/src/shared/deploymentCore.js';
 import { dropDeliveryOrderPath } from '../../../../functions/src/dropPaths.js';
 import {
   shouldTrackPackStatusForDrop,
@@ -57,6 +64,8 @@ const MPL_NOOP_PROGRAM_ID = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
 const MPL_ACCOUNT_COMPRESSION_PROGRAM_ID = new PublicKey(MPL_ACCOUNT_COMPRESSION_PROGRAM_ADDRESS);
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const MPL_CORE_CPI_SIGNER = new PublicKey(MPL_CORE_CPI_SIGNER_ADDRESS);
+const MPL_CORE_COLLECTION_V1_DISCRIMINATOR = 5;
+const MPL_CORE_COLLECTION_V1_MIN_BYTES = 49;
 
 type FulfillmentRuntime = StripeCheckoutDropRuntime & {
   config: FunctionsDropConfig;
@@ -134,12 +143,16 @@ function heliusOrigin(cluster: FulfillmentRuntime['cluster']): string {
   return cluster === 'mainnet-beta' ? 'https://mainnet.helius-rpc.com' : 'https://devnet.helius-rpc.com';
 }
 
-function connection(runtime: FulfillmentRuntime, apiKey: string): Connection {
+function connection(runtime: FulfillmentRuntime, apiKey: string, signal: AbortSignal): Connection {
   const normalized = apiKey.trim();
   if (!normalized) throw fulfillmentError('unavailable', 'HELIUS_API_KEY is not configured');
   return new Connection(`${heliusOrigin(runtime.cluster)}/?api-key=${encodeURIComponent(normalized)}`, {
     commitment: 'confirmed',
     disableRetryOnRateLimit: true,
+    fetch: ((input, init) => fetch(input, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal,
+    })) as FetchFn,
   });
 }
 
@@ -288,12 +301,75 @@ async function sendAndConfirmSignedTx(
   });
 }
 
-async function onchainConfig(runtime: FulfillmentRuntime, rpc: Connection): Promise<StripeCheckoutOnchainConfig> {
-  const info = await withTimeout(
-    rpc.getAccountInfo(runtime.boxMinterConfigPda, { commitment: 'confirmed' }),
-    RPC_TIMEOUT_MS,
-    'getAccountInfo:boxMinterConfig',
+function validateOnchainConfig(
+  runtime: FulfillmentRuntime,
+  decoded: DecodedBoxMinterConfigData,
+): StripeCheckoutOnchainConfig {
+  const mismatch = (condition: boolean, message: string, details?: Record<string, unknown>) => {
+    if (condition) throw fulfillmentError('failed-precondition', message, { dropId: runtime.dropId, ...details });
+  };
+  mismatch(decoded.itemsPerBox !== runtime.itemsPerBox, 'On-chain itemsPerBox does not match deployment config');
+  mismatch(decoded.maxSupply !== runtime.maxSupply, 'On-chain maxSupply does not match deployment config');
+  mismatch(
+    decoded.discountMintsPerWallet !== runtime.config.discountMintsPerWallet,
+    'On-chain discount limit does not match deployment config',
   );
+  mismatch(
+    !boxMinterMetadataBaseMatchesDrop(
+      decoded.uriBase,
+      runtime.config.metadataBase,
+      runtime.config.metadataBaseAliases,
+    ),
+    'On-chain metadata base does not match deployment config',
+  );
+  const treasury = new PublicKey(decoded.treasury).toBase58();
+  mismatch(treasury !== runtime.config.treasury, 'On-chain treasury does not match deployment config');
+  const configuredRouting = runtime.config.paymentRouting;
+  const onchainRouting = decoded.paymentRouting;
+  if (!configuredRouting) {
+    mismatch(onchainRouting?.schema !== 'legacy', 'On-chain payment routing does not match deployment config');
+  } else {
+    mismatch(onchainRouting?.schema !== 'split-payments-v1', 'On-chain payment routing does not match deployment config');
+    if (onchainRouting?.schema === 'split-payments-v1') {
+      mismatch(
+        new PublicKey(onchainRouting.deliveryPaymentReceiver).toBase58() !== configuredRouting.deliveryPaymentReceiver ||
+          onchainRouting.mintProceeds.length !== configuredRouting.mintProceeds.length,
+        'On-chain payment routing does not match deployment config',
+      );
+      configuredRouting.mintProceeds.forEach((expected, index) => {
+        const actual = onchainRouting.mintProceeds[index];
+        mismatch(
+          !actual || new PublicKey(actual.address).toBase58() !== expected.address || actual.percentage !== expected.percentage,
+          'On-chain payment routing does not match deployment config',
+          { recipientIndex: index },
+        );
+      });
+    }
+  }
+  return {
+    admin: new PublicKey(decoded.admin),
+    coreCollection: new PublicKey(decoded.coreCollection),
+  };
+}
+
+function isMplCoreCollectionAccount(
+  account: { data: Uint8Array; owner: PublicKey } | null,
+): boolean {
+  return account !== null &&
+    account.owner.equals(MPL_CORE_PROGRAM_ID) &&
+    account.data.length >= MPL_CORE_COLLECTION_V1_MIN_BYTES &&
+    account.data[0] === MPL_CORE_COLLECTION_V1_DISCRIMINATOR;
+}
+
+async function onchainConfig(runtime: FulfillmentRuntime, rpc: Connection): Promise<StripeCheckoutOnchainConfig> {
+  const [collectionInfo, info] = await withTimeout(
+    rpc.getMultipleAccountsInfo([runtime.collectionMint, runtime.boxMinterConfigPda], { commitment: 'confirmed' }),
+    RPC_TIMEOUT_MS,
+    'getMultipleAccountsInfo:stripeCheckoutConfig',
+  );
+  if (!isMplCoreCollectionAccount(collectionInfo)) {
+    throw fulfillmentError('failed-precondition', 'Collection account is missing or invalid');
+  }
   if (!info?.data || !info.owner.equals(runtime.boxMinterProgramId)) {
     throw fulfillmentError('failed-precondition', 'Box minter config PDA is missing or invalid');
   }
@@ -303,10 +379,7 @@ async function onchainConfig(runtime: FulfillmentRuntime, rpc: Connection): Prom
   } catch (error) {
     throw fulfillmentError('failed-precondition', error instanceof Error ? error.message : String(error));
   }
-  return {
-    admin: new PublicKey(decoded.admin),
-    coreCollection: new PublicKey(decoded.coreCollection),
-  };
+  return validateOnchainConfig(runtime, decoded);
 }
 
 function signer(secret: string): Keypair {
@@ -357,12 +430,13 @@ function stripeKeys(env: FulfillmentEnv): string[] {
 function flowDependencies(
   env: FulfillmentEnv,
   store: ReturnType<typeof createWorkerStripeCheckoutStore>,
+  signal: AbortSignal,
 ): StripeCheckoutFlowDeps<FulfillmentRuntime, StripeCheckoutOnchainConfig> {
   return {
     requireDropId: (dropId) => fulfillmentRuntime(dropId).dropId,
     getDropRuntime: fulfillmentRuntime,
-    connection: (runtime) => connection(runtime, env.HELIUS_API_KEY),
-    ensureOnchainCoreConfig: (runtime) => onchainConfig(runtime, connection(runtime, env.HELIUS_API_KEY)),
+    connection: (runtime) => connection(runtime, env.HELIUS_API_KEY, signal),
+    ensureOnchainCoreConfig: (runtime) => onchainConfig(runtime, connection(runtime, env.HELIUS_API_KEY, signal)),
     requireStripeCheckoutCollectionMatchesConfig: (runtime, config, code = 'failed-precondition') => {
       if (!runtime.collectionMint.equals(config.coreCollection)) {
         throw fulfillmentError(code, 'COLLECTION_MINT does not match on-chain config', {
@@ -396,6 +470,7 @@ function flowDependencies(
     rpcTimeoutMs: RPC_TIMEOUT_MS,
     txSendTimeoutMs: TX_SEND_TIMEOUT_MS,
     txConfirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
+    signal,
     countPackStatus: async ({ dropRuntime, orderHashHex, quantity, deliveryId, checkoutSessionId }) => {
       if (!shouldTrackPackStatusForDrop(dropRuntime)) return;
       const eventPath = `drops/${dropRuntime.dropId}/packStatusEvents/redeemedIrlStripe_${encodeURIComponent(orderHashHex)}`;
@@ -427,12 +502,13 @@ export async function processStripeCheckoutFulfillmentJob(
   job: StripeCheckoutFulfillmentJobV1,
   env: FulfillmentEnv,
   signal: AbortSignal,
+  options: { persistenceSignal?: AbortSignal; treatRetryableFailureAsTerminal?: boolean } = {},
 ): Promise<FulfillmentProcessingResult> {
   const store = createWorkerStripeCheckoutStore({
     accessTokenProvider,
     providerFetch: (input, init) => fetch(input, init),
     serviceAccountJson: env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
-    signal,
+    signal: options.persistenceSignal || signal,
   });
   const checkoutPath = `drops/${job.dropId}/stripeCheckouts/${job.sessionId}`;
   const fulfillment = await processStripeCheckoutFulfillmentDocument({
@@ -441,8 +517,15 @@ export async function processStripeCheckoutFulfillmentJob(
     sessionId: job.sessionId,
     checkoutRef: store.doc(checkoutPath),
     apiKeys: stripeKeys(env),
-    deps: flowDependencies(env, store),
+    deps: flowDependencies(env, store, signal),
+    treatRetryableFailureAsTerminal: options.treatRetryableFailureAsTerminal,
   });
+  if (fulfillment.status === 'ignored' && fulfillment.reason === 'not_pending') {
+    throw fulfillmentError('aborted', 'Stripe checkout is not ready for fulfillment', {
+      dropId: job.dropId,
+      sessionId: job.sessionId,
+    });
+  }
   const notifications = await publishStripeCheckoutTerminalNotifications({
     dropId: job.dropId,
     sessionId: job.sessionId,
@@ -481,3 +564,9 @@ export async function processStripeCheckoutFulfillmentJob(
   }
   return { fulfillment, notifications };
 }
+
+export const stripeCheckoutFulfillmentTestHooks = {
+  fulfillmentRuntime,
+  isMplCoreCollectionAccount,
+  validateOnchainConfig,
+};

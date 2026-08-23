@@ -6,7 +6,7 @@ import {
   StripeCheckoutServerTimestamp,
   stripeCheckoutFieldValue,
 } from '../../../../functions/src/stripeCheckout/store.ts';
-import { FirestoreWriteConflict } from '../src/firestoreRest.ts';
+import { FirestoreWriteConflict, ProfileReadError } from '../src/firestoreRest.ts';
 import {
   createWorkerStripeCheckoutStore,
   stripeCheckoutFirestoreTestHooks,
@@ -46,6 +46,48 @@ test('Stripe checkout Firestore writes encode fields, deletes, increments, and t
   assert.equal(stripeCheckoutFieldValue.serverTimestamp() instanceof StripeCheckoutServerTimestamp, true);
   assert.equal(stripeCheckoutFieldValue.delete() instanceof StripeCheckoutDeleteField, true);
   assert.equal(stripeCheckoutFieldValue.increment(1) instanceof StripeCheckoutIncrement, true);
+});
+
+test('Stripe checkout Firestore distinguishes missing documents from decode failures', () => {
+  assert.equal(stripeCheckoutFirestoreTestHooks.parseDocument(null), null);
+  assert.deepEqual(
+    stripeCheckoutFirestoreTestHooks.parseDocument({ updateTime: '2026-08-23T00:00:00.000000Z' }),
+    { fields: {}, updateTime: '2026-08-23T00:00:00.000000Z' },
+  );
+  assert.deepEqual(
+    stripeCheckoutFirestoreTestHooks.parseDocument({
+      updateTime: '2026-08-23T00:00:00.000000Z',
+      fields: {
+        attachment: { bytesValue: 'AQID' },
+        location: { geoPointValue: { latitude: 41, longitude: 29 } },
+        reference: { referenceValue: 'projects/mons-shop/databases/(default)/documents/example/1' },
+      },
+    }),
+    {
+      fields: {
+        attachment: 'AQID',
+        location: { latitude: 41, longitude: 29 },
+        reference: 'projects/mons-shop/databases/(default)/documents/example/1',
+      },
+      updateTime: '2026-08-23T00:00:00.000000Z',
+    },
+  );
+  assert.throws(
+    () => stripeCheckoutFirestoreTestHooks.parseDocument({
+      updateTime: '2026-08-23T00:00:00.000000Z',
+      fields: { attachment: { bytesValue: 123 } },
+    }),
+    (error: unknown) => error instanceof ProfileReadError && error.code === 'unavailable',
+  );
+  for (const doubleValue of ['NaN', 'Infinity', '-Infinity']) {
+    assert.throws(
+      () => stripeCheckoutFirestoreTestHooks.parseDocument({
+        updateTime: '2026-08-23T00:00:00.000000Z',
+        fields: { claimedAt: { doubleValue } },
+      }),
+      (error: unknown) => error instanceof ProfileReadError && error.code === 'unavailable',
+    );
+  }
 });
 
 test('Stripe checkout Firestore transactions retry ABORTED commits with fresh reads', async () => {

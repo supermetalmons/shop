@@ -122,9 +122,15 @@ function encodedDocumentWrite(
 }
 
 function parseDocument(value: unknown): FirestoreDocument | null {
-  if (!isRecord(value) || typeof value.updateTime !== 'string') return null;
-  const fields = decodeFirestoreFields(value.fields);
-  return fields ? { fields, updateTime: value.updateTime } : null;
+  if (value === null) return null;
+  if (!isRecord(value) || typeof value.updateTime !== 'string' || !value.updateTime) {
+    throw new ProfileReadError('unavailable', 502, 'Stripe checkout data is temporarily unavailable.');
+  }
+  const fields = value.fields === undefined ? {} : decodeFirestoreFields(value.fields);
+  if (!fields) {
+    throw new ProfileReadError('unavailable', 502, 'Stripe checkout data is temporarily unavailable.');
+  }
+  return { fields, updateTime: value.updateTime };
 }
 
 function nestedField(data: StripeCheckoutDocumentData, fieldPath: string): unknown {

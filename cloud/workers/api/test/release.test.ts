@@ -920,6 +920,10 @@ test('API deployment validates exact Worker and custom-domain targets before mut
     false,
   );
   assert.equal(
+    deployApiTestHooks.isExactApiDeploymentConfig({ ...config, triggers: { crons: ['0 * * * *'] } }),
+    false,
+  );
+  assert.equal(
     deployApiTestHooks.isExactApiDeploymentConfig({
       ...config,
       queues: { producers: [{ binding: 'REVEAL_BACKGROUND_QUEUE', queue: 'unexpected-queue' }] },
@@ -943,6 +947,22 @@ test('API deployment validates exact Worker and custom-domain targets before mut
     }),
     false,
   );
+});
+
+test('API rollback trigger configuration disables reconciliation cron before version rollback', () => {
+  let inspected = false;
+  deployApiTestHooks.deployApiTriggersWithoutReconciliationSchedule(
+    deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+    (args, _environment, label) => {
+      assert.deepEqual(args.slice(0, 2), ['triggers', 'deploy']);
+      const configPath = args[args.indexOf('--config') + 1];
+      const config = JSON.parse(readFileSync(configPath, 'utf8')) as { triggers: { crons: string[] } };
+      assert.deepEqual(config.triggers, { crons: [] });
+      assert.equal(label, 'Disable Stripe reconciliation schedule before approved API rollback');
+      inspected = true;
+    },
+  );
+  assert.equal(inspected, true);
 });
 
 test('queue consumers and delivery log inspection require the exact reviewed surface', () => {
@@ -1627,6 +1647,7 @@ test('frontend deployment gates upload on typechecking, tests, build, and bundle
   );
   const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
   assert.match(packageJson.scripts['check:api'], /dry-run:api:triggers/);
+  assert.equal(packageJson.scripts['deploy:api:triggers'], undefined);
 });
 
 test('API observability retains all custom logs without automatic invocation logs', () => {
@@ -2795,12 +2816,12 @@ test('API production benchmarks the exact preview before mutation and writes evi
     `benchmark:${previewUrl}`,
     'deployment-status',
     'pause-reveal',
-    'Reviewed trigger deployment',
-    'queue-consumers',
     'smoke:https://api.mons.shop',
     'deployment-status',
     'Exact version promotion',
     'deployment-status',
+    'Reviewed trigger deployment',
+    'queue-consumers',
     'deployment-status',
     'resume-reveal',
     'smoke:https://api.mons.shop',
@@ -2877,7 +2898,7 @@ test('API production benchmark failure performs no deployment mutation', async (
   assert.deepEqual(events, [`smoke:${previewUrl}`, `benchmark:${previewUrl}`]);
 });
 
-test('API trigger deployment gets exactly one declarative retry before promotion', async () => {
+test('API trigger deployment gets exactly one declarative retry after promotion', async () => {
   const baselineVersionId = randomUUID();
   const candidateVersionId = randomUUID();
   const labels: string[] = [];
@@ -2919,9 +2940,9 @@ test('API trigger deployment gets exactly one declarative retry before promotion
     },
   );
   assert.deepEqual(labels, [
+    'Exact version promotion',
     'Reviewed trigger deployment',
     'Reviewed trigger deployment retry',
-    'Exact version promotion',
   ]);
 });
 
@@ -3057,6 +3078,39 @@ test('API guarded resume re-pauses when candidate verification fails', async () 
   assert.equal(revealDeliveryPaused, true);
 });
 
+test('API failure handling attempts fulfillment re-pause when reveal re-pause fails', () => {
+  const candidateVersionId = randomUUID();
+  const events: string[] = [];
+  assert.throws(
+    () => deployApiTestHooks.repauseRevealQueueAfterFailure(
+      new Error('verification failed'),
+      {
+        expectedCurrentVersionId: candidateVersionId,
+        heliusApiKey: 'helius-test-key',
+        previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+        smokeOwner: OWNER,
+        versionId: candidateVersionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        deployment: async () => stableDeployment(candidateVersionId),
+        smoke: async () => undefined,
+        benchmark: async () => ({ runs: 5, workerMedianMs: 10, legacyMedianMs: 20 }),
+        repauseRevealQueue: () => {
+          events.push('re-pause');
+          throw new Error('reveal re-pause failed');
+        },
+        repauseFulfillmentQueue: () => events.push('re-pause-fulfillment'),
+        wrangler: () => undefined,
+        evidence: () => assert.fail('re-pause unit test wrote evidence'),
+        sleep: async () => undefined,
+      },
+    ),
+    /could not be fully re-paused/,
+  );
+  assert.deepEqual(events, ['re-pause', 're-pause-fulfillment']);
+});
+
 test('API promotion command failure leaves reveal delivery paused for exact-candidate recovery', async () => {
   const baselineVersionId = randomUUID();
   const candidateVersionId = randomUUID();
@@ -3098,7 +3152,7 @@ test('API promotion command failure leaves reveal delivery paused for exact-cand
     /appears live[\s\S]*promotion command failed[\s\S]*remains paused[\s\S]*Fix forward/,
   );
   assert.equal(revealDeliveryPaused, true);
-  assert.deepEqual(labels, ['pause', 'Reviewed trigger deployment', 'Exact version promotion']);
+  assert.deepEqual(labels, ['pause', 'Exact version promotion']);
 });
 
 test('API successful promotion command reports manual intervention for ambiguous live state', async () => {
@@ -3131,7 +3185,7 @@ test('API successful promotion command reports manual intervention for ambiguous
     ),
     /live mutation state could not be safely reconciled[\s\S]*remains paused[\s\S]*Fix forward/,
   );
-  assert.deepEqual(labels, ['Reviewed trigger deployment', 'Exact version promotion']);
+  assert.deepEqual(labels, ['Exact version promotion']);
 });
 
 test('API refuses split or third-version state before any mutation', async () => {
@@ -3220,6 +3274,7 @@ test('approved API rollback pauses, verifies the exact pair, resumes, and record
     wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
   }, {
     apiDeployment: async () => stableDeployment(apiStatuses.shift() || assert.fail('unexpected API status read')),
+    disableReconciliationSchedule: () => events.push('disable-reconciliation-schedule'),
     evidence: (kind, versionId) => {
       assert.equal(kind, 'api');
       assert.equal(versionId, rollbackApiVersionId);
@@ -3250,7 +3305,10 @@ test('approved API rollback pauses, verifies the exact pair, resumes, and record
     repauseFulfillmentQueue: () => assert.fail('successful rollback re-paused fulfillment delivery'),
     resumeRevealQueue: () => events.push('resume'),
     resumeFulfillmentQueue: () => events.push('resume-fulfillment'),
-    sleep: async () => undefined,
+    sleep: async (milliseconds) => {
+      assert.equal(milliseconds, 15 * 60 * 1000);
+      events.push('wait-for-reconciliation-schedule-removal');
+    },
     smoke: async () => {
       smokeCalls += 1;
       events.push(`smoke-${smokeCalls}`);
@@ -3266,6 +3324,8 @@ test('approved API rollback pauses, verifies the exact pair, resumes, and record
   assert.deepEqual(events, [
     'pause',
     'pause-fulfillment',
+    'disable-reconciliation-schedule',
+    'wait-for-reconciliation-schedule-removal',
     'rollback',
     'verify-consumers',
     'smoke-1',
@@ -3300,6 +3360,7 @@ test('approved API rollback re-pauses reveal delivery after a post-resume failur
       wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
     }, {
       apiDeployment: async () => stableDeployment(apiStatuses.shift() || assert.fail('unexpected API status read')),
+      disableReconciliationSchedule: () => events.push('disable-reconciliation-schedule'),
       evidence: () => assert.fail('failed rollback wrote evidence'),
       frontendDeployment: async () => stableDeployment(
         frontendStatuses.shift() || assert.fail('unexpected frontend status read'),
@@ -3312,7 +3373,10 @@ test('approved API rollback re-pauses reveal delivery after a post-resume failur
       repauseFulfillmentQueue: () => events.push('re-pause-fulfillment'),
       resumeRevealQueue: () => events.push('resume'),
       resumeFulfillmentQueue: () => events.push('resume-fulfillment'),
-      sleep: async () => undefined,
+      sleep: async (milliseconds) => {
+        assert.equal(milliseconds, 15 * 60 * 1000);
+        events.push('wait-for-reconciliation-schedule-removal');
+      },
       smoke: async () => {
         smokeCalls += 1;
         if (smokeCalls === 2) throw new Error('injected post-resume rollback smoke failure');
@@ -3325,6 +3389,8 @@ test('approved API rollback re-pauses reveal delivery after a post-resume failur
   assert.deepEqual(events, [
     'pause',
     'pause-fulfillment',
+    'disable-reconciliation-schedule',
+    'wait-for-reconciliation-schedule-removal',
     'rollback',
     'resume',
     'resume-fulfillment',
@@ -3476,14 +3542,23 @@ test('Firestore writer preflight verifies OAuth and database write access withou
       if (url.href === 'https://oauth2.googleapis.com/token') {
         return Response.json({ access_token: 'writer-token', token_type: 'Bearer', expires_in: 3600 });
       }
-      assert.equal(init?.method, 'DELETE');
       assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer writer-token');
-      assert.match(url.pathname, /\/databases\/\(default\)\/documents\/cloudflareReleaseChecks\//);
-      assert.equal(url.searchParams.get('currentDocument.exists'), 'false');
+      if (init?.method === 'DELETE') {
+        assert.match(url.pathname, /\/databases\/\(default\)\/documents\/cloudflareReleaseChecks\//);
+        assert.equal(url.searchParams.get('currentDocument.exists'), 'false');
+      } else {
+        assert.equal(init?.method, 'POST');
+        assert.match(url.pathname, /\/databases\/\(default\)\/documents:runQuery$/);
+        const body = JSON.parse(String(init.body)) as { structuredQuery: Record<string, unknown> };
+        assert.deepEqual(body.structuredQuery.orderBy, [
+          { field: { fieldPath: 'updatedAt' }, direction: 'ASCENDING' },
+          { field: { fieldPath: '__name__' }, direction: 'ASCENDING' },
+        ]);
+      }
       return Response.json({});
     },
   );
-  assert.deepEqual(requests.map(({ method }) => method), ['POST', 'DELETE']);
+  assert.deepEqual(requests.map(({ method }) => method), ['POST', 'DELETE', 'POST']);
 
   await assert.rejects(
     deployApiTestHooks.verifyFirestoreWriterAccess(
@@ -3493,6 +3568,20 @@ test('Firestore writer preflight verifies OAuth and database write access withou
         : Response.json({}, { status: 403 }),
     ),
     /Firestore writer access verification failed/,
+  );
+
+  await assert.rejects(
+    deployApiTestHooks.verifyFirestoreWriterAccess(
+      FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+      async (input, init) => {
+        if (String(input) === 'https://oauth2.googleapis.com/token') {
+          return Response.json({ access_token: 'writer-token' });
+        }
+        if (init?.method === 'DELETE') return Response.json({});
+        return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 400 });
+      },
+    ),
+    /reconciliation index verification failed/,
   );
 });
 

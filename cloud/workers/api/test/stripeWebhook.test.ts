@@ -386,8 +386,9 @@ test('webhook retries optimistic Firestore conflicts and surfaces exhausted conf
   assert.equal(exhausted.outcome, 'write_conflict');
 });
 
-test('webhook retries repair a committed Firestore transition after Queue publication fails', async () => {
+test('webhook commits before publish and duplicate delivery repairs a failed Queue send', async () => {
   let status: string = STRIPE_CHECKOUT_STATUS.CREATED;
+  let commits = 0;
   const failed = await handleStripeWebhookRequest(
     await signedRequest(stripeEvent()),
     env({
@@ -400,6 +401,7 @@ test('webhook retries repair a committed Firestore transition after Queue public
       log: () => undefined,
       providerFetch: async (_input, init) => {
         if (init?.method === 'GET') return Response.json(firestoreDocument(checkoutDocument({ status })));
+        commits += 1;
         status = STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING;
         return Response.json({ writeResults: [{}] });
       },
@@ -407,12 +409,16 @@ test('webhook retries repair a committed Firestore transition after Queue public
   );
   assert.equal(failed.response.status, 500);
   assert.equal(failed.outcome, 'processing_error');
+  assert.equal(commits, 1);
+  assert.equal(status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
 
   const jobs: unknown[] = [];
+  const events: string[] = [];
   const repaired = await handleStripeWebhookRequest(
     await signedRequest(stripeEvent()),
     env({
       STRIPE_FULFILLMENT_QUEUE: queue(async (body) => {
+        events.push('queue');
         jobs.push(body);
         return { metadata: { metrics: { backlogCount: 1, backlogBytes: 128 } } };
       }),
@@ -420,14 +426,17 @@ test('webhook retries repair a committed Firestore transition after Queue public
     {
       accessTokenProvider: accessTokenProvider(),
       log: () => undefined,
-      providerFetch: async (_input, init) => init?.method === 'GET'
-        ? Response.json(firestoreDocument(checkoutDocument({ status })))
-        : Response.json({ writeResults: [{}] }),
+      providerFetch: async (_input, init) => {
+        if (init?.method === 'GET') return Response.json(firestoreDocument(checkoutDocument({ status })));
+        events.push('commit');
+        return Response.json({ writeResults: [{}] });
+      },
     },
   );
   assert.equal(repaired.response.status, 200);
   assert.equal(repaired.outcome, 'already_pending');
   assert.equal(jobs.length, 1);
+  assert.deepEqual(events, ['commit', 'queue']);
 });
 
 test('signed mainnet webhook uses the live secret and preserves fulfilled idempotency', async () => {

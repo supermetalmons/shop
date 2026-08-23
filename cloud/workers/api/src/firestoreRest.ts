@@ -349,9 +349,19 @@ function decodeFirestoreValue(value: unknown): unknown {
   }
   if (typeof value.integerValue === 'string' && /^-?\d+$/.test(value.integerValue)) {
     const integer = Number(value.integerValue);
-    return Number.isSafeInteger(integer) ? integer : undefined;
+    return Number.isSafeInteger(integer) ? integer : value.integerValue;
   }
   if (typeof value.doubleValue === 'number' && Number.isFinite(value.doubleValue)) return value.doubleValue;
+  if (typeof value.bytesValue === 'string') return value.bytesValue;
+  if (typeof value.referenceValue === 'string') return value.referenceValue;
+  if (isRecord(value.geoPointValue)) {
+    const latitude = value.geoPointValue.latitude;
+    const longitude = value.geoPointValue.longitude;
+    return typeof latitude === 'number' && Number.isFinite(latitude) &&
+      typeof longitude === 'number' && Number.isFinite(longitude)
+      ? { latitude, longitude }
+      : undefined;
+  }
   if (isRecord(value.arrayValue)) {
     const values = value.arrayValue.values;
     if (values === undefined) return [];

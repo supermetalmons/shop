@@ -84,14 +84,12 @@ Advanced release controls remain available for separately managed releases:
 - Upload an undeployed candidate, smoke-test its Version Preview, run the mandatory five-request comparison, and write version-keyed promotion evidence:
   - `npm run deploy:api -- preview --smoke-owner <wallet>`
   - Preview creates the reveal and Stripe fulfillment queues and their DLQs when they are missing; it does not attach consumers or enqueue work.
-- Re-smoke and repeat the mandatory five-request comparison against that exact Version Preview, apply the reviewed `api.mons.shop` trigger, verify the tracked baseline, promote the exact version, smoke-test production, and write production evidence:
+- Re-smoke and repeat the mandatory five-request comparison against that exact Version Preview, verify the tracked baseline, promote the exact version, apply its reviewed triggers, smoke-test production, and write production evidence:
   - `npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet>`
-- Reapply reviewed triggers without changing code:
-  - `npm run deploy:api -- triggers --smoke-owner <wallet>`
-  - This verifies all three queue consumers without pausing or resuming stateful queue delivery.
 - Roll back to the exact approved API version only when the approved frontend is live:
   - `npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet>`
   - The command pauses reveal and Stripe fulfillment delivery, verifies the approved pair and all consumers, rolls back and smokes the API, resumes delivery, verifies again, and updates release metadata. Any post-resume failure re-pauses both queues.
+  - Scheduled Stripe reconciliation is disabled before rollback and restored by the next guarded production release.
 - Run the standalone comparison against an explicit origin:
   - `npm run benchmark:api -- --api-origin https://api.mons.shop --owner <wallet> --runs 5`
   - Add `--include-devnet` when the comparison should include both mainnet and devnet inventory.
@@ -118,17 +116,22 @@ Ready-to-ship buyer and shipper emails are rendered by `mons-shop-api` when the
 delivery order atomically enters `ready_to_ship`, then published directly through
 the `NOTIFICATION_EMAIL_QUEUE` binding. Pending Firestore outbox markers let a
 receipt retry resume Queue publication without repeating on-chain work. The
-Stripe webhook marks the checkout for `cloudflare_queue_v1` and publishes a
-versioned job through `STRIPE_FULFILLMENT_QUEUE`. The Worker acquires the
-existing Firestore lease, reconciles the on-chain order, creates the delivery
-records and claim codes, and publishes success or manual-review email jobs. The
-fulfillment processor owns all marked documents. Fulfillment failures retry ten
-times with a 60-second delay before moving to
-`mons-shop-stripe-fulfillment-dlq`; email delivery failures retain their existing
+Stripe webhook commits the `cloudflare_queue_v1` marker before publishing a
+versioned job through `STRIPE_FULFILLMENT_QUEUE`. A five-minute scheduled pass
+requeues marked pending or processing checkouts that have been stale for fifteen minutes,
+covering Queue publication failures and exhausted retry cycles. The consumer
+acquires the existing Firestore lease, reconciles the on-chain order, creates the
+delivery records and claim codes, and publishes success or manual-review email jobs. The
+fulfillment processor owns all marked documents. Transient fulfillment errors
+retry up to ten times with a 60-second delay before becoming manual-review
+failures; unhandled persistence or notification failures move to
+`mons-shop-stripe-fulfillment-dlq`. Email delivery retains its existing
 five-retry policy.
 
 - Validate the HTTP and notification handlers, generated bindings, TypeScript,
   unit tests, bundling, and startup together with `npm run check:api`.
+- Deploy the checked-in Firestore indexes with `npm run deploy:firebase` before
+  releasing an API version that changes fulfillment reconciliation queries.
 - API production releases send a synthetic email through the production queue
   before writing release evidence.
 - Queue the synthetic test email through the production API and print its job ID:

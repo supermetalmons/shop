@@ -47,6 +47,8 @@ import {
   isRetryableStripeCheckoutFulfillmentError,
   markStripeCheckoutFulfillmentFailed,
   markStripeCheckoutFulfillmentFulfilled,
+  processStripeCheckoutFulfillmentDocument,
+  releaseStripeCheckoutFulfillmentForRetry,
   runStripeCheckoutFulfillmentWithRetry,
   isStripeCheckoutManualReviewCandidate,
   startStripeCheckoutFulfillmentDocument,
@@ -2218,6 +2220,78 @@ test('markStripeCheckoutFulfillmentFailed leaves an already-fulfilled checkout i
 
   assert.deepEqual(result, { status: 'already_fulfilled' });
   assert.equal(sets.length, 0);
+});
+
+test('retryable fulfillment failures release the current lease back to pending', async () => {
+  const updates: Array<{ ref: any; data: any }> = [];
+  const checkoutRef = { path: 'checkout' } as any;
+  checkoutRef.firestore = {
+    runTransaction: async (fn: any) => fn({
+      get: async () => ({
+        exists: true,
+        data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_current' }),
+      }),
+      update: (ref: any, data: any) => updates.push({ ref, data }),
+    }),
+  };
+
+  const result = await releaseStripeCheckoutFulfillmentForRetry(
+    checkoutRef,
+    new Error('provider unavailable'),
+    {
+      summarizeError: (error) => ({ message: error instanceof Error ? error.message : String(error) }),
+      processingAttemptId: 'attempt_current',
+    },
+  );
+
+  assert.deepEqual(result, { status: 'released' });
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+  assert.equal(updates[0].data.lastRetryableFulfillmentError.message, 'provider unavailable');
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingAttemptId'), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingLeaseExpiresAt'), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingStartedAt'), true);
+});
+
+test('final Queue attempts persist retryable fulfillment failures for manual review', async () => {
+  const sets: Array<{ data: any }> = [];
+  const checkoutRef = { path: 'checkout' } as any;
+  let transactionCalls = 0;
+  checkoutRef.firestore = {
+    runTransaction: async (fn: any) => {
+      transactionCalls += 1;
+      if (transactionCalls === 1) {
+        return fn({
+          get: async () => {
+            throw Object.assign(new Error('provider unavailable'), { code: 'unavailable' });
+          },
+        });
+      }
+      return fn({
+        get: async () => ({
+          exists: true,
+          data: () => ({ status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING }),
+        }),
+        set: (_ref: any, data: any) => sets.push({ data }),
+      });
+    },
+  };
+  const result = await processStripeCheckoutFulfillmentDocument({
+    db: checkoutRef.firestore,
+    dropId: 'card_nft_binder_devnet',
+    sessionId: 'cs_test_final_attempt',
+    checkoutRef,
+    apiKeys: [],
+    deps: {
+      getDropRuntime: () => ({ cluster: 'devnet' }),
+      summarizeError: (error: unknown) => ({ message: error instanceof Error ? error.message : String(error) }),
+    } as any,
+    treatRetryableFailureAsTerminal: true,
+  });
+  assert.equal(result.status, 'failed');
+  assert.equal(sets.length, 1);
+  assert.equal(sets[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
+  assert.equal(sets[0].data.manualRefundReviewRequired, true);
 });
 
 test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async () => {

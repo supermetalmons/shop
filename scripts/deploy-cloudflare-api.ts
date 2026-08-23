@@ -22,6 +22,7 @@ import {
   isExactShopPendingOpenBoxesResponse,
 } from '../functions/src/shared/shopApi.ts';
 import { isExactSubscribeToNotificationsResponse } from '../functions/src/shared/notificationSubscription.ts';
+import { stripeCheckoutReconciliationQuery } from '../functions/src/shared/stripeCheckoutReconciliation.ts';
 import { FULFILLMENT_ADMIN_WALLET_ADDRESSES } from '../functions/src/shared/fulfillmentAccess.ts';
 import { isBase58Bytes } from '../functions/src/shared/solanaRpcProxy.ts';
 import { benchmarkApi, type ApiBenchmarkResult } from './benchmark-cloudflare-api.ts';
@@ -50,7 +51,7 @@ import {
   readCloudflareFirestoreKeychainCredential,
 } from './cloudflare-firestore-keychain.ts';
 
-type Mode = 'release' | 'preview' | 'production' | 'triggers' | 'rollback';
+type Mode = 'release' | 'preview' | 'production' | 'rollback';
 
 type CliOptions = {
   firestoreServiceAccountFile?: string;
@@ -155,6 +156,7 @@ type RollbackSequenceInput = {
 
 type RollbackSequenceDependencies = {
   apiDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
+  disableReconciliationSchedule: (environment: NodeJS.ProcessEnv) => void;
   evidence: typeof writeProductionEvidence;
   frontendDeployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
   notificationSmoke?: typeof smokeNotificationDelivery;
@@ -255,6 +257,7 @@ const googleOAuthTokenUrl = 'https://oauth2.googleapis.com/token';
 const googleDatastoreScope = 'https://www.googleapis.com/auth/datastore';
 const DEFAULT_SMOKE_TIMEOUT_MS = 15_000;
 const INVENTORY_SMOKE_TIMEOUT_MS = 70_000;
+const CRON_TRIGGER_PROPAGATION_MS = 15 * 60 * 1000;
 const SMOKE_PROPAGATION_DELAYS_MS = [0, 500, 1_500, 3_000, 5_000, 10_000, 15_000] as const;
 const secretFileOperations: SecretFileOperations = {
   chmod: chmodSync,
@@ -276,7 +279,6 @@ function usage(): string {
     '  npm run deploy:api -- release --firestore-service-account-file <path> --firestore-writer-service-account-file <path> [--smoke-owner <wallet>] [--token-file <path>]',
     '  npm run deploy:api -- preview --firestore-service-account-file <path> --firestore-writer-service-account-file <path> --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
-    '  npm run deploy:api -- triggers --smoke-owner <wallet> [--token-file <path>]',
     '  npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
     '',
     'The default release validates, uploads, verifies, promotes, and records one exact Worker version.',
@@ -296,11 +298,11 @@ function parseArgs(argv: string[]): CliOptions {
     process.exit(0);
   }
   const requestedMode = argv[0];
-  const knownModes: readonly Mode[] = ['release', 'preview', 'production', 'triggers', 'rollback'];
+  const knownModes: readonly Mode[] = ['release', 'preview', 'production', 'rollback'];
   const mode: Mode = requestedMode && knownModes.includes(requestedMode as Mode) ? requestedMode as Mode : 'release';
   const optionStart = mode === requestedMode ? 1 : 0;
   if (requestedMode && !requestedMode.startsWith('--') && optionStart === 0) {
-    fail(`Expected release, preview, production, triggers, or rollback.\n\n${usage()}`, 2);
+    fail(`Expected release, preview, production, or rollback.\n\n${usage()}`, 2);
   }
   let smokeOwner = mode === 'release' ? defaultSmokeOwner : '';
   let firestoreServiceAccountFile: string | undefined;
@@ -331,7 +333,7 @@ function parseArgs(argv: string[]): CliOptions {
   if ((mode === 'production' || mode === 'rollback') && (!versionId || !versionIdPattern.test(versionId))) {
     fail(`${mode} requires an exact UUID --version-id.`, 2);
   }
-  if ((mode === 'release' || mode === 'preview' || mode === 'triggers') && versionId) fail(`--version-id is not valid in ${mode} mode.`, 2);
+  if ((mode === 'release' || mode === 'preview') && versionId) fail(`--version-id is not valid in ${mode} mode.`, 2);
   if (mode !== 'release' && mode !== 'preview' && (firestoreServiceAccountFile || firestoreWriterServiceAccountFile)) {
     fail(`Firestore service-account file options are not valid in ${mode} mode.`, 2);
   }
@@ -469,6 +471,28 @@ async function verifyFirestoreWriterAccess(
     fail('Firestore writer access verification failed.');
   }
   await deleteResponse.body?.cancel().catch(() => undefined);
+  let queryResponse: Response;
+  try {
+    queryResponse = await providerFetch(
+      `https://firestore.googleapis.com/v1/${firestoreDatabaseName}/documents:runQuery`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(stripeCheckoutReconciliationQuery(nowMs, 1)),
+        signal: AbortSignal.timeout(DEFAULT_SMOKE_TIMEOUT_MS),
+      },
+    );
+  } catch {
+    fail('Firestore fulfillment reconciliation index verification failed.');
+  }
+  if (!queryResponse.ok) {
+    await queryResponse.body?.cancel().catch(() => undefined);
+    fail('Firestore fulfillment reconciliation index verification failed.');
+  }
+  await queryResponse.body?.cancel().catch(() => undefined);
 }
 
 function readFirestoreCredential(
@@ -1076,6 +1100,7 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
   const route = value.routes[0];
   const queues = value.queues;
   const secrets = value.secrets;
+  const triggers = value.triggers;
   if (
     !isRecord(queues) ||
     !hasExactKeys(queues, ['consumers', 'producers']) ||
@@ -1092,7 +1117,12 @@ function isExactApiDeploymentConfig(value: unknown): boolean {
   const notificationConsumer = queues.consumers[0];
   const revealConsumer = queues.consumers[1];
   const stripeFulfillmentConsumer = queues.consumers[2];
-  return isRecord(secrets) &&
+  return isRecord(triggers) &&
+    hasExactKeys(triggers, ['crons']) &&
+    Array.isArray(triggers.crons) &&
+    triggers.crons.length === 1 &&
+    triggers.crons[0] === '*/5 * * * *' &&
+    isRecord(secrets) &&
     hasExactKeys(secrets, ['required']) &&
     Array.isArray(secrets.required) &&
     [...secrets.required].sort().join('\0') === [
@@ -1188,7 +1218,7 @@ function assertApiDeploymentConfig(path = resolve(repoRoot, configPath)): void {
   }
   if (!isExactApiDeploymentConfig(value)) {
     fail(
-      `API Wrangler config must target only ${workerName}, account ${accountId}, the ${new URL(productionUrl).hostname} custom domain, and the reviewed notification, reveal, and Stripe fulfillment queues.`,
+      `API Wrangler config must target only ${workerName}, account ${accountId}, the ${new URL(productionUrl).hostname} custom domain, the reviewed queues, and the Stripe fulfillment reconciliation schedule.`,
     );
   }
 }
@@ -1646,9 +1676,32 @@ function deployReviewedApiTriggers(
     } catch (retryError) {
       throw new AggregateError(
         [firstError, retryError],
-        'Reviewed API trigger deployment failed twice; no new Worker version was promoted.',
+        'Reviewed API trigger deployment failed twice; the exact candidate remains live with stateful queues paused.',
       );
     }
+  }
+}
+
+function deployApiTriggersWithoutReconciliationSchedule(
+  environment: NodeJS.ProcessEnv,
+  wrangler: typeof runWrangler = runWrangler,
+): void {
+  const directory = mkdtempSync(join(tmpdir(), 'mons-shop-api-rollback-triggers-'));
+  chmodSync(directory, 0o700);
+  const path = join(directory, 'wrangler.json');
+  const config = JSON.parse(readFileSync(resolve(repoRoot, configPath), 'utf8')) as Record<string, unknown>;
+  delete config.$schema;
+  config.main = resolve(repoRoot, 'cloud/workers/api/src/index.ts');
+  config.triggers = { crons: [] };
+  writeFileSync(path, `${JSON.stringify(config)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  try {
+    wrangler(
+      ['triggers', 'deploy', '--config', path, '--env-file', releaseEnvPath],
+      environment,
+      'Disable Stripe reconciliation schedule before approved API rollback',
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 }
 
@@ -1699,36 +1752,45 @@ function productionCandidateSmoke(input: ProductionSequenceInput): SmokeApiOptio
   return input.candidateSmoke || { includeDevnet: true, includeStripeWebhook: true, owner: input.smokeOwner };
 }
 
+function repauseStatefulQueuesAfterFailure(
+  error: unknown,
+  reveal: (() => void) | undefined,
+  fulfillment: (() => void) | undefined,
+  message: string,
+): void {
+  const repauseErrors: unknown[] = [];
+  if (!reveal) {
+    repauseErrors.push(new Error('No reveal re-pause operation was configured.'));
+  } else {
+    try {
+      reveal();
+    } catch (repauseError) {
+      repauseErrors.push(repauseError);
+    }
+  }
+  if (fulfillment) {
+    try {
+      fulfillment();
+    } catch (repauseError) {
+      repauseErrors.push(repauseError);
+    }
+  }
+  if (repauseErrors.length) throw new AggregateError([error, ...repauseErrors], message);
+}
+
 function repauseRevealQueueAfterFailure(
   error: unknown,
   input: ProductionSequenceInput,
   dependencies: ProductionSequenceDependencies,
 ): void {
   const repause = dependencies.repauseRevealQueue ?? dependencies.pauseRevealQueue;
-  if (!repause) {
-    throw new AggregateError(
-      [error],
-      'Reveal delivery may have resumed, but no re-pause operation was configured. Inspect the live version and queue immediately.',
-    );
-  }
-  try {
-    repause(input.wranglerEnvironment);
-  } catch (repauseError) {
-    throw new AggregateError(
-      [error, repauseError],
-      'Reveal delivery could not be re-paused after a post-resume failure. Inspect the live version and queue immediately.',
-    );
-  }
   const repauseFulfillment = dependencies.repauseFulfillmentQueue ?? dependencies.pauseFulfillmentQueue;
-  if (!repauseFulfillment) return;
-  try {
-    repauseFulfillment(input.wranglerEnvironment);
-  } catch (repauseError) {
-    throw new AggregateError(
-      [error, repauseError],
-      'Stripe fulfillment delivery could not be re-paused after a post-resume failure. Inspect the live version and queue immediately.',
-    );
-  }
+  repauseStatefulQueuesAfterFailure(
+    error,
+    repause ? () => repause(input.wranglerEnvironment) : undefined,
+    repauseFulfillment ? () => repauseFulfillment(input.wranglerEnvironment) : undefined,
+    'Stateful queue delivery could not be fully re-paused after a post-resume failure. Inspect production immediately.',
+  );
 }
 
 async function runProductionSequence(
@@ -1798,18 +1860,8 @@ async function runProductionSequence(
   } catch (error) {
     throw new Error('Stateful queue delivery could not be paused, so no trigger or version mutation was attempted.', { cause: error });
   }
-  if (releaseStart.resumeCandidate) {
+  if (!releaseStart.resumeCandidate) {
     try {
-      deployReviewedApiTriggers(input, dependencies);
-    } catch (error) {
-      throw revealQueuePausedFailure(
-        error,
-        `API candidate ${candidateVersionId} is live, but reviewed triggers could not be verified.`,
-      );
-    }
-  } else {
-    try {
-      deployReviewedApiTriggers(input, dependencies);
       await dependencies.smoke(productionUrl, {
         includeDevnet: candidateSmoke.includeDevnet,
         owner: input.smokeOwner,
@@ -1874,6 +1926,15 @@ async function runProductionSequence(
         `API candidate ${candidateVersionId} appears live, but the promotion command failed.`,
       );
     }
+  }
+
+  try {
+    deployReviewedApiTriggers(input, dependencies);
+  } catch (error) {
+    throw revealQueuePausedFailure(
+      error,
+      `API candidate ${candidateVersionId} is live, but reviewed triggers could not be verified.`,
+    );
   }
 
   if (dependencies.resumeRevealQueue || dependencies.resumeFulfillmentQueue) {
@@ -2026,6 +2087,7 @@ async function runRollbackSequence(
   input: RollbackSequenceInput,
   dependencies: RollbackSequenceDependencies = {
     apiDeployment: readApiDeploymentStatus,
+    disableReconciliationSchedule: deployApiTriggersWithoutReconciliationSchedule,
     evidence: writeProductionEvidence,
     frontendDeployment: readFrontendDeploymentStatus,
     notificationSmoke: smokeNotificationDelivery,
@@ -2070,8 +2132,10 @@ async function runRollbackSequence(
   try {
     dependencies.pauseRevealQueue(input.wranglerEnvironment);
     dependencies.pauseFulfillmentQueue?.(input.wranglerEnvironment);
+    dependencies.disableReconciliationSchedule(input.wranglerEnvironment);
+    await dependencies.sleep(CRON_TRIGGER_PROPAGATION_MS);
   } catch (error) {
-    throw new Error('Stateful queue delivery could not be paused, so API rollback was not attempted.', { cause: error });
+    throw new Error('Stateful delivery could not be paused and the reconciliation schedule fully disabled, so API rollback was not attempted.', { cause: error });
   }
 
   let resumeAttempted = false;
@@ -2116,15 +2180,14 @@ async function runRollbackSequence(
     });
   } catch (error) {
     if (resumeAttempted || fulfillmentResumeAttempted) {
-      try {
-        dependencies.repauseRevealQueue(input.wranglerEnvironment);
-        dependencies.repauseFulfillmentQueue?.(input.wranglerEnvironment);
-      } catch (repauseError) {
-        throw new AggregateError(
-          [error, repauseError],
-          'API rollback failed and stateful queue delivery could not be re-paused. Inspect production immediately.',
-        );
-      }
+      repauseStatefulQueuesAfterFailure(
+        error,
+        () => dependencies.repauseRevealQueue(input.wranglerEnvironment),
+        dependencies.repauseFulfillmentQueue
+          ? () => dependencies.repauseFulfillmentQueue?.(input.wranglerEnvironment)
+          : undefined,
+        'API rollback failed and stateful queue delivery could not be re-paused. Inspect production immediately.',
+      );
     }
     throw new Error(
       'Approved API rollback failed. Stateful queue delivery remains paused; inspect the live pair before retrying the exact approved rollback.',
@@ -2276,7 +2339,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (options.mode === 'production' || options.mode === 'triggers') {
+  if (options.mode === 'production') {
     runWrangler(['triggers', 'deploy', '--dry-run', ...configArgs], checkEnvironment, 'Trigger configuration dry-run');
   }
   const apiToken = readApiToken(options.tokenFile);
@@ -2317,11 +2380,6 @@ async function main(): Promise<void> {
     console.log(`[api-deploy] Production version ${options.versionId} and custom-domain trigger verified.`);
     return;
   }
-  runWrangler(['triggers', 'deploy', ...configArgs], wranglerEnvironment, 'Reviewed trigger deployment');
-  assertExactQueueConsumers(wranglerEnvironment);
-  await smokeApi(productionUrl, { includeDevnet: true, owner: options.smokeOwner });
-  await smokeNotificationDelivery(wranglerEnvironment, workerName);
-  console.log('[api-deploy] Custom-domain and queue triggers verified; stateful queue delivery state was unchanged.');
 }
 
 export const deployApiTestHooks = {
@@ -2355,6 +2413,8 @@ export const deployApiTestHooks = {
   readFirestoreServiceAccount,
   readFirestoreWriterServiceAccount,
   readStableReleasePair,
+  deployApiTriggersWithoutReconciliationSchedule,
+  repauseRevealQueueAfterFailure,
   requireCandidateRecord,
   resolveHeliusApiKey,
   resolveApiProductionPreviewUrl,
