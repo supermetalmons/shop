@@ -20,10 +20,7 @@ export type PackStatusD1Database = {
   prepare(query: string): PackStatusD1Statement;
 };
 
-export type PackStatusReadSource = 'd1';
-
-export type PackStatusRollout = {
-  readSource: PackStatusReadSource;
+export type PackStatusMetadata = {
   cacheGeneration: number;
 };
 
@@ -46,8 +43,7 @@ type PackStatusRow = {
   updated_at_ms: number;
 };
 
-type RolloutRow = {
-  read_source: string;
+type MetadataRow = {
   cache_generation: number;
 };
 
@@ -124,17 +120,14 @@ function parsePackStatusRow(row: PackStatusRow | null, dropId: string): D1PackSt
   };
 }
 
-export async function readPackStatusRollout(db: PackStatusD1Database): Promise<PackStatusRollout> {
+export async function readPackStatusMetadata(db: PackStatusD1Database): Promise<PackStatusMetadata> {
   const row = await db.prepare(
-    'SELECT read_source, cache_generation FROM pack_status_rollout WHERE singleton = 1',
-  ).first<RolloutRow>();
-  if (
-    !row ||
-    row.read_source !== 'd1' ||
-    positiveSafeInteger(row.cache_generation) === null
-  ) throw new Error('invalid_pack_status_rollout');
+    'SELECT cache_generation FROM pack_status_metadata WHERE singleton = 1',
+  ).first<MetadataRow>();
+  if (!row || positiveSafeInteger(row.cache_generation) === null) {
+    throw new Error('invalid_pack_status_metadata');
+  }
   return {
-    readSource: row.read_source,
     cacheGeneration: Number(row.cache_generation),
   };
 }
@@ -220,7 +213,6 @@ function increment(event: PackStatusEvent, key: keyof PackStatusEventIncrements)
 export async function applyD1PackStatusEvent(
   db: PackStatusD1Database,
   event: PackStatusEvent,
-  applyDelta = true,
 ): Promise<'applied' | 'duplicate'> {
   if (
     !event.dropId ||
@@ -266,7 +258,7 @@ export async function applyD1PackStatusEvent(
     event.checkoutSessionId ?? null,
     event.boxAssetId ?? null,
     event.signature ?? null,
-    applyDelta ? 1 : 0,
+    1,
     event.createdAtMs,
   ).run();
   if (!result.success) throw new Error('pack_status_d1_event_insert_failed');
@@ -274,12 +266,11 @@ export async function applyD1PackStatusEvent(
 }
 
 export function packStatusCacheRequest(
-  source: PackStatusReadSource,
   generation: number,
   dropId: string,
 ): Request {
   return new Request(
-    `https://pack-status-cache.invalid/v1/${source}/${generation}/${encodeURIComponent(dropId)}`,
+    `https://pack-status-cache.invalid/v1/${generation}/${encodeURIComponent(dropId)}`,
     { method: 'GET' },
   );
 }

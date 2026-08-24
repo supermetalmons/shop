@@ -9,8 +9,6 @@ import {
 } from './fulfillmentSources.ts';
 
 export const PACK_STATUS_SCHEMA_VERSION = 1;
-export const PACK_STATUS_SOURCE_HEADER = 'X-Mons-Pack-Status-Source';
-export const PACK_STATUS_DEFAULT_DROP_ID = 'card_nft_2';
 export const PACK_STATUS_SUPPORTED_DROP_IDS = [
   'card_nft_2',
   'poncho_drifella',

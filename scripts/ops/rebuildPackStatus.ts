@@ -30,7 +30,7 @@ import {
 import {
   readD1Integrity,
   writeD1RebuiltSummaries,
-} from '../migrate-pack-status-to-d1.ts';
+} from '../shared/d1PackStatusMaintenance.ts';
 
 type Args = {
   dropIds: string[];

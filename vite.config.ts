@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv, type Plugin } from 'vite';
+import { defineConfig, loadEnv, type Plugin, type UserConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { normalizeMonsApiOrigin } from './src/lib/monsApiOrigin.ts';
 
@@ -35,16 +35,35 @@ export function redirectDependencyPublicRpcFallbacks(apiOrigin: string): Plugin 
   };
 }
 
-export default defineConfig(({ mode }) => {
-  const configuredEnvDir = process.env.MONS_SHOP_VITE_ENV_DIR;
-  const environment = loadEnv(mode, configuredEnvDir || process.cwd(), 'VITE_');
+export function resolveViteClientSettings(
+  mode: string,
+  environmentDirectory = process.cwd(),
+  buildTimeMilliseconds = Date.now(),
+) {
+  const production = mode === 'production';
+  const environment = production ? {} : loadEnv(mode, environmentDirectory, 'VITE_');
   const apiOrigin = normalizeMonsApiOrigin(environment.VITE_MONS_API_ORIGIN);
 
   return {
-    plugins: [redirectDependencyPublicRpcFallbacks(apiOrigin), react()],
+    apiOrigin,
+    envDir: production ? false as const : environmentDirectory,
+    envPrefix: production ? [] : ['VITE_', 'STRIPE_TEST_UNIT_AMOUNT_CENTS'],
+    buildDatetime: production ? String(Math.floor(buildTimeMilliseconds / 1000)) : undefined,
+  };
+}
 
-    envDir: configuredEnvDir || undefined,
-    envPrefix: ['VITE_', 'STRIPE_TEST_UNIT_AMOUNT_CENTS'],
+export function createViteConfig(
+  mode: string,
+  environmentDirectory = process.cwd(),
+  buildTimeMilliseconds = Date.now(),
+): UserConfig {
+  const settings = resolveViteClientSettings(mode, environmentDirectory, buildTimeMilliseconds);
+
+  return {
+    plugins: [redirectDependencyPublicRpcFallbacks(settings.apiOrigin), react()],
+
+    envDir: settings.envDir,
+    envPrefix: settings.envPrefix,
 
     // Vite 7 externalizes Node built-ins by default. We need the npm `buffer` polyfill
     // for Solana web3.js and our client code.
@@ -55,6 +74,9 @@ export default defineConfig(({ mode }) => {
     },
     define: {
       global: 'globalThis',
+      ...(settings.buildDatetime === undefined
+        ? {}
+        : { 'import.meta.env.VITE_BUILD_DATETIME': JSON.stringify(settings.buildDatetime) }),
     },
     server: {
       port: 5173,
@@ -64,4 +86,6 @@ export default defineConfig(({ mode }) => {
       outDir: 'dist',
     },
   };
-});
+}
+
+export default defineConfig(({ mode }) => createViteConfig(mode));

@@ -4,10 +4,8 @@ import { readFileSync } from 'node:fs';
 import {
   assertD1Integrity,
   buildD1SummaryRebuildSql,
-  parseArgs,
-  parseBookmarkOutput,
   type D1IntegrityInput,
-} from '../../../../scripts/migrate-pack-status-to-d1.ts';
+} from '../../../../scripts/shared/d1PackStatusMaintenance.ts';
 import {
   parseArgs as parseRebuildArgs,
   requireSettledPackStatusProjectionOutboxes,
@@ -21,7 +19,7 @@ const dropRows = [
 
 function integrityInput(): D1IntegrityInput {
   return {
-    rollout: [{ singleton: 1, read_source: 'd1', cache_generation: 8 }],
+    metadata: [{ singleton: 1, cache_generation: 8 }],
     summaries: dropRows.map(([dropId, totalInitialSupply, totalCards, cardsPerPack]) => ({
       drop_id: dropId,
       version: 1,
@@ -43,18 +41,11 @@ function integrityInput(): D1IntegrityInput {
     schema: [
       { name: 'pack_status', type: 'table' },
       { name: 'pack_status_events', type: 'table' },
-      { name: 'pack_status_rollout', type: 'table' },
+      { name: 'pack_status_metadata', type: 'table' },
       { name: 'pack_status_event_apply', type: 'trigger' },
       { name: 'pack_status_event_delete_guard', type: 'trigger' },
       { name: 'pack_status_event_immutable', type: 'trigger' },
       { name: 'pack_status_event_type_guard', type: 'trigger' },
-      { name: 'pack_status_rollout_d1_only_insert_guard', type: 'trigger' },
-      { name: 'pack_status_rollout_d1_only_update_guard', type: 'trigger' },
-    ],
-    migrations: [
-      { name: '0001_pack_status.sql' },
-      { name: '0002_pack_status_event_type_guard.sql' },
-      { name: '0003_pack_status_d1_only.sql' },
     ],
     quickCheck: [{ quick_check: 'ok' }],
     foreignKeyCheck: [],
@@ -62,17 +53,7 @@ function integrityInput(): D1IntegrityInput {
   };
 }
 
-test('D1-only pack-status commands reject reversible migration operations', () => {
-  assert.deepEqual(parseArgs(['integrity']), { command: 'integrity' });
-  assert.deepEqual(parseArgs(['probe']), { command: 'probe' });
-  assert.deepEqual(parseArgs(['bookmark']), { command: 'bookmark' });
-  for (const command of ['backfill', 'verify', 'cutover', 'rollback']) {
-    assert.throws(() => parseArgs([command]), /Usage/);
-  }
-  assert.throws(() => parseArgs(['integrity', '--unknown']), /Usage/);
-});
-
-test('D1 integrity requires exact supported summaries, migrations, guards, and event ownership', () => {
+test('D1 integrity requires valid metadata, exact supported summaries, guards, and event ownership', () => {
   const input = integrityInput();
   const report = assertD1Integrity(input);
   assert.equal(report.cacheGeneration, 8);
@@ -80,18 +61,18 @@ test('D1 integrity requires exact supported summaries, migrations, guards, and e
   assert.equal(report.eventCount, 870);
   assert.equal(report.drops.find((drop) => drop.dropId === 'card_nft_2')?.appliedEventCount, 1);
 
+  for (const metadata of [
+    [],
+    [{ singleton: 1, cache_generation: 8 }, { singleton: 1, cache_generation: 9 }],
+    [{ singleton: 2, cache_generation: 8 }],
+    [{ singleton: 1, cache_generation: 0 }],
+  ]) {
+    assert.throws(() => assertD1Integrity({ ...input, metadata }), /metadata|cache_generation/);
+  }
   assert.throws(() => assertD1Integrity({
     ...input,
-    rollout: [{ singleton: 1, read_source: 'firestore', cache_generation: 8 }],
-  }), /locked to D1/);
-  assert.throws(() => assertD1Integrity({
-    ...input,
-    migrations: input.migrations.slice(0, 2),
-  }), /migrations/);
-  assert.throws(() => assertD1Integrity({
-    ...input,
-    schema: input.schema.filter((row) => row.name !== 'pack_status_rollout_d1_only_update_guard'),
-  }), /update_guard/);
+    schema: input.schema.filter((row) => row.name !== 'pack_status_metadata'),
+  }), /pack_status_metadata/);
   assert.throws(() => assertD1Integrity({
     ...input,
     eventCounts: [...input.eventCounts, {
@@ -103,6 +84,16 @@ test('D1 integrity requires exact supported summaries, migrations, guards, and e
   }), /unsupported/);
   assert.throws(() => assertD1Integrity({
     ...input,
+    eventCounts: input.eventCounts.map((row) => row.drop_id === 'card_nft_2'
+      ? { ...row, applied_event_count: 2 }
+      : row),
+  }), /inconsistent/);
+  assert.throws(() => assertD1Integrity({
+    ...input,
+    quickCheck: [{ quick_check: 'corrupt' }],
+  }), /quick_check/);
+  assert.throws(() => assertD1Integrity({
+    ...input,
     foreignKeyCheck: [{ table: 'pack_status_events', rowid: 1 }],
   }), /foreign_key_check/);
   assert.throws(() => assertD1Integrity({
@@ -111,7 +102,7 @@ test('D1 integrity requires exact supported summaries, migrations, guards, and e
   }), /invalid pack-status event payloads/);
 });
 
-test('authoritative rebuild SQL updates only one allowlisted D1 summary and cache generation', () => {
+test('authoritative rebuild SQL updates one allowlisted summary and metadata generation once', () => {
   const sql = buildD1SummaryRebuildSql({
     dropId: 'card_nft_2',
     totalInitialSupply: 10,
@@ -124,8 +115,9 @@ test('authoritative rebuild SQL updates only one allowlisted D1 summary and cach
   }, 500);
   assert.match(sql, /INSERT INTO pack_status/);
   assert.match(sql, /ON CONFLICT\(drop_id\) DO UPDATE SET/);
-  assert.match(sql, /UPDATE pack_status_rollout/);
-  assert.match(sql, /cache_generation = cache_generation \+ 1/);
+  assert.equal((sql.match(/UPDATE pack_status_metadata/g) || []).length, 1);
+  assert.equal((sql.match(/cache_generation = cache_generation \+ 1/g) || []).length, 1);
+  assert.doesNotMatch(sql, /pack_status_rollout/);
   assert.doesNotMatch(sql, /pack_status_events/);
   assert.doesNotMatch(sql, /firestore/i);
   assert.equal((sql.match(/total_initial_supply = excluded\.total_initial_supply/g) || []).length, 1);
@@ -141,7 +133,7 @@ test('authoritative rebuild SQL updates only one allowlisted D1 summary and cach
   }, 500), /Unsupported/);
 });
 
-test('all-drop authoritative rebuild is one batch with one cache invalidation', () => {
+test('all-drop authoritative rebuild preserves exact event counts and invalidates cache once', () => {
   const sql = buildD1SummaryRebuildSql(dropRows.map(([
     dropId,
     totalInitialSupply,
@@ -162,9 +154,10 @@ test('all-drop authoritative rebuild is one batch with one cache invalidation', 
     { dropId: 'poncho_drifella', eventCount: 70, historicalEventCount: 70, appliedEventCount: 0 },
   ]);
   assert.equal((sql.match(/INSERT INTO pack_status/g) || []).length, 3);
+  assert.equal((sql.match(/UPDATE pack_status_metadata/g) || []).length, 1);
   assert.equal((sql.match(/cache_generation = cache_generation \+ 1/g) || []).length, 1);
-  assert.equal((sql.match(/UPDATE pack_status_rollout/g) || []).length, 1);
   assert.equal((sql.match(/SELECT COUNT\(\*\) FROM pack_status_events\) = 870/g) || []).length, 4);
+  assert.match(sql, /drop_id = 'card_nft_2' AND apply_delta = 0\) = 699/);
   assert.match(sql, /drop_id = 'card_nft_2' AND apply_delta = 1\) = 1/);
   assert.throws(() => buildD1SummaryRebuildSql([
     {
@@ -219,20 +212,29 @@ test('authoritative rebuild rejects unsettled durable delivery projection outbox
   }
 });
 
-test('migration 0003 forces D1, invalidates cache, and installs permanent source guards', () => {
-  const migration = readFileSync('cloud/workers/api/migrations/0003_pack_status_d1_only.sql', 'utf8');
-  assert.match(migration, /read_source = 'd1'/);
-  assert.match(migration, /cache_generation = cache_generation \+ 1/);
-  assert.match(migration, /CREATE TRIGGER pack_status_rollout_d1_only_insert_guard/);
-  assert.match(migration, /CREATE TRIGGER pack_status_rollout_d1_only_update_guard/);
-  assert.match(migration, /CREATE TRIGGER pack_status_event_immutable/);
-  assert.match(migration, /CREATE TRIGGER pack_status_event_delete_guard/);
-  assert.match(migration, /RAISE\(ABORT, 'pack-status read source is permanently d1'\)/);
+test('migration 0004 introduces synchronized metadata and an unconditional delete guard', () => {
+  const migration = readFileSync(
+    'cloud/workers/api/migrations/0004_pack_status_metadata_compat.sql',
+    'utf8',
+  );
+  assert.match(migration, /CREATE TABLE pack_status_metadata/);
+  assert.match(migration, /INSERT INTO pack_status_metadata/);
+  assert.match(migration, /CREATE TRIGGER pack_status_rollout_metadata_sync/);
+  assert.match(migration, /CREATE TRIGGER pack_status_metadata_rollout_sync/);
+  assert.match(migration, /DROP TRIGGER pack_status_event_delete_guard/);
+  const deleteGuard = migration.slice(migration.indexOf('CREATE TRIGGER pack_status_event_delete_guard'));
+  assert.doesNotMatch(deleteGuard, /\bWHEN\b/);
+  assert.match(deleteGuard, /RAISE\(ABORT, 'pack-status events are immutable'\)/);
 });
 
-test('Time Travel bookmark parser accepts Wrangler JSON without logging credentials', () => {
-  const bookmark = '00000085-0000024c-00004c6d-8e61117bf38d7adb71b934ebbf891683';
-  assert.equal(parseBookmarkOutput(JSON.stringify({ bookmark })), bookmark);
-  assert.equal(parseBookmarkOutput(JSON.stringify({ result: { bookmark } })), bookmark);
-  assert.throws(() => parseBookmarkOutput(JSON.stringify({ result: {} })), /no bookmark/);
+test('migration 0005 removes the rollout compatibility schema', () => {
+  const migration = readFileSync(
+    'cloud/workers/api/migrations/0005_remove_pack_status_rollout.sql',
+    'utf8',
+  );
+  assert.match(migration, /DROP TRIGGER pack_status_metadata_rollout_sync/);
+  assert.match(migration, /DROP TRIGGER pack_status_rollout_metadata_sync/);
+  assert.match(migration, /DROP TRIGGER pack_status_rollout_d1_only_insert_guard/);
+  assert.match(migration, /DROP TRIGGER pack_status_rollout_d1_only_update_guard/);
+  assert.match(migration, /DROP TABLE pack_status_rollout/);
 });

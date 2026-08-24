@@ -40,10 +40,7 @@ import {
   type ShopDropRuntime,
 } from '../../../../shared/shopDomain.js';
 import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
-import {
-  isPackStatusSupportedDropId,
-  PACK_STATUS_SOURCE_HEADER,
-} from '../../../../shared/packStatus.js';
+import { isPackStatusSupportedDropId } from '../../../../shared/packStatus.js';
 import {
   isExactSubscribeToNotificationsRequest,
   normalizeNotificationEmailRecipient,
@@ -66,8 +63,7 @@ import {
   packStatusCacheRequest,
   parseD1PackStatusCache,
   readD1PackStatus,
-  readPackStatusRollout,
-  type PackStatusReadSource,
+  readPackStatusMetadata,
 } from './d1PackStatus.js';
 import {
   handleNotificationEnqueue,
@@ -1315,11 +1311,11 @@ async function handlePackStatus(
   env: Pick<Env, 'DATA_DB'>,
   dependencies: WorkerDependencies,
   waitUntil?: (promise: Promise<unknown>) => void,
-): Promise<{ response: Response; cacheStatus?: string; source: PackStatusReadSource }> {
+): Promise<{ response: Response; cacheStatus?: string }> {
   try {
     if (typeof env.DATA_DB?.prepare !== 'function') throw new Error('pack_status_data_db_not_configured');
-    const rollout = await readPackStatusRollout(env.DATA_DB);
-    const cacheRequest = packStatusCacheRequest('d1', rollout.cacheGeneration, dropId);
+    const metadata = await readPackStatusMetadata(env.DATA_DB);
+    const cacheRequest = packStatusCacheRequest(metadata.cacheGeneration, dropId);
     let cached: Response | undefined;
     try {
       cached = await dependencies.cache?.match(cacheRequest);
@@ -1337,7 +1333,6 @@ async function handlePackStatus(
           return {
             response: jsonResponse({ ok: true, packStatus }, 200),
             cacheStatus: 'D1-HIT',
-            source: 'd1',
           };
         }
       } catch {}
@@ -1362,7 +1357,6 @@ async function handlePackStatus(
     return {
       response: jsonResponse({ ok: true, packStatus }, 200),
       cacheStatus: 'D1-MISS',
-      source: 'd1',
     };
   } catch (error) {
     dependencies.log({
@@ -1372,7 +1366,6 @@ async function handlePackStatus(
     });
     return {
       response: jsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
-      source: 'd1',
     };
   }
 }
@@ -1554,7 +1547,6 @@ export async function handleRequest(
   const isPackStatusRoute = packStatusDropId !== undefined;
   let includeDevnet = false;
   let providerCacheStatus: string | undefined;
-  let packStatusSource: PackStatusReadSource | undefined;
   let profileAuthOutcome: string | undefined;
   let profileStateSections: { profile: string; shipments: string } | undefined;
   let mergedStripeDeliveryOrders: number | undefined;
@@ -1626,9 +1618,7 @@ export async function handleRequest(
     } else {
       const result = await handlePackStatus(packStatusDropId, env, dependencies, waitUntil);
       response = result.response;
-      response.headers.set(PACK_STATUS_SOURCE_HEADER, result.source);
       providerCacheStatus = result.cacheStatus;
-      packStatusSource = result.source;
     }
   } else if (pathname === '/health') {
     response = request.method === 'GET'
@@ -1855,7 +1845,6 @@ export async function handleRequest(
     includeDevnet,
     ...(packStatusDropId ? { dropId: packStatusDropId } : {}),
     ...(providerCacheStatus ? { providerCacheStatus } : {}),
-    ...(packStatusSource ? { packStatusSource } : {}),
     ...(pathname === '/inventory' ? {
       expectedAssetIds: metrics.expectedAssetIds,
       expectedAssetRecoveryFailures: metrics.expectedAssetRecoveryFailures,

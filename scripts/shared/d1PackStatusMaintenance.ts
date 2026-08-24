@@ -1,25 +1,19 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import {
   PACK_STATUS_SUPPORTED_DROP_IDS,
   type PackStatusCounters,
-} from '../shared/packStatus.ts';
+} from '../../shared/packStatus.ts';
 
-type Command = 'bookmark' | 'integrity' | 'probe';
 type D1Row = Record<string, unknown>;
-
-type Args = {
-  command: Command;
-};
 
 export type D1IntegrityInput = {
   eventCounts: D1Row[];
   foreignKeyCheck: D1Row[];
   invalidEvents: D1Row[];
-  migrations: D1Row[];
+  metadata: D1Row[];
   quickCheck: D1Row[];
-  rollout: D1Row[];
   schema: D1Row[];
   summaries: D1Row[];
 };
@@ -41,50 +35,23 @@ export type D1EventCountExpectation = Pick<
   'appliedEventCount' | 'dropId' | 'eventCount' | 'historicalEventCount'
 >;
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const configPath = 'cloud/workers/api/wrangler.jsonc';
+const envFilePath = 'cloud/workers/api/release.env';
 const databaseName = 'mons-shop-data';
-const probeDropId = '__mons_pack_status_trigger_probe__';
-const probeEventKey = 'retirement';
 const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
 const expectedSchema = new Map([
   ['pack_status', 'table'],
   ['pack_status_events', 'table'],
-  ['pack_status_rollout', 'table'],
+  ['pack_status_metadata', 'table'],
   ['pack_status_event_apply', 'trigger'],
   ['pack_status_event_delete_guard', 'trigger'],
   ['pack_status_event_immutable', 'trigger'],
   ['pack_status_event_type_guard', 'trigger'],
-  ['pack_status_rollout_d1_only_insert_guard', 'trigger'],
-  ['pack_status_rollout_d1_only_update_guard', 'trigger'],
 ]);
-const expectedMigrations = [
-  '0001_pack_status.sql',
-  '0002_pack_status_event_type_guard.sql',
-  '0003_pack_status_d1_only.sql',
-];
-const bookmarkPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{8}){2}-[0-9a-f]{32}$/i;
 
 function fail(message: string): never {
   throw new Error(message);
-}
-
-function usage(): string {
-  return [
-    'Usage:',
-    '  npm run migrate:pack-status -- integrity',
-    '  npm run migrate:pack-status -- probe',
-    '  npm run migrate:pack-status -- bookmark',
-  ].join('\n');
-}
-
-export function parseArgs(argv: string[]): Args {
-  const command = argv[0];
-  if (
-    argv.length !== 1 ||
-    (command !== 'bookmark' && command !== 'integrity' && command !== 'probe')
-  ) fail(usage());
-  return { command };
 }
 
 function positiveInteger(value: unknown, label: string): number {
@@ -108,6 +75,7 @@ function runWrangler(args: string[], json = false): string {
     return execFileSync(wranglerBinary, [
       ...args,
       '--config', configPath,
+      '--env-file', envFilePath,
       ...(json ? ['--json'] : []),
     ], {
       cwd: repoRoot,
@@ -143,13 +111,13 @@ function parseD1Envelope(output: string): Array<{ results: D1Row[]; success: boo
   });
 }
 
-export function executeD1(sql: string): D1Row[][] {
+function executeD1(sql: string): D1Row[][] {
   return parseD1Envelope(runWrangler([
     'd1', 'execute', databaseName, '--remote', '--command', sql,
   ], true)).map((entry) => entry.results);
 }
 
-export function queryD1(sql: string): D1Row[] {
+function queryD1(sql: string): D1Row[] {
   const results = executeD1(sql);
   if (results.length !== 1) fail('Expected exactly one D1 statement result.');
   return results[0];
@@ -192,11 +160,10 @@ function exactStringSet(actual: string[], expected: readonly string[], label: st
 
 export function assertD1Integrity(input: D1IntegrityInput): D1IntegrityReport {
   if (
-    input.rollout.length !== 1 ||
-    Number(input.rollout[0].singleton) !== 1 ||
-    input.rollout[0].read_source !== 'd1'
-  ) fail('Pack-status rollout is not locked to D1.');
-  const cacheGeneration = positiveInteger(input.rollout[0].cache_generation, 'd1.cache_generation');
+    input.metadata.length !== 1 ||
+    Number(input.metadata[0].singleton) !== 1
+  ) fail('Pack-status metadata is invalid.');
+  const cacheGeneration = positiveInteger(input.metadata[0].cache_generation, 'd1.cache_generation');
   if (
     input.quickCheck.length !== 1 ||
     String(input.quickCheck[0].quick_check || '').toLowerCase() !== 'ok'
@@ -211,11 +178,6 @@ export function assertD1Integrity(input: D1IntegrityInput): D1IntegrityReport {
   for (const [name, type] of expectedSchema) {
     if (actualSchema.get(name) !== type) fail(`Missing D1 ${type} ${name}.`);
   }
-  exactStringSet(
-    input.migrations.map((row) => requiredString(row.name, 'd1.migration.name')),
-    expectedMigrations,
-    'D1 pack-status migrations',
-  );
 
   const summaries = input.summaries.map(parseSummary);
   exactStringSet(summaries.map((summary) => summary.dropId), PACK_STATUS_SUPPORTED_DROP_IDS, 'D1 pack-status summaries');
@@ -254,7 +216,7 @@ export function assertD1Integrity(input: D1IntegrityInput): D1IntegrityReport {
 
 export function readD1Integrity(): D1IntegrityReport {
   return assertD1Integrity({
-    rollout: queryD1('SELECT singleton, read_source, cache_generation FROM pack_status_rollout ORDER BY singleton'),
+    metadata: queryD1('SELECT singleton, cache_generation FROM pack_status_metadata ORDER BY singleton'),
     summaries: queryD1(`SELECT
       drop_id, version, total_initial_supply, total_cards, cards_per_pack,
       unsealed_online, redeemed_irl_normal, redeemed_irl_stripe, redeemed_unsealed_cards,
@@ -294,8 +256,6 @@ export function readD1Integrity(): D1IntegrityReport {
     schema: queryD1(`SELECT name, type FROM sqlite_schema
       WHERE name IN (${[...expectedSchema.keys()].map(sqlString).join(', ')})
       ORDER BY name`),
-    migrations: queryD1(`SELECT name FROM d1_migrations
-      WHERE name LIKE '%pack_status%' ORDER BY name`),
     quickCheck: queryD1('PRAGMA quick_check'),
     foreignKeyCheck: queryD1('PRAGMA foreign_key_check'),
   });
@@ -346,9 +306,8 @@ function buildD1SummaryUpsertSql(
     ${sqlString(counters.dropId)}, 1, ${counters.totalInitialSupply}, ${counters.totalCards},
     ${counters.cardsPerPack}, ${counters.unsealedOnline}, ${counters.redeemedIrlNormal},
     ${counters.redeemedIrlStripe}, ${counters.redeemedUnsealedCards}, ${nowMs}, ${nowMs}
-  FROM pack_status_rollout
-  WHERE singleton = 1 AND read_source = 'd1'
-    AND ${eventPrecondition}
+  FROM pack_status_metadata
+  WHERE singleton = 1 AND ${eventPrecondition}
   ON CONFLICT(drop_id) DO UPDATE SET
     version = excluded.version,
     total_initial_supply = excluded.total_initial_supply,
@@ -395,10 +354,9 @@ export function buildD1SummaryRebuildSql(
   const eventPrecondition = expectedEvents ? d1EventCountPrecondition(expectedEvents) : '1 = 1';
   const upserts = counters.map((entry) => buildD1SummaryUpsertSql(entry, nowMs, eventPrecondition));
   return `${upserts.join('\n')}
-  UPDATE pack_status_rollout
+  UPDATE pack_status_metadata
   SET cache_generation = cache_generation + 1, updated_at_ms = ${nowMs}
-  WHERE singleton = 1 AND read_source = 'd1'
-    AND ${eventPrecondition};`;
+  WHERE singleton = 1 AND ${eventPrecondition};`;
 }
 
 export function writeD1RebuiltSummaries(
@@ -435,104 +393,4 @@ export function writeD1RebuiltSummaries(
       fail(`D1 pack-status rebuild verification failed for ${rebuilt.dropId}.`);
     }
   }
-}
-
-function reportFingerprint(report: D1IntegrityReport): string {
-  return JSON.stringify(report);
-}
-
-export function parseBookmarkOutput(output: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(output);
-  } catch {
-    return fail('D1 Time Travel returned invalid JSON.');
-  }
-  const visit = (value: unknown): string | undefined => {
-    if (typeof value === 'string' && bookmarkPattern.test(value)) return value;
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        const bookmark = visit(entry);
-        if (bookmark) return bookmark;
-      }
-      return undefined;
-    }
-    if (!value || typeof value !== 'object') return undefined;
-    const record = value as Record<string, unknown>;
-    if (typeof record.bookmark === 'string' && bookmarkPattern.test(record.bookmark)) return record.bookmark;
-    for (const entry of Object.values(record)) {
-      const bookmark = visit(entry);
-      if (bookmark) return bookmark;
-    }
-    return undefined;
-  };
-  return visit(parsed) || fail('D1 Time Travel returned no bookmark.');
-}
-
-export function currentD1Bookmark(): string {
-  return parseBookmarkOutput(runWrangler([
-    'd1', 'time-travel', 'info', databaseName,
-  ], true));
-}
-
-function cleanupD1TriggerProbe(): void {
-  executeD1(`DELETE FROM pack_status_events
-    WHERE drop_id = ${sqlString(probeDropId)}
-      AND event_type = 'onlineReveal'
-      AND event_key = ${sqlString(probeEventKey)};
-    DELETE FROM pack_status WHERE drop_id = ${sqlString(probeDropId)};`);
-}
-
-export function runD1TriggerProbe(): D1IntegrityReport {
-  cleanupD1TriggerProbe();
-  const before = readD1Integrity();
-  try {
-    const nowMs = Date.now();
-    executeD1(`INSERT INTO pack_status (
-      drop_id, version, total_initial_supply, total_cards, cards_per_pack,
-      unsealed_online, redeemed_irl_normal, redeemed_irl_stripe, redeemed_unsealed_cards,
-      rebuilt_at_ms, updated_at_ms
-    ) VALUES (${sqlString(probeDropId)}, 1, 1, 1, 1, 0, 0, 0, 0, ${nowMs}, ${nowMs});`);
-    executeD1(`INSERT INTO pack_status_events (
-      drop_id, event_type, event_key, quantity,
-      unsealed_online_delta, redeemed_irl_normal_delta, redeemed_irl_stripe_delta,
-      redeemed_unsealed_cards_delta, apply_delta, created_at_ms
-    ) VALUES (${sqlString(probeDropId)}, 'onlineReveal', ${sqlString(probeEventKey)}, 1, 1, 0, 0, 0, 1, ${nowMs + 1});`);
-    const rows = queryD1(`SELECT unsealed_online, updated_at_ms FROM pack_status WHERE drop_id = ${sqlString(probeDropId)}`);
-    if (
-      rows.length !== 1 ||
-      Number(rows[0].unsealed_online) !== 1 ||
-      Number(rows[0].updated_at_ms) !== nowMs + 1
-    ) fail('D1 trigger probe did not apply the synthetic event.');
-  } finally {
-    cleanupD1TriggerProbe();
-  }
-  const after = readD1Integrity();
-  if (reportFingerprint(after) !== reportFingerprint(before)) {
-    fail('D1 trigger probe changed real pack-status data.');
-  }
-  return after;
-}
-
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.command === 'bookmark') {
-    console.log(`[pack-status] D1 Time Travel bookmark: ${currentD1Bookmark()}`);
-    return;
-  }
-  const report = args.command === 'probe' ? runD1TriggerProbe() : readD1Integrity();
-  console.log(
-    `[pack-status] D1 ${args.command} passed: ${report.drops.length} summaries, ${report.eventCount} events, cache generation ${report.cacheGeneration}.`,
-  );
-}
-
-function isDirectRun(): boolean {
-  return Boolean(process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href);
-}
-
-if (isDirectRun()) {
-  main().catch((error) => {
-    console.error(`[pack-status] ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
-  });
 }

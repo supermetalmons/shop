@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import {
   buildPackStatusBreakdown,
   buildPackStatusCountersFromRebuildInputs,
@@ -341,15 +340,4 @@ test('pack status rebuild script accepts supported mainnet drops and rejects uns
     () => requireSupportedPackStatusDrop('little_swag_hoodies'),
     /only supports card_nft_2, poncho_drifella, little_swag_boxes/i,
   );
-});
-
-test('Firestore rules deny all retired pack-status reads and writes', () => {
-  const rules = readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8');
-  const start = rules.indexOf('match /meta/packStatus');
-  const end = rules.indexOf('match /meta/dudePool', start);
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
-  const packStatusRule = rules.slice(start, end);
-
-  assert.match(packStatusRule, /allow\s+read,\s+write:\s+if\s+false/);
 });

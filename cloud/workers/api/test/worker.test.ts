@@ -15,7 +15,6 @@ import {
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.ts';
 import { SHOP_EXPECTED_ASSET_IDS_MAX } from '../../../../shared/shopApi.ts';
 import { isExactShopRpcRequest } from '../../../../shared/solanaRpcProxy.ts';
-import { PACK_STATUS_SOURCE_HEADER } from '../../../../shared/packStatus.ts';
 import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import {
   NOTIFICATION_ENQUEUE_PATH,
@@ -73,8 +72,7 @@ function env(options: {
 
 function packStatusD1(options: {
   failure?: Error;
-  readSource?: 'firestore' | 'd1';
-  rolloutRow?: Record<string, unknown> | null;
+  metadataRow?: Record<string, unknown> | null;
   row?: Record<string, unknown> | null;
 } = {}): D1Database {
   return {
@@ -87,9 +85,9 @@ function packStatusD1(options: {
         },
         async first() {
           if (options.failure) throw options.failure;
-          if (query.includes('pack_status_rollout')) {
-            if (Object.hasOwn(options, 'rolloutRow')) return options.rolloutRow;
-            return { read_source: options.readSource || 'd1', cache_generation: 7 };
+          if (query.includes('pack_status_metadata')) {
+            if (Object.hasOwn(options, 'metadataRow')) return options.metadataRow;
+            return { cache_generation: 7 };
           }
           if (query.includes('FROM pack_status')) {
             const dropId = String(bindings[0] || 'card_nft_2');
@@ -787,7 +785,7 @@ test('pack-status route reads every supported drop from D1 only', async () => {
       },
     );
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get(PACK_STATUS_SOURCE_HEADER), 'd1');
+    assert.equal(response.headers.get('x-mons-pack-status-source'), null);
     assert.match(response.headers.get('cache-control') || '', /no-store/);
     assert.match(response.headers.get('server-timing') || '', /provider;dur=/);
     const payload = await response.json() as { ok: boolean; packStatus: { dropId: string; cardsPerPack: number } };
@@ -817,7 +815,7 @@ test('pack-status route reads and internally caches D1 while preserving the resp
     dependencies,
   );
   assert.equal(first.status, 200);
-  assert.equal(first.headers.get(PACK_STATUS_SOURCE_HEADER), 'd1');
+  assert.equal(first.headers.get('x-mons-pack-status-source'), null);
   assert.deepEqual(await first.json(), {
     ok: true,
     packStatus: {
@@ -840,7 +838,7 @@ test('pack-status route reads and internally caches D1 while preserving the resp
       ],
     },
   });
-  assert.equal(logs.at(-1)?.packStatusSource, 'd1');
+  assert.equal(Object.hasOwn(logs.at(-1) || {}, 'packStatusSource'), false);
   assert.equal(logs.at(-1)?.providerCacheStatus, 'D1-MISS');
   assert.equal(logs.at(-1)?.upstreamCalls, 0);
   const second = await handleRequest(
@@ -876,7 +874,7 @@ test('pack-status route rejects malformed cache entries and refreshes them from 
       },
     );
     assert.equal(response.status, 200, label);
-    assert.equal(response.headers.get(PACK_STATUS_SOURCE_HEADER), 'd1', label);
+    assert.equal(response.headers.get('x-mons-pack-status-source'), null, label);
     const payload = await response.json() as { packStatus: { dropId: string; total: number } };
     assert.deepEqual(payload.packStatus, {
       dropId: 'card_nft_2',
@@ -916,16 +914,16 @@ test('pack-status route rejects malformed cache entries and refreshes them from 
     },
   );
   assert.equal(failClosed.status, 502);
-  assert.equal(failClosed.headers.get(PACK_STATUS_SOURCE_HEADER), 'd1');
+  assert.equal(failClosed.headers.get('x-mons-pack-status-source'), null);
   assert.deepEqual(await failClosed.json(), { ok: false, error: 'provider-unavailable' });
 });
 
 test('pack-status route fails closed on missing or invalid D1 state', async () => {
   const cases: Array<{ label: string; dataDb: D1Database }> = [
     { label: 'missing binding', dataDb: {} as D1Database },
-    { label: 'missing rollout', dataDb: packStatusD1({ rolloutRow: null }) },
-    { label: 'legacy rollout source', dataDb: packStatusD1({ readSource: 'firestore' }) },
-    { label: 'malformed rollout', dataDb: packStatusD1({ rolloutRow: { read_source: 'd1', cache_generation: 0 } }) },
+    { label: 'missing metadata', dataDb: packStatusD1({ metadataRow: null }) },
+    { label: 'zero metadata generation', dataDb: packStatusD1({ metadataRow: { cache_generation: 0 } }) },
+    { label: 'malformed metadata', dataDb: packStatusD1({ metadataRow: { cache_generation: 'invalid' } }) },
     { label: 'missing summary', dataDb: packStatusD1({ row: null }) },
     { label: 'malformed summary', dataDb: packStatusD1({ row: { drop_id: 'card_nft_2', version: 1 } }) },
     { label: 'query failure', dataDb: packStatusD1({ failure: new Error('d1 unavailable') }) },
@@ -938,10 +936,10 @@ test('pack-status route fails closed on missing or invalid D1 state', async () =
       { ...quietDependencies(fetch), log: (entry) => logs.push(entry) },
     );
     assert.equal(response.status, 502, label);
-    assert.equal(response.headers.get(PACK_STATUS_SOURCE_HEADER), 'd1', label);
+    assert.equal(response.headers.get('x-mons-pack-status-source'), null, label);
     assert.deepEqual(await response.json(), { ok: false, error: 'provider-unavailable' }, label);
     assert.equal(logs.some((entry) => entry.event === 'pack_status_d1_unavailable'), true, label);
-    assert.equal(logs.at(-1)?.packStatusSource, 'd1', label);
+    assert.equal(Object.hasOwn(logs.at(-1) || {}, 'packStatusSource'), false, label);
     assert.equal(logs.at(-1)?.upstreamCalls, 0, label);
   }
 });

@@ -1,0 +1,6 @@
+DROP TRIGGER pack_status_metadata_rollout_sync;
+DROP TRIGGER pack_status_rollout_metadata_sync;
+DROP TRIGGER pack_status_rollout_d1_only_insert_guard;
+DROP TRIGGER pack_status_rollout_d1_only_update_guard;
+
+DROP TABLE pack_status_rollout;
