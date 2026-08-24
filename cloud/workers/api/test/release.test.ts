@@ -4118,7 +4118,7 @@ test('tracked release metadata uses the exact v2 production and rollback pairs',
     'schemaVersion',
   ]);
   assert.deepEqual(manifest.currentProduction, {
-    apiVersionId: '5dbad869-1e79-43d8-85c0-4fa0f733d377',
+    apiVersionId: 'b2a8f911-2f01-471e-9179-f23bbe0f927b',
     frontendVersionId: '4a56dcb4-1887-406c-8433-ac911eb6b8b7',
   });
   assert.deepEqual(manifest.approvedRollback, {
