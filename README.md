@@ -121,7 +121,7 @@ Advanced exact-version controls:
 
 ```bash
 npm run deploy:api -- preview --smoke-owner <wallet>
-npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet>
+npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet> [--firestore-writer-service-account-file <path>]
 npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet>
 npm run benchmark:api -- --api-origin https://api.mons.shop --owner <wallet> --runs 5
 ```
@@ -138,13 +138,20 @@ The guarded flow validates the tracked production pair, generated bindings,
 tests, dry-run bundle and triggers, exact preview inventory, and production
 smokes. Its five-request comparison requires exact inventory IDs to match the
 direct Helius reference and requires the Worker median to be faster. Promotion
-applies reviewed triggers only to the verified version.
+applies reviewed triggers only to the verified version. Every one-step or
+exact-version promotion reruns the exact Stripe, ready-notification, and
+pack-status Firestore reconciliation queries after candidate benchmarking and
+before production mutation. Production mode reads the writer credential from
+Keychain on macOS; the writer-file option is required elsewhere. Exact-version
+promotion also requires a clean checkout at the candidate's recorded commit and
+the same writer public key that was uploaded with that candidate.
 
 Rollback accepts only the approved API version while its approved frontend is
 live. It pauses reveal and Stripe fulfillment delivery, verifies consumers and
 the exact pair, rolls back and smokes production, then resumes and verifies the
-queues. A failure after resume re-pauses delivery. Scheduled Stripe
-reconciliation is restored by the next guarded production release.
+queues. A failure after resume re-pauses delivery. Scheduled Stripe fulfillment,
+pack-status, and ready-notification reconciliation is restored by the next guarded
+production release.
 
 ### Pack-status D1
 
@@ -175,6 +182,45 @@ exact Firestore/D1 summary and event parity and automatically restores Firestore
 reads if any production smoke fails. Firestore remains a dual-write target,
 shadow comparison source, and emergency fallback until a separate cleanup.
 
+Before the first direct pack-status projection release, use a maintenance window
+that prevents delivery/admin finalization and pauses reveal and Stripe fulfillment
+processing. Keep them quiesced through the rebuild and exact-version promotion.
+
+If a Queue-based candidate ever served real delivery traffic, first either drain
+its projection jobs with the Queue-capable version and verify their outcomes, or
+deliberately discard them and reconcile the affected orders. Finish this before the
+authoritative rebuild so no legacy job can apply another delta afterward. Then deploy
+the Firestore indexes, rebuild the legacy summaries, and refresh and verify D1:
+
+```bash
+npm run deploy:firestore
+npm run rebuild-pack-status -- --drop-id card_nft_2 --write
+npm run rebuild-pack-status -- --drop-id little_swag_boxes --write
+npm run rebuild-pack-status -- --drop-id poncho_drifella --write
+npm run migrate:pack-status -- backfill
+npm run migrate:pack-status -- verify
+```
+
+After verification succeeds, run `npm run deploy:api` while delivery/admin
+finalization remains manually paused. The guarded release promotes the exact direct
+Worker, applies and verifies its triggers, then resumes reveal and Stripe delivery
+for its post-resume smokes. Do not deploy the intermediate Queue-based projector.
+Resume delivery/admin finalization only after the guarded command succeeds.
+
+Do not mark every legacy delivery order as projection-pending. Historical summary
+rebuilds can include orders without per-order event documents, so replaying those
+orders individually can double-count them. New ready orders receive their durable
+pending marker atomically and are retried directly by the Worker schedule.
+
+An approved rollback preserves existing direct pending markers but does not process
+them. Keep delivery/admin finalization manually paused. The guarded rollback resumes
+the Queue-capable reveal and Stripe consumers; use that version to drain or reconcile
+legacy Queue work, then explicitly pause those consumers again. If any order was
+finalized by the rollback version, restoring forward alone cannot recover it. Restore
+the direct version and triggers while producers remain paused, and verify every
+existing direct pending marker has settled. Finally rerun the authoritative rebuild,
+D1 backfill, and verification above before resuming producers.
+
 `NOTIFICATION_ENQUEUE_SECRET` remains stored only as a Worker secret and is
 inherited by uploaded versions. Guarded API releases publish a smoke probe to
 the Cloudflare Queue; the Worker signs and forwards the test through its real
@@ -182,6 +228,30 @@ enqueue handler with the bound secret. Releases therefore do not retrieve or
 locally duplicate the secret. The standalone
 notification-smoke command still accepts it from the invoking environment or
 root `.env.local`. Never pass it as a command argument, print it, or commit it.
+
+Ready-to-ship email recovery uses the Firestore control document
+`workerControls/readyNotifications`. The Worker creates a missing control
+automatically with `paused=false`; set its `paused` field to `true` to stop only
+ready-notification publication and set it back to `false` after reconciliation.
+Do not disable the shared scheduled trigger, which also owns Stripe fulfillment
+and pack-status recovery.
+
+Before the first cron-enabled ready-notification release, deploy the Firestore
+indexes and audit legacy orders whose buyer or shipper email state is `pending`.
+Do not add markers to ready orders that have none. The first publication claim
+opens a six-hour retry window, with at most four claims. Legacy pending markers
+without that claim metadata, and markers that exhaust either bound, move to
+`failed` with `manual-review-required`; do not fabricate claim metadata to replay
+them. Reconcile their stored job IDs against Queue and Resend outcomes first,
+because a Queue publish may have succeeded before its marker update failed. The
+guarded API writer preflight executes the exact recovery queries and blocks
+promotion until all of their indexes are available.
+
+Alert on `ready_to_ship_notifications_marker_finalization_failed`. Notification
+retries reuse one Resend idempotency key, but Resend retains that key for 24 hours.
+If the failure persists, set `workerControls/readyNotifications.paused=true` and
+reconcile the logged job IDs and Firestore markers before that provider window
+expires. Restore ready-email recovery with `paused=false` after reconciliation.
 
 ### Worker secrets
 

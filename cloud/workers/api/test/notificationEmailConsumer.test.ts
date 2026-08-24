@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { createStripeCheckoutFulfillmentJobV1 } from '../../../../shared/stripeCheckoutFulfillmentJob.ts';
-import worker, { processBackgroundJobBatch, processStripeFulfillmentMessage } from '../src/index.ts';
+import worker, {
+  processBackgroundJobBatch,
+  processStripeFulfillmentMessage,
+} from '../src/index.ts';
 import {
   notificationEmailRetryDelaySeconds,
   processNotificationEmailMessage,
@@ -461,7 +464,6 @@ test('API Worker exposes the queue handler and uses the reviewed queue policy', 
   assert.equal(config.workers_dev, false);
   assert.equal(config.preview_urls, true);
   assert.deepEqual(config.routes, [{ pattern: 'api.mons.shop', custom_domain: true }]);
-  assert.deepEqual(config.triggers, { crons: ['*/5 * * * *'] });
   assert.equal(config.secrets.required.includes('RESEND_API_KEY'), true);
   assert.deepEqual(config.queues.consumers, [
     {

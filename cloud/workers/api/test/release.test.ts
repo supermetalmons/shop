@@ -22,6 +22,9 @@ import {
   parseApiBenchmarkArgs,
 } from '../../../../scripts/benchmark-cloudflare-api.ts';
 import { deployApiTestHooks } from '../../../../scripts/deploy-cloudflare-api.ts';
+import { buildDeliveryPackStatusProjectionReconciliationQuery } from '../../../../shared/deliveryPackStatusProjectionReconciliation.ts';
+import { PACK_STATUS_DEFAULT_DROP_ID } from '../../../../shared/packStatus.ts';
+import { buildReadyNotificationReconciliationQuery } from '../../../../shared/readyToShipNotificationReconciliation.ts';
 import {
   frontendDeployTestHooks,
   parseFrontendDeployArgs,
@@ -352,6 +355,9 @@ test('candidate promotion evidence is exact, version-keyed, and owner-bound', ()
   const path = deployApiTestHooks.candidateRecordPath(versionId);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const record = {
+    firestoreWriterPublicKeySha256: deployApiTestHooks.firestoreWriterPublicKeySha256(
+      FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+    ),
     includeDevnet: true,
     workerName: 'mons-shop-api',
     versionId,
@@ -366,6 +372,10 @@ test('candidate promotion evidence is exact, version-keyed, and owner-bound', ()
   try {
     writeFileSync(path, JSON.stringify(record), { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     assert.equal(deployApiTestHooks.isCandidateRecord(record), true);
+    assert.equal(
+      deployApiTestHooks.isCandidateRecord({ ...record, firestoreWriterPublicKeySha256: 'invalid' }),
+      false,
+    );
     const retiredCandidateRecord: Partial<typeof record> = { ...record };
     delete retiredCandidateRecord.directHeliusMedianMs;
     assert.equal(deployApiTestHooks.isCandidateRecord(retiredCandidateRecord), false);
@@ -808,37 +818,51 @@ test('frontend production capability check treats authenticated preparation smok
   );
 });
 
-test('API production candidate resolution permits cache-free resume only for the exact live version', async () => {
-  const baselineVersionId = randomUUID();
+test('API production candidate resolution requires source- and writer-bound evidence', async () => {
   const candidateVersionId = randomUUID();
-  const wranglerEnvironment = deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token');
+  const writerFingerprint = 'a'.repeat(64);
   const input = {
-    expectedCurrentVersionId: baselineVersionId,
+    firestoreWriterPublicKeySha256: writerFingerprint,
     smokeOwner: OWNER,
+    sourceCommit: SOURCE_COMMIT,
     versionId: candidateVersionId,
-    wranglerEnvironment,
   };
-
-  assert.equal(
-    await deployApiTestHooks.resolveApiProductionPreviewUrl(input, {
-      deployment: deploymentReader([candidateVersionId]),
-      readCandidate: () => undefined,
+  const candidate = {
+    directHeliusMedianMs: 20,
+    firestoreWriterPublicKeySha256: writerFingerprint,
+    includeDevnet: true as const,
+    previewUrl: deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+    runs: 5,
+    smokeOwner: OWNER,
+    sourceCommit: SOURCE_COMMIT,
+    testedAt: new Date().toISOString(),
+    versionId: candidateVersionId,
+    workerMedianMs: 10,
+    workerName: 'mons-shop-api' as const,
+  };
+  assert.deepEqual(
+    await deployApiTestHooks.resolveApiProductionCandidate(input, {
+      readCandidate: () => candidate,
     }),
-    deployApiTestHooks.expectedPreviewOrigin(candidateVersionId),
+    candidate,
   );
   await assert.rejects(
-    () => deployApiTestHooks.resolveApiProductionPreviewUrl(input, {
-      deployment: deploymentReader([baselineVersionId]),
-      readCandidate: () => undefined,
+    () => deployApiTestHooks.resolveApiProductionCandidate(input, {
+      readCandidate: () => ({ ...candidate, sourceCommit: 'b'.repeat(40) }),
     }),
-    /requires a fresh local candidate record/,
+    /built from Git commit/,
   );
   await assert.rejects(
-    () => deployApiTestHooks.resolveApiProductionPreviewUrl(input, {
-      deployment: deploymentReader([splitDeployment(baselineVersionId, candidateVersionId)]),
+    () => deployApiTestHooks.resolveApiProductionCandidate(input, {
+      readCandidate: () => ({ ...candidate, firestoreWriterPublicKeySha256: 'b'.repeat(64) }),
+    }),
+    /writer credential does not match/,
+  );
+  await assert.rejects(
+    () => deployApiTestHooks.resolveApiProductionCandidate(input, {
       readCandidate: () => undefined,
     }),
-    /not a stable single-version deployment/,
+    /requires source-bound candidate evidence/,
   );
 });
 
@@ -1019,7 +1043,7 @@ test('API rollback trigger configuration disables reconciliation cron before ver
       const configPath = args[args.indexOf('--config') + 1];
       const config = JSON.parse(readFileSync(configPath, 'utf8')) as { triggers: { crons: string[] } };
       assert.deepEqual(config.triggers, { crons: [] });
-      assert.equal(label, 'Disable Stripe reconciliation schedule before approved API rollback');
+      assert.equal(label, 'Disable scheduled reconciliation before approved API rollback');
       inspected = true;
     },
   );
@@ -2734,6 +2758,8 @@ test('complete API release verifies the full pair around one exact API promotion
         includeStripeWebhook: true,
         owner: OWNER,
       });
+      await input.verifyBeforeProductionMutation?.();
+      events.push('production-mutation-guard-passed');
       await input.verifyBeforePromotion?.();
       events.push('promotion-guard-passed');
     },
@@ -2759,6 +2785,10 @@ test('complete API release verifies the full pair around one exact API promotion
       };
     },
     validate: () => events.push('validate'),
+    verifyWriter: async (credential) => {
+      assert.equal(credential, 'firestore-writer-test-credential');
+      events.push('writer-preflight');
+    },
   });
   assert.equal(metadata.versionId, candidateVersionId);
   assert.deepEqual(events, [
@@ -2770,6 +2800,8 @@ test('complete API release verifies the full pair around one exact API promotion
     'prepare-queues',
     'upload',
     'production',
+    'writer-preflight',
+    'production-mutation-guard-passed',
     'frontend-status',
     'promotion-guard-passed',
     'api-status',
@@ -2922,6 +2954,9 @@ test('API production benchmarks the exact preview before mutation and writes evi
       notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
       previewUrl,
       smokeOwner: OWNER,
+      verifyBeforeProductionMutation: async () => {
+        events.push('writer-preflight');
+      },
       versionId: candidateVersionId,
       wranglerEnvironment,
     },
@@ -2985,6 +3020,7 @@ test('API production benchmarks the exact preview before mutation and writes evi
   assert.deepEqual(events, [
     `smoke:${previewUrl}`,
     `benchmark:${previewUrl}`,
+    'writer-preflight',
     'deployment-status',
     'pause-reveal',
     'smoke:https://api.mons.shop',
@@ -3068,6 +3104,50 @@ test('API production benchmark failure performs no deployment mutation', async (
     /injected benchmark failure/,
   );
   assert.deepEqual(events, [`smoke:${previewUrl}`, `benchmark:${previewUrl}`]);
+});
+
+test('API production writer preflight failure performs no deployment mutation', async () => {
+  const versionId = randomUUID();
+  const previewUrl = deployApiTestHooks.expectedPreviewOrigin(versionId);
+  const events: string[] = [];
+  await assert.rejects(
+    () => deployApiTestHooks.runProductionSequence(
+      {
+        expectedCurrentVersionId: randomUUID(),
+        heliusApiKey: 'helius-test-key',
+        notificationEnqueueSecret: NOTIFICATION_ENQUEUE_SECRET,
+        previewUrl,
+        smokeOwner: OWNER,
+        verifyBeforeProductionMutation: async () => {
+          events.push('writer-preflight');
+          throw new Error('injected writer preflight failure');
+        },
+        versionId,
+        wranglerEnvironment: deployApiTestHooks.authenticatedWranglerEnvironment('scoped-token'),
+      },
+      {
+        smoke: async (origin) => {
+          events.push(`smoke:${origin}`);
+        },
+        benchmark: async (options) => {
+          events.push(`benchmark:${options.apiOrigin}`);
+          return { runs: 5, workerMedianMs: 10, directHeliusMedianMs: 20 };
+        },
+        deployment: async () => assert.fail('deployment state was read after a failed writer preflight'),
+        wrangler: () => assert.fail('Wrangler mutation ran after a failed writer preflight'),
+        evidence: () => assert.fail('production evidence was written after a failed writer preflight'),
+        pauseRevealQueue: () => assert.fail('queue delivery paused after a failed writer preflight'),
+        pauseFulfillmentQueue: () => assert.fail('queue delivery paused after a failed writer preflight'),
+        sleep: async () => undefined,
+      },
+    ),
+    /injected writer preflight failure/,
+  );
+  assert.deepEqual(events, [
+    `smoke:${previewUrl}`,
+    `benchmark:${previewUrl}`,
+    'writer-preflight',
+  ]);
 });
 
 test('API production fails closed when the pause phase is ambiguous', async () => {
@@ -3758,8 +3838,10 @@ test('Firestore writer credential input is exact, private, and distinct from the
   }
 });
 
-test('Firestore writer preflight verifies OAuth and database write access without creating data', async () => {
+test('Firestore writer preflight verifies OAuth, database write access, and exact reconciliation queries', async () => {
   const requests: Array<{ method: string; url: URL }> = [];
+  const queries: Record<string, unknown>[] = [];
+  const nowMs = 1_700_000_000_000;
   await deployApiTestHooks.verifyFirestoreWriterAccess(
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
     async (input, init) => {
@@ -3774,17 +3856,31 @@ test('Firestore writer preflight verifies OAuth and database write access withou
         assert.equal(url.searchParams.get('currentDocument.exists'), 'false');
       } else {
         assert.equal(init?.method, 'POST');
-        assert.match(url.pathname, /\/databases\/\(default\)\/documents:runQuery$/);
-        const body = JSON.parse(String(init.body)) as { structuredQuery: Record<string, unknown> };
-        assert.deepEqual(body.structuredQuery.orderBy, [
-          { field: { fieldPath: 'updatedAt' }, direction: 'ASCENDING' },
-          { field: { fieldPath: '__name__' }, direction: 'ASCENDING' },
-        ]);
+        assert.match(url.pathname, /\/databases\/\(default\)\/documents(?:\/drops\/card_nft_2)?:runQuery$/);
+        queries.push(JSON.parse(String(init.body)) as Record<string, unknown>);
       }
       return Response.json({});
     },
+    nowMs,
   );
-  assert.deepEqual(requests.map(({ method }) => method), ['POST', 'DELETE', 'POST']);
+  assert.deepEqual(requests.map(({ method }) => method), ['POST', 'DELETE', 'POST', 'POST', 'POST']);
+  assert.deepEqual(requests.slice(2).map(({ url }) => url.pathname), [
+    '/v1/projects/mons-shop/databases/(default)/documents:runQuery',
+    '/v1/projects/mons-shop/databases/(default)/documents:runQuery',
+    `/v1/projects/mons-shop/databases/(default)/documents/drops/${PACK_STATUS_DEFAULT_DROP_ID}:runQuery`,
+  ]);
+  assert.deepEqual(
+    (queries[0].structuredQuery as { orderBy: unknown }).orderBy,
+    [
+      { field: { fieldPath: 'updatedAt' }, direction: 'ASCENDING' },
+      { field: { fieldPath: '__name__' }, direction: 'ASCENDING' },
+    ],
+  );
+  assert.deepEqual(queries[1], buildReadyNotificationReconciliationQuery({ limit: 1 }));
+  assert.deepEqual(
+    queries[2],
+    buildDeliveryPackStatusProjectionReconciliationQuery({ dueAtMs: nowMs, limit: 1 }),
+  );
 
   await assert.rejects(
     deployApiTestHooks.verifyFirestoreWriterAccess(
@@ -3809,6 +3905,44 @@ test('Firestore writer preflight verifies OAuth and database write access withou
     ),
     /reconciliation index verification failed/,
   );
+
+  let reconciliationQueries = 0;
+  await assert.rejects(
+    deployApiTestHooks.verifyFirestoreWriterAccess(
+      FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+      async (input, init) => {
+        if (String(input) === 'https://oauth2.googleapis.com/token') {
+          return Response.json({ access_token: 'writer-token' });
+        }
+        if (init?.method === 'DELETE') return Response.json({});
+        reconciliationQueries += 1;
+        return reconciliationQueries === 1
+          ? Response.json({})
+          : Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 400 });
+      },
+    ),
+    /ready-notification reconciliation index verification failed/,
+  );
+  assert.equal(reconciliationQueries, 2);
+
+  reconciliationQueries = 0;
+  await assert.rejects(
+    deployApiTestHooks.verifyFirestoreWriterAccess(
+      FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+      async (input, init) => {
+        if (String(input) === 'https://oauth2.googleapis.com/token') {
+          return Response.json({ access_token: 'writer-token' });
+        }
+        if (init?.method === 'DELETE') return Response.json({});
+        reconciliationQueries += 1;
+        return reconciliationQueries < 3
+          ? Response.json({})
+          : Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 400 });
+      },
+    ),
+    /pack-status projection reconciliation index verification failed/,
+  );
+  assert.equal(reconciliationQueries, 3);
 });
 
 test('release CLI requires exact production version metadata', () => {
@@ -3845,7 +3979,7 @@ test('release CLI requires exact production version metadata', () => {
   );
 });
 
-test('release CLI defaults to Keychain and requires paired Firestore file overrides', () => {
+test('release CLI defaults to Keychain and scopes Firestore file overrides by mode', () => {
   assert.deepEqual(deployApiTestHooks.parseArgs([]), {
     firestoreServiceAccountFile: undefined,
     firestoreWriterServiceAccountFile: undefined,
@@ -3911,6 +4045,35 @@ test('release CLI defaults to Keychain and requires paired Firestore file overri
       OWNER,
     ]),
     /not valid in production mode/,
+  );
+  const productionVersionId = randomUUID();
+  assert.deepEqual(deployApiTestHooks.parseArgs([
+    'production',
+    '--firestore-writer-service-account-file',
+    '/tmp/firestore-writer.json',
+    '--version-id',
+    productionVersionId,
+    '--smoke-owner',
+    OWNER,
+  ]), {
+    firestoreServiceAccountFile: undefined,
+    firestoreWriterServiceAccountFile: '/tmp/firestore-writer.json',
+    mode: 'production',
+    smokeOwner: OWNER,
+    tokenFile: undefined,
+    versionId: productionVersionId,
+  });
+  assert.throws(
+    () => deployApiTestHooks.parseArgs([
+      'rollback',
+      '--firestore-writer-service-account-file',
+      '/tmp/firestore-writer.json',
+      '--version-id',
+      randomUUID(),
+      '--smoke-owner',
+      OWNER,
+    ]),
+    /not valid in rollback mode/,
   );
 });
 

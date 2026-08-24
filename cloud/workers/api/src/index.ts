@@ -139,8 +139,8 @@ import {
   DELIVERY_RECEIPTS_ISSUE_PATH,
   DELIVERY_RECEIPTS_RECOVER_PATH,
   handleDeliveryReceiptRequest,
-  isDeliveryPackStatusProjectionJob,
-  processDeliveryPackStatusProjectionMessage,
+  reconcilePendingDeliveryPackStatusProjections,
+  reconcilePendingReadyToShipNotifications,
 } from './deliveryReceipts.js';
 import {
   ADMIN_IRL_REDEEM_PREPARE_PATH,
@@ -237,20 +237,40 @@ const KNOWN_LOG_ROUTES = new Set([
   REVEAL_DUDES_PATH,
 ]);
 
-async function processReconciliationMessage(message: Message<unknown>, env: Env): Promise<void> {
-  if (isDeliveryPackStatusProjectionJob(message.body)) {
-    return processDeliveryPackStatusProjectionMessage(message, env);
-  }
-  return processRevealBackgroundJobMessage(message, env);
-}
-
 type BackgroundJobProcessors = {
   notification: typeof processNotificationQueueMessage;
-  reveal: typeof processReconciliationMessage;
+  reveal: typeof processRevealBackgroundJobMessage;
   fulfillment: typeof processStripeFulfillmentMessage;
   log: (entry: Record<string, unknown>) => void;
   error: (entry: Record<string, unknown>) => void;
 };
+
+type ScheduledReconcilers = {
+  notifications: typeof reconcilePendingReadyToShipNotifications;
+  packStatus: typeof reconcilePendingDeliveryPackStatusProjections;
+  stripe: typeof reconcileStaleStripeFulfillments;
+};
+
+const defaultScheduledReconcilers: ScheduledReconcilers = {
+  notifications: reconcilePendingReadyToShipNotifications,
+  packStatus: reconcilePendingDeliveryPackStatusProjections,
+  stripe: reconcileStaleStripeFulfillments,
+};
+
+export async function runScheduledReconciliations(
+  env: Env,
+  signal: AbortSignal,
+  overrides: Partial<ScheduledReconcilers> = {},
+): Promise<void> {
+  const reconcilers = { ...defaultScheduledReconcilers, ...overrides };
+  const results = await Promise.allSettled([
+    reconcilers.stripe(env, signal),
+    reconcilers.packStatus(env, signal),
+    reconcilers.notifications(env, signal),
+  ]);
+  const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+  if (failures.length) throw new AggregateError(failures, 'Scheduled reconciliation failed');
+}
 
 export async function processStripeFulfillmentMessage(
   message: Message<unknown>,
@@ -312,7 +332,7 @@ export async function processStripeFulfillmentMessage(
 
 const defaultBackgroundJobProcessors: BackgroundJobProcessors = {
   notification: processNotificationQueueMessage,
-  reveal: processReconciliationMessage,
+  reveal: processRevealBackgroundJobMessage,
   fulfillment: processStripeFulfillmentMessage,
   log: (entry) => console.log(entry),
   error: (entry) => console.error(entry),
@@ -1930,11 +1950,11 @@ export default {
   async scheduled(_controller, env) {
     const controller = new AbortController();
     const timeout = setTimeout(
-      () => controller.abort(new DOMException('Stripe fulfillment reconciliation timed out', 'TimeoutError')),
+      () => controller.abort(new DOMException('Scheduled reconciliation timed out', 'TimeoutError')),
       STRIPE_FULFILLMENT_RECONCILIATION_TIMEOUT_MS,
     );
     try {
-      await reconcileStaleStripeFulfillments(env, controller.signal);
+      await runScheduledReconciliations(env, controller.signal);
     } finally {
       clearTimeout(timeout);
     }

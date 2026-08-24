@@ -82,7 +82,11 @@ import {
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { adminIrlRedeemRuntime } from './adminIrlRedeemPrepare.js';
-import { deliveryReceiptRuntime, enqueueDeliveryPackStatusProjectionJob } from './deliveryReceipts.js';
+import {
+  createDeliveryPackStatusProjectionOutbox,
+  deliveryReceiptRuntime,
+  scheduleDeliveryPackStatusProjection,
+} from './deliveryReceipts.js';
 
 export const ADMIN_IRL_REDEEM_FINALIZE_PATH = '/admin/irl-redeem/finalize';
 
@@ -119,7 +123,7 @@ const requestSchema = z.object({
 
 type FinalizeRequest = z.infer<typeof requestSchema>;
 type FinalizeEnv = Pick<Env, 'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'> &
-  Partial<Pick<Env, 'DATA_DB' | 'REVEAL_BACKGROUND_QUEUE'>>;
+  Partial<Pick<Env, 'DATA_DB'>>;
 type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
 type ProviderContext = Parameters<typeof adminIrlRedeemRuntime.fetchAsset>[0];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
@@ -1241,7 +1245,6 @@ async function publishPack(
   closeDeliveryTx: string | null,
   receiptTxs: string[],
   boxes: AdminIrlRedeemBoxBaseInput[],
-  projectionQueue: Queue | undefined,
 ): Promise<AdminIrlRedeemFinalizeResponse> {
   const selectionKey = buildAdminIrlRedeemSelectionKey({
     dropId: runtime.dropId,
@@ -1249,7 +1252,6 @@ async function publishPack(
   });
   for (let attempt = 0; attempt < MAX_DELIVERY_ALLOCATION_ATTEMPTS; attempt += 1) {
     const deliveryId = newDeliveryId();
-    await enqueueDeliveryPackStatusProjectionJob(projectionQueue, runtime.dropId, deliveryId);
     const claimCodes = newClaimCodes(boxes.length);
     const boxesWithCodes = boxes.map((box, index) => ({ ...box, receiptClaimCode: claimCodes[index] }));
     const orderPath = dropDeliveryOrderPath(runtime.dropId, deliveryId);
@@ -1295,6 +1297,7 @@ async function publishPack(
         receiptTxs,
         boxes: boxesWithCodes,
       });
+      Object.assign(order, createDeliveryPackStatusProjectionOutbox(runtime, order, firestore.nowMs).fields);
       const writes: Record<string, unknown>[] = [createWithTimestamps(orderPath, order, ['createdAt', 'processedAt'])];
       boxesWithCodes.forEach((box, index) => {
         writes.push(createWithTimestamps(claimPaths[index], buildAdminIrlRedeemClaimCodeDocument({
@@ -1473,13 +1476,28 @@ async function publishCard(
   throw new AdminIrlRedeemFinalizeError('unavailable', 'Failed to allocate Admin IRL card receipt delivery id or claim code.');
 }
 
+function scheduleAdminPackStatusProjection(args: {
+  firestore: FirestoreContext;
+  response: AdminIrlRedeemFinalizeResponse;
+  runtime: Runtime;
+  waitUntil: FinalizeWaitUntil;
+}): void {
+  if (!Number.isSafeInteger(args.response.deliveryId) || Number(args.response.deliveryId) < 1) return;
+  scheduleDeliveryPackStatusProjection({
+    context: args.firestore,
+    deliveryId: Number(args.response.deliveryId),
+    dropId: args.runtime.dropId,
+    waitUntil: args.waitUntil,
+  });
+}
+
 async function finalizeAdminIrlRedeem(
   body: FinalizeRequest,
   identity: FirebaseIdentity,
   env: FinalizeEnv,
   firestore: FirestoreContext,
   provider: ProviderContext,
-  _waitUntil: FinalizeWaitUntil,
+  waitUntil: FinalizeWaitUntil,
 ): Promise<{ response: AdminIrlRedeemFinalizeResponse; targetKind: AdminIrlRedeemTargetKind; outcome: string }> {
   const config = API_DROPS[body.dropId];
   if (!config) throw new AdminIrlRedeemFinalizeError('invalid-argument', `Unsupported dropId: ${body.dropId}`);
@@ -1489,7 +1507,12 @@ async function finalizeAdminIrlRedeem(
   const attemptId = `admin_irl:${crypto.randomUUID()}`;
   const started = await startFinalize(firestore, body, wallet, attemptId, firestore.nowMs);
   if (started.status === 'complete') {
-    return { response: completeResponse(body.dropId, body.requestId, started.request), targetKind: started.request.targetKind === 'card_receipt' ? 'card_receipt' : 'pack', outcome: 'already_complete' };
+    const targetKind = started.request.targetKind === 'card_receipt' ? 'card_receipt' : 'pack';
+    const response = completeResponse(body.dropId, body.requestId, started.request);
+    if (targetKind === 'pack') {
+      scheduleAdminPackStatusProjection({ firestore, response, runtime, waitUntil });
+    }
+    return { response, targetKind, outcome: 'already_complete' };
   }
   try {
     const connection = createConnection(provider, runtime);
@@ -1516,7 +1539,10 @@ async function finalizeAdminIrlRedeem(
     }
     await verifyPackTransfer(connection, body.transferSignature, started.request.owner, signer.publicKey.toBase58(), onchain.coreCollection, started.request.itemIds);
     const existing = await completeFromExistingMarkers(firestore, body, attemptId, started.request);
-    if (existing) return { response: existing, targetKind: 'pack', outcome: 'marker_reuse' };
+    if (existing) {
+      scheduleAdminPackStatusProjection({ firestore, response: existing, runtime, waitUntil });
+      return { response: existing, targetKind: 'pack', outcome: 'marker_reuse' };
+    }
     const internal = await ensureInternalDelivery(connection, runtime, signer, onchain, firestore, requestPath(body), started.request);
     const receiptTxs = await mintPackReceipts(
       connection,
@@ -1549,20 +1575,21 @@ async function finalizeAdminIrlRedeem(
       boxes.push({ boxId: item.refId, originalAssetId: item.assetId, receiptAssetId: matches[0].id, dudeIds });
     }
     const closeDeliveryTx = await closeInternalDelivery(connection, runtime, signer, firestore, requestPath(body), started.request, internal);
+    const response = await publishPack(
+      firestore,
+      runtime,
+      body,
+      attemptId,
+      started.request,
+      signer.publicKey.toBase58(),
+      internal,
+      closeDeliveryTx,
+      receiptTxs,
+      boxes,
+    );
+    scheduleAdminPackStatusProjection({ firestore, response, runtime, waitUntil });
     return {
-      response: await publishPack(
-        firestore,
-        runtime,
-        body,
-        attemptId,
-        started.request,
-        signer.publicKey.toBase58(),
-        internal,
-        closeDeliveryTx,
-        receiptTxs,
-        boxes,
-        env.REVEAL_BACKGROUND_QUEUE,
-      ),
+      response,
       targetKind: 'pack',
       outcome: 'completed',
     };

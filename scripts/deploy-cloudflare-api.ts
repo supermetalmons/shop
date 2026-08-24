@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { createPrivateKey, randomUUID } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, randomUUID } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -28,6 +28,9 @@ import {
   type NotificationEmailJobV1,
   type NotificationEnqueueSmokeJobV1,
 } from '../shared/notificationEmailJob.ts';
+import { buildDeliveryPackStatusProjectionReconciliationQuery } from '../shared/deliveryPackStatusProjectionReconciliation.ts';
+import { PACK_STATUS_DEFAULT_DROP_ID } from '../shared/packStatus.ts';
+import { buildReadyNotificationReconciliationQuery } from '../shared/readyToShipNotificationReconciliation.ts';
 import { stripeCheckoutReconciliationQuery } from '../shared/stripeCheckoutReconciliation.ts';
 import { FULFILLMENT_ADMIN_WALLET_ADDRESSES } from '../shared/fulfillmentAccess.ts';
 import { isBase58Bytes } from '../shared/solanaRpcProxy.ts';
@@ -75,6 +78,7 @@ type UploadMetadata = {
 };
 
 type CandidateRecord = UploadMetadata & ApiBenchmarkResult & {
+  firestoreWriterPublicKeySha256: string;
   includeDevnet: true;
   sourceCommit: string;
   workerName: 'mons-shop-api';
@@ -134,6 +138,7 @@ type ProductionSequenceInput = {
   previewUrl: string;
   smokeOwner: string;
   versionId: string;
+  verifyBeforeProductionMutation?: () => Promise<void>;
   verifyBeforePromotion?: () => Promise<void>;
   wranglerEnvironment: NodeJS.ProcessEnv;
 };
@@ -183,7 +188,6 @@ type RollbackSequenceDependencies = {
 };
 
 type ApiProductionCandidateDependencies = {
-  deployment: (environment: NodeJS.ProcessEnv) => CloudflareDeploymentStatus | Promise<CloudflareDeploymentStatus>;
   readCandidate: (versionId: string, smokeOwner: string) => CandidateRecord | undefined;
 };
 
@@ -213,6 +217,7 @@ type CompleteApiReleaseDependencies = {
   triggerDryRun: (environment: NodeJS.ProcessEnv) => void;
   upload: typeof uploadApiCandidate;
   validate: () => void;
+  verifyWriter?: typeof verifyFirestoreWriterAccess;
 };
 
 type QueueConsumer = {
@@ -344,7 +349,7 @@ function usage(): string {
     '  npm run deploy:api',
     '  npm run deploy:api -- release --firestore-service-account-file <path> --firestore-writer-service-account-file <path> [--smoke-owner <wallet>] [--token-file <path>]',
     '  npm run deploy:api -- preview --firestore-service-account-file <path> --firestore-writer-service-account-file <path> --smoke-owner <wallet> [--token-file <path>]',
-    '  npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
+    '  npm run deploy:api -- production --version-id <uuid> --smoke-owner <wallet> [--firestore-writer-service-account-file <path>] [--token-file <path>]',
     '  npm run deploy:api -- rollback --version-id <uuid> --smoke-owner <wallet> [--token-file <path>]',
     '',
     'The default release validates, uploads, verifies, promotes, and records one exact Worker version.',
@@ -401,14 +406,23 @@ function parseArgs(argv: string[]): CliOptions {
     fail(`${mode} requires an exact UUID --version-id.`, 2);
   }
   if ((mode === 'release' || mode === 'preview') && versionId) fail(`--version-id is not valid in ${mode} mode.`, 2);
-  if (mode !== 'release' && mode !== 'preview' && (firestoreServiceAccountFile || firestoreWriterServiceAccountFile)) {
-    fail(`Firestore service-account file options are not valid in ${mode} mode.`, 2);
+  if ((mode === 'production' || mode === 'rollback') && firestoreServiceAccountFile) {
+    fail(`--firestore-service-account-file is not valid in ${mode} mode.`, 2);
   }
-  if (Boolean(firestoreServiceAccountFile) !== Boolean(firestoreWriterServiceAccountFile)) {
+  if (mode === 'rollback' && firestoreWriterServiceAccountFile) {
+    fail('--firestore-writer-service-account-file is not valid in rollback mode.', 2);
+  }
+  if (
+    (mode === 'release' || mode === 'preview') &&
+    Boolean(firestoreServiceAccountFile) !== Boolean(firestoreWriterServiceAccountFile)
+  ) {
     fail('Firestore reader and writer service-account file options must be supplied together.', 2);
   }
   if ((mode === 'release' || mode === 'preview') && !firestoreServiceAccountFile && process.platform !== 'darwin') {
     fail(`${mode} requires Firestore service-account files outside macOS.`, 2);
+  }
+  if (mode === 'production' && !firestoreWriterServiceAccountFile && process.platform !== 'darwin') {
+    fail('production requires --firestore-writer-service-account-file outside macOS.', 2);
   }
   return {
     firestoreServiceAccountFile,
@@ -497,6 +511,15 @@ function validateFirestoreWriterServiceAccountJson(value: string): string {
   return validated;
 }
 
+function firestoreWriterPublicKeySha256(value: string): string {
+  const credential = JSON.parse(validateFirestoreWriterServiceAccountJson(value)) as { private_key: string };
+  const publicKey = createPublicKey(createPrivateKey(credential.private_key)).export({
+    format: 'der',
+    type: 'spki',
+  });
+  return createHash('sha256').update(publicKey).digest('hex');
+}
+
 async function verifyFirestoreWriterAccess(
   value: string,
   providerFetch: typeof fetch = fetch,
@@ -562,28 +585,49 @@ async function verifyFirestoreWriterAccess(
     fail('Firestore writer access verification failed.');
   }
   await deleteResponse.body?.cancel().catch(() => undefined);
-  let queryResponse: Response;
-  try {
-    queryResponse = await providerFetch(
-      `https://firestore.googleapis.com/v1/${firestoreDatabaseName}/documents:runQuery`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
+  const rootRunQueryUrl = `https://firestore.googleapis.com/v1/${firestoreDatabaseName}/documents:runQuery`;
+  const reconciliationQueries = [
+    {
+      body: stripeCheckoutReconciliationQuery(nowMs, 1),
+      failure: 'Firestore fulfillment reconciliation index verification failed.',
+      url: rootRunQueryUrl,
+    },
+    {
+      body: buildReadyNotificationReconciliationQuery({ limit: 1 }),
+      failure: 'Firestore ready-notification reconciliation index verification failed.',
+      url: rootRunQueryUrl,
+    },
+    {
+      body: buildDeliveryPackStatusProjectionReconciliationQuery({ dueAtMs: nowMs, limit: 1 }),
+      failure: 'Firestore pack-status projection reconciliation index verification failed.',
+      url: `https://firestore.googleapis.com/v1/${firestoreDatabaseName}/documents/drops/` +
+        `${encodeURIComponent(PACK_STATUS_DEFAULT_DROP_ID)}:runQuery`,
+    },
+  ];
+  for (const query of reconciliationQueries) {
+    let queryResponse: Response;
+    try {
+      queryResponse = await providerFetch(
+        query.url,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(query.body),
+          signal: AbortSignal.timeout(DEFAULT_SMOKE_TIMEOUT_MS),
         },
-        body: JSON.stringify(stripeCheckoutReconciliationQuery(nowMs, 1)),
-        signal: AbortSignal.timeout(DEFAULT_SMOKE_TIMEOUT_MS),
-      },
-    );
-  } catch {
-    fail('Firestore fulfillment reconciliation index verification failed.');
-  }
-  if (!queryResponse.ok) {
+      );
+    } catch {
+      fail(query.failure);
+    }
+    if (!queryResponse.ok) {
+      await queryResponse.body?.cancel().catch(() => undefined);
+      fail(query.failure);
+    }
     await queryResponse.body?.cancel().catch(() => undefined);
-    fail('Firestore fulfillment reconciliation index verification failed.');
   }
-  await queryResponse.body?.cancel().catch(() => undefined);
 }
 
 function readFirestoreCredential(
@@ -843,7 +887,7 @@ function ensureApiQueueResources(
 function readCleanSourceCommit(): string {
   const environment = credentialFreeEnvironment();
   const status = runProcessForOutput('git', ['status', '--porcelain'], environment, 'Git status').trim();
-  if (status) fail('API candidate upload requires a clean Git worktree.');
+  if (status) fail('API release requires a clean Git worktree.');
   const commit = runProcessForOutput('git', ['rev-parse', '--verify', 'HEAD'], environment, 'Git HEAD').trim().toLowerCase();
   if (!gitCommitPattern.test(commit)) fail('Git HEAD did not resolve to an exact commit.');
   return commit;
@@ -1513,6 +1557,7 @@ function isCandidateRecord(value: unknown, now = new Date()): value is Candidate
   const ageMs = now.getTime() - testedAt;
   return Object.keys(record).sort().join(',') === [
     'directHeliusMedianMs',
+    'firestoreWriterPublicKeySha256',
     'includeDevnet',
     'previewUrl',
     'runs',
@@ -1529,6 +1574,8 @@ function isCandidateRecord(value: unknown, now = new Date()): value is Candidate
     typeof record.previewUrl === 'string' && record.previewUrl === expectedPreviewOrigin(record.versionId) &&
     typeof record.smokeOwner === 'string' && isBase58Bytes(record.smokeOwner, 32) &&
     typeof record.sourceCommit === 'string' && gitCommitPattern.test(record.sourceCommit) &&
+    typeof record.firestoreWriterPublicKeySha256 === 'string' &&
+    /^[0-9a-f]{64}$/.test(record.firestoreWriterPublicKeySha256) &&
     Number.isFinite(now.getTime()) && Number.isFinite(testedAt) &&
     ageMs >= -candidateRecordClockSkewMs && ageMs <= candidateRecordMaxAgeMs &&
     Number.isSafeInteger(record.runs) && Number(record.runs) === 5 &&
@@ -1548,10 +1595,12 @@ function writeCandidateRecord(
   smokeOwner: string,
   benchmark: ApiBenchmarkResult,
   sourceCommit: string,
+  writerPublicKeySha256: string,
 ): void {
   const record: CandidateRecord = {
     workerName,
     ...metadata,
+    firestoreWriterPublicKeySha256: writerPublicKeySha256,
     includeDevnet: true,
     smokeOwner,
     sourceCommit,
@@ -1598,32 +1647,32 @@ function readCandidateRecordIfValid(
   return value;
 }
 
-async function resolveApiProductionPreviewUrl(
+async function resolveApiProductionCandidate(
   input: {
-    expectedCurrentVersionId: string;
+    firestoreWriterPublicKeySha256: string;
     smokeOwner: string;
+    sourceCommit: string;
     versionId: string;
-    wranglerEnvironment: NodeJS.ProcessEnv;
   },
   dependencies: ApiProductionCandidateDependencies = {
-    deployment: readApiDeploymentStatus,
     readCandidate: readCandidateRecordIfValid,
   },
-): Promise<string> {
+): Promise<CandidateRecord> {
   const candidateVersionId = input.versionId.toLowerCase();
   const candidate = dependencies.readCandidate(candidateVersionId, input.smokeOwner);
-  if (candidate) return candidate.previewUrl;
-  const liveVersionId = stableCloudflareVersionId(await dependencies.deployment(input.wranglerEnvironment));
-  const releaseStart = guardCloudflareReleaseStart({
-    candidateVersionId,
-    expectedCurrentVersionId: input.expectedCurrentVersionId,
-    liveVersionId,
-    workerLabel: workerName,
-  });
-  if (!releaseStart.resumeCandidate) {
-    fail('Production promotion requires a fresh local candidate record created by preview mode.');
+  if (!candidate) {
+    fail('Production promotion requires source-bound candidate evidence created by preview mode.');
   }
-  return expectedPreviewOrigin(candidateVersionId);
+  if (candidate.sourceCommit !== input.sourceCommit) {
+    fail(
+      `API candidate ${candidateVersionId} was built from Git commit ${candidate.sourceCommit}, ` +
+      `but the current commit is ${input.sourceCommit}.`,
+    );
+  }
+  if (candidate.firestoreWriterPublicKeySha256 !== input.firestoreWriterPublicKeySha256) {
+    fail('The Firestore writer credential does not match the exact API candidate.');
+  }
+  return candidate;
 }
 
 function createBootstrapConfig(directory: string): string {
@@ -1982,7 +2031,7 @@ function deployApiTriggersWithoutReconciliationSchedule(
     wrangler(
       ['triggers', 'deploy', '--config', path, '--env-file', releaseEnvPath],
       environment,
-      'Disable Stripe reconciliation schedule before approved API rollback',
+      'Disable scheduled reconciliation before approved API rollback',
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -2136,6 +2185,7 @@ async function runProductionSequence(
     },
     input.heliusApiKey,
   );
+  await input.verifyBeforeProductionMutation?.();
 
   const candidateVersionId = input.versionId.toLowerCase();
   const initialLiveVersionId = await exactApiLiveVersion(input, dependencies);
@@ -2292,6 +2342,7 @@ async function uploadApiCandidate(input: {
 }): Promise<UploadMetadata> {
   if (input.candidateSmoke.owner !== input.smokeOwner) fail('Candidate smoke owner did not match the upload owner.');
   const sourceCommit = readCleanSourceCommit();
+  const writerPublicKeySha256 = firestoreWriterPublicKeySha256(input.firestoreWriterServiceAccountJson);
   const secretFile = createSecretFile(
     secretFileOperations,
     input.heliusApiKey,
@@ -2327,7 +2378,7 @@ async function uploadApiCandidate(input: {
       },
       input.heliusApiKey,
     );
-    writeCandidateRecord(metadata, input.smokeOwner, benchmark, sourceCommit);
+    writeCandidateRecord(metadata, input.smokeOwner, benchmark, sourceCommit, writerPublicKeySha256);
     console.log(`[api-deploy] Candidate smoke checks and benchmark passed; record written for ${metadata.versionId}.`);
   } catch (error) {
     releaseError = error;
@@ -2519,6 +2570,7 @@ async function runCompleteApiRelease(
     ),
     upload: uploadApiCandidate,
     validate: runApiValidation,
+    verifyWriter: verifyFirestoreWriterAccess,
   },
 ): Promise<UploadMetadata> {
   const notificationEnqueueSecret = input.notificationEnqueueSecret.trim();
@@ -2557,6 +2609,9 @@ async function runCompleteApiRelease(
     notificationEnqueueSecret,
     previewUrl: metadata.previewUrl,
     smokeOwner: input.smokeOwner,
+    verifyBeforeProductionMutation: () => (
+      dependencies.verifyWriter || verifyFirestoreWriterAccess
+    )(input.firestoreWriterServiceAccountJson),
     verifyBeforePromotion: async () => {
       const frontendVersionId = stableCloudflareVersionId(
         await dependencies.frontendDeployment(input.wranglerEnvironment),
@@ -2660,10 +2715,10 @@ async function main(): Promise<void> {
   const apiToken = readApiToken(options.tokenFile);
   const wranglerEnvironment = authenticatedWranglerEnvironment(apiToken);
   assertD1DatabaseReady(wranglerEnvironment);
-  ensureApiQueueResources(wranglerEnvironment);
-  assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
 
   if (options.mode === 'rollback') {
+    ensureApiQueueResources(wranglerEnvironment);
+    assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
     const manifest = readReleaseManifest();
     await runRollbackSequence({
       manifest,
@@ -2678,20 +2733,35 @@ async function main(): Promise<void> {
 
   if (options.mode === 'production') {
     if (!heliusApiKey) fail('Production mode requires HELIUS_API_KEY for the mandatory direct-path benchmark.');
-    const expectedCurrentVersionId = readReleaseManifest().currentProduction.apiVersionId;
-    const previewUrl = await resolveApiProductionPreviewUrl({
-      expectedCurrentVersionId,
+    const firestoreWriterServiceAccountJson = readFirestoreWriterServiceAccount(
+      options.firestoreWriterServiceAccountFile,
+    );
+    const sourceCommit = readCleanSourceCommit();
+    const candidate = await resolveApiProductionCandidate({
+      firestoreWriterPublicKeySha256: firestoreWriterPublicKeySha256(
+        firestoreWriterServiceAccountJson,
+      ),
       smokeOwner: options.smokeOwner,
+      sourceCommit,
       versionId: options.versionId!,
-      wranglerEnvironment,
     });
+    await verifyFirestoreWriterAccess(firestoreWriterServiceAccountJson);
+    ensureApiQueueResources(wranglerEnvironment);
+    assertSoleNotificationConsumer(readNotificationQueueConsumers(wranglerEnvironment), workerName);
+    const expectedCurrentVersionId = readReleaseManifest().currentProduction.apiVersionId;
     await runProductionSequence({
       candidateSmoke: { includeDevnet: true, includeNotificationSubscription: true, includePackStatus: true, includeProfileState: true, includeStripeWebhook: true, owner: options.smokeOwner },
       expectedCurrentVersionId,
       heliusApiKey,
       notificationEnqueueSecret,
-      previewUrl,
+      previewUrl: candidate.previewUrl,
       smokeOwner: options.smokeOwner,
+      verifyBeforeProductionMutation: async () => {
+        if (readCleanSourceCommit() !== sourceCommit) {
+          fail('API source changed before production mutation.');
+        }
+        await verifyFirestoreWriterAccess(firestoreWriterServiceAccountJson);
+      },
       versionId: options.versionId!,
       wranglerEnvironment,
     });
@@ -2746,7 +2816,7 @@ export const deployApiTestHooks = {
   resolveHeliusApiKey,
   resolveNotificationEnqueueSecret,
   requireNotificationEnqueueSecret,
-  resolveApiProductionPreviewUrl,
+  resolveApiProductionCandidate,
   runApiValidation,
   runCompleteApiRelease,
   runProductionSequence,
@@ -2756,6 +2826,7 @@ export const deployApiTestHooks = {
   validationEnvironment,
   validateFirestoreServiceAccountJson,
   validateFirestoreWriterServiceAccountJson,
+  firestoreWriterPublicKeySha256,
   assertQueueResource,
   assertApprovedApiRollback,
   assertSoleRevealConsumer,

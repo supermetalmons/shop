@@ -14,6 +14,7 @@ import {
 } from '@solana/web3.js';
 import { z } from 'zod';
 import {
+  API_DROPS,
   getApiDrop,
   type ApiDropConfig,
 } from './dropConfig.js';
@@ -42,6 +43,16 @@ import {
   processingDeliveryRecoveryNextCheckMs,
 } from '../../../../shared/deliveryRecovery.js';
 import {
+  READY_NOTIFICATION_CONTROL_PATH,
+  buildReadyNotificationReconciliationQuery,
+} from '../../../../shared/readyToShipNotificationReconciliation.js';
+import {
+  PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
+  PACK_STATUS_PROJECTION_PENDING,
+  PACK_STATUS_PROJECTION_STATE_FIELD,
+  buildDeliveryPackStatusProjectionReconciliationQuery,
+} from '../../../../shared/deliveryPackStatusProjectionReconciliation.js';
+import {
   DudeAssignmentPoolExhaustedError,
   pickDudeIdsForAssignment,
 } from '../../../../shared/assignDudesPicker.js';
@@ -67,7 +78,10 @@ import {
   normalizeDropId,
   type SolanaCluster,
 } from '../../../../shared/deploymentCore.js';
-import { isAdminIrlRedeemDeliveryOrderSource } from '../../../../shared/fulfillmentSources.js';
+import {
+  isAdminIrlRedeemDeliveryOrderSource,
+  isStripeOffchainDeliveryOrderSource,
+} from '../../../../shared/fulfillmentSources.js';
 import { sanitizeDudeAssignmentPool } from '../../../../shared/dudeAssignmentPool.js';
 import {
   PACK_STATUS_SCHEMA_VERSION,
@@ -113,11 +127,21 @@ import {
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import {
+  BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
+  READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
+  READY_TO_SHIP_NOTIFICATION_FAILED,
+  READY_TO_SHIP_NOTIFICATION_MAX_PUBLISH_ATTEMPTS,
   READY_TO_SHIP_NOTIFICATION_PENDING,
+  READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
+  READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
+  READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
   READY_TO_SHIP_NOTIFICATION_QUEUED,
+  READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS,
+  READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD,
+  SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD,
   createReadyToShipNotificationJobs,
   createReadyToShipNotificationOutbox,
-  pendingReadyToShipNotifications,
+  inspectPendingReadyToShipNotifications,
   type PendingReadyToShipNotification,
 } from './readyToShipNotifications.js';
 import { applyPackStatusDualWrite } from './packStatusProjection.js';
@@ -125,39 +149,31 @@ import { applyPackStatusDualWrite } from './packStatusProjection.js';
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
 
-export type DeliveryPackStatusProjectionJob = {
-  version: 1;
-  kind: 'delivery_pack_status_projection';
-  dropId: string;
-  deliveryId: number;
-  enqueuedAtMs: number;
-};
-
-export function isDeliveryPackStatusProjectionJob(value: unknown): value is DeliveryPackStatusProjectionJob {
-  if (!isRecord(value)) return false;
-  const keys = Object.keys(value);
-  return keys.length === 5 &&
-    keys.every((key) => ['version', 'kind', 'dropId', 'deliveryId', 'enqueuedAtMs'].includes(key)) &&
-    value.version === 1 &&
-    value.kind === 'delivery_pack_status_projection' &&
-    typeof value.dropId === 'string' &&
-    value.dropId.length > 0 &&
-    Number.isSafeInteger(value.deliveryId) &&
-    Number(value.deliveryId) > 0 &&
-    Number.isSafeInteger(value.enqueuedAtMs) &&
-    Number(value.enqueuedAtMs) >= 0;
-}
-
 const REQUEST_MAX_BYTES = 4096;
 const PROVIDER_MAX_BYTES = 2 * 1024 * 1024;
 const HANDLER_TIMEOUT_MS = 55_000;
 const CLEANUP_TIMEOUT_MS = 5_000;
 const PACK_STATUS_TIMEOUT_MS = 10_000;
+const READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE = 8;
+const READY_NOTIFICATION_RECONCILIATION_PUBLISH_LIMIT = 4;
+const READY_NOTIFICATION_FAILED_AT_FIELD = 'readyToShipNotificationFailedAt';
+const READY_NOTIFICATION_LAST_ERROR_CODE_FIELD = 'readyToShipNotificationLastErrorCode';
+const READY_NOTIFICATION_CONTROL_CURSOR_PATH_FIELD = 'cursorPath';
+const READY_NOTIFICATION_CONTROL_CURSOR_UPDATED_AT_FIELD = 'cursorUpdatedAt';
+const PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE = 4;
+const PACK_STATUS_PROJECTION_RECONCILIATION_CONCURRENCY = 2;
+const PACK_STATUS_PROJECTION_BACKOFF_MS = [5 * 60_000, 15 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000] as const;
+const PACK_STATUS_PROJECTION_COMPLETED = 'completed';
+const PACK_STATUS_PROJECTION_FAILED = 'failed';
+const PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD = 'packStatusProjectionFailureCount';
+const PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD = 'packStatusProjectionCompletedAt';
+const PACK_STATUS_PROJECTION_FAILED_AT_FIELD = 'packStatusProjectionFailedAt';
+const PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD = 'packStatusProjectionLastErrorCode';
 const RPC_TIMEOUT_MS = 8_000;
 const TX_SEND_TIMEOUT_MS = 12_000;
 const TX_CONFIRM_TIMEOUT_MS = 25_000;
 const TX_CONFIRM_POLL_MS = 800;
-const packStatusProjectionAccessTokenProvider = createGoogleAccessTokenProvider();
+const backgroundFirestoreAccessTokenProvider = createGoogleAccessTokenProvider();
 const TX_MAX_SEND_ATTEMPTS = 3;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
 const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
@@ -202,7 +218,7 @@ type RecoverRequest = z.infer<typeof recoverSchema>;
 type DeliveryReceiptsEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE'
-> & Partial<Pick<Env, 'DATA_DB' | 'REVEAL_BACKGROUND_QUEUE'>>;
+> & Partial<Pick<Env, 'DATA_DB'>>;
 
 type DeliveryReceiptErrorCode =
   | 'invalid-argument'
@@ -237,12 +253,33 @@ class ReceiptBatchRetryExhaustedError extends DeliveryReceiptError {
 }
 
 class ReadyToShipNotificationEnqueueError extends DeliveryReceiptError {
-  constructor() {
+  constructor(message = 'Delivery completed, but notification emails could not be queued. Retry to finish notification delivery.') {
     super(
       'unavailable',
-      'Delivery completed, but notification emails could not be queued. Retry to finish notification delivery.',
+      message,
     );
     this.name = 'ReadyToShipNotificationEnqueueError';
+  }
+}
+
+class ReadyToShipNotificationFinalizationError extends ReadyToShipNotificationEnqueueError {
+  constructor() {
+    super('Delivery completed and notifications were queued, but their recovery state could not be saved. Retry later.');
+    this.name = 'ReadyToShipNotificationFinalizationError';
+  }
+}
+
+class ReadyToShipNotificationControlError extends ReadyToShipNotificationEnqueueError {
+  constructor() {
+    super('Delivery completed, but notification publication is paused or unavailable. Retry later.');
+    this.name = 'ReadyToShipNotificationControlError';
+  }
+}
+
+class DeliveryPackStatusProjectionInvalidError extends Error {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = 'DeliveryPackStatusProjectionInvalidError';
   }
 }
 
@@ -778,10 +815,7 @@ async function runDeliveryOrderQuery(
   return decodeDeliveryOrderQuery(value, true);
 }
 
-async function runPendingReadyNotificationQuery(
-  context: FirestoreContext,
-  ownerWallet: string,
-): Promise<DeliveryOrderDocument[]> {
+function pendingReadyNotificationWhere(ownerWallet: string): Record<string, unknown> {
   const pendingFilter = (fieldPath: string) => ({
     fieldFilter: {
       field: { fieldPath },
@@ -789,47 +823,74 @@ async function runPendingReadyNotificationQuery(
       value: firestoreString(READY_TO_SHIP_NOTIFICATION_PENDING),
     },
   });
+  return {
+    compositeFilter: {
+      op: 'AND',
+      filters: [
+        {
+          fieldFilter: {
+            field: { fieldPath: 'owner' },
+            op: 'EQUAL',
+            value: firestoreString(ownerWallet),
+          },
+        },
+        {
+          fieldFilter: {
+            field: { fieldPath: 'status' },
+            op: 'EQUAL',
+            value: firestoreString('ready_to_ship'),
+          },
+        },
+        {
+          compositeFilter: {
+            op: 'OR',
+            filters: [
+              pendingFilter(BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD),
+              pendingFilter(SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD),
+            ],
+          },
+        },
+      ],
+    },
+  };
+}
+
+async function runPendingReadyNotificationQuery(
+  context: FirestoreContext,
+  ownerWallet: string,
+): Promise<DeliveryOrderDocument[]> {
   const value = await authenticatedFirestoreRequest({
     ...context,
     body: JSON.stringify({
       structuredQuery: {
         from: [{ collectionId: 'deliveryOrders', allDescendants: true }],
-        where: {
-          compositeFilter: {
-            op: 'AND',
-            filters: [
-              {
-                fieldFilter: {
-                  field: { fieldPath: 'owner' },
-                  op: 'EQUAL',
-                  value: firestoreString(ownerWallet),
-                },
-              },
-              {
-                fieldFilter: {
-                  field: { fieldPath: 'status' },
-                  op: 'EQUAL',
-                  value: firestoreString('ready_to_ship'),
-                },
-              },
-              {
-                compositeFilter: {
-                  op: 'OR',
-                  filters: [
-                    pendingFilter('buyerOrderReceivedEmailState'),
-                    pendingFilter('shipperReadyToShipEmailState'),
-                  ],
-                },
-              },
-            ],
-          },
-        },
+        where: pendingReadyNotificationWhere(ownerWallet),
+        limit: MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL,
       },
     }),
     method: 'POST',
     url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
   });
   return decodeDeliveryOrderQuery(value, true);
+}
+
+async function runPendingReadyNotificationReconciliationQuery(
+  context: FirestoreContext,
+  limit: number,
+  startAfterCursorPath?: string,
+): Promise<DeliveryOrderDocument[]> {
+  const value = await authenticatedFirestoreRequest({
+    ...context,
+    body: JSON.stringify(buildReadyNotificationReconciliationQuery({
+      limit,
+      ...(startAfterCursorPath
+        ? { startAfterDocumentPath: documentName(startAfterCursorPath) }
+        : {}),
+    })),
+    method: 'POST',
+    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+  });
+  return decodeDeliveryOrderQuery(value, false);
 }
 
 function decodeDeliveryOrderQuery(value: unknown, requireIdentity: boolean): DeliveryOrderDocument[] {
@@ -1580,12 +1641,40 @@ function shouldProjectNormalIrlPackStatus(
     itemsPerBox: runtime.itemsPerBox,
     maxSupply: runtime.maxSupply,
   })) return false;
+  if (isStripeOffchainDeliveryOrderSource(order.source)) return false;
   if (
     isAdminIrlRedeemDeliveryOrderSource(order.source) &&
     isRecord(order.adminIrlRedeem) &&
     order.adminIrlRedeem.targetKind === 'card_receipt'
   ) return false;
   return true;
+}
+
+export function createDeliveryPackStatusProjectionOutbox(
+  runtime: DeliveryRuntime,
+  order: Record<string, unknown>,
+  nowMs = Date.now(),
+): { fields: Record<string, unknown>; fieldPaths: string[] } {
+  if (!shouldProjectNormalIrlPackStatus(runtime, order)) return { fields: {}, fieldPaths: [] };
+  if (countDeliveryOrderBoxItems(order.items) < 1 && countDeliveryOrderDudeItems(order.items) < 1) {
+    return { fields: {}, fieldPaths: [] };
+  }
+  const nextAttemptAtMs = Number.isSafeInteger(nowMs) && nowMs >= 0 ? nowMs : Date.now();
+  return {
+    fields: {
+      [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
+      [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: nextAttemptAtMs,
+      [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: 0,
+    },
+    fieldPaths: [
+      PACK_STATUS_PROJECTION_STATE_FIELD,
+      PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
+      PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD,
+      PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
+      PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
+      PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD,
+    ],
+  };
 }
 
 async function countNormalIrlPackStatus(
@@ -1665,92 +1754,430 @@ async function countNormalIrlPackStatus(
   });
 }
 
-export async function enqueueDeliveryPackStatusProjectionJob(
-  queue: Queue | undefined,
-  dropId: string,
-  deliveryId: number,
-): Promise<void> {
-  if (!queue) throw new DeliveryReceiptError('unavailable', 'Pack-status repair Queue is unavailable.');
-  try {
-    await queue.send({
-      version: 1,
-      kind: 'delivery_pack_status_projection',
-      dropId,
-      deliveryId,
-      enqueuedAtMs: Date.now(),
-    } satisfies DeliveryPackStatusProjectionJob);
-  } catch {
-    throw new DeliveryReceiptError('unavailable', 'Pack-status repair Queue is unavailable.');
-  }
+function deliveryPackStatusProjectionFailureCount(value: unknown): number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
 }
 
-async function enqueueDeliveryPackStatusProjection(
-  queue: Queue | undefined,
-  runtime: DeliveryRuntime,
-  deliveryId: number,
-  order: Record<string, unknown>,
-): Promise<void> {
-  if (!shouldProjectNormalIrlPackStatus(runtime, order)) return;
-  await enqueueDeliveryPackStatusProjectionJob(queue, runtime.dropId, deliveryId);
+function deliveryPackStatusProjectionNextAttemptAtMs(value: unknown): number {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
 }
 
-export async function processDeliveryPackStatusProjectionMessage(
-  message: Message<unknown>,
-  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'DATA_DB'>>,
-  overrides: {
-    accessTokenProvider?: GoogleAccessTokenProvider;
-    log?: (entry: Record<string, unknown>) => void;
-    nowMs?: () => number;
-    providerFetch?: ProfileProviderFetch;
-  } = {},
-): Promise<void> {
-  const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
-  if (!isDeliveryPackStatusProjectionJob(message.body)) {
-    message.retry({ delaySeconds: 30 });
-    return;
+function deliveryPackStatusProjectionErrorCode(error: unknown): string {
+  if (error instanceof DeliveryPackStatusProjectionInvalidError) return error.code;
+  if (error instanceof DeliveryReceiptError) return error.code;
+  if (error instanceof DOMException && error.name === 'TimeoutError') return 'deadline-exceeded';
+  if (error instanceof DOMException && error.name === 'AbortError') return 'aborted';
+  if (error instanceof AggregateError) return 'dual-write-failed';
+  if (error instanceof Error && error.message === 'pack_status_data_db_not_configured') {
+    return 'data-db-unavailable';
   }
-  const job = message.body;
-  const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
+  return 'internal';
+}
+
+async function transitionDeliveryPackStatusProjection(
+  context: FirestoreContext,
+  documentPath: string,
+  options: {
+    clearFields?: readonly string[];
+    fields?: Record<string, unknown>;
+    requiredState: string;
+    timestampField?: string;
+  },
+): Promise<boolean> {
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    const document = await readDocument(context, documentPath);
+    if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== options.requiredState) return false;
+    try {
+      await commitWrites(context, [updateWrite({
+        path: documentPath,
+        fields: options.fields,
+        updateMask: [
+          ...Object.keys(options.fields || {}),
+          ...(options.clearFields || []),
+        ],
+        transforms: options.timestampField
+          ? [{ fieldPath: options.timestampField, setToServerValue: 'REQUEST_TIME' }]
+          : undefined,
+        currentDocument: { updateTime: document.updateTime },
+      })]);
+      return true;
+    } catch (error) {
+      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      throw error;
+    }
+  }
+  return false;
+}
+
+async function markDeliveryPackStatusProjectionCompleted(
+  context: FirestoreContext,
+  documentPath: string,
+): Promise<boolean> {
+  return transitionDeliveryPackStatusProjection(context, documentPath, {
+    clearFields: [
+      PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
+      PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
+      PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD,
+    ],
+    fields: { [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_COMPLETED },
+    requiredState: PACK_STATUS_PROJECTION_PENDING,
+    timestampField: PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
+  });
+}
+
+async function markDeliveryPackStatusProjectionFailed(
+  context: FirestoreContext,
+  documentPath: string,
+  errorCode: string,
+): Promise<boolean> {
+  return transitionDeliveryPackStatusProjection(context, documentPath, {
+    clearFields: [
+      PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
+      PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
+    ],
+    fields: {
+      [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_FAILED,
+      [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: errorCode,
+    },
+    requiredState: PACK_STATUS_PROJECTION_PENDING,
+    timestampField: PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
+  });
+}
+
+async function clearDeliveryPackStatusProjection(
+  context: FirestoreContext,
+  documentPath: string,
+): Promise<boolean> {
+  return transitionDeliveryPackStatusProjection(context, documentPath, {
+    clearFields: [
+      PACK_STATUS_PROJECTION_STATE_FIELD,
+      PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
+      PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD,
+      PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
+      PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
+      PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD,
+    ],
+    requiredState: PACK_STATUS_PROJECTION_PENDING,
+  });
+}
+
+async function recordDeliveryPackStatusProjectionTransientFailure(args: {
+  attemptStartedAtMs: number;
+  context: FirestoreContext;
+  documentPath: string;
+  errorCode: string;
+}): Promise<boolean> {
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    const document = await readDocument(args.context, args.documentPath);
+    if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== PACK_STATUS_PROJECTION_PENDING) {
+      return false;
+    }
+    if (
+      deliveryPackStatusProjectionNextAttemptAtMs(
+        document.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD],
+      ) > args.attemptStartedAtMs
+    ) return false;
+    const failureCount = deliveryPackStatusProjectionFailureCount(
+      document.fields[PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD],
+    );
+    const backoffMs = PACK_STATUS_PROJECTION_BACKOFF_MS[
+      Math.min(failureCount, PACK_STATUS_PROJECTION_BACKOFF_MS.length - 1)
+    ];
+    try {
+      await commitWrites(args.context, [updateWrite({
+        path: args.documentPath,
+        fields: {
+          [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
+          [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: args.attemptStartedAtMs + backoffMs,
+          [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: Math.min(Number.MAX_SAFE_INTEGER, failureCount + 1),
+          [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: args.errorCode,
+        },
+        updateMask: [
+          PACK_STATUS_PROJECTION_STATE_FIELD,
+          PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
+          PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD,
+          PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD,
+          PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
+          PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
+        ],
+        currentDocument: { updateTime: document.updateTime },
+      })]);
+      return true;
+    } catch (error) {
+      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), args.context.signal);
+        continue;
+      }
+      throw error;
+    }
+  }
+  return false;
+}
+
+type DeliveryPackStatusProjectionOutcome = 'completed' | 'failed' | 'not-due' | 'not-needed' | 'pending';
+
+async function projectPendingDeliveryPackStatus(args: {
+  context: FirestoreContext;
+  deliveryId: number;
+  dropId: string;
+  log?: (entry: Record<string, unknown>) => void;
+  nowMs?: () => number;
+}): Promise<DeliveryPackStatusProjectionOutcome> {
+  const log = args.log || ((entry: Record<string, unknown>) => console.log(entry));
+  const attemptStartedAtMs = (args.nowMs || Date.now)();
   const controller = new AbortController();
+  const onAbort = () => {
+    if (!controller.signal.aborted) controller.abort(args.context.signal.reason);
+  };
+  args.context.signal.addEventListener('abort', onAbort, { once: true });
+  if (args.context.signal.aborted) onAbort();
   const timeout = setTimeout(
     () => controller.abort(new DOMException('Pack-status projection timed out', 'TimeoutError')),
     PACK_STATUS_TIMEOUT_MS,
   );
+  const context: FirestoreContext = {
+    ...args.context,
+    nowMs: attemptStartedAtMs,
+    signal: controller.signal,
+  };
+  const documentPath = dropDeliveryOrderPath(args.dropId, args.deliveryId);
   try {
-    if (!serviceAccountJson) throw new Error('firestore_writer_service_account_not_configured');
-    const runtime = runtimeForDrop(job.dropId);
-    const context: FirestoreContext = {
-      accessTokenProvider: overrides.accessTokenProvider || packStatusProjectionAccessTokenProvider,
-      nowMs: (overrides.nowMs || Date.now)(),
-      providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
-      serviceAccountJson,
-      signal: controller.signal,
-      dataDb: env.DATA_DB,
-    };
-    const order = await readDocument(context, dropDeliveryOrderPath(job.dropId, job.deliveryId));
-    if (!order || order.fields.status !== 'ready_to_ship') {
-      message.retry({ delaySeconds: 30 });
-      return;
+    const order = await readDocument(context, documentPath);
+    if (!order) return 'not-needed';
+    const state = order.fields[PACK_STATUS_PROJECTION_STATE_FIELD];
+    if (state !== PACK_STATUS_PROJECTION_PENDING) return 'not-needed';
+    if (
+      deliveryPackStatusProjectionNextAttemptAtMs(
+        order.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD],
+      ) > attemptStartedAtMs
+    ) return 'not-due';
+    if (order.fields.status !== 'ready_to_ship') {
+      throw new DeliveryPackStatusProjectionInvalidError(
+        'invalid-order-status',
+        'Pack-status projection order is not ready to ship.',
+      );
     }
-    await countNormalIrlPackStatus(context, runtime, job.deliveryId, order.fields);
+    const resolution = resolveDeliveryOrderIdentity(order.id, order.fields, order.path);
+    if (
+      !('identity' in resolution) ||
+      resolution.identity.dropId !== args.dropId ||
+      resolution.identity.deliveryId !== args.deliveryId
+    ) {
+      throw new DeliveryPackStatusProjectionInvalidError(
+        'invalid-order-identity',
+        'Pack-status projection order identity is invalid.',
+      );
+    }
+    let runtime: DeliveryRuntime;
+    try {
+      runtime = runtimeForDrop(args.dropId);
+    } catch {
+      throw new DeliveryPackStatusProjectionInvalidError(
+        'invalid-drop',
+        'Pack-status projection drop is invalid.',
+      );
+    }
+    if (!shouldProjectNormalIrlPackStatus(runtime, order.fields)) {
+      await clearDeliveryPackStatusProjection(context, order.path);
+      log({
+        event: 'delivery_pack_status_projection_skipped',
+        dropId: args.dropId,
+        deliveryId: args.deliveryId,
+      });
+      return 'not-needed';
+    }
+    if (
+      countDeliveryOrderBoxItems(order.fields.items) < 1 &&
+      countDeliveryOrderDudeItems(order.fields.items) < 1
+    ) {
+      throw new DeliveryPackStatusProjectionInvalidError(
+        'invalid-order-items',
+        'Pack-status projection order has no countable items.',
+      );
+    }
+    if (!context.dataDb) throw new Error('pack_status_data_db_not_configured');
+    await countNormalIrlPackStatus(context, runtime, args.deliveryId, order.fields);
+    await markDeliveryPackStatusProjectionCompleted(context, order.path);
     log({
       event: 'delivery_pack_status_projection_completed',
-      dropId: job.dropId,
-      deliveryId: job.deliveryId,
-      queueAttempts: message.attempts,
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
     });
-    message.ack();
+    return 'completed';
   } catch (error) {
+    const errorCode = deliveryPackStatusProjectionErrorCode(error);
+    const persistenceContext = cleanupContext(args.context);
+    if (error instanceof DeliveryPackStatusProjectionInvalidError) {
+      await markDeliveryPackStatusProjectionFailed(persistenceContext, documentPath, errorCode);
+      log({
+        event: 'delivery_pack_status_projection_failed',
+        dropId: args.dropId,
+        deliveryId: args.deliveryId,
+        errorCode,
+        error: summarizeError(error),
+      });
+      return 'failed';
+    }
+    await recordDeliveryPackStatusProjectionTransientFailure({
+      attemptStartedAtMs,
+      context: persistenceContext,
+      documentPath,
+      errorCode,
+    });
     log({
-      event: 'delivery_pack_status_projection_retry',
-      dropId: job.dropId,
-      deliveryId: job.deliveryId,
-      queueAttempts: message.attempts,
+      event: 'delivery_pack_status_projection_retry_scheduled',
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
+      errorCode,
       error: summarizeError(error),
     });
-    message.retry({ delaySeconds: 30 });
+    return 'pending';
   } finally {
     clearTimeout(timeout);
+    args.context.signal.removeEventListener('abort', onAbort);
+  }
+}
+
+async function runDueDeliveryPackStatusProjectionQuery(
+  context: FirestoreContext,
+  dropId: string,
+  dueAtMs: number,
+  limit: number,
+): Promise<DeliveryOrderDocument[]> {
+  const value = await authenticatedFirestoreRequest({
+    ...context,
+    body: JSON.stringify(buildDeliveryPackStatusProjectionReconciliationQuery({ dueAtMs, limit })),
+    method: 'POST',
+    url: FIRESTORE_DOCUMENTS_BASE_URL + '/drops/' + encodeURIComponent(dropId) + ':runQuery',
+  });
+  return decodeDeliveryOrderQuery(value, false);
+}
+
+export async function reconcilePendingDeliveryPackStatusProjections(
+  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'DATA_DB'>>,
+  signal: AbortSignal,
+  overrides: {
+    accessTokenProvider?: GoogleAccessTokenProvider;
+    dropIds?: readonly string[];
+    log?: (entry: Record<string, unknown>) => void;
+    nowMs?: () => number;
+    providerFetch?: ProfileProviderFetch;
+  } = {},
+): Promise<number> {
+  const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
+  if (!serviceAccountJson) throw new Error('firestore_writer_service_account_not_configured');
+  const nowMs = overrides.nowMs || Date.now;
+  const dueAtMs = nowMs();
+  const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
+  const context: FirestoreContext = {
+    accessTokenProvider: overrides.accessTokenProvider || backgroundFirestoreAccessTokenProvider,
+    nowMs: dueAtMs,
+    providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
+    serviceAccountJson,
+    signal,
+    dataDb: env.DATA_DB,
+  };
+  const lanes = await Promise.all(
+    (overrides.dropIds || Object.keys(API_DROPS).sort()).flatMap((dropId) => {
+      const runtime = runtimeForDrop(dropId);
+      if (!shouldTrackPackStatusForDrop(runtime)) return [];
+      return [runDueDeliveryPackStatusProjectionQuery(
+        context,
+        runtime.dropId,
+        dueAtMs,
+        PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE,
+      ).then((documents) => ({ documents, dropId: runtime.dropId }))];
+    }),
+  );
+  const candidates: Array<{ deliveryId: number; dropId: string }> = [];
+  const errors: unknown[] = [];
+  let inspected = 0;
+  while (
+    inspected < PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE &&
+    lanes.some((lane) => lane.documents.length)
+  ) {
+    for (const lane of lanes) {
+      if (inspected >= PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE) break;
+      const document = lane.documents.shift();
+      if (!document) continue;
+      inspected += 1;
+      const resolution = resolveDeliveryOrderIdentity(document.id, document.fields, document.path);
+      if (!('identity' in resolution) || resolution.identity.dropId !== lane.dropId) {
+        try {
+          await markDeliveryPackStatusProjectionFailed(
+            cleanupContext(context),
+            document.path,
+            'invalid-order-identity',
+          );
+        } catch (error) {
+          errors.push(error);
+        }
+        continue;
+      }
+      candidates.push({
+        deliveryId: resolution.identity.deliveryId,
+        dropId: lane.dropId,
+      });
+    }
+  }
+  let nextCandidate = 0;
+  const worker = async () => {
+    while (nextCandidate < candidates.length) {
+      if (signal.aborted) {
+        errors.push(signal.reason);
+        return;
+      }
+      const candidate = candidates[nextCandidate];
+      nextCandidate += 1;
+      try {
+        await projectPendingDeliveryPackStatus({
+          ...candidate,
+          context,
+          log,
+          nowMs,
+        });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  };
+  await Promise.all(
+    Array.from(
+      { length: Math.min(PACK_STATUS_PROJECTION_RECONCILIATION_CONCURRENCY, candidates.length) },
+      worker,
+    ),
+  );
+  if (errors.length) throw new AggregateError(errors, 'Pack-status projection reconciliation failed');
+  return candidates.length;
+}
+
+export function scheduleDeliveryPackStatusProjection(args: {
+  context: FirestoreContext;
+  deliveryId: number;
+  dropId: string;
+  waitUntil: DeliveryReceiptWaitUntil;
+}): void {
+  const task = projectPendingDeliveryPackStatus(args).catch((error) => {
+    console.error({
+      event: 'delivery_pack_status_projection_background_failed',
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
+      error: summarizeError(error),
+    });
+  });
+  try {
+    args.waitUntil(task);
+  } catch (error) {
+    void task;
+    console.error({
+      event: 'delivery_pack_status_projection_tracking_failed',
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
+      error: summarizeError(error),
+    });
   }
 }
 
@@ -2514,12 +2941,17 @@ async function markDeliveryReady(
     after: readyOrder,
     deliveryId: Number(document.id),
     dropId: runtime.dropId,
+    nowMs: context.nowMs,
   });
   Object.assign(fields, notificationOutbox.fields);
   Object.assign(readyOrder, notificationOutbox.fields);
+  const packStatusOutbox = createDeliveryPackStatusProjectionOutbox(runtime, readyOrder, context.nowMs);
+  Object.assign(fields, packStatusOutbox.fields);
+  Object.assign(readyOrder, packStatusOutbox.fields);
   const updateMask = [
     ...Object.keys(fields),
     ...notificationOutbox.fieldPaths.filter((fieldPath) => !Object.hasOwn(fields, fieldPath)),
+    ...packStatusOutbox.fieldPaths.filter((fieldPath) => !Object.hasOwn(fields, fieldPath)),
     'receiptRecovery.leaseExpiresAt',
     'receiptRecovery.lastErrorCode',
     'receiptRecovery.lastErrorMessage',
@@ -2546,17 +2978,35 @@ async function markDeliveryReady(
 async function markReadyToShipNotificationsQueued(
   context: FirestoreContext,
   documentPath: string,
+  claimId: string,
   pending: readonly PendingReadyToShipNotification[],
 ): Promise<string[]> {
   for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
     const document = await readDocument(context, documentPath);
-    if (!document) return [];
+    if (
+      !document ||
+      document.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] !== claimId
+    ) return [];
     const matching = pending.filter((marker) => (
       document.fields[marker.stateField] === READY_TO_SHIP_NOTIFICATION_PENDING &&
       document.fields[marker.jobIdField] === marker.jobId &&
       document.fields[marker.idempotencyKeyField] === marker.idempotencyKey
     ));
     if (!matching.length) return [];
+    const matchingStateFields = new Set(matching.map((marker) => marker.stateField));
+    const hasRemainingPendingMarker = [
+      BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
+      SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD,
+    ].some((stateField) => (
+      document.fields[stateField] === READY_TO_SHIP_NOTIFICATION_PENDING &&
+      !matchingStateFields.has(stateField)
+    ));
+    const clearedClaimFields = hasRemainingPendingMarker
+      ? []
+      : [
+          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
+          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
+        ];
     try {
       await commitWrites(context, [updateWrite({
         path: documentPath,
@@ -2564,7 +3014,10 @@ async function markReadyToShipNotificationsQueued(
           [marker.stateField, READY_TO_SHIP_NOTIFICATION_QUEUED],
           [marker.jobIdField, marker.jobId],
         ])),
-        updateMask: matching.flatMap((marker) => [marker.stateField, marker.jobIdField]),
+        updateMask: [
+          ...matching.flatMap((marker) => [marker.stateField, marker.jobIdField]),
+          ...clearedClaimFields,
+        ],
         transforms: matching.map((marker) => ({
           fieldPath: marker.queuedAtField,
           setToServerValue: 'REQUEST_TIME',
@@ -2583,32 +3036,378 @@ async function markReadyToShipNotificationsQueued(
   return [];
 }
 
+type ReadyToShipNotificationClaim = {
+  claimId: string;
+  document: DeliveryOrderDocument;
+  pending: PendingReadyToShipNotification[];
+  previousAttemptCount: number;
+};
+
+type ReadyToShipNotificationClaimResult =
+  | { outcome: 'busy' | 'manual-review' | 'none' }
+  | { outcome: 'claimed'; claim: ReadyToShipNotificationClaim };
+
+function readyToShipNotificationNonNegativeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
+}
+
+async function claimReadyToShipNotifications(args: {
+  context: FirestoreContext;
+  deliveryId: number;
+  documentPath: string;
+  dropId: string;
+}): Promise<ReadyToShipNotificationClaimResult> {
+  const nowMs = Math.max(0, Math.floor(args.context.nowMs));
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    const document = await readDocument(args.context, args.documentPath);
+    if (!document) return { outcome: 'none' };
+    const inspection = inspectPendingReadyToShipNotifications(document.fields, {
+      deliveryId: args.deliveryId,
+      dropId: args.dropId,
+    });
+    if (!inspection.pending.length) return { outcome: 'none' };
+    const activeClaimId = document.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD];
+    const claimExpiresAtMs = readyToShipNotificationNonNegativeInteger(
+      document.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD],
+    );
+    if (typeof activeClaimId === 'string' && activeClaimId && claimExpiresAtMs !== null && claimExpiresAtMs > nowMs) {
+      return { outcome: 'busy' };
+    }
+    const retryUntilMs = readyToShipNotificationNonNegativeInteger(
+      document.fields[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD],
+    );
+    const attemptCount = readyToShipNotificationNonNegativeInteger(
+      document.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD],
+    );
+    if (
+      retryUntilMs === null ||
+      attemptCount === null ||
+      attemptCount >= READY_TO_SHIP_NOTIFICATION_MAX_PUBLISH_ATTEMPTS ||
+      (attemptCount > 0 && retryUntilMs <= nowMs)
+    ) {
+      const stateFields = inspection.pending.map((marker) => marker.stateField);
+      try {
+        await commitWrites(args.context, [updateWrite({
+          path: args.documentPath,
+          fields: {
+            ...Object.fromEntries(stateFields.map((stateField) => [stateField, READY_TO_SHIP_NOTIFICATION_FAILED])),
+            [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: 'manual-review-required',
+          },
+          updateMask: [
+            ...stateFields,
+            READY_NOTIFICATION_LAST_ERROR_CODE_FIELD,
+            READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
+            READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
+          ],
+          transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, setToServerValue: 'REQUEST_TIME' }],
+          currentDocument: { updateTime: document.updateTime },
+        })]);
+        return { outcome: 'manual-review' };
+      } catch (error) {
+        if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+          await pause(Math.min(400, 25 * 2 ** attempt), args.context.signal);
+          continue;
+        }
+        throw error;
+      }
+    }
+    const claimId = crypto.randomUUID();
+    try {
+      await commitWrites(args.context, [updateWrite({
+        path: args.documentPath,
+        fields: {
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: claimId,
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]:
+            nowMs + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: attemptCount + 1,
+          [READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]: attemptCount === 0
+            ? nowMs + READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS
+            : retryUntilMs,
+        },
+        updateMask: [
+          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
+          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
+          READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
+          READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD,
+        ],
+        currentDocument: { updateTime: document.updateTime },
+      })]);
+      return {
+        outcome: 'claimed',
+        claim: {
+          claimId,
+          document,
+          pending: inspection.pending,
+          previousAttemptCount: attemptCount,
+        },
+      };
+    } catch (error) {
+      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), args.context.signal);
+        continue;
+      }
+      throw error;
+    }
+  }
+  return { outcome: 'busy' };
+}
+
+async function releaseReadyToShipNotificationClaim(
+  context: FirestoreContext,
+  documentPath: string,
+  claim: ReadyToShipNotificationClaim,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    const document = await readDocument(context, documentPath);
+    if (
+      !document ||
+      document.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] !== claim.claimId
+    ) return false;
+    try {
+      await commitWrites(context, [updateWrite({
+        path: documentPath,
+        fields: {
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: claim.previousAttemptCount,
+        },
+        updateMask: [
+          READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
+          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
+          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
+        ],
+        currentDocument: { updateTime: document.updateTime },
+      })]);
+      return true;
+    } catch (error) {
+      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      throw error;
+    }
+  }
+  return false;
+}
+
+async function markPendingReadyToShipNotificationsFailed(
+  context: FirestoreContext,
+  documentPath: string,
+  errorCode: string,
+  targetStateFields?: readonly string[],
+): Promise<string[]> {
+  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    const document = await readDocument(context, documentPath);
+    if (!document) return [];
+    const stateFields = [
+      BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
+      SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD,
+    ].filter((fieldPath) => (
+      document.fields[fieldPath] === READY_TO_SHIP_NOTIFICATION_PENDING &&
+      (!targetStateFields || targetStateFields.includes(fieldPath))
+    ));
+    if (!stateFields.length) return [];
+    try {
+      await commitWrites(context, [updateWrite({
+        path: documentPath,
+        fields: {
+          ...Object.fromEntries(
+            stateFields.map((fieldPath) => [fieldPath, READY_TO_SHIP_NOTIFICATION_FAILED]),
+          ),
+          [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: errorCode,
+        },
+        updateMask: [...stateFields, READY_NOTIFICATION_LAST_ERROR_CODE_FIELD],
+        transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, setToServerValue: 'REQUEST_TIME' }],
+        currentDocument: { updateTime: document.updateTime },
+      })]);
+      return stateFields;
+    } catch (error) {
+      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      throw error;
+    }
+  }
+  return [];
+}
+
+type ReadyNotificationControl = {
+  cursorPath: string | null;
+  paused: boolean;
+  updateTime: string;
+};
+
+function decodeReadyNotificationControl(document: DeliveryOrderDocument): ReadyNotificationControl {
+  if (typeof document.fields.paused !== 'boolean') throw new ReadyToShipNotificationControlError();
+  const cursorPath = document.fields[READY_NOTIFICATION_CONTROL_CURSOR_PATH_FIELD];
+  if (cursorPath === undefined) {
+    return { cursorPath: null, paused: document.fields.paused, updateTime: document.updateTime };
+  }
+  if (typeof cursorPath !== 'string') throw new ReadyToShipNotificationControlError();
+  const parts = cursorPath.split('/');
+  const resolution = resolveDeliveryOrderIdentity(parts.at(-1) || '', {}, cursorPath);
+  if (!('identity' in resolution)) throw new ReadyToShipNotificationControlError();
+  return { cursorPath, paused: document.fields.paused, updateTime: document.updateTime };
+}
+
+async function loadReadyNotificationControl(context: FirestoreContext): Promise<ReadyNotificationControl> {
+  let document = await readDocument(context, READY_NOTIFICATION_CONTROL_PATH);
+  if (!document) {
+    try {
+      await commitWrites(context, [createWrite({
+        path: READY_NOTIFICATION_CONTROL_PATH,
+        fields: { paused: false },
+        transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+      })]);
+    } catch (error) {
+      if (!(error instanceof FirestoreWriteConflict)) throw error;
+    }
+    document = await readDocument(context, READY_NOTIFICATION_CONTROL_PATH);
+  }
+  if (!document) throw new ReadyToShipNotificationControlError();
+  return decodeReadyNotificationControl(document);
+}
+
+async function updateReadyNotificationCursor(
+  context: FirestoreContext,
+  cursorPath: string,
+  controlUpdateTime: string,
+): Promise<void> {
+  await commitWrites(context, [updateWrite({
+    path: READY_NOTIFICATION_CONTROL_PATH,
+    fields: { [READY_NOTIFICATION_CONTROL_CURSOR_PATH_FIELD]: cursorPath },
+    updateMask: [READY_NOTIFICATION_CONTROL_CURSOR_PATH_FIELD],
+    transforms: [{
+      fieldPath: READY_NOTIFICATION_CONTROL_CURSOR_UPDATED_AT_FIELD,
+      setToServerValue: 'REQUEST_TIME',
+    }],
+    currentDocument: { updateTime: controlUpdateTime },
+  })]);
+}
+
 async function publishReadyToShipNotifications(args: {
   context: FirestoreContext;
   deliveryId: number;
   document: DeliveryOrderDocument;
   dropId: string;
   queue: Env['NOTIFICATION_EMAIL_QUEUE'];
-}): Promise<void> {
-  let pending: PendingReadyToShipNotification[];
-  let jobs: Awaited<ReturnType<typeof createReadyToShipNotificationJobs>>;
-  try {
-    pending = pendingReadyToShipNotifications(args.document.fields);
-    if (!pending.length) {
-      console.log({
-        event: 'ready_to_ship_notifications_skipped',
+}): Promise<boolean> {
+  const expectedIdentity = { deliveryId: args.deliveryId, dropId: args.dropId };
+  let initialInspection = inspectPendingReadyToShipNotifications(args.document.fields, expectedIdentity);
+  let invalidMarkerFinalizationError: unknown;
+  if (initialInspection.invalidStateFields.length) {
+    const currentDocument = await readDocument(args.context, args.document.path);
+    if (!currentDocument) return false;
+    initialInspection = inspectPendingReadyToShipNotifications(currentDocument.fields, expectedIdentity);
+  }
+  if (initialInspection.invalidStateFields.length) {
+    try {
+      await markPendingReadyToShipNotificationsFailed(
+        cleanupContext(args.context),
+        args.document.path,
+        'invalid-notification-data',
+        initialInspection.invalidStateFields,
+      );
+    } catch (error) {
+      invalidMarkerFinalizationError = error;
+      console.error({
+        event: 'ready_to_ship_notifications_marker_finalization_failed',
         dropId: args.dropId,
         deliveryId: args.deliveryId,
-        reason: 'no-pending-markers',
+        error: summarizeError(error),
       });
-      return;
     }
-    jobs = await createReadyToShipNotificationJobs({
-      order: args.document.fields,
-      deliveryId: args.deliveryId,
+  }
+  if (!initialInspection.pending.length) {
+    console.log({
+      event: 'ready_to_ship_notifications_skipped',
       dropId: args.dropId,
-      pending,
+      deliveryId: args.deliveryId,
+      reason: initialInspection.invalidStateFields.length ? 'no-valid-pending-markers' : 'no-pending-markers',
     });
+    if (invalidMarkerFinalizationError) throw new ReadyToShipNotificationFinalizationError();
+    return false;
+  }
+
+  const claimResult = await claimReadyToShipNotifications({
+    context: args.context,
+    deliveryId: args.deliveryId,
+    documentPath: args.document.path,
+    dropId: args.dropId,
+  });
+  if (claimResult.outcome !== 'claimed') {
+    console.log({
+      event: 'ready_to_ship_notifications_skipped',
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
+      reason: claimResult.outcome,
+    });
+    if (invalidMarkerFinalizationError) throw new ReadyToShipNotificationFinalizationError();
+    return false;
+  }
+  const { claim } = claimResult;
+  const pending: PendingReadyToShipNotification[] = [];
+  const jobs: Awaited<ReturnType<typeof createReadyToShipNotificationJobs>> = [];
+  const buildErrors: unknown[] = [];
+  for (const marker of claim.pending) {
+    try {
+      const markerJobs = await createReadyToShipNotificationJobs({
+        order: claim.document.fields,
+        deliveryId: args.deliveryId,
+        dropId: args.dropId,
+        pending: [marker],
+      });
+      if (markerJobs.length !== 1) throw new Error('ready_notification_job_count_invalid');
+      pending.push(marker);
+      jobs.push(markerJobs[0]);
+    } catch (error) {
+      buildErrors.push(error);
+      console.error({
+        event: 'ready_to_ship_notification_build_failed',
+        dropId: args.dropId,
+        deliveryId: args.deliveryId,
+        stateField: marker.stateField,
+        error: summarizeError(error),
+      });
+    }
+  }
+  try {
+    const latestControl = await loadReadyNotificationControl(args.context);
+    if (latestControl.paused) throw new ReadyToShipNotificationControlError();
+  } catch (error) {
+    await releaseReadyToShipNotificationClaim(
+      cleanupContext(args.context),
+      args.document.path,
+      claim,
+    ).catch((releaseError) => {
+      console.error({
+        event: 'ready_to_ship_notifications_claim_release_failed',
+        dropId: args.dropId,
+        deliveryId: args.deliveryId,
+        error: summarizeError(releaseError),
+      });
+    });
+    console.error({
+      event: 'ready_to_ship_notifications_control_unavailable',
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
+      error: summarizeError(error),
+    });
+    throw error instanceof ReadyToShipNotificationControlError
+      ? error
+      : new ReadyToShipNotificationControlError();
+  }
+  if (!jobs.length) {
+    console.log({
+      event: 'ready_to_ship_notifications_skipped',
+      dropId: args.dropId,
+      deliveryId: args.deliveryId,
+      reason: 'job-build-failed',
+    });
+    throw new ReadyToShipNotificationEnqueueError(
+      'Delivery completed, but notification emails could not be prepared. Retry later.',
+    );
+  }
+  try {
     await args.queue.sendBatch(jobs.map((job) => ({ body: job, contentType: 'json' })));
   } catch (error) {
     console.error({
@@ -2625,21 +3424,24 @@ async function publishReadyToShipNotifications(args: {
     deliveryId: args.deliveryId,
     jobs: jobs.map((job) => ({ jobId: job.jobId, kind: job.kind })),
   });
+  const persistenceContext = cleanupContext(args.context);
   try {
     const finalizedKinds = await markReadyToShipNotificationsQueued(
-      args.context,
+      persistenceContext,
       args.document.path,
+      claim.claimId,
       pending,
     );
     if (finalizedKinds.length !== pending.length) {
-      console.warn({
-        event: 'ready_to_ship_notifications_marker_finalization_failed',
-        dropId: args.dropId,
-        deliveryId: args.deliveryId,
-        reason: 'pending-marker-changed',
-        finalizedKinds,
-      });
+      const latest = await readDocument(persistenceContext, args.document.path);
+      const remaining = pending.filter((marker) => (
+        latest?.fields[marker.stateField] === READY_TO_SHIP_NOTIFICATION_PENDING &&
+        latest.fields[marker.jobIdField] === marker.jobId &&
+        latest.fields[marker.idempotencyKeyField] === marker.idempotencyKey
+      ));
+      if (remaining.length) throw new Error('ready_notification_marker_still_pending');
     }
+    if (invalidMarkerFinalizationError) throw invalidMarkerFinalizationError;
   } catch (error) {
     console.error({
       event: 'ready_to_ship_notifications_marker_finalization_failed',
@@ -2647,7 +3449,110 @@ async function publishReadyToShipNotifications(args: {
       deliveryId: args.deliveryId,
       error: summarizeError(error),
     });
+    throw new ReadyToShipNotificationFinalizationError();
   }
+  if (buildErrors.length) {
+    throw new ReadyToShipNotificationEnqueueError(
+      'Delivery completed, but some notification emails could not be prepared. Retry later.',
+    );
+  }
+  return true;
+}
+
+export async function reconcilePendingReadyToShipNotifications(
+  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'NOTIFICATION_EMAIL_QUEUE'>,
+  signal: AbortSignal,
+  overrides: {
+    accessTokenProvider?: GoogleAccessTokenProvider;
+    log?: (entry: Record<string, unknown>) => void;
+    nowMs?: () => number;
+    providerFetch?: ProfileProviderFetch;
+  } = {},
+): Promise<number> {
+  const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
+  if (!serviceAccountJson) throw new Error('firestore_writer_service_account_not_configured');
+  const context: FirestoreContext = {
+    accessTokenProvider: overrides.accessTokenProvider || backgroundFirestoreAccessTokenProvider,
+    nowMs: (overrides.nowMs || Date.now)(),
+    providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
+    serviceAccountJson,
+    signal,
+  };
+  const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
+  const control = await loadReadyNotificationControl(context);
+  if (control.paused) {
+    log({ event: 'ready_to_ship_notifications_reconciliation_paused' });
+    return 0;
+  }
+  const afterCursor = await runPendingReadyNotificationReconciliationQuery(
+    context,
+    READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE,
+    control.cursorPath || undefined,
+  );
+  const wrapped = control.cursorPath && afterCursor.length < READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE
+    ? await runPendingReadyNotificationReconciliationQuery(
+        context,
+        READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE - afterCursor.length,
+      )
+    : [];
+  const documents = Array.from(
+    new Map(
+      [...afterCursor, ...wrapped].map((document) => [document.path, document] as const),
+    ).values(),
+  ).slice(0, READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE);
+  const failures: unknown[] = [];
+  let publicationAttempts = 0;
+  let processed = 0;
+  let lastVisitedPath: string | undefined;
+  for (const document of documents) {
+    if (signal.aborted) {
+      failures.push(signal.reason);
+      break;
+    }
+    const resolution = resolveDeliveryOrderIdentity(document.id, document.fields, document.path);
+    const dropId = resolveDeliveryOrderDropId(document.fields, document.path);
+    if (!('identity' in resolution) || !dropId || dropId !== resolution.identity.dropId) {
+      lastVisitedPath = document.path;
+      try {
+        await markPendingReadyToShipNotificationsFailed(
+          cleanupContext(context),
+          document.path,
+          'invalid-order-identity',
+        );
+        log({
+          event: 'ready_to_ship_notifications_invalid_order',
+          documentPath: document.path,
+        });
+      } catch (error) {
+        failures.push(error);
+      }
+      continue;
+    }
+    if (publicationAttempts >= READY_NOTIFICATION_RECONCILIATION_PUBLISH_LIMIT) break;
+    lastVisitedPath = document.path;
+    publicationAttempts += 1;
+    try {
+      const published = await publishReadyToShipNotifications({
+        context,
+        deliveryId: resolution.identity.deliveryId,
+        document,
+        dropId,
+        queue: env.NOTIFICATION_EMAIL_QUEUE,
+      });
+      if (published) processed += 1;
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (lastVisitedPath) {
+    try {
+      await updateReadyNotificationCursor(cleanupContext(context), lastVisitedPath, control.updateTime);
+    } catch (error) {
+      if (!(error instanceof FirestoreWriteConflict)) failures.push(error);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, 'Ready-notification reconciliation failed');
+  return processed;
 }
 
 async function recordDeliveryClose(
@@ -2858,6 +3763,12 @@ async function retryIssueReceipts(args: {
     throw new DeliveryReceiptError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.');
   }
   if (document.fields.status === 'ready_to_ship') {
+    scheduleDeliveryPackStatusProjection({
+      context: args.firestore,
+      deliveryId,
+      dropId: runtime.dropId,
+      waitUntil: args.waitUntil,
+    });
     let closeDeliveryTx = typeof document.fields.closeDeliveryTx === 'string'
       ? document.fields.closeDeliveryTx
       : null;
@@ -2988,17 +3899,17 @@ async function retryIssueReceipts(args: {
       irlClaims.push({ code, boxId, boxAssetId: item.assetId, dudeIds });
     }
   }
-  await enqueueDeliveryPackStatusProjection(
-    args.env.REVEAL_BACKGROUND_QUEUE,
-    runtime,
-    deliveryId,
-    document.fields,
-  );
   const readyDocument = await markDeliveryReady(args.firestore, document, runtime, {
     signature: verified.signature,
     receiptsMinted,
     receiptTxs,
     irlClaims,
+  });
+  scheduleDeliveryPackStatusProjection({
+    context: args.firestore,
+    deliveryId,
+    dropId: runtime.dropId,
+    waitUntil: args.waitUntil,
   });
   let closeDeliveryTx: string | null = null;
   try {
@@ -3527,6 +4438,8 @@ export const deliveryReceiptTestHooks = {
   markDeliveryReady,
   markReadyToShipNotificationsQueued,
   normalizeAssignedDudeIds,
+  projectPendingDeliveryPackStatus,
+  recordDeliveryPackStatusProjectionTransientFailure,
   pendingReceiptItems,
   ReceiptBatchRetryExhaustedError,
   ReadyToShipNotificationEnqueueError,
