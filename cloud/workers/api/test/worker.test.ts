@@ -25,10 +25,6 @@ import {
   signNotificationEnqueueRequest,
 } from '../../../../shared/notificationEnqueueAuth.ts';
 import { handleRequest, sleepWithAbort, type ProviderFetch } from '../src/index.ts';
-import {
-  FIRESTORE_PACK_STATUS_CACHE_TTL_SECONDS,
-  FIRESTORE_PACK_STATUS_MAX_RESPONSE_BYTES,
-} from '../src/firestorePackStatus.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const CARD_COLLECTION = 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu';
@@ -76,7 +72,9 @@ function env(options: {
 }
 
 function packStatusD1(options: {
+  failure?: Error;
   readSource?: 'firestore' | 'd1';
+  rolloutRow?: Record<string, unknown> | null;
   row?: Record<string, unknown> | null;
 } = {}): D1Database {
   return {
@@ -88,7 +86,9 @@ function packStatusD1(options: {
           return this;
         },
         async first() {
+          if (options.failure) throw options.failure;
           if (query.includes('pack_status_rollout')) {
+            if (Object.hasOwn(options, 'rolloutRow')) return options.rolloutRow;
             return { read_source: options.readSource || 'd1', cache_generation: 7 };
           }
           if (query.includes('FROM pack_status')) {
@@ -212,27 +212,6 @@ function quietDependencies(providerFetch: ProviderFetch) {
     sleep: async () => undefined,
     log: () => undefined,
   };
-}
-
-function firestorePackStatusResponse(
-  dropId: string,
-  cardsPerPack: number,
-  headers: HeadersInit = {},
-): Response {
-  return Response.json({
-    name: `projects/mons-shop/databases/(default)/documents/drops/${dropId}/meta/packStatus`,
-    fields: {
-      version: { integerValue: '1' },
-      dropId: { stringValue: dropId },
-      totalInitialSupply: { integerValue: '10' },
-      totalCards: { integerValue: String(10 * cardsPerPack) },
-      cardsPerPack: { integerValue: String(cardsPerPack) },
-      unsealedOnline: { integerValue: '2' },
-      redeemedIrlNormal: { integerValue: '1' },
-      redeemedIrlStripe: { integerValue: '2' },
-      redeemedUnsealedCards: { integerValue: '1' },
-    },
-  }, { headers });
 }
 
 function cardAsset(id: string, packId: number) {
@@ -774,54 +753,52 @@ test('profile write routes use restricted CORS, bearer authentication, and stabl
   assert.equal((await method.json() as { error: { code: string } }).error.code, 'invalid-argument');
 });
 
-test('pack-status route reads bounded Firestore fields with a 15-second edge cache', async () => {
+test('pack-status route reads every supported drop from D1 only', async () => {
   for (const [dropId, cardsPerPack] of [
     ['card_nft_2', 3],
     ['poncho_drifella', 1],
     ['little_swag_boxes', 3],
   ] as const) {
-    const calls: Array<{ url: URL; init?: RequestInit }> = [];
     const logs: Record<string, unknown>[] = [];
+    let providerCalls = 0;
     const response = await handleRequest(
       new Request(`https://api.mons.shop/pack-status/${dropId}`),
-      env(),
-      {
-        ...quietDependencies(fetch),
-        firestoreFetch: async (input, init) => {
-          calls.push({ url: new URL(String(input)), init });
-          return firestorePackStatusResponse(dropId, cardsPerPack, { 'CF-Cache-Status': 'HIT' });
+      env({ dataDb: packStatusD1({
+        row: {
+          drop_id: dropId,
+          version: 1,
+          total_initial_supply: 10,
+          total_cards: 10 * cardsPerPack,
+          cards_per_pack: cardsPerPack,
+          unsealed_online: 2,
+          redeemed_irl_normal: 1,
+          redeemed_irl_stripe: 2,
+          redeemed_unsealed_cards: 1,
+          rebuilt_at_ms: 100,
+          updated_at_ms: 200,
         },
+      }) }),
+      {
+        ...quietDependencies(async () => {
+          providerCalls += 1;
+          throw new Error('pack-status must not call a provider');
+        }),
         log: (entry) => logs.push(entry),
       },
     );
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get(PACK_STATUS_SOURCE_HEADER), 'firestore');
+    assert.equal(response.headers.get(PACK_STATUS_SOURCE_HEADER), 'd1');
     assert.match(response.headers.get('cache-control') || '', /no-store/);
     assert.match(response.headers.get('server-timing') || '', /provider;dur=/);
     const payload = await response.json() as { ok: boolean; packStatus: { dropId: string; cardsPerPack: number } };
     assert.equal(payload.ok, true);
     assert.equal(payload.packStatus.dropId, dropId);
     assert.equal(payload.packStatus.cardsPerPack, cardsPerPack);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url.origin, 'https://firestore.googleapis.com');
-    assert.equal(calls[0]?.url.pathname, `/v1/projects/mons-shop/databases/(default)/documents/drops/${dropId}/meta/packStatus`);
-    assert.equal(calls[0]?.url.searchParams.getAll('mask.fieldPaths').length, 9);
-    assert.equal(new Headers(calls[0]?.init?.headers).has('authorization'), false);
-    assert.equal(calls[0]?.init?.method, 'GET');
-    assert.equal(calls[0]?.init?.redirect, 'manual');
-    assert.equal(calls[0]?.init?.cf?.cacheEverything, true);
-    assert.deepEqual(calls[0]?.init?.cf?.cacheTtlByStatus, {
-      '200-299': FIRESTORE_PACK_STATUS_CACHE_TTL_SECONDS,
-      '300-399': 0,
-      '400-403': 0,
-      '404': FIRESTORE_PACK_STATUS_CACHE_TTL_SECONDS,
-      '405-499': 0,
-      '500-599': 0,
-    });
+    assert.equal(providerCalls, 0);
     assert.equal(logs[0]?.route, '/pack-status/:dropId');
     assert.equal(logs[0]?.dropId, dropId);
-    assert.equal(logs[0]?.providerCacheStatus, 'HIT');
-    assert.equal(logs[0]?.upstreamCalls, 1);
+    assert.equal(logs[0]?.providerCacheStatus, 'D1-MISS');
+    assert.equal(logs[0]?.upstreamCalls, 0);
   }
 });
 
@@ -829,14 +806,9 @@ test('pack-status route reads and internally caches D1 while preserving the resp
   const dataDb = packStatusD1();
   const cache = memoryPackStatusCache();
   const logs: Record<string, unknown>[] = [];
-  let firestoreCalls = 0;
   const dependencies = {
     ...quietDependencies(fetch),
     cache,
-    firestoreFetch: async () => {
-      firestoreCalls += 1;
-      return firestorePackStatusResponse('card_nft_2', 3);
-    },
     log: (entry: Record<string, unknown>) => logs.push(entry),
   };
   const first = await handleRequest(
@@ -878,50 +850,100 @@ test('pack-status route reads and internally caches D1 while preserving the resp
   );
   assert.equal(second.status, 200);
   assert.equal(logs.at(-1)?.providerCacheStatus, 'D1-HIT');
-  assert.equal(firestoreCalls, 0);
 });
 
-test('pack-status route falls back to Firestore when the selected D1 row is missing', async () => {
-  const logs: Record<string, unknown>[] = [];
-  const response = await handleRequest(
+test('pack-status route rejects malformed cache entries and refreshes them from D1', async () => {
+  for (const [label, cachedResponse] of [
+    ['invalid JSON', () => new Response('{')],
+    ['invalid data', () => Response.json({ dropId: 'card_nft_2', total: 999 })],
+  ] as const) {
+    let cacheWrites = 0;
+    let providerCalls = 0;
+    const logs: Record<string, unknown>[] = [];
+    const response = await handleRequest(
+      new Request('https://api.mons.shop/pack-status/card_nft_2'),
+      env({ dataDb: packStatusD1() }),
+      {
+        ...quietDependencies(async () => {
+          providerCalls += 1;
+          throw new Error('pack-status must not call Firestore or another provider');
+        }),
+        cache: {
+          match: async () => cachedResponse(),
+          put: async () => { cacheWrites += 1; },
+        },
+        log: (entry) => logs.push(entry),
+      },
+    );
+    assert.equal(response.status, 200, label);
+    assert.equal(response.headers.get(PACK_STATUS_SOURCE_HEADER), 'd1', label);
+    const payload = await response.json() as { packStatus: { dropId: string; total: number } };
+    assert.deepEqual(payload.packStatus, {
+      dropId: 'card_nft_2',
+      total: 30,
+      totalInitialSupply: 10,
+      totalCards: 30,
+      cardsPerPack: 3,
+      unsealedOnline: 2,
+      unsealedCards: 6,
+      redeemedIrl: 3,
+      redeemedIrlNormal: 1,
+      redeemedIrlStripe: 2,
+      redeemedUnsealedCards: 1,
+      redeemedCards: 10,
+      items: [
+        { key: 'unsealed', label: 'Unpacked', amount: 6, percentage: 20 },
+        { key: 'redeemed', label: 'Redeemed', amount: 10, percentage: 33.33 },
+        { key: 'total', label: 'Total', amount: 30, percentage: 100 },
+      ],
+    }, label);
+    assert.equal(cacheWrites, 1, label);
+    assert.equal(providerCalls, 0, label);
+    assert.equal(logs.some((entry) => entry.event === 'pack_status_d1_cache_invalid'), true, label);
+    assert.equal(logs.at(-1)?.providerCacheStatus, 'D1-MISS', label);
+  }
+
+  const failClosed = await handleRequest(
     new Request('https://api.mons.shop/pack-status/card_nft_2'),
     env({ dataDb: packStatusD1({ row: null }) }),
     {
-      ...quietDependencies(fetch),
-      firestoreFetch: async () => firestorePackStatusResponse('card_nft_2', 3),
-      log: (entry) => logs.push(entry),
+      ...quietDependencies(async () => assert.fail('pack-status must not call Firestore or another provider')),
+      cache: {
+        match: async () => Response.json({ dropId: 'card_nft_2', total: 999 }),
+        put: async () => assert.fail('missing D1 data must not be cached'),
+      },
+      log: () => undefined,
     },
   );
-  assert.equal(response.status, 200);
-  assert.equal(response.headers.get(PACK_STATUS_SOURCE_HEADER), 'firestore');
-  assert.equal(logs.some((entry) => entry.event === 'pack_status_d1_fallback'), true);
-  assert.equal(logs.at(-1)?.packStatusSource, 'firestore');
+  assert.equal(failClosed.status, 502);
+  assert.equal(failClosed.headers.get(PACK_STATUS_SOURCE_HEADER), 'd1');
+  assert.deepEqual(await failClosed.json(), { ok: false, error: 'provider-unavailable' });
 });
 
-test('pack-status route shadow-compares D1 and uncached Firestore in background', async () => {
-  const logs: Record<string, unknown>[] = [];
-  const background: Promise<unknown>[] = [];
-  const calls: RequestInit[] = [];
-  const response = await handleRequest(
-    new Request('https://api.mons.shop/pack-status/card_nft_2'),
-    env({ dataDb: packStatusD1({ readSource: 'firestore' }) }),
-    {
-      ...quietDependencies(fetch),
-      firestoreFetch: async (_input, init) => {
-        calls.push(init || {});
-        return firestorePackStatusResponse('card_nft_2', 3);
-      },
-      log: (entry) => logs.push(entry),
-    },
-    (promise) => background.push(promise),
-  );
-  assert.equal(response.status, 200);
-  await Promise.all(background);
-  assert.equal(calls.length, 2);
-  assert.equal(calls.some((init) => (
-    init.cf?.cacheTtlByStatus as Record<string, number> | undefined
-  )?.['200-299'] === 0), true);
-  assert.equal(logs.some((entry) => entry.event === 'pack_status_shadow_mismatch'), false);
+test('pack-status route fails closed on missing or invalid D1 state', async () => {
+  const cases: Array<{ label: string; dataDb: D1Database }> = [
+    { label: 'missing binding', dataDb: {} as D1Database },
+    { label: 'missing rollout', dataDb: packStatusD1({ rolloutRow: null }) },
+    { label: 'legacy rollout source', dataDb: packStatusD1({ readSource: 'firestore' }) },
+    { label: 'malformed rollout', dataDb: packStatusD1({ rolloutRow: { read_source: 'd1', cache_generation: 0 } }) },
+    { label: 'missing summary', dataDb: packStatusD1({ row: null }) },
+    { label: 'malformed summary', dataDb: packStatusD1({ row: { drop_id: 'card_nft_2', version: 1 } }) },
+    { label: 'query failure', dataDb: packStatusD1({ failure: new Error('d1 unavailable') }) },
+  ];
+  for (const { label, dataDb } of cases) {
+    const logs: Record<string, unknown>[] = [];
+    const response = await handleRequest(
+      new Request('https://api.mons.shop/pack-status/card_nft_2'),
+      env({ dataDb }),
+      { ...quietDependencies(fetch), log: (entry) => logs.push(entry) },
+    );
+    assert.equal(response.status, 502, label);
+    assert.equal(response.headers.get(PACK_STATUS_SOURCE_HEADER), 'd1', label);
+    assert.deepEqual(await response.json(), { ok: false, error: 'provider-unavailable' }, label);
+    assert.equal(logs.some((entry) => entry.event === 'pack_status_d1_unavailable'), true, label);
+    assert.equal(logs.at(-1)?.packStatusSource, 'd1', label);
+    assert.equal(logs.at(-1)?.upstreamCalls, 0, label);
+  }
 });
 
 test('pack-status route enforces allowlisted paths, methods, and CORS', async () => {
@@ -947,40 +969,6 @@ test('pack-status route enforces allowlisted paths, methods, and CORS', async ()
   assert.equal(cors.status, 204);
   assert.equal(cors.headers.get('access-control-allow-origin'), '*');
   assert.match(cors.headers.get('cache-control') || '', /no-store/);
-});
-
-test('pack-status route maps missing, malformed, oversized, denied, and timed-out Firestore responses', async () => {
-  const run = (firestoreFetch: typeof fetch, firestoreTimeoutMs = 10_000) => handleRequest(
-    new Request('https://api.mons.shop/pack-status/card_nft_2'),
-    env(),
-    { ...quietDependencies(fetch), firestoreFetch, firestoreTimeoutMs },
-  );
-  const missing = await run(async () => new Response(null, { status: 404 }));
-  assert.equal(missing.status, 200);
-  assert.deepEqual(await missing.json(), { ok: true, packStatus: null });
-
-  for (const firestoreFetch of [
-    async () => Response.json({ fields: { version: { integerValue: '1' } } }),
-    async () => Response.json({ error: { status: 'PERMISSION_DENIED' } }, { status: 403 }),
-    async () => new Response('{}', {
-      headers: {
-        'Content-Length': String(FIRESTORE_PACK_STATUS_MAX_RESPONSE_BYTES + 1),
-        'Content-Type': 'application/json',
-      },
-    }),
-    async () => new Response('{}', { headers: { 'Content-Type': 'text/plain' } }),
-  ] as Array<typeof fetch>) {
-    const response = await run(firestoreFetch);
-    assert.equal(response.status, 502);
-    assert.deepEqual(await response.json(), { ok: false, error: 'provider-unavailable' });
-  }
-
-  const timedOut = await run(async (_input, init) => new Promise<Response>((_resolve, reject) => {
-    const signal = init?.signal;
-    signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
-  }), 1);
-  assert.equal(timedOut.status, 504);
-  assert.deepEqual(await timedOut.json(), { ok: false, error: 'provider-timeout' });
 });
 
 test('notification subscription normalizes email and calls Resend without exposing credentials', async () => {

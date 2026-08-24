@@ -23,7 +23,10 @@ import {
 } from '../../../../scripts/benchmark-cloudflare-api.ts';
 import { deployApiTestHooks } from '../../../../scripts/deploy-cloudflare-api.ts';
 import { buildDeliveryPackStatusProjectionReconciliationQuery } from '../../../../shared/deliveryPackStatusProjectionReconciliation.ts';
-import { PACK_STATUS_DEFAULT_DROP_ID } from '../../../../shared/packStatus.ts';
+import {
+  PACK_STATUS_DEFAULT_DROP_ID,
+  PACK_STATUS_SOURCE_HEADER,
+} from '../../../../shared/packStatus.ts';
 import { buildReadyNotificationReconciliationQuery } from '../../../../shared/readyToShipNotificationReconciliation.ts';
 import {
   frontendDeployTestHooks,
@@ -1027,11 +1030,37 @@ test('API release validates exact D1 table and trigger definitions', () => {
     'pack_status_rollout',
     'pack_status_event_apply',
     'pack_status_event_type_guard',
+    'pack_status_event_immutable',
+    'pack_status_event_delete_guard',
+    'pack_status_rollout_d1_only_insert_guard',
+    'pack_status_rollout_d1_only_update_guard',
   ]);
   assert.equal(deployApiTestHooks.hasExactD1Schema(JSON.stringify(expected)), true);
   assert.equal(deployApiTestHooks.hasExactD1Schema(JSON.stringify(expected.map((entry) => (
     entry.name === 'pack_status_event_apply' ? { ...entry, sql: `${entry.sql} SELECT 1` } : entry
   )))), false);
+});
+
+test('API release requires all three migrations and the irreversible D1 rollout state', () => {
+  const ready = {
+    read_source: 'd1',
+    cache_generation: 2,
+    schema_json: JSON.stringify(deployApiTestHooks.expectedD1SchemaObjects()),
+    migration_count: 3,
+  };
+  assert.equal(deployApiTestHooks.isD1OnlyPackStatusDatabaseRow(ready), true);
+  assert.equal(deployApiTestHooks.isD1OnlyPackStatusDatabaseRow({
+    ...ready,
+    read_source: 'firestore',
+  }), false);
+  assert.equal(deployApiTestHooks.isD1OnlyPackStatusDatabaseRow({
+    ...ready,
+    migration_count: 2,
+  }), false);
+  assert.equal(deployApiTestHooks.isD1OnlyPackStatusDatabaseRow({
+    ...ready,
+    schema_json: JSON.stringify(deployApiTestHooks.expectedD1SchemaObjects().slice(0, -1)),
+  }), false);
 });
 
 test('API rollback trigger configuration disables reconciliation cron before version rollback', () => {
@@ -2141,6 +2170,7 @@ test('API smoke grants inventory routes the Worker deadline while keeping other 
         };
       }
       if (method === 'GET' && pathname === '/pack-status/card_nft_2') {
+        headers.set(PACK_STATUS_SOURCE_HEADER, 'd1');
         return {
           response: Response.json({
             ok: true,
@@ -4160,7 +4190,7 @@ test('release finalization requires both explicit IDs and deliberate confirmatio
   );
 });
 
-test('API rollback approval requires the current verified API and a matching frontend', () => {
+test('API rollback approval replaces the obsolete pair with the exact verified live pair', () => {
   const versionId = randomUUID();
   assert.deepEqual(
     parseApproveApiRollbackArgs(['--version-id', versionId, '--confirm']),
@@ -4180,7 +4210,7 @@ test('API rollback approval requires the current verified API and a matching fro
     ...before,
     currentProduction: {
       apiVersionId: versionId,
-      frontendVersionId: before.approvedRollback.frontendVersionId,
+      frontendVersionId: randomUUID(),
     },
   };
   try {
@@ -4196,21 +4226,19 @@ test('API rollback approval requires the current verified API and a matching fro
       () => approveCurrentApiRollback(nonCurrentVersionId, { evidenceDirectory, manifestPath: path, now }),
       /Only the current production API version/,
     );
-    const mismatchedFrontend = {
-      ...current,
-      currentProduction: { ...current.currentProduction, frontendVersionId: randomUUID() },
-    };
-    writeFileSync(path, `${JSON.stringify(mismatchedFrontend, null, 2)}\n`, { encoding: 'utf8', mode: 0o640 });
-    assert.throws(
-      () => approveCurrentApiRollback(versionId, { evidenceDirectory, manifestPath: path, now }),
-      /does not match the approved rollback frontend/,
-    );
-    writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`, { encoding: 'utf8', mode: 0o640 });
     const approved = approveCurrentApiRollback(versionId, { evidenceDirectory, manifestPath: path, now });
     assert.deepEqual(approved.currentProduction, current.currentProduction);
     assert.deepEqual(approved.approvedRollback, current.currentProduction);
     assert.equal(approved.recordedAt, now.toISOString());
     assert.equal(statSync(path).mode & 0o777, 0o640);
+    assert.throws(
+      () => deployApiTestHooks.assertApprovedApiRollback(approved, before.approvedRollback.apiVersionId),
+      /not the approved target/,
+    );
+    assert.throws(
+      () => deployApiTestHooks.assertApprovedApiRollback(approved, versionId),
+      /No distinct API rollback is approved/,
+    );
     assert.deepEqual(approveCurrentApiRollback(versionId, {
       evidenceDirectory,
       manifestPath: path,

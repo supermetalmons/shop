@@ -40,7 +40,10 @@ import {
   type ShopDropRuntime,
 } from '../../../../shared/shopDomain.js';
 import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
-import { PACK_STATUS_SOURCE_HEADER } from '../../../../shared/packStatus.js';
+import {
+  isPackStatusSupportedDropId,
+  PACK_STATUS_SOURCE_HEADER,
+} from '../../../../shared/packStatus.js';
 import {
   isExactSubscribeToNotificationsRequest,
   normalizeNotificationEmailRecipient,
@@ -59,18 +62,12 @@ import {
   MAX_INVENTORY_SERIALIZED_ITEM_BYTES,
 } from './inventoryLimits.js';
 import {
-  fetchFirestorePackStatus,
-  FIRESTORE_PACK_STATUS_TIMEOUT_MS,
-  isPackStatusRouteDropId,
-  type FirestorePackStatusFetch,
-} from './firestorePackStatus.js';
-import {
   D1_PACK_STATUS_CACHE_TTL_SECONDS,
   packStatusCacheRequest,
+  parseD1PackStatusCache,
   readD1PackStatus,
   readPackStatusRollout,
   type PackStatusReadSource,
-  type PackStatusRollout,
 } from './d1PackStatus.js';
 import {
   handleNotificationEnqueue,
@@ -495,8 +492,6 @@ function createAttemptScope(overallSignal: AbortSignal, timeoutMs: number): Atte
 type WorkerDependencies = RpcProxyDependencies & {
   cache: Pick<Cache, 'match' | 'put'> | null;
   expectedAssetRecoveryTimeoutMs: number;
-  firestoreFetch: FirestorePackStatusFetch;
-  firestoreTimeoutMs: number;
   providerMaxResponseBodyBytes: number;
   providerMaxTotalResponseBodyBytes: number;
   inventoryMaxCandidates: number;
@@ -1289,8 +1284,6 @@ const defaultDependencies: WorkerDependencies = {
     ? null
     : (caches as CacheStorage & { readonly default: Cache }).default,
   expectedAssetRecoveryTimeoutMs: EXPECTED_ASSET_RECOVERY_TIMEOUT_MS,
-  firestoreFetch: (input, init) => fetch(input, init),
-  firestoreTimeoutMs: FIRESTORE_PACK_STATUS_TIMEOUT_MS,
   providerFetch: (input, init) => fetch(input, init),
   providerTimeoutMs: HELIUS_OVERALL_TIMEOUT_MS,
   providerAttemptTimeoutMs: HELIUS_ATTEMPT_TIMEOUT_MS,
@@ -1313,112 +1306,75 @@ function packStatusDropIdFromPathname(pathname: string): string | null | undefin
   if (pathname !== '/pack-status' && !pathname.startsWith('/pack-status/')) return undefined;
   const match = pathname.match(/^\/pack-status\/([^/]+)$/);
   const dropId = match?.[1] || '';
-  return isPackStatusRouteDropId(dropId) ? dropId : null;
+  const drop = shopDropById(dropId);
+  return isPackStatusSupportedDropId(dropId) && drop?.solanaCluster === 'mainnet-beta' ? dropId : null;
 }
 
 async function handlePackStatus(
   dropId: string,
   env: Pick<Env, 'DATA_DB'>,
   dependencies: WorkerDependencies,
-  metrics: WorkerRequestMetrics,
   waitUntil?: (promise: Promise<unknown>) => void,
 ): Promise<{ response: Response; cacheStatus?: string; source: PackStatusReadSource }> {
-  const hasD1Binding = typeof env.DATA_DB?.prepare === 'function';
-  let rollout: PackStatusRollout = { readSource: 'firestore', cacheGeneration: 1 };
-  if (hasD1Binding) {
+  try {
+    if (typeof env.DATA_DB?.prepare !== 'function') throw new Error('pack_status_data_db_not_configured');
+    const rollout = await readPackStatusRollout(env.DATA_DB);
+    const cacheRequest = packStatusCacheRequest('d1', rollout.cacheGeneration, dropId);
+    let cached: Response | undefined;
     try {
-      rollout = await readPackStatusRollout(env.DATA_DB);
+      cached = await dependencies.cache?.match(cacheRequest);
     } catch (error) {
       dependencies.log({
-        event: 'pack_status_d1_rollout_unavailable',
+        event: 'pack_status_d1_cache_read_failed',
         dropId,
         error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
       });
     }
-  }
-
-  const shadowCompare = async (): Promise<void> => {
-    try {
-      const [d1, firestore] = await Promise.all([
-        readD1PackStatus(env.DATA_DB, dropId),
-        fetchFirestorePackStatus(dropId, dependencies.firestoreFetch, dependencies.firestoreTimeoutMs, 0),
-      ]);
-      if (!firestore.ok || JSON.stringify(d1) !== JSON.stringify(firestore.packStatus)) {
+    if (cached) {
+      try {
+        const packStatus = parseD1PackStatusCache(await cached.json(), dropId);
+        if (packStatus) {
+          return {
+            response: jsonResponse({ ok: true, packStatus }, 200),
+            cacheStatus: 'D1-HIT',
+            source: 'd1',
+          };
+        }
+      } catch {}
+      dependencies.log({ event: 'pack_status_d1_cache_invalid', dropId });
+    }
+    const packStatus = await readD1PackStatus(env.DATA_DB, dropId);
+    if (!packStatus) throw new Error('pack_status_d1_row_missing');
+    if (dependencies.cache) {
+      const cacheResponse = Response.json(packStatus, {
+        headers: { 'Cache-Control': `max-age=${D1_PACK_STATUS_CACHE_TTL_SECONDS}` },
+      });
+      const write = dependencies.cache.put(cacheRequest, cacheResponse).catch((error) => {
         dependencies.log({
-          event: 'pack_status_shadow_mismatch',
+          event: 'pack_status_d1_cache_write_failed',
           dropId,
-          d1Available: d1 !== null,
-          firestoreOutcome: firestore.ok ? 'available' : firestore.error,
+          error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
         });
-      }
-    } catch (error) {
-      dependencies.log({
-        event: 'pack_status_shadow_compare_failed',
-        dropId,
-        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
       });
+      if (waitUntil) waitUntil(write);
+      else await write;
     }
-  };
-  if (waitUntil && hasD1Binding) waitUntil(shadowCompare());
-
-  if (rollout.readSource === 'd1') {
-    try {
-      const cacheRequest = packStatusCacheRequest('d1', rollout.cacheGeneration, dropId);
-      const cached = await dependencies.cache?.match(cacheRequest);
-      if (cached) {
-        const packStatus = await cached.json();
-        return {
-          response: jsonResponse({ ok: true, packStatus }, 200),
-          cacheStatus: 'D1-HIT',
-          source: 'd1',
-        };
-      }
-      const packStatus = await readD1PackStatus(env.DATA_DB, dropId);
-      if (!packStatus) throw new Error('pack_status_d1_row_missing');
-      if (dependencies.cache) {
-        const cacheResponse = Response.json(packStatus, {
-          headers: { 'Cache-Control': `max-age=${D1_PACK_STATUS_CACHE_TTL_SECONDS}` },
-        });
-        const write = dependencies.cache.put(cacheRequest, cacheResponse).catch((error) => {
-          dependencies.log({
-            event: 'pack_status_d1_cache_write_failed',
-            dropId,
-            error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
-          });
-        });
-        if (waitUntil) waitUntil(write);
-        else await write;
-      }
-      return {
-        response: jsonResponse({ ok: true, packStatus }, 200),
-        cacheStatus: 'D1-MISS',
-        source: 'd1',
-      };
-    } catch (error) {
-      dependencies.log({
-        event: 'pack_status_d1_fallback',
-        dropId,
-        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
-      });
-    }
+    return {
+      response: jsonResponse({ ok: true, packStatus }, 200),
+      cacheStatus: 'D1-MISS',
+      source: 'd1',
+    };
+  } catch (error) {
+    dependencies.log({
+      event: 'pack_status_d1_unavailable',
+      dropId,
+      error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+    });
+    return {
+      response: jsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
+      source: 'd1',
+    };
   }
-
-  const startedAt = performance.now();
-  metrics.upstreamCalls += 1;
-  const result = await fetchFirestorePackStatus(
-    dropId,
-    dependencies.firestoreFetch,
-    dependencies.firestoreTimeoutMs,
-  );
-  metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-  const response = result.ok
-    ? jsonResponse({ ok: true, packStatus: result.packStatus }, 200)
-    : jsonResponse({ ok: false, error: result.error }, result.error === 'provider-timeout' ? 504 : 502);
-  return {
-    response,
-    ...(result.cacheStatus ? { cacheStatus: result.cacheStatus } : {}),
-    source: 'firestore',
-  };
 }
 
 async function handlePost(
@@ -1668,7 +1624,7 @@ export async function handleRequest(
     } else if (request.method !== 'GET') {
       response = jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET, OPTIONS' });
     } else {
-      const result = await handlePackStatus(packStatusDropId, env, dependencies, metrics, waitUntil);
+      const result = await handlePackStatus(packStatusDropId, env, dependencies, waitUntil);
       response = result.response;
       response.headers.set(PACK_STATUS_SOURCE_HEADER, result.source);
       providerCacheStatus = result.cacheStatus;

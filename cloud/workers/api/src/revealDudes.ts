@@ -44,7 +44,6 @@ import {
 } from '../../../../shared/finalizeOpenBoxArgs.js';
 import { decodePendingOpenData } from '../../../../shared/pendingOpenCodec.js';
 import {
-  PACK_STATUS_SCHEMA_VERSION,
   packStatusCardsPerPack,
   shouldTrackPackStatusForDrop,
   type PackStatusEvent,
@@ -84,7 +83,7 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
-import { applyPackStatusDualWrite } from './packStatusProjection.js';
+import { applyPackStatusProjection } from './packStatusProjection.js';
 
 export const REVEAL_DUDES_PATH = '/boxes/reveal';
 
@@ -1640,72 +1639,6 @@ async function loadLatestBlockhash(
   return { blockhash, blockhashContextSlot: Number(contextValue.slot) };
 }
 
-async function writeFirestoreOnlineRevealPackStatus(
-  context: FirestoreContext,
-  runtime: RevealRuntime,
-  event: Extract<PackStatusEvent, { type: 'onlineReveal' }>,
-): Promise<void> {
-  const eventPath = `drops/${runtime.dropId}/packStatusEvents/onlineReveal_${encodeURIComponent(event.eventKey)}`;
-  const unsealedOnlineIncrement = event.increments.unsealedOnline ?? 0;
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: string | undefined;
-    try {
-      transaction = await beginFirestoreTransaction(context);
-      const existingEvent = await readFirestoreDocument(context, eventPath, transaction);
-      if (existingEvent) return;
-      const statsName = `${FIRESTORE_DOCUMENT_NAME_PREFIX}drops/${runtime.dropId}/meta/packStatus`;
-      await authenticatedFirestoreRequest({
-        ...context,
-        body: JSON.stringify({
-          transaction,
-          writes: [
-            {
-              transform: {
-                document: statsName,
-                fieldTransforms: [
-                  { fieldPath: 'unsealedOnline', increment: firestoreInteger(unsealedOnlineIncrement) },
-                  { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
-                ],
-              },
-              currentDocument: { exists: true },
-            },
-            {
-              update: {
-                name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${eventPath}`,
-                fields: {
-                  version: firestoreInteger(PACK_STATUS_SCHEMA_VERSION),
-                  dropId: { stringValue: runtime.dropId },
-                  type: { stringValue: event.type },
-                  eventKey: { stringValue: event.eventKey },
-                  quantity: firestoreInteger(event.quantity),
-                  increments: { mapValue: { fields: { unsealedOnline: firestoreInteger(unsealedOnlineIncrement) } } },
-                  boxAssetId: { stringValue: event.boxAssetId },
-                  signature: { stringValue: event.signature },
-                },
-              },
-              currentDocument: { exists: false },
-              updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
-            },
-          ],
-        }),
-        method: 'POST',
-        surfaceWriteConflict: true,
-        url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-      });
-      transaction = undefined;
-      return;
-    } catch (error) {
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      throw error;
-    } finally {
-      if (transaction) await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
-    }
-  }
-}
-
 async function countOnlineRevealPackStatus(
   context: FirestoreContext,
   runtime: RevealRuntime,
@@ -1728,10 +1661,9 @@ async function countOnlineRevealPackStatus(
     signature,
     createdAtMs: context.nowMs,
   };
-  await applyPackStatusDualWrite({
+  await applyPackStatusProjection({
     dataDb: context.dataDb,
     event,
-    firestore: () => writeFirestoreOnlineRevealPackStatus(context, runtime, event),
     log: (entry) => console.warn(entry),
   });
 }

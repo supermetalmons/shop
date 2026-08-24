@@ -43,6 +43,7 @@ export type PackStatusDeliveryOrderRecord = {
   adminIrlRedeem?: unknown;
   metadataId?: unknown;
   metadataIds?: unknown;
+  packStatusProjectionState?: unknown;
   quantity?: unknown;
 };
 
@@ -66,11 +67,6 @@ export type PackStatusStatsFields = {
   redeemedIrlStripe: number;
   redeemedUnsealedCards: number;
 };
-
-export type PackStatusEventType =
-  | 'onlineReveal'
-  | 'redeemedIrlNormal'
-  | 'redeemedIrlStripe';
 
 type PackStatusEventBase = {
   dropId: string;
@@ -380,37 +376,5 @@ export function buildPackStatusCountersFromRebuildInputs(
     redeemedIrlNormal,
     redeemedIrlStripe,
     redeemedUnsealedCards,
-  };
-}
-
-export function buildPackStatusStatsFields(
-  counters: PackStatusCounters,
-): PackStatusStatsFields {
-  const totalInitialSupply = normalizePackStatusAmount(
-    counters.totalInitialSupply,
-  );
-  const cardsPerPack =
-    normalizePackStatusAmount(counters.cardsPerPack) ||
-    PACK_STATUS_DEFAULT_CARDS_PER_PACK;
-  const totalCards =
-    normalizePackStatusAmount(counters.totalCards) ||
-    totalInitialSupply * cardsPerPack;
-
-  return {
-    version: PACK_STATUS_SCHEMA_VERSION,
-    dropId: counters.dropId,
-    totalInitialSupply,
-    totalCards,
-    cardsPerPack,
-    unsealedOnline: normalizePackStatusAmount(counters.unsealedOnline),
-    redeemedIrlNormal: normalizePackStatusAmount(
-      counters.redeemedIrlNormal,
-    ),
-    redeemedIrlStripe: normalizePackStatusAmount(
-      counters.redeemedIrlStripe,
-    ),
-    redeemedUnsealedCards: normalizePackStatusAmount(
-      counters.redeemedUnsealedCards,
-    ),
   };
 }

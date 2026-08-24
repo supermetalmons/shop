@@ -16,7 +16,7 @@ const manifestPath = 'cloud/release-manifest.json';
 
 function usage(): string {
   return [
-    'Approve the exact current production API version as the rollback target.',
+    'Approve the exact current production API and frontend pair as the recovery baseline.',
     '',
     'Usage:',
     '  npm run release:approve-api-rollback -- --version-id <uuid> --confirm',
@@ -102,8 +102,8 @@ function main(): void {
   manifestOnlyWorktreeEntries();
   const manifest = approveCurrentApiRollback(options.versionId);
   commitApprovedRollback(options.versionId);
-  console.log(`[release] Approved API rollback ${manifest.approvedRollback.apiVersionId}.`);
-  console.log(`[release] Preserved rollback frontend ${manifest.approvedRollback.frontendVersionId}.`);
+  console.log(`[release] Approved recovery API ${manifest.approvedRollback.apiVersionId}.`);
+  console.log(`[release] Approved recovery frontend ${manifest.approvedRollback.frontendVersionId}.`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

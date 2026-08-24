@@ -331,19 +331,17 @@ export function approveCurrentApiRollback(
   if (current.currentProduction.apiVersionId.toLowerCase() !== normalizedVersionId) {
     fail('Only the current production API version can be approved as the rollback target.');
   }
+  const normalizedFrontendVersionId = current.currentProduction.frontendVersionId.toLowerCase();
   if (
-    current.currentProduction.frontendVersionId.toLowerCase() !==
-    current.approvedRollback.frontendVersionId.toLowerCase()
-  ) {
-    fail('The current frontend does not match the approved rollback frontend.');
-  }
-  if (current.approvedRollback.apiVersionId.toLowerCase() === normalizedVersionId) return current;
+    current.approvedRollback.apiVersionId.toLowerCase() === normalizedVersionId &&
+    current.approvedRollback.frontendVersionId.toLowerCase() === normalizedFrontendVersionId
+  ) return current;
   return writeReleaseManifest(path, {
     ...current,
     recordedAt: now.toISOString(),
     approvedRollback: {
       apiVersionId: normalizedVersionId,
-      frontendVersionId: current.approvedRollback.frontendVersionId.toLowerCase(),
+      frontendVersionId: normalizedFrontendVersionId,
     },
   });
 }

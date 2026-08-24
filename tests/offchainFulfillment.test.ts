@@ -1408,7 +1408,7 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
   assert.equal(updates[0].data.quantity, 3);
 });
 
-test('createOrGetStripeOffchainDeliveryOrder keeps pack status out of the critical transaction', async () => {
+test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the critical Firestore transaction', async () => {
   const dropId = 'card_nft_2';
   const orderHashHex = '12'.repeat(32);
   const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
@@ -1418,6 +1418,7 @@ test('createOrGetStripeOffchainDeliveryOrder keeps pack status out of the critic
     creates: Array<{ ref: any; data: any }>;
     updates: Array<{ ref: any; data: any }>;
   }> = [];
+  const packStatusCalls: unknown[] = [];
   const db = {
     doc: (path: string) => {
       if (path === markerRef.path) return markerRef;
@@ -1426,13 +1427,11 @@ test('createOrGetStripeOffchainDeliveryOrder keeps pack status out of the critic
       return { path };
     },
     runTransaction: async (fn: any) => {
-      const transactionIndex = transactions.length;
       const ops = { gets: [] as string[], creates: [] as Array<{ ref: any; data: any }>, updates: [] as Array<{ ref: any; data: any }> };
       transactions.push(ops);
       return fn({
         get: async (ref: any) => {
           ops.gets.push(String(ref?.path || ''));
-          if (transactionIndex > 0 && String(ref?.path || '').includes('/packStatusEvents/')) return { exists: false };
           if (ref === markerRef) return { exists: false };
           if (ref === checkoutRef) {
             return {
@@ -1462,13 +1461,8 @@ test('createOrGetStripeOffchainDeliveryOrder keeps pack status out of the critic
     checkoutRef,
     isAlreadyExistsError: () => false,
     processingAttemptId: 'attempt_current',
-    countPackStatus: async ({ dropRuntime, orderHashHex: eventKey, quantity }) => {
-      await db.runTransaction(async (transaction: any) => {
-        const eventRef = db.doc(`drops/${dropRuntime.dropId}/packStatusEvents/redeemedIrlStripe_${eventKey}`);
-        if ((await transaction.get(eventRef)).exists) return;
-        transaction.update(db.doc(`drops/${dropRuntime.dropId}/meta/packStatus`), { redeemedIrlStripe: quantity });
-        transaction.create(eventRef, { quantity });
-      });
+    countPackStatus: async (input) => {
+      packStatusCalls.push(input);
     },
     order: {
       dropId,
@@ -1486,16 +1480,24 @@ test('createOrGetStripeOffchainDeliveryOrder keeps pack status out of the critic
   });
 
   assert.equal(result.checkoutStatus, 'fulfilled');
-  assert.equal(transactions.length, 2);
+  assert.equal(transactions.length, 1);
   const critical = transactions[0];
   assert.ok(critical);
   assert.equal(critical.gets.some((path) => path.includes('/meta/packStatus') || path.includes('/packStatusEvents/')), false);
   for (const write of [...critical.creates, ...critical.updates]) {
     assert.equal(Object.prototype.hasOwnProperty.call(write.data, 'packStatus'), false);
   }
-  const background = transactions[1];
-  assert.equal(background.updates.some((write) => String(write.ref.path).endsWith('/meta/packStatus')), true);
-  assert.equal(background.creates.some((write) => String(write.ref.path).includes('/packStatusEvents/')), true);
+  assert.equal(packStatusCalls.length, 1);
+  const packStatusCall = packStatusCalls[0] as Record<string, unknown>;
+  assert.equal(Number.isSafeInteger(packStatusCall.deliveryId), true);
+  assert.equal(Number(packStatusCall.deliveryId) > 0, true);
+  assert.deepEqual({ ...packStatusCall, deliveryId: undefined }, {
+    dropRuntime: { dropId, cluster: 'mainnet-beta', itemsPerBox: 3, maxSupply: 12_000 },
+    orderHashHex,
+    quantity: 2,
+    deliveryId: undefined,
+    checkoutSessionId: 'cs_live_pack',
+  });
 });
 
 test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers on retry', async () => {

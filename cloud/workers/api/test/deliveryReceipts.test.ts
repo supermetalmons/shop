@@ -101,18 +101,13 @@ function projectionDataDb(args: {
 
 function projectionHarness(args: {
   d1?: ReturnType<typeof projectionDataDb>;
-  eventReadBarrier?: () => Promise<void>;
   failCompletionWrites?: number;
-  failEventWrites?: number;
   fields?: Record<string, unknown>;
 } = {}) {
   const nowMs = 1_700_000_000_000;
   const d1 = args.d1 || projectionDataDb();
   const commits: Array<Record<string, any>> = [];
-  let eventExists = false;
-  let eventWrites = 0;
   let failCompletionWrites = args.failCompletionWrites || 0;
-  let failEventWrites = args.failEventWrites || 0;
   const fields: Record<string, unknown> = {
     dropId: 'card_nft_2',
     deliveryId: 7,
@@ -127,17 +122,6 @@ function projectionHarness(args: {
     const url = String(input);
     if (url.endsWith('/documents:beginTransaction')) return Response.json({ transaction: 'transaction' });
     if (url.endsWith('/documents:rollback')) return Response.json({});
-    if (url.includes('/packStatusEvents/redeemedIrlNormal_7')) {
-      if (!eventExists) {
-        await args.eventReadBarrier?.();
-        return Response.json({ error: { status: 'NOT_FOUND' } }, { status: 404 });
-      }
-      return Response.json({
-        name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/packStatusEvents/redeemedIrlNormal_7',
-        updateTime: '2026-08-22T00:00:00.000Z',
-        fields: {},
-      });
-    }
     if (url.includes('/deliveryOrders/7') && init?.method === 'GET') {
       return Response.json({
         name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
@@ -151,26 +135,12 @@ function projectionHarness(args: {
     if (url.endsWith('/documents:commit')) {
       const body = JSON.parse(String(init?.body)) as Record<string, any>;
       commits.push(body);
-      const eventWrite = body.writes.some((write: Record<string, any>) => (
-        String(write.update?.name || '').includes('/packStatusEvents/redeemedIrlNormal_7')
-      ));
       const completedWrite = body.writes.some((write: Record<string, any>) => (
         write.update?.fields?.packStatusProjectionState?.stringValue === 'completed'
       ));
-      if (eventWrite && eventExists) {
-        return Response.json({ error: { status: 'ABORTED' } }, { status: 409 });
-      }
-      if (eventWrite && failEventWrites > 0) {
-        failEventWrites -= 1;
-        return Response.json({ error: { status: 'UNAVAILABLE' } }, { status: 503 });
-      }
       if (completedWrite && failCompletionWrites > 0) {
         failCompletionWrites -= 1;
         return Response.json({ error: { status: 'UNAVAILABLE' } }, { status: 503 });
-      }
-      if (eventWrite) {
-        eventExists = true;
-        eventWrites += 1;
       }
       for (const write of body.writes) {
         if (!String(write.update?.name || '').includes('/deliveryOrders/7')) continue;
@@ -200,9 +170,6 @@ function projectionHarness(args: {
     d1,
     fields,
     allowCompletionWrites() { failCompletionWrites = 0; },
-    allowEventWrites() { failEventWrites = 0; },
-    get eventExists() { return eventExists; },
-    get eventWrites() { return eventWrites; },
   };
 }
 
@@ -1320,7 +1287,6 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
   const queued: Array<Record<string, unknown>> = [];
   const projectionDb = projectionDataDb();
   const deferred: Promise<unknown>[] = [];
-  let eventExists = false;
   let projectionState = 'pending';
   let rpcCalls = 0;
   let deliveryRevision = 0;
@@ -1336,18 +1302,6 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
   };
   const providerFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
-    if (url.endsWith('/documents:beginTransaction')) {
-      return Response.json({ transaction: 'pack-status-transaction' });
-    }
-    if (url.includes('/packStatusEvents/redeemedIrlNormal_7')) {
-      return eventExists
-        ? Response.json({
-            name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/packStatusEvents/redeemedIrlNormal_7',
-            updateTime: '2026-08-22T00:00:00.000Z',
-            fields: {},
-          })
-        : Response.json({ error: { status: 'NOT_FOUND' } }, { status: 404 });
-    }
     if (url.includes('/authSessions/')) {
       return Response.json({
         name: 'projects/mons-shop/databases/(default)/documents/authSessions/firebase-uid',
@@ -1387,9 +1341,6 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
     if (url.endsWith('/documents:commit')) {
       const commit = JSON.parse(String(init?.body)) as Record<string, any>;
       commits.push(commit);
-      eventExists ||= commit.writes.some((write: Record<string, any>) => (
-        String(write.update?.name || '').includes('/packStatusEvents/redeemedIrlNormal_7')
-      ));
       for (const write of commit.writes) {
         projectionState = write.update?.fields?.packStatusProjectionState?.stringValue || projectionState;
         if (!String(write.update?.name || '').includes('/deliveryOrders/7')) continue;
@@ -1489,17 +1440,17 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
       idempotencyKey: 'card_nft_2:7:ready_to_ship',
     },
   ]);
-  assert.equal(commits.length, 4);
+  assert.equal(commits.length, 3);
   assert.match(JSON.stringify(commits), /buyerOrderReceivedEmailQueuedAt/);
   assert.match(JSON.stringify(commits), /shipperReadyToShipEmailQueuedAt/);
-  assert.match(JSON.stringify(commits), /redeemedIrlNormal/);
+  assert.doesNotMatch(JSON.stringify(commits), /packStatusEvents|meta\/packStatus/);
   assert.match(JSON.stringify(commits), /packStatusProjectionState.*completed/);
   assert.match(JSON.stringify(commits), /packStatusProjectionCompletedAt/);
   assert.equal(projectionState, 'completed');
   assert.equal(projectionDb.applied, 1);
 });
 
-test('direct pack-status background work completes both idempotent stores', async () => {
+test('direct pack-status background work completes the D1 projection', async () => {
   const harness = projectionHarness();
   const deferred: Promise<unknown>[] = [];
   scheduleDeliveryPackStatusProjection({
@@ -1511,11 +1462,11 @@ test('direct pack-status background work completes both idempotent stores', asyn
   await Promise.all(deferred);
   assert.equal(harness.fields.packStatusProjectionState, 'completed');
   assert.equal(harness.fields.packStatusProjectionNextAttemptAtMs, undefined);
-  assert.equal(harness.eventWrites, 1);
+  assert.doesNotMatch(JSON.stringify(harness.commits), /packStatusEvents|meta\/packStatus/);
   assert.equal(harness.d1.applied, 1);
 });
 
-test('transient partial projection failures back off and replay idempotently', async () => {
+test('transient D1 projection failures back off and replay idempotently', async () => {
   const nowMs = 1_700_000_000_000;
   const harness = projectionHarness({ d1: projectionDataDb({ failures: 1 }) });
   assert.equal(await deliveryReceiptTestHooks.projectPendingDeliveryPackStatus({
@@ -1528,8 +1479,7 @@ test('transient partial projection failures back off and replay idempotently', a
   assert.equal(harness.fields.packStatusProjectionState, 'pending');
   assert.equal(harness.fields.packStatusProjectionFailureCount, 1);
   assert.equal(harness.fields.packStatusProjectionNextAttemptAtMs, nowMs + 5 * 60_000);
-  assert.equal(harness.fields.packStatusProjectionLastErrorCode, 'dual-write-failed');
-  assert.equal(harness.eventWrites, 1);
+  assert.equal(harness.fields.packStatusProjectionLastErrorCode, 'd1-write-failed');
   assert.equal(harness.d1.applied, 0);
 
   assert.equal(await deliveryReceiptTestHooks.projectPendingDeliveryPackStatus({
@@ -1539,7 +1489,6 @@ test('transient partial projection failures back off and replay idempotently', a
     log: () => undefined,
     nowMs: () => nowMs + 60_000,
   }), 'not-due');
-  assert.equal(harness.eventWrites, 1);
   assert.equal(harness.d1.attempts, 1);
 
   assert.equal(await deliveryReceiptTestHooks.projectPendingDeliveryPackStatus({
@@ -1550,7 +1499,6 @@ test('transient partial projection failures back off and replay idempotently', a
     nowMs: () => nowMs + 5 * 60_000,
   }), 'completed');
   assert.equal(harness.fields.packStatusProjectionState, 'completed');
-  assert.equal(harness.eventWrites, 1);
   assert.equal(harness.d1.applied, 1);
   assert.equal(harness.d1.attempts, 2);
 });
@@ -1571,20 +1519,19 @@ test('transient pack-status backoff caps at 24 hours', async () => {
   assert.equal(harness.fields.packStatusProjectionNextAttemptAtMs, nowMs + 24 * 60 * 60_000);
 });
 
-test('reverse partial projection failures converge without reapplying D1', async () => {
+test('a missing D1 binding remains pending until the binding is restored', async () => {
   const nowMs = 1_700_000_000_000;
-  const harness = projectionHarness({ failEventWrites: 10 });
+  const harness = projectionHarness();
   assert.equal(await deliveryReceiptTestHooks.projectPendingDeliveryPackStatus({
-    context: harness.context,
+    context: { ...harness.context, dataDb: undefined },
     deliveryId: 7,
     dropId: 'card_nft_2',
     log: () => undefined,
     nowMs: () => nowMs,
   }), 'pending');
-  assert.equal(harness.eventWrites, 0);
-  assert.equal(harness.d1.applied, 1);
+  assert.equal(harness.fields.packStatusProjectionLastErrorCode, 'data-db-unavailable');
+  assert.equal(harness.d1.applied, 0);
 
-  harness.allowEventWrites();
   assert.equal(await deliveryReceiptTestHooks.projectPendingDeliveryPackStatus({
     context: harness.context,
     deliveryId: 7,
@@ -1592,22 +1539,12 @@ test('reverse partial projection failures converge without reapplying D1', async
     log: () => undefined,
     nowMs: () => Number(harness.fields.packStatusProjectionNextAttemptAtMs),
   }), 'completed');
-  assert.equal(harness.eventWrites, 1);
   assert.equal(harness.d1.applied, 1);
   assert.equal(harness.fields.packStatusProjectionState, 'completed');
 });
 
-test('concurrent direct projections apply each store once', async () => {
-  let waiting = 0;
-  let release: (() => void) | undefined;
-  const barrier = new Promise<void>((resolve) => { release = resolve; });
-  const harness = projectionHarness({
-    eventReadBarrier: async () => {
-      waiting += 1;
-      if (waiting === 2) release?.();
-      await barrier;
-    },
-  });
+test('concurrent direct projections apply the D1 event once', async () => {
+  const harness = projectionHarness();
   const project = () => deliveryReceiptTestHooks.projectPendingDeliveryPackStatus({
     context: harness.context,
     deliveryId: 7,
@@ -1616,7 +1553,6 @@ test('concurrent direct projections apply each store once', async () => {
     nowMs: () => harness.context.nowMs,
   });
   await Promise.all([project(), project()]);
-  assert.equal(harness.eventWrites, 1);
   assert.equal(harness.d1.applied, 1);
   assert.equal(harness.fields.packStatusProjectionState, 'completed');
 });
@@ -1632,7 +1568,6 @@ test('completion-write crashes leave pending work that replays without double ap
     nowMs: () => nowMs,
   }), 'pending');
   assert.equal(harness.fields.packStatusProjectionState, 'pending');
-  assert.equal(harness.eventWrites, 1);
   assert.equal(harness.d1.applied, 1);
 
   harness.allowCompletionWrites();
@@ -1644,7 +1579,6 @@ test('completion-write crashes leave pending work that replays without double ap
     nowMs: () => Number(harness.fields.packStatusProjectionNextAttemptAtMs),
   }), 'completed');
   assert.equal(harness.fields.packStatusProjectionState, 'completed');
-  assert.equal(harness.eventWrites, 1);
   assert.equal(harness.d1.applied, 1);
   assert.equal(harness.d1.attempts, 2);
 });
@@ -1661,7 +1595,6 @@ test('permanently invalid pending projections become terminal failures', async (
   assert.equal(harness.fields.packStatusProjectionState, 'failed');
   assert.equal(harness.fields.packStatusProjectionLastErrorCode, 'invalid-order-status');
   assert.equal(harness.fields.packStatusProjectionNextAttemptAtMs, undefined);
-  assert.equal(harness.eventExists, false);
   assert.equal(harness.d1.attempts, 0);
 });
 
@@ -1679,7 +1612,6 @@ test('normal projection excludes Stripe and Admin IRL card-receipt orders', asyn
       nowMs: () => harness.context.nowMs,
     }), 'not-needed');
     assert.equal(harness.fields.packStatusProjectionState, undefined);
-    assert.equal(harness.eventExists, false);
     assert.equal(harness.d1.attempts, 0);
   }
 });

@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { createTestHarness } from 'wrangler';
+import { createTestHarness, unstable_splitSqlQuery } from 'wrangler';
 import {
   applyD1PackStatusEvent,
   readD1PackStatus,
   readD1PackStatusRecord,
   readPackStatusRollout,
 } from '../src/d1PackStatus.ts';
-import { snapshotSql } from '../../../../scripts/migrate-pack-status-to-d1.ts';
+import { buildD1SummaryRebuildSql } from '../../../../scripts/migrate-pack-status-to-d1.ts';
 
 test('D1 pack-status migration enforces idempotent projection updates', async () => {
   const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
@@ -34,7 +34,15 @@ test('D1 pack-status migration enforces idempotent projection updates', async ()
     await worker.applyD1Migrations('DATA_DB');
     const env = await worker.getEnv();
     const rollout = await readPackStatusRollout(env.DATA_DB);
-    assert.deepEqual(rollout, { readSource: 'firestore', cacheGeneration: 1 });
+    assert.deepEqual(rollout, { readSource: 'd1', cacheGeneration: 2 });
+    const migrations = await env.DATA_DB.prepare(
+      "SELECT name FROM d1_migrations WHERE name LIKE '%pack_status%' ORDER BY name",
+    ).all<{ name: string }>();
+    assert.deepEqual(migrations.results.map((row) => row.name), [
+      '0001_pack_status.sql',
+      '0002_pack_status_event_type_guard.sql',
+      '0003_pack_status_d1_only.sql',
+    ]);
 
     await env.DATA_DB.prepare(
       `INSERT INTO pack_status (
@@ -93,24 +101,45 @@ test('D1 pack-status migration enforces idempotent projection updates', async ()
     assert.equal(breakdown?.unsealedCards, 6);
     assert.equal(breakdown?.redeemedCards, 23);
 
-    const beforeGuardedBackfill = await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2');
-    await env.DATA_DB.prepare(snapshotSql({
-      summaries: [{
-        version: 1,
-        dropId: 'card_nft_2',
-        totalInitialSupply: 10,
-        totalCards: 30,
-        cardsPerPack: 3,
-        unsealedOnline: 0,
-        redeemedIrlNormal: 0,
-        redeemedIrlStripe: 0,
-        redeemedUnsealedCards: 0,
-        rebuiltAtMs: 100,
-        updatedAtMs: 200,
-      }],
-      events: [],
-    })).run();
-    assert.deepEqual(await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2'), beforeGuardedBackfill);
+    const rebuildSql = buildD1SummaryRebuildSql({
+      dropId: 'card_nft_2',
+      totalInitialSupply: 10,
+      totalCards: 30,
+      cardsPerPack: 3,
+      unsealedOnline: 0,
+      redeemedIrlNormal: 0,
+      redeemedIrlStripe: 0,
+      redeemedUnsealedCards: 0,
+    }, 500);
+    await env.DATA_DB.batch(
+      unstable_splitSqlQuery(rebuildSql).map((query) => env.DATA_DB.prepare(query)),
+    );
+    assert.deepEqual(await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2'), {
+      version: 1,
+      dropId: 'card_nft_2',
+      totalInitialSupply: 10,
+      totalCards: 30,
+      cardsPerPack: 3,
+      unsealedOnline: 0,
+      redeemedIrlNormal: 0,
+      redeemedIrlStripe: 0,
+      redeemedUnsealedCards: 0,
+      rebuiltAtMs: 500,
+      updatedAtMs: 500,
+    });
+    assert.deepEqual(await readPackStatusRollout(env.DATA_DB), { readSource: 'd1', cacheGeneration: 3 });
+    const eventCount = await env.DATA_DB.prepare(
+      "SELECT COUNT(*) AS event_count FROM pack_status_events WHERE drop_id = 'card_nft_2'",
+    ).first<{ event_count: number }>();
+    assert.equal(eventCount?.event_count, 3);
+
+    await applyD1PackStatusEvent(env.DATA_DB, {
+      ...onlineReveal,
+      eventKey: 'box-after-rebuild',
+      createdAtMs: 600,
+    });
+    assert.equal((await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2'))?.unsealedOnline, 1);
+    assert.equal((await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2'))?.updatedAtMs, 600);
 
     await assert.rejects(
       applyD1PackStatusEvent(env.DATA_DB, {
@@ -118,6 +147,30 @@ test('D1 pack-status migration enforces idempotent projection updates', async ()
         eventKey: 'negative',
         increments: { unsealedOnline: -1 },
       }),
+    );
+    await assert.rejects(
+      env.DATA_DB.prepare(
+        "UPDATE pack_status_rollout SET read_source = 'firestore' WHERE singleton = 1",
+      ).run(),
+      /permanently d1/,
+    );
+    await assert.rejects(
+      env.DATA_DB.prepare(
+        "UPDATE pack_status_events SET quantity = quantity + 1 WHERE drop_id = 'card_nft_2' AND event_type = 'onlineReveal' AND event_key = 'box-1'",
+      ).run(),
+      /events are immutable/,
+    );
+    await assert.rejects(
+      env.DATA_DB.prepare(
+        "DELETE FROM pack_status_events WHERE drop_id = 'card_nft_2' AND event_type = 'onlineReveal' AND event_key = 'box-1'",
+      ).run(),
+      /events are immutable/,
+    );
+    await assert.rejects(
+      env.DATA_DB.prepare(
+        "INSERT INTO pack_status_rollout (singleton, read_source, cache_generation, updated_at_ms) VALUES (1, 'firestore', 1, 0) ON CONFLICT(singleton) DO NOTHING",
+      ).run(),
+      /permanently d1/,
     );
     await assert.rejects(
       env.DATA_DB.prepare(`INSERT INTO pack_status_events (
@@ -141,9 +194,13 @@ test('D1 pack-status migration enforces idempotent projection updates', async ()
     assert.deepEqual(schema.results.map((row) => row.name), [
       'pack_status',
       'pack_status_event_apply',
+      'pack_status_event_delete_guard',
+      'pack_status_event_immutable',
       'pack_status_event_type_guard',
       'pack_status_events',
       'pack_status_rollout',
+      'pack_status_rollout_d1_only_insert_guard',
+      'pack_status_rollout_d1_only_update_guard',
     ]);
   } finally {
     await server.close();

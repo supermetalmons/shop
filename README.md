@@ -167,59 +167,69 @@ node_modules/.bin/wrangler d1 create mons-shop-data --location enam
 node_modules/.bin/wrangler d1 migrations apply mons-shop-data --remote --config cloud/workers/api/wrangler.jsonc
 ```
 
-The production migration is guarded and reversible:
+Apply all tracked migrations before uploading the D1-only Worker, then verify the
+permanent source lock and D1 integrity:
 
 ```bash
-npm run migrate:pack-status -- backfill
-npm run migrate:pack-status -- verify
-npm run migrate:pack-status -- cutover
-npm run migrate:pack-status -- rollback
+node_modules/.bin/wrangler d1 migrations apply mons-shop-data --remote --config cloud/workers/api/wrangler.jsonc
+npm run migrate:pack-status -- integrity
+npm run migrate:pack-status -- bookmark
+npm run migrate:pack-status -- probe
 ```
 
-`backfill` and `verify` use the device-local Firestore reader credential unless
-`--firestore-service-account-file <path>` is supplied. Cutover first requires
-exact Firestore/D1 summary and event parity and automatically restores Firestore
-reads if any production smoke fails. Firestore remains a dual-write target,
-shadow comparison source, and emergency fallback until a separate cleanup.
+Migration `0003_pack_status_d1_only.sql` forces `read_source=d1`, increments the
+cache generation, and installs insert/update guards that reject any future switch
+to Firestore. `integrity` requires the exact three summaries, all three migrations,
+the projection, type, update-immutability, and delete-guard event triggers, both D1-only guards,
+`quick_check=ok`, no invalid event payloads, and no foreign-key
+violations. `probe` inserts and removes one reserved synthetic summary/event to
+exercise the production delta trigger without changing supported-drop data.
 
-Before the first direct pack-status projection release, use a maintenance window
-that prevents delivery/admin finalization and pauses reveal and Stripe fulfillment
-processing. Keep them quiesced through the rebuild and exact-version promotion.
-
-If a Queue-based candidate ever served real delivery traffic, first either drain
-its projection jobs with the Queue-capable version and verify their outcomes, or
-deliberately discard them and reconcile the affected orders. Finish this before the
-authoritative rebuild so no legacy job can apply another delta afterward. Then deploy
-the Firestore indexes, rebuild the legacy summaries, and refresh and verify D1:
+The authoritative rebuild still derives counters from operational Firestore order
+and assignment history, but writes only the selected D1 summaries in one atomic
+batch and increments the D1 cache generation exactly once. It never creates,
+deletes, or rewrites D1 event rows:
 
 ```bash
-npm run deploy:firestore
-npm run rebuild-pack-status -- --drop-id card_nft_2 --write
-npm run rebuild-pack-status -- --drop-id little_swag_boxes --write
-npm run rebuild-pack-status -- --drop-id poncho_drifella --write
-npm run migrate:pack-status -- backfill
-npm run migrate:pack-status -- verify
+npm run rebuild-pack-status -- --all
+npm run rebuild-pack-status -- --all --write
+npm run migrate:pack-status -- integrity
 ```
 
-After verification succeeds, run `npm run deploy:api` while delivery/admin
-finalization remains manually paused. The guarded release promotes the exact direct
-Worker, applies and verifies its triggers, then resumes reveal and Stripe delivery
-for its post-resume smokes. Do not deploy the intermediate Queue-based projector.
-Resume delivery/admin finalization only after the guarded command succeeds.
+The rebuild uses the reviewed device-local Firestore reader credential by default;
+`--firestore-service-account-file <path>` is available for a mode-0600 temporary
+credential. Run it only while reveal, Stripe fulfillment, and delivery/admin
+finalization are quiesced. The write refuses pending, failed, or unknown durable
+delivery projection outboxes and uses the pre-rebuild D1 event counts as an atomic
+write precondition.
+
+After the exact D1-only API version is live and the Firestore rules deny public
+pack-status reads, retire only the duplicated pack-status documents:
+
+```bash
+npm run retire:pack-status-firestore -- --dry-run [--firestore-writer-service-account-file <path>]
+npm run retire:pack-status-firestore -- --confirm RETIRE_FIRESTORE_PACK_STATUS --api-version-id <uuid> [--firestore-writer-service-account-file <path>]
+```
+
+The retirement command uses the reviewed Firestore writer credential unless
+`--firestore-writer-service-account-file <path>` is supplied. Its allowlist contains
+only `drops/{supportedDrop}/meta/packStatus` and
+`drops/{supportedDrop}/packStatusEvents/*`; deletion is paginated and requires the
+exact confirmation phrase. It records the API UUID, pre-delete and final Time Travel bookmarks, per-drop
+counts, deletion timestamp, and post-delete verification in
+`cloud/pack-status-firestore-retirement.json`. No SQL, JSON data export, or Firestore
+archive is created.
 
 Do not mark every legacy delivery order as projection-pending. Historical summary
 rebuilds can include orders without per-order event documents, so replaying those
 orders individually can double-count them. New ready orders receive their durable
 pending marker atomically and are retried directly by the Worker schedule.
 
-An approved rollback preserves existing direct pending markers but does not process
-them. Keep delivery/admin finalization manually paused. The guarded rollback resumes
-the Queue-capable reveal and Stripe consumers; use that version to drain or reconcile
-legacy Queue work, then explicitly pause those consumers again. If any order was
-finalized by the rollback version, restoring forward alone cannot recover it. Restore
-the direct version and triggers while producers remain paused, and verify every
-existing direct pending marker has settled. Finally rerun the authoritative rebuild,
-D1 backfill, and verification above before resuming producers.
+After Firestore retirement, older API versions are not safe rollback targets.
+Recovery is fix-forward with the current D1-only API; the recorded D1 Time Travel
+bookmark is the only data rollback point and is usable only within Cloudflare's
+retention window. Firestore remains required for operational orders, assignments,
+profiles, notification controls, and delivery projection outboxes.
 
 `NOTIFICATION_ENQUEUE_SECRET` remains stored only as a Worker secret and is
 inherited by uploaded versions. Guarded API releases publish a smoke probe to
@@ -300,9 +310,11 @@ The retained tools are intentionally narrow:
 
 - `npm run check-irl-claims` inspects IRL claim state.
 - `npm run rebuild-pack-status` rebuilds public pack-status counters and is
-  read-only unless its explicit write option is supplied.
-- `npm run migrate:pack-status -- <command>` backfills, verifies, cuts over, or
-  rolls back the D1 pack-status projection.
+  read-only unless its explicit D1 write option is supplied.
+- `npm run migrate:pack-status -- integrity|bookmark|probe` verifies or probes
+  the permanent D1-only pack-status projection.
+- `npm run retire:pack-status-firestore` previews or performs the allowlisted
+  removal of retired Firestore pack-status summaries and events.
 - `npm run test-resend-notification-email` sends a synthetic notification through
   the production API queue.
 - `npm run wipe-drop` is the guarded drop cleanup utility. Use `--dry-run` to

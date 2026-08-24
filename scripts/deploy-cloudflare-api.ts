@@ -29,7 +29,10 @@ import {
   type NotificationEnqueueSmokeJobV1,
 } from '../shared/notificationEmailJob.ts';
 import { buildDeliveryPackStatusProjectionReconciliationQuery } from '../shared/deliveryPackStatusProjectionReconciliation.ts';
-import { PACK_STATUS_DEFAULT_DROP_ID } from '../shared/packStatus.ts';
+import {
+  PACK_STATUS_DEFAULT_DROP_ID,
+  PACK_STATUS_SOURCE_HEADER,
+} from '../shared/packStatus.ts';
 import { buildReadyNotificationReconciliationQuery } from '../shared/readyToShipNotificationReconciliation.ts';
 import { stripeCheckoutReconciliationQuery } from '../shared/stripeCheckoutReconciliation.ts';
 import { FULFILLMENT_ADMIN_WALLET_ADDRESSES } from '../shared/fulfillmentAccess.ts';
@@ -269,13 +272,21 @@ const d1DatabaseName = 'mons-shop-data';
 const d1BindingName = 'DATA_DB';
 const d1MigrationsDirectory = 'migrations';
 const d1DatabaseId = '4b09f942-b0c6-4a1e-81df-cb802fbf7099';
-const d1MigrationNames = ['0001_pack_status.sql', '0002_pack_status_event_type_guard.sql'] as const;
+const d1MigrationNames = [
+  '0001_pack_status.sql',
+  '0002_pack_status_event_type_guard.sql',
+  '0003_pack_status_d1_only.sql',
+] as const;
 const d1SchemaDefinitions = [
   { migration: '0001_pack_status.sql', name: 'pack_status', type: 'table', start: 'CREATE TABLE pack_status (', end: 'CREATE TABLE pack_status_events (' },
   { migration: '0001_pack_status.sql', name: 'pack_status_events', type: 'table', start: 'CREATE TABLE pack_status_events (', end: 'CREATE TABLE pack_status_rollout (' },
   { migration: '0001_pack_status.sql', name: 'pack_status_rollout', type: 'table', start: 'CREATE TABLE pack_status_rollout (', end: 'INSERT INTO pack_status_rollout' },
   { migration: '0001_pack_status.sql', name: 'pack_status_event_apply', type: 'trigger', start: 'CREATE TRIGGER pack_status_event_apply', end: undefined },
   { migration: '0002_pack_status_event_type_guard.sql', name: 'pack_status_event_type_guard', type: 'trigger', start: 'CREATE TRIGGER pack_status_event_type_guard', end: undefined },
+  { migration: '0003_pack_status_d1_only.sql', name: 'pack_status_event_immutable', type: 'trigger', start: 'CREATE TRIGGER pack_status_event_immutable', end: 'CREATE TRIGGER pack_status_event_delete_guard' },
+  { migration: '0003_pack_status_d1_only.sql', name: 'pack_status_event_delete_guard', type: 'trigger', start: 'CREATE TRIGGER pack_status_event_delete_guard', end: 'CREATE TRIGGER pack_status_rollout_d1_only_insert_guard' },
+  { migration: '0003_pack_status_d1_only.sql', name: 'pack_status_rollout_d1_only_insert_guard', type: 'trigger', start: 'CREATE TRIGGER pack_status_rollout_d1_only_insert_guard', end: 'CREATE TRIGGER pack_status_rollout_d1_only_update_guard' },
+  { migration: '0003_pack_status_d1_only.sql', name: 'pack_status_rollout_d1_only_update_guard', type: 'trigger', start: 'CREATE TRIGGER pack_status_rollout_d1_only_update_guard', end: undefined },
 ] as const;
 const notificationSmokeTimeoutMs = 90_000;
 const firestoreProjectId = 'mons-shop';
@@ -339,6 +350,15 @@ function hasExactD1Schema(value: unknown): boolean {
   const byName = (left: { name?: string } | null, right: { name?: string } | null) =>
     String(left?.name || '').localeCompare(String(right?.name || ''));
   return JSON.stringify(actual.sort(byName)) === JSON.stringify(expectedD1SchemaObjects().sort(byName));
+}
+
+function isD1OnlyPackStatusDatabaseRow(value: unknown): boolean {
+  return isRecord(value) &&
+    value.read_source === 'd1' &&
+    Number.isSafeInteger(value.cache_generation) &&
+    Number(value.cache_generation) >= 1 &&
+    hasExactD1Schema(value.schema_json) &&
+    value.migration_count === d1MigrationNames.length;
 }
 
 function usage(): string {
@@ -1502,10 +1522,10 @@ function assertD1DatabaseReady(environment: NodeJS.ProcessEnv): void {
         rollout.cache_generation,
         (SELECT json_group_array(json_object('name', name, 'type', type, 'sql', sql))
           FROM (SELECT name, type, sql FROM sqlite_schema
-            WHERE name IN ('pack_status', 'pack_status_events', 'pack_status_rollout', 'pack_status_event_apply', 'pack_status_event_type_guard')
+            WHERE name IN ('pack_status', 'pack_status_events', 'pack_status_rollout', 'pack_status_event_apply', 'pack_status_event_delete_guard', 'pack_status_event_immutable', 'pack_status_event_type_guard', 'pack_status_rollout_d1_only_insert_guard', 'pack_status_rollout_d1_only_update_guard')
             ORDER BY name)) AS schema_json,
         (SELECT COUNT(*) FROM d1_migrations
-          WHERE name IN ('0001_pack_status.sql', '0002_pack_status_event_type_guard.sql')) AS migration_count
+          WHERE name IN ('0001_pack_status.sql', '0002_pack_status_event_type_guard.sql', '0003_pack_status_d1_only.sql')) AS migration_count
         FROM pack_status_rollout AS rollout WHERE rollout.singleton = 1`,
       ...configArgs,
     ],
@@ -1524,12 +1544,7 @@ function assertD1DatabaseReady(environment: NodeJS.ProcessEnv): void {
     : null;
   if (
     configuredDatabaseId !== d1DatabaseId ||
-    !isRecord(row) ||
-    (row.read_source !== 'firestore' && row.read_source !== 'd1') ||
-    !Number.isSafeInteger(row.cache_generation) ||
-    Number(row.cache_generation) < 1 ||
-    !hasExactD1Schema(row.schema_json) ||
-    row.migration_count !== d1MigrationNames.length
+    !isD1OnlyPackStatusDatabaseRow(row)
   ) {
     fail('D1 pack-status migration is not applied or its rollout row is invalid.');
   }
@@ -1889,6 +1904,9 @@ async function smokeApi(
     );
     if (packStatus.response.status !== 200) {
       fail(`Pack-status smoke request returned ${packStatus.response.status}.`);
+    }
+    if (packStatus.response.headers.get(PACK_STATUS_SOURCE_HEADER) !== 'd1') {
+      fail('Pack-status smoke response did not confirm D1 as its source.');
     }
     assertResponseHeaders(packStatus.response, 'Pack-status smoke response');
     const packStatusPayload: unknown = await packStatus.response.json();
@@ -2799,6 +2817,7 @@ export const deployApiTestHooks = {
   installTerminationCleanup,
   inventorySmokeTimeoutMs: INVENTORY_SMOKE_TIMEOUT_MS,
   isExactApiDeploymentConfig,
+  isD1OnlyPackStatusDatabaseRow,
   hasExactD1Schema,
   isCandidateRecord,
   isReleaseManifest,

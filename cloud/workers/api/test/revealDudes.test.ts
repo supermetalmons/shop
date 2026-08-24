@@ -2492,27 +2492,42 @@ test('legacy pending-open disambiguation rejects an asset from another configure
   assert.equal(calls, 2);
 });
 
-test('online reveal pack status creates one idempotency event and increments the aggregate', async () => {
-  let commitBody: unknown;
-  const fetcher: typeof fetch = async (input, init) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-pack' });
-    if (url.includes('/packStatusEvents/')) return new Response(null, { status: 404 });
-    if (url.endsWith('documents:commit')) {
-      commitBody = JSON.parse(String(init?.body)) as unknown;
-      return Response.json({ writeResults: [{}] });
-    }
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
+test('online reveal pack status writes one idempotent D1 event without Firestore access', async () => {
+  let query = '';
+  let bindings: unknown[] = [];
+  let runs = 0;
+  const dataDb = {
+    prepare(value: string) {
+      query = value;
+      return {
+        bind(...values: unknown[]) {
+          bindings = values;
+          return this;
+        },
+        async run() {
+          runs += 1;
+          return { success: true, results: [], meta: { changes: 1 } };
+        },
+      };
+    },
+  } as unknown as D1Database;
 
   await revealDudesTestHooks.countOnlineRevealPackStatus(
-    firestoreContext(fetcher),
+    {
+      ...firestoreContext(async () => assert.fail('pack-status projection must not access Firestore')),
+      dataDb,
+    },
     revealDudesTestHooks.runtimeForDrop('card_nft_2'),
     BOX_ASSET.toBase58(),
     SIGNATURE,
   );
 
-  assert.match(JSON.stringify(commitBody), /unsealedOnline/);
-  assert.match(JSON.stringify(commitBody), /onlineReveal_/);
-  assert.match(JSON.stringify(commitBody), new RegExp(SIGNATURE));
+  assert.match(query, /INSERT INTO pack_status_events/);
+  assert.equal(runs, 1);
+  assert.equal(bindings[0], 'card_nft_2');
+  assert.equal(bindings[1], 'onlineReveal');
+  assert.equal(bindings[2], BOX_ASSET.toBase58());
+  assert.equal(bindings[10], BOX_ASSET.toBase58());
+  assert.equal(bindings[11], SIGNATURE);
+  assert.equal(bindings[12], 1);
 });

@@ -84,7 +84,6 @@ import {
 } from '../../../../shared/fulfillmentSources.js';
 import { sanitizeDudeAssignmentPool } from '../../../../shared/dudeAssignmentPool.js';
 import {
-  PACK_STATUS_SCHEMA_VERSION,
   countDeliveryOrderBoxItems,
   countDeliveryOrderDudeItems,
   packStatusCardsPerPack,
@@ -144,7 +143,7 @@ import {
   inspectPendingReadyToShipNotifications,
   type PendingReadyToShipNotification,
 } from './readyToShipNotifications.js';
-import { applyPackStatusDualWrite } from './packStatusProjection.js';
+import { applyPackStatusProjection } from './packStatusProjection.js';
 
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
@@ -1699,57 +1698,9 @@ async function countNormalIrlPackStatus(
     deliveryId,
     createdAtMs: context.nowMs,
   };
-  await applyPackStatusDualWrite({
+  await applyPackStatusProjection({
     dataDb: context.dataDb,
     event,
-    firestore: async () => {
-      const eventPath = `drops/${runtime.dropId}/packStatusEvents/redeemedIrlNormal_${deliveryId}`;
-      for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-        let transaction: string | undefined;
-        try {
-          transaction = await beginTransaction(context);
-          if (await readDocument(context, eventPath, transaction)) {
-            await rollbackTransactionBestEffort(context, transaction);
-            return;
-          }
-          const increments = [
-            ...(packQuantity ? [{ fieldPath: 'redeemedIrlNormal', increment: firestoreInteger(packQuantity) }] : []),
-            ...(cardQuantity ? [{ fieldPath: 'redeemedUnsealedCards', increment: firestoreInteger(cardQuantity) }] : []),
-            { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
-          ];
-          await commitWrites(context, [
-            {
-              transform: {
-                document: documentName(`drops/${runtime.dropId}/meta/packStatus`),
-                fieldTransforms: increments,
-              },
-              currentDocument: { exists: true },
-            },
-            createWrite({
-              path: eventPath,
-              fields: {
-                version: PACK_STATUS_SCHEMA_VERSION,
-                dropId: event.dropId,
-                type: event.type,
-                eventKey: event.eventKey,
-                quantity: event.quantity,
-                increments: event.increments,
-                deliveryId,
-              },
-              transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
-            }),
-          ], transaction);
-          return;
-        } catch (error) {
-          if (transaction) await rollbackTransactionBestEffort(context, transaction);
-          if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
-            await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-            continue;
-          }
-          throw mapProviderError(error, 'Pack status is temporarily unavailable.');
-        }
-      }
-    },
     log: (entry) => console.warn(entry),
   });
 }
@@ -1767,10 +1718,10 @@ function deliveryPackStatusProjectionErrorCode(error: unknown): string {
   if (error instanceof DeliveryReceiptError) return error.code;
   if (error instanceof DOMException && error.name === 'TimeoutError') return 'deadline-exceeded';
   if (error instanceof DOMException && error.name === 'AbortError') return 'aborted';
-  if (error instanceof AggregateError) return 'dual-write-failed';
   if (error instanceof Error && error.message === 'pack_status_data_db_not_configured') {
     return 'data-db-unavailable';
   }
+  if (error instanceof Error && error.message === 'pack_status_d1_write_failed') return 'd1-write-failed';
   return 'internal';
 }
 

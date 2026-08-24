@@ -86,6 +86,69 @@ test('Stripe fulfillment pack-status events use card-equivalent quantity', () =>
   assert.equal(stripeCheckoutFulfillmentTestHooks.packStatusEventQuantity(runtime, 2), 6);
 });
 
+test('Stripe fulfillment writes pack-status events to required D1 without Firestore access', async () => {
+  let query = '';
+  let bindings: unknown[] = [];
+  let runs = 0;
+  const dataDb = {
+    prepare(value: string) {
+      query = value;
+      return {
+        bind(...values: unknown[]) {
+          bindings = values;
+          return this;
+        },
+        async run() {
+          runs += 1;
+          return { success: true, results: [], meta: { changes: 1 } };
+        },
+      };
+    },
+  } as unknown as D1Database;
+  const dependencies = stripeCheckoutFulfillmentTestHooks.flowDependencies(
+    { ADDRESS_DECRYPTION_SECRET: '', DATA_DB: dataDb } as any,
+    { doc: () => assert.fail('pack-status projection must not access Firestore') } as any,
+    new AbortController().signal,
+  );
+  assert.ok(dependencies.countPackStatus);
+  await dependencies.countPackStatus({
+    dropRuntime: stripeCheckoutFulfillmentTestHooks.fulfillmentRuntime('card_nft_2'),
+    orderHashHex: '12'.repeat(32),
+    quantity: 2,
+    deliveryId: 123,
+    checkoutSessionId: 'cs_live_d1',
+  });
+  assert.match(query, /INSERT INTO pack_status_events/);
+  assert.equal(runs, 1);
+  assert.equal(bindings[0], 'card_nft_2');
+  assert.equal(bindings[1], 'redeemedIrlStripe');
+  assert.equal(bindings[2], '12'.repeat(32));
+  assert.equal(bindings[3], 6);
+  assert.equal(bindings[5], 0);
+  assert.equal(bindings[6], 2);
+  assert.equal(bindings[8], 123);
+  assert.equal(bindings[9], 'cs_live_d1');
+  assert.equal(bindings[12], 1);
+
+  const missing = stripeCheckoutFulfillmentTestHooks.flowDependencies(
+    { ADDRESS_DECRYPTION_SECRET: '' } as any,
+    {} as any,
+    new AbortController().signal,
+  );
+  const missingCountPackStatus = missing.countPackStatus;
+  assert.ok(missingCountPackStatus);
+  await assert.rejects(
+    missingCountPackStatus({
+      dropRuntime: stripeCheckoutFulfillmentTestHooks.fulfillmentRuntime('card_nft_2'),
+      orderHashHex: '34'.repeat(32),
+      quantity: 1,
+      deliveryId: 124,
+      checkoutSessionId: 'cs_live_missing_d1',
+    }),
+    /pack_status_data_db_not_configured/,
+  );
+});
+
 test('Stripe pack-status repair skips unsupported drops and rejects inconsistent orders', async () => {
   let reads = 0;
   const store = {

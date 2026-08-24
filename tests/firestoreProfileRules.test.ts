@@ -64,11 +64,7 @@ test('Firestore profile rules keep sensitive and unrelated collections closed', 
   assert.match(claimCodes, /allow read, write: if false/);
   assert.match(deliveryOrders, /allow read, write: if false/);
   assert.match(catchAll, /allow read, write: if false/);
-  assert.doesNotMatch(packStatus, /request\.auth/);
-  assert.match(packStatus, /dropId == "card_nft_2"/);
-  assert.match(packStatus, /dropId == "poncho_drifella"/);
-  assert.match(packStatus, /dropId == "little_swag_boxes"/);
-  assert.match(packStatus, /allow list, create, update, delete: if false/);
+  assert.match(packStatus, /allow read, write: if false/);
 });
 
 test(
@@ -158,7 +154,7 @@ test(
         getDocs(query(collection(active, 'profiles', activeWallet, 'shipments'), orderBy('sortAt', 'desc'))),
       );
       await assertFails(getDocs(collection(active, 'profiles', activeWallet, 'shipments')));
-      await assertSucceeds(getDoc(doc(active, 'drops', 'card_nft_2', 'meta', 'packStatus')));
+      await assertFails(getDoc(doc(active, 'drops', 'card_nft_2', 'meta', 'packStatus')));
 
       await assertFails(getDoc(doc(active, 'authSessions', 'expired-user')));
       await assertFails(getDocs(collection(active, 'authSessions')));
@@ -243,9 +239,9 @@ test(
       await assertFails(getDoc(doc(anonymous, 'profiles', activeWallet, 'shipments', 'shipment-1')));
       await assertFails(getDocs(collection(anonymous, 'profiles', activeWallet, 'shipments')));
       await assertFails(getDoc(doc(anonymous, 'authSessions', 'active-user')));
-      await assertSucceeds(getDoc(doc(anonymous, 'drops', 'card_nft_2', 'meta', 'packStatus')));
-      await assertSucceeds(getDoc(doc(anonymous, 'drops', 'poncho_drifella', 'meta', 'packStatus')));
-      await assertSucceeds(getDoc(doc(anonymous, 'drops', 'little_swag_boxes', 'meta', 'packStatus')));
+      await assertFails(getDoc(doc(anonymous, 'drops', 'card_nft_2', 'meta', 'packStatus')));
+      await assertFails(getDoc(doc(anonymous, 'drops', 'poncho_drifella', 'meta', 'packStatus')));
+      await assertFails(getDoc(doc(anonymous, 'drops', 'little_swag_boxes', 'meta', 'packStatus')));
       await assertFails(getDoc(doc(anonymous, 'drops', 'unsupported', 'meta', 'packStatus')));
       await assertFails(getDocs(collection(anonymous, 'drops', 'card_nft_2', 'meta')));
 

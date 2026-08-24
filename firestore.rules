@@ -60,11 +60,7 @@ service cloud.firestore {
       }
 
       match /meta/packStatus {
-        allow get: if
-          dropId == "card_nft_2" ||
-          dropId == "poncho_drifella" ||
-          dropId == "little_swag_boxes";
-        allow list, create, update, delete: if false;
+        allow read, write: if false;
       }
 
       match /meta/dudePool {

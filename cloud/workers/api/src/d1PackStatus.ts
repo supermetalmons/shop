@@ -20,7 +20,7 @@ export type PackStatusD1Database = {
   prepare(query: string): PackStatusD1Statement;
 };
 
-export type PackStatusReadSource = 'firestore' | 'd1';
+export type PackStatusReadSource = 'd1';
 
 export type PackStatusRollout = {
   readSource: PackStatusReadSource;
@@ -67,6 +67,25 @@ function optionalTimestamp(value: unknown): number | null | undefined {
   return normalized === null ? undefined : normalized;
 }
 
+function exactValue(value: unknown, expected: unknown): boolean {
+  if (Array.isArray(expected)) {
+    return Array.isArray(value) &&
+      value.length === expected.length &&
+      expected.every((entry, index) => exactValue(value[index], entry));
+  }
+  if (expected && typeof expected === 'object') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const valueRecord = value as Record<string, unknown>;
+    const expectedRecord = expected as Record<string, unknown>;
+    const valueKeys = Object.keys(valueRecord).sort();
+    const expectedKeys = Object.keys(expectedRecord).sort();
+    return valueKeys.length === expectedKeys.length &&
+      valueKeys.every((key, index) => key === expectedKeys[index]) &&
+      expectedKeys.every((key) => exactValue(valueRecord[key], expectedRecord[key]));
+  }
+  return Object.is(value, expected);
+}
+
 function parsePackStatusRow(row: PackStatusRow | null, dropId: string): D1PackStatusRecord | null {
   if (!row || row.drop_id !== dropId || row.version !== PACK_STATUS_SCHEMA_VERSION) return null;
   const totalInitialSupply = positiveSafeInteger(row.total_initial_supply);
@@ -111,7 +130,7 @@ export async function readPackStatusRollout(db: PackStatusD1Database): Promise<P
   ).first<RolloutRow>();
   if (
     !row ||
-    (row.read_source !== 'firestore' && row.read_source !== 'd1') ||
+    row.read_source !== 'd1' ||
     positiveSafeInteger(row.cache_generation) === null
   ) throw new Error('invalid_pack_status_rollout');
   return {
@@ -150,6 +169,44 @@ export async function readD1PackStatus(
   const record = await readD1PackStatusRecord(db, dropId);
   if (!record) return null;
   return normalizePackStatusBreakdown(record, dropId, shopDropById(dropId)?.itemsPerBox);
+}
+
+export function parseD1PackStatusCache(
+  value: unknown,
+  dropId: string,
+): PackStatusBreakdown | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const totalInitialSupply = positiveSafeInteger(record.totalInitialSupply);
+  const totalCards = positiveSafeInteger(record.totalCards);
+  const cardsPerPack = positiveSafeInteger(record.cardsPerPack);
+  const unsealedOnline = nonnegativeSafeInteger(record.unsealedOnline);
+  const redeemedIrlNormal = nonnegativeSafeInteger(record.redeemedIrlNormal);
+  const redeemedIrlStripe = nonnegativeSafeInteger(record.redeemedIrlStripe);
+  const redeemedUnsealedCards = nonnegativeSafeInteger(record.redeemedUnsealedCards);
+  if (
+    record.dropId !== dropId ||
+    totalInitialSupply === null ||
+    totalCards === null ||
+    cardsPerPack === null ||
+    totalCards !== totalInitialSupply * cardsPerPack ||
+    unsealedOnline === null ||
+    redeemedIrlNormal === null ||
+    redeemedIrlStripe === null ||
+    redeemedUnsealedCards === null
+  ) return null;
+  const expected = normalizePackStatusBreakdown({
+    version: PACK_STATUS_SCHEMA_VERSION,
+    dropId,
+    totalInitialSupply,
+    totalCards,
+    cardsPerPack,
+    unsealedOnline,
+    redeemedIrlNormal,
+    redeemedIrlStripe,
+    redeemedUnsealedCards,
+  }, dropId, shopDropById(dropId)?.itemsPerBox);
+  return expected && exactValue(value, expected) ? expected : null;
 }
 
 function increment(event: PackStatusEvent, key: keyof PackStatusEventIncrements): number {
@@ -212,6 +269,7 @@ export async function applyD1PackStatusEvent(
     applyDelta ? 1 : 0,
     event.createdAtMs,
   ).run();
+  if (!result.success) throw new Error('pack_status_d1_event_insert_failed');
   return Number(result.meta.changes) > 0 ? 'applied' : 'duplicate';
 }
 
