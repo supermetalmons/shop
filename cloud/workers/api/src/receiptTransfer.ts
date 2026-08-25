@@ -58,11 +58,10 @@ import type {
   PrepareReceiptTransferResponse,
 } from '../../../../shared/contracts.js';
 import {
-  RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION,
-  evaluateReceiptTransferRateLimit,
+  consumeReceiptTransferRateLimit,
   receiptTransferAssetRateLimitBucket,
   receiptTransferCallerRateLimitBucket,
-  receiptTransferStoredBucketMatches,
+  type ReceiptTransferRateLimitD1Database,
   type ReceiptTransferRateLimitBucket,
 } from './receiptTransferRateLimit.js';
 import {
@@ -71,18 +70,10 @@ import {
   type FirebaseIdentity,
 } from './firebaseIdToken.js';
 import {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  FirestoreWriteConflict,
   ProfileReadError,
-  authenticatedFirestoreRequest,
   cancelResponseBody,
-  createGoogleAccessTokenProvider,
-  decodeFirestoreFields,
   isRecord,
   readBoundedJson,
-  type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 
@@ -92,7 +83,6 @@ const REQUEST_MAX_BYTES = 1024;
 const PROVIDER_MAX_BYTES = HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES;
 const HANDLER_TIMEOUT_MS = 55_000;
 const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
-const FIRESTORE_TRANSACTION_ATTEMPTS = 5;
 const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
@@ -111,7 +101,7 @@ const requestSchema = z.object({
 
 type ReceiptTransferEnv = Pick<
   Env,
-  'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
+  'HELIUS_API_KEY' | 'OPS_DB'
 >;
 
 type ReceiptTransferErrorCode =
@@ -152,11 +142,9 @@ type ReceiptTransferRuntime = {
   maxDudeId: number;
 };
 
-type FirestoreContext = {
-  accessTokenProvider: GoogleAccessTokenProvider;
+type RateLimitContext = {
+  database: ReceiptTransferRateLimitD1Database;
   nowMs: number;
-  providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
   signal: AbortSignal;
 };
 
@@ -172,13 +160,12 @@ type OnchainState = {
 };
 
 type ReceiptTransferDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
   verifyIdToken: typeof verifyFirebaseIdToken;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
-  enforceRateLimit: (context: FirestoreContext, bucket: ReceiptTransferRateLimitBucket) => Promise<void>;
+  enforceRateLimit: (context: RateLimitContext, bucket: ReceiptTransferRateLimitBucket) => Promise<void>;
   fetchAsset: (context: ProviderContext, runtime: ReceiptTransferRuntime, assetId: string) => Promise<DasAsset>;
   fetchAssetProof: (context: ProviderContext, runtime: ReceiptTransferRuntime, assetId: string) => Promise<Record<string, unknown>>;
   loadOnchainState: (context: ProviderContext, runtime: ReceiptTransferRuntime) => Promise<OnchainState>;
@@ -688,111 +675,33 @@ async function loadLookupTable(
   }
 }
 
-function firestoreInteger(value: number): Record<string, string> {
-  return { integerValue: String(value) };
-}
-
-async function beginFirestoreTransaction(context: FirestoreContext): Promise<string> {
-  const value = await authenticatedFirestoreRequest({
-    ...context,
-    body: JSON.stringify({ options: { readWrite: {} } }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:beginTransaction`,
-  });
-  if (!isRecord(value) || typeof value.transaction !== 'string' || !value.transaction) {
-    throw new ProfileReadError('unavailable', 502, 'Receipt transfers are temporarily unavailable.');
-  }
-  return value.transaction;
-}
-
-async function rollbackFirestoreTransaction(context: FirestoreContext, transaction: string): Promise<void> {
-  await authenticatedFirestoreRequest({
-    ...context,
-    body: JSON.stringify({ transaction }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:rollback`,
-  });
-}
-
-async function commitFirestoreTransaction(
-  context: FirestoreContext,
-  transaction: string,
-  bucket: ReceiptTransferRateLimitBucket,
-  count: number,
-  windowStartedAtMs: number,
-): Promise<void> {
-  const fields: Record<string, Record<string, string>> = {
-    schemaVersion: firestoreInteger(RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION),
-    scope: { stringValue: bucket.scope },
-    subjectHash: { stringValue: bucket.subjectHash },
-    ...Object.fromEntries(Object.entries(bucket.publicFields ?? {}).map(([key, value]) => [key, { stringValue: value }])),
-    windowStartedAtMs: firestoreInteger(windowStartedAtMs),
-    count: firestoreInteger(count),
-    updatedAtMs: firestoreInteger(context.nowMs),
-  };
-  await authenticatedFirestoreRequest({
-    ...context,
-    body: JSON.stringify({
-      transaction,
-      writes: [{
-        update: {
-          name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${bucket.documentPath}`,
-          fields,
-        },
-      }],
-    }),
-    method: 'POST',
-    surfaceWriteConflict: true,
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-  });
-}
-
 async function enforceRateLimit(
-  context: FirestoreContext,
+  context: RateLimitContext,
   bucket: ReceiptTransferRateLimitBucket,
 ): Promise<void> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: string | undefined;
-    try {
-      transaction = await beginFirestoreTransaction(context);
-      const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/${bucket.documentPath}`);
-      url.searchParams.set('transaction', transaction);
-      const document = await authenticatedFirestoreRequest({ ...context, method: 'GET', url: url.toString() });
-      const rawExisting = isRecord(document) ? decodeFirestoreFields(document.fields) : null;
-      if (document && !rawExisting) {
-        throw new ProfileReadError('unavailable', 502, 'Receipt transfers are temporarily unavailable.');
-      }
-      const existing = receiptTransferStoredBucketMatches(rawExisting ?? undefined, bucket)
-        ? rawExisting
-        : undefined;
-      const decision = evaluateReceiptTransferRateLimit(existing, context.nowMs, bucket.limit);
-      if (!decision.allowed) {
-        await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
-        throw new ReceiptTransferError(
-          'resource-exhausted',
-          'Too many receipt transfer attempts. Please wait before trying again.',
-          { retryAfterMs: decision.retryAfterMs },
-        );
-      }
-      await commitFirestoreTransaction(
-        context,
-        transaction,
-        bucket,
-        decision.count,
-        decision.windowStartedAtMs,
-      );
-      return;
-    } catch (error) {
-      if (error instanceof ReceiptTransferError) throw error;
-      if (transaction) await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
-        await pause(context.signal, Math.min(400, 25 * 2 ** attempt));
-        continue;
-      }
-      throw new ReceiptTransferError('unavailable', 'Receipt transfers are temporarily unavailable.');
-    }
+  if (context.signal.aborted) throw context.signal.reason;
+  let decision;
+  try {
+    decision = await consumeReceiptTransferRateLimit(context.database, bucket, context.nowMs);
+  } catch (error) {
+    if (context.signal.aborted) throw context.signal.reason;
+    console.error({
+      event: 'receipt_transfer_rate_limit_d1_failed',
+      scope: bucket.scope,
+      error: error instanceof Error
+        ? { name: error.name, message: error.message }
+        : { name: 'UnknownError', message: String(error) },
+    });
+    throw new ReceiptTransferError('unavailable', 'Receipt transfers are temporarily unavailable.');
   }
-  throw new ReceiptTransferError('unavailable', 'Receipt transfers are temporarily unavailable.');
+  if (context.signal.aborted) throw context.signal.reason;
+  if (!decision.allowed) {
+    throw new ReceiptTransferError(
+      'resource-exhausted',
+      'Too many receipt transfer attempts. Please wait before trying again.',
+      { retryAfterMs: decision.retryAfterMs },
+    );
+  }
 }
 
 function receiptDropIdentity(runtime: ReceiptTransferRuntime) {
@@ -1023,7 +932,7 @@ async function buildPreparedTransaction(args: {
 async function prepareReceiptTransfer(args: {
   body: PrepareReceiptTransferRequest;
   identity: FirebaseIdentity;
-  firestoreContext: FirestoreContext;
+  rateLimitContext: RateLimitContext;
   providerContext: ProviderContext;
   dependencies: ReceiptTransferDependencies;
 }): Promise<PrepareReceiptTransferResponse> {
@@ -1045,7 +954,7 @@ async function prepareReceiptTransfer(args: {
   }
 
   await args.dependencies.enforceRateLimit(
-    args.firestoreContext,
+    args.rateLimitContext,
     receiptTransferCallerRateLimitBucket(args.identity.uid),
   );
 
@@ -1092,7 +1001,7 @@ async function prepareReceiptTransfer(args: {
   }
 
   await args.dependencies.enforceRateLimit(
-    args.firestoreContext,
+    args.rateLimitContext,
     receiptTransferAssetRateLimitBucket({
       uid: args.identity.uid,
       cluster: runtime.cluster,
@@ -1120,7 +1029,6 @@ async function prepareReceiptTransfer(args: {
 }
 
 const defaultDependencies: ReceiptTransferDependencies = {
-  accessTokenProvider: createGoogleAccessTokenProvider(),
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
@@ -1176,9 +1084,8 @@ export async function handleReceiptTransferPrepare(
       controller.signal,
       dependencies.nowMs(),
     );
-    const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
-    if (!serviceAccountJson || !apiKey) {
+    if (!apiKey || typeof env.OPS_DB?.prepare !== 'function' || typeof env.OPS_DB.batch !== 'function') {
       throw new ReceiptTransferError('unavailable', 'Receipt transfers are temporarily unavailable.');
     }
     const nowMs = dependencies.nowMs();
@@ -1186,11 +1093,9 @@ export async function handleReceiptTransferPrepare(
       body,
       identity,
       dependencies,
-      firestoreContext: {
-        accessTokenProvider: dependencies.accessTokenProvider,
+      rateLimitContext: {
+        database: env.OPS_DB,
         nowMs,
-        providerFetch: trackedFetch,
-        serviceAccountJson,
         signal: controller.signal,
       },
       providerContext: {

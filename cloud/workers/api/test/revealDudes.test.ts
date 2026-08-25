@@ -42,6 +42,7 @@ function queue(send: Queue['send'] = async () => ({ metadata: { metrics: { backl
 function env(signer = COSIGNER, backgroundQueue = queue()): Env {
   return {
     DATA_DB: {} as D1Database,
+    OPS_DB: {} as D1Database,
     NOTIFICATION_EMAIL_QUEUE: queue(),
     REVEAL_BACKGROUND_QUEUE: backgroundQueue,
     STRIPE_FULFILLMENT_QUEUE: queue(),

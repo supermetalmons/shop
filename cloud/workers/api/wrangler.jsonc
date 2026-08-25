@@ -16,6 +16,12 @@
       "database_name": "mons-shop-data",
       "database_id": "4b09f942-b0c6-4a1e-81df-cb802fbf7099",
       "migrations_dir": "migrations"
+    },
+    {
+      "binding": "OPS_DB",
+      "database_name": "mons-shop-ops",
+      "database_id": "6f8f6e7e-e6b1-4e1d-bd68-ece26fd918d5",
+      "migrations_dir": "ops-migrations"
     }
   ],
   "routes": [

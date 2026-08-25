@@ -14,6 +14,7 @@ import {
 } from '../src/dropConfig.ts';
 import { BUBBLEGUM_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION } from '../src/receiptTransferRateLimit.ts';
 import {
   handleReceiptTransferPrepare,
   RECEIPT_TRANSFER_PREPARE_PATH,
@@ -85,10 +86,21 @@ function proof(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function env(overrides: Record<string, string> = {}) {
+function unusedOpsDb(): D1Database {
+  const database = {} as D1Database;
+  database.prepare = () => {
+    throw new Error('unexpected OPS_DB prepare');
+  };
+  database.batch = async () => {
+    throw new Error('unexpected OPS_DB batch');
+  };
+  return database;
+}
+
+function env(overrides: Partial<Pick<Env, 'HELIUS_API_KEY' | 'OPS_DB'>> = {}) {
   return {
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: 'helius-test-key',
+    OPS_DB: unusedOpsDb(),
     ...overrides,
   };
 }
@@ -212,7 +224,7 @@ test('receipt transfer handler rejects invalid authentication and missing config
 
   const unavailable = await handleReceiptTransferPrepare(
     request(requestBody()),
-    env({ FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '' }),
+    env({ HELIUS_API_KEY: '' }),
     dependencies(),
   );
   assert.equal(unavailable.response.status, 502);
@@ -233,7 +245,7 @@ test('receipt transfer handler keeps the overall deadline authoritative', async 
   );
   assert.equal(stalledBody.response.status, 504);
 
-  const stalledFirestore = await handleReceiptTransferPrepare(
+  const stalledRateLimit = await handleReceiptTransferPrepare(
     request(requestBody()),
     env(),
     dependencies({
@@ -246,8 +258,8 @@ test('receipt transfer handler keeps the overall deadline authoritative', async 
         }),
     }),
   );
-  assert.equal(stalledFirestore.response.status, 504);
-  assert.equal((await stalledFirestore.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
+  assert.equal(stalledRateLimit.response.status, 504);
+  assert.equal((await stalledRateLimit.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
 });
 
 test('receipt transfer handler preserves asset, owner, metadata, and proof rejection boundaries', async () => {
@@ -300,46 +312,53 @@ test('receipt transfer provider adapter retries transient JSON-RPC reads and bou
   );
 });
 
-test('receipt transfer Firestore limiter commits compatible fields and rolls back denials', async () => {
-  const documents = new Map<string, Record<string, unknown>>();
-  const commits: unknown[] = [];
-  let rollbacks = 0;
+test('receipt transfer D1 limiter maps atomic batch admissions and denials', async () => {
+  const subjectHash = 'a'.repeat(64);
+  const nowMs = 1_700_000_000_000;
+  const row = {
+    scope: 'caller',
+    subject_hash: subjectHash,
+    schema_version: RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION,
+    cluster: null,
+    owner_wallet: null,
+    receipt_asset_id: null,
+    window_started_at_ms: nowMs,
+    expires_at_ms: nowMs + 600_000,
+    request_count: 1,
+  };
+  const batches = [
+    [[row], [row]],
+    [[], [row]],
+  ];
+  const prepared = new WeakMap<D1PreparedStatement, { query: string; values: unknown[] }>();
+  const batchCalls: Array<Array<{ query: string; values: unknown[] }>> = [];
+  const database = {} as D1Database;
+  database.prepare = (query) => {
+    const statement = {} as D1PreparedStatement;
+    prepared.set(statement, { query, values: [] });
+    statement.bind = (...values) => {
+      prepared.set(statement, { query, values });
+      return statement;
+    };
+    return statement;
+  };
+  database.batch = (async <T>(statements: D1PreparedStatement[]) => {
+    batchCalls.push(statements.map((statement) => prepared.get(statement)!));
+    const results = batches.shift();
+    if (!results) throw new Error('unexpected D1 batch');
+    return results.map((rows) => ({ success: true, meta: {}, results: rows as T[] }));
+  }) as D1Database['batch'];
   const context = {
-    accessTokenProvider: {
-      invalidate: () => undefined,
-      get: async () => 'google-token',
-    },
-    nowMs: 1_700_000_000_000,
-    providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.endsWith(':beginTransaction')) return Response.json({ transaction: `tx-${commits.length}` });
-      if (url.endsWith(':rollback')) {
-        rollbacks += 1;
-        return Response.json({});
-      }
-      if (url.endsWith(':commit')) {
-        const body = JSON.parse(String(init?.body)) as { writes: Array<{ update: { name: string; fields: Record<string, unknown> } }> };
-        commits.push(body);
-        const update = body.writes[0].update;
-        documents.set(update.name, update.fields);
-        return Response.json({ writeResults: [] });
-      }
-      const documentName = url.split('?')[0].replace('https://firestore.googleapis.com/v1/', '');
-      const document = documents.get(documentName);
-      return document ? Response.json({ fields: document }) : new Response(null, { status: 404 });
-    },
-    serviceAccountJson: '{"credential":"test"}',
+    database,
+    nowMs,
     signal: new AbortController().signal,
   };
   const bucket = {
     scope: 'caller' as const,
-    subjectHash: 'a'.repeat(64),
-    documentPath: `system/receiptTransferRateLimits/callers/${'a'.repeat(64)}`,
+    subjectHash,
     limit: 1,
   };
   await receiptTransferTestHooks.enforceRateLimit(context, bucket);
-  assert.equal(commits.length, 1);
-  assert.doesNotMatch(JSON.stringify(commits), /firebase-uid/);
   await assert.rejects(
     () => receiptTransferTestHooks.enforceRateLimit(context, bucket),
     (error) => {
@@ -348,45 +367,45 @@ test('receipt transfer Firestore limiter commits compatible fields and rolls bac
       return true;
     },
   );
-  assert.equal(commits.length, 1);
-  assert.equal(rollbacks, 1);
+  assert.equal(batchCalls.length, 2);
+  assert.equal(batchCalls.every((call) => call.length === 2), true);
+  assert.match(batchCalls[0][0].query, /ON CONFLICT\(scope, subject_hash\).*RETURNING/s);
+  assert.match(batchCalls[0][1].query, /SELECT[\s\S]*FROM rate_limit_buckets/);
+  assert.doesNotMatch(JSON.stringify(batchCalls), /firebase-uid/);
 });
 
-test('receipt transfer Firestore limiter retries transaction conflicts', async () => {
-  let begins = 0;
-  let commits = 0;
+test('receipt transfer D1 limiter fails closed without retrying ambiguous writes', async () => {
+  let batches = 0;
+  const database = {} as D1Database;
+  database.prepare = () => {
+    const statement = {} as D1PreparedStatement;
+    statement.bind = () => statement;
+    return statement;
+  };
+  database.batch = async () => {
+    batches += 1;
+    throw new Error('D1 write outcome is unknown');
+  };
   const context = {
-    accessTokenProvider: {
-      invalidate: () => undefined,
-      get: async () => 'google-token',
-    },
+    database,
     nowMs: 1_700_000_000_000,
-    providerFetch: async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith(':beginTransaction')) {
-        begins += 1;
-        return Response.json({ transaction: `tx-${begins}` });
-      }
-      if (url.endsWith(':rollback')) return Response.json({});
-      if (url.endsWith(':commit')) {
-        commits += 1;
-        return commits === 1
-          ? Response.json({ error: { status: 'ABORTED' } }, { status: 409 })
-          : Response.json({ writeResults: [] });
-      }
-      return new Response(null, { status: 404 });
-    },
-    serviceAccountJson: '{"credential":"test"}',
     signal: new AbortController().signal,
   };
-  await receiptTransferTestHooks.enforceRateLimit(context, {
-    scope: 'caller',
-    subjectHash: 'b'.repeat(64),
-    documentPath: `system/receiptTransferRateLimits/callers/${'b'.repeat(64)}`,
-    limit: 2,
-  });
-  assert.equal(begins, 2);
-  assert.equal(commits, 2);
+  const originalConsoleError = console.error;
+  console.error = () => undefined;
+  try {
+    await assert.rejects(
+      () => receiptTransferTestHooks.enforceRateLimit(context, {
+        scope: 'caller',
+        subjectHash: 'b'.repeat(64),
+        limit: 2,
+      }),
+      (error) => (error as { code?: unknown }).code === 'unavailable',
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.equal(batches, 1);
 });
 
 test('receipt transfer transaction builder uses a lookup table for oversized packets', async () => {

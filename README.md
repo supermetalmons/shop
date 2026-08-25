@@ -4,7 +4,7 @@ React + TypeScript Solana dapp for mons IRL blind boxes. Box minting is fully
 on-chain through the custom box-minter program and MPL Core assets. The browser
 uses Firebase Anonymous Auth for identity. Privileged application traffic runs
 through Cloudflare, operational records remain in Firestore, and D1 owns the
-public pack-status projection.
+public pack-status projection plus narrow Worker control and rate-limit state.
 
 ## Architecture
 
@@ -18,6 +18,8 @@ public pack-status projection.
   Worker accesses operational data with its service accounts.
 - The `mons-shop-data` D1 database is authoritative for public pack-status
   summaries and events.
+- The `mons-shop-ops` D1 database stores the ready-notification control and
+  receipt-transfer fixed-window rate-limit buckets.
 - The API Worker's existing cron, Queue producers and consumers, dead-letter
   queues, bindings, routes, and secrets are declared in
   `cloud/workers/api/wrangler.jsonc`.
@@ -79,9 +81,9 @@ lists, creates, updates, and deletes. Customer operations go through
 `mons-shop-api`, whose reader and writer service accounts access Firestore
 server-side.
 
-Firestore still stores orders, assignments, profiles, notification controls,
-and delivery projection outboxes. Its indexes, rules, emulator tooling,
-operator scripts, and API service-account secrets remain required.
+Firestore still stores orders, assignments, profiles, and delivery projection
+outboxes. Its indexes, rules, emulator tooling, operator scripts, and API
+service-account secrets remain required.
 
 Deploy Firestore indexes and deny-all client rules from the repository root:
 
@@ -113,11 +115,11 @@ account:
 node_modules/.bin/wrangler whoami
 ```
 
-Deployment assumes the configured Workers, custom domains, `mons-shop-data` D1
-database, Queues, dead-letter queues, bindings, schedules, and secrets already
-exist. The npm commands validate and deploy application changes; they do not
-create infrastructure, rewrite resource IDs, or pause consumers. Provision a
-new environment explicitly before using these commands.
+Deployment assumes the configured Workers, custom domains, `mons-shop-data` and
+`mons-shop-ops` D1 databases, Queues, dead-letter queues, bindings, schedules,
+and secrets already exist. The npm commands validate and deploy application
+changes; they do not create infrastructure, rewrite resource IDs, or pause
+consumers. Provision a new environment explicitly before using these commands.
 
 The committed `cloud/workers/api/release.env` remains empty. It isolates
 production API commands from local dotenv files and must not be used to store
@@ -147,15 +149,19 @@ npm run dry-run:api
 The focused production primitives are:
 
 ```bash
+npm run db:migrate:data
+npm run db:migrate:ops
 npm run db:migrate:api
 npm run check:pack-status-d1
+npm run check:ops-d1
 npm run deploy:api
 ```
 
-`deploy:api` runs the API checks, applies pending remote D1 migrations, checks
-remote pack-status integrity, and then publishes the API Worker with native
-`wrangler deploy --strict`. This order ensures the deployed code never expects
-a schema that has not been applied.
+`db:migrate:api` applies both immutable migration histories. `deploy:api` runs
+the API checks, applies both pending remote D1 migration sets, checks remote
+pack-status and ops-state integrity, and then publishes the API Worker with
+native `wrangler deploy --strict`. This order ensures the deployed code never
+expects a schema that has not been applied.
 
 D1 changes and Worker publication are separate platform operations. Production
 recovery is fix-forward: if any step fails, stop, inspect the remote state,
@@ -182,7 +188,7 @@ expected.
 Apply pending production migrations and verify the result with:
 
 ```bash
-npm run db:migrate:api
+npm run db:migrate:data
 npm run check:pack-status-d1
 ```
 
@@ -210,6 +216,63 @@ summary rebuilds can include orders without per-order event documents, so
 replaying those orders individually can double-count them. New ready orders
 receive their durable pending marker atomically and are retried by the Worker
 schedule.
+
+### Operations D1
+
+The API Worker binds `mons-shop-ops` as `OPS_DB`. Its immutable migration
+history is separate from pack status under
+`cloud/workers/api/ops-migrations/`. Append a numbered migration for every
+future change; never edit or remove one that may have been applied.
+
+Apply and verify this database independently with:
+
+```bash
+npm run db:migrate:ops
+npm run check:ops-d1
+```
+
+The integrity check validates Wrangler migration history, both strict tables,
+the expiry index, SQLite quick check, and the singleton ready-notification
+control. Receipt-transfer caller and asset buckets use exact ten-minute fixed
+windows. Expired buckets are cleaned in bounded batches by the existing
+five-minute Worker schedule; there is no Firestore backfill for these ephemeral
+counters.
+
+Inspect and mutate the notification control only through the guarded operator
+command:
+
+```bash
+npm run ready-notifications-control -- status
+npm run ready-notifications-control -- pause --write
+npm run ready-notifications-control -- resume --write
+```
+
+Pause and resume always advance the control revision, including repeated
+requests for the same state, so in-flight cursor updates become stale. All
+mutations require `--write`; `status` is read-only.
+
+For the one-time Firestore cutover, record the original legacy control state,
+manually set `workerControls/readyNotifications.paused` to `true`, and wait at
+least 65 seconds. Then run:
+
+```bash
+npm run db:migrate:api
+npm run check:pack-status-d1
+npm run check:ops-d1
+npm run ready-notifications-control -- import-firestore --write
+npm run deploy:api
+npm run ready-notifications-control -- status
+```
+
+The one-time import uses Firebase CLI credentials, refuses an unpaused or
+malformed legacy control, copies its validated cursor, and requires the
+untouched seeded D1 row. If the recorded original state was active, resume with
+`npm run ready-notifications-control -- resume --write`; otherwise leave D1
+paused. Observe at least two five-minute schedule cycles after publication.
+Leave the legacy Firestore control paused and retain the old rate-limit
+documents and Firestore secrets during the rollback window. A rollback to the
+previous Worker is safe but remains paused until the legacy control is resumed;
+the accepted direct-cutover tradeoff is a temporary counter reset.
 
 ### Worker secrets
 
@@ -248,10 +311,9 @@ The shared five-minute scheduled trigger recovers Stripe fulfillment,
 pack-status projections, and ready-to-ship notification work. Do not disable
 the schedule to control one subsystem.
 
-Ready-to-ship email recovery uses
-`workerControls/readyNotifications` in Firestore. The Worker creates a missing
-control with `paused=false`. Set only this control to `true` to stop ready-email
-publication during incident reconciliation, then restore `false`. Reconcile
+Ready-to-ship email recovery uses the `ready_notifications` control in
+`mons-shop-ops`. Use `ready-notifications-control` to pause only this subsystem
+during incident reconciliation; do not disable the shared schedule. Reconcile
 stored job IDs with Queue and Resend outcomes before replaying work because a
 Queue publish may have succeeded before its Firestore marker update.
 
@@ -281,6 +343,10 @@ The retained tools are intentionally narrow:
 - `npm run rebuild-pack-status` (`scripts/ops/rebuildPackStatus.ts`) compares
   operational Firestore history with D1 summaries and is read-only unless its
   explicit D1 write option is supplied.
+- `npm run check:ops-d1` validates the remote operations database and its
+  ready-notification singleton.
+- `npm run ready-notifications-control` inspects or changes the D1 notification
+  control; every mutation requires `--write`.
 - `npm run test-resend-notification-email` sends a synthetic notification
   through the production API queue.
 - `npm run wipe-drop` (`scripts/ops/wipeDrop.ts`) is the guarded drop cleanup

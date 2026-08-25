@@ -3,15 +3,17 @@ import test from 'node:test';
 import {
   RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
   RECEIPT_TRANSFER_CALLER_RATE_LIMIT,
+  RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT,
   RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS,
+  cleanupExpiredReceiptTransferRateLimitBuckets,
+  consumeReceiptTransferRateLimit,
   evaluateReceiptTransferRateLimit,
   receiptTransferAssetRateLimitBucket,
-  receiptTransferAssetRateLimitDocumentPath,
   receiptTransferAssetRateLimitSubjectHash,
   receiptTransferCallerRateLimitBucket,
-  receiptTransferCallerRateLimitDocumentPath,
   receiptTransferCallerRateLimitSubjectHash,
-  receiptTransferStoredBucketMatches,
+  type ReceiptTransferRateLimitD1Database,
+  type ReceiptTransferRateLimitD1Statement,
 } from '../cloud/workers/api/src/receiptTransferRateLimit.ts';
 
 const UID = 'anonymous-firebase-uid';
@@ -30,6 +32,30 @@ function assetSubject(overrides: Partial<{
     ownerWallet: overrides.ownerWallet ?? OWNER,
     receiptAssetId: overrides.receiptAssetId ?? ASSET,
   };
+}
+
+function scriptedDatabase(batches: Array<Array<Array<Record<string, unknown>>>>) {
+  const metadata = new WeakMap<ReceiptTransferRateLimitD1Statement, { query: string; values: unknown[] }>();
+  const calls: Array<Array<{ query: string; values: unknown[] }>> = [];
+  const database: ReceiptTransferRateLimitD1Database = {
+    prepare(query) {
+      const statement: ReceiptTransferRateLimitD1Statement = {
+        bind(...values) {
+          metadata.set(statement, { query, values });
+          return statement;
+        },
+      };
+      metadata.set(statement, { query, values: [] });
+      return statement;
+    },
+    async batch<T>(statements: ReceiptTransferRateLimitD1Statement[]) {
+      calls.push(statements.map((statement) => metadata.get(statement)!));
+      const results = batches.shift();
+      if (!results) throw new Error('Unexpected D1 batch');
+      return results.map((rows) => ({ results: rows as T[] }));
+    },
+  };
+  return { calls, database };
 }
 
 test('receipt transfer fixed windows preserve caller and asset quotas', () => {
@@ -63,6 +89,36 @@ test('receipt transfer fixed windows preserve caller and asset quotas', () => {
   );
 });
 
+test('receipt transfer fixed windows stay monotonic for reversed request arrival', () => {
+  const newerStartedAtMs = 2_000;
+  const olderSampledAtMs = 1_000;
+  assert.deepEqual(
+    evaluateReceiptTransferRateLimit(
+      { count: 1, windowStartedAtMs: newerStartedAtMs },
+      olderSampledAtMs,
+      RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
+    ),
+    {
+      allowed: true,
+      count: 2,
+      windowStartedAtMs: newerStartedAtMs,
+    },
+  );
+  assert.deepEqual(
+    evaluateReceiptTransferRateLimit(
+      { count: RECEIPT_TRANSFER_ASSET_RATE_LIMIT, windowStartedAtMs: newerStartedAtMs },
+      olderSampledAtMs,
+      RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
+    ),
+    {
+      allowed: false,
+      count: RECEIPT_TRANSFER_ASSET_RATE_LIMIT,
+      retryAfterMs: RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS,
+      windowStartedAtMs: newerStartedAtMs,
+    },
+  );
+});
+
 test('receipt transfer rate-limit subjects preserve v2 domain separation', () => {
   const base = assetSubject();
   const callerHash = receiptTransferCallerRateLimitSubjectHash(UID);
@@ -74,56 +130,83 @@ test('receipt transfer rate-limit subjects preserve v2 domain separation', () =>
   assert.notEqual(assetHash, receiptTransferAssetRateLimitSubjectHash({ ...base, ownerWallet: 'other' }));
   assert.notEqual(assetHash, receiptTransferAssetRateLimitSubjectHash({ ...base, cluster: 'mainnet-beta' }));
   assert.notEqual(assetHash, receiptTransferAssetRateLimitSubjectHash({ ...base, receiptAssetId: 'other' }));
-  assert.match(receiptTransferCallerRateLimitDocumentPath(UID), /\/callers\//);
-  assert.match(receiptTransferAssetRateLimitDocumentPath(base), /\/assets\//);
 });
 
-test('receipt transfer rate-limit buckets retain production paths and public fields', () => {
+test('receipt transfer D1 buckets retain only hashed caller and public asset identity', () => {
   const caller = receiptTransferCallerRateLimitBucket(UID);
   const asset = receiptTransferAssetRateLimitBucket(assetSubject());
   assert.equal(caller.limit, RECEIPT_TRANSFER_CALLER_RATE_LIMIT);
   assert.equal(asset.limit, RECEIPT_TRANSFER_ASSET_RATE_LIMIT);
-  assert.equal(caller.documentPath, receiptTransferCallerRateLimitDocumentPath(UID));
-  assert.equal(asset.documentPath, receiptTransferAssetRateLimitDocumentPath(assetSubject()));
-  assert.deepEqual(asset.publicFields, {
-    cluster: 'devnet',
-    ownerWallet: OWNER,
-    receiptAssetId: ASSET,
+  assert.deepEqual(caller, {
+    scope: 'caller',
+    subjectHash: receiptTransferCallerRateLimitSubjectHash(UID),
+    limit: RECEIPT_TRANSFER_CALLER_RATE_LIMIT,
   });
+  assert.equal(asset.scope, 'asset');
+  if (asset.scope !== 'asset') assert.fail('Expected asset bucket');
+  assert.equal(asset.cluster, 'devnet');
+  assert.equal(asset.ownerWallet, OWNER);
+  assert.equal(asset.receiptAssetId, ASSET);
   assert.doesNotMatch(JSON.stringify(asset), new RegExp(UID));
 });
 
-test('receipt transfer stored bucket matching resets legacy and malformed documents', () => {
+test('receipt transfer D1 consumption uses one atomic UPSERT and read batch', async () => {
+  const nowMs = 1_700_000_000_000;
   const caller = receiptTransferCallerRateLimitBucket(UID);
-  assert.equal(receiptTransferStoredBucketMatches({
-    schemaVersion: 2,
+  const admittedRow = {
     scope: 'caller',
-    subjectHash: caller.subjectHash,
-    count: 1,
-    windowStartedAtMs: 1,
-  }, caller), true);
-  assert.equal(receiptTransferStoredBucketMatches({
-    schemaVersion: 1,
-    scope: 'caller',
-    subjectHash: caller.subjectHash,
-  }, caller), false);
-  const asset = receiptTransferAssetRateLimitBucket(assetSubject());
-  assert.equal(receiptTransferStoredBucketMatches({
-    schemaVersion: 2,
-    scope: 'asset',
-    subjectHash: asset.subjectHash,
-    cluster: 'devnet',
-    ownerWallet: OWNER,
-    receiptAssetId: ASSET,
-  }, asset), true);
-  assert.equal(receiptTransferStoredBucketMatches({
-    schemaVersion: 2,
-    scope: 'asset',
-    subjectHash: asset.subjectHash,
-    cluster: 'devnet',
-    ownerWallet: OWNER,
-    receiptAssetId: 'other',
-  }, asset), false);
+    subject_hash: caller.subjectHash,
+    schema_version: 2,
+    cluster: null,
+    owner_wallet: null,
+    receipt_asset_id: null,
+    window_started_at_ms: nowMs,
+    expires_at_ms: nowMs + RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS,
+    request_count: 1,
+  };
+  const admitted = scriptedDatabase([[[admittedRow], [admittedRow]]]);
+  assert.deepEqual(
+    await consumeReceiptTransferRateLimit(admitted.database, caller, nowMs),
+    { allowed: true, count: 1, windowStartedAtMs: nowMs },
+  );
+  assert.equal(admitted.calls.length, 1);
+  assert.equal(admitted.calls[0].length, 2);
+  assert.match(admitted.calls[0][0].query, /ON CONFLICT\(scope, subject_hash\).*RETURNING/s);
+  assert.match(admitted.calls[0][1].query, /SELECT[\s\S]*FROM rate_limit_buckets/);
+  assert.equal(admitted.calls[0][0].values.length, 15);
+  assert.doesNotMatch(JSON.stringify(admitted.calls), new RegExp(UID));
+
+  const deniedRow = { ...admittedRow, request_count: RECEIPT_TRANSFER_CALLER_RATE_LIMIT };
+  const denied = scriptedDatabase([[[], [deniedRow]]]);
+  assert.deepEqual(
+    await consumeReceiptTransferRateLimit(denied.database, caller, nowMs + 1_000),
+    {
+      allowed: false,
+      count: RECEIPT_TRANSFER_CALLER_RATE_LIMIT,
+      retryAfterMs: RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS - 1_000,
+      windowStartedAtMs: nowMs,
+    },
+  );
+});
+
+test('receipt transfer D1 cleanup is bounded and reports remaining backlog', async () => {
+  const nowMs = 1_700_000_000_000;
+  const deletedRows = Array.from(
+    { length: RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT },
+    (_, index) => ({ subject_hash: String(index).padStart(64, '0') }),
+  );
+  const scripted = scriptedDatabase([[[...deletedRows], [{ has_more: 1 }]]]);
+  assert.deepEqual(
+    await cleanupExpiredReceiptTransferRateLimitBuckets(scripted.database, nowMs),
+    {
+      deletedCount: RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT,
+      limitReached: true,
+      hasMore: true,
+    },
+  );
+  assert.equal(scripted.calls[0][0].values[0], nowMs - 2 * 60 * 1_000);
+  assert.equal(scripted.calls[0][1].values[0], nowMs - 2 * 60 * 1_000);
+  assert.match(scripted.calls[0][0].query, /LIMIT 1000[\s\S]*RETURNING subject_hash/);
 });
 
 test('receipt transfer evaluator rejects invalid limits and times', () => {

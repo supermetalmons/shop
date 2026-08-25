@@ -43,7 +43,6 @@ import {
   processingDeliveryRecoveryNextCheckMs,
 } from '../../../../shared/deliveryRecovery.js';
 import {
-  READY_NOTIFICATION_CONTROL_PATH,
   buildReadyNotificationReconciliationQuery,
 } from '../../../../shared/readyToShipNotificationReconciliation.js';
 import {
@@ -144,6 +143,10 @@ import {
   type PendingReadyToShipNotification,
 } from './readyToShipNotifications.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
+import {
+  compareAndSetReadyNotificationCursor,
+  loadReadyNotificationControl,
+} from './d1ReadyNotificationControl.js';
 
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
@@ -157,8 +160,6 @@ const READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE = 8;
 const READY_NOTIFICATION_RECONCILIATION_PUBLISH_LIMIT = 4;
 const READY_NOTIFICATION_FAILED_AT_FIELD = 'readyToShipNotificationFailedAt';
 const READY_NOTIFICATION_LAST_ERROR_CODE_FIELD = 'readyToShipNotificationLastErrorCode';
-const READY_NOTIFICATION_CONTROL_CURSOR_PATH_FIELD = 'cursorPath';
-const READY_NOTIFICATION_CONTROL_CURSOR_UPDATED_AT_FIELD = 'cursorUpdatedAt';
 const PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE = 4;
 const PACK_STATUS_PROJECTION_RECONCILIATION_CONCURRENCY = 2;
 const PACK_STATUS_PROJECTION_BACKOFF_MS = [5 * 60_000, 15 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000] as const;
@@ -216,7 +217,7 @@ type RecoverRequest = z.infer<typeof recoverSchema>;
 
 type DeliveryReceiptsEnv = Pick<
   Env,
-  'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE'
+  'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'
 > & Partial<Pick<Env, 'DATA_DB'>>;
 
 type DeliveryReceiptErrorCode =
@@ -3181,65 +3182,12 @@ async function markPendingReadyToShipNotificationsFailed(
   return [];
 }
 
-type ReadyNotificationControl = {
-  cursorPath: string | null;
-  paused: boolean;
-  updateTime: string;
-};
-
-function decodeReadyNotificationControl(document: DeliveryOrderDocument): ReadyNotificationControl {
-  if (typeof document.fields.paused !== 'boolean') throw new ReadyToShipNotificationControlError();
-  const cursorPath = document.fields[READY_NOTIFICATION_CONTROL_CURSOR_PATH_FIELD];
-  if (cursorPath === undefined) {
-    return { cursorPath: null, paused: document.fields.paused, updateTime: document.updateTime };
-  }
-  if (typeof cursorPath !== 'string') throw new ReadyToShipNotificationControlError();
-  const parts = cursorPath.split('/');
-  const resolution = resolveDeliveryOrderIdentity(parts.at(-1) || '', {}, cursorPath);
-  if (!('identity' in resolution)) throw new ReadyToShipNotificationControlError();
-  return { cursorPath, paused: document.fields.paused, updateTime: document.updateTime };
-}
-
-async function loadReadyNotificationControl(context: FirestoreContext): Promise<ReadyNotificationControl> {
-  let document = await readDocument(context, READY_NOTIFICATION_CONTROL_PATH);
-  if (!document) {
-    try {
-      await commitWrites(context, [createWrite({
-        path: READY_NOTIFICATION_CONTROL_PATH,
-        fields: { paused: false },
-        transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
-      })]);
-    } catch (error) {
-      if (!(error instanceof FirestoreWriteConflict)) throw error;
-    }
-    document = await readDocument(context, READY_NOTIFICATION_CONTROL_PATH);
-  }
-  if (!document) throw new ReadyToShipNotificationControlError();
-  return decodeReadyNotificationControl(document);
-}
-
-async function updateReadyNotificationCursor(
-  context: FirestoreContext,
-  cursorPath: string,
-  controlUpdateTime: string,
-): Promise<void> {
-  await commitWrites(context, [updateWrite({
-    path: READY_NOTIFICATION_CONTROL_PATH,
-    fields: { [READY_NOTIFICATION_CONTROL_CURSOR_PATH_FIELD]: cursorPath },
-    updateMask: [READY_NOTIFICATION_CONTROL_CURSOR_PATH_FIELD],
-    transforms: [{
-      fieldPath: READY_NOTIFICATION_CONTROL_CURSOR_UPDATED_AT_FIELD,
-      setToServerValue: 'REQUEST_TIME',
-    }],
-    currentDocument: { updateTime: controlUpdateTime },
-  })]);
-}
-
 async function publishReadyToShipNotifications(args: {
   context: FirestoreContext;
   deliveryId: number;
   document: DeliveryOrderDocument;
   dropId: string;
+  opsDb: D1Database;
   queue: Env['NOTIFICATION_EMAIL_QUEUE'];
 }): Promise<boolean> {
   const expectedIdentity = { deliveryId: args.deliveryId, dropId: args.dropId };
@@ -3322,7 +3270,9 @@ async function publishReadyToShipNotifications(args: {
     }
   }
   try {
-    const latestControl = await loadReadyNotificationControl(args.context);
+    args.context.signal.throwIfAborted();
+    const latestControl = await loadReadyNotificationControl(args.opsDb, args.context.nowMs);
+    args.context.signal.throwIfAborted();
     if (latestControl.paused) throw new ReadyToShipNotificationControlError();
   } catch (error) {
     await releaseReadyToShipNotificationClaim(
@@ -3343,6 +3293,7 @@ async function publishReadyToShipNotifications(args: {
       deliveryId: args.deliveryId,
       error: summarizeError(error),
     });
+    args.context.signal.throwIfAborted();
     throw error instanceof ReadyToShipNotificationControlError
       ? error
       : new ReadyToShipNotificationControlError();
@@ -3411,7 +3362,7 @@ async function publishReadyToShipNotifications(args: {
 }
 
 export async function reconcilePendingReadyToShipNotifications(
-  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'NOTIFICATION_EMAIL_QUEUE'>,
+  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'>,
   signal: AbortSignal,
   overrides: {
     accessTokenProvider?: GoogleAccessTokenProvider;
@@ -3430,7 +3381,9 @@ export async function reconcilePendingReadyToShipNotifications(
     signal,
   };
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
-  const control = await loadReadyNotificationControl(context);
+  signal.throwIfAborted();
+  const control = await loadReadyNotificationControl(env.OPS_DB, context.nowMs);
+  signal.throwIfAborted();
   if (control.paused) {
     log({ event: 'ready_to_ship_notifications_reconciliation_paused' });
     return 0;
@@ -3488,6 +3441,7 @@ export async function reconcilePendingReadyToShipNotifications(
         deliveryId: resolution.identity.deliveryId,
         document,
         dropId,
+        opsDb: env.OPS_DB,
         queue: env.NOTIFICATION_EMAIL_QUEUE,
       });
       if (published) processed += 1;
@@ -3497,9 +3451,14 @@ export async function reconcilePendingReadyToShipNotifications(
   }
   if (lastVisitedPath) {
     try {
-      await updateReadyNotificationCursor(cleanupContext(context), lastVisitedPath, control.updateTime);
+      await compareAndSetReadyNotificationCursor(
+        env.OPS_DB,
+        lastVisitedPath,
+        control.revision,
+        (overrides.nowMs || Date.now)(),
+      );
     } catch (error) {
-      if (!(error instanceof FirestoreWriteConflict)) failures.push(error);
+      failures.push(error);
     }
   }
   if (failures.length) throw new AggregateError(failures, 'Ready-notification reconciliation failed');
@@ -3752,6 +3711,7 @@ async function retryIssueReceipts(args: {
       deliveryId,
       document,
       dropId: runtime.dropId,
+      opsDb: args.env.OPS_DB,
       queue: args.env.NOTIFICATION_EMAIL_QUEUE,
     });
     return {
@@ -3889,6 +3849,7 @@ async function retryIssueReceipts(args: {
     deliveryId,
     document: readyDocument,
     dropId: runtime.dropId,
+    opsDb: args.env.OPS_DB,
     queue: args.env.NOTIFICATION_EMAIL_QUEUE,
   });
   return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };

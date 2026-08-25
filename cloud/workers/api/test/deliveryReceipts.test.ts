@@ -8,7 +8,6 @@ import {
   BOX_MINTER_CONFIG_DISCRIMINATOR,
   decodeBoxMinterConfigData,
 } from '../../../../shared/boxMinterConfigCodec.ts';
-import { READY_NOTIFICATION_CONTROL_PATH } from '../../../../shared/readyToShipNotificationReconciliation.ts';
 import { buildDeliveryPackStatusProjectionReconciliationQuery } from '../../../../shared/deliveryPackStatusProjectionReconciliation.ts';
 import { IRL_CLAIM_CODE_NAMESPACE, IRL_CLAIM_CODE_DIGITS } from '../src/claimCodes.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
@@ -23,6 +22,10 @@ import {
   scheduleDeliveryPackStatusProjection,
 } from '../src/deliveryReceipts.ts';
 import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import {
+  compareAndSetReadyNotificationCursor,
+  loadReadyNotificationControl,
+} from '../src/d1ReadyNotificationControl.ts';
 import {
   READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
   READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
@@ -195,19 +198,232 @@ function readyNotificationOrderFields(deliveryId: number, includeShipper = false
   };
 }
 
-function readyNotificationControlDocument(
-  paused = false,
-  cursorPath?: string | null,
-): Record<string, unknown> {
+function readyNotificationD1Result(
+  results: Array<Record<string, unknown>> = [],
+  changes = 0,
+): D1Result<Record<string, unknown>> {
   return {
-    name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${READY_NOTIFICATION_CONTROL_PATH}`,
-    updateTime: '2026-08-22T00:00:00.000Z',
-    fields: {
-      paused: { booleanValue: paused },
-      ...(cursorPath ? { cursorPath: { stringValue: cursorPath } } : {}),
+    success: true,
+    results,
+    meta: {
+      changed_db: changes > 0,
+      changes,
+      duration: 0,
+      last_row_id: 0,
+      rows_read: results.length,
+      rows_written: changes,
+      size_after: 0,
     },
   };
 }
+
+type ReadyNotificationD1Execute = (
+  statement: ReadyNotificationTestStatement,
+) => D1Result<Record<string, unknown>> | Promise<D1Result<Record<string, unknown>>>;
+
+class ReadyNotificationTestStatement implements D1PreparedStatement {
+  constructor(
+    readonly query: string,
+    private readonly execute: ReadyNotificationD1Execute,
+    readonly values: unknown[] = [],
+  ) {}
+
+  bind(...values: unknown[]): D1PreparedStatement {
+    return new ReadyNotificationTestStatement(this.query, this.execute, values);
+  }
+
+  first<T = unknown>(colName: string): Promise<T | null>;
+  first<T = Record<string, unknown>>(): Promise<T | null>;
+  async first<T = Record<string, unknown>>(colName?: string): Promise<T | null> {
+    const row = (await this.execute(this)).results[0];
+    if (!row) return null;
+    return (colName === undefined ? row : row[colName]) as T;
+  }
+
+  async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+    const result = await this.execute(this);
+    return { ...result, results: result.results as T[] };
+  }
+
+  async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
+    return this.run<T>();
+  }
+
+  raw<T = unknown[]>(options: { columnNames: true }): Promise<[string[], ...T[]]>;
+  raw<T = unknown[]>(options?: { columnNames?: false }): Promise<T[]>;
+  async raw<T = unknown[]>(options?: { columnNames?: boolean }): Promise<T[] | [string[], ...T[]]> {
+    const rows = (await this.execute(this)).results;
+    const columnNames = Object.keys(rows[0] || {});
+    const values = rows.map((row) => columnNames.map((columnName) => row[columnName]) as T);
+    return options?.columnNames ? [columnNames, ...values] : values;
+  }
+}
+
+class ReadyNotificationTestDatabase implements D1Database {
+  constructor(
+    private readonly execute: ReadyNotificationD1Execute,
+    private readonly batchSizes: number[],
+  ) {}
+
+  prepare(query: string): D1PreparedStatement {
+    return new ReadyNotificationTestStatement(query, this.execute);
+  }
+
+  async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+    this.batchSizes.push(statements.length);
+    return Promise.all(statements.map((statement) => statement.run<T>()));
+  }
+
+  exec(): Promise<D1ExecResult> {
+    throw new Error('Unexpected D1 exec');
+  }
+
+  withSession(): D1DatabaseSession {
+    throw new Error('Unexpected D1 session');
+  }
+
+  dump(): Promise<ArrayBuffer> {
+    throw new Error('Unexpected D1 dump');
+  }
+}
+
+function readyNotificationControlHarness(args: {
+  cursorPath?: string | null;
+  exists?: boolean;
+  failCursorWrites?: number;
+  onCursor?: () => void;
+  paused?: boolean;
+  revision?: number;
+} = {}) {
+  let cursorPath = args.cursorPath || null;
+  let exists = args.exists ?? true;
+  let failCursorWrites = args.failCursorWrites || 0;
+  let paused = args.paused || false;
+  let revision = args.revision || 1;
+  let insertAttempts = 0;
+  const batchSizes: number[] = [];
+  const reads: boolean[] = [];
+  const execute = (statement: ReadyNotificationTestStatement): D1Result<Record<string, unknown>> => {
+    if (statement.query.includes('INSERT INTO worker_controls')) {
+      insertAttempts += 1;
+      if (exists) return readyNotificationD1Result();
+      exists = true;
+      paused = false;
+      cursorPath = null;
+      revision = 1;
+      return readyNotificationD1Result([], 1);
+    }
+    if (statement.query.includes('SELECT control_key, paused, cursor_path, revision')) {
+      if (!exists) return readyNotificationD1Result();
+      reads.push(paused);
+      return readyNotificationD1Result([{
+        control_key: 'ready_notifications',
+        cursor_path: cursorPath,
+        paused: paused ? 1 : 0,
+        revision,
+      }]);
+    }
+    if (statement.query.includes('UPDATE worker_controls')) {
+      if (failCursorWrites > 0) {
+        failCursorWrites -= 1;
+        return readyNotificationD1Result();
+      }
+      const [nextCursorPath, , , controlKey, expectedRevision] = statement.values;
+      if (
+        !exists ||
+        paused ||
+        controlKey !== 'ready_notifications' ||
+        expectedRevision !== revision ||
+        typeof nextCursorPath !== 'string'
+      ) return readyNotificationD1Result();
+      cursorPath = nextCursorPath;
+      revision += 1;
+      args.onCursor?.();
+      return readyNotificationD1Result([], 1);
+    }
+    throw new Error(`Unexpected D1 query: ${statement.query}`);
+  };
+  const db = new ReadyNotificationTestDatabase(execute, batchSizes);
+  return {
+    batchSizes,
+    db,
+    reads,
+    get cursorPath() { return cursorPath; },
+    get exists() { return exists; },
+    get insertAttempts() { return insertAttempts; },
+    get revision() { return revision; },
+    setPaused(value: boolean) {
+      paused = value;
+      revision += 1;
+    },
+  };
+}
+
+test('D1 notification control loads and advances its cursor with revision CAS', async () => {
+  const control = readyNotificationControlHarness();
+  assert.deepEqual(await loadReadyNotificationControl(control.db, READY_NOTIFICATION_NOW_MS), {
+    cursorPath: null,
+    paused: false,
+    revision: 1,
+  });
+  assert.equal(await compareAndSetReadyNotificationCursor(
+    control.db,
+    'drops/card_nft_2/deliveryOrders/7',
+    1,
+    READY_NOTIFICATION_NOW_MS + 1,
+  ), true);
+  assert.equal(await compareAndSetReadyNotificationCursor(
+    control.db,
+    'drops/card_nft_2/deliveryOrders/8',
+    1,
+    READY_NOTIFICATION_NOW_MS + 2,
+  ), false);
+  assert.deepEqual(await loadReadyNotificationControl(control.db, READY_NOTIFICATION_NOW_MS + 3), {
+    cursorPath: 'drops/card_nft_2/deliveryOrders/7',
+    paused: false,
+    revision: 2,
+  });
+});
+
+test('D1 notification control rejects malformed cursor paths and does not advance while paused', async () => {
+  const malformed = readyNotificationControlHarness({ cursorPath: 'deliveryOrders/7' });
+  await assert.rejects(
+    loadReadyNotificationControl(malformed.db, READY_NOTIFICATION_NOW_MS),
+    /invalid_ready_notification_control/,
+  );
+  const paused = readyNotificationControlHarness({ paused: true });
+  assert.equal(await compareAndSetReadyNotificationCursor(
+    paused.db,
+    'drops/card_nft_2/deliveryOrders/7',
+    1,
+    READY_NOTIFICATION_NOW_MS,
+  ), false);
+  await assert.rejects(
+    compareAndSetReadyNotificationCursor(
+      paused.db,
+      'deliveryOrders/7',
+      1,
+      READY_NOTIFICATION_NOW_MS,
+    ),
+    /invalid_ready_notification_control_cursor/,
+  );
+  const noncanonical = readyNotificationControlHarness({
+    cursorPath: 'drops/Card_NFT_2/deliveryOrders/7',
+  });
+  await assert.rejects(
+    loadReadyNotificationControl(noncanonical.db, READY_NOTIFICATION_NOW_MS),
+    /invalid_ready_notification_control/,
+  );
+  await assert.rejects(
+    compareAndSetReadyNotificationCursor(
+      paused.db,
+      'drops/Card_NFT_2/deliveryOrders/7',
+      1,
+      READY_NOTIFICATION_NOW_MS,
+    ),
+    /invalid_ready_notification_control_cursor/,
+  );
+});
 
 function readyNotificationHarness(args: {
   documents?: Array<{ deliveryId: number; fields?: Record<string, unknown>; includeShipper?: boolean }>;
@@ -216,16 +432,16 @@ function readyNotificationHarness(args: {
   pauseAfterClaim?: boolean;
   paused?: boolean;
 } = {}) {
-  let controlPaused = args.paused || false;
-  let controlRevision = 0;
-  let cursorPath: string | null = null;
   let failQueuedWrites = args.failQueuedWrites || 0;
-  let failCursorWrites = args.failCursorWrites || 0;
   let revision = 0;
-  const controlReads: boolean[] = [];
   const commits: Array<Record<string, any>> = [];
   const events: string[] = [];
   const queries: Array<Record<string, any>> = [];
+  const control = readyNotificationControlHarness({
+    failCursorWrites: args.failCursorWrites,
+    onCursor: () => events.push('cursor'),
+    paused: args.paused,
+  });
   const documents = new Map<string, { fields: Record<string, unknown>; updateTime: string }>();
   for (const entry of args.documents || [{ deliveryId: 7 }]) {
     const path = `drops/card_nft_2/deliveryOrders/${entry.deliveryId}`;
@@ -241,7 +457,6 @@ function readyNotificationHarness(args: {
       updateTime: `2026-08-22T00:00:${String(entry.deliveryId).padStart(2, '0')}.000Z`,
     });
   }
-  const controlUpdateTime = () => `2026-08-22T01:00:${String(controlRevision).padStart(2, '0')}.000Z`;
   const encodedDocument = (path: string) => {
     const document = documents.get(path);
     if (!document) return null;
@@ -286,10 +501,7 @@ function readyNotificationHarness(args: {
     document.updateTime = `2026-08-22T02:00:${String(revision).padStart(2, '0')}.000Z`;
     if (write.update?.fields?.[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]) {
       events.push('claim');
-      if (args.pauseAfterClaim) {
-        controlPaused = true;
-        controlRevision += 1;
-      }
+      if (args.pauseAfterClaim) control.setPaused(true);
     } else if (queuedWrite) events.push('queued-marker');
     else if ([
       write.update?.fields?.buyerOrderReceivedEmailState?.stringValue,
@@ -300,17 +512,6 @@ function readyNotificationHarness(args: {
   };
   const providerFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
-    if (url.includes(`/${READY_NOTIFICATION_CONTROL_PATH}`) && init?.method === 'GET') {
-      controlReads.push(controlPaused);
-      return Response.json({
-        name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${READY_NOTIFICATION_CONTROL_PATH}`,
-        updateTime: controlUpdateTime(),
-        fields: {
-          paused: { booleanValue: controlPaused },
-          ...(cursorPath ? { cursorPath: { stringValue: cursorPath } } : {}),
-        },
-      });
-    }
     if (url.endsWith(':runQuery')) {
       const body = JSON.parse(String(init?.body)) as Record<string, any>;
       queries.push(body);
@@ -342,38 +543,26 @@ function readyNotificationHarness(args: {
       commits.push(body);
       const write = body.writes[0];
       const path = String(write.update?.name || '').slice(FIRESTORE_DOCUMENT_NAME_PREFIX.length);
-      if (path === READY_NOTIFICATION_CONTROL_PATH) {
-        if (failCursorWrites > 0) {
-          failCursorWrites -= 1;
-          return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 409 });
-        }
-        if (write.currentDocument?.updateTime && write.currentDocument.updateTime !== controlUpdateTime()) {
-          return Response.json({ error: { status: 'FAILED_PRECONDITION' } }, { status: 409 });
-        }
-        cursorPath = write.update?.fields?.cursorPath?.stringValue || null;
-        controlRevision += 1;
-        events.push('cursor');
-        return Response.json({ writeResults: [{}] });
-      }
       return applyDeliveryWrite(write, path);
     }
     throw new Error(`Unexpected request: ${url}`);
   };
   return {
     commits,
-    controlReads,
+    controlReads: control.reads,
     decodedDocument,
     events,
     fields(deliveryId = 7) {
       return documents.get(`drops/card_nft_2/deliveryOrders/${deliveryId}`)?.fields;
     },
     providerFetch,
+    opsDb: control.db,
     queries,
     setPaused(value: boolean) {
-      controlPaused = value;
-      controlRevision += 1;
+      control.setPaused(value);
     },
-    get cursorPath() { return cursorPath; },
+    get controlRevision() { return control.revision; },
+    get cursorPath() { return control.cursorPath; },
   };
 }
 
@@ -405,13 +594,14 @@ function request(path: string, body: unknown, init: RequestInit = {}): Request {
 }
 
 function env(overrides: Partial<Pick<Env,
-  'COSIGNER_SECRET' | 'DATA_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE'
+  'COSIGNER_SECRET' | 'DATA_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'
 >> = {}) {
   return {
     COSIGNER_SECRET: bs58.encode(Keypair.generate().secretKey),
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: 'helius-test-key',
     NOTIFICATION_EMAIL_QUEUE: notificationQueue(),
+    OPS_DB: readyNotificationControlHarness().db,
     ...overrides,
   };
 }
@@ -638,7 +828,7 @@ test('notification queue failure maps both delivery routes to retryable 503 afte
       signature: SIGNATURE,
       dropId: 'card_nft_2',
     }),
-    env({ NOTIFICATION_EMAIL_QUEUE: queue }),
+    env({ NOTIFICATION_EMAIL_QUEUE: queue, OPS_DB: harness.opsDb }),
     DELIVERY_RECEIPTS_ISSUE_PATH,
     () => undefined,
     dependencies({
@@ -655,6 +845,7 @@ test('notification queue failure maps both delivery routes to retryable 503 afte
           deliveryId: 7,
           document: harness.decodedDocument(7),
           dropId: 'card_nft_2',
+          opsDb: workerEnv.OPS_DB,
           queue: workerEnv.NOTIFICATION_EMAIL_QUEUE,
         });
         throw new Error('unreachable');
@@ -706,6 +897,7 @@ test('paused notification control fails the direct HTTP publisher closed', async
           return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
         },
       }),
+      OPS_DB: harness.opsDb,
     }),
     DELIVERY_RECEIPTS_ISSUE_PATH,
     () => undefined,
@@ -723,6 +915,7 @@ test('paused notification control fails the direct HTTP publisher closed', async
           deliveryId: 7,
           document: harness.decodedDocument(7),
           dropId: 'card_nft_2',
+          opsDb: workerEnv.OPS_DB,
           queue: workerEnv.NOTIFICATION_EMAIL_QUEUE,
         });
         throw new Error('unreachable');
@@ -743,6 +936,7 @@ test('paused notification control fails the direct HTTP publisher closed', async
 
 test('queued and markerless ready retries succeed during a pause without reading control', async () => {
   let providerCalls = 0;
+  const control = readyNotificationControlHarness({ paused: true });
   const context: ReadyNotificationPublishArgs['context'] = {
     accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
     nowMs: READY_NOTIFICATION_NOW_MS,
@@ -774,10 +968,12 @@ test('queued and markerless ready retries succeed during a pause without reading
         fields,
       },
       dropId: 'card_nft_2',
+      opsDb: control.db,
       queue: notificationQueue(),
     }), false);
   }
   assert.equal(providerCalls, 0);
+  assert.deepEqual(control.reads, []);
 });
 
 test('a stale pending snapshot does not consult paused control after another publisher settles it', async () => {
@@ -795,6 +991,7 @@ test('a stale pending snapshot does not consult paused control after another pub
     deliveryId: 7,
     document: staleDocument,
     dropId: 'card_nft_2',
+    opsDb: harness.opsDb,
     queue,
   }), true);
   harness.setPaused(true);
@@ -803,6 +1000,7 @@ test('a stale pending snapshot does not consult paused control after another pub
     deliveryId: 7,
     document: staleDocument,
     dropId: 'card_nft_2',
+    opsDb: harness.opsDb,
     queue,
   }), false);
   assert.equal(queueSends, 1);
@@ -827,6 +1025,7 @@ test('successful queue publication retains its active claim when marker finaliza
     deliveryId: 7,
     document: harness.decodedDocument(7),
     dropId: 'card_nft_2',
+    opsDb: harness.opsDb,
     queue: notificationQueue({
       sendBatch: async () => {
         queueSends += 1;
@@ -844,6 +1043,7 @@ test('successful queue publication retains its active claim when marker finaliza
     deliveryId: 7,
     document: harness.decodedDocument(7),
     dropId: 'card_nft_2',
+    opsDb: harness.opsDb,
     queue: notificationQueue({
       sendBatch: async () => {
         queueSends += 1;
@@ -869,11 +1069,13 @@ test('one CAS winner publishes across concurrent direct and scheduled recovery',
       deliveryId: 7,
       document: harness.decodedDocument(7),
       dropId: 'card_nft_2',
+      opsDb: harness.opsDb,
       queue,
     }),
     reconcilePendingReadyToShipNotifications({
       FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
       NOTIFICATION_EMAIL_QUEUE: queue,
+      OPS_DB: harness.opsDb,
     }, new AbortController().signal, {
       accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
       nowMs: () => READY_NOTIFICATION_NOW_MS,
@@ -897,6 +1099,7 @@ test('an expired claim republishes the same stable Queue job identity', async ()
     deliveryId: 7,
     document: harness.decodedDocument(7),
     dropId: 'card_nft_2',
+    opsDb: harness.opsDb,
     queue: notificationQueue({
       sendBatch: async (messages) => {
         jobs.push(...Array.from(messages, (message) => message.body as Record<string, unknown>));
@@ -929,6 +1132,7 @@ test('attempt and retry-window exhaustion require manual review without Queue pu
       deliveryId: 7,
       document: harness.decodedDocument(7),
       dropId: 'card_nft_2',
+      opsDb: harness.opsDb,
       queue: notificationQueue({ sendBatch: async () => {
         queueSends += 1;
         return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
@@ -950,6 +1154,7 @@ test('an expired never-attempted notification gets one fresh publication window'
     deliveryId: 7,
     document: harness.decodedDocument(7),
     dropId: 'card_nft_2',
+    opsDb: harness.opsDb,
     queue: notificationQueue({ sendBatch: async () => {
       queueSends += 1;
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
@@ -970,11 +1175,93 @@ test('a pause observed after claiming releases the claim before Queue publicatio
     deliveryId: 7,
     document: harness.decodedDocument(7),
     dropId: 'card_nft_2',
+    opsDb: harness.opsDb,
     queue: notificationQueue({ sendBatch: async () => {
       queueSends += 1;
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     } }),
   }), /paused or unavailable/i);
+  assert.equal(queueSends, 0);
+  assert.equal(harness.fields()?.[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
+  assert.equal(harness.fields()?.[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD], 0);
+});
+
+test('an unavailable D1 control releases the claim and fails publication closed', async () => {
+  const harness = readyNotificationHarness();
+  const unavailable = new ReadyNotificationTestDatabase(
+    () => { throw new Error('D1 unavailable'); },
+    [],
+  );
+  let queueSends = 0;
+  await assert.rejects(deliveryReceiptTestHooks.publishReadyToShipNotifications({
+    context: readyNotificationContext(harness),
+    deliveryId: 7,
+    document: harness.decodedDocument(7),
+    dropId: 'card_nft_2',
+    opsDb: unavailable,
+    queue: notificationQueue({ sendBatch: async () => {
+      queueSends += 1;
+      return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+    } }),
+  }), /paused or unavailable/i);
+  assert.equal(queueSends, 0);
+  assert.equal(harness.fields()?.[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
+  assert.equal(harness.fields()?.[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD], 0);
+});
+
+test('an abort during the D1 control read releases the claim before Queue publication', async () => {
+  const harness = readyNotificationHarness();
+  const controller = new AbortController();
+  let releaseRead: (() => void) | undefined;
+  let markReadStarted: (() => void) | undefined;
+  const readStarted = new Promise<void>((resolve) => {
+    markReadStarted = resolve;
+  });
+  const controlRead = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  const opsDb = new ReadyNotificationTestDatabase(
+    async (statement) => {
+      markReadStarted?.();
+      await controlRead;
+      if (statement.query.includes('INSERT INTO worker_controls')) {
+        return readyNotificationD1Result();
+      }
+      if (statement.query.includes('SELECT control_key, paused, cursor_path, revision')) {
+        return readyNotificationD1Result([{
+          control_key: 'ready_notifications',
+          cursor_path: null,
+          paused: 0,
+          revision: 1,
+        }]);
+      }
+      throw new Error(`Unexpected D1 query: ${statement.query}`);
+    },
+    [],
+  );
+  let queueSends = 0;
+  const publication = deliveryReceiptTestHooks.publishReadyToShipNotifications({
+    context: {
+      ...readyNotificationContext(harness),
+      signal: controller.signal,
+    },
+    deliveryId: 7,
+    document: harness.decodedDocument(7),
+    dropId: 'card_nft_2',
+    opsDb,
+    queue: notificationQueue({
+      sendBatch: async () => {
+        queueSends += 1;
+        return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+      },
+    }),
+  });
+  await readStarted;
+  controller.abort(new DOMException('timed out', 'TimeoutError'));
+  releaseRead?.();
+  await assert.rejects(publication, (error: unknown) => (
+    error instanceof DOMException && error.name === 'TimeoutError'
+  ));
   assert.equal(queueSends, 0);
   assert.equal(harness.fields()?.[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
   assert.equal(harness.fields()?.[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD], 0);
@@ -990,6 +1277,7 @@ test('content construction failures remain pending under the active claim', asyn
     deliveryId: 7,
     document: harness.decodedDocument(7),
     dropId: 'card_nft_2',
+    opsDb: harness.opsDb,
     queue: notificationQueue(),
   }), /could not be prepared/i);
   assert.equal(harness.fields()?.buyerOrderReceivedEmailState, 'pending');
@@ -1008,6 +1296,7 @@ test('paused unbuildable notifications release their claim without consuming an 
     deliveryId: 7,
     document: harness.decodedDocument(7),
     dropId: 'card_nft_2',
+    opsDb: harness.opsDb,
     queue: notificationQueue({ sendBatch: async () => {
       queueSends += 1;
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
@@ -1029,6 +1318,7 @@ test('legacy pending markers without retry metadata never publish automatically'
     deliveryId: 7,
     document: harness.decodedDocument(7),
     dropId: 'card_nft_2',
+    opsDb: harness.opsDb,
     queue: notificationQueue({ sendBatch: async () => {
       queueSends += 1;
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
@@ -1039,52 +1329,36 @@ test('legacy pending markers without retry metadata never publish automatically'
   assert.equal(harness.fields()?.readyToShipNotificationLastErrorCode, 'manual-review-required');
 });
 
-test('notification reconciliation creates its missing Firestore control before scanning', async () => {
-  let controlExists = false;
-  let controlReads = 0;
-  let controlCreates = 0;
+test('notification reconciliation creates its missing D1 control atomically before scanning', async () => {
+  const control = readyNotificationControlHarness({ exists: false });
   let queryCalls = 0;
   const processed = await reconcilePendingReadyToShipNotifications({
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
     NOTIFICATION_EMAIL_QUEUE: notificationQueue(),
+    OPS_DB: control.db,
   }, new AbortController().signal, {
     accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
     nowMs: () => 1_700_000_000_000,
-    providerFetch: async (input, init) => {
+    providerFetch: async (input) => {
       const url = String(input);
-      if (url.includes(`/${READY_NOTIFICATION_CONTROL_PATH}`) && init?.method === 'GET') {
-        controlReads += 1;
-        return controlExists
-          ? Response.json(readyNotificationControlDocument())
-          : Response.json({ error: { status: 'NOT_FOUND' } }, { status: 404 });
-      }
       if (url.endsWith(':runQuery')) {
         queryCalls += 1;
         return Response.json([]);
-      }
-      if (url.endsWith('/documents:commit')) {
-        const body = JSON.parse(String(init?.body)) as Record<string, any>;
-        const write = body.writes[0];
-        assert.equal(write.update.name, `${FIRESTORE_DOCUMENT_NAME_PREFIX}${READY_NOTIFICATION_CONTROL_PATH}`);
-        assert.equal(write.update.fields.paused.booleanValue, false);
-        assert.equal(write.currentDocument.exists, false);
-        assert.deepEqual(write.updateTransforms, [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }]);
-        controlCreates += 1;
-        controlExists = true;
-        return Response.json({ writeResults: [{}] });
       }
       throw new Error(`Unexpected request: ${url}`);
     },
   });
   assert.equal(processed, 0);
-  assert.equal(controlReads, 2);
-  assert.equal(controlCreates, 1);
+  assert.equal(control.exists, true);
+  assert.equal(control.insertAttempts, 1);
+  assert.deepEqual(control.batchSizes, [2]);
+  assert.deepEqual(control.reads, [false]);
   assert.equal(queryCalls, 1);
 });
 
 test('paused notification control stops cron publication without scanning', async () => {
+  const control = readyNotificationControlHarness({ paused: true });
   let queueSends = 0;
-  let requests = 0;
   const logs: Record<string, unknown>[] = [];
   const processed = await reconcilePendingReadyToShipNotifications({
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
@@ -1094,20 +1368,15 @@ test('paused notification control stops cron publication without scanning', asyn
         return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
       },
     }),
+    OPS_DB: control.db,
   }, new AbortController().signal, {
     accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
     log: (entry) => logs.push(entry),
     nowMs: () => 1_700_000_000_000,
-    providerFetch: async (input, init) => {
-      requests += 1;
-      const url = String(input);
-      assert.equal(init?.method, 'GET');
-      assert.equal(url.includes(`/${READY_NOTIFICATION_CONTROL_PATH}`), true);
-      return Response.json(readyNotificationControlDocument(true));
-    },
+    providerFetch: async () => { throw new Error('Firestore must not be scanned'); },
   });
   assert.equal(processed, 0);
-  assert.equal(requests, 1);
+  assert.deepEqual(control.reads, [true]);
   assert.equal(queueSends, 0);
   assert.deepEqual(logs, [{ event: 'ready_to_ship_notifications_reconciliation_paused' }]);
 });
@@ -1123,6 +1392,7 @@ test('scheduled ready-notification reconciliation queues before finalization and
         return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
       },
     }),
+    OPS_DB: harness.opsDb,
   }, new AbortController().signal, {
     accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
     nowMs: () => READY_NOTIFICATION_NOW_MS,
@@ -1134,7 +1404,7 @@ test('scheduled ready-notification reconciliation queues before finalization and
     { jobId: '00000000-0000-4000-9000-000000000007', kind: 'shipper_ready_to_ship' },
   ]);
   assert.deepEqual(harness.events, ['claim', 'queued-marker', 'cursor']);
-  assert.equal(harness.commits.length, 3);
+  assert.equal(harness.commits.length, 2);
   const claimWrite = harness.commits[0].writes[0];
   assert.equal(typeof claimWrite.update.fields.readyToShipNotificationPublishClaimId.stringValue, 'string');
   assert.equal(claimWrite.update.fields.readyToShipNotificationPublishAttemptCount.integerValue, '1');
@@ -1143,10 +1413,8 @@ test('scheduled ready-notification reconciliation queues before finalization and
   assert.equal(markerWrite.update.fields.shipperReadyToShipEmailState.stringValue, 'queued');
   assert.equal(markerWrite.update.fields.readyToShipNotificationPublishClaimId, undefined);
   assert.ok(markerWrite.updateMask.fieldPaths.includes('readyToShipNotificationPublishClaimId'));
-  const cursorWrite = harness.commits[2].writes[0];
-  assert.equal(cursorWrite.update.name, `${FIRESTORE_DOCUMENT_NAME_PREFIX}${READY_NOTIFICATION_CONTROL_PATH}`);
-  assert.equal(cursorWrite.update.fields.cursorPath.stringValue, 'drops/card_nft_2/deliveryOrders/7');
-  assert.deepEqual(cursorWrite.updateTransforms, [{ fieldPath: 'cursorUpdatedAt', setToServerValue: 'REQUEST_TIME' }]);
+  assert.equal(harness.cursorPath, 'drops/card_nft_2/deliveryOrders/7');
+  assert.equal(harness.controlRevision, 2);
 });
 
 test('persisted notification cursor advances past four failures and reaches later work next run', async () => {
@@ -1164,6 +1432,7 @@ test('persisted notification cursor advances past four failures and reaches late
         return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
       },
     }),
+    OPS_DB: harness.opsDb,
   };
   const overrides = {
     accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
@@ -1199,6 +1468,7 @@ test('notification cursor compare-and-set preserves progress from a concurrent c
   const processed = await reconcilePendingReadyToShipNotifications({
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
     NOTIFICATION_EMAIL_QUEUE: notificationQueue(),
+    OPS_DB: harness.opsDb,
   }, new AbortController().signal, {
     accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
     nowMs: () => READY_NOTIFICATION_NOW_MS,
@@ -1226,6 +1496,7 @@ test('scheduled ready-notification reconciliation terminalizes poison rows befor
         return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
       },
     }),
+    OPS_DB: harness.opsDb,
   }, new AbortController().signal, {
     accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
     nowMs: () => READY_NOTIFICATION_NOW_MS,
@@ -1254,6 +1525,7 @@ test('scheduled reconciliation fails a wrong valid key and publishes its valid s
         return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
       },
     }),
+    OPS_DB: harness.opsDb,
   }, new AbortController().signal, {
     accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
     nowMs: () => READY_NOTIFICATION_NOW_MS,
@@ -1308,9 +1580,6 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
         updateTime: '2026-08-22T00:00:00.000Z',
         fields: { wallet: { stringValue: OWNER } },
       });
-    }
-    if (url.includes(`/${READY_NOTIFICATION_CONTROL_PATH}`)) {
-      return Response.json(readyNotificationControlDocument());
     }
     if (url.includes('/drops/card_nft_2/deliveryOrders/7')) {
       return Response.json({
@@ -1887,9 +2156,6 @@ test('forced recovery validates the delivery PDA and finalizes an already-burned
         updateTime: '2026-08-22T00:00:00.000Z',
         fields: { wallet: { stringValue: OWNER } },
       });
-    }
-    if (url.includes(`/${READY_NOTIFICATION_CONTROL_PATH}`)) {
-      return Response.json(readyNotificationControlDocument());
     }
     if (url.includes(`/drops/${runtime.dropId}/deliveryOrders/7`)) {
       return Response.json(orderDocument);

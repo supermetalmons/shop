@@ -1,8 +1,8 @@
-export const READY_NOTIFICATION_CONTROL_PATH = 'workerControls/readyNotifications';
 export const READY_NOTIFICATION_PENDING_STATE = 'pending';
 export const READY_NOTIFICATION_BUYER_STATE_FIELD = 'buyerOrderReceivedEmailState';
 export const READY_NOTIFICATION_SHIPPER_STATE_FIELD = 'shipperReadyToShipEmailState';
 const READY_NOTIFICATION_RECONCILIATION_MAX_QUERY_LIMIT = 32;
+const READY_NOTIFICATION_CURSOR_DROP_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 type ReadyNotificationReconciliationQueryArgs = {
   limit: number;
@@ -14,6 +14,20 @@ function boundedQueryLimit(value: number): number {
     throw new Error('Ready-notification reconciliation query limit is invalid');
   }
   return Math.min(value, READY_NOTIFICATION_RECONCILIATION_MAX_QUERY_LIMIT);
+}
+
+export function isCanonicalReadyNotificationCursorPath(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const parts = value.split('/');
+  if (
+    parts.length !== 4 ||
+    parts[0] !== 'drops' ||
+    !READY_NOTIFICATION_CURSOR_DROP_ID_PATTERN.test(parts[1] || '') ||
+    parts[2] !== 'deliveryOrders' ||
+    !/^[1-9][0-9]*$/.test(parts[3] || '')
+  ) return false;
+  const deliveryId = Number(parts[3]);
+  return Number.isSafeInteger(deliveryId) && deliveryId > 0;
 }
 
 export function buildReadyNotificationReconciliationQuery(

@@ -120,6 +120,7 @@ import {
   RECEIPT_TRANSFER_PREPARE_PATH,
   handleReceiptTransferPrepare,
 } from './receiptTransfer.js';
+import { cleanupExpiredReceiptTransferRateLimitBuckets } from './receiptTransferRateLimit.js';
 import {
   STRIPE_RECEIPT_CLAIM_PATH,
   handleStripeReceiptClaim,
@@ -240,12 +241,37 @@ type BackgroundJobProcessors = {
 
 type ScheduledReconcilers = {
   notifications: typeof reconcilePendingReadyToShipNotifications;
+  ops: (env: Pick<Env, 'OPS_DB'>, signal: AbortSignal) => Promise<void>;
   packStatus: typeof reconcilePendingDeliveryPackStatusProjections;
   stripe: typeof reconcileStaleStripeFulfillments;
 };
 
+async function cleanupScheduledOpsState(
+  env: Pick<Env, 'OPS_DB'>,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) throw signal.reason;
+  const result = await cleanupExpiredReceiptTransferRateLimitBuckets(env.OPS_DB, Date.now());
+  if (signal.aborted) throw signal.reason;
+  if (result.deletedCount > 0) {
+    console.log({
+      event: 'receipt_transfer_rate_limit_cleanup_completed',
+      deletedCount: result.deletedCount,
+      limitReached: result.limitReached,
+      hasMore: result.hasMore,
+    });
+  }
+  if (result.limitReached && result.hasMore) {
+    console.error({
+      event: 'receipt_transfer_rate_limit_cleanup_backlog',
+      deletedCount: result.deletedCount,
+    });
+  }
+}
+
 const defaultScheduledReconcilers: ScheduledReconcilers = {
   notifications: reconcilePendingReadyToShipNotifications,
+  ops: cleanupScheduledOpsState,
   packStatus: reconcilePendingDeliveryPackStatusProjections,
   stripe: reconcileStaleStripeFulfillments,
 };
@@ -260,6 +286,7 @@ export async function runScheduledReconciliations(
     reconcilers.stripe(env, signal),
     reconcilers.packStatus(env, signal),
     reconcilers.notifications(env, signal),
+    reconcilers.ops(env, signal),
   ]);
   const failures = results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
   if (failures.length) throw new AggregateError(failures, 'Scheduled reconciliation failed');

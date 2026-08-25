@@ -9,6 +9,19 @@ const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.me
   scripts: Record<string, string>;
   devDependencies: Record<string, string>;
 };
+const apiWrangler = JSON.parse(
+  readFileSync(
+    new URL('../cloud/workers/api/wrangler.jsonc', import.meta.url),
+    'utf8',
+  ),
+) as {
+  d1_databases: Array<{
+    binding: string;
+    database_name: string;
+    database_id: string;
+    migrations_dir: string;
+  }>;
+};
 
 test('Cloudflare releases use direct pinned Wrangler commands', () => {
   assert.equal(packageJson.devDependencies.wrangler, '4.120.0');
@@ -33,17 +46,50 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
     'npm run types:api:check && npm run typecheck:api && npm run test:api && npm run test:api:runtime && npm run dry-run:api && npm run startup:api',
   );
   assert.equal(
-    packageJson.scripts['db:migrate:api'],
+    packageJson.scripts['db:migrate:data'],
     'wrangler d1 migrations apply mons-shop-data --remote --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env',
+  );
+  assert.equal(
+    packageJson.scripts['db:migrate:ops'],
+    'wrangler d1 migrations apply mons-shop-ops --remote --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env',
+  );
+  assert.equal(
+    packageJson.scripts['db:migrate:api'],
+    'npm run db:migrate:data && npm run db:migrate:ops',
   );
   assert.equal(
     packageJson.scripts['check:pack-status-d1'],
     'node --import tsx scripts/ops/checkPackStatusD1.ts',
   );
   assert.equal(
-    packageJson.scripts['deploy:api'],
-    'npm run check:api && npm run db:migrate:api && npm run check:pack-status-d1 && wrangler deploy --strict --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env',
+    packageJson.scripts['check:ops-d1'],
+    'node --import tsx scripts/ops/checkOpsD1.ts',
   );
+  assert.equal(
+    packageJson.scripts['ready-notifications-control'],
+    'node --import tsx scripts/ops/readyNotificationsControl.ts',
+  );
+  assert.equal(
+    packageJson.scripts['deploy:api'],
+    'npm run check:api && npm run db:migrate:api && npm run check:pack-status-d1 && npm run check:ops-d1 && wrangler deploy --strict --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env',
+  );
+});
+
+test('API Worker binds separate immutable data and ops D1 histories', () => {
+  assert.deepEqual(apiWrangler.d1_databases, [
+    {
+      binding: 'DATA_DB',
+      database_name: 'mons-shop-data',
+      database_id: '4b09f942-b0c6-4a1e-81df-cb802fbf7099',
+      migrations_dir: 'migrations',
+    },
+    {
+      binding: 'OPS_DB',
+      database_name: 'mons-shop-ops',
+      database_id: '6f8f6e7e-e6b1-4e1d-bd68-ece26fd918d5',
+      migrations_dir: 'ops-migrations',
+    },
+  ]);
 });
 
 test('production Vite builds ignore local client overrides and inject build time', () => {

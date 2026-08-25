@@ -23,7 +23,12 @@ import {
   notificationEnqueueTimestamp,
   signNotificationEnqueueRequest,
 } from '../../../../shared/notificationEnqueueAuth.ts';
-import { handleRequest, sleepWithAbort, type ProviderFetch } from '../src/index.ts';
+import {
+  handleRequest,
+  runScheduledReconciliations,
+  sleepWithAbort,
+  type ProviderFetch,
+} from '../src/index.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const CARD_COLLECTION = 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu';
@@ -33,6 +38,7 @@ const TRANSACTION = Buffer.from([1, 2, 3]).toString('base64');
 function env(options: {
   apiKey?: string;
   dataDb?: D1Database;
+  opsDb?: D1Database;
   resendContactsApiKey?: string;
   notificationEnqueueSecret?: string;
   notificationQueue?: Queue;
@@ -44,6 +50,7 @@ function env(options: {
   };
   return {
     DATA_DB: options.dataDb || {} as D1Database,
+    OPS_DB: options.opsDb || {} as D1Database,
     NOTIFICATION_EMAIL_QUEUE: notificationQueue,
     REVEAL_BACKGROUND_QUEUE: notificationQueue,
     STRIPE_FULFILLMENT_QUEUE: notificationQueue,
@@ -123,6 +130,37 @@ function memoryPackStatusCache(): Pick<Cache, 'match' | 'put'> {
     },
   };
 }
+
+test('scheduled reconciliation isolates all four subsystems and reports failures after settlement', async () => {
+  const calls: string[] = [];
+  const failure = new Error('ops cleanup failed');
+  await assert.rejects(
+    runScheduledReconciliations(env(), new AbortController().signal, {
+      notifications: async () => {
+        calls.push('notifications');
+        return 0;
+      },
+      ops: async () => {
+        calls.push('ops');
+        throw failure;
+      },
+      packStatus: async () => {
+        calls.push('packStatus');
+        return 0;
+      },
+      stripe: async () => {
+        calls.push('stripe');
+        return { enqueued: 0, failed: 0 };
+      },
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [failure]);
+      return true;
+    },
+  );
+  assert.deepEqual(calls.sort(), ['notifications', 'ops', 'packStatus', 'stripe']);
+});
 
 const NOTIFICATION_JOB = createNotificationEmailJobV1({
   jobId: '123e4567-e89b-42d3-a456-426614174000',

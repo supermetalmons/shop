@@ -19,7 +19,7 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
     routes: undefined,
     d1_databases: productionConfig.d1_databases.map((database: Record<string, unknown>) => ({
       ...database,
-      migrations_dir: resolve('cloud/workers/api/migrations'),
+      migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)),
     })),
   };
   delete runtimeConfig.$schema;
