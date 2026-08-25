@@ -88,6 +88,10 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
+import {
+  loadD1ProfileAddress,
+  type D1ProfileAddress,
+} from './profileD1.js';
 
 export const DELIVERY_PREPARE_PATH = '/delivery/prepare';
 
@@ -125,7 +129,7 @@ const requestSchema = z.object({
 type DeliveryPrepareEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
->;
+> & Partial<Pick<Env, 'OPS_DB'>>;
 
 type DeliveryPrepareErrorCode =
   | 'invalid-argument'
@@ -221,6 +225,7 @@ type DeliveryPrepareDependencies = {
   getDrop: (dropId: string) => ApiDropConfig | undefined;
   loadAddress: (
     context: FirestoreContext,
+    db: D1Database | undefined,
     wallet: string,
     addressId: string,
   ) => Promise<AddressDocument>;
@@ -821,22 +826,48 @@ async function loadWalletSession(context: FirestoreContext, uid: string): Promis
   return resolution.wallet;
 }
 
+function d1AddressDocument(address: D1ProfileAddress): AddressDocument {
+  const rawFields: Record<string, unknown> = {
+    id: firestoreString(address.id),
+    country: firestoreString(address.country),
+    encrypted: firestoreString(address.encrypted),
+    hint: firestoreString(address.hint),
+    createdAt: { timestampValue: new Date(address.createdAtMs).toISOString() },
+    ...(address.countryCode ? { countryCode: firestoreString(address.countryCode) } : {}),
+    ...(address.email ? { email: firestoreString(address.email) } : {}),
+    ...(address.label ? { label: firestoreString(address.label) } : {}),
+  };
+  return {
+    decoded: {
+      id: address.id,
+      country: address.country,
+      encrypted: address.encrypted,
+      hint: address.hint,
+      createdAt: address.createdAtMs,
+      ...(address.countryCode ? { countryCode: address.countryCode } : {}),
+      ...(address.email ? { email: address.email } : {}),
+      ...(address.label ? { label: address.label } : {}),
+    },
+    rawFields,
+  };
+}
+
 async function loadAddress(
   context: FirestoreContext,
+  db: D1Database | undefined,
   wallet: string,
   addressId: string,
 ): Promise<AddressDocument> {
-  const url = new URL(
-    `${FIRESTORE_DOCUMENTS_BASE_URL}/profiles/${encodeURIComponent(wallet)}/addresses/${encodeURIComponent(addressId)}`,
-  );
-  const document = await authenticatedFirestoreRequest({ ...context, method: 'GET', url: url.toString() });
-  if (!isRecord(document)) throw new DeliveryPrepareError('not-found', 'Address not found');
-  const rawFields = isRecord(document.fields) ? document.fields : null;
-  const decoded = rawFields ? decodeFirestoreFields(rawFields) : null;
-  if (!rawFields || !decoded) {
+  if (!db) throw new DeliveryPrepareError('unavailable', 'Delivery address is temporarily unavailable.');
+  let stored;
+  try {
+    stored = await loadD1ProfileAddress(db, wallet, addressId, context.signal);
+  } catch {
+    if (context.signal.aborted) throw context.signal.reason;
     throw new DeliveryPrepareError('unavailable', 'Delivery address is temporarily unavailable.');
   }
-  return { decoded, rawFields };
+  if (stored) return d1AddressDocument(stored);
+  throw new DeliveryPrepareError('not-found', 'Address not found');
 }
 
 function firestoreInteger(value: number): Record<string, unknown> {
@@ -1278,7 +1309,7 @@ async function prepareDelivery(args: {
   if (new Set(itemIds).size !== itemIds.length) {
     throw new DeliveryPrepareError('invalid-argument', 'Duplicate itemIds are not allowed');
   }
-  const address = await args.dependencies.loadAddress(args.context, ownerWallet, args.body.addressId);
+  const address = await args.dependencies.loadAddress(args.context, args.env.OPS_DB, ownerWallet, args.body.addressId);
   const rawAddressCountry = typeof address.decoded.countryCode === 'string' && address.decoded.countryCode
     ? address.decoded.countryCode
     : typeof address.decoded.country === 'string' ? address.decoded.country : '';
@@ -1401,8 +1432,8 @@ const defaultDependencies: DeliveryPrepareDependencies = {
   deleteDeliveryOrder,
   deliveryPdaExists,
   fetchAsset,
-  getDrop: getApiDrop,
   loadAddress,
+  getDrop: getApiDrop,
   loadLatestBlockhash,
   loadLookupTable,
   loadOnchainState,
@@ -1533,6 +1564,7 @@ export const deliveryPrepareTestHooks = {
   deriveDeliveryPda,
   encodeDeliverArgs,
   fetchAsset,
+  loadAddress,
   loadLatestBlockhash,
   loadLookupTable,
   loadOnchainState,

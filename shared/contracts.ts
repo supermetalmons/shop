@@ -55,6 +55,10 @@ export type ProfileAddress = {
   email?: string;
 };
 
+export type SaveProfileAddressRequest = Omit<ProfileAddress, 'id' | 'countryName'> & {
+  id?: string;
+};
+
 export type DeliveryOrderItemSummary = {
   kind: 'box' | 'dude';
   refId: number;

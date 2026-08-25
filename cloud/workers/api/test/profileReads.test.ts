@@ -89,13 +89,16 @@ function accessTokenProvider(): GoogleAccessTokenProvider {
 
 function profileDependencies(
   providerFetch: ProfileProviderFetch,
+  overrides: Partial<Parameters<typeof handleProfileReadRequest>[3]> = {},
 ): Parameters<typeof handleProfileReadRequest>[3] {
   return {
     accessTokenProvider: accessTokenProvider(),
+    loadProfileEmail: async () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
     timeoutMs: 500,
     verifyIdToken: async () => ({ uid: UID }),
+    ...overrides,
   };
 }
 
@@ -289,7 +292,7 @@ test('profile state derives identity server-side and returns independently bound
         ]);
       }
       return Response.json({ error: 'unexpected' }, { status: 500 });
-    }),
+    }, { loadProfileEmail: async () => 'owner@example.com' }),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), {
@@ -375,6 +378,10 @@ test('profile state reports section failures without discarding successful data'
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'busy' }, { status: 503 });
       if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
+    }, {
+      loadProfileEmail: async () => {
+        throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
+      },
     }),
   );
   assert.equal(result.response.status, 200);
@@ -469,7 +476,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     profileDependencies(async (input) => {
       if (String(input).includes('/authSessions/')) return Response.json(sessionDocument(OTHER));
       return Response.json({ error: 'unexpected' }, { status: 500 });
-    }),
+    }, { loadProfileEmail: async () => 'owner@example.com' }),
   );
   assert.equal(denied.response.status, 403);
   assert.equal((await denied.response.json() as { error: { code: string } }).error.code, 'permission-denied');
@@ -484,7 +491,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ fields: { email: stringValue('owner@example.com') } });
       if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
-    }),
+    }, { loadProfileEmail: async () => 'owner@example.com' }),
   );
   assert.equal(accepted.response.status, 200);
   assert.deepEqual(await accepted.response.json(), {
@@ -516,6 +523,23 @@ test('admin profile route enforces the existing wallet allowlist and returns can
   );
   assert.equal(missingProfile.response.status, 200);
   assert.deepEqual(await missingProfile.response.json(), { profile: { wallet: OWNER, orders: [] } });
+
+  const unavailableProfile = await handleProfileReadRequest(
+    tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
+    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    ADMIN_PROFILE_PATH,
+    profileDependencies(async (input) => {
+      const url = String(input);
+      if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
+      if (url.endsWith('/documents:runQuery')) return Response.json([]);
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    }, {
+      loadProfileEmail: async () => {
+        throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
+      },
+    }),
+  );
+  assert.equal(unavailableProfile.response.status, 502);
 });
 
 test('admin and fulfillment read routes preserve access, pagination, masking, and Stripe fallback', async () => {

@@ -44,6 +44,7 @@ import {
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { isProfileRequestOriginAllowed } from './profileReads.js';
+import { ensureD1Profile } from './profileD1.js';
 
 export const SOLANA_AUTH_PATH = '/auth/solana';
 export const PROFILE_RECONCILE_PATH = '/profile/reconcile';
@@ -99,6 +100,11 @@ type ProfileLifecycleDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
+  upsertProfile: (
+    db: D1Database | undefined,
+    profile: Parameters<typeof ensureD1Profile>[1],
+    signal: AbortSignal,
+  ) => Promise<void>;
   verifyIdToken: (
     authorization: string | null,
     providerFetch: ProfileProviderFetch,
@@ -107,7 +113,7 @@ type ProfileLifecycleDependencies = {
   ) => Promise<FirebaseIdentity>;
 };
 
-type ProfileLifecycleEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'>;
+type ProfileLifecycleEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'OPS_DB'>>;
 
 class WalletSessionSupersededError extends ProfileReadError {
   constructor() {
@@ -317,13 +323,6 @@ async function establishWalletSession(params: {
           currentDocument: current
             ? { updateTime: current.updateTime }
             : { exists: false },
-        },
-        {
-          update: {
-            name: documentName(`profiles/${params.wallet}`),
-            fields: { wallet: firestoreString(params.wallet) },
-          },
-          updateMask: { fieldPaths: ['wallet'] },
         },
       ]);
       return;
@@ -545,6 +544,10 @@ const defaultDependencies: ProfileLifecycleDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: AUTH_TIMEOUT_MS,
+  upsertProfile: async (db, profile, signal) => {
+    if (!db) throw new Error('OPS_DB is unavailable');
+    await ensureD1Profile(db, profile, signal);
+  },
   verifyIdToken: verifyFirebaseIdToken,
 };
 
@@ -619,6 +622,16 @@ export async function handleProfileLifecycleRequest(
         signature: authBody.signature,
         wallet,
       });
+      try {
+        await dependencies.upsertProfile(
+          env.OPS_DB,
+          { wallet, createdAtMs: nowMs, updatedAtMs: nowMs },
+          controller.signal,
+        );
+      } catch (error) {
+        if (controller.signal.aborted) throw controller.signal.reason;
+        throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+      }
       return { response: jsonResponse({ wallet }, 200), metrics, authOutcome: 'accepted' };
     }
     const response = await reconcileProfileState({

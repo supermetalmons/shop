@@ -31,6 +31,7 @@ import {
   PreparedTxResponse,
   Profile,
   ProfileAddress,
+  SaveProfileAddressRequest,
   ProfileStateProfile,
   ProfileStateSection,
   PurchaseFulfillmentShipStationLabelRequest,
@@ -71,6 +72,7 @@ import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
 } from '../../shared/solanaRpcProxy.ts';
+import { createProfileAddressId } from '../../shared/profileD1.ts';
 import { fetchPackStatus } from './shopApi';
 import { monsApiOrigin } from './monsApiOrigin';
 
@@ -263,6 +265,7 @@ const DELIVERY_PREPARE_API_TIMEOUT_MS = 65_000;
 const DELIVERY_RECEIPTS_API_TIMEOUT_MS = 65_000;
 const RECEIPT_TRANSFER_PREPARE_API_TIMEOUT_MS = 65_000;
 const STRIPE_RECEIPT_CLAIM_API_TIMEOUT_MS = 190_000;
+const PROFILE_D1_WRITE_API_TIMEOUT_MS = 80_000;
 const SHIPSTATION_LABEL_API_TIMEOUT_MS = 50_000;
 const SHIPSTATION_LABEL_PURCHASE_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_LABEL_VOID_API_TIMEOUT_MS = 65_000;
@@ -270,6 +273,7 @@ const SHIPSTATION_RATES_API_TIMEOUT_MS = 65_000;
 const SHIPSTATION_SHIPMENT_API_TIMEOUT_MS = 65_000;
 
 function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
+  if (pathname === '/auth/solana' || pathname === '/profile/addresses') return PROFILE_D1_WRITE_API_TIMEOUT_MS;
   if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
   if (pathname === '/claims/irl/prepare') return IRL_CLAIM_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/admin/irl-redeem/prepare') return ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS;
@@ -1044,16 +1048,41 @@ export async function saveEncryptedAddress(
   email?: string,
   countryCode?: string,
 ): Promise<ProfileAddress> {
-  const response = await callProfileApi('/profile/addresses', {
+  const request: SaveProfileAddressRequest = {
+    id: createProfileAddressId(),
     encrypted,
     country,
     countryCode,
     hint,
     email,
-  });
+  };
+  const response = await saveProfileAddressRequest(request, (pathname, data) => callProfileApi(pathname, data));
   const address = parseProfileAddress(response);
   if (!address) throw new Error('Invalid saved address response');
   return address;
+}
+
+type ProfileApiCaller = (pathname: AuthenticatedApiPath, data: unknown) => Promise<unknown>;
+
+function retryableProfileAddressError(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  if (!error || typeof error !== 'object') return false;
+  const code = (error as { code?: unknown }).code;
+  return code === 'deadline-exceeded' || code === 'unavailable';
+}
+
+async function saveProfileAddressRequest(
+  request: SaveProfileAddressRequest,
+  call: ProfileApiCaller,
+): Promise<unknown> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await call('/profile/addresses', request);
+    } catch (error) {
+      if (attempt > 0 || !retryableProfileAddressError(error)) throw error;
+    }
+  }
+  throw new Error('Profile address retry failed');
 }
 
 function stripeCheckoutRequestQuantity(quantity: StripeCheckoutSessionRequest['quantity']): number | undefined {
@@ -1876,4 +1905,5 @@ export const profileApiTestHooks = {
   profileApiErrorPayload,
   profileOrders,
   requestProfileApi,
+  saveProfileAddressRequest,
 };

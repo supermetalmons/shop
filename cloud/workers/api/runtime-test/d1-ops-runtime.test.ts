@@ -15,6 +15,17 @@ import {
   receiptTransferAssetRateLimitBucket,
   receiptTransferCallerRateLimitBucket,
 } from '../src/receiptTransferRateLimit.ts';
+import {
+  ensureD1Profile,
+  loadD1Profile,
+  loadD1ProfileAddress,
+  saveD1ProfileAddress,
+} from '../src/profileD1.ts';
+import { profileReadTestHooks } from '../src/profileReads.ts';
+import { deliveryPrepareTestHooks } from '../src/deliveryPrepare.ts';
+
+const PROFILE_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
+const RACE_WALLET = '11111111111111111111111111111111';
 
 test('ops D1 migrations enforce notification control and receipt-transfer limits', async () => {
   const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
@@ -41,7 +52,187 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     const migrations = await env.OPS_DB.prepare(
       'SELECT name FROM d1_migrations ORDER BY name',
     ).all<{ name: string }>();
-    assert.deepEqual(migrations.results.map((row) => row.name), ['0001_ops_state.sql']);
+    assert.deepEqual(migrations.results.map((row) => row.name), [
+      '0001_ops_state.sql',
+      '0002_profiles.sql',
+      '0003_profiles_d1_final.sql',
+      '0004_profile_integrity.sql',
+      '0005_profile_write_safety.sql',
+    ]);
+    assert.deepEqual(await saveD1ProfileAddress(env.OPS_DB, {
+      wallet: PROFILE_WALLET,
+      id: 'AbCdEfGhIjKlMnOpQrSt',
+      country: 'United States',
+      countryCode: 'US',
+      encrypted: 'cipher-text',
+      hint: '100…01',
+      email: 'owner@example.com',
+      createdAtMs: 1_000,
+      updatedAtMs: 1_000,
+    }), {
+      id: 'AbCdEfGhIjKlMnOpQrSt',
+      country: 'United States',
+      countryCode: 'US',
+      encrypted: 'cipher-text',
+      hint: '100…01',
+      email: 'owner@example.com',
+    });
+    assert.deepEqual(await saveD1ProfileAddress(env.OPS_DB, {
+      wallet: PROFILE_WALLET,
+      id: 'AbCdEfGhIjKlMnOpQrSt',
+      country: 'United States',
+      countryCode: 'US',
+      encrypted: 'cipher-text',
+      hint: '100…01',
+      email: 'owner@example.com',
+      createdAtMs: 1_500,
+      updatedAtMs: 1_500,
+    }), {
+      id: 'AbCdEfGhIjKlMnOpQrSt',
+      country: 'United States',
+      countryCode: 'US',
+      encrypted: 'cipher-text',
+      hint: '100…01',
+      email: 'owner@example.com',
+    });
+    assert.equal((await loadD1ProfileAddress(
+      env.OPS_DB,
+      PROFILE_WALLET,
+      'AbCdEfGhIjKlMnOpQrSt',
+    ))?.createdAtMs, 1_000);
+    await saveD1ProfileAddress(env.OPS_DB, {
+      wallet: PROFILE_WALLET,
+      id: 'ZbCdEfGhIjKlMnOpQrSt',
+      country: 'Türkiye',
+      countryCode: 'TR',
+      encrypted: 'cipher-two',
+      hint: '340…TR',
+      createdAtMs: 2_000,
+      updatedAtMs: 2_000,
+    });
+    assert.deepEqual(await loadD1Profile(env.OPS_DB, PROFILE_WALLET), {
+      wallet: PROFILE_WALLET,
+      email: 'owner@example.com',
+      createdAtMs: 1_000,
+      updatedAtMs: 1_500,
+    });
+    assert.equal((await loadD1ProfileAddress(env.OPS_DB, PROFILE_WALLET, 'ZbCdEfGhIjKlMnOpQrSt'))?.countryCode, 'TR');
+    await assert.rejects(saveD1ProfileAddress(env.OPS_DB, {
+      wallet: PROFILE_WALLET,
+      id: 'AbCdEfGhIjKlMnOpQrSt',
+      country: 'Canada',
+      encrypted: 'collision',
+      hint: 'collision',
+      email: 'replacement@example.com',
+      createdAtMs: 3_000,
+      updatedAtMs: 3_000,
+    }));
+    assert.equal((await loadD1Profile(env.OPS_DB, PROFILE_WALLET))?.email, 'owner@example.com');
+    await saveD1ProfileAddress(env.OPS_DB, {
+      wallet: PROFILE_WALLET,
+      id: 'YbCdEfGhIjKlMnOpQrSt',
+      country: 'United States',
+      encrypted: 'legacy-cipher',
+      hint: 'legacy',
+      email: 'owner@example.com',
+      label: 'Home',
+      createdAtMs: 500,
+      updatedAtMs: 500,
+    });
+    assert.equal((await loadD1ProfileAddress(
+      env.OPS_DB,
+      PROFILE_WALLET,
+      'YbCdEfGhIjKlMnOpQrSt',
+    ))?.label, 'Home');
+    await assert.rejects(env.OPS_DB.prepare(
+      "UPDATE profile_addresses SET encrypted = 'changed' WHERE wallet = ? AND address_id = 'AbCdEfGhIjKlMnOpQrSt'",
+    ).bind(PROFILE_WALLET).run());
+    await assert.rejects(env.OPS_DB.prepare(
+      "DELETE FROM profile_addresses WHERE wallet = ? AND address_id = 'AbCdEfGhIjKlMnOpQrSt'",
+    ).bind(PROFILE_WALLET).run());
+    await assert.rejects(env.OPS_DB.prepare(
+      'DELETE FROM profiles WHERE wallet = ?',
+    ).bind(PROFILE_WALLET).run());
+    assert.equal(await profileReadTestHooks.loadProfileEmail({
+      accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+      db: env.OPS_DB,
+      nowMs: 4_000,
+      ownerWallet: PROFILE_WALLET,
+      providerFetch: async () => assert.fail('D1 profile read reached Firestore'),
+      serviceAccountJson: 'credential',
+      signal: new AbortController().signal,
+    }), 'owner@example.com');
+    const missingWallet = 'So11111111111111111111111111111111111111112';
+    assert.equal(await profileReadTestHooks.loadProfileEmail({
+      accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+      db: env.OPS_DB,
+      nowMs: 4_000,
+      ownerWallet: missingWallet,
+      providerFetch: async () => assert.fail('D1-only profile read reached Firestore'),
+      serviceAccountJson: 'credential',
+      signal: new AbortController().signal,
+    }), undefined);
+    await assert.rejects(deliveryPrepareTestHooks.loadAddress({
+      accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+      nowMs: 4_000,
+      providerFetch: async () => assert.fail('D1-only address read reached Firestore'),
+      serviceAccountJson: 'credential',
+      signal: new AbortController().signal,
+    }, env.OPS_DB, missingWallet, 'XbCdEfGhIjKlMnOpQrSt'), /Address not found/);
+    await ensureD1Profile(env.OPS_DB, {
+      wallet: RACE_WALLET,
+      createdAtMs: 3_000,
+      updatedAtMs: 3_000,
+    });
+    await saveD1ProfileAddress(env.OPS_DB, {
+      wallet: RACE_WALLET,
+      id: 'RbCdEfGhIjKlMnOpQrSt',
+      country: 'Türkiye',
+      encrypted: 'race-cipher',
+      hint: 'race',
+      email: 'race@example.com',
+      createdAtMs: 2_000,
+      updatedAtMs: 2_000,
+    });
+    assert.deepEqual(await loadD1Profile(env.OPS_DB, RACE_WALLET), {
+      wallet: RACE_WALLET,
+      email: 'race@example.com',
+      createdAtMs: 2_000,
+      updatedAtMs: 2_000,
+    });
+    await ensureD1Profile(env.OPS_DB, {
+      wallet: RACE_WALLET,
+      createdAtMs: 4_000,
+      updatedAtMs: 4_000,
+    });
+    assert.equal((await loadD1Profile(env.OPS_DB, RACE_WALLET))?.updatedAtMs, 2_000);
+    await assert.rejects(
+      loadD1Profile(env.OPS_DB, PROFILE_WALLET, AbortSignal.abort(new Error('D1 deadline'))),
+      /D1 deadline/,
+    );
+    await assert.rejects(
+      env.OPS_DB.prepare(`INSERT INTO profile_addresses (
+        wallet, address_id, encrypted, country, country_code,
+        hint, email, label, created_at_ms, updated_at_ms
+      ) VALUES (?, 'TbCdEfGhIjKlMnOpQrSt', 'cipher', 'US', 'US', 'hint', NULL, NULL, ?, ?)`)
+        .bind(PROFILE_WALLET, 253_402_300_800_000, 253_402_300_800_000)
+        .run(),
+    );
+    await assert.rejects(env.OPS_DB.prepare(
+      "UPDATE profile_storage_control SET read_source = 'firestore_fallback' WHERE singleton = 1",
+    ).run());
+    await assert.rejects(env.OPS_DB.prepare(
+      'DELETE FROM profile_storage_control WHERE singleton = 1',
+    ).run());
+    await assert.rejects(env.OPS_DB.prepare(
+      "INSERT OR REPLACE INTO profile_storage_control (singleton, read_source, updated_at_ms) VALUES (1, 'firestore_fallback', 0)",
+    ).run());
+    await assert.rejects(env.OPS_DB.prepare(
+      `INSERT INTO profile_addresses (
+        wallet, address_id, encrypted, country, country_code,
+        hint, email, label, created_at_ms, updated_at_ms
+      ) VALUES (?, 'QbCdEfGhIjKlMnOpQrSt', 'cipher', 'US', 'US', 'hint', NULL, NULL, 0, 0)`,
+    ).bind('So11111111111111111111111111111111111111112').run());
     assert.deepEqual(await loadReadyNotificationControl(env.OPS_DB, 1_000), {
       cursorPath: null,
       paused: false,

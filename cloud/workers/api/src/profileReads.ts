@@ -55,6 +55,9 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
+import {
+  loadD1Profile,
+} from './profileD1.js';
 
 export {
   ProfileReadError,
@@ -229,6 +232,7 @@ const defaultAccessTokenProvider = createGoogleAccessTokenProvider();
 
 type ProfileReadDependencies = {
   accessTokenProvider: GoogleAccessTokenProvider;
+  loadProfileEmail: typeof loadProfileEmail;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
@@ -242,6 +246,7 @@ type ProfileReadDependencies = {
 
 type ProfileReadEnv = Pick<Env, 'FIRESTORE_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
   | 'ADDRESS_DECRYPTION_SECRET'
+  | 'OPS_DB'
   | 'STRIPE_SECRET_KEY'
   | 'STRIPE_RESTRICTED_KEY'
   | 'STRIPE_SECRET_KEY_LIVE'
@@ -250,6 +255,7 @@ type ProfileReadEnv = Pick<Env, 'FIRESTORE_SERVICE_ACCOUNT_JSON'> & Partial<Pick
 
 const defaultDependencies: ProfileReadDependencies = {
   accessTokenProvider: defaultAccessTokenProvider,
+  loadProfileEmail,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: PROFILE_READ_TIMEOUT_MS,
@@ -553,22 +559,17 @@ async function loadDeliveryHistory(args: {
 
 async function loadAdminProfile(args: {
   accessTokenProvider: GoogleAccessTokenProvider;
+  db: D1Database | undefined;
   nowMs: number;
   ownerWallet: string;
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
   signal: AbortSignal;
-}): Promise<GetAdminProfileViewResponse> {
-  const profileUrl = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/profiles/${encodeURIComponent(args.ownerWallet)}`);
-  profileUrl.searchParams.append('mask.fieldPaths', 'email');
-  const [profileDocument, orders] = await Promise.all([
-    authenticatedFirestoreRequest({ ...args, method: 'GET', url: profileUrl.toString() }),
+}, profileEmailLoader: typeof loadProfileEmail): Promise<GetAdminProfileViewResponse> {
+  const [email, orders] = await Promise.all([
+    profileEmailLoader(args),
     loadDeliveryHistory({ ...args, owner: args.ownerWallet }),
   ]);
-  const profileFields = isRecord(profileDocument) ? decodeFirestoreFields(profileDocument.fields) : null;
-  const email = typeof profileFields?.email === 'string' && profileFields.email.trim()
-    ? profileFields.email.trim()
-    : undefined;
   return {
     profile: {
       wallet: args.ownerWallet,
@@ -576,6 +577,26 @@ async function loadAdminProfile(args: {
       orders,
     },
   };
+}
+
+async function loadProfileEmail(args: {
+  accessTokenProvider: GoogleAccessTokenProvider;
+  db: D1Database | undefined;
+  nowMs: number;
+  ownerWallet: string;
+  providerFetch: ProfileProviderFetch;
+  serviceAccountJson: string;
+  signal: AbortSignal;
+}): Promise<string | undefined> {
+  if (!args.db) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+  let stored;
+  try {
+    stored = await loadD1Profile(args.db, args.ownerWallet, args.signal);
+  } catch {
+    if (args.signal.aborted) throw args.signal.reason;
+    throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
+  }
+  return stored?.email;
 }
 
 function encodeOwnersCursor(path: string): string {
@@ -850,19 +871,14 @@ async function loadManualReviewCheckouts(args: {
 
 async function loadProfileStateProfile(args: {
   accessTokenProvider: GoogleAccessTokenProvider;
+  db: D1Database | undefined;
   nowMs: number;
   ownerWallet: string;
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
   signal: AbortSignal;
-}): Promise<ProfileStateProfile> {
-  const profileUrl = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/profiles/${encodeURIComponent(args.ownerWallet)}`);
-  profileUrl.searchParams.append('mask.fieldPaths', 'email');
-  const profileDocument = await authenticatedFirestoreRequest({ ...args, method: 'GET', url: profileUrl.toString() });
-  const profileFields = isRecord(profileDocument) ? decodeFirestoreFields(profileDocument.fields) : null;
-  const email = typeof profileFields?.email === 'string' && profileFields.email.trim()
-    ? profileFields.email.trim()
-    : undefined;
+}, profileEmailLoader: typeof loadProfileEmail): Promise<ProfileStateProfile> {
+  const email = await profileEmailLoader(args);
   return { wallet: args.ownerWallet, ...(email ? { email } : {}) };
 }
 
@@ -962,7 +978,7 @@ export async function handleProfileReadRequest(
         };
       }
       const [profileResult, shipmentsResult] = await Promise.allSettled([
-        loadProfileStateProfile({ ...common, ownerWallet: wallet }),
+        loadProfileStateProfile({ ...common, db: env.OPS_DB, ownerWallet: wallet }, dependencies.loadProfileEmail),
         loadDeliveryHistory({ ...common, owner: wallet }),
       ]);
       const profile = profileStateSection(profileResult, controller.signal);
@@ -1039,7 +1055,10 @@ export async function handleProfileReadRequest(
       throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
     }
     return {
-      response: jsonResponse(await loadAdminProfile({ ...common, ownerWallet }), 200),
+      response: jsonResponse(await loadAdminProfile(
+        { ...common, db: env.OPS_DB, ownerWallet },
+        dependencies.loadProfileEmail,
+      ), 200),
       metrics,
       authOutcome: 'accepted',
     };
@@ -1074,3 +1093,7 @@ export async function handleProfileReadRequest(
     clearTimeout(timeout);
   }
 }
+
+export const profileReadTestHooks = {
+  loadProfileEmail,
+};

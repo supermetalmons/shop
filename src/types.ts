@@ -33,6 +33,7 @@ export type {
   PreparedTxResponse,
   Profile,
   ProfileAddress,
+  SaveProfileAddressRequest,
   ProfileStateProfile,
   ProfileStateSection,
   PurchaseFulfillmentShipStationLabelRequest,

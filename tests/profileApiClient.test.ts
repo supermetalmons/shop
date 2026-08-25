@@ -209,6 +209,33 @@ test('fulfillment actions use authenticated Cloudflare routes', () => {
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-shipment'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/profile/reconcile'), 65_000);
   assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/order-address'), 20_000);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/profile/addresses'), 80_000);
+  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/auth/solana'), 80_000);
+});
+
+test('saved address retries reuse the exact client-generated id and payload', async () => {
+  const request = {
+    id: 'AbCdEfGhIjKlMnOpQrSt',
+    encrypted: 'cipher-text',
+    country: 'United States',
+    countryCode: 'US',
+    hint: '100…01',
+    email: 'owner@example.com',
+  };
+  const calls: unknown[] = [];
+  const response = await profileApiTestHooks.saveProfileAddressRequest(
+    request,
+    async (pathname, payload) => {
+      assert.equal(pathname, '/profile/addresses');
+      calls.push(structuredClone(payload));
+      if (calls.length === 1) {
+        throw Object.assign(new Error('temporary failure'), { code: 'unavailable' });
+      }
+      return request;
+    },
+  );
+  assert.deepEqual(response, request);
+  assert.deepEqual(calls, [request, request]);
 });
 
 test('Stripe checkout uses the authenticated Cloudflare route with an exact response contract', async () => {

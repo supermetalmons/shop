@@ -3,8 +3,9 @@
 React + TypeScript Solana dapp for mons IRL blind boxes. Box minting is fully
 on-chain through the custom box-minter program and MPL Core assets. The browser
 uses Firebase Anonymous Auth for identity. Privileged application traffic runs
-through Cloudflare, operational records remain in Firestore, and D1 owns the
-public pack-status projection plus narrow Worker control and rate-limit state.
+through Cloudflare, order and assignment records remain in Firestore, and D1
+owns profiles, saved addresses, the public pack-status projection, Worker
+control, and rate-limit state.
 
 ## Architecture
 
@@ -18,8 +19,9 @@ public pack-status projection plus narrow Worker control and rate-limit state.
   Worker accesses operational data with its service accounts.
 - The `mons-shop-data` D1 database is authoritative for public pack-status
   summaries and events.
-- The `mons-shop-ops` D1 database stores the ready-notification control and
-  receipt-transfer fixed-window rate-limit buckets.
+- The `mons-shop-ops` D1 database stores profiles, encrypted saved addresses,
+  the ready-notification control, and receipt-transfer fixed-window rate-limit
+  buckets.
 - The API Worker's existing cron, Queue producers and consumers, dead-letter
   queues, bindings, routes, and secrets are declared in
   `cloud/workers/api/wrangler.jsonc`.
@@ -81,9 +83,10 @@ lists, creates, updates, and deletes. Customer operations go through
 `mons-shop-api`, whose reader and writer service accounts access Firestore
 server-side.
 
-Firestore still stores orders, assignments, profiles, and delivery projection
-outboxes. Its indexes, rules, emulator tooling, operator scripts, and API
-service-account secrets remain required.
+Firestore still stores orders, assignments, wallet-session bindings, and
+delivery projection outboxes. Its indexes, rules, emulator tooling, operator
+scripts, and API service-account secrets remain required. Profiles and saved
+addresses are D1-only.
 
 Deploy Firestore indexes and deny-all client rules from the repository root:
 
@@ -231,12 +234,16 @@ npm run db:migrate:ops
 npm run check:ops-d1
 ```
 
-The integrity check validates Wrangler migration history, both strict tables,
-the expiry index, SQLite quick check, and the singleton ready-notification
-control. Receipt-transfer caller and asset buckets use exact ten-minute fixed
-windows. Expired buckets are cleaned in bounded batches by the existing
-five-minute Worker schedule; there is no Firestore backfill for these ephemeral
-counters.
+The integrity check validates Wrangler migration history, every strict table,
+the expiry index, foreign keys, SQLite quick check, the singleton
+ready-notification control, and the profile-storage source. Receipt-transfer
+caller and asset buckets use exact ten-minute fixed windows. Expired buckets
+are cleaned in bounded batches by the existing five-minute Worker schedule;
+there is no Firestore backfill for these ephemeral counters.
+
+Profiles and append-only encrypted saved addresses live only in the Ops D1
+database. The Ops integrity check enforces the production cutover count floors
+and permanently D1-only source.
 
 Inspect and mutate the notification control only through the guarded operator
 command:

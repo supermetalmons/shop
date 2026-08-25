@@ -17,13 +17,18 @@ import {
   type ReadyNotificationsControlDependencies,
 } from '../scripts/ops/readyNotificationsControl.ts';
 
-const migrationSql = readFileSync(
-  new URL(
-    '../cloud/workers/api/ops-migrations/0001_ops_state.sql',
-    import.meta.url,
-  ),
-  'utf8',
-);
+const migrationSql = [
+  '0001_ops_state.sql',
+  '0002_profiles.sql',
+  '0003_profiles_d1_final.sql',
+  '0004_profile_integrity.sql',
+  '0005_profile_write_safety.sql',
+]
+  .map((name) => readFileSync(
+    new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
+    'utf8',
+  ))
+  .join('\n');
 
 function database(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
@@ -43,15 +48,6 @@ WHERE
   name <> 'd1_migrations'
 ORDER BY name`;
 
-function migratedApplicationSchema() {
-  const db = database();
-  try {
-    return queryRows(db, applicationSchemaQuery);
-  } finally {
-    db.close();
-  }
-}
-
 function controlRow(overrides: Record<string, unknown> = {}) {
   return {
     control_key: 'ready_notifications',
@@ -65,56 +61,44 @@ function controlRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function columnRow(
-  cid: number,
-  name: string,
-  type: 'INTEGER' | 'TEXT',
-  notnull: 0 | 1,
-  pk: number,
-) {
-  return { cid, name, type, notnull, dflt_value: null, pk };
-}
-
-const workerControlColumns = [
-  columnRow(0, 'control_key', 'TEXT', 1, 1),
-  columnRow(1, 'paused', 'INTEGER', 1, 0),
-  columnRow(2, 'cursor_path', 'TEXT', 0, 0),
-  columnRow(3, 'revision', 'INTEGER', 1, 0),
-  columnRow(4, 'created_at_ms', 'INTEGER', 1, 0),
-  columnRow(5, 'updated_at_ms', 'INTEGER', 1, 0),
-  columnRow(6, 'cursor_updated_at_ms', 'INTEGER', 0, 0),
-];
-
-const rateLimitBucketColumns = [
-  columnRow(0, 'scope', 'TEXT', 1, 1),
-  columnRow(1, 'subject_hash', 'TEXT', 1, 2),
-  columnRow(2, 'schema_version', 'INTEGER', 1, 0),
-  columnRow(3, 'cluster', 'TEXT', 0, 0),
-  columnRow(4, 'owner_wallet', 'TEXT', 0, 0),
-  columnRow(5, 'receipt_asset_id', 'TEXT', 0, 0),
-  columnRow(6, 'window_started_at_ms', 'INTEGER', 1, 0),
-  columnRow(7, 'expires_at_ms', 'INTEGER', 1, 0),
-  columnRow(8, 'request_count', 'INTEGER', 1, 0),
-  columnRow(9, 'updated_at_ms', 'INTEGER', 1, 0),
-];
-
 function integrityInput(
   overrides: Partial<OpsD1IntegrityInput> = {},
 ): OpsD1IntegrityInput {
-  return {
-    controls: [controlRow()],
-    expiryIndexColumns: [{ seqno: 0, cid: 7, name: 'expires_at_ms' }],
-    migrations: [{ name: '0001_ops_state.sql' }],
-    quickCheck: [{ quick_check: 'ok' }],
-    rateLimitBucketColumns,
-    schema: migratedApplicationSchema(),
-    tableList: [
-      { name: 'rate_limit_buckets', type: 'table', strict: 1 },
-      { name: 'worker_controls', type: 'table', strict: 1 },
-    ],
-    workerControlColumns,
-    ...overrides,
-  };
+  const db = database();
+  try {
+    return {
+      controls: queryRows(db, 'SELECT * FROM worker_controls ORDER BY control_key'),
+      expiryIndexColumns: queryRows(db, 'PRAGMA index_info(rate_limit_buckets_expires_at_ms)'),
+      foreignKeyCheck: queryRows(db, 'PRAGMA foreign_key_check'),
+      migrations: [
+        { name: '0001_ops_state.sql' },
+        { name: '0002_profiles.sql' },
+        { name: '0003_profiles_d1_final.sql' },
+        { name: '0004_profile_integrity.sql' },
+        { name: '0005_profile_write_safety.sql' },
+      ],
+      profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
+      profileCounts: queryRows(db, `SELECT
+        (SELECT COUNT(*) FROM profiles) AS profile_count,
+        (SELECT COUNT(*) FROM profile_addresses) AS profile_address_count`),
+      profileColumns: queryRows(db, 'PRAGMA table_info(profiles)'),
+      profileStorageControl: queryRows(db, 'SELECT * FROM profile_storage_control'),
+      profileStorageControlColumns: queryRows(db, 'PRAGMA table_info(profile_storage_control)'),
+      quickCheck: queryRows(db, 'PRAGMA quick_check'),
+      rateLimitBucketColumns: queryRows(db, 'PRAGMA table_info(rate_limit_buckets)'),
+      schema: queryRows(db, applicationSchemaQuery),
+      tableList: queryRows(db, `SELECT name, type, strict
+        FROM pragma_table_list
+        WHERE
+          schema = 'main' AND
+          name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'worker_controls')
+        ORDER BY name`),
+      workerControlColumns: queryRows(db, 'PRAGMA table_info(worker_controls)'),
+      ...overrides,
+    };
+  } finally {
+    db.close();
+  }
 }
 
 test('ops migration creates strict state tables, seed, and expiry index', () => {
@@ -127,9 +111,12 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
     assert.deepEqual(controls, [controlRow()]);
     const tables = queryRows(
       db,
-      "SELECT name, strict FROM pragma_table_list WHERE name IN ('worker_controls', 'rate_limit_buckets') ORDER BY name",
+      "SELECT name, strict FROM pragma_table_list WHERE name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'worker_controls', 'rate_limit_buckets') ORDER BY name",
     );
     assert.deepEqual(tables, [
+      { name: 'profile_addresses', strict: 1 },
+      { name: 'profile_storage_control', strict: 1 },
+      { name: 'profiles', strict: 1 },
       { name: 'rate_limit_buckets', strict: 1 },
       { name: 'worker_controls', strict: 1 },
     ]);
@@ -147,7 +134,21 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
           db,
           'PRAGMA index_info(rate_limit_buckets_expires_at_ms)',
         ),
-        migrations: [{ name: '0001_ops_state.sql' }],
+        foreignKeyCheck: queryRows(db, 'PRAGMA foreign_key_check'),
+        migrations: [
+          { name: '0001_ops_state.sql' },
+          { name: '0002_profiles.sql' },
+          { name: '0003_profiles_d1_final.sql' },
+          { name: '0004_profile_integrity.sql' },
+          { name: '0005_profile_write_safety.sql' },
+        ],
+        profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
+        profileCounts: queryRows(db, `SELECT
+          (SELECT COUNT(*) FROM profiles) AS profile_count,
+          (SELECT COUNT(*) FROM profile_addresses) AS profile_address_count`),
+        profileColumns: queryRows(db, 'PRAGMA table_info(profiles)'),
+        profileStorageControl: queryRows(db, 'SELECT * FROM profile_storage_control'),
+        profileStorageControlColumns: queryRows(db, 'PRAGMA table_info(profile_storage_control)'),
         quickCheck: queryRows(db, 'PRAGMA quick_check'),
         rateLimitBucketColumns: queryRows(
           db,
@@ -160,7 +161,7 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
           FROM pragma_table_list
           WHERE
             schema = 'main' AND
-            name IN ('rate_limit_buckets', 'worker_controls')
+            name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'worker_controls')
           ORDER BY name`,
         ),
         workerControlColumns: queryRows(
@@ -269,6 +270,42 @@ test('ops migration enforces control and rate-limit invariants', () => {
     assert.throws(() =>
       db.exec(`UPDATE worker_controls SET paused = 'false'`),
     );
+    assert.throws(() =>
+      db.exec(`UPDATE profile_storage_control SET read_source = 'firestore_fallback'`),
+    );
+    assert.throws(() =>
+      db.exec(`DELETE FROM profile_storage_control`),
+    );
+    assert.throws(() =>
+      db.exec(`INSERT OR REPLACE INTO profile_storage_control (
+        singleton, read_source, updated_at_ms
+      ) VALUES (1, 'firestore_fallback', 0)`),
+    );
+    db.exec(`INSERT INTO profiles VALUES (
+      '11111111111111111111111111111111', NULL, 1, 1
+    )`);
+    db.exec(`INSERT INTO profile_addresses VALUES (
+      '11111111111111111111111111111111',
+      'AbCdEfGhIjKlMnOpQrSt',
+      'cipher', 'US', 'US', 'hint', NULL, NULL, 1, 1
+    )`);
+    assert.doesNotThrow(() =>
+      db.exec(`INSERT INTO profile_addresses VALUES (
+        '11111111111111111111111111111111',
+        'AbCdEfGhIjKlMnOpQrSt',
+        'cipher', 'US', 'US', 'hint', NULL, NULL, 2, 2
+      )`),
+    );
+    assert.throws(() =>
+      db.exec(`INSERT INTO profile_addresses VALUES (
+        '11111111111111111111111111111111',
+        'AbCdEfGhIjKlMnOpQrSt',
+        'changed', 'US', 'US', 'hint', NULL, NULL, 2, 2
+      )`),
+    );
+    assert.throws(() => db.exec(`UPDATE profile_addresses SET encrypted = 'changed'`));
+    assert.throws(() => db.exec(`DELETE FROM profile_addresses`));
+    assert.throws(() => db.exec(`DELETE FROM profiles`));
   } finally {
     db.close();
   }
@@ -277,6 +314,9 @@ test('ops migration enforces control and rate-limit invariants', () => {
 test('ops D1 integrity requires exact migrations, schema, quick check, and singleton', () => {
   const healthy = integrityInput();
   assert.deepEqual(assertOpsD1Integrity(healthy), {
+    profileAddressCount: 0,
+    profileCount: 0,
+    profileStorageSource: 'd1',
     readyNotifications: {
       controlKey: 'ready_notifications',
       paused: false,
@@ -288,8 +328,20 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
     },
   });
   assert.throws(
+    () => assertOpsD1Integrity(healthy, { profileAddressCount: 1, profileCount: 1 }),
+    /cutover baseline/,
+  );
+  assert.throws(
     () => assertOpsD1Integrity(integrityInput({ migrations: [] })),
     /migrations/,
+  );
+  assert.throws(
+    () => assertOpsD1Integrity(integrityInput({ foreignKeyCheck: [{ table: 'profile_addresses' }] })),
+    /foreign_key_check/,
+  );
+  assert.throws(
+    () => assertOpsD1Integrity(integrityInput({ profileStorageControl: [] })),
+    /profile storage control/,
   );
   assert.throws(
     () => assertOpsD1Integrity(integrityInput({ schema: [] })),

@@ -5,7 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { isCanonicalReadyNotificationCursorPath } from '../../shared/readyToShipNotificationReconciliation.ts';
 
 export const READY_NOTIFICATIONS_CONTROL_KEY = 'ready_notifications';
-const OPS_D1_MIGRATIONS = ['0001_ops_state.sql'] as const;
+const OPS_D1_MIGRATIONS = [
+  '0001_ops_state.sql',
+  '0002_profiles.sql',
+  '0003_profiles_d1_final.sql',
+  '0004_profile_integrity.sql',
+  '0005_profile_write_safety.sql',
+] as const;
+
+const PRODUCTION_MIN_PROFILE_COUNT = 690;
+const PRODUCTION_MIN_PROFILE_ADDRESS_COUNT = 503;
 
 export type OpsD1Row = Record<string, unknown>;
 
@@ -22,7 +31,13 @@ export type ReadyNotificationsControl = {
 export type OpsD1IntegrityInput = {
   controls: OpsD1Row[];
   expiryIndexColumns: OpsD1Row[];
+  foreignKeyCheck: OpsD1Row[];
   migrations: OpsD1Row[];
+  profileAddressColumns: OpsD1Row[];
+  profileCounts: OpsD1Row[];
+  profileColumns: OpsD1Row[];
+  profileStorageControl: OpsD1Row[];
+  profileStorageControlColumns: OpsD1Row[];
   quickCheck: OpsD1Row[];
   rateLimitBucketColumns: OpsD1Row[];
   schema: OpsD1Row[];
@@ -31,7 +46,15 @@ export type OpsD1IntegrityInput = {
 };
 
 export type OpsD1IntegrityReport = {
+  profileAddressCount: number;
+  profileCount: number;
+  profileStorageSource: 'd1';
   readyNotifications: ReadyNotificationsControl;
+};
+
+type OpsD1IntegrityMinimums = {
+  profileAddressCount: number;
+  profileCount: number;
 };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -48,6 +71,94 @@ const expectedSchema = new Map<
   string,
   { fingerprint: string; type: string; tableName: string }
 >([
+  [
+    'profile_address_conflict_guard',
+    {
+      fingerprint: '6504ae117f42990c9b0559ff2c7e4b097df0ead3548c95369cd541c7850634c2',
+      type: 'trigger',
+      tableName: 'profile_addresses',
+    },
+  ],
+  [
+    'profile_address_delete_guard',
+    {
+      fingerprint: '76113564b7c95a0b5482afad506b95403f1d1e954f98ddaf26e7f063069b515f',
+      type: 'trigger',
+      tableName: 'profile_addresses',
+    },
+  ],
+  [
+    'profile_address_idempotent_insert',
+    {
+      fingerprint: '84e281a297546ef97e1bea092fbb86158bd330721441c106f7ff374f2dc8112a',
+      type: 'trigger',
+      tableName: 'profile_addresses',
+    },
+  ],
+  [
+    'profile_address_update_guard',
+    {
+      fingerprint: '6c838bec11592eeca61bb8db969751f67b586039aecceb78594e1f7ca6126423',
+      type: 'trigger',
+      tableName: 'profile_addresses',
+    },
+  ],
+  [
+    'profile_addresses',
+    {
+      fingerprint: '4e4f30d79d313311d118f477d6fc4dbc552bf9fd007acd603771619748abd2c8',
+      type: 'table',
+      tableName: 'profile_addresses',
+    },
+  ],
+  [
+    'profile_delete_guard',
+    {
+      fingerprint: '9f05b1d6afa5acae25c0df24040b85247000a5b225451586786286d8fb5b55d0',
+      type: 'trigger',
+      tableName: 'profiles',
+    },
+  ],
+  [
+    'profile_storage_control',
+    {
+      fingerprint: '0278093932cf6724c1b08cd05ae33b800d96a2eb32951dcd1c5569fc88be8972',
+      type: 'table',
+      tableName: 'profile_storage_control',
+    },
+  ],
+  [
+    'profile_storage_delete_guard',
+    {
+      fingerprint: 'c3382b13d0c57b4304d56cb883f7e71f3da47c180fe8a595d76ee52f2cefd9cb',
+      type: 'trigger',
+      tableName: 'profile_storage_control',
+    },
+  ],
+  [
+    'profile_storage_insert_guard',
+    {
+      fingerprint: '95a0fa6fa01ef5114a3222a5033dc0f6785fa5e97243b2a16bddb3f75c86a2d9',
+      type: 'trigger',
+      tableName: 'profile_storage_control',
+    },
+  ],
+  [
+    'profile_storage_source_immutable',
+    {
+      fingerprint: '04043c620da863760a2ee64bba4422bd54ed52a0a277ae14f24b04e2a3502165',
+      type: 'trigger',
+      tableName: 'profile_storage_control',
+    },
+  ],
+  [
+    'profiles',
+    {
+      fingerprint: '44bd3280983418705513ff1a0003f8b1a83f849dbd74155f4322691d2ceb9135',
+      type: 'table',
+      tableName: 'profiles',
+    },
+  ],
   [
     'rate_limit_buckets',
     {
@@ -101,6 +212,32 @@ const expectedRateLimitBucketColumns: readonly ExpectedColumn[] = [
   ['window_started_at_ms', 'INTEGER', 1, 0],
   ['expires_at_ms', 'INTEGER', 1, 0],
   ['request_count', 'INTEGER', 1, 0],
+  ['updated_at_ms', 'INTEGER', 1, 0],
+];
+
+const expectedProfileColumns: readonly ExpectedColumn[] = [
+  ['wallet', 'TEXT', 1, 1],
+  ['email', 'TEXT', 0, 0],
+  ['created_at_ms', 'INTEGER', 1, 0],
+  ['updated_at_ms', 'INTEGER', 1, 0],
+];
+
+const expectedProfileAddressColumns: readonly ExpectedColumn[] = [
+  ['wallet', 'TEXT', 1, 1],
+  ['address_id', 'TEXT', 1, 2],
+  ['encrypted', 'TEXT', 1, 0],
+  ['country', 'TEXT', 1, 0],
+  ['country_code', 'TEXT', 0, 0],
+  ['hint', 'TEXT', 1, 0],
+  ['email', 'TEXT', 0, 0],
+  ['label', 'TEXT', 0, 0],
+  ['created_at_ms', 'INTEGER', 1, 0],
+  ['updated_at_ms', 'INTEGER', 1, 0],
+];
+
+const expectedProfileStorageControlColumns: readonly ExpectedColumn[] = [
+  ['singleton', 'INTEGER', 1, 1],
+  ['read_source', 'TEXT', 1, 0],
   ['updated_at_ms', 'INTEGER', 1, 0],
 ];
 
@@ -293,12 +430,16 @@ export function parseReadyNotificationsControl(
 
 export function assertOpsD1Integrity(
   input: OpsD1IntegrityInput,
+  minimums: OpsD1IntegrityMinimums = { profileAddressCount: 0, profileCount: 0 },
 ): OpsD1IntegrityReport {
   if (
     input.quickCheck.length !== 1 ||
     String(input.quickCheck[0].quick_check || '').toLowerCase() !== 'ok'
   ) {
     return fail('Ops D1 quick_check failed.');
+  }
+  if (input.foreignKeyCheck.length !== 0) {
+    return fail('Ops D1 foreign_key_check failed.');
   }
   exactStringSet(
     input.migrations.map((row) => requiredString(row.name, 'Ops D1 migration name')),
@@ -313,6 +454,21 @@ export function assertOpsD1Integrity(
     'worker_controls',
   );
   assertExactColumns(
+    input.profileColumns,
+    expectedProfileColumns,
+    'profiles',
+  );
+  assertExactColumns(
+    input.profileAddressColumns,
+    expectedProfileAddressColumns,
+    'profile_addresses',
+  );
+  assertExactColumns(
+    input.profileStorageControlColumns,
+    expectedProfileStorageControlColumns,
+    'profile_storage_control',
+  );
+  assertExactColumns(
     input.rateLimitBucketColumns,
     expectedRateLimitBucketColumns,
     'rate_limit_buckets',
@@ -321,7 +477,27 @@ export function assertOpsD1Integrity(
   if (input.controls.length !== 1) {
     return fail('Ops D1 must contain exactly one worker control.');
   }
+  if (input.profileStorageControl.length !== 1) {
+    return fail('Ops D1 must contain exactly one profile storage control.');
+  }
+  const source = input.profileStorageControl[0].read_source;
+  if (source !== 'd1') return fail('Ops D1 profile storage source must be d1.');
+  if (input.profileStorageControl[0].singleton !== 1) {
+    return fail('Ops D1 profile storage singleton is invalid.');
+  }
+  safeInteger(input.profileStorageControl[0].updated_at_ms, 'Ops D1 profile storage update timestamp');
+  if (input.profileCounts.length !== 1) {
+    return fail('Ops D1 profile counts are invalid.');
+  }
+  const profileCount = safeInteger(input.profileCounts[0].profile_count, 'Ops D1 profile count');
+  const profileAddressCount = safeInteger(input.profileCounts[0].profile_address_count, 'Ops D1 profile address count');
+  if (profileCount < minimums.profileCount || profileAddressCount < minimums.profileAddressCount) {
+    return fail('Ops D1 profile counts are below the production cutover baseline.');
+  }
   return {
+    profileAddressCount,
+    profileCount,
+    profileStorageSource: source,
     readyNotifications: parseReadyNotificationsControl(input.controls[0]),
   };
 }
@@ -438,8 +614,23 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
     expiryIndexColumns: queryRemoteOpsD1(
       'PRAGMA index_info(rate_limit_buckets_expires_at_ms)',
     ),
+    foreignKeyCheck: queryRemoteOpsD1('PRAGMA foreign_key_check'),
     migrations: queryRemoteOpsD1(
       'SELECT name FROM d1_migrations ORDER BY id',
+    ),
+    profileAddressColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(profile_addresses)',
+    ),
+    profileCounts: queryRemoteOpsD1(`SELECT
+      (SELECT COUNT(*) FROM profiles) AS profile_count,
+      (SELECT COUNT(*) FROM profile_addresses) AS profile_address_count`),
+    profileColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(profiles)',
+    ),
+    profileStorageControl: queryRemoteOpsD1(`SELECT singleton, read_source, updated_at_ms
+      FROM profile_storage_control`),
+    profileStorageControlColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(profile_storage_control)',
     ),
     quickCheck: queryRemoteOpsD1('PRAGMA quick_check'),
     rateLimitBucketColumns: queryRemoteOpsD1(
@@ -456,11 +647,14 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
       FROM pragma_table_list
       WHERE
         schema = 'main' AND
-        name IN ('rate_limit_buckets', 'worker_controls')
+        name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'worker_controls')
       ORDER BY name`),
     workerControlColumns: queryRemoteOpsD1(
       'PRAGMA table_info(worker_controls)',
     ),
+  }, {
+    profileAddressCount: PRODUCTION_MIN_PROFILE_ADDRESS_COUNT,
+    profileCount: PRODUCTION_MIN_PROFILE_COUNT,
   });
 }
 

@@ -124,6 +124,14 @@ function dependencies(
     log: () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
+    saveProfileAddress: async (_db, address) => ({
+      id: address.id,
+      country: address.country,
+      ...(address.countryCode ? { countryCode: address.countryCode } : {}),
+      encrypted: address.encrypted,
+      hint: address.hint,
+      ...(address.email ? { email: address.email } : {}),
+    }),
     timeoutMs: 500,
     verifyIdToken: async () => ({ uid: UID }),
     warn: () => undefined,
@@ -191,21 +199,18 @@ function encryptedAddress(full: string): string {
   );
 }
 
-test('address route authenticates and atomically commits the exact address and profile writes', async () => {
-  let commit: Record<string, unknown> | undefined;
+test('address route authenticates and atomically persists the exact D1 profile address', async () => {
+  let persisted: Record<string, unknown> | undefined;
   const calls: Array<{ url: URL; authorization: string }> = [];
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     calls.push({ url, authorization: new Headers(init?.headers).get('authorization') || '' });
     if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
-    if (url.pathname.endsWith('/documents:commit')) {
-      commit = JSON.parse(String(init?.body));
-      return Response.json({ writeResults: [{}, {}], commitTime: '2026-08-18T12:00:00Z' });
-    }
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };
   const result = await handleProfileWriteRequest(
     request(PROFILE_ADDRESSES_PATH, {
+      id: ADDRESS_ID,
       encrypted: 'cipher-text',
       country: 'United States',
       hint: '100…01',
@@ -213,7 +218,20 @@ test('address route authenticates and atomically commits the exact address and p
     }),
     env,
     PROFILE_ADDRESSES_PATH,
-    dependencies(providerFetch),
+    dependencies(providerFetch, {
+      autoId: () => assert.fail('client-supplied address id used the server generator'),
+      saveProfileAddress: async (_db, address) => {
+        persisted = address;
+        return {
+          id: address.id,
+          country: address.country,
+          ...(address.countryCode ? { countryCode: address.countryCode } : {}),
+          encrypted: address.encrypted,
+          hint: address.hint,
+          ...(address.email ? { email: address.email } : {}),
+        };
+      },
+    }),
   );
   assert.equal(result.response.status, 200);
   assert.match(result.response.headers.get('cache-control') || '', /no-store/);
@@ -225,51 +243,27 @@ test('address route authenticates and atomically commits the exact address and p
     hint: '100…01',
     email: 'owner@example.com',
   });
-  assert.deepEqual(commit, {
-    writes: [
-      {
-        update: {
-          name: `projects/mons-shop/databases/(default)/documents/profiles/${OWNER}/addresses/${ADDRESS_ID}`,
-          fields: {
-            encrypted: stringValue('cipher-text'),
-            country: stringValue('United States'),
-            hint: stringValue('100…01'),
-            id: stringValue(ADDRESS_ID),
-            countryCode: stringValue('US'),
-            email: stringValue('owner@example.com'),
-          },
-        },
-        updateMask: { fieldPaths: ['encrypted', 'country', 'hint', 'id', 'countryCode', 'email'] },
-        updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
-      },
-      {
-        update: {
-          name: `projects/mons-shop/databases/(default)/documents/profiles/${OWNER}`,
-          fields: { wallet: stringValue(OWNER), email: stringValue('owner@example.com') },
-        },
-        updateMask: { fieldPaths: ['wallet', 'email'] },
-      },
-    ],
+  assert.deepEqual(persisted, {
+    wallet: OWNER,
+    id: ADDRESS_ID,
+    country: 'United States',
+    countryCode: 'US',
+    encrypted: 'cipher-text',
+    hint: '100…01',
+    email: 'owner@example.com',
+    createdAtMs: NOW_MS,
+    updatedAtMs: NOW_MS,
   });
   assert.equal(result.authOutcome, 'accepted');
-  assert.equal(result.metrics.upstreamCalls, 2);
+  assert.equal(result.metrics.upstreamCalls, 1);
   assert.ok(calls.every((call) => call.authorization === 'Bearer writer-access-token'));
 });
 
-test('address commit retries with one stable auto ID after writer token rejection', async () => {
-  let commitAttempts = 0;
+test('address route maps D1 failures to a generic unavailable response with one stable auto ID', async () => {
   let autoIds = 0;
-  let invalidations = 0;
-  const bodies: string[] = [];
-  const providerFetch: typeof fetch = async (input, init) => {
+  const providerFetch: typeof fetch = async (input) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
-    if (url.pathname.endsWith('/documents:commit')) {
-      commitAttempts += 1;
-      bodies.push(String(init?.body));
-      if (commitAttempts === 1) return Response.json({ error: 'expired' }, { status: 401 });
-      return Response.json({ writeResults: [{}, {}], commitTime: '2026-08-18T12:00:00Z' });
-    }
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };
   const result = await handleProfileWriteRequest(
@@ -282,20 +276,48 @@ test('address commit retries with one stable auto ID after writer token rejectio
     env,
     PROFILE_ADDRESSES_PATH,
     dependencies(providerFetch, {
-      accessTokenProvider: accessTokenProvider(() => {
-        invalidations += 1;
-      }),
       autoId: () => {
         autoIds += 1;
         return ADDRESS_ID;
       },
+      saveProfileAddress: async () => {
+        throw new Error('private D1 details');
+      },
     }),
   );
-  assert.equal(result.response.status, 200);
-  assert.equal(commitAttempts, 2);
+  assert.equal(result.response.status, 502);
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'unavailable', message: 'Profile data is temporarily unavailable.' },
+  });
   assert.equal(autoIds, 1);
-  assert.equal(invalidations, 1);
-  assert.equal(bodies[0], bodies[1]);
+});
+
+test('address route applies the request deadline to D1 persistence', async () => {
+  const providerFetch: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileWriteRequest(
+    request(PROFILE_ADDRESSES_PATH, {
+      encrypted: 'cipher-text',
+      country: 'US',
+      hint: 'hint',
+    }),
+    env,
+    PROFILE_ADDRESSES_PATH,
+    dependencies(providerFetch, {
+      timeoutMs: 5,
+      saveProfileAddress: async (_db, _address, signal) => new Promise((_resolve, reject) => {
+        const abort = () => reject(signal.reason);
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+      }),
+    }),
+  );
+  assert.equal(result.response.status, 504);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
 });
 
 test('status route preserves, replaces, and deletes tracking fields with exact update masks', async () => {
@@ -4457,6 +4479,7 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
   };
   for (const body of [
     { encrypted: 'cipher', country: 'US', hint: 'hint', extra: true },
+    { id: 'invalid', encrypted: 'cipher', country: 'US', hint: 'hint' },
     { encrypted: 'cipher', country: 'US', hint: 'hint', email: 'not-an-email' },
     { encrypted: 'x'.repeat(11 * 1024), country: 'US', hint: 'hint' },
   ]) {
@@ -4574,7 +4597,11 @@ test('writer failures stay generic and never expose request or credential materi
     }),
     { FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'private-writer-credential' },
     PROFILE_ADDRESSES_PATH,
-    dependencies(providerFetch),
+    dependencies(providerFetch, {
+      saveProfileAddress: async () => {
+        throw new Error('private D1 writer-secret');
+      },
+    }),
   );
   assert.equal(result.response.status, 502);
   const text = await result.response.text();

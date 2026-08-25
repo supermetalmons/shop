@@ -74,6 +74,10 @@ import {
   type ShipStationPackageInput,
 } from '../../../../shared/shipstationPackage.js';
 import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
+import {
+  createProfileAddressId,
+  PROFILE_ADDRESS_ID_PATTERN,
+} from '../../../../shared/profileD1.js';
 import type {
   AddFulfillmentOrderToShipStationResponse,
   FulfillmentShipStationAddressCorrectionDetails,
@@ -106,6 +110,7 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
+import { saveD1ProfileAddress } from './profileD1.js';
 import {
   BUYER_ORDER_SHIPPED_EMAIL_PENDING,
   BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
@@ -163,6 +168,11 @@ type ProfileWriteDependencies = {
   nowMs: () => number;
   pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
   providerFetch: ProfileProviderFetch;
+  saveProfileAddress: (
+    db: D1Database | undefined,
+    address: Parameters<typeof saveD1ProfileAddress>[1],
+    signal: AbortSignal,
+  ) => Promise<ProfileAddress>;
   timeoutMs: number;
   verifyIdToken: (
     authorization: string | null,
@@ -174,7 +184,7 @@ type ProfileWriteDependencies = {
 };
 
 type ProfileWriteEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
-  'ADDRESS_DECRYPTION_SECRET' | 'NOTIFICATION_EMAIL_QUEUE' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
+  'ADDRESS_DECRYPTION_SECRET' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
 >>;
 
 const PROFILE_WRITE_TIMEOUT_MS = 15_000;
@@ -196,9 +206,6 @@ const MAX_SHIPSTATION_SHIPMENT_REQUEST_BYTES = 2048;
 const SHIPSTATION_CLAIM_TTL_MS = 120_000;
 const SHIPSTATION_RATE_REQUEST_TTL_MS = 10 * 60_000;
 const FIRESTORE_MUTATION_ATTEMPTS = 3;
-const AUTO_ID_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-const AUTO_ID_LENGTH = 20;
-const AUTO_ID_RANDOM_LIMIT = 248;
 const ADMIN_WALLETS = new Set(FULFILLMENT_ADMIN_WALLET_ADDRESSES);
 const ADDRESS_ADMIN_WALLETS = new Set(FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES);
 const SHIPPER_DROP_IDS_BY_WALLET = new Map(
@@ -206,6 +213,7 @@ const SHIPPER_DROP_IDS_BY_WALLET = new Map(
 );
 
 const saveAddressSchema = z.object({
+  id: z.string().regex(PROFILE_ADDRESS_ID_PATTERN).optional(),
   encrypted: z.string().max(4096),
   country: z.string().max(64),
   countryCode: z.string().max(32).optional(),
@@ -288,28 +296,19 @@ class ShipStationProfileError extends ProfileReadError {
   }
 }
 
-function firestoreAutoId(): string {
-  let id = '';
-  while (id.length < AUTO_ID_LENGTH) {
-    const bytes = crypto.getRandomValues(new Uint8Array(AUTO_ID_LENGTH * 2));
-    for (const byte of bytes) {
-      if (byte >= AUTO_ID_RANDOM_LIMIT) continue;
-      id += AUTO_ID_ALPHABET[byte % AUTO_ID_ALPHABET.length];
-      if (id.length === AUTO_ID_LENGTH) break;
-    }
-  }
-  return id;
-}
-
 const defaultDependencies: ProfileWriteDependencies = {
   accessTokenProvider: defaultAccessTokenProvider,
-  autoId: firestoreAutoId,
+  autoId: createProfileAddressId,
   createNotificationJobId: () => crypto.randomUUID(),
   error: (entry) => console.error(entry),
   log: (entry) => console.log(entry),
   nowMs: () => Date.now(),
   pauseForRatePoll,
   providerFetch: (input, init) => fetch(input, init),
+  saveProfileAddress: (db, address, signal) => {
+    if (!db) throw new Error('OPS_DB is unavailable');
+    return saveD1ProfileAddress(db, address, signal);
+  },
   timeoutMs: PROFILE_WRITE_TIMEOUT_MS,
   verifyIdToken: verifyFirebaseIdToken,
   warn: (entry) => console.warn(entry),
@@ -475,56 +474,32 @@ async function commitWrites(
 async function saveAddress(
   body: z.infer<typeof saveAddressSchema>,
   wallet: string,
-  common: {
-    accessTokenProvider: GoogleAccessTokenProvider;
-    nowMs: number;
-    providerFetch: ProfileProviderFetch;
-    serviceAccountJson: string;
-    signal: AbortSignal;
-  },
+  db: D1Database | undefined,
   autoId: () => string,
+  nowMs: number,
+  signal: AbortSignal,
+  persist: ProfileWriteDependencies['saveProfileAddress'],
 ): Promise<ProfileAddress> {
-  const id = autoId();
-  if (!/^[A-Za-z0-9]{20}$/.test(id)) throw new ProfileReadError('internal', 500, 'Profile request failed.');
+  const id = body.id || autoId();
+  if (!PROFILE_ADDRESS_ID_PATTERN.test(id)) throw new ProfileReadError('internal', 500, 'Profile request failed.');
   const normalizedCountryCode = normalizeCountryCode(body.countryCode || body.country);
   const countryCode = normalizedCountryCode || body.countryCode;
-  const addressFields: Record<string, unknown> = {
-    encrypted: firestoreString(body.encrypted),
-    country: firestoreString(body.country),
-    hint: firestoreString(body.hint),
-    id: firestoreString(id),
-    ...(countryCode ? { countryCode: firestoreString(countryCode) } : {}),
-    ...(body.email ? { email: firestoreString(body.email) } : {}),
-  };
-  const profileFields: Record<string, unknown> = {
-    wallet: firestoreString(wallet),
-    ...(body.email ? { email: firestoreString(body.email) } : {}),
-  };
-  await commitWrites(common, [
-    {
-      update: {
-        name: documentName(`profiles/${wallet}/addresses/${id}`),
-        fields: addressFields,
-      },
-      updateMask: { fieldPaths: Object.keys(addressFields) },
-      updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
-    },
-    {
-      update: {
-        name: documentName(`profiles/${wallet}`),
-        fields: profileFields,
-      },
-      updateMask: { fieldPaths: Object.keys(profileFields) },
-    },
-  ]);
-  return {
-    id,
-    country: body.country,
-    ...(countryCode ? { countryCode } : {}),
-    encrypted: body.encrypted,
-    hint: body.hint,
-    ...(body.email ? { email: body.email } : {}),
-  };
+  try {
+    return await persist(db, {
+      wallet,
+      id,
+      country: body.country,
+      ...(countryCode ? { countryCode } : {}),
+      encrypted: body.encrypted,
+      hint: body.hint,
+      ...(body.email ? { email: body.email } : {}),
+      createdAtMs: nowMs,
+      updatedAtMs: nowMs,
+    }, signal);
+  } catch {
+    if (signal.aborted) throw signal.reason;
+    throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
+  }
 }
 
 type FulfillmentStatusResponse = {
@@ -3310,8 +3285,11 @@ export async function handleProfileWriteRequest(
       payload = await saveAddress(
         requestBody as z.infer<typeof saveAddressSchema>,
         wallet,
-        common,
+        env.OPS_DB,
         dependencies.autoId,
+        dependencies.nowMs(),
+        controller.signal,
+        dependencies.saveProfileAddress,
       );
     } else if (path === FULFILLMENT_ORDER_STATUS_PATH) {
       payload = await updateFulfillmentStatus(
@@ -3409,6 +3387,6 @@ export async function handleProfileWriteRequest(
 }
 
 export const profileWriteTestHooks = {
-  firestoreAutoId,
+  firestoreAutoId: createProfileAddressId,
   shipStationRateInputHash,
 };

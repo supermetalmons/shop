@@ -59,7 +59,6 @@ function decodedFields(value: unknown): Record<string, unknown> {
 
 class FirestoreHarness {
   session: StoredDocument | null = document(`authSessions/${UID}`, { wallet: OWNER }, 1);
-  profiles = new Map<string, StoredDocument>();
   orders: StoredDocument[] = [];
   transactions = new Map<string, { session: StoredDocument | null; orders: StoredDocument[] }>();
   transactionCounter = 0;
@@ -84,11 +83,6 @@ class FirestoreHarness {
     const fields = decodedFields(update);
     if (path === `authSessions/${UID}`) {
       this.session = document(path, { ...(this.session ? decodedFields(this.session) : {}), ...fields }, this.version++);
-      return;
-    }
-    if (path.startsWith('profiles/')) {
-      const current = this.profiles.get(path);
-      this.profiles.set(path, document(path, { ...(current ? decodedFields(current) : {}), ...fields }, this.version++));
       return;
     }
     const index = this.orders.findIndex((entry) => entry.name === update.name);
@@ -174,13 +168,19 @@ function accessTokenProvider(): GoogleAccessTokenProvider {
   return { invalidate: () => undefined, get: async () => 'access-token' };
 }
 
-function dependencies(harness: FirestoreHarness, timeoutMs = 500): Parameters<typeof handleProfileLifecycleRequest>[3] {
+function dependencies(
+  harness: FirestoreHarness,
+  timeoutMs = 500,
+  overrides: Partial<Parameters<typeof handleProfileLifecycleRequest>[3]> = {},
+): Parameters<typeof handleProfileLifecycleRequest>[3] {
   return {
     accessTokenProvider: accessTokenProvider(),
     nowMs: () => NOW_MS,
     providerFetch: harness.fetch.bind(harness),
     timeoutMs,
+    upsertProfile: async () => undefined,
     verifyIdToken: async () => ({ uid: UID }),
+    ...overrides,
   };
 }
 
@@ -211,18 +211,27 @@ function env(): Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> {
   return { FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}' };
 }
 
-test('Solana auth validates origin-bound signatures and atomically renews session and profile', async () => {
+test('Solana auth validates origin-bound signatures and persists the Firestore session and D1 profile', async () => {
   const harness = new FirestoreHarness();
+  let profile: Record<string, unknown> | undefined;
   const result = await handleProfileLifecycleRequest(
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
-    dependencies(harness),
+    dependencies(harness, 500, {
+      upsertProfile: async (_db, input) => {
+        profile = input;
+      },
+    }),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), { wallet: OWNER });
   assert.equal(decodedFields(harness.session!).wallet, OWNER);
-  assert.equal(decodedFields(harness.profiles.get(`profiles/${OWNER}`)!).wallet, OWNER);
+  assert.deepEqual(profile, {
+    wallet: OWNER,
+    createdAtMs: NOW_MS,
+    updatedAtMs: NOW_MS,
+  });
 
   for (const authRequest of [
     request(SOLANA_AUTH_PATH, signInBody({ domain: 'www.mons.shop' })),
@@ -232,6 +241,43 @@ test('Solana auth validates origin-bound signatures and atomically renews sessio
     const rejected = await handleProfileLifecycleRequest(authRequest, env(), SOLANA_AUTH_PATH, dependencies(new FirestoreHarness()));
     assert.ok([401, 403].includes(rejected.response.status));
   }
+});
+
+test('Solana auth keeps its committed session retryable when D1 profile persistence fails', async () => {
+  const harness = new FirestoreHarness();
+  const result = await handleProfileLifecycleRequest(
+    request(SOLANA_AUTH_PATH, signInBody()),
+    env(),
+    SOLANA_AUTH_PATH,
+    dependencies(harness, 500, {
+      upsertProfile: async () => {
+        throw new Error('private D1 failure');
+      },
+    }),
+  );
+  assert.equal(result.response.status, 503);
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'unavailable', message: 'Profile data is temporarily unavailable.' },
+  });
+  assert.equal(decodedFields(harness.session!).wallet, OWNER);
+});
+
+test('Solana auth applies the request deadline to D1 profile persistence', async () => {
+  const result = await handleProfileLifecycleRequest(
+    request(SOLANA_AUTH_PATH, signInBody()),
+    env(),
+    SOLANA_AUTH_PATH,
+    dependencies(new FirestoreHarness(), 5, {
+      upsertProfile: async (_db, _profile, signal) => new Promise((_resolve, reject) => {
+        const abort = () => reject(signal.reason);
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+      }),
+    }),
+  );
+  assert.equal(result.response.status, 504);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
 });
 
 test('Solana auth rejects a stale different-wallet writer but permits a same-wallet renewal', async () => {
