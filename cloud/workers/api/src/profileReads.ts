@@ -58,6 +58,9 @@ import {
 import {
   loadD1Profile,
 } from './profileD1.js';
+import {
+  resolveD1WalletSession,
+} from './walletSessionD1.js';
 
 export {
   ProfileReadError,
@@ -235,6 +238,11 @@ type ProfileReadDependencies = {
   loadProfileEmail: typeof loadProfileEmail;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  resolveD1WalletSession: (
+    db: D1Database | undefined,
+    uid: string,
+    signal: AbortSignal,
+  ) => ReturnType<typeof resolveD1WalletSession>;
   timeoutMs: number;
   verifyIdToken: (
     authorization: string | null,
@@ -258,6 +266,10 @@ const defaultDependencies: ProfileReadDependencies = {
   loadProfileEmail,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  resolveD1WalletSession: (db, uid, signal) => {
+    if (!db) throw new Error('OPS_DB is unavailable');
+    return resolveD1WalletSession(db, uid, signal);
+  },
   timeoutMs: PROFILE_READ_TIMEOUT_MS,
   verifyIdToken: verifyFirebaseIdToken,
 };
@@ -491,43 +503,28 @@ function manualReviewQuery(): Record<string, unknown> {
   };
 }
 
-function optionalSessionWallet(value: unknown, uid: string): string | null {
-  if (value === null) {
-    if (isBase58Bytes(uid, 32)) return uid;
-    return null;
-  }
-  if (!isRecord(value)) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-  const fields = decodeFirestoreFields(value.fields);
-  const wallet = fields?.wallet;
-  if (typeof wallet !== 'string' || !isBase58Bytes(wallet, 32)) {
-    throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
-  }
-  return wallet;
-}
-
 async function loadOptionalSessionWallet(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
-  nowMs: number;
-  providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  db: D1Database | undefined;
+  resolveD1WalletSession: ProfileReadDependencies['resolveD1WalletSession'];
   signal: AbortSignal;
   uid: string;
 }): Promise<string | null> {
-  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/authSessions/${encodeURIComponent(args.uid)}`);
-  url.searchParams.append('mask.fieldPaths', 'wallet');
-  const document = await authenticatedFirestoreRequest({
-    ...args,
-    method: 'GET',
-    url: url.toString(),
-  });
-  return optionalSessionWallet(document, args.uid);
+  try {
+    const resolution = await args.resolveD1WalletSession(args.db, args.uid, args.signal);
+    if ('reason' in resolution) {
+      if (resolution.reason === 'legacy_uid_invalid') return null;
+      throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
+    }
+    return resolution.wallet;
+  } catch (error) {
+    if (error instanceof ProfileReadError || args.signal.aborted) throw error;
+    throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+  }
 }
 
 async function loadSessionWallet(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
-  nowMs: number;
-  providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  db: D1Database | undefined;
+  resolveD1WalletSession: ProfileReadDependencies['resolveD1WalletSession'];
   signal: AbortSignal;
   uid: string;
 }): Promise<string> {
@@ -957,12 +954,17 @@ export async function handleProfileReadRequest(
       serviceAccountJson,
       signal: controller.signal,
     };
+    const sessionCommon = {
+      db: env.OPS_DB,
+      resolveD1WalletSession: dependencies.resolveD1WalletSession,
+      signal: controller.signal,
+    };
     if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
       const orders = await loadDeliveryHistory({ ...common, owner: `firebase:${identity.uid}` });
       return { response: jsonResponse({ orders }, 200), metrics, authOutcome: 'accepted' };
     }
     if (path === PROFILE_STATE_PATH) {
-      const wallet = await loadOptionalSessionWallet({ ...common, uid: identity.uid });
+      const wallet = await loadOptionalSessionWallet({ ...sessionCommon, uid: identity.uid });
       if (!wallet) {
         const response: GetProfileStateResponse = {
           responseMode: 'profile-state',
@@ -997,7 +999,7 @@ export async function handleProfileReadRequest(
       };
     }
     if (path === ADMIN_DELIVERY_ORDER_OWNERS_PATH) {
-      const wallet = await loadSessionWallet({ ...common, uid: identity.uid });
+      const wallet = await loadSessionWallet({ ...sessionCommon, uid: identity.uid });
       if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
         throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
       }
@@ -1013,7 +1015,7 @@ export async function handleProfileReadRequest(
     }
     if (path === FULFILLMENT_ORDERS_PATH || path === FULFILLMENT_MANUAL_REVIEW_PATH) {
       const dropId = requestBody.dropId!;
-      const wallet = await loadSessionWallet({ ...common, uid: identity.uid });
+      const wallet = await loadSessionWallet({ ...sessionCommon, uid: identity.uid });
       const access = fulfillmentAccess(wallet, dropId);
       if (path === FULFILLMENT_ORDERS_PATH) {
         const addressSecret = typeof env.ADDRESS_DECRYPTION_SECRET === 'string' ? env.ADDRESS_DECRYPTION_SECRET : '';
@@ -1044,7 +1046,7 @@ export async function handleProfileReadRequest(
       };
     }
     const ownerWallet = requestBody.ownerWallet!;
-    const wallet = await loadSessionWallet({ ...common, uid: identity.uid });
+    const wallet = await loadSessionWallet({ ...sessionCommon, uid: identity.uid });
     if (path === PROFILE_SHIPMENTS_PATH) {
       if (wallet !== ownerWallet) throw new ProfileReadError('unauthenticated', 401, 'Wallet session changed. Sign in again.');
       const orders = await loadDeliveryHistory({ ...common, owner: ownerWallet });

@@ -304,6 +304,17 @@ function readyNotificationControlHarness(args: {
   const batchSizes: number[] = [];
   const reads: boolean[] = [];
   const execute = (statement: ReadyNotificationTestStatement): D1Result<Record<string, unknown>> => {
+    if (statement.query.includes('FROM wallet_sessions')) {
+      return readyNotificationD1Result([{
+        firebase_uid: 'firebase-uid',
+        wallet: OWNER,
+        expires_at_ms: 253_402_300_799_999,
+        updated_at_ms: READY_NOTIFICATION_NOW_MS,
+        wallet_revision: 1,
+        reconcile_lease_id: null,
+        reconcile_lease_expires_at_ms: null,
+      }]);
+    }
     if (statement.query.includes('INSERT INTO worker_controls')) {
       insertAttempts += 1;
       if (exists) return readyNotificationD1Result();
@@ -1574,13 +1585,6 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
   };
   const providerFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
-    if (url.includes('/authSessions/')) {
-      return Response.json({
-        name: 'projects/mons-shop/databases/(default)/documents/authSessions/firebase-uid',
-        updateTime: '2026-08-22T00:00:00.000Z',
-        fields: { wallet: { stringValue: OWNER } },
-      });
-    }
     if (url.includes('/drops/card_nft_2/deliveryOrders/7')) {
       return Response.json({
         name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
@@ -2045,13 +2049,6 @@ test('explicit recovery uses the production Firestore adapter and preserves not-
   let queryCalls = 0;
   const providerFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
-    if (url.includes('/authSessions/')) {
-      return Response.json({
-        name: 'projects/mons-shop/databases/(default)/documents/authSessions/firebase-uid',
-        updateTime: '2026-08-22T00:00:00.000Z',
-        fields: { wallet: { stringValue: OWNER } },
-      });
-    }
     if (url.includes('/drops/card_nft_2/deliveryOrders/7')) {
       return Response.json({ error: { status: 'NOT_FOUND' } }, { status: 404 });
     }
@@ -2150,13 +2147,6 @@ test('forced recovery validates the delivery PDA and finalizes an already-burned
   };
   const providerFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
-    if (url.includes('/authSessions/')) {
-      return Response.json({
-        name: 'projects/mons-shop/databases/(default)/documents/authSessions/firebase-uid',
-        updateTime: '2026-08-22T00:00:00.000Z',
-        fields: { wallet: { stringValue: OWNER } },
-      });
-    }
     if (url.includes(`/drops/${runtime.dropId}/deliveryOrders/7`)) {
       return Response.json(orderDocument);
     }

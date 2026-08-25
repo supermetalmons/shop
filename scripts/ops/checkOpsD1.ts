@@ -3,9 +3,16 @@ import { pathToFileURL } from 'node:url';
 import { readRemoteOpsD1Integrity } from '../shared/opsD1Maintenance.ts';
 
 export function formatOpsD1Report(): string {
-  const { profileAddressCount, profileCount, profileStorageSource, readyNotifications } = readRemoteOpsD1Integrity();
+  const {
+    profileAddressCount,
+    profileCount,
+    profileStorageSource,
+    readyNotifications,
+    walletSessionCount,
+    walletSessionStorage,
+  } = readRemoteOpsD1Integrity();
   const cursor = readyNotifications.cursorPath || 'none';
-  return `Ops D1 is healthy: ready notifications ${readyNotifications.paused ? 'paused' : 'active'}, cursor ${cursor}, revision ${readyNotifications.revision}; profiles ${profileCount}, addresses ${profileAddressCount}, source ${profileStorageSource}.`;
+  return `Ops D1 is healthy: ready notifications ${readyNotifications.paused ? 'paused' : 'active'}, cursor ${cursor}, revision ${readyNotifications.revision}; profiles ${profileCount}, addresses ${profileAddressCount}, source ${profileStorageSource}; wallet sessions ${walletSessionCount}, source ${walletSessionStorage.source}, revision ${walletSessionStorage.revision}.`;
 }
 
 function isDirectRun(): boolean {

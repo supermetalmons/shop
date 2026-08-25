@@ -60,10 +60,6 @@ import {
 } from '../../../../shared/solanaRpcProxy.js';
 import { transformShopInventoryItem } from '../../../../shared/shopDomain.js';
 import {
-  WALLET_SESSION_COLLECTION,
-  resolveWalletSessionBinding,
-} from '../../../../shared/walletLifecycle.js';
-import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
   type FirebaseIdentity,
@@ -83,6 +79,7 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
+import { resolveD1WalletSession } from './walletSessionD1.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 
 export const REVEAL_DUDES_PATH = '/boxes/reveal';
@@ -712,20 +709,20 @@ function firestoreDocumentUrl(path: string, transaction?: string): string {
   return url.toString();
 }
 
-async function loadWalletSession(context: FirestoreContext, uid: string): Promise<string> {
-  const document = await authenticatedFirestoreRequest({
-    ...context,
-    method: 'GET',
-    url: firestoreDocumentUrl(`${WALLET_SESSION_COLLECTION}/${uid}`),
-  });
-  const fields = isRecord(document) ? decodeFirestoreFields(document.fields) : null;
-  const resolution = resolveWalletSessionBinding({
-    uid,
-    sessionExists: Boolean(document),
-    sessionData: fields,
-  });
-  if ('reason' in resolution) throw new RevealDudesError('unauthenticated', 'Sign in with your wallet first.');
-  return resolution.wallet;
+async function loadWalletSession(
+  context: FirestoreContext,
+  db: D1Database | undefined,
+  uid: string,
+): Promise<string> {
+  try {
+    if (!db) throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
+    const resolution = await resolveD1WalletSession(db, uid, context.signal);
+    if ('reason' in resolution) throw new RevealDudesError('unauthenticated', 'Sign in with your wallet first.');
+    return resolution.wallet;
+  } catch (error) {
+    if (error instanceof RevealDudesError || error instanceof ProfileReadError || context.signal.aborted) throw error;
+    throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
+  }
 }
 
 async function beginFirestoreTransaction(context: FirestoreContext): Promise<string> {
@@ -2082,7 +2079,11 @@ export async function handleRevealDudes(
       signal: controller.signal,
       dataDb: env.DATA_DB,
     };
-    const sessionWallet = await dependencies.loadWalletSession(firestoreContext, identity.uid);
+    const sessionWallet = await dependencies.loadWalletSession(
+      firestoreContext,
+      env.OPS_DB,
+      identity.uid,
+    );
     if (sessionWallet !== owner.toBase58()) {
       authOutcome = 'rejected';
       throw new RevealDudesError('permission-denied', 'Owners only.');
@@ -2409,6 +2410,7 @@ export const revealDudesTestHooks = {
   loadLatestBlockhash,
   loadPendingOpen,
   loadRevealSubmission,
+  loadWalletSession,
   reconcileRevealSubmission,
   reserveRevealSubmission,
   revealBackgroundJobTimeoutMs: REVEAL_BACKGROUND_JOB_TIMEOUT_MS,

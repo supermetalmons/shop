@@ -76,10 +76,6 @@ import {
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
 import {
-  resolveWalletSessionBinding,
-  WALLET_SESSION_COLLECTION,
-} from '../../../../shared/walletLifecycle.js';
-import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
   type FirebaseIdentity,
@@ -100,6 +96,7 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
+import { resolveD1WalletSession } from './walletSessionD1.js';
 
 export const ADMIN_IRL_REDEEM_PREPARE_PATH = '/admin/irl-redeem/prepare';
 export { ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER };
@@ -139,7 +136,7 @@ const requestSchema = z.object({
 type AdminIrlRedeemPrepareEnv = Pick<
   Env,
   'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
->;
+> & Partial<Pick<Env, 'OPS_DB'>>;
 
 type AdminIrlRedeemPrepareErrorCode =
   | 'invalid-argument'
@@ -240,7 +237,11 @@ type AdminIrlRedeemPrepareDependencies = {
   timeoutMs: number;
   verifyIdToken: typeof verifyFirebaseIdToken;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
-  loadWalletSession: (context: FirestoreContext, uid: string) => Promise<string>;
+  loadWalletSession: (
+    context: FirestoreContext,
+    db: D1Database | undefined,
+    uid: string,
+  ) => Promise<string>;
   loadReceiptMarker: (context: FirestoreContext, dropId: string, assetId: string) => Promise<boolean>;
   createRequest: (context: FirestoreContext, input: CreateRequestInput) => Promise<void>;
   fetchAsset: (context: ProviderContext, runtime: AdminIrlRedeemRuntime, assetId: string) => Promise<DasAsset>;
@@ -805,18 +806,22 @@ async function loadLookupTable(
   }
 }
 
-async function loadWalletSession(context: FirestoreContext, uid: string): Promise<string> {
-  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/${WALLET_SESSION_COLLECTION}/${encodeURIComponent(uid)}`);
-  url.searchParams.append('mask.fieldPaths', 'wallet');
-  const document = await authenticatedFirestoreRequest({ ...context, method: 'GET', url: url.toString() });
-  const fields = isRecord(document) ? decodeFirestoreFields(document.fields) : null;
-  const resolution = resolveWalletSessionBinding({
-    uid,
-    sessionExists: Boolean(document),
-    sessionData: fields,
-  });
-  if ('reason' in resolution) throw new AdminIrlRedeemPrepareError('unauthenticated', 'Sign in with your wallet first.');
-  return resolution.wallet;
+async function loadWalletSession(
+  context: FirestoreContext,
+  db: D1Database | undefined,
+  uid: string,
+): Promise<string> {
+  try {
+    if (!db) {
+      throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem preparation is temporarily unavailable.');
+    }
+    const resolution = await resolveD1WalletSession(db, uid, context.signal);
+    if ('reason' in resolution) throw new AdminIrlRedeemPrepareError('unauthenticated', 'Sign in with your wallet first.');
+    return resolution.wallet;
+  } catch (error) {
+    if (error instanceof AdminIrlRedeemPrepareError || error instanceof ProfileReadError || context.signal.aborted) throw error;
+    throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem preparation is temporarily unavailable.');
+  }
 }
 
 async function loadReceiptMarker(
@@ -1183,6 +1188,7 @@ async function mapWithConcurrency<T, R>(
 
 async function prepareAdminIrlRedeem(args: {
   body: AdminIrlRedeemPrepareRequest;
+  db: D1Database | undefined;
   identity: FirebaseIdentity;
   firestoreContext: FirestoreContext;
   providerContext: ProviderContext;
@@ -1196,7 +1202,11 @@ async function prepareAdminIrlRedeem(args: {
   assertSupportedRuntime(runtime);
   const owner = canonicalPublicKey(args.body.owner, 'wallet address');
   const ownerWallet = owner.toBase58();
-  const sessionWallet = await args.dependencies.loadWalletSession(args.firestoreContext, args.identity.uid);
+  const sessionWallet = await args.dependencies.loadWalletSession(
+    args.firestoreContext,
+    args.db,
+    args.identity.uid,
+  );
   if (!walletHasAdminIrlRedeemAccess(sessionWallet, ADMIN_IRL_REDEEM_WALLETS)) {
     throw new AdminIrlRedeemPrepareError('permission-denied', 'Admin IRL Redeem access denied.');
   }
@@ -1431,6 +1441,7 @@ export async function handleAdminIrlRedeemPrepare(
     const nowMs = dependencies.nowMs();
     const response = await prepareAdminIrlRedeem({
       body,
+      db: env.OPS_DB,
       identity,
       dependencies,
       ...(prepareAttemptId ? { prepareAttemptId } : {}),

@@ -73,13 +73,6 @@ function orderDocument(owner = OWNER, deliveryId = 7) {
   };
 }
 
-function sessionDocument(wallet: string) {
-  return {
-    name: `projects/mons-shop/databases/(default)/documents/authSessions/${UID}`,
-    fields: { wallet: stringValue(wallet) },
-  };
-}
-
 function accessTokenProvider(): GoogleAccessTokenProvider {
   return {
     invalidate: () => undefined,
@@ -96,6 +89,7 @@ function profileDependencies(
     loadProfileEmail: async () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
+    resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
     timeoutMs: 500,
     verifyIdToken: async () => ({ uid: UID }),
     ...overrides,
@@ -219,7 +213,6 @@ test('shipment and anonymous history routes preserve exact source-query behavior
   const queries: Record<string, unknown>[] = [];
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/documents:runQuery')) {
       queries.push(JSON.parse(String(init?.body)));
       return Response.json([{ document: orderDocument() }]);
@@ -276,7 +269,6 @@ test('profile state derives identity server-side and returns independently bound
     PROFILE_STATE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
-      if (url.includes('/authSessions/')) return Response.json(sessionDocument(OWNER));
       if (url.includes(`/profiles/${OWNER}?`)) {
         return Response.json({
           fields: {
@@ -327,14 +319,35 @@ test('profile state derives identity server-side and returns independently bound
   assert.deepEqual(result.profileStateSections, { profile: 'ready', shipments: 'ready' });
 });
 
+test('profile state uses D1 wallet sessions without requesting Firestore authSessions', async () => {
+  const providerFetch: typeof fetch = async (input) => {
+    const url = String(input);
+    assert.equal(url.includes('/authSessions/'), false);
+    if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const result = await handleProfileReadRequest(
+    tokenRequest(PROFILE_STATE_PATH, {}),
+    {
+      FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account',
+      OPS_DB: {} as D1Database,
+    },
+    PROFILE_STATE_PATH,
+    profileDependencies(providerFetch, {
+      resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal((await result.response.json() as { sessionWallet: string }).sessionWallet, OWNER);
+});
+
 test('profile state returns a settled empty session and preserves legacy wallet UIDs', async () => {
   const missing = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
     { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
     PROFILE_STATE_PATH,
-    profileDependencies(async (input) => {
-      assert.match(String(input), /authSessions/);
-      return Response.json({ error: 'missing' }, { status: 404 });
+    profileDependencies(async () => assert.fail('missing session reached Firestore'), {
+      resolveD1WalletSession: async () => ({ wallet: null, reason: 'legacy_uid_invalid' }),
     }),
   );
   assert.deepEqual(await missing.response.json(), {
@@ -351,11 +364,11 @@ test('profile state returns a settled empty session and preserves legacy wallet 
     {
       ...profileDependencies(async (input) => {
         const url = String(input);
-        if (url.includes('/authSessions/')) return Response.json({ error: 'missing' }, { status: 404 });
         if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
         if (url.endsWith('/documents:runQuery')) return Response.json([]);
         return Response.json({ error: 'unexpected' }, { status: 500 });
       }),
+      resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'legacy_uid' }),
       verifyIdToken: async () => ({ uid: OWNER }),
     },
   );
@@ -374,7 +387,6 @@ test('profile state reports section failures without discarding successful data'
     PROFILE_STATE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
-      if (url.includes('/authSessions/')) return Response.json(sessionDocument(OWNER));
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'busy' }, { status: 503 });
       if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
@@ -396,14 +408,16 @@ test('profile state reports section failures without discarding successful data'
   assert.deepEqual(result.profileStateSections, { profile: 'error', shipments: 'ready' });
 });
 
-test('profile state rejects malformed session documents and non-empty requests', async () => {
+test('profile state rejects invalid D1 sessions and non-empty requests', async () => {
   const malformedSession = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
     { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
     PROFILE_STATE_PATH,
-    profileDependencies(async () => Response.json({ fields: { wallet: stringValue('invalid') } })),
+    profileDependencies(async () => assert.fail('invalid D1 session reached Firestore'), {
+      resolveD1WalletSession: async () => { throw new Error('invalid D1 session'); },
+    }),
   );
-  assert.equal(malformedSession.response.status, 401);
+  assert.equal(malformedSession.response.status, 503);
 
   const invalidBody = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, { ownerWallet: OWNER }),
@@ -416,8 +430,7 @@ test('profile state rejects malformed session documents and non-empty requests',
 
 test('shipment route rejects mismatched sessions and malformed requests before source queries', async () => {
   let queries = 0;
-  const providerFetch: typeof fetch = async (input) => {
-    if (String(input).includes('/authSessions/')) return Response.json(sessionDocument(OTHER));
+  const providerFetch: typeof fetch = async () => {
     queries += 1;
     return Response.json([]);
   };
@@ -425,7 +438,9 @@ test('shipment route rejects mismatched sessions and malformed requests before s
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
     { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
     PROFILE_SHIPMENTS_PATH,
-    profileDependencies(providerFetch),
+    profileDependencies(providerFetch, {
+      resolveD1WalletSession: async () => ({ wallet: OTHER, source: 'session' }),
+    }),
   );
   assert.equal(mismatch.response.status, 401);
   assert.deepEqual(await mismatch.response.json(), {
@@ -453,8 +468,7 @@ test('shipment route preserves legacy wallet-shaped Firebase UIDs when no sessio
     { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
     PROFILE_SHIPMENTS_PATH,
     {
-      ...profileDependencies(async (input, init) => {
-        if (String(input).includes('/authSessions/')) return Response.json({ error: 'missing' }, { status: 404 });
+      ...profileDependencies(async (_input, init) => {
         const body = JSON.stringify(JSON.parse(String(init?.body)));
         const match = body.match(/"stringValue":"([1-9A-HJ-NP-Za-km-z]+)"/);
         if (match?.[1]) owners.push(match[1]);
@@ -473,10 +487,12 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
     ADMIN_PROFILE_PATH,
-    profileDependencies(async (input) => {
-      if (String(input).includes('/authSessions/')) return Response.json(sessionDocument(OTHER));
+    profileDependencies(async () => {
       return Response.json({ error: 'unexpected' }, { status: 500 });
-    }, { loadProfileEmail: async () => 'owner@example.com' }),
+    }, {
+      loadProfileEmail: async () => 'owner@example.com',
+      resolveD1WalletSession: async () => ({ wallet: OTHER, source: 'session' }),
+    }),
   );
   assert.equal(denied.response.status, 403);
   assert.equal((await denied.response.json() as { error: { code: string } }).error.code, 'permission-denied');
@@ -487,11 +503,13 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     ADMIN_PROFILE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
-      if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ fields: { email: stringValue('owner@example.com') } });
       if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
-    }, { loadProfileEmail: async () => 'owner@example.com' }),
+    }, {
+      loadProfileEmail: async () => 'owner@example.com',
+      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+    }),
   );
   assert.equal(accepted.response.status, 200);
   assert.deepEqual(await accepted.response.json(), {
@@ -515,10 +533,11 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     ADMIN_PROFILE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
-      if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
       if (url.endsWith('/documents:runQuery')) return Response.json([]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
+    }, {
+      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
     }),
   );
   assert.equal(missingProfile.response.status, 200);
@@ -530,13 +549,13 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     ADMIN_PROFILE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
-      if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
       if (url.endsWith('/documents:runQuery')) return Response.json([]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       loadProfileEmail: async () => {
         throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
       },
+      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
     }),
   );
   assert.equal(unavailableProfile.response.status, 502);
@@ -555,15 +574,15 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize: 2 }),
     env,
     ADMIN_DELIVERY_ORDER_OWNERS_PATH,
-    profileDependencies(async (input, init) => {
-      const url = String(input);
-      if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
+    profileDependencies(async (_input, init) => {
       const query = JSON.parse(String(init?.body));
       assert.equal(query.structuredQuery.from[0].collectionId, 'deliveryOrders');
       return Response.json([
         { document: { name: 'projects/mons-shop/databases/(default)/documents/drops/a/deliveryOrders/1', fields: { owner: stringValue(OWNER) } } },
         { document: { name: 'projects/mons-shop/databases/(default)/documents/drops/a/deliveryOrders/2', fields: { owner: stringValue(OTHER) } } },
       ]);
+    }, {
+      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
     }),
   );
   assert.deepEqual(await owners.response.json(), { owners: [OWNER, OTHER], nextCursor: null, hasMore: false });
@@ -572,9 +591,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 2, cursor: null }),
     env,
     FULFILLMENT_ORDERS_PATH,
-    profileDependencies(async (input, init) => {
-      const url = String(input);
-      if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
+    profileDependencies(async (_input, init) => {
       const query = JSON.parse(String(init?.body));
       assert.equal(query.structuredQuery.limit, 3);
       return Response.json([{ document: {
@@ -589,6 +606,8 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
           items: { arrayValue: {} },
         },
       } }]);
+    }, {
+      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
     }),
   );
   assert.deepEqual(await fulfillment.response.json(), {
@@ -613,7 +632,6 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     FULFILLMENT_MANUAL_REVIEW_PATH,
     profileDependencies(async (input, init) => {
       const url = String(input);
-      if (url.includes('/authSessions/')) return Response.json(sessionDocument(ADMIN));
       if (url.includes('api.stripe.com')) {
         assert.equal(new Headers(init?.headers).get('stripe-version'), '2026-07-29.dahlia');
         return Response.json({ error: 'temporary' }, { status: 503 });
@@ -629,6 +647,8 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
           stripeSessionSummary: { mapValue: { fields: { amount_total: integerValue(4200), currency: stringValue('usd') } } },
         },
       } }]);
+    }, {
+      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
     }),
   );
   assert.deepEqual(await manual.response.json(), {

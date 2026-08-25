@@ -11,10 +11,13 @@ const OPS_D1_MIGRATIONS = [
   '0003_profiles_d1_final.sql',
   '0004_profile_integrity.sql',
   '0005_profile_write_safety.sql',
+  '0006_wallet_sessions.sql',
+  '0007_wallet_sessions_d1_only.sql',
 ] as const;
 
 const PRODUCTION_MIN_PROFILE_COUNT = 690;
 const PRODUCTION_MIN_PROFILE_ADDRESS_COUNT = 503;
+const PRODUCTION_MIN_WALLET_SESSION_COUNT = 1197;
 
 export type OpsD1Row = Record<string, unknown>;
 
@@ -26,6 +29,12 @@ export type ReadyNotificationsControl = {
   createdAtMs: number;
   updatedAtMs: number;
   cursorUpdatedAtMs: number | null;
+};
+
+export type WalletSessionStorageControl = {
+  source: 'd1';
+  revision: number;
+  updatedAtMs: number;
 };
 
 export type OpsD1IntegrityInput = {
@@ -42,6 +51,10 @@ export type OpsD1IntegrityInput = {
   rateLimitBucketColumns: OpsD1Row[];
   schema: OpsD1Row[];
   tableList: OpsD1Row[];
+  walletSessionColumns: OpsD1Row[];
+  walletSessionCounts: OpsD1Row[];
+  walletSessionStorageControl: OpsD1Row[];
+  walletSessionStorageControlColumns: OpsD1Row[];
   workerControlColumns: OpsD1Row[];
 };
 
@@ -50,11 +63,14 @@ export type OpsD1IntegrityReport = {
   profileCount: number;
   profileStorageSource: 'd1';
   readyNotifications: ReadyNotificationsControl;
+  walletSessionCount: number;
+  walletSessionStorage: WalletSessionStorageControl;
 };
 
 type OpsD1IntegrityMinimums = {
   profileAddressCount: number;
   profileCount: number;
+  walletSessionCount: number;
 };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -176,6 +192,62 @@ const expectedSchema = new Map<
     },
   ],
   [
+    'wallet_session_storage_control',
+    {
+      fingerprint: '00c90a3be80876d638deda8ba490605bf9a950bf5e6e3781e061e323d777f4d7',
+      type: 'table',
+      tableName: 'wallet_session_storage_control',
+    },
+  ],
+  [
+    'wallet_session_storage_delete_guard',
+    {
+      fingerprint: '6a139510dbde42ed8087610ea4911aa7d32f7d5fb5ff268c19bfb8bc0e011c13',
+      type: 'trigger',
+      tableName: 'wallet_session_storage_control',
+    },
+  ],
+  [
+    'wallet_session_storage_d1_immutable_guard',
+    {
+      fingerprint: 'c2d243dfc580c0cf2012daa570b506d44c0c3c90b054eaf8e013ee91661d6d11',
+      type: 'trigger',
+      tableName: 'wallet_session_storage_control',
+    },
+  ],
+  [
+    'wallet_session_storage_insert_guard',
+    {
+      fingerprint: '0c7cc2320652eedabc0e3badf2775243f8e0acbdf83c3072454426aace43ab2e',
+      type: 'trigger',
+      tableName: 'wallet_session_storage_control',
+    },
+  ],
+  [
+    'wallet_session_storage_transition_guard',
+    {
+      fingerprint: '14b179d795a5bee9ba9138dc727961289cf88196c6278c26098222756b4a7ae1',
+      type: 'trigger',
+      tableName: 'wallet_session_storage_control',
+    },
+  ],
+  [
+    'wallet_session_storage_update_guard',
+    {
+      fingerprint: 'afe499cf6b9eb54bc4af718d00d450a206b3fa6e45f6d424a94b0d1030d15684',
+      type: 'trigger',
+      tableName: 'wallet_session_storage_control',
+    },
+  ],
+  [
+    'wallet_sessions',
+    {
+      fingerprint: 'c116ba37f7da13ffc3f004c2860a10d36918904d769ef4fe8a6f511e836b50a5',
+      type: 'table',
+      tableName: 'wallet_sessions',
+    },
+  ],
+  [
     'worker_controls',
     {
       fingerprint: 'a3234f2e0eba2083f1cd408e728576c1edb6e0407cf2bdb0746296199ef4f980',
@@ -238,6 +310,23 @@ const expectedProfileAddressColumns: readonly ExpectedColumn[] = [
 const expectedProfileStorageControlColumns: readonly ExpectedColumn[] = [
   ['singleton', 'INTEGER', 1, 1],
   ['read_source', 'TEXT', 1, 0],
+  ['updated_at_ms', 'INTEGER', 1, 0],
+];
+
+const expectedWalletSessionColumns: readonly ExpectedColumn[] = [
+  ['firebase_uid', 'TEXT', 1, 1],
+  ['wallet', 'TEXT', 1, 0],
+  ['expires_at_ms', 'INTEGER', 1, 0],
+  ['updated_at_ms', 'INTEGER', 1, 0],
+  ['wallet_revision', 'INTEGER', 1, 0],
+  ['reconcile_lease_id', 'TEXT', 0, 0],
+  ['reconcile_lease_expires_at_ms', 'INTEGER', 0, 0],
+];
+
+const expectedWalletSessionStorageControlColumns: readonly ExpectedColumn[] = [
+  ['singleton', 'INTEGER', 1, 1],
+  ['storage_source', 'TEXT', 1, 0],
+  ['revision', 'INTEGER', 1, 0],
   ['updated_at_ms', 'INTEGER', 1, 0],
 ];
 
@@ -428,9 +517,30 @@ export function parseReadyNotificationsControl(
   };
 }
 
+function parseWalletSessionStorageControl(
+  row: OpsD1Row,
+): WalletSessionStorageControl {
+  const source = row.storage_source;
+  if (source !== 'd1') {
+    return fail('Wallet-session storage source must be d1.');
+  }
+  if (row.singleton !== 1) {
+    return fail('Wallet-session storage singleton is invalid.');
+  }
+  return {
+    source,
+    revision: safeInteger(row.revision, 'Wallet-session storage revision', 1),
+    updatedAtMs: safeInteger(row.updated_at_ms, 'Wallet-session storage update timestamp'),
+  };
+}
+
 export function assertOpsD1Integrity(
   input: OpsD1IntegrityInput,
-  minimums: OpsD1IntegrityMinimums = { profileAddressCount: 0, profileCount: 0 },
+  minimums: OpsD1IntegrityMinimums = {
+    profileAddressCount: 0,
+    profileCount: 0,
+    walletSessionCount: 0,
+  },
 ): OpsD1IntegrityReport {
   if (
     input.quickCheck.length !== 1 ||
@@ -473,6 +583,16 @@ export function assertOpsD1Integrity(
     expectedRateLimitBucketColumns,
     'rate_limit_buckets',
   );
+  assertExactColumns(
+    input.walletSessionColumns,
+    expectedWalletSessionColumns,
+    'wallet_sessions',
+  );
+  assertExactColumns(
+    input.walletSessionStorageControlColumns,
+    expectedWalletSessionStorageControlColumns,
+    'wallet_session_storage_control',
+  );
   assertExpiryIndexColumns(input.expiryIndexColumns);
   if (input.controls.length !== 1) {
     return fail('Ops D1 must contain exactly one worker control.');
@@ -480,6 +600,12 @@ export function assertOpsD1Integrity(
   if (input.profileStorageControl.length !== 1) {
     return fail('Ops D1 must contain exactly one profile storage control.');
   }
+  if (input.walletSessionStorageControl.length !== 1) {
+    return fail('Ops D1 must contain exactly one wallet-session storage control.');
+  }
+  const walletSessionStorage = parseWalletSessionStorageControl(
+    input.walletSessionStorageControl[0],
+  );
   const source = input.profileStorageControl[0].read_source;
   if (source !== 'd1') return fail('Ops D1 profile storage source must be d1.');
   if (input.profileStorageControl[0].singleton !== 1) {
@@ -494,11 +620,26 @@ export function assertOpsD1Integrity(
   if (profileCount < minimums.profileCount || profileAddressCount < minimums.profileAddressCount) {
     return fail('Ops D1 profile counts are below the production cutover baseline.');
   }
+  if (input.walletSessionCounts.length !== 1) {
+    return fail('Ops D1 wallet-session count is invalid.');
+  }
+  const walletSessionCount = safeInteger(
+    input.walletSessionCounts[0].wallet_session_count,
+    'Ops D1 wallet-session count',
+  );
+  if (
+    walletSessionStorage.source === 'd1' &&
+    walletSessionCount < minimums.walletSessionCount
+  ) {
+    return fail('Ops D1 wallet-session count is below the production cutover baseline.');
+  }
   return {
     profileAddressCount,
     profileCount,
     profileStorageSource: source,
     readyNotifications: parseReadyNotificationsControl(input.controls[0]),
+    walletSessionCount,
+    walletSessionStorage,
   };
 }
 
@@ -647,14 +788,38 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
       FROM pragma_table_list
       WHERE
         schema = 'main' AND
-        name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'worker_controls')
+        name IN (
+          'profile_addresses',
+          'profile_storage_control',
+          'profiles',
+          'rate_limit_buckets',
+          'wallet_sessions',
+          'wallet_session_storage_control',
+          'worker_controls'
+        )
       ORDER BY name`),
+    walletSessionColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(wallet_sessions)',
+    ),
+    walletSessionCounts: queryRemoteOpsD1(
+      'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions',
+    ),
+    walletSessionStorageControl: queryRemoteOpsD1(`SELECT
+      singleton,
+      storage_source,
+      revision,
+      updated_at_ms
+      FROM wallet_session_storage_control`),
+    walletSessionStorageControlColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(wallet_session_storage_control)',
+    ),
     workerControlColumns: queryRemoteOpsD1(
       'PRAGMA table_info(worker_controls)',
     ),
   }, {
     profileAddressCount: PRODUCTION_MIN_PROFILE_ADDRESS_COUNT,
     profileCount: PRODUCTION_MIN_PROFILE_COUNT,
+    walletSessionCount: PRODUCTION_MIN_WALLET_SESSION_COUNT,
   });
 }
 
@@ -727,7 +892,6 @@ RETURNING
   updated_at_ms,
   cursor_updated_at_ms`;
 }
-
 function runControlMutation(sql: string, failureMessage: string): ReadyNotificationsControl {
   const rows = queryRemoteOpsD1(sql);
   if (rows.length !== 1) {

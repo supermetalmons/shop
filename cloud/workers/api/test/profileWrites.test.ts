@@ -86,13 +86,6 @@ function stringValue(value: string) {
   return { stringValue: value };
 }
 
-function sessionDocument(wallet: string) {
-  return {
-    name: `projects/mons-shop/databases/(default)/documents/authSessions/${UID}`,
-    fields: { wallet: stringValue(wallet) },
-  };
-}
-
 function request(path: ProfileWritePath, body: unknown): Request {
   return new Request(`https://api.mons.shop${path}`, {
     method: 'POST',
@@ -124,6 +117,7 @@ function dependencies(
     log: () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
+    resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
     saveProfileAddress: async (_db, address) => ({
       id: address.id,
       country: address.country,
@@ -205,7 +199,6 @@ test('address route authenticates and atomically persists the exact D1 profile a
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     calls.push({ url, authorization: new Headers(init?.headers).get('authorization') || '' });
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };
   const result = await handleProfileWriteRequest(
@@ -255,15 +248,13 @@ test('address route authenticates and atomically persists the exact D1 profile a
     updatedAtMs: NOW_MS,
   });
   assert.equal(result.authOutcome, 'accepted');
-  assert.equal(result.metrics.upstreamCalls, 1);
+  assert.equal(result.metrics.upstreamCalls, 0);
   assert.ok(calls.every((call) => call.authorization === 'Bearer writer-access-token'));
 });
 
 test('address route maps D1 failures to a generic unavailable response with one stable auto ID', async () => {
   let autoIds = 0;
-  const providerFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+  const providerFetch: typeof fetch = async () => {
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };
   const result = await handleProfileWriteRequest(
@@ -293,10 +284,30 @@ test('address route maps D1 failures to a generic unavailable response with one 
   assert.equal(autoIds, 1);
 });
 
+test('address route uses D1 wallet sessions without requesting Firestore authSessions', async () => {
+  let providerCalls = 0;
+  const result = await handleProfileWriteRequest(
+    request(PROFILE_ADDRESSES_PATH, {
+      id: ADDRESS_ID,
+      encrypted: 'cipher-text',
+      country: 'United States',
+      hint: '100…01',
+    }),
+    { ...env, OPS_DB: {} as D1Database },
+    PROFILE_ADDRESSES_PATH,
+    dependencies(async () => {
+      providerCalls += 1;
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    }, {
+      resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal(providerCalls, 0);
+});
+
 test('address route applies the request deadline to D1 persistence', async () => {
-  const providerFetch: typeof fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
+  const providerFetch: typeof fetch = async () => {
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };
   const result = await handleProfileWriteRequest(
@@ -379,7 +390,6 @@ test('status route preserves, replaces, and deletes tracking fields with exact u
     let commit: { writes: Array<Record<string, unknown>> } | undefined;
     const providerFetch: typeof fetch = async (input, init) => {
       const url = new URL(String(input));
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         assert.deepEqual(url.searchParams.getAll('mask.fieldPaths'), []);
         return Response.json(orderDocument({ fulfillmentTrackingCode: ' https://tracking.example/old ' }));
@@ -417,7 +427,6 @@ test('status route atomically marks, queues, and finalizes the first shipped ema
   let orderReads = 0;
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       orderReads += 1;
       return Response.json(orderDocument(orderReads === 1 ? {
@@ -520,7 +529,6 @@ test('status route leaves a pending marker and returns 503 when Queue publicatio
   const errors: Record<string, unknown>[] = [];
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         deliveryId: 7,
@@ -569,7 +577,6 @@ test('status route retries a Firestore conflict before publishing one Queue job'
   let queueSends = 0;
   const providerFetch: typeof fetch = async (input) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       orderReads += 1;
       return Response.json(orderDocument(orderReads < 3 ? {
@@ -622,7 +629,6 @@ test('status route retries a pending shipped notification and skips a queued one
     let orderReads = 0;
     const providerFetch: typeof fetch = async (input) => {
       const url = new URL(String(input));
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         orderReads += 1;
         return Response.json(orderDocument({
@@ -669,7 +675,6 @@ test('status route explicitly replays a queued shipped email with a fresh idempo
   let orderReads = 0;
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       orderReads += 1;
       return Response.json(orderDocument({
@@ -728,7 +733,6 @@ test('status route clears a pending marker when shipment is reversed', async () 
   let commit: { writes: Array<Record<string, any>> } | undefined;
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         deliveryId: 7,
@@ -774,7 +778,6 @@ test('status route returns success when only queued-marker finalization fails', 
   let commits = 0;
   const providerFetch: typeof fetch = async (input) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       orderReads += 1;
       return Response.json(orderDocument(orderReads === 1 ? {
@@ -824,7 +827,6 @@ test('fulfillment address route encrypts the address and conditionally clears st
   let commit: { writes: Array<Record<string, unknown>> } | undefined;
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         addressSnapshot: {
@@ -894,7 +896,6 @@ test('fulfillment address route retries the full read and validation after a Fir
   const updateTimes: string[] = [];
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       reads += 1;
       return Response.json(orderDocument(
@@ -939,16 +940,16 @@ test('fulfillment address route preserves authorization and order-state guards',
     request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }),
     fulfillmentEnv,
     FULFILLMENT_ORDER_ADDRESS_PATH,
-    dependencies(async (input) => {
+    dependencies(async () => {
       providerCalls += 1;
-      const url = new URL(String(input));
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(adminWallet));
       return Response.json({ error: 'unexpected' }, { status: 500 });
+    }, {
+      resolveD1WalletSession: async () => ({ wallet: adminWallet, source: 'session' }),
     }),
   );
   assert.equal(denied.response.status, 403);
   assert.equal((await denied.response.json() as { error: { code: string } }).error.code, 'permission-denied');
-  assert.equal(providerCalls, 1);
+  assert.equal(providerCalls, 0);
 
   for (const [orderFields, code] of [
     [{ addressSnapshot: {}, shipstation: { shipmentId: 'shipment-1' } }, 'failed-precondition'],
@@ -967,7 +968,6 @@ test('fulfillment address route preserves authorization and order-state guards',
       FULFILLMENT_ORDER_ADDRESS_PATH,
       dependencies(async (input) => {
         const url = new URL(String(input));
-        if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
         if (url.pathname.endsWith('/deliveryOrders/7')) {
           return Response.json(orderDocument(orderFields));
         }
@@ -992,7 +992,6 @@ test('ShipStation shipment route returns an existing Firestore shipment without 
         shipStationCalls += 1;
         return Response.json({ error: 'unexpected' }, { status: 500 });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         return Response.json(orderDocument({
           shipstation: { shipmentId: 'shipment-1', createdAt: NOW_MS - 5_000 },
@@ -1030,7 +1029,6 @@ test('ShipStation shipment route never cleans up a claim it did not acquire', as
           shipStationCalls += 1;
           return Response.json({ error: 'unexpected' }, { status: 500 });
         }
-        if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
         if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json(orderDocument(orderFields));
         if (url.pathname.endsWith('/documents:commit')) commits += 1;
         return Response.json({ error: 'unexpected' }, { status: 500 });
@@ -1056,7 +1054,6 @@ test('ShipStation shipment route fails before claiming when provider configurati
       FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
       dependencies(async (input) => {
         const url = new URL(String(input));
-        if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
         if (url.pathname.endsWith('/deliveryOrders/7')) orderReads += 1;
         if (url.pathname.endsWith('/documents:commit')) commits += 1;
         return Response.json({ error: 'unexpected' }, { status: 500 });
@@ -1086,7 +1083,6 @@ test('ShipStation shipment route safely releases a claim after its commit respon
         shipStationCalls += 1;
         return Response.json({ error: 'unexpected' }, { status: 500 });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         orderReads += 1;
         return Response.json(orderDocument({
@@ -1151,7 +1147,6 @@ test('ShipStation shipment route claims, decrypts, creates, and conditionally pe
       }
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         addressSnapshot: {
@@ -1271,7 +1266,6 @@ test('ShipStation shipment route raises an international default parcel above de
       }
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         addressSnapshot: {
@@ -1338,7 +1332,6 @@ test('ShipStation shipment route retains its claim when final persistence confli
         if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
         return Response.json({ shipments: [{ shipment_id: 'shipment-new', packages: [] }] });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         return Response.json(orderDocument({
           addressSnapshot: {
@@ -1401,7 +1394,6 @@ test('ShipStation shipment route adopts an external-id match without creating a 
         },
       });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: claimId
@@ -1451,7 +1443,6 @@ test('ShipStation shipment route retains only its own claim after an ambiguous c
           reject(new Error('network failed after sending a private address'));
         });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         return Response.json(orderDocument({
           addressSnapshot: {
@@ -1512,7 +1503,6 @@ test('ShipStation shipment route releases its claim after a definitive provider 
         errors: [{ error_code: 'invalid_address', message: 'Ivan, 100 Main St' }],
       }, { status: 400 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         addressSnapshot: {
@@ -1600,7 +1590,6 @@ test('ShipStation shipment route releases a structured 5xx rejection and accepts
       }
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         addressSnapshot: {
@@ -1698,7 +1687,6 @@ test('ShipStation shipment route preserves its sanitized provider error when cla
             errors: [{ error_code: 'invalid_address', message: 'Ivan, 100 Main St' }],
           }, { status: 400 });
         }
-        if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
         if (url.pathname.endsWith('/deliveryOrders/7')) {
           return Response.json(orderDocument({
             addressSnapshot: {
@@ -1772,7 +1760,6 @@ test('ShipStation label route refreshes and conditionally persists an active sto
         },
       });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       orderReads += 1;
       return Response.json(orderDocument({
@@ -1839,7 +1826,6 @@ test('ShipStation label route adopts a discovered label and resolves an uncertai
           : [],
       });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: {
@@ -1926,7 +1912,6 @@ test('ShipStation label adoption replaces stale metadata from the previous label
         }],
       });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         fulfillmentTrackingCode: 'stale-tracking',
@@ -1990,7 +1975,6 @@ test('ShipStation label route keeps a voided label terminal across stale provide
       };
       return Response.json(url.pathname === '/v2/labels/label-1' ? { label } : { labels: [label] });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: {
@@ -2033,7 +2017,6 @@ test('ShipStation label route does not overwrite a label created during adoption
         }],
       });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       orderReads += 1;
       return Response.json(orderDocument({
@@ -2073,7 +2056,6 @@ test('ShipStation label route rejects a label from another shipment before persi
         },
       });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: {
@@ -2102,7 +2084,6 @@ test('ShipStation label route rejects a shipment change before transitioning pur
   const providerFetch: typeof fetch = async (input) => {
     const url = new URL(String(input));
     if (url.hostname === 'api.shipstation.com') return Response.json({ labels: [] });
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       orderReads += 1;
       return Response.json(orderDocument({
@@ -2131,7 +2112,6 @@ test('ShipStation label route fails closed for missing configuration and oversiz
   const order = orderDocument({ shipstation: { shipmentId: 'shipment-1' } });
   const firestoreFetch: typeof fetch = async (input) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json(order);
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };
@@ -2234,7 +2214,6 @@ test('ShipStation label void route persists the exact label and conditionally re
         assert.equal(new Headers(init?.headers).get('api-key'), 'shipstation-api-key');
         return Response.json({ approved: true, message: 'Refund requested' });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         return Response.json(orderDocument({
           fulfillmentStatus: 'Shipped',
@@ -2320,7 +2299,6 @@ test('ShipStation label void route is idempotent and rejects stale or ineligible
       providerCalls += 1;
       return Response.json({ approved: true, message: 'ok' });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         ...(source ? { source } : {}),
@@ -2377,7 +2355,6 @@ test('ShipStation label void route maps definite rejection without leaking provi
           reason_code: 'label_already_used',
         });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         return Response.json(orderDocument({
           shipstation: {
@@ -2424,7 +2401,6 @@ test('ShipStation label void route reconciles an ambiguous provider result with 
         },
       });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       cleanupUsedFreshSignal ||= voidCalls > 0 && init?.signal?.aborted === false;
       return Response.json(orderDocument({
@@ -2476,7 +2452,6 @@ test('ShipStation label void route does not overwrite a replacement label after 
         if (url.hostname === 'api.shipstation.com') {
           return Response.json({ approved: true, message: 'Refund requested' });
         }
-        if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
         if (url.pathname.endsWith('/deliveryOrders/7')) {
           orderReads += 1;
           const currentLabelId = orderReads === 1 ? 'label-1' : 'replacement-label';
@@ -2542,7 +2517,6 @@ test('ShipStation label purchase route claims, validates, purchases, and atomica
       }
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       orderReads += 1;
       return Response.json(orderDocument({
@@ -2652,7 +2626,6 @@ test('ShipStation label purchase route adopts an existing provider label without
       if (init?.method === 'POST') purchaseCalls += 1;
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({ shipstation: { shipmentId: 'shipment-1' } }));
     }
@@ -2716,7 +2689,6 @@ test('ShipStation label purchase route records definite failures and unresolved 
         }
         return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         return Response.json(orderDocument({
           shipstation: {
@@ -2810,7 +2782,6 @@ test('ShipStation label purchase stays unknown after a successful charge and rep
       }
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: {
@@ -2891,7 +2862,6 @@ test('ShipStation label purchase timeout uses a fresh cleanup signal and stores 
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
     if (chargedPostAborted) cleanupUsedFreshSignal ||= init?.signal?.aborted === false;
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: {
@@ -2959,7 +2929,6 @@ test('ShipStation label purchase cleanup failure keeps the claim blocked and log
       }
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       if (purchaseFailed) {
         return Response.json({ error: 'Private 100 Main St Bearer secret-token' }, { status: 500 });
@@ -3033,7 +3002,6 @@ test('ShipStation label purchase route reconciles a label after an ambiguous cha
       if (url.pathname === '/v2/labels/rates/rate-1') throw new TypeError('connection closed');
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: {
@@ -3111,7 +3079,6 @@ test('ShipStation label purchase route never charges after its Firestore claim i
       if (url.pathname === '/v2/labels/rates/rate-1') purchaseCalls += 1;
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: {
@@ -3236,7 +3203,6 @@ test('ShipStation rates route refreshes a single package without replacing its S
       }
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json(currentOrder());
     if (url.pathname.endsWith('/documents:commit')) {
       const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
@@ -3366,7 +3332,6 @@ test('ShipStation rates route preserves manual declarations, repairs zeroed pack
         }
         return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         return Response.json(orderDocument({
           items: scenario.items ?? [{ kind: 'dude', refId: 1 }],
@@ -3555,7 +3520,6 @@ test('ShipStation rates route rejects a parcel lighter than its declared product
       if (url.pathname === '/v2/shipments/shipment-1' && method === 'PUT') updateCalls += 1;
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: {
@@ -3699,7 +3663,6 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
         }
         return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         return Response.json(orderDocument({
           addressSnapshot: {
@@ -3809,7 +3772,6 @@ test('ShipStation rates route maps rate limits, timeouts, and oversized response
         }
         return Response.json({ error: `unexpected ${method} ${url.pathname}` }, { status: 500 });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         return Response.json(orderDocument({
           addressSnapshot: {
@@ -3865,7 +3827,6 @@ test('ShipStation rates route rejects a fresh foreign claim before reading a mul
         return Response.json({ shipment_id: 'shipment-1', packages: [{}, {}] });
       }
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: {
@@ -3912,7 +3873,6 @@ test('ShipStation rates route rejects same-id label state changes', async () => 
         });
       }
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         addressSnapshot: {
@@ -3981,7 +3941,6 @@ test('ShipStation rates route stops when an updated shipment becomes multi-packa
       }
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         addressSnapshot: {
@@ -4061,7 +4020,6 @@ test('ShipStation rates route rejects concurrent label, purchase, and claim chan
         }
         return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
       }
-      if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
       if (url.pathname.endsWith('/deliveryOrders/7')) {
         const concurrentState = claimWritten
           ? race === 'label'
@@ -4136,7 +4094,6 @@ test('ShipStation rates route preserves purchase, package-count, and refresh-cla
       }
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         addressSnapshot: {},
@@ -4217,7 +4174,6 @@ test('ShipStation rates route safely releases its own claim after an upstream fa
         return Response.json({ errors: [{ error_code: 'server_error' }] }, { status: 503 });
       }
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       orderReads += 1;
       return Response.json(orderDocument({
@@ -4273,7 +4229,6 @@ test('ShipStation rates route releases a claim whose successful commit response 
       if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         shipstation: {
@@ -4342,7 +4297,6 @@ test('ShipStation rates route releases a claim that becomes visible during clean
       if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
       return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       const response = Response.json(orderDocument({
         shipstation: {
@@ -4428,7 +4382,6 @@ test('ShipStation rates route never releases a replacement claim', async () => {
         return Response.json({ errors: [{ error_code: 'server_error' }] }, { status: 503 });
       }
     }
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) {
       return Response.json(orderDocument({
         addressSnapshot: {
@@ -4552,7 +4505,6 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
   let commits = 0;
   const deniedFetch: typeof fetch = async (input) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OTHER));
     if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json({ fields: {} });
     if (url.pathname.endsWith('/documents:commit')) commits += 1;
     return Response.json({ writeResults: [] });
@@ -4561,14 +4513,15 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
     request(FULFILLMENT_ORDER_STATUS_PATH, { dropId: 'card_nft_2', deliveryId: 7, status: 'Preparing' }),
     env,
     FULFILLMENT_ORDER_STATUS_PATH,
-    dependencies(deniedFetch),
+    dependencies(deniedFetch, {
+      resolveD1WalletSession: async () => ({ wallet: OTHER, source: 'session' }),
+    }),
   );
   assert.equal(denied.response.status, 403);
   assert.equal(commits, 0);
 
   const missingOrderFetch: typeof fetch = async (input) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/deliveryOrders/7')) return new Response(null, { status: 404 });
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };
@@ -4584,7 +4537,6 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
 test('writer failures stay generic and never expose request or credential material', async () => {
   const providerFetch: typeof fetch = async (input) => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith(`/authSessions/${UID}`)) return Response.json(sessionDocument(OWNER));
     if (url.pathname.endsWith('/documents:commit')) return Response.json({ error: 'writer-secret' }, { status: 403 });
     return Response.json({ error: 'unexpected' }, { status: 500 });
   };

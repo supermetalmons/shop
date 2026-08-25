@@ -15,12 +15,9 @@ import type {
   ReconcileProfileStateResponse,
 } from '../../../../shared/contracts.js';
 import {
-  WALLET_SESSION_COLLECTION,
-  WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS,
   WalletLifecycleValidationError,
   canonicalWalletAddress,
   parseSolanaSignInMessage,
-  resolveWalletSessionBinding,
   validateSolanaSignInMessage,
 } from '../../../../shared/walletLifecycle.js';
 import {
@@ -45,6 +42,15 @@ import {
 } from './firestoreRest.js';
 import { isProfileRequestOriginAllowed } from './profileReads.js';
 import { ensureD1Profile } from './profileD1.js';
+import {
+  WalletSessionD1BusyError,
+  WalletSessionD1SupersededError,
+  acquireWalletSessionReconcileLease,
+  establishD1WalletSession,
+  loadD1WalletSession,
+  releaseWalletSessionReconcileLease,
+  resolveD1WalletSession,
+} from './walletSessionD1.js';
 
 export const SOLANA_AUTH_PATH = '/auth/solana';
 export const PROFILE_RECONCILE_PATH = '/profile/reconcile';
@@ -96,7 +102,10 @@ export type ProfileLifecycleResult = {
 };
 
 type ProfileLifecycleDependencies = {
+  acquireWalletSessionReconcileLease: typeof acquireWalletSessionReconcileLease;
   accessTokenProvider: GoogleAccessTokenProvider;
+  establishD1WalletSession: typeof establishD1WalletSession;
+  loadD1WalletSession: typeof loadD1WalletSession;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
@@ -105,6 +114,8 @@ type ProfileLifecycleDependencies = {
     profile: Parameters<typeof ensureD1Profile>[1],
     signal: AbortSignal,
   ) => Promise<void>;
+  releaseWalletSessionReconcileLease: typeof releaseWalletSessionReconcileLease;
+  resolveD1WalletSession: typeof resolveD1WalletSession;
   verifyIdToken: (
     authorization: string | null,
     providerFetch: ProfileProviderFetch,
@@ -124,13 +135,6 @@ class WalletSessionSupersededError extends ProfileReadError {
       { reason: WALLET_SESSION_SUPERSEDED_ERROR_REASON },
     );
     this.name = 'WalletSessionSupersededError';
-  }
-}
-
-class StripeOwnerMergeSessionChangedError extends ProfileReadError {
-  constructor(reason: string) {
-    super('unauthenticated', 401, 'Wallet session changed. Sign in again.', { reason });
-    this.name = 'StripeOwnerMergeSessionChangedError';
   }
 }
 
@@ -209,53 +213,8 @@ function parseFirestoreDocument(value: unknown): FirestoreDocument | null {
   return { fields, name: value.name, updateTime: value.updateTime };
 }
 
-async function loadSessionDocument(
-  common: FirestoreCommon,
-  uid: string,
-  transaction?: string,
-): Promise<FirestoreDocument | null> {
-  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/${WALLET_SESSION_COLLECTION}/${encodeURIComponent(uid)}`);
-  url.searchParams.append('mask.fieldPaths', 'wallet');
-  if (transaction) url.searchParams.set('transaction', transaction);
-  const value = await authenticatedFirestoreRequest({ ...common, method: 'GET', url: url.toString() });
-  if (value === null) return null;
-  const document = parseFirestoreDocument(value);
-  if (!document) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-  return document;
-}
-
-function resolveSessionWallet(document: FirestoreDocument | null, uid: string): string {
-  const resolution = resolveWalletSessionBinding({
-    uid,
-    sessionExists: document !== null,
-    sessionData: document?.fields || null,
-  });
-  if ('reason' in resolution) {
-    throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
-  }
-  return resolution.wallet;
-}
-
-function sessionMatchesBaseline(
-  baseline: FirestoreDocument | null,
-  current: FirestoreDocument | null,
-): boolean {
-  if (baseline === null || current === null) return baseline === current;
-  return baseline.updateTime === current.updateTime;
-}
-
 function documentName(path: string): string {
   return `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`;
-}
-
-async function commitWrites(common: FirestoreCommon, writes: unknown[]): Promise<void> {
-  await authenticatedFirestoreRequest({
-    ...common,
-    body: JSON.stringify({ writes }),
-    method: 'POST',
-    surfaceWriteConflict: true,
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-  });
 }
 
 async function pauseForConflict(signal: AbortSignal, attempt: number): Promise<void> {
@@ -277,16 +236,14 @@ async function pauseForConflict(signal: AbortSignal, attempt: number): Promise<v
   });
 }
 
-async function establishWalletSession(params: {
-  common: FirestoreCommon;
+function validateWalletSessionSignature(params: {
   identity: FirebaseIdentity;
   message: string;
   nowMs: number;
   originHostname: string;
   signature: number[];
   wallet: string;
-}): Promise<void> {
-  const baseline = await loadSessionDocument(params.common, params.identity.uid);
+}): void {
   const statement = parseSolanaSignInMessage(params.message);
   validateSolanaSignInMessage({
     message: statement,
@@ -301,41 +258,6 @@ async function establishWalletSession(params: {
     bs58.decode(params.wallet),
   );
   if (!signatureValid) throw new ProfileReadError('unauthenticated', 401, 'Invalid signature');
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    const current = await loadSessionDocument(params.common, params.identity.uid);
-    const currentWallet = current ? canonicalWalletAddress(current.fields.wallet) : null;
-    if (!sessionMatchesBaseline(baseline, current) && currentWallet !== params.wallet) {
-      throw new WalletSessionSupersededError();
-    }
-    const sessionFields = {
-      wallet: firestoreString(params.wallet),
-      expiresAt: { timestampValue: new Date(WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS).toISOString() },
-    };
-    try {
-      await commitWrites(params.common, [
-        {
-          update: {
-            name: documentName(`${WALLET_SESSION_COLLECTION}/${params.identity.uid}`),
-            fields: sessionFields,
-          },
-          updateMask: { fieldPaths: Object.keys(sessionFields) },
-          updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
-          currentDocument: current
-            ? { updateTime: current.updateTime }
-            : { exists: false },
-        },
-      ]);
-      return;
-    } catch (error) {
-      if (!(error instanceof FirestoreWriteConflict) || attempt + 1 >= FIRESTORE_TRANSACTION_ATTEMPTS) {
-        if (error instanceof FirestoreWriteConflict) {
-          throw new ProfileReadError('aborted', 409, 'Wallet session changed. Try again.');
-        }
-        throw error;
-      }
-      await pauseForConflict(params.common.signal, attempt);
-    }
-  }
 }
 
 async function beginTransaction(common: FirestoreCommon): Promise<string> {
@@ -414,14 +336,6 @@ async function mergeStripeOwnerBatch(params: {
   for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
     const transaction = await beginTransaction(params.common);
     try {
-      const session = await loadSessionDocument(params.common, params.uid, transaction);
-      const resolution = resolveWalletSessionBinding({
-        uid: params.uid,
-        sessionExists: session !== null,
-        sessionData: session?.fields || null,
-      });
-      if ('reason' in resolution) throw new StripeOwnerMergeSessionChangedError(resolution.reason);
-      if (resolution.wallet !== params.wallet) throw new StripeOwnerMergeSessionChangedError('wallet_mismatch');
       const value = await authenticatedFirestoreRequest({
         ...params.common,
         body: JSON.stringify(stripeOwnerQuery(params.firebaseOwner, transaction)),
@@ -520,14 +434,62 @@ async function loadDeliveryRecoveryState(common: FirestoreCommon, wallet: string
 async function reconcileProfileState(params: {
   body: ReconcileProfileStateRequest;
   common: FirestoreCommon;
+  db: D1Database | undefined;
+  dependencies: Pick<ProfileLifecycleDependencies,
+    | 'acquireWalletSessionReconcileLease'
+    | 'releaseWalletSessionReconcileLease'
+    | 'resolveD1WalletSession'
+  >;
   identity: FirebaseIdentity;
   nowMs: number;
 }): Promise<ReconcileProfileStateResponse> {
-  const session = await loadSessionDocument(params.common, params.identity.uid);
-  const wallet = resolveSessionWallet(session, params.identity.uid);
-  const mergedStripeDeliveryOrders = params.body.mergeStripeDeliveryOrders === true
-    ? await mergeStripeOrders({ common: params.common, uid: params.identity.uid, wallet })
-    : 0;
+  let wallet: string;
+  let mergedStripeDeliveryOrders = 0;
+  if (!params.db) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+  if (params.body.mergeStripeDeliveryOrders === true) {
+    let lease;
+    try {
+      lease = await params.dependencies.acquireWalletSessionReconcileLease({
+        db: params.db,
+        firebaseUid: params.identity.uid,
+        nowMs: params.nowMs,
+        signal: params.common.signal,
+      });
+    } catch (error) {
+      if (error instanceof WalletSessionD1BusyError) {
+        throw new ProfileReadError('aborted', 409, error.message);
+      }
+      throw error;
+    }
+    if (!lease) throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
+    wallet = lease.wallet;
+    try {
+      mergedStripeDeliveryOrders = await mergeStripeOrders({
+        common: params.common,
+        uid: params.identity.uid,
+        wallet,
+      });
+    } finally {
+      await params.dependencies.releaseWalletSessionReconcileLease(
+        params.db,
+        params.identity.uid,
+        lease.id,
+      ).catch((error) => console.error({
+        event: 'wallet_session_reconcile_lease_release_failed',
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  } else {
+    const resolution = await params.dependencies.resolveD1WalletSession(
+      params.db,
+      params.identity.uid,
+      params.common.signal,
+    );
+    if ('reason' in resolution) {
+      throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
+    }
+    wallet = resolution.wallet;
+  }
   const recovery = params.body.includeDeliveryRecovery === false
     ? null
     : await loadDeliveryRecoveryState(params.common, wallet, params.nowMs);
@@ -540,7 +502,10 @@ async function reconcileProfileState(params: {
 const defaultAccessTokenProvider = createGoogleAccessTokenProvider();
 
 const defaultDependencies: ProfileLifecycleDependencies = {
+  acquireWalletSessionReconcileLease,
   accessTokenProvider: defaultAccessTokenProvider,
+  establishD1WalletSession,
+  loadD1WalletSession,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: AUTH_TIMEOUT_MS,
@@ -548,6 +513,8 @@ const defaultDependencies: ProfileLifecycleDependencies = {
     if (!db) throw new Error('OPS_DB is unavailable');
     await ensureD1Profile(db, profile, signal);
   },
+  releaseWalletSessionReconcileLease,
+  resolveD1WalletSession,
   verifyIdToken: verifyFirebaseIdToken,
 };
 
@@ -599,7 +566,9 @@ export async function handleProfileLifecycleRequest(
     const serviceAccountJson = typeof env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON === 'string'
       ? env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON
       : '';
-    if (!serviceAccountJson) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+    if (path === PROFILE_RECONCILE_PATH && !serviceAccountJson) {
+      throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+    }
     const nowMs = dependencies.nowMs();
     const common: FirestoreCommon = {
       accessTokenProvider: dependencies.accessTokenProvider,
@@ -613,15 +582,41 @@ export async function handleProfileLifecycleRequest(
       const wallet = canonicalWalletAddress(authBody.wallet);
       if (!wallet) throw new ProfileReadError('invalid-argument', 400, 'Invalid wallet address');
       const originHostname = new URL(origin).hostname;
-      await establishWalletSession({
-        common,
-        identity,
-        message: authBody.message,
-        nowMs,
-        originHostname,
-        signature: authBody.signature,
-        wallet,
-      });
+      if (!env.OPS_DB) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+      try {
+        const baseline = await dependencies.loadD1WalletSession(
+          env.OPS_DB,
+          identity.uid,
+          controller.signal,
+        );
+        validateWalletSessionSignature({
+          identity,
+          message: authBody.message,
+          nowMs,
+          originHostname,
+          signature: authBody.signature,
+          wallet,
+        });
+        await dependencies.establishD1WalletSession({
+          baseline,
+          db: env.OPS_DB,
+          firebaseUid: identity.uid,
+          nowMs,
+          signal: controller.signal,
+          wallet,
+        });
+      } catch (error) {
+        if (error instanceof WalletSessionD1SupersededError) throw new WalletSessionSupersededError();
+        if (error instanceof WalletSessionD1BusyError) {
+          throw new ProfileReadError('aborted', 409, error.message);
+        }
+        if (
+          error instanceof ProfileReadError ||
+          error instanceof WalletLifecycleValidationError ||
+          controller.signal.aborted
+        ) throw error;
+        throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+      }
       try {
         await dependencies.upsertProfile(
           env.OPS_DB,
@@ -634,12 +629,20 @@ export async function handleProfileLifecycleRequest(
       }
       return { response: jsonResponse({ wallet }, 200), metrics, authOutcome: 'accepted' };
     }
-    const response = await reconcileProfileState({
-      body: body as ReconcileProfileStateRequest,
-      common,
-      identity,
-      nowMs,
-    });
+    let response: ReconcileProfileStateResponse;
+    try {
+      response = await reconcileProfileState({
+        body: body as ReconcileProfileStateRequest,
+        common,
+        db: env.OPS_DB,
+        dependencies,
+        identity,
+        nowMs,
+      });
+    } catch (error) {
+      if (error instanceof ProfileReadError || controller.signal.aborted) throw error;
+      throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+    }
     return {
       response: jsonResponse(response, 200),
       metrics,

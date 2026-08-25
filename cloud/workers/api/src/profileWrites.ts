@@ -73,7 +73,6 @@ import {
   SHIPSTATION_PACKAGE_RANGE_MESSAGE,
   type ShipStationPackageInput,
 } from '../../../../shared/shipstationPackage.js';
-import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
 import {
   createProfileAddressId,
   PROFILE_ADDRESS_ID_PATTERN,
@@ -111,6 +110,9 @@ import {
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { saveD1ProfileAddress } from './profileD1.js';
+import {
+  resolveD1WalletSession,
+} from './walletSessionD1.js';
 import {
   BUYER_ORDER_SHIPPED_EMAIL_PENDING,
   BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
@@ -168,6 +170,11 @@ type ProfileWriteDependencies = {
   nowMs: () => number;
   pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
   providerFetch: ProfileProviderFetch;
+  resolveD1WalletSession: (
+    db: D1Database | undefined,
+    uid: string,
+    signal: AbortSignal,
+  ) => ReturnType<typeof resolveD1WalletSession>;
   saveProfileAddress: (
     db: D1Database | undefined,
     address: Parameters<typeof saveD1ProfileAddress>[1],
@@ -305,6 +312,10 @@ const defaultDependencies: ProfileWriteDependencies = {
   nowMs: () => Date.now(),
   pauseForRatePoll,
   providerFetch: (input, init) => fetch(input, init),
+  resolveD1WalletSession: (db, uid, signal) => {
+    if (!db) throw new Error('OPS_DB is unavailable');
+    return resolveD1WalletSession(db, uid, signal);
+  },
   saveProfileAddress: (db, address, signal) => {
     if (!db) throw new Error('OPS_DB is unavailable');
     return saveD1ProfileAddress(db, address, signal);
@@ -404,35 +415,22 @@ async function parseExactRequestBody(
   return result.data;
 }
 
-function optionalSessionWallet(value: unknown, uid: string): string | null {
-  if (value === null) return isBase58Bytes(uid, 32) ? uid : null;
-  if (!isRecord(value)) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-  const fields = decodeFirestoreFields(value.fields);
-  const wallet = fields?.wallet;
-  if (typeof wallet !== 'string' || !isBase58Bytes(wallet, 32)) {
-    throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
-  }
-  return wallet;
-}
-
 async function loadSessionWallet(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
-  nowMs: number;
-  providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  db: D1Database | undefined;
+  resolveD1WalletSession: ProfileWriteDependencies['resolveD1WalletSession'];
   signal: AbortSignal;
   uid: string;
 }): Promise<string> {
-  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/authSessions/${encodeURIComponent(args.uid)}`);
-  url.searchParams.append('mask.fieldPaths', 'wallet');
-  const document = await authenticatedFirestoreRequest({
-    ...args,
-    method: 'GET',
-    url: url.toString(),
-  });
-  const wallet = optionalSessionWallet(document, args.uid);
-  if (!wallet) throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
-  return wallet;
+  try {
+    const resolution = await args.resolveD1WalletSession(args.db, args.uid, args.signal);
+    if ('reason' in resolution) {
+      throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
+    }
+    return resolution.wallet;
+  } catch (error) {
+    if (error instanceof ProfileReadError || args.signal.aborted) throw error;
+    throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+  }
 }
 
 function supportedDropId(value: string): string {
@@ -3279,7 +3277,12 @@ export async function handleProfileWriteRequest(
       serviceAccountJson,
       signal: controller.signal,
     };
-    const wallet = await loadSessionWallet({ ...common, uid: identity.uid });
+    const wallet = await loadSessionWallet({
+      db: env.OPS_DB,
+      resolveD1WalletSession: dependencies.resolveD1WalletSession,
+      signal: controller.signal,
+      uid: identity.uid,
+    });
     let payload: unknown;
     if (path === PROFILE_ADDRESSES_PATH) {
       payload = await saveAddress(

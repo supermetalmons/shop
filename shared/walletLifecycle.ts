@@ -1,7 +1,6 @@
 import bs58 from 'bs58';
 import { isBase58Bytes } from './solanaRpcProxy.ts';
 
-export const WALLET_SESSION_COLLECTION = 'authSessions';
 export const WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS = 253_402_300_799_999;
 const WALLET_SIGN_IN_MAX_SKEW_MS = 2 * 24 * 60 * 60 * 1000;
 

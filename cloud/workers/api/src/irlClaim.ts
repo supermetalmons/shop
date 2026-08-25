@@ -64,10 +64,6 @@ import {
   MPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
 import { isNonZeroBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
-import {
-  resolveWalletSessionBinding,
-  WALLET_SESSION_COLLECTION,
-} from '../../../../shared/walletLifecycle.js';
 import type {
   PrepareIrlClaimRequest,
   PrepareIrlClaimResponse,
@@ -90,6 +86,7 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
+import { resolveD1WalletSession } from './walletSessionD1.js';
 
 export const IRL_CLAIM_PREPARE_PATH = '/claims/irl/prepare';
 
@@ -113,7 +110,7 @@ const MPL_CORE_CPI_SIGNER = new PublicKey(MPL_CORE_CPI_SIGNER_ADDRESS);
 type IrlClaimEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'FIRESTORE_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
->;
+> & Partial<Pick<Env, 'OPS_DB'>>;
 
 type IrlClaimErrorCode =
   | 'invalid-argument'
@@ -180,7 +177,11 @@ type IrlClaimDependencies = {
   timeoutMs: number;
   verifyIdToken: typeof verifyFirebaseIdToken;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
-  loadWalletSession: (context: FirestoreReadContext, uid: string) => Promise<string>;
+  loadWalletSession: (
+    context: FirestoreReadContext,
+    db: D1Database | undefined,
+    uid: string,
+  ) => Promise<string>;
   loadClaim: (context: FirestoreReadContext, code: string) => Promise<Record<string, unknown> | null>;
   resolveLegacyDropIds: (context: FirestoreReadContext, code: string) => Promise<string[]>;
   fetchOwnedAssets: (context: ProviderContext, runtime: IrlClaimRuntime, owner: string) => Promise<DasAsset[]>;
@@ -726,17 +727,20 @@ async function loadLookupTable(
   }
 }
 
-async function loadWalletSession(context: FirestoreReadContext, uid: string): Promise<string> {
-  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/${WALLET_SESSION_COLLECTION}/${encodeURIComponent(uid)}`);
-  const document = await authenticatedFirestoreRequest({ ...context, method: 'GET', url: url.toString() });
-  const fields = isRecord(document) ? decodeFirestoreFields(document.fields) : null;
-  const resolution = resolveWalletSessionBinding({
-    uid,
-    sessionExists: Boolean(document),
-    sessionData: fields,
-  });
-  if ('reason' in resolution) throw new IrlClaimError('unauthenticated', 'Sign in with your wallet first.');
-  return resolution.wallet;
+async function loadWalletSession(
+  context: FirestoreReadContext,
+  db: D1Database | undefined,
+  uid: string,
+): Promise<string> {
+  try {
+    if (!db) throw new IrlClaimError('unavailable', 'IRL claims are temporarily unavailable.');
+    const resolution = await resolveD1WalletSession(db, uid, context.signal);
+    if ('reason' in resolution) throw new IrlClaimError('unauthenticated', 'Sign in with your wallet first.');
+    return resolution.wallet;
+  } catch (error) {
+    if (error instanceof IrlClaimError || error instanceof ProfileReadError || context.signal.aborted) throw error;
+    throw new IrlClaimError('unavailable', 'IRL claims are temporarily unavailable.');
+  }
 }
 
 async function loadClaim(
@@ -1078,7 +1082,11 @@ async function prepareClaim(args: {
   env: IrlClaimEnv;
   dependencies: IrlClaimDependencies;
 }): Promise<PrepareIrlClaimResponse> {
-  const sessionWallet = await args.dependencies.loadWalletSession(args.context, args.identity.uid);
+  const sessionWallet = await args.dependencies.loadWalletSession(
+    args.context,
+    args.env.OPS_DB,
+    args.identity.uid,
+  );
   const owner = canonicalWallet(args.body.owner);
   if (sessionWallet !== owner) throw new IrlClaimError('permission-denied', 'Owners only');
   const normalizedCode = normalizeIrlClaimCode(args.body.code);

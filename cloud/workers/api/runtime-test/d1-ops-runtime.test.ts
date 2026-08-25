@@ -23,6 +23,15 @@ import {
 } from '../src/profileD1.ts';
 import { profileReadTestHooks } from '../src/profileReads.ts';
 import { deliveryPrepareTestHooks } from '../src/deliveryPrepare.ts';
+import {
+  WalletSessionD1BusyError,
+  WalletSessionD1SupersededError,
+  acquireWalletSessionReconcileLease,
+  establishD1WalletSession,
+  loadD1WalletSession,
+  releaseWalletSessionReconcileLease,
+  resolveD1WalletSession,
+} from '../src/walletSessionD1.ts';
 
 const PROFILE_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const RACE_WALLET = '11111111111111111111111111111111';
@@ -58,7 +67,151 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       '0003_profiles_d1_final.sql',
       '0004_profile_integrity.sql',
       '0005_profile_write_safety.sql',
+      '0006_wallet_sessions.sql',
+      '0007_wallet_sessions_d1_only.sql',
     ]);
+    assert.deepEqual(await env.OPS_DB.prepare(`SELECT storage_source, revision
+      FROM wallet_session_storage_control WHERE singleton = 1`).first(), {
+      storage_source: 'd1',
+      revision: 3,
+    });
+    assert.deepEqual(await resolveD1WalletSession(env.OPS_DB, 'missing-firebase-uid'), {
+      wallet: null,
+      reason: 'legacy_uid_invalid',
+    });
+    assert.deepEqual(await resolveD1WalletSession(env.OPS_DB, RACE_WALLET), {
+      wallet: RACE_WALLET,
+      source: 'legacy_uid',
+    });
+    await assert.rejects(establishD1WalletSession({
+      baseline: null,
+      db: env.OPS_DB,
+      firebaseUid: 'invalid-wallet-session-uid',
+      nowMs: 1_000,
+      wallet: '1'.repeat(45),
+    }), /Wallet-session data is invalid/);
+    assert.equal((await env.OPS_DB.prepare(
+      'SELECT COUNT(*) AS count FROM wallet_sessions WHERE firebase_uid = ?',
+    ).bind('invalid-wallet-session-uid').first<{ count: number }>())?.count, 0);
+    const sessionUid = 'runtime-wallet-session-uid';
+    const initialSession = await establishD1WalletSession({
+      baseline: null,
+      db: env.OPS_DB,
+      firebaseUid: sessionUid,
+      nowMs: 1_000,
+      wallet: PROFILE_WALLET,
+    });
+    assert.equal(initialSession.walletRevision, 1);
+    const reboundSession = await establishD1WalletSession({
+      baseline: initialSession,
+      db: env.OPS_DB,
+      firebaseUid: sessionUid,
+      nowMs: 2_000,
+      wallet: RACE_WALLET,
+    });
+    assert.equal(reboundSession.walletRevision, 2);
+    await assert.rejects(
+      establishD1WalletSession({
+        baseline: initialSession,
+        db: env.OPS_DB,
+        firebaseUid: sessionUid,
+        nowMs: 3_000,
+        wallet: PROFILE_WALLET,
+      }),
+      WalletSessionD1SupersededError,
+    );
+    const lease = await acquireWalletSessionReconcileLease({
+      db: env.OPS_DB,
+      firebaseUid: sessionUid,
+      leaseId: '00000000-0000-4000-8000-000000000001',
+      nowMs: 4_000,
+    });
+    assert.equal(lease?.wallet, RACE_WALLET);
+    const renewedDuringLease = await establishD1WalletSession({
+      baseline: reboundSession,
+      db: env.OPS_DB,
+      firebaseUid: sessionUid,
+      nowMs: 5_000,
+      wallet: RACE_WALLET,
+    });
+    assert.equal(renewedDuringLease.wallet, RACE_WALLET);
+    assert.equal(renewedDuringLease.walletRevision, 3);
+    await assert.rejects(
+      establishD1WalletSession({
+        baseline: reboundSession,
+        db: env.OPS_DB,
+        firebaseUid: sessionUid,
+        nowMs: 5_500,
+        wallet: PROFILE_WALLET,
+      }),
+      WalletSessionD1SupersededError,
+    );
+    await assert.rejects(
+      establishD1WalletSession({
+        baseline: renewedDuringLease,
+        db: env.OPS_DB,
+        firebaseUid: sessionUid,
+        nowMs: 6_000,
+        wallet: PROFILE_WALLET,
+      }),
+      WalletSessionD1BusyError,
+    );
+    await releaseWalletSessionReconcileLease(env.OPS_DB, sessionUid, lease!.id);
+    const releasedSession = await loadD1WalletSession(env.OPS_DB, sessionUid);
+    assert.equal(releasedSession?.reconcileLeaseId, null);
+    const reboundAfterRelease = await establishD1WalletSession({
+      baseline: releasedSession,
+      db: env.OPS_DB,
+      firebaseUid: sessionUid,
+      nowMs: 7_000,
+      wallet: PROFILE_WALLET,
+    });
+    assert.equal(reboundAfterRelease.wallet, PROFILE_WALLET);
+    const expiringLease = await acquireWalletSessionReconcileLease({
+      db: env.OPS_DB,
+      firebaseUid: sessionUid,
+      leaseId: '00000000-0000-4000-8000-000000000002',
+      nowMs: 20_000,
+    });
+    await releaseWalletSessionReconcileLease(
+      env.OPS_DB,
+      sessionUid,
+      '00000000-0000-4000-8000-000000000099',
+    );
+    await assert.rejects(acquireWalletSessionReconcileLease({
+      db: env.OPS_DB,
+      firebaseUid: sessionUid,
+      leaseId: '00000000-0000-4000-8000-000000000003',
+      nowMs: 21_000,
+    }), WalletSessionD1BusyError);
+    const reclaimedLease = await acquireWalletSessionReconcileLease({
+      db: env.OPS_DB,
+      firebaseUid: sessionUid,
+      leaseId: '00000000-0000-4000-8000-000000000004',
+      nowMs: expiringLease!.expiresAtMs + 1,
+    });
+    assert.equal(reclaimedLease?.id, '00000000-0000-4000-8000-000000000004');
+    await releaseWalletSessionReconcileLease(env.OPS_DB, sessionUid, reclaimedLease!.id);
+    await establishD1WalletSession({
+      baseline: null,
+      db: env.OPS_DB,
+      firebaseUid: 'duplicate-wallet-session-uid',
+      nowMs: 8_000,
+      wallet: PROFILE_WALLET,
+    });
+    assert.equal((await env.OPS_DB.prepare(
+      'SELECT COUNT(*) AS count FROM wallet_sessions WHERE wallet = ?',
+    ).bind(PROFILE_WALLET).first<{ count: number }>())?.count, 2);
+    assert.deepEqual(await resolveD1WalletSession(env.OPS_DB, sessionUid), {
+      wallet: PROFILE_WALLET,
+      source: 'session',
+    });
+    await assert.rejects(env.OPS_DB.prepare(`UPDATE wallet_session_storage_control
+      SET storage_source = 'firestore', revision = revision + 1, updated_at_ms = 11_000
+      WHERE singleton = 1`).run());
+    await assert.rejects(env.OPS_DB.prepare(`UPDATE wallet_session_storage_control
+      SET revision = revision + 1, updated_at_ms = 11_000
+      WHERE singleton = 1`).run());
     assert.deepEqual(await saveD1ProfileAddress(env.OPS_DB, {
       wallet: PROFILE_WALLET,
       id: 'AbCdEfGhIjKlMnOpQrSt',

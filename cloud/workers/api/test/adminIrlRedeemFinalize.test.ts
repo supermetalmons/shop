@@ -238,6 +238,21 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   assert.equal(unavailable.response.status, 502);
   assert.equal(unavailable.authOutcome, 'provider-failure');
 
+  const sessionStoreUnavailable = await handleAdminIrlRedeemFinalize(
+    request(),
+    env(),
+    () => undefined,
+    dependencies({ finalize: adminIrlRedeemFinalizeTestHooks.finalizeAdminIrlRedeem }),
+  );
+  assert.equal(sessionStoreUnavailable.response.status, 502);
+  assert.deepEqual(await sessionStoreUnavailable.response.json(), {
+    ok: false,
+    error: {
+      code: 'unavailable',
+      message: 'Admin IRL redeem finalization is temporarily unavailable.',
+    },
+  });
+
   const deferred: Promise<unknown>[] = [];
   let finalizeAborted = false;
   let cleanupSettled = false;

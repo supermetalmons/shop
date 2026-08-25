@@ -206,7 +206,7 @@ test('IRL claim handler returns the expected partially signed transaction', asyn
   ]);
 });
 
-test('IRL claim Firestore adapters preserve wallet sessions and legacy collection-group resolution', async () => {
+test('IRL claim reads wallet sessions from D1 and preserves legacy collection-group resolution', async () => {
   const requests: Array<{ url: string; body?: unknown }> = [];
   const context = {
     accessTokenProvider: {
@@ -221,9 +221,7 @@ test('IRL claim Firestore adapters preserve wallet sessions and legacy collectio
         ...(init?.body ? { body: JSON.parse(String(init.body)) as unknown } : {}),
       });
       assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer google-token');
-      if (url.endsWith('/authSessions/firebase-uid')) {
-        return Response.json({ fields: { wallet: { stringValue: OWNER.toBase58() } } });
-      }
+      assert.equal(url.includes('/authSessions/'), false);
       if (url.endsWith('/claimCodes/1234567890')) {
         return Response.json({ fields: {
           dropId: { stringValue: DROP_ID },
@@ -238,7 +236,34 @@ test('IRL claim Firestore adapters preserve wallet sessions and legacy collectio
     serviceAccountJson: '{"credential":"test"}',
     signal: new AbortController().signal,
   };
-  assert.equal(await irlClaimTestHooks.loadWalletSession(context, 'firebase-uid'), OWNER.toBase58());
+  const firestoreSourceDb = {
+    batch: async () => [],
+    dump: async () => new ArrayBuffer(0),
+    exec: async () => ({ count: 0, duration: 0 }),
+    prepare: () => {
+      let statement: D1PreparedStatement;
+      statement = {
+        all: async () => { throw new Error('Unexpected D1 all'); },
+        bind: () => statement,
+        first: async () => ({
+          firebase_uid: 'firebase-uid',
+          wallet: OWNER.toBase58(),
+          expires_at_ms: 253_402_300_799_999,
+          updated_at_ms: 1_700_000_000_000,
+          wallet_revision: 1,
+          reconcile_lease_id: null,
+          reconcile_lease_expires_at_ms: null,
+        }),
+        raw: async () => { throw new Error('Unexpected D1 raw'); },
+        run: async () => { throw new Error('Unexpected D1 run'); },
+      } as D1PreparedStatement;
+      return statement;
+    },
+    withSession: () => {
+      throw new Error('Unexpected D1 session');
+    },
+  } as D1Database;
+  assert.equal(await irlClaimTestHooks.loadWalletSession(context, firestoreSourceDb, 'firebase-uid'), OWNER.toBase58());
   assert.deepEqual(await irlClaimTestHooks.loadClaim(context, '1234567890'), {
     dropId: DROP_ID,
     boxId: 7,

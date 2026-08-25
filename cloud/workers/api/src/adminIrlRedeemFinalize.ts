@@ -123,7 +123,7 @@ const requestSchema = z.object({
 
 type FinalizeRequest = z.infer<typeof requestSchema>;
 type FinalizeEnv = Pick<Env, 'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'> &
-  Partial<Pick<Env, 'DATA_DB'>>;
+  Partial<Pick<Env, 'DATA_DB' | 'OPS_DB'>>;
 type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
 type ProviderContext = Parameters<typeof adminIrlRedeemRuntime.fetchAsset>[0];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
@@ -1503,7 +1503,22 @@ async function finalizeAdminIrlRedeem(
   if (!config) throw new AdminIrlRedeemFinalizeError('invalid-argument', `Unsupported dropId: ${body.dropId}`);
   const runtime = adminIrlRedeemRuntime.buildRuntime(config);
   runtimeSupportsFinalize(runtime);
-  const wallet = canonicalWallet(await adminIrlRedeemRuntime.loadWalletSession(firestore, identity.uid));
+  let wallet: string;
+  try {
+    wallet = canonicalWallet(await adminIrlRedeemRuntime.loadWalletSession(
+      firestore,
+      env.OPS_DB,
+      identity.uid,
+    ));
+  } catch (error) {
+    if (isRecord(error) && error.code === 'unavailable') {
+      throw new AdminIrlRedeemFinalizeError(
+        'unavailable',
+        'Admin IRL redeem finalization is temporarily unavailable.',
+      );
+    }
+    throw error;
+  }
   const attemptId = `admin_irl:${crypto.randomUUID()}`;
   const started = await startFinalize(firestore, body, wallet, attemptId, firestore.nowMs);
   if (started.status === 'complete') {

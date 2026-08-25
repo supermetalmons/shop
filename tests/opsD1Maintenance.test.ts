@@ -23,6 +23,8 @@ const migrationSql = [
   '0003_profiles_d1_final.sql',
   '0004_profile_integrity.sql',
   '0005_profile_write_safety.sql',
+  '0006_wallet_sessions.sql',
+  '0007_wallet_sessions_d1_only.sql',
 ]
   .map((name) => readFileSync(
     new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
@@ -76,6 +78,8 @@ function integrityInput(
         { name: '0003_profiles_d1_final.sql' },
         { name: '0004_profile_integrity.sql' },
         { name: '0005_profile_write_safety.sql' },
+        { name: '0006_wallet_sessions.sql' },
+        { name: '0007_wallet_sessions_d1_only.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
@@ -91,8 +95,12 @@ function integrityInput(
         FROM pragma_table_list
         WHERE
           schema = 'main' AND
-          name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'worker_controls')
+          name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
         ORDER BY name`),
+      walletSessionColumns: queryRows(db, 'PRAGMA table_info(wallet_sessions)'),
+      walletSessionCounts: queryRows(db, 'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions'),
+      walletSessionStorageControl: queryRows(db, 'SELECT * FROM wallet_session_storage_control'),
+      walletSessionStorageControlColumns: queryRows(db, 'PRAGMA table_info(wallet_session_storage_control)'),
       workerControlColumns: queryRows(db, 'PRAGMA table_info(worker_controls)'),
       ...overrides,
     };
@@ -111,13 +119,15 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
     assert.deepEqual(controls, [controlRow()]);
     const tables = queryRows(
       db,
-      "SELECT name, strict FROM pragma_table_list WHERE name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'worker_controls', 'rate_limit_buckets') ORDER BY name",
+      "SELECT name, strict FROM pragma_table_list WHERE name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'worker_controls', 'rate_limit_buckets', 'wallet_sessions', 'wallet_session_storage_control') ORDER BY name",
     );
     assert.deepEqual(tables, [
       { name: 'profile_addresses', strict: 1 },
       { name: 'profile_storage_control', strict: 1 },
       { name: 'profiles', strict: 1 },
       { name: 'rate_limit_buckets', strict: 1 },
+      { name: 'wallet_session_storage_control', strict: 1 },
+      { name: 'wallet_sessions', strict: 1 },
       { name: 'worker_controls', strict: 1 },
     ]);
     assert.deepEqual(
@@ -141,6 +151,8 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
           { name: '0003_profiles_d1_final.sql' },
           { name: '0004_profile_integrity.sql' },
           { name: '0005_profile_write_safety.sql' },
+          { name: '0006_wallet_sessions.sql' },
+          { name: '0007_wallet_sessions_d1_only.sql' },
         ],
         profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
         profileCounts: queryRows(db, `SELECT
@@ -161,9 +173,13 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
           FROM pragma_table_list
           WHERE
             schema = 'main' AND
-            name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'worker_controls')
+            name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
           ORDER BY name`,
         ),
+        walletSessionColumns: queryRows(db, 'PRAGMA table_info(wallet_sessions)'),
+        walletSessionCounts: queryRows(db, 'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions'),
+        walletSessionStorageControl: queryRows(db, 'SELECT * FROM wallet_session_storage_control'),
+        walletSessionStorageControlColumns: queryRows(db, 'PRAGMA table_info(wallet_session_storage_control)'),
         workerControlColumns: queryRows(
           db,
           'PRAGMA table_info(worker_controls)',
@@ -313,7 +329,8 @@ test('ops migration enforces control and rate-limit invariants', () => {
 
 test('ops D1 integrity requires exact migrations, schema, quick check, and singleton', () => {
   const healthy = integrityInput();
-  assert.deepEqual(assertOpsD1Integrity(healthy), {
+  const report = assertOpsD1Integrity(healthy);
+  assert.deepEqual(report, {
     profileAddressCount: 0,
     profileCount: 0,
     profileStorageSource: 'd1',
@@ -326,9 +343,20 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
       updatedAtMs: 0,
       cursorUpdatedAtMs: null,
     },
+    walletSessionCount: 0,
+    walletSessionStorage: {
+      source: 'd1',
+      revision: 3,
+      updatedAtMs: report.walletSessionStorage.updatedAtMs,
+    },
   });
+  assert.ok(report.walletSessionStorage.updatedAtMs > 0);
   assert.throws(
-    () => assertOpsD1Integrity(healthy, { profileAddressCount: 1, profileCount: 1 }),
+    () => assertOpsD1Integrity(healthy, {
+      profileAddressCount: 1,
+      profileCount: 1,
+      walletSessionCount: 1,
+    }),
     /cutover baseline/,
   );
   assert.throws(

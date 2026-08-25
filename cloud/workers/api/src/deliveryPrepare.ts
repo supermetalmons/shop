@@ -64,10 +64,6 @@ import {
   normalizeDeliveryUnitsPerBox,
 } from '../../../../shared/shipping.js';
 import {
-  resolveWalletSessionBinding,
-  WALLET_SESSION_COLLECTION,
-} from '../../../../shared/walletLifecycle.js';
-import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
   type FirebaseIdentity,
@@ -92,6 +88,7 @@ import {
   loadD1ProfileAddress,
   type D1ProfileAddress,
 } from './profileD1.js';
+import { resolveD1WalletSession } from './walletSessionD1.js';
 
 export const DELIVERY_PREPARE_PATH = '/delivery/prepare';
 
@@ -241,7 +238,11 @@ type DeliveryPrepareDependencies = {
     context: ProviderContext,
     runtime: DeliveryRuntime,
   ) => Promise<OnchainState>;
-  loadWalletSession: (context: FirestoreContext, uid: string) => Promise<string>;
+  loadWalletSession: (
+    context: FirestoreContext,
+    db: D1Database | undefined,
+    uid: string,
+  ) => Promise<string>;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
@@ -812,18 +813,20 @@ async function deliveryPdaExists(
   return result.value !== null;
 }
 
-async function loadWalletSession(context: FirestoreContext, uid: string): Promise<string> {
-  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/${WALLET_SESSION_COLLECTION}/${encodeURIComponent(uid)}`);
-  url.searchParams.append('mask.fieldPaths', 'wallet');
-  const document = await authenticatedFirestoreRequest({ ...context, method: 'GET', url: url.toString() });
-  const fields = isRecord(document) ? decodeFirestoreFields(document.fields) : null;
-  const resolution = resolveWalletSessionBinding({
-    uid,
-    sessionExists: Boolean(document),
-    sessionData: fields,
-  });
-  if ('reason' in resolution) throw new DeliveryPrepareError('unauthenticated', 'Sign in with your wallet first.');
-  return resolution.wallet;
+async function loadWalletSession(
+  context: FirestoreContext,
+  db: D1Database | undefined,
+  uid: string,
+): Promise<string> {
+  try {
+    if (!db) throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
+    const resolution = await resolveD1WalletSession(db, uid, context.signal);
+    if ('reason' in resolution) throw new DeliveryPrepareError('unauthenticated', 'Sign in with your wallet first.');
+    return resolution.wallet;
+  } catch (error) {
+    if (error instanceof DeliveryPrepareError || error instanceof ProfileReadError || context.signal.aborted) throw error;
+    throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
+  }
 }
 
 function d1AddressDocument(address: D1ProfileAddress): AddressDocument {
@@ -1297,7 +1300,11 @@ async function prepareDelivery(args: {
   dependencies: DeliveryPrepareDependencies;
   prepareAttemptId?: string;
 }): Promise<PrepareDeliveryResponse> {
-  const sessionWallet = await args.dependencies.loadWalletSession(args.context, args.identity.uid);
+  const sessionWallet = await args.dependencies.loadWalletSession(
+    args.context,
+    args.env.OPS_DB,
+    args.identity.uid,
+  );
   const owner = canonicalPublicKey(args.body.owner, 'wallet address');
   const ownerWallet = owner.toBase58();
   if (sessionWallet !== ownerWallet) throw new DeliveryPrepareError('permission-denied', 'Owners only');
@@ -1568,6 +1575,7 @@ export const deliveryPrepareTestHooks = {
   loadLatestBlockhash,
   loadLookupTable,
   loadOnchainState,
+  loadWalletSession,
   orderItem,
   prepareDelivery,
   secureDeliveryId,

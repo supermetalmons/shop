@@ -20,8 +20,8 @@ control, and rate-limit state.
 - The `mons-shop-data` D1 database is authoritative for public pack-status
   summaries and events.
 - The `mons-shop-ops` D1 database stores profiles, encrypted saved addresses,
-  the ready-notification control, and receipt-transfer fixed-window rate-limit
-  buckets.
+  wallet-session bindings, the ready-notification control, and receipt-transfer
+  fixed-window rate-limit buckets.
 - The API Worker's existing cron, Queue producers and consumers, dead-letter
   queues, bindings, routes, and secrets are declared in
   `cloud/workers/api/wrangler.jsonc`.
@@ -83,10 +83,10 @@ lists, creates, updates, and deletes. Customer operations go through
 `mons-shop-api`, whose reader and writer service accounts access Firestore
 server-side.
 
-Firestore still stores orders, assignments, wallet-session bindings, and
-delivery projection outboxes. Its indexes, rules, emulator tooling, operator
-scripts, and API service-account secrets remain required. Profiles and saved
-addresses are D1-only.
+Firestore still stores orders, assignments, and delivery projection outboxes.
+Its indexes, rules, emulator tooling, operator scripts, and API service-account
+secrets remain required. Profiles, saved addresses, and cut-over wallet-session
+bindings are D1-only.
 
 Deploy Firestore indexes and deny-all client rules from the repository root:
 
@@ -107,6 +107,14 @@ npm run setup:api:firestore-keychain
 
 Tools that support a service-account file require a temporary mode-0600 file.
 Do not put service-account JSON in repository files or frontend configuration.
+
+### Wallet sessions
+
+Firebase Anonymous Auth remains the browser identity provider. The mapping
+from each Firebase UID to its signed Solana wallet is D1-only in
+`mons-shop-ops`; Firestore does not store wallet sessions. Different-wallet
+rebinding is temporarily blocked while profile reconciliation holds its
+bounded D1 lease, while same-wallet renewal remains available.
 
 ## Cloudflare deployment
 

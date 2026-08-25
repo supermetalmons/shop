@@ -9,6 +9,10 @@ import {
   type ProfileLifecyclePath,
 } from '../src/profileLifecycle.ts';
 import type { GoogleAccessTokenProvider } from '../src/firestoreRest.ts';
+import {
+  WalletSessionD1BusyError,
+  WalletSessionD1SupersededError,
+} from '../src/walletSessionD1.ts';
 
 const UID = 'firebase-lifecycle-user';
 const NOW_MS = Date.parse('2026-08-20T12:00:00.000Z');
@@ -68,6 +72,7 @@ class FirestoreHarness {
   rebindAfterMergeCommits = 0;
   sessionChangeBeforeAuthCommit: string | null = null;
   rollbackCount = 0;
+  sessionReads = 0;
 
   snapshotDocument(entry: StoredDocument | null): StoredDocument | null {
     return entry ? structuredClone(entry) : null;
@@ -107,6 +112,7 @@ class FirestoreHarness {
       return Response.json({});
     }
     if (url.pathname.endsWith(`/authSessions/${UID}`)) {
+      this.sessionReads += 1;
       const transaction = url.searchParams.get('transaction');
       const value = transaction ? this.transactions.get(transaction)?.session ?? null : this.session;
       return value ? this.responseDocument(value) : Response.json({ error: 'missing' }, { status: 404 });
@@ -173,10 +179,41 @@ function dependencies(
   timeoutMs = 500,
   overrides: Partial<Parameters<typeof handleProfileLifecycleRequest>[3]> = {},
 ): Parameters<typeof handleProfileLifecycleRequest>[3] {
+  const d1Session = () => harness.session
+    ? {
+        firebaseUid: UID,
+        wallet: String(decodedFields(harness.session).wallet || ''),
+        expiresAtMs: 253_402_300_799_999,
+        updatedAtMs: NOW_MS,
+        walletRevision: harness.version,
+        reconcileLeaseId: null,
+        reconcileLeaseExpiresAtMs: null,
+      }
+    : null;
   return {
+    acquireWalletSessionReconcileLease: async () => {
+      const session = d1Session();
+      return session ? {
+        id: '00000000-0000-4000-8000-000000000001',
+        wallet: session.wallet,
+        expiresAtMs: NOW_MS + 120_000,
+      } : null;
+    },
     accessTokenProvider: accessTokenProvider(),
+    establishD1WalletSession: async (args) => {
+      harness.session = document(`authSessions/${UID}`, { wallet: args.wallet }, harness.version++);
+      return d1Session()!;
+    },
+    loadD1WalletSession: async () => d1Session(),
     nowMs: () => NOW_MS,
     providerFetch: harness.fetch.bind(harness),
+    releaseWalletSessionReconcileLease: async () => undefined,
+    resolveD1WalletSession: async () => {
+      const session = d1Session();
+      return session
+        ? { wallet: session.wallet, source: 'session' as const }
+        : { wallet: null, reason: 'legacy_uid_invalid' as const };
+    },
     timeoutMs,
     upsertProfile: async () => undefined,
     verifyIdToken: async () => ({ uid: UID }),
@@ -207,11 +244,14 @@ function signInBody(args: { domain?: string; keypair?: nacl.SignKeyPair; timesta
   };
 }
 
-function env(): Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> {
-  return { FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}' };
+function env(): Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'OPS_DB'> {
+  return {
+    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
+    OPS_DB: {} as D1Database,
+  };
 }
 
-test('Solana auth validates origin-bound signatures and persists the Firestore session and D1 profile', async () => {
+test('Solana auth validates origin-bound signatures and persists the D1 session and profile', async () => {
   const harness = new FirestoreHarness();
   let profile: Record<string, unknown> | undefined;
   const result = await handleProfileLifecycleRequest(
@@ -280,21 +320,94 @@ test('Solana auth applies the request deadline to D1 profile persistence', async
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
 });
 
-test('Solana auth rejects a stale different-wallet writer but permits a same-wallet renewal', async () => {
-  const stale = new FirestoreHarness();
-  stale.sessionChangeBeforeAuthCommit = OTHER;
-  const staleResult = await handleProfileLifecycleRequest(
-    request(SOLANA_AUTH_PATH, signInBody()), env(), SOLANA_AUTH_PATH, dependencies(stale),
+test('D1 wallet-session mode persists without Firestore session access', async () => {
+  const d1Harness = new FirestoreHarness();
+  let establishedWallet = '';
+  const d1 = await handleProfileLifecycleRequest(
+    request(SOLANA_AUTH_PATH, signInBody()),
+    { ...env(), OPS_DB: {} as D1Database },
+    SOLANA_AUTH_PATH,
+    dependencies(d1Harness, 500, {
+      establishD1WalletSession: async (args) => {
+        establishedWallet = args.wallet;
+        return {
+          firebaseUid: args.firebaseUid,
+          wallet: args.wallet,
+          expiresAtMs: 253_402_300_799_999,
+          updatedAtMs: args.nowMs,
+          walletRevision: 1,
+          reconcileLeaseId: null,
+          reconcileLeaseExpiresAtMs: null,
+        };
+      },
+      loadD1WalletSession: async () => null,
+    }),
   );
-  assert.equal(staleResult.response.status, 409);
-  assert.equal((await staleResult.response.json() as { error: { details: { reason: string } } }).error.details.reason, 'wallet-session-superseded');
+  assert.equal(d1.response.status, 200);
+  assert.equal(establishedWallet, OWNER);
+  assert.equal(d1Harness.sessionReads, 0);
+});
 
-  const renewal = new FirestoreHarness();
-  renewal.authConflicts = 1;
-  const renewalResult = await handleProfileLifecycleRequest(
-    request(SOLANA_AUTH_PATH, signInBody()), env(), SOLANA_AUTH_PATH, dependencies(renewal),
+test('Solana auth preserves D1 superseded and busy response contracts', async () => {
+  const superseded = await handleProfileLifecycleRequest(
+    request(SOLANA_AUTH_PATH, signInBody()),
+    env(),
+    SOLANA_AUTH_PATH,
+    dependencies(new FirestoreHarness(), 500, {
+      establishD1WalletSession: async () => { throw new WalletSessionD1SupersededError(); },
+    }),
   );
-  assert.equal(renewalResult.response.status, 200);
+  assert.equal(superseded.response.status, 409);
+  assert.deepEqual(await superseded.response.json(), {
+    ok: false,
+    error: {
+      code: 'failed-precondition',
+      message: 'A newer wallet sign-in superseded this request. Sign in again.',
+      details: { reason: 'wallet-session-superseded' },
+    },
+  });
+
+  const busy = await handleProfileLifecycleRequest(
+    request(SOLANA_AUTH_PATH, signInBody()),
+    env(),
+    SOLANA_AUTH_PATH,
+    dependencies(new FirestoreHarness(), 500, {
+      establishD1WalletSession: async () => { throw new WalletSessionD1BusyError(); },
+    }),
+  );
+  assert.equal(busy.response.status, 409);
+  assert.deepEqual(await busy.response.json(), {
+    ok: false,
+    error: { code: 'aborted', message: 'Wallet session is busy. Try again.' },
+  });
+});
+
+test('D1 reconciliation holds and releases its lease without reading Firestore sessions', async () => {
+  const harness = new FirestoreHarness();
+  harness.orders.push(document('drops/drop/deliveryOrders/1', {
+    owner: `firebase:${UID}`,
+    status: 'ready_to_ship',
+  }, 3));
+  let released = false;
+  const result = await handleProfileLifecycleRequest(
+    request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
+    { ...env(), OPS_DB: {} as D1Database },
+    PROFILE_RECONCILE_PATH,
+    dependencies(harness, 500, {
+      acquireWalletSessionReconcileLease: async () => ({
+        id: '00000000-0000-4000-8000-000000000001',
+        wallet: OWNER,
+        expiresAtMs: NOW_MS + 120_000,
+      }),
+      releaseWalletSessionReconcileLease: async () => {
+        released = true;
+      },
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), { mergedStripeDeliveryOrders: 1 });
+  assert.equal(harness.sessionReads, 0);
+  assert.equal(released, true);
 });
 
 test('profile reconciliation merges multiple session-validated batches and is idempotent', async () => {
@@ -323,21 +436,7 @@ test('profile reconciliation merges multiple session-validated batches and is id
   assert.deepEqual(await second.response.json(), { mergedStripeDeliveryOrders: 0 });
 });
 
-test('profile reconciliation stops a later batch after session rebind and retries transaction conflicts', async () => {
-  const rebound = new FirestoreHarness();
-  for (let index = 1; index <= 451; index += 1) {
-    rebound.orders.push(document(`drops/drop/deliveryOrders/${index}`, { owner: `firebase:${UID}`, status: 'processing' }, index + 10));
-  }
-  rebound.rebindAfterMergeCommits = 1;
-  const reboundResult = await handleProfileLifecycleRequest(
-    request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true }),
-    env(),
-    PROFILE_RECONCILE_PATH,
-    dependencies(rebound),
-  );
-  assert.equal(reboundResult.response.status, 401);
-  assert.equal(rebound.orders.filter((entry) => decodedFields(entry).owner === OWNER).length, 450);
-
+test('profile reconciliation retries Firestore transaction conflicts', async () => {
   const retry = new FirestoreHarness();
   retry.orders.push(document('drops/drop/deliveryOrders/1', { owner: `firebase:${UID}`, status: 'ready_to_ship' }, 3));
   retry.transactionConflicts = 1;

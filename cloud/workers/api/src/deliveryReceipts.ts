@@ -102,10 +102,6 @@ import {
   isNonZeroBase58Bytes,
 } from '../../../../shared/solanaRpcProxy.js';
 import {
-  WALLET_SESSION_COLLECTION,
-  resolveWalletSessionBinding,
-} from '../../../../shared/walletLifecycle.js';
-import {
   FirebaseIdTokenError,
   verifyFirebaseIdToken,
   type FirebaseIdentity,
@@ -124,6 +120,7 @@ import {
   type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
+import { resolveD1WalletSession } from './walletSessionD1.js';
 import {
   BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
   READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
@@ -752,17 +749,22 @@ function createWrite(args: {
   };
 }
 
-async function loadWalletSession(context: FirestoreContext, uid: string): Promise<string> {
-  const document = await readDocument(context, `${WALLET_SESSION_COLLECTION}/${uid}`);
-  const resolution = resolveWalletSessionBinding({
-    uid,
-    sessionExists: Boolean(document),
-    sessionData: document?.fields || null,
-  });
-  if ('reason' in resolution) {
-    throw new DeliveryReceiptError('unauthenticated', 'Sign in with your wallet first.');
+async function loadWalletSession(
+  context: FirestoreContext,
+  db: D1Database | undefined,
+  uid: string,
+): Promise<string> {
+  try {
+    if (!db) throw new DeliveryReceiptError('unavailable', 'Receipt data is temporarily unavailable.');
+    const resolution = await resolveD1WalletSession(db, uid, context.signal);
+    if ('reason' in resolution) {
+      throw new DeliveryReceiptError('unauthenticated', 'Sign in with your wallet first.');
+    }
+    return resolution.wallet;
+  } catch (error) {
+    if (error instanceof DeliveryReceiptError || error instanceof ProfileReadError || context.signal.aborted) throw error;
+    throw new DeliveryReceiptError('unavailable', 'Receipt data is temporarily unavailable.');
   }
-  return resolution.wallet;
 }
 
 function mapProviderError(error: unknown, message: string): DeliveryReceiptError {
@@ -3909,7 +3911,7 @@ async function issueReceiptsRequest(
   provider: ProviderContext,
   waitUntil: DeliveryReceiptWaitUntil,
 ): Promise<ReceiptIssueResult> {
-  const wallet = await loadWalletSession(firestore, identity.uid);
+  const wallet = await loadWalletSession(firestore, env.OPS_DB, identity.uid);
   const ownerWallet = canonicalPublicKey(body.owner, 'wallet address').toBase58();
   if (wallet !== ownerWallet) throw new DeliveryReceiptError('permission-denied', 'Owners only.');
   if (!isNonZeroBase58Bytes(body.signature, 64)) {
@@ -3989,7 +3991,7 @@ async function recoverReceiptsRequest(
   provider: ProviderContext,
   waitUntil: DeliveryReceiptWaitUntil,
 ): Promise<RecoverDeliveryOrdersResult> {
-  const wallet = await loadWalletSession(firestore, identity.uid);
+  const wallet = await loadWalletSession(firestore, env.OPS_DB, identity.uid);
   if (body.deliveryId !== undefined && body.dropId === undefined) {
     throw new DeliveryReceiptError('invalid-argument', 'deliveryId requires dropId.');
   }
@@ -4347,6 +4349,7 @@ export const deliveryReceiptTestHooks = {
   DeliveryReceiptError,
   handlePreparedRecoveryFailure,
   issueReceiptsRequest,
+  loadWalletSession,
   markDeliveryReady,
   markReadyToShipNotificationsQueued,
   normalizeAssignedDudeIds,
