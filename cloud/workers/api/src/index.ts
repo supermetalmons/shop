@@ -163,6 +163,11 @@ import {
   type StaffAuthPath,
 } from './staffWalletAuth.js';
 import {
+  ANONYMOUS_AUTH_PATHS,
+  cleanupExpiredAnonymousAuthSessions,
+  handleAnonymousAuthRequest,
+} from './anonymousAuth.js';
+import {
   internalStaffAuthorization,
   isInternalStaffAuthorization,
   isStaffOnlyApiPath,
@@ -234,6 +239,7 @@ const KNOWN_LOG_ROUTES = new Set([
   FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
   '/auth/solana',
   '/profile/reconcile',
+  ...ANONYMOUS_AUTH_PATHS,
   IRL_CLAIM_PREPARE_PATH,
   STRIPE_RECEIPT_CLAIM_PATH,
   RECEIPT_TRANSFER_PREPARE_PATH,
@@ -294,6 +300,13 @@ async function cleanupScheduledOpsState(
   }
   if (staffAuthCleanup.limitReached && staffAuthCleanup.hasMore) {
     console.error({ event: 'staff_auth_cleanup_backlog', ...staffAuthCleanup });
+  }
+  const anonymousAuthCleanup = await cleanupExpiredAnonymousAuthSessions(env.OPS_DB, Date.now());
+  if (anonymousAuthCleanup.deletedCount > 0) {
+    console.log({ event: 'anonymous_auth_cleanup_completed', ...anonymousAuthCleanup });
+  }
+  if (anonymousAuthCleanup.limitReached && anonymousAuthCleanup.hasMore) {
+    console.error({ event: 'anonymous_auth_cleanup_backlog', ...anonymousAuthCleanup });
   }
 }
 
@@ -1681,7 +1694,9 @@ export async function handleRequest(
   const profilePath = PROFILE_READ_PATHS.has(pathname) ? pathname as ProfileReadPath : null;
   const profileWritePath = PROFILE_WRITE_PATHS.has(pathname) ? pathname as ProfileWritePath : null;
   const profileLifecyclePath = PROFILE_LIFECYCLE_PATHS.has(pathname) ? pathname as ProfileLifecyclePath : null;
-  if (request.method === 'OPTIONS' && STAFF_AUTH_PATHS.has(pathname)) {
+  if (request.method === 'OPTIONS' && ANONYMOUS_AUTH_PATHS.has(pathname)) {
+    response = handleProfileCorsPreflight(request);
+  } else if (request.method === 'OPTIONS' && STAFF_AUTH_PATHS.has(pathname)) {
     response = handleProfileCorsPreflight(request, isAllowedStaffAuthOrigin);
   } else if (request.method === 'OPTIONS' && (
     profilePath ||
@@ -1722,6 +1737,11 @@ export async function handleRequest(
     response = request.method === 'GET'
       ? jsonResponse({ ok: true }, 200)
       : jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET' });
+  } else if (ANONYMOUS_AUTH_PATHS.has(pathname)) {
+    response = applyProfileCors(
+      request,
+      await handleAnonymousAuthRequest(request, env, pathname),
+    );
   } else if (STAFF_AUTH_PATHS.has(pathname)) {
     response = applyProfileCors(
       request,

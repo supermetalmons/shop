@@ -2,21 +2,21 @@
 
 React + TypeScript Solana dapp for mons IRL blind boxes. Box minting is fully
 on-chain through the custom box-minter program and MPL Core assets. The browser
-uses Firebase Anonymous Auth for identity. Privileged application traffic runs
-through Cloudflare, order and assignment records remain in Firestore, and D1
+uses Worker-managed anonymous sessions and Solana wallet signatures for identity.
+Privileged application traffic runs through Cloudflare, order and assignment records remain in Firestore, and D1
 owns profiles, saved addresses, the public pack-status projection, Worker
 control, and rate-limit state.
 
 ## Architecture
 
-- `mons-shop` is the asset-only frontend Worker for `mons.shop` and
-  `www.mons.shop`.
+- `mons-shop` serves static assets and proxies authenticated `/api/*` requests
+  to `mons-shop-api` through a service binding.
 - `mons-shop-api` serves `api.mons.shop`, including inventory, Solana RPC,
   profiles, delivery, claims, Stripe, ShipStation, notifications, admin routes,
   scheduled reconciliation, and Queue consumers.
-- Firebase provides Anonymous Auth and operational Firestore. Firestore client
-  rules deny every browser read and write, regardless of authentication; the API
-  Worker accesses operational data with its service accounts.
+- Ops D1 stores opaque anonymous-session hashes and the guarded Firebase-token
+  compatibility control. Firestore client rules deny every browser read and
+  write; the API Worker accesses operational data with its service accounts.
 - The `mons-shop-data` D1 database is authoritative for public pack-status
   summaries and events.
 - The `mons-shop-ops` D1 database stores profiles, encrypted saved addresses,
@@ -45,12 +45,10 @@ npm install
 npm run dev
 ```
 
-Development defaults to `https://api.mons.shop` and the committed public
-Firebase configuration. Local overrides may be supplied in an uncommitted
-`.env` or the invoking shell:
+Development proxies authenticated `/api/*` calls to `https://api.mons.shop`.
+The target may be overridden in an uncommitted `.env` or the invoking shell:
 
 - `VITE_MONS_API_ORIGIN`
-- `VITE_FIREBASE_API_KEY`
 
 These overrides are development-only. Production frontend checks and
 deployments ignore local dotenv overrides and inject build time during the
@@ -74,14 +72,17 @@ runtime tests, Firestore rules, dead-code checks, on-chain tests, generated
 Worker types, Worker startup validation, and both production bundles. Java is
 required for the Firestore Emulator suite.
 
-## Firebase Auth and Firestore
+## Anonymous Auth and Firestore
 
-Firebase Anonymous Auth remains the browser identity boundary, and existing
-Firebase UIDs remain compatible with operational data. Firestore is not a
-browser data API: the catch-all rules reject authenticated and anonymous reads,
-lists, creates, updates, and deletes. Customer operations go through
-`mons-shop-api`, whose reader and writer service accounts access Firestore
-server-side.
+The frontend creates fresh anonymous identities through `mons-shop-api`. The
+opaque credential stays in an HttpOnly, host-only cookie; local storage contains
+only non-secret subject and expiry metadata. Authenticated browser requests use
+the frontend Worker's same-origin `/api/*` gateway and a fixed CSRF header.
+
+Firebase ID tokens remain temporarily accepted only for stale frontend builds.
+The compatibility switch is stored in Ops D1 and can only move forward to the
+disabled state. Firestore remains a server-side operational store: the catch-all
+rules reject every browser read and write.
 
 Firestore still stores orders, assignments, and delivery projection outboxes.
 Its indexes, rules, emulator tooling, operator scripts, and API service-account
@@ -110,21 +111,21 @@ Do not put service-account JSON in repository files or frontend configuration.
 
 ### Wallet sessions
 
-Firebase Anonymous Auth remains the browser identity provider. The mapping
-from each Firebase UID to its signed Solana wallet is D1-only in
-`mons-shop-ops`; Firestore does not store wallet sessions. Different-wallet
+The mapping from each anonymous auth subject to its signed Solana wallet is
+D1-only in `mons-shop-ops`; its legacy physical column remains `firebase_uid`
+until the commerce data migrates from Firestore. Different-wallet
 rebinding is temporarily blocked while profile reconciliation holds its
 bounded D1 lease, while same-wallet renewal remains available.
 
 Allowlisted fulfillment and admin wallets use a separate wallet-only staff
-session and do not depend on Firebase authentication. The API issues a
+session and do not depend on anonymous authentication. The API issues a
 five-minute, one-time Solana signing challenge, stores only the resulting
 opaque session secret hash in `mons-shop-ops`, and requires that staff session
 for every `/admin/*` and `/fulfillment/*` request. The browser restores the
 session under `monsStaffWalletSession:v1` and refreshes its 30-day inactivity
 window once per day. Removing a wallet from the committed staff access
-inventory invalidates its sessions immediately. Existing Firebase-backed staff
-sessions are discarded on first load so the wallet signs the new staff
+inventory invalidates its sessions immediately. Legacy staff sessions are
+discarded on first load so the wallet signs the staff
 challenge once. Active challenges are reused, while Cloudflare Worker bindings
 rate-limit challenge and signature requests without storing caller counters in
 D1.
@@ -377,6 +378,39 @@ node_modules/.bin/wrangler tail mons-shop-api --format json
 Queue processing is idempotent. Replay dead-letter jobs only after fixing the
 underlying failure and identifying the affected jobs.
 
+### Anonymous-auth cutover
+
+Inspect the compatibility state and audit legacy wallet-owned shipments with:
+
+```bash
+npm run anonymous-auth-control -- status
+npm run migrate:firebase-wallet-ownership -- status
+```
+
+Apply only the mapped shipment ownership changes, then rerun the audit:
+
+```bash
+npm run migrate:firebase-wallet-ownership -- apply --write
+npm run migrate:firebase-wallet-ownership -- status
+```
+
+Unmapped Firebase-only orders are reported and retained without reassignment.
+After the new browser auth has been observed and the mapped update count is
+zero, permanently disable legacy Firebase tokens with:
+
+```bash
+npm run anonymous-auth-control -- disable-firebase --write
+```
+
+The command audits ownership immediately before and after disabling Firebase.
+This transition is irreversible. If the post-disable audit finds a cutover race,
+roll forward immediately with:
+
+```bash
+npm run migrate:firebase-wallet-ownership -- apply --write
+npm run migrate:firebase-wallet-ownership -- status
+```
+
 ## Operations
 
 The retained tools are intentionally narrow:
@@ -390,6 +424,10 @@ The retained tools are intentionally narrow:
   ready-notification singleton.
 - `npm run ready-notifications-control` inspects or changes the D1 notification
   control; every mutation requires `--write`.
+- `npm run anonymous-auth-control` inspects or permanently disables the legacy
+  Firebase-token fallback.
+- `npm run migrate:firebase-wallet-ownership` audits or backfills legacy
+  Firebase-owned shipment documents for UIDs already bound to Solana wallets.
 - `npm run test-resend-notification-email` sends a synthetic notification
   through the production API queue.
 - `npm run wipe-drop` (`scripts/ops/wipeDrop.ts`) is the guarded drop cleanup

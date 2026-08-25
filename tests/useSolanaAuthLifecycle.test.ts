@@ -102,7 +102,6 @@ class RuntimeHarness {
       }
       return this.uid!;
     },
-    getIdToken: async () => this.uid ? `token:${this.uid}` : null,
     loadProfileState: async () => {
       this.loadCalls += 1;
       return this.loadImpl();
@@ -418,7 +417,6 @@ test('allowlisted staff sign-in uses the server challenge without Firebase walle
       expiresAt: 100_000,
     };
   };
-  harness.runtime.getIdToken = async () => harness.uid === WALLET_A ? 'staff-token' : `token:${harness.uid}`;
   const wallet: SolanaAuthWalletState = {
     ...walletState(WALLET_A),
     signMessage: async (message) => {
@@ -436,7 +434,7 @@ test('allowlisted staff sign-in uses the server challenge without Firebase walle
   assert.equal(harness.authenticateCalls, 0);
   assert.equal(harness.anonymousUidCounter, baselineFirebaseAuthentications);
   assert.equal(result.current.sessionWallet, WALLET_A);
-  assert.equal(result.current.token, 'staff-token');
+  assert.equal(result.current.authenticated, true);
   assert.equal(result.current.authSubject, WALLET_A);
 });
 
@@ -457,7 +455,7 @@ test('wallet switching during staff exchange cannot install the stale credential
     { initialProps: { wallet: WALLET_A as string | null } },
   );
   await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
-  let signIn!: Promise<{ wallet: string; token: string }>;
+  let signIn!: Promise<{ wallet: string }>;
   await act(async () => {
     signIn = result.current.signIn();
     await Promise.resolve();
@@ -489,7 +487,7 @@ test('same-wallet cross-tab replacement wins over an in-flight staff exchange', 
   harness.runtime.authenticateStaffWallet = async () => exchange.promise;
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
   await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
-  let signIn!: Promise<{ wallet: string; token: string }>;
+  let signIn!: Promise<{ wallet: string }>;
   await act(async () => {
     signIn = result.current.signIn();
     await Promise.resolve();
@@ -510,7 +508,7 @@ test('same-wallet cross-tab replacement wins over an in-flight staff exchange', 
     refreshedAt: 1_000,
     expiresAt: 100_000,
   }));
-  assert.deepEqual(await signIn, { wallet: WALLET_A, token: replacement.token });
+  assert.deepEqual(await signIn, { wallet: WALLET_A });
   assert.deepEqual(harness.staffSession, replacement);
 });
 

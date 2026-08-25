@@ -32,6 +32,8 @@ test('profile API client sends bearer JSON without caching and refreshes once af
         assert.deepEqual(JSON.parse(String(init?.body)), { ownerWallet: OWNER });
         const headers = new Headers(init?.headers);
         assert.equal(headers.get('content-type'), 'application/json');
+        assert.equal(headers.get('x-mons-csrf'), '1');
+        assert.equal(init?.credentials, 'same-origin');
         authorizations.push(headers.get('authorization') || '');
         return calls === 1
           ? Response.json({ ok: false, error: { code: 'unauthenticated', message: 'Expired.' } }, { status: 401 })
@@ -40,7 +42,7 @@ test('profile API client sends bearer JSON without caching and refreshes once af
       getToken: async (forceRefresh) => {
         refreshes.push(forceRefresh);
         return {
-          authSubject: forceRefresh ? 'firebase-b' : 'firebase-a',
+          authSubject: 'firebase-a',
           token: forceRefresh ? 'fresh-token' : 'cached-token',
         };
       },
@@ -53,7 +55,55 @@ test('profile API client sends bearer JSON without caching and refreshes once af
   assert.deepEqual(refreshes, [false, true]);
   assert.deepEqual(authorizations, ['Bearer cached-token', 'Bearer fresh-token']);
   assert.equal(signals[0], signals[1]);
-  assert.equal(credentialCapture.authSubject, 'firebase-b');
+  assert.equal(credentialCapture.authSubject, 'firebase-a');
+});
+
+test('profile API client never replays a request after the auth subject changes', async () => {
+  let calls = 0;
+  await assert.rejects(
+    profileApiTestHooks.requestProfileApi('/auth/solana', {
+      wallet: OWNER,
+      message: 'signed-for-subject-a',
+      signature: Array(64).fill(1),
+    }, {
+      fetch: async () => {
+        calls += 1;
+        return Response.json({
+          ok: false,
+          error: { code: 'unauthenticated', message: 'Expired.' },
+        }, { status: 401 });
+      },
+      getToken: async (forceRefresh) => ({
+        authSubject: forceRefresh ? 'subject-b' : 'subject-a',
+      }),
+      origin: () => '/api',
+      timeoutMs: 1000,
+    }),
+    (error) => {
+      const value = error as { code?: unknown; message?: unknown };
+      return value.code === 'auth-subject-changed' && value.message === 'Authentication changed. Please retry.';
+    },
+  );
+  assert.equal(calls, 1);
+});
+
+test('profile API client uses cookie credentials without exposing an anonymous bearer', async () => {
+  let authorization: string | null = 'unset';
+  const payload = await profileApiTestHooks.requestProfileApi('/profile/state', {}, {
+    fetch: async (input, init) => {
+      assert.equal(String(input), '/api/profile/state');
+      const headers = new Headers(init?.headers);
+      authorization = headers.get('authorization');
+      assert.equal(headers.get('x-mons-csrf'), '1');
+      assert.equal(init?.credentials, 'same-origin');
+      return Response.json({ responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null });
+    },
+    getToken: async () => ({ authSubject: 'anon:123e4567-e89b-42d3-a456-426614174000' }),
+    origin: () => '/api',
+    timeoutMs: 1000,
+  });
+  assert.equal(authorization, null);
+  assert.deepEqual(payload, { responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null });
 });
 
 test('profile API client applies its deadline to token retrieval and returns a stable error', async () => {

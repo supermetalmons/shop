@@ -61,6 +61,7 @@ import {
 import { FirestoreWriteConflict, createGoogleAccessTokenProvider } from './firestoreRest.js';
 import { createWorkerStripeCheckoutStore } from './stripeCheckoutFirestore.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
+import { resolveD1WalletSession } from './walletSessionD1.js';
 
 const RPC_TIMEOUT_MS = 8_000;
 const TX_SEND_TIMEOUT_MS = 12_000;
@@ -89,7 +90,7 @@ type FulfillmentEnv = Pick<Env,
   | 'STRIPE_RESTRICTED_KEY_LIVE'
   | 'STRIPE_SECRET_KEY'
   | 'STRIPE_SECRET_KEY_LIVE'
-> & Partial<Pick<Env, 'DATA_DB'>>;
+> & Partial<Pick<Env, 'DATA_DB' | 'OPS_DB'>>;
 
 type FulfillmentProcessingResult = {
   fulfillment: StripeCheckoutFulfillmentProcessResult;
@@ -521,6 +522,14 @@ function flowDependencies(
     txSendTimeoutMs: TX_SEND_TIMEOUT_MS,
     txConfirmTimeoutMs: TX_CONFIRM_TIMEOUT_MS,
     signal,
+    resolveWalletOwner: async (authSubject) => {
+      if (!env.OPS_DB) return null;
+      try {
+        return (await resolveD1WalletSession(env.OPS_DB, authSubject, signal)).wallet;
+      } catch {
+        throw fulfillmentError('unavailable', 'Wallet ownership is temporarily unavailable');
+      }
+    },
     countPackStatus,
     repairPackStatus: async ({ dropRuntime, checkoutRef, sessionId }) => {
       if (!shouldTrackPackStatusForDrop(dropRuntime)) return;

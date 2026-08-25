@@ -9,6 +9,7 @@ import {
   validateSolanaSignInMessage,
 } from '../../../../shared/walletLifecycle.js';
 import { readBoundedText } from './firestoreRest.js';
+import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
 
 export const STAFF_AUTH_CHALLENGE_PATH = '/staff/auth/challenge';
 export const STAFF_AUTH_SESSION_PATH = '/staff/auth/session';
@@ -286,29 +287,6 @@ function sessionFromRow(row: Record<string, unknown> | null): StaffAuthSessionRo
   };
 }
 
-function randomSecret(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
-}
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function constantTimeEqual(left: string, right: string): boolean {
-  const leftBytes = new TextEncoder().encode(left);
-  const rightBytes = new TextEncoder().encode(right);
-  let difference = leftBytes.length ^ rightBytes.length;
-  const length = Math.max(leftBytes.length, rightBytes.length);
-  for (let index = 0; index < length; index += 1) {
-    difference |= (leftBytes[index] || 0) ^ (rightBytes[index] || 0);
-  }
-  return difference === 0;
-}
-
 function authorizationToken(authorization: string | null): { sessionId: string; secret: string } {
   const match = /^Bearer\s+(.+)$/i.exec(String(authorization || '').trim());
   const tokenMatch = match ? STAFF_SESSION_TOKEN_PATTERN.exec(match[1]) : null;
@@ -343,8 +321,7 @@ export async function verifyStaffSession(
   if (!row || row.expires_at_ms <= nowMs || !isStaffWallet(row.wallet)) {
     throw new StaffAuthError('unauthenticated', 401, 'Authentication is required.');
   }
-  const secretHash = await sha256Hex(secret);
-  if (!constantTimeEqual(secretHash, row.secret_hash)) {
+  if (!await matchesSha256Hex(secret, row.secret_hash)) {
     throw new StaffAuthError('unauthenticated', 401, 'Authentication is required.');
   }
   return {
@@ -477,7 +454,7 @@ async function createSession(
   );
   if (!signatureValid) throw new StaffAuthError('unauthenticated', 401, 'Invalid signature.');
   const sessionId = crypto.randomUUID();
-  const secret = randomSecret();
+  const secret = randomSessionSecret();
   const secretHash = await sha256Hex(secret);
   const expiresAt = nowMs + STAFF_AUTH_SESSION_TTL_MS;
   const results = await db.batch([

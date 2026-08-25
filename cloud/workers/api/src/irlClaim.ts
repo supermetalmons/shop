@@ -68,10 +68,7 @@ import type {
   PrepareIrlClaimRequest,
   PrepareIrlClaimResponse,
 } from '../../../../shared/contracts.js';
-import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import { resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   FIRESTORE_DOCUMENTS_BASE_URL,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
@@ -1243,6 +1240,8 @@ export async function handleIrlClaimPrepare(
       trackedFetch,
       controller.signal,
       dependencies.nowMs(),
+      request,
+      env.OPS_DB,
     );
     const serviceAccountJson = String(env.FIRESTORE_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
@@ -1277,7 +1276,7 @@ export async function handleIrlClaimPrepare(
       if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
         authOutcome = 'rejected';
       }
-    } else if (error instanceof FirebaseIdTokenError) {
+    } else if (error instanceof RequestIdentityError) {
       claimError = error.kind === 'invalid-token'
         ? new IrlClaimError('unauthenticated', 'Authentication is required.')
         : error.kind === 'provider-timeout'

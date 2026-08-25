@@ -19,13 +19,12 @@ import {
 } from '../../../../shared/stripeCheckoutSession.js';
 import type { StripeCheckoutMode } from '../../../../shared/stripeCheckoutCore.js';
 import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import {
+  RequestIdentityError,
   requestIdentitySubject,
   verifyRequestIdentity,
   type RequestIdentity,
 } from './requestIdentity.js';
+import { resolveD1WalletSession } from './walletSessionD1.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
@@ -55,7 +54,7 @@ type CheckoutEnv = Pick<Env,
   | 'STRIPE_RESTRICTED_KEY_LIVE'
   | 'STRIPE_SECRET_KEY'
   | 'STRIPE_SECRET_KEY_LIVE'
->;
+> & Partial<Pick<Env, 'OPS_DB'>>;
 
 type StripeCheckoutMetrics = {
   upstreamCalls: number;
@@ -74,12 +73,7 @@ type CheckoutDependencies = {
   accessTokenProvider: GoogleAccessTokenProvider;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  verifyIdToken: (
-    authorization: string | null,
-    providerFetch: ProfileProviderFetch,
-    signal: AbortSignal,
-    nowMs?: number,
-  ) => Promise<RequestIdentity>;
+  verifyIdToken: typeof verifyRequestIdentity;
   createProviderSession?: (
     request: StripeCheckoutProviderRequest,
     mode: StripeCheckoutMode,
@@ -91,12 +85,14 @@ type CheckoutDependencies = {
   loadOnchainConfig?: (drop: StripeCheckoutSessionDrop) => Promise<StripeCheckoutOnchainConfig>;
   requireFulfillmentPrerequisites?: (config: StripeCheckoutOnchainConfig) => void;
   persistCheckout?: (path: string, document: Record<string, unknown>) => Promise<void>;
+  resolveWalletSession: typeof resolveD1WalletSession;
 };
 
 const defaultDependencies: CheckoutDependencies = {
   accessTokenProvider: createGoogleAccessTokenProvider(),
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  resolveWalletSession: resolveD1WalletSession,
   verifyIdToken: verifyRequestIdentity,
 };
 
@@ -504,16 +500,26 @@ export async function handleStripeCheckoutSession(
       trackedFetch,
       controller.signal,
       dependencies.nowMs(),
+      request,
+      env.OPS_DB,
     );
     const heliusApiKey = String(env.HELIUS_API_KEY || '').trim();
     const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     if (!heliusApiKey || !serviceAccountJson) {
       throw new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.');
     }
-    const staffWallet = identity.kind === 'staff-wallet' ? identity.wallet : null;
+    const resolvedWallet = identity.kind === 'staff-wallet'
+      ? identity.wallet
+      : env.OPS_DB
+        ? (await dependencies.resolveWalletSession(
+            env.OPS_DB,
+            identity.authSubject,
+            controller.signal,
+          )).wallet
+        : null;
     const result = await createStripeCheckoutSessionCore({
-      uid: requestIdentitySubject(identity),
-      ...(staffWallet ? { wallet: staffWallet } : {}),
+      uid: resolvedWallet || requestIdentitySubject(identity),
+      ...(resolvedWallet ? { wallet: resolvedWallet } : {}),
       requestOrigin: request.headers.get('Origin') || undefined,
       allowedOrigins: request.headers.get('Origin') ? [request.headers.get('Origin')!] : [],
       body,
@@ -559,7 +565,7 @@ export async function handleStripeCheckoutSession(
       mode: result.mode,
     };
   } catch (error) {
-    if (error instanceof FirebaseIdTokenError) {
+    if (error instanceof RequestIdentityError) {
       if (error.kind === 'invalid-token') {
         return {
           response: jsonResponse({ ok: false, error: { code: 'unauthenticated', message: 'Authentication is required.' } }, 401),

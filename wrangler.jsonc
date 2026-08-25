@@ -2,13 +2,23 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "mons-shop",
   "account_id": "e25f90fc073ea309b54b8b5144bf28e0",
-  "compatibility_date": "2026-07-22",
+  "main": "cloud/workers/frontend/src/index.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "preview_urls": true,
   "assets": {
     "directory": "./dist",
-    "not_found_handling": "single-page-application"
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
   },
+  "services": [
+    {
+      "binding": "MONS_API",
+      "service": "mons-shop-api"
+    }
+  ],
   "routes": [
     {
       "pattern": "mons.shop",

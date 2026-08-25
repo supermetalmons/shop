@@ -1126,14 +1126,14 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const { visible: walletModalVisible, setVisible: setWalletModalVisible } = useWalletModal();
   const {
     sessionWallet,
-    token,
+    authenticated,
     signIn,
     loading: authLoading,
     error: authError,
     sessionResolution,
   } = useSolanaAuth();
   const connectedWallet = walletAdapter.connected ? publicKey?.toBase58() || '' : '';
-  const authenticatedWallet = token && sessionWallet ? sessionWallet : '';
+  const authenticatedWallet = authenticated && sessionWallet ? sessionWallet : '';
   const walletAddress = connectedWallet || authenticatedWallet;
   const allowedDropIds = useMemo(
     () => listAllowedFulfillmentDropIds(walletAddress, allDrops.map((drop) => drop.dropId)),

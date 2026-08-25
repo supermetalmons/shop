@@ -86,6 +86,36 @@ test('Stripe fulfillment pack-status events use card-equivalent quantity', () =>
   assert.equal(stripeCheckoutFulfillmentTestHooks.packStatusEventQuantity(runtime, 2), 6);
 });
 
+test('Stripe fulfillment resolves late checkout ownership through Ops D1', async () => {
+  const wallet = PublicKey.unique().toBase58();
+  const opsDb = {
+    prepare() {
+      return {
+        bind() {
+          return this;
+        },
+        async first() {
+          return {
+            firebase_uid: 'legacy-uid',
+            wallet,
+            expires_at_ms: 253_402_300_799_999,
+            updated_at_ms: 1,
+            wallet_revision: 1,
+            reconcile_lease_id: null,
+            reconcile_lease_expires_at_ms: null,
+          };
+        },
+      };
+    },
+  } as unknown as D1Database;
+  const dependencies = stripeCheckoutFulfillmentTestHooks.flowDependencies(
+    { ADDRESS_DECRYPTION_SECRET: '', OPS_DB: opsDb } as any,
+    {} as any,
+    new AbortController().signal,
+  );
+  assert.equal(await dependencies.resolveWalletOwner?.('legacy-uid'), wallet);
+});
+
 test('Stripe fulfillment writes pack-status events to required D1 without Firestore access', async () => {
   let query = '';
   let bindings: unknown[] = [];

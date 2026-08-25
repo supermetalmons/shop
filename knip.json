@@ -9,6 +9,7 @@
         "cloud/workers/api/src/index.ts",
         "cloud/workers/api/test/*.test.ts",
         "cloud/workers/api/runtime-test/*.test.ts",
+        "cloud/workers/frontend/test/*.test.ts",
         "scripts/*.{ts,cjs}",
         "scripts/newDrops/*.ts",
         "scripts/ops/*.ts",
@@ -17,6 +18,7 @@
       "project": [
         "src/**/*.{ts,tsx}",
         "cloud/workers/api/**/*.{ts,tsx}",
+        "cloud/workers/frontend/**/*.{ts,tsx}",
         "scripts/**/*.{ts,cjs}",
         "shared/**/*.ts",
         "tests/**/*.ts"

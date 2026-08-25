@@ -40,6 +40,14 @@
         "limit": 30,
         "period": 60
       }
+    },
+    {
+      "name": "ANONYMOUS_AUTH_SESSION_RATE_LIMITER",
+      "namespace_id": "1874210346",
+      "simple": {
+        "limit": 20,
+        "period": 60
+      }
     }
   ],
   "routes": [

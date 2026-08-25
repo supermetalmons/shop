@@ -17,6 +17,7 @@ const OPS_D1_MIGRATIONS = [
   '0009_reveal_submissions_d1_only.sql',
   '0010_reveal_submissions_baseline_index.sql',
   '0011_staff_wallet_auth.sql',
+  '0012_anonymous_auth.sql',
 ] as const;
 
 const PRODUCTION_MIN_PROFILE_COUNT = 690;
@@ -50,7 +51,21 @@ export type RevealSubmissionStorageControl = {
   cutoverAtMs: number | null;
 };
 
+export type AnonymousAuthControl = {
+  firebaseFallbackEnabled: boolean;
+  revision: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+  firebaseDisabledAtMs: number | null;
+};
+
 export type OpsD1IntegrityInput = {
+  anonymousAuthControl: OpsD1Row[];
+  anonymousAuthControlColumns: OpsD1Row[];
+  anonymousAuthSessionColumns: OpsD1Row[];
+  anonymousAuthSessionCounts: OpsD1Row[];
+  anonymousAuthSessionExpiryIndexColumns: OpsD1Row[];
+  anonymousAuthSessionSubjectIndexColumns: OpsD1Row[];
   controls: OpsD1Row[];
   expiryIndexColumns: OpsD1Row[];
   foreignKeyCheck: OpsD1Row[];
@@ -77,6 +92,8 @@ export type OpsD1IntegrityInput = {
 };
 
 export type OpsD1IntegrityReport = {
+  anonymousAuth: AnonymousAuthControl;
+  anonymousAuthSessionCount: number;
   profileAddressCount: number;
   profileCount: number;
   profileStorageSource: 'd1';
@@ -108,6 +125,62 @@ const expectedSchema = new Map<
   string,
   { fingerprint: string; type: string; tableName: string }
 >([
+  [
+    'anonymous_auth_control',
+    {
+      fingerprint: 'fa4b29336ebad0930bf26e8421590b4d8079127b47768c72ccf578b60feee74c',
+      type: 'table',
+      tableName: 'anonymous_auth_control',
+    },
+  ],
+  [
+    'anonymous_auth_control_delete_guard',
+    {
+      fingerprint: '415d64090bc1334239d038c17c1b5ebe8741977363f7e3d2c84f5b4e78ebc6ac',
+      type: 'trigger',
+      tableName: 'anonymous_auth_control',
+    },
+  ],
+  [
+    'anonymous_auth_control_insert_guard',
+    {
+      fingerprint: '395468b34b71488e34fc11558cf8ba3e21675f65ff6a5b34ea67813a373bd452',
+      type: 'trigger',
+      tableName: 'anonymous_auth_control',
+    },
+  ],
+  [
+    'anonymous_auth_control_update_guard',
+    {
+      fingerprint: '77b839aeefea21985bb17480e75350ea7eb32f2ef677d3f128a81603ca5b223b',
+      type: 'trigger',
+      tableName: 'anonymous_auth_control',
+    },
+  ],
+  [
+    'anonymous_auth_sessions',
+    {
+      fingerprint: 'b1985b6c05977420c7e68edcb7a501d8877808554064df78d8475d88741921a0',
+      type: 'table',
+      tableName: 'anonymous_auth_sessions',
+    },
+  ],
+  [
+    'anonymous_auth_sessions_auth_subject',
+    {
+      fingerprint: 'e56b0fe36d7e8768244454f81a9e908b0a4a1ba7512f8ea988827bcd44c14f9f',
+      type: 'index',
+      tableName: 'anonymous_auth_sessions',
+    },
+  ],
+  [
+    'anonymous_auth_sessions_expires_at_ms',
+    {
+      fingerprint: 'dabe2ee9d495cd9f7901a8b16145d6986efe885fe6bbd4356e0589669b4aed83',
+      type: 'index',
+      tableName: 'anonymous_auth_sessions',
+    },
+  ],
   [
     'staff_auth_challenges',
     {
@@ -391,6 +464,25 @@ const expectedWorkerControlColumns: readonly ExpectedColumn[] = [
   ['cursor_updated_at_ms', 'INTEGER', 0, 0],
 ];
 
+const expectedAnonymousAuthSessionColumns: readonly ExpectedColumn[] = [
+  ['session_id', 'TEXT', 1, 1],
+  ['secret_hash', 'TEXT', 1, 0],
+  ['auth_subject', 'TEXT', 1, 0],
+  ['origin_hostname', 'TEXT', 1, 0],
+  ['created_at_ms', 'INTEGER', 1, 0],
+  ['refreshed_at_ms', 'INTEGER', 1, 0],
+  ['expires_at_ms', 'INTEGER', 1, 0],
+];
+
+const expectedAnonymousAuthControlColumns: readonly ExpectedColumn[] = [
+  ['singleton', 'INTEGER', 1, 1],
+  ['firebase_fallback_enabled', 'INTEGER', 1, 0],
+  ['revision', 'INTEGER', 1, 0],
+  ['created_at_ms', 'INTEGER', 1, 0],
+  ['updated_at_ms', 'INTEGER', 1, 0],
+  ['firebase_disabled_at_ms', 'INTEGER', 0, 0],
+];
+
 const expectedRateLimitBucketColumns: readonly ExpectedColumn[] = [
   ['scope', 'TEXT', 1, 1],
   ['subject_hash', 'TEXT', 1, 2],
@@ -613,6 +705,12 @@ function assertRevealSubmissionBaselineIndexColumns(rows: OpsD1Row[]): void {
   ) fail('Ops D1 reveal-submission baseline index columns are not exact.');
 }
 
+function assertSingleColumnIndex(rows: OpsD1Row[], name: string, cid: number, label: string): void {
+  if (rows.length !== 1 || rows[0].name !== name) fail(`${label} columns are not exact.`);
+  assertExactInteger(rows[0].seqno, 0, `${label} sequence`);
+  assertExactInteger(rows[0].cid, cid, `${label} column id`);
+}
+
 export function validateReadyNotificationCursorPath(value: unknown): string {
   if (typeof value !== 'string' || !value) {
     return fail('Ready-notification cursor must be a non-empty string.');
@@ -713,6 +811,30 @@ function parseRevealSubmissionStorageControl(
   };
 }
 
+export function parseAnonymousAuthControl(row: OpsD1Row): AnonymousAuthControl {
+  if (
+    row.singleton !== 1 ||
+    (row.firebase_fallback_enabled !== 0 && row.firebase_fallback_enabled !== 1)
+  ) return fail('Anonymous-auth control is invalid.');
+  const createdAtMs = safeInteger(row.created_at_ms, 'Anonymous-auth creation timestamp');
+  const updatedAtMs = safeInteger(row.updated_at_ms, 'Anonymous-auth update timestamp');
+  const firebaseDisabledAtMs = row.firebase_disabled_at_ms === null
+    ? null
+    : safeInteger(row.firebase_disabled_at_ms, 'Anonymous-auth Firebase disable timestamp');
+  if (
+    updatedAtMs < createdAtMs ||
+    (row.firebase_fallback_enabled === 1) !== (firebaseDisabledAtMs === null) ||
+    (firebaseDisabledAtMs !== null && (firebaseDisabledAtMs < createdAtMs || firebaseDisabledAtMs > updatedAtMs))
+  ) return fail('Anonymous-auth control timestamps are invalid.');
+  return {
+    firebaseFallbackEnabled: row.firebase_fallback_enabled === 1,
+    revision: safeInteger(row.revision, 'Anonymous-auth revision', 1),
+    createdAtMs,
+    updatedAtMs,
+    firebaseDisabledAtMs,
+  };
+}
+
 export function assertOpsD1Integrity(
   input: OpsD1IntegrityInput,
   minimums: OpsD1IntegrityMinimums = {
@@ -739,11 +861,33 @@ export function assertOpsD1Integrity(
   assertExactSchema(input.schema);
   assertStrictTables(input.tableList);
   assertExactColumns(
+    input.anonymousAuthSessionColumns,
+    expectedAnonymousAuthSessionColumns,
+    'anonymous_auth_sessions',
+  );
+  assertExactColumns(
+    input.anonymousAuthControlColumns,
+    expectedAnonymousAuthControlColumns,
+    'anonymous_auth_control',
+  );
+  assertExactColumns(
     input.workerControlColumns,
     expectedWorkerControlColumns,
     'worker_controls',
   );
   assertRevealSubmissionBaselineIndexColumns(input.revealSubmissionBaselineIndexColumns);
+  assertSingleColumnIndex(
+    input.anonymousAuthSessionExpiryIndexColumns,
+    'expires_at_ms',
+    6,
+    'Ops D1 anonymous-auth expiry index',
+  );
+  assertSingleColumnIndex(
+    input.anonymousAuthSessionSubjectIndexColumns,
+    'auth_subject',
+    2,
+    'Ops D1 anonymous-auth subject index',
+  );
   assertExactColumns(
     input.profileColumns,
     expectedProfileColumns,
@@ -797,6 +941,17 @@ export function assertOpsD1Integrity(
   if (input.revealSubmissionStorageControl.length !== 1) {
     return fail('Ops D1 must contain exactly one reveal-submission storage control.');
   }
+  if (input.anonymousAuthControl.length !== 1) {
+    return fail('Ops D1 must contain exactly one anonymous-auth control.');
+  }
+  if (input.anonymousAuthSessionCounts.length !== 1) {
+    return fail('Ops D1 anonymous-auth session count is invalid.');
+  }
+  const anonymousAuth = parseAnonymousAuthControl(input.anonymousAuthControl[0]);
+  const anonymousAuthSessionCount = safeInteger(
+    input.anonymousAuthSessionCounts[0].anonymous_auth_session_count,
+    'Ops D1 anonymous-auth session count',
+  );
   const walletSessionStorage = parseWalletSessionStorageControl(
     input.walletSessionStorageControl[0],
   );
@@ -848,6 +1003,8 @@ export function assertOpsD1Integrity(
     return fail('Ops D1 reveal-submission count is below the production cutover baseline.');
   }
   return {
+    anonymousAuth,
+    anonymousAuthSessionCount,
     profileAddressCount,
     profileCount,
     profileStorageSource: source,
@@ -967,6 +1124,29 @@ export function readRemoteReadyNotificationsControl(): ReadyNotificationsControl
 
 export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
   return assertOpsD1Integrity({
+    anonymousAuthControl: queryRemoteOpsD1(`SELECT
+      singleton,
+      firebase_fallback_enabled,
+      revision,
+      created_at_ms,
+      updated_at_ms,
+      firebase_disabled_at_ms
+      FROM anonymous_auth_control`),
+    anonymousAuthControlColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(anonymous_auth_control)',
+    ),
+    anonymousAuthSessionColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(anonymous_auth_sessions)',
+    ),
+    anonymousAuthSessionCounts: queryRemoteOpsD1(
+      'SELECT COUNT(*) AS anonymous_auth_session_count FROM anonymous_auth_sessions',
+    ),
+    anonymousAuthSessionExpiryIndexColumns: queryRemoteOpsD1(
+      'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)',
+    ),
+    anonymousAuthSessionSubjectIndexColumns: queryRemoteOpsD1(
+      'PRAGMA index_info(anonymous_auth_sessions_auth_subject)',
+    ),
     controls: queryRemoteOpsD1(`${controlSelect} ORDER BY control_key`),
     expiryIndexColumns: queryRemoteOpsD1(
       'PRAGMA index_info(rate_limit_buckets_expires_at_ms)',
@@ -1034,6 +1214,8 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
         schema = 'main' AND
         name IN (
           'profile_addresses',
+          'anonymous_auth_control',
+          'anonymous_auth_sessions',
           'profile_storage_control',
           'profiles',
           'rate_limit_buckets',

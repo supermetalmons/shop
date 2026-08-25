@@ -39,6 +39,7 @@ import {
   setD1RevealSubmissionStatus,
   type RevealSubmissionRecord,
 } from '../src/revealSubmissionD1.ts';
+import { cleanupExpiredAnonymousAuthSessions, firebaseFallbackEnabled } from '../src/anonymousAuth.ts';
 
 const PROFILE_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const RACE_WALLET = '11111111111111111111111111111111';
@@ -111,7 +112,41 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       '0009_reveal_submissions_d1_only.sql',
       '0010_reveal_submissions_baseline_index.sql',
       '0011_staff_wallet_auth.sql',
+      '0012_anonymous_auth.sql',
     ]);
+    assert.equal(await firebaseFallbackEnabled(env.OPS_DB), true);
+    const anonymousExpiry = 30 * 24 * 60 * 60 * 1000;
+    await env.OPS_DB.batch([
+      env.OPS_DB.prepare(`INSERT INTO anonymous_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .bind(
+          '10000000-0000-4000-8000-000000000001',
+          'a'.repeat(64),
+          'anon:10000000-0000-4000-8000-000000000001',
+          'mons.shop',
+          0,
+          0,
+          anonymousExpiry,
+        ),
+      env.OPS_DB.prepare(`INSERT INTO anonymous_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .bind(
+          '20000000-0000-4000-8000-000000000002',
+          'b'.repeat(64),
+          'anon:20000000-0000-4000-8000-000000000002',
+          'mons.shop',
+          anonymousExpiry,
+          anonymousExpiry,
+          anonymousExpiry * 2,
+        ),
+    ]);
+    assert.deepEqual(await cleanupExpiredAnonymousAuthSessions(env.OPS_DB, anonymousExpiry + 1), {
+      deletedCount: 1,
+      limitReached: false,
+      hasMore: false,
+    });
+    assert.equal(
+      Number((await env.OPS_DB.prepare('SELECT COUNT(*) AS count FROM anonymous_auth_sessions').first<{ count: number }>())?.count),
+      1,
+    );
     await assert.rejects(loadRevealSubmissionStorageControl(env.OPS_DB));
     await env.OPS_DB.batch(Array.from({ length: 14 }, (_, index) => env.OPS_DB.prepare(
       `INSERT INTO reveal_submissions (

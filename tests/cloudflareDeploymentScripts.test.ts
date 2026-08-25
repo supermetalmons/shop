@@ -27,15 +27,15 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   assert.equal(packageJson.devDependencies.wrangler, '4.120.0');
   assert.equal(
     packageJson.scripts['check:frontend'],
-    'npm run typecheck && npm test && npm run build && npm run validate:browser-bundle',
+    'npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm test && npm run build && npm run validate:browser-bundle',
   );
   assert.equal(
     packageJson.scripts['dry-run:frontend'],
-    'npm run check:frontend && wrangler deploy --dry-run --config wrangler.jsonc',
+    'npm run check:frontend && wrangler deploy --dry-run --config wrangler.jsonc --env-file cloud/workers/frontend/release.env',
   );
   assert.equal(
     packageJson.scripts.deploy,
-    'npm run check:frontend && wrangler deploy --strict --config wrangler.jsonc',
+    'npm run check:frontend && wrangler deploy --strict --config wrangler.jsonc --env-file cloud/workers/frontend/release.env',
   );
   assert.equal(
     packageJson.scripts['dry-run:api'],
@@ -68,6 +68,14 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   assert.equal(
     packageJson.scripts['ready-notifications-control'],
     'node --import tsx scripts/ops/readyNotificationsControl.ts',
+  );
+  assert.equal(
+    packageJson.scripts['anonymous-auth-control'],
+    'node --import tsx scripts/ops/anonymousAuthControl.ts',
+  );
+  assert.equal(
+    packageJson.scripts['migrate:firebase-wallet-ownership'],
+    'node --import tsx scripts/ops/migrateFirebaseWalletOwnership.ts',
   );
   assert.equal(
     packageJson.scripts['deploy:api'],

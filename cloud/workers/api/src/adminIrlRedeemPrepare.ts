@@ -76,9 +76,7 @@ import {
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
 import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import {
+  RequestIdentityError,
   isStaffRequestIdentity,
   resolveRequestWallet,
   verifyRequestIdentity,
@@ -1431,6 +1429,8 @@ export async function handleAdminIrlRedeemPrepare(
       trackedFetch,
       controller.signal,
       dependencies.nowMs(),
+      request,
+      env.OPS_DB,
     );
     if (!isStaffRequestIdentity(identity)) {
       throw new AdminIrlRedeemPrepareError('unauthenticated', 'Staff wallet authentication is required.');
@@ -1483,7 +1483,7 @@ export async function handleAdminIrlRedeemPrepare(
       if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
         authOutcome = 'rejected';
       }
-    } else if (error instanceof FirebaseIdTokenError) {
+    } else if (error instanceof RequestIdentityError) {
       prepareError = error.kind === 'invalid-token'
         ? new AdminIrlRedeemPrepareError('unauthenticated', 'Authentication is required.')
         : error.kind === 'provider-timeout'

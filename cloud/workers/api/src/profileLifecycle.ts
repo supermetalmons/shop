@@ -22,9 +22,7 @@ import {
   validateSolanaSignInMessage,
 } from '../../../../shared/walletLifecycle.js';
 import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import {
+  RequestIdentityError,
   isStaffRequestIdentity,
   verifyRequestIdentity,
   type RequestIdentity,
@@ -121,12 +119,7 @@ type ProfileLifecycleDependencies = {
   ) => Promise<void>;
   releaseWalletSessionReconcileLease: typeof releaseWalletSessionReconcileLease;
   resolveD1WalletSession: typeof resolveD1WalletSession;
-  verifyIdToken: (
-    authorization: string | null,
-    providerFetch: ProfileProviderFetch,
-    signal: AbortSignal,
-    nowMs?: number,
-  ) => Promise<RequestIdentity>;
+  verifyIdToken: typeof verifyRequestIdentity;
 };
 
 type ProfileLifecycleEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'OPS_DB'>>;
@@ -242,7 +235,7 @@ async function pauseForConflict(signal: AbortSignal, attempt: number): Promise<v
 }
 
 function validateWalletSessionSignature(params: {
-  identity: Extract<RequestIdentity, { kind: 'firebase' }>;
+  identity: Extract<RequestIdentity, { kind: 'anonymous' }>;
   message: string;
   nowMs: number;
   originHostname: string;
@@ -254,7 +247,7 @@ function validateWalletSessionSignature(params: {
     message: statement,
     nowMs: params.nowMs,
     originHostname: params.originHostname,
-    uid: params.identity.uid,
+    uid: params.identity.authSubject,
     wallet: params.wallet,
   });
   const signatureValid = nacl.sign.detached.verify(
@@ -458,7 +451,7 @@ async function reconcileProfileState(params: {
     try {
       lease = await params.dependencies.acquireWalletSessionReconcileLease({
         db: params.db,
-        firebaseUid: params.identity.uid,
+        firebaseUid: params.identity.authSubject,
         nowMs: params.nowMs,
         signal: params.common.signal,
       });
@@ -473,13 +466,13 @@ async function reconcileProfileState(params: {
     try {
       mergedStripeDeliveryOrders = await mergeStripeOrders({
         common: params.common,
-        uid: params.identity.uid,
+        uid: params.identity.authSubject,
         wallet,
       });
     } finally {
       await params.dependencies.releaseWalletSessionReconcileLease(
         params.db,
-        params.identity.uid,
+        params.identity.authSubject,
         lease.id,
       ).catch((error) => console.error({
         event: 'wallet_session_reconcile_lease_release_failed',
@@ -489,7 +482,7 @@ async function reconcileProfileState(params: {
   } else {
     const resolution = await params.dependencies.resolveD1WalletSession(
       params.db,
-      params.identity.uid,
+      params.identity.authSubject,
       params.common.signal,
     );
     if ('reason' in resolution) {
@@ -570,6 +563,8 @@ export async function handleProfileLifecycleRequest(
       trackedFetch,
       controller.signal,
       dependencies.nowMs(),
+      request,
+      env.OPS_DB,
     );
     const serviceAccountJson = typeof env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON === 'string'
       ? env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON
@@ -600,7 +595,7 @@ export async function handleProfileLifecycleRequest(
       try {
         const baseline = await dependencies.loadD1WalletSession(
           env.OPS_DB,
-          identity.uid,
+          identity.authSubject,
           controller.signal,
         );
         validateWalletSessionSignature({
@@ -614,7 +609,7 @@ export async function handleProfileLifecycleRequest(
         await dependencies.establishD1WalletSession({
           baseline,
           db: env.OPS_DB,
-          firebaseUid: identity.uid,
+          firebaseUid: identity.authSubject,
           nowMs,
           signal: controller.signal,
           wallet,
@@ -680,7 +675,7 @@ export async function handleProfileLifecycleRequest(
       const status = error.code === 'permission-denied' ? 403 : error.code === 'failed-precondition' ? 409 : 400;
       profileError = new ProfileReadError(error.code, status, error.message);
       authOutcome = 'rejected';
-    } else if (error instanceof FirebaseIdTokenError) {
+    } else if (error instanceof RequestIdentityError) {
       if (error.kind === 'invalid-token') {
         profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
         authOutcome = 'rejected';

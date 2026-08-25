@@ -15,7 +15,7 @@ import {
   BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
-import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 import {
   ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER,
   ADMIN_IRL_REDEEM_PREPARE_PATH,
@@ -264,13 +264,13 @@ test('Admin IRL preparation enforces exact requests, methods, authentication, an
 
   const unauthenticated = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
     verifyIdToken: async () => {
-      throw new FirebaseIdTokenError('invalid-token');
+      throw new RequestIdentityError('invalid-token');
     },
   }));
   assert.equal(unauthenticated.response.status, 401);
 
   const firebaseOnly = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
   }));
   assert.equal(firebaseOnly.response.status, 401);
 

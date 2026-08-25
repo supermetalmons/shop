@@ -26,7 +26,7 @@ import {
   deliveryPrepareTestHooks,
   handleDeliveryPrepare,
 } from '../src/deliveryPrepare.ts';
-import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 
 const OWNER = Keypair.generate();
 const COSIGNER = Keypair.generate();
@@ -160,7 +160,7 @@ function env(overrides: Record<string, string> = {}) {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadWalletSession: async () => OWNER.publicKey.toBase58(),
     loadAddress: async () => ({
@@ -712,7 +712,7 @@ test('delivery preparation rejects inactive lookup tables', async () => {
 test('delivery preparation enforces authentication, session ownership, exact requests, and asset boundaries', async () => {
   const unauthenticated = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
     verifyIdToken: async () => {
-      throw new FirebaseIdTokenError('invalid-token');
+      throw new RequestIdentityError('invalid-token');
     },
   }));
   assert.equal(unauthenticated.response.status, 401);
@@ -722,7 +722,7 @@ test('delivery preparation enforces authentication, session ownership, exact req
     dropId: 'not_configured',
   }), env(), dependencies({
     verifyIdToken: async () => {
-      throw new FirebaseIdTokenError('invalid-token');
+      throw new RequestIdentityError('invalid-token');
     },
   }));
   assert.equal(unsupportedUnauthenticated.response.status, 401);
@@ -789,7 +789,7 @@ test('delivery preparation rejects authentication before reading a stalled reque
   const result = await handleDeliveryPrepare(stalledRequest, env(), {
     timeoutMs: 1000,
     verifyIdToken: async () => {
-      throw new FirebaseIdTokenError('invalid-token');
+      throw new RequestIdentityError('invalid-token');
     },
   });
   assert.equal(result.response.status, 401);
@@ -808,7 +808,7 @@ test('delivery preparation reports an authenticated stalled request body as a de
   } as RequestInit & { duplex: 'half' });
   const result = await handleDeliveryPrepare(stalledRequest, env(), {
     timeoutMs: 5,
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
   });
   assert.equal(result.response.status, 504);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');

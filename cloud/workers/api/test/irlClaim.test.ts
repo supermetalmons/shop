@@ -17,7 +17,7 @@ import type { DecodedBoxMinterConfigData } from '../../../../shared/boxMinterCon
 import {
   BUBBLEGUM_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
-import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 import {
   handleIrlClaimPrepare,
   IRL_CLAIM_PREPARE_PATH,
@@ -137,7 +137,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadClaim: async () => ({ dropId: DROP_ID, boxId: 7, dudeIds: [1, 2, 3] }),
     resolveLegacyDropIds: async () => [],
@@ -491,7 +491,7 @@ test('IRL claim handler rejects authentication and wallet-session mismatches', a
     env(),
     dependencies({
       verifyIdToken: async () => {
-        throw new FirebaseIdTokenError('invalid-token');
+        throw new RequestIdentityError('invalid-token');
       },
     }),
   );

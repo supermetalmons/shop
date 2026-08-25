@@ -1,16 +1,29 @@
 import {
+  FirebaseIdTokenError,
   verifyFirebaseIdToken,
   type FirebaseIdentity,
   type FirebaseIdTokenFetch,
 } from './firebaseIdToken.js';
+import {
+  AnonymousAuthError,
+  firebaseFallbackEnabled,
+  verifyAnonymousSession,
+} from './anonymousAuth.js';
 import { isStaffWalletAddress } from '../../../../shared/fulfillmentAccess.js';
 import { canonicalWalletAddress } from '../../../../shared/walletLifecycle.js';
 
 const INTERNAL_STAFF_AUTHORIZATION_PREFIX = 'Mons-Internal-Staff ';
 
 export type RequestIdentity =
-  | { kind: 'firebase'; uid: string }
+  | { kind: 'anonymous'; authSubject: string; source: 'firebase' | 'mons' }
   | { kind: 'staff-wallet'; wallet: string };
+
+export class RequestIdentityError extends Error {
+  constructor(readonly kind: 'invalid-token' | 'provider-timeout' | 'provider-unavailable') {
+    super(kind);
+    this.name = 'RequestIdentityError';
+  }
+}
 
 export function internalStaffAuthorization(wallet: string): string {
   return `${INTERNAL_STAFF_AUTHORIZATION_PREFIX}${wallet}`;
@@ -31,24 +44,24 @@ export function isStaffRequestIdentity(
 }
 
 export function requestIdentitySubject(identity: RequestIdentity): string {
-  return identity.kind === 'staff-wallet' ? identity.wallet : identity.uid;
+  return identity.kind === 'staff-wallet' ? identity.wallet : identity.authSubject;
 }
 
 export async function resolveRequestWallet(
   identity: RequestIdentity,
-  resolveFirebaseWallet: (uid: string) => Promise<string>,
+  resolveAnonymousWallet: (authSubject: string) => Promise<string>,
 ): Promise<string>;
 export async function resolveRequestWallet(
   identity: RequestIdentity,
-  resolveFirebaseWallet: (uid: string) => Promise<string | null>,
+  resolveAnonymousWallet: (authSubject: string) => Promise<string | null>,
 ): Promise<string | null>;
 export async function resolveRequestWallet(
   identity: RequestIdentity,
-  resolveFirebaseWallet: (uid: string) => Promise<string | null>,
+  resolveAnonymousWallet: (authSubject: string) => Promise<string | null>,
 ): Promise<string | null> {
   return identity.kind === 'staff-wallet'
     ? identity.wallet
-    : resolveFirebaseWallet(identity.uid);
+    : resolveAnonymousWallet(identity.authSubject);
 }
 
 export async function verifyRequestIdentity(
@@ -56,6 +69,8 @@ export async function verifyRequestIdentity(
   providerFetch: FirebaseIdTokenFetch,
   signal: AbortSignal,
   nowMs = Date.now(),
+  request?: Request,
+  db?: D1Database,
 ): Promise<RequestIdentity> {
   const normalized = String(authorization || '');
   if (normalized.startsWith(INTERNAL_STAFF_AUTHORIZATION_PREFIX)) {
@@ -63,11 +78,29 @@ export async function verifyRequestIdentity(
     if (!wallet || !isStaffWalletAddress(wallet)) throw new Error('Invalid internal staff identity');
     return { kind: 'staff-wallet', wallet };
   }
-  const identity: FirebaseIdentity = await verifyFirebaseIdToken(
-    authorization,
-    providerFetch,
-    signal,
-    nowMs,
-  );
-  return { kind: 'firebase', uid: identity.uid };
+  if (normalized) {
+    try {
+      if (!await firebaseFallbackEnabled(db)) throw new RequestIdentityError('invalid-token');
+      const identity: FirebaseIdentity = await verifyFirebaseIdToken(
+        authorization,
+        providerFetch,
+        signal,
+        nowMs,
+      );
+      return { kind: 'anonymous', authSubject: identity.uid, source: 'firebase' };
+    } catch (error) {
+      if (error instanceof RequestIdentityError) throw error;
+      if (error instanceof FirebaseIdTokenError) throw new RequestIdentityError(error.kind);
+      if (error instanceof AnonymousAuthError) throw new RequestIdentityError(error.kind);
+      throw error;
+    }
+  }
+  if (!request) throw new RequestIdentityError('invalid-token');
+  try {
+    const session = await verifyAnonymousSession(request, db, nowMs);
+    return { kind: 'anonymous', authSubject: session.authSubject, source: 'mons' };
+  } catch (error) {
+    if (error instanceof AnonymousAuthError) throw new RequestIdentityError(error.kind);
+    throw error;
+  }
 }

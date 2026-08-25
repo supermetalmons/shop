@@ -17,7 +17,7 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
-import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { FIRESTORE_DOCUMENT_NAME_PREFIX } from '../src/firestoreRest.ts';
 import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
 import {
@@ -208,7 +208,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
     request(),
     env(),
     () => undefined,
-    dependencies({ verifyIdToken: async () => { throw new FirebaseIdTokenError('invalid-token'); } }),
+    dependencies({ verifyIdToken: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(unauthenticated.response.status, 401);
   assert.deepEqual(await unauthenticated.response.json(), {
@@ -220,7 +220,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
     request(),
     env(),
     () => undefined,
-    dependencies({ verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }) }),
+    dependencies({ verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }) }),
   );
   assert.equal(firebaseOnly.response.status, 401);
 

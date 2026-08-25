@@ -13,7 +13,7 @@ import {
   type ApiDropConfig,
 } from '../src/dropConfig.ts';
 import { BUBBLEGUM_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
-import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION } from '../src/receiptTransferRateLimit.ts';
 import {
   handleReceiptTransferPrepare,
@@ -129,7 +129,7 @@ function requestBody() {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     enforceRateLimit: async () => undefined,
     fetchAsset: async () => receiptAsset(),
@@ -215,7 +215,7 @@ test('receipt transfer handler rejects invalid authentication and missing config
     env(),
     dependencies({
       verifyIdToken: async () => {
-        throw new FirebaseIdTokenError('invalid-token');
+        throw new RequestIdentityError('invalid-token');
       },
     }),
   );
@@ -252,7 +252,7 @@ test('receipt transfer handler keeps the overall deadline authoritative', async 
       timeoutMs: 5,
       enforceRateLimit: async (context: { signal: AbortSignal }) =>
         new Promise((_resolve, reject) => {
-          const fail = () => reject(new FirebaseIdTokenError('provider-unavailable'));
+          const fail = () => reject(new RequestIdentityError('provider-unavailable'));
           context.signal.addEventListener('abort', fail, { once: true });
           if (context.signal.aborted) fail();
         }),

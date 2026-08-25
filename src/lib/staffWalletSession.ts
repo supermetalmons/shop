@@ -1,6 +1,6 @@
 import { isStaffWalletAddress } from '../../shared/fulfillmentAccess';
 import { canonicalWalletAddress } from '../../shared/walletLifecycle';
-import { monsApiOrigin } from './monsApiOrigin';
+import { AUTHENTICATED_API_ORIGIN } from './authenticatedApiOrigin';
 
 const STAFF_SESSION_STORAGE_KEY = 'monsStaffWalletSession:v1';
 const STAFF_SESSION_LOCK_NAME = 'monsStaffWalletSession:lock';
@@ -215,14 +215,16 @@ async function callStaffAuth(path: string, body: unknown, token?: string): Promi
     STAFF_AUTH_TIMEOUT_MS,
   );
   try {
-    const response = await fetch(`${monsApiOrigin()}${path}`, {
+    const response = await fetch(`${AUTHENTICATED_API_ORIGIN}${path}`, {
       method: 'POST',
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         'Content-Type': 'application/json',
+        'X-Mons-CSRF': '1',
       },
       body: JSON.stringify(body),
       cache: 'no-store',
+      credentials: 'same-origin',
       signal: controller.signal,
     });
     const payload = await boundedJson(response);

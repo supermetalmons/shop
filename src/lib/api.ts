@@ -1,5 +1,3 @@
-import { onAuthStateChanged, signInAnonymously, type Auth } from 'firebase/auth';
-import { auth } from './firebase';
 import {
   AddFulfillmentOrderToShipStationRequest,
   AddFulfillmentOrderToShipStationResponse,
@@ -74,8 +72,9 @@ import {
 } from '../../shared/solanaRpcProxy.ts';
 import { createProfileAddressId } from '../../shared/profileD1.ts';
 import { fetchPackStatus } from './shopApi';
-import { monsApiOrigin } from './monsApiOrigin';
 import { ensureStaffWalletSession } from './staffWalletSession';
+import { ensureAnonymousSession } from './anonymousSession';
+import { AUTHENTICATED_API_ORIGIN } from './authenticatedApiOrigin';
 
 export type {
   PrepareDeliveryRequest,
@@ -88,46 +87,10 @@ export type {
   StripeCheckoutSessionResponse,
 } from '../types';
 
-let authReadyPromise: Promise<string> | null = null;
-let authStateReadyPromise: Promise<void> | null = null;
-
-async function waitForAuthStateReady(localAuth: Auth): Promise<void> {
-  // If a user is already present, we’re ready.
-  if (localAuth.currentUser) return;
-  if (!authStateReadyPromise) {
-    authStateReadyPromise = new Promise<void>((resolve) => {
-      const unsubscribe = onAuthStateChanged(localAuth, () => {
-        unsubscribe();
-        resolve();
-      });
-    }).finally(() => {
-      authStateReadyPromise = null;
-    });
-  }
-  return authStateReadyPromise;
-}
-
 export async function ensureAuthenticated(): Promise<string> {
   const staffSession = await ensureStaffWalletSession();
   if (staffSession) return staffSession.wallet;
-  const localAuth = auth;
-  if (!localAuth) throw new Error('Firebase client is not configured');
-
-  // IMPORTANT: On page load, Firebase restores persisted auth asynchronously.
-  // If we call signInAnonymously() before that completes, we can create a *new* anon user each reload,
-  // which breaks our wallet-session mapping and makes users re-sign with Solana unnecessarily.
-  await waitForAuthStateReady(localAuth);
-  const user = localAuth.currentUser;
-  if (user) return user.uid;
-
-  if (!authReadyPromise) {
-    authReadyPromise = signInAnonymously(localAuth)
-      .then((credential) => credential.user.uid)
-      .finally(() => {
-        authReadyPromise = null;
-      });
-  }
-  return authReadyPromise;
+  return (await ensureAnonymousSession()).subject;
 }
 
 const DEBUG_API =
@@ -210,20 +173,14 @@ export function fulfillmentShipStationAddressCorrectionDetails(
 
 type AuthenticatedUserCredential = {
   authSubject: string;
-  token: string;
+  token?: string;
 };
 
 async function authenticatedUserCredential(forceRefresh: boolean): Promise<AuthenticatedUserCredential> {
   const staffSession = await ensureStaffWalletSession(forceRefresh);
   if (staffSession) return { authSubject: staffSession.wallet, token: staffSession.token };
-  const uid = await ensureAuthenticated();
-  const user = auth?.currentUser;
-  if (!user || user.uid !== uid) throw new ProfileApiError({ code: 'unauthenticated', message: 'Authentication is required.' });
-  return { authSubject: uid, token: await user.getIdToken(forceRefresh) };
-}
-
-export async function authenticatedUserToken(forceRefresh: boolean): Promise<string> {
-  return (await authenticatedUserCredential(forceRefresh)).token;
+  const session = await ensureAnonymousSession(forceRefresh);
+  return { authSubject: session.subject };
 }
 
 type ProfileApiClientDependencies = {
@@ -265,7 +222,7 @@ type AuthenticatedApiPath =
 const defaultProfileApiDependencies: ProfileApiClientDependencies = {
   fetch: (input, init) => fetch(input, init),
   getToken: authenticatedUserCredential,
-  origin: monsApiOrigin,
+  origin: () => AUTHENTICATED_API_ORIGIN,
   timeoutMs: 20_000,
 };
 
@@ -346,13 +303,21 @@ async function requestProfileApi<Req>(
     () => controller.abort(new DOMException('Timed out', 'TimeoutError')),
     dependencies.timeoutMs,
   );
+  let initialAuthSubject: string | undefined;
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
         const credential = await waitForProfileApiValue(dependencies.getToken(attempt > 0), controller.signal);
         const token = typeof credential === 'string' ? credential : credential.token;
-        if (typeof credential !== 'string' && credentialCapture) {
-          credentialCapture.authSubject = credential.authSubject;
+        if (typeof credential !== 'string') {
+          if (initialAuthSubject === undefined) initialAuthSubject = credential.authSubject;
+          else if (credential.authSubject !== initialAuthSubject) {
+            throw new ProfileApiError({
+              code: 'auth-subject-changed',
+              message: 'Authentication changed. Please retry.',
+            });
+          }
+          if (credentialCapture) credentialCapture.authSubject = credential.authSubject;
         }
         if (DEBUG_API) {
           console.info(`[mons/api] → ${pathname}`, { callId, payload: summarizePayloadShape(data) });
@@ -360,11 +325,13 @@ async function requestProfileApi<Req>(
         const response = await dependencies.fetch(`${dependencies.origin()}${pathname}`, {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${token}`,
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
             'Content-Type': 'application/json',
+            'X-Mons-CSRF': '1',
           },
           body: JSON.stringify(data),
           cache: 'no-store',
+          credentials: 'same-origin',
           signal: controller.signal,
         });
         let payload: unknown;

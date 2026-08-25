@@ -69,9 +69,7 @@ import {
 } from '../../../../shared/stripeReceiptClaims.js';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import {
+  RequestIdentityError,
   isStaffRequestIdentity,
   resolveRequestWallet,
   verifyRequestIdentity,
@@ -1674,7 +1672,7 @@ export async function handleAdminIrlRedeemFinalize(
   let finalization: ReturnType<FinalizeDependencies['finalize']> | undefined;
   try {
     body = await readRequestBody(request, controller.signal);
-    identity = await dependencies.verifyIdToken(request.headers.get('Authorization'), trackedFetch, controller.signal, dependencies.nowMs());
+    identity = await dependencies.verifyIdToken(request.headers.get('Authorization'), trackedFetch, controller.signal, dependencies.nowMs(), request, env.OPS_DB);
     if (!isStaffRequestIdentity(identity)) {
       throw new AdminIrlRedeemFinalizeError('unauthenticated', 'Staff wallet authentication is required.');
     }
@@ -1723,7 +1721,7 @@ export async function handleAdminIrlRedeemFinalize(
         }
       }
       normalized = new AdminIrlRedeemFinalizeError('deadline-exceeded', 'Admin IRL redeem finalization timed out.');
-    } else if (error instanceof FirebaseIdTokenError) {
+    } else if (error instanceof RequestIdentityError) {
       normalized = new AdminIrlRedeemFinalizeError(
         error.kind === 'invalid-token' ? 'unauthenticated' : error.kind === 'provider-timeout' ? 'deadline-exceeded' : 'unavailable',
         error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',

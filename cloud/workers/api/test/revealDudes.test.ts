@@ -8,7 +8,7 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.ts';
-import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 import {
   REVEAL_DUDES_PATH,
   RevealDudesError,
@@ -46,6 +46,7 @@ function env(signer = COSIGNER, backgroundQueue = queue()): Env {
     OPS_DB: {} as D1Database,
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
+    ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     NOTIFICATION_EMAIL_QUEUE: queue(),
     REVEAL_BACKGROUND_QUEUE: backgroundQueue,
     STRIPE_FULFILLMENT_QUEUE: queue(),
@@ -87,7 +88,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
       get: async () => 'google-access-token',
       invalidate: () => undefined,
     },
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadStorageControl: async () => ({
       paused: false,
@@ -242,7 +243,7 @@ test('reveal handler maps invalid and unavailable Firebase authentication', asyn
       env(),
       dependencies({
         verifyIdToken: async () => {
-          throw new FirebaseIdTokenError(kind);
+          throw new RequestIdentityError(kind);
         },
       }),
     );

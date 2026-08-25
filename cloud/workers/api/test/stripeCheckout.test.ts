@@ -45,7 +45,17 @@ const ONCHAIN_CONFIG: StripeCheckoutOnchainConfig = {
 
 const STAFF_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 
-function env(overrides: Partial<Record<keyof Env, string>> = {}) {
+function env(overrides: Partial<Record<
+  | 'ADDRESS_DECRYPTION_SECRET'
+  | 'COSIGNER_SECRET'
+  | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
+  | 'HELIUS_API_KEY'
+  | 'STRIPE_RESTRICTED_KEY'
+  | 'STRIPE_RESTRICTED_KEY_LIVE'
+  | 'STRIPE_SECRET_KEY'
+  | 'STRIPE_SECRET_KEY_LIVE',
+  string
+>> = {}) {
   return {
     HELIUS_API_KEY: 'helius-test-key',
     COSIGNER_SECRET: '',
@@ -74,7 +84,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
     providerFetch: async () => {
       throw new Error('unexpected provider fetch');
     },
@@ -158,6 +168,26 @@ test('staff checkout persists the wallet as the direct order owner', async () =>
   assert.equal(result.response.status, 200);
   assert.equal(checkout?.owner, STAFF_WALLET);
   assert.equal(checkout?.ownerKind, 'wallet');
+  assert.equal(checkout?.uid, STAFF_WALLET);
+  assert.equal(Object.hasOwn(checkout || {}, 'firebaseUid'), false);
+});
+
+test('linked anonymous checkout persists the wallet as the direct order owner', async () => {
+  let checkout: Record<string, unknown> | undefined;
+  const result = await handleStripeCheckoutSession(
+    request({ dropId: DROP.dropId }),
+    { ...env(), OPS_DB: {} as D1Database },
+    dependencies({
+      persistCheckout: async (_path: string, document: Record<string, unknown>) => {
+        checkout = document;
+      },
+      resolveWalletSession: async () => ({ wallet: STAFF_WALLET, source: 'session' as const }),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal(checkout?.owner, STAFF_WALLET);
+  assert.equal(checkout?.ownerKind, 'wallet');
+  assert.equal(checkout?.uid, STAFF_WALLET);
   assert.equal(Object.hasOwn(checkout || {}, 'firebaseUid'), false);
 });
 
@@ -186,8 +216,8 @@ test('checkout handler rejects methods, malformed bodies, extra keys, and oversi
 test('checkout handler maps authentication and provider failures to stable envelopes', async () => {
   const unauthenticated = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), dependencies({
     verifyIdToken: async () => {
-      const { FirebaseIdTokenError } = await import('../src/firebaseIdToken.ts');
-      throw new FirebaseIdTokenError('invalid-token');
+      const { RequestIdentityError } = await import('../src/requestIdentity.ts');
+      throw new RequestIdentityError('invalid-token');
     },
   }));
   assert.equal(unauthenticated.response.status, 401);

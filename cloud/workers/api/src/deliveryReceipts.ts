@@ -101,10 +101,7 @@ import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
 } from '../../../../shared/solanaRpcProxy.js';
-import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import { resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENTS_BASE_URL,
@@ -4228,6 +4225,8 @@ export async function handleDeliveryReceiptRequest(
       trackedFetch,
       controller.signal,
       dependencies.nowMs(),
+      request,
+      env.OPS_DB,
     );
     const rawBody = await readRequestBody(
       request,
@@ -4295,7 +4294,7 @@ export async function handleDeliveryReceiptRequest(
     let receiptError: DeliveryReceiptError;
     if (controller.signal.aborted) {
       receiptError = new DeliveryReceiptError('deadline-exceeded', 'Delivery receipt request timed out.');
-    } else if (error instanceof FirebaseIdTokenError) {
+    } else if (error instanceof RequestIdentityError) {
       receiptError = new DeliveryReceiptError(
         error.kind === 'invalid-token' ? 'unauthenticated' : 'unavailable',
         error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',
@@ -4322,7 +4321,7 @@ export async function handleDeliveryReceiptRequest(
       metrics,
       authOutcome: identity
         ? 'accepted'
-        : error instanceof FirebaseIdTokenError && error.kind !== 'invalid-token'
+        : error instanceof RequestIdentityError && error.kind !== 'invalid-token'
           ? 'provider-failure'
           : 'rejected',
       ...(dropId ? { dropId } : {}),

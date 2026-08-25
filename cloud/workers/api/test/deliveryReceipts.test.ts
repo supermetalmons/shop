@@ -21,7 +21,7 @@ import {
   reconcilePendingReadyToShipNotifications,
   scheduleDeliveryPackStatusProjection,
 } from '../src/deliveryReceipts.ts';
-import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 import {
   compareAndSetReadyNotificationCursor,
   loadReadyNotificationControl,
@@ -619,7 +619,7 @@ function env(overrides: Partial<Pick<Env,
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
     issue: async () => ({
       processed: true as const,
       deliveryId: 7,
@@ -1684,7 +1684,7 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
         invalidate: () => undefined,
       },
       providerFetch,
-      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
     },
   );
   await Promise.all(deferred);
@@ -2088,7 +2088,7 @@ test('explicit recovery uses the production Firestore adapter and preserves not-
         invalidate: () => undefined,
       },
       providerFetch,
-      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
     },
   );
   assert.equal(result.response.status, 200);
@@ -2203,7 +2203,7 @@ test('forced recovery validates the delivery PDA and finalizes an already-burned
         invalidate: () => undefined,
       },
       providerFetch,
-      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
     },
   );
   assert.equal(result.response.status, 200);
@@ -2382,7 +2382,7 @@ test('receipt routes map invalid authentication and provider authentication fail
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     () => undefined,
-    dependencies({ verifyIdToken: async () => { throw new FirebaseIdTokenError('invalid-token'); } }),
+    dependencies({ verifyIdToken: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(invalid.response.status, 401);
   assert.equal(invalid.authOutcome, 'rejected');
@@ -2392,7 +2392,7 @@ test('receipt routes map invalid authentication and provider authentication fail
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     () => undefined,
-    dependencies({ verifyIdToken: async () => { throw new FirebaseIdTokenError('provider-unavailable'); } }),
+    dependencies({ verifyIdToken: async () => { throw new RequestIdentityError('provider-unavailable'); } }),
   );
   assert.equal(provider.response.status, 503);
   assert.equal(provider.authOutcome, 'provider-failure');

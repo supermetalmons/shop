@@ -89,23 +89,23 @@ test('staff challenge exchange stays pure until the session is installed and ref
   Date.now = () => NOW_MS;
   const calls: Array<{ path: string; authorization: string; body: unknown }> = [];
   globalThis.fetch = async (input, init) => {
-    const path = new URL(String(input)).pathname;
+    const path = new URL(String(input), 'https://mons.shop').pathname;
     calls.push({
       path,
       authorization: new Headers(init?.headers).get('Authorization') || '',
       body: JSON.parse(String(init?.body || '{}')),
     });
-    if (path === '/staff/auth/challenge') {
+    if (path === '/api/staff/auth/challenge') {
       return Response.json({
         challengeId: SESSION_ID,
         message: `Sign in to mons.shop as ${WALLET}\nDomain: mons.shop\nTimestamp: 2026-08-25T12:00:00.000Z\nSession: staff:${SESSION_ID}`,
         expiresAt: NOW_MS + 300_000,
       });
     }
-    if (path === '/staff/auth/session') {
+    if (path === '/api/staff/auth/session') {
       return Response.json({ wallet: WALLET, token: TOKEN, expiresAt: NOW_MS + 30 * 24 * 60 * 60 * 1000 });
     }
-    if (path === '/staff/auth/refresh') {
+    if (path === '/api/staff/auth/refresh') {
       return Response.json({ wallet: WALLET, expiresAt: NOW_MS + 31 * 24 * 60 * 60 * 1000 });
     }
     throw new Error(`Unexpected path: ${path}`);
@@ -128,9 +128,9 @@ test('staff challenge exchange stays pure until the session is installed and ref
     const refreshed = await ensureStaffWalletSession(true);
     assert.equal(refreshed?.expiresAt, NOW_MS + 31 * 24 * 60 * 60 * 1000);
     assert.deepEqual(calls.map(({ path }) => path), [
-      '/staff/auth/challenge',
-      '/staff/auth/session',
-      '/staff/auth/refresh',
+      '/api/staff/auth/challenge',
+      '/api/staff/auth/session',
+      '/api/staff/auth/refresh',
     ]);
     assert.equal(calls[2].authorization, `Bearer ${TOKEN}`);
   } finally {

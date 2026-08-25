@@ -11,6 +11,11 @@ const forbidden = [
   'api.mainnet-beta.solana.com',
   'api.devnet.solana.com',
   'api.testnet.solana.com',
+  'signInAnonymously',
+  'identitytoolkit.googleapis.com',
+  'mons-shop.firebaseapp.com',
+  'VITE_FIREBASE_API_KEY',
+  'AIzaSyA3NTv_zfVYMB2VNORxbKg3rJUsiMXIhko',
 ];
 
 function listFiles(directory: string): string[] {
@@ -29,5 +34,5 @@ if (violations.length) {
   violations.forEach(({ path, value }) => console.error(`[browser-bundle] Found ${value} in ${path}`));
   process.exitCode = 1;
 } else {
-  console.log('[browser-bundle] No direct Helius credentials/endpoints or Solana public RPC hosts found.');
+  console.log('[browser-bundle] No direct Helius credentials/endpoints, Solana public RPC hosts, or Firebase Auth runtime found.');
 }

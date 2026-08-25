@@ -220,6 +220,7 @@ export type StripeCheckoutFlowDeps<
   txSendTimeoutMs: number;
   txConfirmTimeoutMs: number;
   signal?: AbortSignal;
+  resolveWalletOwner?: (authSubject: string) => Promise<string | null>;
   countPackStatus?: StripeCheckoutPackStatusCounter<Runtime>;
   repairPackStatus?: StripeCheckoutPackStatusRepair<Runtime>;
   logPackStatusError?: (entry: Record<string, unknown>) => void;
@@ -1331,6 +1332,9 @@ async function fulfillStripeCheckoutSession<
   }
   const metadataId = record.firstMetadataId;
   const metadataIds = Array.from({ length: checkout.quantity }, (_, index) => metadataId + index);
+  const walletOwner = checkout.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_WALLET || !deps.resolveWalletOwner
+    ? null
+    : await deps.resolveWalletOwner(checkout.firebaseUid || checkout.uid);
 
   const order = await createOrGetStripeOffchainDeliveryOrder({
     db,
@@ -1338,8 +1342,8 @@ async function fulfillStripeCheckoutSession<
     order: {
       dropId,
       orderHashHex,
-      owner: checkout.owner,
-      ownerKind: checkout.ownerKind,
+      owner: walletOwner || checkout.owner,
+      ownerKind: walletOwner ? STRIPE_CHECKOUT_OWNER_KIND_WALLET : checkout.ownerKind,
       ...(checkout.firebaseUid ? { firebaseUid: checkout.firebaseUid } : {}),
       receiptOwner: receiptOwner.toBase58(),
       metadataId,

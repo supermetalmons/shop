@@ -64,10 +64,7 @@ import {
   type ReceiptTransferRateLimitD1Database,
   type ReceiptTransferRateLimitBucket,
 } from './receiptTransferRateLimit.js';
-import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import { requestIdentitySubject, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { RequestIdentityError, requestIdentitySubject, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   ProfileReadError,
   cancelResponseBody,
@@ -1082,6 +1079,8 @@ export async function handleReceiptTransferPrepare(
       trackedFetch,
       controller.signal,
       dependencies.nowMs(),
+      request,
+      env.OPS_DB,
     );
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
     if (!apiKey || typeof env.OPS_DB?.prepare !== 'function' || typeof env.OPS_DB.batch !== 'function') {
@@ -1114,7 +1113,7 @@ export async function handleReceiptTransferPrepare(
       if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
         authOutcome = 'rejected';
       }
-    } else if (error instanceof FirebaseIdTokenError) {
+    } else if (error instanceof RequestIdentityError) {
       transferError = error.kind === 'invalid-token'
         ? new ReceiptTransferError('unauthenticated', 'Authentication is required.')
         : error.kind === 'provider-timeout'

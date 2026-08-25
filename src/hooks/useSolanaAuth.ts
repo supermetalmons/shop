@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { onAuthStateChanged, signOut as firebaseSignOut } from 'firebase/auth';
-import { auth } from '../lib/firebase';
 import {
   ensureAuthenticated,
-  authenticatedUserToken,
   loadProfileStateFromServer,
   reconcileProfileState,
   solanaAuth,
@@ -31,12 +28,17 @@ import {
   type StaffWalletChallenge,
   type StaffWalletSession,
 } from '../lib/staffWalletSession';
+import {
+  currentAnonymousSubject,
+  logoutAnonymousSession,
+  subscribeAnonymousSession,
+} from '../lib/anonymousSession';
 
 export type SolanaAuthState = {
   profile: Profile | null;
   shipments: DeliveryOrderSummary[];
   sessionWallet: string | null;
-  token: string | null;
+  authenticated: boolean;
   loading: boolean;
   profileReady: boolean;
   shipmentsReady: boolean;
@@ -57,7 +59,6 @@ export type SolanaAuthRuntime = {
   currentAuthSubject: () => string | null;
   subscribeAuthSubject: (listener: (authSubject: string | null) => void) => () => void;
   ensureAuthenticated: () => Promise<string>;
-  getIdToken: () => Promise<string | null>;
   loadProfileState: () => Promise<GetProfileStateResponse>;
   reconcileProfileState: (options?: ReconcileProfileStateRequest) => Promise<ReconcileProfileStateResponse>;
   authenticateWallet: (wallet: string, message: string, signature: Uint8Array) => Promise<{ wallet: string }>;
@@ -80,7 +81,6 @@ export type SolanaAuthRuntime = {
 
 type SignInResult = {
   wallet: string;
-  token: string;
 };
 
 type SignInAttempt = {
@@ -116,7 +116,7 @@ const EMPTY_AUTH_STATE: SolanaAuthState = {
   profile: null,
   shipments: [],
   sessionWallet: null,
-  token: null,
+  authenticated: false,
   loading: false,
   profileReady: false,
   shipmentsReady: false,
@@ -141,28 +141,27 @@ function subscribeBrowserRefreshEvents(listener: () => void): () => void {
 }
 
 const DEFAULT_RUNTIME: SolanaAuthRuntime = {
-  currentAuthSubject: () => readStaffWalletSession()?.wallet || auth?.currentUser?.uid || null,
+  currentAuthSubject: () => readStaffWalletSession()?.wallet || currentAnonymousSubject(),
   subscribeAuthSubject: (listener) => {
-    const emit = () => listener(readStaffWalletSession()?.wallet || auth?.currentUser?.uid || null);
+    const emit = () => listener(readStaffWalletSession()?.wallet || currentAnonymousSubject());
     const unsubscribeStaff = subscribeStaffWalletSession(emit);
-    const unsubscribeFirebase = auth ? onAuthStateChanged(auth, emit) : () => {};
+    const unsubscribeAnonymous = subscribeAnonymousSession(emit);
     return () => {
       unsubscribeStaff();
-      unsubscribeFirebase();
+      unsubscribeAnonymous();
     };
   },
   ensureAuthenticated,
-  getIdToken: async () => authenticatedUserToken(false),
   loadProfileState: loadProfileStateFromServer,
   reconcileProfileState,
   authenticateWallet: solanaAuth,
   signOut: async () => {
     const staffSession = readStaffWalletSession();
     if (staffSession) {
-      if (auth) await firebaseSignOut(auth).catch(() => undefined);
+      await logoutAnonymousSession().catch(() => undefined);
       await logoutStaffWalletSession(staffSession);
-    } else if (auth) {
-      await firebaseSignOut(auth);
+    } else {
+      await logoutAnonymousSession();
     }
   },
   subscribeRefreshEvents: subscribeBrowserRefreshEvents,
@@ -276,7 +275,7 @@ export function useSolanaAuthWithRuntime(
     setState({ ...EMPTY_AUTH_STATE, loading });
   }, []);
 
-  const activateOwner = useCallback((wallet: string, token: string, uid: string) => {
+  const activateOwner = useCallback((wallet: string, uid: string) => {
     const previousWallet = sessionWalletRef.current;
     sessionWalletRef.current = wallet;
     sessionSubjectRef.current = uid;
@@ -284,13 +283,13 @@ export function useSolanaAuthWithRuntime(
       ownerGenerationRef.current += 1;
       deliveryRecoveryRequestGenerationRef.current = 0;
       deliveryRecoveryAppliedGenerationRef.current = 0;
-      setState({ ...EMPTY_AUTH_STATE, sessionWallet: wallet, token });
+      setState({ ...EMPTY_AUTH_STATE, sessionWallet: wallet, authenticated: true });
       return;
     }
     setState((current) =>
       current.sessionWallet === wallet
-        ? { ...current, token, loading: false }
-        : { ...EMPTY_AUTH_STATE, sessionWallet: wallet, token },
+        ? { ...current, authenticated: true, loading: false }
+        : { ...EMPTY_AUTH_STATE, sessionWallet: wallet, authenticated: true },
     );
   }, []);
 
@@ -324,7 +323,7 @@ export function useSolanaAuthWithRuntime(
     [clearMismatchSignOutTimer, deactivateOwner, runtime],
   );
 
-  const applyProfileState = useCallback((response: GetProfileStateResponse, token: string, uid: string) => {
+  const applyProfileState = useCallback((response: GetProfileStateResponse, uid: string) => {
     const wallet = response.sessionWallet;
     if (!wallet) {
       deactivateOwner(false);
@@ -354,14 +353,14 @@ export function useSolanaAuthWithRuntime(
     setState((current) => {
       const base = current.sessionWallet === wallet
         ? current
-        : { ...EMPTY_AUTH_STATE, sessionWallet: wallet, token };
+        : { ...EMPTY_AUTH_STATE, sessionWallet: wallet, authenticated: true };
       const nextShipments = response.shipments?.status === 'ready'
         ? shipmentsInDisplayOrder(response.shipments.value)
         : base.shipments;
       const next: SolanaAuthState = {
         ...base,
         sessionWallet: wallet,
-        token,
+        authenticated: true,
         loading: false,
         profile: response.profile?.status === 'ready' ? response.profile.value : base.profile,
         profileReady: response.profile?.status === 'ready' ? true : base.profileReady,
@@ -372,7 +371,7 @@ export function useSolanaAuthWithRuntime(
       };
       if (
         current.sessionWallet === next.sessionWallet &&
-        current.token === next.token &&
+        current.authenticated === next.authenticated &&
         current.loading === next.loading &&
         current.profile === next.profile &&
         current.profileReady === next.profileReady &&
@@ -406,9 +405,8 @@ export function useSolanaAuthWithRuntime(
         const uid = await runtime.ensureAuthenticated();
         if (!isCurrent() || runtime.currentAuthSubject() !== uid) return true;
         const response = await runtime.loadProfileState();
-        const token = await runtime.getIdToken();
-        if (!isCurrent() || runtime.currentAuthSubject() !== uid || !token) return true;
-        return applyProfileState(response, token, uid);
+        if (!isCurrent() || runtime.currentAuthSubject() !== uid) return true;
+        return applyProfileState(response, uid);
       } catch (refreshError) {
         if (!isCurrent()) return true;
         if (errorCode(refreshError) === 'unauthenticated') {
@@ -683,7 +681,6 @@ export function useSolanaAuthWithRuntime(
       try {
         const staffSignIn = Boolean(runtime.isStaffWallet?.(wallet));
         let uid: string;
-        let token: string;
         let session: { wallet: string };
         if (staffSignIn) {
           if (
@@ -713,7 +710,6 @@ export function useSolanaAuthWithRuntime(
             throw authChangedError;
           }
           uid = wallet;
-          token = staffSession.token;
           session = staffSession;
           ensureAttemptCurrent();
         } else {
@@ -751,16 +747,14 @@ export function useSolanaAuthWithRuntime(
               },
             },
           );
-          token = await runtime.getIdToken() || '';
           ensureAttemptCurrent();
         }
         if (session.wallet !== wallet) throw new Error('Wallet session response did not match the connected wallet');
-        if (!token) throw new Error('Missing authentication token');
         setError(null);
-        activateOwner(wallet, token, uid);
+        activateOwner(wallet, uid);
         setSessionResolution('settled');
         await refreshProfileState().catch(() => undefined);
-        resolveAttempt({ wallet, token });
+        resolveAttempt({ wallet });
       } catch (signInError) {
         console.error(signInError);
         if (attemptIsCurrent() && isInvalidSignatureError(signInError)) lastSignedRef.current = null;

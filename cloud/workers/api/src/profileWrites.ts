@@ -91,9 +91,7 @@ import type {
   VoidFulfillmentShipStationLabelResponse,
 } from '../../../../shared/contracts.js';
 import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import {
+  RequestIdentityError,
   isStaffOnlyApiPath,
   isStaffRequestIdentity,
   resolveRequestWallet,
@@ -186,12 +184,7 @@ type ProfileWriteDependencies = {
     signal: AbortSignal,
   ) => Promise<ProfileAddress>;
   timeoutMs: number;
-  verifyIdToken: (
-    authorization: string | null,
-    providerFetch: ProfileProviderFetch,
-    signal: AbortSignal,
-    nowMs?: number,
-  ) => Promise<RequestIdentity>;
+  verifyIdToken: typeof verifyRequestIdentity;
   warn: (entry: Record<string, unknown>) => void;
 };
 
@@ -3269,6 +3262,8 @@ export async function handleProfileWriteRequest(
       trackedFetch,
       controller.signal,
       dependencies.nowMs(),
+      request,
+      env.OPS_DB,
     );
     if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
       throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
@@ -3377,7 +3372,7 @@ export async function handleProfileWriteRequest(
       ) {
         authOutcome = 'rejected';
       }
-    } else if (error instanceof FirebaseIdTokenError) {
+    } else if (error instanceof RequestIdentityError) {
       if (error.kind === 'invalid-token') {
         profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
         authOutcome = 'rejected';

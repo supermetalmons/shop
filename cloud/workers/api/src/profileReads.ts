@@ -36,9 +36,7 @@ import {
 import { parseCanonicalPositiveInteger } from '../../../../shared/positiveInteger.js';
 import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
 import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import {
+  RequestIdentityError,
   isStaffOnlyApiPath,
   isStaffRequestIdentity,
   resolveRequestWallet,
@@ -91,7 +89,7 @@ export const PROFILE_READ_PATHS = new Set([
   FULFILLMENT_MANUAL_REVIEW_PATH,
 ]);
 
-const PROFILE_CORS_ALLOW_HEADERS = 'Content-Type, Authorization';
+const PROFILE_CORS_ALLOW_HEADERS = 'Content-Type, Authorization, X-Mons-CSRF';
 const PROFILE_CORS_ALLOW_METHODS = 'POST, OPTIONS';
 
 const MAX_PROFILE_REQUEST_BYTES = 4096;
@@ -252,12 +250,7 @@ type ProfileReadDependencies = {
     signal: AbortSignal,
   ) => ReturnType<typeof resolveD1WalletSession>;
   timeoutMs: number;
-  verifyIdToken: (
-    authorization: string | null,
-    providerFetch: ProfileProviderFetch,
-    signal: AbortSignal,
-    nowMs?: number,
-  ) => Promise<RequestIdentity>;
+  verifyIdToken: typeof verifyRequestIdentity;
 };
 
 type ProfileReadEnv = Pick<Env, 'FIRESTORE_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
@@ -950,6 +943,8 @@ export async function handleProfileReadRequest(
       trackedFetch,
       controller.signal,
       dependencies.nowMs(),
+      request,
+      env.OPS_DB,
     );
     if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
       throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
@@ -971,7 +966,7 @@ export async function handleProfileReadRequest(
       signal: controller.signal,
     };
     if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
-      const owner = identity.kind === 'staff-wallet' ? identity.wallet : `firebase:${identity.uid}`;
+      const owner = identity.kind === 'staff-wallet' ? identity.wallet : `firebase:${identity.authSubject}`;
       const orders = await loadDeliveryHistory({ ...common, owner });
       return { response: jsonResponse({ orders }, 200), metrics, authOutcome: 'accepted' };
     }
@@ -1087,7 +1082,7 @@ export async function handleProfileReadRequest(
       if (error.code === 'unauthenticated' || error.code === 'permission-denied' || error.code === 'invalid-argument') {
         authOutcome = 'rejected';
       }
-    } else if (error instanceof FirebaseIdTokenError) {
+    } else if (error instanceof RequestIdentityError) {
       if (error.kind === 'invalid-token') {
         profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
         authOutcome = 'rejected';

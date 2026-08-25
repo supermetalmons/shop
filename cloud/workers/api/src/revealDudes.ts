@@ -59,10 +59,7 @@ import {
   isTransientShopRpcError,
 } from '../../../../shared/solanaRpcProxy.js';
 import { transformShopInventoryItem } from '../../../../shared/shopDomain.js';
-import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import { resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENTS_BASE_URL,
@@ -189,12 +186,7 @@ type RevealDudesDependencies = {
   sendAndConfirmTransaction: typeof sendAndConfirmTransaction;
   sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   validateOnchainConfig: typeof validateOnchainConfig;
-  verifyIdToken: (
-    authorization: string | null,
-    providerFetch: ProfileProviderFetch,
-    signal: AbortSignal,
-    nowMs?: number,
-  ) => Promise<RequestIdentity>;
+  verifyIdToken: typeof verifyRequestIdentity;
 };
 
 type RevealWaitUntil = (promise: Promise<unknown>) => void;
@@ -1957,9 +1949,11 @@ export async function handleRevealDudes(
         meteredFetch,
         controller.signal,
         dependencies.nowMs(),
+        request,
+        env.OPS_DB,
       );
     } catch (error) {
-      if (error instanceof FirebaseIdTokenError) {
+      if (error instanceof RequestIdentityError) {
         authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
         throw new RevealDudesError(
           error.kind === 'invalid-token'

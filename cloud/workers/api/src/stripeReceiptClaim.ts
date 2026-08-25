@@ -67,10 +67,7 @@ import type {
   StripeReceiptClaimRequest,
   StripeReceiptClaimResult,
 } from '../../../../shared/contracts.js';
-import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import { verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { RequestIdentityError, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   FirestoreWriteConflict,
   ProfileReadError,
@@ -107,7 +104,8 @@ const requestSchema = z.object({
   recipient: z.string().min(32).max(64),
 }).strict();
 
-type ClaimEnv = Pick<Env, 'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'>;
+type ClaimEnv = Pick<Env, 'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'> &
+  Partial<Pick<Env, 'OPS_DB'>>;
 type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
 type ProviderContext = {
@@ -2035,6 +2033,8 @@ export async function handleStripeReceiptClaim(
       trackedFetch,
       controller.signal,
       dependencies.nowMs(),
+      request,
+      env.OPS_DB,
     );
     const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
@@ -2074,7 +2074,7 @@ export async function handleStripeReceiptClaim(
         catch { void cleanup; }
       }
       normalized = new StripeReceiptClaimError('deadline-exceeded', 'Receipt claim request timed out.');
-    } else if (error instanceof FirebaseIdTokenError) {
+    } else if (error instanceof RequestIdentityError) {
       normalized = new StripeReceiptClaimError(
         error.kind === 'invalid-token' ? 'unauthenticated' : error.kind === 'provider-timeout' ? 'deadline-exceeded' : 'unavailable',
         error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',

@@ -216,7 +216,7 @@ function dependencies(
     },
     timeoutMs,
     upsertProfile: async () => undefined,
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: UID }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: UID, source: 'firebase' as const }),
     ...overrides,
   };
 }
@@ -537,7 +537,7 @@ test('profile lifecycle responses never expose credentials or bearer tokens', as
     PROFILE_RECONCILE_PATH,
     {
       ...dependencies(new FirestoreHarness()),
-      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: UID }),
+      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: UID, source: 'firebase' as const }),
     },
   );
   const body = JSON.stringify(await response.response.json());

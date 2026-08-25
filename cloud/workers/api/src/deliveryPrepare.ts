@@ -63,10 +63,7 @@ import {
   calculateDeliveryLamports,
   normalizeDeliveryUnitsPerBox,
 } from '../../../../shared/shipping.js';
-import {
-  FirebaseIdTokenError,
-} from './firebaseIdToken.js';
-import { resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENTS_BASE_URL,
@@ -1488,6 +1485,8 @@ export async function handleDeliveryPrepare(
       trackedFetch,
       controller.signal,
       dependencies.nowMs(),
+      request,
+      env.OPS_DB,
     );
     const body = await readRequestBody(request, controller.signal);
     const requestedDropId = normalizeDropId(body.dropId);
@@ -1530,7 +1529,7 @@ export async function handleDeliveryPrepare(
       if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
         authOutcome = 'rejected';
       }
-    } else if (error instanceof FirebaseIdTokenError) {
+    } else if (error instanceof RequestIdentityError) {
       deliveryError = error.kind === 'invalid-token'
         ? new DeliveryPrepareError('unauthenticated', 'Authentication is required.')
         : error.kind === 'provider-timeout'

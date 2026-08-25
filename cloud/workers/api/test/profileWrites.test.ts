@@ -24,7 +24,7 @@ import type {
   GoogleAccessTokenProvider,
   ProfileProviderFetch,
 } from '../src/firestoreRest.ts';
-import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const OTHER = 'So11111111111111111111111111111111111111112';
@@ -300,7 +300,7 @@ test('address route uses D1 wallet sessions without requesting Firestore authSes
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
-      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: UID }),
+      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: UID, source: 'firebase' as const }),
     }),
   );
   assert.equal(result.response.status, 200);
@@ -4488,7 +4488,7 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
     PROFILE_ADDRESSES_PATH,
     dependencies(neverFetch, {
       verifyIdToken: async () => {
-        throw new FirebaseIdTokenError('invalid-token');
+        throw new RequestIdentityError('invalid-token');
       },
     }),
   );
@@ -4504,7 +4504,7 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
     env,
     FULFILLMENT_ORDER_STATUS_PATH,
     dependencies(neverFetch, {
-      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: UID }),
+      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: UID, source: 'firebase' as const }),
     }),
   );
   assert.equal(firebaseOnlyStaffWrite.response.status, 401);

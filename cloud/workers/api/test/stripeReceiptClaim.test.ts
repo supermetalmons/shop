@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Keypair } from '@solana/web3.js';
-import { FirebaseIdTokenError } from '../src/firebaseIdToken.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { FIRESTORE_DOCUMENT_NAME_PREFIX } from '../src/firestoreRest.ts';
 import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
 import {
@@ -45,7 +45,7 @@ function env(overrides: Partial<Record<'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SER
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
     providerFetch: async () => { throw new Error('unexpected provider fetch'); },
     nowMs: () => 1_700_000_000_000,
     timeoutMs: 1_000,
@@ -222,7 +222,7 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
     request(),
     env(),
     () => undefined,
-    dependencies({ verifyIdToken: async () => { throw new FirebaseIdTokenError('invalid-token'); } }),
+    dependencies({ verifyIdToken: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(unauthenticated.response.status, 401);
   assert.deepEqual(await unauthenticated.response.json(), {

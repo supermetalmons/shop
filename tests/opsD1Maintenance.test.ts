@@ -35,6 +35,7 @@ const migrationSql = [
   '0009_reveal_submissions_d1_only.sql',
   '0010_reveal_submissions_baseline_index.sql',
   '0011_staff_wallet_auth.sql',
+  '0012_anonymous_auth.sql',
 ]
   .map((name) => readFileSync(
     new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
@@ -79,6 +80,12 @@ function integrityInput(
   const db = database();
   try {
     return {
+      anonymousAuthControl: queryRows(db, 'SELECT * FROM anonymous_auth_control'),
+      anonymousAuthControlColumns: queryRows(db, 'PRAGMA table_info(anonymous_auth_control)'),
+      anonymousAuthSessionColumns: queryRows(db, 'PRAGMA table_info(anonymous_auth_sessions)'),
+      anonymousAuthSessionCounts: queryRows(db, 'SELECT COUNT(*) AS anonymous_auth_session_count FROM anonymous_auth_sessions'),
+      anonymousAuthSessionExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)'),
+      anonymousAuthSessionSubjectIndexColumns: queryRows(db, 'PRAGMA index_info(anonymous_auth_sessions_auth_subject)'),
       controls: queryRows(db, 'SELECT * FROM worker_controls ORDER BY control_key'),
       expiryIndexColumns: queryRows(db, 'PRAGMA index_info(rate_limit_buckets_expires_at_ms)'),
       foreignKeyCheck: queryRows(db, 'PRAGMA foreign_key_check'),
@@ -94,6 +101,7 @@ function integrityInput(
         { name: '0009_reveal_submissions_d1_only.sql' },
         { name: '0010_reveal_submissions_baseline_index.sql' },
         { name: '0011_staff_wallet_auth.sql' },
+        { name: '0012_anonymous_auth.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
@@ -125,7 +133,7 @@ function integrityInput(
         FROM pragma_table_list
         WHERE
           schema = 'main' AND
-          name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
+          name IN ('anonymous_auth_control', 'anonymous_auth_sessions', 'profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
         ORDER BY name`),
       walletSessionColumns: queryRows(db, 'PRAGMA table_info(wallet_sessions)'),
       walletSessionCounts: queryRows(db, 'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions'),
@@ -149,9 +157,11 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
     assert.deepEqual(controls, [controlRow()]);
     const tables = queryRows(
       db,
-      "SELECT name, strict FROM pragma_table_list WHERE name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'worker_controls', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'wallet_session_storage_control') ORDER BY name",
+      "SELECT name, strict FROM pragma_table_list WHERE name IN ('anonymous_auth_control', 'anonymous_auth_sessions', 'profile_addresses', 'profile_storage_control', 'profiles', 'worker_controls', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'wallet_session_storage_control') ORDER BY name",
     );
     assert.deepEqual(tables, [
+      { name: 'anonymous_auth_control', strict: 1 },
+      { name: 'anonymous_auth_sessions', strict: 1 },
       { name: 'profile_addresses', strict: 1 },
       { name: 'profile_storage_control', strict: 1 },
       { name: 'profiles', strict: 1 },
@@ -171,75 +181,7 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
       ),
       [{ name: 'rate_limit_buckets_expires_at_ms' }],
     );
-    assert.doesNotThrow(() =>
-      assertOpsD1Integrity({
-        controls,
-        expiryIndexColumns: queryRows(
-          db,
-          'PRAGMA index_info(rate_limit_buckets_expires_at_ms)',
-        ),
-        foreignKeyCheck: queryRows(db, 'PRAGMA foreign_key_check'),
-        migrations: [
-          { name: '0001_ops_state.sql' },
-          { name: '0002_profiles.sql' },
-          { name: '0003_profiles_d1_final.sql' },
-          { name: '0004_profile_integrity.sql' },
-          { name: '0005_profile_write_safety.sql' },
-          { name: '0006_wallet_sessions.sql' },
-          { name: '0007_wallet_sessions_d1_only.sql' },
-          { name: '0008_reveal_submissions.sql' },
-          { name: '0009_reveal_submissions_d1_only.sql' },
-          { name: '0010_reveal_submissions_baseline_index.sql' },
-          { name: '0011_staff_wallet_auth.sql' },
-        ],
-        profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
-        profileCounts: queryRows(db, `SELECT
-          (SELECT COUNT(*) FROM profiles) AS profile_count,
-          (SELECT COUNT(*) FROM profile_addresses) AS profile_address_count`),
-        profileColumns: queryRows(db, 'PRAGMA table_info(profiles)'),
-        profileStorageControl: queryRows(db, 'SELECT * FROM profile_storage_control'),
-        profileStorageControlColumns: queryRows(db, 'PRAGMA table_info(profile_storage_control)'),
-        quickCheck: queryRows(db, 'PRAGMA quick_check'),
-        rateLimitBucketColumns: queryRows(
-          db,
-          'PRAGMA table_info(rate_limit_buckets)',
-        ),
-        revealSubmissionColumns: queryRows(db, 'PRAGMA table_info(reveal_submissions)'),
-        revealSubmissionBaselineIndexColumns: queryRows(
-          db,
-          'PRAGMA index_info(reveal_submissions_status_created_at_ms)',
-        ),
-        revealSubmissionCounts: queryRows(db, `SELECT
-          (SELECT COUNT(*) FROM reveal_submissions) AS reveal_submission_count,
-          (SELECT COUNT(*)
-            FROM reveal_submissions AS submission
-            JOIN reveal_submission_storage_control AS control ON control.singleton = 1
-            WHERE
-              submission.status = 'confirmed' AND
-              submission.created_at_ms <= control.cutover_at_ms
-          ) AS reveal_submission_cutover_count`),
-        revealSubmissionStorageControl: queryRows(db, 'SELECT * FROM reveal_submission_storage_control'),
-        revealSubmissionStorageControlColumns: queryRows(db, 'PRAGMA table_info(reveal_submission_storage_control)'),
-        schema: queryRows(db, applicationSchemaQuery),
-        tableList: queryRows(
-          db,
-          `SELECT name, type, strict
-          FROM pragma_table_list
-          WHERE
-            schema = 'main' AND
-            name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
-          ORDER BY name`,
-        ),
-        walletSessionColumns: queryRows(db, 'PRAGMA table_info(wallet_sessions)'),
-        walletSessionCounts: queryRows(db, 'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions'),
-        walletSessionStorageControl: queryRows(db, 'SELECT * FROM wallet_session_storage_control'),
-        walletSessionStorageControlColumns: queryRows(db, 'PRAGMA table_info(wallet_session_storage_control)'),
-        workerControlColumns: queryRows(
-          db,
-          'PRAGMA table_info(worker_controls)',
-        ),
-      }),
-    );
+    assert.doesNotThrow(() => assertOpsD1Integrity(integrityInput()));
   } finally {
     db.close();
   }
@@ -376,6 +318,19 @@ test('ops migration enforces control and rate-limit invariants', () => {
     assert.throws(() => db.exec(`UPDATE profile_addresses SET encrypted = 'changed'`));
     assert.throws(() => db.exec(`DELETE FROM profile_addresses`));
     assert.throws(() => db.exec(`DELETE FROM profiles`));
+    db.exec(`UPDATE anonymous_auth_control SET
+      firebase_fallback_enabled = 0,
+      revision = revision + 1,
+      updated_at_ms = 1,
+      firebase_disabled_at_ms = 1
+      WHERE singleton = 1`);
+    assert.throws(() => db.exec(`UPDATE anonymous_auth_control SET
+      firebase_fallback_enabled = 1,
+      revision = revision + 1,
+      updated_at_ms = 2,
+      firebase_disabled_at_ms = NULL
+      WHERE singleton = 1`));
+    assert.throws(() => db.exec('DELETE FROM anonymous_auth_control'));
   } finally {
     db.close();
   }
@@ -385,6 +340,14 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
   const healthy = integrityInput();
   const report = assertOpsD1Integrity(healthy);
   assert.deepEqual(report, {
+    anonymousAuth: {
+      firebaseFallbackEnabled: true,
+      revision: 1,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      firebaseDisabledAtMs: null,
+    },
+    anonymousAuthSessionCount: 0,
     profileAddressCount: 0,
     profileCount: 0,
     profileStorageSource: 'd1',

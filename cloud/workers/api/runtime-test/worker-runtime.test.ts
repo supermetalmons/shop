@@ -80,17 +80,74 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     });
     assert.equal(profilePreflight.status, 204);
     assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-    assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+    assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
-    for (const pathname of ['/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/boxes/reveal', '/staff/auth/challenge', '/staff/auth/session', '/staff/auth/refresh', '/staff/auth/logout']) {
+    for (const pathname of ['/auth/anonymous/session', '/auth/anonymous/logout', '/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/boxes/reveal', '/staff/auth/challenge', '/staff/auth/session', '/staff/auth/refresh', '/staff/auth/logout']) {
       const lifecyclePreflight = await worker.fetch(`https://api.mons.shop${pathname}`, {
         method: 'OPTIONS',
         headers: { Origin: 'https://mons.shop' },
       });
       assert.equal(lifecyclePreflight.status, 204);
       assert.equal(lifecyclePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-      assert.equal(lifecyclePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+      assert.equal(lifecyclePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
     }
+
+    const anonymousHeaders = {
+      'Content-Type': 'application/json',
+      Origin: 'http://localhost:5173',
+      'X-Mons-CSRF': '1',
+    };
+    const createdAnonymous = await worker.fetch('https://api.mons.shop/auth/anonymous/session', {
+      method: 'POST',
+      headers: anonymousHeaders,
+      body: '{}',
+    });
+    assert.equal(createdAnonymous.status, 201);
+    const anonymousCookie = createdAnonymous.headers.get('set-cookie') || '';
+    assert.match(anonymousCookie, /^mons_anon_dev_v1=mons_anon_v1\./);
+    assert.match(anonymousCookie, /HttpOnly/);
+    assert.match(anonymousCookie, /SameSite=Strict/);
+    assert.doesNotMatch(anonymousCookie, /Secure/);
+    const anonymousSession = await createdAnonymous.json() as { subject: string; refreshedAt: number; expiresAt: number };
+    assert.match(anonymousSession.subject, /^anon:/);
+    const anonymousEnv = await worker.getEnv();
+    const storedAnonymous = await anonymousEnv.OPS_DB.prepare(`SELECT secret_hash, auth_subject
+      FROM anonymous_auth_sessions`).first<{ secret_hash: string; auth_subject: string }>();
+    assert.equal(storedAnonymous?.auth_subject, anonymousSession.subject);
+    assert.match(storedAnonymous?.secret_hash || '', /^[0-9a-f]{64}$/);
+    assert.equal(anonymousCookie.includes(storedAnonymous?.secret_hash || 'missing'), false);
+
+    const cookieHeader = anonymousCookie.split(';', 1)[0];
+    const restoredAnonymous = await worker.fetch('https://api.mons.shop/auth/anonymous/session', {
+      method: 'POST',
+      headers: { ...anonymousHeaders, Cookie: cookieHeader },
+      body: '{}',
+    });
+    assert.equal(restoredAnonymous.status, 200);
+    assert.equal(((await restoredAnonymous.json()) as { subject: string }).subject, anonymousSession.subject);
+
+    const cookieProfile = await worker.fetch('https://api.mons.shop/profile/state', {
+      method: 'POST',
+      headers: { ...anonymousHeaders, Cookie: cookieHeader },
+      body: '{}',
+    });
+    assert.equal(cookieProfile.status, 200);
+    assert.equal(((await cookieProfile.json()) as { sessionWallet: string | null }).sessionWallet, null);
+
+    const missingCsrf = await worker.fetch('https://api.mons.shop/profile/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:5173', Cookie: cookieHeader },
+      body: '{}',
+    });
+    assert.equal(missingCsrf.status, 401);
+
+    const loggedOut = await worker.fetch('https://api.mons.shop/auth/anonymous/logout', {
+      method: 'POST',
+      headers: { ...anonymousHeaders, Cookie: cookieHeader },
+      body: '{}',
+    });
+    assert.equal(loggedOut.status, 200);
+    assert.match(loggedOut.headers.get('set-cookie') || '', /Max-Age=0/);
 
     const staffChallenge = await worker.fetch('https://api.mons.shop/staff/auth/challenge', {
       method: 'POST',
@@ -160,7 +217,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     });
     assert.equal(checkoutPreflight.status, 204);
     assert.equal(checkoutPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-    assert.equal(checkoutPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+    assert.equal(checkoutPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
     const unauthenticatedCheckout = await worker.fetch('https://api.mons.shop/checkout/session', {
       method: 'POST',

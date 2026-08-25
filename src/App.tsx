@@ -1577,7 +1577,7 @@ function App({
     profile,
     shipments: profileShipments,
     sessionWallet,
-    token,
+    authenticated,
     loading: authLoading,
     error: authError,
     profileError,
@@ -1597,11 +1597,11 @@ function App({
   const [stripeCheckoutInventoryRecovery, setStripeCheckoutInventoryRecovery] =
     useState<StripeCheckoutInventoryRecovery | null>(null);
   const [adminViewedOwner, setAdminViewedOwner] = useState<string | null>(null);
-  const authenticatedWallet = token && sessionWallet ? sessionWallet : undefined;
+  const authenticatedWallet = authenticated && sessionWallet ? sessionWallet : undefined;
   const hasAuthenticatedAccount = Boolean(authenticatedWallet);
   const localAccountWallet = connectedWallet || authenticatedWallet;
   const isAdminWallet = Boolean(authenticatedWallet && ADMIN_WALLETS.has(authenticatedWallet));
-  const isSignedInWallet = Boolean(token && connectedWallet && sessionWallet === connectedWallet);
+  const isSignedInWallet = Boolean(authenticated && connectedWallet && sessionWallet === connectedWallet);
   const canUseAdminMenu = Boolean(
     authenticatedWallet && hasFulfillmentAppAccess(authenticatedWallet),
   );
@@ -1613,7 +1613,7 @@ function App({
   const includeDevnetInventory = hasDevnetInventoryAccess(connectedWallet) || hasDevnetInventoryAccess(owner);
   const isViewerMode = Boolean(owner && authenticatedWallet && owner !== authenticatedWallet);
   const canReadOwnProfile = Boolean(
-    token && owner && sessionWallet === owner && !isViewerMode,
+    authenticated && owner && sessionWallet === owner && !isViewerMode,
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ownerPickerOpened, setOwnerPickerOpened] = useState(false);
@@ -2725,7 +2725,7 @@ function App({
       return false;
     }
     const readiness = walletSessionSignInReadiness({
-      hasAuthenticatedSession: Boolean((isSignedInWallet && token) || hasCurrentSession),
+      hasAuthenticatedSession: Boolean((isSignedInWallet && authenticated) || hasCurrentSession),
       sessionResolution,
       authLoading,
     });

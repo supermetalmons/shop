@@ -55,6 +55,7 @@ function env(options: {
     OPS_DB: options.opsDb || {} as D1Database,
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
+    ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     NOTIFICATION_EMAIL_QUEUE: notificationQueue,
     REVEAL_BACKGROUND_QUEUE: notificationQueue,
     STRIPE_FULFILLMENT_QUEUE: notificationQueue,
@@ -339,7 +340,7 @@ test('profile routes enforce restricted CORS, bearer authentication, and stable 
   }), env(), quietDependencies(fetch));
   assert.equal(allowedPreflight.status, 204);
   assert.equal(allowedPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
   assert.equal(allowedPreflight.headers.get('vary'), 'Origin');
 
   const deniedPreflight = await handleRequest(new Request('https://api.mons.shop/admin/profile', {
@@ -454,7 +455,7 @@ test('checkout route enforces restricted CORS, bearer authentication, methods, a
   });
   assert.equal(allowedPreflight.status, 204);
   assert.equal(allowedPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
   const deniedPreflight = await handleRequest(new Request('https://api.mons.shop/checkout/session', {
     method: 'OPTIONS',
@@ -493,7 +494,7 @@ test('IRL claim route enforces restricted CORS, bearer authentication, methods, 
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request('/claims/irl/prepare', {
@@ -532,7 +533,7 @@ test('Stripe receipt claim route enforces restricted CORS, bearer authentication
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request(pathname, {
@@ -571,7 +572,7 @@ test('receipt transfer route enforces restricted CORS, bearer authentication, me
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request('/receipts/transfer/prepare', {
@@ -619,7 +620,7 @@ test('delivery preparation route enforces restricted CORS, bearer authentication
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request(pathname, body, {
@@ -661,7 +662,7 @@ test('Admin IRL preparation route enforces restricted CORS, bearer authenticatio
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request(pathname, body, {
@@ -705,7 +706,7 @@ test('Admin IRL finalization route enforces restricted CORS, bearer authenticati
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request(pathname, body, {
@@ -749,7 +750,7 @@ test('reveal route enforces restricted CORS, bearer authentication, methods, and
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request(pathname, body, {
@@ -786,7 +787,7 @@ test('profile write routes use restricted CORS, bearer authentication, and stabl
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request('/profile/addresses', {
@@ -1307,7 +1308,7 @@ test('internal notification enqueue rejects signed invalid jobs and surfaces que
   assert.deepEqual(await unavailable.json(), { ok: false, error: 'enqueue-unavailable' });
 });
 
-test('production config has exact staff authentication rate limits', () => {
+test('production config has exact authentication rate limits', () => {
   const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   assert.deepEqual(config.ratelimits, [
     {
@@ -1319,6 +1320,11 @@ test('production config has exact staff authentication rate limits', () => {
       name: 'STAFF_AUTH_SESSION_RATE_LIMITER',
       namespace_id: '1361289553',
       simple: { limit: 30, period: 60 },
+    },
+    {
+      name: 'ANONYMOUS_AUTH_SESSION_RATE_LIMITER',
+      namespace_id: '1874210346',
+      simple: { limit: 20, period: 60 },
     },
   ]);
 });

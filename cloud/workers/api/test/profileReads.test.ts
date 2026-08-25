@@ -91,7 +91,7 @@ function profileDependencies(
     providerFetch,
     resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
     timeoutMs: 500,
-    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: UID }),
+    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: UID, source: 'firebase' as const }),
     ...overrides,
   };
 }
@@ -393,7 +393,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
         return Response.json({ error: 'unexpected' }, { status: 500 });
       }),
       resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'legacy_uid' }),
-      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: OWNER }),
+      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: OWNER, source: 'firebase' as const }),
     },
   );
   assert.deepEqual(await legacy.response.json(), {
@@ -498,7 +498,7 @@ test('shipment route preserves legacy wallet-shaped Firebase UIDs when no sessio
         if (match?.[1]) owners.push(match[1]);
         return Response.json([]);
       }),
-      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: OWNER }),
+      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: OWNER, source: 'firebase' as const }),
     },
   );
   assert.equal(result.response.status, 200);
@@ -512,7 +512,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
     ADMIN_PROFILE_PATH,
     profileDependencies(async () => Response.json([]), {
-      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: UID }),
+      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: UID, source: 'firebase' as const }),
     }),
   );
   assert.equal(firebaseOnly.response.status, 401);

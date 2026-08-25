@@ -81,6 +81,13 @@ export function createViteConfig(
     server: {
       port: 5173,
       allowedHosts: ['.trycloudflare.com'],
+      proxy: {
+        '/api': {
+          target: settings.apiOrigin,
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api(?=\/|$)/, ''),
+        },
+      },
     },
     build: {
       outDir: 'dist',
