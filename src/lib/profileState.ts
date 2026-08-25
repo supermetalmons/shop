@@ -27,16 +27,16 @@ export function stripeProfileRecoveryAfterRefresh(
   return { key: recoveryKey, phase: 'recovered' };
 }
 
-export function firebaseAuthChangeInvalidatesSession(args: {
-  previousUid: string | null;
-  nextUid: string | null;
+export function authSubjectChangeInvalidatesSession(args: {
+  previousSubject: string | null;
+  nextSubject: string | null;
   signInActive: boolean;
-  activeSignInUid: string | null;
+  activeSignInSubject: string | null;
 }): boolean {
-  if (args.previousUid === args.nextUid) return false;
+  if (args.previousSubject === args.nextSubject) return false;
   if (!args.signInActive) return true;
-  if (args.activeSignInUid !== null) return args.nextUid !== args.activeSignInUid;
-  return !(args.previousUid === null && args.nextUid !== null);
+  if (args.activeSignInSubject !== null) return args.nextSubject !== args.activeSignInSubject;
+  return !(args.previousSubject === null && args.nextSubject !== null);
 }
 
 export function profileForAuthorizedView<T>(args: {

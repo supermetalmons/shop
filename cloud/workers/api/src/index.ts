@@ -153,6 +153,20 @@ import {
   isExactStripeCheckoutFulfillmentJobV1,
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import { processStripeCheckoutFulfillmentJob } from './stripeCheckoutFulfillment.js';
+import {
+  STAFF_AUTH_PATHS,
+  cleanupExpiredStaffAuthState,
+  handleStaffAuthRequest,
+  isAllowedStaffAuthOrigin,
+  isStaffSessionAuthorization,
+  verifyStaffSession,
+  type StaffAuthPath,
+} from './staffWalletAuth.js';
+import {
+  internalStaffAuthorization,
+  isInternalStaffAuthorization,
+  isStaffOnlyApiPath,
+} from './requestIdentity.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -229,6 +243,7 @@ const KNOWN_LOG_ROUTES = new Set([
   ADMIN_IRL_REDEEM_PREPARE_PATH,
   ADMIN_IRL_REDEEM_FINALIZE_PATH,
   REVEAL_DUDES_PATH,
+  ...STAFF_AUTH_PATHS,
 ]);
 
 type BackgroundJobProcessors = {
@@ -266,6 +281,19 @@ async function cleanupScheduledOpsState(
       event: 'receipt_transfer_rate_limit_cleanup_backlog',
       deletedCount: result.deletedCount,
     });
+  }
+  const staffAuthCleanup = await cleanupExpiredStaffAuthState(env.OPS_DB, Date.now());
+  if (
+    staffAuthCleanup.challengesDeleted > 0 ||
+    staffAuthCleanup.sessionsDeleted > 0
+  ) {
+    console.log({
+      event: 'staff_auth_cleanup_completed',
+      ...staffAuthCleanup,
+    });
+  }
+  if (staffAuthCleanup.limitReached && staffAuthCleanup.hasMore) {
+    console.error({ event: 'staff_auth_cleanup_backlog', ...staffAuthCleanup });
   }
 }
 
@@ -1570,6 +1598,47 @@ export async function handleRequest(
     expectedAssetResolved: 0,
   };
   const pathname = new URL(request.url).pathname;
+  let staffAuthenticated = false;
+  if (!STAFF_AUTH_PATHS.has(pathname)) {
+    const authorization = request.headers.get('Authorization');
+    if (isStaffSessionAuthorization(authorization)) {
+      try {
+        const staffSession = await verifyStaffSession(authorization, env.OPS_DB);
+        staffAuthenticated = true;
+        const headers = new Headers(request.headers);
+        headers.set('Authorization', internalStaffAuthorization(staffSession.wallet));
+        request = new Request(request, { headers });
+      } catch {
+        console.log({ event: 'staff_auth_request_rejected', route: pathname });
+        return applyProfileCors(request, jsonResponse({
+          ok: false,
+          error: { code: 'unauthenticated', message: 'Authentication is required.' },
+        }, 401));
+      }
+    } else if (isInternalStaffAuthorization(authorization)) {
+      const headers = new Headers(request.headers);
+      headers.delete('Authorization');
+      request = new Request(request, { headers });
+    }
+  }
+  if (request.method !== 'OPTIONS' && isStaffOnlyApiPath(pathname) && !staffAuthenticated) {
+    const durationMs = Math.round(performance.now() - startedAt);
+    dependencies.log({
+      event: 'shop_api_request',
+      route: KNOWN_LOG_ROUTES.has(pathname) ? pathname : 'not-found',
+      method: request.method,
+      status: 401,
+      durationMs,
+      providerDurationMs: 0,
+      upstreamCalls: 0,
+      includeDevnet: false,
+      profileAuthOutcome: 'rejected',
+    });
+    return applyProfileCors(request, jsonResponse({
+      ok: false,
+      error: { code: 'unauthenticated', message: 'Staff wallet authentication is required.' },
+    }, 401));
+  }
   const packStatusDropId = packStatusDropIdFromPathname(pathname);
   const isPackStatusRoute = packStatusDropId !== undefined;
   let includeDevnet = false;
@@ -1612,7 +1681,9 @@ export async function handleRequest(
   const profilePath = PROFILE_READ_PATHS.has(pathname) ? pathname as ProfileReadPath : null;
   const profileWritePath = PROFILE_WRITE_PATHS.has(pathname) ? pathname as ProfileWritePath : null;
   const profileLifecyclePath = PROFILE_LIFECYCLE_PATHS.has(pathname) ? pathname as ProfileLifecyclePath : null;
-  if (request.method === 'OPTIONS' && (
+  if (request.method === 'OPTIONS' && STAFF_AUTH_PATHS.has(pathname)) {
+    response = handleProfileCorsPreflight(request, isAllowedStaffAuthOrigin);
+  } else if (request.method === 'OPTIONS' && (
     profilePath ||
     profileWritePath ||
     profileLifecyclePath ||
@@ -1651,6 +1722,11 @@ export async function handleRequest(
     response = request.method === 'GET'
       ? jsonResponse({ ok: true }, 200)
       : jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET' });
+  } else if (STAFF_AUTH_PATHS.has(pathname)) {
+    response = applyProfileCors(
+      request,
+      await handleStaffAuthRequest(request, env, pathname as StaffAuthPath),
+    );
   } else if (pathname === NOTIFICATION_ENQUEUE_PATH) {
     response = await handleNotificationEnqueue(request, env, { log: dependencies.log });
   } else if (pathname === STRIPE_CHECKOUT_SESSION_PATH) {

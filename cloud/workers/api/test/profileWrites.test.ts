@@ -127,7 +127,7 @@ function dependencies(
       ...(address.email ? { email: address.email } : {}),
     }),
     timeoutMs: 500,
-    verifyIdToken: async () => ({ uid: UID }),
+    verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     warn: () => undefined,
     ...overrides,
   };
@@ -300,6 +300,7 @@ test('address route uses D1 wallet sessions without requesting Firestore authSes
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
+      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: UID }),
     }),
   );
   assert.equal(result.response.status, 200);
@@ -945,6 +946,7 @@ test('fulfillment address route preserves authorization and order-state guards',
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       resolveD1WalletSession: async () => ({ wallet: adminWallet, source: 'session' }),
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: adminWallet }),
     }),
   );
   assert.equal(denied.response.status, 403);
@@ -4493,6 +4495,20 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
   assert.equal(invalidToken.response.status, 401);
   assert.equal(upstreamCalls, 0);
 
+  const firebaseOnlyStaffWrite = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      status: 'Preparing',
+    }),
+    env,
+    FULFILLMENT_ORDER_STATUS_PATH,
+    dependencies(neverFetch, {
+      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: UID }),
+    }),
+  );
+  assert.equal(firebaseOnlyStaffWrite.response.status, 401);
+
   const missingSecret = await handleProfileWriteRequest(
     request(PROFILE_ADDRESSES_PATH, { encrypted: 'cipher', country: 'US', hint: 'hint' }),
     { FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '' },
@@ -4515,6 +4531,7 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
     FULFILLMENT_ORDER_STATUS_PATH,
     dependencies(deniedFetch, {
       resolveD1WalletSession: async () => ({ wallet: OTHER, source: 'session' }),
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OTHER }),
     }),
   );
   assert.equal(denied.response.status, 403);

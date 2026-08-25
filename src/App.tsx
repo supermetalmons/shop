@@ -12,7 +12,6 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Connection, LAMPORTS_PER_SOL, PublicKey, type VersionedTransaction } from '@solana/web3.js';
-import { onAuthStateChanged } from 'firebase/auth';
 import { FaBoxOpen, FaPlane, FaReceipt, FaTableCellsLarge } from 'react-icons/fa6';
 import { MintPanel, type MintPanelBoxMedia } from './components/MintPanel';
 import { DropsPanel } from './components/DropsPanel';
@@ -65,7 +64,6 @@ import {
   removeHiddenAssetIds,
   rememberPendingAdminIrlRedeem,
 } from './lib/adminIrlRedeem';
-import { auth } from './lib/firebase';
 import { refetchInventoryWithLatestExpectedAssets } from './lib/inventoryQuery';
 import {
   profileForAuthorizedView,
@@ -103,8 +101,8 @@ import {
 import {
   applyOptimisticStripeCheckoutMintProgress,
   completeStripeCheckoutMarker,
-  completedStripeCheckoutMarkerSummaryForFirebaseUid,
-  forgetCompletedStripeCheckoutMarkersForFirebaseUid,
+  completedStripeCheckoutMarkerSummaryForAuthSubject,
+  forgetCompletedStripeCheckoutMarkersForAuthSubject,
   isStripeCheckoutMintProgressSettled,
   loadStripeCheckoutMarkers,
   rememberStripeCheckoutStarted,
@@ -385,8 +383,8 @@ async function withBrowserLock<T>(name: string, run: () => Promise<T>): Promise<
   });
 }
 
-function anonymousStripeDeliveryHistoryQueryKey(firebaseUid: string | null, markerKey: string) {
-  return ['anonymousStripeDeliveryHistory', firebaseUid, markerKey] as const;
+function anonymousStripeDeliveryHistoryQueryKey(authSubject: string | null, markerKey: string) {
+  return ['anonymousStripeDeliveryHistory', authSubject, markerKey] as const;
 }
 
 function stripeCheckoutUnitAmountCentsForDrop(
@@ -1302,15 +1300,16 @@ function App({
   statusUiSuspendedRef.current = statusUiSuspended;
   const { publicKey, sendTransaction } = wallet;
   const connectedWallet = wallet.connected ? publicKey?.toBase58() : undefined;
-  const [firebaseUid, setFirebaseUid] = useState<string | null>(() => auth?.currentUser?.uid || null);
+  const solanaAuth = useSolanaAuth();
+  const { authSubject } = solanaAuth;
   const [stripeCheckoutMarkers, setStripeCheckoutMarkers] = useState(() => loadStripeCheckoutMarkers());
   const [stripeCheckoutReturnSessionId, setStripeCheckoutReturnSessionId] = useState<string | null>(null);
   const [stripeRecoveryOwner, setStripeRecoveryOwner] = useState<string | null>(null);
   const [stripeCheckoutProfileRecovery, setStripeCheckoutProfileRecovery] =
     useState<StripeCheckoutProfileRecoveryStatus | null>(null);
   const anonymousStripeHistoryCompletion = useMemo(
-    () => completedStripeCheckoutMarkerSummaryForFirebaseUid(firebaseUid, stripeCheckoutMarkers),
-    [firebaseUid, stripeCheckoutMarkers],
+    () => completedStripeCheckoutMarkerSummaryForAuthSubject(authSubject, stripeCheckoutMarkers),
+    [authSubject, stripeCheckoutMarkers],
   );
   const anonymousStripeHistoryMarkerKey = anonymousStripeHistoryCompletion.markerKey;
   const completedStripeCheckoutSessionIds = anonymousStripeHistoryCompletion.sessionIds;
@@ -1323,7 +1322,7 @@ function App({
     [anonymousStripeHistoryMarkerKey, stripeCheckoutReturnSessionId],
   );
   const stripeCheckoutRecoveryKey = stripeRecoveryKeyForResolvedSessions(
-    firebaseUid,
+    authSubject,
     stripeCheckoutRecoverySessionIds,
   );
   const cardNft2PackVideoSources = useMemo(cardNft2PackVideoSourcesForBrowser, []);
@@ -1591,7 +1590,7 @@ function App({
     refreshProfileState,
     beginDeliveryRecoveryScheduleUpdate,
     hasAuthenticatedWalletSession,
-  } = useSolanaAuth();
+  } = solanaAuth;
   const queryClient = useQueryClient();
   const [stripeCheckoutRecoveredProfile, setStripeCheckoutRecoveredProfile] =
     useState<StripeCheckoutRecoveredProfile | null>(null);
@@ -1833,7 +1832,7 @@ function App({
     isFetching: anonymousStripeHistoryLoading,
     error: anonymousStripeHistoryError,
   } = useQuery({
-    queryKey: anonymousStripeDeliveryHistoryQueryKey(firebaseUid, anonymousStripeHistoryMarkerKey),
+    queryKey: anonymousStripeDeliveryHistoryQueryKey(authSubject, anonymousStripeHistoryMarkerKey),
     enabled: anonymousStripeHistoryEnabled,
     queryFn: getAnonymousStripeDeliveryHistory,
     refetchInterval: (query) => {
@@ -2211,13 +2210,6 @@ function App({
   }, [clearToast, statusUiSuspended]);
 
   useEffect(() => {
-    if (!auth) return;
-    return onAuthStateChanged(auth, (user) => {
-      setFirebaseUid(user?.uid || null);
-    });
-  }, []);
-
-  useEffect(() => {
     if (stripeCheckoutReturnRef.current === undefined) {
       stripeCheckoutReturnRef.current = consumeStripeCheckoutReturnFromUrl();
     }
@@ -2239,31 +2231,31 @@ function App({
   }, [showSuccessHud]);
 
   useEffect(() => {
-    if (stripeCheckoutCompletionHandledRef.current || !firebaseUid) return;
+    if (stripeCheckoutCompletionHandledRef.current || !authSubject) return;
     const checkoutReturn = stripeCheckoutReturnRef.current;
     if (!checkoutReturn || checkoutReturn.status !== 'success') return;
     const result = completeStripeCheckoutMarker({
       sessionId: checkoutReturn.sessionId,
-      firebaseUid,
+      authSubject,
       completedAt: Date.now(),
     });
     if (result.completed) {
       stripeCheckoutCompletionHandledRef.current = true;
       setStripeCheckoutMarkers(result.markers);
     }
-  }, [firebaseUid]);
+  }, [authSubject]);
 
   useEffect(() => {
     const sessionId = stripeCheckoutReturnSessionId;
     if (
-      !firebaseUid ||
+      !authSubject ||
       !sessionId ||
       stripeCheckoutOptimisticMintSessionRef.current === sessionId
     ) {
       return;
     }
     const markerProgress = stripeCheckoutMintProgressForSession(
-      firebaseUid,
+      authSubject,
       sessionId,
       stripeCheckoutMarkers,
     );
@@ -2290,7 +2282,7 @@ function App({
       ),
     });
   }, [
-    firebaseUid,
+    authSubject,
     refetchStats,
     routeDrop?.dropId,
     shouldFetchMintStats,
@@ -2356,22 +2348,22 @@ function App({
 
   useEffect(() => {
     if (
-      !firebaseUid ||
+      !authSubject ||
       !stripeCheckoutRecoveryKey ||
       !stripeCheckoutRecoverySessionIds.length ||
       !profileShipmentsReady
     ) {
       return;
     }
-    const markerResult = forgetCompletedStripeCheckoutMarkersForFirebaseUid({
-      firebaseUid,
+    const markerResult = forgetCompletedStripeCheckoutMarkersForAuthSubject({
+      authSubject,
       sessionIds: profileShipmentStripeSessionIds,
     });
     if (markerResult.removed) {
       setStripeCheckoutMarkers(markerResult.markers);
       const inventoryRecoveryTarget = stripeInventoryRecoveryTargetForResolvedSessions({
         owner: sessionWallet,
-        firebaseUid,
+        authSubject,
         sessionIds: markerResult.removedSessionIds,
       });
       if (inventoryRecoveryTarget) {
@@ -2381,7 +2373,7 @@ function App({
       }
       if (anonymousStripeHistoryMarkerKey) {
         queryClient.removeQueries({
-          queryKey: anonymousStripeDeliveryHistoryQueryKey(firebaseUid, anonymousStripeHistoryMarkerKey),
+          queryKey: anonymousStripeDeliveryHistoryQueryKey(authSubject, anonymousStripeHistoryMarkerKey),
           exact: true,
         });
       }
@@ -2408,7 +2400,7 @@ function App({
   }, [
     anonymousStripeHistoryMarkerKey,
     connectedWallet,
-    firebaseUid,
+    authSubject,
     pendingProfileStripeSessionIds,
     profileShipmentStripeSessionIds,
     profileShipmentsReady,
@@ -2420,7 +2412,7 @@ function App({
   ]);
 
   useEffect(() => {
-    if (!firebaseUid || !stripeCheckoutRecoveryKey || !stripeCheckoutRecoverySessionIds.length) return;
+    if (!authSubject || !stripeCheckoutRecoveryKey || !stripeCheckoutRecoverySessionIds.length) return;
     if (!sessionWallet) {
       if (connectedWallet && (!authReady || authLoading)) return;
       if (!connectedWallet && sessionResolution !== 'settled') return;
@@ -2528,7 +2520,7 @@ function App({
     authLoading,
     authReady,
     connectedWallet,
-    firebaseUid,
+    authSubject,
     profileShipmentsReady,
     reconcileProfile,
     sessionWallet,
@@ -5005,29 +4997,26 @@ function App({
     try {
       const returnUrl = typeof window !== 'undefined' ? window.location.href : undefined;
       const checkoutQuantity = stripeCheckoutKind === 'size_variant' ? 1 : quantity;
-      const { id, url } = await createStripeCheckoutSession({
+      const { id, url, authSubject: checkoutAuthSubject } = await createStripeCheckoutSession({
         dropId: mintDrop.dropId,
         quantity: checkoutQuantity,
         variantKey,
         returnUrl,
       });
-      const checkoutFirebaseUid = auth?.currentUser?.uid || firebaseUid;
-      if (checkoutFirebaseUid) {
-        setStripeCheckoutMarkers(
-          rememberStripeCheckoutStarted({
-            sessionId: id,
-            dropId: mintDrop.dropId,
-            firebaseUid: checkoutFirebaseUid,
-            createdAt: Date.now(),
-            quantity: checkoutQuantity,
-            remainingBeforeCheckout: effectiveMintStats?.remaining,
-            variantKey,
-            variantRemainingBeforeCheckout: variantKey
-              ? effectiveMintStats?.mintSelectionAvailability?.[variantKey]
-              : undefined,
-          }),
-        );
-      }
+      setStripeCheckoutMarkers(
+        rememberStripeCheckoutStarted({
+          sessionId: id,
+          dropId: mintDrop.dropId,
+          authSubject: checkoutAuthSubject,
+          createdAt: Date.now(),
+          quantity: checkoutQuantity,
+          remainingBeforeCheckout: effectiveMintStats?.remaining,
+          variantKey,
+          variantRemainingBeforeCheckout: variantKey
+            ? effectiveMintStats?.mintSelectionAvailability?.[variantKey]
+            : undefined,
+        }),
+      );
       window.location.assign(url);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to start Stripe payment');

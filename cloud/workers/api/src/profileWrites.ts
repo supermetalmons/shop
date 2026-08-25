@@ -92,9 +92,14 @@ import type {
 } from '../../../../shared/contracts.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import {
+  isStaffOnlyApiPath,
+  isStaffRequestIdentity,
+  resolveRequestWallet,
+  verifyRequestIdentity,
+  type RequestIdentity,
+} from './requestIdentity.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENTS_BASE_URL,
@@ -186,7 +191,7 @@ type ProfileWriteDependencies = {
     providerFetch: ProfileProviderFetch,
     signal: AbortSignal,
     nowMs?: number,
-  ) => Promise<FirebaseIdentity>;
+  ) => Promise<RequestIdentity>;
   warn: (entry: Record<string, unknown>) => void;
 };
 
@@ -321,7 +326,7 @@ const defaultDependencies: ProfileWriteDependencies = {
     return saveD1ProfileAddress(db, address, signal);
   },
   timeoutMs: PROFILE_WRITE_TIMEOUT_MS,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
   warn: (entry) => console.warn(entry),
 };
 
@@ -3256,7 +3261,7 @@ export async function handleProfileWriteRequest(
     () => controller.abort(new DOMException('Profile request timed out', 'TimeoutError')),
     dependencies.timeoutMs,
   );
-  let identity: FirebaseIdentity | undefined;
+  let identity: RequestIdentity | undefined;
   try {
     const requestBody = await parseExactRequestBody(request, path, controller.signal);
     identity = await dependencies.verifyIdToken(
@@ -3265,6 +3270,9 @@ export async function handleProfileWriteRequest(
       controller.signal,
       dependencies.nowMs(),
     );
+    if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
+      throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
+    }
     const serviceAccountJson = typeof env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON === 'string'
       ? env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON
       : '';
@@ -3277,12 +3285,12 @@ export async function handleProfileWriteRequest(
       serviceAccountJson,
       signal: controller.signal,
     };
-    const wallet = await loadSessionWallet({
+    const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({
       db: env.OPS_DB,
       resolveD1WalletSession: dependencies.resolveD1WalletSession,
       signal: controller.signal,
-      uid: identity.uid,
-    });
+      uid,
+    }));
     let payload: unknown;
     if (path === PROFILE_ADDRESSES_PATH) {
       payload = await saveAddress(

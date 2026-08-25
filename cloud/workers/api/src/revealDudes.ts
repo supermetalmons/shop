@@ -61,9 +61,8 @@ import {
 import { transformShopInventoryItem } from '../../../../shared/shopDomain.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import { resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENTS_BASE_URL,
@@ -195,7 +194,7 @@ type RevealDudesDependencies = {
     providerFetch: ProfileProviderFetch,
     signal: AbortSignal,
     nowMs?: number,
-  ) => Promise<FirebaseIdentity>;
+  ) => Promise<RequestIdentity>;
 };
 
 type RevealWaitUntil = (promise: Promise<unknown>) => void;
@@ -287,7 +286,7 @@ const defaultDependencies: RevealDudesDependencies = {
   sendAndConfirmTransaction,
   sleep: pause,
   validateOnchainConfig,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
 };
 
 const requestSchema = z.object({
@@ -1951,7 +1950,7 @@ export async function handleRevealDudes(
     boxAssetId = canonicalPublicKey(body.boxAssetId, 'boxAssetId').toBase58();
     const runtime = runtimeForDrop(body.dropId);
     dropId = runtime.dropId;
-    let identity: FirebaseIdentity;
+    let identity: RequestIdentity;
     try {
       identity = await dependencies.verifyIdToken(
         request.headers.get('Authorization'),
@@ -1986,10 +1985,9 @@ export async function handleRevealDudes(
       dataDb: env.DATA_DB,
       opsDb: env.OPS_DB,
     };
-    const sessionWallet = await dependencies.loadWalletSession(
-      firestoreContext,
-      env.OPS_DB,
-      identity.uid,
+    const sessionWallet = await resolveRequestWallet(
+      identity,
+      (uid) => dependencies.loadWalletSession(firestoreContext, env.OPS_DB, uid),
     );
     if (sessionWallet !== owner.toBase58()) {
       authOutcome = 'rejected';

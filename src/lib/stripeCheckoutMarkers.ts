@@ -13,7 +13,7 @@ export type StripeCheckoutMintProgress = {
 export type StripeCheckoutMarker = {
   sessionId: string;
   dropId: string;
-  firebaseUid: string;
+  authSubject: string;
   status: StripeCheckoutMarkerStatus;
   createdAt: number;
   completedAt?: number;
@@ -25,7 +25,8 @@ export type StripeCheckoutMarker = {
 
 export type StripeCheckoutMarkerStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
-const STRIPE_CHECKOUT_MARKERS_STORAGE_KEY = 'monsStripeCheckoutMarkers:v1';
+const STRIPE_CHECKOUT_MARKERS_STORAGE_KEY = 'monsStripeCheckoutMarkers:v2';
+const LEGACY_STRIPE_CHECKOUT_MARKERS_STORAGE_KEY = 'monsStripeCheckoutMarkers:v1';
 
 const MAX_STRIPE_CHECKOUT_MARKERS = 50;
 
@@ -64,9 +65,9 @@ function normalizeMarker(value: unknown): StripeCheckoutMarker | null {
   const raw = value as Record<string, unknown>;
   const sessionId = normalizedString(raw.sessionId);
   const dropId = normalizedString(raw.dropId).toLowerCase();
-  const firebaseUid = normalizedString(raw.firebaseUid);
+  const authSubject = normalizedString(raw.authSubject);
   const status = raw.status === 'completed' ? 'completed' : raw.status === 'started' ? 'started' : null;
-  if (!sessionId || !dropId || !firebaseUid || !status) return null;
+  if (!sessionId || !dropId || !authSubject || !status) return null;
   const createdAt = normalizeTimestamp(raw.createdAt, Date.now());
   const completedAt = status === 'completed' ? normalizeTimestamp(raw.completedAt, createdAt) : undefined;
   const quantity = normalizePositiveInteger(raw.quantity);
@@ -76,7 +77,7 @@ function normalizeMarker(value: unknown): StripeCheckoutMarker | null {
   return {
     sessionId,
     dropId,
-    firebaseUid,
+    authSubject,
     status,
     createdAt,
     ...(completedAt ? { completedAt } : {}),
@@ -93,12 +94,12 @@ function markerActivityAt(marker: StripeCheckoutMarker): number {
   return marker.completedAt ?? marker.createdAt;
 }
 
-function markerIdentity(marker: Pick<StripeCheckoutMarker, 'firebaseUid' | 'sessionId'>): string {
-  return `${marker.firebaseUid}:${marker.sessionId}`;
+function markerIdentity(marker: Pick<StripeCheckoutMarker, 'authSubject' | 'sessionId'>): string {
+  return `${marker.authSubject}:${marker.sessionId}`;
 }
 
-function isMarkerForSession(marker: StripeCheckoutMarker, sessionId: string, firebaseUid: string): boolean {
-  return marker.sessionId === sessionId && marker.firebaseUid === firebaseUid;
+function isMarkerForSession(marker: StripeCheckoutMarker, sessionId: string, authSubject: string): boolean {
+  return marker.sessionId === sessionId && marker.authSubject === authSubject;
 }
 
 function serializeStripeCheckoutMarkers(markers: readonly StripeCheckoutMarker[]): string {
@@ -157,6 +158,7 @@ export function loadStripeCheckoutMarkers(
 ): StripeCheckoutMarker[] {
   if (!storage) return [];
   try {
+    storage.removeItem(LEGACY_STRIPE_CHECKOUT_MARKERS_STORAGE_KEY);
     const parsed = parseStripeCheckoutMarkers(storage.getItem(STRIPE_CHECKOUT_MARKERS_STORAGE_KEY));
     if (parsed.needsCleanup) persistStripeCheckoutMarkers(parsed.markers, storage);
     return parsed.markers;
@@ -166,7 +168,7 @@ export function loadStripeCheckoutMarkers(
 }
 
 export function rememberStripeCheckoutStarted(
-  marker: Pick<StripeCheckoutMarker, 'sessionId' | 'dropId' | 'firebaseUid'> & {
+  marker: Pick<StripeCheckoutMarker, 'sessionId' | 'dropId' | 'authSubject'> & {
     createdAt?: number;
     quantity?: number;
     remainingBeforeCheckout?: number;
@@ -177,12 +179,12 @@ export function rememberStripeCheckoutStarted(
 ): StripeCheckoutMarker[] {
   const sessionId = normalizedString(marker.sessionId);
   const dropId = normalizedString(marker.dropId).toLowerCase();
-  const firebaseUid = normalizedString(marker.firebaseUid);
-  if (!sessionId || !dropId || !firebaseUid) {
+  const authSubject = normalizedString(marker.authSubject);
+  if (!sessionId || !dropId || !authSubject) {
     return loadStripeCheckoutMarkers(storage);
   }
   const markers = loadStripeCheckoutMarkers(storage);
-  const existing = markers.find((entry) => isMarkerForSession(entry, sessionId, firebaseUid));
+  const existing = markers.find((entry) => isMarkerForSession(entry, sessionId, authSubject));
   const quantity = normalizePositiveInteger(marker.quantity) || existing?.quantity;
   const remainingBeforeCheckout =
     normalizeNonnegativeInteger(marker.remainingBeforeCheckout) ?? existing?.remainingBeforeCheckout;
@@ -193,7 +195,7 @@ export function rememberStripeCheckoutStarted(
   const nextMarker: StripeCheckoutMarker = {
     sessionId,
     dropId,
-    firebaseUid,
+    authSubject,
     status: existing?.status === 'completed' ? 'completed' : 'started',
     createdAt: normalizeTimestamp(marker.createdAt, Date.now()),
     ...(existing?.completedAt ? { completedAt: existing.completedAt } : {}),
@@ -205,24 +207,24 @@ export function rememberStripeCheckoutStarted(
       : {}),
   };
   return persistStripeCheckoutMarkers(
-    [nextMarker, ...markers.filter((entry) => !isMarkerForSession(entry, sessionId, firebaseUid))],
+    [nextMarker, ...markers.filter((entry) => !isMarkerForSession(entry, sessionId, authSubject))],
     storage,
   );
 }
 
 export function completeStripeCheckoutMarker(
-  args: { sessionId: string; firebaseUid: string; completedAt?: number },
+  args: { sessionId: string; authSubject: string; completedAt?: number },
   storage: StripeCheckoutMarkerStorage | null = defaultStorage(),
 ): { markers: StripeCheckoutMarker[]; completed: boolean } {
   const sessionId = normalizedString(args.sessionId);
-  const firebaseUid = normalizedString(args.firebaseUid);
+  const authSubject = normalizedString(args.authSubject);
   const markers = loadStripeCheckoutMarkers(storage);
-  if (!sessionId || !firebaseUid) return { markers, completed: false };
+  if (!sessionId || !authSubject) return { markers, completed: false };
 
   let completed = false;
   const completedAt = normalizeTimestamp(args.completedAt, Date.now());
   const nextMarkers = markers.map((marker) => {
-    if (!isMarkerForSession(marker, sessionId, firebaseUid)) return marker;
+    if (!isMarkerForSession(marker, sessionId, authSubject)) return marker;
     completed = true;
     return {
       ...marker,
@@ -233,20 +235,20 @@ export function completeStripeCheckoutMarker(
   return { markers: completed ? persistStripeCheckoutMarkers(nextMarkers, storage) : markers, completed };
 }
 
-export function forgetCompletedStripeCheckoutMarkersForFirebaseUid(
-  args: { firebaseUid: string | null | undefined; sessionIds: readonly string[] },
+export function forgetCompletedStripeCheckoutMarkersForAuthSubject(
+  args: { authSubject: string | null | undefined; sessionIds: readonly string[] },
   storage: StripeCheckoutMarkerStorage | null = defaultStorage(),
 ): { markers: StripeCheckoutMarker[]; removed: boolean; removedSessionIds: string[] } {
-  const firebaseUid = normalizedString(args.firebaseUid);
+  const authSubject = normalizedString(args.authSubject);
   const sessionIds = new Set(args.sessionIds.map(normalizedString).filter(Boolean));
   const markers = loadStripeCheckoutMarkers(storage);
-  if (!firebaseUid || !sessionIds.size) {
+  if (!authSubject || !sessionIds.size) {
     return { markers, removed: false, removedSessionIds: [] };
   }
 
   const removedSessionIds: string[] = [];
   const nextMarkers = markers.filter((marker) => {
-    if (marker.firebaseUid !== firebaseUid || marker.status !== 'completed' || !sessionIds.has(marker.sessionId)) {
+    if (marker.authSubject !== authSubject || marker.status !== 'completed' || !sessionIds.has(marker.sessionId)) {
       return true;
     }
     removedSessionIds.push(marker.sessionId);
@@ -265,16 +267,16 @@ export function forgetCompletedStripeCheckoutMarkersForFirebaseUid(
 }
 
 export function stripeCheckoutMintProgressForSession(
-  firebaseUid: string | null | undefined,
+  authSubject: string | null | undefined,
   sessionId: string | null | undefined,
   markers: readonly StripeCheckoutMarker[],
 ): StripeCheckoutMintProgress | null {
-  const normalizedFirebaseUid = normalizedString(firebaseUid);
+  const normalizedAuthSubject = normalizedString(authSubject);
   const normalizedSessionId = normalizedString(sessionId);
-  if (!normalizedFirebaseUid || !normalizedSessionId) return null;
+  if (!normalizedAuthSubject || !normalizedSessionId) return null;
   const marker = markers.find(
     (entry) =>
-      entry.firebaseUid === normalizedFirebaseUid &&
+      entry.authSubject === normalizedAuthSubject &&
       entry.sessionId === normalizedSessionId,
   );
   if (!marker) return null;
@@ -382,24 +384,24 @@ export function isStripeCheckoutMintProgressSettled(
   return tracksProgress;
 }
 
-export function completedStripeCheckoutMarkerKeyForFirebaseUid(
-  firebaseUid: string | null | undefined,
+export function completedStripeCheckoutMarkerKeyForAuthSubject(
+  authSubject: string | null | undefined,
   markers: readonly StripeCheckoutMarker[],
 ): string {
-  return completedStripeCheckoutMarkerSummaryForFirebaseUid(firebaseUid, markers).markerKey;
+  return completedStripeCheckoutMarkerSummaryForAuthSubject(authSubject, markers).markerKey;
 }
 
-export function completedStripeCheckoutMarkerSummaryForFirebaseUid(
-  firebaseUid: string | null | undefined,
+export function completedStripeCheckoutMarkerSummaryForAuthSubject(
+  authSubject: string | null | undefined,
   markers: readonly StripeCheckoutMarker[],
 ): { markerKey: string; sessionIds: string[]; latestCompletedAt: number } {
-  const uid = normalizedString(firebaseUid);
-  if (!uid) return { markerKey: '', sessionIds: [], latestCompletedAt: 0 };
+  const subject = normalizedString(authSubject);
+  if (!subject) return { markerKey: '', sessionIds: [], latestCompletedAt: 0 };
 
   const sessionIds: string[] = [];
   let latestCompletedAt = 0;
   markers.forEach((marker) => {
-    if (marker.firebaseUid !== uid || marker.status !== 'completed') return;
+    if (marker.authSubject !== subject || marker.status !== 'completed') return;
     sessionIds.push(marker.sessionId);
     latestCompletedAt = Math.max(latestCompletedAt, marker.completedAt || marker.createdAt || 0);
   });

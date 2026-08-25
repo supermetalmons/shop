@@ -11,6 +11,8 @@ import {
   FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   SHIPPER_FULFILLMENT_ACCESS,
+  STAFF_WALLET_ADDRESSES,
+  isStaffWalletAddress,
   walletCanViewSensitiveFulfillmentAddress,
   walletHasFulfillmentDropAccess,
 } from '../shared/fulfillmentAccess.ts';
@@ -49,6 +51,7 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
   assert.equal(Object.isFrozen(CARD_FULFILLMENT_DROP_IDS), true);
   assert.equal(Object.isFrozen(CARD_NFT_BINDER_FULFILLMENT_DROP_IDS), true);
   assert.equal(Object.isFrozen(SHIPPER_FULFILLMENT_ACCESS), true);
+  assert.equal(Object.isFrozen(STAFF_WALLET_ADDRESSES), true);
   SHIPPER_FULFILLMENT_ACCESS.forEach((entry) => {
     assert.equal(Object.isFrozen(entry), true);
     assert.equal(Object.isFrozen(entry.dropIds), true);
@@ -76,6 +79,14 @@ test('fulfillment access inventory is frozen and preserves configured wallet and
       [FULFILLMENT_ONLY_WALLET, ALL_SHIPPER_DROP_IDS],
     ],
   );
+  assert.deepEqual(STAFF_WALLET_ADDRESSES, [
+    ADMIN_WALLET,
+    FULFILLMENT_ONLY_WALLET,
+    '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM',
+    LIMITED_SHIPPER_WALLET,
+  ]);
+  STAFF_WALLET_ADDRESSES.forEach((wallet) => assert.equal(isStaffWalletAddress(wallet), true));
+  assert.equal(isStaffWalletAddress('11111111111111111111111111111111'), false);
 });
 
 test('frontend fulfillment access keeps admin, shipper, and Admin IRL membership behavior', () => {

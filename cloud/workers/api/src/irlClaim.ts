@@ -70,9 +70,8 @@ import type {
 } from '../../../../shared/contracts.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import { resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   FIRESTORE_DOCUMENTS_BASE_URL,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
@@ -175,7 +174,7 @@ type IrlClaimDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyFirebaseIdToken;
+  verifyIdToken: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
   loadWalletSession: (
     context: FirestoreReadContext,
@@ -1078,14 +1077,13 @@ async function prepareClaim(args: {
   body: PrepareIrlClaimRequest;
   context: FirestoreReadContext;
   providerContext: ProviderContext;
-  identity: FirebaseIdentity;
+  identity: RequestIdentity;
   env: IrlClaimEnv;
   dependencies: IrlClaimDependencies;
 }): Promise<PrepareIrlClaimResponse> {
-  const sessionWallet = await args.dependencies.loadWalletSession(
-    args.context,
-    args.env.OPS_DB,
-    args.identity.uid,
+  const sessionWallet = await resolveRequestWallet(
+    args.identity,
+    (uid) => args.dependencies.loadWalletSession(args.context, args.env.OPS_DB, uid),
   );
   const owner = canonicalWallet(args.body.owner);
   if (sessionWallet !== owner) throw new IrlClaimError('permission-denied', 'Owners only');
@@ -1197,7 +1195,7 @@ const defaultDependencies: IrlClaimDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
   getDrop: getApiDrop,
   loadWalletSession,
   loadClaim,
@@ -1236,7 +1234,7 @@ export async function handleIrlClaimPrepare(
     () => controller.abort(new DOMException('IRL claim request timed out', 'TimeoutError')),
     dependencies.timeoutMs,
   );
-  let identity: FirebaseIdentity | undefined;
+  let identity: RequestIdentity | undefined;
   let dropId: string | undefined;
   try {
     const body = await readRequestBody(request, controller.signal);

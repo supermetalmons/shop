@@ -45,7 +45,7 @@ function env(overrides: Partial<Record<'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SER
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
     providerFetch: async () => { throw new Error('unexpected provider fetch'); },
     nowMs: () => 1_700_000_000_000,
     timeoutMs: 1_000,

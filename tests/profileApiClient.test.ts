@@ -16,6 +16,7 @@ test('profile API client sends bearer JSON without caching and refreshes once af
   const authorizations: string[] = [];
   const signals: AbortSignal[] = [];
   let calls = 0;
+  const credentialCapture: { authSubject?: string } = {};
   const payload = await profileApiTestHooks.requestProfileApi(
     '/profile/shipments',
     { ownerWallet: OWNER },
@@ -38,16 +39,21 @@ test('profile API client sends bearer JSON without caching and refreshes once af
       },
       getToken: async (forceRefresh) => {
         refreshes.push(forceRefresh);
-        return forceRefresh ? 'fresh-token' : 'cached-token';
+        return {
+          authSubject: forceRefresh ? 'firebase-b' : 'firebase-a',
+          token: forceRefresh ? 'fresh-token' : 'cached-token',
+        };
       },
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     },
+    credentialCapture,
   );
   assert.deepEqual(payload, { responseMode: 'shipments', wallet: OWNER, orders: [] });
   assert.deepEqual(refreshes, [false, true]);
   assert.deepEqual(authorizations, ['Bearer cached-token', 'Bearer fresh-token']);
   assert.equal(signals[0], signals[1]);
+  assert.equal(credentialCapture.authSubject, 'firebase-b');
 });
 
 test('profile API client applies its deadline to token retrieval and returns a stable error', async () => {

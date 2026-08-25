@@ -69,9 +69,8 @@ import type {
 } from '../../../../shared/contracts.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import { verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   FirestoreWriteConflict,
   ProfileReadError,
@@ -181,7 +180,7 @@ type ClaimDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyFirebaseIdToken;
+  verifyIdToken: typeof verifyRequestIdentity;
 };
 
 function statusForCode(code: ClaimErrorCode): number {
@@ -1972,7 +1971,7 @@ const defaultDependencies: ClaimDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
 };
 
 async function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -2026,7 +2025,7 @@ export async function handleStripeReceiptClaim(
     () => controller.abort(new DOMException('Stripe receipt claim timed out', 'TimeoutError')),
     dependencies.timeoutMs,
   );
-  let identity: FirebaseIdentity | undefined;
+  let identity: RequestIdentity | undefined;
   let execution: Promise<ClaimExecution> | undefined;
   let claimContext: ClaimLogContext | undefined;
   try {

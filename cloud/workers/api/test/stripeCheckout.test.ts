@@ -43,6 +43,8 @@ const ONCHAIN_CONFIG: StripeCheckoutOnchainConfig = {
   mintVariantNextIds: [0, 0, 0],
 };
 
+const STAFF_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+
 function env(overrides: Partial<Record<keyof Env, string>> = {}) {
   return {
     HELIUS_API_KEY: 'helius-test-key',
@@ -72,7 +74,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
     providerFetch: async () => {
       throw new Error('unexpected provider fetch');
     },
@@ -139,6 +141,24 @@ test('checkout handler authenticates, creates one session, and persists the exac
   assert.equal(writes[0]?.path, `drops/${DROP.dropId}/stripeCheckouts/cs_test_123`);
   assert.equal(writes[0]?.document.status, 'created');
   assert.equal(writes[0]?.document.owner, 'firebase:firebase-uid');
+});
+
+test('staff checkout persists the wallet as the direct order owner', async () => {
+  let checkout: Record<string, unknown> | undefined;
+  const result = await handleStripeCheckoutSession(
+    request({ dropId: DROP.dropId }),
+    env(),
+    dependencies({
+      persistCheckout: async (_path: string, document: Record<string, unknown>) => {
+        checkout = document;
+      },
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: STAFF_WALLET }),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.equal(checkout?.owner, STAFF_WALLET);
+  assert.equal(checkout?.ownerKind, 'wallet');
+  assert.equal(Object.hasOwn(checkout || {}, 'firebaseUid'), false);
 });
 
 test('checkout handler rejects methods, malformed bodies, extra keys, and oversized JSON before providers', async () => {

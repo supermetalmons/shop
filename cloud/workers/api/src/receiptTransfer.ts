@@ -66,9 +66,8 @@ import {
 } from './receiptTransferRateLimit.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import { requestIdentitySubject, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   ProfileReadError,
   cancelResponseBody,
@@ -163,7 +162,7 @@ type ReceiptTransferDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyFirebaseIdToken;
+  verifyIdToken: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
   enforceRateLimit: (context: RateLimitContext, bucket: ReceiptTransferRateLimitBucket) => Promise<void>;
   fetchAsset: (context: ProviderContext, runtime: ReceiptTransferRuntime, assetId: string) => Promise<DasAsset>;
@@ -931,7 +930,7 @@ async function buildPreparedTransaction(args: {
 
 async function prepareReceiptTransfer(args: {
   body: PrepareReceiptTransferRequest;
-  identity: FirebaseIdentity;
+  identity: RequestIdentity;
   rateLimitContext: RateLimitContext;
   providerContext: ProviderContext;
   dependencies: ReceiptTransferDependencies;
@@ -955,7 +954,7 @@ async function prepareReceiptTransfer(args: {
 
   await args.dependencies.enforceRateLimit(
     args.rateLimitContext,
-    receiptTransferCallerRateLimitBucket(args.identity.uid),
+    receiptTransferCallerRateLimitBucket(requestIdentitySubject(args.identity)),
   );
 
   const receiptAssetId = receiptAsset.toBase58();
@@ -1003,7 +1002,7 @@ async function prepareReceiptTransfer(args: {
   await args.dependencies.enforceRateLimit(
     args.rateLimitContext,
     receiptTransferAssetRateLimitBucket({
-      uid: args.identity.uid,
+      uid: requestIdentitySubject(args.identity),
       cluster: runtime.cluster,
       ownerWallet,
       receiptAssetId,
@@ -1032,7 +1031,7 @@ const defaultDependencies: ReceiptTransferDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
   getDrop: getApiDrop,
   enforceRateLimit,
   fetchAsset,
@@ -1073,7 +1072,7 @@ export async function handleReceiptTransferPrepare(
     () => controller.abort(new DOMException('Receipt transfer request timed out', 'TimeoutError')),
     dependencies.timeoutMs,
   );
-  let identity: FirebaseIdentity | undefined;
+  let identity: RequestIdentity | undefined;
   let dropId: string | undefined;
   try {
     const body = await readRequestBody(request, controller.signal);

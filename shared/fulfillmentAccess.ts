@@ -70,6 +70,19 @@ export const SHIPPER_FULFILLMENT_ACCESS: readonly ShipperFulfillmentAccessConfig
   }),
 ]);
 
+export const STAFF_WALLET_ADDRESSES: readonly string[] = Object.freeze(Array.from(new Set([
+  ...FULFILLMENT_ADMIN_WALLET_ADDRESSES,
+  ...FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES,
+  ...ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
+  ...SHIPPER_FULFILLMENT_ACCESS.map(({ wallet }) => wallet),
+])));
+
+const STAFF_WALLET_ADDRESS_SET = new Set(STAFF_WALLET_ADDRESSES);
+
+export function isStaffWalletAddress(wallet: string | null | undefined): boolean {
+  return Boolean(wallet && STAFF_WALLET_ADDRESS_SET.has(wallet));
+}
+
 export function walletHasAdminAccess(
   wallet: string | null | undefined,
   adminWallets: ReadonlySet<string>,

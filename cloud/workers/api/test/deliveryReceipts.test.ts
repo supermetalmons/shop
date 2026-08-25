@@ -619,7 +619,7 @@ function env(overrides: Partial<Pick<Env,
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
     issue: async () => ({
       processed: true as const,
       deliveryId: 7,
@@ -1684,7 +1684,7 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
         invalidate: () => undefined,
       },
       providerFetch,
-      verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
     },
   );
   await Promise.all(deferred);
@@ -2088,7 +2088,7 @@ test('explicit recovery uses the production Firestore adapter and preserves not-
         invalidate: () => undefined,
       },
       providerFetch,
-      verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
     },
   );
   assert.equal(result.response.status, 200);
@@ -2203,7 +2203,7 @@ test('forced recovery validates the delivery PDA and finalizes an already-burned
         invalidate: () => undefined,
       },
       providerFetch,
-      verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
     },
   );
   assert.equal(result.response.status, 200);

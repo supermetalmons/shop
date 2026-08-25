@@ -8,6 +8,8 @@ import {
   type SolanaAuthRuntime,
   type SolanaAuthWalletState,
 } from '../src/hooks/useSolanaAuth.ts';
+import { walletSessionSignInReadiness } from '../src/lib/profileClientLifecycle.ts';
+import type { StaffWalletSession } from '../src/lib/staffWalletSession.ts';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>');
 Object.defineProperty(globalThis, 'window', { configurable: true, value: dom.window });
@@ -63,6 +65,7 @@ function emptyState(): GetProfileStateResponse {
 
 class RuntimeHarness {
   uid: string | null = 'firebase-a';
+  staffSession: StaffWalletSession | null = null;
   anonymousUidCounter = 0;
   nowMs = 1_000;
   visible = true;
@@ -75,27 +78,27 @@ class RuntimeHarness {
   reconcileImpl: () => Promise<ReconcileProfileStateResponse> = async () => ({ mergedStripeDeliveryOrders: 0 });
   signOutImpl: () => Promise<void> = async () => {
     this.nextState = emptyState();
-    this.emitAuthUid(null);
+    this.emitAuthSubject(null);
   };
   authenticateImpl: (wallet: string) => Promise<{ wallet: string }> = async (wallet) => {
     this.nextState = readyState(wallet);
     return { wallet };
   };
-  authListeners = new Set<(uid: string | null) => void>();
+  authSubjectListeners = new Set<(uid: string | null) => void>();
   refreshListeners = new Set<() => void>();
   nextTimerId = 1;
   timers = new Map<number, { at: number; callback: () => void; delay: number }>();
 
   runtime: SolanaAuthRuntime = {
-    currentUid: () => this.uid,
-    subscribeAuthUser: (listener) => {
-      this.authListeners.add(listener);
-      return () => this.authListeners.delete(listener);
+    currentAuthSubject: () => this.uid,
+    subscribeAuthSubject: (listener) => {
+      this.authSubjectListeners.add(listener);
+      return () => this.authSubjectListeners.delete(listener);
     },
     ensureAuthenticated: async () => {
       if (!this.uid) {
         this.anonymousUidCounter += 1;
-        this.emitAuthUid(`firebase-anonymous-${this.anonymousUidCounter}`);
+        this.emitAuthSubject(`firebase-anonymous-${this.anonymousUidCounter}`);
       }
       return this.uid!;
     },
@@ -130,11 +133,18 @@ class RuntimeHarness {
     clearTimer: (timer) => {
       if (typeof timer === 'number') this.timers.delete(timer);
     },
+    currentStaffSession: () => this.staffSession,
+    installStaffSession: async (session, expectedToken) => {
+      if ((this.staffSession?.token || null) !== expectedToken) return this.staffSession;
+      this.staffSession = session;
+      this.emitAuthSubject(session.wallet);
+      return session;
+    },
   };
 
-  emitAuthUid(uid: string | null) {
+  emitAuthSubject(uid: string | null) {
     this.uid = uid;
-    this.authListeners.forEach((listener) => listener(uid));
+    this.authSubjectListeners.forEach((listener) => listener(uid));
   }
 
   emitRefresh() {
@@ -189,6 +199,22 @@ test('an authenticated Firebase user without a wallet session settles signed out
   await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
   assert.equal(result.current.sessionWallet, null);
   assert.equal(result.current.loading, false);
+  assert.equal(walletSessionSignInReadiness({
+    hasAuthenticatedSession: false,
+    sessionResolution: result.current.sessionResolution,
+    authLoading: result.current.loading,
+  }), 'sign');
+});
+
+test('the auth subject observes identities created after render', async () => {
+  const harness = new RuntimeHarness();
+  harness.uid = null;
+  harness.nextState = emptyState();
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(null), harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  assert.match(result.current.authSubject || '', /^firebase-anonymous-/);
+  await act(async () => harness.emitAuthSubject('firebase-replacement'));
+  assert.equal(result.current.authSubject, 'firebase-replacement');
 });
 
 test('a connected-wallet mismatch clears state and signs Firebase out once', async () => {
@@ -342,7 +368,7 @@ test('stale in-flight responses cannot restore a replaced Firebase user', async 
     void result.current.refreshProfileState();
   });
   harness.loadImpl = async () => emptyState();
-  await act(async () => harness.emitAuthUid('firebase-b'));
+  await act(async () => harness.emitAuthSubject('firebase-b'));
   await act(async () => stale.resolve(readyState(WALLET_A)));
   await waitFor(() => assert.equal(result.current.sessionWallet, null));
 });
@@ -358,6 +384,136 @@ test('sign-in establishes and refreshes API-backed profile state', async () => {
   assert.deepEqual(result.current.profile, { wallet: WALLET_A, email: 'owner@example.com' });
 });
 
+test('restored Firebase staff sessions are discarded before wallet-only sign-in', async () => {
+  const harness = new RuntimeHarness();
+  harness.runtime.isStaffWallet = (wallet) => wallet === WALLET_A;
+  harness.runtime.hasStaffSession = () => false;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(harness.signOutCalls, 1));
+  await waitFor(() => assert.equal(result.current.sessionWallet, null));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  assert.equal(result.current.loading, false);
+});
+
+test('allowlisted staff sign-in uses the server challenge without Firebase wallet binding', async () => {
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  let staffChallengeCalls = 0;
+  let staffSessionCalls = 0;
+  let signedMessage = '';
+  harness.runtime.isStaffWallet = (wallet) => wallet === WALLET_A;
+  harness.runtime.hasStaffSession = (wallet) => harness.uid === wallet;
+  harness.runtime.createStaffChallenge = async () => {
+    staffChallengeCalls += 1;
+    return { challengeId: 'challenge', message: 'server staff challenge', expiresAt: 10_000 };
+  };
+  harness.runtime.authenticateStaffWallet = async (_challengeId, signature) => {
+    staffSessionCalls += 1;
+    assert.deepEqual(signature, new Uint8Array(64).fill(9));
+    harness.nextState = readyState(WALLET_A);
+    return {
+      wallet: WALLET_A,
+      token: 'staff-token',
+      refreshedAt: 1_000,
+      expiresAt: 100_000,
+    };
+  };
+  harness.runtime.getIdToken = async () => harness.uid === WALLET_A ? 'staff-token' : `token:${harness.uid}`;
+  const wallet: SolanaAuthWalletState = {
+    ...walletState(WALLET_A),
+    signMessage: async (message) => {
+      signedMessage = new TextDecoder().decode(message);
+      return new Uint8Array(64).fill(9);
+    },
+  };
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(wallet, harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  const baselineFirebaseAuthentications = harness.anonymousUidCounter;
+  await act(async () => result.current.signIn());
+  assert.equal(staffChallengeCalls, 1);
+  assert.equal(staffSessionCalls, 1);
+  assert.equal(signedMessage, 'server staff challenge');
+  assert.equal(harness.authenticateCalls, 0);
+  assert.equal(harness.anonymousUidCounter, baselineFirebaseAuthentications);
+  assert.equal(result.current.sessionWallet, WALLET_A);
+  assert.equal(result.current.token, 'staff-token');
+  assert.equal(result.current.authSubject, WALLET_A);
+});
+
+test('wallet switching during staff exchange cannot install the stale credential', async () => {
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  harness.runtime.isStaffWallet = (wallet) => wallet === WALLET_A;
+  harness.runtime.hasStaffSession = (wallet) => harness.staffSession?.wallet === wallet;
+  harness.runtime.createStaffChallenge = async () => ({
+    challengeId: 'challenge',
+    message: 'server staff challenge',
+    expiresAt: 10_000,
+  });
+  const exchange = deferred<StaffWalletSession>();
+  harness.runtime.authenticateStaffWallet = async () => exchange.promise;
+  const { result, rerender } = renderHook(
+    ({ wallet }: { wallet: string | null }) => useSolanaAuthWithRuntime(walletState(wallet), harness.runtime),
+    { initialProps: { wallet: WALLET_A as string | null } },
+  );
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  let signIn!: Promise<{ wallet: string; token: string }>;
+  await act(async () => {
+    signIn = result.current.signIn();
+    await Promise.resolve();
+  });
+  rerender({ wallet: WALLET_B });
+  const rejected = assert.rejects(signIn, /Wallet changed during sign-in/);
+  await act(async () => exchange.resolve({
+    wallet: WALLET_A,
+    token: 'stale-staff-token',
+    refreshedAt: 1_000,
+    expiresAt: 100_000,
+  }));
+  await rejected;
+  assert.equal(harness.staffSession, null);
+  assert.notEqual(result.current.authSubject, WALLET_A);
+});
+
+test('same-wallet cross-tab replacement wins over an in-flight staff exchange', async () => {
+  const harness = new RuntimeHarness();
+  harness.nextState = emptyState();
+  harness.runtime.isStaffWallet = (wallet) => wallet === WALLET_A;
+  harness.runtime.hasStaffSession = (wallet) => harness.staffSession?.wallet === wallet;
+  harness.runtime.createStaffChallenge = async () => ({
+    challengeId: 'challenge',
+    message: 'server staff challenge',
+    expiresAt: 10_000,
+  });
+  const exchange = deferred<StaffWalletSession>();
+  harness.runtime.authenticateStaffWallet = async () => exchange.promise;
+  const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
+  await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
+  let signIn!: Promise<{ wallet: string; token: string }>;
+  await act(async () => {
+    signIn = result.current.signIn();
+    await Promise.resolve();
+  });
+  const replacement: StaffWalletSession = {
+    wallet: WALLET_A,
+    token: 'replacement-staff-token',
+    refreshedAt: 1_001,
+    expiresAt: 100_001,
+  };
+  await act(async () => {
+    harness.staffSession = replacement;
+    harness.emitAuthSubject(WALLET_A);
+  });
+  await act(async () => exchange.resolve({
+    wallet: WALLET_A,
+    token: 'stale-staff-token',
+    refreshedAt: 1_000,
+    expiresAt: 100_000,
+  }));
+  assert.deepEqual(await signIn, { wallet: WALLET_A, token: replacement.token });
+  assert.deepEqual(harness.staffSession, replacement);
+});
+
 test('terminal unauthenticated refreshes clear state and reset Firebase auth', async () => {
   const harness = new RuntimeHarness();
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(null), harness.runtime));
@@ -367,7 +523,7 @@ test('terminal unauthenticated refreshes clear state and reset Firebase auth', a
   };
   harness.signOutImpl = async () => {
     harness.loadImpl = async () => emptyState();
-    harness.emitAuthUid(null);
+    harness.emitAuthSubject(null);
   };
   await act(async () => assert.rejects(result.current.refreshProfileState(), /authentication expired/));
   assert.equal(harness.signOutCalls, 1);

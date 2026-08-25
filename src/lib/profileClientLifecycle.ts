@@ -109,25 +109,25 @@ export type OwnerRecoveryKey = {
 };
 
 export function stripeRecoveryKeyForResolvedSessions(
-  firebaseUid: string | null | undefined,
+  authSubject: string | null | undefined,
   sessionIds: readonly string[],
 ): string {
-  const uid = String(firebaseUid || '').trim();
+  const subject = String(authSubject || '').trim();
   const normalizedSessionIds = Array.from(
     new Set(sessionIds.map((sessionId) => String(sessionId || '').trim()).filter(Boolean)),
   ).sort();
-  return uid && normalizedSessionIds.length
-    ? `${uid}:${normalizedSessionIds.join('|')}`
+  return subject && normalizedSessionIds.length
+    ? `${subject}:${normalizedSessionIds.join('|')}`
     : '';
 }
 
 export function stripeInventoryRecoveryTargetForResolvedSessions(args: {
   owner: string | null | undefined;
-  firebaseUid: string | null | undefined;
+  authSubject: string | null | undefined;
   sessionIds: readonly string[];
 }): OwnerRecoveryKey | null {
   const owner = String(args.owner || '').trim();
-  const key = stripeRecoveryKeyForResolvedSessions(args.firebaseUid, args.sessionIds);
+  const key = stripeRecoveryKeyForResolvedSessions(args.authSubject, args.sessionIds);
   return owner && key ? { owner, key } : null;
 }
 

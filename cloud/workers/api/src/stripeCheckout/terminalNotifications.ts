@@ -7,7 +7,7 @@ import {
 } from '../../../../../shared/notificationEmailJob.js';
 import { toMillisMaybe } from '../time.js';
 import { createStripeReadyToShipNotificationJobs } from '../stripeReadyNotifications.js';
-import { STRIPE_CHECKOUT_STATUS } from './contract.js';
+import { STRIPE_CHECKOUT_OWNER_KIND_WALLET, STRIPE_CHECKOUT_STATUS } from './contract.js';
 
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
 
@@ -114,7 +114,9 @@ export async function publishStripeCheckoutTerminalNotifications(args: {
       livemode: checkout.livemode === true,
       variantKey: optionalTrimmedString(checkout.variantKey),
       owner: optionalTrimmedString(checkout.owner),
-      firebaseUid: optionalTrimmedString(checkout.firebaseUid || checkout.uid),
+      firebaseUid: optionalTrimmedString(
+        checkout.firebaseUid || (checkout.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_WALLET ? '' : checkout.uid),
+      ),
       manualRefundReviewReason: optionalTrimmedString(checkout.manualRefundReviewReason),
       lastFulfillmentError: checkout.lastFulfillmentError,
       createdAt: toMillisMaybe(checkout.createdAt),

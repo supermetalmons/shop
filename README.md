@@ -116,6 +116,19 @@ from each Firebase UID to its signed Solana wallet is D1-only in
 rebinding is temporarily blocked while profile reconciliation holds its
 bounded D1 lease, while same-wallet renewal remains available.
 
+Allowlisted fulfillment and admin wallets use a separate wallet-only staff
+session and do not depend on Firebase authentication. The API issues a
+five-minute, one-time Solana signing challenge, stores only the resulting
+opaque session secret hash in `mons-shop-ops`, and requires that staff session
+for every `/admin/*` and `/fulfillment/*` request. The browser restores the
+session under `monsStaffWalletSession:v1` and refreshes its 30-day inactivity
+window once per day. Removing a wallet from the committed staff access
+inventory invalidates its sessions immediately. Existing Firebase-backed staff
+sessions are discarded on first load so the wallet signs the new staff
+challenge once. Active challenges are reused, while Cloudflare Worker bindings
+rate-limit challenge and signature requests without storing caller counters in
+D1.
+
 ## Cloudflare deployment
 
 Use the repository's pinned Wrangler. Authenticate interactively with native

@@ -34,6 +34,7 @@ const migrationSql = [
   '0008_reveal_submissions.sql',
   '0009_reveal_submissions_d1_only.sql',
   '0010_reveal_submissions_baseline_index.sql',
+  '0011_staff_wallet_auth.sql',
 ]
   .map((name) => readFileSync(
     new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
@@ -92,6 +93,7 @@ function integrityInput(
         { name: '0008_reveal_submissions.sql' },
         { name: '0009_reveal_submissions_d1_only.sql' },
         { name: '0010_reveal_submissions_baseline_index.sql' },
+        { name: '0011_staff_wallet_auth.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
@@ -123,7 +125,7 @@ function integrityInput(
         FROM pragma_table_list
         WHERE
           schema = 'main' AND
-          name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
+          name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
         ORDER BY name`),
       walletSessionColumns: queryRows(db, 'PRAGMA table_info(wallet_sessions)'),
       walletSessionCounts: queryRows(db, 'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions'),
@@ -147,7 +149,7 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
     assert.deepEqual(controls, [controlRow()]);
     const tables = queryRows(
       db,
-      "SELECT name, strict FROM pragma_table_list WHERE name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'worker_controls', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'wallet_sessions', 'wallet_session_storage_control') ORDER BY name",
+      "SELECT name, strict FROM pragma_table_list WHERE name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'worker_controls', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'wallet_session_storage_control') ORDER BY name",
     );
     assert.deepEqual(tables, [
       { name: 'profile_addresses', strict: 1 },
@@ -156,6 +158,8 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
       { name: 'rate_limit_buckets', strict: 1 },
       { name: 'reveal_submission_storage_control', strict: 1 },
       { name: 'reveal_submissions', strict: 1 },
+      { name: 'staff_auth_challenges', strict: 1 },
+      { name: 'staff_auth_sessions', strict: 1 },
       { name: 'wallet_session_storage_control', strict: 1 },
       { name: 'wallet_sessions', strict: 1 },
       { name: 'worker_controls', strict: 1 },
@@ -186,6 +190,7 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
           { name: '0008_reveal_submissions.sql' },
           { name: '0009_reveal_submissions_d1_only.sql' },
           { name: '0010_reveal_submissions_baseline_index.sql' },
+          { name: '0011_staff_wallet_auth.sql' },
         ],
         profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
         profileCounts: queryRows(db, `SELECT
@@ -222,7 +227,7 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
           FROM pragma_table_list
           WHERE
             schema = 'main' AND
-            name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
+            name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
           ORDER BY name`,
         ),
         walletSessionColumns: queryRows(db, 'PRAGMA table_info(wallet_sessions)'),

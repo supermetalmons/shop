@@ -70,9 +70,13 @@ import {
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import {
+  isStaffRequestIdentity,
+  resolveRequestWallet,
+  verifyRequestIdentity,
+  type RequestIdentity,
+} from './requestIdentity.js';
 import {
   FirestoreWriteConflict,
   ProfileReadError,
@@ -206,7 +210,7 @@ type FinalizeDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyFirebaseIdToken;
+  verifyIdToken: typeof verifyRequestIdentity;
 };
 
 function statusForCode(code: AdminIrlRedeemFinalizeErrorCode): number {
@@ -1493,7 +1497,7 @@ function scheduleAdminPackStatusProjection(args: {
 
 async function finalizeAdminIrlRedeem(
   body: FinalizeRequest,
-  identity: FirebaseIdentity,
+  identity: RequestIdentity,
   env: FinalizeEnv,
   firestore: FirestoreContext,
   provider: ProviderContext,
@@ -1505,10 +1509,9 @@ async function finalizeAdminIrlRedeem(
   runtimeSupportsFinalize(runtime);
   let wallet: string;
   try {
-    wallet = canonicalWallet(await adminIrlRedeemRuntime.loadWalletSession(
-      firestore,
-      env.OPS_DB,
-      identity.uid,
+    wallet = canonicalWallet(await resolveRequestWallet(
+      identity,
+      (uid) => adminIrlRedeemRuntime.loadWalletSession(firestore, env.OPS_DB, uid),
     ));
   } catch (error) {
     if (isRecord(error) && error.code === 'unavailable') {
@@ -1620,7 +1623,7 @@ const defaultDependencies: FinalizeDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
 };
 
 async function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -1666,12 +1669,15 @@ export async function handleAdminIrlRedeemFinalize(
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new DOMException('Admin IRL redeem finalization timed out', 'TimeoutError')), dependencies.timeoutMs);
-  let identity: FirebaseIdentity | undefined;
+  let identity: RequestIdentity | undefined;
   let body: FinalizeRequest | undefined;
   let finalization: ReturnType<FinalizeDependencies['finalize']> | undefined;
   try {
     body = await readRequestBody(request, controller.signal);
     identity = await dependencies.verifyIdToken(request.headers.get('Authorization'), trackedFetch, controller.signal, dependencies.nowMs());
+    if (!isStaffRequestIdentity(identity)) {
+      throw new AdminIrlRedeemFinalizeError('unauthenticated', 'Staff wallet authentication is required.');
+    }
     const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
     const cosignerSecret = String(env.COSIGNER_SECRET || '').trim();

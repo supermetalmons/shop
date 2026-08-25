@@ -37,9 +37,14 @@ import { parseCanonicalPositiveInteger } from '../../../../shared/positiveIntege
 import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import {
+  isStaffOnlyApiPath,
+  isStaffRequestIdentity,
+  resolveRequestWallet,
+  verifyRequestIdentity,
+  type RequestIdentity,
+} from './requestIdentity.js';
 import {
   FIRESTORE_DOCUMENTS_BASE_URL,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
@@ -194,9 +199,12 @@ function profileCorsHeaders(origin: string): Record<string, string> {
   };
 }
 
-export function handleProfileCorsPreflight(request: Request): Response {
+export function handleProfileCorsPreflight(
+  request: Request,
+  isAllowedOrigin: (origin: string) => boolean = isAllowedProfileOrigin,
+): Response {
   const origin = request.headers.get('Origin') || '';
-  if (!isAllowedProfileOrigin(origin)) {
+  if (!isAllowedOrigin(origin)) {
     return errorResponse(new ProfileReadError('permission-denied', 403, 'Origin is not allowed.'));
   }
   return new Response(null, {
@@ -249,7 +257,7 @@ type ProfileReadDependencies = {
     providerFetch: ProfileProviderFetch,
     signal: AbortSignal,
     nowMs?: number,
-  ) => Promise<FirebaseIdentity>;
+  ) => Promise<RequestIdentity>;
 };
 
 type ProfileReadEnv = Pick<Env, 'FIRESTORE_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
@@ -271,7 +279,7 @@ const defaultDependencies: ProfileReadDependencies = {
     return resolveD1WalletSession(db, uid, signal);
   },
   timeoutMs: PROFILE_READ_TIMEOUT_MS,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
 };
 
 function documentIdentity(name: unknown): { dropId: string; deliveryId: number } | null {
@@ -934,7 +942,7 @@ export async function handleProfileReadRequest(
     () => controller.abort(new DOMException('Profile request timed out', 'TimeoutError')),
     dependencies.timeoutMs,
   );
-  let identity: FirebaseIdentity;
+  let identity: RequestIdentity;
   try {
     const requestBody = await parseExactRequestBody(request, path, controller.signal);
     identity = await dependencies.verifyIdToken(
@@ -943,6 +951,9 @@ export async function handleProfileReadRequest(
       controller.signal,
       dependencies.nowMs(),
     );
+    if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
+      throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
+    }
     const serviceAccountJson = typeof env.FIRESTORE_SERVICE_ACCOUNT_JSON === 'string'
       ? env.FIRESTORE_SERVICE_ACCOUNT_JSON
       : '';
@@ -960,11 +971,15 @@ export async function handleProfileReadRequest(
       signal: controller.signal,
     };
     if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
-      const orders = await loadDeliveryHistory({ ...common, owner: `firebase:${identity.uid}` });
+      const owner = identity.kind === 'staff-wallet' ? identity.wallet : `firebase:${identity.uid}`;
+      const orders = await loadDeliveryHistory({ ...common, owner });
       return { response: jsonResponse({ orders }, 200), metrics, authOutcome: 'accepted' };
     }
     if (path === PROFILE_STATE_PATH) {
-      const wallet = await loadOptionalSessionWallet({ ...sessionCommon, uid: identity.uid });
+      const wallet = await resolveRequestWallet(
+        identity,
+        (uid) => loadOptionalSessionWallet({ ...sessionCommon, uid }),
+      );
       if (!wallet) {
         const response: GetProfileStateResponse = {
           responseMode: 'profile-state',
@@ -999,7 +1014,7 @@ export async function handleProfileReadRequest(
       };
     }
     if (path === ADMIN_DELIVERY_ORDER_OWNERS_PATH) {
-      const wallet = await loadSessionWallet({ ...sessionCommon, uid: identity.uid });
+      const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({ ...sessionCommon, uid }));
       if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
         throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
       }
@@ -1015,7 +1030,7 @@ export async function handleProfileReadRequest(
     }
     if (path === FULFILLMENT_ORDERS_PATH || path === FULFILLMENT_MANUAL_REVIEW_PATH) {
       const dropId = requestBody.dropId!;
-      const wallet = await loadSessionWallet({ ...sessionCommon, uid: identity.uid });
+      const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({ ...sessionCommon, uid }));
       const access = fulfillmentAccess(wallet, dropId);
       if (path === FULFILLMENT_ORDERS_PATH) {
         const addressSecret = typeof env.ADDRESS_DECRYPTION_SECRET === 'string' ? env.ADDRESS_DECRYPTION_SECRET : '';
@@ -1046,7 +1061,7 @@ export async function handleProfileReadRequest(
       };
     }
     const ownerWallet = requestBody.ownerWallet!;
-    const wallet = await loadSessionWallet({ ...sessionCommon, uid: identity.uid });
+    const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({ ...sessionCommon, uid }));
     if (path === PROFILE_SHIPMENTS_PATH) {
       if (wallet !== ownerWallet) throw new ProfileReadError('unauthenticated', 401, 'Wallet session changed. Sign in again.');
       const orders = await loadDeliveryHistory({ ...common, owner: ownerWallet });

@@ -315,7 +315,7 @@ test('a new Stripe recovery key retriggers refresh and stale settlement cannot f
 test('authoritative Stripe subsets publish one stable inventory refresh target per resolved subset', () => {
   const firstResolved = stripeInventoryRecoveryTargetForResolvedSessions({
     owner: ' wallet-a ',
-    firebaseUid: ' uid-a ',
+    authSubject: ' uid-a ',
     sessionIds: ['cs_b', 'cs_a', 'cs_a', ''],
   });
   assert.deepEqual(firstResolved, {
@@ -332,7 +332,7 @@ test('authoritative Stripe subsets publish one stable inventory refresh target p
 
   const laterResolved = stripeInventoryRecoveryTargetForResolvedSessions({
     owner: 'wallet-a',
-    firebaseUid: 'uid-a',
+    authSubject: 'uid-a',
     sessionIds: ['cs_c'],
   });
   published = retainMatchingOwnerRecoveryKey(repeated, laterResolved!);
@@ -349,7 +349,7 @@ test('authoritative Stripe subsets publish one stable inventory refresh target p
   assert.equal(
     stripeInventoryRecoveryTargetForResolvedSessions({
       owner: 'wallet-a',
-      firebaseUid: 'uid-a',
+      authSubject: 'uid-a',
       sessionIds: [],
     }),
     null,

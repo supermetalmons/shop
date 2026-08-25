@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   deliveryOrderSummariesEqual,
-  firebaseAuthChangeInvalidatesSession,
+  authSubjectChangeInvalidatesSession,
   ownProfileShipmentsEmptyState,
   profileForAuthorizedView,
   stripeMergeReconciliationOptions,
@@ -12,23 +12,23 @@ import {
 const WALLET = '11111111111111111111111111111111';
 
 test('Firebase UID changes preserve only the expected initial sign-in authentication', () => {
-  assert.equal(firebaseAuthChangeInvalidatesSession({
-    previousUid: null,
-    nextUid: 'anonymous-user',
+  assert.equal(authSubjectChangeInvalidatesSession({
+    previousSubject: null,
+    nextSubject: 'anonymous-user',
     signInActive: true,
-    activeSignInUid: null,
+    activeSignInSubject: null,
   }), false);
-  assert.equal(firebaseAuthChangeInvalidatesSession({
-    previousUid: 'signed-user',
-    nextUid: 'different-user',
+  assert.equal(authSubjectChangeInvalidatesSession({
+    previousSubject: 'signed-user',
+    nextSubject: 'different-user',
     signInActive: true,
-    activeSignInUid: 'signed-user',
+    activeSignInSubject: 'signed-user',
   }), true);
-  assert.equal(firebaseAuthChangeInvalidatesSession({
-    previousUid: 'signed-user',
-    nextUid: null,
+  assert.equal(authSubjectChangeInvalidatesSession({
+    previousSubject: 'signed-user',
+    nextSubject: null,
     signInActive: false,
-    activeSignInUid: null,
+    activeSignInSubject: null,
   }), true);
 });
 

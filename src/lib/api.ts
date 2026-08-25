@@ -75,6 +75,7 @@ import {
 import { createProfileAddressId } from '../../shared/profileD1.ts';
 import { fetchPackStatus } from './shopApi';
 import { monsApiOrigin } from './monsApiOrigin';
+import { ensureStaffWalletSession } from './staffWalletSession';
 
 export type {
   PrepareDeliveryRequest,
@@ -107,6 +108,8 @@ async function waitForAuthStateReady(localAuth: Auth): Promise<void> {
 }
 
 export async function ensureAuthenticated(): Promise<string> {
+  const staffSession = await ensureStaffWalletSession();
+  if (staffSession) return staffSession.wallet;
   const localAuth = auth;
   if (!localAuth) throw new Error('Firebase client is not configured');
 
@@ -205,16 +208,27 @@ export function fulfillmentShipStationAddressCorrectionDetails(
   return parseFulfillmentShipStationAddressCorrectionDetails(error.details);
 }
 
-async function authenticatedUserToken(forceRefresh: boolean): Promise<string> {
+type AuthenticatedUserCredential = {
+  authSubject: string;
+  token: string;
+};
+
+async function authenticatedUserCredential(forceRefresh: boolean): Promise<AuthenticatedUserCredential> {
+  const staffSession = await ensureStaffWalletSession(forceRefresh);
+  if (staffSession) return { authSubject: staffSession.wallet, token: staffSession.token };
   const uid = await ensureAuthenticated();
   const user = auth?.currentUser;
   if (!user || user.uid !== uid) throw new ProfileApiError({ code: 'unauthenticated', message: 'Authentication is required.' });
-  return user.getIdToken(forceRefresh);
+  return { authSubject: uid, token: await user.getIdToken(forceRefresh) };
+}
+
+export async function authenticatedUserToken(forceRefresh: boolean): Promise<string> {
+  return (await authenticatedUserCredential(forceRefresh)).token;
 }
 
 type ProfileApiClientDependencies = {
   fetch: typeof fetch;
-  getToken: (forceRefresh: boolean) => Promise<string>;
+  getToken: (forceRefresh: boolean) => Promise<string | AuthenticatedUserCredential>;
   origin: () => string;
   timeoutMs: number;
 };
@@ -250,7 +264,7 @@ type AuthenticatedApiPath =
 
 const defaultProfileApiDependencies: ProfileApiClientDependencies = {
   fetch: (input, init) => fetch(input, init),
-  getToken: authenticatedUserToken,
+  getToken: authenticatedUserCredential,
   origin: monsApiOrigin,
   timeoutMs: 20_000,
 };
@@ -323,6 +337,7 @@ async function requestProfileApi<Req>(
   pathname: AuthenticatedApiPath,
   data: Req,
   dependencies: ProfileApiClientDependencies,
+  credentialCapture?: { authSubject?: string },
 ): Promise<unknown> {
   const startedAt = Date.now();
   const callId = DEBUG_API ? makeCallId() : undefined;
@@ -334,7 +349,11 @@ async function requestProfileApi<Req>(
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const token = await waitForProfileApiValue(dependencies.getToken(attempt > 0), controller.signal);
+        const credential = await waitForProfileApiValue(dependencies.getToken(attempt > 0), controller.signal);
+        const token = typeof credential === 'string' ? credential : credential.token;
+        if (typeof credential !== 'string' && credentialCapture) {
+          credentialCapture.authSubject = credential.authSubject;
+        }
         if (DEBUG_API) {
           console.info(`[mons/api] → ${pathname}`, { callId, payload: summarizePayloadShape(data) });
         }
@@ -387,11 +406,12 @@ async function requestProfileApi<Req>(
 async function callProfileApi<Req>(
   pathname: AuthenticatedApiPath,
   data: Req,
+  credentialCapture?: { authSubject?: string },
 ): Promise<unknown> {
   return requestProfileApi(pathname, data, {
     ...defaultProfileApiDependencies,
     timeoutMs: profileApiTimeoutMs(pathname),
-  });
+  }, credentialCapture);
 }
 
 function profileOrders(value: unknown): DeliveryOrderSummary[] | null {
@@ -1127,11 +1147,14 @@ function parseStripeCheckoutSessionResponse(value: unknown): StripeCheckoutSessi
   return { id: value.id, url: value.url, livemode: value.livemode };
 }
 
-export async function createStripeCheckoutSession(args: StripeCheckoutSessionRequest): Promise<StripeCheckoutSessionResponse> {
-  const response = await callProfileApi('/checkout/session', stripeCheckoutSessionPayload(args));
+export async function createStripeCheckoutSession(
+  args: StripeCheckoutSessionRequest,
+): Promise<StripeCheckoutSessionResponse & { authSubject: string }> {
+  const credential: { authSubject?: string } = {};
+  const response = await callProfileApi('/checkout/session', stripeCheckoutSessionPayload(args), credential);
   const session = parseStripeCheckoutSessionResponse(response);
-  if (!session) throw new Error('Invalid Stripe checkout session response');
-  return session;
+  if (!session || !credential.authSubject) throw new Error('Invalid Stripe checkout session response');
+  return { ...session, authSubject: credential.authSubject };
 }
 
 function packStatusFrontendDropForDropId(dropId: string): FrontendDeploymentConfig | null {

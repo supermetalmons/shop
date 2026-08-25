@@ -16,6 +16,7 @@ const OPS_D1_MIGRATIONS = [
   '0008_reveal_submissions.sql',
   '0009_reveal_submissions_d1_only.sql',
   '0010_reveal_submissions_baseline_index.sql',
+  '0011_staff_wallet_auth.sql',
 ] as const;
 
 const PRODUCTION_MIN_PROFILE_COUNT = 690;
@@ -107,6 +108,46 @@ const expectedSchema = new Map<
   string,
   { fingerprint: string; type: string; tableName: string }
 >([
+  [
+    'staff_auth_challenges',
+    {
+      fingerprint: '86954545cba1f42dd9a778efc90615ca911eebcfe5e9727416e50176c680f67e',
+      type: 'table',
+      tableName: 'staff_auth_challenges',
+    },
+  ],
+  [
+    'staff_auth_challenges_expires_at_ms',
+    {
+      fingerprint: 'a5d6fff7130b51a8402033b0567044b34b1c93890d8c977e13dd4ba0309bb8a1',
+      type: 'index',
+      tableName: 'staff_auth_challenges',
+    },
+  ],
+  [
+    'staff_auth_sessions',
+    {
+      fingerprint: '402a5a3d60d61711a21037db9cf4dc959835983e6bf6c4c877a1d176f3d0deee',
+      type: 'table',
+      tableName: 'staff_auth_sessions',
+    },
+  ],
+  [
+    'staff_auth_sessions_expires_at_ms',
+    {
+      fingerprint: '8c2b017cdff5784d201488410419c15c601a983814ee654333aa4d5d48f5ff0d',
+      type: 'index',
+      tableName: 'staff_auth_sessions',
+    },
+  ],
+  [
+    'staff_auth_sessions_wallet',
+    {
+      fingerprint: 'b875009c658d267620488b533c013a508059f9a72a8ddb92943ab4f5bd2b3d7e',
+      type: 'index',
+      tableName: 'staff_auth_sessions',
+    },
+  ],
   [
     'reveal_submissions_status_created_at_ms',
     {
@@ -998,6 +1039,8 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
           'rate_limit_buckets',
           'reveal_submission_storage_control',
           'reveal_submissions',
+          'staff_auth_challenges',
+          'staff_auth_sessions',
           'wallet_sessions',
           'wallet_session_storage_control',
           'worker_controls'

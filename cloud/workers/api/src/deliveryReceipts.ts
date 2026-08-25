@@ -103,9 +103,8 @@ import {
 } from '../../../../shared/solanaRpcProxy.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import { resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENTS_BASE_URL,
@@ -369,7 +368,7 @@ type DeliveryReceiptDependencies = {
   accessTokenProvider: GoogleAccessTokenProvider;
   issue: (
     body: IssueRequest,
-    identity: FirebaseIdentity,
+    identity: RequestIdentity,
     env: DeliveryReceiptsEnv,
     firestore: FirestoreContext,
     provider: ProviderContext,
@@ -379,14 +378,14 @@ type DeliveryReceiptDependencies = {
   providerFetch: ProfileProviderFetch;
   recover: (
     body: RecoverRequest,
-    identity: FirebaseIdentity,
+    identity: RequestIdentity,
     env: DeliveryReceiptsEnv,
     firestore: FirestoreContext,
     provider: ProviderContext,
     waitUntil: DeliveryReceiptWaitUntil,
   ) => Promise<RecoverDeliveryOrdersResult>;
   timeoutMs: number;
-  verifyIdToken: typeof verifyFirebaseIdToken;
+  verifyIdToken: typeof verifyRequestIdentity;
 };
 
 function statusForCode(code: DeliveryReceiptErrorCode): number {
@@ -3905,13 +3904,13 @@ function normalizeRecoveryMessage(error: unknown): string | undefined {
 
 async function issueReceiptsRequest(
   body: IssueRequest,
-  identity: FirebaseIdentity,
+  identity: RequestIdentity,
   env: DeliveryReceiptsEnv,
   firestore: FirestoreContext,
   provider: ProviderContext,
   waitUntil: DeliveryReceiptWaitUntil,
 ): Promise<ReceiptIssueResult> {
-  const wallet = await loadWalletSession(firestore, env.OPS_DB, identity.uid);
+  const wallet = await resolveRequestWallet(identity, (uid) => loadWalletSession(firestore, env.OPS_DB, uid));
   const ownerWallet = canonicalPublicKey(body.owner, 'wallet address').toBase58();
   if (wallet !== ownerWallet) throw new DeliveryReceiptError('permission-denied', 'Owners only.');
   if (!isNonZeroBase58Bytes(body.signature, 64)) {
@@ -3985,13 +3984,13 @@ async function hasConfirmedDeliveryRecord(
 
 async function recoverReceiptsRequest(
   body: RecoverRequest,
-  identity: FirebaseIdentity,
+  identity: RequestIdentity,
   env: DeliveryReceiptsEnv,
   firestore: FirestoreContext,
   provider: ProviderContext,
   waitUntil: DeliveryReceiptWaitUntil,
 ): Promise<RecoverDeliveryOrdersResult> {
-  const wallet = await loadWalletSession(firestore, env.OPS_DB, identity.uid);
+  const wallet = await resolveRequestWallet(identity, (uid) => loadWalletSession(firestore, env.OPS_DB, uid));
   if (body.deliveryId !== undefined && body.dropId === undefined) {
     throw new DeliveryReceiptError('invalid-argument', 'deliveryId requires dropId.');
   }
@@ -4184,7 +4183,7 @@ const defaultDependencies: DeliveryReceiptDependencies = {
   providerFetch: (input, init) => fetch(input, init),
   recover: recoverReceiptsRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
 };
 
 export async function handleDeliveryReceiptRequest(
@@ -4220,7 +4219,7 @@ export async function handleDeliveryReceiptRequest(
       metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
     }
   };
-  let identity: FirebaseIdentity | undefined;
+  let identity: RequestIdentity | undefined;
   let dropId: string | undefined;
   let deliveryId: number | undefined;
   try {

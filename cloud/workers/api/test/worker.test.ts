@@ -29,11 +29,13 @@ import {
   sleepWithAbort,
   type ProviderFetch,
 } from '../src/index.ts';
+import { isStaffOnlyApiPath } from '../src/requestIdentity.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const CARD_COLLECTION = 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu';
 const SIGNATURE = bs58.encode(new Uint8Array(64).fill(1));
 const TRANSACTION = Buffer.from([1, 2, 3]).toString('base64');
+const allowRateLimit = { limit: async () => ({ success: true }) } satisfies RateLimit;
 
 function env(options: {
   apiKey?: string;
@@ -51,6 +53,8 @@ function env(options: {
   return {
     DATA_DB: options.dataDb || {} as D1Database,
     OPS_DB: options.opsDb || {} as D1Database,
+    STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
+    STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     NOTIFICATION_EMAIL_QUEUE: notificationQueue,
     REVEAL_BACKGROUND_QUEUE: notificationQueue,
     STRIPE_FULFILLMENT_QUEUE: notificationQueue,
@@ -345,6 +349,15 @@ test('profile routes enforce restricted CORS, bearer authentication, and stable 
   assert.equal(deniedPreflight.status, 403);
   assert.equal((await deniedPreflight.json() as { error: { code: string } }).error.code, 'permission-denied');
 
+  for (const pathname of ['/admin/profile', '/fulfillment/orders']) {
+    const staffPreflight = await handleRequest(new Request(`https://api.mons.shop${pathname}`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://mons.shop' },
+    }), env(), quietDependencies(fetch));
+    assert.equal(staffPreflight.status, 204);
+    assert.equal(staffPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  }
+
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request('/profile/state', {}, {
     Origin: 'https://mons.shop',
@@ -392,6 +405,42 @@ test('profile routes enforce restricted CORS, bearer authentication, and stable 
   assert.equal(deniedOrigin.status, 403);
   assert.equal(upstreamCalls, 0);
   assert.equal(JSON.stringify(await deniedOrigin.json()).includes('private-token'), false);
+});
+
+test('staff-only path policy covers current and future admin and fulfillment routes', async () => {
+  for (const pathname of [
+    '/admin/profile',
+    '/admin/irl-redeem/prepare',
+    '/admin/future',
+    '/fulfillment/orders',
+    '/fulfillment/order-status',
+    '/fulfillment/future',
+  ]) assert.equal(isStaffOnlyApiPath(pathname), true, pathname);
+  for (const pathname of ['/admin', '/fulfillment', '/profile/state', '/staff/auth/session']) {
+    assert.equal(isStaffOnlyApiPath(pathname), false, pathname);
+  }
+  const future = await handleRequest(request('/admin/future', {}, {
+    Authorization: 'Bearer firebase-token',
+    Origin: 'https://mons.shop',
+  }), env(), quietDependencies(fetch));
+  assert.equal(future.status, 401);
+  assert.equal((await future.json() as { error: { code: string } }).error.code, 'unauthenticated');
+});
+
+test('staff auth preflight accepts only dedicated staff origins', async () => {
+  const denied = await handleRequest(new Request('https://api.mons.shop/staff/auth/challenge', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://deadbeef-mons-shop.lil-org.workers.dev' },
+  }), env(), quietDependencies(fetch));
+  assert.equal(denied.status, 403);
+
+  const candidateOrigin = 'https://candidate-mons-shop.lil-org.workers.dev';
+  const allowed = await handleRequest(new Request('https://api.mons.shop/staff/auth/challenge', {
+    method: 'OPTIONS',
+    headers: { Origin: candidateOrigin },
+  }), env(), quietDependencies(fetch));
+  assert.equal(allowed.status, 204);
+  assert.equal(allowed.headers.get('access-control-allow-origin'), candidateOrigin);
 });
 
 test('checkout route enforces restricted CORS, bearer authentication, methods, and stable logging', async () => {
@@ -626,8 +675,8 @@ test('Admin IRL preparation route enforces restricted CORS, bearer authenticatio
   assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
   assert.equal(logs[0]?.route, pathname);
   assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
-  assert.equal(logs[0]?.adminIrlRedeemPrepareDropId, 'card_nft_2');
-  assert.equal(logs[0]?.adminIrlRedeemPrepareItemCount, 1);
+  assert.equal(logs[0]?.adminIrlRedeemPrepareDropId, undefined);
+  assert.equal(logs[0]?.adminIrlRedeemPrepareItemCount, undefined);
   assert.equal(JSON.stringify(logs).includes(OWNER), false);
   assert.equal(JSON.stringify(logs).includes(CARD_COLLECTION), false);
 
@@ -639,8 +688,8 @@ test('Admin IRL preparation route enforces restricted CORS, bearer authenticatio
   const wrongMethod = await handleRequest(new Request(`https://api.mons.shop${pathname}`, {
     headers: { Origin: 'https://mons.shop' },
   }), env(), quietDependencies(fetch));
-  assert.equal(wrongMethod.status, 405);
-  assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
+  assert.equal(wrongMethod.status, 401);
+  assert.equal(wrongMethod.headers.get('allow'), null);
 });
 
 test('Admin IRL finalization route enforces restricted CORS, bearer authentication, methods, and safe logging', async () => {
@@ -670,8 +719,8 @@ test('Admin IRL finalization route enforces restricted CORS, bearer authenticati
   assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
   assert.equal(logs[0]?.route, pathname);
   assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
-  assert.equal(logs[0]?.adminIrlRedeemFinalizeDropId, 'card_nft_2');
-  assert.equal(logs[0]?.adminIrlRedeemFinalizeOutcome, 'unauthenticated');
+  assert.equal(logs[0]?.adminIrlRedeemFinalizeDropId, undefined);
+  assert.equal(logs[0]?.adminIrlRedeemFinalizeOutcome, undefined);
   assert.equal(JSON.stringify(logs).includes(body.requestId), false);
   assert.equal(JSON.stringify(logs).includes(body.transferSignature), false);
 
@@ -683,8 +732,8 @@ test('Admin IRL finalization route enforces restricted CORS, bearer authenticati
   const wrongMethod = await handleRequest(new Request(`https://api.mons.shop${pathname}`, {
     headers: { Origin: 'https://mons.shop' },
   }), env(), quietDependencies(fetch));
-  assert.equal(wrongMethod.status, 405);
-  assert.equal(wrongMethod.headers.get('allow'), 'POST, OPTIONS');
+  assert.equal(wrongMethod.status, 401);
+  assert.equal(wrongMethod.headers.get('allow'), null);
 });
 
 test('reveal route enforces restricted CORS, bearer authentication, methods, and stable logging', async () => {
@@ -784,9 +833,9 @@ test('profile write routes use restricted CORS, bearer authentication, and stabl
   }
 
   const method = await handleRequest(new Request('https://api.mons.shop/fulfillment/order-status'), env(), quietDependencies(fetch));
-  assert.equal(method.status, 405);
-  assert.equal(method.headers.get('allow'), 'POST, OPTIONS');
-  assert.equal((await method.json() as { error: { code: string } }).error.code, 'invalid-argument');
+  assert.equal(method.status, 401);
+  assert.equal(method.headers.get('allow'), null);
+  assert.equal((await method.json() as { error: { code: string } }).error.code, 'unauthenticated');
 });
 
 test('pack-status route reads every supported drop from D1 only', async () => {
@@ -1258,9 +1307,20 @@ test('internal notification enqueue rejects signed invalid jobs and surfaces que
   assert.deepEqual(await unavailable.json(), { ok: false, error: 'enqueue-unavailable' });
 });
 
-test('production config has no Worker rate limits', () => {
+test('production config has exact staff authentication rate limits', () => {
   const config = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
-  assert.equal(Object.hasOwn(config, 'ratelimits'), false);
+  assert.deepEqual(config.ratelimits, [
+    {
+      name: 'STAFF_AUTH_CHALLENGE_RATE_LIMITER',
+      namespace_id: '1142143110',
+      simple: { limit: 10, period: 60 },
+    },
+    {
+      name: 'STAFF_AUTH_SESSION_RATE_LIMITER',
+      namespace_id: '1361289553',
+      simple: { limit: 30, period: 60 },
+    },
+  ]);
 });
 
 test('RPC routing applies its restricted CORS policy and HTTP-only contract', async () => {

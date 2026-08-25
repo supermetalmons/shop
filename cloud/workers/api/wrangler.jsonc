@@ -24,6 +24,24 @@
       "migrations_dir": "ops-migrations"
     }
   ],
+  "ratelimits": [
+    {
+      "name": "STAFF_AUTH_CHALLENGE_RATE_LIMITER",
+      "namespace_id": "1142143110",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    },
+    {
+      "name": "STAFF_AUTH_SESSION_RATE_LIMITER",
+      "namespace_id": "1361289553",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    }
+  ],
   "routes": [
     {
       "pattern": "api.mons.shop",

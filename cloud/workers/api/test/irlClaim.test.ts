@@ -137,7 +137,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadClaim: async () => ({ dropId: DROP_ID, boxId: 7, dudeIds: [1, 2, 3] }),
     resolveLegacyDropIds: async () => [],

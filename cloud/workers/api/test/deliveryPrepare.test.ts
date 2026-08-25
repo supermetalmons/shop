@@ -160,7 +160,7 @@ function env(overrides: Record<string, string> = {}) {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadWalletSession: async () => OWNER.publicKey.toBase58(),
     loadAddress: async () => ({
@@ -808,7 +808,7 @@ test('delivery preparation reports an authenticated stalled request body as a de
   } as RequestInit & { duplex: 'half' });
   const result = await handleDeliveryPrepare(stalledRequest, env(), {
     timeoutMs: 5,
-    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
   });
   assert.equal(result.response.status, 504);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');

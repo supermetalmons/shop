@@ -91,7 +91,7 @@ function profileDependencies(
     providerFetch,
     resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
     timeoutMs: 500,
-    verifyIdToken: async () => ({ uid: UID }),
+    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: UID }),
     ...overrides,
   };
 }
@@ -341,6 +341,30 @@ test('profile state uses D1 wallet sessions without requesting Firestore authSes
   assert.equal((await result.response.json() as { sessionWallet: string }).sessionWallet, OWNER);
 });
 
+test('staff profile state uses the wallet principal without a Firebase session row', async () => {
+  const result = await handleProfileReadRequest(
+    tokenRequest(PROFILE_STATE_PATH, {}),
+    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    PROFILE_STATE_PATH,
+    profileDependencies(async (input) => {
+      const url = String(input);
+      if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
+      if (url.endsWith('/documents:runQuery')) return Response.json([]);
+      return Response.json({ error: 'unexpected' }, { status: 500 });
+    }, {
+      resolveD1WalletSession: async () => assert.fail('staff identity reached Firebase wallet-session resolution'),
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), {
+    responseMode: 'profile-state',
+    sessionWallet: OWNER,
+    profile: { status: 'ready', value: { wallet: OWNER } },
+    shipments: { status: 'ready', value: [] },
+  });
+});
+
 test('profile state returns a settled empty session and preserves legacy wallet UIDs', async () => {
   const missing = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
@@ -369,7 +393,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
         return Response.json({ error: 'unexpected' }, { status: 500 });
       }),
       resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'legacy_uid' }),
-      verifyIdToken: async () => ({ uid: OWNER }),
+      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: OWNER }),
     },
   );
   assert.deepEqual(await legacy.response.json(), {
@@ -474,7 +498,7 @@ test('shipment route preserves legacy wallet-shaped Firebase UIDs when no sessio
         if (match?.[1]) owners.push(match[1]);
         return Response.json([]);
       }),
-      verifyIdToken: async () => ({ uid: OWNER }),
+      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: OWNER }),
     },
   );
   assert.equal(result.response.status, 200);
@@ -483,6 +507,16 @@ test('shipment route preserves legacy wallet-shaped Firebase UIDs when no sessio
 });
 
 test('admin profile route enforces the existing wallet allowlist and returns canonical delivery summaries', async () => {
+  const firebaseOnly = await handleProfileReadRequest(
+    tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
+    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    ADMIN_PROFILE_PATH,
+    profileDependencies(async () => Response.json([]), {
+      verifyIdToken: async () => ({ kind: 'firebase' as const, uid: UID }),
+    }),
+  );
+  assert.equal(firebaseOnly.response.status, 401);
+
   const denied = await handleProfileReadRequest(
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
@@ -492,6 +526,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     }, {
       loadProfileEmail: async () => 'owner@example.com',
       resolveD1WalletSession: async () => ({ wallet: OTHER, source: 'session' }),
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
   assert.equal(denied.response.status, 403);
@@ -509,6 +544,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     }, {
       loadProfileEmail: async () => 'owner@example.com',
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.equal(accepted.response.status, 200);
@@ -538,6 +574,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.equal(missingProfile.response.status, 200);
@@ -556,6 +593,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
         throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
       },
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.equal(unavailableProfile.response.status, 502);
@@ -583,6 +621,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
       ]);
     }, {
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.deepEqual(await owners.response.json(), { owners: [OWNER, OTHER], nextCursor: null, hasMore: false });
@@ -608,6 +647,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
       } }]);
     }, {
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.deepEqual(await fulfillment.response.json(), {
@@ -649,6 +689,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
       } }]);
     }, {
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.deepEqual(await manual.response.json(), {

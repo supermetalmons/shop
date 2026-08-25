@@ -65,9 +65,8 @@ import {
 } from '../../../../shared/shipping.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import { resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENTS_BASE_URL,
@@ -246,7 +245,7 @@ type DeliveryPrepareDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyFirebaseIdToken;
+  verifyIdToken: typeof verifyRequestIdentity;
 };
 
 type DeliveryPrepareMetrics = {
@@ -1295,15 +1294,14 @@ async function prepareDelivery(args: {
   body: PrepareDeliveryRequest;
   context: FirestoreContext;
   providerContext: ProviderContext;
-  identity: FirebaseIdentity;
+  identity: RequestIdentity;
   env: DeliveryPrepareEnv;
   dependencies: DeliveryPrepareDependencies;
   prepareAttemptId?: string;
 }): Promise<PrepareDeliveryResponse> {
-  const sessionWallet = await args.dependencies.loadWalletSession(
-    args.context,
-    args.env.OPS_DB,
-    args.identity.uid,
+  const sessionWallet = await resolveRequestWallet(
+    args.identity,
+    (uid) => args.dependencies.loadWalletSession(args.context, args.env.OPS_DB, uid),
   );
   const owner = canonicalPublicKey(args.body.owner, 'wallet address');
   const ownerWallet = owner.toBase58();
@@ -1448,7 +1446,7 @@ const defaultDependencies: DeliveryPrepareDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
 };
 
 export async function handleDeliveryPrepare(
@@ -1482,7 +1480,7 @@ export async function handleDeliveryPrepare(
     () => controller.abort(new DOMException('Delivery preparation request timed out', 'TimeoutError')),
     dependencies.timeoutMs,
   );
-  let identity: FirebaseIdentity | undefined;
+  let identity: RequestIdentity | undefined;
   let dropId: string | undefined;
   try {
     identity = await dependencies.verifyIdToken(

@@ -126,7 +126,7 @@ function env(overrides: Record<string, string> = {}) {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER.toBase58() }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadWalletSession: async () => OWNER.toBase58(),
     loadReceiptMarker: async () => false,
@@ -269,8 +269,14 @@ test('Admin IRL preparation enforces exact requests, methods, authentication, an
   }));
   assert.equal(unauthenticated.response.status, 401);
 
+  const firebaseOnly = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
+    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
+  }));
+  assert.equal(firebaseOnly.response.status, 401);
+
   const wrongOwner = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
     loadWalletSession: async () => ADMIN.toBase58(),
+    verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN.toBase58() }),
   }));
   assert.equal(wrongOwner.response.status, 403);
 });

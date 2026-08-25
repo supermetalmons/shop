@@ -77,9 +77,13 @@ import {
 } from '../../../../shared/solanaProgramAddresses.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import {
+  isStaffRequestIdentity,
+  resolveRequestWallet,
+  verifyRequestIdentity,
+  type RequestIdentity,
+} from './requestIdentity.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENTS_BASE_URL,
@@ -235,7 +239,7 @@ type AdminIrlRedeemPrepareDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyFirebaseIdToken;
+  verifyIdToken: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
   loadWalletSession: (
     context: FirestoreContext,
@@ -1189,7 +1193,7 @@ async function mapWithConcurrency<T, R>(
 async function prepareAdminIrlRedeem(args: {
   body: AdminIrlRedeemPrepareRequest;
   db: D1Database | undefined;
-  identity: FirebaseIdentity;
+  identity: RequestIdentity;
   firestoreContext: FirestoreContext;
   providerContext: ProviderContext;
   dependencies: AdminIrlRedeemPrepareDependencies;
@@ -1202,10 +1206,9 @@ async function prepareAdminIrlRedeem(args: {
   assertSupportedRuntime(runtime);
   const owner = canonicalPublicKey(args.body.owner, 'wallet address');
   const ownerWallet = owner.toBase58();
-  const sessionWallet = await args.dependencies.loadWalletSession(
-    args.firestoreContext,
-    args.db,
-    args.identity.uid,
+  const sessionWallet = await resolveRequestWallet(
+    args.identity,
+    (uid) => args.dependencies.loadWalletSession(args.firestoreContext, args.db, uid),
   );
   if (!walletHasAdminIrlRedeemAccess(sessionWallet, ADMIN_IRL_REDEEM_WALLETS)) {
     throw new AdminIrlRedeemPrepareError('permission-denied', 'Admin IRL Redeem access denied.');
@@ -1371,7 +1374,7 @@ const defaultDependencies: AdminIrlRedeemPrepareDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
   getDrop: getApiDrop,
   loadWalletSession,
   loadReceiptMarker,
@@ -1415,7 +1418,7 @@ export async function handleAdminIrlRedeemPrepare(
     () => controller.abort(new DOMException('Admin IRL redeem preparation timed out', 'TimeoutError')),
     dependencies.timeoutMs,
   );
-  let identity: FirebaseIdentity | undefined;
+  let identity: RequestIdentity | undefined;
   let dropId: string | undefined;
   let targetKind: AdminIrlRedeemTargetKind | undefined;
   let itemCount: number | undefined;
@@ -1429,6 +1432,9 @@ export async function handleAdminIrlRedeemPrepare(
       controller.signal,
       dependencies.nowMs(),
     );
+    if (!isStaffRequestIdentity(identity)) {
+      throw new AdminIrlRedeemPrepareError('unauthenticated', 'Staff wallet authentication is required.');
+    }
     const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
     if (!serviceAccountJson || !apiKey) {

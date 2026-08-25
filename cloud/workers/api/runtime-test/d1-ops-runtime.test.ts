@@ -110,6 +110,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       '0008_reveal_submissions.sql',
       '0009_reveal_submissions_d1_only.sql',
       '0010_reveal_submissions_baseline_index.sql',
+      '0011_staff_wallet_auth.sql',
     ]);
     await assert.rejects(loadRevealSubmissionStorageControl(env.OPS_DB));
     await env.OPS_DB.batch(Array.from({ length: 14 }, (_, index) => env.OPS_DB.prepare(

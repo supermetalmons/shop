@@ -164,6 +164,8 @@ const providerFetch: ProviderFetch = async (_input, init) => {
 const env: Env = {
   DATA_DB: {} as D1Database,
   OPS_DB: {} as D1Database,
+  STAFF_AUTH_CHALLENGE_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  STAFF_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },
   NOTIFICATION_EMAIL_QUEUE: {
     send: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
     sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),

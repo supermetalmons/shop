@@ -7,6 +7,7 @@ import {
   preparedDeliveryRecoveryNextCheckMs,
   processingDeliveryRecoveryNextCheckMs,
 } from '../../../../shared/deliveryRecovery.js';
+import { isStaffWalletAddress } from '../../../../shared/fulfillmentAccess.js';
 import { parseDropDeliveryOrderPath } from './dropPaths.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
 import { stripeCheckoutOwnerId } from '../../../../shared/stripeCheckoutSession.js';
@@ -22,9 +23,12 @@ import {
 } from '../../../../shared/walletLifecycle.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import {
+  isStaffRequestIdentity,
+  verifyRequestIdentity,
+  type RequestIdentity,
+} from './requestIdentity.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENTS_BASE_URL,
@@ -105,6 +109,7 @@ type ProfileLifecycleDependencies = {
   acquireWalletSessionReconcileLease: typeof acquireWalletSessionReconcileLease;
   accessTokenProvider: GoogleAccessTokenProvider;
   establishD1WalletSession: typeof establishD1WalletSession;
+  isStaffWallet: typeof isStaffWalletAddress;
   loadD1WalletSession: typeof loadD1WalletSession;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
@@ -121,7 +126,7 @@ type ProfileLifecycleDependencies = {
     providerFetch: ProfileProviderFetch,
     signal: AbortSignal,
     nowMs?: number,
-  ) => Promise<FirebaseIdentity>;
+  ) => Promise<RequestIdentity>;
 };
 
 type ProfileLifecycleEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'OPS_DB'>>;
@@ -237,7 +242,7 @@ async function pauseForConflict(signal: AbortSignal, attempt: number): Promise<v
 }
 
 function validateWalletSessionSignature(params: {
-  identity: FirebaseIdentity;
+  identity: Extract<RequestIdentity, { kind: 'firebase' }>;
   message: string;
   nowMs: number;
   originHostname: string;
@@ -440,13 +445,15 @@ async function reconcileProfileState(params: {
     | 'releaseWalletSessionReconcileLease'
     | 'resolveD1WalletSession'
   >;
-  identity: FirebaseIdentity;
+  identity: RequestIdentity;
   nowMs: number;
 }): Promise<ReconcileProfileStateResponse> {
   let wallet: string;
   let mergedStripeDeliveryOrders = 0;
   if (!params.db) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
-  if (params.body.mergeStripeDeliveryOrders === true) {
+  if (params.identity.kind === 'staff-wallet') {
+    wallet = params.identity.wallet;
+  } else if (params.body.mergeStripeDeliveryOrders === true) {
     let lease;
     try {
       lease = await params.dependencies.acquireWalletSessionReconcileLease({
@@ -505,6 +512,7 @@ const defaultDependencies: ProfileLifecycleDependencies = {
   acquireWalletSessionReconcileLease,
   accessTokenProvider: defaultAccessTokenProvider,
   establishD1WalletSession,
+  isStaffWallet: isStaffWalletAddress,
   loadD1WalletSession,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
@@ -515,7 +523,7 @@ const defaultDependencies: ProfileLifecycleDependencies = {
   },
   releaseWalletSessionReconcileLease,
   resolveD1WalletSession,
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
 };
 
 export async function handleProfileLifecycleRequest(
@@ -550,7 +558,7 @@ export async function handleProfileLifecycleRequest(
     () => controller.abort(new DOMException('Profile lifecycle request timed out', 'TimeoutError')),
     dependencies.timeoutMs,
   );
-  let identity: FirebaseIdentity | undefined;
+  let identity: RequestIdentity | undefined;
   try {
     const origin = request.headers.get('Origin') || '';
     if (path === SOLANA_AUTH_PATH && (!origin || !isProfileRequestOriginAllowed(request))) {
@@ -578,9 +586,15 @@ export async function handleProfileLifecycleRequest(
       signal: controller.signal,
     };
     if (path === SOLANA_AUTH_PATH) {
+      if (isStaffRequestIdentity(identity)) {
+        throw new ProfileReadError('permission-denied', 403, 'Staff wallets use staff authentication.');
+      }
       const authBody = body as z.infer<typeof solanaAuthSchema>;
       const wallet = canonicalWalletAddress(authBody.wallet);
       if (!wallet) throw new ProfileReadError('invalid-argument', 400, 'Invalid wallet address');
+      if (dependencies.isStaffWallet(wallet)) {
+        throw new ProfileReadError('permission-denied', 403, 'Staff wallets use staff authentication.');
+      }
       const originHostname = new URL(origin).hostname;
       if (!env.OPS_DB) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
       try {

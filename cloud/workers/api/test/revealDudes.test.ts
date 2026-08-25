@@ -30,6 +30,7 @@ const BLOCKHASH_CONTEXT_SLOT = 1;
 const LAST_VALID_BLOCK_HEIGHT = 123_456;
 const SIGNATURE = bs58.encode(new Uint8Array(64).fill(7));
 const DROP_ID = 'clear_cards_devnet_v2';
+const allowRateLimit = { limit: async () => ({ success: true }) } satisfies RateLimit;
 
 function queue(send: Queue['send'] = async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } })): Queue {
   return {
@@ -43,6 +44,8 @@ function env(signer = COSIGNER, backgroundQueue = queue()): Env {
   return {
     DATA_DB: {} as D1Database,
     OPS_DB: {} as D1Database,
+    STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
+    STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     NOTIFICATION_EMAIL_QUEUE: queue(),
     REVEAL_BACKGROUND_QUEUE: backgroundQueue,
     STRIPE_FULFILLMENT_QUEUE: queue(),
@@ -84,7 +87,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
       get: async () => 'google-access-token',
       invalidate: () => undefined,
     },
-    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadStorageControl: async () => ({
       paused: false,

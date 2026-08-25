@@ -23,12 +23,11 @@ import {
   isStripeOffchainFulfillmentSession,
   normalizeStripeCheckoutQuantity,
   resolveMintSelectionVariantIndex,
-  STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+  STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CURRENCY,
   STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
   requireStripeReceiptClaimCode,
-  stripeCheckoutOwnerId,
   stripeCheckoutSessionOrderHash,
   stripeFulfillmentAddressFromSession,
   validateStripeCheckoutContract,
@@ -657,7 +656,9 @@ export function buildStripeCheckoutManualReviewSummary(args: {
   const amountTotal = manualReviewNonNegativeInteger(args.session?.amount_total ?? sessionSummary?.amount_total);
   const currency = manualReviewCurrency(args.session?.currency ?? sessionSummary?.currency);
   const owner = normalizedManualReviewString(checkout?.owner);
-  const firebaseUid = normalizedManualReviewString(checkout?.firebaseUid || checkout?.uid);
+  const firebaseUid = normalizedManualReviewString(
+    checkout?.firebaseUid || (checkout?.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_WALLET ? '' : checkout?.uid),
+  );
   const manualRefundReviewReason = normalizedManualReviewString(checkout?.manualRefundReviewReason);
   const errorMessage = stripeCheckoutManualReviewErrorMessage(checkout);
   const createdAt = toMillisMaybe(checkout?.createdAt);
@@ -1337,9 +1338,9 @@ async function fulfillStripeCheckoutSession<
     order: {
       dropId,
       orderHashHex,
-      owner: stripeCheckoutOwnerId(checkout.uid),
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-      firebaseUid: checkout.uid,
+      owner: checkout.owner,
+      ownerKind: checkout.ownerKind,
+      ...(checkout.firebaseUid ? { firebaseUid: checkout.firebaseUid } : {}),
       receiptOwner: receiptOwner.toBase58(),
       metadataId,
       metadataIds,

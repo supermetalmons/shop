@@ -15,6 +15,7 @@ import {
   type StripeCheckoutKind,
   type StripeCheckoutMode,
 } from './stripeCheckoutCore.ts';
+import { canonicalWalletAddress } from './walletLifecycle.ts';
 
 export const STRIPE_OFFCHAIN_FULFILLMENT_MODE = 'admin_variant_receipt';
 export const STRIPE_OFFCHAIN_CURRENCY = 'usd';
@@ -22,6 +23,7 @@ export const STRIPE_OFFCHAIN_CHECKOUT_QUANTITY = 1;
 export const STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY = 15;
 export const STRIPE_CHECKOUT_SHIPPING_COUNTRY = 'US';
 export const STRIPE_CHECKOUT_OWNER_KIND_FIREBASE = 'firebase';
+export const STRIPE_CHECKOUT_OWNER_KIND_WALLET = 'wallet';
 
 const STRIPE_CHECKOUT_DEFAULT_SHIPPING_COUNTRIES = [STRIPE_CHECKOUT_SHIPPING_COUNTRY] as const;
 export const STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES = [
@@ -101,6 +103,7 @@ export type StripeCheckoutDocumentInput = {
   dropId: string;
   sessionId: string;
   uid: string;
+  wallet?: string;
   variantKey?: string;
   unitAmountCents: number;
   quantity?: number;
@@ -444,13 +447,15 @@ export function buildStripeCheckoutSessionMetadata(args: {
 export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): Record<string, unknown> {
   const quantity = normalizeStripeCheckoutQuantity(args.quantity);
   const variantKey = normalizedString(args.variantKey);
+  const wallet = args.wallet === undefined ? null : canonicalWalletAddress(args.wallet);
+  if (args.wallet !== undefined && !wallet) throw new Error('App-created Stripe checkout has invalid wallet');
   return {
     sessionId: args.sessionId,
     dropId: args.dropId,
     uid: args.uid,
-    owner: stripeCheckoutOwnerId(args.uid),
-    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-    firebaseUid: args.uid,
+    owner: wallet || stripeCheckoutOwnerId(args.uid),
+    ownerKind: wallet ? STRIPE_CHECKOUT_OWNER_KIND_WALLET : STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+    ...(wallet ? {} : { firebaseUid: args.uid }),
     ...(variantKey ? { variantKey } : {}),
     quantity,
     currency: STRIPE_OFFCHAIN_CURRENCY,
@@ -466,6 +471,7 @@ export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): 
 export async function createStripeCheckoutSessionCore(
   input: {
     uid: string;
+    wallet?: string;
     requestOrigin?: string;
     allowedOrigins?: readonly string[];
     body: unknown;
@@ -552,6 +558,7 @@ export async function createStripeCheckoutSessionCore(
     dropId: drop.dropId,
     sessionId: session.id,
     uid: input.uid,
+    ...(input.wallet ? { wallet: input.wallet } : {}),
     ...(variantKey ? { variantKey } : {}),
     unitAmountCents,
     quantity,

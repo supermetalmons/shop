@@ -129,7 +129,7 @@ function requestBody() {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     enforceRateLimit: async () => undefined,
     fetchAsset: async () => receiptAsset(),

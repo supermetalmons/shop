@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import Stripe from 'stripe';
 import { createTestHarness } from 'wrangler';
@@ -31,6 +32,10 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
       migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)),
     })),
     vars: {
+      FIRESTORE_SERVICE_ACCOUNT_JSON: JSON.stringify({
+        client_email: 'runtime@example.com',
+        private_key: 'invalid-runtime-key',
+      }),
       STRIPE_WEBHOOK_SECRET_DEVNET: 'whsec_runtime_devnet',
       STRIPE_WEBHOOK_SECRET: 'whsec_runtime_mainnet',
     },
@@ -77,7 +82,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
     assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
 
-    for (const pathname of ['/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/boxes/reveal']) {
+    for (const pathname of ['/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/boxes/reveal', '/staff/auth/challenge', '/staff/auth/session', '/staff/auth/refresh', '/staff/auth/logout']) {
       const lifecyclePreflight = await worker.fetch(`https://api.mons.shop${pathname}`, {
         method: 'OPTIONS',
         headers: { Origin: 'https://mons.shop' },
@@ -86,6 +91,68 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
       assert.equal(lifecyclePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
       assert.equal(lifecyclePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization');
     }
+
+    const staffChallenge = await worker.fetch('https://api.mons.shop/staff/auth/challenge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+      body: JSON.stringify({ wallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx' }),
+    });
+    assert.equal(staffChallenge.status, 200);
+    const staffChallengeBody = await staffChallenge.json() as {
+      challengeId: string;
+      expiresAt: number;
+      message: string;
+    };
+    assert.match(staffChallengeBody.challengeId, /^[0-9a-f-]{36}$/);
+    assert.match(staffChallengeBody.message, new RegExp(`Session: staff:${staffChallengeBody.challengeId}$`));
+    assert.ok(staffChallengeBody.expiresAt > Date.now());
+
+    const workerEnv = await worker.getEnv();
+    const seededChallengeId = crypto.randomUUID();
+    const seededSessionId = crypto.randomUUID();
+    const seededSecret = 'A'.repeat(43);
+    const seededNowMs = Date.now();
+    await workerEnv.OPS_DB.batch([
+      workerEnv.OPS_DB.prepare(`INSERT INTO staff_auth_challenges VALUES (?, ?, ?, ?, ?, ?)`)
+        .bind(
+          seededChallengeId,
+          'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
+          'mons.shop',
+          seededNowMs,
+          seededNowMs + 300_000,
+          seededNowMs,
+        ),
+      workerEnv.OPS_DB.prepare(`INSERT INTO staff_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .bind(
+          seededSessionId,
+          seededChallengeId,
+          createHash('sha256').update(seededSecret).digest('hex'),
+          'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
+          seededNowMs,
+          seededNowMs,
+          seededNowMs + 30 * 24 * 60 * 60 * 1000,
+        ),
+    ]);
+    const authenticatedStaffRoute = await worker.fetch('https://api.mons.shop/admin/future', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer mons_staff_v1.${seededSessionId}.${seededSecret}`,
+        'Content-Type': 'application/json',
+        Origin: 'https://mons.shop',
+      },
+      body: '{}',
+    });
+    assert.equal(authenticatedStaffRoute.status, 404);
+    const authenticatedExistingStaffRoute = await worker.fetch('https://api.mons.shop/admin/delivery-order-owners', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer mons_staff_v1.${seededSessionId}.${seededSecret}`,
+        'Content-Type': 'application/json',
+        Origin: 'https://mons.shop',
+      },
+      body: JSON.stringify({ pageSize: 1 }),
+    });
+    assert.equal(authenticatedExistingStaffRoute.status, 503);
 
     const checkoutPreflight = await worker.fetch('https://api.mons.shop/checkout/session', {
       method: 'OPTIONS',

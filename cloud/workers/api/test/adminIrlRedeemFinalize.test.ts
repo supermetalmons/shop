@@ -111,7 +111,7 @@ function env() {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ uid: 'firebase-uid' }),
+    verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     providerFetch: async () => { throw new Error('unexpected provider fetch'); },
     nowMs: () => 1_700_000_000_000,
     timeoutMs: 1_000,
@@ -216,6 +216,14 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
     error: { code: 'unauthenticated', message: 'Authentication is required.' },
   });
 
+  const firebaseOnly = await handleAdminIrlRedeemFinalize(
+    request(),
+    env(),
+    () => undefined,
+    dependencies({ verifyIdToken: async () => ({ kind: 'firebase' as const, uid: 'firebase-uid' }) }),
+  );
+  assert.equal(firebaseOnly.response.status, 401);
+
   const conflict = await handleAdminIrlRedeemFinalize(
     request(),
     env(),
@@ -249,7 +257,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
     ok: false,
     error: {
       code: 'unavailable',
-      message: 'Admin IRL redeem finalization is temporarily unavailable.',
+      message: 'Profile data is temporarily unavailable.',
     },
   });
 

@@ -20,9 +20,12 @@ import {
 import type { StripeCheckoutMode } from '../../../../shared/stripeCheckoutCore.js';
 import {
   FirebaseIdTokenError,
-  verifyFirebaseIdToken,
-  type FirebaseIdentity,
 } from './firebaseIdToken.js';
+import {
+  requestIdentitySubject,
+  verifyRequestIdentity,
+  type RequestIdentity,
+} from './requestIdentity.js';
 import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
@@ -76,7 +79,7 @@ type CheckoutDependencies = {
     providerFetch: ProfileProviderFetch,
     signal: AbortSignal,
     nowMs?: number,
-  ) => Promise<FirebaseIdentity>;
+  ) => Promise<RequestIdentity>;
   createProviderSession?: (
     request: StripeCheckoutProviderRequest,
     mode: StripeCheckoutMode,
@@ -94,7 +97,7 @@ const defaultDependencies: CheckoutDependencies = {
   accessTokenProvider: createGoogleAccessTokenProvider(),
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  verifyIdToken: verifyFirebaseIdToken,
+  verifyIdToken: verifyRequestIdentity,
 };
 
 function jsonResponse(body: unknown, status: number): Response {
@@ -493,7 +496,7 @@ export async function handleStripeCheckoutSession(
     () => controller.abort(new DOMException('Checkout request timed out', 'TimeoutError')),
     CHECKOUT_TIMEOUT_MS,
   );
-  let identity: FirebaseIdentity | undefined;
+  let identity: RequestIdentity | undefined;
   try {
     const body = await readBoundedRequestJson(request, controller.signal);
     identity = await dependencies.verifyIdToken(
@@ -507,8 +510,10 @@ export async function handleStripeCheckoutSession(
     if (!heliusApiKey || !serviceAccountJson) {
       throw new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.');
     }
+    const staffWallet = identity.kind === 'staff-wallet' ? identity.wallet : null;
     const result = await createStripeCheckoutSessionCore({
-      uid: identity.uid,
+      uid: requestIdentitySubject(identity),
+      ...(staffWallet ? { wallet: staffWallet } : {}),
       requestOrigin: request.headers.get('Origin') || undefined,
       allowedOrigins: request.headers.get('Origin') ? [request.headers.get('Origin')!] : [],
       body,

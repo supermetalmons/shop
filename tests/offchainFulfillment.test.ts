@@ -7,6 +7,7 @@ import {
   ACCOUNT_ADMIN_DELIVERY_ORDER,
   IX_ADMIN_DELIVER_VARIANT_ORDER,
   STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+  STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   STRIPE_CHECKOUT_SHIPPING_COUNTRY,
   STRIPE_CHECKOUT_STATUS,
   STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES,
@@ -80,6 +81,7 @@ import {
   encodeBubblegumMintV2Args,
 } from '../cloud/workers/api/src/bubblegum.ts';
 import { COUNTRIES } from '../src/lib/countries.ts';
+import { manualReviewCheckoutFromRecord } from '../shared/fulfillmentReadModel.ts';
 
 function pubkey(seed: number): PublicKey {
   return new PublicKey(Uint8Array.from({ length: 32 }, (_, index) => (seed + index) & 0xff));
@@ -604,6 +606,25 @@ test('buildStripeCheckoutManualReviewSummary masks failed checkout contact info 
   assert.equal(summary?.address.full, '***');
   assert.equal(summary?.address.email, undefined);
   assert.equal(summary?.address.countryCode, 'US');
+});
+
+test('wallet-owned manual-review summaries do not fabricate a Firebase UID', () => {
+  const wallet = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+  const summary = manualReviewCheckoutFromRecord({
+    canViewSensitiveAddress: false,
+    checkout: {
+      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
+      manualRefundReviewRequired: true,
+      owner: wallet,
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_WALLET,
+      uid: wallet,
+    },
+    dropId: 'card_nft_2',
+    session: null,
+    sessionId: 'cs_test_staff_manual_review',
+  });
+  assert.equal(summary?.owner, wallet);
+  assert.equal(Object.hasOwn(summary || {}, 'firebaseUid'), false);
 });
 
 test('manual-review checkout summary excludes non-failed or non-manual-review checkout docs', () => {
@@ -1676,6 +1697,9 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     }),
     {
       uid: 'anon_uid_123',
+      owner: 'firebase:anon_uid_123',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+      firebaseUid: 'anon_uid_123',
       variantKey: 'XL',
       quantity: 1,
       unitAmountCents: 100,
@@ -1702,6 +1726,9 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     }),
     {
       uid: 'anon_uid_123',
+      owner: 'firebase:anon_uid_123',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+      firebaseUid: 'anon_uid_123',
       variantKey: 'XL',
       quantity: 3,
       unitAmountCents: 100,
@@ -1729,6 +1756,9 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     }),
     {
       uid: 'anon_uid_123',
+      owner: 'firebase:anon_uid_123',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+      firebaseUid: 'anon_uid_123',
       variantKey: 'XL',
       quantity: 1,
       unitAmountCents: 24900,
@@ -1737,6 +1767,26 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     },
   );
   assert.equal(stripeCheckoutOwnerId('anon_uid_123'), 'firebase:anon_uid_123');
+  const staffWallet = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+  const staffCheckout = buildStripeCheckoutDocument({
+    dropId: 'little_swag_hoodies_devnet',
+    sessionId: 'cs_test_staff',
+    uid: staffWallet,
+    wallet: staffWallet,
+    variantKey: 'XL',
+    unitAmountCents: 100,
+    createdAt: 'createdAt',
+    updatedAt: 'updatedAt',
+  });
+  assert.equal(staffCheckout.owner, staffWallet);
+  assert.equal(staffCheckout.ownerKind, STRIPE_CHECKOUT_OWNER_KIND_WALLET);
+  assert.equal(Object.hasOwn(staffCheckout, 'firebaseUid'), false);
+  assert.equal(validateStripeCheckoutDocumentData({
+    dropId: 'little_swag_hoodies_devnet',
+    variantKey: 'XL',
+    sessionId: 'cs_test_staff',
+    checkout: staffCheckout,
+  }).owner, staffWallet);
   assert.throws(
     () =>
       validateStripeCheckoutDocumentData({
@@ -1815,6 +1865,9 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
     }),
     {
       uid: 'anon_uid_pack',
+      owner: 'firebase:anon_uid_pack',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+      firebaseUid: 'anon_uid_pack',
       quantity: 15,
       unitAmountCents: 100,
       livemode: false,
