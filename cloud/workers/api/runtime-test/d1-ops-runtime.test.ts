@@ -32,9 +32,47 @@ import {
   releaseWalletSessionReconcileLease,
   resolveD1WalletSession,
 } from '../src/walletSessionD1.ts';
+import {
+  loadD1RevealSubmission,
+  loadRevealSubmissionStorageControl,
+  reserveD1RevealSubmission,
+  setD1RevealSubmissionStatus,
+  type RevealSubmissionRecord,
+} from '../src/revealSubmissionD1.ts';
 
 const PROFILE_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const RACE_WALLET = '11111111111111111111111111111111';
+const REVEAL_DROP_ID = 'runtime_drop';
+const REVEAL_BOX_ASSET_ID = 'So11111111111111111111111111111111111111112';
+const REVEAL_OWNER = PROFILE_WALLET;
+const REVEAL_SIGNATURE = '2'.repeat(88);
+const REVEAL_BLOCKHASH = '3'.repeat(44);
+
+function normalizeRuntimeRevealSubmission(
+  raw: Record<string, unknown>,
+): RevealSubmissionRecord {
+  const dudeIds = Array.isArray(raw.dudeIds) ? raw.dudeIds.map(Number) : [];
+  if (
+    raw.version !== 1 ||
+    raw.owner !== REVEAL_OWNER ||
+    typeof raw.signature !== 'string' ||
+    typeof raw.recentBlockhash !== 'string' ||
+    !Number.isSafeInteger(raw.blockhashContextSlot) ||
+    dudeIds.length !== 1 ||
+    !Number.isSafeInteger(dudeIds[0]) ||
+    typeof raw.reservationId !== 'string' ||
+    (raw.status !== 'pending' && raw.status !== 'confirmed' && raw.status !== 'failed')
+  ) throw new Error('Invalid runtime reveal submission');
+  return {
+    owner: raw.owner,
+    signature: raw.signature,
+    recentBlockhash: raw.recentBlockhash,
+    blockhashContextSlot: Number(raw.blockhashContextSlot),
+    dudeIds,
+    reservationId: raw.reservationId,
+    status: raw.status,
+  };
+}
 
 test('ops D1 migrations enforce notification control and receipt-transfer limits', async () => {
   const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
@@ -69,7 +107,175 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       '0005_profile_write_safety.sql',
       '0006_wallet_sessions.sql',
       '0007_wallet_sessions_d1_only.sql',
+      '0008_reveal_submissions.sql',
+      '0009_reveal_submissions_d1_only.sql',
+      '0010_reveal_submissions_baseline_index.sql',
     ]);
+    await assert.rejects(loadRevealSubmissionStorageControl(env.OPS_DB));
+    await env.OPS_DB.batch(Array.from({ length: 14 }, (_, index) => env.OPS_DB.prepare(
+      `INSERT INTO reveal_submissions (
+        drop_id, box_asset_id, schema_version, owner_wallet, signature,
+        recent_blockhash, blockhash_context_slot, dude_ids_json,
+        reservation_id, status, revision, created_at_ms, updated_at_ms, confirmed_at_ms
+      ) VALUES ('baseline', ?, 1, ?, ?, ?, 1, '[1]', ?, 'confirmed', 1, 1, 1, 1)`,
+    ).bind(
+      String(index).padStart(32, '0'),
+      RACE_WALLET,
+      '2'.repeat(64),
+      '3'.repeat(32),
+      `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    )));
+    const revealStorageControl = await loadRevealSubmissionStorageControl(env.OPS_DB);
+    assert.equal(revealStorageControl.paused, false);
+    assert.equal(revealStorageControl.source, 'd1');
+    assert.equal(revealStorageControl.revision, 3);
+    assert.ok(revealStorageControl.updatedAtMs > 0);
+    assert.equal(revealStorageControl.cutoverAtMs, revealStorageControl.updatedAtMs);
+    const baselinePlan = await env.OPS_DB.prepare(`EXPLAIN QUERY PLAN
+      SELECT COUNT(*)
+      FROM reveal_submissions
+      WHERE status = 'confirmed' AND created_at_ms <= ?`)
+      .bind(revealStorageControl.cutoverAtMs)
+      .all<{ detail: string }>();
+    assert.ok(baselinePlan.results.some((row) =>
+      row.detail.includes('reveal_submissions_status_created_at_ms')));
+    for (const status of ['pending', 'failed'] as const) {
+      await env.OPS_DB.prepare(`UPDATE reveal_submissions
+        SET status = ?, confirmed_at_ms = NULL, revision = revision + 1, updated_at_ms = 2
+        WHERE drop_id = 'baseline' AND box_asset_id = ?`)
+        .bind(status, String(0).padStart(32, '0'))
+        .run();
+      await assert.rejects(loadRevealSubmissionStorageControl(env.OPS_DB));
+      await env.OPS_DB.prepare(`UPDATE reveal_submissions
+        SET status = 'confirmed', confirmed_at_ms = 2, revision = revision + 1
+        WHERE drop_id = 'baseline' AND box_asset_id = ?`)
+        .bind(String(0).padStart(32, '0'))
+        .run();
+    }
+    await env.OPS_DB.prepare(`UPDATE reveal_submissions
+      SET status = 'failed', confirmed_at_ms = NULL, revision = revision + 1
+      WHERE drop_id = 'baseline' AND box_asset_id = ?`)
+      .bind(String(0).padStart(32, '0'))
+      .run();
+    const newerTimestamp = revealStorageControl.cutoverAtMs + 1;
+    await env.OPS_DB.prepare(`INSERT INTO reveal_submissions (
+      drop_id, box_asset_id, schema_version, owner_wallet, signature,
+      recent_blockhash, blockhash_context_slot, dude_ids_json,
+      reservation_id, status, revision, created_at_ms, updated_at_ms, confirmed_at_ms
+    ) VALUES ('newer', ?, 1, ?, ?, ?, 1, '[1]', ?, 'confirmed', 1, ?, ?, ?)`)
+      .bind(
+        '9'.repeat(32),
+        RACE_WALLET,
+        '4'.repeat(64),
+        '5'.repeat(32),
+        '00000000-0000-4000-8000-999999999999',
+        newerTimestamp,
+        newerTimestamp,
+        newerTimestamp,
+      )
+      .run();
+    await assert.rejects(loadRevealSubmissionStorageControl(env.OPS_DB));
+    await env.OPS_DB.prepare(`UPDATE reveal_submissions
+      SET status = 'confirmed', confirmed_at_ms = updated_at_ms, revision = revision + 1
+      WHERE drop_id = 'baseline' AND box_asset_id = ?`)
+      .bind(String(0).padStart(32, '0'))
+      .run();
+    assert.equal((await loadRevealSubmissionStorageControl(env.OPS_DB)).source, 'd1');
+    const initialReveal: RevealSubmissionRecord = {
+      owner: REVEAL_OWNER,
+      signature: REVEAL_SIGNATURE,
+      recentBlockhash: REVEAL_BLOCKHASH,
+      blockhashContextSlot: 42,
+      dudeIds: [9],
+      reservationId: '123e4567-e89b-42d3-a456-426614174000',
+      status: 'pending',
+    };
+    assert.deepEqual(await reserveD1RevealSubmission({
+      boxAssetId: REVEAL_BOX_ASSET_ID,
+      candidate: initialReveal,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 1_000,
+    }), { submission: initialReveal, owned: true });
+    assert.deepEqual(await reserveD1RevealSubmission({
+      boxAssetId: REVEAL_BOX_ASSET_ID,
+      candidate: {
+        ...initialReveal,
+        signature: '4'.repeat(88),
+        reservationId: '123e4567-e89b-42d3-b456-426614174001',
+      },
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 1_001,
+    }), { submission: initialReveal, owned: false });
+    assert.equal(await setD1RevealSubmissionStatus({
+      boxAssetId: REVEAL_BOX_ASSET_ID,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 2_000,
+      status: 'failed',
+      submission: initialReveal,
+    }), 'failed');
+    const replacement = {
+      ...initialReveal,
+      signature: '5'.repeat(88),
+      reservationId: '123e4567-e89b-42d3-8456-426614174002',
+    };
+    assert.deepEqual(await reserveD1RevealSubmission({
+      boxAssetId: REVEAL_BOX_ASSET_ID,
+      candidate: replacement,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 3_000,
+      replaceSubmission: { ...initialReveal, status: 'failed' },
+    }), { submission: replacement, owned: true });
+    assert.equal(await setD1RevealSubmissionStatus({
+      boxAssetId: REVEAL_BOX_ASSET_ID,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 4_000,
+      status: 'confirmed',
+      submission: replacement,
+    }), 'confirmed');
+    assert.equal(await setD1RevealSubmissionStatus({
+      boxAssetId: REVEAL_BOX_ASSET_ID,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 5_000,
+      status: 'failed',
+      submission: replacement,
+    }), 'confirmed');
+    assert.equal((await loadD1RevealSubmission(
+      env.OPS_DB,
+      REVEAL_DROP_ID,
+      REVEAL_BOX_ASSET_ID,
+      normalizeRuntimeRevealSubmission,
+    ))?.status, 'confirmed');
+    await assert.rejects(env.OPS_DB.prepare(`INSERT INTO reveal_submissions (
+      drop_id, box_asset_id, schema_version, owner_wallet, signature,
+      recent_blockhash, blockhash_context_slot, dude_ids_json,
+      reservation_id, status, revision, created_at_ms, updated_at_ms, confirmed_at_ms
+    ) VALUES ('invalid', ?, 1, ?, ?, ?, 1, 'not-json', ?, 'pending', 1, 0, 0, NULL)`)
+      .bind(
+        '1'.repeat(32),
+        REVEAL_OWNER,
+        REVEAL_SIGNATURE,
+        REVEAL_BLOCKHASH,
+        '123e4567-e89b-42d3-a456-426614174000',
+      ).run());
+    await assert.rejects(env.OPS_DB.prepare(`UPDATE reveal_submission_storage_control
+      SET
+        storage_source = 'firestore',
+        revision = revision + 1,
+        updated_at_ms = updated_at_ms + 1,
+        cutover_at_ms = NULL
+      WHERE singleton = 1`).run());
     assert.deepEqual(await env.OPS_DB.prepare(`SELECT storage_source, revision
       FROM wallet_session_storage_control WHERE singleton = 1`).first(), {
       storage_source: 'd1',

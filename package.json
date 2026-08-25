@@ -60,6 +60,7 @@
     "check:pack-status-d1": "node --import tsx scripts/ops/checkPackStatusD1.ts",
     "check:ops-d1": "node --import tsx scripts/ops/checkOpsD1.ts",
     "ready-notifications-control": "node --import tsx scripts/ops/readyNotificationsControl.ts",
+    "reveal-submissions-control": "node --import tsx scripts/ops/revealSubmissionsControl.ts",
     "test-resend-notification-email": "tsx scripts/ops/sendTestResendNotificationEmail.ts",
     "wipe-drop": "node --experimental-strip-types scripts/ops/wipeDrop.ts",
     "deploy": "npm run check:frontend && wrangler deploy --strict --config wrangler.jsonc",

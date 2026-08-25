@@ -86,6 +86,13 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     },
     verifyIdToken: async () => ({ uid: 'firebase-uid' }),
     loadWalletSession: async () => OWNER.toBase58(),
+    loadStorageControl: async () => ({
+      paused: false,
+      source: 'd1' as const,
+      revision: 1,
+      updatedAtMs: 0,
+      cutoverAtMs: 500,
+    }),
     validateOnchainConfig: async () => ({
       admin: COSIGNER.publicKey,
       coreCollection: new PublicKey(revealDudesTestHooks.runtimeForDrop(DROP_ID).config.collectionMint),
@@ -188,6 +195,37 @@ test('reveal handler rejects wallet-session mismatches before any reveal work', 
   assert.equal(result.response.status, 403);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'permission-denied');
   assert.equal(onchainCalls, 0);
+});
+
+test('paused reveal storage rejects requests before reveal reads or mutations', async () => {
+  let revealReads = 0;
+  let assignments = 0;
+  const result = await handleRevealDudes(
+    request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+    env(),
+    dependencies({
+      loadStorageControl: async () => ({
+        paused: true,
+        source: 'd1' as const,
+        revision: 1,
+        updatedAtMs: 0,
+        cutoverAtMs: 500,
+      }),
+      loadRevealSubmission: async () => {
+        revealReads += 1;
+        return null;
+      },
+      assignDudes: async () => {
+        assignments += 1;
+        return { dudeIds: [9], outcome: 'created' as const };
+      },
+    }),
+  );
+
+  assert.equal(result.response.status, 503);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'unavailable');
+  assert.equal(revealReads, 0);
+  assert.equal(assignments, 0);
 });
 
 test('reveal handler maps invalid and unavailable Firebase authentication', async () => {
@@ -889,362 +927,11 @@ function revealQueueMessage(body: unknown = revealJob(), attempts = 1) {
 
 function revealConsumerEnv(apiKey = 'helius-test-key') {
   return {
+    OPS_DB: {} as D1Database,
     FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: apiKey,
   };
 }
-
-function submissionDocument(value = submission()): Response {
-  return firestoreDocument({
-    version: { integerValue: '1' },
-    owner: { stringValue: value.owner },
-    signature: { stringValue: value.signature },
-    recentBlockhash: { stringValue: value.recentBlockhash },
-    blockhashContextSlot: { integerValue: String(value.blockhashContextSlot) },
-    dudeIds: { arrayValue: { values: value.dudeIds.map((id) => ({ integerValue: String(id) })) } },
-    reservationId: { stringValue: value.reservationId },
-    status: { stringValue: value.status },
-  });
-}
-
-test('reveal submission reservation atomically creates the first candidate', async () => {
-  let commitBody: { writes: Array<Record<string, unknown>> } | undefined;
-  const fetcher: typeof fetch = async (input, init) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-reserve' });
-    if (url.includes('/revealSubmissions/')) return new Response(null, { status: 404 });
-    if (url.endsWith('documents:commit')) {
-      commitBody = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      return Response.json({ writeResults: [{}] });
-    }
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
-
-  const result = await revealDudesTestHooks.reserveRevealSubmission(
-    firestoreContext(fetcher),
-    revealDudesTestHooks.runtimeForDrop(DROP_ID),
-    BOX_ASSET.toBase58(),
-    submission(),
-    undefined,
-    { sleep: async () => undefined },
-  );
-
-  assert.deepEqual(result, { submission: submission(), owned: true });
-  assert.match(JSON.stringify(commitBody), /revealSubmissions/);
-  assert.match(JSON.stringify(commitBody), new RegExp(RESERVATION_ID));
-  assert.match(JSON.stringify(commitBody), /blockhashContextSlot/);
-  assert.equal(JSON.stringify(commitBody).includes('lastValidBlockHeight'), false);
-});
-
-test('reveal submission reservation retains ownership after an exact commit-response recovery read', async () => {
-  let commits = 0;
-  let rollbacks = 0;
-  const fetcher: typeof fetch = async (input) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-recovered' });
-    if (url.includes('/revealSubmissions/')) return submissionDocument();
-    if (url.endsWith('documents:rollback')) {
-      rollbacks += 1;
-      return Response.json({});
-    }
-    if (url.endsWith('documents:commit')) {
-      commits += 1;
-      return Response.json({ writeResults: [{}] });
-    }
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
-
-  const result = await revealDudesTestHooks.reserveRevealSubmission(
-    firestoreContext(fetcher),
-    revealDudesTestHooks.runtimeForDrop(DROP_ID),
-    BOX_ASSET.toBase58(),
-    submission(),
-    undefined,
-    { sleep: async () => undefined },
-  );
-
-  assert.deepEqual(result, { submission: submission(), owned: true });
-  assert.equal(commits, 0);
-  assert.equal(rollbacks, 1);
-});
-
-test('reveal submission reservation returns a concurrent winner without sending ownership', async () => {
-  let commits = 0;
-  const fetcher: typeof fetch = async (input) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-existing' });
-    if (url.includes('/revealSubmissions/')) return submissionDocument();
-    if (url.endsWith('documents:rollback')) return Response.json({});
-    if (url.endsWith('documents:commit')) commits += 1;
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
-  const candidate = submission({
-    signature: bs58.encode(new Uint8Array(64).fill(8)),
-    reservationId: '123e4567-e89b-42d3-b456-426614174001',
-  });
-
-  const result = await revealDudesTestHooks.reserveRevealSubmission(
-    firestoreContext(fetcher),
-    revealDudesTestHooks.runtimeForDrop(DROP_ID),
-    BOX_ASSET.toBase58(),
-    candidate,
-    undefined,
-    { sleep: async () => undefined },
-  );
-
-  assert.deepEqual(result, { submission: submission(), owned: false });
-  assert.equal(commits, 0);
-});
-
-test('reveal submission reservation leaves an identical signed candidate with its single sender', async () => {
-  let commits = 0;
-  const fetcher: typeof fetch = async (input) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-identical' });
-    if (url.includes('/revealSubmissions/')) return submissionDocument();
-    if (url.endsWith('documents:rollback')) return Response.json({});
-    if (url.endsWith('documents:commit')) commits += 1;
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
-  const candidate = submission({
-    reservationId: '123e4567-e89b-42d3-b456-426614174001',
-  });
-
-  const result = await revealDudesTestHooks.reserveRevealSubmission(
-    firestoreContext(fetcher),
-    revealDudesTestHooks.runtimeForDrop(DROP_ID),
-    BOX_ASSET.toBase58(),
-    candidate,
-    undefined,
-    { sleep: async () => undefined },
-  );
-
-  assert.deepEqual(result, { submission: submission(), owned: false });
-  assert.equal(commits, 0);
-});
-
-test('reveal submission replacement cannot reuse a stale reservation with the same signature', async () => {
-  let commits = 0;
-  const winner = submission({ reservationId: '123e4567-e89b-42d3-b456-426614174001' });
-  const fetcher: typeof fetch = async (input) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-replaced' });
-    if (url.includes('/revealSubmissions/')) return submissionDocument(winner);
-    if (url.endsWith('documents:rollback')) return Response.json({});
-    if (url.endsWith('documents:commit')) commits += 1;
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
-  const candidate = submission({ reservationId: '123e4567-e89b-42d3-8456-426614174002' });
-
-  const result = await revealDudesTestHooks.reserveRevealSubmission(
-    firestoreContext(fetcher),
-    revealDudesTestHooks.runtimeForDrop(DROP_ID),
-    BOX_ASSET.toBase58(),
-    candidate,
-    submission(),
-    { sleep: async () => undefined },
-  );
-
-  assert.deepEqual(result, { submission: winner, owned: false });
-  assert.equal(commits, 0);
-});
-
-test('reveal submission reservation never replaces a confirmed record', async () => {
-  let commits = 0;
-  const confirmed = submission({ status: 'confirmed' });
-  const fetcher: typeof fetch = async (input) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-confirmed' });
-    if (url.includes('/revealSubmissions/')) return submissionDocument(confirmed);
-    if (url.endsWith('documents:rollback')) return Response.json({});
-    if (url.endsWith('documents:commit')) commits += 1;
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
-  const candidate = submission({
-    signature: bs58.encode(new Uint8Array(64).fill(8)),
-  });
-
-  const result = await revealDudesTestHooks.reserveRevealSubmission(
-    firestoreContext(fetcher),
-    revealDudesTestHooks.runtimeForDrop(DROP_ID),
-    BOX_ASSET.toBase58(),
-    candidate,
-    confirmed,
-    { sleep: async () => undefined },
-  );
-
-  assert.deepEqual(result, { submission: confirmed, owned: false });
-  assert.equal(commits, 0);
-});
-
-test('reveal submission failure transition updates only the matching pending reservation', async () => {
-  let commitBody: { writes: Array<Record<string, unknown>> } | undefined;
-  const fetcher: typeof fetch = async (input, init) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-failed' });
-    if (url.includes('/revealSubmissions/')) return submissionDocument();
-    if (url.endsWith('documents:commit')) {
-      commitBody = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      return Response.json({ writeResults: [{}] });
-    }
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
-
-  const status = await revealDudesTestHooks.failRevealSubmission(
-    firestoreContext(fetcher),
-    revealDudesTestHooks.runtimeForDrop(DROP_ID),
-    BOX_ASSET.toBase58(),
-    submission(),
-  );
-
-  assert.match(JSON.stringify(commitBody), /"status"[^}]*"failed"/);
-  assert.equal(status, 'failed');
-});
-
-test('reveal submission failure transition cannot overwrite confirmation', async () => {
-  let commits = 0;
-  let rollbacks = 0;
-  const fetcher: typeof fetch = async (input) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-still-confirmed' });
-    if (url.includes('/revealSubmissions/')) return submissionDocument(submission({ status: 'confirmed' }));
-    if (url.endsWith('documents:rollback')) {
-      rollbacks += 1;
-      return Response.json({});
-    }
-    if (url.endsWith('documents:commit')) commits += 1;
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
-
-  const status = await revealDudesTestHooks.failRevealSubmission(
-    firestoreContext(fetcher),
-    revealDudesTestHooks.runtimeForDrop(DROP_ID),
-    BOX_ASSET.toBase58(),
-    submission(),
-  );
-
-  assert.equal(commits, 0);
-  assert.equal(rollbacks, 1);
-  assert.equal(status, 'confirmed');
-});
-
-test('reveal submission failure transition re-reads a concurrent confirmation', async () => {
-  let begins = 0;
-  let commits = 0;
-  const fetcher: typeof fetch = async (input) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) {
-      begins += 1;
-      return Response.json({ transaction: `tx-fail-${begins}` });
-    }
-    if (url.includes('/revealSubmissions/')) {
-      return submissionDocument(submission({ status: begins === 1 ? 'pending' : 'confirmed' }));
-    }
-    if (url.endsWith('documents:commit')) {
-      commits += 1;
-      return Response.json({ error: { status: 'ABORTED' } }, { status: 409 });
-    }
-    if (url.endsWith('documents:rollback')) return Response.json({});
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
-
-  const status = await revealDudesTestHooks.failRevealSubmission(
-    firestoreContext(fetcher),
-    revealDudesTestHooks.runtimeForDrop(DROP_ID),
-    BOX_ASSET.toBase58(),
-    submission(),
-  );
-
-  assert.equal(status, 'confirmed');
-  assert.equal(begins, 2);
-  assert.equal(commits, 1);
-});
-
-test('reveal confirmation re-reads after a Firestore write conflict', async () => {
-  let begins = 0;
-  let commits = 0;
-  let rollbacks = 0;
-  const fetcher: typeof fetch = async (input) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) {
-      begins += 1;
-      return Response.json({ transaction: `tx-confirm-${begins}` });
-    }
-    if (url.includes('/revealSubmissions/')) {
-      return submissionDocument(submission({ status: begins === 1 ? 'pending' : 'confirmed' }));
-    }
-    if (url.endsWith('documents:commit')) {
-      commits += 1;
-      return Response.json({ error: { status: 'ABORTED' } }, { status: 409 });
-    }
-    if (url.endsWith('documents:rollback')) {
-      rollbacks += 1;
-      return Response.json({});
-    }
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
-
-  await revealDudesTestHooks.confirmRevealSubmission(
-    firestoreContext(fetcher),
-    revealDudesTestHooks.runtimeForDrop(DROP_ID),
-    BOX_ASSET.toBase58(),
-    submission(),
-  );
-
-  assert.equal(begins, 2);
-  assert.equal(commits, 1);
-  assert.equal(rollbacks, 2);
-});
-
-test('stored reveal submissions reject invalid transaction identity and context', async () => {
-  for (const invalid of [
-    submission({ signature: '1'.repeat(64) }),
-    submission({ recentBlockhash: '1'.repeat(32) }),
-    submission({ blockhashContextSlot: -1 }),
-    submission({ blockhashContextSlot: 1.5 }),
-    submission({ blockhashContextSlot: Number.MAX_SAFE_INTEGER + 1 }),
-  ]) {
-    const fetcher: typeof fetch = async (input) => {
-      const url = String(input);
-      if (url.includes('/revealSubmissions/')) return submissionDocument(invalid);
-      throw new Error(`Unexpected Firestore request: ${url}`);
-    };
-
-    await assert.rejects(
-      revealDudesTestHooks.loadRevealSubmission(
-        firestoreContext(fetcher),
-        revealDudesTestHooks.runtimeForDrop(DROP_ID),
-        BOX_ASSET.toBase58(),
-      ),
-      (error: unknown) => error instanceof RevealDudesError && error.code === 'failed-precondition',
-    );
-  }
-
-  const missingContext = await submissionDocument().json() as { fields: Record<string, unknown> };
-  delete missingContext.fields.blockhashContextSlot;
-  await assert.rejects(
-    revealDudesTestHooks.loadRevealSubmission(
-      firestoreContext(async () => Response.json(missingContext)),
-      revealDudesTestHooks.runtimeForDrop(DROP_ID),
-      BOX_ASSET.toBase58(),
-    ),
-    (error: unknown) => error instanceof RevealDudesError && error.code === 'failed-precondition',
-  );
-});
-
-test('stored reveal submissions reject obsolete block-height fields', async () => {
-  const document = await submissionDocument().json() as { fields: Record<string, unknown> };
-  document.fields.lastValidBlockHeight = { integerValue: String(LAST_VALID_BLOCK_HEIGHT) };
-
-  await assert.rejects(
-    revealDudesTestHooks.loadRevealSubmission(
-      firestoreContext(async () => Response.json(document)),
-      revealDudesTestHooks.runtimeForDrop(DROP_ID),
-      BOX_ASSET.toBase58(),
-    ),
-    (error: unknown) => error instanceof RevealDudesError && error.code === 'failed-precondition',
-  );
-});
 
 test('Firestore assignment atomically creates markers, updates the pool, and creates the box assignment', async () => {
   const calls: Array<{ method: string; url: string; body?: unknown }> = [];
@@ -2026,6 +1713,7 @@ test('reveal background consumer retries structurally valid jobs for unsupported
   const unsupported = revealQueueMessage(revealJob({ dropId: 'future_drop' }));
 
   await processRevealBackgroundJobMessage(unsupported.message, revealConsumerEnv(), {
+    loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => {
       throw new Error('unexpected submission read');
     },
@@ -2038,12 +1726,39 @@ test('reveal background consumer retries structurally valid jobs for unsupported
   assert.deepEqual(unsupported.actions.retries, [{ delaySeconds: 5 }]);
 });
 
+test('paused reveal storage retries background jobs without reading submissions', async () => {
+  const paused = revealQueueMessage();
+  let reads = 0;
+
+  await processRevealBackgroundJobMessage(paused.message, revealConsumerEnv(), {
+    loadStorageControl: async () => ({
+      paused: true,
+      source: 'd1' as const,
+      revision: 1,
+      updatedAtMs: 0,
+      cutoverAtMs: 500,
+    }),
+    loadRevealSubmission: async () => {
+      reads += 1;
+      return null;
+    },
+    log: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  });
+
+  assert.equal(reads, 0);
+  assert.equal(paused.actions.acks, 0);
+  assert.deepEqual(paused.actions.retries, [{ delaySeconds: 5 }]);
+});
+
 test('reveal background consumer confirms, counts, and safely repeats confirmed jobs', async () => {
   let stored = submission();
   let reconcileCalls = 0;
   let confirmCalls = 0;
   let countCalls = 0;
   const overrides = {
+    loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => stored,
     reconcileRevealSubmission: async () => {
       reconcileCalls += 1;
@@ -2078,6 +1793,7 @@ test('reveal background consumer confirms, counts, and safely repeats confirmed 
 test('reveal background consumer retries unknown outcomes and pack-count outages with bounded delays', async () => {
   const unknown = revealQueueMessage(revealJob(), 99);
   await processRevealBackgroundJobMessage(unknown.message, revealConsumerEnv(), {
+    loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission(),
     reconcileRevealSubmission: async () => 'unknown',
     confirmRevealSubmission: async () => {
@@ -2096,6 +1812,7 @@ test('reveal background consumer retries unknown outcomes and pack-count outages
 
   const countOutage = revealQueueMessage(revealJob(), 2);
   await processRevealBackgroundJobMessage(countOutage.message, revealConsumerEnv(''), {
+    loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission({ status: 'confirmed' }),
     reconcileRevealSubmission: async () => {
       throw new Error('unexpected reconciliation');
@@ -2119,6 +1836,7 @@ test('reveal background consumer marks expired submissions failed and acknowledg
   let failCalls = 0;
   const expired = revealQueueMessage();
   await processRevealBackgroundJobMessage(expired.message, revealConsumerEnv(), {
+    loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission(),
     reconcileRevealSubmission: async () => 'expired',
     failRevealSubmission: async () => {
@@ -2135,6 +1853,7 @@ test('reveal background consumer marks expired submissions failed and acknowledg
 
   const stale = revealQueueMessage();
   await processRevealBackgroundJobMessage(stale.message, revealConsumerEnv(''), {
+    loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission({
       reservationId: '123e4567-e89b-42d3-b456-426614174001',
     }),
@@ -2161,6 +1880,7 @@ test('reveal background consumer counts when a failure transition loses to confi
   const confirmed = revealQueueMessage();
 
   await processRevealBackgroundJobMessage(confirmed.message, revealConsumerEnv(), {
+    loadStorageControl: dependencies().loadStorageControl,
     loadRevealSubmission: async () => submission(),
     reconcileRevealSubmission: async () => 'expired',
     failRevealSubmission: async () => 'confirmed' as const,

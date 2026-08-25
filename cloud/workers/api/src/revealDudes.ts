@@ -81,6 +81,15 @@ import {
 } from './firestoreRest.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
+import {
+  RevealSubmissionOwnerMismatchError,
+  loadD1RevealSubmission,
+  loadRevealSubmissionStorageControl,
+  reserveD1RevealSubmission,
+  setD1RevealSubmissionStatus,
+  type RevealSubmissionRecord,
+  type RevealSubmissionStorageControl,
+} from './revealSubmissionD1.js';
 
 export const REVEAL_DUDES_PATH = '/boxes/reveal';
 
@@ -171,6 +180,7 @@ type RevealDudesDependencies = {
   loadLatestBlockhash: typeof loadLatestBlockhash;
   loadPendingOpen: typeof loadPendingOpen;
   loadRevealSubmission: typeof loadRevealSubmission;
+  loadStorageControl: typeof requireRevealSubmissionStorageControl;
   loadWalletSession: typeof loadWalletSession;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
@@ -203,6 +213,7 @@ type FirestoreContext = {
   serviceAccountJson: string;
   signal: AbortSignal;
   dataDb?: D1Database;
+  opsDb?: D1Database;
 };
 
 type AssignmentResult = {
@@ -212,15 +223,7 @@ type AssignmentResult = {
 
 type AssignmentDependencies = Pick<RevealDudesDependencies, 'randomInt' | 'sleep'>;
 
-type RevealSubmission = {
-  owner: string;
-  signature: string;
-  recentBlockhash: string;
-  blockhashContextSlot: number;
-  dudeIds: number[];
-  reservationId: string;
-  status: 'pending' | 'confirmed' | 'failed';
-};
+type RevealSubmission = RevealSubmissionRecord;
 
 type RevealSubmissionOutcome = 'confirmed' | 'failed' | 'expired' | 'unknown';
 
@@ -274,6 +277,7 @@ const defaultDependencies: RevealDudesDependencies = {
   loadLatestBlockhash,
   loadPendingOpen,
   loadRevealSubmission,
+  loadStorageControl: requireRevealSubmissionStorageControl,
   loadWalletSession,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
@@ -725,6 +729,19 @@ async function loadWalletSession(
   }
 }
 
+async function requireRevealSubmissionStorageControl(
+  db: D1Database | undefined,
+  signal: AbortSignal,
+): Promise<RevealSubmissionStorageControl> {
+  if (!db) throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
+  try {
+    return await loadRevealSubmissionStorageControl(db, signal);
+  } catch (error) {
+    if (error instanceof RevealDudesError || signal.aborted) throw error;
+    throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
+  }
+}
+
 async function beginFirestoreTransaction(context: FirestoreContext): Promise<string> {
   const value = await authenticatedFirestoreRequest({
     ...context,
@@ -849,40 +866,23 @@ function normalizeRevealSubmission(
   };
 }
 
-function revealSubmissionFields(submission: RevealSubmission): Record<string, unknown> {
-  return {
-    version: firestoreInteger(REVEAL_SUBMISSION_VERSION),
-    owner: { stringValue: submission.owner },
-    signature: { stringValue: submission.signature },
-    recentBlockhash: { stringValue: submission.recentBlockhash },
-    blockhashContextSlot: firestoreInteger(submission.blockhashContextSlot),
-    dudeIds: firestoreIntegerArray(submission.dudeIds),
-    reservationId: { stringValue: submission.reservationId },
-    status: { stringValue: submission.status },
-  };
-}
-
-function revealSubmissionPath(runtime: RevealRuntime, boxAssetId: string): string {
-  return `drops/${runtime.dropId}/revealSubmissions/${boxAssetId}`;
-}
-
-async function readRevealSubmission(
+async function runRevealSubmissionD1Operation<T>(
   context: FirestoreContext,
-  runtime: RevealRuntime,
-  boxAssetId: string,
-  transaction?: string,
-): Promise<RevealSubmission | null> {
-  const document = await authenticatedFirestoreRequest({
-    ...context,
-    method: 'GET',
-    url: firestoreDocumentUrl(revealSubmissionPath(runtime, boxAssetId), transaction),
-  });
-  if (!document) return null;
-  const fields = isRecord(document) ? decodeFirestoreFields(document.fields) : null;
-  if (!fields) {
-    throw new RevealDudesError('failed-precondition', 'Stored reveal submission is invalid.', { boxAssetId });
+  operation: (db: D1Database) => Promise<T>,
+): Promise<T> {
+  if (!context.opsDb) throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
+  try {
+    return await operation(context.opsDb);
+  } catch (error) {
+    if (error instanceof RevealDudesError || context.signal.aborted) throw error;
+    if (error instanceof RevealSubmissionOwnerMismatchError) {
+      throw new RevealDudesError('permission-denied', 'Owners only.');
+    }
+    if (error instanceof Error && error.message === 'Stored reveal submission does not match its reservation') {
+      throw new RevealDudesError('failed-precondition', 'Stored reveal submission is invalid.');
+    }
+    throw new RevealDudesError('unavailable', 'Reveal submission is temporarily unavailable.');
   }
-  return normalizeRevealSubmission(fields, runtime, boxAssetId);
 }
 
 async function loadRevealSubmission(
@@ -890,16 +890,13 @@ async function loadRevealSubmission(
   runtime: RevealRuntime,
   boxAssetId: string,
 ): Promise<RevealSubmission | null> {
-  return readRevealSubmission(context, runtime, boxAssetId);
-}
-
-function sameRevealTransaction(left: RevealSubmission, right: RevealSubmission): boolean {
-  return left.owner === right.owner &&
-    left.signature === right.signature &&
-    left.recentBlockhash === right.recentBlockhash &&
-    left.blockhashContextSlot === right.blockhashContextSlot &&
-    left.dudeIds.length === right.dudeIds.length &&
-    left.dudeIds.every((id, index) => id === right.dudeIds[index]);
+  return runRevealSubmissionD1Operation(context, (db) => loadD1RevealSubmission(
+    db,
+    runtime.dropId,
+    boxAssetId,
+    (raw, storedBoxAssetId) => normalizeRevealSubmission(raw, runtime, storedBoxAssetId),
+    context.signal,
+  ));
 }
 
 async function reserveRevealSubmission(
@@ -908,86 +905,18 @@ async function reserveRevealSubmission(
   boxAssetId: string,
   candidate: RevealSubmission,
   replaceSubmission: RevealSubmission | undefined,
-  dependencies: Pick<RevealDudesDependencies, 'sleep'>,
+  _dependencies: Pick<RevealDudesDependencies, 'sleep'>,
 ): Promise<{ submission: RevealSubmission; owned: boolean }> {
-  const normalizedCandidate = normalizeRevealSubmission(
-    { ...candidate, version: REVEAL_SUBMISSION_VERSION },
-    runtime,
+  return runRevealSubmissionD1Operation(context, (db) => reserveD1RevealSubmission({
     boxAssetId,
-  );
-  const path = revealSubmissionPath(runtime, boxAssetId);
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: string | undefined;
-    try {
-      transaction = await beginFirestoreTransaction(context);
-      const existing = await readRevealSubmission(context, runtime, boxAssetId, transaction);
-      if (existing?.owner !== undefined && existing.owner !== normalizedCandidate.owner) {
-        throw new RevealDudesError('permission-denied', 'Owners only.');
-      }
-      if (existing?.status === 'confirmed') {
-        await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
-        transaction = undefined;
-        return { submission: existing, owned: false };
-      }
-      if (existing?.reservationId === normalizedCandidate.reservationId) {
-        if (!sameRevealTransaction(existing, normalizedCandidate)) {
-          throw new RevealDudesError('failed-precondition', 'Stored reveal submission is invalid.', { boxAssetId });
-        }
-        await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
-        transaction = undefined;
-        return { submission: existing, owned: existing.status === 'pending' };
-      }
-      if (
-        existing &&
-        (
-          !replaceSubmission ||
-          existing.signature !== replaceSubmission.signature ||
-          existing.reservationId !== replaceSubmission.reservationId
-        )
-      ) {
-        await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
-        transaction = undefined;
-        return { submission: existing, owned: false };
-      }
-      await authenticatedFirestoreRequest({
-        ...context,
-        body: JSON.stringify({
-          transaction,
-          writes: [{
-            update: {
-              name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`,
-              fields: revealSubmissionFields(normalizedCandidate),
-            },
-            currentDocument: { exists: Boolean(existing) },
-            updateTransforms: [{
-              fieldPath: existing ? 'updatedAt' : 'createdAt',
-              setToServerValue: 'REQUEST_TIME',
-            }],
-          }],
-        }),
-        method: 'POST',
-        surfaceWriteConflict: true,
-        url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-      });
-      transaction = undefined;
-      return { submission: normalizedCandidate, owned: true };
-    } catch (error) {
-      if (transaction) await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
-      if (error instanceof RevealDudesError) throw error;
-      if (
-        (error instanceof FirestoreWriteConflict || error instanceof ProfileReadError) &&
-        attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS
-      ) {
-        await dependencies.sleep(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      if (error instanceof ProfileReadError) {
-        throw new RevealDudesError(error.code === 'deadline-exceeded' ? error.code : 'unavailable', 'Reveal submission is temporarily unavailable.');
-      }
-      throw new RevealDudesError('unavailable', 'Reveal submission is temporarily unavailable.');
-    }
-  }
-  throw new RevealDudesError('unavailable', 'Reveal submission is temporarily unavailable.');
+    candidate,
+    db,
+    dropId: runtime.dropId,
+    normalize: (raw, storedBoxAssetId) => normalizeRevealSubmission(raw, runtime, storedBoxAssetId),
+    nowMs: context.nowMs,
+    replaceSubmission,
+    signal: context.signal,
+  }));
 }
 
 async function setRevealSubmissionStatus(
@@ -997,55 +926,16 @@ async function setRevealSubmissionStatus(
   submission: RevealSubmission,
   status: 'confirmed' | 'failed',
 ): Promise<'confirmed' | 'failed' | 'stale'> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: string | undefined;
-    try {
-      transaction = await beginFirestoreTransaction(context);
-      const existing = await readRevealSubmission(context, runtime, boxAssetId, transaction);
-      if (
-        !existing ||
-        existing.reservationId !== submission.reservationId ||
-        existing.signature !== submission.signature
-      ) return 'stale';
-      if (existing.status !== 'pending') return existing.status;
-      await authenticatedFirestoreRequest({
-        ...context,
-        body: JSON.stringify({
-          transaction,
-          writes: [{
-            update: {
-              name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${revealSubmissionPath(runtime, boxAssetId)}`,
-              fields: { status: { stringValue: status } },
-            },
-            updateMask: { fieldPaths: ['status'] },
-            currentDocument: { exists: true },
-            updateTransforms: [{
-              fieldPath: status === 'confirmed' ? 'confirmedAt' : 'updatedAt',
-              setToServerValue: 'REQUEST_TIME',
-            }],
-          }],
-        }),
-        method: 'POST',
-        surfaceWriteConflict: true,
-        url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-      });
-      transaction = undefined;
-      return status;
-    } catch (error) {
-      if (transaction) {
-        await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
-        transaction = undefined;
-      }
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      throw error;
-    } finally {
-      if (transaction) await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
-    }
-  }
-  return 'stale';
+  return runRevealSubmissionD1Operation(context, (db) => setD1RevealSubmissionStatus({
+    boxAssetId,
+    db,
+    dropId: runtime.dropId,
+    normalize: (raw, storedBoxAssetId) => normalizeRevealSubmission(raw, runtime, storedBoxAssetId),
+    nowMs: context.nowMs,
+    signal: context.signal,
+    status,
+    submission,
+  }));
 }
 
 async function confirmRevealSubmission(
@@ -1822,6 +1712,7 @@ type RevealBackgroundJobDependencies = Pick<
   | 'countOnlineRevealPackStatus'
   | 'failRevealSubmission'
   | 'loadRevealSubmission'
+  | 'loadStorageControl'
   | 'nowMs'
   | 'providerFetch'
   | 'reconcileRevealSubmission'
@@ -1837,6 +1728,7 @@ const defaultRevealBackgroundJobDependencies: RevealBackgroundJobDependencies = 
   countOnlineRevealPackStatus,
   failRevealSubmission,
   loadRevealSubmission,
+  loadStorageControl: requireRevealSubmissionStorageControl,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   reconcileRevealSubmission,
@@ -1874,7 +1766,7 @@ function retryRevealBackgroundJob(
 
 export async function processRevealBackgroundJobMessage(
   message: Message<unknown>,
-  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'> & Partial<Pick<Env, 'DATA_DB'>>,
+  env: Pick<Env, 'HELIUS_API_KEY' | 'OPS_DB'> & Partial<Pick<Env, 'DATA_DB'>>,
   overrides: Partial<RevealBackgroundJobDependencies> = {},
 ): Promise<void> {
   const dependencies = { ...defaultRevealBackgroundJobDependencies, ...overrides };
@@ -1889,19 +1781,32 @@ export async function processRevealBackgroundJobMessage(
   }
   const job = message.body;
   const signal = AbortSignal.timeout(REVEAL_BACKGROUND_JOB_TIMEOUT_MS);
-  const serviceAccountJson = typeof env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON === 'string'
-    ? env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON.trim()
-    : '';
+  let storageControl: RevealSubmissionStorageControl;
+  try {
+    storageControl = await dependencies.loadStorageControl(env.OPS_DB, signal);
+  } catch (error) {
+    retryRevealBackgroundJob(
+      message,
+      dependencies,
+      job,
+      error instanceof Error ? error.message : 'storage_control_unavailable',
+    );
+    return;
+  }
+  if (storageControl.paused) {
+    retryRevealBackgroundJob(message, dependencies, job, 'reveal_submissions_paused');
+    return;
+  }
   const firestoreContext: FirestoreContext = {
     accessTokenProvider: dependencies.accessTokenProvider,
     nowMs: dependencies.nowMs(),
     providerFetch: dependencies.providerFetch,
-    serviceAccountJson,
+    serviceAccountJson: '',
     signal,
     dataDb: env.DATA_DB,
+    opsDb: env.OPS_DB,
   };
   try {
-    if (!serviceAccountJson) throw new Error('firestore_writer_service_account_not_configured');
     const runtime = runtimeForDrop(job.dropId);
     const submission = await dependencies.loadRevealSubmission(firestoreContext, runtime, job.boxAssetId);
     if (
@@ -2071,6 +1976,7 @@ export async function handleRevealDudes(
       ? env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON.trim()
       : '';
     if (!serviceAccountJson) throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
+    const storageControl = await dependencies.loadStorageControl(env.OPS_DB, controller.signal);
     const firestoreContext: FirestoreContext = {
       accessTokenProvider: dependencies.accessTokenProvider,
       nowMs: dependencies.nowMs(),
@@ -2078,6 +1984,7 @@ export async function handleRevealDudes(
       serviceAccountJson,
       signal: controller.signal,
       dataDb: env.DATA_DB,
+      opsDb: env.OPS_DB,
     };
     const sessionWallet = await dependencies.loadWalletSession(
       firestoreContext,
@@ -2089,6 +1996,9 @@ export async function handleRevealDudes(
       throw new RevealDudesError('permission-denied', 'Owners only.');
     }
     authOutcome = 'accepted';
+    if (storageControl.paused) {
+      throw new RevealDudesError('unavailable', 'Reveal migration is in progress. Try again.');
+    }
     const storedSubmission = await dependencies.loadRevealSubmission(firestoreContext, runtime, boxAssetId);
     if (storedSubmission && storedSubmission.owner !== owner.toBase58()) {
       authOutcome = 'rejected';

@@ -16,6 +16,12 @@ import {
   runReadyNotificationsControl,
   type ReadyNotificationsControlDependencies,
 } from '../scripts/ops/readyNotificationsControl.ts';
+import {
+  parseRevealSubmissionsControl,
+  parseRevealSubmissionsControlArgs,
+  runRevealSubmissionsControl,
+  type RevealSubmissionsControlDependencies,
+} from '../scripts/ops/revealSubmissionsControl.ts';
 
 const migrationSql = [
   '0001_ops_state.sql',
@@ -25,6 +31,9 @@ const migrationSql = [
   '0005_profile_write_safety.sql',
   '0006_wallet_sessions.sql',
   '0007_wallet_sessions_d1_only.sql',
+  '0008_reveal_submissions.sql',
+  '0009_reveal_submissions_d1_only.sql',
+  '0010_reveal_submissions_baseline_index.sql',
 ]
   .map((name) => readFileSync(
     new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
@@ -80,6 +89,9 @@ function integrityInput(
         { name: '0005_profile_write_safety.sql' },
         { name: '0006_wallet_sessions.sql' },
         { name: '0007_wallet_sessions_d1_only.sql' },
+        { name: '0008_reveal_submissions.sql' },
+        { name: '0009_reveal_submissions_d1_only.sql' },
+        { name: '0010_reveal_submissions_baseline_index.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
@@ -90,12 +102,28 @@ function integrityInput(
       profileStorageControlColumns: queryRows(db, 'PRAGMA table_info(profile_storage_control)'),
       quickCheck: queryRows(db, 'PRAGMA quick_check'),
       rateLimitBucketColumns: queryRows(db, 'PRAGMA table_info(rate_limit_buckets)'),
+      revealSubmissionColumns: queryRows(db, 'PRAGMA table_info(reveal_submissions)'),
+      revealSubmissionBaselineIndexColumns: queryRows(
+        db,
+        'PRAGMA index_info(reveal_submissions_status_created_at_ms)',
+      ),
+      revealSubmissionCounts: queryRows(db, `SELECT
+        (SELECT COUNT(*) FROM reveal_submissions) AS reveal_submission_count,
+        (SELECT COUNT(*)
+          FROM reveal_submissions AS submission
+          JOIN reveal_submission_storage_control AS control ON control.singleton = 1
+          WHERE
+            submission.status = 'confirmed' AND
+            submission.created_at_ms <= control.cutover_at_ms
+        ) AS reveal_submission_cutover_count`),
+      revealSubmissionStorageControl: queryRows(db, 'SELECT * FROM reveal_submission_storage_control'),
+      revealSubmissionStorageControlColumns: queryRows(db, 'PRAGMA table_info(reveal_submission_storage_control)'),
       schema: queryRows(db, applicationSchemaQuery),
       tableList: queryRows(db, `SELECT name, type, strict
         FROM pragma_table_list
         WHERE
           schema = 'main' AND
-          name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
+          name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
         ORDER BY name`),
       walletSessionColumns: queryRows(db, 'PRAGMA table_info(wallet_sessions)'),
       walletSessionCounts: queryRows(db, 'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions'),
@@ -119,13 +147,15 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
     assert.deepEqual(controls, [controlRow()]);
     const tables = queryRows(
       db,
-      "SELECT name, strict FROM pragma_table_list WHERE name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'worker_controls', 'rate_limit_buckets', 'wallet_sessions', 'wallet_session_storage_control') ORDER BY name",
+      "SELECT name, strict FROM pragma_table_list WHERE name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'worker_controls', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'wallet_sessions', 'wallet_session_storage_control') ORDER BY name",
     );
     assert.deepEqual(tables, [
       { name: 'profile_addresses', strict: 1 },
       { name: 'profile_storage_control', strict: 1 },
       { name: 'profiles', strict: 1 },
       { name: 'rate_limit_buckets', strict: 1 },
+      { name: 'reveal_submission_storage_control', strict: 1 },
+      { name: 'reveal_submissions', strict: 1 },
       { name: 'wallet_session_storage_control', strict: 1 },
       { name: 'wallet_sessions', strict: 1 },
       { name: 'worker_controls', strict: 1 },
@@ -153,6 +183,9 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
           { name: '0005_profile_write_safety.sql' },
           { name: '0006_wallet_sessions.sql' },
           { name: '0007_wallet_sessions_d1_only.sql' },
+          { name: '0008_reveal_submissions.sql' },
+          { name: '0009_reveal_submissions_d1_only.sql' },
+          { name: '0010_reveal_submissions_baseline_index.sql' },
         ],
         profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
         profileCounts: queryRows(db, `SELECT
@@ -166,6 +199,22 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
           db,
           'PRAGMA table_info(rate_limit_buckets)',
         ),
+        revealSubmissionColumns: queryRows(db, 'PRAGMA table_info(reveal_submissions)'),
+        revealSubmissionBaselineIndexColumns: queryRows(
+          db,
+          'PRAGMA index_info(reveal_submissions_status_created_at_ms)',
+        ),
+        revealSubmissionCounts: queryRows(db, `SELECT
+          (SELECT COUNT(*) FROM reveal_submissions) AS reveal_submission_count,
+          (SELECT COUNT(*)
+            FROM reveal_submissions AS submission
+            JOIN reveal_submission_storage_control AS control ON control.singleton = 1
+            WHERE
+              submission.status = 'confirmed' AND
+              submission.created_at_ms <= control.cutover_at_ms
+          ) AS reveal_submission_cutover_count`),
+        revealSubmissionStorageControl: queryRows(db, 'SELECT * FROM reveal_submission_storage_control'),
+        revealSubmissionStorageControlColumns: queryRows(db, 'PRAGMA table_info(reveal_submission_storage_control)'),
         schema: queryRows(db, applicationSchemaQuery),
         tableList: queryRows(
           db,
@@ -173,7 +222,7 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
           FROM pragma_table_list
           WHERE
             schema = 'main' AND
-            name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
+            name IN ('profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
           ORDER BY name`,
         ),
         walletSessionColumns: queryRows(db, 'PRAGMA table_info(wallet_sessions)'),
@@ -343,6 +392,14 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
       updatedAtMs: 0,
       cursorUpdatedAtMs: null,
     },
+    revealSubmissionCount: 0,
+    revealSubmissionStorage: {
+      paused: false,
+      source: 'd1',
+      revision: 3,
+      updatedAtMs: report.revealSubmissionStorage.updatedAtMs,
+      cutoverAtMs: report.revealSubmissionStorage.cutoverAtMs,
+    },
     walletSessionCount: 0,
     walletSessionStorage: {
       source: 'd1',
@@ -351,13 +408,42 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
     },
   });
   assert.ok(report.walletSessionStorage.updatedAtMs > 0);
+  assert.ok(report.revealSubmissionStorage.updatedAtMs > 0);
+  assert.equal(
+    report.revealSubmissionStorage.cutoverAtMs,
+    report.revealSubmissionStorage.updatedAtMs,
+  );
   assert.throws(
     () => assertOpsD1Integrity(healthy, {
       profileAddressCount: 1,
       profileCount: 1,
+      revealSubmissionCutoverCount: 1,
       walletSessionCount: 1,
     }),
     /cutover baseline/,
+  );
+  assert.throws(
+    () => assertOpsD1Integrity(healthy, {
+      profileAddressCount: 0,
+      profileCount: 0,
+      revealSubmissionCutoverCount: 1,
+      walletSessionCount: 0,
+    }),
+    /reveal-submission count is below/,
+  );
+  assert.throws(
+    () => assertOpsD1Integrity(integrityInput({
+      revealSubmissionCounts: [{
+        reveal_submission_count: 14,
+        reveal_submission_cutover_count: 0,
+      }],
+    }), {
+      profileAddressCount: 0,
+      profileCount: 0,
+      revealSubmissionCutoverCount: 1,
+      walletSessionCount: 0,
+    }),
+    /reveal-submission count is below/,
   );
   assert.throws(
     () => assertOpsD1Integrity(integrityInput({ migrations: [] })),
@@ -696,4 +782,84 @@ test('operator validates D1 control before pause or resume mutation', async () =
     /canonical delivery-order path/,
   );
   assert.equal(mutations, 0);
+});
+
+test('reveal-submission operator exposes only forward D1 controls', async () => {
+  assert.deepEqual(parseRevealSubmissionsControlArgs(['status']), {
+    command: 'status',
+    write: false,
+  });
+  assert.deepEqual(parseRevealSubmissionsControlArgs(['pause', '--write']), {
+    command: 'pause',
+    write: true,
+  });
+  assert.deepEqual(parseRevealSubmissionsControlArgs(['resume', '--write']), {
+    command: 'resume',
+    write: true,
+  });
+  assert.throws(
+    () => parseRevealSubmissionsControlArgs(['import-firestore', '--write']),
+    /Expected status, pause, or resume/,
+  );
+  assert.throws(
+    () => parseRevealSubmissionsControlArgs(['cutover', '--write']),
+    /Expected status, pause, or resume/,
+  );
+  assert.throws(
+    () => parseRevealSubmissionsControlArgs(['status', '--write']),
+    /read-only/,
+  );
+  const baseControl = parseRevealSubmissionsControl({
+    singleton: 1,
+    paused: 0,
+    storage_source: 'd1',
+    revision: 4,
+    updated_at_ms: 1_000,
+    cutover_at_ms: 500,
+  });
+  assert.throws(
+    () => parseRevealSubmissionsControl({
+      singleton: 1,
+      paused: 1,
+      storage_source: 'firestore',
+      revision: 1,
+      updated_at_ms: 0,
+      cutover_at_ms: null,
+    }),
+    /invalid/,
+  );
+  const calls: unknown[] = [];
+  const dependencies: RevealSubmissionsControlDependencies = {
+    nowMs: () => 2_000,
+    readControl: () => baseControl,
+    readSubmissionCount: () => 14,
+    setPaused: (paused, revision, nowMs) => {
+      calls.push([paused, revision, nowMs]);
+      return {
+        ...baseControl,
+        paused,
+        revision: revision + 1,
+        updatedAtMs: nowMs,
+      };
+    },
+  };
+  assert.deepEqual(await runRevealSubmissionsControl(
+    { command: 'status', write: false },
+    dependencies,
+  ), {
+    control: baseControl,
+    submissionCount: 14,
+  });
+  assert.equal((await runRevealSubmissionsControl(
+    { command: 'pause', write: true },
+    dependencies,
+  )).control.paused, true);
+  assert.equal((await runRevealSubmissionsControl(
+    { command: 'resume', write: true },
+    dependencies,
+  )).control.paused, false);
+  assert.deepEqual(calls, [
+    [true, 4, 2_000],
+    [false, 4, 2_000],
+  ]);
 });

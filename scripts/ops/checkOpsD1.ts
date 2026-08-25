@@ -8,11 +8,13 @@ export function formatOpsD1Report(): string {
     profileCount,
     profileStorageSource,
     readyNotifications,
+    revealSubmissionCount,
+    revealSubmissionStorage,
     walletSessionCount,
     walletSessionStorage,
   } = readRemoteOpsD1Integrity();
   const cursor = readyNotifications.cursorPath || 'none';
-  return `Ops D1 is healthy: ready notifications ${readyNotifications.paused ? 'paused' : 'active'}, cursor ${cursor}, revision ${readyNotifications.revision}; profiles ${profileCount}, addresses ${profileAddressCount}, source ${profileStorageSource}; wallet sessions ${walletSessionCount}, source ${walletSessionStorage.source}, revision ${walletSessionStorage.revision}.`;
+  return `Ops D1 is healthy: ready notifications ${readyNotifications.paused ? 'paused' : 'active'}, cursor ${cursor}, revision ${readyNotifications.revision}; reveal submissions ${revealSubmissionCount}, ${revealSubmissionStorage.paused ? 'paused' : 'active'}, source ${revealSubmissionStorage.source}, revision ${revealSubmissionStorage.revision}; profiles ${profileCount}, addresses ${profileAddressCount}, source ${profileStorageSource}; wallet sessions ${walletSessionCount}, source ${walletSessionStorage.source}, revision ${walletSessionStorage.revision}.`;
 }
 
 function isDirectRun(): boolean {

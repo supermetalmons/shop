@@ -244,10 +244,25 @@ npm run check:ops-d1
 
 The integrity check validates Wrangler migration history, every strict table,
 the expiry index, foreign keys, SQLite quick check, the singleton
-ready-notification control, and the profile-storage source. Receipt-transfer
+ready-notification control, the reveal-submission source and production count
+baseline, and the profile-storage source. Receipt-transfer
 caller and asset buckets use exact ten-minute fixed windows. Expired buckets
 are cleaned in bounded batches by the existing five-minute Worker schedule;
 there is no Firestore backfill for these ephemeral counters.
+
+Reveal submissions live in Ops D1 after their guarded one-way cutover. Inspect
+or pause that subsystem with:
+
+```bash
+npm run reveal-submissions-control -- status
+npm run reveal-submissions-control -- pause --write
+npm run reveal-submissions-control -- resume --write
+```
+
+The production Firestore-to-D1 cutover completed on 2026-08-25. The D1 source is
+permanent and the Worker fails closed unless all 14 pre-cutover submissions are
+present. Recover by fixing forward and retain the historical Firestore documents
+without modifying or deleting them.
 
 Profiles and append-only encrypted saved addresses live only in the Ops D1
 database. The Ops integrity check enforces the production cutover count floors

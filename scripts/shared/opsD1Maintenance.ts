@@ -13,11 +13,15 @@ const OPS_D1_MIGRATIONS = [
   '0005_profile_write_safety.sql',
   '0006_wallet_sessions.sql',
   '0007_wallet_sessions_d1_only.sql',
+  '0008_reveal_submissions.sql',
+  '0009_reveal_submissions_d1_only.sql',
+  '0010_reveal_submissions_baseline_index.sql',
 ] as const;
 
 const PRODUCTION_MIN_PROFILE_COUNT = 690;
 const PRODUCTION_MIN_PROFILE_ADDRESS_COUNT = 503;
 const PRODUCTION_MIN_WALLET_SESSION_COUNT = 1197;
+const PRODUCTION_MIN_REVEAL_SUBMISSION_CUTOVER_COUNT = 14;
 
 export type OpsD1Row = Record<string, unknown>;
 
@@ -37,6 +41,14 @@ export type WalletSessionStorageControl = {
   updatedAtMs: number;
 };
 
+export type RevealSubmissionStorageControl = {
+  paused: boolean;
+  source: 'd1';
+  revision: number;
+  updatedAtMs: number;
+  cutoverAtMs: number | null;
+};
+
 export type OpsD1IntegrityInput = {
   controls: OpsD1Row[];
   expiryIndexColumns: OpsD1Row[];
@@ -49,6 +61,11 @@ export type OpsD1IntegrityInput = {
   profileStorageControlColumns: OpsD1Row[];
   quickCheck: OpsD1Row[];
   rateLimitBucketColumns: OpsD1Row[];
+  revealSubmissionColumns: OpsD1Row[];
+  revealSubmissionBaselineIndexColumns: OpsD1Row[];
+  revealSubmissionCounts: OpsD1Row[];
+  revealSubmissionStorageControl: OpsD1Row[];
+  revealSubmissionStorageControlColumns: OpsD1Row[];
   schema: OpsD1Row[];
   tableList: OpsD1Row[];
   walletSessionColumns: OpsD1Row[];
@@ -63,6 +80,8 @@ export type OpsD1IntegrityReport = {
   profileCount: number;
   profileStorageSource: 'd1';
   readyNotifications: ReadyNotificationsControl;
+  revealSubmissionCount: number;
+  revealSubmissionStorage: RevealSubmissionStorageControl;
   walletSessionCount: number;
   walletSessionStorage: WalletSessionStorageControl;
 };
@@ -70,6 +89,7 @@ export type OpsD1IntegrityReport = {
 type OpsD1IntegrityMinimums = {
   profileAddressCount: number;
   profileCount: number;
+  revealSubmissionCutoverCount: number;
   walletSessionCount: number;
 };
 
@@ -87,6 +107,62 @@ const expectedSchema = new Map<
   string,
   { fingerprint: string; type: string; tableName: string }
 >([
+  [
+    'reveal_submissions_status_created_at_ms',
+    {
+      fingerprint: 'c19d631a0f0ffab085cc48fab19ae012694d49036c349047dc7d7187d066d6b5',
+      type: 'index',
+      tableName: 'reveal_submissions',
+    },
+  ],
+  [
+    'reveal_submission_storage_control',
+    {
+      fingerprint: 'a96ae38f775189e18221ec8ddf2e7c20de8857f588eaa0019f1c0369dbd42505',
+      type: 'table',
+      tableName: 'reveal_submission_storage_control',
+    },
+  ],
+  [
+    'reveal_submission_storage_d1_immutable_guard',
+    {
+      fingerprint: '1a229715b81eeeaec5911d8c21aaa296fe858e513700109a0e30be5538babb78',
+      type: 'trigger',
+      tableName: 'reveal_submission_storage_control',
+    },
+  ],
+  [
+    'reveal_submission_storage_delete_guard',
+    {
+      fingerprint: '71aaffadef67b9c0fe2394c6601b4b97c47925df014ad534d79b7eae41120178',
+      type: 'trigger',
+      tableName: 'reveal_submission_storage_control',
+    },
+  ],
+  [
+    'reveal_submission_storage_insert_guard',
+    {
+      fingerprint: 'f2c687e87e40f40582ef0b182d38ad0b5c8650ac5bbaa85cc86f5fae8081b13e',
+      type: 'trigger',
+      tableName: 'reveal_submission_storage_control',
+    },
+  ],
+  [
+    'reveal_submission_storage_update_guard',
+    {
+      fingerprint: '70a75dc47b5348215428860c8daf1c33010947f2de67484d54983c7edd68fa6c',
+      type: 'trigger',
+      tableName: 'reveal_submission_storage_control',
+    },
+  ],
+  [
+    'reveal_submissions',
+    {
+      fingerprint: 'c38f2cc6730267cd001cd0ff72fe77e5fd282d13fa7f26d010c03e08223cf09c',
+      type: 'table',
+      tableName: 'reveal_submissions',
+    },
+  ],
   [
     'profile_address_conflict_guard',
     {
@@ -330,6 +406,33 @@ const expectedWalletSessionStorageControlColumns: readonly ExpectedColumn[] = [
   ['updated_at_ms', 'INTEGER', 1, 0],
 ];
 
+const expectedRevealSubmissionColumns: readonly ExpectedColumn[] = [
+  ['drop_id', 'TEXT', 1, 1],
+  ['box_asset_id', 'TEXT', 1, 2],
+  ['schema_version', 'INTEGER', 1, 0],
+  ['owner_wallet', 'TEXT', 1, 0],
+  ['signature', 'TEXT', 1, 0],
+  ['recent_blockhash', 'TEXT', 1, 0],
+  ['blockhash_context_slot', 'INTEGER', 1, 0],
+  ['dude_ids_json', 'TEXT', 1, 0],
+  ['reservation_id', 'TEXT', 1, 0],
+  ['status', 'TEXT', 1, 0],
+  ['revision', 'INTEGER', 1, 0],
+  ['created_at_ms', 'INTEGER', 1, 0],
+  ['updated_at_ms', 'INTEGER', 1, 0],
+  ['confirmed_at_ms', 'INTEGER', 0, 0],
+];
+
+const expectedRevealSubmissionStorageControlColumns: readonly ExpectedColumn[] = [
+  ['singleton', 'INTEGER', 1, 1],
+  ['paused', 'INTEGER', 1, 0],
+  ['storage_source', 'TEXT', 1, 0],
+  ['revision', 'INTEGER', 1, 0],
+  ['created_at_ms', 'INTEGER', 1, 0],
+  ['updated_at_ms', 'INTEGER', 1, 0],
+  ['cutover_at_ms', 'INTEGER', 0, 0],
+];
+
 function fail(message: string): never {
   throw new Error(message);
 }
@@ -459,6 +562,16 @@ function assertExpiryIndexColumns(rows: OpsD1Row[]): void {
   assertExactInteger(rows[0].cid, 7, 'Ops D1 expiry index column id');
 }
 
+function assertRevealSubmissionBaselineIndexColumns(rows: OpsD1Row[]): void {
+  if (
+    rows.length !== 2 ||
+    rows[0].seqno !== 0 ||
+    rows[0].name !== 'status' ||
+    rows[1].seqno !== 1 ||
+    rows[1].name !== 'created_at_ms'
+  ) fail('Ops D1 reveal-submission baseline index columns are not exact.');
+}
+
 export function validateReadyNotificationCursorPath(value: unknown): string {
   if (typeof value !== 'string' || !value) {
     return fail('Ready-notification cursor must be a non-empty string.');
@@ -534,11 +647,37 @@ function parseWalletSessionStorageControl(
   };
 }
 
+function parseRevealSubmissionStorageControl(
+  row: OpsD1Row,
+): RevealSubmissionStorageControl {
+  if (
+    row.singleton !== 1 ||
+    (row.paused !== 0 && row.paused !== 1) ||
+    row.storage_source !== 'd1'
+  ) return fail('Reveal-submission storage control is invalid.');
+  const revision = safeInteger(row.revision, 'Reveal-submission storage revision', 1);
+  const updatedAtMs = safeInteger(row.updated_at_ms, 'Reveal-submission storage update timestamp');
+  const cutoverAtMs = row.cutover_at_ms === null
+    ? null
+    : safeInteger(row.cutover_at_ms, 'Reveal-submission cutover timestamp');
+  if (
+    cutoverAtMs === null
+  ) return fail('Reveal-submission cutover state is invalid.');
+  return {
+    paused: row.paused === 1,
+    source: row.storage_source,
+    revision,
+    updatedAtMs,
+    cutoverAtMs,
+  };
+}
+
 export function assertOpsD1Integrity(
   input: OpsD1IntegrityInput,
   minimums: OpsD1IntegrityMinimums = {
     profileAddressCount: 0,
     profileCount: 0,
+    revealSubmissionCutoverCount: 0,
     walletSessionCount: 0,
   },
 ): OpsD1IntegrityReport {
@@ -563,6 +702,7 @@ export function assertOpsD1Integrity(
     expectedWorkerControlColumns,
     'worker_controls',
   );
+  assertRevealSubmissionBaselineIndexColumns(input.revealSubmissionBaselineIndexColumns);
   assertExactColumns(
     input.profileColumns,
     expectedProfileColumns,
@@ -593,6 +733,16 @@ export function assertOpsD1Integrity(
     expectedWalletSessionStorageControlColumns,
     'wallet_session_storage_control',
   );
+  assertExactColumns(
+    input.revealSubmissionColumns,
+    expectedRevealSubmissionColumns,
+    'reveal_submissions',
+  );
+  assertExactColumns(
+    input.revealSubmissionStorageControlColumns,
+    expectedRevealSubmissionStorageControlColumns,
+    'reveal_submission_storage_control',
+  );
   assertExpiryIndexColumns(input.expiryIndexColumns);
   if (input.controls.length !== 1) {
     return fail('Ops D1 must contain exactly one worker control.');
@@ -603,8 +753,14 @@ export function assertOpsD1Integrity(
   if (input.walletSessionStorageControl.length !== 1) {
     return fail('Ops D1 must contain exactly one wallet-session storage control.');
   }
+  if (input.revealSubmissionStorageControl.length !== 1) {
+    return fail('Ops D1 must contain exactly one reveal-submission storage control.');
+  }
   const walletSessionStorage = parseWalletSessionStorageControl(
     input.walletSessionStorageControl[0],
+  );
+  const revealSubmissionStorage = parseRevealSubmissionStorageControl(
+    input.revealSubmissionStorageControl[0],
   );
   const source = input.profileStorageControl[0].read_source;
   if (source !== 'd1') return fail('Ops D1 profile storage source must be d1.');
@@ -633,11 +789,30 @@ export function assertOpsD1Integrity(
   ) {
     return fail('Ops D1 wallet-session count is below the production cutover baseline.');
   }
+  if (input.revealSubmissionCounts.length !== 1) {
+    return fail('Ops D1 reveal-submission count is invalid.');
+  }
+  const revealSubmissionCount = safeInteger(
+    input.revealSubmissionCounts[0].reveal_submission_count,
+    'Ops D1 reveal-submission count',
+  );
+  const revealSubmissionCutoverCount = safeInteger(
+    input.revealSubmissionCounts[0].reveal_submission_cutover_count,
+    'Ops D1 cutover reveal-submission count',
+  );
+  if (
+    revealSubmissionStorage.source === 'd1' &&
+    revealSubmissionCutoverCount < minimums.revealSubmissionCutoverCount
+  ) {
+    return fail('Ops D1 reveal-submission count is below the production cutover baseline.');
+  }
   return {
     profileAddressCount,
     profileCount,
     profileStorageSource: source,
     readyNotifications: parseReadyNotificationsControl(input.controls[0]),
+    revealSubmissionCount,
+    revealSubmissionStorage,
     walletSessionCount,
     walletSessionStorage,
   };
@@ -721,7 +896,7 @@ function executeRemoteOpsD1(sql: string): OpsD1Row[][] {
   ).map((entry) => entry.results);
 }
 
-function queryRemoteOpsD1(sql: string): OpsD1Row[] {
+export function queryRemoteOpsD1(sql: string): OpsD1Row[] {
   const results = executeRemoteOpsD1(sql);
   if (results.length !== 1) {
     return fail('Expected exactly one Ops D1 statement result.');
@@ -777,6 +952,34 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
     rateLimitBucketColumns: queryRemoteOpsD1(
       'PRAGMA table_info(rate_limit_buckets)',
     ),
+    revealSubmissionColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(reveal_submissions)',
+    ),
+    revealSubmissionBaselineIndexColumns: queryRemoteOpsD1(
+      'PRAGMA index_info(reveal_submissions_status_created_at_ms)',
+    ),
+    revealSubmissionCounts: queryRemoteOpsD1(
+      `SELECT
+        (SELECT COUNT(*) FROM reveal_submissions) AS reveal_submission_count,
+        (SELECT COUNT(*)
+          FROM reveal_submissions AS submission
+          JOIN reveal_submission_storage_control AS control ON control.singleton = 1
+          WHERE
+            submission.status = 'confirmed' AND
+            submission.created_at_ms <= control.cutover_at_ms
+        ) AS reveal_submission_cutover_count`,
+    ),
+    revealSubmissionStorageControl: queryRemoteOpsD1(`SELECT
+      singleton,
+      paused,
+      storage_source,
+      revision,
+      updated_at_ms,
+      cutover_at_ms
+      FROM reveal_submission_storage_control`),
+    revealSubmissionStorageControlColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(reveal_submission_storage_control)',
+    ),
     schema: queryRemoteOpsD1(`SELECT name, type, tbl_name, sql
       FROM sqlite_schema
       WHERE
@@ -793,6 +996,8 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
           'profile_storage_control',
           'profiles',
           'rate_limit_buckets',
+          'reveal_submission_storage_control',
+          'reveal_submissions',
           'wallet_sessions',
           'wallet_session_storage_control',
           'worker_controls'
@@ -819,6 +1024,7 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
   }, {
     profileAddressCount: PRODUCTION_MIN_PROFILE_ADDRESS_COUNT,
     profileCount: PRODUCTION_MIN_PROFILE_COUNT,
+    revealSubmissionCutoverCount: PRODUCTION_MIN_REVEAL_SUBMISSION_CUTOVER_COUNT,
     walletSessionCount: PRODUCTION_MIN_WALLET_SESSION_COUNT,
   });
 }
