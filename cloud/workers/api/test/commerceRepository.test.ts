@@ -91,7 +91,7 @@ test('native writes remain readable through the compatibility adapter', async ()
   assert.equal(record?.version, 2);
 });
 
-test('migration sync and native cursors preserve nanosecond ordering from adapter writes', async () => {
+test('native cursors preserve compatibility timestamps written during the bridge gap', async () => {
   const harness = createCommerceD1Harness();
   const adapter = new D1CommerceDocumentStore(harness.db);
   const writes = [
@@ -108,9 +108,9 @@ test('migration sync and native cursors preserve nanosecond ordering from adapte
     harness.database.prepare(`SELECT document_id, processed_at_seconds, processed_at_nanos
       FROM commerce_documents ORDER BY document_id`).all().map((row) => ({ ...row })),
     [
-      { document_id: '1', processed_at_seconds: 1_787_054_400, processed_at_nanos: 123_000_001 },
-      { document_id: '2', processed_at_seconds: 1_787_054_400, processed_at_nanos: 123_000_002 },
-      { document_id: '3', processed_at_seconds: 1_787_054_400, processed_at_nanos: 123_000_002 },
+      { document_id: '1', processed_at_seconds: null, processed_at_nanos: null },
+      { document_id: '2', processed_at_seconds: null, processed_at_nanos: null },
+      { document_id: '3', processed_at_seconds: null, processed_at_nanos: null },
     ],
   );
 

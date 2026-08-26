@@ -295,14 +295,21 @@ function parseRow(row: DocumentRow): StoredDocument {
     throw new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
   }
   const key = parseDocumentKey(row.document_kind, row.drop_id, row.document_id, row.document_path);
-  const processedAt = row.processed_at_seconds === null && row.processed_at_nanos === null
-    ? null
-    : { seconds: row.processed_at_seconds, nanos: row.processed_at_nanos };
   if (
     !isObject(data) || !isObject(compatibilityFields) || !key ||
-    !Number.isSafeInteger(row.version) || row.version < 1 ||
-    (processedAt && (!validTimestamp(processedAt as CommerceTimestamp)))
+    !Number.isSafeInteger(row.version) || row.version < 1
   ) throw new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
+  const projectedProcessedAt = row.processed_at_seconds === null && row.processed_at_nanos === null
+    ? null
+    : { seconds: row.processed_at_seconds, nanos: row.processed_at_nanos };
+  const compatibilityProcessedAt = isObject(compatibilityFields.processedAt) &&
+    typeof compatibilityFields.processedAt.timestampValue === 'string'
+    ? parseTimestampString(compatibilityFields.processedAt.timestampValue)
+    : null;
+  const processedAt = projectedProcessedAt || compatibilityProcessedAt;
+  if (processedAt && !validTimestamp(processedAt as CommerceTimestamp)) {
+    throw new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
+  }
   return {
     compatibilityFields,
     createTime: row.create_time,
@@ -581,8 +588,8 @@ export class CommerceUnitOfWork {
       }
       statements.push(this.db.prepare(`INSERT INTO commerce_documents (
         document_path, document_kind, drop_id, document_id, fields_json, document_json,
-        version, create_time, update_time
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        version, create_time, update_time, processed_at_seconds, processed_at_nanos
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(document_path) DO UPDATE SET
         document_kind = excluded.document_kind,
         drop_id = excluded.drop_id,
@@ -591,7 +598,9 @@ export class CommerceUnitOfWork {
         document_json = excluded.document_json,
         version = excluded.version,
         create_time = excluded.create_time,
-        update_time = excluded.update_time`).bind(
+        update_time = excluded.update_time,
+        processed_at_seconds = excluded.processed_at_seconds,
+        processed_at_nanos = excluded.processed_at_nanos`).bind(
         document.key.path,
         document.key.kind,
         document.key.dropId,
@@ -601,6 +610,8 @@ export class CommerceUnitOfWork {
         document.version,
         document.createTime,
         document.updateTime,
+        document.processedAt?.seconds ?? null,
+        document.processedAt?.nanos ?? null,
       ));
     }
     statements.push(this.db.prepare(`UPDATE commerce_authority_control

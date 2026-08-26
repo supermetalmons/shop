@@ -27,58 +27,6 @@ SET
     ) AS INTEGER)
   END;
 
-CREATE TRIGGER commerce_documents_processed_time_insert_sync
-AFTER INSERT ON commerce_documents
-BEGIN
-  UPDATE commerce_documents
-  SET
-    processed_at_seconds = CASE
-      WHEN json_type(NEW.fields_json, '$.processedAt.timestampValue') = 'text'
-        THEN CAST(strftime('%s', substr(json_extract(NEW.fields_json, '$.processedAt.timestampValue'), 1, 19) || 'Z') AS INTEGER)
-      ELSE NULL
-    END,
-    processed_at_nanos = CASE
-      WHEN json_type(NEW.fields_json, '$.processedAt.timestampValue') <> 'text' THEN NULL
-      WHEN substr(json_extract(NEW.fields_json, '$.processedAt.timestampValue'), 20, 1) <> '.' THEN 0
-      ELSE CAST(substr(
-        substr(
-          json_extract(NEW.fields_json, '$.processedAt.timestampValue'),
-          21,
-          instr(json_extract(NEW.fields_json, '$.processedAt.timestampValue'), 'Z') - 21
-        ) || '000000000',
-        1,
-        9
-      ) AS INTEGER)
-    END
-  WHERE document_path = NEW.document_path;
-END;
-
-CREATE TRIGGER commerce_documents_processed_time_update_sync
-AFTER UPDATE OF fields_json ON commerce_documents
-BEGIN
-  UPDATE commerce_documents
-  SET
-    processed_at_seconds = CASE
-      WHEN json_type(NEW.fields_json, '$.processedAt.timestampValue') = 'text'
-        THEN CAST(strftime('%s', substr(json_extract(NEW.fields_json, '$.processedAt.timestampValue'), 1, 19) || 'Z') AS INTEGER)
-      ELSE NULL
-    END,
-    processed_at_nanos = CASE
-      WHEN json_type(NEW.fields_json, '$.processedAt.timestampValue') <> 'text' THEN NULL
-      WHEN substr(json_extract(NEW.fields_json, '$.processedAt.timestampValue'), 20, 1) <> '.' THEN 0
-      ELSE CAST(substr(
-        substr(
-          json_extract(NEW.fields_json, '$.processedAt.timestampValue'),
-          21,
-          instr(json_extract(NEW.fields_json, '$.processedAt.timestampValue'), 'Z') - 21
-        ) || '000000000',
-        1,
-        9
-      ) AS INTEGER)
-    END
-  WHERE document_path = NEW.document_path;
-END;
-
 CREATE INDEX commerce_documents_drop_processed_cursor
   ON commerce_documents (
     document_kind,
