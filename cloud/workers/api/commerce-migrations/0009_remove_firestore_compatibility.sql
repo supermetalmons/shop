@@ -1,9 +1,9 @@
-SELECT CASE WHEN
+SELECT (CASE WHEN
   (SELECT authority_state FROM commerce_authority_control WHERE singleton = 1) <> 'paused' AND NOT (
     (SELECT authority_state FROM commerce_authority_control WHERE singleton = 1) = 'firestore' AND
     NOT EXISTS (SELECT 1 FROM commerce_documents)
   )
-THEN json('commerce must be paused for contract migration') ELSE NULL END;
+THEN json('commerce must be paused for contract migration') ELSE NULL END);
 
 DROP TRIGGER commerce_authority_transition_guard;
 DROP TRIGGER commerce_authority_delete_guard;
@@ -76,13 +76,13 @@ CREATE TRIGGER commerce_authority_d1_manifest_guard
 BEFORE UPDATE OF authority_state ON commerce_authority_control
 WHEN NEW.authority_state = 'd1' AND OLD.authority_state <> 'd1'
 BEGIN
-  SELECT CASE WHEN NEW.revision <> OLD.revision + 1
-    THEN RAISE(ABORT, 'commerce authority revision conflict') END;
-  SELECT CASE WHEN NEW.import_manifest_sha256 IS NULL OR NOT EXISTS (
+  SELECT (CASE WHEN NEW.revision <> OLD.revision + 1
+    THEN RAISE(ABORT, 'commerce authority revision conflict') END);
+  SELECT (CASE WHEN NEW.import_manifest_sha256 IS NULL OR NOT EXISTS (
     SELECT 1
     FROM commerce_import_manifests
     WHERE manifest_sha256 = NEW.import_manifest_sha256
-  ) THEN RAISE(ABORT, 'commerce import is not verified') END;
+  ) THEN RAISE(ABORT, 'commerce import is not verified') END);
 END;
 
 CREATE TRIGGER commerce_authority_revision_guard
@@ -95,41 +95,41 @@ END;
 CREATE TRIGGER commerce_commit_guard_validate
 BEFORE INSERT ON commerce_commit_guards
 BEGIN
-  SELECT CASE WHEN (
+  SELECT (CASE WHEN (
     SELECT authority_state FROM commerce_authority_control WHERE singleton = 1
-  ) <> 'd1' THEN RAISE(ABORT, 'commerce authority is not d1') END;
+  ) <> 'd1' THEN RAISE(ABORT, 'commerce authority is not d1') END);
 
-  SELECT CASE WHEN NEW.expected_documents_revision IS NOT NULL AND NEW.expected_documents_revision <> (
+  SELECT (CASE WHEN NEW.expected_documents_revision IS NOT NULL AND NEW.expected_documents_revision <> (
     SELECT documents_revision FROM commerce_authority_control WHERE singleton = 1
-  ) THEN RAISE(ABORT, 'commerce transaction conflict') END;
+  ) THEN RAISE(ABORT, 'commerce transaction conflict') END);
 
-  SELECT CASE WHEN EXISTS (
+  SELECT (CASE WHEN EXISTS (
     SELECT 1
     FROM json_each(NEW.expectations_json) AS expectation
     LEFT JOIN commerce_documents AS document
       ON document.document_path = json_extract(expectation.value, '$.path')
     WHERE COALESCE(document.version, -1) <> CAST(json_extract(expectation.value, '$.version') AS INTEGER)
-  ) THEN RAISE(ABORT, 'commerce transaction conflict') END;
+  ) THEN RAISE(ABORT, 'commerce transaction conflict') END);
 END;
 
 CREATE TRIGGER commerce_wipe_guard_validate
 BEFORE INSERT ON commerce_wipe_guards
 BEGIN
-  SELECT CASE WHEN (
+  SELECT (CASE WHEN (
     SELECT authority_state FROM commerce_authority_control WHERE singleton = 1
-  ) <> 'paused' THEN RAISE(ABORT, 'commerce authority is not paused') END;
+  ) <> 'paused' THEN RAISE(ABORT, 'commerce authority is not paused') END);
 
-  SELECT CASE WHEN NEW.expected_documents_revision <> (
+  SELECT (CASE WHEN NEW.expected_documents_revision <> (
     SELECT documents_revision FROM commerce_authority_control WHERE singleton = 1
-  ) THEN RAISE(ABORT, 'commerce wipe conflict') END;
+  ) THEN RAISE(ABORT, 'commerce wipe conflict') END);
 
-  SELECT CASE WHEN EXISTS (
+  SELECT (CASE WHEN EXISTS (
     SELECT 1
     FROM json_each(NEW.expectations_json) AS expectation
     LEFT JOIN commerce_documents AS document
       ON document.document_path = json_extract(expectation.value, '$.path')
     WHERE COALESCE(document.version, -1) <> CAST(json_extract(expectation.value, '$.version') AS INTEGER)
-  ) THEN RAISE(ABORT, 'commerce wipe conflict') END;
+  ) THEN RAISE(ABORT, 'commerce wipe conflict') END);
 END;
 
 CREATE TRIGGER commerce_documents_insert_authority_guard
