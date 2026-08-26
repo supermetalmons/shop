@@ -64,9 +64,8 @@ export function buildCommerceAuthorityMutationSql(
   if (command === 'paused') {
     return `UPDATE commerce_authority_control
       SET authority_state = 'paused', revision = revision + 1,
-        paused_at_ms = ${nowMs}, cutover_at_ms = NULL,
-        import_manifest_sha256 = NULL, updated_at_ms = ${nowMs}
-      WHERE singleton = 1 AND authority_state = 'firestore' AND revision = ${expectedRevision}
+        paused_at_ms = ${nowMs}, updated_at_ms = ${nowMs}
+      WHERE singleton = 1 AND authority_state IN ('firestore', 'd1') AND revision = ${expectedRevision}
       RETURNING *`;
   }
   if (command === 'firestore') {
@@ -79,7 +78,7 @@ export function buildCommerceAuthorityMutationSql(
   }
   return `UPDATE commerce_authority_control
     SET authority_state = 'd1', revision = revision + 1,
-      cutover_at_ms = ${nowMs}, updated_at_ms = ${nowMs}
+      paused_at_ms = NULL, cutover_at_ms = COALESCE(cutover_at_ms, ${nowMs}), updated_at_ms = ${nowMs}
     WHERE singleton = 1 AND authority_state = 'paused' AND revision = ${expectedRevision}
       AND import_manifest_sha256 IS NOT NULL
     RETURNING *`;

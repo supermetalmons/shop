@@ -28,7 +28,7 @@ import {
   applyPreparedRepoWipe,
   applyRepoWipe,
   applyWipePhases,
-  asFirestoreDocumentId,
+  asStoredDocumentId,
   assertRepoWipeRegistryWritable,
   buildRepoPlan,
   normalizeStoredDropIdField,
@@ -43,10 +43,10 @@ import {
 
 const ROOT_A = '11'.repeat(32);
 test('Firestore document IDs remain exact while stored dropId fields normalize permissively', () => {
-  assert.equal(asFirestoreDocumentId('Legacy.Drop-V1'), 'Legacy.Drop-V1');
-  assert.equal(asFirestoreDocumentId(' drop with spaces '), ' drop with spaces ');
-  assert.equal(asFirestoreDocumentId(''), undefined);
-  assert.equal(asFirestoreDocumentId(null), undefined);
+  assert.equal(asStoredDocumentId('Legacy.Drop-V1'), 'Legacy.Drop-V1');
+  assert.equal(asStoredDocumentId(' drop with spaces '), ' drop with spaces ');
+  assert.equal(asStoredDocumentId(''), undefined);
+  assert.equal(asStoredDocumentId(null), undefined);
 
   assert.equal(
     normalizeStoredDropIdField(' Legacy.Drop-V1 '),
@@ -2040,7 +2040,7 @@ test('wipe phases abort preparation drift before Firestore starts', async (t) =>
   await assert.rejects(
     applyWipePhases({
       prepareRepo: () => prepareRepoWipe(fixture.plan),
-      applyFirestore: async () => {
+      applyData: async () => {
         firestoreCalled = true;
       },
       applyPreparedRepo: (prepared) => applyPreparedRepoWipe(prepared),
@@ -2065,7 +2065,7 @@ test('wipe phases never touch local files after a Firestore failure', async (t) 
   await assert.rejects(
     applyWipePhases({
       prepareRepo: () => prepareRepoWipe(fixture.plan),
-      applyFirestore: async () => {
+      applyData: async () => {
         throw firestoreError;
       },
       applyPreparedRepo: (prepared) => {
@@ -2108,7 +2108,7 @@ test('wipe phases remove a newly prepared recovery journal after a Firestore fai
   await assert.rejects(
     applyWipePhases({
       prepareRepo: () => prepareRepoWipe(fixture.plan),
-      applyFirestore: async () => {
+      applyData: async () => {
         assert.equal(existsSync(manifestPath), true);
         throw firestoreError;
       },
@@ -2143,7 +2143,7 @@ test('wipe phases preserve drift during Firestore, remove the registry row, and 
   await assert.rejects(
     applyWipePhases({
       prepareRepo: () => prepareRepoWipe(fixture.plan),
-      applyFirestore: async () => {
+      applyData: async () => {
         writeFileSync(fixture.firstCanonicalPath, changed, 'utf8');
       },
       applyPreparedRepo: (prepared) => applyPreparedRepoWipe(prepared),
@@ -2180,7 +2180,7 @@ test('a partial wipe can retry after the registry row and canonical files are al
 
   await applyWipePhases({
     prepareRepo: () => prepareRepoWipe(retryPlan),
-    applyFirestore: async () => {
+    applyData: async () => {
       firestoreCalls += 1;
     },
     applyPreparedRepo: (prepared) => applyPreparedRepoWipe(prepared),
@@ -2210,7 +2210,7 @@ test('shared recovery preparation leaves a missing canonical and its adopted qua
         assert.equal(existsSync(shared.absolutePath), false);
         return prepared;
       },
-      applyFirestore: async () => {
+      applyData: async () => {
         assert.equal(existsSync(shared.absolutePath), false);
         throw firestoreError;
       },
@@ -2244,7 +2244,7 @@ test('shared recovery preserves a canonical replacement created during Firestore
   await assert.rejects(
     applyWipePhases({
       prepareRepo: () => prepareRepoWipe(fixture.plan),
-      applyFirestore: async () => {
+      applyData: async () => {
         writeFileSync(shared.absolutePath, replacement, 'utf8');
       },
       applyPreparedRepo: (prepared) =>
@@ -2421,7 +2421,7 @@ test('wipe preparation rejects debris in the deterministic staging directory bef
   await assert.rejects(
     applyWipePhases({
       prepareRepo: () => prepareRepoWipe(fixture.plan),
-      applyFirestore: async () => {
+      applyData: async () => {
         firestoreCalled = true;
       },
       applyPreparedRepo: (prepared) =>

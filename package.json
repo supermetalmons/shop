@@ -141,7 +141,6 @@
     "@types/wicg-file-system-access": "^2023.10.7",
     "@typescript/native": "npm:typescript@^7.0.2",
     "@vitejs/plugin-react": "^6.0.5",
-    "@google-cloud/firestore": "^9.0.0",
     "firebase-tools": "^15.25.1",
     "jsdom": "^30.0.1",
     "knip": "^6.31.0",

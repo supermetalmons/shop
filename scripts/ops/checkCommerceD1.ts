@@ -36,6 +36,9 @@ export function checkCommerceD1(): Record<string, unknown> {
   if (!migrations.some((row) => String(row.name).endsWith('0005_remove_read_model.sql'))) {
     fail('Commerce D1 read-model cleanup migration is missing.');
   }
+  if (!migrations.some((row) => String(row.name).endsWith('0006_paused_wipe.sql'))) {
+    fail('Commerce D1 paused-wipe migration is missing.');
+  }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -43,11 +46,12 @@ export function checkCommerceD1(): Record<string, unknown> {
       'commerce_authority_control',
       'commerce_documents',
       'commerce_commit_guards',
+      'commerce_wipe_guards',
       'commerce_import_manifests',
       'commerce_transactions',
       'commerce_transaction_reads'
     ) ORDER BY name`);
-  if (authoritativeTables.length !== 6 || authoritativeTables.some((row) => row.strict !== 1)) {
+  if (authoritativeTables.length !== 7 || authoritativeTables.some((row) => row.strict !== 1)) {
     fail('Commerce D1 authoritative strict table inventory is invalid.');
   }
   const authorityRows = queryRemoteCommerceD1('SELECT * FROM commerce_authority_control');

@@ -1,11 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Firestore, type QueryDocumentSnapshot, Timestamp } from '@google-cloud/firestore';
 import { PublicKey } from '@solana/web3.js';
 import {
-  createFirebaseCliFirestoreRestClient,
-  decodeFirestoreRestDocument,
-} from '../shared/firebaseCliFirestoreRest.ts';
+  queryRemoteCommerceDocuments,
+  sqlString,
+} from '../shared/commerceD1Maintenance.ts';
 import { normalizeDropId, requireApiDrop, type SolanaCluster } from '../../cloud/workers/api/src/dropConfig.ts';
 import {
   dasAssetBoxId,
@@ -63,17 +62,12 @@ type ClaimInspection = ClaimRecord & {
   };
 };
 
-const PROJECT_ID = 'mons-shop';
 const IRL_CODE_DIGITS = 10;
 const CHECK_IRL_CLAIMS_DAS_NAME_OPTIONS = { metadataNameMode: 'string-only' } as const;
 const CHECK_IRL_CLAIMS_DAS_BURN_OPTIONS = {
   missingAssetResult: false,
   nonBooleanFlagIsBurnt: true,
 } as const;
-const firestoreRestClient = createFirebaseCliFirestoreRestClient({
-  projectId: PROJECT_ID,
-});
-
 function heliusRpcBaseForCluster(cluster: SolanaCluster): string {
   return cluster === 'mainnet-beta'
     ? 'https://mainnet.helius-rpc.com'
@@ -94,7 +88,7 @@ function usage() {
     '',
     'Requirements:',
     '  - HELIUS_API_KEY in .env or .env.local',
-    '  - Firestore admin credentials available via ADC/GOOGLE_APPLICATION_CREDENTIALS',
+    '  - Wrangler authenticated for the configured Cloudflare account',
   ].join('\n');
 }
 
@@ -207,10 +201,6 @@ function heliusApiKey(): string {
 
 function heliusRpcUrl(): string {
   return `${HELIUS_RPC_BASE}/?api-key=${heliusApiKey()}`;
-}
-
-function looksLikeFirestorePermissionError(message: string): boolean {
-  return /permission[-_\s]?denied|missing or insufficient permissions/i.test(message);
 }
 
 async function heliusRpc<T>(method: string, params: unknown): Promise<T> {
@@ -343,7 +333,7 @@ async function fetchCollectionAssets(): Promise<DasAsset[]> {
 }
 
 function timestampToIso(value: unknown): string | undefined {
-  if (value instanceof Timestamp) return value.toDate().toISOString();
+  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
   if (value && typeof (value as any).toDate === 'function') return (value as any).toDate().toISOString();
   return undefined;
 }
@@ -376,72 +366,25 @@ function parseClaimData(data: any, docId: string): ClaimRecord | null {
   };
 }
 
-function parseClaimDoc(doc: QueryDocumentSnapshot): ClaimRecord | null {
-  return parseClaimData(doc.data() as any, doc.id);
-}
-
-async function loadClaimsViaRest(args: Args): Promise<ClaimRecord[]> {
+async function loadClaims(args: Args): Promise<ClaimRecord[]> {
+  const select = `SELECT document_path, document_kind, drop_id, document_id,
+    document_json, version, create_time, update_time FROM commerce_documents`;
   if (args.code) {
-    const json = await firestoreRestClient.request({
-      url: firestoreRestClient.documentUrl(`claimCodes/${args.code}`),
-    });
-    const document = decodeFirestoreRestDocument(json);
-    const parsed = document
-      ? parseClaimData(document.data, document.id)
-      : null;
+    const documents = queryRemoteCommerceDocuments(`${select}
+      WHERE document_kind = 'claim_code' AND document_id = ${sqlString(args.code)}
+      ORDER BY document_path LIMIT 1`);
+    const document = documents[0];
+    const parsed = document ? parseClaimData(document.data, document.documentId) : null;
     return parsed && claimMatchesSelectedDrop(parsed) ? [parsed] : [];
   }
-
-  const claims: ClaimRecord[] = [];
-  let pageToken: string | undefined;
-  do {
-    const url = firestoreRestClient.documentUrl('claimCodes');
-    url.searchParams.set('pageSize', '1000');
-    if (pageToken) url.searchParams.set('pageToken', pageToken);
-    const json = await firestoreRestClient.request({
-      url,
-    });
-    const docs = Array.isArray(json?.documents) ? json.documents : [];
-    for (const doc of docs) {
-      const document = decodeFirestoreRestDocument(doc);
-      const parsed = document
-        ? parseClaimData(document.data, document.id)
-        : null;
-      if (parsed && claimMatchesSelectedDrop(parsed)) claims.push(parsed);
-    }
-    pageToken = typeof json?.nextPageToken === 'string' && json.nextPageToken ? json.nextPageToken : undefined;
-  } while (pageToken);
-
-  claims.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-  return limitClaims(claims, args.limit);
-}
-
-async function loadClaims(args: Args): Promise<ClaimRecord[]> {
-  if (args.code) {
-    try {
-      const db = new Firestore({ projectId: PROJECT_ID });
-      const snap = await db.doc(`claimCodes/${args.code}`).get();
-      if (!snap.exists) return [];
-      const parsed = parseClaimDoc(snap as QueryDocumentSnapshot);
-      return parsed && claimMatchesSelectedDrop(parsed) ? [parsed] : [];
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!looksLikeFirestorePermissionError(message)) throw err;
-      return loadClaimsViaRest(args);
-    }
-  }
-
-  try {
-    const db = new Firestore({ projectId: PROJECT_ID });
-    const snap = await db.collection('claimCodes').where('dropId', '==', selectedDropId).get();
-    const claims = snap.docs.map(parseClaimDoc).filter(Boolean) as ClaimRecord[];
-    claims.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
-    return limitClaims(claims, args.limit);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!looksLikeFirestorePermissionError(message)) throw err;
-    return loadClaimsViaRest(args);
-  }
+  const documents = queryRemoteCommerceDocuments(`${select}
+    WHERE document_kind = 'claim_code'
+      AND json_extract(document_json, '$.dropId') = ${sqlString(selectedDropId)}
+    ORDER BY CAST(json_extract(document_json, '$.createdAt') AS INTEGER) DESC, document_path`);
+  return limitClaims(documents.flatMap((document) => {
+    const parsed = parseClaimData(document.data, document.documentId);
+    return parsed && claimMatchesSelectedDrop(parsed) ? [parsed] : [];
+  }), args.limit);
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
@@ -631,9 +574,6 @@ async function main() {
 
 main().catch((err) => {
   const message = err instanceof Error ? err.message : String(err);
-  if (/Could not load the default credentials|Failed to determine service account|credential implementation provided/i.test(message)) {
-    console.error('Firestore admin credentials are not available. Set GOOGLE_APPLICATION_CREDENTIALS or local ADC, then retry.');
-  }
   console.error(message);
   process.exit(1);
 });

@@ -8,8 +8,10 @@ import {
 } from '../../../../scripts/shared/d1PackStatusMaintenance.ts';
 import {
   parseArgs as parseRebuildArgs,
+  rebuildPackStatusCounters,
   requireSettledPackStatusProjectionOutboxes,
 } from '../../../../scripts/ops/rebuildPackStatus.ts';
+import type { CommerceD1Document } from '../../../../scripts/shared/commerceD1Maintenance.ts';
 
 const dropRows = [
   ['card_nft_2', 100, 300, 3],
@@ -50,6 +52,24 @@ function integrityInput(): D1IntegrityInput {
     quickCheck: [{ quick_check: 'ok' }],
     foreignKeyCheck: [],
     invalidEvents: [],
+  };
+}
+
+function commerceDocument(
+  kind: 'box_assignment' | 'delivery_order',
+  documentId: string,
+  data: Record<string, unknown>,
+): CommerceD1Document {
+  const collection = kind === 'box_assignment' ? 'boxAssignments' : 'deliveryOrders';
+  return {
+    data,
+    documentId,
+    dropId: 'card_nft_2',
+    kind,
+    path: `drops/card_nft_2/${collection}/${documentId}`,
+    version: 1,
+    createTime: '2026-08-25T10:00:00.000000000Z',
+    updateTime: '2026-08-25T10:00:00.000000001Z',
   };
 }
 
@@ -210,6 +230,47 @@ test('authoritative rebuild rejects unsettled durable delivery projection outbox
       /outbox to be settled/,
     );
   }
+});
+
+test('authoritative rebuild derives assignment and delivery counters from Commerce D1 documents', () => {
+  const result = rebuildPackStatusCounters({
+    dropId: 'card_nft_2',
+    cluster: 'mainnet-beta',
+    itemsPerBox: 3,
+    maxSupply: 10,
+  }, {
+    assignments: [
+      commerceDocument('box_assignment', 'normal-box', {}),
+      commerceDocument('box_assignment', 'irl-box', { irlClaim: { namespace: 'irl_v2' } }),
+      commerceDocument('box_assignment', 'revealed-box', {}),
+    ],
+    deliveryOrders: [
+      commerceDocument('delivery_order', '1', {
+        status: 'processing',
+        items: [{ assetId: 'normal-box', kind: 'box' }],
+        packStatusProjectionState: 'completed',
+      }),
+      commerceDocument('delivery_order', '2', {
+        status: 'ready_to_ship',
+        source: 'admin_irl_redeem',
+        items: [{ assetId: 'admin-receipt', kind: 'box' }],
+        packStatusProjectionState: 'completed',
+      }),
+      commerceDocument('delivery_order', '3', {
+        status: 'ready_to_ship',
+        items: [{ assetId: 'irl-box', kind: 'box' }],
+        packStatusProjectionState: 'completed',
+      }),
+    ],
+  });
+  assert.deepEqual(result.historicalAssignmentCounts, {
+    boxAssignments: 3,
+    irlClaimAssignments: 1,
+    adminIrlAssignments: 1,
+    inFlightNormalAssignments: 1,
+  });
+  assert.equal(result.counters.unsealedOnline, 0);
+  assert.equal(result.counters.redeemedIrlNormal, 2);
 });
 
 test('migration 0004 introduces synchronized metadata and an unconditional delete guard', () => {

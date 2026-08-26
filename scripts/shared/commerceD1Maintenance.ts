@@ -4,6 +4,36 @@ import { fileURLToPath } from 'node:url';
 
 export type CommerceD1Row = Record<string, unknown>;
 
+export type CommerceD1DocumentKind =
+  | 'delivery_order'
+  | 'stripe_checkout'
+  | 'claim_code'
+  | 'box_assignment'
+  | 'dude_assignment'
+  | 'dude_pool'
+  | 'offchain_order'
+  | 'admin_irl_redeem_request'
+  | 'admin_irl_redeem_pack_marker'
+  | 'admin_irl_redeem_receipt_marker';
+
+export type CommerceD1Document = {
+  data: Record<string, unknown>;
+  documentId: string;
+  dropId: string | null;
+  kind: CommerceD1DocumentKind;
+  path: string;
+  version: number;
+  createTime: string;
+  updateTime: string;
+};
+
+export type CommerceD1Authority = {
+  state: 'firestore' | 'paused' | 'd1';
+  revision: number;
+  documentsRevision: number;
+  pausedAtMs: number | null;
+};
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const configPath = 'cloud/workers/api/wrangler.jsonc';
 const envFilePath = 'cloud/workers/api/release.env';
@@ -114,6 +144,101 @@ export function queryRemoteCommerceD1(sql: string): CommerceD1Row[] {
   ]));
   if (results.length !== 1) return fail('Expected exactly one Commerce D1 statement result.');
   return results[0];
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value) return fail(`${label} is invalid.`);
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function commerceDocumentIdentity(path: string): {
+  documentId: string;
+  dropId: string | null;
+  kind: CommerceD1DocumentKind;
+} | null {
+  const segments = path.split('/');
+  if (segments.length === 2 && segments[0] === 'claimCodes' && segments[1]) {
+    return { kind: 'claim_code', dropId: null, documentId: segments[1] };
+  }
+  if (segments.length !== 4 || segments[0] !== 'drops' || !segments[1] || !segments[3]) return null;
+  const kind = new Map<string, CommerceD1DocumentKind>([
+    ['deliveryOrders', 'delivery_order'],
+    ['stripeCheckouts', 'stripe_checkout'],
+    ['boxAssignments', 'box_assignment'],
+    ['dudeAssignments', 'dude_assignment'],
+    ['offchainOrders', 'offchain_order'],
+    ['adminIrlRedeemRequests', 'admin_irl_redeem_request'],
+    ['adminIrlRedeemPackMarkers', 'admin_irl_redeem_pack_marker'],
+    ['adminIrlRedeemReceiptMarkers', 'admin_irl_redeem_receipt_marker'],
+  ]).get(segments[2]);
+  if (kind) return { kind, dropId: segments[1], documentId: segments[3] };
+  if (segments[2] === 'meta' && segments[3] === 'dudePool') {
+    return { kind: 'dude_pool', dropId: segments[1], documentId: segments[3] };
+  }
+  return null;
+}
+
+export function parseCommerceD1DocumentRow(row: CommerceD1Row): CommerceD1Document {
+  const path = requiredString(row.document_path, 'Commerce D1 document path');
+  const identity = commerceDocumentIdentity(path);
+  if (!identity) return fail(`Commerce D1 document path is unsupported: ${path}.`);
+  const kind = requiredString(row.document_kind, `${path} document kind`);
+  const documentId = requiredString(row.document_id, `${path} document id`);
+  const dropId = row.drop_id === null ? null : requiredString(row.drop_id, `${path} drop id`);
+  const version = safeInteger(row.version, `${path} version`);
+  if (version < 1) return fail(`${path} version is invalid.`);
+  const createTime = requiredString(row.create_time, `${path} creation time`);
+  const updateTime = requiredString(row.update_time, `${path} update time`);
+  if (
+    kind !== identity.kind ||
+    documentId !== identity.documentId ||
+    dropId !== identity.dropId ||
+    !Number.isFinite(Date.parse(createTime)) ||
+    !Number.isFinite(Date.parse(updateTime))
+  ) return fail(`Commerce D1 document identity is inconsistent: ${path}.`);
+  let data: unknown;
+  try {
+    data = JSON.parse(requiredString(row.document_json, `${path} document JSON`));
+  } catch {
+    return fail(`Commerce D1 document JSON is invalid: ${path}.`);
+  }
+  if (!isRecord(data)) return fail(`Commerce D1 document JSON is invalid: ${path}.`);
+  return {
+    data,
+    documentId,
+    dropId,
+    kind: identity.kind,
+    path,
+    version,
+    createTime,
+    updateTime,
+  };
+}
+
+export function queryRemoteCommerceDocuments(sql: string): CommerceD1Document[] {
+  return queryRemoteCommerceD1(sql).map(parseCommerceD1DocumentRow);
+}
+
+export function readRemoteCommerceAuthority(): CommerceD1Authority {
+  const rows = queryRemoteCommerceD1(`SELECT authority_state, revision, documents_revision, paused_at_ms
+    FROM commerce_authority_control WHERE singleton = 1`);
+  if (rows.length !== 1) return fail('Commerce D1 authority control is invalid.');
+  const state = rows[0].authority_state;
+  if (state !== 'firestore' && state !== 'paused' && state !== 'd1') {
+    return fail('Commerce D1 authority state is invalid.');
+  }
+  return {
+    state,
+    revision: safeInteger(rows[0].revision, 'Commerce D1 authority revision'),
+    documentsRevision: safeInteger(rows[0].documents_revision, 'Commerce D1 documents revision'),
+    pausedAtMs: rows[0].paused_at_ms === null
+      ? null
+      : safeInteger(rows[0].paused_at_ms, 'Commerce D1 pause timestamp'),
+  };
 }
 
 export function executeRemoteCommerceD1File(filePath: string): CommerceD1Row[][] {

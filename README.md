@@ -3,9 +3,9 @@
 React + TypeScript Solana dapp for mons IRL blind boxes. Box minting is fully
 on-chain through the custom box-minter program and MPL Core assets. The browser
 uses Worker-managed anonymous sessions and Solana wallet signatures for identity.
-Privileged application traffic runs through Cloudflare, order and assignment records remain in Firestore, and D1
-owns profiles, saved addresses, the public pack-status projection, Worker
-control, rate-limit state, and the shipment and fulfillment read models.
+Privileged application traffic runs through Cloudflare. D1 owns commerce
+documents, profiles, saved addresses, the public pack-status projection, Worker
+control, rate-limit state, and shipment and fulfillment data.
 
 ## Architecture
 
@@ -22,10 +22,9 @@ control, rate-limit state, and the shipment and fulfillment read models.
 - The `mons-shop-ops` D1 database stores profiles, encrypted saved addresses,
   wallet-session bindings, the ready-notification control, and receipt-transfer
   fixed-window rate-limit buckets.
-- The `mons-shop-commerce` D1 database stores complete server-only projections
-  of Firestore delivery orders and Stripe checkouts. Firestore remains the
-  commerce write authority while the read source advances through `firestore`,
-  `dual`, and `d1` modes.
+- The `mons-shop-commerce` D1 database is the permanent authority for delivery
+  orders, assignments, claim codes, Stripe checkouts, and related commerce
+  documents.
 - The API Worker's existing cron, Queue producers and consumers, dead-letter
   queues, bindings, routes, and secrets are declared in
   `cloud/workers/api/wrangler.jsonc`.
@@ -85,13 +84,12 @@ the frontend Worker's same-origin `/api/*` gateway and a fixed CSRF header.
 
 Firebase ID tokens are not accepted. The completed removal is recorded
 irreversibly in Ops D1, and arbitrary bearer tokens fail closed without a Google
-certificate lookup. Firestore remains a server-side operational store: the
-catch-all rules reject every browser read and write.
+certificate lookup. The retained Firestore catch-all rules reject every browser
+read and write, and the historical database is not an application runtime path.
 
-Firestore still stores orders, assignments, and delivery projection outboxes.
-Its indexes, rules, emulator tooling, operator scripts, and API service-account
-secrets remain required. Profiles, saved addresses, and cut-over wallet-session
-bindings are D1-only.
+Commerce documents, profiles, saved addresses, wallet sessions, and operational
+controls are D1-only. Firebase tooling remains only for retained historical
+cutover, audit, and deny-rule workflows.
 
 Deploy Firestore indexes and deny-all client rules from the repository root:
 
@@ -100,11 +98,11 @@ npm run deploy:firestore
 ```
 
 The command runs the emulator rules suite before changing the `mons-shop`
-project, then deploys indexes and rules. Deploy required indexes before API code
-that issues new operational Firestore queries.
+project, then deploys the retained indexes and deny rules. Application runtime
+code must not add new Firestore queries.
 
 On macOS, install the device-local reader and writer credentials used by
-operator tools with:
+historical cutover and audit tools with:
 
 ```bash
 npm run setup:api:firestore-keychain
@@ -117,7 +115,7 @@ Do not put service-account JSON in repository files or frontend configuration.
 
 The mapping from each anonymous auth subject to its signed Solana wallet is
 D1-only in `mons-shop-ops`; its legacy physical column remains `firebase_uid`
-until the commerce data migrates from Firestore. Different-wallet
+for storage compatibility. Different-wallet
 rebinding is temporarily blocked while profile reconciliation holds its
 bounded D1 lease, while same-wallet renewal remains available.
 
@@ -205,7 +203,7 @@ to reverse the deployment workflow by hand.
 ### Pack-status D1
 
 The API Worker binds the existing `mons-shop-data` database as `DATA_DB`.
-Customer pack-status endpoints read D1 only; operational Firestore is not a
+Customer pack-status endpoints read D1 only; historical Firestore is not a
 fallback. The projection includes supported-drop summaries, immutable event
 history, and cache-generation metadata.
 
@@ -227,8 +225,8 @@ The integrity check validates the supported summaries, projection and event
 invariants, cache metadata, SQLite quick check, and foreign keys against the
 remote database.
 
-The authoritative rebuild derives summaries from operational Firestore orders
-and assignments, but writes only D1 summaries:
+The authoritative rebuild derives summaries from Commerce D1 orders and
+assignments, then writes the public summaries to the pack-status D1 database:
 
 ```bash
 npm run rebuild-pack-status -- --all
@@ -327,9 +325,9 @@ the accepted direct-cutover tradeoff is a temporary counter reset.
 ### Worker secrets
 
 Cloudflare Worker secrets are the runtime secret system. The required inventory
-is declared in `cloud/workers/api/wrangler.jsonc` and includes Helius,
-Firestore reader and writer accounts, the cosigner and address-decryption keys,
-Resend, notification enqueue, ShipStation, and Stripe values.
+is declared in `cloud/workers/api/wrangler.jsonc` and includes Helius, the
+cosigner and address-decryption keys, Resend, notification enqueue, ShipStation,
+and Stripe values.
 
 Create or rotate a secret with native Wrangler and enter its value through the
 prompt or standard input:
@@ -384,7 +382,7 @@ Ready-to-ship email recovery uses the `ready_notifications` control in
 `mons-shop-ops`. Use `ready-notifications-control` to pause only this subsystem
 during incident reconciliation; do not disable the shared schedule. Reconcile
 stored job IDs with Queue and Resend outcomes before replaying work because a
-Queue publish may have succeeded before its Firestore marker update.
+Queue publish may have succeeded before its D1 marker update.
 
 Queue a synthetic notification email through the production API:
 
@@ -434,7 +432,7 @@ The retained tools are intentionally narrow:
 - `npm run check-irl-claims` (`scripts/ops/checkIrlClaims.ts`) inspects IRL
   claim state.
 - `npm run rebuild-pack-status` (`scripts/ops/rebuildPackStatus.ts`) compares
-  operational Firestore history with D1 summaries and is read-only unless its
+  authoritative Commerce D1 history with pack-status summaries and is read-only unless its
   explicit D1 write option is supplied.
 - `npm run check:ops-d1` validates the remote operations database, its
   ready-notification singleton, and the permanent Firebase-auth removal record.
@@ -444,13 +442,17 @@ The retained tools are intentionally narrow:
   Firebase-owned shipment documents for UIDs already bound to Solana wallets.
 - `npm run test-resend-notification-email` sends a synthetic notification
   through the production API queue.
-- `npm run wipe-drop` (`scripts/ops/wipeDrop.ts`) is the guarded drop cleanup
-  utility. Use `--dry-run` to inspect proposed changes; mutation requires
+- `npm run wipe-drop` (`scripts/ops/wipeDrop.ts`) is the guarded repository and
+  Commerce D1 cleanup utility. It refuses drops with pack-status or reveal
+  history. Use `--dry-run` to inspect proposed changes without pausing. Before
+  mutation, pause Commerce D1 with `commerce-authority-control`, wait at least
+  65 seconds, and rerun the command; keep Commerce paused until the
+  updated API and frontend are deployed, then resume `d1`. Mutation requires
   interactive confirmation unless `--yes` is supplied explicitly.
 
-Repository operations use Google Cloud Firestore or Firebase CLI credentials
-only for server-side operational access. They do not represent a browser data
-path.
+Historical cutover and audit operations use Google Cloud Firestore or Firebase
+CLI credentials. Active operator commands use the configured Cloudflare D1
+databases, and neither path represents browser data access.
 
 ## Address encryption
 

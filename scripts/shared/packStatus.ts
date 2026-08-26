@@ -1,5 +1,3 @@
-import type { DocumentReference, Firestore } from '@google-cloud/firestore';
-import { dropBoxAssignmentPath } from '../../cloud/workers/api/src/dropPaths.ts';
 import { IRL_CLAIM_CODE_NAMESPACE } from '../../cloud/workers/api/src/claimCodes.ts';
 import {
   PACK_STATUS_SUPPORTED_DROP_IDS,
@@ -31,12 +29,4 @@ export type {
 
 export function assignmentHasNormalInFlightPackStatusClaim(assignment: any): boolean {
   return assignment?.irlClaim?.namespace !== IRL_CLAIM_CODE_NAMESPACE;
-}
-
-export function packStatusAssignmentRef(
-  db: Pick<Firestore, 'doc'>,
-  dropId: string,
-  boxAssetId: string,
-): DocumentReference {
-  return db.doc(dropBoxAssignmentPath(dropId, boxAssetId));
 }

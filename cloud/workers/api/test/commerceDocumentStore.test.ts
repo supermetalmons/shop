@@ -112,7 +112,7 @@ test('commerce paths recognize every authoritative document kind', () => {
   assert.equal(commerceDocumentIdentity('drops/poncho/unknown/id'), null);
 });
 
-test('commerce authority requires a verified import and cannot leave D1', () => {
+test('commerce authority requires a verified import and can pause D1 without falling back', () => {
   const database = new DatabaseSync(':memory:');
   for (const file of readdirSync('cloud/workers/api/commerce-migrations').sort()) {
     database.exec(readFileSync(`cloud/workers/api/commerce-migrations/${file}`, 'utf8'));
@@ -127,8 +127,12 @@ test('commerce authority requires a verified import and cannot leave D1', () => 
   ) VALUES (?, 0, '{}', 1, 1, 'test')`).run('b'.repeat(64));
   database.prepare(`UPDATE commerce_authority_control SET authority_state = 'd1', revision = 3,
     import_manifest_sha256 = ?, updated_at_ms = 2 WHERE singleton = 1`).run('b'.repeat(64));
+  database.exec(`UPDATE commerce_authority_control SET
+    authority_state = 'paused', revision = 4, paused_at_ms = 3, updated_at_ms = 3 WHERE singleton = 1`);
   assert.throws(() => database.exec(`UPDATE commerce_authority_control SET
-    authority_state = 'firestore', revision = 4, updated_at_ms = 3 WHERE singleton = 1`));
+    authority_state = 'firestore', revision = 5, updated_at_ms = 4 WHERE singleton = 1`));
+  database.exec(`UPDATE commerce_authority_control SET
+    authority_state = 'd1', revision = 5, paused_at_ms = NULL, updated_at_ms = 4 WHERE singleton = 1`);
 });
 
 test('D1 commerce commits, queries, transforms, and deletes Firestore-shaped documents', async () => {

@@ -2,9 +2,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
-import { FieldPath, Firestore, type DocumentSnapshot, type Query } from '@google-cloud/firestore';
 import { API_DROPS, normalizeDropId, requireApiDrop } from '../../cloud/workers/api/src/dropConfig.ts';
-import { dropDeliveryOrderPath, dropDeliveryOrdersCollectionPath } from '../../cloud/workers/api/src/dropPaths.ts';
+import { dropDeliveryOrderPath } from '../../cloud/workers/api/src/dropPaths.ts';
 import {
   buildBuyerOrderReceivedEmailContent,
   buildBuyerOrderShippedEmailContent,
@@ -29,6 +28,11 @@ import {
 } from '../../shared/notificationEmailJob.ts';
 import { normalizeFulfillmentStatus, type FulfillmentStatus } from '../../shared/fulfillmentStatus.ts';
 import { resolveFulfillmentTrackingHref } from '../../shared/fulfillmentTracking.ts';
+import {
+  queryRemoteCommerceDocuments,
+  sqlString,
+  type CommerceD1Document,
+} from '../shared/commerceD1Maintenance.ts';
 
 const ORDER_BACKED_TEST_EMAIL_KINDS = ['shipper-ready', 'order-received', 'order-update', 'order-shipped'] as const;
 const TEST_EMAIL_KINDS = [...ORDER_BACKED_TEST_EMAIL_KINDS, 'stripe-manual-review'] as const;
@@ -84,7 +88,6 @@ type BuiltTestEmail = {
   selectedOrder?: SelectedDeliveryOrder;
 };
 
-const PROJECT_ID = 'mons-shop';
 const ENQUEUE_SECRET_NAME = 'NOTIFICATION_ENQUEUE_SECRET';
 const TEST_RECIPIENT = 'ivan@ivan.lol';
 const TEST_DROP_ID = 'local_resend_test';
@@ -94,20 +97,6 @@ const ORDER_LOOKUP_PAGE_SIZE = 50;
 const ORDER_LOOKUP_MAX_PAGES = 5;
 const ORDER_LOOKUP_MAX_DOCS = ORDER_LOOKUP_PAGE_SIZE * ORDER_LOOKUP_MAX_PAGES;
 const SHIPPED_FULFILLMENT_STATUS: FulfillmentStatus = 'Shipped';
-const DELIVERY_ORDER_LOOKUP_FIELDS = [
-  'dropId',
-  'deliveryId',
-  'source',
-  'status',
-  'owner',
-  'fulfillmentStatus',
-  'fulfillmentTrackingCode',
-  'fulfillmentUpdatedAt',
-  'createdAt',
-  'processingAt',
-  'processedAt',
-] as const;
-
 function usage(): string {
   return [
     'Queue one Resend notification test email to ivan@ivan.lol through Cloudflare.',
@@ -327,13 +316,6 @@ export function notificationEnqueueSecret(
   fail(`${ENQUEUE_SECRET_NAME} is not configured. Set it in the invoking environment or root .env.local.`);
 }
 
-let firestoreInstance: Firestore | undefined;
-
-function firestore(): Firestore {
-  firestoreInstance ||= new Firestore({ projectId: PROJECT_ID });
-  return firestoreInstance;
-}
-
 function dropIdFromDeliveryOrderPath(path: string): string | undefined {
   const parts = String(path || '').split('/');
   if (parts.length !== 4 || parts[0] !== 'drops' || parts[2] !== 'deliveryOrders') return undefined;
@@ -353,14 +335,14 @@ function deliveryOrderSortTimeMs(order: any, kind: OrderBackedTestEmailKind): nu
   return toMillisMaybe(order?.processedAt) ?? toMillisMaybe(order?.processingAt) ?? toMillisMaybe(order?.createdAt);
 }
 
-type DeliveryOrderLookupOptions = {
+export type DeliveryOrderLookupOptions = {
   kind: OrderBackedTestEmailKind;
   statuses: readonly string[];
   requireShippedTracking?: boolean;
   noMatchMessage: string;
 };
 
-function selectedOrderFromDoc(doc: DeliveryOrderDocLike, options: DeliveryOrderLookupOptions): DeliveryOrderCandidate | null {
+export function selectedOrderFromDoc(doc: DeliveryOrderDocLike, options: DeliveryOrderLookupOptions): DeliveryOrderCandidate | null {
   const order = doc.data() || {};
   const status = typeof order.status === 'string' ? order.status : '';
   if (!options.statuses.includes(status)) return null;
@@ -403,14 +385,7 @@ function compareSelectedOrders(a: SelectedDeliveryOrder, b: SelectedDeliveryOrde
   return a.docPath.localeCompare(b.docPath);
 }
 
-function summarizeFetchError(err: unknown): string {
-  const anyErr = err as any;
-  const code = typeof anyErr?.code === 'string' || typeof anyErr?.code === 'number' ? String(anyErr.code) : undefined;
-  const message = err instanceof Error ? err.message : String(err);
-  return [code, message].filter(Boolean).join(': ');
-}
-
-function docsToDeliveryOrderCandidates(docs: DocumentSnapshot[], options: DeliveryOrderLookupOptions): DeliveryOrderCandidate[] {
+function docsToDeliveryOrderCandidates(docs: DeliveryOrderDocLike[], options: DeliveryOrderLookupOptions): DeliveryOrderCandidate[] {
   return docs
     .map((doc) => selectedOrderFromDoc(doc, options))
     .filter((order): order is DeliveryOrderCandidate => Boolean(order));
@@ -443,92 +418,73 @@ function deliveryOrderLookupOptions(kind: OrderBackedTestEmailKind): DeliveryOrd
   }
 }
 
-function deliveryOrderQuery(
-  db: Firestore,
+function deliveryOrderDocument(document: CommerceD1Document | undefined, path: string): DeliveryOrderDocLike {
+  if (!document) {
+    return {
+      exists: false,
+      id: path.split('/').pop() || '',
+      ref: { path },
+      data: () => ({}),
+    };
+  }
+  return {
+    exists: true,
+    id: document.documentId,
+    ref: { path: document.path },
+    data: () => document.data,
+  };
+}
+
+export function deliveryOrderQuerySql(
   dropId: string,
   status: string,
   options: DeliveryOrderLookupOptions,
-): Query {
-  let query: Query = db.collection(dropDeliveryOrdersCollectionPath(dropId)).where('status', '==', status);
-  if (options.requireShippedTracking) query = query.where('fulfillmentStatus', '==', SHIPPED_FULFILLMENT_STATUS);
+): string {
   const sortField =
     options.kind === 'order-shipped' ? 'fulfillmentUpdatedAt' : status === 'processing' ? 'processingAt' : 'processedAt';
-  query = query.orderBy(sortField, 'desc').orderBy(FieldPath.documentId(), 'desc');
-  return query.select(...DELIVERY_ORDER_LOOKUP_FIELDS);
+  return `SELECT document_path, document_kind, drop_id, document_id,
+    document_json, version, create_time, update_time FROM commerce_documents
+    WHERE document_kind = 'delivery_order'
+      AND drop_id = ${sqlString(dropId)}
+      AND status = ${sqlString(status)}
+      ${options.requireShippedTracking ? `AND fulfillment_status = ${sqlString(SHIPPED_FULFILLMENT_STATUS)}` : ''}
+      AND json_type(document_json, '$.${sortField}') IS NOT NULL
+    ORDER BY CAST(json_extract(document_json, '$.${sortField}') AS INTEGER) DESC, document_path DESC
+    LIMIT ${ORDER_LOOKUP_MAX_DOCS}`;
 }
 
 async function fetchLatestDeliveryOrderCandidatesForStatus(
-  db: Firestore,
   dropId: string,
   status: string,
   options: DeliveryOrderLookupOptions,
 ): Promise<DeliveryOrderCandidate[]> {
-  let cursor: DocumentSnapshot | undefined;
-  for (let pageIndex = 0; pageIndex < ORDER_LOOKUP_MAX_PAGES; pageIndex += 1) {
-    let query = deliveryOrderQuery(db, dropId, status, options).limit(ORDER_LOOKUP_PAGE_SIZE);
-    if (cursor) query = query.startAfter(cursor);
-
-    let snap;
-    try {
-      snap = await query.get();
-    } catch (err) {
-      fail(
-        [
-          `Indexed ${options.kind} lookup failed for drop ${dropId}, status ${status}.`,
-          `Error: ${summarizeFetchError(err)}`,
-          'Required Firestore indexes are declared in firestore.indexes.json.',
-          'Deploy them with: firebase deploy --project mons-shop --only firestore:indexes',
-        ].join('\n'),
-      );
-    }
-
-    const candidates = docsToDeliveryOrderCandidates(snap.docs, options);
-    if (candidates.length) return candidates;
-
-    const lastDoc = snap.docs[snap.docs.length - 1];
-    if (!lastDoc || snap.docs.length < ORDER_LOOKUP_PAGE_SIZE) break;
-    cursor = lastDoc;
-  }
-
-  return [];
+  const documents = queryRemoteCommerceDocuments(deliveryOrderQuerySql(dropId, status, options));
+  return docsToDeliveryOrderCandidates(
+    documents.map((document) => deliveryOrderDocument(document, document.path)),
+    options,
+  );
 }
 
 async function fetchLatestDeliveryOrderCandidates(
-  db: Firestore,
   dropId: string,
   options: DeliveryOrderLookupOptions,
 ): Promise<DeliveryOrderCandidate[]> {
   const candidatesByStatus = await Promise.all(
-    options.statuses.map((status) => fetchLatestDeliveryOrderCandidatesForStatus(db, dropId, status, options)),
+    options.statuses.map((status) => fetchLatestDeliveryOrderCandidatesForStatus(dropId, status, options)),
   );
   return candidatesByStatus.flat();
-}
-
-async function hydrateDeliveryOrderCandidate(
-  db: Firestore,
-  candidate: DeliveryOrderCandidate,
-): Promise<DeliveryOrderCandidate> {
-  const snap = await db.doc(candidate.docPath).get();
-  return {
-    ...candidate,
-    order: {
-      ...candidate.order,
-      ...(snap.data() || {}),
-    },
-  };
 }
 
 async function latestDeliveryOrder(kind: OrderBackedTestEmailKind, dropId?: string): Promise<DeliveryOrderCandidate> {
   const options = deliveryOrderLookupOptions(kind);
   const searchedDropIds = dropId ? [dropId] : DEFAULT_ORDER_BACKED_DROP_IDS;
-  const db = firestore();
   const candidates = (
-    await Promise.all(searchedDropIds.map((searchedDropId) => fetchLatestDeliveryOrderCandidates(db, searchedDropId, options)))
+    await Promise.all(searchedDropIds.map((searchedDropId) => fetchLatestDeliveryOrderCandidates(searchedDropId, options)))
   ).flat();
   candidates.sort(compareSelectedOrders);
 
   const found = candidates[0];
-  if (found) return hydrateDeliveryOrderCandidate(db, found);
+  if (found) return found;
 
   fail(
     [
@@ -545,7 +501,11 @@ async function latestDeliveryOrder(kind: OrderBackedTestEmailKind, dropId?: stri
 }
 
 async function loadDeliveryOrderDoc(docPath: string): Promise<DeliveryOrderDocLike> {
-  return firestore().doc(docPath).get();
+  const documents = queryRemoteCommerceDocuments(`SELECT document_path, document_kind, drop_id, document_id,
+    document_json, version, create_time, update_time FROM commerce_documents
+    WHERE document_kind = 'delivery_order' AND document_path = ${sqlString(docPath)}
+    ORDER BY document_path LIMIT 1`);
+  return deliveryOrderDocument(documents[0], docPath);
 }
 
 export async function deliveryOrderById(

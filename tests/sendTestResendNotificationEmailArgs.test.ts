@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   deliveryOrderById,
+  deliveryOrderQuerySql,
   notificationEnqueueSecret,
   parseArgs,
+  selectedOrderFromDoc,
 } from '../scripts/ops/sendTestResendNotificationEmail.ts';
 
 function deliveryOrderSnap(docPath: string, data: Record<string, unknown>, exists = true) {
@@ -157,4 +159,64 @@ test('Resend test email exact lookup rejects stored delivery id mismatches', asy
       ),
     /does not match requested --order-id 123/,
   );
+});
+
+test('Resend D1 latest-order query preserves lookup caps and kind-specific ordering', () => {
+  const shipped = deliveryOrderQuerySql('card_nft_2', 'ready_to_ship', {
+    kind: 'order-shipped',
+    statuses: ['ready_to_ship'],
+    requireShippedTracking: true,
+    noMatchMessage: 'none',
+  });
+  assert.match(shipped, /document_kind = 'delivery_order'/);
+  assert.match(shipped, /drop_id = 'card_nft_2'/);
+  assert.match(shipped, /fulfillment_status = 'Shipped'/);
+  assert.match(shipped, /\$\.fulfillmentUpdatedAt/);
+  assert.match(shipped, /json_type\(document_json, '\$\.fulfillmentUpdatedAt'\) IS NOT NULL/);
+  assert.match(shipped, /LIMIT 250/);
+
+  const processing = deliveryOrderQuerySql('card_nft_2', 'processing', {
+    kind: 'order-received',
+    statuses: ['processing'],
+    noMatchMessage: 'none',
+  });
+  assert.match(processing, /\$\.processingAt/);
+  assert.match(processing, /json_type\(document_json, '\$\.processingAt'\) IS NOT NULL/);
+  assert.doesNotMatch(processing, /fulfillment_status/);
+});
+
+test('Resend D1 order selection excludes admin orders and requires shipped tracking', () => {
+  const path = 'drops/card_nft_2/deliveryOrders/123';
+  assert.equal(selectedOrderFromDoc(deliveryOrderSnap(path, {
+    deliveryId: 123,
+    source: 'admin_irl_redeem',
+    status: 'ready_to_ship',
+  }), {
+    kind: 'shipper-ready',
+    statuses: ['ready_to_ship'],
+    noMatchMessage: 'none',
+  }), null);
+  assert.equal(selectedOrderFromDoc(deliveryOrderSnap(path, {
+    deliveryId: 123,
+    status: 'ready_to_ship',
+    fulfillmentStatus: 'Shipped',
+    fulfillmentTrackingCode: 'not-https',
+  }), {
+    kind: 'order-shipped',
+    statuses: ['ready_to_ship'],
+    requireShippedTracking: true,
+    noMatchMessage: 'none',
+  }), null);
+  const selected = selectedOrderFromDoc(deliveryOrderSnap(path, {
+    deliveryId: 123,
+    status: 'ready_to_ship',
+    fulfillmentStatus: 'Shipped',
+    fulfillmentTrackingCode: 'https://example.com/track',
+  }), {
+    kind: 'order-shipped',
+    statuses: ['ready_to_ship'],
+    requireShippedTracking: true,
+    noMatchMessage: 'none',
+  });
+  assert.equal(selected?.trackingUrl, 'https://example.com/track');
 });

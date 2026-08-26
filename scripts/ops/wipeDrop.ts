@@ -15,26 +15,33 @@ import {
   readFileSync,
   readlinkSync,
   renameSync,
+  rmSync,
   rmdirSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import ts from 'typescript';
-import { Firestore } from '@google-cloud/firestore';
 import {
   planCanonicalDiscountMerkleDatasetRemoval,
   type DiscountMerkleDatasetReference,
 } from '../shared/discountMerkleDataset.ts';
 import {
-  createFirebaseCliFirestoreRestClient,
-  decodeFirestoreRestDocument,
-  type FirestoreRestDocument,
-} from '../shared/firebaseCliFirestoreRest.ts';
+  executeRemoteCommerceD1File,
+  queryRemoteCommerceD1,
+  queryRemoteCommerceDocuments,
+  readRemoteCommerceAuthority,
+  sqlString,
+  type CommerceD1Authority,
+  type CommerceD1Document,
+} from '../shared/commerceD1Maintenance.ts';
+import { readD1Integrity } from '../shared/d1PackStatusMaintenance.ts';
+import { queryRemoteOpsD1 } from '../shared/opsD1Maintenance.ts';
 import {
   isOptimisticTextFilePostCommitVerificationError,
   writeOptimisticTextFile,
@@ -92,40 +99,22 @@ export type RepoPlan = {
   };
 };
 
-type FirestorePlan = {
+export type CommerceD1Plan = {
+  authority: CommerceD1Authority;
   claimCodesByDropId: string[];
   claimCodesFromAssignments: string[];
   claimCodesFromDeliveryOrders: string[];
   claimCodesToDelete: string[];
+  documentsToDelete: Array<{ path: string; version: number }>;
   missingClaimCodes: string[];
-  recursiveDeletePath: string;
+  targetDocumentCount: number;
 };
 
-type FirestoreDocRecord = FirestoreRestDocument;
-
-type FirestoreClientMode = 'admin' | 'rest';
-type FirestoreStringFilter =
-  | {
-      op?: 'EQUAL';
-      value: string;
-    }
-  | {
-      op: 'IN';
-      values: string[];
-    };
-
-const PROJECT_ID = 'mons-shop';
-const FIRESTORE_LIST_PAGE_SIZE = 1000;
-const FIRESTORE_IN_QUERY_MAX_VALUES = 10;
-
-let firestoreClientMode: FirestoreClientMode | undefined;
-const firestoreRestClient = createFirebaseCliFirestoreRestClient({
-  projectId: PROJECT_ID,
-});
+export const COMMERCE_WIPE_MINIMUM_PAUSE_MS = 65_000;
 
 function usage(): string {
   return [
-    'Wipe one drop from local config/data and Firestore.',
+    'Wipe one drop from local config/data and Commerce D1.',
     '',
     'Usage:',
     '  npm run wipe-drop -- --drop-id <dropId>',
@@ -229,7 +218,7 @@ function parseArgs(argv: string[]): Args {
   };
 }
 
-export function asFirestoreDocumentId(value: unknown): string | undefined {
+export function asStoredDocumentId(value: unknown): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined;
   return value;
 }
@@ -248,34 +237,6 @@ function normalizeClaimCode(value: unknown): string | undefined {
 
 function sortStrings(values: Iterable<string>): string[] {
   return Array.from(new Set(Array.from(values).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-}
-
-function chunkStrings(values: string[], size: number): string[][] {
-  if (!values.length || size < 1) return [];
-  const out: string[][] = [];
-  for (let index = 0; index < values.length; index += size) {
-    out.push(values.slice(index, index + size));
-  }
-  return out;
-}
-
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
-  if (!items.length) return [];
-  const out = new Array<R>(items.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (true) {
-      const current = nextIndex;
-      nextIndex += 1;
-      if (current >= items.length) return;
-      out[current] = await fn(items[current], current);
-    }
-  }
-
-  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
-  await Promise.all(workers);
-  return out;
 }
 
 function repoRoot(): string {
@@ -798,325 +759,162 @@ function renderWipeRecoveryManifest(
   )}\n`;
 }
 
-let firestoreInstance: Firestore | undefined;
+const COMMERCE_DOCUMENT_SELECT = `SELECT document_path, document_kind, drop_id, document_id,
+  document_json, version, create_time, update_time FROM commerce_documents`;
 
-function adminDb(): Firestore {
-  firestoreInstance ||= new Firestore({ projectId: PROJECT_ID });
-  return firestoreInstance;
+function commerceDocuments(where: string): CommerceD1Document[] {
+  return queryRemoteCommerceDocuments(`${COMMERCE_DOCUMENT_SELECT} WHERE ${where} ORDER BY document_path`);
 }
 
-function normalizeFirestoreDocPath(pathValue: string): string {
-  return String(pathValue || '').replace(/^\/+/, '');
-}
-
-async function listCollectionDocumentsViaRest(
-  collectionPath: string,
-  opts?: { maskFieldPaths?: string[]; showMissing?: boolean },
-): Promise<FirestoreDocRecord[]> {
-  const docs: FirestoreDocRecord[] = [];
-  let pageToken: string | undefined;
-
-  do {
-    const url = firestoreRestClient.documentUrl(collectionPath);
-    url.searchParams.set('pageSize', String(FIRESTORE_LIST_PAGE_SIZE));
-    if (pageToken) url.searchParams.set('pageToken', pageToken);
-    if (opts?.showMissing) url.searchParams.set('showMissing', 'true');
-    (opts?.maskFieldPaths || []).forEach((fieldPath) => {
-      url.searchParams.append('mask.fieldPaths', fieldPath);
-    });
-    const json = await firestoreRestClient.request({ url, allow404: true });
-    const pageDocs = Array.isArray(json?.documents) ? json.documents : [];
-    pageDocs.forEach((doc) => {
-      const decoded = decodeFirestoreRestDocument(doc);
-      if (decoded) docs.push(decoded);
-    });
-    pageToken = typeof json?.nextPageToken === 'string' && json.nextPageToken ? json.nextPageToken : undefined;
-  } while (pageToken);
-
-  return docs;
-}
-
-async function getDocumentViaRest(documentPath: string): Promise<FirestoreDocRecord | null> {
-  const json = await firestoreRestClient.request({
-    url: firestoreRestClient.documentUrl(documentPath),
-    allow404: true,
-  });
-  if (!json) return null;
-  return decodeFirestoreRestDocument(json) || null;
-}
-
-async function runCollectionQueryViaRest(args: {
-  collectionId: string;
-  fieldPath: string;
-  filter: FirestoreStringFilter;
-  parentPath?: string;
-  allDescendants?: boolean;
-  maskFieldPaths?: string[];
-  limit?: number;
-}): Promise<FirestoreDocRecord[]> {
-  const url = args.parentPath
-    ? firestoreRestClient.documentUrl(args.parentPath, ':runQuery')
-    : firestoreRestClient.documentsUrl(':runQuery');
-  const json = await firestoreRestClient.request({
-    url,
-    method: 'POST',
-    body: {
-      structuredQuery: {
-        from: [
-          {
-            collectionId: args.collectionId,
-            ...(args.allDescendants ? { allDescendants: true } : {}),
-          },
-        ],
-        where: {
-          fieldFilter: {
-            field: { fieldPath: args.fieldPath },
-            op: args.filter.op || 'EQUAL',
-            value:
-              args.filter.op === 'IN'
-                ? {
-                    arrayValue: {
-                      values: args.filter.values.map((value) => ({ stringValue: value })),
-                    },
-                  }
-                : { stringValue: args.filter.value },
-          },
-        },
-        ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
-        ...(args.maskFieldPaths?.length
-          ? {
-              select: {
-                fields: args.maskFieldPaths.map((fieldPath) => ({ fieldPath })),
-              },
-            }
-          : {}),
-      },
-    },
-  });
-  return (Array.isArray(json) ? json : [])
-    .map((entry) => decodeFirestoreRestDocument(entry?.document))
-    .filter((doc): doc is FirestoreDocRecord => Boolean(doc));
-}
-
-async function listCollectionIdsViaRest(documentPath: string): Promise<string[]> {
-  const collectionIds: string[] = [];
-  let pageToken: string | undefined;
-
-  do {
-    const json = await firestoreRestClient.request({
-      url: firestoreRestClient.documentUrl(documentPath, ':listCollectionIds'),
-      method: 'POST',
-      body: {
-        pageSize: FIRESTORE_LIST_PAGE_SIZE,
-        ...(pageToken ? { pageToken } : {}),
-      },
-      allow404: true,
-    });
-    collectionIds.push(...((Array.isArray(json?.collectionIds) ? json.collectionIds : []).filter(Boolean) as string[]));
-    pageToken = typeof json?.nextPageToken === 'string' && json.nextPageToken ? json.nextPageToken : undefined;
-  } while (pageToken);
-
-  return sortStrings(collectionIds);
-}
-
-async function deleteDocumentViaRest(documentPath: string): Promise<void> {
-  await firestoreRestClient.request({
-    url: firestoreRestClient.documentUrl(documentPath),
-    method: 'DELETE',
-    allow404: true,
-  });
-}
-
-async function recursiveDeleteDocumentViaRest(documentPath: string): Promise<void> {
-  const normalizedPath = normalizeFirestoreDocPath(documentPath);
-  const subcollectionIds = await listCollectionIdsViaRest(normalizedPath);
-
-  for (const subcollectionId of subcollectionIds) {
-    const nestedDocs = await listCollectionDocumentsViaRest(`${normalizedPath}/${subcollectionId}`, {
-      maskFieldPaths: ['__name__'],
-      showMissing: true,
-    });
-    await mapLimit(
-      nestedDocs.map((doc) => doc.path),
-      8,
-      async (childDocPath) => recursiveDeleteDocumentViaRest(childDocPath),
+export function requireNoProtectedD1History(args: {
+  dropId: string;
+  packStatusEventCount: number;
+  packStatusSummaryCount: number;
+  revealSubmissionCount: number;
+}): void {
+  if (args.packStatusSummaryCount || args.packStatusEventCount) {
+    fail(
+      `Refusing to wipe ${args.dropId} because DATA_DB retains ` +
+      `${args.packStatusSummaryCount} pack-status summary row(s) and ${args.packStatusEventCount} event row(s).`,
     );
   }
-
-  await deleteDocumentViaRest(normalizedPath);
+  if (args.revealSubmissionCount) {
+    fail(`Refusing to wipe ${args.dropId} because OPS_DB retains ${args.revealSubmissionCount} reveal submission(s).`);
+  }
 }
 
-function looksLikeFirestorePermissionError(message: string): boolean {
-  return /permission[-_\s]?denied|missing or insufficient permissions/i.test(message);
+function requireRemoteD1HistoryClear(dropId: string): void {
+  const packStatus = readD1Integrity().drops.find((drop) => drop.dropId === dropId);
+  const revealRows = queryRemoteOpsD1(`SELECT COUNT(*) AS count FROM reveal_submissions
+    WHERE drop_id = ${sqlString(dropId)}`);
+  const revealSubmissionCount = Number(revealRows[0]?.count || 0);
+  if (!Number.isSafeInteger(revealSubmissionCount) || revealSubmissionCount < 0) {
+    fail('OPS_DB returned an invalid reveal-submission count.');
+  }
+  requireNoProtectedD1History({
+    dropId,
+    packStatusSummaryCount: packStatus ? 1 : 0,
+    packStatusEventCount: packStatus?.eventCount || 0,
+    revealSubmissionCount,
+  });
 }
 
-async function withFirestoreFallback<T>(adminOp: () => Promise<T>, restOp: () => Promise<T>): Promise<T> {
-  if (firestoreClientMode !== 'rest') {
-    try {
-      const result = await adminOp();
-      firestoreClientMode = 'admin';
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!looksLikeFirestorePermissionError(message)) throw err;
-      firestoreClientMode = 'rest';
+function addClaimOwner(ownership: Map<string, Set<string>>, code: string, dropId: string): void {
+  const owners = ownership.get(code) || new Set<string>();
+  owners.add(dropId);
+  ownership.set(code, owners);
+}
+
+export function buildCommerceD1PlanFromDocuments(args: {
+  authority: CommerceD1Authority;
+  assignmentDocuments: CommerceD1Document[];
+  claimDocuments: CommerceD1Document[];
+  dropId: string;
+  targetDocuments: CommerceD1Document[];
+}): CommerceD1Plan {
+  const dropId = validateDropId(args.dropId, 'drop id');
+  if (args.authority.state === 'firestore') fail('Commerce D1 must be authoritative before a drop can be planned.');
+  const targetAssignments = args.targetDocuments.filter((document) => document.kind === 'box_assignment');
+  const targetDeliveryOrders = args.targetDocuments.filter((document) => document.kind === 'delivery_order');
+  const claimCodesByDropId = sortStrings(args.claimDocuments.flatMap((document) =>
+    normalizeStoredDropIdField(document.data.dropId) === dropId ? [document.documentId] : []
+  ));
+  const claimCodesFromAssignments = sortStrings(targetAssignments.flatMap((document) => {
+    const code = normalizeClaimCode(document.data.irlClaimCode);
+    return code ? [code] : [];
+  }));
+  const claimCodesFromDeliveryOrders = sortStrings(
+    targetDeliveryOrders.flatMap((document) => extractClaimCodesFromDeliveryOrders(document.data)),
+  );
+  const claimCodesToInspect = sortStrings([
+    ...claimCodesByDropId,
+    ...claimCodesFromAssignments,
+    ...claimCodesFromDeliveryOrders,
+  ]);
+  const inspectedCodes = new Set(claimCodesToInspect);
+  const assignmentOwnerDropIdsByCode = new Map<string, Set<string>>();
+  for (const document of args.assignmentDocuments) {
+    const code = normalizeClaimCode(document.data.irlClaimCode);
+    if (code && inspectedCodes.has(code) && document.dropId) {
+      addClaimOwner(assignmentOwnerDropIdsByCode, code, document.dropId);
     }
   }
-
-  return restOp();
-}
-
-async function listDropIds(): Promise<string[]> {
-  return withFirestoreFallback(
-    async () => {
-      const refs = await adminDb().collection('drops').listDocuments();
-      return sortStrings(refs.map((ref) => asFirestoreDocumentId(ref.id)).filter((dropId): dropId is string => Boolean(dropId)));
-    },
-    async () => {
-      const docs = await listCollectionDocumentsViaRest('drops', { maskFieldPaths: ['__name__'], showMissing: true });
-      return sortStrings(docs.map((doc) => asFirestoreDocumentId(doc.id)).filter((dropId): dropId is string => Boolean(dropId)));
-    },
-  );
-}
-
-async function listClaimCodesByDropId(dropId: string): Promise<string[]> {
-  return withFirestoreFallback(
-    async () => {
-      const snap = await adminDb().collection('claimCodes').where('dropId', '==', dropId).get();
-      return sortStrings(snap.docs.map((doc) => doc.id));
-    },
-    async () => {
-      const docs = await runCollectionQueryViaRest({
-        collectionId: 'claimCodes',
-        fieldPath: 'dropId',
-        filter: { value: dropId },
-        maskFieldPaths: ['dropId'],
-      });
-      return sortStrings(docs.map((doc) => doc.id));
-    },
-  );
-}
-
-async function listBoxAssignmentClaimCodes(dropId: string): Promise<string[]> {
-  return withFirestoreFallback(
-    async () => {
-      const snap = await adminDb().collection(`drops/${dropId}/boxAssignments`).select('irlClaimCode').get();
-      return sortStrings(
-        snap.docs.map((doc) => normalizeClaimCode(doc.get('irlClaimCode'))).filter((code): code is string => Boolean(code)),
+  for (const code of claimCodesFromAssignments) addClaimOwner(assignmentOwnerDropIdsByCode, code, dropId);
+  const claimDocByCode = new Map(args.claimDocuments
+    .filter((document) => inspectedCodes.has(document.documentId))
+    .map((document) => [document.documentId, document]));
+  const conflicts: string[] = [];
+  const claimCodesByDropIdSet = new Set(claimCodesByDropId);
+  const claimCodesFromAssignmentsSet = new Set(claimCodesFromAssignments);
+  const claimCodesFromDeliveryOrdersSet = new Set(claimCodesFromDeliveryOrders);
+  for (const code of claimCodesToInspect) {
+    const document = claimDocByCode.get(code);
+    if (!document) continue;
+    const assignmentOwnerDropIds = sortStrings(assignmentOwnerDropIdsByCode.get(code) || []);
+    const foreignAssignmentOwners = assignmentOwnerDropIds.filter((ownerDropId) => ownerDropId !== dropId);
+    if (foreignAssignmentOwners.length) {
+      conflicts.push(`claimCodes/${code} is referenced by drop(s): ${foreignAssignmentOwners.join(', ')}`);
+      continue;
+    }
+    const explicitDropId = normalizeStoredDropIdField(document.data.dropId);
+    if (explicitDropId && explicitDropId !== dropId) {
+      conflicts.push(`claimCodes/${code} belongs to ${explicitDropId}`);
+      continue;
+    }
+    if (!explicitDropId && !assignmentOwnerDropIds.includes(dropId)) {
+      const sources = sortStrings([
+        ...(claimCodesByDropIdSet.has(code) ? ['claimCodes.dropId query'] : []),
+        ...(claimCodesFromAssignmentsSet.has(code) ? ['drops/<drop>/boxAssignments'] : []),
+        ...(claimCodesFromDeliveryOrdersSet.has(code) ? ['drops/<drop>/deliveryOrders.irlClaims'] : []),
+      ]);
+      conflicts.push(
+        `claimCodes/${code} has no dropId and no boxAssignments ownership signal (sources: ${sources.join(', ') || 'unknown'})`,
       );
-    },
-    async () => {
-      const docs = await listCollectionDocumentsViaRest(`drops/${dropId}/boxAssignments`, { maskFieldPaths: ['irlClaimCode'] });
-      return sortStrings(docs.map((doc) => normalizeClaimCode(doc.data.irlClaimCode)).filter((code): code is string => Boolean(code)));
-    },
-  );
-}
-
-async function listDeliveryOrderClaimCodes(dropId: string): Promise<string[]> {
-  return withFirestoreFallback(
-    async () => {
-      const snap = await adminDb().collection(`drops/${dropId}/deliveryOrders`).select('irlClaims').get();
-      return sortStrings(snap.docs.flatMap((doc) => extractClaimCodesFromDeliveryOrders(doc.data())));
-    },
-    async () => {
-      const docs = await listCollectionDocumentsViaRest(`drops/${dropId}/deliveryOrders`, { maskFieldPaths: ['irlClaims'] });
-      return sortStrings(docs.flatMap((doc) => extractClaimCodesFromDeliveryOrders(doc.data)));
-    },
-  );
-}
-
-async function findClaimCodesInBoxAssignments(dropId: string, codes: string[]): Promise<string[]> {
-  const normalizedCodes = sortStrings(codes);
-  if (!normalizedCodes.length) return [];
-
-  return withFirestoreFallback(
-    async () => {
-      const chunks = chunkStrings(normalizedCodes, FIRESTORE_IN_QUERY_MAX_VALUES);
-      const matches = await mapLimit(chunks, 4, async (chunk) => {
-        const snap = await adminDb()
-          .collection(`drops/${dropId}/boxAssignments`)
-          .where('irlClaimCode', 'in', chunk)
-          .select('irlClaimCode')
-          .get();
-        return snap.docs.map((doc) => normalizeClaimCode(doc.get('irlClaimCode'))).filter((code): code is string => Boolean(code));
-      });
-      return sortStrings(matches.flat());
-    },
-    async () => {
-      const chunks = chunkStrings(normalizedCodes, FIRESTORE_IN_QUERY_MAX_VALUES);
-      const matches = await mapLimit(chunks, 4, async (chunk) => {
-        const docs = await runCollectionQueryViaRest({
-          parentPath: `drops/${dropId}`,
-          collectionId: 'boxAssignments',
-          fieldPath: 'irlClaimCode',
-          filter: { op: 'IN', values: chunk },
-          maskFieldPaths: ['irlClaimCode'],
-        });
-        return docs.map((doc) => normalizeClaimCode(doc.data.irlClaimCode)).filter((code): code is string => Boolean(code));
-      });
-      return sortStrings(matches.flat());
-    },
-  );
-}
-
-async function findAssignmentOwnerDropIdsByCode(args: {
-  dropIds: string[];
-  targetDropId: string;
-  targetClaimCodes: string[];
-  codesToInspect: string[];
-}): Promise<Map<string, Set<string>>> {
-  const ownership = new Map<string, Set<string>>();
-  const targetDropId = validateDropId(args.targetDropId, 'drop id');
-
-  const addOwners = (ownerDropId: string, codes: string[]) => {
-    codes.forEach((code) => {
-      const owners = ownership.get(code) || new Set<string>();
-      owners.add(ownerDropId);
-      ownership.set(code, owners);
-    });
+    }
+  }
+  if (conflicts.length) {
+    fail(
+      `Refusing to wipe ${dropId} because some claim codes are not uniquely owned by that drop:\n` +
+      conflicts.map((entry) => `- ${entry}`).join('\n'),
+    );
+  }
+  const claimDocumentsToDelete = [...claimDocByCode.values()];
+  const documentsToDelete = [...new Map(
+    [...args.targetDocuments, ...claimDocumentsToDelete].map((document) => [document.path, document]),
+  ).values()]
+    .map((document) => ({ path: document.path, version: document.version }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    authority: args.authority,
+    claimCodesByDropId,
+    claimCodesFromAssignments,
+    claimCodesFromDeliveryOrders,
+    claimCodesToDelete: sortStrings(claimDocByCode.keys()),
+    documentsToDelete,
+    missingClaimCodes: sortStrings(claimCodesToInspect.filter((code) => !claimDocByCode.has(code))),
+    targetDocumentCount: args.targetDocuments.length,
   };
-
-  addOwners(targetDropId, args.targetClaimCodes);
-
-  const foreignDropIds = sortStrings(
-    args.dropIds
-      .map((dropId) => asFirestoreDocumentId(dropId))
-      .filter(
-        (dropId): dropId is string =>
-          Boolean(dropId) && dropId !== targetDropId,
-      ),
-  );
-  const codeChunks = chunkStrings(sortStrings(args.codesToInspect), FIRESTORE_IN_QUERY_MAX_VALUES);
-  const queryTasks = foreignDropIds.flatMap((ownerDropId) => codeChunks.map((codes) => ({ ownerDropId, codes })));
-
-  const results = await mapLimit(queryTasks, 8, async ({ ownerDropId, codes }) => ({
-    ownerDropId,
-    codes: await findClaimCodesInBoxAssignments(ownerDropId, codes),
-  }));
-
-  results.forEach(({ ownerDropId, codes }) => addOwners(ownerDropId, codes));
-  return ownership;
 }
 
-async function loadClaimDocs(codes: string[]): Promise<Map<string, FirestoreDocRecord>> {
-  if (!codes.length) return new Map<string, FirestoreDocRecord>();
+export function requireExecutableCommerceD1Wipe(authority: CommerceD1Authority, nowMs = Date.now()): void {
+  if (authority.state !== 'paused' || authority.pausedAtMs === null) {
+    fail('Commerce D1 must be paused with commerce-authority-control before a drop can be wiped.');
+  }
+  if (nowMs - authority.pausedAtMs < COMMERCE_WIPE_MINIMUM_PAUSE_MS) {
+    fail(`Commerce D1 must remain paused for at least ${COMMERCE_WIPE_MINIMUM_PAUSE_MS / 1000} seconds before a drop can be wiped.`);
+  }
+}
 
-  return withFirestoreFallback(
-    async () => {
-      const docs = await adminDb().getAll(...codes.map((code) => adminDb().doc(`claimCodes/${code}`)));
-      return new Map<string, FirestoreDocRecord>(
-        docs
-          .filter((snap) => snap.exists)
-          .map((snap) => [snap.id, { path: snap.ref.path, id: snap.id, data: snap.data() || {} }]),
-      );
-    },
-    async () => {
-      const docs = await mapLimit(codes, 8, async (code) => getDocumentViaRest(`claimCodes/${code}`));
-      return new Map<string, FirestoreDocRecord>(
-        docs.filter((doc): doc is FirestoreDocRecord => Boolean(doc)).map((doc) => [doc.id, doc]),
-      );
-    },
-  );
+export function buildCommerceD1Plan(dropId: string): CommerceD1Plan {
+  dropId = validateDropId(dropId, 'drop id');
+  requireRemoteD1HistoryClear(dropId);
+  return buildCommerceD1PlanFromDocuments({
+    authority: readRemoteCommerceAuthority(),
+    dropId,
+    targetDocuments: commerceDocuments(`drop_id = ${sqlString(dropId)}`),
+    claimDocuments: commerceDocuments(`document_kind = 'claim_code'`),
+    assignmentDocuments: commerceDocuments(`document_kind = 'box_assignment'`),
+  });
 }
 
 export async function buildRepoPlan(args: {
@@ -1680,87 +1478,13 @@ function extractClaimCodesFromDeliveryOrders(orderData: unknown): string[] {
     .filter((code): code is string => Boolean(code));
 }
 
-async function buildFirestorePlan(dropId: string, knownDropIds: string[]): Promise<FirestorePlan> {
-  dropId = validateDropId(dropId, 'drop id');
-  const [claimCodesByDropId, claimCodesFromAssignments, claimCodesFromDeliveryOrders, firestoreDropIds] = await Promise.all([
-    listClaimCodesByDropId(dropId),
-    listBoxAssignmentClaimCodes(dropId),
-    listDeliveryOrderClaimCodes(dropId),
-    listDropIds(),
-  ]);
-
-  const claimCodesByDropIdSet = new Set<string>(claimCodesByDropId);
-  const claimCodesFromAssignmentsSet = new Set<string>(claimCodesFromAssignments);
-  const claimCodesFromDeliveryOrdersSet = new Set<string>(claimCodesFromDeliveryOrders);
-  const claimCodesToInspect = sortStrings([
-    ...claimCodesByDropId,
-    ...claimCodesFromAssignments,
-    ...claimCodesFromDeliveryOrders,
-  ]);
-
-  const dropIdsToInspect = sortStrings([...knownDropIds, ...firestoreDropIds]);
-  const assignmentOwnerDropIdsByCode = await findAssignmentOwnerDropIdsByCode({
-    dropIds: dropIdsToInspect,
-    targetDropId: dropId,
-    targetClaimCodes: claimCodesFromAssignments,
-    codesToInspect: claimCodesToInspect,
-  });
-  const claimDocByCode = await loadClaimDocs(claimCodesToInspect);
-
-  const conflicts: string[] = [];
-  for (const code of claimCodesToInspect) {
-    const doc = claimDocByCode.get(code);
-    if (!doc) continue;
-
-    const assignmentOwnerDropIds = sortStrings(assignmentOwnerDropIdsByCode.get(code) || []);
-    const foreignAssignmentOwners = assignmentOwnerDropIds.filter((ownerDropId) => ownerDropId !== dropId);
-    if (foreignAssignmentOwners.length) {
-      conflicts.push(`claimCodes/${code} is referenced by drop(s): ${foreignAssignmentOwners.join(', ')}`);
-      continue;
-    }
-
-    const explicitDropId = normalizeStoredDropIdField(doc.data.dropId);
-    if (explicitDropId && explicitDropId !== dropId) {
-      conflicts.push(`claimCodes/${code} belongs to ${explicitDropId}`);
-      continue;
-    }
-
-    if (!explicitDropId && !assignmentOwnerDropIds.includes(dropId)) {
-      const sources = sortStrings([
-        ...(claimCodesByDropIdSet.has(code) ? ['claimCodes.dropId query'] : []),
-        ...(claimCodesFromAssignmentsSet.has(code) ? ['drops/<drop>/boxAssignments'] : []),
-        ...(claimCodesFromDeliveryOrdersSet.has(code) ? ['drops/<drop>/deliveryOrders.irlClaims'] : []),
-      ]);
-      conflicts.push(
-        `claimCodes/${code} has no dropId and no boxAssignments ownership signal (sources: ${sources.join(', ') || 'unknown'})`,
-      );
-    }
-  }
-
-  if (conflicts.length) {
-    fail(
-      `Refusing to wipe ${dropId} because some claim codes are not uniquely owned by that drop:\n` +
-        conflicts.map((entry) => `- ${entry}`).join('\n'),
-    );
-  }
-
-  return {
-    claimCodesByDropId,
-    claimCodesFromAssignments,
-    claimCodesFromDeliveryOrders,
-    claimCodesToDelete: sortStrings(claimDocByCode.keys()),
-    missingClaimCodes: sortStrings(claimCodesToInspect.filter((code) => !claimDocByCode.has(code))),
-    recursiveDeletePath: `drops/${dropId}`,
-  };
-}
-
 function printPlan(args: {
   dropId: string;
   dryRun: boolean;
   repoPlan: RepoPlan;
-  firestorePlan: FirestorePlan;
+  commercePlan: CommerceD1Plan;
 }) {
-  const { repoPlan, firestorePlan } = args;
+  const { repoPlan, commercePlan } = args;
 
   console.log(`wipe-drop plan for ${args.dropId}`);
   console.log(`mode: ${args.dryRun ? 'dry-run' : 'execute after confirmation'}`);
@@ -1781,15 +1505,18 @@ function printPlan(args: {
   }
 
   console.log('');
-  console.log('firestore');
-  console.log(`- claimCodes where dropId == ${args.dropId}: ${firestorePlan.claimCodesByDropId.length}`);
-  console.log(`- claim codes from boxAssignments: ${firestorePlan.claimCodesFromAssignments.length}`);
-  console.log(`- claim codes from deliveryOrders.irlClaims: ${firestorePlan.claimCodesFromDeliveryOrders.length}`);
-  console.log(`- claimCodes docs to delete: ${firestorePlan.claimCodesToDelete.length}`);
-  if (firestorePlan.missingClaimCodes.length) {
-    console.log(`- referenced claimCodes already absent: ${firestorePlan.missingClaimCodes.length}`);
+  console.log('commerce d1');
+  console.log(`- authority revision: ${commercePlan.authority.revision}`);
+  console.log(`- documents revision: ${commercePlan.authority.documentsRevision}`);
+  console.log(`- drop-scoped documents to delete: ${commercePlan.targetDocumentCount}`);
+  console.log(`- claimCodes where dropId == ${args.dropId}: ${commercePlan.claimCodesByDropId.length}`);
+  console.log(`- claim codes from boxAssignments: ${commercePlan.claimCodesFromAssignments.length}`);
+  console.log(`- claim codes from deliveryOrders.irlClaims: ${commercePlan.claimCodesFromDeliveryOrders.length}`);
+  console.log(`- claimCodes docs to delete: ${commercePlan.claimCodesToDelete.length}`);
+  if (commercePlan.missingClaimCodes.length) {
+    console.log(`- referenced claimCodes already absent: ${commercePlan.missingClaimCodes.length}`);
   }
-  console.log(`- recursive delete: ${firestorePlan.recursiveDeletePath}`);
+  console.log(`- total Commerce D1 documents to delete: ${commercePlan.documentsToDelete.length}`);
 }
 
 async function promptForConfirmation(): Promise<boolean> {
@@ -2454,7 +2181,7 @@ function snapshotPreparedQuarantineTarget(args: {
   if (!snapshot.exists) {
     if (args.target.quarantineExpectedSha256 == null) return snapshot;
     throw new Error(
-      `Repository wipe plan conflict for ${args.target.relativePath}: prepared quarantine disappeared before Firestore.`,
+      `Repository wipe plan conflict for ${args.target.relativePath}: prepared quarantine disappeared before the data wipe.`,
     );
   }
   if (args.target.quarantineExpectedSha256 == null) {
@@ -3995,7 +3722,7 @@ function preserveRecoveryRestoreQuarantine(args: {
   return recovery;
 }
 
-function reconcileRecoveryRestoreTargetsAfterFirestore(args: {
+function reconcileRecoveryRestoreTargetsAfterDataWipe(args: {
   prepared: PreparedRepoWipe;
   recoveryManifestMatches: boolean;
   residualPaths: string[];
@@ -4596,7 +4323,7 @@ export function applyPreparedRepoWipe(
       }
     }
     reconciledRecoveryRestoreTargets =
-      reconcileRecoveryRestoreTargetsAfterFirestore({
+      reconcileRecoveryRestoreTargetsAfterDataWipe({
         prepared,
         recoveryManifestMatches,
         residualPaths,
@@ -4815,64 +4542,97 @@ export function applyRepoWipe(
 
 export async function applyWipePhases<TPrepared>(args: {
   prepareRepo: () => TPrepared;
-  applyFirestore: () => Promise<void>;
+  applyData: () => Promise<void>;
   applyPreparedRepo: (prepared: TPrepared) => void;
   abortPreparedRepo?: (prepared: TPrepared) => void;
 }): Promise<void> {
   const prepared = args.prepareRepo();
   try {
-    await args.applyFirestore();
-  } catch (firestoreError) {
+    await args.applyData();
+  } catch (dataError) {
     if (args.abortPreparedRepo) {
       try {
         args.abortPreparedRepo(prepared);
       } catch (abortError) {
         throw new Error(
-          `Firestore wipe failed and prepared repository cleanup also failed: ${
+          `Commerce D1 wipe failed and prepared repository cleanup also failed: ${
             abortError instanceof Error
               ? abortError.message
               : String(abortError)
           }`,
-          { cause: firestoreError },
+          { cause: dataError },
         );
       }
     }
-    throw firestoreError;
+    throw dataError;
   }
   args.applyPreparedRepo(prepared);
 }
 
-async function applyFirestoreWipe(dropId: string, plan: FirestorePlan): Promise<void> {
-  dropId = validateDropId(dropId, 'drop id');
-  await withFirestoreFallback(
-    async () => {
-      const db = adminDb();
-
-      if (plan.claimCodesToDelete.length) {
-        const writer = db.bulkWriter();
-        writer.onWriteError((err) => {
-          console.error(`claimCodes delete failed for ${err.documentRef.path}: ${err.message}`);
-          return false;
-        });
-        plan.claimCodesToDelete.forEach((code) => {
-          writer.delete(db.doc(`claimCodes/${code}`));
-        });
-        await writer.close();
-      }
-
-      await db.recursiveDelete(db.doc(`drops/${dropId}`));
-    },
-    async () => {
-      await mapLimit(plan.claimCodesToDelete, 8, async (code) => deleteDocumentViaRest(`claimCodes/${code}`));
-      await recursiveDeleteDocumentViaRest(`drops/${dropId}`);
-    },
+export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, nowMs: number): string {
+  requireExecutableCommerceD1Wipe(plan.authority, nowMs);
+  if (!guardId || !Number.isSafeInteger(nowMs) || nowMs < 0) fail('Commerce D1 wipe metadata is invalid.');
+  const expectations = plan.documentsToDelete.map((document) => ({
+    path: document.path,
+    version: document.version,
+  }));
+  if (!expectations.length) return '';
+  const chunks = Array.from(
+    { length: Math.ceil(expectations.length / 50) },
+    (_, index) => expectations.slice(index * 50, index * 50 + 50),
   );
+  const guardIds = chunks.map((_, index) => `${guardId}:${index}`);
+  const guards = chunks.map((chunk, index) => `INSERT INTO commerce_wipe_guards (
+    guard_id, expectations_json, expected_documents_revision, created_at_ms
+  ) VALUES (
+    ${sqlString(guardIds[index])}, ${sqlString(JSON.stringify(chunk))},
+    ${plan.authority.documentsRevision}, ${nowMs}
+  );`).join('\n');
+  const deletes = chunks.map((chunk) => `DELETE FROM commerce_documents
+  WHERE document_path IN (${chunk.map((document) => sqlString(document.path)).join(', ')});`).join('\n');
+  const cleanup = guardIds.map((id) =>
+    `DELETE FROM commerce_wipe_guards WHERE guard_id = ${sqlString(id)};`
+  ).join('\n');
+  return `${guards}
+  ${deletes}
+  UPDATE commerce_authority_control
+  SET documents_revision = documents_revision + 1, updated_at_ms = ${nowMs}
+  WHERE singleton = 1 AND authority_state = 'paused'
+    AND documents_revision = ${plan.authority.documentsRevision};
+  ${cleanup}`;
 }
 
-function looksLikeCredentialError(message: string): boolean {
-  return /Could not load the default credentials|Failed to determine service account|credential implementation provided|Failed to read credentials from file|No Firebase CLI refresh token available|firebase login:list failed/i.test(
-    message,
-  );
+export function applyCommerceD1Wipe(dropId: string, plan: CommerceD1Plan, nowMs = Date.now()): void {
+  dropId = validateDropId(dropId, 'drop id');
+  requireExecutableCommerceD1Wipe(plan.authority, nowMs);
+  if (!plan.documentsToDelete.length) return;
+  const directory = mkdtempSync(path.join(tmpdir(), 'mons-shop-commerce-wipe-'));
+  const filePath = path.join(directory, 'wipe.sql');
+  try {
+    writeFileSync(filePath, buildCommerceD1WipeSql(plan, crypto.randomUUID(), nowMs), {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+    executeRemoteCommerceD1File(filePath);
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
+  }
+  const authority = readRemoteCommerceAuthority();
+  if (
+    authority.state !== 'paused' ||
+    authority.revision !== plan.authority.revision ||
+    authority.documentsRevision !== plan.authority.documentsRevision + 1
+  ) fail('Commerce D1 authority verification failed after the wipe.');
+  const remainingDropRows = queryRemoteCommerceD1(`SELECT COUNT(*) AS count FROM commerce_documents
+    WHERE drop_id = ${sqlString(dropId)}`);
+  const remainingClaimRows = plan.claimCodesToDelete.length
+    ? queryRemoteCommerceD1(`SELECT COUNT(*) AS count FROM commerce_documents
+        WHERE document_kind = 'claim_code'
+          AND document_id IN (${plan.claimCodesToDelete.map(sqlString).join(', ')})`)
+    : [{ count: 0 }];
+  if (Number(remainingDropRows[0]?.count) !== 0 || Number(remainingClaimRows[0]?.count) !== 0) {
+    fail('Commerce D1 documents remain after the wipe.');
+  }
 }
 
 async function main() {
@@ -4891,12 +4651,9 @@ async function main() {
     assertRepoWipeRegistryWritable(repoPlan);
   }
 
-  const knownDropIds = sortStrings([
-    ...Object.keys(repoPlan.dropsNext),
-    args.dropId,
-  ]);
-  const firestorePlan = await buildFirestorePlan(args.dropId, knownDropIds);
-  printPlan({ dropId: args.dropId, dryRun: args.dryRun, repoPlan, firestorePlan });
+  const commercePlan = buildCommerceD1Plan(args.dropId);
+  if (!args.dryRun) requireExecutableCommerceD1Wipe(commercePlan.authority);
+  printPlan({ dropId: args.dropId, dryRun: args.dryRun, repoPlan, commercePlan });
 
   if (args.dryRun) {
     console.log('');
@@ -4941,21 +4698,18 @@ async function main() {
       );
     }
     assertRepoWipeRegistryWritable(lockedRepoPlan);
-    const lockedKnownDropIds = sortStrings([
-      ...Object.keys(lockedRepoPlan.dropsNext),
-      args.dropId,
-    ]);
-    const lockedFirestorePlan = await buildFirestorePlan(args.dropId, lockedKnownDropIds);
+    const lockedCommercePlan = buildCommerceD1Plan(args.dropId);
+    requireExecutableCommerceD1Wipe(lockedCommercePlan.authority);
     if (
       !isDeepStrictEqual(lockedRepoPlan, repoPlan) ||
-      !isDeepStrictEqual(lockedFirestorePlan, firestorePlan)
+      !isDeepStrictEqual(lockedCommercePlan, commercePlan)
     ) {
-      fail('Repository or Firestore state changed after the wipe plan was shown. Rerun to review a fresh plan.');
+      fail('Repository or Commerce D1 state changed after the wipe plan was shown. Rerun to review a fresh plan.');
     }
 
     await applyWipePhases({
       prepareRepo: () => prepareRepoWipe(lockedRepoPlan),
-      applyFirestore: () => applyFirestoreWipe(args.dropId, lockedFirestorePlan),
+      applyData: async () => applyCommerceD1Wipe(args.dropId, lockedCommercePlan),
       applyPreparedRepo: (prepared) => applyPreparedRepoWipe(prepared),
       abortPreparedRepo: (prepared) => abortPreparedRepoWipe(prepared),
     });
@@ -4963,7 +4717,8 @@ async function main() {
     console.log('');
     console.log(
       `wipe complete: removed ${args.dropId} from local config, deleted ${lockedRepoPlan.canonicalDeleteTargets.length} canonical file(s), ` +
-      `deleted ${lockedFirestorePlan.claimCodesToDelete.length} claimCodes doc(s), and recursively deleted ${lockedFirestorePlan.recursiveDeletePath}`,
+      `deleted ${lockedCommercePlan.documentsToDelete.length} Commerce D1 document(s), including ` +
+      `${lockedCommercePlan.claimCodesToDelete.length} claimCodes doc(s)`,
     );
   } finally {
     const released = releaseRegistryLock ? releaseRegistryLock() : true;
@@ -4983,11 +4738,6 @@ function isDirectRun(): boolean {
 if (isDirectRun()) {
   main().catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
-    if (looksLikeCredentialError(message)) {
-      console.error(
-        'Firestore access is unavailable. Set GOOGLE_APPLICATION_CREDENTIALS/local ADC or authenticate with `firebase login`, then retry.',
-      );
-    }
     console.error(message);
     process.exit(1);
   });

@@ -36,7 +36,7 @@ export function dropDudePoolPath(dropId: string): string {
   return `${dropRootPath(dropId)}/meta/dudePool`;
 }
 
-export function dropDeliveryOrdersCollectionPath(dropId: string): string {
+function dropDeliveryOrdersCollectionPath(dropId: string): string {
   return `${dropRootPath(dropId)}/deliveryOrders`;
 }
 
