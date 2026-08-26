@@ -210,7 +210,7 @@ type RecoverRequest = z.infer<typeof recoverSchema>;
 
 type DeliveryReceiptsEnv = Pick<
   Env,
-  'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'
+  'COSIGNER_SECRET' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'
 > & Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB'>>;
 
 type DeliveryReceiptErrorCode =
@@ -2008,7 +2008,7 @@ async function runDueDeliveryPackStatusProjectionQuery(
 }
 
 export async function reconcilePendingDeliveryPackStatusProjections(
-  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB'>>,
+  env: Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'>>,
   signal: AbortSignal,
   overrides: {
     accessTokenProvider?: GoogleAccessTokenProvider;
@@ -2018,8 +2018,6 @@ export async function reconcilePendingDeliveryPackStatusProjections(
     providerFetch?: ProfileProviderFetch;
   } = {},
 ): Promise<number> {
-  const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
-  if (!serviceAccountJson) throw new Error('firestore_writer_service_account_not_configured');
   const nowMs = overrides.nowMs || Date.now;
   const dueAtMs = nowMs();
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
@@ -2028,7 +2026,7 @@ export async function reconcilePendingDeliveryPackStatusProjections(
     commerceDb: env.COMMERCE_DB,
     nowMs: dueAtMs,
     providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
-    serviceAccountJson,
+    serviceAccountJson: 'd1',
     signal,
     dataDb: env.DATA_DB,
   };
@@ -3362,7 +3360,7 @@ async function publishReadyToShipNotifications(args: {
 }
 
 export async function reconcilePendingReadyToShipNotifications(
-  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'> & Partial<Pick<Env, 'COMMERCE_DB'>>,
+  env: Pick<Env, 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'> & Partial<Pick<Env, 'COMMERCE_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'>>,
   signal: AbortSignal,
   overrides: {
     accessTokenProvider?: GoogleAccessTokenProvider;
@@ -3371,14 +3369,12 @@ export async function reconcilePendingReadyToShipNotifications(
     providerFetch?: ProfileProviderFetch;
   } = {},
 ): Promise<number> {
-  const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
-  if (!serviceAccountJson) throw new Error('firestore_writer_service_account_not_configured');
   const context: FirestoreContext = {
     accessTokenProvider: overrides.accessTokenProvider || backgroundFirestoreAccessTokenProvider,
     commerceDb: env.COMMERCE_DB,
     nowMs: (overrides.nowMs || Date.now)(),
     providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
-    serviceAccountJson,
+    serviceAccountJson: 'd1',
     signal,
   };
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
@@ -4234,10 +4230,9 @@ export async function handleDeliveryReceiptRequest(
       controller.signal,
       path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'issue' : 'recover',
     );
-    const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
     const cosignerSecret = String(env.COSIGNER_SECRET || '').trim();
-    if (!serviceAccountJson || !apiKey || !cosignerSecret) {
+    if (!apiKey || !cosignerSecret) {
       throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
     }
     const common: FirestoreContext = {
@@ -4245,7 +4240,7 @@ export async function handleDeliveryReceiptRequest(
       commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: trackedFetch,
-      serviceAccountJson,
+      serviceAccountJson: 'd1',
       signal: controller.signal,
       dataDb: env.DATA_DB,
     };

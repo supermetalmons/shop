@@ -188,8 +188,8 @@ type ProfileWriteDependencies = {
   warn: (entry: Record<string, unknown>) => void;
 };
 
-type ProfileWriteEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
-  'ADDRESS_DECRYPTION_SECRET' | 'COMMERCE_DB' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
+type ProfileWriteEnv = Partial<Pick<Env,
+  'ADDRESS_DECRYPTION_SECRET' | 'COMMERCE_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
 >>;
 
 const PROFILE_WRITE_TIMEOUT_MS = 15_000;
@@ -3267,17 +3267,13 @@ export async function handleProfileWriteRequest(
     if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
       throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
     }
-    const serviceAccountJson = typeof env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON === 'string'
-      ? env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON
-      : '';
-    if (!serviceAccountJson) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
     const common = {
       accessTokenProvider: dependencies.accessTokenProvider,
       commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       pauseForRatePoll: dependencies.pauseForRatePoll,
       providerFetch: trackedFetch,
-      serviceAccountJson,
+      serviceAccountJson: 'd1',
       signal: controller.signal,
     };
     const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({

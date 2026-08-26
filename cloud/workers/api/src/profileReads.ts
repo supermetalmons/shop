@@ -253,10 +253,11 @@ type ProfileReadDependencies = {
   verifyIdentity: typeof verifyRequestIdentity;
 };
 
-type ProfileReadEnv = Pick<Env, 'FIRESTORE_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
+type ProfileReadEnv = Partial<Pick<Env,
   | 'ADDRESS_DECRYPTION_SECRET'
   | 'OPS_DB'
   | 'COMMERCE_DB'
+  | 'FIRESTORE_SERVICE_ACCOUNT_JSON'
   | 'STRIPE_SECRET_KEY'
   | 'STRIPE_RESTRICTED_KEY'
   | 'STRIPE_SECRET_KEY_LIVE'
@@ -975,18 +976,12 @@ export async function handleProfileReadRequest(
     if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
       throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
     }
-    const serviceAccountJson = typeof env.FIRESTORE_SERVICE_ACCOUNT_JSON === 'string'
-      ? env.FIRESTORE_SERVICE_ACCOUNT_JSON
-      : '';
-    if (!serviceAccountJson) {
-      throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
-    }
     const common = {
       accessTokenProvider: dependencies.accessTokenProvider,
       commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: trackedFetch,
-      serviceAccountJson,
+      serviceAccountJson: 'd1',
       signal: controller.signal,
     };
     const sessionCommon = {

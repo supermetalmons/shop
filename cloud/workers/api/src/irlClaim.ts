@@ -105,7 +105,7 @@ const MPL_CORE_CPI_SIGNER = new PublicKey(MPL_CORE_CPI_SIGNER_ADDRESS);
 
 type IrlClaimEnv = Pick<
   Env,
-  'COSIGNER_SECRET' | 'FIRESTORE_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
+  'COSIGNER_SECRET' | 'HELIUS_API_KEY'
 > & Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
 
 type IrlClaimErrorCode =
@@ -1242,9 +1242,8 @@ export async function handleIrlClaimPrepare(
       controller.signal,
       dependencies.nowMs(),
     );
-    const serviceAccountJson = String(env.FIRESTORE_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
-    if (!serviceAccountJson || !apiKey) {
+    if (!apiKey) {
       throw new IrlClaimError('unavailable', 'IRL claims are temporarily unavailable.');
     }
     const response = await prepareClaim({
@@ -1257,7 +1256,7 @@ export async function handleIrlClaimPrepare(
         commerceDb: env.COMMERCE_DB,
         nowMs: dependencies.nowMs(),
         providerFetch: trackedFetch,
-        serviceAccountJson,
+        serviceAccountJson: 'd1',
         signal: controller.signal,
       },
       providerContext: {

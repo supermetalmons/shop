@@ -123,8 +123,8 @@ type ProfileLifecycleDependencies = {
   verifyIdentity: typeof verifyRequestIdentity;
 };
 
-type ProfileLifecycleEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
-  'COMMERCE_DB' | 'OPS_DB'
+type ProfileLifecycleEnv = Partial<Pick<Env,
+  'COMMERCE_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'OPS_DB'
 >>;
 
 class WalletSessionSupersededError extends ProfileReadError {
@@ -567,19 +567,13 @@ export async function handleProfileLifecycleRequest(
       controller.signal,
       dependencies.nowMs(),
     );
-    const serviceAccountJson = typeof env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON === 'string'
-      ? env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON
-      : '';
-    if (path === PROFILE_RECONCILE_PATH && !serviceAccountJson) {
-      throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
-    }
     const nowMs = dependencies.nowMs();
     const common: FirestoreCommon = {
       accessTokenProvider: dependencies.accessTokenProvider,
       commerceDb: env.COMMERCE_DB,
       nowMs,
       providerFetch: trackedFetch,
-      serviceAccountJson,
+      serviceAccountJson: 'd1',
       signal: controller.signal,
     };
     if (path === SOLANA_AUTH_PATH) {

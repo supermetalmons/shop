@@ -124,7 +124,7 @@ const requestSchema = z.object({
 }).strict();
 
 type FinalizeRequest = z.infer<typeof requestSchema>;
-type FinalizeEnv = Pick<Env, 'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'> &
+type FinalizeEnv = Pick<Env, 'COSIGNER_SECRET' | 'HELIUS_API_KEY'> &
   Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB' | 'OPS_DB'>>;
 type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
 type ProviderContext = Parameters<typeof adminIrlRedeemRuntime.fetchAsset>[0];
@@ -1676,23 +1676,22 @@ export async function handleAdminIrlRedeemFinalize(
     if (!isStaffRequestIdentity(identity)) {
       throw new AdminIrlRedeemFinalizeError('unauthenticated', 'Staff wallet authentication is required.');
     }
-    const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
     const cosignerSecret = String(env.COSIGNER_SECRET || '').trim();
-    if (!serviceAccountJson || !apiKey || !cosignerSecret) {
+    if (!apiKey || !cosignerSecret) {
       throw new AdminIrlRedeemFinalizeError('unavailable', 'Admin IRL redeem finalization is temporarily unavailable.');
     }
     const nowMs = dependencies.nowMs();
     finalization = dependencies.finalize(
       body,
       identity,
-      { ...env, COSIGNER_SECRET: cosignerSecret, FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: serviceAccountJson, HELIUS_API_KEY: apiKey },
+      { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
       {
         accessTokenProvider: dependencies.accessTokenProvider,
         commerceDb: env.COMMERCE_DB,
         nowMs,
         providerFetch: trackedFetch,
-        serviceAccountJson,
+        serviceAccountJson: 'd1',
         signal: controller.signal,
         dataDb: env.DATA_DB,
       },

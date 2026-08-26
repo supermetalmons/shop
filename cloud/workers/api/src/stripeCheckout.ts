@@ -48,7 +48,6 @@ const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 type CheckoutEnv = Pick<Env,
   | 'ADDRESS_DECRYPTION_SECRET'
   | 'COSIGNER_SECRET'
-  | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
   | 'HELIUS_API_KEY'
   | 'STRIPE_RESTRICTED_KEY'
   | 'STRIPE_RESTRICTED_KEY_LIVE'
@@ -504,8 +503,7 @@ export async function handleStripeCheckoutSession(
       dependencies.nowMs(),
     );
     const heliusApiKey = String(env.HELIUS_API_KEY || '').trim();
-    const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
-    if (!heliusApiKey || !serviceAccountJson) {
+    if (!heliusApiKey) {
       throw new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.');
     }
     const resolvedWallet = identity.kind === 'staff-wallet'
@@ -549,7 +547,7 @@ export async function handleStripeCheckoutSession(
         ((path, document) => persistCheckoutDocument(
           path,
           document,
-          serviceAccountJson,
+          'd1',
           dependencies.accessTokenProvider,
           trackedFetch,
           controller.signal,

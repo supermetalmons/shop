@@ -1794,7 +1794,7 @@ export async function processRevealBackgroundJobMessage(
     commerceDb: env.COMMERCE_DB,
     nowMs: dependencies.nowMs(),
     providerFetch: dependencies.providerFetch,
-    serviceAccountJson: '',
+    serviceAccountJson: 'd1',
     signal,
     dataDb: env.DATA_DB,
     opsDb: env.OPS_DB,
@@ -1965,17 +1965,13 @@ export async function handleRevealDudes(
       throw error;
     }
     authOutcome = 'provider-failure';
-    const serviceAccountJson = typeof env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON === 'string'
-      ? env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON.trim()
-      : '';
-    if (!serviceAccountJson) throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
     const storageControl = await dependencies.loadStorageControl(env.OPS_DB, controller.signal);
     const firestoreContext: FirestoreContext = {
       accessTokenProvider: dependencies.accessTokenProvider,
       commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: meteredFetch,
-      serviceAccountJson,
+      serviceAccountJson: 'd1',
       signal: controller.signal,
       dataDb: env.DATA_DB,
       opsDb: env.OPS_DB,

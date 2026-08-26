@@ -29,9 +29,8 @@ type RequeueCandidate = {
 };
 
 type ReconciliationEnv = Pick<Env,
-  | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
   | 'STRIPE_FULFILLMENT_QUEUE'
-> & Partial<Pick<Env, 'COMMERCE_DB'>>;
+> & Partial<Pick<Env, 'COMMERCE_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'>>;
 
 type ReconciliationDependencies = {
   error?: (entry: Record<string, unknown>) => void;
@@ -96,10 +95,6 @@ async function loadCandidates(
   cutoffMs: number,
   signal: AbortSignal,
 ): Promise<RequeueCandidate[]> {
-  const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
-  if (!serviceAccountJson) {
-    throw new ProfileReadError('unavailable', 503, 'Stripe fulfillment reconciliation is not configured.');
-  }
   const value = await authenticatedFirestoreRequest({
     accessTokenProvider,
     commerceDb: env.COMMERCE_DB,
@@ -107,7 +102,7 @@ async function loadCandidates(
     method: 'POST',
     nowMs: Date.now(),
     providerFetch: (input, init) => fetch(input, init),
-    serviceAccountJson,
+    serviceAccountJson: 'd1',
     signal,
     url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
   });
@@ -129,7 +124,7 @@ export async function reconcileStaleStripeFulfillments(
     accessTokenProvider,
     commerceDb: env.COMMERCE_DB,
     providerFetch: (input, init) => fetch(input, init),
-    serviceAccountJson: env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+    serviceAccountJson: 'd1',
     signal,
   });
   const markEnqueued = overrides.markEnqueued || (async (candidate: RequeueCandidate) => {

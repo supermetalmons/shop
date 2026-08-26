@@ -83,7 +83,6 @@ type FulfillmentRuntime = StripeCheckoutDropRuntime & {
 type FulfillmentEnv = Pick<Env,
   | 'ADDRESS_DECRYPTION_SECRET'
   | 'COSIGNER_SECRET'
-  | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
   | 'HELIUS_API_KEY'
   | 'NOTIFICATION_EMAIL_QUEUE'
   | 'STRIPE_RESTRICTED_KEY'
@@ -605,7 +604,7 @@ export async function processStripeCheckoutFulfillmentJob(
     accessTokenProvider,
     commerceDb: env.COMMERCE_DB,
     providerFetch: (input, init) => fetch(input, init),
-    serviceAccountJson: env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
+    serviceAccountJson: 'd1',
     signal: options.persistenceSignal || signal,
   });
   const checkoutPath = `drops/${job.dropId}/stripeCheckouts/${job.sessionId}`;

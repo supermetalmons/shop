@@ -36,7 +36,6 @@ const STRIPE_WEBHOOK_TIMEOUT_MS = 15_000;
 const FIRESTORE_MUTATION_ATTEMPTS = 3;
 
 type StripeWebhookEnv = Pick<Env,
-  | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
   | 'STRIPE_FULFILLMENT_QUEUE'
   | 'STRIPE_WEBHOOK_SECRET'
   | 'STRIPE_WEBHOOK_SECRET_DEVNET'
@@ -491,8 +490,6 @@ export async function handleStripeWebhookRequest(
         };
         return result;
       }
-      const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
-      if (!serviceAccountJson) throw new StripeWebhookRequestError(500, 'configuration_error');
       const trackedFetch: ProfileProviderFetch = async (input, init) => {
         const providerStartedAt = performance.now();
         metrics.upstreamCalls += 1;
@@ -507,7 +504,7 @@ export async function handleStripeWebhookRequest(
         commerceDb: env.COMMERCE_DB,
         nowMs: dependencies.nowMs(),
         providerFetch: trackedFetch,
-        serviceAccountJson,
+        serviceAccountJson: 'd1',
         signal: controller.signal,
       });
       if (transition.outcome !== 'already_fulfilled') {

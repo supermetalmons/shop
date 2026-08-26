@@ -121,7 +121,7 @@ const requestSchema = z.object({
 
 type DeliveryPrepareEnv = Pick<
   Env,
-  'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
+  'COSIGNER_SECRET' | 'HELIUS_API_KEY'
 > & Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
 
 type DeliveryPrepareErrorCode =
@@ -1490,9 +1490,8 @@ export async function handleDeliveryPrepare(
     const body = await readRequestBody(request, controller.signal);
     const requestedDropId = normalizeDropId(body.dropId);
     dropId = dependencies.getDrop(requestedDropId) ? requestedDropId : undefined;
-    const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
-    if (!serviceAccountJson || !apiKey || !String(env.COSIGNER_SECRET || '').trim()) {
+    if (!apiKey || !String(env.COSIGNER_SECRET || '').trim()) {
       throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
     }
     const nowMs = dependencies.nowMs();
@@ -1511,7 +1510,7 @@ export async function handleDeliveryPrepare(
         commerceDb: env.COMMERCE_DB,
         nowMs,
         providerFetch: trackedFetch,
-        serviceAccountJson,
+        serviceAccountJson: 'd1',
         signal: controller.signal,
       },
       providerContext: {

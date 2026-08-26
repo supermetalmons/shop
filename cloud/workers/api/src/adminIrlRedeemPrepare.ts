@@ -137,7 +137,7 @@ const requestSchema = z.object({
 
 type AdminIrlRedeemPrepareEnv = Pick<
   Env,
-  'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
+  'HELIUS_API_KEY'
 > & Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
 
 type AdminIrlRedeemPrepareErrorCode =
@@ -1434,9 +1434,8 @@ export async function handleAdminIrlRedeemPrepare(
     if (!isStaffRequestIdentity(identity)) {
       throw new AdminIrlRedeemPrepareError('unauthenticated', 'Staff wallet authentication is required.');
     }
-    const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
-    if (!serviceAccountJson || !apiKey) {
+    if (!apiKey) {
       throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem preparation is temporarily unavailable.');
     }
     const prepareAttemptId = request.headers.get(ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER)?.trim();
@@ -1455,7 +1454,7 @@ export async function handleAdminIrlRedeemPrepare(
         commerceDb: env.COMMERCE_DB,
         nowMs,
         providerFetch: trackedFetch,
-        serviceAccountJson,
+        serviceAccountJson: 'd1',
         signal: controller.signal,
       },
       providerContext: {

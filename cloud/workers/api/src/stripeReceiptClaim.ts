@@ -104,7 +104,7 @@ const requestSchema = z.object({
   recipient: z.string().min(32).max(64),
 }).strict();
 
-type ClaimEnv = Pick<Env, 'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'> &
+type ClaimEnv = Pick<Env, 'COSIGNER_SECRET' | 'HELIUS_API_KEY'> &
   Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
 type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
@@ -2034,22 +2034,21 @@ export async function handleStripeReceiptClaim(
       controller.signal,
       dependencies.nowMs(),
     );
-    const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
     const cosignerSecret = String(env.COSIGNER_SECRET || '').trim();
-    if (!serviceAccountJson || !apiKey || !cosignerSecret) {
+    if (!apiKey || !cosignerSecret) {
       throw new StripeReceiptClaimError('unavailable', 'Receipt claiming is temporarily unavailable.');
     }
     const nowMs = dependencies.nowMs();
     execution = dependencies.claim(
       body,
-      { ...env, COSIGNER_SECRET: cosignerSecret, FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: serviceAccountJson, HELIUS_API_KEY: apiKey },
+      { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
       {
         accessTokenProvider: dependencies.accessTokenProvider,
         commerceDb: env.COMMERCE_DB,
         nowMs,
         providerFetch: trackedFetch,
-        serviceAccountJson,
+        serviceAccountJson: 'd1',
         signal: controller.signal,
       },
       { apiKey, providerFetch: trackedFetch, signal: controller.signal },

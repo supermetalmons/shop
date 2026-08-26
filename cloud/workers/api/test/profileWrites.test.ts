@@ -4425,7 +4425,7 @@ test('ShipStation rates route never releases a replacement claim', async () => {
   assert.equal(currentClaimedBy, OTHER);
 });
 
-test('write routes reject invalid payloads, unauthorized wallets, missing orders, and missing writer configuration', async () => {
+test('write routes reject invalid payloads, unauthorized wallets, and missing orders without Firestore configuration', async () => {
   let upstreamCalls = 0;
   const neverFetch: typeof fetch = async () => {
     upstreamCalls += 1;
@@ -4508,13 +4508,13 @@ test('write routes reject invalid payloads, unauthorized wallets, missing orders
   );
   assert.equal(anonymousOnlyStaffWrite.response.status, 401);
 
-  const missingSecret = await handleProfileWriteRequest(
+  const retiredSecret = await handleProfileWriteRequest(
     request(PROFILE_ADDRESSES_PATH, { encrypted: 'cipher', country: 'US', hint: 'hint' }),
     { FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '' },
     PROFILE_ADDRESSES_PATH,
     dependencies(neverFetch),
   );
-  assert.equal(missingSecret.response.status, 503);
+  assert.equal(retiredSecret.response.status, 200);
   assert.equal(upstreamCalls, 0);
 
   let commits = 0;
