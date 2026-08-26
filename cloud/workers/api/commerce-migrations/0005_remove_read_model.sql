@@ -1,0 +1,4 @@
+DROP TABLE delivery_order_read_models;
+DROP TABLE stripe_checkout_read_models;
+DROP TABLE commerce_read_model_reconciliation;
+DROP TABLE commerce_read_model_control;
