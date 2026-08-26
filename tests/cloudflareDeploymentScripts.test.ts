@@ -27,7 +27,7 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   assert.equal(packageJson.devDependencies.wrangler, '4.120.0');
   assert.equal(
     packageJson.scripts['check:frontend'],
-    'npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm test && npm run build && npm run validate:browser-bundle',
+    'npm run validate:legacy-runtime && npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm test && npm run build && npm run validate:browser-bundle',
   );
   assert.equal(
     packageJson.scripts['dry-run:frontend'],
@@ -43,7 +43,7 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   );
   assert.equal(
     packageJson.scripts['check:api'],
-    'npm run types:api:check && npm run typecheck:api && npm run test:api && npm run test:api:runtime && npm run dry-run:api && npm run startup:api',
+    'npm run validate:legacy-runtime && npm run types:api:check && npm run typecheck:api && npm run test:api && npm run test:api:runtime && npm run dry-run:api && npm run startup:api',
   );
   assert.equal(
     packageJson.scripts['db:migrate:data'],

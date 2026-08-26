@@ -142,10 +142,10 @@ test('manual-review checkout queues the existing bounded notification job', asyn
         lastFulfillmentError: { message: '<danger>'.repeat(20_000) },
         livemode: false,
         variantKey: ' xl ',
-        owner: 'firebase:legacy-subject',
-        ownerKind: 'firebase',
-        uid: 'legacy-subject',
-        firebaseUid: 'legacy-subject',
+        owner: 'anonymous:anon:manual-review-subject',
+        ownerKind: 'anonymous',
+        uid: 'anon:manual-review-subject',
+        authSubject: 'anon:manual-review-subject',
         createdAt: Date.UTC(2026, 0, 2, 3, 4, 5),
         failedAt: Date.UTC(2026, 0, 2, 3, 6, 5),
       },
@@ -158,8 +158,7 @@ test('manual-review checkout queues the existing bounded notification job', asyn
   assert.deepEqual(jobs[0]?.context, { dropId: DROP_ID, sessionId: SESSION_ID });
   assert.match(jobs[0]?.text || '', new RegExp(`Session ID: ${SESSION_ID}`));
   assert.match(jobs[0]?.text || '', /Variant: xl/);
-  assert.match(jobs[0]?.text || '', /Auth subject: legacy-subject/);
-  assert.doesNotMatch(jobs[0]?.text || '', /Firebase/);
+  assert.match(jobs[0]?.text || '', /Auth subject: anon:manual-review-subject/);
   assert.match(jobs[0]?.text || '', /… truncated$/);
   assert.doesNotMatch(jobs[0]?.html || '', /<danger>/);
 });

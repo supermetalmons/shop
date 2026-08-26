@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1 } from './commerceD1Harness.ts';
+import { createCommerceD1, decodeFixtureFields } from './commerceD1Harness.ts';
 import {
   ADMIN_PROFILE_PATH,
   ADMIN_DELIVERY_ORDER_OWNERS_PATH,
@@ -14,7 +14,6 @@ import {
   type ProfileProviderFetch,
   type ProfileReadPath,
 } from '../src/profileReads.ts';
-import { decodeFirestoreFields } from '../src/firestoreContract.ts';
 import {
   D1CommerceRepository,
   commerceKeys,
@@ -26,7 +25,7 @@ import {
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const OTHER = 'So11111111111111111111111111111111111111112';
-const UID = 'firebase-user-one';
+const UID = 'auth-user-one';
 const NOW_MS = Date.parse('2026-08-18T12:00:00.000Z');
 
 function tokenRequest(path: ProfileReadPath, body: unknown, origin = 'https://mons.shop'): Request {
@@ -88,7 +87,7 @@ function profileDependencies(
           if (!document || typeof document !== 'object') return [];
           const raw = document as { name?: unknown; fields?: unknown; updateTime?: unknown };
           if (typeof raw.name !== 'string') return [];
-          const fields = decodeFirestoreFields(raw.fields);
+          const fields = decodeFixtureFields(raw.fields);
           if (!fields) return [];
           const delivery = raw.name.match(/\/drops\/([^/]+)\/deliveryOrders\/([^/]+)$/);
           const checkout = raw.name.match(/\/drops\/([^/]+)\/stripeCheckouts\/([^/]+)$/);
@@ -171,7 +170,7 @@ test('shipment and anonymous history routes preserve exact source-query behavior
   assert.equal(queries.length, 2);
   const serialized = queries.map((query) => JSON.stringify(query));
   assert.match(serialized[0], new RegExp(OWNER));
-  assert.match(serialized[1], new RegExp(`firebase:${UID}`));
+  assert.match(serialized[1], new RegExp(`anonymous:${UID}`));
   assert.equal(serialized.every((query) => query.includes('delivery_order') && query.includes('ready_to_ship')), true);
 });
 
@@ -232,7 +231,7 @@ test('profile state derives identity server-side and returns independently bound
   assert.deepEqual(result.profileStateSections, { profile: 'ready', shipments: 'ready' });
 });
 
-test('profile state uses D1 wallet sessions without requesting Firestore authSessions', async () => {
+test('profile state uses D1 wallet sessions without requesting Commerce authSessions', async () => {
   const providerFetch: typeof fetch = async (input) => {
     const url = String(input);
     assert.equal(url.includes('/authSessions/'), false);
@@ -254,7 +253,7 @@ test('profile state uses D1 wallet sessions without requesting Firestore authSes
   assert.equal((await result.response.json() as { sessionWallet: string }).sessionWallet, OWNER);
 });
 
-test('staff profile state uses the wallet principal without a Firebase session row', async () => {
+test('staff profile state uses the wallet principal without a Auth session row', async () => {
   const result = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
@@ -265,7 +264,7 @@ test('staff profile state uses the wallet principal without a Firebase session r
       if (url.endsWith('/documents:runQuery')) return Response.json([]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
-      resolveD1WalletSession: async () => assert.fail('staff identity reached Firebase wallet-session resolution'),
+      resolveD1WalletSession: async () => assert.fail('staff identity reached Auth wallet-session resolution'),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
@@ -283,7 +282,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
-    profileDependencies(async () => assert.fail('missing session reached Firestore'), {
+    profileDependencies(async () => assert.fail('missing session reached Commerce'), {
       resolveD1WalletSession: async () => ({ wallet: null, reason: 'legacy_uid_invalid' }),
     }),
   );
@@ -350,7 +349,7 @@ test('profile state rejects invalid D1 sessions and non-empty requests', async (
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
-    profileDependencies(async () => assert.fail('invalid D1 session reached Firestore'), {
+    profileDependencies(async () => assert.fail('invalid D1 session reached Commerce'), {
       resolveD1WalletSession: async () => { throw new Error('invalid D1 session'); },
     }),
   );
@@ -398,7 +397,7 @@ test('shipment route rejects mismatched sessions and malformed requests before s
   }
 });
 
-test('shipment route preserves legacy wallet-shaped Firebase UIDs when no session document exists', async () => {
+test('shipment route preserves legacy wallet-shaped Auth UIDs when no session document exists', async () => {
   const owners: string[] = [];
   const result = await handleProfileReadRequest(
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
@@ -620,7 +619,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
   });
 });
 
-test('all seven commerce read routes use D1 without Firestore in d1 mode', async () => {
+test('all seven commerce read routes use D1 without Commerce in d1 mode', async () => {
   const order = orderDocument();
   (order.fields as Record<string, unknown>).buyerOrderShippedEmailState = stringValue('pending');
   const checkout = {
@@ -639,7 +638,7 @@ test('all seven commerce read routes use D1 without Firestore in d1 mode', async
     drop_id: 'card_nft_2',
     document_id: document.name.split('/').at(-1),
     fields_json: JSON.stringify(document.fields),
-    document_json: JSON.stringify(decodeFirestoreFields(document.fields)),
+    document_json: JSON.stringify(decodeFixtureFields(document.fields)),
     version: 1,
     create_time: '2026-08-18T10:00:00Z',
     update_time: '2026-08-18T12:00:00Z',
@@ -674,11 +673,11 @@ test('all seven commerce read routes use D1 without Firestore in d1 mode', async
     OPS_DB: {} as D1Database,
     STRIPE_SECRET_KEY: 'sk_test_primary',
   };
-  let firestoreCalls = 0;
+  let commerceCalls = 0;
   const providerFetch: typeof fetch = async (input) => {
-    if (String(input).includes('firestore.googleapis.com')) {
-      firestoreCalls += 1;
-      throw new Error('D1 route reached Firestore');
+    if (String(input).includes('commerce.googleapis.com')) {
+      commerceCalls += 1;
+      throw new Error('D1 route reached Commerce');
     }
     return Response.json({});
   };
@@ -708,7 +707,7 @@ test('all seven commerce read routes use D1 without Firestore in d1 mode', async
       assert.doesNotMatch(JSON.stringify(payload), /buyerOrderShippedEmailState/);
     }
   }
-  assert.equal(firestoreCalls, 0);
+  assert.equal(commerceCalls, 0);
 });
 
 test('commerce authority failures fail closed without a provider fallback', async () => {

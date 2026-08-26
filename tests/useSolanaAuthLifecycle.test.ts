@@ -64,7 +64,7 @@ function emptyState(): GetProfileStateResponse {
 }
 
 class RuntimeHarness {
-  uid: string | null = 'firebase-a';
+  uid: string | null = 'auth-a';
   staffSession: StaffWalletSession | null = null;
   anonymousUidCounter = 0;
   nowMs = 1_000;
@@ -98,7 +98,7 @@ class RuntimeHarness {
     ensureAuthenticated: async () => {
       if (!this.uid) {
         this.anonymousUidCounter += 1;
-        this.emitAuthSubject(`firebase-anonymous-${this.anonymousUidCounter}`);
+        this.emitAuthSubject(`auth-anonymous-${this.anonymousUidCounter}`);
       }
       return this.uid!;
     },
@@ -191,7 +191,7 @@ test('disconnected sessions restore complete profile state through the API', asy
   assert.deepEqual(harness.timerDelays(), [60_000]);
 });
 
-test('an authenticated Firebase user without a wallet session settles signed out', async () => {
+test('an authenticated Auth user without a wallet session settles signed out', async () => {
   const harness = new RuntimeHarness();
   harness.nextState = emptyState();
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_A), harness.runtime));
@@ -211,12 +211,12 @@ test('the auth subject observes identities created after render', async () => {
   harness.nextState = emptyState();
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(null), harness.runtime));
   await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
-  assert.match(result.current.authSubject || '', /^firebase-anonymous-/);
-  await act(async () => harness.emitAuthSubject('firebase-replacement'));
-  assert.equal(result.current.authSubject, 'firebase-replacement');
+  assert.match(result.current.authSubject || '', /^auth-anonymous-/);
+  await act(async () => harness.emitAuthSubject('auth-replacement'));
+  assert.equal(result.current.authSubject, 'auth-replacement');
 });
 
-test('a connected-wallet mismatch clears state and signs Firebase out once', async () => {
+test('a connected-wallet mismatch clears state and signs Auth out once', async () => {
   const harness = new RuntimeHarness();
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(WALLET_B), harness.runtime));
   await waitFor(() => assert.equal(harness.signOutCalls, 1));
@@ -356,7 +356,7 @@ test('concurrent refreshes share one request and queue one follow-up', async () 
   assert.deepEqual(result.current.shipments, [shipment(5)]);
 });
 
-test('stale in-flight responses cannot restore a replaced Firebase user', async () => {
+test('stale in-flight responses cannot restore a replaced Auth user', async () => {
   const harness = new RuntimeHarness();
   harness.nextState = emptyState();
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(null), harness.runtime));
@@ -367,7 +367,7 @@ test('stale in-flight responses cannot restore a replaced Firebase user', async 
     void result.current.refreshProfileState();
   });
   harness.loadImpl = async () => emptyState();
-  await act(async () => harness.emitAuthSubject('firebase-b'));
+  await act(async () => harness.emitAuthSubject('auth-b'));
   await act(async () => stale.resolve(readyState(WALLET_A)));
   await waitFor(() => assert.equal(result.current.sessionWallet, null));
 });
@@ -383,7 +383,7 @@ test('sign-in establishes and refreshes API-backed profile state', async () => {
   assert.deepEqual(result.current.profile, { wallet: WALLET_A, email: 'owner@example.com' });
 });
 
-test('restored Firebase staff sessions are discarded before wallet-only sign-in', async () => {
+test('restored Auth staff sessions are discarded before wallet-only sign-in', async () => {
   const harness = new RuntimeHarness();
   harness.runtime.isStaffWallet = (wallet) => wallet === WALLET_A;
   harness.runtime.hasStaffSession = () => false;
@@ -394,7 +394,7 @@ test('restored Firebase staff sessions are discarded before wallet-only sign-in'
   assert.equal(result.current.loading, false);
 });
 
-test('allowlisted staff sign-in uses the server challenge without Firebase wallet binding', async () => {
+test('allowlisted staff sign-in uses the server challenge without Auth wallet binding', async () => {
   const harness = new RuntimeHarness();
   harness.nextState = emptyState();
   let staffChallengeCalls = 0;
@@ -426,13 +426,13 @@ test('allowlisted staff sign-in uses the server challenge without Firebase walle
   };
   const { result } = renderHook(() => useSolanaAuthWithRuntime(wallet, harness.runtime));
   await waitFor(() => assert.equal(result.current.sessionResolution, 'settled'));
-  const baselineFirebaseAuthentications = harness.anonymousUidCounter;
+  const baselineAuthAuthentications = harness.anonymousUidCounter;
   await act(async () => result.current.signIn());
   assert.equal(staffChallengeCalls, 1);
   assert.equal(staffSessionCalls, 1);
   assert.equal(signedMessage, 'server staff challenge');
   assert.equal(harness.authenticateCalls, 0);
-  assert.equal(harness.anonymousUidCounter, baselineFirebaseAuthentications);
+  assert.equal(harness.anonymousUidCounter, baselineAuthAuthentications);
   assert.equal(result.current.sessionWallet, WALLET_A);
   assert.equal(result.current.authenticated, true);
   assert.equal(result.current.authSubject, WALLET_A);
@@ -512,7 +512,7 @@ test('same-wallet cross-tab replacement wins over an in-flight staff exchange', 
   assert.deepEqual(harness.staffSession, replacement);
 });
 
-test('terminal unauthenticated refreshes clear state and reset Firebase auth', async () => {
+test('terminal unauthenticated refreshes clear state and reset Auth auth', async () => {
   const harness = new RuntimeHarness();
   const { result } = renderHook(() => useSolanaAuthWithRuntime(walletState(null), harness.runtime));
   await waitFor(() => assert.equal(result.current.sessionWallet, WALLET_A));

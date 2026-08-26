@@ -137,7 +137,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadClaim: async () => ({ dropId: DROP_ID, boxId: 7, dudeIds: [1, 2, 3] }),
     resolveLegacyDropIds: async () => [],
@@ -226,7 +226,7 @@ test('IRL claim reads wallet sessions from D1 and preserves legacy collection-gr
     providerFetch: async () => assert.fail('commerce reads must not use provider fetch'),
     signal: new AbortController().signal,
   };
-  const firestoreSourceDb = {
+  const commerceSourceDb = {
     batch: async () => [],
     dump: async () => new ArrayBuffer(0),
     exec: async () => ({ count: 0, duration: 0 }),
@@ -236,7 +236,7 @@ test('IRL claim reads wallet sessions from D1 and preserves legacy collection-gr
         all: async () => { throw new Error('Unexpected D1 all'); },
         bind: () => statement,
         first: async () => ({
-          auth_subject: 'firebase-uid',
+          auth_subject: 'auth-uid',
           wallet: OWNER.toBase58(),
           expires_at_ms: 253_402_300_799_999,
           updated_at_ms: 1_700_000_000_000,
@@ -253,7 +253,7 @@ test('IRL claim reads wallet sessions from D1 and preserves legacy collection-gr
       throw new Error('Unexpected D1 session');
     },
   } as D1Database;
-  assert.equal(await irlClaimTestHooks.loadWalletSession(context, firestoreSourceDb, 'firebase-uid'), OWNER.toBase58());
+  assert.equal(await irlClaimTestHooks.loadWalletSession(context, commerceSourceDb, 'auth-uid'), OWNER.toBase58());
   assert.deepEqual(await irlClaimTestHooks.loadClaim(context, '1234567890'), {
     dropId: DROP_ID,
     boxId: 7,

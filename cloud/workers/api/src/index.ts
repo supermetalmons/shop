@@ -172,7 +172,7 @@ import {
   isInternalStaffAuthorization,
   isStaffOnlyApiPath,
 } from './requestIdentity.js';
-import { loadCommerceAuthorityControl } from './commerceDocumentStore.js';
+import { loadCommerceAuthorityControl } from './commerceRepository.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;

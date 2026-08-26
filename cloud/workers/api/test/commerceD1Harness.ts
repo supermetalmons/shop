@@ -1,18 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
-import { commerceDocumentIdentity } from '../src/commerceDocumentStore.ts';
-import { decodeFirestoreFields, FirestoreWriteConflict } from '../src/firestoreContract.ts';
-import { ProfileReadError } from '../src/dataAccess.ts';
-
-type CommerceDocumentRequest = {
-  body?: string;
-  commerceDb: D1Database;
-  method: 'GET' | 'POST';
-  nowMs: number;
-  url: string;
-};
-
-type CommerceDocumentRequester = (args: CommerceDocumentRequest) => Promise<unknown | null>;
+import { commerceKeyFromPath } from '../src/commerceRepository.ts';
 
 class PreparedStatement {
   private values: SQLInputValue[] = [];
@@ -84,6 +72,11 @@ export function createCommerceD1Harness(): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys = ON');
   for (const file of readdirSync('cloud/workers/api/commerce-migrations').sort()) {
+    if (file.startsWith('0009_')) {
+      database.exec(`UPDATE commerce_authority_control SET
+        authority_state = 'paused', revision = 2, paused_at_ms = 1, updated_at_ms = 1
+        WHERE singleton = 1`);
+    }
     database.exec(readFileSync(`cloud/workers/api/commerce-migrations/${file}`, 'utf8'));
   }
   database.exec(`UPDATE commerce_authority_control SET
@@ -102,47 +95,67 @@ export function createCommerceD1(): D1Database {
   return createCommerceD1Harness().db;
 }
 
-export const firestoreProviderCommerceRequester: CommerceDocumentRequester = async (args) => {
-      const request = args as CommerceDocumentRequest & {
-        providerFetch?: typeof fetch;
-        signal?: AbortSignal;
-      };
-      if (!request.providerFetch) throw new Error('Commerce provider test requester is missing providerFetch');
-      let response: Response | undefined;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          response = await request.providerFetch(request.url, {
-            method: request.method,
-            ...(request.body ? { body: request.body } : {}),
-            signal: request.signal,
-          });
-        } catch {
-          if (request.signal?.aborted) throw request.signal.reason;
-          if (attempt === 0) continue;
-          throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-        }
-        if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt === 1) break;
-        await response.body?.cancel().catch(() => undefined);
-      }
-      if (!response) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-      if (response.status === 404 && args.method === 'GET') {
-        await response.body?.cancel().catch(() => undefined);
-        return null;
-      }
-      const payload = await response.json().catch(() => null);
-      if (response.status === 400 || response.status === 409) {
-        const error = payload && typeof payload === 'object' && 'error' in payload
-          ? (payload as { error?: { status?: unknown } }).error
-          : undefined;
-        if (
-          error?.status === 'ABORTED' ||
-          error?.status === 'ALREADY_EXISTS' ||
-          error?.status === 'FAILED_PRECONDITION'
-        ) throw new FirestoreWriteConflict(error.status);
-      }
-      if (!response.ok) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-      return payload;
-};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function decodeFixtureValue(value: unknown): unknown {
+  if (!isRecord(value) || Object.keys(value).length !== 1) return undefined;
+  if (Object.hasOwn(value, 'nullValue')) return null;
+  if (typeof value.booleanValue === 'boolean') return value.booleanValue;
+  if (typeof value.stringValue === 'string') return value.stringValue;
+  if (typeof value.timestampValue === 'string') {
+    const milliseconds = Date.parse(value.timestampValue);
+    return Number.isFinite(milliseconds) ? milliseconds : undefined;
+  }
+  if (typeof value.integerValue === 'string' && /^-?\d+$/.test(value.integerValue)) {
+    const integer = Number(value.integerValue);
+    return Number.isSafeInteger(integer) ? integer : value.integerValue;
+  }
+  if (typeof value.doubleValue === 'number' && Number.isFinite(value.doubleValue)) return value.doubleValue;
+  if (typeof value.bytesValue === 'string') return value.bytesValue;
+  if (typeof value.referenceValue === 'string') return value.referenceValue;
+  if (isRecord(value.arrayValue)) {
+    if (value.arrayValue.values === undefined) return [];
+    if (!Array.isArray(value.arrayValue.values)) return undefined;
+    const decoded = value.arrayValue.values.map(decodeFixtureValue);
+    return decoded.some((entry) => entry === undefined) ? undefined : decoded;
+  }
+  if (isRecord(value.mapValue)) {
+    if (value.mapValue.fields === undefined) return {};
+    if (!isRecord(value.mapValue.fields)) return undefined;
+    const decoded: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value.mapValue.fields)) {
+      const result = decodeFixtureValue(entry);
+      if (result === undefined) return undefined;
+      decoded[key] = result;
+    }
+    return decoded;
+  }
+  return undefined;
+}
+
+export function decodeFixtureFields(fields: unknown): Record<string, unknown> | null {
+  if (!isRecord(fields)) return null;
+  const decoded: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(fields)) {
+    const result = decodeFixtureValue(entry);
+    if (result === undefined) return null;
+    decoded[key] = result;
+  }
+  return decoded;
+}
+
+function processedTimestamp(fields: Record<string, unknown>): { seconds: number; nanos: number } | null {
+  const value = isRecord(fields.processedAt) ? fields.processedAt.timestampValue : undefined;
+  if (typeof value !== 'string') return null;
+  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
+  if (!match) return null;
+  const seconds = Date.parse(`${match[1]}Z`) / 1000;
+  return Number.isSafeInteger(seconds) && seconds >= 0
+    ? { seconds, nanos: Number((match[2] || '').padEnd(9, '0')) }
+    : null;
+}
 
 export function seedCommerceDocument(
   harness: CommerceD1Harness,
@@ -151,27 +164,30 @@ export function seedCommerceDocument(
   const marker = '/documents/';
   const markerIndex = document.name.indexOf(marker);
   const path = markerIndex >= 0 ? document.name.slice(markerIndex + marker.length) : document.name;
-  const identity = commerceDocumentIdentity(path);
+  const identity = commerceKeyFromPath(path);
   const fields = document.fields || {};
-  const decoded = decodeFirestoreFields(fields);
+  const decoded = decodeFixtureFields(fields);
   if (!identity || !decoded) throw new Error(`Invalid commerce test document: ${path}`);
+  const processedAt = processedTimestamp(fields);
   const updateTime = document.updateTime || '2026-01-01T00:00:00.000Z';
   harness.database.prepare(`INSERT INTO commerce_documents (
-    document_path, document_kind, drop_id, document_id, fields_json, document_json,
-    version, create_time, update_time
-  ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+    document_path, document_kind, drop_id, document_id, document_json,
+    version, create_time, update_time, processed_at_seconds, processed_at_nanos
+  ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
   ON CONFLICT(document_path) DO UPDATE SET
-    fields_json = excluded.fields_json,
     document_json = excluded.document_json,
     version = commerce_documents.version + 1,
-    update_time = excluded.update_time`).run(
+    update_time = excluded.update_time,
+    processed_at_seconds = excluded.processed_at_seconds,
+    processed_at_nanos = excluded.processed_at_nanos`).run(
     path,
     identity.kind,
     identity.dropId,
     identity.documentId,
-    JSON.stringify(fields),
     JSON.stringify(decoded),
     updateTime,
     updateTime,
+    processedAt?.seconds ?? null,
+    processedAt?.nanos ?? null,
   );
 }

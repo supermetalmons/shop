@@ -10,7 +10,6 @@ export type RevealSubmissionRecord = {
 
 export type RevealSubmissionStorageControl = {
   paused: boolean;
-  source: 'd1';
   revision: number;
   updatedAtMs: number;
   cutoverAtMs: number | null;
@@ -62,9 +61,13 @@ export async function loadRevealSubmissionStorageControl(
   signal?: AbortSignal,
 ): Promise<RevealSubmissionStorageControl> {
   throwIfAborted(signal);
+  const columns = await db.prepare('PRAGMA table_info(reveal_submission_storage_control)')
+    .all<{ name: string }>();
+  throwIfAborted(signal);
+  const hasMigrationSource = columns.results.some((column) => column.name === 'storage_source');
   const row = await db.prepare(`SELECT
       paused,
-      storage_source,
+      ${hasMigrationSource ? 'storage_source' : "'d1' AS storage_source"},
       revision,
       updated_at_ms,
       cutover_at_ms,
@@ -95,7 +98,6 @@ export async function loadRevealSubmissionStorageControl(
   }
   return {
     paused: row.paused === 1,
-    source: row.storage_source,
     revision,
     updatedAtMs,
     cutoverAtMs,

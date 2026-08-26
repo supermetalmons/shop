@@ -271,7 +271,7 @@ test('Admin IRL preparation enforces exact requests, methods, authentication, an
   assert.equal(unauthenticated.response.status, 401);
 
   const anonymousOnly = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
-    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
   }));
   assert.equal(anonymousOnly.response.status, 401);
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
+import { createCommerceD1 } from './commerceD1Harness.ts';
 import { Keypair } from '@solana/web3.js';
 import { adminIrlRedeemPrepareTestHooks } from '../src/adminIrlRedeemPrepare.js';
 import { deliveryPrepareTestHooks } from '../src/deliveryPrepare.js';
@@ -45,14 +45,13 @@ function walletSessionDb(): D1Database {
 }
 
 test('delivery, reveal, claim, receipt, and admin authorization load wallet sessions only from D1', async () => {
-  let firestoreRequests = 0;
+  let providerRequests = 0;
   const context = {
-    requestCommerceDocument: firestoreProviderCommerceRequester,
     commerceDb: createCommerceD1(),
     nowMs: 1_700_000_000_000,
     providerFetch: async () => {
-      firestoreRequests += 1;
-      throw new Error('Wallet authorization must not request Firestore');
+      providerRequests += 1;
+      throw new Error('Wallet authorization must not request an external provider');
     },
     signal: new AbortController().signal,
   };
@@ -67,5 +66,5 @@ test('delivery, reveal, claim, receipt, and admin authorization load wallet sess
   for (const loadWalletSession of loaders) {
     assert.equal(await loadWalletSession(context, db, AUTH_SUBJECT), WALLET);
   }
-  assert.equal(firestoreRequests, 0);
+  assert.equal(providerRequests, 0);
 });

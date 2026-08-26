@@ -32,8 +32,6 @@ test('new anonymous checkout documents use only the canonical identity contract'
   assert.equal(checkout.authSubject, AUTH_SUBJECT);
   assert.equal(checkout.owner, `anonymous:${AUTH_SUBJECT}`);
   assert.equal(checkout.ownerKind, STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS);
-  assert.equal(Object.hasOwn(checkout, 'firebaseUid'), false);
-  assert.equal(JSON.stringify(checkout).includes('firebase'), false);
   assert.deepEqual(
     buildStripeCheckoutSessionMetadata({ dropId: 'card_nft_binder_devnet', uid: AUTH_SUBJECT }),
     {
@@ -46,25 +44,8 @@ test('new anonymous checkout documents use only the canonical identity contract'
   );
 });
 
-test('checkout identity normalization accepts exact legacy records and returns canonical data', () => {
-  const legacy = {
-    uid: AUTH_SUBJECT,
-    owner: `firebase:${AUTH_SUBJECT}`,
-    ownerKind: 'firebase',
-    firebaseUid: AUTH_SUBJECT,
-  };
-  assert.deepEqual(normalizeStripeCheckoutIdentity(legacy), {
-    uid: AUTH_SUBJECT,
-    owner: `anonymous:${AUTH_SUBJECT}`,
-    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
-    authSubject: AUTH_SUBJECT,
-  });
-
-  const checkout: Record<string, unknown> = {
-    ...checkoutDocument(),
-    ...legacy,
-  };
-  delete checkout.authSubject;
+test('checkout identity normalization preserves the canonical document contract', () => {
+  const checkout: Record<string, unknown> = checkoutDocument();
   assert.deepEqual(validateStripeCheckoutDocumentData({
     checkout,
     dropId: 'card_nft_binder_devnet',
@@ -81,19 +62,12 @@ test('checkout identity normalization accepts exact legacy records and returns c
   });
 });
 
-test('checkout identity normalization rejects mixed, mismatched, and contaminated wallet records', () => {
+test('checkout identity normalization rejects mismatched and contaminated records', () => {
   const canonical = checkoutDocument();
   for (const invalid of [
-    { ...canonical, firebaseUid: AUTH_SUBJECT },
     { ...canonical, authSubject: `${AUTH_SUBJECT}-other` },
-    { ...canonical, owner: `firebase:${AUTH_SUBJECT}` },
-    {
-      uid: AUTH_SUBJECT,
-      owner: `firebase:${AUTH_SUBJECT}`,
-      ownerKind: 'firebase',
-      firebaseUid: AUTH_SUBJECT,
-      authSubject: AUTH_SUBJECT,
-    },
+    { ...canonical, owner: `anonymous:${AUTH_SUBJECT}-other` },
+    { ...canonical, ownerKind: 'unknown' },
   ]) {
     assert.throws(() => normalizeStripeCheckoutIdentity(invalid));
   }

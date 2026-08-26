@@ -65,7 +65,7 @@ export function buildCommerceAuthorityMutationSql(
     return `UPDATE commerce_authority_control
       SET authority_state = 'paused', revision = revision + 1,
         paused_at_ms = ${nowMs}, updated_at_ms = ${nowMs}
-      WHERE singleton = 1 AND authority_state IN ('firestore', 'd1') AND revision = ${expectedRevision}
+      WHERE singleton = 1 AND authority_state = 'd1' AND revision = ${expectedRevision}
       RETURNING *`;
   }
   return `UPDATE commerce_authority_control

@@ -15,7 +15,7 @@ test('Stripe ready orders create the exact buyer and shipper jobs', async () => 
       source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
       status: 'ready_to_ship',
       deliveryId: 7,
-      owner: 'firebase-owner',
+      owner: 'auth-owner',
       addressSnapshot: { email: ' buyer@example.com ' },
       items: [{ kind: 'box', refId: 3 }],
     },

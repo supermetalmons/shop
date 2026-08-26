@@ -21,8 +21,15 @@ import {
 export * from './commerceRepositoryTypes.js';
 
 type AuthorityRow = {
-  authority_state: string;
+  authority_state: 'paused' | 'd1';
+  revision: number;
   documents_revision: number;
+};
+
+export type CommerceAuthorityControl = {
+  state: 'paused' | 'd1';
+  revision: number;
+  documentsRevision: number;
 };
 
 type DocumentRow = {
@@ -32,7 +39,6 @@ type DocumentRow = {
   document_kind: CommerceDocumentKind;
   document_path: string;
   drop_id: string | null;
-  fields_json: string;
   processed_at_nanos: number | null;
   processed_at_seconds: number | null;
   update_time: string;
@@ -40,7 +46,6 @@ type DocumentRow = {
 };
 
 type StoredDocument = {
-  compatibilityFields: Record<string, unknown>;
   createTime: string;
   data: CommerceDocumentData;
   key: CommerceDocumentKey;
@@ -52,7 +57,7 @@ type StoredDocument = {
 type PendingDocument = StoredDocument | null;
 
 const DOCUMENT_COLUMNS = `document_path, document_kind, drop_id, document_id, document_json,
-  fields_json, version, create_time, update_time, processed_at_seconds, processed_at_nanos`;
+  version, create_time, update_time, processed_at_seconds, processed_at_nanos`;
 
 const INDEXED_COLUMNS: Readonly<Record<CommerceIndexedField, string>> = Object.freeze({
   buyerOrderReceivedEmailState: 'buyer_notification_state',
@@ -95,6 +100,26 @@ function documentKey<K extends CommerceDocumentKind>(
   return Object.freeze({ documentId, dropId, kind, path });
 }
 
+export function commerceKeyFromPath(path: string): CommerceDocumentKey | null {
+  const claim = /^claimCodes\/([^/]+)$/.exec(path);
+  if (claim) return documentKey('claim_code', null, claim[1]);
+  const nested = /^drops\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(path);
+  if (!nested) return null;
+  const [, dropId, collection, documentId] = nested;
+  if (collection === 'meta' && documentId === 'dudePool') return documentKey('dude_pool', dropId, documentId);
+  const kind = new Map<string, Exclude<CommerceDocumentKind, 'claim_code' | 'dude_pool'>>([
+    ['adminIrlRedeemPackMarkers', 'admin_irl_redeem_pack_marker'],
+    ['adminIrlRedeemReceiptMarkers', 'admin_irl_redeem_receipt_marker'],
+    ['adminIrlRedeemRequests', 'admin_irl_redeem_request'],
+    ['boxAssignments', 'box_assignment'],
+    ['deliveryOrders', 'delivery_order'],
+    ['dudeAssignments', 'dude_assignment'],
+    ['offchainOrders', 'offchain_order'],
+    ['stripeCheckouts', 'stripe_checkout'],
+  ]).get(collection);
+  return kind ? documentKey(kind, dropId, documentId) : null;
+}
+
 export const commerceKeys = Object.freeze({
   adminIrlRedeemPackMarker: (dropId: string, documentId: string) =>
     documentKey('admin_irl_redeem_pack_marker', dropId, documentId),
@@ -128,6 +153,20 @@ function cloneData<T>(value: T): T {
   return structuredClone(value);
 }
 
+function validatedJsonValue(value: unknown): CommerceJsonValue {
+  if (value === null) return null;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return value;
+    throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce document value.');
+  }
+  if (Array.isArray(value)) return value.map(validatedJsonValue);
+  if (isObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, validatedJsonValue(entry)]));
+  }
+  throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce document value.');
+}
+
 function validTimestamp(value: CommerceTimestamp): boolean {
   return Number.isSafeInteger(value.seconds) && value.seconds >= 0 &&
     Number.isInteger(value.nanos) && value.nanos >= 0 && value.nanos <= 999_999_999;
@@ -149,36 +188,6 @@ function timestampString(value: CommerceTimestamp): string {
 
 function timestampMilliseconds(value: CommerceTimestamp): number {
   return value.seconds * 1000 + Math.floor(value.nanos / 1_000_000);
-}
-
-function timestampField(fieldPath: string): boolean {
-  const name = fieldPath.split('.').at(-1) || '';
-  return name.endsWith('At') && !name.endsWith('AtMs');
-}
-
-function encodeCompatibility(value: CommerceJsonValue, fieldPath: string): unknown {
-  if (value === null) return { nullValue: null };
-  if (typeof value === 'boolean') return { booleanValue: value };
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce document value.');
-    if (timestampField(fieldPath)) return { timestampValue: timestampString(timestampFromMilliseconds(value)) };
-    return Number.isSafeInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
-  }
-  if (Array.isArray(value)) {
-    return { arrayValue: { values: value.map((entry) => encodeCompatibility(entry, fieldPath)) } };
-  }
-  return { mapValue: { fields: encodeCompatibilityFields(value, fieldPath) } };
-}
-
-function encodeCompatibilityFields(
-  value: CommerceDocumentData,
-  parentPath = '',
-): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).map(([key, entry]) => {
-    const path = parentPath ? `${parentPath}.${key}` : key;
-    return [key, encodeCompatibility(entry, path)];
-  }));
 }
 
 function dataField(data: CommerceDocumentData, fieldPath: string): unknown {
@@ -203,78 +212,50 @@ function setDataField(data: CommerceDocumentData, fieldPath: string, value: Comm
   else current[last] = value;
 }
 
-function compatibilityField(fields: Record<string, unknown>, fieldPath: string): unknown {
-  const parts = fieldPath.split('.');
-  let current: unknown = fields[parts[0]];
-  for (let index = 1; index < parts.length; index += 1) {
-    if (!isObject(current) || !isObject(current.mapValue) || !isObject(current.mapValue.fields)) return undefined;
-    current = current.mapValue.fields[parts[index]];
-  }
-  return current;
-}
-
-function setCompatibilityField(fields: Record<string, unknown>, fieldPath: string, value: unknown): void {
-  const parts = fieldPath.split('.');
-  if (parts.length === 1) {
-    if (value === undefined) delete fields[fieldPath];
-    else fields[fieldPath] = value;
-    return;
-  }
-  let current = fields;
-  for (let index = 0; index < parts.length - 1; index += 1) {
-    const existing = current[parts[index]];
-    if (!isObject(existing) || !isObject(existing.mapValue) || !isObject(existing.mapValue.fields)) {
-      current[parts[index]] = { mapValue: { fields: {} } };
-    }
-    current = (current[parts[index]] as { mapValue: { fields: Record<string, unknown> } }).mapValue.fields;
-  }
-  const last = parts.at(-1)!;
-  if (value === undefined) delete current[last];
-  else current[last] = value;
-}
-
 function materializeUpdate(
   current: CommerceJsonValue | undefined,
-  currentCompatibility: unknown,
-  fieldPath: string,
   update: CommerceUpdateValue,
   now: CommerceTimestamp,
-): { compatibility: unknown; value: CommerceJsonValue | undefined } {
-  if (isCommerceDeleteField(update)) return { compatibility: undefined, value: undefined };
+): CommerceJsonValue | undefined {
+  if (isCommerceDeleteField(update)) return undefined;
   if (isCommerceServerTimestamp(update)) {
-    return { compatibility: { timestampValue: timestampString(now) }, value: timestampMilliseconds(now) };
+    return timestampMilliseconds(now);
   }
   if (isCommerceTimestamp(update)) {
     if (!validTimestamp(update.value)) throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce timestamp.');
-    return {
-      compatibility: { timestampValue: timestampString(update.value) },
-      value: timestampMilliseconds(update.value),
-    };
+    return timestampMilliseconds(update.value);
   }
   if (isCommerceIncrement(update)) {
     if (!Number.isFinite(update.amount)) throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce increment.');
     const existing = typeof current === 'number' ? current : 0;
     const value = existing + update.amount;
     if (!Number.isFinite(value)) throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce increment.');
-    const compatibility = Number.isSafeInteger(value)
-      ? { integerValue: String(value) }
-      : { doubleValue: value };
-    return { compatibility, value };
+    return value;
   }
   if (isCommerceArrayUnion(update)) {
     const values = Array.isArray(current) ? cloneData(current) : [];
     for (const entry of update.values) {
-      if (!values.some((existing) => canonicalJson(existing) === canonicalJson(entry))) values.push(cloneData(entry));
+      const validated = validatedJsonValue(entry);
+      if (!values.some((existing) => canonicalJson(existing) === canonicalJson(validated))) values.push(validated);
     }
-    return { compatibility: encodeCompatibility(values, fieldPath), value: values };
+    return values;
   }
-  const value = cloneData(update);
-  const compatibility = timestampField(fieldPath) && isObject(currentCompatibility) &&
-    typeof currentCompatibility.timestampValue === 'string' && typeof value === 'number' &&
-    timestampMilliseconds(parseTimestampString(currentCompatibility.timestampValue) || timestampFromMilliseconds(value)) === value
-    ? currentCompatibility
-    : encodeCompatibility(value, fieldPath);
-  return { compatibility, value };
+  return validatedJsonValue(update);
+}
+
+function processedTimestampForUpdate(
+  currentTimestamp: CommerceTimestamp | null,
+  currentValue: CommerceJsonValue | undefined,
+  update: CommerceUpdateValue,
+  value: CommerceJsonValue | undefined,
+  now: CommerceTimestamp,
+): CommerceTimestamp | null {
+  if (isCommerceDeleteField(update)) return null;
+  if (isCommerceServerTimestamp(update)) return now;
+  if (isCommerceTimestamp(update)) return update.value;
+  if (typeof value !== 'number') return null;
+  if (currentTimestamp && value === currentValue) return currentTimestamp;
+  return timestampFromMilliseconds(value);
 }
 
 function parseTimestampString(value: string): CommerceTimestamp | null {
@@ -287,31 +268,24 @@ function parseTimestampString(value: string): CommerceTimestamp | null {
 
 function parseRow(row: DocumentRow): StoredDocument {
   let data: unknown;
-  let compatibilityFields: unknown;
   try {
     data = JSON.parse(row.document_json);
-    compatibilityFields = JSON.parse(row.fields_json);
   } catch {
     throw new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
   }
   const key = parseDocumentKey(row.document_kind, row.drop_id, row.document_id, row.document_path);
   if (
-    !isObject(data) || !isObject(compatibilityFields) || !key ||
+    !isObject(data) || !key ||
     !Number.isSafeInteger(row.version) || row.version < 1
   ) throw new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
   const projectedProcessedAt = row.processed_at_seconds === null && row.processed_at_nanos === null
     ? null
     : { seconds: row.processed_at_seconds, nanos: row.processed_at_nanos };
-  const compatibilityProcessedAt = isObject(compatibilityFields.processedAt) &&
-    typeof compatibilityFields.processedAt.timestampValue === 'string'
-    ? parseTimestampString(compatibilityFields.processedAt.timestampValue)
-    : null;
-  const processedAt = projectedProcessedAt || compatibilityProcessedAt;
+  const processedAt = projectedProcessedAt;
   if (processedAt && !validTimestamp(processedAt as CommerceTimestamp)) {
     throw new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
   }
   return {
-    compatibilityFields,
     createTime: row.create_time,
     data: data as CommerceDocumentData,
     key,
@@ -390,18 +364,33 @@ function ensureQuery(query: CommerceQuery): void {
   }
 }
 
-async function authority(db: D1Database): Promise<AuthorityRow> {
+export async function loadCommerceAuthorityControl(db: D1Database): Promise<CommerceAuthorityControl> {
   let row: AuthorityRow | null;
   try {
-    row = await db.prepare(`SELECT authority_state, documents_revision
+    row = await db.prepare(`SELECT authority_state, revision, documents_revision
       FROM commerce_authority_control WHERE singleton = 1`).first<AuthorityRow>();
   } catch {
     throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
   }
-  if (!row || row.authority_state !== 'd1' || !Number.isSafeInteger(row.documents_revision)) {
+  if (
+    !row || !['paused', 'd1'].includes(row.authority_state) ||
+    !Number.isSafeInteger(row.revision) || !Number.isSafeInteger(row.documents_revision)
+  ) {
     throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
   }
-  return row;
+  return {
+    state: row.authority_state,
+    revision: row.revision,
+    documentsRevision: row.documents_revision,
+  };
+}
+
+async function authority(db: D1Database): Promise<CommerceAuthorityControl> {
+  const control = await loadCommerceAuthorityControl(db);
+  if (control.state !== 'd1') {
+    throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
+  }
+  return control;
 }
 
 export class D1CommerceRepository {
@@ -470,10 +459,10 @@ export class CommerceUnitOfWork {
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
     ensureQuery(query);
     const control = await authority(this.db);
-    if (this.expectedDocumentsRevision !== null && this.expectedDocumentsRevision !== control.documents_revision) {
+    if (this.expectedDocumentsRevision !== null && this.expectedDocumentsRevision !== control.documentsRevision) {
       throw new CommerceWriteConflict();
     }
-    this.expectedDocumentsRevision = control.documents_revision;
+    this.expectedDocumentsRevision = control.documentsRevision;
     let sql = `SELECT ${DOCUMENT_COLUMNS} FROM commerce_documents WHERE document_kind = ?`;
     const bindings: Array<string | number | null> = [query.kind];
     if (query.dropId !== undefined) {
@@ -579,14 +568,13 @@ export class CommerceUnitOfWork {
         continue;
       }
       statements.push(this.db.prepare(`INSERT INTO commerce_documents (
-        document_path, document_kind, drop_id, document_id, fields_json, document_json,
+        document_path, document_kind, drop_id, document_id, document_json,
         version, create_time, update_time, processed_at_seconds, processed_at_nanos
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(document_path) DO UPDATE SET
         document_kind = excluded.document_kind,
         drop_id = excluded.drop_id,
         document_id = excluded.document_id,
-        fields_json = excluded.fields_json,
         document_json = excluded.document_json,
         version = excluded.version,
         create_time = excluded.create_time,
@@ -597,7 +585,6 @@ export class CommerceUnitOfWork {
         document.key.kind,
         document.key.dropId,
         document.key.documentId,
-        JSON.stringify(document.compatibilityFields),
         JSON.stringify(document.data),
         document.version,
         document.createTime,
@@ -674,11 +661,10 @@ export class CommerceUnitOfWork {
     const materialized = this.materializeDocument(data, now);
     const commitTime = timestampString(now);
     return {
-      compatibilityFields: materialized.compatibility,
       createTime: commitTime,
       data: materialized.data,
       key,
-      processedAt: this.processedTimestamp(materialized.compatibility),
+      processedAt: materialized.processedAt,
       updateTime: versionedTimestamp(commitTime, 1),
       version: 1,
     };
@@ -694,11 +680,10 @@ export class CommerceUnitOfWork {
     const version = (current?.version || 0) + 1;
     const commitTime = timestampString(now);
     return {
-      compatibilityFields: materialized.compatibility,
       createTime: current?.createTime || commitTime,
       data: materialized.data,
       key,
-      processedAt: this.processedTimestamp(materialized.compatibility),
+      processedAt: materialized.processedAt,
       updateTime: versionedTimestamp(commitTime, version),
       version,
     };
@@ -713,29 +698,25 @@ export class CommerceUnitOfWork {
     if (requireExisting && !current) throw new CommerceWriteConflict('failed-precondition');
     const now = timestampFromMilliseconds(this.nowMs);
     const data = current ? cloneData(current.data) : {};
-    const compatibilityFields = current ? cloneData(current.compatibilityFields) : {};
+    let processedAt = current?.processedAt || null;
     for (const [fieldPath, update] of Object.entries(updates)) {
       if (!fieldPath || fieldPath.split('.').some((part) => !part)) {
         throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce field path.');
       }
-      const result = materializeUpdate(
-        dataField(data, fieldPath) as CommerceJsonValue | undefined,
-        compatibilityField(compatibilityFields, fieldPath),
-        fieldPath,
-        update,
-        now,
-      );
-      setDataField(data, fieldPath, result.value);
-      setCompatibilityField(compatibilityFields, fieldPath, result.compatibility);
+      const currentValue = dataField(data, fieldPath) as CommerceJsonValue | undefined;
+      const value = materializeUpdate(currentValue, update, now);
+      setDataField(data, fieldPath, value);
+      if (fieldPath === 'processedAt') {
+        processedAt = processedTimestampForUpdate(processedAt, currentValue, update, value, now);
+      }
     }
     const version = (current?.version || 0) + 1;
     const commitTime = timestampString(now);
     return {
-      compatibilityFields,
       createTime: current?.createTime || commitTime,
       data,
       key,
-      processedAt: this.processedTimestamp(compatibilityFields),
+      processedAt,
       updateTime: versionedTimestamp(commitTime, version),
       version,
     };
@@ -744,23 +725,18 @@ export class CommerceUnitOfWork {
   private materializeDocument(
     data: CommerceDocumentWriteData,
     now: CommerceTimestamp,
-  ): { compatibility: Record<string, unknown>; data: CommerceDocumentData } {
+  ): { data: CommerceDocumentData; processedAt: CommerceTimestamp | null } {
     const materialized: CommerceDocumentData = {};
-    const compatibility: Record<string, unknown> = {};
+    let processedAt: CommerceTimestamp | null = null;
     for (const [field, value] of Object.entries(data)) {
-      const result = materializeUpdate(undefined, undefined, field, value, now);
-      if (result.value === undefined) throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce document value.');
-      materialized[field] = result.value;
-      compatibility[field] = result.compatibility;
+      const result = materializeUpdate(undefined, value, now);
+      if (result === undefined) throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce document value.');
+      materialized[field] = result;
+      if (field === 'processedAt') {
+        processedAt = processedTimestampForUpdate(null, undefined, value, result, now);
+      }
     }
-    return { compatibility, data: materialized };
-  }
-
-  private processedTimestamp(fields: Record<string, unknown>): CommerceTimestamp | null {
-    const value = fields.processedAt;
-    return isObject(value) && typeof value.timestampValue === 'string'
-      ? parseTimestampString(value.timestampValue)
-      : null;
+    return { data: materialized, processedAt };
   }
 }
 

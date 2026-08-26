@@ -68,12 +68,12 @@ test('wallet session resolution preserves bound and legacy wallet behavior', () 
     sessionData: null,
   }), { wallet: OWNER_ONE, source: 'legacy_uid' });
   assert.deepEqual(resolveWalletSessionBinding({
-    uid: 'firebase-uid',
+    uid: 'auth-uid',
     sessionExists: false,
     sessionData: null,
   }), { wallet: null, reason: 'legacy_uid_invalid' });
   assert.deepEqual(resolveWalletSessionBinding({
-    uid: 'firebase-uid',
+    uid: 'auth-uid',
     sessionExists: true,
     sessionData: { wallet: OWNER_TWO },
   }), { wallet: OWNER_TWO, source: 'session' });

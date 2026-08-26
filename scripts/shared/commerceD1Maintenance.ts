@@ -28,7 +28,7 @@ export type CommerceD1Document = {
 };
 
 export type CommerceD1Authority = {
-  state: 'firestore' | 'paused' | 'd1';
+  state: 'paused' | 'd1';
   revision: number;
   documentsRevision: number;
   pausedAtMs: number | null;
@@ -122,7 +122,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function commerceDocumentIdentity(path: string): {
+export function commerceD1DocumentIdentity(path: string): {
   documentId: string;
   dropId: string | null;
   kind: CommerceD1DocumentKind;
@@ -151,7 +151,7 @@ function commerceDocumentIdentity(path: string): {
 
 export function parseCommerceD1DocumentRow(row: CommerceD1Row): CommerceD1Document {
   const path = requiredString(row.document_path, 'Commerce D1 document path');
-  const identity = commerceDocumentIdentity(path);
+  const identity = commerceD1DocumentIdentity(path);
   if (!identity) return fail(`Commerce D1 document path is unsupported: ${path}.`);
   const kind = requiredString(row.document_kind, `${path} document kind`);
   const documentId = requiredString(row.document_id, `${path} document id`);
@@ -195,7 +195,7 @@ export function readRemoteCommerceAuthority(): CommerceD1Authority {
     FROM commerce_authority_control WHERE singleton = 1`);
   if (rows.length !== 1) return fail('Commerce D1 authority control is invalid.');
   const state = rows[0].authority_state;
-  if (state !== 'firestore' && state !== 'paused' && state !== 'd1') {
+  if (state !== 'paused' && state !== 'd1') {
     return fail('Commerce D1 authority state is invalid.');
   }
   return {

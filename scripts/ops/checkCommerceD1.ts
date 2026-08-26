@@ -1,7 +1,7 @@
 import { pathToFileURL } from 'node:url';
-import { commerceDocumentIdentity } from '../../cloud/workers/api/src/commerceDocumentStore.ts';
 import { canonicalizeCommerceIdentity } from '../shared/commerceIdentityCanonicalization.ts';
 import {
+  commerceD1DocumentIdentity,
   queryRemoteCommerceD1,
   safeInteger,
 } from '../shared/commerceD1Maintenance.ts';
@@ -46,6 +46,9 @@ export function checkCommerceD1(): Record<string, unknown> {
   if (!migrations.some((row) => String(row.name).endsWith('0008_canonicalize_identity_documents.sql'))) {
     fail('Commerce D1 identity canonicalization migration is missing.');
   }
+  if (!migrations.some((row) => String(row.name).endsWith('0009_remove_firestore_compatibility.sql'))) {
+    fail('Commerce D1 contract migration is missing.');
+  }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -54,27 +57,25 @@ export function checkCommerceD1(): Record<string, unknown> {
       'commerce_documents',
       'commerce_commit_guards',
       'commerce_wipe_guards',
-      'commerce_import_manifests',
-      'commerce_transactions',
-      'commerce_transaction_reads'
+      'commerce_import_manifests'
     ) ORDER BY name`);
-  if (authoritativeTables.length !== 7 || authoritativeTables.some((row) => row.strict !== 1)) {
+  if (authoritativeTables.length !== 5 || authoritativeTables.some((row) => row.strict !== 1)) {
     fail('Commerce D1 authoritative strict table inventory is invalid.');
   }
   const authorityRows = queryRemoteCommerceD1('SELECT * FROM commerce_authority_control');
   if (authorityRows.length !== 1) fail('Commerce D1 authority singleton is invalid.');
   const authority = authorityRows[0];
-  if (!['firestore', 'paused', 'd1'].includes(String(authority.authority_state))) {
+  if (!['paused', 'd1'].includes(String(authority.authority_state))) {
     fail('Commerce D1 authority state is invalid.');
   }
   safeInteger(authority.revision, 'Commerce authority revision');
   safeInteger(authority.documents_revision, 'Commerce document revision');
 
   const authoritativeDocuments = queryRemoteCommerceD1(`SELECT
-    document_path, document_kind, drop_id, document_id, fields_json, document_json
+    document_path, document_kind, drop_id, document_id, document_json
     FROM commerce_documents ORDER BY document_path`);
   for (const row of authoritativeDocuments) {
-    const identity = commerceDocumentIdentity(String(row.document_path));
+    const identity = commerceD1DocumentIdentity(String(row.document_path));
     if (
       !identity ||
       identity.kind !== row.document_kind ||
@@ -83,12 +84,8 @@ export function checkCommerceD1(): Record<string, unknown> {
     ) fail('Commerce D1 contains an invalid authoritative document identity.');
     let document: Record<string, unknown>;
     try {
-      const fields = JSON.parse(String(row.fields_json)) as unknown;
       const parsedDocument = JSON.parse(String(row.document_json)) as unknown;
-      if (
-        !fields || typeof fields !== 'object' || Array.isArray(fields) ||
-        !parsedDocument || typeof parsedDocument !== 'object' || Array.isArray(parsedDocument)
-      ) throw new Error('fields');
+      if (!parsedDocument || typeof parsedDocument !== 'object' || Array.isArray(parsedDocument)) throw new Error('fields');
       document = parsedDocument as Record<string, unknown>;
     } catch {
       fail('Commerce D1 contains invalid authoritative fields JSON.');
@@ -101,6 +98,34 @@ export function checkCommerceD1(): Record<string, unknown> {
       fail('Commerce D1 contains an invalid or legacy identity document after canonicalization.');
     }
   }
+
+  const removedState = queryRemoteCommerceD1(`SELECT
+    (SELECT COUNT(*) FROM pragma_table_info('commerce_documents') WHERE name = 'fields_json') AS fields_json_count,
+    (SELECT COUNT(*) FROM pragma_table_list
+      WHERE name IN ('commerce_transactions', 'commerce_transaction_reads')) AS transaction_table_count`);
+  if (
+    removedState.length !== 1 ||
+    safeInteger(removedState[0].fields_json_count, 'Commerce compatibility column count') !== 0 ||
+    safeInteger(removedState[0].transaction_table_count, 'Commerce transaction table count') !== 0
+  ) fail('Commerce D1 compatibility state remains after contract migration.');
+
+  const requiredTriggers = new Set([
+    'commerce_authority_transition_guard',
+    'commerce_authority_delete_guard',
+    'commerce_authority_d1_manifest_guard',
+    'commerce_authority_revision_guard',
+    'commerce_commit_guard_validate',
+    'commerce_wipe_guard_validate',
+    'commerce_documents_insert_authority_guard',
+    'commerce_documents_update_authority_guard',
+    'commerce_documents_delete_authority_guard',
+  ]);
+  const triggers = queryRemoteCommerceD1(`SELECT name FROM sqlite_master
+    WHERE type = 'trigger' AND name LIKE 'commerce_%' ORDER BY name`);
+  if (
+    triggers.length !== requiredTriggers.size ||
+    triggers.some((row) => !requiredTriggers.has(String(row.name)))
+  ) fail('Commerce D1 trigger inventory is invalid.');
 
   requireIndex(
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path

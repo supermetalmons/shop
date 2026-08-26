@@ -36,12 +36,18 @@ const migrationSql = [
   '0013_remove_firebase_auth_fallback.sql',
   '0014_auth_subject_bridge.sql',
   '0015_auth_subject_cutover.sql',
+  '0016_remove_migration_controls.sql',
 ]
   .map((name) => readFileSync(
     new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
     'utf8',
   ))
   .join('\n');
+
+const removeMigrationControlsSql = readFileSync(
+  new URL('../cloud/workers/api/ops-migrations/0016_remove_migration_controls.sql', import.meta.url),
+  'utf8',
+);
 
 function database(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
@@ -80,8 +86,8 @@ function integrityInput(
   const db = database();
   try {
     return {
-      anonymousAuthControl: queryRows(db, 'SELECT * FROM anonymous_auth_control'),
-      anonymousAuthControlColumns: queryRows(db, 'PRAGMA table_info(anonymous_auth_control)'),
+      authProviderRetirement: queryRows(db, 'SELECT * FROM auth_provider_retirement'),
+      authProviderRetirementColumns: queryRows(db, 'PRAGMA table_info(auth_provider_retirement)'),
       anonymousAuthSessionColumns: queryRows(db, 'PRAGMA table_info(anonymous_auth_sessions)'),
       anonymousAuthSessionCounts: queryRows(db, 'SELECT COUNT(*) AS anonymous_auth_session_count FROM anonymous_auth_sessions'),
       anonymousAuthSessionExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)'),
@@ -105,14 +111,13 @@ function integrityInput(
         { name: '0013_remove_firebase_auth_fallback.sql' },
         { name: '0014_auth_subject_bridge.sql' },
         { name: '0015_auth_subject_cutover.sql' },
+        { name: '0016_remove_migration_controls.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
         (SELECT COUNT(*) FROM profiles) AS profile_count,
         (SELECT COUNT(*) FROM profile_addresses) AS profile_address_count`),
       profileColumns: queryRows(db, 'PRAGMA table_info(profiles)'),
-      profileStorageControl: queryRows(db, 'SELECT * FROM profile_storage_control'),
-      profileStorageControlColumns: queryRows(db, 'PRAGMA table_info(profile_storage_control)'),
       quickCheck: queryRows(db, 'PRAGMA quick_check'),
       rateLimitBucketColumns: queryRows(db, 'PRAGMA table_info(rate_limit_buckets)'),
       revealSubmissionColumns: queryRows(db, 'PRAGMA table_info(reveal_submissions)'),
@@ -136,12 +141,10 @@ function integrityInput(
         FROM pragma_table_list
         WHERE
           schema = 'main' AND
-          name IN ('anonymous_auth_control', 'anonymous_auth_sessions', 'profile_addresses', 'profile_storage_control', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'wallet_session_storage_control', 'worker_controls')
+          name IN ('auth_provider_retirement', 'anonymous_auth_sessions', 'profile_addresses', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'worker_controls')
         ORDER BY name`),
       walletSessionColumns: queryRows(db, 'PRAGMA table_info(wallet_sessions)'),
       walletSessionCounts: queryRows(db, 'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions'),
-      walletSessionStorageControl: queryRows(db, 'SELECT * FROM wallet_session_storage_control'),
-      walletSessionStorageControlColumns: queryRows(db, 'PRAGMA table_info(wallet_session_storage_control)'),
       workerControlColumns: queryRows(db, 'PRAGMA table_info(worker_controls)'),
       ...overrides,
     };
@@ -160,20 +163,18 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
     assert.deepEqual(controls, [controlRow()]);
     const tables = queryRows(
       db,
-      "SELECT name, strict FROM pragma_table_list WHERE name IN ('anonymous_auth_control', 'anonymous_auth_sessions', 'profile_addresses', 'profile_storage_control', 'profiles', 'worker_controls', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'wallet_session_storage_control') ORDER BY name",
+      "SELECT name, strict FROM pragma_table_list WHERE name IN ('auth_provider_retirement', 'anonymous_auth_sessions', 'profile_addresses', 'profiles', 'worker_controls', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions') ORDER BY name",
     );
     assert.deepEqual(tables, [
-      { name: 'anonymous_auth_control', strict: 1 },
       { name: 'anonymous_auth_sessions', strict: 1 },
+      { name: 'auth_provider_retirement', strict: 1 },
       { name: 'profile_addresses', strict: 1 },
-      { name: 'profile_storage_control', strict: 1 },
       { name: 'profiles', strict: 1 },
       { name: 'rate_limit_buckets', strict: 1 },
       { name: 'reveal_submission_storage_control', strict: 1 },
       { name: 'reveal_submissions', strict: 1 },
       { name: 'staff_auth_challenges', strict: 1 },
       { name: 'staff_auth_sessions', strict: 1 },
-      { name: 'wallet_session_storage_control', strict: 1 },
       { name: 'wallet_sessions', strict: 1 },
       { name: 'worker_controls', strict: 1 },
     ]);
@@ -188,6 +189,73 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
   } finally {
     db.close();
   }
+});
+
+test('final Ops cutover preserves sessions, reveals, and retirement timestamps exactly', () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(migrationSql.replace(removeMigrationControlsSql, ''));
+  const insertWallet = db.prepare(`INSERT INTO wallet_sessions (
+    auth_subject, wallet, expires_at_ms, updated_at_ms, wallet_revision,
+    reconcile_lease_id, reconcile_lease_expires_at_ms
+  ) VALUES (?, '11111111111111111111111111111111', 253402300799999, ?, ?, ?, ?)`);
+  for (let index = 0; index < 1_205; index += 1) {
+    const leased = index === 1_204;
+    insertWallet.run(
+      `subject-${index}`,
+      1_700_000_000_000 + index,
+      index + 1,
+      leased ? '00000000-0000-4000-8000-000000000001' : null,
+      leased ? 1_700_000_120_000 : null,
+    );
+  }
+  const insertAuth = db.prepare(`INSERT INTO anonymous_auth_sessions (
+    session_id, secret_hash, auth_subject, origin_hostname,
+    created_at_ms, refreshed_at_ms, expires_at_ms
+  ) VALUES (?, ?, ?, 'mons.shop', 1, 1, 1000)`);
+  for (let index = 0; index < 55; index += 1) {
+    const suffix = String(index).padStart(12, '0');
+    insertAuth.run(
+      `10000000-0000-4000-8000-${suffix}`,
+      index.toString(16).padStart(64, '0'),
+      `anon:10000000-0000-4000-8000-${suffix}`,
+    );
+  }
+  const insertReveal = db.prepare(`INSERT INTO reveal_submissions (
+    drop_id, box_asset_id, schema_version, owner_wallet, signature,
+    recent_blockhash, blockhash_context_slot, dude_ids_json,
+    reservation_id, status, revision, created_at_ms, updated_at_ms, confirmed_at_ms
+  ) VALUES ('baseline', ?, 1, ?, ?, ?, 1, '[1]', ?, 'confirmed', 1, 1, 1, 1)`);
+  for (let index = 0; index < 14; index += 1) {
+    insertReveal.run(
+      String(index).padStart(32, '0'),
+      '11111111111111111111111111111111',
+      '2'.repeat(64),
+      '3'.repeat(32),
+      `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+    );
+  }
+  const walletBefore = queryRows(db, 'SELECT * FROM wallet_sessions ORDER BY auth_subject');
+  const authBefore = queryRows(db, 'SELECT * FROM anonymous_auth_sessions ORDER BY session_id');
+  const revealBefore = queryRows(db, 'SELECT * FROM reveal_submissions ORDER BY box_asset_id');
+  const controlBefore = queryRows(db, `SELECT singleton, paused, revision, created_at_ms, updated_at_ms, cutover_at_ms
+    FROM reveal_submission_storage_control`);
+  const retirementBefore = queryRows(db, `SELECT revision, created_at_ms, updated_at_ms,
+    firebase_disabled_at_ms FROM anonymous_auth_control`)[0];
+  db.exec(removeMigrationControlsSql);
+  assert.deepEqual(queryRows(db, 'SELECT * FROM wallet_sessions ORDER BY auth_subject'), walletBefore);
+  assert.deepEqual(queryRows(db, 'SELECT * FROM anonymous_auth_sessions ORDER BY session_id'), authBefore);
+  assert.deepEqual(queryRows(db, 'SELECT * FROM reveal_submissions ORDER BY box_asset_id'), revealBefore);
+  assert.deepEqual(queryRows(db, 'SELECT * FROM reveal_submission_storage_control'), controlBefore);
+  assert.deepEqual(queryRows(db, 'SELECT * FROM auth_provider_retirement'), [{
+    singleton: 1,
+    revision: retirementBefore.revision,
+    created_at_ms: retirementBefore.created_at_ms,
+    updated_at_ms: retirementBefore.updated_at_ms,
+    legacy_provider_disabled_at_ms: retirementBefore.firebase_disabled_at_ms,
+  }]);
+  assert.equal(queryRows(db, `SELECT name FROM sqlite_schema
+    WHERE name IN ('profile_storage_control', 'wallet_session_storage_control', 'anonymous_auth_control')`).length, 0);
+  db.close();
 });
 
 test('ops migration enforces control and rate-limit invariants', () => {
@@ -285,17 +353,8 @@ test('ops migration enforces control and rate-limit invariants', () => {
     assert.throws(() =>
       db.exec(`UPDATE worker_controls SET paused = 'false'`),
     );
-    assert.throws(() =>
-      db.exec(`UPDATE profile_storage_control SET read_source = 'firestore_fallback'`),
-    );
-    assert.throws(() =>
-      db.exec(`DELETE FROM profile_storage_control`),
-    );
-    assert.throws(() =>
-      db.exec(`INSERT OR REPLACE INTO profile_storage_control (
-        singleton, read_source, updated_at_ms
-      ) VALUES (1, 'firestore_fallback', 0)`),
-    );
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE name = 'profile_storage_control'").get().count, 0);
+    assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_schema WHERE name = 'wallet_session_storage_control'").get().count, 0);
     db.exec(`INSERT INTO profiles VALUES (
       '11111111111111111111111111111111', NULL, 1, 1
     )`);
@@ -321,13 +380,8 @@ test('ops migration enforces control and rate-limit invariants', () => {
     assert.throws(() => db.exec(`UPDATE profile_addresses SET encrypted = 'changed'`));
     assert.throws(() => db.exec(`DELETE FROM profile_addresses`));
     assert.throws(() => db.exec(`DELETE FROM profiles`));
-    assert.throws(() => db.exec(`UPDATE anonymous_auth_control SET
-      firebase_fallback_enabled = 1,
-      revision = revision + 1,
-      updated_at_ms = 2,
-      firebase_disabled_at_ms = NULL
-      WHERE singleton = 1`));
-    assert.throws(() => db.exec('DELETE FROM anonymous_auth_control'));
+    assert.throws(() => db.exec('UPDATE auth_provider_retirement SET revision = revision + 1'));
+    assert.throws(() => db.exec('DELETE FROM auth_provider_retirement'));
   } finally {
     db.close();
   }
@@ -337,17 +391,15 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
   const healthy = integrityInput();
   const report = assertOpsD1Integrity(healthy);
   assert.deepEqual(report, {
-    anonymousAuth: {
-      firebaseFallbackEnabled: false,
+    authProviderRetirement: {
       revision: 2,
       createdAtMs: 0,
-      updatedAtMs: report.anonymousAuth.updatedAtMs,
-      firebaseDisabledAtMs: report.anonymousAuth.firebaseDisabledAtMs,
+      updatedAtMs: report.authProviderRetirement.updatedAtMs,
+      legacyProviderDisabledAtMs: report.authProviderRetirement.legacyProviderDisabledAtMs,
     },
     anonymousAuthSessionCount: 0,
     profileAddressCount: 0,
     profileCount: 0,
-    profileStorageSource: 'd1',
     readyNotifications: {
       controlKey: 'ready_notifications',
       paused: false,
@@ -360,22 +412,18 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
     revealSubmissionCount: 0,
     revealSubmissionStorage: {
       paused: false,
-      source: 'd1',
       revision: 3,
       updatedAtMs: report.revealSubmissionStorage.updatedAtMs,
       cutoverAtMs: report.revealSubmissionStorage.cutoverAtMs,
     },
     walletSessionCount: 0,
-    walletSessionStorage: {
-      source: 'd1',
-      revision: 3,
-      updatedAtMs: report.walletSessionStorage.updatedAtMs,
-    },
   });
-  assert.ok(report.walletSessionStorage.updatedAtMs > 0);
   assert.ok(report.revealSubmissionStorage.updatedAtMs > 0);
-  assert.ok(report.anonymousAuth.updatedAtMs > 0);
-  assert.equal(report.anonymousAuth.firebaseDisabledAtMs, report.anonymousAuth.updatedAtMs);
+  assert.ok(report.authProviderRetirement.updatedAtMs > 0);
+  assert.equal(
+    report.authProviderRetirement.legacyProviderDisabledAtMs,
+    report.authProviderRetirement.updatedAtMs,
+  );
   assert.equal(
     report.revealSubmissionStorage.cutoverAtMs,
     report.revealSubmissionStorage.updatedAtMs,
@@ -418,24 +466,19 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
   );
   assert.throws(
     () => assertOpsD1Integrity(integrityInput({
-      anonymousAuthControl: [{
+      authProviderRetirement: [{
         singleton: 1,
-        firebase_fallback_enabled: 1,
         revision: 1,
         created_at_ms: 0,
         updated_at_ms: 0,
-        firebase_disabled_at_ms: null,
+        legacy_provider_disabled_at_ms: 1,
       }],
     })),
-    /permanently disabled/,
+    /timestamps are invalid/,
   );
   assert.throws(
     () => assertOpsD1Integrity(integrityInput({ foreignKeyCheck: [{ table: 'profile_addresses' }] })),
     /foreign_key_check/,
-  );
-  assert.throws(
-    () => assertOpsD1Integrity(integrityInput({ profileStorageControl: [] })),
-    /profile storage control/,
   );
   assert.throws(
     () => assertOpsD1Integrity(integrityInput({ schema: [] })),
@@ -671,7 +714,6 @@ test('reveal-submission operator exposes only forward D1 controls', async () => 
   const baseControl = parseRevealSubmissionsControl({
     singleton: 1,
     paused: 0,
-    storage_source: 'd1',
     revision: 4,
     updated_at_ms: 1_000,
     cutover_at_ms: 500,
@@ -679,8 +721,7 @@ test('reveal-submission operator exposes only forward D1 controls', async () => 
   assert.throws(
     () => parseRevealSubmissionsControl({
       singleton: 1,
-      paused: 1,
-      storage_source: 'firestore',
+      paused: 2,
       revision: 1,
       updated_at_ms: 0,
       cutover_at_ms: null,

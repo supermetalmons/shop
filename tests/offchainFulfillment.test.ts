@@ -1327,7 +1327,6 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
   assert.ok(claimCreate);
   assert.match(claimCreate.data.code, /^[A-Z]{6}-\d{10}$/);
   assert.equal(claimCreate.data.authSubject, 'anon_uid_456');
-  assert.doesNotMatch(JSON.stringify(creates), /firebase/i);
   assert.equal(claimCreate.data.namespace, STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE);
   assert.equal(claimCreate.data.status, 'unclaimed');
   assert.equal(claimCreate.data.boxId, 16);

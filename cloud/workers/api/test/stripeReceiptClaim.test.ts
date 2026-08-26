@@ -44,7 +44,7 @@ function env(overrides: Partial<Record<'COSIGNER_SECRET' | 'HELIUS_API_KEY', str
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
     providerFetch: async () => { throw new Error('unexpected provider fetch'); },
     nowMs: () => 1_700_000_000_000,
     timeoutMs: 1_000,
@@ -200,7 +200,7 @@ test('Stripe receipt claim route preserves the authenticated request and exact r
     () => undefined,
     dependencies({
       verifyIdentity: async () => {
-        observedUid = 'firebase-uid';
+        observedUid = 'auth-uid';
         return { uid: observedUid };
       },
       claim: async (body: unknown) => {
@@ -209,7 +209,7 @@ test('Stripe receipt claim route preserves the authenticated request and exact r
       },
     }),
   );
-  assert.equal(observedUid, 'firebase-uid');
+  assert.equal(observedUid, 'auth-uid');
   assert.deepEqual(observedBody, { code: CODE, recipient: RECIPIENT });
   assert.equal(result.response.status, 200);
   assert.equal(result.authOutcome, 'accepted');
@@ -278,15 +278,15 @@ test('Stripe receipt claim handler returns its deadline and tracks unfinished cl
       claim: async (
         _body: unknown,
         _env: unknown,
-        firestore: { signal: AbortSignal },
+        commerce: { signal: AbortSignal },
         _provider: unknown,
         onContext: (context: { dropId: string; deliveryId: number }) => void,
       ) => {
         onContext({ dropId: DROP_ID, deliveryId: DELIVERY_ID });
         await new Promise<void>((resolve) => {
           const onAbort = () => { aborted = true; resolve(); };
-          firestore.signal.addEventListener('abort', onAbort, { once: true });
-          if (firestore.signal.aborted) onAbort();
+          commerce.signal.addEventListener('abort', onAbort, { once: true });
+          if (commerce.signal.aborted) onAbort();
         });
         throw new StripeReceiptClaimError('deadline-exceeded', 'Timed out.');
       },

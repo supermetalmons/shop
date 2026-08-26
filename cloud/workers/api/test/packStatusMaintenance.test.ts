@@ -139,7 +139,7 @@ test('authoritative rebuild SQL updates one allowlisted summary and metadata gen
   assert.equal((sql.match(/cache_generation = cache_generation \+ 1/g) || []).length, 1);
   assert.doesNotMatch(sql, /pack_status_rollout/);
   assert.doesNotMatch(sql, /pack_status_events/);
-  assert.doesNotMatch(sql, /firestore/i);
+  assert.doesNotMatch(sql, /commerce/i);
   assert.equal((sql.match(/total_initial_supply = excluded\.total_initial_supply/g) || []).length, 1);
   assert.throws(() => buildD1SummaryRebuildSql({
     dropId: 'unsupported',

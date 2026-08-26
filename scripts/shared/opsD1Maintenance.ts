@@ -21,6 +21,7 @@ const OPS_D1_MIGRATIONS = [
   '0013_remove_firebase_auth_fallback.sql',
   '0014_auth_subject_bridge.sql',
   '0015_auth_subject_cutover.sql',
+  '0016_remove_migration_controls.sql',
 ] as const;
 
 const PRODUCTION_MIN_PROFILE_COUNT = 690;
@@ -40,31 +41,23 @@ export type ReadyNotificationsControl = {
   cursorUpdatedAtMs: number | null;
 };
 
-export type WalletSessionStorageControl = {
-  source: 'd1';
-  revision: number;
-  updatedAtMs: number;
-};
-
 export type RevealSubmissionStorageControl = {
   paused: boolean;
-  source: 'd1';
   revision: number;
   updatedAtMs: number;
   cutoverAtMs: number | null;
 };
 
-export type AnonymousAuthControl = {
-  firebaseFallbackEnabled: boolean;
+export type AuthProviderRetirement = {
   revision: number;
   createdAtMs: number;
   updatedAtMs: number;
-  firebaseDisabledAtMs: number | null;
+  legacyProviderDisabledAtMs: number;
 };
 
 export type OpsD1IntegrityInput = {
-  anonymousAuthControl: OpsD1Row[];
-  anonymousAuthControlColumns: OpsD1Row[];
+  authProviderRetirement: OpsD1Row[];
+  authProviderRetirementColumns: OpsD1Row[];
   anonymousAuthSessionColumns: OpsD1Row[];
   anonymousAuthSessionCounts: OpsD1Row[];
   anonymousAuthSessionExpiryIndexColumns: OpsD1Row[];
@@ -76,8 +69,6 @@ export type OpsD1IntegrityInput = {
   profileAddressColumns: OpsD1Row[];
   profileCounts: OpsD1Row[];
   profileColumns: OpsD1Row[];
-  profileStorageControl: OpsD1Row[];
-  profileStorageControlColumns: OpsD1Row[];
   quickCheck: OpsD1Row[];
   rateLimitBucketColumns: OpsD1Row[];
   revealSubmissionColumns: OpsD1Row[];
@@ -89,22 +80,18 @@ export type OpsD1IntegrityInput = {
   tableList: OpsD1Row[];
   walletSessionColumns: OpsD1Row[];
   walletSessionCounts: OpsD1Row[];
-  walletSessionStorageControl: OpsD1Row[];
-  walletSessionStorageControlColumns: OpsD1Row[];
   workerControlColumns: OpsD1Row[];
 };
 
 export type OpsD1IntegrityReport = {
-  anonymousAuth: AnonymousAuthControl;
+  authProviderRetirement: AuthProviderRetirement;
   anonymousAuthSessionCount: number;
   profileAddressCount: number;
   profileCount: number;
-  profileStorageSource: 'd1';
   readyNotifications: ReadyNotificationsControl;
   revealSubmissionCount: number;
   revealSubmissionStorage: RevealSubmissionStorageControl;
   walletSessionCount: number;
-  walletSessionStorage: WalletSessionStorageControl;
 };
 
 type OpsD1IntegrityMinimums = {
@@ -128,38 +115,14 @@ const expectedSchema = new Map<
   string,
   { fingerprint: string; type: string; tableName: string }
 >([
-  [
-    'anonymous_auth_control',
-    {
-      fingerprint: 'fa4b29336ebad0930bf26e8421590b4d8079127b47768c72ccf578b60feee74c',
-      type: 'table',
-      tableName: 'anonymous_auth_control',
-    },
-  ],
-  [
-    'anonymous_auth_control_delete_guard',
-    {
-      fingerprint: '415d64090bc1334239d038c17c1b5ebe8741977363f7e3d2c84f5b4e78ebc6ac',
-      type: 'trigger',
-      tableName: 'anonymous_auth_control',
-    },
-  ],
-  [
-    'anonymous_auth_control_insert_guard',
-    {
-      fingerprint: '395468b34b71488e34fc11558cf8ba3e21675f65ff6a5b34ea67813a373bd452',
-      type: 'trigger',
-      tableName: 'anonymous_auth_control',
-    },
-  ],
-  [
-    'anonymous_auth_control_update_guard',
-    {
-      fingerprint: '77b839aeefea21985bb17480e75350ea7eb32f2ef677d3f128a81603ca5b223b',
-      type: 'trigger',
-      tableName: 'anonymous_auth_control',
-    },
-  ],
+  ['auth_provider_retirement', { fingerprint: '05a3cd026372bf98dbadbc764b028930f9f1fcf3294a542efd2c6b08fe5d39bc', type: 'table', tableName: 'auth_provider_retirement' }],
+  ['auth_provider_retirement_delete_guard', { fingerprint: 'a8c936557fa24491dbc92b5f99324cb68633866b79426b226e78f045ba81969d', type: 'trigger', tableName: 'auth_provider_retirement' }],
+  ['auth_provider_retirement_insert_guard', { fingerprint: '025c6efe39d94b9e03fe87a14f468de810ddc353f6b143a6a6114dc988c30edc', type: 'trigger', tableName: 'auth_provider_retirement' }],
+  ['auth_provider_retirement_update_guard', { fingerprint: '85cb4a800c0d199e055d6c0b7ad0dffb3009003104027b69544d9c0723667903', type: 'trigger', tableName: 'auth_provider_retirement' }],
+  ['reveal_submission_storage_control', { fingerprint: 'c56576538e111e7dcb61ca0159f55af0487e30d389c125fdf914e4075748f30e', type: 'table', tableName: 'reveal_submission_storage_control' }],
+  ['reveal_submission_control_delete_guard', { fingerprint: '618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
+  ['reveal_submission_control_insert_guard', { fingerprint: 'b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
+  ['reveal_submission_control_update_guard', { fingerprint: 'd523fb91e74871a128fff75ec6687b8617309ad10b0287905ae35f2f0acc51cb', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
   [
     'anonymous_auth_sessions',
     {
@@ -233,46 +196,6 @@ const expectedSchema = new Map<
     },
   ],
   [
-    'reveal_submission_storage_control',
-    {
-      fingerprint: 'a96ae38f775189e18221ec8ddf2e7c20de8857f588eaa0019f1c0369dbd42505',
-      type: 'table',
-      tableName: 'reveal_submission_storage_control',
-    },
-  ],
-  [
-    'reveal_submission_storage_d1_immutable_guard',
-    {
-      fingerprint: '1a229715b81eeeaec5911d8c21aaa296fe858e513700109a0e30be5538babb78',
-      type: 'trigger',
-      tableName: 'reveal_submission_storage_control',
-    },
-  ],
-  [
-    'reveal_submission_storage_delete_guard',
-    {
-      fingerprint: '71aaffadef67b9c0fe2394c6601b4b97c47925df014ad534d79b7eae41120178',
-      type: 'trigger',
-      tableName: 'reveal_submission_storage_control',
-    },
-  ],
-  [
-    'reveal_submission_storage_insert_guard',
-    {
-      fingerprint: 'f2c687e87e40f40582ef0b182d38ad0b5c8650ac5bbaa85cc86f5fae8081b13e',
-      type: 'trigger',
-      tableName: 'reveal_submission_storage_control',
-    },
-  ],
-  [
-    'reveal_submission_storage_update_guard',
-    {
-      fingerprint: '70a75dc47b5348215428860c8daf1c33010947f2de67484d54983c7edd68fa6c',
-      type: 'trigger',
-      tableName: 'reveal_submission_storage_control',
-    },
-  ],
-  [
     'reveal_submissions',
     {
       fingerprint: 'c38f2cc6730267cd001cd0ff72fe77e5fd282d13fa7f26d010c03e08223cf09c',
@@ -329,38 +252,6 @@ const expectedSchema = new Map<
     },
   ],
   [
-    'profile_storage_control',
-    {
-      fingerprint: '0278093932cf6724c1b08cd05ae33b800d96a2eb32951dcd1c5569fc88be8972',
-      type: 'table',
-      tableName: 'profile_storage_control',
-    },
-  ],
-  [
-    'profile_storage_delete_guard',
-    {
-      fingerprint: 'c3382b13d0c57b4304d56cb883f7e71f3da47c180fe8a595d76ee52f2cefd9cb',
-      type: 'trigger',
-      tableName: 'profile_storage_control',
-    },
-  ],
-  [
-    'profile_storage_insert_guard',
-    {
-      fingerprint: '95a0fa6fa01ef5114a3222a5033dc0f6785fa5e97243b2a16bddb3f75c86a2d9',
-      type: 'trigger',
-      tableName: 'profile_storage_control',
-    },
-  ],
-  [
-    'profile_storage_source_immutable',
-    {
-      fingerprint: '04043c620da863760a2ee64bba4422bd54ed52a0a277ae14f24b04e2a3502165',
-      type: 'trigger',
-      tableName: 'profile_storage_control',
-    },
-  ],
-  [
     'profiles',
     {
       fingerprint: '44bd3280983418705513ff1a0003f8b1a83f849dbd74155f4322691d2ceb9135',
@@ -382,54 +273,6 @@ const expectedSchema = new Map<
       fingerprint: '0f23fc84abcf76475c691f58fee9c23737b7c9d304aeea0c7a2031e3055d2aa9',
       type: 'index',
       tableName: 'rate_limit_buckets',
-    },
-  ],
-  [
-    'wallet_session_storage_control',
-    {
-      fingerprint: '00c90a3be80876d638deda8ba490605bf9a950bf5e6e3781e061e323d777f4d7',
-      type: 'table',
-      tableName: 'wallet_session_storage_control',
-    },
-  ],
-  [
-    'wallet_session_storage_delete_guard',
-    {
-      fingerprint: '6a139510dbde42ed8087610ea4911aa7d32f7d5fb5ff268c19bfb8bc0e011c13',
-      type: 'trigger',
-      tableName: 'wallet_session_storage_control',
-    },
-  ],
-  [
-    'wallet_session_storage_d1_immutable_guard',
-    {
-      fingerprint: 'c2d243dfc580c0cf2012daa570b506d44c0c3c90b054eaf8e013ee91661d6d11',
-      type: 'trigger',
-      tableName: 'wallet_session_storage_control',
-    },
-  ],
-  [
-    'wallet_session_storage_insert_guard',
-    {
-      fingerprint: '0c7cc2320652eedabc0e3badf2775243f8e0acbdf83c3072454426aace43ab2e',
-      type: 'trigger',
-      tableName: 'wallet_session_storage_control',
-    },
-  ],
-  [
-    'wallet_session_storage_transition_guard',
-    {
-      fingerprint: '14b179d795a5bee9ba9138dc727961289cf88196c6278c26098222756b4a7ae1',
-      type: 'trigger',
-      tableName: 'wallet_session_storage_control',
-    },
-  ],
-  [
-    'wallet_session_storage_update_guard',
-    {
-      fingerprint: 'afe499cf6b9eb54bc4af718d00d450a206b3fa6e45f6d424a94b0d1030d15684',
-      type: 'trigger',
-      tableName: 'wallet_session_storage_control',
     },
   ],
   [
@@ -477,13 +320,12 @@ const expectedAnonymousAuthSessionColumns: readonly ExpectedColumn[] = [
   ['expires_at_ms', 'INTEGER', 1, 0],
 ];
 
-const expectedAnonymousAuthControlColumns: readonly ExpectedColumn[] = [
+const expectedAuthProviderRetirementColumns: readonly ExpectedColumn[] = [
   ['singleton', 'INTEGER', 1, 1],
-  ['firebase_fallback_enabled', 'INTEGER', 1, 0],
   ['revision', 'INTEGER', 1, 0],
   ['created_at_ms', 'INTEGER', 1, 0],
   ['updated_at_ms', 'INTEGER', 1, 0],
-  ['firebase_disabled_at_ms', 'INTEGER', 0, 0],
+  ['legacy_provider_disabled_at_ms', 'INTEGER', 1, 0],
 ];
 
 const expectedRateLimitBucketColumns: readonly ExpectedColumn[] = [
@@ -519,12 +361,6 @@ const expectedProfileAddressColumns: readonly ExpectedColumn[] = [
   ['updated_at_ms', 'INTEGER', 1, 0],
 ];
 
-const expectedProfileStorageControlColumns: readonly ExpectedColumn[] = [
-  ['singleton', 'INTEGER', 1, 1],
-  ['read_source', 'TEXT', 1, 0],
-  ['updated_at_ms', 'INTEGER', 1, 0],
-];
-
 const expectedWalletSessionColumns: readonly ExpectedColumn[] = [
   ['auth_subject', 'TEXT', 1, 1],
   ['wallet', 'TEXT', 1, 0],
@@ -533,13 +369,6 @@ const expectedWalletSessionColumns: readonly ExpectedColumn[] = [
   ['wallet_revision', 'INTEGER', 1, 0],
   ['reconcile_lease_id', 'TEXT', 0, 0],
   ['reconcile_lease_expires_at_ms', 'INTEGER', 0, 0],
-];
-
-const expectedWalletSessionStorageControlColumns: readonly ExpectedColumn[] = [
-  ['singleton', 'INTEGER', 1, 1],
-  ['storage_source', 'TEXT', 1, 0],
-  ['revision', 'INTEGER', 1, 0],
-  ['updated_at_ms', 'INTEGER', 1, 0],
 ];
 
 const expectedRevealSubmissionColumns: readonly ExpectedColumn[] = [
@@ -562,11 +391,10 @@ const expectedRevealSubmissionColumns: readonly ExpectedColumn[] = [
 const expectedRevealSubmissionStorageControlColumns: readonly ExpectedColumn[] = [
   ['singleton', 'INTEGER', 1, 1],
   ['paused', 'INTEGER', 1, 0],
-  ['storage_source', 'TEXT', 1, 0],
   ['revision', 'INTEGER', 1, 0],
   ['created_at_ms', 'INTEGER', 1, 0],
   ['updated_at_ms', 'INTEGER', 1, 0],
-  ['cutover_at_ms', 'INTEGER', 0, 0],
+  ['cutover_at_ms', 'INTEGER', 1, 0],
 ];
 
 function fail(message: string): never {
@@ -772,30 +600,12 @@ export function parseReadyNotificationsControl(
   };
 }
 
-function parseWalletSessionStorageControl(
-  row: OpsD1Row,
-): WalletSessionStorageControl {
-  const source = row.storage_source;
-  if (source !== 'd1') {
-    return fail('Wallet-session storage source must be d1.');
-  }
-  if (row.singleton !== 1) {
-    return fail('Wallet-session storage singleton is invalid.');
-  }
-  return {
-    source,
-    revision: safeInteger(row.revision, 'Wallet-session storage revision', 1),
-    updatedAtMs: safeInteger(row.updated_at_ms, 'Wallet-session storage update timestamp'),
-  };
-}
-
 function parseRevealSubmissionStorageControl(
   row: OpsD1Row,
 ): RevealSubmissionStorageControl {
   if (
     row.singleton !== 1 ||
-    (row.paused !== 0 && row.paused !== 1) ||
-    row.storage_source !== 'd1'
+    (row.paused !== 0 && row.paused !== 1)
   ) return fail('Reveal-submission storage control is invalid.');
   const revision = safeInteger(row.revision, 'Reveal-submission storage revision', 1);
   const updatedAtMs = safeInteger(row.updated_at_ms, 'Reveal-submission storage update timestamp');
@@ -807,34 +617,30 @@ function parseRevealSubmissionStorageControl(
   ) return fail('Reveal-submission cutover state is invalid.');
   return {
     paused: row.paused === 1,
-    source: row.storage_source,
     revision,
     updatedAtMs,
     cutoverAtMs,
   };
 }
 
-function parseAnonymousAuthControl(row: OpsD1Row): AnonymousAuthControl {
-  if (
-    row.singleton !== 1 ||
-    (row.firebase_fallback_enabled !== 0 && row.firebase_fallback_enabled !== 1)
-  ) return fail('Anonymous-auth control is invalid.');
-  const createdAtMs = safeInteger(row.created_at_ms, 'Anonymous-auth creation timestamp');
-  const updatedAtMs = safeInteger(row.updated_at_ms, 'Anonymous-auth update timestamp');
-  const firebaseDisabledAtMs = row.firebase_disabled_at_ms === null
-    ? null
-    : safeInteger(row.firebase_disabled_at_ms, 'Anonymous-auth Firebase disable timestamp');
+function parseAuthProviderRetirement(row: OpsD1Row): AuthProviderRetirement {
+  if (row.singleton !== 1) return fail('Auth-provider retirement record is invalid.');
+  const createdAtMs = safeInteger(row.created_at_ms, 'Auth-provider retirement creation timestamp');
+  const updatedAtMs = safeInteger(row.updated_at_ms, 'Auth-provider retirement update timestamp');
+  const legacyProviderDisabledAtMs = safeInteger(
+    row.legacy_provider_disabled_at_ms,
+    'Legacy-provider disable timestamp',
+  );
   if (
     updatedAtMs < createdAtMs ||
-    (row.firebase_fallback_enabled === 1) !== (firebaseDisabledAtMs === null) ||
-    (firebaseDisabledAtMs !== null && (firebaseDisabledAtMs < createdAtMs || firebaseDisabledAtMs > updatedAtMs))
-  ) return fail('Anonymous-auth control timestamps are invalid.');
+    legacyProviderDisabledAtMs < createdAtMs ||
+    legacyProviderDisabledAtMs > updatedAtMs
+  ) return fail('Auth-provider retirement timestamps are invalid.');
   return {
-    firebaseFallbackEnabled: row.firebase_fallback_enabled === 1,
-    revision: safeInteger(row.revision, 'Anonymous-auth revision', 1),
+    revision: safeInteger(row.revision, 'Auth-provider retirement revision', 1),
     createdAtMs,
     updatedAtMs,
-    firebaseDisabledAtMs,
+    legacyProviderDisabledAtMs,
   };
 }
 
@@ -869,9 +675,9 @@ export function assertOpsD1Integrity(
     'anonymous_auth_sessions',
   );
   assertExactColumns(
-    input.anonymousAuthControlColumns,
-    expectedAnonymousAuthControlColumns,
-    'anonymous_auth_control',
+    input.authProviderRetirementColumns,
+    expectedAuthProviderRetirementColumns,
+    'auth_provider_retirement',
   );
   assertExactColumns(
     input.workerControlColumns,
@@ -902,11 +708,6 @@ export function assertOpsD1Integrity(
     'profile_addresses',
   );
   assertExactColumns(
-    input.profileStorageControlColumns,
-    expectedProfileStorageControlColumns,
-    'profile_storage_control',
-  );
-  assertExactColumns(
     input.rateLimitBucketColumns,
     expectedRateLimitBucketColumns,
     'rate_limit_buckets',
@@ -915,11 +716,6 @@ export function assertOpsD1Integrity(
     input.walletSessionColumns,
     expectedWalletSessionColumns,
     'wallet_sessions',
-  );
-  assertExactColumns(
-    input.walletSessionStorageControlColumns,
-    expectedWalletSessionStorageControlColumns,
-    'wallet_session_storage_control',
   );
   assertExactColumns(
     input.revealSubmissionColumns,
@@ -935,41 +731,23 @@ export function assertOpsD1Integrity(
   if (input.controls.length !== 1) {
     return fail('Ops D1 must contain exactly one worker control.');
   }
-  if (input.profileStorageControl.length !== 1) {
-    return fail('Ops D1 must contain exactly one profile storage control.');
-  }
-  if (input.walletSessionStorageControl.length !== 1) {
-    return fail('Ops D1 must contain exactly one wallet-session storage control.');
-  }
   if (input.revealSubmissionStorageControl.length !== 1) {
     return fail('Ops D1 must contain exactly one reveal-submission storage control.');
   }
-  if (input.anonymousAuthControl.length !== 1) {
-    return fail('Ops D1 must contain exactly one anonymous-auth control.');
+  if (input.authProviderRetirement.length !== 1) {
+    return fail('Ops D1 must contain exactly one auth-provider retirement record.');
   }
   if (input.anonymousAuthSessionCounts.length !== 1) {
     return fail('Ops D1 anonymous-auth session count is invalid.');
   }
-  const anonymousAuth = parseAnonymousAuthControl(input.anonymousAuthControl[0]);
-  if (anonymousAuth.firebaseFallbackEnabled) {
-    return fail('Ops D1 Firebase authentication fallback must be permanently disabled.');
-  }
+  const authProviderRetirement = parseAuthProviderRetirement(input.authProviderRetirement[0]);
   const anonymousAuthSessionCount = safeInteger(
     input.anonymousAuthSessionCounts[0].anonymous_auth_session_count,
     'Ops D1 anonymous-auth session count',
   );
-  const walletSessionStorage = parseWalletSessionStorageControl(
-    input.walletSessionStorageControl[0],
-  );
   const revealSubmissionStorage = parseRevealSubmissionStorageControl(
     input.revealSubmissionStorageControl[0],
   );
-  const source = input.profileStorageControl[0].read_source;
-  if (source !== 'd1') return fail('Ops D1 profile storage source must be d1.');
-  if (input.profileStorageControl[0].singleton !== 1) {
-    return fail('Ops D1 profile storage singleton is invalid.');
-  }
-  safeInteger(input.profileStorageControl[0].updated_at_ms, 'Ops D1 profile storage update timestamp');
   if (input.profileCounts.length !== 1) {
     return fail('Ops D1 profile counts are invalid.');
   }
@@ -985,10 +763,7 @@ export function assertOpsD1Integrity(
     input.walletSessionCounts[0].wallet_session_count,
     'Ops D1 wallet-session count',
   );
-  if (
-    walletSessionStorage.source === 'd1' &&
-    walletSessionCount < minimums.walletSessionCount
-  ) {
+  if (walletSessionCount < minimums.walletSessionCount) {
     return fail('Ops D1 wallet-session count is below the production cutover baseline.');
   }
   if (input.revealSubmissionCounts.length !== 1) {
@@ -1002,23 +777,18 @@ export function assertOpsD1Integrity(
     input.revealSubmissionCounts[0].reveal_submission_cutover_count,
     'Ops D1 cutover reveal-submission count',
   );
-  if (
-    revealSubmissionStorage.source === 'd1' &&
-    revealSubmissionCutoverCount < minimums.revealSubmissionCutoverCount
-  ) {
+  if (revealSubmissionCutoverCount < minimums.revealSubmissionCutoverCount) {
     return fail('Ops D1 reveal-submission count is below the production cutover baseline.');
   }
   return {
-    anonymousAuth,
+    authProviderRetirement,
     anonymousAuthSessionCount,
     profileAddressCount,
     profileCount,
-    profileStorageSource: source,
     readyNotifications: parseReadyNotificationsControl(input.controls[0]),
     revealSubmissionCount,
     revealSubmissionStorage,
     walletSessionCount,
-    walletSessionStorage,
   };
 }
 
@@ -1130,16 +900,15 @@ export function readRemoteReadyNotificationsControl(): ReadyNotificationsControl
 
 export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
   return assertOpsD1Integrity({
-    anonymousAuthControl: queryRemoteOpsD1(`SELECT
+    authProviderRetirement: queryRemoteOpsD1(`SELECT
       singleton,
-      firebase_fallback_enabled,
       revision,
       created_at_ms,
       updated_at_ms,
-      firebase_disabled_at_ms
-      FROM anonymous_auth_control`),
-    anonymousAuthControlColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(anonymous_auth_control)',
+      legacy_provider_disabled_at_ms
+      FROM auth_provider_retirement`),
+    authProviderRetirementColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(auth_provider_retirement)',
     ),
     anonymousAuthSessionColumns: queryRemoteOpsD1(
       'PRAGMA table_info(anonymous_auth_sessions)',
@@ -1170,11 +939,6 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
     profileColumns: queryRemoteOpsD1(
       'PRAGMA table_info(profiles)',
     ),
-    profileStorageControl: queryRemoteOpsD1(`SELECT singleton, read_source, updated_at_ms
-      FROM profile_storage_control`),
-    profileStorageControlColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(profile_storage_control)',
-    ),
     quickCheck: queryRemoteOpsD1('PRAGMA quick_check'),
     rateLimitBucketColumns: queryRemoteOpsD1(
       'PRAGMA table_info(rate_limit_buckets)',
@@ -1199,7 +963,6 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
     revealSubmissionStorageControl: queryRemoteOpsD1(`SELECT
       singleton,
       paused,
-      storage_source,
       revision,
       updated_at_ms,
       cutover_at_ms
@@ -1220,9 +983,8 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
         schema = 'main' AND
         name IN (
           'profile_addresses',
-          'anonymous_auth_control',
+          'auth_provider_retirement',
           'anonymous_auth_sessions',
-          'profile_storage_control',
           'profiles',
           'rate_limit_buckets',
           'reveal_submission_storage_control',
@@ -1230,7 +992,6 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
           'staff_auth_challenges',
           'staff_auth_sessions',
           'wallet_sessions',
-          'wallet_session_storage_control',
           'worker_controls'
         )
       ORDER BY name`),
@@ -1239,15 +1000,6 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
     ),
     walletSessionCounts: queryRemoteOpsD1(
       'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions',
-    ),
-    walletSessionStorageControl: queryRemoteOpsD1(`SELECT
-      singleton,
-      storage_source,
-      revision,
-      updated_at_ms
-      FROM wallet_session_storage_control`),
-    walletSessionStorageControlColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(wallet_session_storage_control)',
     ),
     workerControlColumns: queryRemoteOpsD1(
       'PRAGMA table_info(worker_controls)',

@@ -89,8 +89,7 @@ function sessionFromRow(row: Record<string, unknown> | null): D1WalletSession | 
 }
 
 function changed(result: D1Result): boolean {
-  const changes = Number(result.meta.changes || 0);
-  return changes === 1 || changes === 2;
+  return Number(result.meta.changes || 0) === 1;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

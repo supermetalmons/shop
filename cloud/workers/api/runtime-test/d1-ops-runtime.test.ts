@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { createCommerceD1, firestoreProviderCommerceRequester } from '../test/commerceD1Harness.ts';
+import { createCommerceD1 } from '../test/commerceD1Harness.ts';
 import { createTestHarness } from 'wrangler';
 import {
   compareAndSetReadyNotificationCursor,
@@ -117,13 +117,13 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       '0013_remove_firebase_auth_fallback.sql',
       '0014_auth_subject_bridge.sql',
       '0015_auth_subject_cutover.sql',
+      '0016_remove_migration_controls.sql',
     ]);
-    const authControl = await env.OPS_DB.prepare(`SELECT firebase_fallback_enabled, revision, firebase_disabled_at_ms
-      FROM anonymous_auth_control
+    const authRetirement = await env.OPS_DB.prepare(`SELECT revision, legacy_provider_disabled_at_ms
+      FROM auth_provider_retirement
       WHERE singleton = 1`).first<Record<string, unknown>>();
-    assert.equal(authControl?.firebase_fallback_enabled, 0);
-    assert.equal(authControl?.revision, 2);
-    assert.ok(Number.isSafeInteger(authControl?.firebase_disabled_at_ms));
+    assert.equal(authRetirement?.revision, 2);
+    assert.ok(Number.isSafeInteger(authRetirement?.legacy_provider_disabled_at_ms));
     const anonymousExpiry = 30 * 24 * 60 * 60 * 1000;
     await env.OPS_DB.batch([
       env.OPS_DB.prepare(`INSERT INTO anonymous_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?)`)
@@ -172,7 +172,6 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     )));
     const revealStorageControl = await loadRevealSubmissionStorageControl(env.OPS_DB);
     assert.equal(revealStorageControl.paused, false);
-    assert.equal(revealStorageControl.source, 'd1');
     assert.equal(revealStorageControl.revision, 3);
     assert.ok(revealStorageControl.updatedAtMs > 0);
     assert.equal(revealStorageControl.cutoverAtMs, revealStorageControl.updatedAtMs);
@@ -225,7 +224,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       WHERE drop_id = 'baseline' AND box_asset_id = ?`)
       .bind(String(0).padStart(32, '0'))
       .run();
-    assert.equal((await loadRevealSubmissionStorageControl(env.OPS_DB)).source, 'd1');
+    assert.equal((await loadRevealSubmissionStorageControl(env.OPS_DB)).paused, false);
     const initialReveal: RevealSubmissionRecord = {
       owner: REVEAL_OWNER,
       signature: REVEAL_SIGNATURE,
@@ -316,16 +315,12 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       ).run());
     await assert.rejects(env.OPS_DB.prepare(`UPDATE reveal_submission_storage_control
       SET
-        storage_source = 'firestore',
         revision = revision + 1,
         updated_at_ms = updated_at_ms + 1,
-        cutover_at_ms = NULL
+        cutover_at_ms = cutover_at_ms + 1
       WHERE singleton = 1`).run());
-    assert.deepEqual(await env.OPS_DB.prepare(`SELECT storage_source, revision
-      FROM wallet_session_storage_control WHERE singleton = 1`).first(), {
-      storage_source: 'd1',
-      revision: 3,
-    });
+    assert.equal((await env.OPS_DB.prepare(`SELECT COUNT(*) AS count FROM sqlite_schema
+      WHERE name IN ('profile_storage_control', 'wallet_session_storage_control')`).first<{ count: number }>())?.count, 0);
     assert.deepEqual(await resolveD1WalletSession(env.OPS_DB, 'missing-firebase-uid'), {
       wallet: null,
       reason: 'legacy_uid_invalid',
@@ -457,12 +452,6 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       wallet: PROFILE_WALLET,
       source: 'session',
     });
-    await assert.rejects(env.OPS_DB.prepare(`UPDATE wallet_session_storage_control
-      SET storage_source = 'firestore', revision = revision + 1, updated_at_ms = 11_000
-      WHERE singleton = 1`).run());
-    await assert.rejects(env.OPS_DB.prepare(`UPDATE wallet_session_storage_control
-      SET revision = revision + 1, updated_at_ms = 11_000
-      WHERE singleton = 1`).run());
     assert.deepEqual(await saveD1ProfileAddress(env.OPS_DB, {
       wallet: PROFILE_WALLET,
       id: 'AbCdEfGhIjKlMnOpQrSt',
@@ -561,7 +550,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       db: env.OPS_DB,
       nowMs: 4_000,
       ownerWallet: PROFILE_WALLET,
-      providerFetch: async () => assert.fail('D1 profile read reached Firestore'),
+      providerFetch: async () => assert.fail('D1 profile read reached an external provider'),
       signal: new AbortController().signal,
     }), 'owner@example.com');
     const missingWallet = 'So11111111111111111111111111111111111111112';
@@ -569,14 +558,13 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       db: env.OPS_DB,
       nowMs: 4_000,
       ownerWallet: missingWallet,
-      providerFetch: async () => assert.fail('D1-only profile read reached Firestore'),
+      providerFetch: async () => assert.fail('D1-only profile read reached an external provider'),
       signal: new AbortController().signal,
     }), undefined);
     await assert.rejects(deliveryPrepareTestHooks.loadAddress({
-      requestCommerceDocument: firestoreProviderCommerceRequester,
       commerceDb: createCommerceD1(),
       nowMs: 4_000,
-      providerFetch: async () => assert.fail('D1-only address read reached Firestore'),
+      providerFetch: async () => assert.fail('D1-only address read reached an external provider'),
       signal: new AbortController().signal,
     }, env.OPS_DB, missingWallet, 'XbCdEfGhIjKlMnOpQrSt'), /Address not found/);
     await ensureD1Profile(env.OPS_DB, {

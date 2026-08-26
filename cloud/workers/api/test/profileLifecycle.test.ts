@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1 } from './commerceD1Harness.ts';
+import { createCommerceD1, decodeFixtureFields } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import {
@@ -13,7 +13,6 @@ import {
   WalletSessionD1BusyError,
   WalletSessionD1SupersededError,
 } from '../src/walletSessionD1.ts';
-import { decodeFirestoreFields } from '../src/firestoreContract.ts';
 import {
   CommerceWriteConflict,
   commerceKeys,
@@ -22,7 +21,7 @@ import {
   type CommerceUpdateValue,
 } from '../src/commerceRepository.ts';
 
-const UID = 'firebase-lifecycle-user';
+const UID = 'auth-lifecycle-user';
 const NOW_MS = Date.parse('2026-08-20T12:00:00.000Z');
 const KEYPAIR = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
 const OWNER = bs58.encode(KEYPAIR.publicKey);
@@ -35,16 +34,16 @@ type StoredDocument = {
   updateTime: string;
 };
 
-function firestoreValue(value: unknown): Record<string, unknown> {
+function commerceValue(value: unknown): Record<string, unknown> {
   if (typeof value === 'string') return { stringValue: value };
   if (typeof value === 'number') return { integerValue: String(value) };
   if (typeof value === 'boolean') return { booleanValue: value };
-  if (Array.isArray(value)) return { arrayValue: { values: value.map(firestoreValue) } };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(commerceValue) } };
   if (value && typeof value === 'object') {
     return {
       mapValue: {
         fields: Object.fromEntries(Object.entries(value as Record<string, unknown>).map(
-          ([key, entry]) => [key, firestoreValue(entry)],
+          ([key, entry]) => [key, commerceValue(entry)],
         )),
       },
     };
@@ -55,7 +54,7 @@ function firestoreValue(value: unknown): Record<string, unknown> {
 function document(path: string, fields: Record<string, unknown>, version: number): StoredDocument {
   return {
     name: `${DOCUMENT_PREFIX}${path}`,
-    fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, firestoreValue(value)])),
+    fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, commerceValue(value)])),
     updateTime: `2026-08-20T12:00:${String(version).padStart(2, '0')}.000Z`,
   };
 }
@@ -69,7 +68,7 @@ function decodedFields(value: unknown): Record<string, unknown> {
   }));
 }
 
-class FirestoreHarness {
+class CommerceHarness {
   session: StoredDocument | null = document(`authSessions/${UID}`, { wallet: OWNER }, 1);
   orders: StoredDocument[] = [];
   transactions = new Map<string, { session: StoredDocument | null; orders: StoredDocument[] }>();
@@ -174,11 +173,11 @@ class FirestoreHarness {
       writes.forEach((write) => this.applyUpdate(write));
       return Response.json({ writeResults: writes.map(() => ({})), commitTime: '2026-08-20T12:00:00Z' });
     }
-    throw new Error(`Unexpected Firestore request: ${url}`);
+    throw new Error(`Unexpected Commerce request: ${url}`);
   }
 }
 
-function commerceRepository(harness: FirestoreHarness) {
+function commerceRepository(harness: CommerceHarness) {
   const record = (entry: StoredDocument): CommerceDocumentRecord => {
     const path = entry.name.slice(DOCUMENT_PREFIX.length);
     const match = path.match(/^drops\/([^/]+)\/deliveryOrders\/([^/]+)$/);
@@ -187,7 +186,7 @@ function commerceRepository(harness: FirestoreHarness) {
       : { ...commerceKeys.deliveryOrder('invalid', 'invalid'), path };
     return {
       createTime: entry.updateTime,
-      data: (decodeFirestoreFields(entry.fields) || {}) as never,
+      data: (decodeFixtureFields(entry.fields) || {}) as never,
       key,
       processedAt: null,
       updateTime: entry.updateTime,
@@ -220,7 +219,7 @@ function commerceRepository(harness: FirestoreHarness) {
       for (const [path, updates] of staged) {
         const index = harness.orders.findIndex((entry) => entry.name === `${DOCUMENT_PREFIX}${path}`);
         if (index < 0) throw new Error('missing order');
-        const fields = decodeFirestoreFields(harness.orders[index].fields) || {};
+        const fields = decodeFixtureFields(harness.orders[index].fields) || {};
         for (const [fieldPath, update] of Object.entries(updates)) {
           if (update && typeof update === 'object' && 'kind' in update) {
             const kind = (update as { kind?: unknown }).kind;
@@ -242,7 +241,7 @@ function commerceRepository(harness: FirestoreHarness) {
 }
 
 function dependencies(
-  harness: FirestoreHarness,
+  harness: CommerceHarness,
   timeoutMs = 500,
   overrides: Partial<Parameters<typeof handleProfileLifecycleRequest>[3]> = {},
 ): Parameters<typeof handleProfileLifecycleRequest>[3] {
@@ -319,7 +318,7 @@ function env(): Pick<Env, 'COMMERCE_DB' | 'OPS_DB'> {
 }
 
 test('Solana auth validates origin-bound signatures and persists the D1 session and profile', async () => {
-  const harness = new FirestoreHarness();
+  const harness = new CommerceHarness();
   let profile: Record<string, unknown> | undefined;
   const result = await handleProfileLifecycleRequest(
     request(SOLANA_AUTH_PATH, signInBody()),
@@ -345,13 +344,13 @@ test('Solana auth validates origin-bound signatures and persists the D1 session 
     request(SOLANA_AUTH_PATH, signInBody(), ''),
     request(SOLANA_AUTH_PATH, { ...signInBody(), signature: Array(64).fill(0) }),
   ]) {
-    const rejected = await handleProfileLifecycleRequest(authRequest, env(), SOLANA_AUTH_PATH, dependencies(new FirestoreHarness()));
+    const rejected = await handleProfileLifecycleRequest(authRequest, env(), SOLANA_AUTH_PATH, dependencies(new CommerceHarness()));
     assert.ok([401, 403].includes(rejected.response.status));
   }
 });
 
 test('Solana auth keeps its committed session retryable when D1 profile persistence fails', async () => {
-  const harness = new FirestoreHarness();
+  const harness = new CommerceHarness();
   const result = await handleProfileLifecycleRequest(
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
@@ -375,7 +374,7 @@ test('Solana auth applies the request deadline to D1 profile persistence', async
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
-    dependencies(new FirestoreHarness(), 5, {
+    dependencies(new CommerceHarness(), 5, {
       upsertProfile: async (_db, _profile, signal) => new Promise((_resolve, reject) => {
         const abort = () => reject(signal.reason);
         signal.addEventListener('abort', abort, { once: true });
@@ -387,8 +386,8 @@ test('Solana auth applies the request deadline to D1 profile persistence', async
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
 });
 
-test('D1 wallet-session mode persists without Firestore session access', async () => {
-  const d1Harness = new FirestoreHarness();
+test('D1 wallet-session mode persists without Commerce session access', async () => {
+  const d1Harness = new CommerceHarness();
   let establishedWallet = '';
   const d1 = await handleProfileLifecycleRequest(
     request(SOLANA_AUTH_PATH, signInBody()),
@@ -420,7 +419,7 @@ test('Solana auth preserves D1 superseded and busy response contracts', async ()
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
-    dependencies(new FirestoreHarness(), 500, {
+    dependencies(new CommerceHarness(), 500, {
       establishD1WalletSession: async () => { throw new WalletSessionD1SupersededError(); },
     }),
   );
@@ -438,7 +437,7 @@ test('Solana auth preserves D1 superseded and busy response contracts', async ()
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
-    dependencies(new FirestoreHarness(), 500, {
+    dependencies(new CommerceHarness(), 500, {
       establishD1WalletSession: async () => { throw new WalletSessionD1BusyError(); },
     }),
   );
@@ -449,12 +448,12 @@ test('Solana auth preserves D1 superseded and busy response contracts', async ()
   });
 });
 
-test('D1 reconciliation holds and releases its lease without reading Firestore sessions', async () => {
-  const harness = new FirestoreHarness();
+test('D1 reconciliation holds and releases its lease without reading Commerce sessions', async () => {
+  const harness = new CommerceHarness();
   harness.orders.push(document('drops/drop/deliveryOrders/1', {
-    firebaseUid: UID,
-    mergedFirebaseUid: UID,
-    owner: `firebase:${UID}`,
+    authSubject: UID,
+    mergedAuthSubject: UID,
+    owner: `anonymous:${UID}`,
     status: 'ready_to_ship',
   }, 3));
   let released = false;
@@ -478,6 +477,7 @@ test('D1 reconciliation holds and releases its lease without reading Firestore s
   assert.equal(harness.sessionReads, 0);
   assert.equal(released, true);
   assert.deepEqual(decodedFields(harness.orders[0]), {
+    authSubject: UID,
     mergedAuthSubject: UID,
     owner: OWNER,
     ownerKind: 'wallet',
@@ -487,14 +487,14 @@ test('D1 reconciliation holds and releases its lease without reading Firestore s
   });
 });
 
-test('staff reconciliation uses its wallet directly and skips legacy Firebase order merging', async () => {
+test('staff reconciliation uses its wallet directly and skips legacy Auth order merging', async () => {
   const result = await handleProfileLifecycleRequest(
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
     env(),
     PROFILE_RECONCILE_PATH,
-    dependencies(new FirestoreHarness(), 500, {
-      acquireWalletSessionReconcileLease: async () => assert.fail('staff identity acquired a Firebase reconciliation lease'),
-      resolveD1WalletSession: async () => assert.fail('staff identity resolved a Firebase wallet session'),
+    dependencies(new CommerceHarness(), 500, {
+      acquireWalletSessionReconcileLease: async () => assert.fail('staff identity acquired a Auth reconciliation lease'),
+      resolveD1WalletSession: async () => assert.fail('staff identity resolved a Auth wallet session'),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
@@ -502,13 +502,13 @@ test('staff reconciliation uses its wallet directly and skips legacy Firebase or
   assert.deepEqual(await result.response.json(), { mergedStripeDeliveryOrders: 0 });
 });
 
-test('staff principals cannot enter the Firebase wallet-binding route', async () => {
+test('staff principals cannot enter the Auth wallet-binding route', async () => {
   const result = await handleProfileLifecycleRequest(
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
-    dependencies(new FirestoreHarness(), 500, {
-      loadD1WalletSession: async () => assert.fail('staff identity reached Firebase wallet-session loading'),
+    dependencies(new CommerceHarness(), 500, {
+      loadD1WalletSession: async () => assert.fail('staff identity reached Auth wallet-session loading'),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
@@ -524,9 +524,9 @@ test('anonymous principals cannot bind an allowlisted staff wallet', async () =>
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
-    dependencies(new FirestoreHarness(), 500, {
+    dependencies(new CommerceHarness(), 500, {
       isStaffWallet: (wallet) => wallet === OWNER,
-      loadD1WalletSession: async () => assert.fail('allowlisted staff wallet reached Firebase wallet-session loading'),
+      loadD1WalletSession: async () => assert.fail('allowlisted staff wallet reached Auth wallet-session loading'),
     }),
   );
   assert.equal(result.response.status, 403);
@@ -537,10 +537,10 @@ test('anonymous principals cannot bind an allowlisted staff wallet', async () =>
 });
 
 test('profile reconciliation merges multiple session-validated batches and is idempotent', async () => {
-  const harness = new FirestoreHarness();
+  const harness = new CommerceHarness();
   for (let index = 1; index <= 451; index += 1) {
     harness.orders.push(document(`drops/drop/deliveryOrders/${index}`, {
-      owner: `firebase:${UID}`,
+      owner: `anonymous:${UID}`,
       status: 'ready_to_ship',
     }, index + 10));
   }
@@ -562,9 +562,9 @@ test('profile reconciliation merges multiple session-validated batches and is id
   assert.deepEqual(await second.response.json(), { mergedStripeDeliveryOrders: 0 });
 });
 
-test('profile reconciliation retries Firestore transaction conflicts', async () => {
-  const retry = new FirestoreHarness();
-  retry.orders.push(document('drops/drop/deliveryOrders/1', { owner: `firebase:${UID}`, status: 'ready_to_ship' }, 3));
+test('profile reconciliation retries transaction conflicts', async () => {
+  const retry = new CommerceHarness();
+  retry.orders.push(document('drops/drop/deliveryOrders/1', { owner: `anonymous:${UID}`, status: 'ready_to_ship' }, 3));
   retry.transactionConflicts = 1;
   const retryResult = await handleProfileLifecycleRequest(
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
@@ -576,8 +576,8 @@ test('profile reconciliation retries Firestore transaction conflicts', async () 
 });
 
 test('profile reconciliation rejects invalid collection-group paths before writes and returns recovery timing', async () => {
-  const invalid = new FirestoreHarness();
-  invalid.orders.push(document('archives/drop/deliveryOrders/1', { owner: `firebase:${UID}`, status: 'processing' }, 3));
+  const invalid = new CommerceHarness();
+  invalid.orders.push(document('archives/drop/deliveryOrders/1', { owner: `anonymous:${UID}`, status: 'processing' }, 3));
   const invalidResult = await handleProfileLifecycleRequest(
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true }),
     env(),
@@ -586,9 +586,9 @@ test('profile reconciliation rejects invalid collection-group paths before write
   );
   assert.equal(invalidResult.response.status, 409);
   assert.equal(invalid.rollbackCount, 0);
-  assert.equal(decodedFields(invalid.orders[0]).owner, `firebase:${UID}`);
+  assert.equal(decodedFields(invalid.orders[0]).owner, `anonymous:${UID}`);
 
-  const recovery = new FirestoreHarness();
+  const recovery = new CommerceHarness();
   recovery.orders.push(document('drops/drop/deliveryOrders/1', {
     owner: OWNER,
     status: 'processing',
@@ -613,7 +613,7 @@ test('profile lifecycle responses never expose credentials or bearer tokens', as
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_RECONCILE_PATH,
     {
-      ...dependencies(new FirestoreHarness()),
+      ...dependencies(new CommerceHarness()),
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     },
   );
@@ -628,7 +628,7 @@ test('profile lifecycle enforces exact bodies and stable deadlines', async () =>
     request(PROFILE_RECONCILE_PATH, { includeDeliveryRecovery: true, extra: true }),
     env(),
     PROFILE_RECONCILE_PATH,
-    dependencies(new FirestoreHarness()),
+    dependencies(new CommerceHarness()),
   );
   assert.equal(malformed.response.status, 400);
 
@@ -637,7 +637,7 @@ test('profile lifecycle enforces exact bodies and stable deadlines', async () =>
     env(),
     PROFILE_RECONCILE_PATH,
     {
-      ...dependencies(new FirestoreHarness()),
+      ...dependencies(new CommerceHarness()),
       timeoutMs: 5,
       verifyIdentity: async (_authorization, _providerFetch, signal) => new Promise((_resolve, reject) => {
         const fail = () => reject(signal.reason);

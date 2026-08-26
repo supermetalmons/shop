@@ -1260,13 +1260,13 @@ test('profile state validator rejects mismatches, malformed summaries, and extra
   }), null);
 });
 
-test('browser source has no direct Firestore data access', () => {
+test('browser source has no direct Commerce data access', () => {
   const sourceRoot = new URL('../src/', import.meta.url);
   const files = (directory: URL): URL[] => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const child = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory);
     return entry.isDirectory() ? files(child) : statSync(child).isFile() && /\.[cm]?[jt]sx?$/.test(entry.name) ? [child] : [];
   });
   const source = files(sourceRoot).map((file) => readFileSync(file, 'utf8')).join('\n');
-  assert.doesNotMatch(source, /from\s+['"]firebase\/firestore['"]/);
-  assert.doesNotMatch(source, /\bgetFirestore\s*\(/);
+  assert.doesNotMatch(source, /from\s+['"]auth\/commerce['"]/);
+  assert.doesNotMatch(source, /\bgetCommerce\s*\(/);
 });

@@ -107,7 +107,7 @@ const FULFILLMENT_ORDER_FIELDS = [
 ] as const;
 const MANUAL_REVIEW_FIELDS = [
   'manualRefundReviewRequired', 'status', 'sessionId', 'stripeSessionSummary', 'quantity', 'owner',
-  'ownerKind', 'authSubject', 'firebaseUid', 'uid', 'manualRefundReviewReason', 'lastFulfillmentError',
+  'ownerKind', 'authSubject', 'uid', 'manualRefundReviewReason', 'lastFulfillmentError',
   'createdAt', 'failedAt',
 ] as const;
 
@@ -826,7 +826,7 @@ export async function handleProfileReadRequest(
     if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
       const owners = identity.kind === 'staff-wallet'
         ? [identity.wallet]
-        : [stripeCheckoutAnonymousOwnerId(identity.authSubject), `firebase:${identity.authSubject}`];
+        : [stripeCheckoutAnonymousOwnerId(identity.authSubject)];
       const orders = await loadDeliveryHistory({ ...common, owners });
       return { response: jsonResponse({ orders }, 200), metrics, authOutcome: 'accepted' };
     }

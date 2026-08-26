@@ -211,7 +211,7 @@ function readyNotificationControlHarness(args: {
   const execute = (statement: ReadyNotificationTestStatement): D1Result<Record<string, unknown>> => {
     if (statement.query.includes('FROM wallet_sessions')) {
       return readyNotificationD1Result([{
-        firebase_uid: 'firebase-uid',
+        auth_subject: 'auth-uid',
         wallet: OWNER,
         expires_at_ms: 253_402_300_799_999,
         updated_at_ms: READY_NOTIFICATION_NOW_MS,
@@ -369,7 +369,7 @@ function env(overrides: Partial<Pick<Env,
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
     issue: async () => ({
       processed: true as const,
       deliveryId: 7,

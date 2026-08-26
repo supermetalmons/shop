@@ -813,7 +813,6 @@ export function buildCommerceD1PlanFromDocuments(args: {
   targetDocuments: CommerceD1Document[];
 }): CommerceD1Plan {
   const dropId = validateDropId(args.dropId, 'drop id');
-  if (args.authority.state === 'firestore') fail('Commerce D1 must be authoritative before a drop can be planned.');
   const targetAssignments = args.targetDocuments.filter((document) => document.kind === 'box_assignment');
   const targetDeliveryOrders = args.targetDocuments.filter((document) => document.kind === 'delivery_order');
   const claimCodesByDropId = sortStrings(args.claimDocuments.flatMap((document) =>

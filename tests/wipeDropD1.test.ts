@@ -68,6 +68,11 @@ function database(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys = ON');
   for (const file of readdirSync('cloud/workers/api/commerce-migrations').sort()) {
+    if (file.startsWith('0009_')) {
+      db.exec(`UPDATE commerce_authority_control SET
+        authority_state = 'paused', revision = 2, paused_at_ms = 1, updated_at_ms = 1
+        WHERE singleton = 1`);
+    }
     db.exec(readFileSync(`cloud/workers/api/commerce-migrations/${file}`, 'utf8'));
   }
   const manifestHash = 'a'.repeat(64);
@@ -80,17 +85,20 @@ function database(): DatabaseSync {
   db.prepare(`UPDATE commerce_authority_control SET
     authority_state = 'd1', revision = 3, import_manifest_sha256 = ?, cutover_at_ms = 2, updated_at_ms = 2
     WHERE singleton = 1`).run(manifestHash);
+  return db;
+}
+
+function pauseCommerce(db: DatabaseSync): void {
   db.exec(`UPDATE commerce_authority_control SET
     authority_state = 'paused', revision = 4, paused_at_ms = 3, updated_at_ms = 3
     WHERE singleton = 1`);
-  return db;
 }
 
 function insertDocument(db: DatabaseSync, value: CommerceD1Document): void {
   db.prepare(`INSERT INTO commerce_documents (
-    document_path, document_kind, drop_id, document_id, fields_json, document_json,
+    document_path, document_kind, drop_id, document_id, document_json,
     version, create_time, update_time
-  ) VALUES (?, ?, ?, ?, '{}', ?, ?, ?, ?)`).run(
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
     value.path,
     value.kind,
     value.dropId,
@@ -188,6 +196,7 @@ test('Commerce D1 wipe SQL deletes exact documents and advances revision once', 
     insertDocument(db, claim);
   }
   insertDocument(db, document('delivery_order', 'other', '9', {}));
+  pauseCommerce(db);
   executeTransaction(db, buildCommerceD1WipeSql(wipePlan, 'guard', 100_000));
   assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM commerce_documents WHERE drop_id = 'target'`).get()!.count, 0);
   assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM commerce_documents WHERE drop_id = 'other'`).get()!.count, 1);
@@ -206,6 +215,7 @@ test('Commerce D1 wipe SQL rolls back on version drift and refuses non-D1 author
   t.after(() => db.close());
   const assignment = document('box_assignment', 'target', 'box-a', { irlClaimCode: '1111111111' });
   insertDocument(db, assignment);
+  pauseCommerce(db);
   const stalePlan = {
     ...wipePlan,
     documentsToDelete: [{ path: assignment.path, version: 2 }],

@@ -128,7 +128,7 @@ function requestBody() {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     enforceRateLimit: async () => undefined,
     fetchAsset: async () => receiptAsset(),
@@ -370,7 +370,7 @@ test('receipt transfer D1 limiter maps atomic batch admissions and denials', asy
   assert.equal(batchCalls.every((call) => call.length === 2), true);
   assert.match(batchCalls[0][0].query, /ON CONFLICT\(scope, subject_hash\).*RETURNING/s);
   assert.match(batchCalls[0][1].query, /SELECT[\s\S]*FROM rate_limit_buckets/);
-  assert.doesNotMatch(JSON.stringify(batchCalls), /firebase-uid/);
+  assert.doesNotMatch(JSON.stringify(batchCalls), /auth-uid/);
 });
 
 test('receipt transfer D1 limiter fails closed without retrying ambiguous writes', async () => {

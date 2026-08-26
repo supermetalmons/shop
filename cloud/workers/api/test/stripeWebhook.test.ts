@@ -178,7 +178,7 @@ function checkoutDocument(options: {
   const document = buildStripeCheckoutDocument({
     dropId: options.dropId || DEVNET_DROP,
     sessionId: options.sessionId || 'cs_test_123',
-    uid: 'firebase-user',
+    uid: 'auth-user',
     quantity: 1,
     unitAmountCents: 100,
     livemode: options.livemode === true,

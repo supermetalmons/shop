@@ -12,7 +12,6 @@ export type RevealSubmissionsControlArgs = {
 
 export type RevealSubmissionsControl = {
   paused: boolean;
-  source: 'd1';
   revision: number;
   updatedAtMs: number;
   cutoverAtMs: number;
@@ -82,12 +81,10 @@ export function parseRevealSubmissionsControl(
 ): RevealSubmissionsControl {
   if (
     row.singleton !== 1 ||
-    (row.paused !== 0 && row.paused !== 1) ||
-    row.storage_source !== 'd1'
+    (row.paused !== 0 && row.paused !== 1)
   ) return fail('Reveal-submission storage control is invalid.');
   return {
     paused: row.paused === 1,
-    source: 'd1',
     revision: safeInteger(row.revision, 'Reveal-submission storage revision', 1),
     updatedAtMs: safeInteger(row.updated_at_ms, 'Reveal-submission storage update timestamp'),
     cutoverAtMs: safeInteger(row.cutover_at_ms, 'Reveal-submission cutover timestamp'),
@@ -97,7 +94,6 @@ export function parseRevealSubmissionsControl(
 const controlSelect = `SELECT
   singleton,
   paused,
-  storage_source,
   revision,
   updated_at_ms,
   cutover_at_ms
@@ -119,7 +115,7 @@ export function readRemoteRevealSubmissionCount(): number {
 }
 
 function returningControl(): string {
-  return 'RETURNING singleton, paused, storage_source, revision, updated_at_ms, cutover_at_ms';
+  return 'RETURNING singleton, paused, revision, updated_at_ms, cutover_at_ms';
 }
 
 export function setRemoteRevealSubmissionsPaused(
@@ -134,7 +130,6 @@ export function setRemoteRevealSubmissionsPaused(
       updated_at_ms = MAX(updated_at_ms, ${safeInteger(nowMs, 'Mutation timestamp')})
     WHERE
       singleton = 1 AND
-      storage_source = 'd1' AND
       revision = ${safeInteger(expectedRevision, 'Expected revision', 1)}
     ${returningControl()}`);
   if (rows.length !== 1) {
@@ -175,7 +170,6 @@ export function formatRevealSubmissionsControl(result: {
 }): string {
   return [
     `Reveal submissions are ${result.control.paused ? 'paused' : 'active'}.`,
-    `Source: ${result.control.source}.`,
     `Rows: ${result.submissionCount}.`,
     `Revision: ${result.control.revision}.`,
     `Updated at: ${new Date(result.control.updatedAtMs).toISOString()}.`,

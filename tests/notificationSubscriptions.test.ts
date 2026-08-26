@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { subscribeToNotifications } from '../src/lib/notificationSubscriptions.ts';
 
-test('notification subscription client posts exact JSON to the shop API without Firebase authentication', async () => {
+test('notification subscription client posts exact JSON to the shop API without Auth authentication', async () => {
   const originalFetch = globalThis.fetch;
   let receivedUrl = '';
   let receivedInit: RequestInit | undefined;

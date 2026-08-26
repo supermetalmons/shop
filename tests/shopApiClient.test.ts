@@ -164,7 +164,7 @@ test('pack-status client propagates aborts and API errors', async () => {
   });
 });
 
-test('pack-status frontend facade has no direct Firestore fallback', () => {
+test('pack-status frontend facade has no direct Commerce fallback', () => {
   const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
   const start = source.indexOf('export async function getDropPackStatus');
   const end = source.indexOf('export async function listFulfillmentOrders', start);
@@ -172,7 +172,7 @@ test('pack-status frontend facade has no direct Firestore fallback', () => {
   assert.notEqual(end, -1);
   const implementation = source.slice(start, end);
   assert.match(implementation, /fetchPackStatus\(normalizedDropId\)/);
-  assert.doesNotMatch(implementation, /firebase\/firestore|getFirestore|getDoc/);
+  assert.doesNotMatch(implementation, /auth\/commerce|getCommerce|getDoc/);
 });
 
 test('inventory client accepts exact string bounds and rejects each over-limit field', async () => {

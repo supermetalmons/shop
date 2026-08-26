@@ -266,8 +266,6 @@ async function mergeStripeOwnerBatch(params: {
         for (const document of documents) {
           deliveryOrderPath(document);
           await unit.update(document.key, {
-            firebaseUid: commerceFieldValue.delete(),
-            mergedFirebaseUid: commerceFieldValue.delete(),
             mergedAuthSubject: params.authSubject,
             owner: params.wallet,
             ownerKind: 'wallet',
@@ -294,10 +292,7 @@ async function mergeStripeOrders(params: {
   wallet: string;
 }): Promise<number> {
   let merged = 0;
-  for (const sourceOwner of [
-    stripeCheckoutAnonymousOwnerId(params.authSubject),
-    `firebase:${params.authSubject}`,
-  ]) {
+  for (const sourceOwner of [stripeCheckoutAnonymousOwnerId(params.authSubject)]) {
     for (;;) {
       const batchCount = await mergeStripeOwnerBatch({ ...params, sourceOwner });
       merged += batchCount;

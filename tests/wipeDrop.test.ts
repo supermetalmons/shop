@@ -42,7 +42,7 @@ import {
 } from '../scripts/shared/deploymentRegistry.ts';
 
 const ROOT_A = '11'.repeat(32);
-test('Firestore document IDs remain exact while stored dropId fields normalize permissively', () => {
+test('Commerce document IDs remain exact while stored dropId fields normalize permissively', () => {
   assert.equal(asStoredDocumentId('Legacy.Drop-V1'), 'Legacy.Drop-V1');
   assert.equal(asStoredDocumentId(' drop with spaces '), ' drop with spaces ');
   assert.equal(asStoredDocumentId(''), undefined);
@@ -1037,7 +1037,7 @@ test('local wipe removes exact recovery provenance only after complete committed
   assert.equal(existsSync(fixture.secondCanonicalPath), false);
 });
 
-test('local wipe retains exact recovery provenance when post-Firestore residual cleanup remains', (t) => {
+test('local wipe retains exact recovery provenance when post-Commerce residual cleanup remains', (t) => {
   const fixture = makeRepoPlanFixture();
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
   const manifestPath = path.join(
@@ -1164,7 +1164,7 @@ test('wipe registry writability preflight still opens the registry when its row 
   }
 });
 
-test('wipe preparation probes every staging parent before Firestore', (t) => {
+test('wipe preparation probes every staging parent before Commerce', (t) => {
   if (typeof process.getuid === 'function' && process.getuid() === 0) {
     t.skip('root can create entries in read-only directories');
     return;
@@ -2030,25 +2030,25 @@ test('local wipe accepts only an exact concurrent recreation during rollback', (
   assert.equal(lstatSync(wrongKind.firstCanonicalPath).isSymbolicLink(), true);
 });
 
-test('wipe phases abort preparation drift before Firestore starts', async (t) => {
+test('wipe phases abort preparation drift before Commerce starts', async (t) => {
   const fixture = makeRepoPlanFixture();
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
   const changed = 'edited-before-prepare\n';
   writeFileSync(fixture.firstCanonicalPath, changed, 'utf8');
-  let firestoreCalled = false;
+  let commerceCalled = false;
 
   await assert.rejects(
     applyWipePhases({
       prepareRepo: () => prepareRepoWipe(fixture.plan),
       applyData: async () => {
-        firestoreCalled = true;
+        commerceCalled = true;
       },
       applyPreparedRepo: (prepared) => applyPreparedRepoWipe(prepared),
     }),
     /plan conflict for first\.json: target changed after the plan was prepared/,
   );
 
-  assert.equal(firestoreCalled, false);
+  assert.equal(commerceCalled, false);
   assert.equal(readFileSync(fixture.firstCanonicalPath, 'utf8'), changed);
   assert.equal(
     readFileSync(fixture.registryPath, 'utf8'),
@@ -2056,24 +2056,24 @@ test('wipe phases abort preparation drift before Firestore starts', async (t) =>
   );
 });
 
-test('wipe phases never touch local files after a Firestore failure', async (t) => {
+test('wipe phases never touch local files after a Commerce failure', async (t) => {
   const fixture = makeRepoPlanFixture();
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
-  const firestoreError = new Error('Firestore wipe failed');
+  const commerceError = new Error('Commerce wipe failed');
   let applyPreparedCalled = false;
 
   await assert.rejects(
     applyWipePhases({
       prepareRepo: () => prepareRepoWipe(fixture.plan),
       applyData: async () => {
-        throw firestoreError;
+        throw commerceError;
       },
       applyPreparedRepo: (prepared) => {
         applyPreparedCalled = true;
         applyPreparedRepoWipe(prepared);
       },
     }),
-    (error) => error === firestoreError,
+    (error) => error === commerceError,
   );
   assert.equal(applyPreparedCalled, false);
   assert.equal(
@@ -2090,7 +2090,7 @@ test('wipe phases never touch local files after a Firestore failure', async (t) 
   );
 });
 
-test('wipe phases remove a newly prepared recovery journal after a Firestore failure', async (t) => {
+test('wipe phases remove a newly prepared recovery journal after a Commerce failure', async (t) => {
   const fixture = makeRepoPlanFixture();
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
   const manifestPath = path.join(
@@ -2103,21 +2103,21 @@ test('wipe phases remove a newly prepared recovery journal after a Firestore fai
     filePath: manifestPath,
     content: '{"version":1,"prepared":true}\n',
   };
-  const firestoreError = new Error('Firestore wipe failed');
+  const commerceError = new Error('Commerce wipe failed');
 
   await assert.rejects(
     applyWipePhases({
       prepareRepo: () => prepareRepoWipe(fixture.plan),
       applyData: async () => {
         assert.equal(existsSync(manifestPath), true);
-        throw firestoreError;
+        throw commerceError;
       },
       applyPreparedRepo: (prepared) =>
         applyPreparedRepoWipe(prepared),
       abortPreparedRepo: (prepared) =>
         abortPreparedRepoWipe(prepared),
     }),
-    (error) => error === firestoreError,
+    (error) => error === commerceError,
   );
 
   assert.equal(existsSync(manifestPath), false);
@@ -2135,10 +2135,10 @@ test('wipe phases remove a newly prepared recovery journal after a Firestore fai
   );
 });
 
-test('wipe phases preserve drift during Firestore, remove the registry row, and report residual cleanup', async (t) => {
+test('wipe phases preserve drift during Commerce, remove the registry row, and report residual cleanup', async (t) => {
   const fixture = makeRepoPlanFixture();
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
-  const changed = 'edited-while-firestore-was-deleting\n';
+  const changed = 'edited-while-commerce-was-deleting\n';
 
   await assert.rejects(
     applyWipePhases({
@@ -2165,7 +2165,7 @@ test('wipe phases preserve drift during Firestore, remove the registry row, and 
 test('a partial wipe can retry after the registry row and canonical files are already absent', async (t) => {
   const fixture = makeRepoPlanFixture();
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
-  let firestoreCalls = 0;
+  let commerceCalls = 0;
 
   applyRepoWipe(fixture.plan);
   assert.equal(existsSync(fixture.firstCanonicalPath), false);
@@ -2181,12 +2181,12 @@ test('a partial wipe can retry after the registry row and canonical files are al
   await applyWipePhases({
     prepareRepo: () => prepareRepoWipe(retryPlan),
     applyData: async () => {
-      firestoreCalls += 1;
+      commerceCalls += 1;
     },
     applyPreparedRepo: (prepared) => applyPreparedRepoWipe(prepared),
   });
 
-  assert.equal(firestoreCalls, 1);
+  assert.equal(commerceCalls, 1);
   assert.equal(existsSync(fixture.firstCanonicalPath), false);
   assert.equal(existsSync(fixture.secondCanonicalPath), false);
   assert.equal(
@@ -2195,13 +2195,13 @@ test('a partial wipe can retry after the registry row and canonical files are al
   );
 });
 
-test('shared recovery preparation leaves a missing canonical and its adopted quarantine untouched when Firestore fails', async (t) => {
+test('shared recovery preparation leaves a missing canonical and its adopted quarantine untouched when Commerce fails', async (t) => {
   const fixture = makeRepoPlanFixture();
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
   const shared = addSharedRecoveryTarget(fixture);
   const quarantineInode = lstatSync(shared.quarantinePath).ino;
   const manifestInode = lstatSync(shared.manifestPath).ino;
-  const firestoreError = new Error('Firestore wipe failed');
+  const commerceError = new Error('Commerce wipe failed');
 
   await assert.rejects(
     applyWipePhases({
@@ -2212,14 +2212,14 @@ test('shared recovery preparation leaves a missing canonical and its adopted qua
       },
       applyData: async () => {
         assert.equal(existsSync(shared.absolutePath), false);
-        throw firestoreError;
+        throw commerceError;
       },
       applyPreparedRepo: (prepared) =>
         applyPreparedRepoWipe(prepared),
       abortPreparedRepo: (prepared) =>
         abortPreparedRepoWipe(prepared),
     }),
-    (error) => error === firestoreError,
+    (error) => error === commerceError,
   );
 
   assert.equal(existsSync(shared.absolutePath), false);
@@ -2235,7 +2235,7 @@ test('shared recovery preparation leaves a missing canonical and its adopted qua
   );
 });
 
-test('shared recovery preserves a canonical replacement created during Firestore while converging the registry', async (t) => {
+test('shared recovery preserves a canonical replacement created during Commerce while converging the registry', async (t) => {
   const fixture = makeRepoPlanFixture();
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
   const shared = addSharedRecoveryTarget(fixture);
@@ -2408,7 +2408,7 @@ test('stable shared recovery restores a missing canonical only after preparation
   );
 });
 
-test('wipe preparation rejects debris in the deterministic staging directory before Firestore', async (t) => {
+test('wipe preparation rejects debris in the deterministic staging directory before Commerce', async (t) => {
   const fixture = makeRepoPlanFixture();
   t.after(() => rmSync(fixture.root, { recursive: true, force: true }));
   const quarantinePath =
@@ -2416,13 +2416,13 @@ test('wipe preparation rejects debris in the deterministic staging directory bef
       .quarantinePath;
   mkdirSync(path.dirname(quarantinePath), { recursive: true });
   writeFileSync(`${quarantinePath}.prepared`, 'stale-recovery\n');
-  let firestoreCalled = false;
+  let commerceCalled = false;
 
   await assert.rejects(
     applyWipePhases({
       prepareRepo: () => prepareRepoWipe(fixture.plan),
       applyData: async () => {
-        firestoreCalled = true;
+        commerceCalled = true;
       },
       applyPreparedRepo: (prepared) =>
         applyPreparedRepoWipe(prepared),
@@ -2430,7 +2430,7 @@ test('wipe preparation rejects debris in the deterministic staging directory bef
     /deterministic quarantine directory contains unexpected recovery entries/,
   );
 
-  assert.equal(firestoreCalled, false);
+  assert.equal(commerceCalled, false);
   assert.equal(
     readFileSync(fixture.registryPath, 'utf8'),
     fixture.original.registry,
@@ -3292,7 +3292,7 @@ test('row-absent planning uses exact recovery provenance for legacy Merkle clean
   writeFileSync(
     legacyMerklePath,
     `${JSON.stringify(
-      { root: targetRoot, claims: [], editedDuringFirestore: true },
+      { root: targetRoot, claims: [], editedDuringCommerce: true },
       null,
       2,
     )}\n`,
@@ -3325,7 +3325,7 @@ test('row-absent planning uses exact recovery provenance for legacy Merkle clean
 
   assert.equal(
     JSON.parse(readFileSync(legacyMerklePath, 'utf8'))
-      .editedDuringFirestore,
+      .editedDuringCommerce,
     true,
   );
   assert.equal(existsSync(canonicalMerklePath), false);

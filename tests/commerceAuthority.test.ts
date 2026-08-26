@@ -25,7 +25,7 @@ test('commerce authority mutations require explicit write and revision guards', 
   assert.match(sql, /import_manifest_sha256 IS NOT NULL/);
   assert.match(sql, /cutover_at_ms = COALESCE\(cutover_at_ms, 100\)/);
   const pauseSql = buildCommerceAuthorityMutationSql('paused', 7, 100);
-  assert.match(pauseSql, /authority_state IN \('firestore', 'd1'\)/);
+  assert.match(pauseSql, /authority_state = 'd1'/);
   assert.doesNotMatch(pauseSql, /import_manifest_sha256 = NULL/);
   assert.throws(() => parseCommerceAuthorityControlArgs(['firestore', '--expected-revision', '7', '--write']));
 });

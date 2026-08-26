@@ -11,7 +11,7 @@ import {
 
 const WALLET = '11111111111111111111111111111111';
 
-test('Firebase UID changes preserve only the expected initial sign-in authentication', () => {
+test('Auth UID changes preserve only the expected initial sign-in authentication', () => {
   assert.equal(authSubjectChangeInvalidatesSession({
     previousSubject: null,
     nextSubject: 'anonymous-user',
@@ -48,7 +48,7 @@ test('profile view selection drops data when authorization disappears', () => {
 });
 
 test('profile refresh helpers preserve recovery and empty-state behavior', () => {
-  const fallback = { key: 'firebase:cs_one', phase: 'fallback' as const };
+  const fallback = { key: 'anonymous:cs_one', phase: 'fallback' as const };
   assert.equal(stripeProfileRecoveryAfterRefresh(fallback, fallback.key, false), fallback);
   assert.deepEqual(stripeProfileRecoveryAfterRefresh(fallback, fallback.key, true), {
     key: fallback.key,

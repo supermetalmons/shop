@@ -157,7 +157,7 @@ function env(overrides: Record<string, string> = {}) {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadWalletSession: async () => OWNER.publicKey.toBase58(),
     loadAddress: async () => ({
@@ -243,7 +243,7 @@ test('delivery preparation schedules recovery from the document reservation time
   assert.equal(nextPreparedProbeAtMs, NOW_MS + 30_000);
 });
 
-test('delivery preparation preserves raw address fields in the Firestore create', async () => {
+test('delivery preparation preserves raw address fields in the native create', async () => {
   const harness = createCommerceD1Harness();
   const updateTime = await deliveryPrepareTestHooks.createDeliveryOrder({
     nowMs: NOW_MS,
@@ -266,13 +266,13 @@ test('delivery preparation preserves raw address fields in the Firestore create'
     prepareAttemptId: '123e4567-e89b-42d3-a456-426614174000',
   });
   assert.equal(Date.parse(updateTime), NOW_MS);
-  const row = harness.database.prepare(`SELECT fields_json FROM commerce_documents
-    WHERE document_path = ?`).get(`drops/${DROP_ID}/deliveryOrders/7`) as { fields_json: string };
-  const fields = JSON.parse(row.fields_json) as Record<string, unknown>;
-  const snapshot = ((fields.addressSnapshot as Record<string, unknown>).mapValue as Record<string, unknown>).fields as Record<string, unknown>;
-  assert.deepEqual(snapshot.createdAt, { timestampValue: '2026-08-19T00:00:00.000000000Z' });
-  assert.deepEqual(snapshot.countryCode, { stringValue: 'US' });
-  assert.deepEqual(fields.createdAt, { timestampValue: '2023-11-14T22:13:20.000000000Z' });
+  const row = harness.database.prepare(`SELECT document_json FROM commerce_documents
+    WHERE document_path = ?`).get(`drops/${DROP_ID}/deliveryOrders/7`) as { document_json: string };
+  const fields = JSON.parse(row.document_json) as Record<string, unknown>;
+  const snapshot = fields.addressSnapshot as Record<string, unknown>;
+  assert.equal(snapshot.createdAt, Date.parse('2026-08-19T00:00:00.000Z'));
+  assert.equal(snapshot.countryCode, 'US');
+  assert.equal(fields.createdAt, NOW_MS);
 });
 
 test('delivery preparation reconciles an applied D1 commit when its result is lost', async () => {
@@ -309,7 +309,7 @@ test('delivery preparation reconciles an applied D1 commit when its result is lo
   assert.equal(batches, 1);
 });
 
-test('delivery preparation retries Firestore collisions with a fresh delivery id', async () => {
+test('delivery preparation retries Commerce collisions with a fresh delivery id', async () => {
   const candidates = [7, 8];
   const created: number[] = [];
   const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
@@ -702,7 +702,7 @@ test('delivery preparation reports an authenticated stalled request body as a de
   } as RequestInit & { duplex: 'half' });
   const result = await handleDeliveryPrepare(stalledRequest, env(), {
     timeoutMs: 5,
-    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
   });
   assert.equal(result.response.status, 504);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');

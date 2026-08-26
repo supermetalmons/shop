@@ -220,7 +220,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
     request(),
     env(),
     () => undefined,
-    dependencies({ verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }) }),
+    dependencies({ verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }) }),
   );
   assert.equal(anonymousOnly.response.status, 401);
 
@@ -260,14 +260,14 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
     dependencies({
       timeoutMs: 1,
       finalize: async (...args: Parameters<typeof adminIrlRedeemFinalizeTestHooks.finalizeAdminIrlRedeem>) => {
-        const firestore = args[3];
+        const commerce = args[3];
         await new Promise<void>((resolve) => {
           const onAbort = () => {
             finalizeAborted = true;
             resolve();
           };
-          firestore.signal.addEventListener('abort', onAbort, { once: true });
-          if (firestore.signal.aborted) onAbort();
+          commerce.signal.addEventListener('abort', onAbort, { once: true });
+          if (commerce.signal.aborted) onAbort();
         });
         await cleanupGate;
         cleanupSettled = true;

@@ -264,7 +264,6 @@ test('stripe checkout manual review email builder includes details and escapes h
   assert.match(content.text, /Mode: test/);
   assert.match(content.text, /Session ID: cs_test_123/);
   assert.match(content.text, /Auth subject: uid-123/);
-  assert.doesNotMatch(content.text, /Firebase/);
   assert.match(content.text, /Review reason: needs <review>/);
   assert.match(content.text, /Created at: 2026-01-02T03:04:05.000Z/);
   assert.match(content.html, /Card NFT 2 &lt;Drop&gt;/);

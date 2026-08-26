@@ -196,7 +196,7 @@ test('semantic marker inspection rejects only the sibling with another valid ord
   assert.deepEqual(inspection.pending.map((marker) => marker.kind), ['shipper_ready_to_ship']);
 });
 
-test('shared reconciliation query uses the full Firestore cursor reference', () => {
+test('shared reconciliation query uses the full Commerce cursor reference', () => {
   const referenceValue = 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7';
   const query = buildReadyNotificationReconciliationQuery({
     limit: 100,

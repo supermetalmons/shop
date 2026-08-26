@@ -24,7 +24,7 @@ import {
 import type { ProfileProviderFetch } from '../src/boundedResponse.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
-import { decodeFirestoreFields } from '../src/firestoreContract.ts';
+import { decodeFixtureFields } from './commerceD1Harness.ts';
 import {
   CommerceWriteConflict,
   type CommerceDocumentKey,
@@ -34,7 +34,7 @@ import {
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const OTHER = 'So11111111111111111111111111111111111111112';
-const UID = 'firebase-user-one';
+const UID = 'auth-user-one';
 const NOW_MS = Date.parse('2026-08-18T12:00:00.000Z');
 const ADDRESS_ID = 'AbCdEfGhIjKlMnOpQrSt';
 const NOTIFICATION_JOB_ID = '123e4567-e89b-42d3-a456-426614174000';
@@ -93,7 +93,7 @@ function stringValue(value: string) {
 }
 
 const TEST_DOCUMENT_PREFIX = 'projects/mons-shop/databases/(default)/documents/';
-const TEST_DOCUMENTS_URL = `https://firestore.googleapis.com/v1/${TEST_DOCUMENT_PREFIX.slice(0, -1)}`;
+const TEST_DOCUMENTS_URL = `https://commerce.googleapis.com/v1/${TEST_DOCUMENT_PREFIX.slice(0, -1)}`;
 
 function encodedValue(value: unknown, fieldPath: string): Record<string, unknown> {
   if (value === null) return { nullValue: null };
@@ -126,7 +126,7 @@ function fixtureRepository(providerFetch: ProfileProviderFetch) {
     if (response.status === 404) return null;
     if (!response.ok) throw new Error('Commerce fixture read failed');
     const payload = await response.json() as { fields?: unknown; updateTime?: unknown };
-    const data = payload.fields === undefined ? {} : decodeFirestoreFields(payload.fields);
+    const data = payload.fields === undefined ? {} : decodeFixtureFields(payload.fields);
     if (!data) throw new Error('Commerce fixture document is invalid');
     return {
       createTime: '',
@@ -264,17 +264,17 @@ function notificationQueue(send: Queue['send']): Queue {
   };
 }
 
-function firestoreValue(value: unknown): unknown {
+function commerceValue(value: unknown): unknown {
   if (typeof value === 'string') return { stringValue: value };
   if (typeof value === 'boolean') return { booleanValue: value };
   if (typeof value === 'number') {
     return Number.isSafeInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
   }
-  if (Array.isArray(value)) return { arrayValue: { values: value.map(firestoreValue) } };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(commerceValue) } };
   if (value && typeof value === 'object') {
     return {
       mapValue: {
-        fields: Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, firestoreValue(entry)])),
+        fields: Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, commerceValue(entry)])),
       },
     };
   }
@@ -288,7 +288,7 @@ function orderDocument(fields: Record<string, unknown>, updateTime = '2026-08-18
   };
   return {
     name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
-    fields: Object.fromEntries(Object.entries(normalizedFields).map(([key, value]) => [key, firestoreValue(value)])),
+    fields: Object.fromEntries(Object.entries(normalizedFields).map(([key, value]) => [key, commerceValue(value)])),
     updateTime,
   };
 }
@@ -399,7 +399,7 @@ test('address route maps D1 failures to a generic unavailable response with one 
   assert.equal(autoIds, 1);
 });
 
-test('address route uses D1 wallet sessions without requesting Firestore authSessions', async () => {
+test('address route uses D1 wallet sessions without requesting Commerce authSessions', async () => {
   let providerCalls = 0;
   const result = await handleProfileWriteRequest(
     request(PROFILE_ADDRESSES_PATH, {
@@ -687,7 +687,7 @@ test('status route leaves a pending marker and returns 503 when Queue publicatio
   assert.equal(errors[0]?.event, 'buyer_order_shipped_notification_enqueue_failed');
 });
 
-test('status route retries a Firestore conflict before publishing one Queue job', async () => {
+test('status route retries a Commerce conflict before publishing one Queue job', async () => {
   let commits = 0;
   let orderReads = 0;
   let queueSends = 0;
@@ -1006,7 +1006,7 @@ test('fulfillment address route encrypts the address and conditionally clears st
   ]);
 });
 
-test('fulfillment address route retries the full read and validation after a Firestore precondition conflict', async () => {
+test('fulfillment address route retries the full read and validation after a Commerce precondition conflict', async () => {
   let reads = 0;
   let commits = 0;
   const updateTimes: string[] = [];
@@ -1096,7 +1096,7 @@ test('fulfillment address route preserves authorization and order-state guards',
   }
 });
 
-test('ShipStation shipment route returns an existing Firestore shipment without calling ShipStation', async () => {
+test('ShipStation shipment route returns an existing Commerce shipment without calling ShipStation', async () => {
   let shipStationCalls = 0;
   let commits = 0;
   const result = await handleProfileWriteRequest(
@@ -2227,7 +2227,7 @@ test('ShipStation label route rejects a shipment change before transitioning pur
 
 test('ShipStation label route fails closed for missing configuration and oversized provider responses', async () => {
   const order = orderDocument({ shipstation: { shipmentId: 'shipment-1' } });
-  const firestoreFetch: typeof fetch = async (input) => {
+  const commerceFetch: typeof fetch = async (input) => {
     const url = new URL(String(input));
     if (url.pathname.endsWith('/deliveryOrders/7')) return Response.json(order);
     return Response.json({ error: 'unexpected' }, { status: 500 });
@@ -2236,7 +2236,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     { ...fulfillmentEnv, SHIPSTATION_API_KEY: '' },
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(firestoreFetch),
+    dependencies(commerceFetch),
   );
   assert.equal(missing.response.status, 409);
   assert.equal((await missing.response.json() as { error: { code: string } }).error.code, 'failed-precondition');
@@ -2249,7 +2249,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     dependencies(async (input) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') return Response.json({}, { status: 429 });
-      return firestoreFetch(input);
+      return commerceFetch(input);
     }),
   );
   assert.equal(rateLimited.response.status, 429);
@@ -2264,7 +2264,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
       if (url.hostname === 'api.shipstation.com') {
         return new Response('{}', { headers: { 'Content-Length': String(300 * 1024) } });
       }
-      return firestoreFetch(input);
+      return commerceFetch(input);
     }),
   );
   assert.equal(oversized.response.status, 502);
@@ -2277,7 +2277,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     dependencies(async (input) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') return Response.json({});
-      return firestoreFetch(input);
+      return commerceFetch(input);
     }),
   );
   assert.equal(malformed.response.status, 502);
@@ -2291,7 +2291,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     dependencies(async (input) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') return Response.json({ labels: [{}] });
-      return firestoreFetch(input);
+      return commerceFetch(input);
     }),
   );
   assert.equal(malformedEntry.response.status, 502);
@@ -2304,7 +2304,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
     dependencies(async (input, init) => {
       const url = new URL(String(input));
-      if (url.hostname !== 'api.shipstation.com') return firestoreFetch(input);
+      if (url.hostname !== 'api.shipstation.com') return commerceFetch(input);
       return new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;
         const abort = () => reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
@@ -2879,7 +2879,7 @@ test('ShipStation label purchase route records definite failures and unresolved 
   }
 });
 
-test('ShipStation label purchase stays unknown after a successful charge and repeated Firestore conflicts', async () => {
+test('ShipStation label purchase stays unknown after a successful charge and repeated Commerce conflicts', async () => {
   let purchaseState: Record<string, unknown> | undefined;
   let purchaseCalls = 0;
   let persistenceConflicts = 0;
@@ -3179,7 +3179,7 @@ test('ShipStation label purchase route reconciles a label after an ambiguous cha
   assert.ok(persistence.updateMask.fieldPaths.includes('shipstation.labelPurchase'));
 });
 
-test('ShipStation label purchase route never charges after its Firestore claim is replaced', async () => {
+test('ShipStation label purchase route never charges after its Commerce claim is replaced', async () => {
   let purchaseState: Record<string, unknown> | undefined;
   let purchaseCalls = 0;
   let rateRead = false;
@@ -3248,7 +3248,7 @@ test('ShipStation rates route refreshes a single package without replacing its S
   let claimId = '';
   const currentOrder = () => orderDocument({
     addressSnapshot: {
-      encrypted: 'stale-firestore-address',
+      encrypted: 'stale-commerce-address',
       email: 'owner@example.com',
       phone: '+905551234567',
       countryCode: 'TR',
@@ -4541,7 +4541,7 @@ test('ShipStation rates route never releases a replacement claim', async () => {
   assert.equal(currentClaimedBy, OTHER);
 });
 
-test('write routes reject invalid payloads, unauthorized wallets, and missing orders without Firestore configuration', async () => {
+test('write routes reject invalid payloads, unauthorized wallets, and missing orders without Commerce configuration', async () => {
   let upstreamCalls = 0;
   const neverFetch: typeof fetch = async () => {
     upstreamCalls += 1;
@@ -4698,7 +4698,7 @@ test('writer failures stay generic and never expose request or credential materi
   }
 });
 
-test('generated Firestore auto IDs are cryptographic-compatible document IDs', () => {
+test('generated Commerce auto IDs are cryptographic-compatible document IDs', () => {
   const ids = Array.from({ length: 100 }, () => profileWriteTestHooks.commerceAutoId());
   assert.equal(new Set(ids).size, ids.length);
   assert.ok(ids.every((id) => /^[A-Za-z0-9]{20}$/.test(id)));

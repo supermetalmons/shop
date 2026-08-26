@@ -83,7 +83,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
     providerFetch: async () => {
       throw new Error('unexpected provider fetch');
     },
@@ -132,7 +132,7 @@ test('checkout handler authenticates, creates one session, and persists the exac
     billingAddressCollection: 'auto',
     successUrl: 'https://mons.shop/drop?stripe_checkout=success&session_id={CHECKOUT_SESSION_ID}',
     cancelUrl: 'https://mons.shop/drop?stripe_checkout=cancel',
-    clientReferenceId: 'firebase-uid:card_nft_binder_devnet:1700000000000',
+    clientReferenceId: 'auth-uid:card_nft_binder_devnet:1700000000000',
     quantity: 1,
     currency: 'usd',
     unitAmountCents: 100,
@@ -140,7 +140,7 @@ test('checkout handler authenticates, creates one session, and persists the exac
     productTaxCode: 'txcd_99999999',
     metadata: {
       dropId: DROP.dropId,
-      uid: 'firebase-uid',
+      uid: 'auth-uid',
       fulfillmentMode: 'admin_variant_receipt',
       placeholder: 'stripe_direct_delivery',
       quantity: '1',
@@ -149,9 +149,9 @@ test('checkout handler authenticates, creates one session, and persists the exac
   });
   assert.equal(writes[0]?.path, `drops/${DROP.dropId}/stripeCheckouts/cs_test_123`);
   assert.equal(writes[0]?.document.status, 'created');
-  assert.equal(writes[0]?.document.owner, 'anonymous:firebase-uid');
+  assert.equal(writes[0]?.document.owner, 'anonymous:auth-uid');
   assert.equal(writes[0]?.document.ownerKind, 'anonymous');
-  assert.equal(writes[0]?.document.authSubject, 'firebase-uid');
+  assert.equal(writes[0]?.document.authSubject, 'auth-uid');
 });
 
 test('staff checkout persists the wallet as the direct order owner', async () => {
@@ -170,7 +170,7 @@ test('staff checkout persists the wallet as the direct order owner', async () =>
   assert.equal(checkout?.owner, STAFF_WALLET);
   assert.equal(checkout?.ownerKind, 'wallet');
   assert.equal(checkout?.uid, STAFF_WALLET);
-  assert.equal(Object.hasOwn(checkout || {}, 'firebaseUid'), false);
+  assert.equal(Object.hasOwn(checkout || {}, 'authSubject'), false);
   assert.equal(Object.hasOwn(checkout || {}, 'authSubject'), false);
 });
 
@@ -190,7 +190,7 @@ test('linked anonymous checkout persists the wallet as the direct order owner', 
   assert.equal(checkout?.owner, STAFF_WALLET);
   assert.equal(checkout?.ownerKind, 'wallet');
   assert.equal(checkout?.uid, STAFF_WALLET);
-  assert.equal(Object.hasOwn(checkout || {}, 'firebaseUid'), false);
+  assert.equal(Object.hasOwn(checkout || {}, 'authSubject'), false);
   assert.equal(Object.hasOwn(checkout || {}, 'authSubject'), false);
 });
 

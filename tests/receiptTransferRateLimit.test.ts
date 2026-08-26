@@ -16,7 +16,7 @@ import {
   type ReceiptTransferRateLimitD1Statement,
 } from '../cloud/workers/api/src/receiptTransferRateLimit.ts';
 
-const UID = 'anonymous-firebase-uid';
+const UID = 'anonymous-auth-uid';
 const OWNER = 'owner-wallet';
 const ASSET = 'receipt-1';
 

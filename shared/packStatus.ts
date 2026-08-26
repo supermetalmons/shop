@@ -222,10 +222,6 @@ export function buildPackStatusBreakdown(
   };
 }
 
-/**
- * Validates a raw Firestore pack-status document and derives the same display
- * model used by Functions rebuilds.
- */
 export function normalizePackStatusBreakdown(
   raw: unknown,
   dropId: string,

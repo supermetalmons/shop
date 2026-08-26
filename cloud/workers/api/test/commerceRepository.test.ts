@@ -9,21 +9,7 @@ import {
   commerceFieldValue,
   commerceKeys,
 } from '../src/commerceRepository.ts';
-import { D1CommerceDocumentStore } from '../src/commerceDocumentStore.ts';
-import {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-} from '../src/firestoreContract.ts';
 import { createCommerceD1Harness } from './commerceD1Harness.ts';
-
-const COMMIT_URL = `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`;
-
-function legacyCreate(path: string, fields: Record<string, unknown>): Record<string, unknown> {
-  return {
-    currentDocument: { exists: false },
-    update: { fields, name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}` },
-  };
-}
 
 test('native repository keys cover every commerce document kind', () => {
   assert.equal(commerceKeys.claimCode('ABC').path, 'claimCodes/ABC');
@@ -47,7 +33,7 @@ test('native repository keys cover every commerce document kind', () => {
   );
 });
 
-test('native writes remain readable through the compatibility adapter', async () => {
+test('native writes persist canonical documents and lossless cursor timestamps', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
   const key = commerceKeys.deliveryOrder('poncho', '7');
@@ -67,18 +53,6 @@ test('native writes remain readable through the compatibility adapter', async ()
     });
   });
 
-  const adapter = new D1CommerceDocumentStore(harness.db);
-  const value = await adapter.request({
-    method: 'GET',
-    nowMs: 1_700_000_001_457,
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents/${key.path}`,
-  }) as { fields: Record<string, Record<string, unknown>> };
-  assert.equal(value.fields.owner.stringValue, 'wallet');
-  assert.equal(value.fields.status.stringValue, 'ready_to_ship');
-  assert.equal(value.fields.attempts.integerValue, '3');
-  assert.equal(value.fields.processedAt.timestampValue, '2023-11-14T22:13:20.123000001Z');
-  assert.equal(value.fields.updatedAt.timestampValue, '2023-11-14T22:13:21.456000000Z');
-
   const record = await repository.get(key);
   assert.deepEqual(record?.data, {
     attempts: 3,
@@ -89,32 +63,50 @@ test('native writes remain readable through the compatibility adapter', async ()
   });
   assert.deepEqual(record?.processedAt, { seconds: 1_700_000_000, nanos: 123_000_001 });
   assert.equal(record?.version, 2);
+  assert.deepEqual(
+    { ...harness.database.prepare(`SELECT document_json, processed_at_seconds, processed_at_nanos
+      FROM commerce_documents WHERE document_path = ?`).get(key.path) },
+    {
+      document_json: JSON.stringify(record?.data),
+      processed_at_seconds: 1_700_000_000,
+      processed_at_nanos: 123_000_001,
+    },
+  );
+  assert.equal(
+    harness.database.prepare(`SELECT COUNT(*) AS count FROM pragma_table_info('commerce_documents')
+      WHERE name = 'fields_json'`).get()!.count,
+    0,
+  );
 });
 
-test('native cursors preserve compatibility timestamps written during the bridge gap', async () => {
+test('native cursors preserve nanosecond and document-path ordering', async () => {
   const harness = createCommerceD1Harness();
-  const adapter = new D1CommerceDocumentStore(harness.db);
-  const writes = [
-    ['1', '2026-08-18T12:00:00.123000001Z'],
-    ['2', '2026-08-18T12:00:00.123000002Z'],
-    ['3', '2026-08-18T12:00:00.123000002Z'],
-  ].map(([id, processedAt]) => legacyCreate(`drops/poncho/deliveryOrders/${id}`, {
-    processedAt: { timestampValue: processedAt },
-    status: { stringValue: 'ready_to_ship' },
-  }));
-  await adapter.request({ method: 'POST', nowMs: 10, url: COMMIT_URL, body: JSON.stringify({ writes }) });
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(10, async (unit) => {
+    await unit.create(commerceKeys.deliveryOrder('poncho', '1'), {
+      processedAt: commerceFieldValue.timestamp(1_787_054_400, 123_000_001),
+      status: 'ready_to_ship',
+    });
+    await unit.create(commerceKeys.deliveryOrder('poncho', '2'), {
+      processedAt: commerceFieldValue.timestamp(1_787_054_400, 123_000_002),
+      status: 'ready_to_ship',
+    });
+    await unit.create(commerceKeys.deliveryOrder('poncho', '3'), {
+      processedAt: commerceFieldValue.timestamp(1_787_054_400, 123_000_002),
+      status: 'ready_to_ship',
+    });
+  });
 
   assert.deepEqual(
     harness.database.prepare(`SELECT document_id, processed_at_seconds, processed_at_nanos
       FROM commerce_documents ORDER BY document_id`).all().map((row) => ({ ...row })),
     [
-      { document_id: '1', processed_at_seconds: null, processed_at_nanos: null },
-      { document_id: '2', processed_at_seconds: null, processed_at_nanos: null },
-      { document_id: '3', processed_at_seconds: null, processed_at_nanos: null },
+      { document_id: '1', processed_at_seconds: 1_787_054_400, processed_at_nanos: 123_000_001 },
+      { document_id: '2', processed_at_seconds: 1_787_054_400, processed_at_nanos: 123_000_002 },
+      { document_id: '3', processed_at_seconds: 1_787_054_400, processed_at_nanos: 123_000_002 },
     ],
   );
 
-  const repository = new D1CommerceRepository(harness.db);
   const records = await repository.query({
     dropId: 'poncho',
     filters: [{ field: 'status', op: 'equal', value: 'ready_to_ship' }],

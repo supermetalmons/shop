@@ -39,7 +39,7 @@ const allowRateLimit = { limit: async () => ({ success: true }) } satisfies Rate
 
 function env(options: {
   apiKey?: string;
-  commerceState?: 'firestore' | 'paused' | 'd1';
+  commerceState?: 'paused' | 'd1';
   dataDb?: D1Database;
   opsDb?: D1Database;
   resendContactsApiKey?: string;
@@ -58,7 +58,7 @@ function env(options: {
       prepare() {
         return {
           first: async () => ({
-            authority_state: options.commerceState || 'firestore',
+            authority_state: options.commerceState || 'd1',
             revision: 1,
             documents_revision: 0,
           }),
@@ -397,7 +397,7 @@ test('profile routes enforce restricted CORS, bearer authentication, and stable 
   assert.equal(unauthenticated.headers.get('access-control-allow-origin'), 'https://mons.shop');
   assert.equal(logs[0]?.route, '/profile/state');
   assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
-  assert.equal(JSON.stringify(logs).includes('firebase'), false);
+  assert.equal(JSON.stringify(logs).includes('anonymous'), false);
 
   const authPreflight = await handleRequest(new Request('https://api.mons.shop/auth/solana', {
     method: 'OPTIONS',
@@ -450,7 +450,7 @@ test('staff-only path policy covers current and future admin and fulfillment rou
     assert.equal(isStaffOnlyApiPath(pathname), false, pathname);
   }
   const future = await handleRequest(request('/admin/future', {}, {
-    Authorization: 'Bearer firebase-token',
+    Authorization: 'Bearer auth-token',
     Origin: 'https://mons.shop',
   }), env(), quietDependencies(fetch));
   assert.equal(future.status, 401);
@@ -795,7 +795,7 @@ test('reveal route enforces restricted CORS, bearer authentication, methods, and
   assert.equal(logs[0]?.profileAuthOutcome, 'rejected');
   assert.equal(logs[0]?.revealDropId, 'clear_cards_devnet_v2');
   assert.equal(logs[0]?.revealBoxAssetId, CARD_COLLECTION);
-  assert.equal(JSON.stringify(logs).includes('firebase-token'), false);
+  assert.equal(JSON.stringify(logs).includes('auth-token'), false);
 
   const denied = await handleRequest(request(pathname, body, {
     Origin: 'https://evil.example',
@@ -981,7 +981,7 @@ test('pack-status route rejects malformed cache entries and refreshes them from 
       {
         ...quietDependencies(async () => {
           providerCalls += 1;
-          throw new Error('pack-status must not call Firestore or another provider');
+          throw new Error('pack-status must not call Commerce or another provider');
         }),
         cache: {
           match: async () => cachedResponse(),
@@ -1022,7 +1022,7 @@ test('pack-status route rejects malformed cache entries and refreshes them from 
     new Request('https://api.mons.shop/pack-status/card_nft_2'),
     env({ dataDb: packStatusD1({ row: null }) }),
     {
-      ...quietDependencies(async () => assert.fail('pack-status must not call Firestore or another provider')),
+      ...quietDependencies(async () => assert.fail('pack-status must not call Commerce or another provider')),
       cache: {
         match: async () => Response.json({ dropId: 'card_nft_2', total: 999 }),
         put: async () => assert.fail('missing D1 data must not be cached'),
