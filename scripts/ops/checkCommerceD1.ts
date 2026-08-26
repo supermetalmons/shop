@@ -1,5 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { commerceDocumentIdentity } from '../../cloud/workers/api/src/commerceDocumentStore.ts';
+import { canonicalizeCommerceIdentity } from '../shared/commerceIdentityCanonicalization.ts';
 import {
   queryRemoteCommerceD1,
   safeInteger,
@@ -42,6 +43,9 @@ export function checkCommerceD1(): Record<string, unknown> {
   if (!migrations.some((row) => String(row.name).endsWith('0007_native_repository_expand.sql'))) {
     fail('Commerce D1 native-repository expansion migration is missing.');
   }
+  if (!migrations.some((row) => String(row.name).endsWith('0008_canonicalize_identity_documents.sql'))) {
+    fail('Commerce D1 identity canonicalization migration is missing.');
+  }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -77,15 +81,24 @@ export function checkCommerceD1(): Record<string, unknown> {
       identity.dropId !== row.drop_id ||
       identity.documentId !== row.document_id
     ) fail('Commerce D1 contains an invalid authoritative document identity.');
+    let document: Record<string, unknown>;
     try {
-      const fields = JSON.parse(String(row.fields_json));
-      const document = JSON.parse(String(row.document_json));
+      const fields = JSON.parse(String(row.fields_json)) as unknown;
+      const parsedDocument = JSON.parse(String(row.document_json)) as unknown;
       if (
         !fields || typeof fields !== 'object' || Array.isArray(fields) ||
-        !document || typeof document !== 'object' || Array.isArray(document)
+        !parsedDocument || typeof parsedDocument !== 'object' || Array.isArray(parsedDocument)
       ) throw new Error('fields');
+      document = parsedDocument as Record<string, unknown>;
     } catch {
       fail('Commerce D1 contains invalid authoritative fields JSON.');
+    }
+    try {
+      if (canonicalizeCommerceIdentity(document).changed) {
+        fail('Commerce D1 contains a legacy identity document after canonicalization.');
+      }
+    } catch {
+      fail('Commerce D1 contains an invalid or legacy identity document after canonicalization.');
     }
   }
 

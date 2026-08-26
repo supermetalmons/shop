@@ -41,6 +41,12 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function containsKey(value: unknown, keys: ReadonlySet<string>): boolean {
+  if (Array.isArray(value)) return value.some((entry) => containsKey(entry, keys));
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(([key, entry]) => keys.has(key) || containsKey(entry, keys));
+}
+
 function documentDigestValue(document: CommerceIdentityDocument, data: Record<string, unknown>): string {
   return canonicalJson({
     createTime: document.createTime,
@@ -76,7 +82,7 @@ export function canonicalizeCommerceIdentity(
 ): { changed: boolean; data: Record<string, unknown> } {
   const hasLegacySubject = Object.hasOwn(data, 'firebaseUid');
   const hasMergedLegacySubject = Object.hasOwn(data, 'mergedFirebaseUid');
-  const hasCanonicalSubject = Object.hasOwn(data, 'authSubject') || Object.hasOwn(data, 'mergedAuthSubject');
+  const hasCanonicalSubject = containsKey(data, new Set(['authSubject', 'mergedAuthSubject']));
   const hasLegacyValue = Object.values(data).some(
     (value) => typeof value === 'string' && (value === 'firebase' || value.startsWith('firebase:')),
   );
@@ -94,11 +100,11 @@ export function canonicalizeCommerceIdentity(
   delete next.firebaseUid;
 
   if (hasMergedLegacySubject) {
+    const walletOwner = requiredString(data.owner, 'Merged wallet owner');
     if (
       requiredString(data.mergedFirebaseUid, 'Merged legacy auth subject') !== authSubject ||
       data.previousOwner !== legacyOwner ||
-      typeof data.owner !== 'string' ||
-      data.owner === legacyOwner
+      walletOwner === legacyOwner
     ) {
       throw new Error('Commerce document has an invalid merged legacy identity.');
     }

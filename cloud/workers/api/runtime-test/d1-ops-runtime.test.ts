@@ -116,6 +116,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       '0012_anonymous_auth.sql',
       '0013_remove_firebase_auth_fallback.sql',
       '0014_auth_subject_bridge.sql',
+      '0015_auth_subject_cutover.sql',
     ]);
     const authControl = await env.OPS_DB.prepare(`SELECT firebase_fallback_enabled, revision, firebase_disabled_at_ms
       FROM anonymous_auth_control

@@ -42,6 +42,12 @@ function bridgeDatabase(seedCount = 0): DatabaseSync {
   return database;
 }
 
+function cutoverDatabase(seedCount = 0): DatabaseSync {
+  const database = bridgeDatabase(seedCount);
+  database.exec(migration('0015_auth_subject_cutover.sql'));
+  return database;
+}
+
 test('auth-subject bridge preserves all rows, revisions, and leases', () => {
   const database = bridgeDatabase(1_205);
   assert.deepEqual({ ...database.prepare(`SELECT
@@ -137,4 +143,77 @@ test('auth-subject bridge rejects mixed identities and duplicate cross-path inse
       reconcile_lease_id, reconcile_lease_expires_at_ms
     ) VALUES (?, ?, ?, ?, 1, NULL, NULL)`)
     .run('same-subject', WALLET, 253_402_300_799_999, NOW_MS));
+});
+
+test('auth-subject cutover preserves every row, revision, lease, and timestamp exactly', () => {
+  const database = bridgeDatabase(1_205);
+  const before = database.prepare(`SELECT
+      auth_subject,
+      wallet,
+      expires_at_ms,
+      updated_at_ms,
+      wallet_revision,
+      reconcile_lease_id,
+      reconcile_lease_expires_at_ms
+    FROM wallet_sessions
+    ORDER BY auth_subject`).all().map((row) => ({ ...row }));
+  database.exec(migration('0015_auth_subject_cutover.sql'));
+  const after = database.prepare(`SELECT
+      auth_subject,
+      wallet,
+      expires_at_ms,
+      updated_at_ms,
+      wallet_revision,
+      reconcile_lease_id,
+      reconcile_lease_expires_at_ms
+    FROM wallet_sessions
+    ORDER BY auth_subject`).all().map((row) => ({ ...row }));
+  assert.deepEqual(after, before);
+  assert.equal(after.length, 1_205);
+  assert.deepEqual(
+    database.prepare('PRAGMA table_info(wallet_sessions)').all().map((row) => ({ ...row })),
+    [
+      { cid: 0, name: 'auth_subject', type: 'TEXT', notnull: 1, dflt_value: null, pk: 1 },
+      { cid: 1, name: 'wallet', type: 'TEXT', notnull: 1, dflt_value: null, pk: 0 },
+      { cid: 2, name: 'expires_at_ms', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0 },
+      { cid: 3, name: 'updated_at_ms', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0 },
+      { cid: 4, name: 'wallet_revision', type: 'INTEGER', notnull: 1, dflt_value: null, pk: 0 },
+      { cid: 5, name: 'reconcile_lease_id', type: 'TEXT', notnull: 0, dflt_value: null, pk: 0 },
+      { cid: 6, name: 'reconcile_lease_expires_at_ms', type: 'INTEGER', notnull: 0, dflt_value: null, pk: 0 },
+    ],
+  );
+  assert.deepEqual(
+    database.prepare("SELECT name FROM sqlite_schema WHERE name LIKE 'wallet_sessions_sync_%'").all(),
+    [],
+  );
+});
+
+test('wallet-session operations remain concurrent-safe after auth-subject cutover', async () => {
+  const database = cutoverDatabase();
+  const db = d1Database(database);
+  const created = await establishD1WalletSession({
+    baseline: null,
+    db,
+    authSubject: 'canonical-subject',
+    nowMs: NOW_MS,
+    wallet: WALLET,
+  });
+  assert.equal(created.walletRevision, 1);
+  const renewed = await establishD1WalletSession({
+    baseline: created,
+    db,
+    authSubject: 'canonical-subject',
+    nowMs: NOW_MS + 1,
+    wallet: WALLET,
+  });
+  assert.equal(renewed.walletRevision, 2);
+  const lease = await acquireWalletSessionReconcileLease({
+    authSubject: 'canonical-subject',
+    db,
+    leaseId: '00000000-0000-4000-8000-000000000003',
+    nowMs: NOW_MS + 2,
+  });
+  assert.equal(lease?.wallet, WALLET);
+  await releaseWalletSessionReconcileLease(db, 'canonical-subject', lease!.id);
+  assert.equal((await loadD1WalletSession(db, 'canonical-subject'))?.reconcileLeaseId, null);
 });
