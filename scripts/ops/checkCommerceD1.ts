@@ -93,7 +93,7 @@ export function checkCommerceD1(): Record<string, unknown> {
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
       FROM commerce_documents
       WHERE document_kind = 'delivery_order' AND owner = 'owner' AND status = 'ready_to_ship'`),
-    'commerce_documents_delivery_owner_status',
+    'commerce_documents_owner_processed_cursor',
   );
   requireIndex(
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
