@@ -16,7 +16,8 @@ export function formatOpsD1Report(): string {
     walletSessionStorage,
   } = readRemoteOpsD1Integrity();
   const cursor = readyNotifications.cursorPath || 'none';
-  return `Ops D1 is healthy: anonymous auth ${anonymousAuthSessionCount} sessions, Firebase fallback ${anonymousAuth.firebaseFallbackEnabled ? 'enabled' : 'disabled'}, revision ${anonymousAuth.revision}; ready notifications ${readyNotifications.paused ? 'paused' : 'active'}, cursor ${cursor}, revision ${readyNotifications.revision}; reveal submissions ${revealSubmissionCount}, ${revealSubmissionStorage.paused ? 'paused' : 'active'}, source ${revealSubmissionStorage.source}, revision ${revealSubmissionStorage.revision}; profiles ${profileCount}, addresses ${profileAddressCount}, source ${profileStorageSource}; wallet sessions ${walletSessionCount}, source ${walletSessionStorage.source}, revision ${walletSessionStorage.revision}.`;
+  if (anonymousAuth.firebaseDisabledAtMs === null) throw new Error('Firebase authentication removal timestamp is missing.');
+  return `Ops D1 is healthy: anonymous auth ${anonymousAuthSessionCount} sessions, Firebase authentication removed at ${new Date(anonymousAuth.firebaseDisabledAtMs).toISOString()}, revision ${anonymousAuth.revision}; ready notifications ${readyNotifications.paused ? 'paused' : 'active'}, cursor ${cursor}, revision ${readyNotifications.revision}; reveal submissions ${revealSubmissionCount}, ${revealSubmissionStorage.paused ? 'paused' : 'active'}, source ${revealSubmissionStorage.source}, revision ${revealSubmissionStorage.revision}; profiles ${profileCount}, addresses ${profileAddressCount}, source ${profileStorageSource}; wallet sessions ${walletSessionCount}, source ${walletSessionStorage.source}, revision ${walletSessionStorage.revision}.`;
 }
 
 function isDirectRun(): boolean {

@@ -208,7 +208,7 @@ type FinalizeDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
 };
 
 function statusForCode(code: AdminIrlRedeemFinalizeErrorCode): number {
@@ -1621,7 +1621,7 @@ const defaultDependencies: FinalizeDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
 };
 
 async function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -1672,7 +1672,7 @@ export async function handleAdminIrlRedeemFinalize(
   let finalization: ReturnType<FinalizeDependencies['finalize']> | undefined;
   try {
     body = await readRequestBody(request, controller.signal);
-    identity = await dependencies.verifyIdToken(request.headers.get('Authorization'), trackedFetch, controller.signal, dependencies.nowMs(), request, env.OPS_DB);
+    identity = await dependencies.verifyIdentity(request, env.OPS_DB, controller.signal, dependencies.nowMs());
     if (!isStaffRequestIdentity(identity)) {
       throw new AdminIrlRedeemFinalizeError('unauthenticated', 'Staff wallet authentication is required.');
     }

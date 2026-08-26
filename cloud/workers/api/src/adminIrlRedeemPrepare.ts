@@ -237,7 +237,7 @@ type AdminIrlRedeemPrepareDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
   loadWalletSession: (
     context: FirestoreContext,
@@ -1372,7 +1372,7 @@ const defaultDependencies: AdminIrlRedeemPrepareDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
   getDrop: getApiDrop,
   loadWalletSession,
   loadReceiptMarker,
@@ -1424,13 +1424,11 @@ export async function handleAdminIrlRedeemPrepare(
     const body = await readRequestBody(request, controller.signal);
     dropId = normalizeDropId(body.dropId);
     itemCount = body.itemIds.length;
-    identity = await dependencies.verifyIdToken(
-      request.headers.get('Authorization'),
-      trackedFetch,
-      controller.signal,
-      dependencies.nowMs(),
+    identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
+      controller.signal,
+      dependencies.nowMs(),
     );
     if (!isStaffRequestIdentity(identity)) {
       throw new AdminIrlRedeemPrepareError('unauthenticated', 'Staff wallet authentication is required.');

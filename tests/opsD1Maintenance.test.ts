@@ -36,6 +36,7 @@ const migrationSql = [
   '0010_reveal_submissions_baseline_index.sql',
   '0011_staff_wallet_auth.sql',
   '0012_anonymous_auth.sql',
+  '0013_remove_firebase_auth_fallback.sql',
 ]
   .map((name) => readFileSync(
     new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
@@ -102,6 +103,7 @@ function integrityInput(
         { name: '0010_reveal_submissions_baseline_index.sql' },
         { name: '0011_staff_wallet_auth.sql' },
         { name: '0012_anonymous_auth.sql' },
+        { name: '0013_remove_firebase_auth_fallback.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
@@ -318,12 +320,6 @@ test('ops migration enforces control and rate-limit invariants', () => {
     assert.throws(() => db.exec(`UPDATE profile_addresses SET encrypted = 'changed'`));
     assert.throws(() => db.exec(`DELETE FROM profile_addresses`));
     assert.throws(() => db.exec(`DELETE FROM profiles`));
-    db.exec(`UPDATE anonymous_auth_control SET
-      firebase_fallback_enabled = 0,
-      revision = revision + 1,
-      updated_at_ms = 1,
-      firebase_disabled_at_ms = 1
-      WHERE singleton = 1`);
     assert.throws(() => db.exec(`UPDATE anonymous_auth_control SET
       firebase_fallback_enabled = 1,
       revision = revision + 1,
@@ -341,11 +337,11 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
   const report = assertOpsD1Integrity(healthy);
   assert.deepEqual(report, {
     anonymousAuth: {
-      firebaseFallbackEnabled: true,
-      revision: 1,
+      firebaseFallbackEnabled: false,
+      revision: 2,
       createdAtMs: 0,
-      updatedAtMs: 0,
-      firebaseDisabledAtMs: null,
+      updatedAtMs: report.anonymousAuth.updatedAtMs,
+      firebaseDisabledAtMs: report.anonymousAuth.firebaseDisabledAtMs,
     },
     anonymousAuthSessionCount: 0,
     profileAddressCount: 0,
@@ -377,6 +373,8 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
   });
   assert.ok(report.walletSessionStorage.updatedAtMs > 0);
   assert.ok(report.revealSubmissionStorage.updatedAtMs > 0);
+  assert.ok(report.anonymousAuth.updatedAtMs > 0);
+  assert.equal(report.anonymousAuth.firebaseDisabledAtMs, report.anonymousAuth.updatedAtMs);
   assert.equal(
     report.revealSubmissionStorage.cutoverAtMs,
     report.revealSubmissionStorage.updatedAtMs,
@@ -416,6 +414,19 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
   assert.throws(
     () => assertOpsD1Integrity(integrityInput({ migrations: [] })),
     /migrations/,
+  );
+  assert.throws(
+    () => assertOpsD1Integrity(integrityInput({
+      anonymousAuthControl: [{
+        singleton: 1,
+        firebase_fallback_enabled: 1,
+        revision: 1,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+        firebase_disabled_at_ms: null,
+      }],
+    })),
+    /permanently disabled/,
   );
   assert.throws(
     () => assertOpsD1Integrity(integrityInput({ foreignKeyCheck: [{ table: 'profile_addresses' }] })),

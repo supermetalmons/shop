@@ -64,7 +64,6 @@
     "check:pack-status-d1": "node --import tsx scripts/ops/checkPackStatusD1.ts",
     "check:ops-d1": "node --import tsx scripts/ops/checkOpsD1.ts",
     "ready-notifications-control": "node --import tsx scripts/ops/readyNotificationsControl.ts",
-    "anonymous-auth-control": "node --import tsx scripts/ops/anonymousAuthControl.ts",
     "migrate:firebase-wallet-ownership": "node --import tsx scripts/ops/migrateFirebaseWalletOwnership.ts",
     "reveal-submissions-control": "node --import tsx scripts/ops/revealSubmissionsControl.ts",
     "test-resend-notification-email": "tsx scripts/ops/sendTestResendNotificationEmail.ts",

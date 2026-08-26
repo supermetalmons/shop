@@ -126,7 +126,6 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
   return new Request(`https://api.mons.shop${IRL_CLAIM_PREPARE_PATH}`, {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer firebase-token',
       'Content-Type': 'application/json',
       Origin: 'https://mons.shop',
       ...headers,
@@ -137,7 +136,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadClaim: async () => ({ dropId: DROP_ID, boxId: 7, dudeIds: [1, 2, 3] }),
     resolveLegacyDropIds: async () => [],
@@ -490,7 +489,7 @@ test('IRL claim handler rejects authentication and wallet-session mismatches', a
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     env(),
     dependencies({
-      verifyIdToken: async () => {
+      verifyIdentity: async () => {
         throw new RequestIdentityError('invalid-token');
       },
     }),
@@ -585,7 +584,7 @@ test('IRL claim handler returns a stable deadline error', async () => {
     env(),
     dependencies({
       timeoutMs: 5,
-      verifyIdToken: async (_authorization: string | null, _fetch: unknown, signal: AbortSignal) =>
+      verifyIdentity: async (_authorization: string | null, _fetch: unknown, signal: AbortSignal) =>
         new Promise((_resolve, reject) => {
           const fail = () => reject(signal.reason);
           signal.addEventListener('abort', fail, { once: true });

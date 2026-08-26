@@ -24,7 +24,6 @@ function request(body: unknown = { code: CODE, recipient: RECIPIENT }, init: Req
   return new Request(`https://api.mons.shop${STRIPE_RECEIPT_CLAIM_PATH}`, {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer firebase-token',
       'Content-Type': 'application/json',
       Origin: 'https://mons.shop',
       ...init.headers,
@@ -45,7 +44,7 @@ function env(overrides: Partial<Record<'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SER
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     providerFetch: async () => { throw new Error('unexpected provider fetch'); },
     nowMs: () => 1_700_000_000_000,
     timeoutMs: 1_000,
@@ -190,7 +189,7 @@ test('Stripe receipt claim route preserves the authenticated request and exact r
     env(),
     () => undefined,
     dependencies({
-      verifyIdToken: async () => {
+      verifyIdentity: async () => {
         observedUid = 'firebase-uid';
         return { uid: observedUid };
       },
@@ -222,7 +221,7 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
     request(),
     env(),
     () => undefined,
-    dependencies({ verifyIdToken: async () => { throw new RequestIdentityError('invalid-token'); } }),
+    dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(unauthenticated.response.status, 401);
   assert.deepEqual(await unauthenticated.response.json(), {

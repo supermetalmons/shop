@@ -594,7 +594,6 @@ function request(path: string, body: unknown, init: RequestInit = {}): Request {
   return new Request(`https://api.mons.shop${path}`, {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer firebase-token',
       'Content-Type': 'application/json',
       Origin: 'https://mons.shop',
       ...init.headers,
@@ -619,7 +618,7 @@ function env(overrides: Partial<Pick<Env,
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     issue: async () => ({
       processed: true as const,
       deliveryId: 7,
@@ -1684,7 +1683,7 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
         invalidate: () => undefined,
       },
       providerFetch,
-      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     },
   );
   await Promise.all(deferred);
@@ -2088,7 +2087,7 @@ test('explicit recovery uses the production Firestore adapter and preserves not-
         invalidate: () => undefined,
       },
       providerFetch,
-      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     },
   );
   assert.equal(result.response.status, 200);
@@ -2203,7 +2202,7 @@ test('forced recovery validates the delivery PDA and finalizes an already-burned
         invalidate: () => undefined,
       },
       providerFetch,
-      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     },
   );
   assert.equal(result.response.status, 200);
@@ -2382,7 +2381,7 @@ test('receipt routes map invalid authentication and provider authentication fail
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     () => undefined,
-    dependencies({ verifyIdToken: async () => { throw new RequestIdentityError('invalid-token'); } }),
+    dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(invalid.response.status, 401);
   assert.equal(invalid.authOutcome, 'rejected');
@@ -2392,7 +2391,7 @@ test('receipt routes map invalid authentication and provider authentication fail
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     () => undefined,
-    dependencies({ verifyIdToken: async () => { throw new RequestIdentityError('provider-unavailable'); } }),
+    dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('provider-unavailable'); } }),
   );
   assert.equal(provider.response.status, 503);
   assert.equal(provider.authOutcome, 'provider-failure');
@@ -2406,7 +2405,7 @@ test('receipt route deadline is stable and retryable', async () => {
     () => undefined,
     dependencies({
       timeoutMs: 5,
-      verifyIdToken: async (_authorization: unknown, _fetch: unknown, signal: AbortSignal) =>
+      verifyIdentity: async (_authorization: unknown, _fetch: unknown, signal: AbortSignal) =>
         new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })),
     }),
   );

@@ -14,8 +14,8 @@ control, and rate-limit state.
 - `mons-shop-api` serves `api.mons.shop`, including inventory, Solana RPC,
   profiles, delivery, claims, Stripe, ShipStation, notifications, admin routes,
   scheduled reconciliation, and Queue consumers.
-- Ops D1 stores opaque anonymous-session hashes and the guarded Firebase-token
-  compatibility control. Firestore client rules deny every browser read and
+- Ops D1 stores opaque anonymous-session hashes and the irreversible Firebase-auth
+  removal record. Firestore client rules deny every browser read and
   write; the API Worker accesses operational data with its service accounts.
 - The `mons-shop-data` D1 database is authoritative for public pack-status
   summaries and events.
@@ -79,10 +79,10 @@ opaque credential stays in an HttpOnly, host-only cookie; local storage contains
 only non-secret subject and expiry metadata. Authenticated browser requests use
 the frontend Worker's same-origin `/api/*` gateway and a fixed CSRF header.
 
-Firebase ID tokens remain temporarily accepted only for stale frontend builds.
-The compatibility switch is stored in Ops D1 and can only move forward to the
-disabled state. Firestore remains a server-side operational store: the catch-all
-rules reject every browser read and write.
+Firebase ID tokens are not accepted. The completed removal is recorded
+irreversibly in Ops D1, and arbitrary bearer tokens fail closed without a Google
+certificate lookup. Firestore remains a server-side operational store: the
+catch-all rules reject every browser read and write.
 
 Firestore still stores orders, assignments, and delivery projection outboxes.
 Its indexes, rules, emulator tooling, operator scripts, and API service-account
@@ -378,12 +378,11 @@ node_modules/.bin/wrangler tail mons-shop-api --format json
 Queue processing is idempotent. Replay dead-letter jobs only after fixing the
 underlying failure and identifying the affected jobs.
 
-### Anonymous-auth cutover
+### Legacy shipment ownership
 
-Inspect the compatibility state and audit legacy wallet-owned shipments with:
+Audit legacy wallet-owned shipments with:
 
 ```bash
-npm run anonymous-auth-control -- status
 npm run migrate:firebase-wallet-ownership -- status
 ```
 
@@ -395,16 +394,8 @@ npm run migrate:firebase-wallet-ownership -- status
 ```
 
 Unmapped Firebase-only orders are reported and retained without reassignment.
-After the new browser auth has been observed and the mapped update count is
-zero, permanently disable legacy Firebase tokens with:
-
-```bash
-npm run anonymous-auth-control -- disable-firebase --write
-```
-
-The command audits ownership immediately before and after disabling Firebase.
-This transition is irreversible. If the post-disable audit finds a cutover race,
-roll forward immediately with:
+Firebase authentication has been removed irreversibly. If an ownership audit
+finds a late mapped shipment, roll forward with:
 
 ```bash
 npm run migrate:firebase-wallet-ownership -- apply --write
@@ -420,12 +411,10 @@ The retained tools are intentionally narrow:
 - `npm run rebuild-pack-status` (`scripts/ops/rebuildPackStatus.ts`) compares
   operational Firestore history with D1 summaries and is read-only unless its
   explicit D1 write option is supplied.
-- `npm run check:ops-d1` validates the remote operations database and its
-  ready-notification singleton.
+- `npm run check:ops-d1` validates the remote operations database, its
+  ready-notification singleton, and the permanent Firebase-auth removal record.
 - `npm run ready-notifications-control` inspects or changes the D1 notification
   control; every mutation requires `--write`.
-- `npm run anonymous-auth-control` inspects or permanently disables the legacy
-  Firebase-token fallback.
 - `npm run migrate:firebase-wallet-ownership` audits or backfills legacy
   Firebase-owned shipment documents for UIDs already bound to Solana wallets.
 - `npm run test-resend-notification-email` sends a synthetic notification

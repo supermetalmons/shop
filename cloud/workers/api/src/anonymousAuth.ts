@@ -216,21 +216,6 @@ export async function verifyAnonymousSession(
   return verified;
 }
 
-export async function firebaseFallbackEnabled(db: D1Database | undefined): Promise<boolean> {
-  if (!db) throw new AnonymousAuthError('provider-unavailable');
-  try {
-    const row = await db.prepare(`SELECT firebase_fallback_enabled
-      FROM anonymous_auth_control
-      WHERE singleton = 1`)
-      .first<{ firebase_fallback_enabled: unknown }>();
-    if (row?.firebase_fallback_enabled === 1) return true;
-    if (row?.firebase_fallback_enabled === 0) return false;
-  } catch {
-    throw new AnonymousAuthError('provider-unavailable');
-  }
-  throw new AnonymousAuthError('provider-unavailable');
-}
-
 async function createOrRefreshSession(
   request: Request,
   env: AnonymousAuthEnv,

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   RequestIdentityError,
+  internalStaffAuthorization,
   verifyRequestIdentity,
 } from '../src/requestIdentity.ts';
 import { anonymousAuthTestHooks, handleAnonymousAuthRequest } from '../src/anonymousAuth.ts';
@@ -11,6 +12,7 @@ const NOW_MS = Date.parse('2026-08-25T12:00:00.000Z');
 const SESSION_ID = '123e4567-e89b-42d3-a456-426614174000';
 const SUBJECT = 'anon:223e4567-e89b-42d3-a456-426614174000';
 const SECRET = 'A'.repeat(43);
+const STAFF_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 
 test('anonymous production cookies are host-only, secure, and strict', () => {
   const cookie = anonymousAuthTestHooks.sessionCookie(new URL('https://mons.shop'), 'token', 60);
@@ -47,42 +49,67 @@ test('request identity verifies a same-origin cookie without exposing its secret
     },
   });
   assert.deepEqual(await verifyRequestIdentity(
-    null,
-    async () => { throw new Error('unexpected fetch'); },
-    request.signal,
-    NOW_MS,
     request,
     database,
-  ), { kind: 'anonymous', authSubject: SUBJECT, source: 'mons' });
+    request.signal,
+    NOW_MS,
+  ), { kind: 'anonymous', authSubject: SUBJECT });
 });
 
-test('request identity rejects cookie CSRF failures and disabled legacy bearer tokens', async () => {
-  const database = db((query) => query.includes('anonymous_auth_control')
-    ? { firebase_fallback_enabled: 0 }
-    : null);
+test('request identity rejects cookie CSRF failures and arbitrary bearer tokens without a database lookup', async () => {
+  let queries = 0;
+  const database = db(() => {
+    queries += 1;
+    return null;
+  });
   const missingCsrf = new Request('https://mons.shop/profile/state', {
     headers: { Origin: 'https://mons.shop' },
   });
   await assert.rejects(
-    verifyRequestIdentity(null, fetch, missingCsrf.signal, NOW_MS, missingCsrf, database),
+    verifyRequestIdentity(missingCsrf, database, missingCsrf.signal, NOW_MS),
     (error) => error instanceof RequestIdentityError && error.kind === 'invalid-token',
   );
-  let fetched = false;
+  assert.equal(queries, 0);
+  const bearer = new Request(missingCsrf, { headers: { Authorization: 'Bearer legacy-token' } });
   await assert.rejects(
-    verifyRequestIdentity(
-      'Bearer legacy-token',
-      async () => {
-        fetched = true;
-        throw new Error('unexpected fetch');
-      },
-      new AbortController().signal,
-      NOW_MS,
-      missingCsrf,
-      database,
-    ),
+    verifyRequestIdentity(bearer, database, bearer.signal, NOW_MS),
     (error) => error instanceof RequestIdentityError && error.kind === 'invalid-token',
   );
-  assert.equal(fetched, false);
+  assert.equal(queries, 0);
+});
+
+test('request identity accepts only allowlisted internal staff identities', async () => {
+  const valid = new Request('https://api.mons.shop/admin/profile', {
+    headers: { Authorization: internalStaffAuthorization(STAFF_WALLET) },
+  });
+  assert.deepEqual(
+    await verifyRequestIdentity(valid, undefined, valid.signal, NOW_MS),
+    { kind: 'staff-wallet', wallet: STAFF_WALLET },
+  );
+  const invalid = new Request(valid, {
+    headers: { Authorization: internalStaffAuthorization('11111111111111111111111111111111') },
+  });
+  await assert.rejects(verifyRequestIdentity(invalid, undefined, invalid.signal, NOW_MS), /Invalid internal staff identity/);
+});
+
+test('request identity maps unavailable and timed-out anonymous session storage', async () => {
+  const request = new Request('https://mons.shop/profile/state', {
+    headers: {
+      Cookie: `__Host-mons_anon_v1=mons_anon_v1.${SESSION_ID}.${SECRET}`,
+      Origin: 'https://mons.shop',
+      'X-Mons-CSRF': '1',
+    },
+  });
+  await assert.rejects(
+    verifyRequestIdentity(request, db(() => { throw new Error('D1 unavailable'); }), request.signal, NOW_MS),
+    (error) => error instanceof RequestIdentityError && error.kind === 'provider-unavailable',
+  );
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    verifyRequestIdentity(request, db(() => null), controller.signal, NOW_MS),
+    (error) => error instanceof RequestIdentityError && error.kind === 'provider-timeout',
+  );
 });
 
 test('anonymous logout expires its cookie when D1 revocation fails', async () => {

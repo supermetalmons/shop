@@ -382,7 +382,7 @@ type DeliveryReceiptDependencies = {
     waitUntil: DeliveryReceiptWaitUntil,
   ) => Promise<RecoverDeliveryOrdersResult>;
   timeoutMs: number;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
 };
 
 function statusForCode(code: DeliveryReceiptErrorCode): number {
@@ -4180,7 +4180,7 @@ const defaultDependencies: DeliveryReceiptDependencies = {
   providerFetch: (input, init) => fetch(input, init),
   recover: recoverReceiptsRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
 };
 
 export async function handleDeliveryReceiptRequest(
@@ -4220,13 +4220,11 @@ export async function handleDeliveryReceiptRequest(
   let dropId: string | undefined;
   let deliveryId: number | undefined;
   try {
-    identity = await dependencies.verifyIdToken(
-      request.headers.get('Authorization'),
-      trackedFetch,
-      controller.signal,
-      dependencies.nowMs(),
+    identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
+      controller.signal,
+      dependencies.nowMs(),
     );
     const rawBody = await readRequestBody(
       request,

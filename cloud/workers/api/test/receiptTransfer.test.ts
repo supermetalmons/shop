@@ -109,7 +109,6 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
   return new Request(`https://api.mons.shop${RECEIPT_TRANSFER_PREPARE_PATH}`, {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer firebase-token',
       'Content-Type': 'application/json',
       Origin: 'https://mons.shop',
       ...headers,
@@ -129,7 +128,7 @@ function requestBody() {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     enforceRateLimit: async () => undefined,
     fetchAsset: async () => receiptAsset(),
@@ -214,7 +213,7 @@ test('receipt transfer handler rejects invalid authentication and missing config
     request(requestBody()),
     env(),
     dependencies({
-      verifyIdToken: async () => {
+      verifyIdentity: async () => {
         throw new RequestIdentityError('invalid-token');
       },
     }),

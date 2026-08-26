@@ -184,7 +184,7 @@ type ProfileWriteDependencies = {
     signal: AbortSignal,
   ) => Promise<ProfileAddress>;
   timeoutMs: number;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
   warn: (entry: Record<string, unknown>) => void;
 };
 
@@ -319,7 +319,7 @@ const defaultDependencies: ProfileWriteDependencies = {
     return saveD1ProfileAddress(db, address, signal);
   },
   timeoutMs: PROFILE_WRITE_TIMEOUT_MS,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
   warn: (entry) => console.warn(entry),
 };
 
@@ -3257,13 +3257,11 @@ export async function handleProfileWriteRequest(
   let identity: RequestIdentity | undefined;
   try {
     const requestBody = await parseExactRequestBody(request, path, controller.signal);
-    identity = await dependencies.verifyIdToken(
-      request.headers.get('Authorization'),
-      trackedFetch,
-      controller.signal,
-      dependencies.nowMs(),
+    identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
+      controller.signal,
+      dependencies.nowMs(),
     );
     if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
       throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');

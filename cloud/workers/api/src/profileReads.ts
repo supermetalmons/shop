@@ -250,7 +250,7 @@ type ProfileReadDependencies = {
     signal: AbortSignal,
   ) => ReturnType<typeof resolveD1WalletSession>;
   timeoutMs: number;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
 };
 
 type ProfileReadEnv = Pick<Env, 'FIRESTORE_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
@@ -272,7 +272,7 @@ const defaultDependencies: ProfileReadDependencies = {
     return resolveD1WalletSession(db, uid, signal);
   },
   timeoutMs: PROFILE_READ_TIMEOUT_MS,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
 };
 
 function documentIdentity(name: unknown): { dropId: string; deliveryId: number } | null {
@@ -938,13 +938,11 @@ export async function handleProfileReadRequest(
   let identity: RequestIdentity;
   try {
     const requestBody = await parseExactRequestBody(request, path, controller.signal);
-    identity = await dependencies.verifyIdToken(
-      request.headers.get('Authorization'),
-      trackedFetch,
-      controller.signal,
-      dependencies.nowMs(),
+    identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
+      controller.signal,
+      dependencies.nowMs(),
     );
     if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
       throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');

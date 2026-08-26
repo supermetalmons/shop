@@ -186,7 +186,7 @@ type RevealDudesDependencies = {
   sendAndConfirmTransaction: typeof sendAndConfirmTransaction;
   sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   validateOnchainConfig: typeof validateOnchainConfig;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
 };
 
 type RevealWaitUntil = (promise: Promise<unknown>) => void;
@@ -278,7 +278,7 @@ const defaultDependencies: RevealDudesDependencies = {
   sendAndConfirmTransaction,
   sleep: pause,
   validateOnchainConfig,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
 };
 
 const requestSchema = z.object({
@@ -1944,13 +1944,11 @@ export async function handleRevealDudes(
     dropId = runtime.dropId;
     let identity: RequestIdentity;
     try {
-      identity = await dependencies.verifyIdToken(
-        request.headers.get('Authorization'),
-        meteredFetch,
-        controller.signal,
-        dependencies.nowMs(),
+      identity = await dependencies.verifyIdentity(
         request,
         env.OPS_DB,
+        controller.signal,
+        dependencies.nowMs(),
       );
     } catch (error) {
       if (error instanceof RequestIdentityError) {

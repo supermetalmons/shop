@@ -70,10 +70,6 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
     'node --import tsx scripts/ops/readyNotificationsControl.ts',
   );
   assert.equal(
-    packageJson.scripts['anonymous-auth-control'],
-    'node --import tsx scripts/ops/anonymousAuthControl.ts',
-  );
-  assert.equal(
     packageJson.scripts['migrate:firebase-wallet-ownership'],
     'node --import tsx scripts/ops/migrateFirebaseWalletOwnership.ts',
   );

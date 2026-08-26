@@ -119,7 +119,7 @@ type ProfileLifecycleDependencies = {
   ) => Promise<void>;
   releaseWalletSessionReconcileLease: typeof releaseWalletSessionReconcileLease;
   resolveD1WalletSession: typeof resolveD1WalletSession;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
 };
 
 type ProfileLifecycleEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'OPS_DB'>>;
@@ -516,7 +516,7 @@ const defaultDependencies: ProfileLifecycleDependencies = {
   },
   releaseWalletSessionReconcileLease,
   resolveD1WalletSession,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
 };
 
 export async function handleProfileLifecycleRequest(
@@ -558,13 +558,11 @@ export async function handleProfileLifecycleRequest(
       throw new ProfileReadError('permission-denied', 403, 'Origin is not allowed.');
     }
     const body = await parseRequestBody(request, path, controller.signal);
-    identity = await dependencies.verifyIdToken(
-      request.headers.get('Authorization'),
-      trackedFetch,
-      controller.signal,
-      dependencies.nowMs(),
+    identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
+      controller.signal,
+      dependencies.nowMs(),
     );
     const serviceAccountJson = typeof env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON === 'string'
       ? env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON

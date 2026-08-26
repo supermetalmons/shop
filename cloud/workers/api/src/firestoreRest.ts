@@ -1,5 +1,4 @@
 import { SignJWT, importPKCS8 } from 'jose';
-import type { FirebaseIdTokenFetch } from './firebaseIdToken.js';
 
 const FIRESTORE_PROJECT_ID = 'mons-shop';
 export const FIRESTORE_DATABASE_NAME = `projects/${FIRESTORE_PROJECT_ID}/databases/(default)`;
@@ -14,7 +13,7 @@ const MAX_PROVIDER_METADATA_BYTES = 64 * 1024;
 const ACCESS_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
-export type ProfileProviderFetch = FirebaseIdTokenFetch;
+export type ProfileProviderFetch = typeof fetch;
 
 type ServiceAccount = {
   clientEmail: string;

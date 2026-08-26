@@ -73,7 +73,6 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
   return new Request('https://api.mons.shop/checkout/session', {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer firebase-token',
       'Content-Type': 'application/json',
       Origin: 'https://mons.shop',
       ...headers,
@@ -84,7 +83,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     providerFetch: async () => {
       throw new Error('unexpected provider fetch');
     },
@@ -162,7 +161,7 @@ test('staff checkout persists the wallet as the direct order owner', async () =>
       persistCheckout: async (_path: string, document: Record<string, unknown>) => {
         checkout = document;
       },
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: STAFF_WALLET }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: STAFF_WALLET }),
     }),
   );
   assert.equal(result.response.status, 200);
@@ -215,7 +214,7 @@ test('checkout handler rejects methods, malformed bodies, extra keys, and oversi
 
 test('checkout handler maps authentication and provider failures to stable envelopes', async () => {
   const unauthenticated = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), dependencies({
-    verifyIdToken: async () => {
+    verifyIdentity: async () => {
       const { RequestIdentityError } = await import('../src/requestIdentity.ts');
       throw new RequestIdentityError('invalid-token');
     },

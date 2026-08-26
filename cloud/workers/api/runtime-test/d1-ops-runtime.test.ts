@@ -39,7 +39,7 @@ import {
   setD1RevealSubmissionStatus,
   type RevealSubmissionRecord,
 } from '../src/revealSubmissionD1.ts';
-import { cleanupExpiredAnonymousAuthSessions, firebaseFallbackEnabled } from '../src/anonymousAuth.ts';
+import { cleanupExpiredAnonymousAuthSessions } from '../src/anonymousAuth.ts';
 
 const PROFILE_WALLET = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const RACE_WALLET = '11111111111111111111111111111111';
@@ -113,8 +113,14 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       '0010_reveal_submissions_baseline_index.sql',
       '0011_staff_wallet_auth.sql',
       '0012_anonymous_auth.sql',
+      '0013_remove_firebase_auth_fallback.sql',
     ]);
-    assert.equal(await firebaseFallbackEnabled(env.OPS_DB), true);
+    const authControl = await env.OPS_DB.prepare(`SELECT firebase_fallback_enabled, revision, firebase_disabled_at_ms
+      FROM anonymous_auth_control
+      WHERE singleton = 1`).first<Record<string, unknown>>();
+    assert.equal(authControl?.firebase_fallback_enabled, 0);
+    assert.equal(authControl?.revision, 2);
+    assert.ok(Number.isSafeInteger(authControl?.firebase_disabled_at_ms));
     const anonymousExpiry = 30 * 24 * 60 * 60 * 1000;
     await env.OPS_DB.batch([
       env.OPS_DB.prepare(`INSERT INTO anonymous_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?)`)

@@ -159,7 +159,7 @@ type ReceiptTransferDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
   enforceRateLimit: (context: RateLimitContext, bucket: ReceiptTransferRateLimitBucket) => Promise<void>;
   fetchAsset: (context: ProviderContext, runtime: ReceiptTransferRuntime, assetId: string) => Promise<DasAsset>;
@@ -1028,7 +1028,7 @@ const defaultDependencies: ReceiptTransferDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
   getDrop: getApiDrop,
   enforceRateLimit,
   fetchAsset,
@@ -1074,13 +1074,11 @@ export async function handleReceiptTransferPrepare(
   try {
     const body = await readRequestBody(request, controller.signal);
     dropId = normalizeDropId(body.dropId);
-    identity = await dependencies.verifyIdToken(
-      request.headers.get('Authorization'),
-      trackedFetch,
-      controller.signal,
-      dependencies.nowMs(),
+    identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
+      controller.signal,
+      dependencies.nowMs(),
     );
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
     if (!apiKey || typeof env.OPS_DB?.prepare !== 'function' || typeof env.OPS_DB.batch !== 'function') {

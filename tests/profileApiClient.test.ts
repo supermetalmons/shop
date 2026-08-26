@@ -39,10 +39,10 @@ test('profile API client sends bearer JSON without caching and refreshes once af
           ? Response.json({ ok: false, error: { code: 'unauthenticated', message: 'Expired.' } }, { status: 401 })
           : Response.json({ responseMode: 'shipments', wallet: OWNER, orders: [] });
       },
-      getToken: async (forceRefresh) => {
+      getCredential: async (forceRefresh) => {
         refreshes.push(forceRefresh);
         return {
-          authSubject: 'firebase-a',
+          authSubject: 'subject-a',
           token: forceRefresh ? 'fresh-token' : 'cached-token',
         };
       },
@@ -55,7 +55,7 @@ test('profile API client sends bearer JSON without caching and refreshes once af
   assert.deepEqual(refreshes, [false, true]);
   assert.deepEqual(authorizations, ['Bearer cached-token', 'Bearer fresh-token']);
   assert.equal(signals[0], signals[1]);
-  assert.equal(credentialCapture.authSubject, 'firebase-a');
+  assert.equal(credentialCapture.authSubject, 'subject-a');
 });
 
 test('profile API client never replays a request after the auth subject changes', async () => {
@@ -73,7 +73,7 @@ test('profile API client never replays a request after the auth subject changes'
           error: { code: 'unauthenticated', message: 'Expired.' },
         }, { status: 401 });
       },
-      getToken: async (forceRefresh) => ({
+      getCredential: async (forceRefresh) => ({
         authSubject: forceRefresh ? 'subject-b' : 'subject-a',
       }),
       origin: () => '/api',
@@ -98,7 +98,7 @@ test('profile API client uses cookie credentials without exposing an anonymous b
       assert.equal(init?.credentials, 'same-origin');
       return Response.json({ responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null });
     },
-    getToken: async () => ({ authSubject: 'anon:123e4567-e89b-42d3-a456-426614174000' }),
+    getCredential: async () => ({ authSubject: 'anon:123e4567-e89b-42d3-a456-426614174000' }),
     origin: () => '/api',
     timeoutMs: 1000,
   });
@@ -114,7 +114,7 @@ test('profile API client applies its deadline to token retrieval and returns a s
         fetchCalled = true;
         return Response.json({});
       },
-      getToken: async () => new Promise<string>(() => undefined),
+      getCredential: async () => new Promise<never>(() => undefined),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 10,
     }),
@@ -136,7 +136,7 @@ test('profile API client preserves stable error codes and rejects malformed JSON
           ok: false,
           error: { code: 'permission-denied', message: 'Admin access denied.', details: { reason: 'wallet' } },
         }, { status: 403 }),
-        getToken: async () => 'token',
+        getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
         origin: () => 'https://api.mons.shop',
         timeoutMs: 1000,
       },
@@ -155,7 +155,7 @@ test('profile API client preserves stable error codes and rejects malformed JSON
       {},
       {
         fetch: async () => new Response('not-json', { status: 200 }),
-        getToken: async () => 'token',
+        getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
         origin: () => 'https://api.mons.shop',
         timeoutMs: 1000,
       },
@@ -192,7 +192,7 @@ test('profile state client sends an exact authenticated request and validates in
           shipments: { status: 'error', error: { code: 'unavailable', message: 'Shipments unavailable.' } },
         });
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     },
@@ -212,9 +212,12 @@ test('profile API retries one 401 with a fresh token and then fails terminally',
           error: { code: 'unauthenticated', message: 'Authentication is required.' },
         }, { status: 401 });
       },
-      getToken: async (forceRefresh) => {
+      getCredential: async (forceRefresh) => {
         refreshes.push(forceRefresh);
-        return forceRefresh ? 'fresh-token' : 'cached-token';
+        return {
+          authSubject: OWNER,
+          token: forceRefresh ? 'fresh-token' : 'cached-token',
+        };
       },
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
@@ -309,7 +312,7 @@ test('Stripe checkout uses the authenticated Cloudflare route with an exact resp
           livemode: false,
         });
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     },
@@ -346,7 +349,7 @@ test('IRL claim preparation uses the authenticated Cloudflare route with an exac
         assert.deepEqual(JSON.parse(String(init?.body)), { owner: OWNER, code: '1234567890' });
         return Response.json(response);
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     },
@@ -389,7 +392,7 @@ test('Stripe receipt claiming uses the authenticated Cloudflare route with an ex
         });
         return Response.json(response);
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1_000,
     },
@@ -426,7 +429,7 @@ test('Admin IRL preparation uses the authenticated Cloudflare route with an exac
         assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
         return Response.json(response);
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     },
@@ -476,7 +479,7 @@ test('Admin IRL finalization uses the authenticated Cloudflare route with an exa
         assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
         return Response.json(response);
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1_000,
     },
@@ -512,7 +515,7 @@ test('box reveal uses the authenticated Cloudflare route with an exact response 
         });
         return Response.json(response);
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     },
@@ -580,7 +583,7 @@ test('box reveal unknown-submission details require an exact drop-specific contr
         fetch: async () => Response.json({
           error: { code: 'unavailable', message: 'Reveal status is unknown.', details },
         }, { status: 503 }),
-        getToken: async () => 'token',
+        getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
         origin: () => 'https://api.mons.shop',
         timeoutMs: 1000,
       },
@@ -789,7 +792,7 @@ test('receipt transfer preparation uses the authenticated Cloudflare route with 
         });
         return Response.json(response);
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     },
@@ -829,7 +832,7 @@ test('delivery preparation uses the authenticated Cloudflare route with an exact
       assert.deepEqual(JSON.parse(String(init?.body)), body);
       return Response.json(response);
     },
-    getToken: async () => 'token',
+    getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
     origin: () => 'https://api.mons.shop',
     timeoutMs: 1000,
   });
@@ -865,7 +868,7 @@ test('receipt issuance and recovery use authenticated Cloudflare routes with exa
         assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
         return Response.json(issueResponse);
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     },
@@ -899,7 +902,7 @@ test('receipt issuance and recovery use authenticated Cloudflare routes with exa
         assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
         return Response.json(recoveryResponse);
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     },
@@ -947,7 +950,7 @@ test('wallet lifecycle clients use the authenticated Cloudflare routes', async (
           ? { wallet: OWNER }
           : { mergedStripeDeliveryOrders: 1 });
       },
-      getToken: async () => 'token',
+      getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     });

@@ -242,7 +242,7 @@ type DeliveryPrepareDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
 };
 
 type DeliveryPrepareMetrics = {
@@ -1443,7 +1443,7 @@ const defaultDependencies: DeliveryPrepareDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
 };
 
 export async function handleDeliveryPrepare(
@@ -1480,13 +1480,11 @@ export async function handleDeliveryPrepare(
   let identity: RequestIdentity | undefined;
   let dropId: string | undefined;
   try {
-    identity = await dependencies.verifyIdToken(
-      request.headers.get('Authorization'),
-      trackedFetch,
-      controller.signal,
-      dependencies.nowMs(),
+    identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
+      controller.signal,
+      dependencies.nowMs(),
     );
     const body = await readRequestBody(request, controller.signal);
     const requestedDropId = normalizeDropId(body.dropId);

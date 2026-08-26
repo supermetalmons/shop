@@ -216,7 +216,7 @@ function dependencies(
     },
     timeoutMs,
     upsertProfile: async () => undefined,
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: UID, source: 'firebase' as const }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     ...overrides,
   };
 }
@@ -418,7 +418,7 @@ test('staff reconciliation uses its wallet directly and skips legacy Firebase or
     dependencies(new FirestoreHarness(), 500, {
       acquireWalletSessionReconcileLease: async () => assert.fail('staff identity acquired a Firebase reconciliation lease'),
       resolveD1WalletSession: async () => assert.fail('staff identity resolved a Firebase wallet session'),
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
   assert.equal(result.response.status, 200);
@@ -432,7 +432,7 @@ test('staff principals cannot enter the Firebase wallet-binding route', async ()
     SOLANA_AUTH_PATH,
     dependencies(new FirestoreHarness(), 500, {
       loadD1WalletSession: async () => assert.fail('staff identity reached Firebase wallet-session loading'),
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
   assert.equal(result.response.status, 403);
@@ -442,7 +442,7 @@ test('staff principals cannot enter the Firebase wallet-binding route', async ()
   });
 });
 
-test('Firebase principals cannot bind an allowlisted staff wallet', async () => {
+test('anonymous principals cannot bind an allowlisted staff wallet', async () => {
   const result = await handleProfileLifecycleRequest(
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
@@ -537,7 +537,7 @@ test('profile lifecycle responses never expose credentials or bearer tokens', as
     PROFILE_RECONCILE_PATH,
     {
       ...dependencies(new FirestoreHarness()),
-      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: UID, source: 'firebase' as const }),
+      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     },
   );
   const body = JSON.stringify(await response.response.json());
@@ -562,7 +562,7 @@ test('profile lifecycle enforces exact bodies and stable deadlines', async () =>
     {
       ...dependencies(new FirestoreHarness()),
       timeoutMs: 5,
-      verifyIdToken: async (_authorization, _providerFetch, signal) => new Promise((_resolve, reject) => {
+      verifyIdentity: async (_authorization, _providerFetch, signal) => new Promise((_resolve, reject) => {
         const fail = () => reject(signal.reason);
         signal.addEventListener('abort', fail, { once: true });
         if (signal.aborted) fail();

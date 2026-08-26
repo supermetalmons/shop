@@ -178,7 +178,7 @@ type ClaimDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
 };
 
 function statusForCode(code: ClaimErrorCode): number {
@@ -1969,7 +1969,7 @@ const defaultDependencies: ClaimDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
 };
 
 async function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -2028,13 +2028,11 @@ export async function handleStripeReceiptClaim(
   let claimContext: ClaimLogContext | undefined;
   try {
     const body = await readRequestBody(request, controller.signal);
-    identity = await dependencies.verifyIdToken(
-      request.headers.get('Authorization'),
-      trackedFetch,
-      controller.signal,
-      dependencies.nowMs(),
+    identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
+      controller.signal,
+      dependencies.nowMs(),
     );
     const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
     const apiKey = String(env.HELIUS_API_KEY || '').trim();

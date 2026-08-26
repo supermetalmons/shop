@@ -85,7 +85,6 @@ function request(body: unknown = {
   return new Request(`https://api.mons.shop${ADMIN_IRL_REDEEM_FINALIZE_PATH}`, {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer firebase-token',
       'Content-Type': 'application/json',
       Origin: 'https://mons.shop',
       ...init.headers,
@@ -111,7 +110,7 @@ function env() {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
+    verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     providerFetch: async () => { throw new Error('unexpected provider fetch'); },
     nowMs: () => 1_700_000_000_000,
     timeoutMs: 1_000,
@@ -208,7 +207,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
     request(),
     env(),
     () => undefined,
-    dependencies({ verifyIdToken: async () => { throw new RequestIdentityError('invalid-token'); } }),
+    dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(unauthenticated.response.status, 401);
   assert.deepEqual(await unauthenticated.response.json(), {
@@ -216,13 +215,13 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
     error: { code: 'unauthenticated', message: 'Authentication is required.' },
   });
 
-  const firebaseOnly = await handleAdminIrlRedeemFinalize(
+  const anonymousOnly = await handleAdminIrlRedeemFinalize(
     request(),
     env(),
     () => undefined,
-    dependencies({ verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }) }),
+    dependencies({ verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }) }),
   );
-  assert.equal(firebaseOnly.response.status, 401);
+  assert.equal(anonymousOnly.response.status, 401);
 
   const conflict = await handleAdminIrlRedeemFinalize(
     request(),

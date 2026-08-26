@@ -1,16 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  SignJWT,
   decodeJwt,
   decodeProtectedHeader,
   exportPKCS8,
   generateKeyPair,
 } from 'jose';
-import {
-  FirebaseIdTokenError,
-  createFirebaseIdTokenVerifier,
-} from '../src/firebaseIdToken.ts';
 import {
   ADMIN_PROFILE_PATH,
   ADMIN_DELIVERY_ORDER_OWNERS_PATH,
@@ -32,7 +27,6 @@ const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const OTHER = 'So11111111111111111111111111111111111111112';
 const UID = 'firebase-user-one';
 const NOW_MS = Date.parse('2026-08-18T12:00:00.000Z');
-const CERTIFICATE = '-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n';
 
 function tokenRequest(path: ProfileReadPath, body: unknown, origin = 'https://mons.shop'): Request {
   return new Request(`https://api.mons.shop${path}`, {
@@ -91,92 +85,10 @@ function profileDependencies(
     providerFetch,
     resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
     timeoutMs: 500,
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: UID, source: 'firebase' as const }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     ...overrides,
   };
 }
-
-async function signedFirebaseToken(args: {
-  privateKey: CryptoKey;
-  kid?: string;
-  issuer?: string;
-  audience?: string;
-  issuedAt?: number;
-  authTime?: number;
-  expirationTime?: number;
-  subject?: string;
-}): Promise<string> {
-  const nowSeconds = Math.floor(NOW_MS / 1000);
-  return new SignJWT({ auth_time: args.authTime ?? nowSeconds - 30 })
-    .setProtectedHeader({ alg: 'RS256', kid: args.kid ?? 'test-kid' })
-    .setIssuer(args.issuer ?? 'https://securetoken.google.com/mons-shop')
-    .setAudience(args.audience ?? 'mons-shop')
-    .setSubject(args.subject ?? UID)
-    .setIssuedAt(args.issuedAt ?? nowSeconds - 30)
-    .setExpirationTime(args.expirationTime ?? nowSeconds + 3600)
-    .sign(args.privateKey);
-}
-
-test('Firebase token verifier validates claims, signatures, and certificate caching', async () => {
-  const signing = await generateKeyPair('RS256', { extractable: true });
-  const other = await generateKeyPair('RS256', { extractable: true });
-  let certificateFetches = 0;
-  const providerFetch: typeof fetch = async () => {
-    certificateFetches += 1;
-    return Response.json(
-      { 'test-kid': CERTIFICATE },
-      { headers: { 'Cache-Control': 'public, max-age=3600' } },
-    );
-  };
-  const verifier = createFirebaseIdTokenVerifier(async () => signing.publicKey);
-  const token = await signedFirebaseToken({ privateKey: signing.privateKey });
-  assert.deepEqual(await verifier(`Bearer ${token}`, providerFetch, new AbortController().signal, NOW_MS), { uid: UID });
-  assert.deepEqual(await verifier(`Bearer ${token}`, providerFetch, new AbortController().signal, NOW_MS + 1000), { uid: UID });
-  assert.equal(certificateFetches, 1);
-
-  const unknownKid = await signedFirebaseToken({ privateKey: signing.privateKey, kid: 'unknown-kid' });
-  await assert.rejects(
-    verifier(`Bearer ${unknownKid}`, providerFetch, new AbortController().signal, NOW_MS + 2000),
-    (error) => error instanceof FirebaseIdTokenError && error.kind === 'invalid-token',
-  );
-  assert.equal(certificateFetches, 1);
-
-  for (const invalidToken of [
-    await signedFirebaseToken({ privateKey: other.privateKey }),
-    await signedFirebaseToken({ privateKey: signing.privateKey, audience: 'other-project' }),
-    await signedFirebaseToken({ privateKey: signing.privateKey, issuer: 'https://securetoken.google.com/other-project' }),
-    await signedFirebaseToken({ privateKey: signing.privateKey, expirationTime: Math.floor(NOW_MS / 1000) - 10 }),
-    await signedFirebaseToken({ privateKey: signing.privateKey, issuedAt: Math.floor(NOW_MS / 1000) + 10 }),
-    await signedFirebaseToken({ privateKey: signing.privateKey, authTime: Math.floor(NOW_MS / 1000) + 10 }),
-    await signedFirebaseToken({ privateKey: signing.privateKey, subject: '' }),
-  ]) {
-    await assert.rejects(
-      verifier(`Bearer ${invalidToken}`, providerFetch, new AbortController().signal, NOW_MS),
-      (error) => error instanceof FirebaseIdTokenError && error.kind === 'invalid-token',
-    );
-  }
-  for (const authorization of [null, '', 'Basic token', 'Bearer', 'Bearer token extra']) {
-    await assert.rejects(
-      verifier(authorization, providerFetch, new AbortController().signal, NOW_MS),
-      (error) => error instanceof FirebaseIdTokenError && error.kind === 'invalid-token',
-    );
-  }
-});
-
-test('Firebase token verifier distinguishes certificate-provider failures from invalid tokens', async () => {
-  const signing = await generateKeyPair('RS256', { extractable: true });
-  const token = await signedFirebaseToken({ privateKey: signing.privateKey });
-  const verifier = createFirebaseIdTokenVerifier(async () => signing.publicKey);
-  await assert.rejects(
-    verifier(
-      `Bearer ${token}`,
-      async () => Response.json({ error: 'unavailable' }, { status: 503 }),
-      new AbortController().signal,
-      NOW_MS,
-    ),
-    (error) => error instanceof FirebaseIdTokenError && error.kind === 'provider-unavailable',
-  );
-});
 
 test('Google access-token provider signs the exact datastore assertion and caches its token', async () => {
   const signing = await generateKeyPair('RS256', { extractable: true });
@@ -353,7 +265,7 @@ test('staff profile state uses the wallet principal without a Firebase session r
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       resolveD1WalletSession: async () => assert.fail('staff identity reached Firebase wallet-session resolution'),
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
   assert.equal(result.response.status, 200);
@@ -393,7 +305,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
         return Response.json({ error: 'unexpected' }, { status: 500 });
       }),
       resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'legacy_uid' }),
-      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: OWNER, source: 'firebase' as const }),
+      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: OWNER }),
     },
   );
   assert.deepEqual(await legacy.response.json(), {
@@ -498,7 +410,7 @@ test('shipment route preserves legacy wallet-shaped Firebase UIDs when no sessio
         if (match?.[1]) owners.push(match[1]);
         return Response.json([]);
       }),
-      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: OWNER, source: 'firebase' as const }),
+      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: OWNER }),
     },
   );
   assert.equal(result.response.status, 200);
@@ -507,15 +419,15 @@ test('shipment route preserves legacy wallet-shaped Firebase UIDs when no sessio
 });
 
 test('admin profile route enforces the existing wallet allowlist and returns canonical delivery summaries', async () => {
-  const firebaseOnly = await handleProfileReadRequest(
+  const anonymousOnly = await handleProfileReadRequest(
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
     ADMIN_PROFILE_PATH,
     profileDependencies(async () => Response.json([]), {
-      verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: UID, source: 'firebase' as const }),
+      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     }),
   );
-  assert.equal(firebaseOnly.response.status, 401);
+  assert.equal(anonymousOnly.response.status, 401);
 
   const denied = await handleProfileReadRequest(
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
@@ -526,7 +438,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     }, {
       loadProfileEmail: async () => 'owner@example.com',
       resolveD1WalletSession: async () => ({ wallet: OTHER, source: 'session' }),
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
   assert.equal(denied.response.status, 403);
@@ -544,7 +456,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     }, {
       loadProfileEmail: async () => 'owner@example.com',
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.equal(accepted.response.status, 200);
@@ -574,7 +486,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.equal(missingProfile.response.status, 200);
@@ -593,7 +505,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
         throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
       },
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.equal(unavailableProfile.response.status, 502);
@@ -621,7 +533,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
       ]);
     }, {
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.deepEqual(await owners.response.json(), { owners: [OWNER, OTHER], nextCursor: null, hasMore: false });
@@ -647,7 +559,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
       } }]);
     }, {
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.deepEqual(await fulfillment.response.json(), {
@@ -689,7 +601,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
       } }]);
     }, {
       resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
-      verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
   assert.deepEqual(await manual.response.json(), {

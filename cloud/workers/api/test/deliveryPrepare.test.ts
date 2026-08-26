@@ -131,7 +131,6 @@ function request(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request(`https://api.mons.shop${DELIVERY_PREPARE_PATH}`, {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer firebase-token',
       'Content-Type': 'application/json',
       Origin: 'https://mons.shop',
       ...headers,
@@ -160,7 +159,7 @@ function env(overrides: Record<string, string> = {}) {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadWalletSession: async () => OWNER.publicKey.toBase58(),
     loadAddress: async () => ({
@@ -711,7 +710,7 @@ test('delivery preparation rejects inactive lookup tables', async () => {
 
 test('delivery preparation enforces authentication, session ownership, exact requests, and asset boundaries', async () => {
   const unauthenticated = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
-    verifyIdToken: async () => {
+    verifyIdentity: async () => {
       throw new RequestIdentityError('invalid-token');
     },
   }));
@@ -721,7 +720,7 @@ test('delivery preparation enforces authentication, session ownership, exact req
     ...requestBody(),
     dropId: 'not_configured',
   }), env(), dependencies({
-    verifyIdToken: async () => {
+    verifyIdentity: async () => {
       throw new RequestIdentityError('invalid-token');
     },
   }));
@@ -788,7 +787,7 @@ test('delivery preparation rejects authentication before reading a stalled reque
   } as RequestInit & { duplex: 'half' });
   const result = await handleDeliveryPrepare(stalledRequest, env(), {
     timeoutMs: 1000,
-    verifyIdToken: async () => {
+    verifyIdentity: async () => {
       throw new RequestIdentityError('invalid-token');
     },
   });
@@ -808,7 +807,7 @@ test('delivery preparation reports an authenticated stalled request body as a de
   } as RequestInit & { duplex: 'half' });
   const result = await handleDeliveryPrepare(stalledRequest, env(), {
     timeoutMs: 5,
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
   });
   assert.equal(result.response.status, 504);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');

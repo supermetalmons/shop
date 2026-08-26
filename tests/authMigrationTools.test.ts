@@ -1,115 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  parseAnonymousAuthControlArgs,
-  runAnonymousAuthControl,
-} from '../scripts/ops/anonymousAuthControl.ts';
-import {
   buildOwnershipPlan,
   buildDeliveryOrderOwnershipQuery,
   decodeDeliveryOrderOwnershipPage,
   parseWalletBinding,
   parseOwnershipMigrationArgs,
 } from '../scripts/ops/migrateFirebaseWalletOwnership.ts';
-
-const enabledControl = {
-  firebaseFallbackEnabled: true,
-  revision: 1,
-  createdAtMs: 0,
-  updatedAtMs: 0,
-  firebaseDisabledAtMs: null,
-};
-
-const disabledControl = {
-  firebaseFallbackEnabled: false,
-  revision: 2,
-  createdAtMs: 0,
-  updatedAtMs: 1000,
-  firebaseDisabledAtMs: 1000,
-};
-
-const cleanAudit = {
-  scannedOrders: 10,
-  mappedUpdates: 0,
-  unmappedFirebaseOrders: 1,
-};
-
-test('anonymous auth control requires an explicit irreversible write and clean ownership audit', async () => {
-  assert.deepEqual(parseAnonymousAuthControlArgs(['status']), { command: 'status', write: false });
-  assert.deepEqual(parseAnonymousAuthControlArgs(['disable-firebase', '--write']), {
-    command: 'disable-firebase',
-    write: true,
-  });
-  assert.throws(() => parseAnonymousAuthControlArgs(['disable-firebase']), /requires --write/);
-  assert.match(await runAnonymousAuthControl({ command: 'status', write: false }, {
-    read: () => enabledControl,
-    disable: () => disabledControl,
-    audit: async () => cleanAudit,
-  }), /fallback enabled/);
-  let auditCalls = 0;
-  assert.match(await runAnonymousAuthControl({ command: 'disable-firebase', write: true }, {
-    read: () => enabledControl,
-    disable: () => disabledControl,
-    audit: async () => {
-      auditCalls += 1;
-      return cleanAudit;
-    },
-  }), /fallback disabled/);
-  assert.equal(auditCalls, 2);
-  await assert.rejects(runAnonymousAuthControl({ command: 'disable-firebase', write: true }, {
-    read: () => enabledControl,
-    disable: () => enabledControl,
-    audit: async () => cleanAudit,
-  }), /was not disabled/);
-  let disabled = false;
-  await assert.rejects(runAnonymousAuthControl({ command: 'disable-firebase', write: true }, {
-    read: () => enabledControl,
-    disable: () => {
-      disabled = true;
-      return disabledControl;
-    },
-    audit: async () => ({ ...cleanAudit, mappedUpdates: 1 }),
-  }), /still need migration/);
-  assert.equal(disabled, false);
-  let postAuditCalls = 0;
-  await assert.rejects(runAnonymousAuthControl({ command: 'disable-firebase', write: true }, {
-    read: () => enabledControl,
-    disable: () => {
-      disabled = true;
-      return disabledControl;
-    },
-    audit: async () => {
-      postAuditCalls += 1;
-      return { ...cleanAudit, mappedUpdates: postAuditCalls === 1 ? 0 : 1 };
-    },
-  }), /fallback is disabled.*need migration/);
-  assert.equal(disabled, true);
-  let alreadyDisabledAuditCalls = 0;
-  assert.match(await runAnonymousAuthControl({ command: 'disable-firebase', write: true }, {
-    read: () => disabledControl,
-    disable: () => assert.fail('already-disabled control must not be written'),
-    audit: async () => {
-      alreadyDisabledAuditCalls += 1;
-      return cleanAudit;
-    },
-  }), /Post-disable ownership audit clean/);
-  assert.equal(alreadyDisabledAuditCalls, 1);
-  let failedPostAuditCalls = 0;
-  await assert.rejects(runAnonymousAuthControl({ command: 'disable-firebase', write: true }, {
-    read: () => enabledControl,
-    disable: () => disabledControl,
-    audit: async () => {
-      failedPostAuditCalls += 1;
-      if (failedPostAuditCalls === 1) return cleanAudit;
-      throw new Error('Firestore unavailable');
-    },
-  }), /fallback is disabled.*ownership audit failed.*Firestore unavailable/);
-  await assert.rejects(runAnonymousAuthControl({ command: 'disable-firebase', write: true }, {
-    read: () => enabledControl,
-    disable: () => { throw new Error('Wrangler connection lost'); },
-    audit: async () => cleanAudit,
-  }), /disable outcome is unknown.*status before retrying/);
-});
 
 test('wallet ownership migration is guarded and separates mapped from unmapped Firebase orders', () => {
   assert.deepEqual(parseOwnershipMigrationArgs(['status']), { command: 'status', write: false });

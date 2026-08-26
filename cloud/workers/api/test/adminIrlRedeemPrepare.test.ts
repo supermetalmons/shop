@@ -107,7 +107,6 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
   return new Request(`https://api.mons.shop${ADMIN_IRL_REDEEM_PREPARE_PATH}`, {
     method: 'POST',
     headers: {
-      Authorization: 'Bearer firebase-token',
       'Content-Type': 'application/json',
       Origin: 'https://mons.shop',
       ...headers,
@@ -126,7 +125,7 @@ function env(overrides: Record<string, string> = {}) {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER.toBase58() }),
+    verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER.toBase58() }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadWalletSession: async () => OWNER.toBase58(),
     loadReceiptMarker: async () => false,
@@ -263,20 +262,20 @@ test('Admin IRL preparation enforces exact requests, methods, authentication, an
   assert.equal(duplicate.response.status, 400);
 
   const unauthenticated = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
-    verifyIdToken: async () => {
+    verifyIdentity: async () => {
       throw new RequestIdentityError('invalid-token');
     },
   }));
   assert.equal(unauthenticated.response.status, 401);
 
-  const firebaseOnly = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+  const anonymousOnly = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
   }));
-  assert.equal(firebaseOnly.response.status, 401);
+  assert.equal(anonymousOnly.response.status, 401);
 
   const wrongOwner = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
     loadWalletSession: async () => ADMIN.toBase58(),
-    verifyIdToken: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN.toBase58() }),
+    verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN.toBase58() }),
   }));
   assert.equal(wrongOwner.response.status, 403);
 });

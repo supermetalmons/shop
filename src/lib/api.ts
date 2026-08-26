@@ -185,7 +185,7 @@ async function authenticatedUserCredential(forceRefresh: boolean): Promise<Authe
 
 type ProfileApiClientDependencies = {
   fetch: typeof fetch;
-  getToken: (forceRefresh: boolean) => Promise<string | AuthenticatedUserCredential>;
+  getCredential: (forceRefresh: boolean) => Promise<AuthenticatedUserCredential>;
   origin: () => string;
   timeoutMs: number;
 };
@@ -221,7 +221,7 @@ type AuthenticatedApiPath =
 
 const defaultProfileApiDependencies: ProfileApiClientDependencies = {
   fetch: (input, init) => fetch(input, init),
-  getToken: authenticatedUserCredential,
+  getCredential: authenticatedUserCredential,
   origin: () => AUTHENTICATED_API_ORIGIN,
   timeoutMs: 20_000,
 };
@@ -307,18 +307,16 @@ async function requestProfileApi<Req>(
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const credential = await waitForProfileApiValue(dependencies.getToken(attempt > 0), controller.signal);
-        const token = typeof credential === 'string' ? credential : credential.token;
-        if (typeof credential !== 'string') {
-          if (initialAuthSubject === undefined) initialAuthSubject = credential.authSubject;
-          else if (credential.authSubject !== initialAuthSubject) {
-            throw new ProfileApiError({
-              code: 'auth-subject-changed',
-              message: 'Authentication changed. Please retry.',
-            });
-          }
-          if (credentialCapture) credentialCapture.authSubject = credential.authSubject;
+        const credential = await waitForProfileApiValue(dependencies.getCredential(attempt > 0), controller.signal);
+        const token = credential.token;
+        if (initialAuthSubject === undefined) initialAuthSubject = credential.authSubject;
+        else if (credential.authSubject !== initialAuthSubject) {
+          throw new ProfileApiError({
+            code: 'auth-subject-changed',
+            message: 'Authentication changed. Please retry.',
+          });
         }
+        if (credentialCapture) credentialCapture.authSubject = credential.authSubject;
         if (DEBUG_API) {
           console.info(`[mons/api] → ${pathname}`, { callId, payload: summarizePayloadShape(data) });
         }

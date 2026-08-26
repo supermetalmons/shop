@@ -73,7 +73,6 @@ function request(body: unknown, init: { method?: string; headers?: HeadersInit }
   return new Request(`https://api.mons.shop${REVEAL_DUDES_PATH}`, {
     method: init.method ?? 'POST',
     headers: {
-      Authorization: 'Bearer firebase-token',
       'Content-Type': 'application/json',
       Origin: 'https://mons.shop',
       ...init.headers,
@@ -88,7 +87,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
       get: async () => 'google-access-token',
       invalidate: () => undefined,
     },
-    verifyIdToken: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid', source: 'firebase' as const }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadStorageControl: async () => ({
       paused: false,
@@ -232,7 +231,7 @@ test('paused reveal storage rejects requests before reveal reads or mutations', 
   assert.equal(assignments, 0);
 });
 
-test('reveal handler maps invalid and unavailable Firebase authentication', async () => {
+test('reveal handler maps invalid and unavailable request identity', async () => {
   for (const [kind, status, code] of [
     ['invalid-token', 401, 'unauthenticated'],
     ['provider-timeout', 504, 'deadline-exceeded'],
@@ -242,7 +241,7 @@ test('reveal handler maps invalid and unavailable Firebase authentication', asyn
       request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
       env(),
       dependencies({
-        verifyIdToken: async () => {
+        verifyIdentity: async () => {
           throw new RequestIdentityError(kind);
         },
       }),

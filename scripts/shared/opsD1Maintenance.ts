@@ -18,6 +18,7 @@ const OPS_D1_MIGRATIONS = [
   '0010_reveal_submissions_baseline_index.sql',
   '0011_staff_wallet_auth.sql',
   '0012_anonymous_auth.sql',
+  '0013_remove_firebase_auth_fallback.sql',
 ] as const;
 
 const PRODUCTION_MIN_PROFILE_COUNT = 690;
@@ -811,7 +812,7 @@ function parseRevealSubmissionStorageControl(
   };
 }
 
-export function parseAnonymousAuthControl(row: OpsD1Row): AnonymousAuthControl {
+function parseAnonymousAuthControl(row: OpsD1Row): AnonymousAuthControl {
   if (
     row.singleton !== 1 ||
     (row.firebase_fallback_enabled !== 0 && row.firebase_fallback_enabled !== 1)
@@ -948,6 +949,9 @@ export function assertOpsD1Integrity(
     return fail('Ops D1 anonymous-auth session count is invalid.');
   }
   const anonymousAuth = parseAnonymousAuthControl(input.anonymousAuthControl[0]);
+  if (anonymousAuth.firebaseFallbackEnabled) {
+    return fail('Ops D1 Firebase authentication fallback must be permanently disabled.');
+  }
   const anonymousAuthSessionCount = safeInteger(
     input.anonymousAuthSessionCounts[0].anonymous_auth_session_count,
     'Ops D1 anonymous-auth session count',

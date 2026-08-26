@@ -73,7 +73,7 @@ type CheckoutDependencies = {
   accessTokenProvider: GoogleAccessTokenProvider;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  verifyIdToken: typeof verifyRequestIdentity;
+  verifyIdentity: typeof verifyRequestIdentity;
   createProviderSession?: (
     request: StripeCheckoutProviderRequest,
     mode: StripeCheckoutMode,
@@ -93,7 +93,7 @@ const defaultDependencies: CheckoutDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   resolveWalletSession: resolveD1WalletSession,
-  verifyIdToken: verifyRequestIdentity,
+  verifyIdentity: verifyRequestIdentity,
 };
 
 function jsonResponse(body: unknown, status: number): Response {
@@ -495,13 +495,11 @@ export async function handleStripeCheckoutSession(
   let identity: RequestIdentity | undefined;
   try {
     const body = await readBoundedRequestJson(request, controller.signal);
-    identity = await dependencies.verifyIdToken(
-      request.headers.get('Authorization'),
-      trackedFetch,
-      controller.signal,
-      dependencies.nowMs(),
+    identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
+      controller.signal,
+      dependencies.nowMs(),
     );
     const heliusApiKey = String(env.HELIUS_API_KEY || '').trim();
     const serviceAccountJson = String(env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON || '').trim();
