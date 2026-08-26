@@ -46,31 +46,3 @@ CREATE INDEX commerce_documents_owner_processed_cursor
     processed_at_nanos DESC,
     document_path DESC
   );
-
-CREATE TABLE commerce_native_precondition_guards (
-  guard_id TEXT PRIMARY KEY,
-  create_paths_json TEXT NOT NULL CHECK (json_valid(create_paths_json)),
-  existing_paths_json TEXT NOT NULL CHECK (json_valid(existing_paths_json)),
-  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0)
-) STRICT;
-
-CREATE TRIGGER commerce_native_precondition_guard_validate
-BEFORE INSERT ON commerce_native_precondition_guards
-BEGIN
-  SELECT CASE WHEN (
-    SELECT authority_state FROM commerce_authority_control WHERE singleton = 1
-  ) <> 'd1' THEN RAISE(ABORT, 'commerce authority is not d1') END;
-
-  SELECT CASE WHEN EXISTS (
-    SELECT 1
-    FROM json_each(NEW.create_paths_json) AS expected
-    JOIN commerce_documents AS document ON document.document_path = expected.value
-  ) THEN RAISE(ABORT, 'commerce document already exists') END;
-
-  SELECT CASE WHEN EXISTS (
-    SELECT 1
-    FROM json_each(NEW.existing_paths_json) AS expected
-    LEFT JOIN commerce_documents AS document ON document.document_path = expected.value
-    WHERE document.document_path IS NULL
-  ) THEN RAISE(ABORT, 'commerce document failed precondition') END;
-END;

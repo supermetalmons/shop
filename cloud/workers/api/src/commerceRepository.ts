@@ -564,14 +564,6 @@ export class CommerceUnitOfWork {
     }
     const guardId = crypto.randomUUID();
     const statements: D1PreparedStatement[] = [
-      this.db.prepare(`INSERT INTO commerce_native_precondition_guards (
-        guard_id, create_paths_json, existing_paths_json, created_at_ms
-      ) VALUES (?, ?, ?, ?)`).bind(
-        guardId,
-        JSON.stringify([...this.createPaths]),
-        JSON.stringify([...this.existingPaths]),
-        this.nowMs,
-      ),
       this.db.prepare(`INSERT INTO commerce_commit_guards (
         guard_id, expectations_json, expected_documents_revision, created_at_ms
       ) VALUES (?, ?, ?, ?)`).bind(
@@ -617,7 +609,6 @@ export class CommerceUnitOfWork {
     statements.push(this.db.prepare(`UPDATE commerce_authority_control
       SET documents_revision = documents_revision + 1, updated_at_ms = ? WHERE singleton = 1`).bind(this.nowMs));
     statements.push(this.db.prepare('DELETE FROM commerce_commit_guards WHERE guard_id = ?').bind(guardId));
-    statements.push(this.db.prepare('DELETE FROM commerce_native_precondition_guards WHERE guard_id = ?').bind(guardId));
     try {
       await this.db.batch(statements);
     } catch (error) {
@@ -625,9 +616,15 @@ export class CommerceUnitOfWork {
       if (/authority is not d1/i.test(message)) {
         throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
       }
-      if (/document already exists/i.test(message)) throw new CommerceWriteConflict('already-exists');
-      if (/document failed precondition/i.test(message)) throw new CommerceWriteConflict('failed-precondition');
-      if (/transaction conflict|UNIQUE constraint/i.test(message)) throw new CommerceWriteConflict();
+      if (/transaction conflict|UNIQUE constraint/i.test(message)) {
+        for (const path of this.createPaths) {
+          if (await this.documentExists(path)) throw new CommerceWriteConflict('already-exists');
+        }
+        for (const path of this.existingPaths) {
+          if (!(await this.documentExists(path))) throw new CommerceWriteConflict('failed-precondition');
+        }
+        throw new CommerceWriteConflict();
+      }
       throw error;
     }
   }
@@ -639,6 +636,11 @@ export class CommerceUnitOfWork {
 
   private assertOpen(): void {
     if (this.closed) throw new CommerceRepositoryError('invalid-argument', 'Commerce unit of work is closed.');
+  }
+
+  private async documentExists(path: string): Promise<boolean> {
+    return Boolean(await this.db.prepare(`SELECT document_path FROM commerce_documents
+      WHERE document_path = ?`).bind(path).first());
   }
 
   private async load(key: CommerceDocumentKey): Promise<StoredDocument | null> {

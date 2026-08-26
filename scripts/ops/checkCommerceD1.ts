@@ -49,13 +49,12 @@ export function checkCommerceD1(): Record<string, unknown> {
       'commerce_authority_control',
       'commerce_documents',
       'commerce_commit_guards',
-      'commerce_native_precondition_guards',
       'commerce_wipe_guards',
       'commerce_import_manifests',
       'commerce_transactions',
       'commerce_transaction_reads'
     ) ORDER BY name`);
-  if (authoritativeTables.length !== 8 || authoritativeTables.some((row) => row.strict !== 1)) {
+  if (authoritativeTables.length !== 7 || authoritativeTables.some((row) => row.strict !== 1)) {
     fail('Commerce D1 authoritative strict table inventory is invalid.');
   }
   const authorityRows = queryRemoteCommerceD1('SELECT * FROM commerce_authority_control');
