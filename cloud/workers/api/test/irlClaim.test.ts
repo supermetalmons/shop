@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import {
   AddressLookupTableAccount,
@@ -116,8 +117,8 @@ function certificateAsset(overrides: Record<string, unknown> = {}) {
 
 function env() {
   return {
+    COMMERCE_DB: createCommerceD1(),
     COSIGNER_SECRET: bs58.encode(COSIGNER.secretKey),
-    FIRESTORE_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: 'helius-test-key',
   };
 }
@@ -136,6 +137,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadClaim: async () => ({ dropId: DROP_ID, boxId: 7, dudeIds: [1, 2, 3] }),
@@ -208,10 +210,8 @@ test('IRL claim handler returns the expected partially signed transaction', asyn
 test('IRL claim reads wallet sessions from D1 and preserves legacy collection-group resolution', async () => {
   const requests: Array<{ url: string; body?: unknown }> = [];
   const context = {
-    accessTokenProvider: {
-      invalidate: () => undefined,
-      get: async () => 'google-token',
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: 1_700_000_000_000,
     providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -219,7 +219,6 @@ test('IRL claim reads wallet sessions from D1 and preserves legacy collection-gr
         url,
         ...(init?.body ? { body: JSON.parse(String(init.body)) as unknown } : {}),
       });
-      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer google-token');
       assert.equal(url.includes('/authSessions/'), false);
       if (url.endsWith('/claimCodes/1234567890')) {
         return Response.json({ fields: {
@@ -232,7 +231,6 @@ test('IRL claim reads wallet sessions from D1 and preserves legacy collection-gr
         { document: { name: `projects/mons-shop/databases/(default)/documents/drops/${DROP_ID}/boxAssignments/asset-1` } },
       ]);
     },
-    serviceAccountJson: '{"credential":"test"}',
     signal: new AbortController().signal,
   };
   const firestoreSourceDb = {

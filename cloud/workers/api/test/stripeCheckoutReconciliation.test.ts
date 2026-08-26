@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1 } from './commerceD1Harness.ts';
 import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.ts';
 import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.ts';
 import {
@@ -30,7 +31,7 @@ test('Stripe fulfillment reconciliation requeues and marks stale pending checkou
   const nowMs = 2_000_000;
   const result = await reconcileStaleStripeFulfillments(
     {
-      FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'writer-service-account',
+      COMMERCE_DB: createCommerceD1(),
       STRIPE_FULFILLMENT_QUEUE: queue(async (job) => {
         jobs.push(job);
         return { metadata: { metrics: { backlogCount: 1, backlogBytes: 128 } } };
@@ -68,7 +69,7 @@ test('Stripe fulfillment reconciliation retains stale work when Queue publicatio
   await assert.rejects(
     reconcileStaleStripeFulfillments(
       {
-        FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'writer-service-account',
+        COMMERCE_DB: createCommerceD1(),
         STRIPE_FULFILLMENT_QUEUE: queue(async () => {
           throw new Error('queue unavailable');
         }),
@@ -96,7 +97,7 @@ test('Stripe fulfillment reconciliation stops before enqueue when its deadline i
   await assert.rejects(
     reconcileStaleStripeFulfillments(
       {
-        FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'writer-service-account',
+        COMMERCE_DB: createCommerceD1(),
         STRIPE_FULFILLMENT_QUEUE: queue(async () => {
           sent = true;
           return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
@@ -122,7 +123,7 @@ test('Stripe fulfillment reconciliation defers invalid candidates behind the bac
   await assert.rejects(
     reconcileStaleStripeFulfillments(
       {
-        FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'writer-service-account',
+        COMMERCE_DB: createCommerceD1(),
         STRIPE_FULFILLMENT_QUEUE: queue(async () => {
           sent = true;
           return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };

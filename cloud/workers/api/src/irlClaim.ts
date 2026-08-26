@@ -73,13 +73,12 @@ import {
   FIRESTORE_DOCUMENTS_BASE_URL,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   ProfileReadError,
-  authenticatedFirestoreRequest,
+  commerceDocumentRequest,
   cancelResponseBody,
-  createGoogleAccessTokenProvider,
   decodeFirestoreFields,
   isRecord,
   readBoundedJson,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
@@ -106,7 +105,7 @@ const MPL_CORE_CPI_SIGNER = new PublicKey(MPL_CORE_CPI_SIGNER_ADDRESS);
 type IrlClaimEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'HELIUS_API_KEY'
-> & Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
+> & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
 type IrlClaimErrorCode =
   | 'invalid-argument'
@@ -147,11 +146,10 @@ type IrlClaimRuntime = {
 };
 
 type FirestoreReadContext = {
-  accessTokenProvider: GoogleAccessTokenProvider;
-  commerceDb?: D1Database;
+  commerceDb: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
 };
 
@@ -168,9 +166,9 @@ type OnchainState = {
 };
 
 type IrlClaimDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
@@ -745,7 +743,7 @@ async function loadClaim(
   code: string,
 ): Promise<Record<string, unknown> | null> {
   const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/claimCodes/${encodeURIComponent(code)}`);
-  const document = await authenticatedFirestoreRequest({ ...context, method: 'GET', url: url.toString() });
+  const document = await context.requestCommerceDocument({ ...context, method: 'GET', url: url.toString() });
   if (!isRecord(document)) return null;
   const fields = decodeFirestoreFields(document.fields);
   if (!fields) throw new IrlClaimError('failed-precondition', 'Claim code record is invalid.');
@@ -753,7 +751,7 @@ async function loadClaim(
 }
 
 async function resolveLegacyDropIds(context: FirestoreReadContext, code: string): Promise<string[]> {
-  const value = await authenticatedFirestoreRequest({
+  const value = await context.requestCommerceDocument({
     ...context,
     method: 'POST',
     body: JSON.stringify({
@@ -1189,9 +1187,9 @@ async function prepareClaim(args: {
 }
 
 const defaultDependencies: IrlClaimDependencies = {
-  accessTokenProvider: createGoogleAccessTokenProvider(),
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
   getDrop: getApiDrop,
@@ -1252,11 +1250,10 @@ export async function handleIrlClaimPrepare(
       env,
       dependencies,
       context: {
-        accessTokenProvider: dependencies.accessTokenProvider,
         commerceDb: env.COMMERCE_DB,
         nowMs: dependencies.nowMs(),
         providerFetch: trackedFetch,
-        serviceAccountJson: 'd1',
+        requestCommerceDocument: dependencies.requestCommerceDocument,
         signal: controller.signal,
       },
       providerContext: {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import {
   ComputeBudgetProgram,
@@ -117,7 +118,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function env(overrides: Record<string, string> = {}) {
   return {
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
+    COMMERCE_DB: createCommerceD1(),
     HELIUS_API_KEY: 'helius-test-key',
     ...overrides,
   };
@@ -125,6 +126,7 @@ function env(overrides: Record<string, string> = {}) {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER.toBase58() }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadWalletSession: async () => OWNER.toBase58(),
@@ -318,13 +320,10 @@ test('Admin IRL preparation surfaces provider deadlines and conditional-create c
 
   await assert.rejects(
     adminIrlRedeemPrepareTestHooks.createRequest({
-      accessTokenProvider: {
-        get: async () => 'token',
-        invalidate: () => undefined,
-      },
+      requestCommerceDocument: firestoreProviderCommerceRequester,
+      commerceDb: createCommerceD1(),
       nowMs: 1_700_000_000_000,
       providerFetch: async () => Response.json({ error: { status: 'ALREADY_EXISTS' } }, { status: 409 }),
-      serviceAccountJson: '{"credential":"test"}',
       signal: new AbortController().signal,
     }, {
       adminWallet: ADMIN.toBase58(),
@@ -342,18 +341,14 @@ test('Admin IRL preparation surfaces provider deadlines and conditional-create c
 test('Admin IRL Firestore adapter conditionally creates the exact prepared request schema', async () => {
   let commit: Record<string, unknown> | undefined;
   await adminIrlRedeemPrepareTestHooks.createRequest({
-    accessTokenProvider: {
-      get: async () => 'token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: 1_700_000_000_000,
     providerFetch: async (input, init) => {
       assert.match(String(input), /documents:commit$/);
-      assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
       commit = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return Response.json({ writeResults: [{ updateTime: '2026-08-21T00:00:00.000Z' }] });
     },
-    serviceAccountJson: '{"credential":"test"}',
     signal: new AbortController().signal,
   }, {
     adminWallet: ADMIN.toBase58(),

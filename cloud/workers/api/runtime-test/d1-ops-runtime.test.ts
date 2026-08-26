@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from '../test/commerceD1Harness.ts';
 import { createTestHarness } from 'wrangler';
 import {
   compareAndSetReadyNotificationCursor,
@@ -555,29 +556,25 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       'DELETE FROM profiles WHERE wallet = ?',
     ).bind(PROFILE_WALLET).run());
     assert.equal(await profileReadTestHooks.loadProfileEmail({
-      accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
       db: env.OPS_DB,
       nowMs: 4_000,
       ownerWallet: PROFILE_WALLET,
       providerFetch: async () => assert.fail('D1 profile read reached Firestore'),
-      serviceAccountJson: 'credential',
       signal: new AbortController().signal,
     }), 'owner@example.com');
     const missingWallet = 'So11111111111111111111111111111111111111112';
     assert.equal(await profileReadTestHooks.loadProfileEmail({
-      accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
       db: env.OPS_DB,
       nowMs: 4_000,
       ownerWallet: missingWallet,
       providerFetch: async () => assert.fail('D1-only profile read reached Firestore'),
-      serviceAccountJson: 'credential',
       signal: new AbortController().signal,
     }), undefined);
     await assert.rejects(deliveryPrepareTestHooks.loadAddress({
-      accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+      requestCommerceDocument: firestoreProviderCommerceRequester,
+      commerceDb: createCommerceD1(),
       nowMs: 4_000,
       providerFetch: async () => assert.fail('D1-only address read reached Firestore'),
-      serviceAccountJson: 'credential',
       signal: new AbortController().signal,
     }, env.OPS_DB, missingWallet, 'XbCdEfGhIjKlMnOpQrSt'), /Address not found/);
     await ensureD1Profile(env.OPS_DB, {

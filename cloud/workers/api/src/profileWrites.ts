@@ -104,12 +104,11 @@ import {
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   FirestoreWriteConflict,
   ProfileReadError,
-  authenticatedFirestoreRequest,
-  createGoogleAccessTokenProvider,
+  commerceDocumentRequest,
   decodeFirestoreFields,
   isRecord,
   readBoundedText,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { saveD1ProfileAddress } from './profileD1.js';
@@ -165,7 +164,6 @@ export type ProfileWriteResult = {
 };
 
 type ProfileWriteDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   autoId: () => string;
   createNotificationJobId: () => string;
   error: (entry: Record<string, unknown>) => void;
@@ -173,6 +171,7 @@ type ProfileWriteDependencies = {
   nowMs: () => number;
   pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   resolveD1WalletSession: (
     db: D1Database | undefined,
     uid: string,
@@ -188,8 +187,8 @@ type ProfileWriteDependencies = {
   warn: (entry: Record<string, unknown>) => void;
 };
 
-type ProfileWriteEnv = Partial<Pick<Env,
-  'ADDRESS_DECRYPTION_SECRET' | 'COMMERCE_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
+type ProfileWriteEnv = Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env,
+  'ADDRESS_DECRYPTION_SECRET' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
 >>;
 
 const PROFILE_WRITE_TIMEOUT_MS = 15_000;
@@ -288,7 +287,6 @@ const shipStationShipmentSchema = shipStationRatesSchema.extend({
   addressPatch: shipStationAddressPatchSchema.optional(),
 }).strict();
 
-const defaultAccessTokenProvider = createGoogleAccessTokenProvider();
 
 class ShipStationProfileError extends ProfileReadError {
   constructor(
@@ -302,7 +300,6 @@ class ShipStationProfileError extends ProfileReadError {
 }
 
 const defaultDependencies: ProfileWriteDependencies = {
-  accessTokenProvider: defaultAccessTokenProvider,
   autoId: createProfileAddressId,
   createNotificationJobId: () => crypto.randomUUID(),
   error: (entry) => console.error(entry),
@@ -310,6 +307,7 @@ const defaultDependencies: ProfileWriteDependencies = {
   nowMs: () => Date.now(),
   pauseForRatePoll,
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   resolveD1WalletSession: (db, uid, signal) => {
     if (!db) throw new Error('OPS_DB is unavailable');
     return resolveD1WalletSession(db, uid, signal);
@@ -449,21 +447,18 @@ function documentName(path: string): string {
 
 async function commitWrites(
   common: {
-    accessTokenProvider: GoogleAccessTokenProvider;
-    commerceDb?: D1Database;
+    commerceDb: D1Database;
     nowMs: number;
     providerFetch: ProfileProviderFetch;
-    serviceAccountJson: string;
+    requestCommerceDocument: CommerceDocumentRequester;
     signal: AbortSignal;
   },
   writes: unknown[],
-  surfaceWriteConflict = false,
 ): Promise<void> {
-  await authenticatedFirestoreRequest({
+  await common.requestCommerceDocument({
     ...common,
     body: JSON.stringify({ writes }),
     method: 'POST',
-    surfaceWriteConflict,
     url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
   });
 }
@@ -758,11 +753,11 @@ async function updateFulfillmentStatus(
 }
 
 type FirestoreWriteCommon = {
-  accessTokenProvider: GoogleAccessTokenProvider;
+  commerceDb: D1Database;
   nowMs: number;
   pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
 };
 
@@ -851,7 +846,7 @@ async function loadDeliveryOrderDocument(
   deliveryId: number,
 ): Promise<DeliveryOrderDocument> {
   const orderPath = `drops/${dropId}/deliveryOrders/${deliveryId}`;
-  const payload = await authenticatedFirestoreRequest({
+  const payload = await common.requestCommerceDocument({
     ...common,
     method: 'GET',
     url: `${FIRESTORE_DOCUMENTS_BASE_URL}/${orderPath}`,
@@ -894,7 +889,7 @@ async function mutateDeliveryOrder<T>(args: {
     const mutation = args.build(document);
     if (!mutation.write) return mutation.value;
     try {
-      await commitWrites(args.common, [mutation.write], true);
+      await commitWrites(args.common, [mutation.write]);
       return mutation.value;
     } catch (error) {
       if (!(error instanceof FirestoreWriteConflict)) throw error;
@@ -3268,12 +3263,11 @@ export async function handleProfileWriteRequest(
       throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
     }
     const common = {
-      accessTokenProvider: dependencies.accessTokenProvider,
       commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       pauseForRatePoll: dependencies.pauseForRatePoll,
       providerFetch: trackedFetch,
-      serviceAccountJson: 'd1',
+      requestCommerceDocument: dependencies.requestCommerceDocument,
       signal: controller.signal,
     };
     const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({

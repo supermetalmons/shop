@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, createCommerceD1Harness } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import {
@@ -17,10 +18,7 @@ import {
   BOX_MINTER_CONFIG_DISCRIMINATOR,
 } from '../../../../shared/boxMinterConfigCodec.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
-import {
-  authenticatedFirestoreRequest,
-  FirestoreWriteConflict,
-} from '../src/firestoreRest.ts';
+import { FirestoreWriteConflict, commerceDocumentRequest } from '../src/firestoreRest.ts';
 import {
   DELIVERY_PREPARE_PATH,
   deliveryPrepareTestHooks,
@@ -150,8 +148,8 @@ function requestBody() {
 
 function env(overrides: Record<string, string> = {}) {
   return {
+    COMMERCE_DB: createCommerceD1(),
     COSIGNER_SECRET: bs58.encode(COSIGNER.secretKey),
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: 'helius-test-key',
     ...overrides,
   };
@@ -159,6 +157,7 @@ function env(overrides: Record<string, string> = {}) {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
+    requestCommerceDocument: commerceDocumentRequest,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadWalletSession: async () => OWNER.publicKey.toBase58(),
@@ -253,19 +252,12 @@ test('delivery preparation schedules recovery from the document reservation time
 });
 
 test('delivery preparation preserves raw address fields in the Firestore create', async () => {
-  let body: Record<string, unknown> | undefined;
-  const accessTokenProvider = {
-    invalidate: () => undefined,
-    get: async () => 'access-token',
-  };
+  const harness = createCommerceD1Harness();
   const updateTime = await deliveryPrepareTestHooks.createDeliveryOrder({
-    accessTokenProvider,
+    requestCommerceDocument: commerceDocumentRequest,
+    commerceDb: harness.db,
     nowMs: NOW_MS,
-    providerFetch: async (_input, init) => {
-      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      return Response.json({ writeResults: [{ updateTime: '2026-08-20T00:00:01.000Z' }] });
-    },
-    serviceAccountJson: '{}',
+    providerFetch: async () => assert.fail('D1 delivery creation reached a network provider'),
     signal: new AbortController().signal,
   }, {
     path: `drops/${DROP_ID}/deliveryOrders/7`,
@@ -287,43 +279,33 @@ test('delivery preparation preserves raw address fields in the Firestore create'
     nextPreparedProbeAtMs: NOW_MS + 30_000,
     prepareAttemptId: '123e4567-e89b-42d3-a456-426614174000',
   });
-  assert.equal(updateTime, '2026-08-20T00:00:01.000Z');
-  const write = ((body?.writes as Record<string, unknown>[])[0]);
-  assert.deepEqual(write.currentDocument, { exists: false });
-  const fields = ((write.update as Record<string, unknown>).fields as Record<string, unknown>);
+  assert.equal(Date.parse(updateTime), NOW_MS);
+  const row = harness.database.prepare(`SELECT fields_json FROM commerce_documents
+    WHERE document_path = ?`).get(`drops/${DROP_ID}/deliveryOrders/7`) as { fields_json: string };
+  const fields = JSON.parse(row.fields_json) as Record<string, unknown>;
   const snapshot = ((fields.addressSnapshot as Record<string, unknown>).mapValue as Record<string, unknown>).fields as Record<string, unknown>;
   assert.deepEqual(snapshot.createdAt, { timestampValue: '2026-08-19T00:00:00.000Z' });
   assert.deepEqual(snapshot.countryCode, { stringValue: 'US' });
-  assert.deepEqual(write.updateTransforms, [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }]);
+  assert.deepEqual(fields.createdAt, { timestampValue: new Date(NOW_MS).toISOString() });
 });
 
-test('delivery preparation reconciles a create whose commit response was lost', async () => {
-  let calls = 0;
+test('delivery preparation reconciles an applied D1 commit when its result is lost', async () => {
+  const harness = createCommerceD1Harness();
+  let batches = 0;
+  const db = {
+    ...harness.db,
+    async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+      const result = await harness.db.batch<T>(statements);
+      batches += 1;
+      if (batches === 1) throw new TypeError('commit result lost');
+      return result;
+    },
+  } as D1Database;
   const updateTime = await deliveryPrepareTestHooks.createDeliveryOrder({
-    accessTokenProvider: {
-      invalidate: () => undefined,
-      get: async () => 'access-token',
-    },
+    requestCommerceDocument: commerceDocumentRequest,
+    commerceDb: db,
     nowMs: NOW_MS,
-    providerFetch: async () => {
-      calls += 1;
-      if (calls <= 2) throw new TypeError('response lost');
-      return Response.json({
-        updateTime: '2026-08-20T00:00:01.000Z',
-        fields: {
-          prepareAttemptId: { stringValue: '123e4567-e89b-42d3-a456-426614174000' },
-          status: { stringValue: 'prepared' },
-          dropId: { stringValue: DROP_ID },
-          owner: { stringValue: OWNER.publicKey.toBase58() },
-          addressId: { stringValue: ADDRESS_ID },
-          deliveryId: { integerValue: '7' },
-          deliveryPda: { stringValue: 'delivery-pda' },
-          deliveryLamports: { integerValue: '200000000' },
-          itemIds: { arrayValue: { values: [{ stringValue: ASSET.toBase58() }] } },
-        },
-      });
-    },
-    serviceAccountJson: '{}',
+    providerFetch: async () => assert.fail('D1 delivery reconciliation reached a network provider'),
     signal: new AbortController().signal,
   }, {
     path: `drops/${DROP_ID}/deliveryOrders/7`,
@@ -339,57 +321,8 @@ test('delivery preparation reconciles a create whose commit response was lost', 
     nextPreparedProbeAtMs: NOW_MS + 30_000,
     prepareAttemptId: '123e4567-e89b-42d3-a456-426614174000',
   });
-  assert.equal(updateTime, '2026-08-20T00:00:01.000Z');
-  assert.equal(calls, 3);
-});
-
-test('delivery preparation uses a fresh signal when a commit response omits its update time', async () => {
-  const overallSignal = new AbortController().signal;
-  let calls = 0;
-  const updateTime = await deliveryPrepareTestHooks.createDeliveryOrder({
-    accessTokenProvider: {
-      invalidate: () => undefined,
-      get: async () => 'access-token',
-    },
-    nowMs: NOW_MS,
-    providerFetch: async (_input, init) => {
-      calls += 1;
-      if (calls === 1) return Response.json({ writeResults: [{}] });
-      assert.notEqual(init?.signal, overallSignal);
-      assert.equal(init?.signal?.aborted, false);
-      return Response.json({
-        updateTime: '2026-08-20T00:00:01.000Z',
-        fields: {
-          prepareAttemptId: { stringValue: '123e4567-e89b-42d3-a456-426614174000' },
-          status: { stringValue: 'prepared' },
-          dropId: { stringValue: DROP_ID },
-          owner: { stringValue: OWNER.publicKey.toBase58() },
-          addressId: { stringValue: ADDRESS_ID },
-          deliveryId: { integerValue: '7' },
-          deliveryPda: { stringValue: 'delivery-pda' },
-          deliveryLamports: { integerValue: '200000000' },
-          itemIds: { arrayValue: { values: [{ stringValue: ASSET.toBase58() }] } },
-        },
-      });
-    },
-    serviceAccountJson: '{}',
-    signal: overallSignal,
-  }, {
-    path: `drops/${DROP_ID}/deliveryOrders/7`,
-    dropId: DROP_ID,
-    owner: OWNER.publicKey.toBase58(),
-    addressId: ADDRESS_ID,
-    address: { decoded: { countryCode: 'US' }, rawFields: {} },
-    addressCountry: 'US',
-    items: [{ assetId: ASSET.toBase58(), kind: 'box', refId: 7 }],
-    deliveryId: 7,
-    deliveryPda: 'delivery-pda',
-    deliveryLamports: 200_000_000,
-    nextPreparedProbeAtMs: NOW_MS + 30_000,
-    prepareAttemptId: '123e4567-e89b-42d3-a456-426614174000',
-  });
-  assert.equal(updateTime, '2026-08-20T00:00:01.000Z');
-  assert.equal(calls, 2);
+  assert.equal(Date.parse(updateTime), NOW_MS);
+  assert.equal(batches, 1);
 });
 
 test('delivery preparation retries Firestore collisions with a fresh delivery id', async () => {
@@ -406,28 +339,6 @@ test('delivery preparation retries Firestore collisions with a fresh delivery id
   assert.equal(result.response.status, 200);
   assert.equal((await result.response.json() as { deliveryId: number }).deliveryId, 8);
   assert.deepEqual(created, [7, 8]);
-});
-
-test('Firestore REST surfaces already-existing creates as write conflicts', async () => {
-  await assert.rejects(
-    authenticatedFirestoreRequest({
-      accessTokenProvider: {
-        get: async () => 'access-token',
-        invalidate: () => undefined,
-      },
-      body: '{}',
-      method: 'POST',
-      nowMs: NOW_MS,
-      providerFetch: async () => Response.json({
-        error: { status: 'ALREADY_EXISTS' },
-      }, { status: 409 }),
-      serviceAccountJson: '{"credential":"test"}',
-      signal: new AbortController().signal,
-      surfaceWriteConflict: true,
-      url: 'https://firestore.googleapis.com/v1/projects/mons-shop/databases/(default)/documents:commit',
-    }),
-    FirestoreWriteConflict,
-  );
 });
 
 test('delivery preparation conditionally cleans up a reserved order after a blockhash failure', async () => {

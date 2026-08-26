@@ -71,9 +71,9 @@ import { RequestIdentityError, verifyRequestIdentity, type RequestIdentity } fro
 import {
   FirestoreWriteConflict,
   ProfileReadError,
-  createGoogleAccessTokenProvider,
+  commerceDocumentRequest,
   isRecord,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { adminIrlRedeemRuntime } from './adminIrlRedeemPrepare.js';
@@ -105,7 +105,7 @@ const requestSchema = z.object({
 }).strict();
 
 type ClaimEnv = Pick<Env, 'COSIGNER_SECRET' | 'HELIUS_API_KEY'> &
-  Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
+  Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
 type ProviderContext = {
@@ -173,10 +173,10 @@ export class StripeReceiptClaimError extends Error {
 }
 
 type ClaimDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   claim: typeof claimStripeReceipt;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
 };
@@ -1964,10 +1964,10 @@ async function claimStripeReceipt(
 }
 
 const defaultDependencies: ClaimDependencies = {
-  accessTokenProvider: createGoogleAccessTokenProvider(),
   claim: claimStripeReceipt,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
 };
@@ -2044,11 +2044,10 @@ export async function handleStripeReceiptClaim(
       body,
       { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
       {
-        accessTokenProvider: dependencies.accessTokenProvider,
         commerceDb: env.COMMERCE_DB,
         nowMs,
         providerFetch: trackedFetch,
-        serviceAccountJson: 'd1',
+        requestCommerceDocument: dependencies.requestCommerceDocument,
         signal: controller.signal,
       },
       { apiKey, providerFetch: trackedFetch, signal: controller.signal },

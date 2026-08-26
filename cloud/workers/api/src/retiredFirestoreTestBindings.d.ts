@@ -1,4 +1,0 @@
-interface Env {
-  FIRESTORE_SERVICE_ACCOUNT_JSON?: string;
-  FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON?: string;
-}

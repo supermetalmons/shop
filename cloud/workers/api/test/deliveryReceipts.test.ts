@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import {
@@ -162,10 +163,10 @@ function projectionHarness(args: {
   return {
     commits,
     context: {
-      accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+      requestCommerceDocument: firestoreProviderCommerceRequester,
+      commerceDb: createCommerceD1(),
       nowMs,
       providerFetch,
-      serviceAccountJson: 'credential',
       signal: new AbortController().signal,
       dataDb: d1.db,
     },
@@ -558,6 +559,7 @@ function readyNotificationHarness(args: {
     throw new Error(`Unexpected request: ${url}`);
   };
   return {
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     commits,
     controlReads: control.reads,
     decodedDocument,
@@ -581,10 +583,10 @@ function readyNotificationContext(
   nowMs = READY_NOTIFICATION_NOW_MS,
 ): ReadyNotificationPublishArgs['context'] {
   return {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs,
     providerFetch: harness.providerFetch,
-    serviceAccountJson: 'credential',
     signal: new AbortController().signal,
   };
 }
@@ -603,11 +605,11 @@ function request(path: string, body: unknown, init: RequestInit = {}): Request {
 }
 
 function env(overrides: Partial<Pick<Env,
-  'COSIGNER_SECRET' | 'DATA_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'
+  'COMMERCE_DB' | 'COSIGNER_SECRET' | 'DATA_DB' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'
 >> = {}) {
   return {
+    COMMERCE_DB: createCommerceD1(),
     COSIGNER_SECRET: bs58.encode(Keypair.generate().secretKey),
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: 'helius-test-key',
     NOTIFICATION_EMAIL_QUEUE: notificationQueue(),
     OPS_DB: readyNotificationControlHarness().db,
@@ -617,6 +619,7 @@ function env(overrides: Partial<Pick<Env,
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     issue: async () => ({
       processed: true as const,
@@ -770,10 +773,8 @@ test('ready-to-ship persistence atomically includes notification and pack-status
   const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
   const commits: Array<{ writes: Array<Record<string, any>> }> = [];
   const context = {
-    accessTokenProvider: {
-      get: async () => 'google-access-token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: Date.now(),
     providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -781,7 +782,6 @@ test('ready-to-ship persistence atomically includes notification and pack-status
       commits.push(JSON.parse(String(init?.body)));
       return Response.json({ writeResults: [{}], commitTime: '2026-08-22T00:00:01.000Z' });
     },
-    serviceAccountJson: '{"credential":"test"}',
     signal: new AbortController().signal,
   };
   const document = {
@@ -841,7 +841,7 @@ test('notification queue failure maps both delivery routes to retryable 503 afte
     DELIVERY_RECEIPTS_ISSUE_PATH,
     () => undefined,
     dependencies({
-      accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+      requestCommerceDocument: firestoreProviderCommerceRequester,
       providerFetch: harness.providerFetch,
       issue: async (
         _body: unknown,
@@ -911,7 +911,7 @@ test('paused notification control fails the direct HTTP publisher closed', async
     DELIVERY_RECEIPTS_ISSUE_PATH,
     () => undefined,
     dependencies({
-      accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+      requestCommerceDocument: firestoreProviderCommerceRequester,
       providerFetch: harness.providerFetch,
       issue: async (
         _body: unknown,
@@ -947,13 +947,13 @@ test('queued and markerless ready retries succeed during a pause without reading
   let providerCalls = 0;
   const control = readyNotificationControlHarness({ paused: true });
   const context: ReadyNotificationPublishArgs['context'] = {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: READY_NOTIFICATION_NOW_MS,
     providerFetch: async () => {
       providerCalls += 1;
       throw new Error('control must not be read');
     },
-    serviceAccountJson: 'credential',
     signal: new AbortController().signal,
   };
   for (const fields of [
@@ -1020,13 +1020,10 @@ test('successful queue publication retains its active claim when marker finaliza
   let queueSends = 0;
   const harness = readyNotificationHarness({ failQueuedWrites: 1 });
   const context: ReadyNotificationPublishArgs['context'] = {
-    accessTokenProvider: {
-      get: async () => 'google-access-token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: READY_NOTIFICATION_NOW_MS,
     providerFetch: harness.providerFetch,
-    serviceAccountJson: '{"credential":"test"}',
     signal: new AbortController().signal,
   };
   await assert.rejects(deliveryReceiptTestHooks.publishReadyToShipNotifications({
@@ -1082,11 +1079,11 @@ test('one CAS winner publishes across concurrent direct and scheduled recovery',
       queue,
     }),
     reconcilePendingReadyToShipNotifications({
-      FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+      COMMERCE_DB: createCommerceD1(),
       NOTIFICATION_EMAIL_QUEUE: queue,
       OPS_DB: harness.opsDb,
     }, new AbortController().signal, {
-      accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+      requestCommerceDocument: firestoreProviderCommerceRequester,
       nowMs: () => READY_NOTIFICATION_NOW_MS,
       providerFetch: harness.providerFetch,
     }),
@@ -1342,11 +1339,11 @@ test('notification reconciliation creates its missing D1 control atomically befo
   const control = readyNotificationControlHarness({ exists: false });
   let queryCalls = 0;
   const processed = await reconcilePendingReadyToShipNotifications({
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+    COMMERCE_DB: createCommerceD1(),
     NOTIFICATION_EMAIL_QUEUE: notificationQueue(),
     OPS_DB: control.db,
   }, new AbortController().signal, {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     nowMs: () => 1_700_000_000_000,
     providerFetch: async (input) => {
       const url = String(input);
@@ -1370,7 +1367,7 @@ test('paused notification control stops cron publication without scanning', asyn
   let queueSends = 0;
   const logs: Record<string, unknown>[] = [];
   const processed = await reconcilePendingReadyToShipNotifications({
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+    COMMERCE_DB: createCommerceD1(),
     NOTIFICATION_EMAIL_QUEUE: notificationQueue({
       sendBatch: async () => {
         queueSends += 1;
@@ -1379,7 +1376,7 @@ test('paused notification control stops cron publication without scanning', asyn
     }),
     OPS_DB: control.db,
   }, new AbortController().signal, {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     log: (entry) => logs.push(entry),
     nowMs: () => 1_700_000_000_000,
     providerFetch: async () => { throw new Error('Firestore must not be scanned'); },
@@ -1394,7 +1391,7 @@ test('scheduled ready-notification reconciliation queues before finalization and
   const harness = readyNotificationHarness({ documents: [{ deliveryId: 7, includeShipper: true }] });
   const queued: Array<Record<string, unknown>> = [];
   const processed = await reconcilePendingReadyToShipNotifications({
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+    COMMERCE_DB: createCommerceD1(),
     NOTIFICATION_EMAIL_QUEUE: notificationQueue({
       sendBatch: async (messages) => {
         queued.push(...Array.from(messages, (message) => message.body as Record<string, unknown>));
@@ -1403,7 +1400,7 @@ test('scheduled ready-notification reconciliation queues before finalization and
     }),
     OPS_DB: harness.opsDb,
   }, new AbortController().signal, {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     nowMs: () => READY_NOTIFICATION_NOW_MS,
     providerFetch: harness.providerFetch,
   });
@@ -1432,7 +1429,7 @@ test('persisted notification cursor advances past four failures and reaches late
   });
   const attempts: number[] = [];
   const workerEnv = {
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+    COMMERCE_DB: createCommerceD1(),
     NOTIFICATION_EMAIL_QUEUE: notificationQueue({
       sendBatch: async (messages) => {
         const job = Array.from(messages)[0].body as { context: { deliveryId: number } };
@@ -1444,7 +1441,7 @@ test('persisted notification cursor advances past four failures and reaches late
     OPS_DB: harness.opsDb,
   };
   const overrides = {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     nowMs: () => READY_NOTIFICATION_NOW_MS,
     providerFetch: harness.providerFetch,
   };
@@ -1475,11 +1472,11 @@ test('persisted notification cursor advances past four failures and reaches late
 test('notification cursor compare-and-set preserves progress from a concurrent cron', async () => {
   const harness = readyNotificationHarness({ failCursorWrites: 1 });
   const processed = await reconcilePendingReadyToShipNotifications({
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+    COMMERCE_DB: createCommerceD1(),
     NOTIFICATION_EMAIL_QUEUE: notificationQueue(),
     OPS_DB: harness.opsDb,
   }, new AbortController().signal, {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     nowMs: () => READY_NOTIFICATION_NOW_MS,
     providerFetch: harness.providerFetch,
   });
@@ -1497,7 +1494,7 @@ test('scheduled ready-notification reconciliation terminalizes poison rows befor
   });
   const published: number[] = [];
   const processed = await reconcilePendingReadyToShipNotifications({
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+    COMMERCE_DB: createCommerceD1(),
     NOTIFICATION_EMAIL_QUEUE: notificationQueue({
       sendBatch: async (messages) => {
         const job = Array.from(messages)[0].body as { context: { deliveryId: number } };
@@ -1507,7 +1504,7 @@ test('scheduled ready-notification reconciliation terminalizes poison rows befor
     }),
     OPS_DB: harness.opsDb,
   }, new AbortController().signal, {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     nowMs: () => READY_NOTIFICATION_NOW_MS,
     providerFetch: harness.providerFetch,
   });
@@ -1527,7 +1524,7 @@ test('scheduled reconciliation fails a wrong valid key and publishes its valid s
   }] });
   const published: string[] = [];
   const processed = await reconcilePendingReadyToShipNotifications({
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+    COMMERCE_DB: createCommerceD1(),
     NOTIFICATION_EMAIL_QUEUE: notificationQueue({
       sendBatch: async (messages) => {
         published.push(...Array.from(messages, (message) => String((message.body as { kind: string }).kind)));
@@ -1536,7 +1533,7 @@ test('scheduled reconciliation fails a wrong valid key and publishes its valid s
     }),
     OPS_DB: harness.opsDb,
   }, new AbortController().signal, {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     nowMs: () => READY_NOTIFICATION_NOW_MS,
     providerFetch: harness.providerFetch,
   });
@@ -1664,10 +1661,7 @@ test('ready-to-ship issue requests use the production Firestore and bounded Sola
     DELIVERY_RECEIPTS_ISSUE_PATH,
     (promise) => deferred.push(promise),
     {
-      accessTokenProvider: {
-        get: async () => 'google-access-token',
-        invalidate: () => undefined,
-      },
+      requestCommerceDocument: firestoreProviderCommerceRequester,
       providerFetch,
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     },
@@ -1879,10 +1873,10 @@ test('due pack-status reconciliation uses a bounded projection and completes dir
   let query: Record<string, any> | undefined;
   let queryUrl = '';
   const processed = await reconcilePendingDeliveryPackStatusProjections({
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+    COMMERCE_DB: createCommerceD1(),
     DATA_DB: harness.d1.db,
   }, new AbortController().signal, {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     dropIds: ['card_nft_2'],
     log: () => undefined,
     nowMs: () => harness.context.nowMs,
@@ -1920,10 +1914,10 @@ test('scheduled reconciliation terminalizes malformed due rows', async () => {
   const nowMs = 1_700_000_000_000;
   let failed = 0;
   const processed = await reconcilePendingDeliveryPackStatusProjections({
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+    COMMERCE_DB: createCommerceD1(),
     DATA_DB: projectionDataDb().db,
   }, new AbortController().signal, {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     dropIds: ['card_nft_2'],
     log: () => undefined,
     nowMs: () => nowMs,
@@ -1972,10 +1966,10 @@ test('scheduled projection reconciliation round-robins drops within global and c
   let active = 0;
   let maxActive = 0;
   const processed = await reconcilePendingDeliveryPackStatusProjections({
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'credential',
+    COMMERCE_DB: createCommerceD1(),
     DATA_DB: projectionDataDb().db,
   }, new AbortController().signal, {
-    accessTokenProvider: { get: async () => 'token', invalidate: () => undefined },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     dropIds: [...rows.keys()],
     nowMs: () => nowMs,
     providerFetch: async (input, init) => {
@@ -2056,10 +2050,7 @@ test('explicit recovery uses the production Firestore adapter and preserves not-
     DELIVERY_RECEIPTS_RECOVER_PATH,
     () => undefined,
     {
-      accessTokenProvider: {
-        get: async () => 'google-access-token',
-        invalidate: () => undefined,
-      },
+      requestCommerceDocument: firestoreProviderCommerceRequester,
       providerFetch,
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     },
@@ -2171,10 +2162,7 @@ test('forced recovery validates the delivery PDA and finalizes an already-burned
     DELIVERY_RECEIPTS_RECOVER_PATH,
     () => undefined,
     {
-      accessTokenProvider: {
-        get: async () => 'google-access-token',
-        invalidate: () => undefined,
-      },
+      requestCommerceDocument: firestoreProviderCommerceRequester,
       providerFetch,
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     },
@@ -2285,16 +2273,13 @@ test('malformed 64-byte cosigner secrets remain availability failures', () => {
 test('read-only Firestore rollback is best effort', async () => {
   let calls = 0;
   await assert.doesNotReject(deliveryReceiptTestHooks.rollbackTransactionBestEffort({
-    accessTokenProvider: {
-      get: async () => 'google-access-token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: Date.now(),
     providerFetch: async () => {
       calls += 1;
       return Response.json({ error: { status: 'INVALID_ARGUMENT' } }, { status: 400 });
     },
-    serviceAccountJson: '{}',
     signal: new AbortController().signal,
   }, 'transaction'));
   assert.equal(calls, 1);
@@ -2303,17 +2288,14 @@ test('read-only Firestore rollback is best effort', async () => {
 test('pending ready recovery queries all outbox marker states', async () => {
   let query: Record<string, any> | undefined;
   const result = await deliveryReceiptTestHooks.runPendingReadyNotificationQuery({
-    accessTokenProvider: {
-      get: async () => 'google-access-token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: Date.now(),
     providerFetch: async (input, init) => {
       assert.equal(String(input).endsWith('/documents:runQuery'), true);
       query = JSON.parse(String(init?.body));
       return Response.json([]);
     },
-    serviceAccountJson: '{"credential":"test"}',
     signal: new AbortController().signal,
   }, OWNER);
   assert.deepEqual(result, []);
@@ -2414,10 +2396,8 @@ test('prepared recovery failures reread the leased order and preserve retryable 
   const updateTime = '2026-08-22T00:00:01.000Z';
   const commits: Array<Record<string, unknown>> = [];
   const context = {
-    accessTokenProvider: {
-      get: async () => 'google-access-token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: 1_000,
     providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -2440,7 +2420,6 @@ test('prepared recovery failures reread the leased order and preserve retryable 
       }
       throw new Error(`Unexpected request: ${url}`);
     },
-    serviceAccountJson: '{}',
     signal: new AbortController().signal,
   };
   await deliveryReceiptTestHooks.handlePreparedRecoveryFailure(

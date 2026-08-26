@@ -70,14 +70,13 @@ import {
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   FirestoreWriteConflict,
   ProfileReadError,
-  authenticatedFirestoreRequest,
+  commerceDocumentRequest,
   cancelResponseBody,
-  createGoogleAccessTokenProvider,
   decodeFirestoreFields,
   firestoreString,
   isRecord,
   readBoundedJson,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import {
@@ -122,7 +121,7 @@ const requestSchema = z.object({
 type DeliveryPrepareEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'HELIUS_API_KEY'
-> & Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
+> & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
 type DeliveryPrepareErrorCode =
   | 'invalid-argument'
@@ -161,11 +160,10 @@ type DeliveryRuntime = {
 };
 
 type FirestoreContext = {
-  accessTokenProvider: GoogleAccessTokenProvider;
-  commerceDb?: D1Database;
+  commerceDb: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
 };
 
@@ -194,7 +192,6 @@ type DeliveryOrderItem = {
 };
 
 type DeliveryPrepareDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   attemptId: () => string;
   candidateId: () => number;
   createDeliveryOrder: (
@@ -242,6 +239,7 @@ type DeliveryPrepareDependencies = {
   ) => Promise<string>;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
 };
@@ -923,7 +921,7 @@ async function createDeliveryOrder(
   };
   let payload: unknown;
   try {
-    payload = await authenticatedFirestoreRequest({
+    payload = await context.requestCommerceDocument({
       ...context,
       body: JSON.stringify({
         writes: [{
@@ -936,7 +934,6 @@ async function createDeliveryOrder(
         }],
       }),
       method: 'POST',
-      surfaceWriteConflict: true,
       url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
     });
   } catch (error) {
@@ -961,7 +958,7 @@ async function reconcileCreatedDeliveryOrder(
   context: FirestoreContext,
   input: DeliveryOrderCreateInput,
 ): Promise<string | null> {
-  const document = await authenticatedFirestoreRequest({
+  const document = await context.requestCommerceDocument({
     ...context,
     method: 'GET',
     url: `${FIRESTORE_DOCUMENTS_BASE_URL}/${input.path}`,
@@ -988,7 +985,7 @@ async function deleteDeliveryOrder(
   path: string,
   updateTime: string,
 ): Promise<void> {
-  await authenticatedFirestoreRequest({
+  await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify({
       writes: [{
@@ -997,7 +994,6 @@ async function deleteDeliveryOrder(
       }],
     }),
     method: 'POST',
-    surfaceWriteConflict: true,
     url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
   });
 }
@@ -1428,7 +1424,6 @@ async function prepareDelivery(args: {
 }
 
 const defaultDependencies: DeliveryPrepareDependencies = {
-  accessTokenProvider: createGoogleAccessTokenProvider(),
   attemptId: () => crypto.randomUUID(),
   candidateId: secureDeliveryId,
   createDeliveryOrder,
@@ -1443,6 +1438,7 @@ const defaultDependencies: DeliveryPrepareDependencies = {
   loadWalletSession,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
 };
@@ -1506,11 +1502,10 @@ export async function handleDeliveryPrepare(
       dependencies,
       ...(prepareAttemptId ? { prepareAttemptId } : {}),
       context: {
-        accessTokenProvider: dependencies.accessTokenProvider,
         commerceDb: env.COMMERCE_DB,
         nowMs,
         providerFetch: trackedFetch,
-        serviceAccountJson: 'd1',
+        requestCommerceDocument: dependencies.requestCommerceDocument,
         signal: controller.signal,
       },
       providerContext: {

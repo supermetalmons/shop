@@ -47,15 +47,14 @@ import {
   FIRESTORE_DOCUMENTS_BASE_URL,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   ProfileReadError,
-  authenticatedFirestoreRequest,
+  commerceDocumentRequest,
   cancelResponseBody,
-  createGoogleAccessTokenProvider,
   decodeFirestoreFields,
   firestoreString,
   isRecord,
   readBoundedJson,
   readBoundedText,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import {
@@ -67,8 +66,6 @@ import {
 
 export {
   ProfileReadError,
-  createGoogleAccessTokenProvider,
-  type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 
@@ -237,13 +234,12 @@ function errorResponse(error: ProfileReadError): Response {
   }, error.status);
 }
 
-const defaultAccessTokenProvider = createGoogleAccessTokenProvider();
 
 type ProfileReadDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   loadProfileEmail: typeof loadProfileEmail;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   resolveD1WalletSession: (
     db: D1Database | undefined,
     uid: string,
@@ -253,11 +249,9 @@ type ProfileReadDependencies = {
   verifyIdentity: typeof verifyRequestIdentity;
 };
 
-type ProfileReadEnv = Partial<Pick<Env,
+type ProfileReadEnv = Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env,
   | 'ADDRESS_DECRYPTION_SECRET'
   | 'OPS_DB'
-  | 'COMMERCE_DB'
-  | 'FIRESTORE_SERVICE_ACCOUNT_JSON'
   | 'STRIPE_SECRET_KEY'
   | 'STRIPE_RESTRICTED_KEY'
   | 'STRIPE_SECRET_KEY_LIVE'
@@ -265,10 +259,10 @@ type ProfileReadEnv = Partial<Pick<Env,
 >>;
 
 const defaultDependencies: ProfileReadDependencies = {
-  accessTokenProvider: defaultAccessTokenProvider,
   loadProfileEmail,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   resolveD1WalletSession: (db, uid, signal) => {
     if (!db) throw new Error('OPS_DB is unavailable');
     return resolveD1WalletSession(db, uid, signal);
@@ -545,14 +539,14 @@ async function loadSessionWallet(args: {
 }
 
 async function loadFirestoreDeliveryHistory(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
+  commerceDb: D1Database;
   nowMs: number;
   owner: string;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
 }): Promise<DeliveryOrderSummary[]> {
-  const payload = await authenticatedFirestoreRequest({
+  const payload = await args.requestCommerceDocument({
     ...args,
     body: JSON.stringify(deliveryHistoryQuery(args.owner)),
     method: 'POST',
@@ -562,12 +556,10 @@ async function loadFirestoreDeliveryHistory(args: {
 }
 
 async function loadAdminProfile(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
   db: D1Database | undefined;
   nowMs: number;
   ownerWallet: string;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
   signal: AbortSignal;
 }, profileEmailLoader: typeof loadProfileEmail, ordersLoader: () => Promise<DeliveryOrderSummary[]>): Promise<GetAdminProfileViewResponse> {
   const [email, orders] = await Promise.all([
@@ -584,12 +576,10 @@ async function loadAdminProfile(args: {
 }
 
 async function loadProfileEmail(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
   db: D1Database | undefined;
   nowMs: number;
   ownerWallet: string;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
   signal: AbortSignal;
 }): Promise<string | undefined> {
   if (!args.db) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
@@ -631,12 +621,12 @@ function documentPath(value: unknown): string | null {
 }
 
 async function loadFirestoreDeliveryOrderOwners(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
+  commerceDb: D1Database;
   cursor?: string;
   nowMs: number;
   pageSize?: number;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
 }): Promise<{ owners: string[]; nextCursor: string | null; hasMore: boolean }> {
   const owners: string[] = [];
@@ -646,7 +636,7 @@ async function loadFirestoreDeliveryOrderOwners(args: {
   const fetchLimit = Math.min(Math.max(pageSize * 3, pageSize + 1), MAX_DELIVERY_ORDER_OWNER_PAGE_SIZE);
   let hasMore = false;
   while (owners.length < pageSize) {
-    const payload = await authenticatedFirestoreRequest({
+    const payload = await args.requestCommerceDocument({
       ...args,
       body: JSON.stringify(deliveryOrderOwnersQuery(cursorPath, fetchLimit)),
       method: 'POST',
@@ -778,18 +768,18 @@ function fulfillmentOrdersFromDocuments(args: {
 }
 
 async function loadFirestoreFulfillmentOrders(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
   addressSecret: string;
   canViewSensitiveAddress: boolean;
+  commerceDb: D1Database;
   cursor: FulfillmentOrdersCursor | null;
   dropId: string;
   limit: number;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
 }): Promise<{ orders: FulfillmentOrder[]; nextCursor: FulfillmentOrdersCursor | null }> {
-  const payload = await authenticatedFirestoreRequest({
+  const payload = await args.requestCommerceDocument({
     ...args,
     body: JSON.stringify(fulfillmentOrdersQuery(args.dropId, args.limit, args.cursor)),
     method: 'POST',
@@ -876,14 +866,14 @@ async function manualReviewFromDocuments(args: {
 }
 
 async function loadFirestoreManualReviewDocuments(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
+  commerceDb: D1Database;
   dropId: string;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
 }): Promise<unknown[]> {
-  const payload = await authenticatedFirestoreRequest({
+  const payload = await args.requestCommerceDocument({
     ...args,
     body: JSON.stringify(manualReviewQuery()),
     method: 'POST',
@@ -897,12 +887,10 @@ async function loadFirestoreManualReviewDocuments(args: {
 }
 
 async function loadProfileStateProfile(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
   db: D1Database | undefined;
   nowMs: number;
   ownerWallet: string;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
   signal: AbortSignal;
 }, profileEmailLoader: typeof loadProfileEmail): Promise<ProfileStateProfile> {
   const email = await profileEmailLoader(args);
@@ -977,11 +965,10 @@ export async function handleProfileReadRequest(
       throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
     }
     const common = {
-      accessTokenProvider: dependencies.accessTokenProvider,
       commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: trackedFetch,
-      serviceAccountJson: 'd1',
+      requestCommerceDocument: dependencies.requestCommerceDocument,
       signal: controller.signal,
     };
     const sessionCommon = {

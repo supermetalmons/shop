@@ -88,14 +88,13 @@ import {
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   FirestoreWriteConflict,
   ProfileReadError,
-  authenticatedFirestoreRequest,
+  commerceDocumentRequest,
   cancelResponseBody,
-  createGoogleAccessTokenProvider,
   decodeFirestoreFields,
   firestoreString,
   isRecord,
   readBoundedJson,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
@@ -138,7 +137,7 @@ const requestSchema = z.object({
 type AdminIrlRedeemPrepareEnv = Pick<
   Env,
   'HELIUS_API_KEY'
-> & Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
+> & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
 type AdminIrlRedeemPrepareErrorCode =
   | 'invalid-argument'
@@ -181,11 +180,10 @@ type AdminIrlRedeemRuntime = {
 };
 
 type FirestoreContext = {
-  accessTokenProvider: GoogleAccessTokenProvider;
-  commerceDb?: D1Database;
+  commerceDb: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
 };
 
@@ -233,10 +231,10 @@ type CreateRequestInput = {
 };
 
 type AdminIrlRedeemPrepareDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   autoId: () => string;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
@@ -833,7 +831,7 @@ async function loadReceiptMarker(
   assetId: string,
 ): Promise<boolean> {
   const path = dropAdminIrlRedeemReceiptMarkerPath(dropId, assetId);
-  return Boolean(await authenticatedFirestoreRequest({
+  return Boolean(await context.requestCommerceDocument({
     ...context,
     method: 'GET',
     url: `${FIRESTORE_DOCUMENTS_BASE_URL}/${path}`,
@@ -885,7 +883,7 @@ async function createRequest(context: FirestoreContext, input: CreateRequestInpu
     ...(input.prepareAttemptId ? { prepareAttemptId: firestoreString(input.prepareAttemptId) } : {}),
   };
   try {
-    const payload = await authenticatedFirestoreRequest({
+    const payload = await context.requestCommerceDocument({
       ...context,
       body: JSON.stringify({
         writes: [{
@@ -901,7 +899,6 @@ async function createRequest(context: FirestoreContext, input: CreateRequestInpu
         }],
       }),
       method: 'POST',
-      surfaceWriteConflict: true,
       url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
     });
     const results = isRecord(payload) ? payload.writeResults : undefined;
@@ -912,10 +909,9 @@ async function createRequest(context: FirestoreContext, input: CreateRequestInpu
     if (error instanceof FirestoreWriteConflict) {
       throw new AdminIrlRedeemPrepareError('aborted', 'Admin IRL redeem request collision. Retry.');
     }
-    const reconciled = await authenticatedFirestoreRequest({
+    const reconciled = await context.requestCommerceDocument({
       ...context,
       method: 'GET',
-      signal: AbortSignal.timeout(10_000),
       url: `${FIRESTORE_DOCUMENTS_BASE_URL}/${path}`,
     }).catch(() => null);
     if (requestMatches(reconciled, input)) return;
@@ -1368,10 +1364,10 @@ async function prepareAdminIrlRedeem(args: {
 }
 
 const defaultDependencies: AdminIrlRedeemPrepareDependencies = {
-  accessTokenProvider: createGoogleAccessTokenProvider(),
   autoId: firestoreAutoId,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
   getDrop: getApiDrop,
@@ -1450,11 +1446,10 @@ export async function handleAdminIrlRedeemPrepare(
       dependencies,
       ...(prepareAttemptId ? { prepareAttemptId } : {}),
       firestoreContext: {
-        accessTokenProvider: dependencies.accessTokenProvider,
         commerceDb: env.COMMERCE_DB,
         nowMs,
         providerFetch: trackedFetch,
-        serviceAccountJson: 'd1',
+        requestCommerceDocument: dependencies.requestCommerceDocument,
         signal: controller.signal,
       },
       providerContext: {

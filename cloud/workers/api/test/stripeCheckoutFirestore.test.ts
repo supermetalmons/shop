@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import {
   StripeCheckoutDeleteField,
   StripeCheckoutIncrement,
@@ -11,13 +12,6 @@ import {
   createWorkerStripeCheckoutStore,
   stripeCheckoutFirestoreTestHooks,
 } from '../src/stripeCheckoutFirestore.ts';
-
-function accessTokenProvider() {
-  return {
-    invalidate: () => undefined,
-    get: async () => 'firestore-access-token',
-  };
-}
 
 test('Stripe checkout Firestore writes encode fields, deletes, increments, and timestamps', () => {
   const write = stripeCheckoutFirestoreTestHooks.encodedDocumentWrite(
@@ -91,75 +85,53 @@ test('Stripe checkout Firestore distinguishes missing documents from decode fail
 });
 
 test('Stripe checkout Firestore transactions retry ABORTED commits with fresh reads', async () => {
-  let beginCount = 0;
-  let readCount = 0;
-  let commitCount = 0;
-  const commits: Record<string, unknown>[] = [];
+  const harness = createCommerceD1Harness();
+  seedCommerceDocument(harness, {
+    name: 'projects/mons-shop/databases/(default)/documents/drops/drop/stripeCheckouts/session',
+    updateTime: '2026-08-23T00:00:00.000Z',
+    fields: { status: { stringValue: 'fulfillment_pending' } },
+  });
   const store = createWorkerStripeCheckoutStore({
-    accessTokenProvider: accessTokenProvider(),
-    serviceAccountJson: 'writer-service-account',
+    commerceDb: harness.db,
     signal: new AbortController().signal,
-    providerFetch: async (input, init) => {
-      const url = String(input);
-      if (url.endsWith('/documents:beginTransaction')) {
-        beginCount += 1;
-        return Response.json({ transaction: `transaction-${beginCount}` });
-      }
-      if (url.includes('/documents/drops/drop/stripeCheckouts/session')) {
-        readCount += 1;
-        return Response.json({
-          name: 'projects/mons-shop/databases/(default)/documents/drops/drop/stripeCheckouts/session',
-          updateTime: '2026-08-23T00:00:00.000000Z',
-          fields: { status: { stringValue: 'fulfillment_pending' } },
-        });
-      }
-      if (url.endsWith('/documents:commit')) {
-        commitCount += 1;
-        commits.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
-        if (commitCount === 1) {
-          return Response.json({ error: { status: 'ABORTED', message: 'retry' } }, { status: 409 });
-        }
-        return Response.json({ writeResults: [{}] });
-      }
-      throw new Error(`Unexpected request: ${init?.method} ${url}`);
-    },
+  });
+  const competingStore = createWorkerStripeCheckoutStore({
+    commerceDb: harness.db,
+    signal: new AbortController().signal,
   });
   const reference = store.doc('drops/drop/stripeCheckouts/session');
+  let attempts = 0;
   const result = await store.runTransaction(async (transaction) => {
     assert.equal((await transaction.get(reference)).get('status'), 'fulfillment_pending');
+    attempts += 1;
+    if (attempts === 1) {
+      await competingStore.doc(reference.path).update({ status: 'fulfillment_pending' });
+    }
     transaction.update(reference, { status: 'processing' });
     return 'committed';
   });
   assert.equal(result, 'committed');
-  assert.equal(beginCount, 2);
-  assert.equal(readCount, 2);
-  assert.equal(commitCount, 2);
-  assert.equal(commits[1].transaction, 'transaction-2');
+  assert.equal(attempts, 2);
+  assert.equal((await reference.get()).get('status'), 'processing');
 });
 
 test('Stripe checkout Firestore transactions surface create collisions without retrying', async () => {
-  let beginCount = 0;
-  const store = createWorkerStripeCheckoutStore({
-    accessTokenProvider: accessTokenProvider(),
-    serviceAccountJson: 'writer-service-account',
-    signal: new AbortController().signal,
-    providerFetch: async (input) => {
-      const url = String(input);
-      if (url.endsWith('/documents:beginTransaction')) {
-        beginCount += 1;
-        return Response.json({ transaction: 'transaction-create' });
-      }
-      if (url.endsWith('/documents:commit')) {
-        return Response.json({ error: { status: 'ALREADY_EXISTS', message: 'collision' } }, { status: 409 });
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    },
+  const harness = createCommerceD1Harness();
+  seedCommerceDocument(harness, {
+    name: 'projects/mons-shop/databases/(default)/documents/drops/drop/deliveryOrders/1',
+    fields: { deliveryId: { integerValue: '1' } },
   });
+  const store = createWorkerStripeCheckoutStore({
+    commerceDb: harness.db,
+    signal: new AbortController().signal,
+  });
+  let attempts = 0;
   await assert.rejects(
     store.runTransaction(async (transaction) => {
+      attempts += 1;
       transaction.create(store.doc('drops/drop/deliveryOrders/1'), { deliveryId: 1 });
     }),
     (error: unknown) => error instanceof FirestoreWriteConflict && error.status === 'ALREADY_EXISTS',
   );
-  assert.equal(beginCount, 1);
+  assert.equal(attempts, 1);
 });

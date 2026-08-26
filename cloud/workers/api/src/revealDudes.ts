@@ -66,13 +66,12 @@ import {
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   FirestoreWriteConflict,
   ProfileReadError,
-  authenticatedFirestoreRequest,
+  commerceDocumentRequest,
   cancelResponseBody,
-  createGoogleAccessTokenProvider,
   decodeFirestoreFields,
   isRecord,
   readBoundedJson,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
@@ -168,7 +167,6 @@ export type RevealDudesResult = {
 };
 
 type RevealDudesDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   assignDudes: typeof assignDudes;
   confirmRevealSubmission: typeof confirmRevealSubmission;
   countOnlineRevealPackStatus: typeof countOnlineRevealPackStatus;
@@ -180,6 +178,7 @@ type RevealDudesDependencies = {
   loadWalletSession: typeof loadWalletSession;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   randomInt: (maxExclusive: number) => number;
   reconcileRevealSubmission: typeof reconcileRevealSubmission;
   reserveRevealSubmission: typeof reserveRevealSubmission;
@@ -198,11 +197,10 @@ type ProviderContext = {
 };
 
 type FirestoreContext = {
-  accessTokenProvider: GoogleAccessTokenProvider;
-  commerceDb?: D1Database;
+  commerceDb: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
   dataDb?: D1Database;
   opsDb?: D1Database;
@@ -227,7 +225,6 @@ export type RevealBackgroundJob = {
   signature: string;
 };
 
-const accessTokenProvider = createGoogleAccessTokenProvider();
 
 function secureRandomInt(maxExclusive: number): number {
   const maximum = Math.floor(Number(maxExclusive));
@@ -261,7 +258,6 @@ async function pause(milliseconds: number, signal: AbortSignal): Promise<void> {
 }
 
 const defaultDependencies: RevealDudesDependencies = {
-  accessTokenProvider,
   assignDudes,
   confirmRevealSubmission,
   countOnlineRevealPackStatus,
@@ -273,6 +269,7 @@ const defaultDependencies: RevealDudesDependencies = {
   loadWalletSession,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   randomInt: secureRandomInt,
   reconcileRevealSubmission,
   reserveRevealSubmission,
@@ -735,7 +732,7 @@ async function requireRevealSubmissionStorageControl(
 }
 
 async function beginFirestoreTransaction(context: FirestoreContext): Promise<string> {
-  const value = await authenticatedFirestoreRequest({
+  const value = await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify({ options: { readWrite: {} } }),
     method: 'POST',
@@ -748,7 +745,7 @@ async function beginFirestoreTransaction(context: FirestoreContext): Promise<str
 }
 
 async function rollbackFirestoreTransaction(context: FirestoreContext, transaction: string): Promise<void> {
-  await authenticatedFirestoreRequest({
+  await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify({ transaction }),
     method: 'POST',
@@ -785,7 +782,7 @@ async function readFirestoreDocument(
   path: string,
   transaction: string,
 ): Promise<Record<string, unknown> | null> {
-  const document = await authenticatedFirestoreRequest({
+  const document = await context.requestCommerceDocument({
     ...context,
     method: 'GET',
     url: firestoreDocumentUrl(path, transaction),
@@ -1033,11 +1030,10 @@ async function assignDudes(
         currentDocument: { exists: false },
         updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
       });
-      await authenticatedFirestoreRequest({
+      await context.requestCommerceDocument({
         ...context,
         body: JSON.stringify({ transaction, writes }),
         method: 'POST',
-        surfaceWriteConflict: true,
         url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
       });
       return { dudeIds: picked.chosen, outcome: 'created' };
@@ -1699,7 +1695,6 @@ async function finalizeConfirmedSubmissionForResponse(
 
 type RevealBackgroundJobDependencies = Pick<
   RevealDudesDependencies,
-  | 'accessTokenProvider'
   | 'confirmRevealSubmission'
   | 'countOnlineRevealPackStatus'
   | 'failRevealSubmission'
@@ -1707,6 +1702,7 @@ type RevealBackgroundJobDependencies = Pick<
   | 'loadStorageControl'
   | 'nowMs'
   | 'providerFetch'
+  | 'requestCommerceDocument'
   | 'reconcileRevealSubmission'
 > & {
   log: (entry: Record<string, unknown>) => void;
@@ -1715,7 +1711,6 @@ type RevealBackgroundJobDependencies = Pick<
 };
 
 const defaultRevealBackgroundJobDependencies: RevealBackgroundJobDependencies = {
-  accessTokenProvider,
   confirmRevealSubmission,
   countOnlineRevealPackStatus,
   failRevealSubmission,
@@ -1723,6 +1718,7 @@ const defaultRevealBackgroundJobDependencies: RevealBackgroundJobDependencies = 
   loadStorageControl: requireRevealSubmissionStorageControl,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   reconcileRevealSubmission,
   log: (entry) => console.info(entry),
   warn: (entry) => console.warn(entry),
@@ -1758,7 +1754,7 @@ function retryRevealBackgroundJob(
 
 export async function processRevealBackgroundJobMessage(
   message: Message<unknown>,
-  env: Pick<Env, 'HELIUS_API_KEY' | 'OPS_DB'> & Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB'>>,
+  env: Pick<Env, 'HELIUS_API_KEY' | 'OPS_DB'> & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>,
   overrides: Partial<RevealBackgroundJobDependencies> = {},
 ): Promise<void> {
   const dependencies = { ...defaultRevealBackgroundJobDependencies, ...overrides };
@@ -1790,11 +1786,10 @@ export async function processRevealBackgroundJobMessage(
     return;
   }
   const firestoreContext: FirestoreContext = {
-    accessTokenProvider: dependencies.accessTokenProvider,
     commerceDb: env.COMMERCE_DB,
     nowMs: dependencies.nowMs(),
     providerFetch: dependencies.providerFetch,
-    serviceAccountJson: 'd1',
+    requestCommerceDocument: dependencies.requestCommerceDocument,
     signal,
     dataDb: env.DATA_DB,
     opsDb: env.OPS_DB,
@@ -1967,11 +1962,10 @@ export async function handleRevealDudes(
     authOutcome = 'provider-failure';
     const storageControl = await dependencies.loadStorageControl(env.OPS_DB, controller.signal);
     const firestoreContext: FirestoreContext = {
-      accessTokenProvider: dependencies.accessTokenProvider,
       commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: meteredFetch,
-      serviceAccountJson: 'd1',
+      requestCommerceDocument: dependencies.requestCommerceDocument,
       signal: controller.signal,
       dataDb: env.DATA_DB,
       opsDb: env.OPS_DB,

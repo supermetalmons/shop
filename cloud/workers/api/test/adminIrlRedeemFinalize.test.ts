@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import {
   Keypair,
@@ -97,8 +98,8 @@ function request(body: unknown = {
 function env() {
   const metrics = { backlogCount: 0, backlogBytes: 0 };
   return {
+    COMMERCE_DB: createCommerceD1(),
     COSIGNER_SECRET: 'cosigner',
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: 'helius',
     REVEAL_BACKGROUND_QUEUE: {
       send: async () => ({ metadata: { metrics } }),
@@ -110,6 +111,7 @@ function env() {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     providerFetch: async () => { throw new Error('unexpected provider fetch'); },
     nowMs: () => 1_700_000_000_000,
@@ -124,10 +126,8 @@ function firestoreContext(
   calls: Array<{ url: string; init?: RequestInit }> = [],
 ) {
   return {
-    accessTokenProvider: {
-      get: async () => 'firestore-token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: 1_700_000_000_000,
     providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -143,7 +143,6 @@ function firestoreContext(
       if (url.endsWith(':commit') || url.endsWith(':rollback')) return Response.json({});
       throw new Error(`Unexpected Firestore request: ${url}`);
     },
-    serviceAccountJson: '{}',
     signal: new AbortController().signal,
   };
 }

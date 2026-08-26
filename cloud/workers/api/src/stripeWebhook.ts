@@ -21,11 +21,10 @@ import {
   FIRESTORE_DOCUMENTS_BASE_URL,
   FirestoreWriteConflict,
   ProfileReadError,
-  authenticatedFirestoreRequest,
-  createGoogleAccessTokenProvider,
+  commerceDocumentRequest,
   decodeFirestoreFields,
   isRecord,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 
@@ -39,7 +38,7 @@ type StripeWebhookEnv = Pick<Env,
   | 'STRIPE_FULFILLMENT_QUEUE'
   | 'STRIPE_WEBHOOK_SECRET'
   | 'STRIPE_WEBHOOK_SECRET_DEVNET'
-> & Partial<Pick<Env, 'COMMERCE_DB'>>;
+> & Pick<Env, 'COMMERCE_DB'>;
 
 type StripeWebhookMetrics = {
   upstreamCalls: number;
@@ -57,11 +56,11 @@ export type StripeWebhookRequestResult = {
 };
 
 type StripeWebhookDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   getDrop: (dropId: string) => StripeWebhookDrop | undefined;
   log: (entry: Record<string, unknown>) => void;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   verifyEvent: (
     payload: Uint8Array,
     signature: string,
@@ -90,7 +89,6 @@ class StripeWebhookRequestError extends Error {
 }
 
 const defaultDependencies: StripeWebhookDependencies = {
-  accessTokenProvider: createGoogleAccessTokenProvider(),
   getDrop: (dropId) => {
     const drop = getApiDrop(dropId);
     if (!drop) return undefined;
@@ -105,6 +103,7 @@ const defaultDependencies: StripeWebhookDependencies = {
   log: (entry) => console.log(entry),
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   verifyEvent: async (payload, signature, secret) => {
     const event = await Stripe.webhooks.constructEventAsync(
       payload,
@@ -297,15 +296,14 @@ function documentName(path: string): string {
 async function loadCheckoutDocument(
   path: string,
   common: {
-    accessTokenProvider: GoogleAccessTokenProvider;
-    commerceDb?: D1Database;
+    commerceDb: D1Database;
     nowMs: number;
     providerFetch: ProfileProviderFetch;
-    serviceAccountJson: string;
+    requestCommerceDocument: CommerceDocumentRequester;
     signal: AbortSignal;
   },
 ): Promise<FirestoreDocument> {
-  const payload = await authenticatedFirestoreRequest({
+  const payload = await common.requestCommerceDocument({
     ...common,
     method: 'GET',
     url: `${FIRESTORE_DOCUMENTS_BASE_URL}/${path}`,
@@ -371,11 +369,10 @@ async function pauseForConflict(signal: AbortSignal, attempt: number): Promise<v
 async function mutateCheckout(
   action: Extract<StripeWebhookAction, { kind: 'enqueue' }>,
   common: {
-    accessTokenProvider: GoogleAccessTokenProvider;
-    commerceDb?: D1Database;
+    commerceDb: D1Database;
     nowMs: number;
     providerFetch: ProfileProviderFetch;
-    serviceAccountJson: string;
+    requestCommerceDocument: CommerceDocumentRequester;
     signal: AbortSignal;
   },
 ): Promise<StripeWebhookTransition> {
@@ -384,13 +381,12 @@ async function mutateCheckout(
     const document = await loadCheckoutDocument(path, common);
     const transition = stripeWebhookTransition(document.fields, action);
     try {
-      await authenticatedFirestoreRequest({
+      await common.requestCommerceDocument({
         ...common,
         body: JSON.stringify({
           writes: [transitionWrite(path, document.updateTime, action, transition)],
         }),
         method: 'POST',
-        surfaceWriteConflict: true,
         url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
       });
       return transition;
@@ -500,11 +496,10 @@ export async function handleStripeWebhookRequest(
         }
       };
       const transition = await mutateCheckout(action, {
-        accessTokenProvider: dependencies.accessTokenProvider,
         commerceDb: env.COMMERCE_DB,
         nowMs: dependencies.nowMs(),
         providerFetch: trackedFetch,
-        serviceAccountJson: 'd1',
+        requestCommerceDocument: dependencies.requestCommerceDocument,
         signal: controller.signal,
       });
       if (transition.outcome !== 'already_fulfilled') {

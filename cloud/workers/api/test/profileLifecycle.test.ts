@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import {
@@ -8,7 +9,6 @@ import {
   handleProfileLifecycleRequest,
   type ProfileLifecyclePath,
 } from '../src/profileLifecycle.ts';
-import type { GoogleAccessTokenProvider } from '../src/firestoreRest.ts';
 import {
   WalletSessionD1BusyError,
   WalletSessionD1SupersededError,
@@ -170,10 +170,6 @@ class FirestoreHarness {
   }
 }
 
-function accessTokenProvider(): GoogleAccessTokenProvider {
-  return { invalidate: () => undefined, get: async () => 'access-token' };
-}
-
 function dependencies(
   harness: FirestoreHarness,
   timeoutMs = 500,
@@ -199,7 +195,6 @@ function dependencies(
         expiresAtMs: NOW_MS + 120_000,
       } : null;
     },
-    accessTokenProvider: accessTokenProvider(),
     establishD1WalletSession: async (args) => {
       harness.session = document(`authSessions/${UID}`, { wallet: args.wallet }, harness.version++);
       return d1Session()!;
@@ -207,6 +202,7 @@ function dependencies(
     loadD1WalletSession: async () => d1Session(),
     nowMs: () => NOW_MS,
     providerFetch: harness.fetch.bind(harness),
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     releaseWalletSessionReconcileLease: async () => undefined,
     resolveD1WalletSession: async () => {
       const session = d1Session();
@@ -244,9 +240,9 @@ function signInBody(args: { domain?: string; keypair?: nacl.SignKeyPair; timesta
   };
 }
 
-function env(): Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'OPS_DB'> {
+function env(): Pick<Env, 'COMMERCE_DB' | 'OPS_DB'> {
   return {
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
+    COMMERCE_DB: createCommerceD1(),
     OPS_DB: {} as D1Database,
   };
 }
@@ -533,7 +529,7 @@ test('profile reconciliation rejects invalid collection-group paths before write
 test('profile lifecycle responses never expose credentials or bearer tokens', async () => {
   const response = await handleProfileLifecycleRequest(
     request(PROFILE_RECONCILE_PATH, {}),
-    { FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_RECONCILE_PATH,
     {
       ...dependencies(new FirestoreHarness()),

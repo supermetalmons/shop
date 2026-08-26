@@ -78,9 +78,9 @@ import {
 import {
   FirestoreWriteConflict,
   ProfileReadError,
-  createGoogleAccessTokenProvider,
+  commerceDocumentRequest,
   isRecord,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { adminIrlRedeemRuntime } from './adminIrlRedeemPrepare.js';
@@ -125,7 +125,7 @@ const requestSchema = z.object({
 
 type FinalizeRequest = z.infer<typeof requestSchema>;
 type FinalizeEnv = Pick<Env, 'COSIGNER_SECRET' | 'HELIUS_API_KEY'> &
-  Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB' | 'OPS_DB'>>;
+  Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB' | 'OPS_DB'>>;
 type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
 type ProviderContext = Parameters<typeof adminIrlRedeemRuntime.fetchAsset>[0];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
@@ -203,10 +203,10 @@ export type AdminIrlRedeemFinalizeResult = {
 };
 
 type FinalizeDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   finalize: typeof finalizeAdminIrlRedeem;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
 };
@@ -1616,10 +1616,10 @@ async function finalizeAdminIrlRedeem(
 }
 
 const defaultDependencies: FinalizeDependencies = {
-  accessTokenProvider: createGoogleAccessTokenProvider(),
   finalize: finalizeAdminIrlRedeem,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
 };
@@ -1687,11 +1687,10 @@ export async function handleAdminIrlRedeemFinalize(
       identity,
       { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
       {
-        accessTokenProvider: dependencies.accessTokenProvider,
         commerceDb: env.COMMERCE_DB,
         nowMs,
         providerFetch: trackedFetch,
-        serviceAccountJson: 'd1',
+        requestCommerceDocument: dependencies.requestCommerceDocument,
         signal: controller.signal,
         dataDb: env.DATA_DB,
       },

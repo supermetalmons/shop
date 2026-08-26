@@ -1,4 +1,4 @@
-export const FIRESTORE_PROJECT_ID = 'mons-shop';
+const FIRESTORE_PROJECT_ID = 'mons-shop';
 
 export const FIRESTORE_DATABASE_NAME = `projects/${FIRESTORE_PROJECT_ID}/databases/(default)`;
 export const FIRESTORE_DOCUMENTS_BASE_URL =

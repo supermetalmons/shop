@@ -108,12 +108,11 @@ import {
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   FirestoreWriteConflict,
   ProfileReadError,
-  authenticatedFirestoreRequest,
+  commerceDocumentRequest,
   cancelResponseBody,
-  createGoogleAccessTokenProvider,
   decodeFirestoreFields,
   isRecord,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
@@ -166,7 +165,6 @@ const RPC_TIMEOUT_MS = 8_000;
 const TX_SEND_TIMEOUT_MS = 12_000;
 const TX_CONFIRM_TIMEOUT_MS = 25_000;
 const TX_CONFIRM_POLL_MS = 800;
-const backgroundFirestoreAccessTokenProvider = createGoogleAccessTokenProvider();
 const TX_MAX_SEND_ATTEMPTS = 3;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
 const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
@@ -211,7 +209,7 @@ type RecoverRequest = z.infer<typeof recoverSchema>;
 type DeliveryReceiptsEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'
-> & Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB'>>;
+> & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>;
 
 type DeliveryReceiptErrorCode =
   | 'invalid-argument'
@@ -296,11 +294,10 @@ type DecodedOnchainConfig = {
 };
 
 type FirestoreContext = {
-  accessTokenProvider: GoogleAccessTokenProvider;
-  commerceDb?: D1Database;
+  commerceDb: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
   dataDb?: D1Database;
 };
@@ -363,7 +360,6 @@ export type DeliveryReceiptRequestResult = {
 type DeliveryReceiptWaitUntil = (promise: Promise<unknown>) => void;
 
 type DeliveryReceiptDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   issue: (
     body: IssueRequest,
     identity: RequestIdentity,
@@ -374,6 +370,7 @@ type DeliveryReceiptDependencies = {
   ) => Promise<ReceiptIssueResult>;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   recover: (
     body: RecoverRequest,
     identity: RequestIdentity,
@@ -662,7 +659,7 @@ async function readDocument(
   path: string,
   transaction?: string,
 ): Promise<FirestoreDocument | null> {
-  const value = await authenticatedFirestoreRequest({
+  const value = await context.requestCommerceDocument({
     ...context,
     method: 'GET',
     url: firestoreDocumentUrl(path, transaction),
@@ -674,7 +671,7 @@ async function readDocument(
 }
 
 async function beginTransaction(context: FirestoreContext): Promise<string> {
-  const value = await authenticatedFirestoreRequest({
+  const value = await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify({ options: { readWrite: {} } }),
     method: 'POST',
@@ -687,7 +684,7 @@ async function beginTransaction(context: FirestoreContext): Promise<string> {
 }
 
 async function rollbackTransaction(context: FirestoreContext, transaction: string): Promise<void> {
-  await authenticatedFirestoreRequest({
+  await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify({ transaction }),
     method: 'POST',
@@ -704,11 +701,10 @@ async function commitWrites(
   writes: readonly Record<string, unknown>[],
   transaction?: string,
 ): Promise<void> {
-  await authenticatedFirestoreRequest({
+  await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify({ ...(transaction ? { transaction } : {}), writes }),
     method: 'POST',
-    surfaceWriteConflict: true,
     url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
   });
 }
@@ -780,7 +776,7 @@ async function runDeliveryOrderQuery(
   ownerWallet: string,
   status: 'prepared' | 'processing',
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await authenticatedFirestoreRequest({
+  const value = await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify({
       structuredQuery: {
@@ -858,7 +854,7 @@ async function runPendingReadyNotificationQuery(
   context: FirestoreContext,
   ownerWallet: string,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await authenticatedFirestoreRequest({
+  const value = await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify({
       structuredQuery: {
@@ -878,7 +874,7 @@ async function runPendingReadyNotificationReconciliationQuery(
   limit: number,
   startAfterCursorPath?: string,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await authenticatedFirestoreRequest({
+  const value = await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify(buildReadyNotificationReconciliationQuery({
       limit,
@@ -915,7 +911,7 @@ async function runDeliveryRecoveryStateQuery(
   context: FirestoreContext,
   ownerWallet: string,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await authenticatedFirestoreRequest({
+  const value = await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify({
       structuredQuery: {
@@ -1998,7 +1994,7 @@ async function runDueDeliveryPackStatusProjectionQuery(
   dueAtMs: number,
   limit: number,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await authenticatedFirestoreRequest({
+  const value = await context.requestCommerceDocument({
     ...context,
     body: JSON.stringify(buildDeliveryPackStatusProjectionReconciliationQuery({ dueAtMs, limit })),
     method: 'POST',
@@ -2008,25 +2004,24 @@ async function runDueDeliveryPackStatusProjectionQuery(
 }
 
 export async function reconcilePendingDeliveryPackStatusProjections(
-  env: Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'>>,
+  env: Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>,
   signal: AbortSignal,
   overrides: {
-    accessTokenProvider?: GoogleAccessTokenProvider;
     dropIds?: readonly string[];
     log?: (entry: Record<string, unknown>) => void;
     nowMs?: () => number;
     providerFetch?: ProfileProviderFetch;
+    requestCommerceDocument?: CommerceDocumentRequester;
   } = {},
 ): Promise<number> {
   const nowMs = overrides.nowMs || Date.now;
   const dueAtMs = nowMs();
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
   const context: FirestoreContext = {
-    accessTokenProvider: overrides.accessTokenProvider || backgroundFirestoreAccessTokenProvider,
     commerceDb: env.COMMERCE_DB,
     nowMs: dueAtMs,
     providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
-    serviceAccountJson: 'd1',
+    requestCommerceDocument: overrides.requestCommerceDocument || commerceDocumentRequest,
     signal,
     dataDb: env.DATA_DB,
   };
@@ -3360,21 +3355,20 @@ async function publishReadyToShipNotifications(args: {
 }
 
 export async function reconcilePendingReadyToShipNotifications(
-  env: Pick<Env, 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'> & Partial<Pick<Env, 'COMMERCE_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'>>,
+  env: Pick<Env, 'COMMERCE_DB' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'>,
   signal: AbortSignal,
   overrides: {
-    accessTokenProvider?: GoogleAccessTokenProvider;
     log?: (entry: Record<string, unknown>) => void;
     nowMs?: () => number;
     providerFetch?: ProfileProviderFetch;
+    requestCommerceDocument?: CommerceDocumentRequester;
   } = {},
 ): Promise<number> {
   const context: FirestoreContext = {
-    accessTokenProvider: overrides.accessTokenProvider || backgroundFirestoreAccessTokenProvider,
     commerceDb: env.COMMERCE_DB,
     nowMs: (overrides.nowMs || Date.now)(),
     providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
-    serviceAccountJson: 'd1',
+    requestCommerceDocument: overrides.requestCommerceDocument || commerceDocumentRequest,
     signal,
   };
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
@@ -4173,10 +4167,10 @@ async function recoverReceiptsRequest(
 }
 
 const defaultDependencies: DeliveryReceiptDependencies = {
-  accessTokenProvider: createGoogleAccessTokenProvider(),
   issue: issueReceiptsRequest,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   recover: recoverReceiptsRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
@@ -4236,11 +4230,10 @@ export async function handleDeliveryReceiptRequest(
       throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
     }
     const common: FirestoreContext = {
-      accessTokenProvider: dependencies.accessTokenProvider,
       commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: trackedFetch,
-      serviceAccountJson: 'd1',
+      requestCommerceDocument: dependencies.requestCommerceDocument,
       signal: controller.signal,
       dataDb: env.DATA_DB,
     };

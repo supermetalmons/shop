@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import { Keypair } from '@solana/web3.js';
 import { adminIrlRedeemPrepareTestHooks } from '../src/adminIrlRedeemPrepare.js';
 import { deliveryPrepareTestHooks } from '../src/deliveryPrepare.js';
@@ -46,16 +47,13 @@ function walletSessionDb(): D1Database {
 test('delivery, reveal, claim, receipt, and admin authorization load wallet sessions only from D1', async () => {
   let firestoreRequests = 0;
   const context = {
-    accessTokenProvider: {
-      get: async () => 'firestore-token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: 1_700_000_000_000,
     providerFetch: async () => {
       firestoreRequests += 1;
       throw new Error('Wallet authorization must not request Firestore');
     },
-    serviceAccountJson: '{}',
     signal: new AbortController().signal,
   };
   const db = walletSessionDb();

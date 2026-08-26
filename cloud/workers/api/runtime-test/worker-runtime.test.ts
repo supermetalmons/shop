@@ -32,10 +32,6 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
       migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)),
     })),
     vars: {
-      FIRESTORE_SERVICE_ACCOUNT_JSON: JSON.stringify({
-        client_email: 'runtime@example.com',
-        private_key: 'invalid-runtime-key',
-      }),
       STRIPE_WEBHOOK_SECRET_DEVNET: 'whsec_runtime_devnet',
       STRIPE_WEBHOOK_SECRET: 'whsec_runtime_mainnet',
     },

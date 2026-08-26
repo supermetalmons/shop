@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import nacl from 'tweetnacl';
 import {
   FULFILLMENT_ORDER_ADDRESS_PATH,
@@ -20,10 +21,7 @@ import {
   parseAddressCipherPayload,
   serializeAddressCipherPayload,
 } from '../../../../shared/addressCipher.ts';
-import type {
-  GoogleAccessTokenProvider,
-  ProfileProviderFetch,
-} from '../src/firestoreRest.ts';
+import type { ProfileProviderFetch } from '../src/firestoreRest.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
@@ -97,25 +95,18 @@ function request(path: ProfileWritePath, body: unknown): Request {
   });
 }
 
-function accessTokenProvider(onInvalidate: () => void = () => undefined): GoogleAccessTokenProvider {
-  return {
-    invalidate: onInvalidate,
-    get: async () => 'writer-access-token',
-  };
-}
-
 function dependencies(
   providerFetch: ProfileProviderFetch,
   overrides: Partial<Parameters<typeof handleProfileWriteRequest>[3]> = {},
 ): Parameters<typeof handleProfileWriteRequest>[3] {
   return {
-    accessTokenProvider: accessTokenProvider(),
     autoId: () => ADDRESS_ID,
     createNotificationJobId: () => NOTIFICATION_JOB_ID,
     error: () => undefined,
     log: () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
     saveProfileAddress: async (_db, address) => ({
       id: address.id,
@@ -132,7 +123,7 @@ function dependencies(
   };
 }
 
-const env = { FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'writer-service-account' };
+const env = { COMMERCE_DB: createCommerceD1() };
 const fulfillmentEnv = {
   ...env,
   ADDRESS_DECRYPTION_SECRET: ADDRESS_SECRET,
@@ -248,7 +239,7 @@ test('address route authenticates and atomically persists the exact D1 profile a
   });
   assert.equal(result.authOutcome, 'accepted');
   assert.equal(result.metrics.upstreamCalls, 0);
-  assert.ok(calls.every((call) => call.authorization === 'Bearer writer-access-token'));
+  assert.equal(calls.length, 0);
 });
 
 test('address route maps D1 failures to a generic unavailable response with one stable auto ID', async () => {
@@ -4510,7 +4501,7 @@ test('write routes reject invalid payloads, unauthorized wallets, and missing or
 
   const retiredSecret = await handleProfileWriteRequest(
     request(PROFILE_ADDRESSES_PATH, { encrypted: 'cipher', country: 'US', hint: 'hint' }),
-    { FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_ADDRESSES_PATH,
     dependencies(neverFetch),
   );
@@ -4563,7 +4554,7 @@ test('writer failures stay generic and never expose request or credential materi
       hint: 'private-hint',
       email: 'private@example.com',
     }),
-    { FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'private-writer-credential' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_ADDRESSES_PATH,
     dependencies(providerFetch, {
       saveProfileAddress: async () => {

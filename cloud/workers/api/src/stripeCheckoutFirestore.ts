@@ -15,18 +15,13 @@ import {
   FIRESTORE_DOCUMENTS_BASE_URL,
   FirestoreWriteConflict,
   ProfileReadError,
-  authenticatedFirestoreRequest,
+  commerceDocumentRequest,
   decodeFirestoreFields,
   isRecord,
-  type GoogleAccessTokenProvider,
-  type ProfileProviderFetch,
 } from './firestoreRest.js';
 
 type StripeCheckoutFirestoreContext = {
-  accessTokenProvider: GoogleAccessTokenProvider;
-  commerceDb?: D1Database;
-  providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  commerceDb: D1Database;
   signal: AbortSignal;
 };
 
@@ -230,8 +225,8 @@ export class WorkerStripeCheckoutFirestore implements StripeCheckoutFirestore {
     return new WorkerStripeCheckoutReference(path, this);
   }
 
-  private request(args: { body?: string; method: 'GET' | 'POST'; surfaceWriteConflict?: boolean; url: string }) {
-    return authenticatedFirestoreRequest({
+  private request(args: { body?: string; method: 'GET' | 'POST'; url: string }) {
+    return commerceDocumentRequest({
       ...this.context,
       ...args,
       nowMs: Date.now(),
@@ -246,7 +241,6 @@ export class WorkerStripeCheckoutFirestore implements StripeCheckoutFirestore {
     await this.request({
       body: JSON.stringify({ writes, ...(transaction ? { transaction } : {}) }),
       method: 'POST',
-      surfaceWriteConflict: true,
       url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
     });
   }

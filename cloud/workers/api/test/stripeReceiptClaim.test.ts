@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import { Keypair } from '@solana/web3.js';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { FIRESTORE_DOCUMENT_NAME_PREFIX } from '../src/firestoreRest.ts';
@@ -33,10 +34,10 @@ function request(body: unknown = { code: CODE, recipient: RECIPIENT }, init: Req
   });
 }
 
-function env(overrides: Partial<Record<'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY', string>> = {}) {
+function env(overrides: Partial<Record<'COSIGNER_SECRET' | 'HELIUS_API_KEY', string>> = {}) {
   return {
+    COMMERCE_DB: createCommerceD1(),
     COSIGNER_SECRET: 'cosigner',
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: 'helius',
     ...overrides,
   };
@@ -44,6 +45,7 @@ function env(overrides: Partial<Record<'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SER
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     providerFetch: async () => { throw new Error('unexpected provider fetch'); },
     nowMs: () => 1_700_000_000_000,
@@ -70,10 +72,8 @@ function firestoreContext(
 ) {
   let commitConflicts = options.commitConflicts || 0;
   return {
-    accessTokenProvider: {
-      get: async () => 'firestore-token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: 1_700_000_000_000,
     providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -99,7 +99,6 @@ function firestoreContext(
       }
       throw new Error(`Unexpected Firestore request: ${url}`);
     },
-    serviceAccountJson: '{}',
     signal: new AbortController().signal,
   };
 }

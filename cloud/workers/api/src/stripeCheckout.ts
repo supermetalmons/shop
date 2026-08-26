@@ -29,12 +29,11 @@ import {
   FIRESTORE_DATABASE_NAME,
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   ProfileReadError,
-  authenticatedFirestoreRequest,
+  commerceDocumentRequest,
   cancelResponseBody,
-  createGoogleAccessTokenProvider,
   isRecord,
   readBoundedJson,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 
@@ -53,7 +52,7 @@ type CheckoutEnv = Pick<Env,
   | 'STRIPE_RESTRICTED_KEY_LIVE'
   | 'STRIPE_SECRET_KEY'
   | 'STRIPE_SECRET_KEY_LIVE'
-> & Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
+> & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
 type StripeCheckoutMetrics = {
   upstreamCalls: number;
@@ -69,9 +68,9 @@ export type StripeCheckoutResult = {
 };
 
 type CheckoutDependencies = {
-  accessTokenProvider: GoogleAccessTokenProvider;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   verifyIdentity: typeof verifyRequestIdentity;
   createProviderSession?: (
     request: StripeCheckoutProviderRequest,
@@ -88,9 +87,9 @@ type CheckoutDependencies = {
 };
 
 const defaultDependencies: CheckoutDependencies = {
-  accessTokenProvider: createGoogleAccessTokenProvider(),
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   resolveWalletSession: resolveD1WalletSession,
   verifyIdentity: verifyRequestIdentity,
 };
@@ -433,20 +432,16 @@ function firestoreValue(value: unknown): Record<string, unknown> {
 async function persistCheckoutDocument(
   path: string,
   document: Record<string, unknown>,
-  serviceAccountJson: string,
-  accessTokenProvider: GoogleAccessTokenProvider,
-  providerFetch: ProfileProviderFetch,
-  signal: AbortSignal,
   nowMs: number,
-  commerceDb?: D1Database,
+  commerceDb: D1Database,
+  requestCommerceDocument: CommerceDocumentRequester,
 ): Promise<void> {
   const fields: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(document)) {
     if (key === 'createdAt' || key === 'updatedAt') continue;
     fields[key] = firestoreValue(value);
   }
-  await authenticatedFirestoreRequest({
-    accessTokenProvider,
+  await requestCommerceDocument({
     commerceDb,
     body: JSON.stringify({
       writes: [{
@@ -459,9 +454,6 @@ async function persistCheckoutDocument(
     }),
     method: 'POST',
     nowMs,
-    providerFetch,
-    serviceAccountJson,
-    signal,
     url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
   });
 }
@@ -547,12 +539,9 @@ export async function handleStripeCheckoutSession(
         ((path, document) => persistCheckoutDocument(
           path,
           document,
-          'd1',
-          dependencies.accessTokenProvider,
-          trackedFetch,
-          controller.signal,
           dependencies.nowMs(),
           env.COMMERCE_DB,
+          dependencies.requestCommerceDocument,
         )),
       nowMs: dependencies.nowMs,
     });

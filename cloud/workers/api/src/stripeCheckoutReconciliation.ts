@@ -10,8 +10,7 @@ import {
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   FIRESTORE_DOCUMENTS_BASE_URL,
   ProfileReadError,
-  authenticatedFirestoreRequest,
-  createGoogleAccessTokenProvider,
+  commerceDocumentRequest,
   decodeFirestoreFields,
   isRecord,
 } from './firestoreRest.js';
@@ -29,8 +28,8 @@ type RequeueCandidate = {
 };
 
 type ReconciliationEnv = Pick<Env,
-  | 'STRIPE_FULFILLMENT_QUEUE'
-> & Partial<Pick<Env, 'COMMERCE_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'>>;
+  'COMMERCE_DB' | 'STRIPE_FULFILLMENT_QUEUE'
+>;
 
 type ReconciliationDependencies = {
   error?: (entry: Record<string, unknown>) => void;
@@ -41,7 +40,6 @@ type ReconciliationDependencies = {
   nowMs?: () => number;
 };
 
-const accessTokenProvider = createGoogleAccessTokenProvider();
 
 function reconciliationError(error: unknown): Record<string, unknown> {
   return error instanceof Error
@@ -95,15 +93,12 @@ async function loadCandidates(
   cutoffMs: number,
   signal: AbortSignal,
 ): Promise<RequeueCandidate[]> {
-  const value = await authenticatedFirestoreRequest({
-    accessTokenProvider,
+  signal.throwIfAborted();
+  const value = await commerceDocumentRequest({
     commerceDb: env.COMMERCE_DB,
     body: JSON.stringify(stripeCheckoutReconciliationQuery(cutoffMs, MAX_REQUEUES_PER_RUN)),
     method: 'POST',
     nowMs: Date.now(),
-    providerFetch: (input, init) => fetch(input, init),
-    serviceAccountJson: 'd1',
-    signal,
     url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
   });
   return parseRequeueCandidates(value, cutoffMs);
@@ -121,10 +116,7 @@ export async function reconcileStaleStripeFulfillments(
     ? overrides.loadCandidates(nowMs - REQUEUE_AFTER_MS, signal)
     : loadCandidates(env, nowMs - REQUEUE_AFTER_MS, signal));
   const store = createWorkerStripeCheckoutStore({
-    accessTokenProvider,
     commerceDb: env.COMMERCE_DB,
-    providerFetch: (input, init) => fetch(input, init),
-    serviceAccountJson: 'd1',
     signal,
   });
   const markEnqueued = overrides.markEnqueued || (async (candidate: RequeueCandidate) => {

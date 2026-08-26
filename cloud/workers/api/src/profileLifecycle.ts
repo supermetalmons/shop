@@ -33,13 +33,12 @@ import {
   FIRESTORE_DOCUMENT_NAME_PREFIX,
   FirestoreWriteConflict,
   ProfileReadError,
-  authenticatedFirestoreRequest,
-  createGoogleAccessTokenProvider,
+  commerceDocumentRequest,
   decodeFirestoreFields,
   firestoreString,
   isRecord,
   readBoundedText,
-  type GoogleAccessTokenProvider,
+  type CommerceDocumentRequester,
   type ProfileProviderFetch,
 } from './firestoreRest.js';
 import { isProfileRequestOriginAllowed } from './profileReads.js';
@@ -78,11 +77,10 @@ const reconcileSchema = z.object({
 }).strict();
 
 type FirestoreCommon = {
-  accessTokenProvider: GoogleAccessTokenProvider;
-  commerceDb?: D1Database;
+  commerceDb: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
+  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
 };
 
@@ -106,12 +104,12 @@ export type ProfileLifecycleResult = {
 
 type ProfileLifecycleDependencies = {
   acquireWalletSessionReconcileLease: typeof acquireWalletSessionReconcileLease;
-  accessTokenProvider: GoogleAccessTokenProvider;
   establishD1WalletSession: typeof establishD1WalletSession;
   isStaffWallet: typeof isStaffWalletAddress;
   loadD1WalletSession: typeof loadD1WalletSession;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   upsertProfile: (
     db: D1Database | undefined,
@@ -123,9 +121,7 @@ type ProfileLifecycleDependencies = {
   verifyIdentity: typeof verifyRequestIdentity;
 };
 
-type ProfileLifecycleEnv = Partial<Pick<Env,
-  'COMMERCE_DB' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'OPS_DB'
->>;
+type ProfileLifecycleEnv = Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
 class WalletSessionSupersededError extends ProfileReadError {
   constructor() {
@@ -262,7 +258,7 @@ function validateWalletSessionSignature(params: {
 }
 
 async function beginTransaction(common: FirestoreCommon): Promise<string> {
-  const value = await authenticatedFirestoreRequest({
+  const value = await common.requestCommerceDocument({
     ...common,
     body: JSON.stringify({ options: { readWrite: {} } }),
     method: 'POST',
@@ -275,7 +271,7 @@ async function beginTransaction(common: FirestoreCommon): Promise<string> {
 }
 
 async function rollbackTransaction(common: FirestoreCommon, transaction: string): Promise<void> {
-  await authenticatedFirestoreRequest({
+  await common.requestCommerceDocument({
     ...common,
     body: JSON.stringify({ transaction }),
     method: 'POST',
@@ -284,11 +280,10 @@ async function rollbackTransaction(common: FirestoreCommon, transaction: string)
 }
 
 async function commitTransaction(common: FirestoreCommon, transaction: string, writes: unknown[]): Promise<void> {
-  await authenticatedFirestoreRequest({
+  await common.requestCommerceDocument({
     ...common,
     body: JSON.stringify({ transaction, writes }),
     method: 'POST',
-    surfaceWriteConflict: true,
     url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
   });
 }
@@ -337,7 +332,7 @@ async function mergeStripeOwnerBatch(params: {
   for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
     const transaction = await beginTransaction(params.common);
     try {
-      const value = await authenticatedFirestoreRequest({
+      const value = await params.common.requestCommerceDocument({
         ...params.common,
         body: JSON.stringify(stripeOwnerQuery(params.firebaseOwner, transaction)),
         method: 'POST',
@@ -412,7 +407,7 @@ function deliveryRecoveryQuery(owner: string): Record<string, unknown> {
 }
 
 async function loadDeliveryRecoveryState(common: FirestoreCommon, wallet: string, nowMs: number) {
-  const value = await authenticatedFirestoreRequest({
+  const value = await common.requestCommerceDocument({
     ...common,
     body: JSON.stringify(deliveryRecoveryQuery(wallet)),
     method: 'POST',
@@ -502,16 +497,15 @@ async function reconcileProfileState(params: {
   };
 }
 
-const defaultAccessTokenProvider = createGoogleAccessTokenProvider();
 
 const defaultDependencies: ProfileLifecycleDependencies = {
   acquireWalletSessionReconcileLease,
-  accessTokenProvider: defaultAccessTokenProvider,
   establishD1WalletSession,
   isStaffWallet: isStaffWalletAddress,
   loadD1WalletSession,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: AUTH_TIMEOUT_MS,
   upsertProfile: async (db, profile, signal) => {
     if (!db) throw new Error('OPS_DB is unavailable');
@@ -569,11 +563,10 @@ export async function handleProfileLifecycleRequest(
     );
     const nowMs = dependencies.nowMs();
     const common: FirestoreCommon = {
-      accessTokenProvider: dependencies.accessTokenProvider,
       commerceDb: env.COMMERCE_DB,
       nowMs,
       providerFetch: trackedFetch,
-      serviceAccountJson: 'd1',
+      requestCommerceDocument: dependencies.requestCommerceDocument,
       signal: controller.signal,
     };
     if (path === SOLANA_AUTH_PATH) {

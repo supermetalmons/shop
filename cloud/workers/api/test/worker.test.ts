@@ -79,8 +79,6 @@ function env(options: {
     NOTIFICATION_ENQUEUE_SECRET: options.notificationEnqueueSecret === undefined
       ? 'notification-enqueue-test-secret'
       : options.notificationEnqueueSecret,
-    FIRESTORE_SERVICE_ACCOUNT_JSON: '',
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '',
     ADDRESS_DECRYPTION_SECRET: '',
     COSIGNER_SECRET: '',
     SHIPSTATION_API_KEY: '',

@@ -58,7 +58,7 @@ import {
   STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   type StripeCheckoutFulfillmentJobV1,
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
-import { FirestoreWriteConflict, createGoogleAccessTokenProvider } from './firestoreRest.js';
+import { FirestoreWriteConflict } from './firestoreRest.js';
 import { createWorkerStripeCheckoutStore } from './stripeCheckoutFirestore.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
@@ -89,14 +89,13 @@ type FulfillmentEnv = Pick<Env,
   | 'STRIPE_RESTRICTED_KEY_LIVE'
   | 'STRIPE_SECRET_KEY'
   | 'STRIPE_SECRET_KEY_LIVE'
-> & Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB' | 'OPS_DB'>>;
+> & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB' | 'OPS_DB'>>;
 
 type FulfillmentProcessingResult = {
   fulfillment: StripeCheckoutFulfillmentProcessResult;
   notifications: StripeCheckoutTerminalNotificationResult;
 };
 
-const accessTokenProvider = createGoogleAccessTokenProvider();
 
 function fulfillmentError(
   code: ConstructorParameters<typeof StripeCheckoutFulfillmentError>[0],
@@ -601,10 +600,7 @@ export async function processStripeCheckoutFulfillmentJob(
   options: { persistenceSignal?: AbortSignal; treatRetryableFailureAsTerminal?: boolean } = {},
 ): Promise<FulfillmentProcessingResult> {
   const store = createWorkerStripeCheckoutStore({
-    accessTokenProvider,
     commerceDb: env.COMMERCE_DB,
-    providerFetch: (input, init) => fetch(input, init),
-    serviceAccountJson: 'd1',
     signal: options.persistenceSignal || signal,
   });
   const checkoutPath = `drops/${job.dropId}/stripeCheckouts/${job.sessionId}`;

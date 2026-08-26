@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import assert from 'node:assert/strict';
 import Stripe from 'stripe';
 import {
@@ -28,18 +29,17 @@ function queue(send: Queue['send'] = async () => ({ metadata: { metrics: { backl
 }
 
 function env(overrides: Partial<Pick<Env,
-  | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
   | 'STRIPE_FULFILLMENT_QUEUE'
   | 'STRIPE_WEBHOOK_SECRET_DEVNET'
   | 'STRIPE_WEBHOOK_SECRET'
 >> = {}): Pick<Env,
-  | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
+  | 'COMMERCE_DB'
   | 'STRIPE_FULFILLMENT_QUEUE'
   | 'STRIPE_WEBHOOK_SECRET_DEVNET'
   | 'STRIPE_WEBHOOK_SECRET'
 > {
   return {
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: 'writer-service-account',
+    COMMERCE_DB: createCommerceD1(),
     STRIPE_FULFILLMENT_QUEUE: queue(),
     STRIPE_WEBHOOK_SECRET_DEVNET: DEVNET_SECRET,
     STRIPE_WEBHOOK_SECRET: MAINNET_SECRET,
@@ -155,13 +155,6 @@ function checkoutDocument(options: {
   return document;
 }
 
-function accessTokenProvider() {
-  return {
-    invalidate: () => undefined,
-    get: async () => 'firestore-access-token',
-  };
-}
-
 test('signed devnet webhook atomically queues the existing checkout', async () => {
   const commits: Record<string, unknown>[] = [];
   const logs: Record<string, unknown>[] = [];
@@ -175,8 +168,8 @@ test('signed devnet webhook atomically queues the existing checkout', async () =
       }),
     }),
     {
-      accessTokenProvider: accessTokenProvider(),
       log: (entry) => logs.push(entry),
+      requestCommerceDocument: firestoreProviderCommerceRequester,
       providerFetch: async (input, init) => {
         const url = String(input);
         if (init?.method === 'GET') return Response.json(firestoreDocument(checkoutDocument()));
@@ -272,6 +265,7 @@ test('webhook acknowledges unsupported, unrelated, and awaiting-payment events w
   let providerCalls = 0;
   const dependencies = {
     log: () => undefined,
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     providerFetch: async () => {
       providerCalls += 1;
       return Response.json({});
@@ -357,8 +351,8 @@ test('webhook retries optimistic Firestore conflicts and surfaces exhausted conf
   let commits = 0;
   const request = await signedRequest(stripeEvent());
   const success = await handleStripeWebhookRequest(request, env(), {
-    accessTokenProvider: accessTokenProvider(),
     log: () => undefined,
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     providerFetch: async (_input, init) => {
       if (init?.method === 'GET') {
         gets += 1;
@@ -376,8 +370,8 @@ test('webhook retries optimistic Firestore conflicts and surfaces exhausted conf
   assert.equal(commits, 2);
 
   const exhausted = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), env(), {
-    accessTokenProvider: accessTokenProvider(),
     log: () => undefined,
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     providerFetch: async (_input, init) => init?.method === 'GET'
       ? Response.json(firestoreDocument(checkoutDocument()))
       : Response.json({ error: { status: 'ABORTED' } }, { status: 409 }),
@@ -397,8 +391,8 @@ test('webhook commits before publish and duplicate delivery repairs a failed Que
       }),
     }),
     {
-      accessTokenProvider: accessTokenProvider(),
       log: () => undefined,
+      requestCommerceDocument: firestoreProviderCommerceRequester,
       providerFetch: async (_input, init) => {
         if (init?.method === 'GET') return Response.json(firestoreDocument(checkoutDocument({ status })));
         commits += 1;
@@ -424,8 +418,8 @@ test('webhook commits before publish and duplicate delivery repairs a failed Que
       }),
     }),
     {
-      accessTokenProvider: accessTokenProvider(),
       log: () => undefined,
+      requestCommerceDocument: firestoreProviderCommerceRequester,
       providerFetch: async (_input, init) => {
         if (init?.method === 'GET') return Response.json(firestoreDocument(checkoutDocument({ status })));
         events.push('commit');
@@ -448,8 +442,8 @@ test('signed mainnet webhook uses the live secret and preserves fulfilled idempo
     ),
     env(),
     {
-      accessTokenProvider: accessTokenProvider(),
       log: () => undefined,
+      requestCommerceDocument: firestoreProviderCommerceRequester,
       providerFetch: async (_input, init) => {
         if (init?.method === 'GET') {
           return Response.json(firestoreDocument(checkoutDocument({
@@ -485,8 +479,8 @@ test('invalid checkout documents and Firestore provider failures stay retryable'
   const invalidDocument = checkoutDocument();
   delete invalidDocument.uid;
   const invalid = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), env(), {
-    accessTokenProvider: accessTokenProvider(),
     log: () => undefined,
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     providerFetch: async (_input, init) => {
       if (init?.method === 'GET') return Response.json(firestoreDocument(invalidDocument));
       throw new Error('unexpected commit');
@@ -496,8 +490,8 @@ test('invalid checkout documents and Firestore provider failures stay retryable'
   assert.equal(invalid.outcome, 'processing_error');
 
   const providerFailure = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), env(), {
-    accessTokenProvider: accessTokenProvider(),
     log: () => undefined,
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     providerFetch: async () => Response.json({ error: { status: 'UNAVAILABLE' } }, { status: 503 }),
   });
   assert.equal(providerFailure.response.status, 500);

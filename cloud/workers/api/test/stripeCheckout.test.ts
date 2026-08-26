@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import { Keypair } from '@solana/web3.js';
 import {
@@ -48,7 +49,6 @@ const STAFF_WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 function env(overrides: Partial<Record<
   | 'ADDRESS_DECRYPTION_SECRET'
   | 'COSIGNER_SECRET'
-  | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
   | 'HELIUS_API_KEY'
   | 'STRIPE_RESTRICTED_KEY'
   | 'STRIPE_RESTRICTED_KEY_LIVE'
@@ -57,9 +57,9 @@ function env(overrides: Partial<Record<
   string
 >> = {}) {
   return {
+    COMMERCE_DB: createCommerceD1(),
     HELIUS_API_KEY: 'helius-test-key',
     COSIGNER_SECRET: '',
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{}',
     ADDRESS_DECRYPTION_SECRET: '',
     STRIPE_SECRET_KEY: 'sk_test_primary',
     STRIPE_RESTRICTED_KEY: 'rk_test_fallback',
@@ -83,6 +83,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     providerFetch: async () => {
       throw new Error('unexpected provider fetch');

@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  decodeJwt,
-  decodeProtectedHeader,
-  exportPKCS8,
-  generateKeyPair,
-} from 'jose';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import {
   ADMIN_PROFILE_PATH,
   ADMIN_DELIVERY_ORDER_OWNERS_PATH,
@@ -15,12 +10,11 @@ import {
   FULFILLMENT_ORDERS_PATH,
   FULFILLMENT_MANUAL_REVIEW_PATH,
   ProfileReadError,
-  createGoogleAccessTokenProvider,
   handleProfileReadRequest,
-  type GoogleAccessTokenProvider,
   type ProfileProviderFetch,
   type ProfileReadPath,
 } from '../src/profileReads.ts';
+import { commerceDocumentRequest } from '../src/firestoreRest.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
@@ -67,59 +61,21 @@ function orderDocument(owner = OWNER, deliveryId = 7) {
   };
 }
 
-function accessTokenProvider(): GoogleAccessTokenProvider {
-  return {
-    invalidate: () => undefined,
-    get: async () => 'google-access-token',
-  };
-}
-
 function profileDependencies(
   providerFetch: ProfileProviderFetch,
   overrides: Partial<Parameters<typeof handleProfileReadRequest>[3]> = {},
 ): Parameters<typeof handleProfileReadRequest>[3] {
   return {
-    accessTokenProvider: accessTokenProvider(),
     loadProfileEmail: async () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
     timeoutMs: 500,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     ...overrides,
   };
 }
-
-test('Google access-token provider signs the exact datastore assertion and caches its token', async () => {
-  const signing = await generateKeyPair('RS256', { extractable: true });
-  const privateKey = await exportPKCS8(signing.privateKey);
-  const serviceAccount = JSON.stringify({
-    project_id: 'mons-shop',
-    client_email: 'mons-shop-cloudflare-reader@mons-shop.iam.gserviceaccount.com',
-    private_key: `${privateKey.trim()}\n`,
-  });
-  const assertions: string[] = [];
-  const providerFetch: typeof fetch = async (_input, init) => {
-    const form = new URLSearchParams(String(init?.body));
-    assertions.push(String(form.get('assertion')));
-    assert.equal(form.get('grant_type'), 'urn:ietf:params:oauth:grant-type:jwt-bearer');
-    return Response.json({ access_token: 'access-token', token_type: 'Bearer', expires_in: 3600 });
-  };
-  const provider = createGoogleAccessTokenProvider();
-  assert.equal(await provider.get(serviceAccount, providerFetch, new AbortController().signal, NOW_MS), 'access-token');
-  assert.equal(await provider.get(serviceAccount, providerFetch, new AbortController().signal, NOW_MS + 1000), 'access-token');
-  assert.equal(assertions.length, 1);
-  const header = decodeProtectedHeader(assertions[0]);
-  const claims = decodeJwt(assertions[0]);
-  assert.deepEqual(header, { alg: 'RS256', typ: 'JWT' });
-  assert.equal(claims.iss, 'mons-shop-cloudflare-reader@mons-shop.iam.gserviceaccount.com');
-  assert.equal(claims.sub, claims.iss);
-  assert.equal(claims.aud, 'https://oauth2.googleapis.com/token');
-  assert.equal(claims.scope, 'https://www.googleapis.com/auth/datastore');
-  provider.invalidate();
-  await provider.get(serviceAccount, providerFetch, new AbortController().signal, NOW_MS + 2000);
-  assert.equal(assertions.length, 2);
-});
 
 test('shipment and anonymous history routes preserve exact source-query behavior', async () => {
   const queries: Record<string, unknown>[] = [];
@@ -133,7 +89,7 @@ test('shipment and anonymous history routes preserve exact source-query behavior
   };
   const shipments = await handleProfileReadRequest(
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
     profileDependencies(providerFetch),
   );
@@ -152,7 +108,7 @@ test('shipment and anonymous history routes preserve exact source-query behavior
   });
   const anonymous = await handleProfileReadRequest(
     tokenRequest(ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
     profileDependencies(providerFetch),
   );
@@ -177,7 +133,7 @@ test('shipment and anonymous history routes preserve exact source-query behavior
 test('profile state derives identity server-side and returns independently bounded sections', async () => {
   const result = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
@@ -241,7 +197,7 @@ test('profile state uses D1 wallet sessions without requesting Firestore authSes
   const result = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
     {
-      FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account',
+      COMMERCE_DB: createCommerceD1(),
       OPS_DB: {} as D1Database,
     },
     PROFILE_STATE_PATH,
@@ -256,7 +212,7 @@ test('profile state uses D1 wallet sessions without requesting Firestore authSes
 test('staff profile state uses the wallet principal without a Firebase session row', async () => {
   const result = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
@@ -280,7 +236,7 @@ test('staff profile state uses the wallet principal without a Firebase session r
 test('profile state returns a settled empty session and preserves legacy wallet UIDs', async () => {
   const missing = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     profileDependencies(async () => assert.fail('missing session reached Firestore'), {
       resolveD1WalletSession: async () => ({ wallet: null, reason: 'legacy_uid_invalid' }),
@@ -295,7 +251,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
 
   const legacy = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     {
       ...profileDependencies(async (input) => {
@@ -319,7 +275,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
 test('profile state reports section failures without discarding successful data', async () => {
   const result = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
@@ -347,7 +303,7 @@ test('profile state reports section failures without discarding successful data'
 test('profile state rejects invalid D1 sessions and non-empty requests', async () => {
   const malformedSession = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     profileDependencies(async () => assert.fail('invalid D1 session reached Firestore'), {
       resolveD1WalletSession: async () => { throw new Error('invalid D1 session'); },
@@ -357,7 +313,7 @@ test('profile state rejects invalid D1 sessions and non-empty requests', async (
 
   const invalidBody = await handleProfileReadRequest(
     tokenRequest(PROFILE_STATE_PATH, { ownerWallet: OWNER }),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     profileDependencies(async () => assert.fail('invalid request reached provider')),
   );
@@ -372,7 +328,7 @@ test('shipment route rejects mismatched sessions and malformed requests before s
   };
   const mismatch = await handleProfileReadRequest(
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
     profileDependencies(providerFetch, {
       resolveD1WalletSession: async () => ({ wallet: OTHER, source: 'session' }),
@@ -388,7 +344,7 @@ test('shipment route rejects mismatched sessions and malformed requests before s
   for (const body of [{}, { ownerWallet: OWNER, extra: true }, { ownerWallet: 'invalid' }]) {
     const invalid = await handleProfileReadRequest(
       tokenRequest(PROFILE_SHIPMENTS_PATH, body),
-      { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+      { COMMERCE_DB: createCommerceD1() },
       PROFILE_SHIPMENTS_PATH,
       profileDependencies(async () => assert.fail('invalid request reached provider')),
     );
@@ -401,7 +357,7 @@ test('shipment route preserves legacy wallet-shaped Firebase UIDs when no sessio
   const owners: string[] = [];
   const result = await handleProfileReadRequest(
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
     {
       ...profileDependencies(async (_input, init) => {
@@ -421,7 +377,7 @@ test('shipment route preserves legacy wallet-shaped Firebase UIDs when no sessio
 test('admin profile route enforces the existing wallet allowlist and returns canonical delivery summaries', async () => {
   const anonymousOnly = await handleProfileReadRequest(
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
     profileDependencies(async () => Response.json([]), {
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
@@ -431,7 +387,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
 
   const denied = await handleProfileReadRequest(
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
     profileDependencies(async () => {
       return Response.json({ error: 'unexpected' }, { status: 500 });
@@ -446,7 +402,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
 
   const accepted = await handleProfileReadRequest(
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
@@ -477,7 +433,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
 
   const missingProfile = await handleProfileReadRequest(
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
@@ -494,7 +450,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
 
   const unavailableProfile = await handleProfileReadRequest(
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
+    { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
     profileDependencies(async (input) => {
       const url = String(input);
@@ -513,7 +469,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
 
 test('admin and fulfillment read routes preserve access, pagination, masking, and Stripe fallback', async () => {
   const env = {
-    FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account',
+    COMMERCE_DB: createCommerceD1(),
     ADDRESS_DECRYPTION_SECRET: '',
     STRIPE_SECRET_KEY: 'sk_test_primary',
     STRIPE_RESTRICTED_KEY: 'rk_test_fallback',
@@ -617,89 +573,6 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
   });
 });
 
-test('Firestore reads refresh once after 401, retry transient failures, and remain bounded', async () => {
-  let gets = 0;
-  let invalidations = 0;
-  const accessProvider: GoogleAccessTokenProvider = {
-    get: async () => {
-      gets += 1;
-      return `token-${gets}`;
-    },
-    invalidate: () => {
-      invalidations += 1;
-    },
-  };
-  let calls = 0;
-  const response = await handleProfileReadRequest(
-    tokenRequest(ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
-    ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
-    {
-      ...profileDependencies(async () => {
-        calls += 1;
-        return calls === 1 ? Response.json({ error: 'expired' }, { status: 401 }) : Response.json([]);
-      }),
-      accessTokenProvider: accessProvider,
-    },
-  );
-  assert.equal(response.response.status, 200);
-  assert.equal(gets, 2);
-  assert.equal(invalidations, 1);
-
-  let transientCalls = 0;
-  const transient = await handleProfileReadRequest(
-    tokenRequest(ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
-    ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
-    profileDependencies(async () => {
-      transientCalls += 1;
-      return transientCalls === 1
-        ? Response.json({ error: 'busy' }, { status: 503 })
-        : Response.json([]);
-    }),
-  );
-  assert.equal(transient.response.status, 200);
-  assert.equal(transientCalls, 2);
-
-  const oversized = await handleProfileReadRequest(
-    tokenRequest(ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
-    ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
-    profileDependencies(async () => new Response('[]', {
-      headers: {
-        'Content-Length': String(16 * 1024 * 1024 + 1),
-        'Content-Type': 'application/json',
-      },
-    })),
-  );
-  assert.equal(oversized.response.status, 502);
-  assert.equal((await oversized.response.json() as { error: { code: string } }).error.code, 'unavailable');
-});
-
-test('profile reads convert an overall provider deadline to a stable timeout', async () => {
-  const result = await handleProfileReadRequest(
-    tokenRequest(ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, {}),
-    { FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account' },
-    ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
-    {
-      ...profileDependencies(async (_input, init) => new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
-      })),
-      timeoutMs: 1,
-    },
-  );
-  assert.equal(result.response.status, 504);
-  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
-});
-
-test('invalid service-account material fails closed before Firestore access', async () => {
-  const provider = createGoogleAccessTokenProvider();
-  await assert.rejects(
-    provider.get('{}', async () => assert.fail('invalid credential reached OAuth'), new AbortController().signal, NOW_MS),
-    (error) => error instanceof ProfileReadError && error.status === 503,
-  );
-});
-
 test('all seven commerce read routes use D1 without Firestore in d1 mode', async () => {
   const order = orderDocument();
   (order.fields as Record<string, unknown>).buyerOrderShippedEmailState = stringValue('pending');
@@ -747,7 +620,6 @@ test('all seven commerce read routes use D1 without Firestore in d1 mode', async
   } as unknown as D1Database;
   const env = {
     COMMERCE_DB: db,
-    FIRESTORE_SERVICE_ACCOUNT_JSON: 'unused',
     ADDRESS_DECRYPTION_SECRET: '',
     OPS_DB: {} as D1Database,
     STRIPE_SECRET_KEY: 'sk_test_primary',
@@ -761,10 +633,12 @@ test('all seven commerce read routes use D1 without Firestore in d1 mode', async
     return Response.json({});
   };
   const anonymousDependencies = profileDependencies(providerFetch, {
+    requestCommerceDocument: commerceDocumentRequest,
   });
   const staffDependencies = profileDependencies(providerFetch, {
     loadProfileEmail: async () => 'owner@example.com',
     resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+    requestCommerceDocument: commerceDocumentRequest,
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
   });
   const calls: Array<[ProfileReadPath, unknown, Parameters<typeof handleProfileReadRequest>[3]]> = [
@@ -793,13 +667,12 @@ test('commerce authority failures fail closed without Firestore fallback', async
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
     {
       COMMERCE_DB: {} as D1Database,
-      FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account',
     },
     PROFILE_SHIPMENTS_PATH,
     profileDependencies(async () => {
       firestoreCalls += 1;
       return Response.json([{ document: orderDocument() }]);
-    }),
+    }, { requestCommerceDocument: commerceDocumentRequest }),
   );
   assert.equal(result.response.status, 500);
   assert.equal(firestoreCalls, 0);

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import {
   Keypair,
@@ -44,7 +45,7 @@ function env(signer = COSIGNER, backgroundQueue = queue()): Env {
   return {
     DATA_DB: {} as D1Database,
     OPS_DB: {} as D1Database,
-    COMMERCE_DB: {} as D1Database,
+    COMMERCE_DB: createCommerceD1(),
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
@@ -56,8 +57,6 @@ function env(signer = COSIGNER, backgroundQueue = queue()): Env {
     RESEND_API_KEY: '',
     RESEND_CONTACTS_API_KEY: '',
     NOTIFICATION_ENQUEUE_SECRET: '',
-    FIRESTORE_SERVICE_ACCOUNT_JSON: '',
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     ADDRESS_DECRYPTION_SECRET: '',
     SHIPSTATION_API_KEY: '',
     SHIPSTATION_SHIP_FROM: '',
@@ -84,10 +83,7 @@ function request(body: unknown, init: { method?: string; headers?: HeadersInit }
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    accessTokenProvider: {
-      get: async () => 'google-access-token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadStorageControl: async () => ({
@@ -864,13 +860,10 @@ function firestoreDocument(fields: Record<string, unknown>): Response {
 
 function firestoreContext(providerFetch: typeof fetch) {
   return {
-    accessTokenProvider: {
-      get: async () => 'google-access-token',
-      invalidate: () => undefined,
-    },
+    requestCommerceDocument: firestoreProviderCommerceRequester,
+    commerceDb: createCommerceD1(),
     nowMs: 1_700_000_000_000,
     providerFetch,
-    serviceAccountJson: '{"credential":"test"}',
     signal: new AbortController().signal,
   };
 }
@@ -931,8 +924,8 @@ function revealQueueMessage(body: unknown = revealJob(), attempts = 1) {
 
 function revealConsumerEnv(apiKey = 'helius-test-key') {
   return {
+    COMMERCE_DB: createCommerceD1(),
     OPS_DB: {} as D1Database,
-    FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: '{"credential":"test"}',
     HELIUS_API_KEY: apiKey,
   };
 }
