@@ -61,19 +61,18 @@ import {
 import { transformShopInventoryItem } from '../../../../shared/shopDomain.js';
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  FirestoreWriteConflict,
-  ProfileReadError,
-  commerceDocumentRequest,
   cancelResponseBody,
-  decodeFirestoreFields,
-  isRecord,
   readBoundedJson,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import {
+  CommerceRepositoryError,
+  CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeys,
+} from './commerceRepository.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import {
@@ -99,7 +98,7 @@ const REVEAL_BACKGROUND_JOB_TIMEOUT_MS = 60_000;
 const BACKGROUND_PACK_STATUS_TIMEOUT_MS = 10_000;
 const REVEAL_BACKGROUND_JOB_INITIAL_DELAY_SECONDS = 5;
 const REVEAL_BACKGROUND_JOB_RETRY_DELAYS_SECONDS = [5, 15, 30, 60, 120, 300] as const;
-const FIRESTORE_TRANSACTION_ATTEMPTS = 6;
+const COMMERCE_TRANSACTION_ATTEMPTS = 6;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
@@ -178,7 +177,6 @@ type RevealDudesDependencies = {
   loadWalletSession: typeof loadWalletSession;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   randomInt: (maxExclusive: number) => number;
   reconcileRevealSubmission: typeof reconcileRevealSubmission;
   reserveRevealSubmission: typeof reserveRevealSubmission;
@@ -196,11 +194,10 @@ type ProviderContext = {
   signal: AbortSignal;
 };
 
-type FirestoreContext = {
+type RevealContext = {
   commerceDb: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
   dataDb?: D1Database;
   opsDb?: D1Database;
@@ -269,7 +266,6 @@ const defaultDependencies: RevealDudesDependencies = {
   loadWalletSession,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   randomInt: secureRandomInt,
   reconcileRevealSubmission,
   reserveRevealSubmission,
@@ -695,15 +691,8 @@ async function loadPendingOpen(
   };
 }
 
-function firestoreDocumentUrl(path: string, transaction?: string): string {
-  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/${encodedPath}`);
-  if (transaction) url.searchParams.set('transaction', transaction);
-  return url.toString();
-}
-
 async function loadWalletSession(
-  context: FirestoreContext,
+  context: RevealContext,
   db: D1Database | undefined,
   uid: string,
 ): Promise<string> {
@@ -731,36 +720,6 @@ async function requireRevealSubmissionStorageControl(
   }
 }
 
-async function beginFirestoreTransaction(context: FirestoreContext): Promise<string> {
-  const value = await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify({ options: { readWrite: {} } }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:beginTransaction`,
-  });
-  if (!isRecord(value) || typeof value.transaction !== 'string' || !value.transaction) {
-    throw new RevealDudesError('unavailable', 'Figure assignment is temporarily unavailable.');
-  }
-  return value.transaction;
-}
-
-async function rollbackFirestoreTransaction(context: FirestoreContext, transaction: string): Promise<void> {
-  await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify({ transaction }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:rollback`,
-  });
-}
-
-function firestoreInteger(value: number): Record<string, string> {
-  return { integerValue: String(value) };
-}
-
-function firestoreIntegerArray(values: readonly number[]): Record<string, unknown> {
-  return { arrayValue: { values: values.map(firestoreInteger) } };
-}
-
 function normalizeStoredDudeIds(
   raw: unknown,
   runtime: RevealRuntime,
@@ -775,22 +734,6 @@ function normalizeStoredDudeIds(
     throw new RevealDudesError('failed-precondition', 'Stored figure assignment is invalid.', { boxAssetId });
   }
   return dudeIds;
-}
-
-async function readFirestoreDocument(
-  context: FirestoreContext,
-  path: string,
-  transaction: string,
-): Promise<Record<string, unknown> | null> {
-  const document = await context.requestCommerceDocument({
-    ...context,
-    method: 'GET',
-    url: firestoreDocumentUrl(path, transaction),
-  });
-  if (!document) return null;
-  const fields = isRecord(document) ? decodeFirestoreFields(document.fields) : null;
-  if (!fields) throw new RevealDudesError('unavailable', 'Figure assignment is temporarily unavailable.');
-  return fields;
 }
 
 const REVEAL_SUBMISSION_VERSION = 1;
@@ -856,7 +799,7 @@ function normalizeRevealSubmission(
 }
 
 async function runRevealSubmissionD1Operation<T>(
-  context: FirestoreContext,
+  context: RevealContext,
   operation: (db: D1Database) => Promise<T>,
 ): Promise<T> {
   if (!context.opsDb) throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
@@ -875,7 +818,7 @@ async function runRevealSubmissionD1Operation<T>(
 }
 
 async function loadRevealSubmission(
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
 ): Promise<RevealSubmission | null> {
@@ -889,7 +832,7 @@ async function loadRevealSubmission(
 }
 
 async function reserveRevealSubmission(
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   candidate: RevealSubmission,
@@ -909,7 +852,7 @@ async function reserveRevealSubmission(
 }
 
 async function setRevealSubmissionStatus(
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   submission: RevealSubmission,
@@ -928,7 +871,7 @@ async function setRevealSubmissionStatus(
 }
 
 async function confirmRevealSubmission(
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   submission: RevealSubmission,
@@ -938,7 +881,7 @@ async function confirmRevealSubmission(
 }
 
 async function failRevealSubmission(
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   submission: RevealSubmission,
@@ -947,105 +890,88 @@ async function failRevealSubmission(
 }
 
 async function assignDudes(
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   dependencies: AssignmentDependencies,
 ): Promise<AssignmentResult> {
-  const assignmentPath = `drops/${runtime.dropId}/boxAssignments/${boxAssetId}`;
-  const poolPath = `drops/${runtime.dropId}/meta/dudePool`;
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: string | undefined;
+  const repository = new D1CommerceRepository(context.commerceDb);
+  const assignmentKey = commerceKeys.boxAssignment(runtime.dropId, boxAssetId);
+  const poolKey = commerceKeys.dudePool(runtime.dropId);
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
     try {
-      transaction = await beginFirestoreTransaction(context);
-      const existing = await readFirestoreDocument(context, assignmentPath, transaction);
-      if (existing) {
-        await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
-        return {
-          dudeIds: normalizeStoredDudeIds(existing.dudeIds, runtime, boxAssetId),
-          outcome: 'existing',
-        };
-      }
-      const poolDocument = await readFirestoreDocument(context, poolPath, transaction);
-      const poolInfo = sanitizeDudeAssignmentPool(poolDocument?.available, runtime.maxDudeId);
-      const pool = poolInfo.pool;
-      if (pool.length < runtime.itemsPerBox) {
-        throw new RevealDudesError('resource-exhausted', 'No figures remaining to assign.', {
-          boxAssetId,
-          poolLen: pool.length,
-          required: runtime.itemsPerBox,
-        });
-      }
-      let picked;
-      try {
-        picked = await pickDudeIdsForAssignment({
-          dropFamily: runtime.config.dropFamily,
-          itemsPerBox: runtime.itemsPerBox,
-          maxDudeId: runtime.maxDudeId,
-          pool,
-          randomInt: dependencies.randomInt,
-          isAssigned: async (dudeId) => Boolean(await readFirestoreDocument(
-            context,
-            `drops/${runtime.dropId}/dudeAssignments/${dudeId}`,
-            transaction!,
-          )),
-        });
-      } catch (error) {
-        if (error instanceof DudeAssignmentPoolExhaustedError) {
-          throw new RevealDudesError('resource-exhausted', error.message, {
+      return await repository.run(context.nowMs, async (unit) => {
+        const existing = await unit.get(assignmentKey);
+        if (existing) {
+          return {
+            dudeIds: normalizeStoredDudeIds(existing.data.dudeIds, runtime, boxAssetId),
+            outcome: 'existing' as const,
+          };
+        }
+        const poolDocument = await unit.get(poolKey);
+        const poolInfo = sanitizeDudeAssignmentPool(poolDocument?.data.available, runtime.maxDudeId);
+        const pool = poolInfo.pool;
+        if (pool.length < runtime.itemsPerBox) {
+          throw new RevealDudesError('resource-exhausted', 'No figures remaining to assign.', {
             boxAssetId,
-            bucket: error.bucket,
-            chosen: error.chosen,
-            candidatesChecked: error.candidatesChecked,
-            staleAssigned: error.staleAssigned,
-            poolLen: error.poolLen,
+            poolLen: pool.length,
+            required: runtime.itemsPerBox,
           });
         }
-        throw error;
-      }
-      const writes: Record<string, unknown>[] = picked.chosen.map((dudeId) => ({
-        update: {
-          name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}drops/${runtime.dropId}/dudeAssignments/${dudeId}`,
-          fields: {
-            dudeId: firestoreInteger(dudeId),
-            boxAssetId: { stringValue: boxAssetId },
-          },
-        },
-        currentDocument: { exists: false },
-        updateTransforms: [{ fieldPath: 'assignedAt', setToServerValue: 'REQUEST_TIME' }],
-      }));
-      writes.push({
-        update: {
-          name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${poolPath}`,
-          fields: { available: firestoreIntegerArray(pool) },
-        },
-        updateMask: { fieldPaths: ['available'] },
-        updateTransforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+        let picked;
+        try {
+          picked = await pickDudeIdsForAssignment({
+            dropFamily: runtime.config.dropFamily,
+            itemsPerBox: runtime.itemsPerBox,
+            maxDudeId: runtime.maxDudeId,
+            pool,
+            randomInt: dependencies.randomInt,
+            isAssigned: async (dudeId) => Boolean(await unit.get(commerceKeys.dudeAssignment(
+              runtime.dropId,
+              String(dudeId),
+            ))),
+          });
+        } catch (error) {
+          if (error instanceof DudeAssignmentPoolExhaustedError) {
+            throw new RevealDudesError('resource-exhausted', error.message, {
+              boxAssetId,
+              bucket: error.bucket,
+              chosen: error.chosen,
+              candidatesChecked: error.candidatesChecked,
+              staleAssigned: error.staleAssigned,
+              poolLen: error.poolLen,
+            });
+          }
+          throw error;
+        }
+        for (const dudeId of picked.chosen) {
+          await unit.create(commerceKeys.dudeAssignment(runtime.dropId, String(dudeId)), {
+            assignedAt: commerceFieldValue.serverTimestamp(),
+            boxAssetId,
+            dudeId,
+          });
+        }
+        await unit.set(poolKey, {
+          available: pool,
+          updatedAt: commerceFieldValue.serverTimestamp(),
+        }, { merge: true });
+        await unit.create(assignmentKey, {
+          createdAt: commerceFieldValue.serverTimestamp(),
+          dudeIds: picked.chosen,
+        });
+        return { dudeIds: picked.chosen, outcome: 'created' as const };
       });
-      writes.push({
-        update: {
-          name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${assignmentPath}`,
-          fields: { dudeIds: firestoreIntegerArray(picked.chosen) },
-        },
-        currentDocument: { exists: false },
-        updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
-      });
-      await context.requestCommerceDocument({
-        ...context,
-        body: JSON.stringify({ transaction, writes }),
-        method: 'POST',
-        url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-      });
-      return { dudeIds: picked.chosen, outcome: 'created' };
     } catch (error) {
-      if (transaction) await rollbackFirestoreTransaction(context, transaction).catch(() => undefined);
       if (error instanceof RevealDudesError) throw error;
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await dependencies.sleep(Math.min(2_500, 150 * 2 ** Math.min(attempt, 4)), context.signal);
         continue;
       }
-      if (error instanceof ProfileReadError) {
-        throw new RevealDudesError(error.code === 'deadline-exceeded' ? error.code : 'unavailable', 'Figure assignment is temporarily unavailable.');
+      if (error instanceof ProfileReadError || error instanceof CommerceRepositoryError) {
+        const code = error instanceof ProfileReadError && error.code === 'deadline-exceeded'
+          ? error.code
+          : 'unavailable';
+        throw new RevealDudesError(code, 'Figure assignment is temporarily unavailable.');
       }
       throw new RevealDudesError('unavailable', 'Figure assignment is temporarily unavailable.');
     }
@@ -1515,7 +1441,7 @@ async function loadLatestBlockhash(
 }
 
 async function countOnlineRevealPackStatus(
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   signature: string,
@@ -1545,7 +1471,7 @@ async function countOnlineRevealPackStatus(
 
 async function failRevealSubmissionSafely(
   dependency: typeof failRevealSubmission,
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   submission: RevealSubmission,
@@ -1587,7 +1513,7 @@ function scheduleRevealBackground(
 function scheduleConfirmedPackStatusRepair(
   dependencies: RevealDudesDependencies,
   waitUntil: RevealWaitUntil,
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   submission: RevealSubmission,
@@ -1672,7 +1598,7 @@ async function enqueueRevealBackgroundJob(
 
 async function finalizeConfirmedSubmissionForResponse(
   dependencies: RevealDudesDependencies,
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   submission: RevealSubmission,
@@ -1702,7 +1628,6 @@ type RevealBackgroundJobDependencies = Pick<
   | 'loadStorageControl'
   | 'nowMs'
   | 'providerFetch'
-  | 'requestCommerceDocument'
   | 'reconcileRevealSubmission'
 > & {
   log: (entry: Record<string, unknown>) => void;
@@ -1718,7 +1643,6 @@ const defaultRevealBackgroundJobDependencies: RevealBackgroundJobDependencies = 
   loadStorageControl: requireRevealSubmissionStorageControl,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   reconcileRevealSubmission,
   log: (entry) => console.info(entry),
   warn: (entry) => console.warn(entry),
@@ -1785,18 +1709,17 @@ export async function processRevealBackgroundJobMessage(
     retryRevealBackgroundJob(message, dependencies, job, 'reveal_submissions_paused');
     return;
   }
-  const firestoreContext: FirestoreContext = {
+  const revealContext: RevealContext = {
     commerceDb: env.COMMERCE_DB,
     nowMs: dependencies.nowMs(),
     providerFetch: dependencies.providerFetch,
-    requestCommerceDocument: dependencies.requestCommerceDocument,
     signal,
     dataDb: env.DATA_DB,
     opsDb: env.OPS_DB,
   };
   try {
     const runtime = runtimeForDrop(job.dropId);
-    const submission = await dependencies.loadRevealSubmission(firestoreContext, runtime, job.boxAssetId);
+    const submission = await dependencies.loadRevealSubmission(revealContext, runtime, job.boxAssetId);
     if (
       !submission ||
       submission.reservationId !== job.reservationId ||
@@ -1829,7 +1752,7 @@ export async function processRevealBackgroundJobMessage(
       }
       if (outcome === 'failed' || outcome === 'expired') {
         const status = await dependencies.failRevealSubmission(
-          firestoreContext,
+          revealContext,
           runtime,
           job.boxAssetId,
           submission,
@@ -1847,11 +1770,11 @@ export async function processRevealBackgroundJobMessage(
         }
       }
       if (outcome === 'confirmed') {
-        await dependencies.confirmRevealSubmission(firestoreContext, runtime, job.boxAssetId, submission);
+        await dependencies.confirmRevealSubmission(revealContext, runtime, job.boxAssetId, submission);
       }
     }
     await dependencies.countOnlineRevealPackStatus(
-      firestoreContext,
+      revealContext,
       runtime,
       job.boxAssetId,
       job.signature,
@@ -1877,7 +1800,7 @@ export async function processRevealBackgroundJobMessage(
 function scheduleFailedSubmission(
   dependencies: RevealDudesDependencies,
   waitUntil: RevealWaitUntil,
-  context: FirestoreContext,
+  context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   submission: RevealSubmission,
@@ -1961,18 +1884,17 @@ export async function handleRevealDudes(
     }
     authOutcome = 'provider-failure';
     const storageControl = await dependencies.loadStorageControl(env.OPS_DB, controller.signal);
-    const firestoreContext: FirestoreContext = {
+    const revealContext: RevealContext = {
       commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: meteredFetch,
-      requestCommerceDocument: dependencies.requestCommerceDocument,
       signal: controller.signal,
       dataDb: env.DATA_DB,
       opsDb: env.OPS_DB,
     };
     const sessionWallet = await resolveRequestWallet(
       identity,
-      (uid) => dependencies.loadWalletSession(firestoreContext, env.OPS_DB, uid),
+      (uid) => dependencies.loadWalletSession(revealContext, env.OPS_DB, uid),
     );
     if (sessionWallet !== owner.toBase58()) {
       authOutcome = 'rejected';
@@ -1982,7 +1904,7 @@ export async function handleRevealDudes(
     if (storageControl.paused) {
       throw new RevealDudesError('unavailable', 'Reveal migration is in progress. Try again.');
     }
-    const storedSubmission = await dependencies.loadRevealSubmission(firestoreContext, runtime, boxAssetId);
+    const storedSubmission = await dependencies.loadRevealSubmission(revealContext, runtime, boxAssetId);
     if (storedSubmission && storedSubmission.owner !== owner.toBase58()) {
       authOutcome = 'rejected';
       throw new RevealDudesError('permission-denied', 'Owners only.');
@@ -1992,7 +1914,7 @@ export async function handleRevealDudes(
       scheduleConfirmedPackStatusRepair(
         dependencies,
         waitUntil,
-        firestoreContext,
+        revealContext,
         runtime,
         boxAssetId,
         storedSubmission,
@@ -2018,7 +1940,7 @@ export async function handleRevealDudes(
         transactionOutcome = 'confirmed';
         await finalizeConfirmedSubmissionForResponse(
           dependencies,
-          firestoreContext,
+          revealContext,
           runtime,
           boxAssetId,
           storedSubmission,
@@ -2026,7 +1948,7 @@ export async function handleRevealDudes(
         scheduleConfirmedPackStatusRepair(
           dependencies,
           waitUntil,
-          firestoreContext,
+          revealContext,
           runtime,
           boxAssetId,
           storedSubmission,
@@ -2056,7 +1978,7 @@ export async function handleRevealDudes(
     }
     const boxAsset = new PublicKey(boxAssetId);
     const pending = await dependencies.loadPendingOpen(providerContext, runtime, owner, boxAsset);
-    const assignment = await dependencies.assignDudes(firestoreContext, runtime, boxAssetId, dependencies);
+    const assignment = await dependencies.assignDudes(revealContext, runtime, boxAssetId, dependencies);
     assignmentOutcome = assignment.outcome;
     const instruction = new TransactionInstruction({
       programId: runtime.boxMinterProgramId,
@@ -2097,7 +2019,7 @@ export async function handleRevealDudes(
     let reservation: Awaited<ReturnType<typeof reserveRevealSubmission>>;
     try {
       reservation = await dependencies.reserveRevealSubmission(
-        firestoreContext,
+        revealContext,
         runtime,
         boxAssetId,
         candidate,
@@ -2109,7 +2031,7 @@ export async function handleRevealDudes(
         scheduleFailedSubmission(
           dependencies,
           waitUntil,
-          firestoreContext,
+          revealContext,
           runtime,
           boxAssetId,
           candidate,
@@ -2122,7 +2044,7 @@ export async function handleRevealDudes(
       scheduleConfirmedPackStatusRepair(
         dependencies,
         waitUntil,
-        firestoreContext,
+        revealContext,
         runtime,
         boxAssetId,
         reservation.submission,
@@ -2152,7 +2074,7 @@ export async function handleRevealDudes(
         transactionOutcome = 'confirmed';
         await finalizeConfirmedSubmissionForResponse(
           dependencies,
-          firestoreContext,
+          revealContext,
           runtime,
           boxAssetId,
           reservation.submission,
@@ -2160,7 +2082,7 @@ export async function handleRevealDudes(
         scheduleConfirmedPackStatusRepair(
           dependencies,
           waitUntil,
-          firestoreContext,
+          revealContext,
           runtime,
           boxAssetId,
           reservation.submission,
@@ -2199,7 +2121,7 @@ export async function handleRevealDudes(
       scheduleFailedSubmission(
         dependencies,
         waitUntil,
-        firestoreContext,
+        revealContext,
         runtime,
         boxAssetId,
         submission,
@@ -2228,7 +2150,7 @@ export async function handleRevealDudes(
         scheduleFailedSubmission(
           dependencies,
           waitUntil,
-          firestoreContext,
+          revealContext,
           runtime,
           boxAssetId,
           submission,
@@ -2236,7 +2158,7 @@ export async function handleRevealDudes(
       } else {
         await failRevealSubmissionSafely(
           dependencies.failRevealSubmission,
-          firestoreContext,
+          revealContext,
           runtime,
           boxAssetId,
           submission,
@@ -2246,7 +2168,7 @@ export async function handleRevealDudes(
     }
     await finalizeConfirmedSubmissionForResponse(
       dependencies,
-      firestoreContext,
+      revealContext,
       runtime,
       boxAssetId,
       submission,
@@ -2254,7 +2176,7 @@ export async function handleRevealDudes(
     scheduleConfirmedPackStatusRepair(
       dependencies,
       waitUntil,
-      firestoreContext,
+      revealContext,
       runtime,
       boxAssetId,
       submission,

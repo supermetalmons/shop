@@ -43,13 +43,9 @@ import {
   processingDeliveryRecoveryNextCheckMs,
 } from '../../../../shared/deliveryRecovery.js';
 import {
-  buildReadyNotificationReconciliationQuery,
-} from '../../../../shared/readyToShipNotificationReconciliation.js';
-import {
   PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
   PACK_STATUS_PROJECTION_PENDING,
   PACK_STATUS_PROJECTION_STATE_FIELD,
-  buildDeliveryPackStatusProjectionReconciliationQuery,
 } from '../../../../shared/deliveryPackStatusProjectionReconciliation.js';
 import {
   DudeAssignmentPoolExhaustedError,
@@ -103,18 +99,21 @@ import {
 } from '../../../../shared/solanaRpcProxy.js';
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  FirestoreWriteConflict,
-  ProfileReadError,
-  commerceDocumentRequest,
   cancelResponseBody,
-  decodeFirestoreFields,
-  isRecord,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
+import {
+  CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeys,
+  type CommerceDocumentKey,
+  type CommerceDocumentRecord,
+  type CommerceDocumentWriteData,
+  type CommerceUnitOfWork,
+  type CommerceUpdateValue,
+} from './commerceRepository.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
 import {
   BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
@@ -169,7 +168,7 @@ const TX_MAX_SEND_ATTEMPTS = 3;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
 const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
 const MAX_PREPARED_DELIVERY_RECOVERY_CHECKS = DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS.length;
-const FIRESTORE_TRANSACTION_ATTEMPTS = 6;
+const COMMERCE_TRANSACTION_ATTEMPTS = 6;
 const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const MAX_U32 = 0xffff_ffff;
 const CANONICAL_DROP_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -293,13 +292,14 @@ type DecodedOnchainConfig = {
   decoded: DecodedBoxMinterConfigData;
 };
 
-type FirestoreContext = {
+type CommerceContext = {
   commerceDb: D1Database;
+  repository?: D1CommerceRepository;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
   dataDb?: D1Database;
+  [key: string]: unknown;
 };
 
 type ProviderContext = {
@@ -308,16 +308,14 @@ type ProviderContext = {
   signal: AbortSignal;
 };
 
-type FirestoreValue = Record<string, unknown>;
-
-type FirestoreDocument = {
+type CommerceDocument = {
   id: string;
   path: string;
   fields: Record<string, unknown>;
   updateTime: string;
 };
 
-type DeliveryOrderDocument = FirestoreDocument;
+type DeliveryOrderDocument = CommerceDocument;
 
 type VerifiedReceiptIssuanceTarget = {
   verification: 'signature' | 'delivery_pda';
@@ -364,18 +362,17 @@ type DeliveryReceiptDependencies = {
     body: IssueRequest,
     identity: RequestIdentity,
     env: DeliveryReceiptsEnv,
-    firestore: FirestoreContext,
+    commerce: CommerceContext,
     provider: ProviderContext,
     waitUntil: DeliveryReceiptWaitUntil,
   ) => Promise<ReceiptIssueResult>;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   recover: (
     body: RecoverRequest,
     identity: RequestIdentity,
     env: DeliveryReceiptsEnv,
-    firestore: FirestoreContext,
+    commerce: CommerceContext,
     provider: ProviderContext,
     waitUntil: DeliveryReceiptWaitUntil,
   ) => Promise<RecoverDeliveryOrdersResult>;
@@ -556,194 +553,148 @@ function decodeCosigner(secret: string): Keypair {
   }
 }
 
-function firestoreString(value: string): FirestoreValue {
-  return { stringValue: value };
+function commerceString(value: string): string {
+  return value;
 }
 
-function firestoreInteger(value: number): FirestoreValue {
-  return { integerValue: String(Math.floor(value)) };
+function commerceInteger(value: number): number {
+  return Math.floor(value);
 }
 
-function firestoreBoolean(value: boolean): FirestoreValue {
-  return { booleanValue: value };
+function commerceValue<T>(value: T): T {
+  return value;
 }
 
-function firestoreTimestamp(value: number): FirestoreValue {
-  return { timestampValue: new Date(value).toISOString() };
+function commerceTimestamp(value: number): CommerceUpdateValue {
+  const seconds = Math.floor(value / 1000);
+  return commerceFieldValue.timestamp(seconds, (value - seconds * 1000) * 1_000_000);
 }
 
-function firestoreArray(values: readonly unknown[]): FirestoreValue {
-  return { arrayValue: { values: values.map(firestoreValue) } };
+type CommerceTransform = { fieldPath: string; value: CommerceUpdateValue };
+type CommerceWrite = {
+  operation: 'create' | 'update';
+  path: string;
+  values: CommerceDocumentWriteData;
+  expectedUpdateTime?: string;
+};
+
+function keyForPath(path: string): CommerceDocumentKey {
+  const claim = /^claimCodes\/([^/]+)$/.exec(path);
+  if (claim) return commerceKeys.claimCode(claim[1]);
+  const meta = /^drops\/([^/]+)\/meta\/dudePool$/.exec(path);
+  if (meta) return commerceKeys.dudePool(meta[1]);
+  const match = /^drops\/([^/]+)\/(deliveryOrders|boxAssignments|dudeAssignments|offchainOrders|adminIrlRedeemRequests|adminIrlRedeemPackMarkers|adminIrlRedeemReceiptMarkers)\/([^/]+)$/.exec(path);
+  if (!match) throw new DeliveryReceiptError('internal', 'Invalid commerce document path.');
+  const [, dropId, collection, id] = match;
+  if (collection === 'deliveryOrders') return commerceKeys.deliveryOrder(dropId, id);
+  if (collection === 'boxAssignments') return commerceKeys.boxAssignment(dropId, id);
+  if (collection === 'dudeAssignments') return commerceKeys.dudeAssignment(dropId, id);
+  if (collection === 'offchainOrders') return commerceKeys.offchainOrder(dropId, id);
+  if (collection === 'adminIrlRedeemRequests') return commerceKeys.adminIrlRedeemRequest(dropId, id);
+  if (collection === 'adminIrlRedeemPackMarkers') return commerceKeys.adminIrlRedeemPackMarker(dropId, id);
+  return commerceKeys.adminIrlRedeemReceiptMarker(dropId, id);
 }
 
-function firestoreMap(value: Record<string, unknown>): FirestoreValue {
-  return {
-    mapValue: {
-      fields: Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, firestoreValue(entry)])),
-    },
-  };
+function commerceDocument(record: CommerceDocumentRecord | null): CommerceDocument | null {
+  return record ? {
+    id: record.key.documentId,
+    path: record.key.path,
+    fields: record.data,
+    updateTime: record.updateTime,
+  } : null;
 }
 
-function firestoreValue(value: unknown): FirestoreValue {
-  if (value === null) return { nullValue: null };
-  if (typeof value === 'string') return firestoreString(value);
-  if (typeof value === 'boolean') return firestoreBoolean(value);
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Number.isInteger(value) ? firestoreInteger(value) : { doubleValue: value };
-  }
-  if (Array.isArray(value)) return firestoreArray(value);
-  if (isRecord(value)) {
-    const keys = Object.keys(value);
-    if (
-      keys.length === 1 &&
-      [
-        'arrayValue',
-        'booleanValue',
-        'doubleValue',
-        'integerValue',
-        'mapValue',
-        'nullValue',
-        'stringValue',
-        'timestampValue',
-      ].includes(keys[0])
-    ) return value;
-    return firestoreMap(value);
-  }
-  throw new DeliveryReceiptError('internal', 'Receipt persistence failed.');
-}
-
-function nestedFirestoreFields(entries: Record<string, unknown>): Record<string, FirestoreValue> {
-  const root: Record<string, unknown> = {};
-  for (const [path, value] of Object.entries(entries)) {
-    const parts = path.split('.');
-    let cursor = root;
-    for (let index = 0; index < parts.length - 1; index += 1) {
-      const part = parts[index];
-      const existing = cursor[part];
-      if (!isRecord(existing)) cursor[part] = {};
-      cursor = cursor[part] as Record<string, unknown>;
-    }
-    cursor[parts[parts.length - 1]] = value;
-  }
-  return Object.fromEntries(Object.entries(root).map(([key, value]) => [key, firestoreValue(value)]));
-}
-
-function documentName(path: string): string {
-  return `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`;
-}
-
-function firestoreDocumentUrl(path: string, transaction?: string): string {
-  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
-  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/${encodedPath}`);
-  if (transaction) url.searchParams.set('transaction', transaction);
-  return url.toString();
-}
-
-function documentPathFromName(name: string): string | null {
-  return name.startsWith(FIRESTORE_DOCUMENT_NAME_PREFIX)
-    ? name.slice(FIRESTORE_DOCUMENT_NAME_PREFIX.length)
-    : null;
-}
-
-function decodeDocument(value: unknown): FirestoreDocument | null {
-  if (!isRecord(value) || typeof value.name !== 'string' || typeof value.updateTime !== 'string') return null;
-  const path = documentPathFromName(value.name);
-  const fields = decodeFirestoreFields(value.fields);
-  if (!path || !fields) return null;
-  const id = path.split('/').at(-1) || '';
-  return id ? { id, path, fields, updateTime: value.updateTime } : null;
+function repository(context: CommerceContext): D1CommerceRepository {
+  return context.repository || new D1CommerceRepository(context.commerceDb);
 }
 
 async function readDocument(
-  context: FirestoreContext,
+  context: CommerceContext,
   path: string,
-  transaction?: string,
-): Promise<FirestoreDocument | null> {
-  const value = await context.requestCommerceDocument({
-    ...context,
-    method: 'GET',
-    url: firestoreDocumentUrl(path, transaction),
-  });
-  if (!value) return null;
-  const document = decodeDocument(value);
-  if (!document) throw new DeliveryReceiptError('unavailable', 'Receipt data is temporarily unavailable.');
-  return document;
+  transaction?: CommerceUnitOfWork,
+): Promise<CommerceDocument | null> {
+  const record = transaction
+    ? await transaction.get(keyForPath(path))
+    : await repository(context).get(keyForPath(path));
+  return commerceDocument(record);
 }
 
-async function beginTransaction(context: FirestoreContext): Promise<string> {
-  const value = await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify({ options: { readWrite: {} } }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:beginTransaction`,
-  });
-  if (!isRecord(value) || typeof value.transaction !== 'string' || !value.transaction) {
-    throw new DeliveryReceiptError('unavailable', 'Receipt data is temporarily unavailable.');
+function beginTransaction(context: CommerceContext): Promise<CommerceUnitOfWork> {
+  return repository(context).begin(context.nowMs);
+}
+
+async function rollbackTransactionBestEffort(
+  _context: CommerceContext,
+  transaction: CommerceUnitOfWork,
+): Promise<void> {
+  transaction.rollback();
+}
+
+async function applyWrite(unit: CommerceUnitOfWork, write: CommerceWrite): Promise<void> {
+  const key = keyForPath(write.path);
+  if (write.expectedUpdateTime) {
+    const current = await unit.get(key);
+    if (!current || current.updateTime !== write.expectedUpdateTime) throw new CommerceWriteConflict();
   }
-  return value.transaction;
-}
-
-async function rollbackTransaction(context: FirestoreContext, transaction: string): Promise<void> {
-  await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify({ transaction }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:rollback`,
-  });
-}
-
-async function rollbackTransactionBestEffort(context: FirestoreContext, transaction: string): Promise<void> {
-  await rollbackTransaction(context, transaction).catch(() => undefined);
+  if (write.operation === 'create') await unit.create(key, write.values);
+  else await unit.update(key, write.values);
 }
 
 async function commitWrites(
-  context: FirestoreContext,
-  writes: readonly Record<string, unknown>[],
-  transaction?: string,
+  context: CommerceContext,
+  writes: readonly CommerceWrite[],
+  transaction?: CommerceUnitOfWork,
 ): Promise<void> {
-  await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify({ ...(transaction ? { transaction } : {}), writes }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-  });
+  const unit = transaction || await repository(context).begin(context.nowMs);
+  try {
+    for (const write of writes) await applyWrite(unit, write);
+    await unit.commit();
+  } catch (error) {
+    unit.rollback();
+    throw error;
+  }
 }
 
 function updateWrite(args: {
   path: string;
   fields?: Record<string, unknown>;
-  updateMask: readonly string[];
-  transforms?: readonly Record<string, unknown>[];
-  currentDocument?: Record<string, unknown>;
-}): Record<string, unknown> {
+  fieldPaths: readonly string[];
+  transforms?: readonly CommerceTransform[];
+  mustExist?: boolean;
+  expectedUpdateTime?: string;
+}): CommerceWrite {
+  const fields = args.fields || {};
   return {
-    update: {
-      name: documentName(args.path),
-      fields: nestedFirestoreFields(args.fields || {}),
+    operation: 'update',
+    path: args.path,
+    values: {
+      ...Object.fromEntries(args.fieldPaths.map((field) => [
+        field,
+        Object.hasOwn(fields, field) ? fields[field] as CommerceUpdateValue : commerceFieldValue.delete(),
+      ])),
+      ...Object.fromEntries((args.transforms || []).map((transform) => [transform.fieldPath, transform.value])),
     },
-    updateMask: { fieldPaths: [...args.updateMask] },
-    ...(args.transforms?.length ? { updateTransforms: [...args.transforms] } : {}),
-    ...(args.currentDocument ? { currentDocument: args.currentDocument } : {}),
+    ...(args.expectedUpdateTime ? { expectedUpdateTime: args.expectedUpdateTime } : {}),
   };
 }
 
 function createWrite(args: {
   path: string;
   fields: Record<string, unknown>;
-  transforms?: readonly Record<string, unknown>[];
-}): Record<string, unknown> {
+  transforms?: readonly CommerceTransform[];
+}): CommerceWrite {
   return {
-    update: {
-      name: documentName(args.path),
-      fields: nestedFirestoreFields(args.fields),
+    operation: 'create',
+    path: args.path,
+    values: {
+      ...args.fields as CommerceDocumentWriteData,
+      ...Object.fromEntries((args.transforms || []).map((transform) => [transform.fieldPath, transform.value])),
     },
-    currentDocument: { exists: false },
-    ...(args.transforms?.length ? { updateTransforms: [...args.transforms] } : {}),
   };
 }
 
 async function loadWalletSession(
-  context: FirestoreContext,
+  context: CommerceContext,
   db: D1Database | undefined,
   uid: string,
 ): Promise<string> {
@@ -772,133 +723,66 @@ function mapProviderError(error: unknown, message: string): DeliveryReceiptError
 }
 
 async function runDeliveryOrderQuery(
-  context: FirestoreContext,
+  context: CommerceContext,
   ownerWallet: string,
   status: 'prepared' | 'processing',
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify({
-      structuredQuery: {
-        from: [{ collectionId: 'deliveryOrders', allDescendants: true }],
-        where: {
-          compositeFilter: {
-            op: 'AND',
-            filters: [
-              {
-                fieldFilter: {
-                  field: { fieldPath: 'owner' },
-                  op: 'EQUAL',
-                  value: firestoreString(ownerWallet),
-                },
-              },
-              {
-                fieldFilter: {
-                  field: { fieldPath: 'status' },
-                  op: 'EQUAL',
-                  value: firestoreString(status),
-                },
-              },
-            ],
-          },
-        },
-      },
-    }),
-    method: 'POST',
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+  const value = await repository(context).query({
+    kind: 'delivery_order',
+    filters: [
+      { field: 'owner', op: 'equal', value: ownerWallet },
+      { field: 'status', op: 'equal', value: status },
+    ],
   });
   return decodeDeliveryOrderQuery(value, true);
-}
-
-function pendingReadyNotificationWhere(ownerWallet: string): Record<string, unknown> {
-  const pendingFilter = (fieldPath: string) => ({
-    fieldFilter: {
-      field: { fieldPath },
-      op: 'EQUAL',
-      value: firestoreString(READY_TO_SHIP_NOTIFICATION_PENDING),
-    },
-  });
-  return {
-    compositeFilter: {
-      op: 'AND',
-      filters: [
-        {
-          fieldFilter: {
-            field: { fieldPath: 'owner' },
-            op: 'EQUAL',
-            value: firestoreString(ownerWallet),
-          },
-        },
-        {
-          fieldFilter: {
-            field: { fieldPath: 'status' },
-            op: 'EQUAL',
-            value: firestoreString('ready_to_ship'),
-          },
-        },
-        {
-          compositeFilter: {
-            op: 'OR',
-            filters: [
-              pendingFilter(BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD),
-              pendingFilter(SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD),
-            ],
-          },
-        },
-      ],
-    },
-  };
 }
 
 async function runPendingReadyNotificationQuery(
-  context: FirestoreContext,
+  context: CommerceContext,
   ownerWallet: string,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify({
-      structuredQuery: {
-        from: [{ collectionId: 'deliveryOrders', allDescendants: true }],
-        where: pendingReadyNotificationWhere(ownerWallet),
-        limit: MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL,
-      },
-    }),
-    method: 'POST',
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+  const value = await repository(context).query({
+    kind: 'delivery_order',
+    filters: [
+      { field: 'owner', op: 'equal', value: ownerWallet },
+      { field: 'status', op: 'equal', value: 'ready_to_ship' },
+    ],
   });
-  return decodeDeliveryOrderQuery(value, true);
+  return decodeDeliveryOrderQuery(value, true)
+    .filter((document) => (
+      document.fields[BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD] === READY_TO_SHIP_NOTIFICATION_PENDING ||
+      document.fields[SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD] === READY_TO_SHIP_NOTIFICATION_PENDING
+    ))
+    .slice(0, MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL);
 }
 
 async function runPendingReadyNotificationReconciliationQuery(
-  context: FirestoreContext,
+  context: CommerceContext,
   limit: number,
   startAfterCursorPath?: string,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify(buildReadyNotificationReconciliationQuery({
-      limit,
-      ...(startAfterCursorPath
-        ? { startAfterDocumentPath: documentName(startAfterCursorPath) }
-        : {}),
-    })),
-    method: 'POST',
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+  const value = await repository(context).query({
+    kind: 'delivery_order',
+    filters: [{ field: 'status', op: 'equal', value: 'ready_to_ship' }],
+    orderBy: [{ field: 'documentPath', direction: 'asc' }],
+    ...(startAfterCursorPath ? { startAfter: [startAfterCursorPath] } : {}),
   });
-  return decodeDeliveryOrderQuery(value, false);
+  return decodeDeliveryOrderQuery(value, false)
+    .filter((document) => (
+      document.fields[BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD] === READY_TO_SHIP_NOTIFICATION_PENDING ||
+      document.fields[SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD] === READY_TO_SHIP_NOTIFICATION_PENDING
+    ))
+    .slice(0, limit);
 }
 
-function decodeDeliveryOrderQuery(value: unknown, requireIdentity: boolean): DeliveryOrderDocument[] {
-  if (!Array.isArray(value)) {
-    throw new DeliveryReceiptError('unavailable', 'Delivery recovery data is temporarily unavailable.');
-  }
+function decodeDeliveryOrderQuery(
+  value: readonly CommerceDocumentRecord[],
+  requireIdentity: boolean,
+): DeliveryOrderDocument[] {
   const documents: DeliveryOrderDocument[] = [];
   for (const result of value) {
-    if (!isRecord(result) || result.document === undefined) continue;
-    const document = decodeDocument(result.document);
-    if (!document) {
-      throw new DeliveryReceiptError('unavailable', 'Delivery recovery data is temporarily unavailable.');
-    }
+    const document = commerceDocument(result);
+    if (!document) continue;
     if (requireIdentity && !('identity' in resolveDeliveryOrderIdentity(document.id, document.fields, document.path))) {
       continue;
     }
@@ -908,42 +792,15 @@ function decodeDeliveryOrderQuery(value: unknown, requireIdentity: boolean): Del
 }
 
 async function runDeliveryRecoveryStateQuery(
-  context: FirestoreContext,
+  context: CommerceContext,
   ownerWallet: string,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify({
-      structuredQuery: {
-        select: {
-          fields: ['status', 'createdAt', 'processingAt', 'receiptRecovery'].map((fieldPath) => ({ fieldPath })),
-        },
-        from: [{ collectionId: 'deliveryOrders', allDescendants: true }],
-        where: {
-          compositeFilter: {
-            op: 'AND',
-            filters: [
-              {
-                fieldFilter: {
-                  field: { fieldPath: 'owner' },
-                  op: 'EQUAL',
-                  value: firestoreString(ownerWallet),
-                },
-              },
-              {
-                fieldFilter: {
-                  field: { fieldPath: 'status' },
-                  op: 'IN',
-                  value: firestoreArray(['processing', 'prepared']),
-                },
-              },
-            ],
-          },
-        },
-      },
-    }),
-    method: 'POST',
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+  const value = await repository(context).query({
+    kind: 'delivery_order',
+    filters: [
+      { field: 'owner', op: 'equal', value: ownerWallet },
+      { field: 'status', op: 'in', value: ['processing', 'prepared'] },
+    ],
   });
   return decodeDeliveryOrderQuery(value, false);
 }
@@ -1041,14 +898,14 @@ function orderResultBase(document: DeliveryOrderDocument): {
 }
 
 async function acquireDeliveryRecoveryLease(
-  context: FirestoreContext,
+  context: CommerceContext,
   path: string,
   ownerWallet: string,
   nowMs: number,
   force: boolean,
 ): Promise<{ acquired: true } | { acquired: false; result: RecoverDeliveryOrdersItemResult }> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: string | undefined;
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    let transaction: CommerceUnitOfWork | undefined;
     try {
       transaction = await beginTransaction(context);
       const document = await readDocument(context, path, transaction);
@@ -1136,22 +993,22 @@ async function acquireDeliveryRecoveryLease(
       await commitWrites(context, [updateWrite({
         path,
         fields: {
-          'receiptRecovery.leaseExpiresAt': firestoreTimestamp(nowMs + DELIVERY_RECOVERY_LEASE_MS),
-          'receiptRecovery.lastAttemptAt': firestoreTimestamp(nowMs),
+          'receiptRecovery.leaseExpiresAt': commerceTimestamp(nowMs + DELIVERY_RECOVERY_LEASE_MS),
+          'receiptRecovery.lastAttemptAt': commerceTimestamp(nowMs),
           'receiptRecovery.attemptCount': attemptCount,
         },
-        updateMask: [
+        fieldPaths: [
           'receiptRecovery.leaseExpiresAt',
           'receiptRecovery.lastAttemptAt',
           'receiptRecovery.attemptCount',
         ],
-        currentDocument: { exists: true },
+        mustExist: true,
       })], transaction);
       transaction = undefined;
       return { acquired: true };
     } catch (error) {
       if (transaction) await rollbackTransactionBestEffort(context, transaction);
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
         continue;
       }
@@ -1162,11 +1019,11 @@ async function acquireDeliveryRecoveryLease(
 }
 
 async function finalizeDeliveryRecoveryAttempt(
-  context: FirestoreContext,
+  context: CommerceContext,
   path: string,
   result: { errorCode?: string; message?: string },
 ): Promise<void> {
-  const updateMask = [
+  const fieldPaths = [
     'receiptRecovery.leaseExpiresAt',
     'receiptRecovery.lastErrorCode',
     'receiptRecovery.lastErrorMessage',
@@ -1177,13 +1034,13 @@ async function finalizeDeliveryRecoveryAttempt(
       ...(result.errorCode ? { 'receiptRecovery.lastErrorCode': result.errorCode } : {}),
       ...(result.message ? { 'receiptRecovery.lastErrorMessage': result.message } : {}),
     },
-    updateMask,
-    currentDocument: { exists: true },
+    fieldPaths,
+    mustExist: true,
   })]);
 }
 
 async function recordPreparedDeliveryRecoveryMiss(
-  context: FirestoreContext,
+  context: CommerceContext,
   document: DeliveryOrderDocument,
   nowMs: number,
 ): Promise<number | null> {
@@ -1192,17 +1049,17 @@ async function recordPreparedDeliveryRecoveryMiss(
   const nextDelayMs = nextPreparedDeliveryRecoveryDelayMs(nextProbeCount);
   const fields: Record<string, unknown> = {
     'receiptRecovery.preparedProbeCount': nextProbeCount,
-    'receiptRecovery.lastPreparedProbeAt': firestoreTimestamp(nowMs),
+    'receiptRecovery.lastPreparedProbeAt': commerceTimestamp(nowMs),
     ...(nextDelayMs === null
       ? {
           status: 'prepared_abandoned',
-          preparedRecoveryAbandonedAt: firestoreTimestamp(nowMs),
+          preparedRecoveryAbandonedAt: commerceTimestamp(nowMs),
         }
       : {
-          'receiptRecovery.nextPreparedProbeAt': firestoreTimestamp(nowMs + nextDelayMs),
+          'receiptRecovery.nextPreparedProbeAt': commerceTimestamp(nowMs + nextDelayMs),
         }),
   };
-  const updateMask = [
+  const fieldPaths = [
     'receiptRecovery.preparedProbeCount',
     'receiptRecovery.lastPreparedProbeAt',
     'receiptRecovery.nextPreparedProbeAt',
@@ -1211,14 +1068,14 @@ async function recordPreparedDeliveryRecoveryMiss(
   await commitWrites(context, [updateWrite({
     path: document.path,
     fields,
-    updateMask,
-    currentDocument: { updateTime: document.updateTime },
+    fieldPaths,
+    expectedUpdateTime: document.updateTime,
   })]);
   return nextDelayMs === null ? null : nowMs + nextDelayMs;
 }
 
 async function stopPreparedDeliveryRecoveryChecks(
-  context: FirestoreContext,
+  context: CommerceContext,
   document: DeliveryOrderDocument,
   nowMs: number,
 ): Promise<void> {
@@ -1230,23 +1087,23 @@ async function stopPreparedDeliveryRecoveryChecks(
     path: document.path,
     fields: {
       status: 'prepared_abandoned',
-      preparedRecoveryAbandonedAt: firestoreTimestamp(nowMs),
+      preparedRecoveryAbandonedAt: commerceTimestamp(nowMs),
       'receiptRecovery.preparedProbeCount': probeCount,
-      'receiptRecovery.lastPreparedProbeAt': firestoreTimestamp(nowMs),
+      'receiptRecovery.lastPreparedProbeAt': commerceTimestamp(nowMs),
     },
-    updateMask: [
+    fieldPaths: [
       'status',
       'preparedRecoveryAbandonedAt',
       'receiptRecovery.preparedProbeCount',
       'receiptRecovery.lastPreparedProbeAt',
       'receiptRecovery.nextPreparedProbeAt',
     ],
-    currentDocument: { updateTime: document.updateTime },
+    expectedUpdateTime: document.updateTime,
   })]);
 }
 
 async function deferPreparedDeliveryRecovery(
-  context: FirestoreContext,
+  context: CommerceContext,
   document: DeliveryOrderDocument,
   nowMs: number,
 ): Promise<void> {
@@ -1258,15 +1115,15 @@ async function deferPreparedDeliveryRecovery(
   await commitWrites(context, [updateWrite({
     path: document.path,
     fields: {
-      'receiptRecovery.nextPreparedProbeAt': firestoreTimestamp(nextCheckAt),
+      'receiptRecovery.nextPreparedProbeAt': commerceTimestamp(nextCheckAt),
     },
-    updateMask: ['receiptRecovery.nextPreparedProbeAt'],
-    currentDocument: { updateTime: document.updateTime },
+    fieldPaths: ['receiptRecovery.nextPreparedProbeAt'],
+    expectedUpdateTime: document.updateTime,
   })]);
 }
 
 async function fetchDeliveryRecoveryState(
-  context: FirestoreContext,
+  context: CommerceContext,
   ownerWallet: string,
   nowMs: number,
 ): Promise<WalletDeliveryRecoveryState> {
@@ -1334,15 +1191,15 @@ function normalizeAssignedDudeIds(
 }
 
 async function assignDudesForBox(
-  context: FirestoreContext,
+  context: CommerceContext,
   runtime: DeliveryRuntime,
   boxAssetId: string,
   randomInt: (maxExclusive: number) => number,
 ): Promise<number[]> {
   const assignmentPath = dropBoxAssignmentPath(runtime.dropId, boxAssetId);
   const poolPath = dropDudePoolPath(runtime.dropId);
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: string | undefined;
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    let transaction: CommerceUnitOfWork | undefined;
     try {
       transaction = await beginTransaction(context);
       const existing = await readDocument(context, assignmentPath, transaction);
@@ -1390,18 +1247,18 @@ async function assignDudesForBox(
       const writes = picked.chosen.map((dudeId) => createWrite({
         path: dropDudeAssignmentPath(runtime.dropId, dudeId),
         fields: { dudeId, boxAssetId },
-        transforms: [{ fieldPath: 'assignedAt', setToServerValue: 'REQUEST_TIME' }],
+        transforms: [{ fieldPath: 'assignedAt', value: commerceFieldValue.serverTimestamp() }],
       }));
       writes.push(updateWrite({
         path: poolPath,
         fields: { available: pool },
-        updateMask: ['available'],
-        transforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+        fieldPaths: ['available'],
+        transforms: [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }],
       }));
       writes.push(createWrite({
         path: assignmentPath,
         fields: { dudeIds: picked.chosen },
-        transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+        transforms: [{ fieldPath: 'createdAt', value: commerceFieldValue.serverTimestamp() }],
       }));
       await commitWrites(context, writes, transaction);
       transaction = undefined;
@@ -1409,7 +1266,7 @@ async function assignDudesForBox(
     } catch (error) {
       if (transaction) await rollbackTransactionBestEffort(context, transaction);
       if (error instanceof DeliveryReceiptError) throw error;
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await pause(Math.min(2_500, 150 * 2 ** Math.min(attempt, 4)), context.signal);
         continue;
       }
@@ -1516,7 +1373,7 @@ function assignmentClaimFields(expected: ClaimCodeExpected, ownerWallet: string)
 }
 
 async function ensureIrlClaimCodeForBox(
-  context: FirestoreContext,
+  context: CommerceContext,
   runtime: DeliveryRuntime,
   args: {
     ownerWallet: string;
@@ -1528,8 +1385,8 @@ async function ensureIrlClaimCodeForBox(
   randomInt: (maxExclusive: number) => number,
 ): Promise<string> {
   const assignmentPath = dropBoxAssignmentPath(runtime.dropId, args.boxAssetId);
-  for (let transactionAttempt = 0; transactionAttempt < FIRESTORE_TRANSACTION_ATTEMPTS; transactionAttempt += 1) {
-    let transaction: string | undefined;
+  for (let transactionAttempt = 0; transactionAttempt < COMMERCE_TRANSACTION_ATTEMPTS; transactionAttempt += 1) {
+    let transaction: CommerceUnitOfWork | undefined;
     try {
       transaction = await beginTransaction(context);
       const assignment = await readDocument(context, assignmentPath, transaction);
@@ -1546,12 +1403,12 @@ async function ensureIrlClaimCodeForBox(
         const expected: ClaimCodeExpected = { code: existingCode, dropId: runtime.dropId, ...args };
         const claimPath = `claimCodes/${existingCode}`;
         const claim = await readDocument(context, claimPath, transaction);
-        const writes: Record<string, unknown>[] = [];
+        const writes: CommerceWrite[] = [];
         if (!claim) {
           writes.push(createWrite({
             path: claimPath,
             fields: claimCodeFields(expected, args.ownerWallet),
-            transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+            transforms: [{ fieldPath: 'createdAt', value: commerceFieldValue.serverTimestamp() }],
           }));
         } else if (!claimCodeCompatible(claim.fields, expected)) {
           const reason = claimCodeConflictReason(claim.fields, expected);
@@ -1565,9 +1422,9 @@ async function ensureIrlClaimCodeForBox(
           writes.push(updateWrite({
             path: claimPath,
             fields: claimCodeFields(expected, args.ownerWallet),
-            updateMask: Object.keys(claimCodeFields(expected, args.ownerWallet)),
-            transforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
-            currentDocument: { exists: true },
+            fieldPaths: Object.keys(claimCodeFields(expected, args.ownerWallet)),
+            transforms: [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }],
+            mustExist: true,
           }));
         }
         const assignmentClaim = isRecord(assignment.fields.irlClaim) ? assignment.fields.irlClaim : {};
@@ -1576,9 +1433,9 @@ async function ensureIrlClaimCodeForBox(
           writes.push(updateWrite({
             path: assignmentPath,
             fields: assignmentFields,
-            updateMask: Object.keys(assignmentFields),
-            transforms: [{ fieldPath: 'irlClaim.createdAt', setToServerValue: 'REQUEST_TIME' }],
-            currentDocument: { exists: true },
+            fieldPaths: Object.keys(assignmentFields),
+            transforms: [{ fieldPath: 'irlClaim.createdAt', value: commerceFieldValue.serverTimestamp() }],
+            mustExist: true,
           }));
         }
         if (writes.length) await commitWrites(context, writes, transaction);
@@ -1601,14 +1458,14 @@ async function ensureIrlClaimCodeForBox(
         createWrite({
           path: `claimCodes/${expected.code}`,
           fields: claimCodeFields(expected, args.ownerWallet),
-          transforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
+          transforms: [{ fieldPath: 'createdAt', value: commerceFieldValue.serverTimestamp() }],
         }),
         updateWrite({
           path: assignmentPath,
           fields: assignmentFields,
-          updateMask: Object.keys(assignmentFields),
-          transforms: [{ fieldPath: 'irlClaim.createdAt', setToServerValue: 'REQUEST_TIME' }],
-          currentDocument: { exists: true },
+          fieldPaths: Object.keys(assignmentFields),
+          transforms: [{ fieldPath: 'irlClaim.createdAt', value: commerceFieldValue.serverTimestamp() }],
+          mustExist: true,
         }),
       ], transaction);
       transaction = undefined;
@@ -1616,7 +1473,7 @@ async function ensureIrlClaimCodeForBox(
     } catch (error) {
       if (transaction) await rollbackTransactionBestEffort(context, transaction);
       if (error instanceof DeliveryReceiptError) throw error;
-      if (error instanceof FirestoreWriteConflict && transactionAttempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && transactionAttempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await pause(Math.min(2_500, 150 * 2 ** Math.min(transactionAttempt, 4)), context.signal);
         continue;
       }
@@ -1673,7 +1530,7 @@ export function createDeliveryPackStatusProjectionOutbox(
 }
 
 async function countNormalIrlPackStatus(
-  context: FirestoreContext,
+  context: CommerceContext,
   runtime: DeliveryRuntime,
   deliveryId: number,
   order: Record<string, unknown>,
@@ -1722,7 +1579,7 @@ function deliveryPackStatusProjectionErrorCode(error: unknown): string {
 }
 
 async function transitionDeliveryPackStatusProjection(
-  context: FirestoreContext,
+  context: CommerceContext,
   documentPath: string,
   options: {
     clearFields?: readonly string[];
@@ -1731,25 +1588,25 @@ async function transitionDeliveryPackStatusProjection(
     timestampField?: string;
   },
 ): Promise<boolean> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
     const document = await readDocument(context, documentPath);
     if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== options.requiredState) return false;
     try {
       await commitWrites(context, [updateWrite({
         path: documentPath,
         fields: options.fields,
-        updateMask: [
+        fieldPaths: [
           ...Object.keys(options.fields || {}),
           ...(options.clearFields || []),
         ],
         transforms: options.timestampField
-          ? [{ fieldPath: options.timestampField, setToServerValue: 'REQUEST_TIME' }]
+          ? [{ fieldPath: options.timestampField, value: commerceFieldValue.serverTimestamp() }]
           : undefined,
-        currentDocument: { updateTime: document.updateTime },
+        expectedUpdateTime: document.updateTime,
       })]);
       return true;
     } catch (error) {
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
         continue;
       }
@@ -1760,7 +1617,7 @@ async function transitionDeliveryPackStatusProjection(
 }
 
 async function markDeliveryPackStatusProjectionCompleted(
-  context: FirestoreContext,
+  context: CommerceContext,
   documentPath: string,
 ): Promise<boolean> {
   return transitionDeliveryPackStatusProjection(context, documentPath, {
@@ -1776,7 +1633,7 @@ async function markDeliveryPackStatusProjectionCompleted(
 }
 
 async function markDeliveryPackStatusProjectionFailed(
-  context: FirestoreContext,
+  context: CommerceContext,
   documentPath: string,
   errorCode: string,
 ): Promise<boolean> {
@@ -1795,7 +1652,7 @@ async function markDeliveryPackStatusProjectionFailed(
 }
 
 async function clearDeliveryPackStatusProjection(
-  context: FirestoreContext,
+  context: CommerceContext,
   documentPath: string,
 ): Promise<boolean> {
   return transitionDeliveryPackStatusProjection(context, documentPath, {
@@ -1813,11 +1670,11 @@ async function clearDeliveryPackStatusProjection(
 
 async function recordDeliveryPackStatusProjectionTransientFailure(args: {
   attemptStartedAtMs: number;
-  context: FirestoreContext;
+  context: CommerceContext;
   documentPath: string;
   errorCode: string;
 }): Promise<boolean> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
     const document = await readDocument(args.context, args.documentPath);
     if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== PACK_STATUS_PROJECTION_PENDING) {
       return false;
@@ -1842,7 +1699,7 @@ async function recordDeliveryPackStatusProjectionTransientFailure(args: {
           [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: Math.min(Number.MAX_SAFE_INTEGER, failureCount + 1),
           [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: args.errorCode,
         },
-        updateMask: [
+        fieldPaths: [
           PACK_STATUS_PROJECTION_STATE_FIELD,
           PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
           PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD,
@@ -1850,11 +1707,11 @@ async function recordDeliveryPackStatusProjectionTransientFailure(args: {
           PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
           PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
         ],
-        currentDocument: { updateTime: document.updateTime },
+        expectedUpdateTime: document.updateTime,
       })]);
       return true;
     } catch (error) {
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await pause(Math.min(400, 25 * 2 ** attempt), args.context.signal);
         continue;
       }
@@ -1867,7 +1724,7 @@ async function recordDeliveryPackStatusProjectionTransientFailure(args: {
 type DeliveryPackStatusProjectionOutcome = 'completed' | 'failed' | 'not-due' | 'not-needed' | 'pending';
 
 async function projectPendingDeliveryPackStatus(args: {
-  context: FirestoreContext;
+  context: CommerceContext;
   deliveryId: number;
   dropId: string;
   log?: (entry: Record<string, unknown>) => void;
@@ -1885,7 +1742,7 @@ async function projectPendingDeliveryPackStatus(args: {
     () => controller.abort(new DOMException('Pack-status projection timed out', 'TimeoutError')),
     PACK_STATUS_TIMEOUT_MS,
   );
-  const context: FirestoreContext = {
+  const context: CommerceContext = {
     ...args.context,
     nowMs: attemptStartedAtMs,
     signal: controller.signal,
@@ -1989,18 +1846,24 @@ async function projectPendingDeliveryPackStatus(args: {
 }
 
 async function runDueDeliveryPackStatusProjectionQuery(
-  context: FirestoreContext,
+  context: CommerceContext,
   dropId: string,
   dueAtMs: number,
   limit: number,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify(buildDeliveryPackStatusProjectionReconciliationQuery({ dueAtMs, limit })),
-    method: 'POST',
-    url: FIRESTORE_DOCUMENTS_BASE_URL + '/drops/' + encodeURIComponent(dropId) + ':runQuery',
+  const value = await repository(context).query({
+    kind: 'delivery_order',
+    dropId,
+    filters: [{ field: PACK_STATUS_PROJECTION_STATE_FIELD, op: 'equal', value: PACK_STATUS_PROJECTION_PENDING }],
   });
-  return decodeDeliveryOrderQuery(value, false);
+  return decodeDeliveryOrderQuery(value, false)
+    .filter((document) => Number(document.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]) <= dueAtMs)
+    .sort((left, right) => (
+      Number(left.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]) -
+        Number(right.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]) ||
+      left.path.localeCompare(right.path)
+    ))
+    .slice(0, limit);
 }
 
 export async function reconcilePendingDeliveryPackStatusProjections(
@@ -2011,17 +1874,16 @@ export async function reconcilePendingDeliveryPackStatusProjections(
     log?: (entry: Record<string, unknown>) => void;
     nowMs?: () => number;
     providerFetch?: ProfileProviderFetch;
-    requestCommerceDocument?: CommerceDocumentRequester;
   } = {},
 ): Promise<number> {
   const nowMs = overrides.nowMs || Date.now;
   const dueAtMs = nowMs();
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
-  const context: FirestoreContext = {
+  const context: CommerceContext = {
     commerceDb: env.COMMERCE_DB,
+    repository: new D1CommerceRepository(env.COMMERCE_DB),
     nowMs: dueAtMs,
     providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
-    requestCommerceDocument: overrides.requestCommerceDocument || commerceDocumentRequest,
     signal,
     dataDb: env.DATA_DB,
   };
@@ -2100,7 +1962,7 @@ export async function reconcilePendingDeliveryPackStatusProjections(
 }
 
 export function scheduleDeliveryPackStatusProjection(args: {
-  context: FirestoreContext;
+  context: CommerceContext;
   deliveryId: number;
   dropId: string;
   waitUntil: DeliveryReceiptWaitUntil;
@@ -2831,7 +2693,7 @@ async function sendAndConfirmSignedTransaction(
 }
 
 async function markDeliveryProcessing(
-  context: FirestoreContext,
+  context: CommerceContext,
   document: DeliveryOrderDocument,
   runtime: DeliveryRuntime,
   signature: string | null,
@@ -2841,7 +2703,7 @@ async function markDeliveryProcessing(
     status: 'processing',
     ...(signature ? { deliverySignature: signature } : {}),
   };
-  const updateMask = [
+  const fieldPaths = [
     'dropId',
     'status',
     ...(signature ? ['deliverySignature'] : []),
@@ -2853,16 +2715,16 @@ async function markDeliveryProcessing(
   await commitWrites(context, [updateWrite({
     path: document.path,
     fields,
-    updateMask,
+    fieldPaths,
     transforms: document.fields.processingAt === undefined
-      ? [{ fieldPath: 'processingAt', setToServerValue: 'REQUEST_TIME' }]
+      ? [{ fieldPath: 'processingAt', value: commerceFieldValue.serverTimestamp() }]
       : undefined,
-    currentDocument: { exists: true },
+    mustExist: true,
   })]);
 }
 
 async function markDeliveryReady(
-  context: FirestoreContext,
+  context: CommerceContext,
   document: DeliveryOrderDocument,
   runtime: DeliveryRuntime,
   result: {
@@ -2893,7 +2755,7 @@ async function markDeliveryReady(
   const packStatusOutbox = createDeliveryPackStatusProjectionOutbox(runtime, readyOrder, context.nowMs);
   Object.assign(fields, packStatusOutbox.fields);
   Object.assign(readyOrder, packStatusOutbox.fields);
-  const updateMask = [
+  const fieldPaths = [
     ...Object.keys(fields),
     ...notificationOutbox.fieldPaths.filter((fieldPath) => !Object.hasOwn(fields, fieldPath)),
     ...packStatusOutbox.fieldPaths.filter((fieldPath) => !Object.hasOwn(fields, fieldPath)),
@@ -2908,25 +2770,25 @@ async function markDeliveryReady(
   await commitWrites(context, [updateWrite({
     path: document.path,
     fields,
-    updateMask,
+    fieldPaths,
     transforms: [
-      { fieldPath: 'processedAt', setToServerValue: 'REQUEST_TIME' },
+      { fieldPath: 'processedAt', value: commerceFieldValue.serverTimestamp() },
       ...(result.irlClaims.length
-        ? [{ fieldPath: 'irlClaimsUpdatedAt', setToServerValue: 'REQUEST_TIME' }]
+        ? [{ fieldPath: 'irlClaimsUpdatedAt', value: commerceFieldValue.serverTimestamp() }]
         : []),
     ],
-    currentDocument: { exists: true },
+    mustExist: true,
   })]);
   return { ...document, fields: readyOrder };
 }
 
 async function markReadyToShipNotificationsQueued(
-  context: FirestoreContext,
+  context: CommerceContext,
   documentPath: string,
   claimId: string,
   pending: readonly PendingReadyToShipNotification[],
 ): Promise<string[]> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
     const document = await readDocument(context, documentPath);
     if (
       !document ||
@@ -2959,19 +2821,19 @@ async function markReadyToShipNotificationsQueued(
           [marker.stateField, READY_TO_SHIP_NOTIFICATION_QUEUED],
           [marker.jobIdField, marker.jobId],
         ])),
-        updateMask: [
+        fieldPaths: [
           ...matching.flatMap((marker) => [marker.stateField, marker.jobIdField]),
           ...clearedClaimFields,
         ],
         transforms: matching.map((marker) => ({
           fieldPath: marker.queuedAtField,
-          setToServerValue: 'REQUEST_TIME',
+          value: commerceFieldValue.serverTimestamp(),
         })),
-        currentDocument: { updateTime: document.updateTime },
+        expectedUpdateTime: document.updateTime,
       })]);
       return matching.map((marker) => marker.kind);
     } catch (error) {
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
         continue;
       }
@@ -2997,13 +2859,13 @@ function readyToShipNotificationNonNegativeInteger(value: unknown): number | nul
 }
 
 async function claimReadyToShipNotifications(args: {
-  context: FirestoreContext;
+  context: CommerceContext;
   deliveryId: number;
   documentPath: string;
   dropId: string;
 }): Promise<ReadyToShipNotificationClaimResult> {
   const nowMs = Math.max(0, Math.floor(args.context.nowMs));
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
     const document = await readDocument(args.context, args.documentPath);
     if (!document) return { outcome: 'none' };
     const inspection = inspectPendingReadyToShipNotifications(document.fields, {
@@ -3038,18 +2900,18 @@ async function claimReadyToShipNotifications(args: {
             ...Object.fromEntries(stateFields.map((stateField) => [stateField, READY_TO_SHIP_NOTIFICATION_FAILED])),
             [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: 'manual-review-required',
           },
-          updateMask: [
+          fieldPaths: [
             ...stateFields,
             READY_NOTIFICATION_LAST_ERROR_CODE_FIELD,
             READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
             READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
           ],
-          transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, setToServerValue: 'REQUEST_TIME' }],
-          currentDocument: { updateTime: document.updateTime },
+          transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, value: commerceFieldValue.serverTimestamp() }],
+          expectedUpdateTime: document.updateTime,
         })]);
         return { outcome: 'manual-review' };
       } catch (error) {
-        if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+        if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
           await pause(Math.min(400, 25 * 2 ** attempt), args.context.signal);
           continue;
         }
@@ -3069,13 +2931,13 @@ async function claimReadyToShipNotifications(args: {
             ? nowMs + READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS
             : retryUntilMs,
         },
-        updateMask: [
+        fieldPaths: [
           READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
           READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
           READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
           READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD,
         ],
-        currentDocument: { updateTime: document.updateTime },
+        expectedUpdateTime: document.updateTime,
       })]);
       return {
         outcome: 'claimed',
@@ -3087,7 +2949,7 @@ async function claimReadyToShipNotifications(args: {
         },
       };
     } catch (error) {
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await pause(Math.min(400, 25 * 2 ** attempt), args.context.signal);
         continue;
       }
@@ -3098,11 +2960,11 @@ async function claimReadyToShipNotifications(args: {
 }
 
 async function releaseReadyToShipNotificationClaim(
-  context: FirestoreContext,
+  context: CommerceContext,
   documentPath: string,
   claim: ReadyToShipNotificationClaim,
 ): Promise<boolean> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
     const document = await readDocument(context, documentPath);
     if (
       !document ||
@@ -3114,16 +2976,16 @@ async function releaseReadyToShipNotificationClaim(
         fields: {
           [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: claim.previousAttemptCount,
         },
-        updateMask: [
+        fieldPaths: [
           READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
           READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
           READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
         ],
-        currentDocument: { updateTime: document.updateTime },
+        expectedUpdateTime: document.updateTime,
       })]);
       return true;
     } catch (error) {
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
         continue;
       }
@@ -3134,12 +2996,12 @@ async function releaseReadyToShipNotificationClaim(
 }
 
 async function markPendingReadyToShipNotificationsFailed(
-  context: FirestoreContext,
+  context: CommerceContext,
   documentPath: string,
   errorCode: string,
   targetStateFields?: readonly string[],
 ): Promise<string[]> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
     const document = await readDocument(context, documentPath);
     if (!document) return [];
     const stateFields = [
@@ -3159,13 +3021,13 @@ async function markPendingReadyToShipNotificationsFailed(
           ),
           [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: errorCode,
         },
-        updateMask: [...stateFields, READY_NOTIFICATION_LAST_ERROR_CODE_FIELD],
-        transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, setToServerValue: 'REQUEST_TIME' }],
-        currentDocument: { updateTime: document.updateTime },
+        fieldPaths: [...stateFields, READY_NOTIFICATION_LAST_ERROR_CODE_FIELD],
+        transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, value: commerceFieldValue.serverTimestamp() }],
+        expectedUpdateTime: document.updateTime,
       })]);
       return stateFields;
     } catch (error) {
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
         continue;
       }
@@ -3176,7 +3038,7 @@ async function markPendingReadyToShipNotificationsFailed(
 }
 
 async function publishReadyToShipNotifications(args: {
-  context: FirestoreContext;
+  context: CommerceContext;
   deliveryId: number;
   document: DeliveryOrderDocument;
   dropId: string;
@@ -3361,14 +3223,13 @@ export async function reconcilePendingReadyToShipNotifications(
     log?: (entry: Record<string, unknown>) => void;
     nowMs?: () => number;
     providerFetch?: ProfileProviderFetch;
-    requestCommerceDocument?: CommerceDocumentRequester;
   } = {},
 ): Promise<number> {
-  const context: FirestoreContext = {
+  const context: CommerceContext = {
     commerceDb: env.COMMERCE_DB,
+    repository: new D1CommerceRepository(env.COMMERCE_DB),
     nowMs: (overrides.nowMs || Date.now)(),
     providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
-    requestCommerceDocument: overrides.requestCommerceDocument || commerceDocumentRequest,
     signal,
   };
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
@@ -3457,7 +3318,7 @@ export async function reconcilePendingReadyToShipNotifications(
 }
 
 async function recordDeliveryClose(
-  context: FirestoreContext,
+  context: CommerceContext,
   documentPath: string,
   dropId: string,
   closeDeliveryTx: string,
@@ -3465,9 +3326,9 @@ async function recordDeliveryClose(
   await commitWrites(context, [updateWrite({
     path: documentPath,
     fields: { dropId, closeDeliveryTx },
-    updateMask: ['dropId', 'closeDeliveryTx'],
-    transforms: [{ fieldPath: 'deliveryClosedAt', setToServerValue: 'REQUEST_TIME' }],
-    currentDocument: { exists: true },
+    fieldPaths: ['dropId', 'closeDeliveryTx'],
+    transforms: [{ fieldPath: 'deliveryClosedAt', value: commerceFieldValue.serverTimestamp() }],
+    mustExist: true,
   })]);
 }
 
@@ -3643,7 +3504,7 @@ async function closeDeliveryPda(args: {
 async function retryIssueReceipts(args: {
   request: RetryIssueReceiptsArgs;
   env: DeliveryReceiptsEnv;
-  firestore: FirestoreContext;
+  commerce: CommerceContext;
   provider: ProviderContext;
   waitUntil: DeliveryReceiptWaitUntil;
   randomInt: (maxExclusive: number) => number;
@@ -3652,7 +3513,7 @@ async function retryIssueReceipts(args: {
   const deliveryId = Math.floor(args.request.deliveryId);
   const runtime = runtimeForDrop(args.request.dropId);
   const path = dropDeliveryOrderPath(runtime.dropId, deliveryId);
-  const document = await readDocument(args.firestore, path);
+  const document = await readDocument(args.commerce, path);
   if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
   if (document.fields.owner && document.fields.owner !== owner.toBase58()) {
     throw new DeliveryReceiptError('permission-denied', 'Order belongs to a different wallet.');
@@ -3665,7 +3526,7 @@ async function retryIssueReceipts(args: {
   }
   if (document.fields.status === 'ready_to_ship') {
     scheduleDeliveryPackStatusProjection({
-      context: args.firestore,
+      context: args.commerce,
       deliveryId,
       dropId: runtime.dropId,
       waitUntil: args.waitUntil,
@@ -3686,7 +3547,7 @@ async function retryIssueReceipts(args: {
           signal: args.provider.signal,
         });
         if (closeDeliveryTx) {
-          await recordDeliveryClose(args.firestore, document.path, runtime.dropId, closeDeliveryTx);
+          await recordDeliveryClose(args.commerce, document.path, runtime.dropId, closeDeliveryTx);
         }
       } catch (error) {
         console.warn({
@@ -3698,7 +3559,7 @@ async function retryIssueReceipts(args: {
       }
     }
     await publishReadyToShipNotifications({
-      context: args.firestore,
+      context: args.commerce,
       deliveryId,
       document,
       dropId: runtime.dropId,
@@ -3731,7 +3592,7 @@ async function retryIssueReceipts(args: {
         ownerWallet: owner.toBase58(),
         runtime,
       });
-  await markDeliveryProcessing(args.firestore, document, runtime, verified.signature);
+  await markDeliveryProcessing(args.commerce, document, runtime, verified.signature);
   const assetKeys = verified.targetAssetIds.map((assetId) => canonicalPublicKey(assetId, 'delivery asset id'));
   const infos = await connection.getMultipleAccountsInfo(assetKeys, {
     commitment: 'confirmed',
@@ -3786,12 +3647,12 @@ async function retryIssueReceipts(args: {
       const boxId = Number(item.refId);
       if (!Number.isSafeInteger(boxId) || boxId < 1 || boxId > 0xffff_ffff) continue;
       const dudeIds = await assignDudesForBox(
-        args.firestore,
+        args.commerce,
         runtime,
         item.assetId,
         args.randomInt,
       );
-      const code = await ensureIrlClaimCodeForBox(args.firestore, runtime, {
+      const code = await ensureIrlClaimCodeForBox(args.commerce, runtime, {
         ownerWallet: owner.toBase58(),
         deliveryId,
         boxAssetId: item.assetId,
@@ -3801,14 +3662,14 @@ async function retryIssueReceipts(args: {
       irlClaims.push({ code, boxId, boxAssetId: item.assetId, dudeIds });
     }
   }
-  const readyDocument = await markDeliveryReady(args.firestore, document, runtime, {
+  const readyDocument = await markDeliveryReady(args.commerce, document, runtime, {
     signature: verified.signature,
     receiptsMinted,
     receiptTxs,
     irlClaims,
   });
   scheduleDeliveryPackStatusProjection({
-    context: args.firestore,
+    context: args.commerce,
     deliveryId,
     dropId: runtime.dropId,
     waitUntil: args.waitUntil,
@@ -3833,10 +3694,10 @@ async function retryIssueReceipts(args: {
     });
   }
   if (closeDeliveryTx) {
-    await recordDeliveryClose(args.firestore, document.path, runtime.dropId, closeDeliveryTx);
+    await recordDeliveryClose(args.commerce, document.path, runtime.dropId, closeDeliveryTx);
   }
   await publishReadyToShipNotifications({
-    context: args.firestore,
+    context: args.commerce,
     deliveryId,
     document: readyDocument,
     dropId: runtime.dropId,
@@ -3846,7 +3707,7 @@ async function retryIssueReceipts(args: {
   return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };
 }
 
-function cleanupContext(context: FirestoreContext): FirestoreContext {
+function cleanupContext(context: CommerceContext): CommerceContext {
   return {
     ...context,
     nowMs: Date.now(),
@@ -3870,7 +3731,7 @@ function isRetryableRecoveryErrorCode(errorCode: string | undefined): boolean {
 }
 
 async function handlePreparedRecoveryFailure(
-  context: FirestoreContext,
+  context: CommerceContext,
   documentPath: string,
   outcome: DeliveryRecoveryOutcome,
   errorCode: string | undefined,
@@ -3896,11 +3757,11 @@ async function issueReceiptsRequest(
   body: IssueRequest,
   identity: RequestIdentity,
   env: DeliveryReceiptsEnv,
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   provider: ProviderContext,
   waitUntil: DeliveryReceiptWaitUntil,
 ): Promise<ReceiptIssueResult> {
-  const wallet = await resolveRequestWallet(identity, (uid) => loadWalletSession(firestore, env.OPS_DB, uid));
+  const wallet = await resolveRequestWallet(identity, (uid) => loadWalletSession(commerce, env.OPS_DB, uid));
   const ownerWallet = canonicalPublicKey(body.owner, 'wallet address').toBase58();
   if (wallet !== ownerWallet) throw new DeliveryReceiptError('permission-denied', 'Owners only.');
   if (!isNonZeroBase58Bytes(body.signature, 64)) {
@@ -3908,11 +3769,11 @@ async function issueReceiptsRequest(
   }
   const runtime = runtimeForDrop(body.dropId);
   const path = dropDeliveryOrderPath(runtime.dropId, body.deliveryId);
-  const order = await readDocument(firestore, path);
+  const order = await readDocument(commerce, path);
   if (!order) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
   let leaseAcquired = false;
   if (order.fields.status !== 'ready_to_ship') {
-    const lease = await acquireDeliveryRecoveryLease(firestore, path, ownerWallet, Date.now(), true);
+    const lease = await acquireDeliveryRecoveryLease(commerce, path, ownerWallet, Date.now(), true);
     if (!lease.acquired) {
       if (lease.result.outcome === 'lease_active') {
         throw new DeliveryReceiptError('aborted', lease.result.message || 'Another client is already retrying this order.');
@@ -3940,18 +3801,18 @@ async function issueReceiptsRequest(
         signature: body.signature,
       },
       env,
-      firestore,
+      commerce,
       provider,
       waitUntil,
       randomInt: secureRandomInt,
     });
     if (leaseAcquired) {
-      await finalizeDeliveryRecoveryAttempt(cleanupContext(firestore), path, {}).catch(() => undefined);
+      await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), path, {}).catch(() => undefined);
     }
     return result;
   } catch (error) {
     if (leaseAcquired) {
-      await finalizeDeliveryRecoveryAttempt(cleanupContext(firestore), path, {
+      await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), path, {
         errorCode: normalizeRecoveryErrorCode(error),
         message: normalizeRecoveryMessage(error),
       }).catch(() => undefined);
@@ -3976,11 +3837,11 @@ async function recoverReceiptsRequest(
   body: RecoverRequest,
   identity: RequestIdentity,
   env: DeliveryReceiptsEnv,
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   provider: ProviderContext,
   waitUntil: DeliveryReceiptWaitUntil,
 ): Promise<RecoverDeliveryOrdersResult> {
-  const wallet = await resolveRequestWallet(identity, (uid) => loadWalletSession(firestore, env.OPS_DB, uid));
+  const wallet = await resolveRequestWallet(identity, (uid) => loadWalletSession(commerce, env.OPS_DB, uid));
   if (body.deliveryId !== undefined && body.dropId === undefined) {
     throw new DeliveryReceiptError('invalid-argument', 'deliveryId requires dropId.');
   }
@@ -3992,7 +3853,7 @@ async function recoverReceiptsRequest(
   let recovered = 0;
   let candidates: DeliveryOrderDocument[] = [];
   if (filterDropId && body.deliveryId !== undefined) {
-    const document = await readDocument(firestore, dropDeliveryOrderPath(filterDropId, body.deliveryId));
+    const document = await readDocument(commerce, dropDeliveryOrderPath(filterDropId, body.deliveryId));
     if (document) candidates = [document];
     else {
       results.push({
@@ -4006,9 +3867,9 @@ async function recoverReceiptsRequest(
     }
   } else {
     const [processing, prepared, pendingReady] = await Promise.all([
-      runDeliveryOrderQuery(firestore, wallet, 'processing'),
-      runDeliveryOrderQuery(firestore, wallet, 'prepared'),
-      runPendingReadyNotificationQuery(firestore, wallet),
+      runDeliveryOrderQuery(commerce, wallet, 'processing'),
+      runDeliveryOrderQuery(commerce, wallet, 'prepared'),
+      runPendingReadyNotificationQuery(commerce, wallet),
     ]);
     candidates = Array.from(
       new Map([...processing, ...prepared, ...pendingReady].map((document) => [document.path, document])).values(),
@@ -4037,7 +3898,7 @@ async function recoverReceiptsRequest(
           verification: 'delivery_pda',
         },
         env,
-        firestore,
+        commerce,
         provider,
         waitUntil,
         randomInt: secureRandomInt,
@@ -4066,7 +3927,7 @@ async function recoverReceiptsRequest(
       }
       if (exists === false) {
         const nextCheckAt = await recordPreparedDeliveryRecoveryMiss(
-          firestore,
+          commerce,
           document,
           nowMs,
         ).catch((error) => {
@@ -4098,7 +3959,7 @@ async function recoverReceiptsRequest(
       });
       continue;
     }
-    const lease = await acquireDeliveryRecoveryLease(firestore, document.path, wallet, nowMs, force);
+    const lease = await acquireDeliveryRecoveryLease(commerce, document.path, wallet, nowMs, force);
     if (!lease.acquired) {
       results.push(lease.result);
       continue;
@@ -4113,7 +3974,7 @@ async function recoverReceiptsRequest(
           verification: 'delivery_pda',
         },
         env,
-        firestore,
+        commerce,
         provider,
         waitUntil,
         randomInt: secureRandomInt,
@@ -4125,7 +3986,7 @@ async function recoverReceiptsRequest(
         verification: 'delivery_pda',
         message: result.processed ? 'receipts issued' : 'order already processed',
       });
-      await finalizeDeliveryRecoveryAttempt(cleanupContext(firestore), document.path, {}).catch(() => undefined);
+      await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), document.path, {}).catch(() => undefined);
     } catch (error) {
       const errorCode = normalizeRecoveryErrorCode(error);
       const message = normalizeRecoveryMessage(error);
@@ -4133,7 +3994,7 @@ async function recoverReceiptsRequest(
         /delivery record pda not found/i.test(message || '')
         ? 'missing_delivery'
         : 'failed';
-      const cleanup = cleanupContext(firestore);
+      const cleanup = cleanupContext(commerce);
       if (base.statusBefore === 'prepared') {
         await handlePreparedRecoveryFailure(
           cleanup,
@@ -4162,7 +4023,7 @@ async function recoverReceiptsRequest(
       });
     }
   }
-  const walletRecovery = await fetchDeliveryRecoveryState(firestore, wallet, Date.now());
+  const walletRecovery = await fetchDeliveryRecoveryState(commerce, wallet, Date.now());
   return buildRecoverDeliveryOrdersResult({ attempted, recovered, walletRecovery, results });
 }
 
@@ -4170,7 +4031,6 @@ const defaultDependencies: DeliveryReceiptDependencies = {
   issue: issueReceiptsRequest,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   recover: recoverReceiptsRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
@@ -4229,11 +4089,11 @@ export async function handleDeliveryReceiptRequest(
     if (!apiKey || !cosignerSecret) {
       throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
     }
-    const common: FirestoreContext = {
+    const common: CommerceContext = {
       commerceDb: env.COMMERCE_DB,
+      repository: new D1CommerceRepository(env.COMMERCE_DB),
       nowMs: dependencies.nowMs(),
       providerFetch: trackedFetch,
-      requestCommerceDocument: dependencies.requestCommerceDocument,
       signal: controller.signal,
       dataDb: env.DATA_DB,
     };
@@ -4370,9 +4230,10 @@ export const deliveryReceiptRuntime = {
   DeliveryReceiptError,
   deriveDeliveryPda,
   fetchOnchainConfig,
-  firestoreInteger,
-  firestoreString,
-  firestoreValue,
+  commerceInteger,
+  commerceString,
+  commerceTimestamp,
+  commerceValue,
   mintReceiptsInstruction,
   pause,
   readDocument,

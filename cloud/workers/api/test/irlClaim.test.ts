@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
+import { createCommerceD1, createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import {
   AddressLookupTableAccount,
@@ -137,7 +137,6 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadClaim: async () => ({ dropId: DROP_ID, boxId: 7, dudeIds: [1, 2, 3] }),
@@ -208,29 +207,23 @@ test('IRL claim handler returns the expected partially signed transaction', asyn
 });
 
 test('IRL claim reads wallet sessions from D1 and preserves legacy collection-group resolution', async () => {
-  const requests: Array<{ url: string; body?: unknown }> = [];
-  const context = {
-    requestCommerceDocument: firestoreProviderCommerceRequester,
-    commerceDb: createCommerceD1(),
-    nowMs: 1_700_000_000_000,
-    providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      requests.push({
-        url,
-        ...(init?.body ? { body: JSON.parse(String(init.body)) as unknown } : {}),
-      });
-      assert.equal(url.includes('/authSessions/'), false);
-      if (url.endsWith('/claimCodes/1234567890')) {
-        return Response.json({ fields: {
-          dropId: { stringValue: DROP_ID },
-          boxId: { integerValue: '7' },
-          dudeIds: { arrayValue: { values: [1, 2, 3].map((id) => ({ integerValue: String(id) })) } },
-        } });
-      }
-      return Response.json([
-        { document: { name: `projects/mons-shop/databases/(default)/documents/drops/${DROP_ID}/boxAssignments/asset-1` } },
-      ]);
+  const harness = createCommerceD1Harness();
+  seedCommerceDocument(harness, {
+    name: 'projects/mons-shop/databases/(default)/documents/claimCodes/1234567890',
+    fields: {
+      dropId: { stringValue: DROP_ID },
+      boxId: { integerValue: '7' },
+      dudeIds: { arrayValue: { values: [1, 2, 3].map((id) => ({ integerValue: String(id) })) } },
     },
+  });
+  seedCommerceDocument(harness, {
+    name: `projects/mons-shop/databases/(default)/documents/drops/${DROP_ID}/boxAssignments/asset-1`,
+    fields: { irlClaimCode: { stringValue: '1234567890' } },
+  });
+  const context = {
+    commerceDb: harness.db,
+    nowMs: 1_700_000_000_000,
+    providerFetch: async () => assert.fail('commerce reads must not use provider fetch'),
     signal: new AbortController().signal,
   };
   const firestoreSourceDb = {
@@ -243,7 +236,7 @@ test('IRL claim reads wallet sessions from D1 and preserves legacy collection-gr
         all: async () => { throw new Error('Unexpected D1 all'); },
         bind: () => statement,
         first: async () => ({
-          firebase_uid: 'firebase-uid',
+          auth_subject: 'firebase-uid',
           wallet: OWNER.toBase58(),
           expires_at_ms: 253_402_300_799_999,
           updated_at_ms: 1_700_000_000_000,
@@ -267,9 +260,6 @@ test('IRL claim reads wallet sessions from D1 and preserves legacy collection-gr
     dudeIds: [1, 2, 3],
   });
   assert.deepEqual(await irlClaimTestHooks.resolveLegacyDropIds(context, '1234567890'), [DROP_ID]);
-  const query = requests.at(-1)?.body as { structuredQuery?: { from?: unknown; limit?: unknown } };
-  assert.deepEqual(query.structuredQuery?.from, [{ collectionId: 'boxAssignments', allDescendants: true }]);
-  assert.equal(query.structuredQuery?.limit, 2);
 });
 
 test('IRL claim provider adapters bound responses and retry transient reads once', async () => {

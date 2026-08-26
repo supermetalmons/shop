@@ -14,9 +14,10 @@ control, rate-limit state, and shipment and fulfillment data.
 - `mons-shop-api` serves `api.mons.shop`, including inventory, Solana RPC,
   profiles, delivery, claims, Stripe, ShipStation, notifications, admin routes,
   scheduled reconciliation, and Queue consumers.
-- Ops D1 stores opaque anonymous-session hashes and the irreversible Firebase-auth
-  removal record. The historical Firestore database is frozen behind its last
-  deployed deny-all client rules and is not an application runtime path.
+- Ops D1 stores opaque anonymous-session hashes and the immutable legacy-auth
+  retirement record. The retired Google Cloud project was deletion-requested on
+  2026-08-26 without creating a database archive and is not an application
+  runtime path.
 - The `mons-shop-data` D1 database is authoritative for public pack-status
   summaries and events.
 - The `mons-shop-ops` D1 database stores profiles, encrypted saved addresses,
@@ -73,21 +74,19 @@ dry run. `check` is the full repository gate, including API and runtime tests,
 dead-code checks, on-chain tests, generated Worker types, Worker startup
 validation, and both production bundles.
 
-## Anonymous Auth and Firestore
+## Anonymous Auth and legacy-provider retirement
 
 The frontend creates fresh anonymous identities through `mons-shop-api`. The
 opaque credential stays in an HttpOnly, host-only cookie; local storage contains
 only non-secret subject and expiry metadata. Authenticated browser requests use
 the frontend Worker's same-origin `/api/*` gateway and a fixed CSRF header.
 
-Firebase ID tokens are not accepted. The completed removal is recorded
-irreversibly in Ops D1, and arbitrary bearer tokens fail closed without a Google
-certificate lookup. The historical Firestore database remains protected by its
-last deployed deny-all client rules. This repository does not manage or deploy
-Firebase resources, and application runtime code must not add Firestore queries.
-Google Cloud project administrators own that frozen policy and must verify the
-deny-all rules after any project, IAM, or Firestore configuration change. If the
-policy cannot be maintained, archive and decommission the historical database.
+Legacy provider ID tokens are not accepted. The completed removal is recorded
+irreversibly in Ops D1, and arbitrary bearer tokens fail closed without an
+external certificate lookup. No database archive was created before the Google
+Cloud project entered `DELETE_REQUESTED`; its recorded recovery deadline is
+2026-09-25. This repository does not manage or deploy resources in that project,
+and application runtime code must not add legacy-provider access.
 
 Commerce documents, profiles, saved addresses, wallet sessions, and operational
 controls are D1-only.
@@ -95,8 +94,7 @@ controls are D1-only.
 ### Wallet sessions
 
 The mapping from each anonymous auth subject to its signed Solana wallet is
-D1-only in `mons-shop-ops`; its legacy physical column remains `firebase_uid`
-for storage compatibility. Different-wallet
+D1-only in `mons-shop-ops` and keyed by `auth_subject`. Different-wallet
 rebinding is temporarily blocked while profile reconciliation holds its
 bounded D1 lease, while same-wallet renewal remains available.
 
@@ -184,7 +182,7 @@ to reverse the deployment workflow by hand.
 ### Pack-status D1
 
 The API Worker binds the existing `mons-shop-data` database as `DATA_DB`.
-Customer pack-status endpoints read D1 only; historical Firestore is not a
+Customer pack-status endpoints read D1 only; the retired provider is not a
 fallback. The projection includes supported-drop summaries, immutable event
 history, and cache-generation metadata.
 
@@ -247,7 +245,7 @@ ready-notification control, the reveal-submission source and production count
 baseline, and the profile-storage source. Receipt-transfer
 caller and asset buckets use exact ten-minute fixed windows. Expired buckets
 are cleaned in bounded batches by the existing five-minute Worker schedule;
-there is no Firestore backfill for these ephemeral counters.
+there is no legacy-provider backfill for these ephemeral counters.
 
 Reveal submissions live in Ops D1 after their guarded one-way cutover. Inspect
 or pause that subsystem with:
@@ -258,10 +256,9 @@ npm run reveal-submissions-control -- pause --write
 npm run reveal-submissions-control -- resume --write
 ```
 
-The production Firestore-to-D1 cutover completed on 2026-08-25. The D1 source is
-permanent and the Worker fails closed unless all 14 pre-cutover submissions are
-present. Recover by fixing forward and retain the historical Firestore documents
-without modifying or deleting them.
+The production legacy-database-to-D1 cutover completed on 2026-08-25. The D1
+source is permanent and the Worker fails closed unless all 14 pre-cutover
+submissions are present. Recover by fixing forward.
 
 Profiles and append-only encrypted saved addresses live only in the Ops D1
 database. The Ops integrity check enforces the production cutover count floors
@@ -367,7 +364,7 @@ The retained tools are intentionally narrow:
   authoritative Commerce D1 history with pack-status summaries and is read-only unless its
   explicit D1 write option is supplied.
 - `npm run check:ops-d1` validates the remote operations database, its
-  ready-notification singleton, and the permanent Firebase-auth removal record.
+  ready-notification singleton, and the permanent legacy-auth retirement record.
 - `npm run ready-notifications-control` inspects or changes the D1 notification
   control; every mutation requires `--write`.
 - `npm run test-resend-notification-email` sends a synthetic notification
@@ -381,7 +378,7 @@ The retained tools are intentionally narrow:
   interactive confirmation unless `--yes` is supplied explicitly.
 
 Active operator commands use the configured Cloudflare D1 databases and require
-no Firebase CLI access.
+no legacy-provider CLI access.
 
 ## Address encryption
 

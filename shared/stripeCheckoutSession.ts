@@ -16,14 +16,23 @@ import {
   type StripeCheckoutMode,
 } from './stripeCheckoutCore.ts';
 import { canonicalWalletAddress } from './walletLifecycle.ts';
+import {
+  STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+  STRIPE_CHECKOUT_OWNER_KIND_WALLET,
+  stripeCheckoutAnonymousOwnerId,
+} from './checkoutIdentity.ts';
+
+export {
+  STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+  STRIPE_CHECKOUT_OWNER_KIND_WALLET,
+  stripeCheckoutAnonymousOwnerId,
+} from './checkoutIdentity.ts';
 
 export const STRIPE_OFFCHAIN_FULFILLMENT_MODE = 'admin_variant_receipt';
 export const STRIPE_OFFCHAIN_CURRENCY = 'usd';
 export const STRIPE_OFFCHAIN_CHECKOUT_QUANTITY = 1;
 export const STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY = 15;
 export const STRIPE_CHECKOUT_SHIPPING_COUNTRY = 'US';
-export const STRIPE_CHECKOUT_OWNER_KIND_FIREBASE = 'firebase';
-export const STRIPE_CHECKOUT_OWNER_KIND_WALLET = 'wallet';
 
 const STRIPE_CHECKOUT_DEFAULT_SHIPPING_COUNTRIES = [STRIPE_CHECKOUT_SHIPPING_COUNTRY] as const;
 export const STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES = [
@@ -269,12 +278,6 @@ export function stripeCheckoutShippingCountriesForDropFamily(dropFamily: unknown
     : STRIPE_CHECKOUT_DEFAULT_SHIPPING_COUNTRIES;
 }
 
-export function stripeCheckoutOwnerId(uid: string): string {
-  const normalizedUid = normalizedString(uid);
-  if (!normalizedUid) throw new Error('App-created Stripe checkout is missing uid');
-  return `${STRIPE_CHECKOUT_OWNER_KIND_FIREBASE}:${normalizedUid}`;
-}
-
 export function resolveMintSelectionVariantIndex(selection: MintSelectionConfig | undefined, variantKey: string): number {
   const key = normalizedString(variantKey);
   if (!key) throw new Error('Missing variantKey');
@@ -453,9 +456,9 @@ export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): 
     sessionId: args.sessionId,
     dropId: args.dropId,
     uid: args.uid,
-    owner: wallet || stripeCheckoutOwnerId(args.uid),
-    ownerKind: wallet ? STRIPE_CHECKOUT_OWNER_KIND_WALLET : STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-    ...(wallet ? {} : { firebaseUid: args.uid }),
+    owner: wallet || stripeCheckoutAnonymousOwnerId(args.uid),
+    ownerKind: wallet ? STRIPE_CHECKOUT_OWNER_KIND_WALLET : STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+    ...(wallet ? {} : { authSubject: args.uid }),
     ...(variantKey ? { variantKey } : {}),
     quantity,
     currency: STRIPE_OFFCHAIN_CURRENCY,

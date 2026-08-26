@@ -12,7 +12,7 @@ import { normalizeFulfillmentStatus } from './fulfillmentStatus.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from './fulfillmentSources.ts';
 import { normalizeOptionalFulfillmentTrackingCode } from './fulfillmentTracking.ts';
 import { parseShipStationPackage } from './shipstationPackage.ts';
-import { STRIPE_CHECKOUT_OWNER_KIND_WALLET } from './stripeCheckoutSession.ts';
+import { normalizeStripeCheckoutIdentity } from './checkoutIdentity.ts';
 import { normalizeStripeReceiptClaimCode } from './stripeReceiptClaims.ts';
 
 const ADMIN_IRL_REDEEM_LABEL = 'Redeemed for IRL';
@@ -330,16 +330,18 @@ export function manualReviewCheckoutFromRecord(args: {
   const errorMessage = [lastError?.message, details?.lastError, lastError?.lastError, checkout.manualRefundReviewReason]
     .map(firstErrorLine)
     .find(Boolean);
-  const firebaseUid = optionalString(checkout.firebaseUid) || (
-    checkout.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_WALLET
-      ? undefined
-      : optionalString(checkout.uid)
-  );
+  let authSubject: string | undefined;
+  try {
+    const identity = normalizeStripeCheckoutIdentity(checkout);
+    authSubject = identity.ownerKind === 'anonymous' ? identity.authSubject : undefined;
+  } catch {
+    return null;
+  }
   return {
     dropId: args.dropId,
     sessionId: args.sessionId,
     owner: optionalString(checkout.owner) || '',
-    ...(firebaseUid ? { firebaseUid } : {}),
+    ...(authSubject ? { authSubject } : {}),
     ...(quantity !== null ? { quantity } : {}),
     ...(amountTotal !== undefined ? { amountTotal } : {}),
     ...(currency && /^[a-z]{3}$/.test(currency) ? { currency } : {}),

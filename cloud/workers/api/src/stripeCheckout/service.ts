@@ -23,6 +23,7 @@ import {
   isStripeOffchainFulfillmentSession,
   normalizeStripeCheckoutQuantity,
   resolveMintSelectionVariantIndex,
+  STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
   STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CURRENCY,
@@ -47,20 +48,20 @@ import {
 } from './client.js';
 import type {
   StripeCheckoutManualReviewAddress,
-  StripeCheckoutManualReviewSummary as SharedStripeCheckoutManualReviewSummary,
 } from '../../../../../shared/contracts.js';
 import {
   classifyStripeCheckoutKind,
   stripeCheckoutModeForCluster,
   type StripeCheckoutKind as SharedStripeCheckoutKind,
 } from '../../../../../shared/stripeCheckoutCore.js';
+import { normalizeStripeCheckoutIdentity } from '../../../../../shared/checkoutIdentity.js';
 import { toMillisMaybe } from '../time.js';
 import { StripeCheckoutFulfillmentError } from './errors.js';
 import {
   stripeCheckoutFieldValue,
   type StripeCheckoutDocumentReference,
   type StripeCheckoutDocumentSnapshot,
-  type StripeCheckoutFirestore,
+  type StripeCheckoutStore,
 } from './store.js';
 
 type StripeCheckoutDocumentRecord = {
@@ -68,8 +69,20 @@ type StripeCheckoutDocumentRecord = {
   checkout: any;
 } & StripeCheckoutDocumentData;
 
-export type StripeCheckoutManualReviewSummary =
-  SharedStripeCheckoutManualReviewSummary;
+export type StripeCheckoutManualReviewSummary = {
+  dropId: string;
+  sessionId: string;
+  owner: string;
+  authSubject?: string;
+  quantity?: number;
+  amountTotal?: number;
+  currency?: string;
+  createdAt?: number;
+  failedAt?: number;
+  manualRefundReviewReason?: string;
+  errorMessage?: string;
+  address: StripeCheckoutManualReviewAddress;
+};
 
 export type StripeCheckoutFulfillmentStart =
   | {
@@ -374,7 +387,7 @@ async function recordStripeCheckoutRetryableFulfillmentError(params: {
     return 'recorded';
   }
 
-  return params.checkoutRef.firestore
+  return params.checkoutRef.store
     .runTransaction(async (tx) => {
       const snap = await tx.get(params.checkoutRef);
       const checkout = snap.exists ? (snap.data() as any) : null;
@@ -656,10 +669,15 @@ export function buildStripeCheckoutManualReviewSummary(args: {
   const quantity = manualReviewPositiveInteger(checkout?.quantity ?? sessionSummary?.metadata?.quantity ?? args.session?.metadata?.quantity);
   const amountTotal = manualReviewNonNegativeInteger(args.session?.amount_total ?? sessionSummary?.amount_total);
   const currency = manualReviewCurrency(args.session?.currency ?? sessionSummary?.currency);
-  const owner = normalizedManualReviewString(checkout?.owner);
-  const firebaseUid = normalizedManualReviewString(
-    checkout?.firebaseUid || (checkout?.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_WALLET ? '' : checkout?.uid),
-  );
+  let owner = normalizedManualReviewString(checkout?.owner);
+  let authSubject = '';
+  try {
+    const identity = normalizeStripeCheckoutIdentity(checkout);
+    owner = identity.owner;
+    authSubject = 'authSubject' in identity ? identity.authSubject : '';
+  } catch {
+    authSubject = '';
+  }
   const manualRefundReviewReason = normalizedManualReviewString(checkout?.manualRefundReviewReason);
   const errorMessage = stripeCheckoutManualReviewErrorMessage(checkout);
   const createdAt = toMillisMaybe(checkout?.createdAt);
@@ -669,7 +687,7 @@ export function buildStripeCheckoutManualReviewSummary(args: {
     dropId: args.dropId,
     sessionId: requireStripeCheckoutSessionId(args.sessionId),
     owner,
-    ...(firebaseUid ? { firebaseUid } : {}),
+    ...(authSubject ? { authSubject } : {}),
     ...(quantity ? { quantity } : {}),
     ...(amountTotal !== undefined ? { amountTotal } : {}),
     ...(currency ? { currency } : {}),
@@ -849,7 +867,7 @@ export async function markStripeCheckoutFulfillmentFulfilled(
     return { status: 'fulfilled' };
   }
 
-  return checkoutRef.firestore
+  return checkoutRef.store
     .runTransaction(async (tx) => {
       const checkoutSnap = await tx.get(checkoutRef);
       const checkout = checkoutSnap.exists ? (checkoutSnap.data() as any) : null;
@@ -904,7 +922,7 @@ function readStripeOffchainDeliveryOrderMarker(marker: { get(fieldPath: string):
 }
 
 async function fetchStripeOffchainDeliveryOrderMarker(params: {
-  db: StripeCheckoutFirestore;
+  db: StripeCheckoutStore;
   dropId: string;
   orderHashHex: string;
 }): Promise<StripeOffchainDeliveryOrderMarker | null> {
@@ -913,7 +931,7 @@ async function fetchStripeOffchainDeliveryOrderMarker(params: {
 }
 
 export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends StripeCheckoutPackStatusRuntime = StripeCheckoutPackStatusRuntime>(params: {
-  db: StripeCheckoutFirestore;
+  db: StripeCheckoutStore;
   dropRuntime?: Runtime;
   order: StripeOffchainDeliveryOrderDraft;
   checkoutRef: StripeCheckoutDocumentReference;
@@ -1008,8 +1026,8 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
             dropId,
             deliveryId: candidate,
             owner: order.owner,
-            ...(order.ownerKind ? { ownerKind: order.ownerKind } : {}),
-            ...(order.firebaseUid ? { firebaseUid: order.firebaseUid } : {}),
+            ownerKind: order.ownerKind,
+            ...(order.authSubject ? { authSubject: order.authSubject } : {}),
             receiptOwner: order.receiptOwner,
             boxId: claim.boxId,
             ...(order.variantKey ? { variantKey: order.variantKey } : {}),
@@ -1098,7 +1116,7 @@ async function fulfillStripeCheckoutSession<
   Runtime extends StripeCheckoutDropRuntime,
   Config extends StripeCheckoutOnchainConfig,
 >(params: {
-  db: StripeCheckoutFirestore;
+  db: StripeCheckoutStore;
   session: Stripe.Checkout.Session;
   stripe: Stripe;
   checkout: StripeCheckoutDocumentRecord;
@@ -1332,9 +1350,12 @@ async function fulfillStripeCheckoutSession<
   }
   const metadataId = record.firstMetadataId;
   const metadataIds = Array.from({ length: checkout.quantity }, (_, index) => metadataId + index);
-  const walletOwner = checkout.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_WALLET || !deps.resolveWalletOwner
+  const authSubject = checkout.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS
+    ? checkout.authSubject
+    : undefined;
+  const walletOwner = !authSubject || !deps.resolveWalletOwner
     ? null
-    : await deps.resolveWalletOwner(checkout.firebaseUid || checkout.uid);
+    : await deps.resolveWalletOwner(authSubject);
 
   const order = await createOrGetStripeOffchainDeliveryOrder({
     db,
@@ -1344,7 +1365,7 @@ async function fulfillStripeCheckoutSession<
       orderHashHex,
       owner: walletOwner || checkout.owner,
       ownerKind: walletOwner ? STRIPE_CHECKOUT_OWNER_KIND_WALLET : checkout.ownerKind,
-      ...(checkout.firebaseUid ? { firebaseUid: checkout.firebaseUid } : {}),
+      ...(authSubject ? { authSubject } : {}),
       receiptOwner: receiptOwner.toBase58(),
       metadataId,
       metadataIds,
@@ -1383,7 +1404,7 @@ export async function startStripeCheckoutFulfillmentDocument(params: {
   const { dropId, sessionId, checkoutRef } = params;
   const nowMs = Math.floor(Number(params.nowMs ?? Date.now()));
   const processingAttemptId = createStripeCheckoutProcessingAttemptId(nowMs);
-  return checkoutRef.firestore.runTransaction(async (tx) => {
+  return checkoutRef.store.runTransaction(async (tx) => {
     const snap = await tx.get(checkoutRef);
     if (!snap.exists) return { started: false, reason: 'not_pending' };
     const checkoutData = snap.data() as any;
@@ -1438,7 +1459,7 @@ export async function releaseStripeCheckoutFulfillmentForRetry(
     processingAttemptId: string;
   },
 ): Promise<StripeCheckoutFulfillmentRetryReleaseResult> {
-  return checkoutRef.firestore.runTransaction(async (tx) => {
+  return checkoutRef.store.runTransaction(async (tx) => {
     const checkoutSnap = await tx.get(checkoutRef);
     const checkout = checkoutSnap.exists ? (checkoutSnap.data() as any) : null;
     const writeStatus = stripeCheckoutProcessingAttemptWriteStatus(checkout, params.processingAttemptId);
@@ -1472,7 +1493,7 @@ export async function markStripeCheckoutFulfillmentFailed(
   const identityUpdate = params.sessionIdentity
     ? { dropId: params.sessionIdentity.dropId, sessionId: params.sessionIdentity.sessionId }
     : {};
-  return checkoutRef.firestore.runTransaction(async (tx) => {
+  return checkoutRef.store.runTransaction(async (tx) => {
     const checkoutSnap = await tx.get(checkoutRef);
     const checkout = checkoutSnap.exists ? (checkoutSnap.data() as any) : null;
     const writeStatus = stripeCheckoutProcessingAttemptWriteStatus(checkout, params.processingAttemptId);
@@ -1506,7 +1527,7 @@ export async function processStripeCheckoutFulfillmentDocument<
   Runtime extends StripeCheckoutDropRuntime,
   Config extends StripeCheckoutOnchainConfig,
 >(params: {
-  db: StripeCheckoutFirestore;
+  db: StripeCheckoutStore;
   dropId: string;
   sessionId: string;
   checkoutRef: StripeCheckoutDocumentReference;

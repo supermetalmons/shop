@@ -18,7 +18,7 @@ import {
   BOX_MINTER_CONFIG_DISCRIMINATOR,
 } from '../../../../shared/boxMinterConfigCodec.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
-import { FirestoreWriteConflict, commerceDocumentRequest } from '../src/firestoreRest.ts';
+import { CommerceWriteConflict, D1CommerceRepository } from '../src/commerceRepository.ts';
 import {
   DELIVERY_PREPARE_PATH,
   deliveryPrepareTestHooks,
@@ -157,19 +157,11 @@ function env(overrides: Record<string, string> = {}) {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    requestCommerceDocument: commerceDocumentRequest,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadWalletSession: async () => OWNER.publicKey.toBase58(),
     loadAddress: async () => ({
       decoded: { id: ADDRESS_ID, country: 'US', countryCode: 'US', encrypted: 'cipher' },
-      rawFields: {
-        id: { stringValue: ADDRESS_ID },
-        country: { stringValue: 'US' },
-        countryCode: { stringValue: 'US' },
-        encrypted: { stringValue: 'cipher' },
-        createdAt: { timestampValue: '2026-08-20T00:00:00.000Z' },
-      },
     }),
     fetchAsset: async () => asset(),
     loadOnchainState: async () => ({
@@ -254,10 +246,8 @@ test('delivery preparation schedules recovery from the document reservation time
 test('delivery preparation preserves raw address fields in the Firestore create', async () => {
   const harness = createCommerceD1Harness();
   const updateTime = await deliveryPrepareTestHooks.createDeliveryOrder({
-    requestCommerceDocument: commerceDocumentRequest,
-    commerceDb: harness.db,
     nowMs: NOW_MS,
-    providerFetch: async () => assert.fail('D1 delivery creation reached a network provider'),
+    repository: new D1CommerceRepository(harness.db),
     signal: new AbortController().signal,
   }, {
     path: `drops/${DROP_ID}/deliveryOrders/7`,
@@ -265,11 +255,7 @@ test('delivery preparation preserves raw address fields in the Firestore create'
     owner: OWNER.publicKey.toBase58(),
     addressId: ADDRESS_ID,
     address: {
-      decoded: { countryCode: 'US' },
-      rawFields: {
-        createdAt: { timestampValue: '2026-08-19T00:00:00.000Z' },
-        encrypted: { stringValue: 'cipher' },
-      },
+      decoded: { countryCode: 'US', createdAt: Date.parse('2026-08-19T00:00:00.000Z'), encrypted: 'cipher' },
     },
     addressCountry: 'US',
     items: [{ assetId: ASSET.toBase58(), kind: 'box', refId: 7 }],
@@ -284,9 +270,9 @@ test('delivery preparation preserves raw address fields in the Firestore create'
     WHERE document_path = ?`).get(`drops/${DROP_ID}/deliveryOrders/7`) as { fields_json: string };
   const fields = JSON.parse(row.fields_json) as Record<string, unknown>;
   const snapshot = ((fields.addressSnapshot as Record<string, unknown>).mapValue as Record<string, unknown>).fields as Record<string, unknown>;
-  assert.deepEqual(snapshot.createdAt, { timestampValue: '2026-08-19T00:00:00.000Z' });
+  assert.deepEqual(snapshot.createdAt, { timestampValue: '2026-08-19T00:00:00.000000000Z' });
   assert.deepEqual(snapshot.countryCode, { stringValue: 'US' });
-  assert.deepEqual(fields.createdAt, { timestampValue: new Date(NOW_MS).toISOString() });
+  assert.deepEqual(fields.createdAt, { timestampValue: '2023-11-14T22:13:20.000000000Z' });
 });
 
 test('delivery preparation reconciles an applied D1 commit when its result is lost', async () => {
@@ -302,17 +288,15 @@ test('delivery preparation reconciles an applied D1 commit when its result is lo
     },
   } as D1Database;
   const updateTime = await deliveryPrepareTestHooks.createDeliveryOrder({
-    requestCommerceDocument: commerceDocumentRequest,
-    commerceDb: db,
     nowMs: NOW_MS,
-    providerFetch: async () => assert.fail('D1 delivery reconciliation reached a network provider'),
+    repository: new D1CommerceRepository(db),
     signal: new AbortController().signal,
   }, {
     path: `drops/${DROP_ID}/deliveryOrders/7`,
     dropId: DROP_ID,
     owner: OWNER.publicKey.toBase58(),
     addressId: ADDRESS_ID,
-    address: { decoded: { countryCode: 'US' }, rawFields: {} },
+    address: { decoded: { countryCode: 'US' } },
     addressCountry: 'US',
     items: [{ assetId: ASSET.toBase58(), kind: 'box', refId: 7 }],
     deliveryId: 7,
@@ -332,7 +316,7 @@ test('delivery preparation retries Firestore collisions with a fresh delivery id
     candidateId: () => candidates.shift()!,
     createDeliveryOrder: async (_context: unknown, input: { deliveryId: number }) => {
       created.push(input.deliveryId);
-      if (input.deliveryId === 7) throw new FirestoreWriteConflict();
+      if (input.deliveryId === 7) throw new CommerceWriteConflict();
       return '2026-08-20T00:00:01.000Z';
     },
   }));

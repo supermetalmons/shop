@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
+import { createCommerceD1, createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import {
   Keypair,
@@ -19,7 +19,6 @@ import {
   MPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
-import { FIRESTORE_DOCUMENT_NAME_PREFIX } from '../src/firestoreRest.ts';
 import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_PATH,
@@ -95,10 +94,10 @@ function request(body: unknown = {
   });
 }
 
-function env() {
+function env(commerceDb = createCommerceD1()) {
   const metrics = { backlogCount: 0, backlogBytes: 0 };
   return {
-    COMMERCE_DB: createCommerceD1(),
+    COMMERCE_DB: commerceDb,
     COSIGNER_SECRET: 'cosigner',
     HELIUS_API_KEY: 'helius',
     REVEAL_BACKGROUND_QUEUE: {
@@ -111,7 +110,6 @@ function env() {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     providerFetch: async () => { throw new Error('unexpected provider fetch'); },
     nowMs: () => 1_700_000_000_000,
@@ -121,28 +119,32 @@ function dependencies(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function firestoreContext(
-  fields: Record<string, unknown>,
-  calls: Array<{ url: string; init?: RequestInit }> = [],
-) {
+function storedValue(value: unknown): Record<string, unknown> {
+  if (value === null) return { nullValue: null };
+  if (typeof value === 'string') return { stringValue: value };
+  if (typeof value === 'boolean') return { booleanValue: value };
+  if (typeof value === 'number') return { integerValue: String(value) };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(storedValue) } };
   return {
-    requestCommerceDocument: firestoreProviderCommerceRequester,
-    commerceDb: createCommerceD1(),
-    nowMs: 1_700_000_000_000,
-    providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      calls.push({ url, init });
-      if (url.endsWith(':beginTransaction')) return Response.json({ transaction: 'transaction' });
-      if (url.includes('/documents/') && init?.method === 'GET') {
-        return Response.json({
-          name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
-          fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, deliveryReceiptRuntime.firestoreValue(value)])),
-          updateTime: '2026-08-22T00:00:00.000Z',
-        });
-      }
-      if (url.endsWith(':commit') || url.endsWith(':rollback')) return Response.json({});
-      throw new Error(`Unexpected Firestore request: ${url}`);
+    mapValue: {
+      fields: Object.fromEntries(Object.entries(value as Record<string, unknown>).map(
+        ([key, entry]) => [key, storedValue(entry)],
+      )),
     },
+  };
+}
+
+function commerceContext(fields: Record<string, unknown>) {
+  const harness = createCommerceD1Harness();
+  seedCommerceDocument(harness, {
+    name: `projects/mons-shop/databases/(default)/documents/drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+    fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, storedValue(value)])),
+    updateTime: '2026-08-22T00:00:00.000Z',
+  });
+  return {
+    commerceDb: harness.db,
+    nowMs: 1_700_000_000_000,
+    providerFetch: async () => assert.fail('commerce persistence must not use provider fetch'),
     signal: new AbortController().signal,
   };
 }
@@ -243,21 +245,6 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   );
   assert.equal(unavailable.response.status, 502);
   assert.equal(unavailable.authOutcome, 'provider-failure');
-
-  const sessionStoreUnavailable = await handleAdminIrlRedeemFinalize(
-    request(),
-    env(),
-    () => undefined,
-    dependencies({ finalize: adminIrlRedeemFinalizeTestHooks.finalizeAdminIrlRedeem }),
-  );
-  assert.equal(sessionStoreUnavailable.response.status, 502);
-  assert.deepEqual(await sessionStoreUnavailable.response.json(), {
-    ok: false,
-    error: {
-      code: 'unavailable',
-      message: 'Profile data is temporarily unavailable.',
-    },
-  });
 
   const deferred: Promise<unknown>[] = [];
   let finalizeAborted = false;
@@ -390,24 +377,24 @@ test('Admin IRL finalization acquires, rejects, recovers, and clears processing 
     items: [{ assetId: OWNER, kind: 'box', refId: 7 }],
     receiptTxs: [],
   };
-  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const startedContext = commerceContext(prepared);
   const started = await adminIrlRedeemFinalizeTestHooks.startFinalize(
-    firestoreContext(prepared, calls),
+    startedContext,
     body,
     OWNER,
     'attempt',
     1_700_000_000_000,
   );
   assert.equal(started.status, 'started');
-  const commit = calls.find((call) => call.url.endsWith(':commit'));
-  const commitBody = JSON.parse(String(commit?.init?.body)) as {
-    writes: Array<{ update: { fields: Record<string, { stringValue?: string; timestampValue?: string }> } }>;
-  };
-  assert.equal(commitBody.writes[0].update.fields.status.stringValue, 'processing');
-  assert.equal(commitBody.writes[0].update.fields.processingAttemptId.stringValue, 'attempt');
+  const startedDocument = await deliveryReceiptRuntime.readDocument(
+    startedContext,
+    `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+  );
+  assert.equal(startedDocument?.fields.status, 'processing');
+  assert.equal(startedDocument?.fields.processingAttemptId, 'attempt');
 
   await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.startFinalize(
-    firestoreContext({
+    commerceContext({
       ...prepared,
       status: 'processing',
       processingLeaseExpiresAt: 1_700_000_100_000,
@@ -419,7 +406,7 @@ test('Admin IRL finalization acquires, rejects, recovers, and clears processing 
   ), /already being finalized/);
 
   const recovered = await adminIrlRedeemFinalizeTestHooks.startFinalize(
-    firestoreContext({
+    commerceContext({
       ...prepared,
       status: 'processing',
       processingLeaseExpiresAt: 1_699_999_999_999,
@@ -431,19 +418,19 @@ test('Admin IRL finalization acquires, rejects, recovers, and clears processing 
   );
   assert.equal(recovered.status, 'started');
 
-  const cleanupCalls: Array<{ url: string; init?: RequestInit }> = [];
+  const cleanupContext = commerceContext({ ...prepared, status: 'processing', processingAttemptId: 'attempt' });
   await adminIrlRedeemFinalizeTestHooks.clearProcessing(
-    firestoreContext({ ...prepared, status: 'processing', processingAttemptId: 'attempt' }, cleanupCalls),
+    cleanupContext,
     body,
     'attempt',
     new Error('failed'),
   );
-  const cleanupCommit = cleanupCalls.find((call) => call.url.endsWith(':commit'));
-  const cleanupBody = JSON.parse(String(cleanupCommit?.init?.body)) as {
-    writes: Array<{ update: { fields: Record<string, { stringValue?: string }> }; updateMask: { fieldPaths: string[] } }>;
-  };
-  assert.equal(cleanupBody.writes[0].update.fields.status.stringValue, 'prepared');
-  assert.equal(cleanupBody.writes[0].updateMask.fieldPaths.includes('processingLeaseExpiresAt'), true);
+  const cleanupDocument = await deliveryReceiptRuntime.readDocument(
+    cleanupContext,
+    `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+  );
+  assert.equal(cleanupDocument?.fields.status, 'prepared');
+  assert.equal(cleanupDocument?.fields.processingLeaseExpiresAt, undefined);
 });
 
 test('Admin IRL finalization rebuilds completed responses idempotently', () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
+import { createCommerceD1, createCommerceD1Harness } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import {
   ComputeBudgetProgram,
@@ -23,6 +23,7 @@ import {
   adminIrlRedeemPrepareTestHooks,
   handleAdminIrlRedeemPrepare,
 } from '../src/adminIrlRedeemPrepare.ts';
+import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 
 const OWNER = new PublicKey('8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM');
 const ADMIN = Keypair.generate().publicKey;
@@ -126,7 +127,6 @@ function env(overrides: Record<string, string> = {}) {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER.toBase58() }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadWalletSession: async () => OWNER.toBase58(),
@@ -318,12 +318,16 @@ test('Admin IRL preparation surfaces provider deadlines and conditional-create c
   }));
   assert.equal(timeout.response.status, 504);
 
+  const collisionHarness = createCommerceD1Harness();
+  const collisionRepository = new D1CommerceRepository(collisionHarness.db);
+  await collisionRepository.run(1_699_999_999_999, async (unit) => unit.create(
+    commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
+    { status: 'prepared' },
+  ));
   await assert.rejects(
     adminIrlRedeemPrepareTestHooks.createRequest({
-      requestCommerceDocument: firestoreProviderCommerceRequester,
-      commerceDb: createCommerceD1(),
       nowMs: 1_700_000_000_000,
-      providerFetch: async () => Response.json({ error: { status: 'ALREADY_EXISTS' } }, { status: 409 }),
+      repository: collisionRepository,
       signal: new AbortController().signal,
     }, {
       adminWallet: ADMIN.toBase58(),
@@ -338,17 +342,12 @@ test('Admin IRL preparation surfaces provider deadlines and conditional-create c
   );
 });
 
-test('Admin IRL Firestore adapter conditionally creates the exact prepared request schema', async () => {
-  let commit: Record<string, unknown> | undefined;
+test('Admin IRL repository conditionally creates the exact prepared request schema', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
   await adminIrlRedeemPrepareTestHooks.createRequest({
-    requestCommerceDocument: firestoreProviderCommerceRequester,
-    commerceDb: createCommerceD1(),
     nowMs: 1_700_000_000_000,
-    providerFetch: async (input, init) => {
-      assert.match(String(input), /documents:commit$/);
-      commit = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      return Response.json({ writeResults: [{ updateTime: '2026-08-21T00:00:00.000Z' }] });
-    },
+    repository,
     signal: new AbortController().signal,
   }, {
     adminWallet: ADMIN.toBase58(),
@@ -360,30 +359,19 @@ test('Admin IRL Firestore adapter conditionally creates the exact prepared reque
     requestId: REQUEST_ID,
     targetKind: 'pack',
   });
-  const writes = commit?.writes;
-  assert.ok(Array.isArray(writes));
-  const write = writes[0] as Record<string, unknown>;
-  assert.deepEqual(write.currentDocument, { exists: false });
-  assert.deepEqual(write.updateTransforms, [
-    { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
-    { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
-  ]);
-  const update = write.update as { name: string; fields: Record<string, unknown> };
-  assert.match(update.name, new RegExp(`drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}$`));
-  assert.deepEqual(update.fields, {
-    dropId: { stringValue: DROP_ID },
-    status: { stringValue: 'prepared' },
-    owner: { stringValue: OWNER.toBase58() },
-    targetKind: { stringValue: 'pack' },
-    adminWallet: { stringValue: ADMIN.toBase58() },
-    itemIds: { arrayValue: { values: [{ stringValue: PACK.toBase58() }] } },
-    items: { arrayValue: { values: [{ mapValue: { fields: {
-      assetId: { stringValue: PACK.toBase58() },
-      kind: { stringValue: 'box' },
-      refId: { integerValue: '7' },
-    } } }] } },
-    preparedExpiresAt: { timestampValue: '2023-11-21T22:13:20.000Z' },
-    prepareAttemptId: { stringValue: ATTEMPT_ID },
+  const record = await repository.get(commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
+  assert.deepEqual(record?.data, {
+    dropId: DROP_ID,
+    status: 'prepared',
+    owner: OWNER.toBase58(),
+    targetKind: 'pack',
+    adminWallet: ADMIN.toBase58(),
+    itemIds: [PACK.toBase58()],
+    items: [{ assetId: PACK.toBase58(), kind: 'box', refId: 7 }],
+    preparedExpiresAt: 1_700_604_800_000,
+    prepareAttemptId: ATTEMPT_ID,
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_000_000,
   });
 });
 
@@ -439,7 +427,7 @@ test('Admin IRL pack serialization rejects transactions above the Solana packet 
 
 test('Admin IRL helpers generate compatible ids and reject unsupported drop families', () => {
   for (let index = 0; index < 20; index += 1) {
-    assert.match(adminIrlRedeemPrepareTestHooks.firestoreAutoId(), /^[A-Za-z0-9]{20}$/);
+    assert.match(adminIrlRedeemPrepareTestHooks.commerceAutoId(), /^[A-Za-z0-9]{20}$/);
   }
   const unsupported = {
     ...DROP,

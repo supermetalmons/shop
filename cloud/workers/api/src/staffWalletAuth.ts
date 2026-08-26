@@ -8,7 +8,7 @@ import {
   parseSolanaSignInMessage,
   validateSolanaSignInMessage,
 } from '../../../../shared/walletLifecycle.js';
-import { readBoundedText } from './firestoreRest.js';
+import { readBoundedText } from './boundedResponse.js';
 import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
 
 export const STAFF_AUTH_CHALLENGE_PATH = '/staff/auth/challenge';

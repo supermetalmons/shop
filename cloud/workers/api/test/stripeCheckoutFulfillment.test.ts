@@ -96,7 +96,7 @@ test('Stripe fulfillment resolves late checkout ownership through Ops D1', async
         },
         async first() {
           return {
-            firebase_uid: 'legacy-uid',
+            auth_subject: 'anonymous-subject',
             wallet,
             expires_at_ms: 253_402_300_799_999,
             updated_at_ms: 1,
@@ -113,10 +113,10 @@ test('Stripe fulfillment resolves late checkout ownership through Ops D1', async
     {} as any,
     new AbortController().signal,
   );
-  assert.equal(await dependencies.resolveWalletOwner?.('legacy-uid'), wallet);
+  assert.equal(await dependencies.resolveWalletOwner?.('anonymous-subject'), wallet);
 });
 
-test('Stripe fulfillment writes pack-status events to required D1 without Firestore access', async () => {
+test('Stripe fulfillment writes pack-status events to required D1 without checkout-store access', async () => {
   let query = '';
   let bindings: unknown[] = [];
   let runs = 0;
@@ -137,7 +137,7 @@ test('Stripe fulfillment writes pack-status events to required D1 without Firest
   } as unknown as D1Database;
   const dependencies = stripeCheckoutFulfillmentTestHooks.flowDependencies(
     { ADDRESS_DECRYPTION_SECRET: '', DATA_DB: dataDb } as any,
-    { doc: () => assert.fail('pack-status projection must not access Firestore') } as any,
+    { doc: () => assert.fail('pack-status projection must not access the checkout store') } as any,
     new AbortController().signal,
   );
   assert.ok(dependencies.countPackStatus);

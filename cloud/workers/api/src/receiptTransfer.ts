@@ -66,12 +66,11 @@ import {
 } from './receiptTransferRateLimit.js';
 import { RequestIdentityError, requestIdentitySubject, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
-  ProfileReadError,
   cancelResponseBody,
-  isRecord,
   readBoundedJson,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
 
 export const RECEIPT_TRANSFER_PREPARE_PATH = '/receipts/transfer/prepare';
 

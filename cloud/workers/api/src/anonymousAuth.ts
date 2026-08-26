@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { readBoundedText } from './firestoreRest.js';
+import { readBoundedText } from './boundedResponse.js';
 import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
 
 const ANONYMOUS_AUTH_SESSION_PATH = '/auth/anonymous/session';

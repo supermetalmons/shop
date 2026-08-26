@@ -1,5 +1,4 @@
 import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.js';
-import { stripeCheckoutReconciliationQuery } from '../../../../shared/stripeCheckoutReconciliation.js';
 import {
   STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   createStripeCheckoutFulfillmentJobV1,
@@ -7,14 +6,10 @@ import {
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import { stripeCheckoutFieldValue } from './stripeCheckout/store.js';
 import {
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  ProfileReadError,
-  commerceDocumentRequest,
-  decodeFirestoreFields,
-  isRecord,
-} from './firestoreRest.js';
-import { createWorkerStripeCheckoutStore } from './stripeCheckoutFirestore.js';
+  D1CommerceRepository,
+  type CommerceDocumentRecord,
+} from './commerceRepository.js';
+import { createStripeCheckoutStore } from './stripeCheckout/store.js';
 
 const REQUEUE_AFTER_MS = 15 * 60 * 1000;
 const MAX_REQUEUES_PER_RUN = 100;
@@ -47,24 +42,18 @@ function reconciliationError(error: unknown): Record<string, unknown> {
     : { name: 'UnknownError' };
 }
 
-function parseRequeueCandidates(value: unknown, cutoffMs: number): RequeueCandidate[] {
-  if (!Array.isArray(value)) {
-    throw new ProfileReadError('unavailable', 502, 'Stripe fulfillment reconciliation is temporarily unavailable.');
-  }
+function parseRequeueCandidates(
+  value: readonly CommerceDocumentRecord[],
+  cutoffMs: number,
+): RequeueCandidate[] {
   const candidates: RequeueCandidate[] = [];
-  for (const entry of value) {
-    const document = isRecord(entry) && isRecord(entry.document) ? entry.document : null;
-    if (!document || typeof document.name !== 'string') continue;
-    const relativePath = document.name.startsWith(FIRESTORE_DOCUMENT_NAME_PREFIX)
-      ? document.name.slice(FIRESTORE_DOCUMENT_NAME_PREFIX.length)
-      : '';
-    const pathMatch = /^drops\/([^/]+)\/stripeCheckouts\/([^/]+)$/.exec(relativePath);
-    if (!pathMatch) continue;
-    const [, dropId, sessionId] = pathMatch;
-    const fields = decodeFirestoreFields(document.fields);
-    if (!fields) {
-      throw new ProfileReadError('unavailable', 502, 'Stripe fulfillment reconciliation is temporarily unavailable.');
-    }
+  const ordered = [...value].sort((left, right) =>
+    Number(left.data.updatedAt) - Number(right.data.updatedAt) || left.key.path.localeCompare(right.key.path));
+  for (const document of ordered) {
+    if (document.key.kind !== 'stripe_checkout' || !document.key.dropId) continue;
+    const dropId = document.key.dropId;
+    const sessionId = document.key.documentId;
+    const fields = document.data;
     if (
       (
         fields.status !== STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING &&
@@ -85,7 +74,7 @@ function parseRequeueCandidates(value: unknown, cutoffMs: number): RequeueCandid
         : 'checkout.session.completed',
     });
   }
-  return candidates;
+  return candidates.slice(0, MAX_REQUEUES_PER_RUN);
 }
 
 async function loadCandidates(
@@ -94,13 +83,19 @@ async function loadCandidates(
   signal: AbortSignal,
 ): Promise<RequeueCandidate[]> {
   signal.throwIfAborted();
-  const value = await commerceDocumentRequest({
-    commerceDb: env.COMMERCE_DB,
-    body: JSON.stringify(stripeCheckoutReconciliationQuery(cutoffMs, MAX_REQUEUES_PER_RUN)),
-    method: 'POST',
-    nowMs: Date.now(),
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+  const repository = new D1CommerceRepository(env.COMMERCE_DB);
+  const value = await repository.query({
+    kind: 'stripe_checkout',
+    filters: [
+      { field: 'fulfillmentProcessor', op: 'equal', value: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR },
+      {
+        field: 'status',
+        op: 'in',
+        value: [STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING, STRIPE_CHECKOUT_STATUS.PROCESSING],
+      },
+    ],
   });
+  signal.throwIfAborted();
   return parseRequeueCandidates(value, cutoffMs);
 }
 
@@ -115,7 +110,7 @@ export async function reconcileStaleStripeFulfillments(
   const candidates = await (overrides.loadCandidates
     ? overrides.loadCandidates(nowMs - REQUEUE_AFTER_MS, signal)
     : loadCandidates(env, nowMs - REQUEUE_AFTER_MS, signal));
-  const store = createWorkerStripeCheckoutStore({
+  const store = createStripeCheckoutStore({
     commerceDb: env.COMMERCE_DB,
     signal,
   });
@@ -194,5 +189,4 @@ export async function reconcileStaleStripeFulfillments(
 export const stripeCheckoutReconciliationTestHooks = {
   parseRequeueCandidates,
   requeueAfterMs: REQUEUE_AFTER_MS,
-  stripeCheckoutReconciliationQuery,
 };

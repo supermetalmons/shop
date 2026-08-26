@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
+import { createCommerceD1 } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import {
@@ -13,6 +13,14 @@ import {
   WalletSessionD1BusyError,
   WalletSessionD1SupersededError,
 } from '../src/walletSessionD1.ts';
+import { decodeFirestoreFields } from '../src/firestoreContract.ts';
+import {
+  CommerceWriteConflict,
+  commerceKeys,
+  type CommerceDocumentRecord,
+  type CommerceQuery,
+  type CommerceUpdateValue,
+} from '../src/commerceRepository.ts';
 
 const UID = 'firebase-lifecycle-user';
 const NOW_MS = Date.parse('2026-08-20T12:00:00.000Z');
@@ -170,6 +178,69 @@ class FirestoreHarness {
   }
 }
 
+function commerceRepository(harness: FirestoreHarness) {
+  const record = (entry: StoredDocument): CommerceDocumentRecord => {
+    const path = entry.name.slice(DOCUMENT_PREFIX.length);
+    const match = path.match(/^drops\/([^/]+)\/deliveryOrders\/([^/]+)$/);
+    const key = match
+      ? commerceKeys.deliveryOrder(match[1], match[2])
+      : { ...commerceKeys.deliveryOrder('invalid', 'invalid'), path };
+    return {
+      createTime: entry.updateTime,
+      data: (decodeFirestoreFields(entry.fields) || {}) as never,
+      key,
+      processedAt: null,
+      updateTime: entry.updateTime,
+      version: 1,
+    };
+  };
+  const matches = (entry: CommerceDocumentRecord, query: CommerceQuery) =>
+    (query.filters || []).every((filter) => {
+      const value = entry.data[filter.field];
+      return filter.op === 'equal'
+        ? value === filter.value
+        : Array.isArray(filter.value) && filter.value.includes(value as never);
+    });
+  return {
+    query: async (query: CommerceQuery) => harness.orders.map(record).filter((entry) => matches(entry, query)),
+    run: async <T>(_nowMs: number, operation: (unit: unknown) => Promise<T>) => {
+      const staged = new Map<string, Record<string, CommerceUpdateValue>>();
+      const unit = {
+        query: async (query: CommerceQuery) => harness.orders.map(record)
+          .filter((entry) => matches(entry, query)).slice(0, query.limit),
+        update: async (key: { path: string }, updates: Record<string, CommerceUpdateValue>) => {
+          staged.set(key.path, updates);
+        },
+      };
+      const result = await operation(unit as never);
+      if (harness.transactionConflicts > 0) {
+        harness.transactionConflicts -= 1;
+        throw new CommerceWriteConflict();
+      }
+      for (const [path, updates] of staged) {
+        const index = harness.orders.findIndex((entry) => entry.name === `${DOCUMENT_PREFIX}${path}`);
+        if (index < 0) throw new Error('missing order');
+        const fields = decodeFirestoreFields(harness.orders[index].fields) || {};
+        for (const [fieldPath, update] of Object.entries(updates)) {
+          if (update && typeof update === 'object' && 'kind' in update) {
+            const kind = (update as { kind?: unknown }).kind;
+            if (kind === 'server-timestamp') fields[fieldPath] = NOW_MS;
+            else if (kind === 'delete-field') delete fields[fieldPath];
+            continue;
+          }
+          fields[fieldPath] = update;
+        }
+        harness.orders[index] = document(path, fields, harness.version++);
+      }
+      if (staged.size && harness.rebindAfterMergeCommits > 0) {
+        harness.rebindAfterMergeCommits -= 1;
+        harness.session = document(`authSessions/${UID}`, { wallet: OTHER }, harness.version++);
+      }
+      return result;
+    },
+  };
+}
+
 function dependencies(
   harness: FirestoreHarness,
   timeoutMs = 500,
@@ -177,7 +248,7 @@ function dependencies(
 ): Parameters<typeof handleProfileLifecycleRequest>[3] {
   const d1Session = () => harness.session
     ? {
-        firebaseUid: UID,
+        authSubject: UID,
         wallet: String(decodedFields(harness.session).wallet || ''),
         expiresAtMs: 253_402_300_799_999,
         updatedAtMs: NOW_MS,
@@ -187,6 +258,7 @@ function dependencies(
       }
     : null;
   return {
+    createCommerceRepository: () => commerceRepository(harness) as never,
     acquireWalletSessionReconcileLease: async () => {
       const session = d1Session();
       return session ? {
@@ -202,7 +274,6 @@ function dependencies(
     loadD1WalletSession: async () => d1Session(),
     nowMs: () => NOW_MS,
     providerFetch: harness.fetch.bind(harness),
-    requestCommerceDocument: firestoreProviderCommerceRequester,
     releaseWalletSessionReconcileLease: async () => undefined,
     resolveD1WalletSession: async () => {
       const session = d1Session();
@@ -327,7 +398,7 @@ test('D1 wallet-session mode persists without Firestore session access', async (
       establishD1WalletSession: async (args) => {
         establishedWallet = args.wallet;
         return {
-          firebaseUid: args.firebaseUid,
+          authSubject: args.authSubject,
           wallet: args.wallet,
           expiresAtMs: 253_402_300_799_999,
           updatedAtMs: args.nowMs,
@@ -381,6 +452,8 @@ test('Solana auth preserves D1 superseded and busy response contracts', async ()
 test('D1 reconciliation holds and releases its lease without reading Firestore sessions', async () => {
   const harness = new FirestoreHarness();
   harness.orders.push(document('drops/drop/deliveryOrders/1', {
+    firebaseUid: UID,
+    mergedFirebaseUid: UID,
     owner: `firebase:${UID}`,
     status: 'ready_to_ship',
   }, 3));
@@ -404,6 +477,14 @@ test('D1 reconciliation holds and releases its lease without reading Firestore s
   assert.deepEqual(await result.response.json(), { mergedStripeDeliveryOrders: 1 });
   assert.equal(harness.sessionReads, 0);
   assert.equal(released, true);
+  assert.deepEqual(decodedFields(harness.orders[0]), {
+    mergedAuthSubject: UID,
+    owner: OWNER,
+    ownerKind: 'wallet',
+    ownerMergedAt: NOW_MS,
+    previousOwner: `anonymous:${UID}`,
+    status: 'ready_to_ship',
+  });
 });
 
 test('staff reconciliation uses its wallet directly and skips legacy Firebase order merging', async () => {
@@ -504,7 +585,7 @@ test('profile reconciliation rejects invalid collection-group paths before write
     dependencies(invalid),
   );
   assert.equal(invalidResult.response.status, 409);
-  assert.equal(invalid.rollbackCount, 1);
+  assert.equal(invalid.rollbackCount, 0);
   assert.equal(decodedFields(invalid.orders[0]).owner, `firebase:${UID}`);
 
   const recovery = new FirestoreHarness();

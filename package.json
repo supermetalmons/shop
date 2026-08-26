@@ -62,6 +62,8 @@
     "check:pack-status-d1": "node --import tsx scripts/ops/checkPackStatusD1.ts",
     "check:ops-d1": "node --import tsx scripts/ops/checkOpsD1.ts",
     "check:commerce-d1": "node --import tsx scripts/ops/checkCommerceD1.ts",
+    "check:queue-backlogs": "node --import tsx scripts/ops/checkQueueBacklogs.ts",
+    "commerce-identity-manifest": "node --import tsx scripts/ops/commerceIdentityManifest.ts",
     "commerce-authority-control": "node --import tsx scripts/ops/commerceAuthorityControl.ts",
     "ready-notifications-control": "node --import tsx scripts/ops/readyNotificationsControl.ts",
     "reveal-submissions-control": "node --import tsx scripts/ops/revealSubmissionsControl.ts",

@@ -1,5 +1,9 @@
 import test from 'node:test';
-import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
+import {
+  createCommerceD1,
+  createCommerceD1Harness,
+  seedCommerceDocument,
+} from './commerceD1Harness.ts';
 import assert from 'node:assert/strict';
 import Stripe from 'stripe';
 import {
@@ -14,6 +18,7 @@ import {
   type StripeWebhookEvent,
 } from '../../../../shared/stripeWebhook.ts';
 import { handleStripeWebhookRequest } from '../src/stripeWebhook.ts';
+import { createStripeCheckoutStore } from '../src/stripeCheckout/store.ts';
 
 const DEVNET_SECRET = 'whsec_devnet_test_secret';
 const MAINNET_SECRET = 'whsec_mainnet_test_secret';
@@ -29,6 +34,7 @@ function queue(send: Queue['send'] = async () => ({ metadata: { metrics: { backl
 }
 
 function env(overrides: Partial<Pick<Env,
+  | 'COMMERCE_DB'
   | 'STRIPE_FULFILLMENT_QUEUE'
   | 'STRIPE_WEBHOOK_SECRET_DEVNET'
   | 'STRIPE_WEBHOOK_SECRET'
@@ -45,6 +51,35 @@ function env(overrides: Partial<Pick<Env,
     STRIPE_WEBHOOK_SECRET: MAINNET_SECRET,
     ...overrides,
   };
+}
+
+function checkoutEnvironment(
+  document: Record<string, unknown>,
+  overrides: Partial<Pick<Env,
+    | 'STRIPE_FULFILLMENT_QUEUE'
+    | 'STRIPE_WEBHOOK_SECRET_DEVNET'
+    | 'STRIPE_WEBHOOK_SECRET'
+  >> = {},
+) {
+  const harness = createCommerceD1Harness();
+  seedCommerceDocument(harness, storedDocument(document));
+  return {
+    harness,
+    env: env({ ...overrides, COMMERCE_DB: harness.db }),
+  };
+}
+
+function conflictDatabase(db: D1Database, conflicts: number): D1Database {
+  return {
+    ...db,
+    batch: async (statements) => {
+      if (conflicts > 0) {
+        conflicts -= 1;
+        throw new Error('transaction conflict');
+      }
+      return db.batch(statements);
+    },
+  } as D1Database;
 }
 
 function stripeEvent(options: {
@@ -105,17 +140,17 @@ async function signedRequest(
   });
 }
 
-function firestoreValue(value: unknown): Record<string, unknown> {
+function storedValue(value: unknown): Record<string, unknown> {
   if (value === null) return { nullValue: null };
   if (typeof value === 'string') return { stringValue: value };
   if (typeof value === 'boolean') return { booleanValue: value };
   if (typeof value === 'number') return { integerValue: String(value) };
-  if (Array.isArray(value)) return { arrayValue: { values: value.map(firestoreValue) } };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(storedValue) } };
   if (value && typeof value === 'object') {
     return {
       mapValue: {
         fields: Object.fromEntries(
-          Object.entries(value).map(([key, entry]) => [key, firestoreValue(entry)]),
+          Object.entries(value).map(([key, entry]) => [key, storedValue(entry)]),
         ),
       },
     };
@@ -123,11 +158,11 @@ function firestoreValue(value: unknown): Record<string, unknown> {
   throw new Error('unsupported test value');
 }
 
-function firestoreDocument(document: Record<string, unknown>, updateTime = '2026-08-20T10:00:00.000000Z') {
+function storedDocument(document: Record<string, unknown>, updateTime = '2026-08-20T10:00:00.000000Z') {
   return {
     name: `projects/mons-shop/databases/(default)/documents/drops/${document.dropId}/stripeCheckouts/${document.sessionId}`,
     fields: Object.fromEntries(
-      Object.entries(document).map(([key, value]) => [key, firestoreValue(value)]),
+      Object.entries(document).map(([key, value]) => [key, storedValue(value)]),
     ),
     updateTime,
   };
@@ -156,29 +191,19 @@ function checkoutDocument(options: {
 }
 
 test('signed devnet webhook atomically queues the existing checkout', async () => {
-  const commits: Record<string, unknown>[] = [];
   const logs: Record<string, unknown>[] = [];
   const jobs: unknown[] = [];
+  const context = checkoutEnvironment(checkoutDocument(), {
+    STRIPE_FULFILLMENT_QUEUE: queue(async (body) => {
+      jobs.push(body);
+      return { metadata: { metrics: { backlogCount: 1, backlogBytes: 128 } } };
+    }),
+  });
   const result = await handleStripeWebhookRequest(
     await signedRequest(stripeEvent()),
-    env({
-      STRIPE_FULFILLMENT_QUEUE: queue(async (body) => {
-        jobs.push(body);
-        return { metadata: { metrics: { backlogCount: 1, backlogBytes: 128 } } };
-      }),
-    }),
+    context.env,
     {
       log: (entry) => logs.push(entry),
-      requestCommerceDocument: firestoreProviderCommerceRequester,
-      providerFetch: async (input, init) => {
-        const url = String(input);
-        if (init?.method === 'GET') return Response.json(firestoreDocument(checkoutDocument()));
-        if (url.endsWith('/documents:commit') && init?.method === 'POST') {
-          commits.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-          return Response.json({ writeResults: [{}] });
-        }
-        throw new Error(`Unexpected request: ${init?.method} ${url}`);
-      },
     },
   );
 
@@ -191,21 +216,17 @@ test('signed devnet webhook atomically queues the existing checkout', async () =
     checkoutPath: `drops/${DEVNET_DROP}/stripeCheckouts/cs_test_123`,
   });
   assert.equal(result.outcome, 'queued');
-  assert.equal(result.metrics.upstreamCalls, 2);
+  assert.equal(result.metrics.upstreamCalls, 0);
   assert.ok(result.metrics.providerDurationMs >= 0);
   assert.equal(result.response.headers.has('access-control-allow-origin'), false);
-  assert.equal(commits.length, 1);
-  const write = ((commits[0].writes as Record<string, unknown>[])[0]);
-  assert.deepEqual(write.currentDocument, { updateTime: '2026-08-20T10:00:00.000000Z' });
-  const update = write.update as { fields: Record<string, Record<string, unknown>> };
-  assert.deepEqual(update.fields.status, { stringValue: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING });
-  assert.deepEqual(update.fields.paymentStatus, { stringValue: 'paid' });
-  assert.deepEqual(update.fields.fulfillmentProcessor, { stringValue: 'cloudflare_queue_v1' });
-  assert.ok((write.updateMask as { fieldPaths: string[] }).fieldPaths.includes('manualRefundReviewRequired'));
-  assert.deepEqual((write.updateTransforms as Record<string, unknown>[])[0], {
-    fieldPath: 'stripeWebhookEventIds',
-    appendMissingElements: { values: [{ stringValue: 'evt_test_123' }] },
-  });
+  const checkout = await createStripeCheckoutStore({ commerceDb: context.harness.db })
+    .doc(`drops/${DEVNET_DROP}/stripeCheckouts/cs_test_123`)
+    .get();
+  assert.equal(checkout.get('status'), STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+  assert.equal(checkout.get('paymentStatus'), 'paid');
+  assert.equal(checkout.get('fulfillmentProcessor'), 'cloudflare_queue_v1');
+  assert.deepEqual(checkout.get('stripeWebhookEventIds'), ['evt_test_123']);
+  assert.equal(checkout.get('manualRefundReviewRequired'), undefined);
   const serializedLogs = JSON.stringify(logs);
   assert.doesNotMatch(serializedLogs, /whsec_|Stripe-Signature|automatic_tax|amount_total/);
   assert.match(serializedLogs, /stripe_webhook_request/);
@@ -261,11 +282,10 @@ test('webhook rejects invalid signatures, cross-scope signatures, and invalid se
   assert.equal(duplicateConfiguration.outcome, 'configuration_error');
 });
 
-test('webhook acknowledges unsupported, unrelated, and awaiting-payment events without Firestore', async () => {
+test('webhook acknowledges unsupported, unrelated, and awaiting-payment events without commerce access', async () => {
   let providerCalls = 0;
   const dependencies = {
     log: () => undefined,
-    requestCommerceDocument: firestoreProviderCommerceRequester,
     providerFetch: async () => {
       providerCalls += 1;
       return Response.json({});
@@ -346,117 +366,86 @@ test('webhook enforces methods, content type, bounded bodies, and required signa
   assert.equal(oversized.outcome, 'request_too_large');
 });
 
-test('webhook retries optimistic Firestore conflicts and surfaces exhausted conflicts', async () => {
-  let gets = 0;
-  let commits = 0;
+test('webhook retries optimistic D1 conflicts and surfaces exhausted conflicts', async () => {
+  const successContext = checkoutEnvironment(checkoutDocument());
   const request = await signedRequest(stripeEvent());
-  const success = await handleStripeWebhookRequest(request, env(), {
+  const success = await handleStripeWebhookRequest(request, {
+    ...successContext.env,
+    COMMERCE_DB: conflictDatabase(successContext.harness.db, 1),
+  }, {
     log: () => undefined,
-    requestCommerceDocument: firestoreProviderCommerceRequester,
-    providerFetch: async (_input, init) => {
-      if (init?.method === 'GET') {
-        gets += 1;
-        return Response.json(firestoreDocument(checkoutDocument(), `2026-08-20T10:00:0${gets}.000000Z`));
-      }
-      commits += 1;
-      return commits === 1
-        ? Response.json({ error: { status: 'ABORTED' } }, { status: 409 })
-        : Response.json({ writeResults: [{}] });
-    },
   });
   assert.equal(success.response.status, 200);
   assert.equal(success.outcome, 'queued');
-  assert.equal(gets, 2);
-  assert.equal(commits, 2);
 
-  const exhausted = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), env(), {
+  const exhaustedContext = checkoutEnvironment(checkoutDocument());
+  const exhausted = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), {
+    ...exhaustedContext.env,
+    COMMERCE_DB: conflictDatabase(exhaustedContext.harness.db, 3),
+  }, {
     log: () => undefined,
-    requestCommerceDocument: firestoreProviderCommerceRequester,
-    providerFetch: async (_input, init) => init?.method === 'GET'
-      ? Response.json(firestoreDocument(checkoutDocument()))
-      : Response.json({ error: { status: 'ABORTED' } }, { status: 409 }),
   });
   assert.equal(exhausted.response.status, 500);
   assert.equal(exhausted.outcome, 'write_conflict');
 });
 
 test('webhook commits before publish and duplicate delivery repairs a failed Queue send', async () => {
-  let status: string = STRIPE_CHECKOUT_STATUS.CREATED;
-  let commits = 0;
+  const context = checkoutEnvironment(checkoutDocument(), {
+    STRIPE_FULFILLMENT_QUEUE: queue(async () => {
+      throw new Error('queue unavailable');
+    }),
+  });
   const failed = await handleStripeWebhookRequest(
     await signedRequest(stripeEvent()),
-    env({
-      STRIPE_FULFILLMENT_QUEUE: queue(async () => {
-        throw new Error('queue unavailable');
-      }),
-    }),
+    context.env,
     {
       log: () => undefined,
-      requestCommerceDocument: firestoreProviderCommerceRequester,
-      providerFetch: async (_input, init) => {
-        if (init?.method === 'GET') return Response.json(firestoreDocument(checkoutDocument({ status })));
-        commits += 1;
-        status = STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING;
-        return Response.json({ writeResults: [{}] });
-      },
     },
   );
   assert.equal(failed.response.status, 500);
   assert.equal(failed.outcome, 'processing_error');
-  assert.equal(commits, 1);
-  assert.equal(status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+  const reference = createStripeCheckoutStore({ commerceDb: context.harness.db })
+    .doc(`drops/${DEVNET_DROP}/stripeCheckouts/cs_test_123`);
+  assert.equal((await reference.get()).get('status'), STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
 
   const jobs: unknown[] = [];
   const events: string[] = [];
   const repaired = await handleStripeWebhookRequest(
     await signedRequest(stripeEvent()),
-    env({
+    {
+      ...context.env,
       STRIPE_FULFILLMENT_QUEUE: queue(async (body) => {
         events.push('queue');
         jobs.push(body);
         return { metadata: { metrics: { backlogCount: 1, backlogBytes: 128 } } };
       }),
-    }),
+    },
     {
       log: () => undefined,
-      requestCommerceDocument: firestoreProviderCommerceRequester,
-      providerFetch: async (_input, init) => {
-        if (init?.method === 'GET') return Response.json(firestoreDocument(checkoutDocument({ status })));
-        events.push('commit');
-        return Response.json({ writeResults: [{}] });
-      },
     },
   );
   assert.equal(repaired.response.status, 200);
   assert.equal(repaired.outcome, 'already_pending');
   assert.equal(jobs.length, 1);
-  assert.deepEqual(events, ['commit', 'queue']);
+  assert.deepEqual(events, ['queue']);
 });
 
 test('signed mainnet webhook uses the live secret and preserves fulfilled idempotency', async () => {
-  let commit: Record<string, unknown> | undefined;
+  const context = checkoutEnvironment(checkoutDocument({
+    dropId: MAINNET_DROP,
+    livemode: true,
+    sessionId: 'cs_live_123',
+    status: STRIPE_CHECKOUT_STATUS.FULFILLED,
+    deliveryId: 17,
+  }));
   const result = await handleStripeWebhookRequest(
     await signedRequest(
       stripeEvent({ dropId: MAINNET_DROP, livemode: true, sessionId: 'cs_live_123' }),
       MAINNET_SECRET,
     ),
-    env(),
+    context.env,
     {
       log: () => undefined,
-      requestCommerceDocument: firestoreProviderCommerceRequester,
-      providerFetch: async (_input, init) => {
-        if (init?.method === 'GET') {
-          return Response.json(firestoreDocument(checkoutDocument({
-            dropId: MAINNET_DROP,
-            livemode: true,
-            sessionId: 'cs_live_123',
-            status: STRIPE_CHECKOUT_STATUS.FULFILLED,
-            deliveryId: 17,
-          })));
-        }
-        commit = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        return Response.json({ writeResults: [{}] });
-      },
     },
   );
   assert.equal(result.response.status, 200);
@@ -469,33 +458,28 @@ test('signed mainnet webhook uses the live secret and preserves fulfilled idempo
     sessionId: 'cs_live_123',
     deliveryId: 17,
   });
-  const write = (commit?.writes as Record<string, unknown>[])[0];
-  assert.deepEqual(Object.keys((write.update as { fields: Record<string, unknown> }).fields), [
-    'lastStripeWebhookEventId',
-  ]);
+  const checkout = await createStripeCheckoutStore({ commerceDb: context.harness.db })
+    .doc(`drops/${MAINNET_DROP}/stripeCheckouts/cs_live_123`)
+    .get();
+  assert.equal(checkout.get('lastStripeWebhookEventId'), 'evt_test_123');
+  assert.equal(checkout.get('status'), STRIPE_CHECKOUT_STATUS.FULFILLED);
 });
 
-test('invalid checkout documents and Firestore provider failures stay retryable', async () => {
+test('invalid and missing checkout documents stay retryable', async () => {
   const invalidDocument = checkoutDocument();
   delete invalidDocument.uid;
-  const invalid = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), env(), {
+  const invalidContext = checkoutEnvironment(invalidDocument);
+  const invalid = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), invalidContext.env, {
     log: () => undefined,
-    requestCommerceDocument: firestoreProviderCommerceRequester,
-    providerFetch: async (_input, init) => {
-      if (init?.method === 'GET') return Response.json(firestoreDocument(invalidDocument));
-      throw new Error('unexpected commit');
-    },
   });
   assert.equal(invalid.response.status, 500);
   assert.equal(invalid.outcome, 'processing_error');
 
-  const providerFailure = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), env(), {
+  const missing = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), env(), {
     log: () => undefined,
-    requestCommerceDocument: firestoreProviderCommerceRequester,
-    providerFetch: async () => Response.json({ error: { status: 'UNAVAILABLE' } }, { status: 503 }),
   });
-  assert.equal(providerFailure.response.status, 500);
-  assert.equal(providerFailure.outcome, 'processing_error');
+  assert.equal(missing.response.status, 500);
+  assert.equal(missing.outcome, 'processing_error');
 });
 
 test('shared transition keeps duplicate deliveries idempotent', () => {

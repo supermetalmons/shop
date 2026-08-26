@@ -16,23 +16,22 @@ import {
   isStripeCheckoutFulfillmentEventType,
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  FirestoreWriteConflict,
-  ProfileReadError,
-  commerceDocumentRequest,
-  decodeFirestoreFields,
-  isRecord,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
+import {
+  CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeys,
+  type CommerceDocumentWriteData,
+} from './commerceRepository.js';
 
 export { STRIPE_WEBHOOK_PATH };
 
 const STRIPE_WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
 const STRIPE_WEBHOOK_TIMEOUT_MS = 15_000;
-const FIRESTORE_MUTATION_ATTEMPTS = 3;
+const COMMERCE_MUTATION_ATTEMPTS = 3;
 
 type StripeWebhookEnv = Pick<Env,
   | 'STRIPE_FULFILLMENT_QUEUE'
@@ -60,7 +59,6 @@ type StripeWebhookDependencies = {
   log: (entry: Record<string, unknown>) => void;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   verifyEvent: (
     payload: Uint8Array,
     signature: string,
@@ -71,11 +69,6 @@ type StripeWebhookDependencies = {
 type WebhookSecret = {
   scope: StripeWebhookSecretScope;
   value: string;
-};
-
-type FirestoreDocument = {
-  fields: Record<string, unknown>;
-  updateTime: string;
 };
 
 class StripeWebhookRequestError extends Error {
@@ -103,7 +96,6 @@ const defaultDependencies: StripeWebhookDependencies = {
   log: (entry) => console.log(entry),
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   verifyEvent: async (payload, signature, secret) => {
     const event = await Stripe.webhooks.constructEventAsync(
       payload,
@@ -268,84 +260,16 @@ async function verifyWebhookEvent(
   throw new StripeWebhookRequestError(400, 'invalid_signature');
 }
 
-function firestoreValue(value: unknown): Record<string, unknown> {
-  if (value === null) return { nullValue: null };
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'boolean') return { booleanValue: value };
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new Error('Unsupported Firestore number');
-    return Number.isSafeInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
-  }
-  if (Array.isArray(value)) {
-    return { arrayValue: { values: value.map(firestoreValue) } };
-  }
-  if (isRecord(value)) {
-    const fields: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      if (entry !== undefined) fields[key] = firestoreValue(entry);
-    }
-    return { mapValue: { fields } };
-  }
-  throw new Error('Unsupported Firestore value');
-}
-
-function documentName(path: string): string {
-  return `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`;
-}
-
-async function loadCheckoutDocument(
-  path: string,
-  common: {
-    commerceDb: D1Database;
-    nowMs: number;
-    providerFetch: ProfileProviderFetch;
-    requestCommerceDocument: CommerceDocumentRequester;
-    signal: AbortSignal;
-  },
-): Promise<FirestoreDocument> {
-  const payload = await common.requestCommerceDocument({
-    ...common,
-    method: 'GET',
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}/${path}`,
-  });
-  if (payload === null) throw new Error('Stripe checkout session was not created by this app');
-  if (!isRecord(payload) || typeof payload.updateTime !== 'string' || !payload.updateTime) {
-    throw new ProfileReadError('unavailable', 502, 'Stripe webhook processing failed');
-  }
-  const fields = payload.fields === undefined ? {} : decodeFirestoreFields(payload.fields);
-  if (!fields) throw new ProfileReadError('unavailable', 502, 'Stripe webhook processing failed');
-  return { fields, updateTime: payload.updateTime };
-}
-
-function transitionWrite(
-  path: string,
-  updateTime: string,
+function transitionUpdate(
   action: Extract<StripeWebhookAction, { kind: 'enqueue' }>,
   transition: StripeWebhookTransition,
-): Record<string, unknown> {
-  const fields = Object.fromEntries(
-    Object.entries(transition.fields).map(([key, value]) => [key, firestoreValue(value)]),
-  );
+): CommerceDocumentWriteData {
   return {
-    update: {
-      name: documentName(path),
-      fields,
-    },
-    updateMask: {
-      fieldPaths: [...Object.keys(fields), ...transition.deleteFields],
-    },
-    updateTransforms: [
-      {
-        fieldPath: 'stripeWebhookEventIds',
-        appendMissingElements: { values: [{ stringValue: action.eventId }] },
-      },
-      ...transition.serverTimestampFields.map((fieldPath) => ({
-        fieldPath,
-        setToServerValue: 'REQUEST_TIME',
-      })),
-    ],
-    currentDocument: { updateTime },
-  };
+    ...transition.fields,
+    ...Object.fromEntries(transition.deleteFields.map((field) => [field, commerceFieldValue.delete()])),
+    stripeWebhookEventIds: commerceFieldValue.arrayUnion(action.eventId),
+    ...Object.fromEntries(transition.serverTimestampFields.map((field) => [field, commerceFieldValue.serverTimestamp()])),
+  } as CommerceDocumentWriteData;
 }
 
 async function pauseForConflict(signal: AbortSignal, attempt: number): Promise<void> {
@@ -371,32 +295,28 @@ async function mutateCheckout(
   common: {
     commerceDb: D1Database;
     nowMs: number;
-    providerFetch: ProfileProviderFetch;
-    requestCommerceDocument: CommerceDocumentRequester;
     signal: AbortSignal;
   },
 ): Promise<StripeWebhookTransition> {
-  const path = `drops/${action.dropId}/stripeCheckouts/${action.sessionId}`;
-  for (let attempt = 0; attempt < FIRESTORE_MUTATION_ATTEMPTS; attempt += 1) {
-    const document = await loadCheckoutDocument(path, common);
-    const transition = stripeWebhookTransition(document.fields, action);
+  const repository = new D1CommerceRepository(common.commerceDb);
+  const key = commerceKeys.stripeCheckout(action.dropId, action.sessionId);
+  for (let attempt = 0; attempt < COMMERCE_MUTATION_ATTEMPTS; attempt += 1) {
+    const unit = await repository.begin(common.nowMs);
     try {
-      await common.requestCommerceDocument({
-        ...common,
-        body: JSON.stringify({
-          writes: [transitionWrite(path, document.updateTime, action, transition)],
-        }),
-        method: 'POST',
-        url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-      });
+      const document = await unit.get(key);
+      if (!document) throw new Error('Stripe checkout session was not created by this app');
+      const transition = stripeWebhookTransition(document.data, action);
+      await unit.update(key, transitionUpdate(action, transition));
+      await unit.commit();
       return transition;
     } catch (error) {
-      if (!(error instanceof FirestoreWriteConflict)) throw error;
-      if (attempt + 1 >= FIRESTORE_MUTATION_ATTEMPTS) throw error;
+      unit.rollback();
+      if (!(error instanceof CommerceWriteConflict)) throw error;
+      if (attempt + 1 >= COMMERCE_MUTATION_ATTEMPTS) throw error;
       await pauseForConflict(common.signal, attempt);
     }
   }
-  throw new FirestoreWriteConflict();
+  throw new CommerceWriteConflict();
 }
 
 function actionResponse(
@@ -486,20 +406,9 @@ export async function handleStripeWebhookRequest(
         };
         return result;
       }
-      const trackedFetch: ProfileProviderFetch = async (input, init) => {
-        const providerStartedAt = performance.now();
-        metrics.upstreamCalls += 1;
-        try {
-          return await dependencies.providerFetch(input, init);
-        } finally {
-          metrics.providerDurationMs += Math.max(0, performance.now() - providerStartedAt);
-        }
-      };
       const transition = await mutateCheckout(action, {
         commerceDb: env.COMMERCE_DB,
         nowMs: dependencies.nowMs(),
-        providerFetch: trackedFetch,
-        requestCommerceDocument: dependencies.requestCommerceDocument,
         signal: controller.signal,
       });
       if (transition.outcome !== 'already_fulfilled') {
@@ -567,7 +476,7 @@ export async function handleStripeWebhookRequest(
     const requestError = error instanceof StripeWebhookRequestError ? error : null;
     const status = requestError?.status ?? 500;
     const outcome = requestError?.outcome ?? (
-      error instanceof FirestoreWriteConflict
+      error instanceof CommerceWriteConflict
         ? 'write_conflict'
         : error instanceof ProfileReadError && error.code === 'deadline-exceeded'
           ? 'deadline_exceeded'

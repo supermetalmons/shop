@@ -83,20 +83,18 @@ import {
   type RequestIdentity,
 } from './requestIdentity.js';
 import {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  FirestoreWriteConflict,
-  ProfileReadError,
-  commerceDocumentRequest,
   cancelResponseBody,
-  decodeFirestoreFields,
-  firestoreString,
-  isRecord,
   readBoundedJson,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
+import {
+  CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeys,
+  type CommerceDocumentRecord,
+} from './commerceRepository.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
 
 export const ADMIN_IRL_REDEEM_PREPARE_PATH = '/admin/irl-redeem/prepare';
@@ -179,13 +177,19 @@ type AdminIrlRedeemRuntime = {
   receiptMaxId: number;
 };
 
-type FirestoreContext = {
-  commerceDb: D1Database;
+type CommerceContext = {
+  commerceDb?: D1Database;
   nowMs: number;
-  providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
+  repository?: D1CommerceRepository;
   signal: AbortSignal;
+  [key: string]: unknown;
 };
+
+function commerceRepository(context: CommerceContext): D1CommerceRepository {
+  if (context.repository) return context.repository;
+  if (context.commerceDb) return new D1CommerceRepository(context.commerceDb);
+  throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem preparation is temporarily unavailable.');
+}
 
 type ProviderContext = {
   apiKey: string;
@@ -232,19 +236,19 @@ type CreateRequestInput = {
 
 type AdminIrlRedeemPrepareDependencies = {
   autoId: () => string;
+  createCommerceRepository: (db: D1Database) => D1CommerceRepository;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
   loadWalletSession: (
-    context: FirestoreContext,
+    context: CommerceContext,
     db: D1Database | undefined,
     uid: string,
   ) => Promise<string>;
-  loadReceiptMarker: (context: FirestoreContext, dropId: string, assetId: string) => Promise<boolean>;
-  createRequest: (context: FirestoreContext, input: CreateRequestInput) => Promise<void>;
+  loadReceiptMarker: (context: CommerceContext, dropId: string, assetId: string) => Promise<boolean>;
+  createRequest: (context: CommerceContext, input: CreateRequestInput) => Promise<void>;
   fetchAsset: (context: ProviderContext, runtime: AdminIrlRedeemRuntime, assetId: string) => Promise<DasAsset>;
   fetchAssetProof: (context: ProviderContext, runtime: AdminIrlRedeemRuntime, assetId: string) => Promise<Record<string, unknown>>;
   loadOnchainState: (context: ProviderContext, runtime: AdminIrlRedeemRuntime) => Promise<OnchainState>;
@@ -808,7 +812,7 @@ async function loadLookupTable(
 }
 
 async function loadWalletSession(
-  context: FirestoreContext,
+  context: CommerceContext,
   db: D1Database | undefined,
   uid: string,
 ): Promise<string> {
@@ -826,37 +830,19 @@ async function loadWalletSession(
 }
 
 async function loadReceiptMarker(
-  context: FirestoreContext,
+  context: CommerceContext,
   dropId: string,
   assetId: string,
 ): Promise<boolean> {
-  const path = dropAdminIrlRedeemReceiptMarkerPath(dropId, assetId);
-  return Boolean(await context.requestCommerceDocument({
-    ...context,
-    method: 'GET',
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}/${path}`,
-  }));
+  const key = commerceKeys.adminIrlRedeemReceiptMarker(dropId, assetId);
+  if (key.path !== dropAdminIrlRedeemReceiptMarkerPath(dropId, assetId)) {
+    throw new AdminIrlRedeemPrepareError('internal', 'Admin IRL redeem preparation failed.');
+  }
+  return Boolean(await commerceRepository(context).get(key));
 }
 
-function firestoreInteger(value: number): Record<string, string> {
-  return { integerValue: String(value) };
-}
-
-function firestoreItem(item: PreparedItem): Record<string, unknown> {
-  return {
-    mapValue: {
-      fields: {
-        assetId: firestoreString(item.assetId),
-        kind: firestoreString(item.kind),
-        refId: firestoreInteger(item.refId),
-      },
-    },
-  };
-}
-
-function requestMatches(value: unknown, input: CreateRequestInput): boolean {
-  if (!isRecord(value)) return false;
-  const fields = decodeFirestoreFields(value.fields);
+function requestMatches(value: CommerceDocumentRecord | null, input: CreateRequestInput): boolean {
+  const fields = value?.data;
   return Boolean(
     fields &&
     fields.status === 'prepared' &&
@@ -869,57 +855,37 @@ function requestMatches(value: unknown, input: CreateRequestInput): boolean {
   );
 }
 
-async function createRequest(context: FirestoreContext, input: CreateRequestInput): Promise<void> {
+async function createRequest(context: CommerceContext, input: CreateRequestInput): Promise<void> {
   const path = dropAdminIrlRedeemRequestPath(input.dropId, input.requestId);
-  const fields: Record<string, unknown> = {
-    dropId: firestoreString(input.dropId),
-    status: firestoreString('prepared'),
-    owner: firestoreString(input.owner),
-    targetKind: firestoreString(input.targetKind),
-    adminWallet: firestoreString(input.adminWallet),
-    itemIds: { arrayValue: { values: input.itemIds.map(firestoreString) } },
-    items: { arrayValue: { values: input.items.map(firestoreItem) } },
-    preparedExpiresAt: { timestampValue: new Date(context.nowMs + PREPARED_TTL_MS).toISOString() },
-    ...(input.prepareAttemptId ? { prepareAttemptId: firestoreString(input.prepareAttemptId) } : {}),
+  const key = commerceKeys.adminIrlRedeemRequest(input.dropId, input.requestId);
+  if (key.path !== path) throw new AdminIrlRedeemPrepareError('internal', 'Admin IRL redeem preparation failed.');
+  const fields = {
+    dropId: input.dropId,
+    status: 'prepared',
+    owner: input.owner,
+    targetKind: input.targetKind,
+    adminWallet: input.adminWallet,
+    itemIds: input.itemIds,
+    items: input.items,
+    preparedExpiresAt: commerceFieldValue.timestamp(Math.floor((context.nowMs + PREPARED_TTL_MS) / 1000),
+      ((context.nowMs + PREPARED_TTL_MS) % 1000) * 1_000_000),
+    createdAt: commerceFieldValue.serverTimestamp(),
+    updatedAt: commerceFieldValue.serverTimestamp(),
+    ...(input.prepareAttemptId ? { prepareAttemptId: input.prepareAttemptId } : {}),
   };
   try {
-    const payload = await context.requestCommerceDocument({
-      ...context,
-      body: JSON.stringify({
-        writes: [{
-          update: {
-            name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`,
-            fields,
-          },
-          currentDocument: { exists: false },
-          updateTransforms: [
-            { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
-            { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
-          ],
-        }],
-      }),
-      method: 'POST',
-      url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-    });
-    const results = isRecord(payload) ? payload.writeResults : undefined;
-    if (!Array.isArray(results) || !isRecord(results[0]) || typeof results[0].updateTime !== 'string') {
-      throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem preparation is temporarily unavailable.');
-    }
+    await commerceRepository(context).run(context.nowMs, async (unit) => unit.create(key, fields));
   } catch (error) {
-    if (error instanceof FirestoreWriteConflict) {
+    if (error instanceof CommerceWriteConflict) {
       throw new AdminIrlRedeemPrepareError('aborted', 'Admin IRL redeem request collision. Retry.');
     }
-    const reconciled = await context.requestCommerceDocument({
-      ...context,
-      method: 'GET',
-      url: `${FIRESTORE_DOCUMENTS_BASE_URL}/${path}`,
-    }).catch(() => null);
+    const reconciled = await commerceRepository(context).get(key).catch(() => null);
     if (requestMatches(reconciled, input)) return;
     throw error;
   }
 }
 
-function firestoreAutoId(): string {
+function commerceAutoId(): string {
   let id = '';
   while (id.length < AUTO_ID_LENGTH) {
     const bytes = crypto.getRandomValues(new Uint8Array(AUTO_ID_LENGTH * 2));
@@ -1189,7 +1155,7 @@ async function prepareAdminIrlRedeem(args: {
   body: AdminIrlRedeemPrepareRequest;
   db: D1Database | undefined;
   identity: RequestIdentity;
-  firestoreContext: FirestoreContext;
+  commerceContext: CommerceContext;
   providerContext: ProviderContext;
   dependencies: AdminIrlRedeemPrepareDependencies;
   prepareAttemptId?: string;
@@ -1203,7 +1169,7 @@ async function prepareAdminIrlRedeem(args: {
   const ownerWallet = owner.toBase58();
   const sessionWallet = await resolveRequestWallet(
     args.identity,
-    (uid) => args.dependencies.loadWalletSession(args.firestoreContext, args.db, uid),
+    (uid) => args.dependencies.loadWalletSession(args.commerceContext, args.db, uid),
   );
   if (!walletHasAdminIrlRedeemAccess(sessionWallet, ADMIN_IRL_REDEEM_WALLETS)) {
     throw new AdminIrlRedeemPrepareError('permission-denied', 'Admin IRL Redeem access denied.');
@@ -1322,7 +1288,7 @@ async function prepareAdminIrlRedeem(args: {
     raw = serializePackTransaction(instructions, owner, blockhash);
   } else {
     const assetId = itemIds[0];
-    if (await args.dependencies.loadReceiptMarker(args.firestoreContext, dropId, assetId)) {
+    if (await args.dependencies.loadReceiptMarker(args.commerceContext, dropId, assetId)) {
       throw new AdminIrlRedeemPrepareError('failed-precondition', 'This card receipt has already been redeemed for an Admin IRL order');
     }
     const proof = await args.dependencies.fetchAssetProof(args.providerContext, runtime, assetId);
@@ -1343,7 +1309,7 @@ async function prepareAdminIrlRedeem(args: {
   }
 
   const requestId = args.dependencies.autoId();
-  await args.dependencies.createRequest(args.firestoreContext, {
+  await args.dependencies.createRequest(args.commerceContext, {
     requestId,
     dropId,
     owner: ownerWallet,
@@ -1364,10 +1330,10 @@ async function prepareAdminIrlRedeem(args: {
 }
 
 const defaultDependencies: AdminIrlRedeemPrepareDependencies = {
-  autoId: firestoreAutoId,
+  autoId: commerceAutoId,
+  createCommerceRepository: (db) => new D1CommerceRepository(db),
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
   getDrop: getApiDrop,
@@ -1445,11 +1411,9 @@ export async function handleAdminIrlRedeemPrepare(
       identity,
       dependencies,
       ...(prepareAttemptId ? { prepareAttemptId } : {}),
-      firestoreContext: {
-        commerceDb: env.COMMERCE_DB,
+      commerceContext: {
         nowMs,
-        providerFetch: trackedFetch,
-        requestCommerceDocument: dependencies.requestCommerceDocument,
+        repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
         signal: controller.signal,
       },
       providerContext: {
@@ -1518,7 +1482,7 @@ export const adminIrlRedeemPrepareTestHooks = {
   createRequest,
   fetchAsset,
   fetchAssetProof,
-  firestoreAutoId,
+  commerceAutoId,
   loadLatestBlockhash,
   loadLookupTable,
   loadOnchainState,

@@ -23,7 +23,7 @@ function readyOrder() {
     source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
     status: 'ready_to_ship',
     deliveryId: 7,
-    owner: 'firebase-owner',
+    owner: 'anonymous-owner',
     addressSnapshot: { email: 'buyer@example.com' },
     items: [{ kind: 'box', refId: 3 }],
   };
@@ -142,8 +142,10 @@ test('manual-review checkout queues the existing bounded notification job', asyn
         lastFulfillmentError: { message: '<danger>'.repeat(20_000) },
         livemode: false,
         variantKey: ' xl ',
-        owner: ' owner<&> ',
-        uid: 'firebase-uid',
+        owner: 'firebase:legacy-subject',
+        ownerKind: 'firebase',
+        uid: 'legacy-subject',
+        firebaseUid: 'legacy-subject',
         createdAt: Date.UTC(2026, 0, 2, 3, 4, 5),
         failedAt: Date.UTC(2026, 0, 2, 3, 6, 5),
       },
@@ -156,6 +158,8 @@ test('manual-review checkout queues the existing bounded notification job', asyn
   assert.deepEqual(jobs[0]?.context, { dropId: DROP_ID, sessionId: SESSION_ID });
   assert.match(jobs[0]?.text || '', new RegExp(`Session ID: ${SESSION_ID}`));
   assert.match(jobs[0]?.text || '', /Variant: xl/);
+  assert.match(jobs[0]?.text || '', /Auth subject: legacy-subject/);
+  assert.doesNotMatch(jobs[0]?.text || '', /Firebase/);
   assert.match(jobs[0]?.text || '', /… truncated$/);
   assert.doesNotMatch(jobs[0]?.html || '', /<danger>/);
 });
@@ -236,6 +240,10 @@ test('Cloudflare enqueue failures propagate for Queue retry', async () => {
         checkout: {
           status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
           manualRefundReviewRequired: true,
+          owner: 'anonymous:anonymous-subject',
+          ownerKind: 'anonymous',
+          uid: 'anonymous-subject',
+          authSubject: 'anonymous-subject',
         },
         createJobId: () => JOB_IDS[0],
         enqueueJob: async () => {
@@ -247,7 +255,7 @@ test('Cloudflare enqueue failures propagate for Queue retry', async () => {
   );
 });
 
-test('Firestore read failures propagate for Queue retry', async () => {
+test('checkout-store read failures propagate for Queue retry', async () => {
   await assert.rejects(
     publishStripeCheckoutTerminalNotifications({
       dropId: DROP_ID,
@@ -255,10 +263,10 @@ test('Firestore read failures propagate for Queue retry', async () => {
       dependencies: {
         ...dependencies(),
         loadCheckout: async () => {
-          throw new Error('firestore unavailable');
+          throw new Error('checkout store unavailable');
         },
       },
     }),
-    /firestore unavailable/,
+    /checkout store unavailable/,
   );
 });

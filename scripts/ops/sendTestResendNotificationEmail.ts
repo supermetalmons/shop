@@ -634,7 +634,7 @@ function buildStripeManualReviewTestEmail(idempotencyKey: string): BuiltTestEmai
         livemode: false,
         variantKey: 'local-test',
         owner: 'local-test-owner',
-        firebaseUid: 'local-test-firebase-uid',
+        authSubject: 'local-test-auth-subject',
         manualRefundReviewReason: 'Local Resend notification test',
         lastFulfillmentError: {
           message: 'Synthetic Stripe manual-review notification test',

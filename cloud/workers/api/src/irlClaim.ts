@@ -70,17 +70,12 @@ import type {
 } from '../../../../shared/contracts.js';
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  ProfileReadError,
-  commerceDocumentRequest,
   cancelResponseBody,
-  decodeFirestoreFields,
-  isRecord,
   readBoundedJson,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
+import { D1CommerceRepository, commerceKeys } from './commerceRepository.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
 
 export const IRL_CLAIM_PREPARE_PATH = '/claims/irl/prepare';
@@ -145,12 +140,13 @@ type IrlClaimRuntime = {
   maxDudeId: number;
 };
 
-type FirestoreReadContext = {
+type CommerceReadContext = {
   commerceDb: D1Database;
+  repository?: D1CommerceRepository;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   signal: AbortSignal;
+  [key: string]: unknown;
 };
 
 type ProviderContext = {
@@ -168,17 +164,16 @@ type OnchainState = {
 type IrlClaimDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
   loadWalletSession: (
-    context: FirestoreReadContext,
+    context: CommerceReadContext,
     db: D1Database | undefined,
     uid: string,
   ) => Promise<string>;
-  loadClaim: (context: FirestoreReadContext, code: string) => Promise<Record<string, unknown> | null>;
-  resolveLegacyDropIds: (context: FirestoreReadContext, code: string) => Promise<string[]>;
+  loadClaim: (context: CommerceReadContext, code: string) => Promise<Record<string, unknown> | null>;
+  resolveLegacyDropIds: (context: CommerceReadContext, code: string) => Promise<string[]>;
   fetchOwnedAssets: (context: ProviderContext, runtime: IrlClaimRuntime, owner: string) => Promise<DasAsset[]>;
   fetchAssetProof: (context: ProviderContext, runtime: IrlClaimRuntime, assetId: string) => Promise<Record<string, unknown>>;
   loadOnchainState: (context: ProviderContext, runtime: IrlClaimRuntime) => Promise<OnchainState>;
@@ -723,7 +718,7 @@ async function loadLookupTable(
 }
 
 async function loadWalletSession(
-  context: FirestoreReadContext,
+  context: CommerceReadContext,
   db: D1Database | undefined,
   uid: string,
 ): Promise<string> {
@@ -739,47 +734,23 @@ async function loadWalletSession(
 }
 
 async function loadClaim(
-  context: FirestoreReadContext,
+  context: CommerceReadContext,
   code: string,
 ): Promise<Record<string, unknown> | null> {
-  const url = new URL(`${FIRESTORE_DOCUMENTS_BASE_URL}/claimCodes/${encodeURIComponent(code)}`);
-  const document = await context.requestCommerceDocument({ ...context, method: 'GET', url: url.toString() });
-  if (!isRecord(document)) return null;
-  const fields = decodeFirestoreFields(document.fields);
-  if (!fields) throw new IrlClaimError('failed-precondition', 'Claim code record is invalid.');
-  return fields;
+  const document = await (context.repository || new D1CommerceRepository(context.commerceDb))
+    .get(commerceKeys.claimCode(code));
+  return document?.data || null;
 }
 
-async function resolveLegacyDropIds(context: FirestoreReadContext, code: string): Promise<string[]> {
-  const value = await context.requestCommerceDocument({
-    ...context,
-    method: 'POST',
-    body: JSON.stringify({
-      structuredQuery: {
-        from: [{ collectionId: 'boxAssignments', allDescendants: true }],
-        where: {
-          fieldFilter: {
-            field: { fieldPath: 'irlClaimCode' },
-            op: 'EQUAL',
-            value: { stringValue: code },
-          },
-        },
-        limit: 2,
-      },
-    }),
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+async function resolveLegacyDropIds(context: CommerceReadContext, code: string): Promise<string[]> {
+  const value = await (context.repository || new D1CommerceRepository(context.commerceDb)).query({
+    kind: 'box_assignment',
+    filters: [{ field: 'irlClaimCode', op: 'equal', value: code }],
+    limit: 2,
   });
-  if (!Array.isArray(value)) throw new IrlClaimError('unavailable', 'Claim data is temporarily unavailable.');
   const dropIds = new Set<string>();
-  for (const entry of value) {
-    const document = isRecord(entry) && isRecord(entry.document) ? entry.document : null;
-    const name = document && typeof document.name === 'string' ? document.name : '';
-    if (!name.startsWith(FIRESTORE_DOCUMENT_NAME_PREFIX)) continue;
-    const match = /^drops\/([^/]+)\/boxAssignments\/[^/]+$/.exec(
-      name.slice(FIRESTORE_DOCUMENT_NAME_PREFIX.length),
-    );
-    if (!match) continue;
-    const dropId = normalizeDropId(match[1]);
+  for (const document of value) {
+    const dropId = normalizeDropId(document.key.dropId || '');
     if (dropId) dropIds.add(dropId);
   }
   return Array.from(dropIds);
@@ -1071,7 +1042,7 @@ async function buildPreparedTransaction(args: {
 
 async function prepareClaim(args: {
   body: PrepareIrlClaimRequest;
-  context: FirestoreReadContext;
+  context: CommerceReadContext;
   providerContext: ProviderContext;
   identity: RequestIdentity;
   env: IrlClaimEnv;
@@ -1189,7 +1160,6 @@ async function prepareClaim(args: {
 const defaultDependencies: IrlClaimDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
   getDrop: getApiDrop,
@@ -1251,9 +1221,9 @@ export async function handleIrlClaimPrepare(
       dependencies,
       context: {
         commerceDb: env.COMMERCE_DB,
+        repository: new D1CommerceRepository(env.COMMERCE_DB),
         nowMs: dependencies.nowMs(),
         providerFetch: trackedFetch,
-        requestCommerceDocument: dependencies.requestCommerceDocument,
         signal: controller.signal,
       },
       providerContext: {

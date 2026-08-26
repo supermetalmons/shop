@@ -1,33 +1,6 @@
-import {
-  ProfileReadError,
-} from './firestoreContract.js';
-import {
-  CommerceMaintenanceError,
-  D1CommerceDocumentStore,
-  loadCommerceAuthorityControl,
-} from './commerceDocumentStore.js';
-
-export {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  decodeFirestoreFields,
-  FirestoreWriteConflict,
-  ProfileReadError,
-  isRecord,
-} from './firestoreContract.js';
+import { ProfileReadError } from './dataAccess.js';
 
 export type ProfileProviderFetch = typeof fetch;
-
-export type CommerceDocumentRequest = {
-  body?: string;
-  commerceDb: D1Database;
-  method: 'GET' | 'POST';
-  nowMs: number;
-  url: string;
-};
-
-export type CommerceDocumentRequester = (args: CommerceDocumentRequest) => Promise<unknown | null>;
 
 export async function cancelResponseBody(response: Response): Promise<void> {
   try {
@@ -91,14 +64,4 @@ export async function readBoundedJson(
     if (error instanceof ProfileReadError) throw error;
     throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
   }
-}
-
-export async function commerceDocumentRequest(args: CommerceDocumentRequest): Promise<unknown | null> {
-  const control = await loadCommerceAuthorityControl(args.commerceDb);
-  if (control.state !== 'd1') throw new CommerceMaintenanceError();
-  return new D1CommerceDocumentStore(args.commerceDb).request(args);
-}
-
-export function firestoreString(value: string): Record<string, unknown> {
-  return { stringValue: value };
 }

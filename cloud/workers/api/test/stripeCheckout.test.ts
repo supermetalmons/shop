@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
+import { createCommerceD1 } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import { Keypair } from '@solana/web3.js';
 import {
@@ -83,7 +83,6 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    requestCommerceDocument: firestoreProviderCommerceRequester,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
     providerFetch: async () => {
       throw new Error('unexpected provider fetch');
@@ -150,7 +149,9 @@ test('checkout handler authenticates, creates one session, and persists the exac
   });
   assert.equal(writes[0]?.path, `drops/${DROP.dropId}/stripeCheckouts/cs_test_123`);
   assert.equal(writes[0]?.document.status, 'created');
-  assert.equal(writes[0]?.document.owner, 'firebase:firebase-uid');
+  assert.equal(writes[0]?.document.owner, 'anonymous:firebase-uid');
+  assert.equal(writes[0]?.document.ownerKind, 'anonymous');
+  assert.equal(writes[0]?.document.authSubject, 'firebase-uid');
 });
 
 test('staff checkout persists the wallet as the direct order owner', async () => {
@@ -170,6 +171,7 @@ test('staff checkout persists the wallet as the direct order owner', async () =>
   assert.equal(checkout?.ownerKind, 'wallet');
   assert.equal(checkout?.uid, STAFF_WALLET);
   assert.equal(Object.hasOwn(checkout || {}, 'firebaseUid'), false);
+  assert.equal(Object.hasOwn(checkout || {}, 'authSubject'), false);
 });
 
 test('linked anonymous checkout persists the wallet as the direct order owner', async () => {
@@ -189,6 +191,7 @@ test('linked anonymous checkout persists the wallet as the direct order owner', 
   assert.equal(checkout?.ownerKind, 'wallet');
   assert.equal(checkout?.uid, STAFF_WALLET);
   assert.equal(Object.hasOwn(checkout || {}, 'firebaseUid'), false);
+  assert.equal(Object.hasOwn(checkout || {}, 'authSubject'), false);
 });
 
 test('checkout handler rejects methods, malformed bodies, extra keys, and oversized JSON before providers', async () => {

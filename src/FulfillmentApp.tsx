@@ -2528,7 +2528,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
           const addressText = formatFulfillmentAddressText(checkout.address);
           const contactEmail = checkout.address.full !== '***' ? checkout.address.email : '';
           const quantityText = typeof checkout.quantity === 'number' ? `${checkout.quantity} item${checkout.quantity === 1 ? '' : 's'}` : 'Quantity pending';
-          const ownerText = checkout.owner || checkout.firebaseUid || 'Owner unavailable';
+          const ownerText = checkout.owner || checkout.authSubject || 'Owner unavailable';
           return (
             <div key={manualReviewCheckoutKey(checkout)} className="manual-review-row">
               <div className="manual-review-row__top">

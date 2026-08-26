@@ -19,6 +19,7 @@ const OPS_D1_MIGRATIONS = [
   '0011_staff_wallet_auth.sql',
   '0012_anonymous_auth.sql',
   '0013_remove_firebase_auth_fallback.sql',
+  '0014_auth_subject_bridge.sql',
 ] as const;
 
 const PRODUCTION_MIN_PROFILE_COUNT = 690;
@@ -433,8 +434,40 @@ const expectedSchema = new Map<
   [
     'wallet_sessions',
     {
-      fingerprint: 'c116ba37f7da13ffc3f004c2860a10d36918904d769ef4fe8a6f511e836b50a5',
+      fingerprint: 'aa9ef65cb4ed5080b76a37c3307ccd7a5eb68ee32944b85894ae104c644b2103',
       type: 'table',
+      tableName: 'wallet_sessions',
+    },
+  ],
+  [
+    'wallet_sessions_sync_auth_subject_insert',
+    {
+      fingerprint: 'b79a25466bce201dde35e6ba7f09256e26763b2c319858277dddb1fbcdef62ee',
+      type: 'trigger',
+      tableName: 'wallet_sessions',
+    },
+  ],
+  [
+    'wallet_sessions_sync_auth_subject_update',
+    {
+      fingerprint: '411232e1f040885cb196b5fa851f66af66b89bacb805740d012071ae6e9f83b3',
+      type: 'trigger',
+      tableName: 'wallet_sessions',
+    },
+  ],
+  [
+    'wallet_sessions_sync_firebase_uid_insert',
+    {
+      fingerprint: '4fd10b17a7d6c694cd99b2ae3789f5c4cfc0be7968a10c3d4e49ca65a40ef724',
+      type: 'trigger',
+      tableName: 'wallet_sessions',
+    },
+  ],
+  [
+    'wallet_sessions_sync_firebase_uid_update',
+    {
+      fingerprint: '9d602a961000ddae80ea40c94397dbdf7d7a59f71c1dac20a8b10362b2714190',
+      type: 'trigger',
       tableName: 'wallet_sessions',
     },
   ],
@@ -524,7 +557,8 @@ const expectedProfileStorageControlColumns: readonly ExpectedColumn[] = [
 ];
 
 const expectedWalletSessionColumns: readonly ExpectedColumn[] = [
-  ['firebase_uid', 'TEXT', 1, 1],
+  ['firebase_uid', 'TEXT', 0, 0],
+  ['auth_subject', 'TEXT', 0, 0],
   ['wallet', 'TEXT', 1, 0],
   ['expires_at_ms', 'INTEGER', 1, 0],
   ['updated_at_ms', 'INTEGER', 1, 0],

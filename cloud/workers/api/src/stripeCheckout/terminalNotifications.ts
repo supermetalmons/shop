@@ -7,7 +7,8 @@ import {
 } from '../../../../../shared/notificationEmailJob.js';
 import { toMillisMaybe } from '../time.js';
 import { createStripeReadyToShipNotificationJobs } from '../stripeReadyNotifications.js';
-import { STRIPE_CHECKOUT_OWNER_KIND_WALLET, STRIPE_CHECKOUT_STATUS } from './contract.js';
+import { STRIPE_CHECKOUT_STATUS } from './contract.js';
+import { normalizeStripeCheckoutIdentity } from '../../../../../shared/checkoutIdentity.js';
 
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
 
@@ -104,6 +105,7 @@ export async function publishStripeCheckoutTerminalNotifications(args: {
   const context: NotificationEmailJobContext = { dropId, sessionId };
   let job: NotificationEmailJobV1;
   try {
+    const identity = normalizeStripeCheckoutIdentity(checkout);
     const email = buildStripeCheckoutManualReviewEmailContent({
       idempotencyKey,
       recipients: [recipient],
@@ -113,10 +115,8 @@ export async function publishStripeCheckoutTerminalNotifications(args: {
       checkoutPath: checkoutDocument.path,
       livemode: checkout.livemode === true,
       variantKey: optionalTrimmedString(checkout.variantKey),
-      owner: optionalTrimmedString(checkout.owner),
-      firebaseUid: optionalTrimmedString(
-        checkout.firebaseUid || (checkout.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_WALLET ? '' : checkout.uid),
-      ),
+      owner: identity.owner,
+      ...('authSubject' in identity ? { authSubject: identity.authSubject } : {}),
       manualRefundReviewReason: optionalTrimmedString(checkout.manualRefundReviewReason),
       lastFulfillmentError: checkout.lastFulfillmentError,
       createdAt: toMillisMaybe(checkout.createdAt),

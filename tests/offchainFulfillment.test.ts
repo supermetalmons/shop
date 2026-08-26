@@ -6,7 +6,7 @@ import Stripe from 'stripe';
 import {
   ACCOUNT_ADMIN_DELIVERY_ORDER,
   IX_ADMIN_DELIVER_VARIANT_ORDER,
-  STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+  STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
   STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   STRIPE_CHECKOUT_SHIPPING_COUNTRY,
   STRIPE_CHECKOUT_STATUS,
@@ -31,12 +31,13 @@ import {
   requireStripeReceiptClaimCode,
   resolveMintSelectionVariantIndex,
   shouldProcessStripeCheckoutFulfillmentWrite,
-  stripeCheckoutOwnerId,
+  stripeCheckoutAnonymousOwnerId,
   stripeCheckoutSessionOrderHash,
   stripeFulfillmentAddressFromSession,
   validateStripeCheckoutContract,
   validateStripeCheckoutDocumentData,
   validateStripeTestCheckoutContract,
+  type StripeOffchainDeliveryOrderDocumentInput,
 } from '../cloud/workers/api/src/stripeCheckout/contract.ts';
 import {
   orderStripeReceiptClaimByBoxId,
@@ -513,8 +514,10 @@ test('buildStripeCheckoutManualReviewSummary includes failed manual-review check
     status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
     manualRefundReviewRequired: true,
     manualRefundReviewReason: 'delivery_order_creation_failed',
-    owner: 'owner_wallet',
-    firebaseUid: 'firebase_uid',
+    owner: 'anonymous:anonymous_subject',
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+    uid: 'anonymous_subject',
+    authSubject: 'anonymous_subject',
     quantity: '15',
     createdAt: timestampLike(1_000),
     failedAt: timestampLike(2_000),
@@ -554,8 +557,8 @@ test('buildStripeCheckoutManualReviewSummary includes failed manual-review check
   assert.deepEqual(summary, {
     dropId: 'card_nft_2',
     sessionId: 'cs_test_manual_review_123',
-    owner: 'owner_wallet',
-    firebaseUid: 'firebase_uid',
+    owner: 'anonymous:anonymous_subject',
+    authSubject: 'anonymous_subject',
     quantity: 15,
     amountTotal: 66000,
     currency: STRIPE_OFFCHAIN_CURRENCY,
@@ -608,7 +611,7 @@ test('buildStripeCheckoutManualReviewSummary masks failed checkout contact info 
   assert.equal(summary?.address.countryCode, 'US');
 });
 
-test('wallet-owned manual-review summaries do not fabricate a Firebase UID', () => {
+test('wallet-owned manual-review summaries do not fabricate an auth subject', () => {
   const wallet = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
   const summary = manualReviewCheckoutFromRecord({
     canViewSensitiveAddress: false,
@@ -624,7 +627,7 @@ test('wallet-owned manual-review summaries do not fabricate a Firebase UID', () 
     sessionId: 'cs_test_staff_manual_review',
   });
   assert.equal(summary?.owner, wallet);
-  assert.equal(Object.hasOwn(summary || {}, 'firebaseUid'), false);
+  assert.equal(Object.hasOwn(summary || {}, 'authSubject'), false);
 });
 
 test('manual-review checkout summary excludes non-failed or non-manual-review checkout docs', () => {
@@ -1101,9 +1104,9 @@ test('buildStripeOffchainDeliveryOrderDocument shapes fulfillment UI fields', ()
   const input = {
     dropId: 'little_swag_hoodies_devnet',
     deliveryId: 123,
-    owner: 'firebase:anon_uid_123',
-    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-    firebaseUid: 'anon_uid_123',
+    owner: 'anonymous:anon_uid_123',
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+    authSubject: 'anon_uid_123',
     receiptOwner: pubkey(90).toBase58(),
     metadataId: 16,
     variantKey: 'XL',
@@ -1116,14 +1119,14 @@ test('buildStripeOffchainDeliveryOrderDocument shapes fulfillment UI fields', ()
     receiptTx: 'tx123',
     addressSnapshot: { encrypted: 'cipher', hint: 'B...US', countryCode: 'US' },
     stripeReceiptClaim: { code: 'ABCDEF-0123456789', status: 'unclaimed' },
-  };
+  } satisfies StripeOffchainDeliveryOrderDocumentInput;
   const doc = buildStripeOffchainDeliveryOrderDocument(input);
 
   assert.equal(doc.source, 'stripe_offchain');
   assert.equal(doc.status, 'ready_to_ship');
-  assert.equal(doc.owner, 'firebase:anon_uid_123');
-  assert.equal(doc.ownerKind, STRIPE_CHECKOUT_OWNER_KIND_FIREBASE);
-  assert.equal(doc.firebaseUid, 'anon_uid_123');
+  assert.equal(doc.owner, 'anonymous:anon_uid_123');
+  assert.equal(doc.ownerKind, STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS);
+  assert.equal(doc.authSubject, 'anon_uid_123');
   assert.equal(doc.receiptOwner, pubkey(90).toBase58());
   assert.equal(doc.quantity, 1);
   assert.deepEqual(doc.metadataIds, [16]);
@@ -1151,9 +1154,9 @@ test('buildStripeOffchainDeliveryOrderDocument shapes fulfillment UI fields', ()
   assert.deepEqual(buildStripeOffchainOrderMarkerDocument(input), {
     dropId: 'little_swag_hoodies_devnet',
     deliveryId: 123,
-    owner: 'firebase:anon_uid_123',
-    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-    firebaseUid: 'anon_uid_123',
+    owner: 'anonymous:anon_uid_123',
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+    authSubject: 'anon_uid_123',
     receiptOwner: pubkey(90).toBase58(),
     quantity: 1,
     firstMetadataId: 16,
@@ -1172,9 +1175,9 @@ test('buildStripeOffchainDeliveryOrderDocument shapes multi-item receipt claims'
   const input = {
     dropId: 'little_swag_hoodies_devnet',
     deliveryId: 456,
-    owner: 'firebase:anon_uid_456',
-    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-    firebaseUid: 'anon_uid_456',
+    owner: 'anonymous:anon_uid_456',
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+    authSubject: 'anon_uid_456',
     receiptOwner: pubkey(91).toBase58(),
     metadataIds: [16, 17, 18],
     variantKey: 'XL',
@@ -1187,7 +1190,7 @@ test('buildStripeOffchainDeliveryOrderDocument shapes multi-item receipt claims'
       { code: 'GHIJKL-0123456789', boxId: 17, status: 'unclaimed' },
       { code: 'MNOPQR-0123456789', boxId: 18, status: 'unclaimed' },
     ],
-  };
+  } satisfies StripeOffchainDeliveryOrderDocumentInput;
 
   const doc = buildStripeOffchainDeliveryOrderDocument(input);
   assert.equal(doc.quantity, 3);
@@ -1225,9 +1228,9 @@ test('buildStripeOffchainDeliveryOrderDocument omits variant labels for pack che
   const input = {
     dropId: 'card_nft_2',
     deliveryId: 789,
-    owner: 'firebase:anon_uid_pack',
-    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-    firebaseUid: 'anon_uid_pack',
+    owner: 'anonymous:anon_uid_pack',
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+    authSubject: 'anon_uid_pack',
     receiptOwner: pubkey(93).toBase58(),
     metadataIds: [1, 2],
     orderHashHex: '12'.repeat(32),
@@ -1238,7 +1241,7 @@ test('buildStripeOffchainDeliveryOrderDocument omits variant labels for pack che
       { code: 'PACKAA-0123456789', boxId: 1, status: 'unclaimed' },
       { code: 'PACKBB-0123456789', boxId: 2, status: 'unclaimed' },
     ],
-  };
+  } satisfies StripeOffchainDeliveryOrderDocumentInput;
 
   const doc = buildStripeOffchainDeliveryOrderDocument(input);
   assert.deepEqual(doc.items, [
@@ -1302,9 +1305,9 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
     order: {
       dropId,
       orderHashHex,
-      owner: 'firebase:anon_uid_456',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-      firebaseUid: 'anon_uid_456',
+      owner: 'anonymous:anon_uid_456',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      authSubject: 'anon_uid_456',
       receiptOwner: pubkey(91).toBase58(),
       metadataId: 16,
       variantKey: 'XL',
@@ -1323,6 +1326,8 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
   assert.ok(markerCreate);
   assert.ok(claimCreate);
   assert.match(claimCreate.data.code, /^[A-Z]{6}-\d{10}$/);
+  assert.equal(claimCreate.data.authSubject, 'anon_uid_456');
+  assert.doesNotMatch(JSON.stringify(creates), /firebase/i);
   assert.equal(claimCreate.data.namespace, STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE);
   assert.equal(claimCreate.data.status, 'unclaimed');
   assert.equal(claimCreate.data.boxId, 16);
@@ -1385,9 +1390,9 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
     order: {
       dropId,
       orderHashHex,
-      owner: 'firebase:anon_uid_multi',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-      firebaseUid: 'anon_uid_multi',
+      owner: 'anonymous:anon_uid_multi',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      authSubject: 'anon_uid_multi',
       receiptOwner: pubkey(92).toBase58(),
       metadataId: 16,
       metadataIds: [16, 17, 18],
@@ -1429,7 +1434,7 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
   assert.equal(updates[0].data.quantity, 3);
 });
 
-test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the critical Firestore transaction', async () => {
+test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the critical commerce transaction', async () => {
   const dropId = 'card_nft_2';
   const orderHashHex = '12'.repeat(32);
   const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
@@ -1488,9 +1493,9 @@ test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the 
     order: {
       dropId,
       orderHashHex,
-      owner: 'firebase:anon_uid_pack',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-      firebaseUid: 'anon_uid_pack',
+      owner: 'anonymous:anon_uid_pack',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      authSubject: 'anon_uid_pack',
       receiptOwner: pubkey(95).toBase58(),
       metadataId: 101,
       metadataIds: [101, 102],
@@ -1529,9 +1534,9 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
   const markerData = buildStripeOffchainOrderMarkerDocument({
     dropId,
     deliveryId: 789,
-    owner: 'firebase:anon_uid_pack',
-    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-    firebaseUid: 'anon_uid_pack',
+    owner: 'anonymous:anon_uid_pack',
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+    authSubject: 'anon_uid_pack',
     receiptOwner: pubkey(94).toBase58(),
     metadataIds: [1, 2],
     orderHashHex,
@@ -1594,9 +1599,9 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
     order: {
       dropId,
       orderHashHex,
-      owner: 'firebase:anon_uid_pack',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-      firebaseUid: 'anon_uid_pack',
+      owner: 'anonymous:anon_uid_pack',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      authSubject: 'anon_uid_pack',
       receiptOwner: pubkey(94).toBase58(),
       metadataIds: [1, 2],
       stripeSession: { id: 'cs_test_pack_retry' },
@@ -1626,9 +1631,9 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
       order: {
         dropId,
         orderHashHex,
-        owner: 'firebase:anon_uid_pack',
-        ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-        firebaseUid: 'anon_uid_pack',
+        owner: 'anonymous:anon_uid_pack',
+        ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+        authSubject: 'anon_uid_pack',
         receiptOwner: pubkey(94).toBase58(),
         metadataIds: [1, 2],
         stripeSession: { id: 'cs_test_pack_retry' },
@@ -1674,9 +1679,9 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     sessionId: 'cs_test_123',
     dropId: 'little_swag_hoodies_devnet',
     uid: 'anon_uid_123',
-    owner: 'firebase:anon_uid_123',
-    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-    firebaseUid: 'anon_uid_123',
+    owner: 'anonymous:anon_uid_123',
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+    authSubject: 'anon_uid_123',
     variantKey: 'XL',
     quantity: STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
     currency: STRIPE_OFFCHAIN_CURRENCY,
@@ -1697,9 +1702,9 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     }),
     {
       uid: 'anon_uid_123',
-      owner: 'firebase:anon_uid_123',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-      firebaseUid: 'anon_uid_123',
+      owner: 'anonymous:anon_uid_123',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      authSubject: 'anon_uid_123',
       variantKey: 'XL',
       quantity: 1,
       unitAmountCents: 100,
@@ -1726,9 +1731,9 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     }),
     {
       uid: 'anon_uid_123',
-      owner: 'firebase:anon_uid_123',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-      firebaseUid: 'anon_uid_123',
+      owner: 'anonymous:anon_uid_123',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      authSubject: 'anon_uid_123',
       variantKey: 'XL',
       quantity: 3,
       unitAmountCents: 100,
@@ -1756,9 +1761,9 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
     }),
     {
       uid: 'anon_uid_123',
-      owner: 'firebase:anon_uid_123',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-      firebaseUid: 'anon_uid_123',
+      owner: 'anonymous:anon_uid_123',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      authSubject: 'anon_uid_123',
       variantKey: 'XL',
       quantity: 1,
       unitAmountCents: 24900,
@@ -1766,7 +1771,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
       status: STRIPE_CHECKOUT_STATUS.CREATED,
     },
   );
-  assert.equal(stripeCheckoutOwnerId('anon_uid_123'), 'firebase:anon_uid_123');
+  assert.equal(stripeCheckoutAnonymousOwnerId('anon_uid_123'), 'anonymous:anon_uid_123');
   const staffWallet = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
   const staffCheckout = buildStripeCheckoutDocument({
     dropId: 'little_swag_hoodies_devnet',
@@ -1780,7 +1785,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
   });
   assert.equal(staffCheckout.owner, staffWallet);
   assert.equal(staffCheckout.ownerKind, STRIPE_CHECKOUT_OWNER_KIND_WALLET);
-  assert.equal(Object.hasOwn(staffCheckout, 'firebaseUid'), false);
+  assert.equal(Object.hasOwn(staffCheckout, 'authSubject'), false);
   assert.equal(validateStripeCheckoutDocumentData({
     dropId: 'little_swag_hoodies_devnet',
     variantKey: 'XL',
@@ -1865,9 +1870,9 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
     }),
     {
       uid: 'anon_uid_pack',
-      owner: 'firebase:anon_uid_pack',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-      firebaseUid: 'anon_uid_pack',
+      owner: 'anonymous:anon_uid_pack',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      authSubject: 'anon_uid_pack',
       quantity: 15,
       unitAmountCents: 100,
       livemode: false,
@@ -2097,7 +2102,7 @@ test('startStripeCheckoutFulfillmentDocument processes only pending checkout doc
       updates.push({ ref, data });
     },
   };
-  checkoutRef.firestore = { runTransaction: async (fn: any) => fn(tx) };
+  checkoutRef.store = { runTransaction: async (fn: any) => fn(tx) };
 
   const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef });
 
@@ -2130,7 +2135,7 @@ test('startStripeCheckoutFulfillmentDocument starts pack documents without varia
       status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
     }),
   };
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) =>
       fn({
         get: async (ref: any) => {
@@ -2178,7 +2183,7 @@ test('startStripeCheckoutFulfillmentDocument skips active processing leases', as
       processingStartedAt: timestampLike(nowMs - STRIPE_CHECKOUT_PROCESSING_LEASE_MS - 1_000),
     }),
   };
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) =>
       fn({
         get: async (ref: any) => {
@@ -2220,7 +2225,7 @@ test('startStripeCheckoutFulfillmentDocument reclaims expired processing leases'
       processingLeaseExpiresAt: timestampLike(nowMs - 1),
     }),
   };
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) =>
       fn({
         get: async (ref: any) => {
@@ -2263,7 +2268,7 @@ test('startStripeCheckoutFulfillmentDocument uses legacy processingStartedAt as 
     status: STRIPE_CHECKOUT_STATUS.PROCESSING,
     processingStartedAt: timestampLike(nowMs - STRIPE_CHECKOUT_PROCESSING_LEASE_MS - 1),
   };
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) =>
       fn({
         get: async (ref: any) => {
@@ -2288,7 +2293,7 @@ test('startStripeCheckoutFulfillmentDocument uses legacy processingStartedAt as 
 test('markStripeCheckoutFulfillmentFailed leaves an already-fulfilled checkout intact', async () => {
   const sets: Array<{ ref: any; data: any; options: any }> = [];
   const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) =>
       fn({
         get: async (ref: any) => {
@@ -2321,7 +2326,7 @@ test('markStripeCheckoutFulfillmentFailed leaves an already-fulfilled checkout i
 test('retryable fulfillment failures release the current lease back to pending', async () => {
   const updates: Array<{ ref: any; data: any }> = [];
   const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) => fn({
       get: async () => ({
         exists: true,
@@ -2353,7 +2358,7 @@ test('final Queue attempts persist retryable fulfillment failures for manual rev
   const sets: Array<{ data: any }> = [];
   const checkoutRef = { path: 'checkout' } as any;
   let transactionCalls = 0;
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) => {
       transactionCalls += 1;
       if (transactionCalls === 1) {
@@ -2373,7 +2378,7 @@ test('final Queue attempts persist retryable fulfillment failures for manual rev
     },
   };
   const result = await processStripeCheckoutFulfillmentDocument({
-    db: checkoutRef.firestore,
+    db: checkoutRef.store,
     dropId: 'card_nft_binder_devnet',
     sessionId: 'cs_test_final_attempt',
     checkoutRef,
@@ -2392,7 +2397,7 @@ test('final Queue attempts persist retryable fulfillment failures for manual rev
 
 test('already-fulfilled Queue retries repair pack status idempotently', async () => {
   const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (operation: any) => operation({
       get: async () => ({
         exists: true,
@@ -2402,7 +2407,7 @@ test('already-fulfilled Queue retries repair pack status idempotently', async ()
   };
   const repairs: unknown[] = [];
   const result = await processStripeCheckoutFulfillmentDocument({
-    db: checkoutRef.firestore,
+    db: checkoutRef.store,
     dropId: 'card_nft_2',
     sessionId: 'cs_test_repair',
     checkoutRef,
@@ -2426,7 +2431,7 @@ test('already-fulfilled Queue retries repair pack status idempotently', async ()
 test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async () => {
   const sets: Array<{ ref: any; data: any; options: any }> = [];
   const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) =>
       fn({
         get: async (ref: any) => {
@@ -2462,7 +2467,7 @@ test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async (
 test('markStripeCheckoutFulfillmentFailed ignores stale processing attempts', async () => {
   const sets: Array<{ ref: any; data: any; options: any }> = [];
   const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) =>
       fn({
         get: async (ref: any) => {
@@ -2491,7 +2496,7 @@ test('markStripeCheckoutFulfillmentFailed ignores stale processing attempts', as
 test('markStripeCheckoutFulfillmentFulfilled writes only the current processing attempt', async () => {
   const updates: Array<{ ref: any; data: any }> = [];
   const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) =>
       fn({
         get: async (ref: any) => {
@@ -2531,7 +2536,7 @@ test('markStripeCheckoutFulfillmentFulfilled writes only the current processing 
 test('markStripeCheckoutFulfillmentFulfilled clears singular metadataId for multi-item checkout docs', async () => {
   const updates: Array<{ ref: any; data: any }> = [];
   const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) =>
       fn({
         get: async (ref: any) => {
@@ -2567,7 +2572,7 @@ test('markStripeCheckoutFulfillmentFulfilled clears singular metadataId for mult
 test('markStripeCheckoutFulfillmentFulfilled ignores stale processing attempts', async () => {
   const updates: Array<{ ref: any; data: any }> = [];
   const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.firestore = {
+  checkoutRef.store = {
     runTransaction: async (fn: any) =>
       fn({
         get: async (ref: any) => {
@@ -2638,9 +2643,9 @@ test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale
     order: {
       dropId,
       orderHashHex,
-      owner: 'firebase:anon_uid_123',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-      firebaseUid: 'anon_uid_123',
+      owner: 'anonymous:anon_uid_123',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      authSubject: 'anon_uid_123',
       receiptOwner: pubkey(90).toBase58(),
       metadataId: 16,
       variantKey: 'XL',
@@ -2739,7 +2744,7 @@ test('runStripeCheckoutFulfillmentWithRetry stops when processing attempt is sta
     update: async (data: any) => {
       updates.push(data);
     },
-    firestore: {
+    store: {
       runTransaction: async (fn: any) =>
         fn({
           get: async (ref: any) => {
@@ -2780,9 +2785,9 @@ test('runStripeCheckoutFulfillmentWithRetry stops when processing attempt is sta
 
 test('runStripeCheckoutFulfillmentWithRetry fails closed when ownership cannot be verified', async () => {
   const checkoutRef = {
-    firestore: {
+    store: {
       runTransaction: async () => {
-        throw new Error('firestore unavailable');
+        throw new Error('commerce store unavailable');
       },
     },
   } as any;
@@ -2973,9 +2978,9 @@ test('checkout session core persists the established Stripe checkout document', 
     sessionId: 'cs_test_123',
     dropId: 'card_nft_binder_devnet',
     uid: 'anon_uid_123',
-    owner: 'firebase:anon_uid_123',
-    ownerKind: 'firebase',
-    firebaseUid: 'anon_uid_123',
+    owner: 'anonymous:anon_uid_123',
+    ownerKind: 'anonymous',
+    authSubject: 'anon_uid_123',
     quantity: 1,
     currency: 'usd',
     unitAmountCents: 100,

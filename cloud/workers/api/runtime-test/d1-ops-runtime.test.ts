@@ -115,6 +115,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       '0011_staff_wallet_auth.sql',
       '0012_anonymous_auth.sql',
       '0013_remove_firebase_auth_fallback.sql',
+      '0014_auth_subject_bridge.sql',
     ]);
     const authControl = await env.OPS_DB.prepare(`SELECT firebase_fallback_enabled, revision, firebase_disabled_at_ms
       FROM anonymous_auth_control
@@ -335,18 +336,18 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     await assert.rejects(establishD1WalletSession({
       baseline: null,
       db: env.OPS_DB,
-      firebaseUid: 'invalid-wallet-session-uid',
+      authSubject: 'invalid-wallet-session-uid',
       nowMs: 1_000,
       wallet: '1'.repeat(45),
     }), /Wallet-session data is invalid/);
     assert.equal((await env.OPS_DB.prepare(
-      'SELECT COUNT(*) AS count FROM wallet_sessions WHERE firebase_uid = ?',
+      'SELECT COUNT(*) AS count FROM wallet_sessions WHERE auth_subject = ?',
     ).bind('invalid-wallet-session-uid').first<{ count: number }>())?.count, 0);
     const sessionUid = 'runtime-wallet-session-uid';
     const initialSession = await establishD1WalletSession({
       baseline: null,
       db: env.OPS_DB,
-      firebaseUid: sessionUid,
+      authSubject: sessionUid,
       nowMs: 1_000,
       wallet: PROFILE_WALLET,
     });
@@ -354,7 +355,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     const reboundSession = await establishD1WalletSession({
       baseline: initialSession,
       db: env.OPS_DB,
-      firebaseUid: sessionUid,
+      authSubject: sessionUid,
       nowMs: 2_000,
       wallet: RACE_WALLET,
     });
@@ -363,7 +364,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       establishD1WalletSession({
         baseline: initialSession,
         db: env.OPS_DB,
-        firebaseUid: sessionUid,
+        authSubject: sessionUid,
         nowMs: 3_000,
         wallet: PROFILE_WALLET,
       }),
@@ -371,7 +372,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     );
     const lease = await acquireWalletSessionReconcileLease({
       db: env.OPS_DB,
-      firebaseUid: sessionUid,
+      authSubject: sessionUid,
       leaseId: '00000000-0000-4000-8000-000000000001',
       nowMs: 4_000,
     });
@@ -379,7 +380,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     const renewedDuringLease = await establishD1WalletSession({
       baseline: reboundSession,
       db: env.OPS_DB,
-      firebaseUid: sessionUid,
+      authSubject: sessionUid,
       nowMs: 5_000,
       wallet: RACE_WALLET,
     });
@@ -389,7 +390,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       establishD1WalletSession({
         baseline: reboundSession,
         db: env.OPS_DB,
-        firebaseUid: sessionUid,
+        authSubject: sessionUid,
         nowMs: 5_500,
         wallet: PROFILE_WALLET,
       }),
@@ -399,7 +400,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       establishD1WalletSession({
         baseline: renewedDuringLease,
         db: env.OPS_DB,
-        firebaseUid: sessionUid,
+        authSubject: sessionUid,
         nowMs: 6_000,
         wallet: PROFILE_WALLET,
       }),
@@ -411,14 +412,14 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     const reboundAfterRelease = await establishD1WalletSession({
       baseline: releasedSession,
       db: env.OPS_DB,
-      firebaseUid: sessionUid,
+      authSubject: sessionUid,
       nowMs: 7_000,
       wallet: PROFILE_WALLET,
     });
     assert.equal(reboundAfterRelease.wallet, PROFILE_WALLET);
     const expiringLease = await acquireWalletSessionReconcileLease({
       db: env.OPS_DB,
-      firebaseUid: sessionUid,
+      authSubject: sessionUid,
       leaseId: '00000000-0000-4000-8000-000000000002',
       nowMs: 20_000,
     });
@@ -429,13 +430,13 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     );
     await assert.rejects(acquireWalletSessionReconcileLease({
       db: env.OPS_DB,
-      firebaseUid: sessionUid,
+      authSubject: sessionUid,
       leaseId: '00000000-0000-4000-8000-000000000003',
       nowMs: 21_000,
     }), WalletSessionD1BusyError);
     const reclaimedLease = await acquireWalletSessionReconcileLease({
       db: env.OPS_DB,
-      firebaseUid: sessionUid,
+      authSubject: sessionUid,
       leaseId: '00000000-0000-4000-8000-000000000004',
       nowMs: expiringLease!.expiresAtMs + 1,
     });
@@ -444,7 +445,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     await establishD1WalletSession({
       baseline: null,
       db: env.OPS_DB,
-      firebaseUid: 'duplicate-wallet-session-uid',
+      authSubject: 'duplicate-wallet-session-uid',
       nowMs: 8_000,
       wallet: PROFILE_WALLET,
     });

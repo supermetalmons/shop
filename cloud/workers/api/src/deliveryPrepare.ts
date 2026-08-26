@@ -65,20 +65,18 @@ import {
 } from '../../../../shared/shipping.js';
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  FirestoreWriteConflict,
-  ProfileReadError,
-  commerceDocumentRequest,
   cancelResponseBody,
-  decodeFirestoreFields,
-  firestoreString,
-  isRecord,
   readBoundedJson,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
+import {
+  CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeys,
+  type CommerceDocumentData,
+} from './commerceRepository.js';
 import {
   loadD1ProfileAddress,
   type D1ProfileAddress,
@@ -159,13 +157,19 @@ type DeliveryRuntime = {
   maxDudeId: number;
 };
 
-type FirestoreContext = {
-  commerceDb: D1Database;
+type CommerceContext = {
+  commerceDb?: D1Database;
   nowMs: number;
-  providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
+  repository?: D1CommerceRepository;
   signal: AbortSignal;
+  [key: string]: unknown;
 };
+
+function commerceRepository(context: CommerceContext): D1CommerceRepository {
+  if (context.repository) return context.repository;
+  if (context.commerceDb) return new D1CommerceRepository(context.commerceDb);
+  throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
+}
 
 type ProviderContext = {
   apiKey: string;
@@ -175,8 +179,7 @@ type ProviderContext = {
 };
 
 type AddressDocument = {
-  decoded: Record<string, unknown>;
-  rawFields: Record<string, unknown>;
+  decoded: CommerceDocumentData;
 };
 
 type OnchainState = {
@@ -195,11 +198,11 @@ type DeliveryPrepareDependencies = {
   attemptId: () => string;
   candidateId: () => number;
   createDeliveryOrder: (
-    context: FirestoreContext,
+    context: CommerceContext,
     input: DeliveryOrderCreateInput,
   ) => Promise<string>;
   deleteDeliveryOrder: (
-    context: FirestoreContext,
+    context: CommerceContext,
     path: string,
     updateTime: string,
   ) => Promise<void>;
@@ -215,7 +218,7 @@ type DeliveryPrepareDependencies = {
   ) => Promise<DasAsset>;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
   loadAddress: (
-    context: FirestoreContext,
+    context: CommerceContext,
     db: D1Database | undefined,
     wallet: string,
     addressId: string,
@@ -233,13 +236,13 @@ type DeliveryPrepareDependencies = {
     runtime: DeliveryRuntime,
   ) => Promise<OnchainState>;
   loadWalletSession: (
-    context: FirestoreContext,
+    context: CommerceContext,
     db: D1Database | undefined,
     uid: string,
   ) => Promise<string>;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
+  createCommerceRepository: (db: D1Database) => D1CommerceRepository;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
 };
@@ -809,7 +812,7 @@ async function deliveryPdaExists(
 }
 
 async function loadWalletSession(
-  context: FirestoreContext,
+  context: CommerceContext,
   db: D1Database | undefined,
   uid: string,
 ): Promise<string> {
@@ -825,16 +828,6 @@ async function loadWalletSession(
 }
 
 function d1AddressDocument(address: D1ProfileAddress): AddressDocument {
-  const rawFields: Record<string, unknown> = {
-    id: firestoreString(address.id),
-    country: firestoreString(address.country),
-    encrypted: firestoreString(address.encrypted),
-    hint: firestoreString(address.hint),
-    createdAt: { timestampValue: new Date(address.createdAtMs).toISOString() },
-    ...(address.countryCode ? { countryCode: firestoreString(address.countryCode) } : {}),
-    ...(address.email ? { email: firestoreString(address.email) } : {}),
-    ...(address.label ? { label: firestoreString(address.label) } : {}),
-  };
   return {
     decoded: {
       id: address.id,
@@ -846,12 +839,11 @@ function d1AddressDocument(address: D1ProfileAddress): AddressDocument {
       ...(address.email ? { email: address.email } : {}),
       ...(address.label ? { label: address.label } : {}),
     },
-    rawFields,
   };
 }
 
 async function loadAddress(
-  context: FirestoreContext,
+  context: CommerceContext,
   db: D1Database | undefined,
   wallet: string,
   addressId: string,
@@ -868,103 +860,60 @@ async function loadAddress(
   throw new DeliveryPrepareError('not-found', 'Address not found');
 }
 
-function firestoreInteger(value: number): Record<string, unknown> {
-  return { integerValue: String(value) };
-}
-
-function firestoreItem(item: DeliveryOrderItem): Record<string, unknown> {
-  return {
-    mapValue: {
-      fields: {
-        assetId: firestoreString(item.assetId),
-        kind: firestoreString(item.kind),
-        refId: firestoreInteger(item.refId),
-      },
-    },
-  };
-}
-
 async function createDeliveryOrder(
-  context: FirestoreContext,
+  context: CommerceContext,
   input: DeliveryOrderCreateInput,
 ): Promise<string> {
   const reconcile = () => reconcileCreatedDeliveryOrder({
     ...context,
     signal: AbortSignal.timeout(RECONCILE_TIMEOUT_MS),
   }, input).catch(() => null);
-  const snapshotFields: Record<string, unknown> = {
-    ...input.address.rawFields,
-    id: firestoreString(input.addressId),
-    ...(input.addressCountry ? { countryCode: firestoreString(input.addressCountry) } : {}),
-  };
-  const fields: Record<string, unknown> = {
-    dropId: firestoreString(input.dropId),
-    status: firestoreString('prepared'),
-    owner: firestoreString(input.owner),
-    addressId: firestoreString(input.addressId),
-    addressSnapshot: { mapValue: { fields: snapshotFields } },
-    itemIds: { arrayValue: { values: input.items.map((item) => firestoreString(item.assetId)) } },
-    items: { arrayValue: { values: input.items.map(firestoreItem) } },
-    deliveryId: firestoreInteger(input.deliveryId),
-    deliveryPda: firestoreString(input.deliveryPda),
-    ...(input.lookupTable ? { lookupTable: firestoreString(input.lookupTable) } : {}),
-    deliveryLamports: firestoreInteger(input.deliveryLamports),
-    prepareAttemptId: firestoreString(input.prepareAttemptId),
-    receiptRecovery: {
-      mapValue: {
-        fields: {
-          preparedProbeCount: firestoreInteger(0),
-          nextPreparedProbeAt: { timestampValue: new Date(input.nextPreparedProbeAtMs).toISOString() },
-        },
-      },
+  const fields = {
+    dropId: input.dropId,
+    status: 'prepared',
+    owner: input.owner,
+    addressId: input.addressId,
+    addressSnapshot: {
+      ...input.address.decoded,
+      id: input.addressId,
+      ...(input.addressCountry ? { countryCode: input.addressCountry } : {}),
     },
+    itemIds: input.items.map((item) => item.assetId),
+    items: input.items,
+    deliveryId: input.deliveryId,
+    deliveryPda: input.deliveryPda,
+    ...(input.lookupTable ? { lookupTable: input.lookupTable } : {}),
+    deliveryLamports: input.deliveryLamports,
+    prepareAttemptId: input.prepareAttemptId,
+    receiptRecovery: {
+      preparedProbeCount: 0,
+      nextPreparedProbeAt: input.nextPreparedProbeAtMs,
+    },
+    createdAt: commerceFieldValue.serverTimestamp(),
   };
-  let payload: unknown;
+  const key = commerceKeys.deliveryOrder(input.dropId, String(input.deliveryId));
   try {
-    payload = await context.requestCommerceDocument({
-      ...context,
-      body: JSON.stringify({
-        writes: [{
-          update: {
-            name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${input.path}`,
-            fields,
-          },
-          currentDocument: { exists: false },
-          updateTransforms: [{ fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' }],
-        }],
-      }),
-      method: 'POST',
-      url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-    });
+    if (key.path !== input.path) throw new DeliveryPrepareError('internal', 'Delivery preparation failed.');
+    await commerceRepository(context).run(context.nowMs, async (unit) => unit.create(key, fields));
   } catch (error) {
     const reconciled = await reconcile();
     if (reconciled) return reconciled;
     throw error;
   }
-  const writeResults = isRecord(payload) ? payload.writeResults : undefined;
-  const updateTime = Array.isArray(writeResults) && isRecord(writeResults[0]) &&
-    typeof writeResults[0].updateTime === 'string'
-    ? writeResults[0].updateTime
-    : '';
-  if (!updateTime) {
-    const reconciled = await reconcile();
-    if (reconciled) return reconciled;
-    throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
-  }
-  return updateTime;
+  const created = await commerceRepository(context).get(key);
+  if (!created) throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
+  return created.updateTime;
 }
 
 async function reconcileCreatedDeliveryOrder(
-  context: FirestoreContext,
+  context: CommerceContext,
   input: DeliveryOrderCreateInput,
 ): Promise<string | null> {
-  const document = await context.requestCommerceDocument({
-    ...context,
-    method: 'GET',
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}/${input.path}`,
-  });
-  if (!isRecord(document) || typeof document.updateTime !== 'string') return null;
-  const decoded = decodeFirestoreFields(document.fields);
+  const key = commerceKeys.deliveryOrder(input.dropId, String(input.deliveryId));
+  if (key.path !== input.path) return null;
+  const document = await commerceRepository(context).get(key);
+  if (!document) return null;
+  const decoded = document.data;
   if (
     !decoded ||
     decoded.prepareAttemptId !== input.prepareAttemptId ||
@@ -981,20 +930,17 @@ async function reconcileCreatedDeliveryOrder(
 }
 
 async function deleteDeliveryOrder(
-  context: FirestoreContext,
+  context: CommerceContext,
   path: string,
   updateTime: string,
 ): Promise<void> {
-  await context.requestCommerceDocument({
-    ...context,
-    body: JSON.stringify({
-      writes: [{
-        delete: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`,
-        currentDocument: { updateTime },
-      }],
-    }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
+  const identity = path.match(/^drops\/([^/]+)\/deliveryOrders\/([^/]+)$/);
+  if (!identity) throw new DeliveryPrepareError('internal', 'Delivery preparation failed.');
+  const key = commerceKeys.deliveryOrder(identity[1], identity[2]);
+  await commerceRepository(context).run(context.nowMs, async (unit) => {
+    const current = await unit.get(key);
+    if (!current || current.updateTime !== updateTime) throw new CommerceWriteConflict();
+    await unit.delete(key, { mustExist: true });
   });
 }
 
@@ -1286,7 +1232,7 @@ function orderItem(asset: DasAsset, assetId: string, runtime: DeliveryRuntime, o
 
 async function prepareDelivery(args: {
   body: PrepareDeliveryRequest;
-  context: FirestoreContext;
+  context: CommerceContext;
   providerContext: ProviderContext;
   identity: RequestIdentity;
   env: DeliveryPrepareEnv;
@@ -1384,7 +1330,7 @@ async function prepareDelivery(args: {
         prepareAttemptId,
       });
     } catch (error) {
-      if (error instanceof FirestoreWriteConflict) continue;
+      if (error instanceof CommerceWriteConflict) continue;
       throw error;
     }
     try {
@@ -1426,6 +1372,7 @@ async function prepareDelivery(args: {
 const defaultDependencies: DeliveryPrepareDependencies = {
   attemptId: () => crypto.randomUUID(),
   candidateId: secureDeliveryId,
+  createCommerceRepository: (db) => new D1CommerceRepository(db),
   createDeliveryOrder,
   deleteDeliveryOrder,
   deliveryPdaExists,
@@ -1438,7 +1385,6 @@ const defaultDependencies: DeliveryPrepareDependencies = {
   loadWalletSession,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
 };
@@ -1502,10 +1448,8 @@ export async function handleDeliveryPrepare(
       dependencies,
       ...(prepareAttemptId ? { prepareAttemptId } : {}),
       context: {
-        commerceDb: env.COMMERCE_DB,
         nowMs,
-        providerFetch: trackedFetch,
-        requestCommerceDocument: dependencies.requestCommerceDocument,
+        repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
         signal: controller.signal,
       },
       providerContext: {
@@ -1535,7 +1479,7 @@ export async function handleDeliveryPrepare(
       if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
         authOutcome = 'rejected';
       }
-    } else if (error instanceof FirestoreWriteConflict) {
+    } else if (error instanceof CommerceWriteConflict) {
       deliveryError = new DeliveryPrepareError('aborted', 'Delivery preparation conflicted. Try again.');
       authOutcome = 'rejected';
     } else if (controller.signal.aborted) {

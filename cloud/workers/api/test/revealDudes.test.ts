@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
+import { createCommerceD1, createCommerceD1Harness } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import {
   Keypair,
@@ -10,6 +10,7 @@ import {
 } from '@solana/web3.js';
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import {
   REVEAL_DUDES_PATH,
   RevealDudesError,
@@ -83,8 +84,7 @@ function request(body: unknown, init: { method?: string; headers?: HeadersInit }
 
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
-    requestCommerceDocument: firestoreProviderCommerceRequester,
-    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'firebase-uid' }),
+    verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'anon:reveal-test' }),
     loadWalletSession: async () => OWNER.toBase58(),
     loadStorageControl: async () => ({
       paused: false,
@@ -851,17 +851,9 @@ test('pack-status count outages cannot block a confirmed response', async () => 
   assert.equal(countCalls, 1);
 });
 
-function firestoreDocument(fields: Record<string, unknown>): Response {
-  return Response.json({
-    name: 'projects/mons-shop/databases/(default)/documents/test',
-    fields,
-  });
-}
-
-function firestoreContext(providerFetch: typeof fetch) {
+function revealContext(commerceDb: D1Database = createCommerceD1(), providerFetch: typeof fetch = fetch) {
   return {
-    requestCommerceDocument: firestoreProviderCommerceRequester,
-    commerceDb: createCommerceD1(),
+    commerceDb,
     nowMs: 1_700_000_000_000,
     providerFetch,
     signal: new AbortController().signal,
@@ -930,22 +922,12 @@ function revealConsumerEnv(apiKey = 'helius-test-key') {
   };
 }
 
-test('Firestore assignment atomically creates markers, updates the pool, and creates the box assignment', async () => {
-  const calls: Array<{ method: string; url: string; body?: unknown }> = [];
-  const fetcher: typeof fetch = async (input, init) => {
-    const url = String(input);
-    const method = init?.method || 'GET';
-    const body = typeof init?.body === 'string' ? JSON.parse(init.body) as unknown : undefined;
-    calls.push({ method, url, body });
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-1' });
-    if (url.includes('/boxAssignments/')) return new Response(null, { status: 404 });
-    if (url.includes('/meta/dudePool')) {
-      return firestoreDocument({ available: { arrayValue: { values: [1, 2, 3].map((id) => ({ integerValue: String(id) })) } } });
-    }
-    if (url.includes('/dudeAssignments/')) return new Response(null, { status: 404 });
-    if (url.endsWith('documents:commit')) return Response.json({ writeResults: [{ updateTime: '2026-08-21T00:00:00Z' }] });
-    throw new Error(`Unexpected Firestore request: ${method} ${url}`);
-  };
+test('D1 assignment atomically creates markers, updates the pool, and creates the box assignment', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(1, async (unit) => unit.create(commerceKeys.dudePool(DROP_ID), {
+    available: [1, 2, 3],
+  }));
   const runtime = revealDudesTestHooks.runtimeForDrop(DROP_ID);
   const dependencySubset = {
     randomInt: () => 0,
@@ -953,81 +935,59 @@ test('Firestore assignment atomically creates markers, updates the pool, and cre
   };
 
   const result = await revealDudesTestHooks.assignDudes(
-    firestoreContext(fetcher),
+    revealContext(harness.db),
     runtime,
     BOX_ASSET.toBase58(),
     dependencySubset,
   );
 
   assert.deepEqual(result, { dudeIds: [1], outcome: 'created' });
-  const commit = calls.find((call) => call.url.endsWith('documents:commit'));
-  assert.ok(commit);
-  const writes = (commit.body as { writes: Array<Record<string, unknown>> }).writes;
-  assert.equal(writes.length, 3);
-  assert.match(JSON.stringify(writes), /dudeAssignments\/1/);
-  assert.match(JSON.stringify(writes), /boxAssignments/);
-  assert.match(JSON.stringify(writes), /"available"/);
+  assert.equal((await repository.get(commerceKeys.dudeAssignment(DROP_ID, '1')))?.data.boxAssetId, BOX_ASSET.toBase58());
+  assert.deepEqual((await repository.get(commerceKeys.dudePool(DROP_ID)))?.data.available, [2, 3]);
+  assert.deepEqual((await repository.get(commerceKeys.boxAssignment(DROP_ID, BOX_ASSET.toBase58())))?.data.dudeIds, [1]);
 });
 
-test('Firestore assignment returns an existing valid assignment without touching the pool', async () => {
-  let poolReads = 0;
-  let commits = 0;
-  const fetcher: typeof fetch = async (input, init) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-1' });
-    if (url.includes('/boxAssignments/')) {
-      return firestoreDocument({ dudeIds: { arrayValue: { values: [{ integerValue: '7' }] } } });
-    }
-    if (url.includes('/meta/dudePool')) poolReads += 1;
-    if (url.endsWith('documents:commit')) commits += 1;
-    if (url.endsWith('documents:rollback')) return Response.json({});
-    throw new Error(`Unexpected Firestore request: ${init?.method || 'GET'} ${url}`);
-  };
+test('D1 assignment returns an existing valid assignment without touching the pool', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(1, async (unit) => unit.create(
+    commerceKeys.boxAssignment(DROP_ID, BOX_ASSET.toBase58()),
+    { dudeIds: [7] },
+  ));
   const dependencySubset = {
     randomInt: () => 0,
     sleep: async () => undefined,
   };
 
   const result = await revealDudesTestHooks.assignDudes(
-    firestoreContext(fetcher),
+    revealContext(harness.db),
     revealDudesTestHooks.runtimeForDrop(DROP_ID),
     BOX_ASSET.toBase58(),
     dependencySubset,
   );
 
   assert.deepEqual(result, { dudeIds: [7], outcome: 'existing' });
-  assert.equal(poolReads, 0);
-  assert.equal(commits, 0);
+  assert.equal(await repository.get(commerceKeys.dudePool(DROP_ID)), null);
 });
 
-test('Firestore assignment removes stale markers and retries commit conflicts', async () => {
-  let attempt = 0;
+test('D1 assignment removes stale markers and retries commit conflicts', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(1, async (unit) => {
+    await unit.create(commerceKeys.dudePool(DROP_ID), { available: [1, 2] });
+    await unit.create(commerceKeys.dudeAssignment(DROP_ID, '1'), { dudeId: 1, boxAssetId: 'stale-box' });
+  });
   let sleeps = 0;
-  let committedBody: { writes: Array<Record<string, unknown>> } | undefined;
-  const fetcher: typeof fetch = async (input, init) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) {
-      attempt += 1;
-      return Response.json({ transaction: `tx-${attempt}` });
-    }
-    if (url.includes('/boxAssignments/')) return new Response(null, { status: 404 });
-    if (url.includes('/meta/dudePool')) {
-      return firestoreDocument({
-        available: { arrayValue: { values: [{ integerValue: '1' }, { integerValue: '2' }] } },
-      });
-    }
-    if (url.includes('/dudeAssignments/1')) {
-      return firestoreDocument({ dudeId: { integerValue: '1' }, boxAssetId: { stringValue: 'stale-box' } });
-    }
-    if (url.includes('/dudeAssignments/2')) return new Response(null, { status: 404 });
-    if (url.endsWith('documents:rollback')) return Response.json({});
-    if (url.endsWith('documents:commit')) {
-      if (attempt === 1) return Response.json({ error: { status: 'ABORTED' } }, { status: 409 });
-      committedBody = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
-      return Response.json({ writeResults: [{}] });
-    }
-    throw new Error(`Unexpected Firestore request: ${init?.method || 'GET'} ${url}`);
-  };
+  let batches = 0;
+  const baseBatch = harness.db.batch.bind(harness.db);
+  const flakyDb = {
+    prepare: harness.db.prepare.bind(harness.db),
+    async batch<T>(statements: D1PreparedStatement[]) {
+      batches += 1;
+      if (batches === 1) throw new Error('commerce transaction conflict');
+      return baseBatch<T>(statements);
+    },
+  } as D1Database;
   const dependencySubset = {
     randomInt: () => 0,
     sleep: async () => {
@@ -1036,31 +996,22 @@ test('Firestore assignment removes stale markers and retries commit conflicts', 
   };
 
   const result = await revealDudesTestHooks.assignDudes(
-    firestoreContext(fetcher),
+    revealContext(flakyDb),
     revealDudesTestHooks.runtimeForDrop(DROP_ID),
     BOX_ASSET.toBase58(),
     dependencySubset,
   );
 
   assert.deepEqual(result, { dudeIds: [2], outcome: 'created' });
-  assert.equal(attempt, 2);
   assert.equal(sleeps, 1);
-  assert.ok(committedBody);
-  assert.match(JSON.stringify(committedBody), /dudeAssignments\/2/);
-  assert.doesNotMatch(JSON.stringify(committedBody), /dudeAssignments\/1/);
+  assert.equal((await repository.get(commerceKeys.dudeAssignment(DROP_ID, '2')))?.data.boxAssetId, BOX_ASSET.toBase58());
+  assert.deepEqual((await repository.get(commerceKeys.boxAssignment(DROP_ID, BOX_ASSET.toBase58())))?.data.dudeIds, [2]);
 });
 
-test('Firestore assignment fails closed when the pool is exhausted', async () => {
-  const fetcher: typeof fetch = async (input) => {
-    const url = String(input);
-    if (url.endsWith('documents:beginTransaction')) return Response.json({ transaction: 'tx-1' });
-    if (url.includes('/boxAssignments/')) return new Response(null, { status: 404 });
-    if (url.includes('/meta/dudePool')) {
-      return firestoreDocument({ available: { arrayValue: { values: [] } } });
-    }
-    if (url.endsWith('documents:rollback')) return Response.json({});
-    throw new Error(`Unexpected Firestore request: ${url}`);
-  };
+test('D1 assignment fails closed when the pool is exhausted', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(1, async (unit) => unit.create(commerceKeys.dudePool(DROP_ID), { available: [] }));
   const dependencySubset = {
     randomInt: () => 0,
     sleep: async () => undefined,
@@ -1068,7 +1019,7 @@ test('Firestore assignment fails closed when the pool is exhausted', async () =>
 
   await assert.rejects(
     revealDudesTestHooks.assignDudes(
-      firestoreContext(fetcher),
+      revealContext(harness.db),
       revealDudesTestHooks.runtimeForDrop(DROP_ID),
       BOX_ASSET.toBase58(),
       dependencySubset,
@@ -2210,7 +2161,7 @@ test('legacy pending-open disambiguation rejects an asset from another configure
   assert.equal(calls, 2);
 });
 
-test('online reveal pack status writes one idempotent D1 event without Firestore access', async () => {
+test('online reveal pack status writes one idempotent D1 event without commerce storage access', async () => {
   let query = '';
   let bindings: unknown[] = [];
   let runs = 0;
@@ -2232,7 +2183,7 @@ test('online reveal pack status writes one idempotent D1 event without Firestore
 
   await revealDudesTestHooks.countOnlineRevealPackStatus(
     {
-      ...firestoreContext(async () => assert.fail('pack-status projection must not access Firestore')),
+      ...revealContext(createCommerceD1(), async () => assert.fail('pack-status projection must not access commerce storage')),
       dataDb,
     },
     revealDudesTestHooks.runtimeForDrop('card_nft_2'),

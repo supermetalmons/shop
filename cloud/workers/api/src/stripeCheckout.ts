@@ -26,16 +26,12 @@ import {
 } from './requestIdentity.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
 import {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  ProfileReadError,
-  commerceDocumentRequest,
   cancelResponseBody,
-  isRecord,
   readBoundedJson,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
+import { createStripeCheckoutStore, stripeCheckoutFieldValue } from './stripeCheckout/store.js';
 
 export const STRIPE_CHECKOUT_SESSION_PATH = '/checkout/session';
 
@@ -70,7 +66,6 @@ export type StripeCheckoutResult = {
 type CheckoutDependencies = {
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   verifyIdentity: typeof verifyRequestIdentity;
   createProviderSession?: (
     request: StripeCheckoutProviderRequest,
@@ -89,7 +84,6 @@ type CheckoutDependencies = {
 const defaultDependencies: CheckoutDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   resolveWalletSession: resolveD1WalletSession,
   verifyIdentity: verifyRequestIdentity,
 };
@@ -422,39 +416,20 @@ async function createStripeProviderSession(
   });
 }
 
-function firestoreValue(value: unknown): Record<string, unknown> {
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'boolean') return { booleanValue: value };
-  if (typeof value === 'number' && Number.isSafeInteger(value)) return { integerValue: String(value) };
-  throw new StripeCheckoutSessionError('internal', 'Checkout document contains an unsupported value.');
-}
-
 async function persistCheckoutDocument(
   path: string,
   document: Record<string, unknown>,
   nowMs: number,
   commerceDb: D1Database,
-  requestCommerceDocument: CommerceDocumentRequester,
 ): Promise<void> {
-  const fields: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(document)) {
-    if (key === 'createdAt' || key === 'updatedAt') continue;
-    fields[key] = firestoreValue(value);
-  }
-  await requestCommerceDocument({
-    commerceDb,
-    body: JSON.stringify({
-      writes: [{
-        update: { name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`, fields },
-        updateTransforms: [
-          { fieldPath: 'createdAt', setToServerValue: 'REQUEST_TIME' },
-          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
-        ],
-      }],
-    }),
-    method: 'POST',
-    nowMs,
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
+  const store = createStripeCheckoutStore({ commerceDb, nowMs: () => nowMs });
+  const reference = store.doc(path);
+  await store.runTransaction(async (transaction) => {
+    transaction.set(reference, {
+      ...document,
+      createdAt: stripeCheckoutFieldValue.serverTimestamp(),
+      updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
+    });
   });
 }
 
@@ -541,7 +516,6 @@ export async function handleStripeCheckoutSession(
           document,
           dependencies.nowMs(),
           env.COMMERCE_DB,
-          dependencies.requestCommerceDocument,
         )),
       nowMs: dependencies.nowMs,
     });

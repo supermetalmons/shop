@@ -1,41 +1,17 @@
+import { isRecord } from './dataAccess.js';
+
 const FIRESTORE_PROJECT_ID = 'mons-shop';
 
 export const FIRESTORE_DATABASE_NAME = `projects/${FIRESTORE_PROJECT_ID}/databases/(default)`;
-export const FIRESTORE_DOCUMENTS_BASE_URL =
-  `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents`;
 export const FIRESTORE_DOCUMENT_NAME_PREFIX = `${FIRESTORE_DATABASE_NAME}/documents/`;
 
-export class ProfileReadError extends Error {
-  constructor(
-    readonly code:
-      | 'invalid-argument'
-      | 'unauthenticated'
-      | 'permission-denied'
-      | 'not-found'
-      | 'aborted'
-      | 'failed-precondition'
-      | 'resource-exhausted'
-      | 'deadline-exceeded'
-      | 'unavailable'
-      | 'internal',
-    readonly status: number,
-    message: string,
-    readonly details?: unknown,
-  ) {
-    super(message);
-    this.name = 'ProfileReadError';
-  }
-}
+export { isRecord, ProfileReadError } from './dataAccess.js';
 
 export class FirestoreWriteConflict extends Error {
   constructor(readonly status: 'ABORTED' | 'ALREADY_EXISTS' | 'FAILED_PRECONDITION' = 'ABORTED') {
     super('Firestore document changed during the write');
     this.name = 'FirestoreWriteConflict';
   }
-}
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function decodeFirestoreValue(value: unknown): unknown {

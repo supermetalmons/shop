@@ -34,6 +34,7 @@ const migrationSql = [
   '0011_staff_wallet_auth.sql',
   '0012_anonymous_auth.sql',
   '0013_remove_firebase_auth_fallback.sql',
+  '0014_auth_subject_bridge.sql',
 ]
   .map((name) => readFileSync(
     new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
@@ -101,6 +102,7 @@ function integrityInput(
         { name: '0011_staff_wallet_auth.sql' },
         { name: '0012_anonymous_auth.sql' },
         { name: '0013_remove_firebase_auth_fallback.sql' },
+        { name: '0014_auth_subject_bridge.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT

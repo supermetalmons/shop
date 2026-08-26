@@ -69,13 +69,14 @@ import type {
 } from '../../../../shared/contracts.js';
 import { RequestIdentityError, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
-  FirestoreWriteConflict,
-  ProfileReadError,
-  commerceDocumentRequest,
-  isRecord,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
+import {
+  CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+} from './commerceRepository.js';
 import { adminIrlRedeemRuntime } from './adminIrlRedeemPrepare.js';
 import { deliveryReceiptRuntime } from './deliveryReceipts.js';
 
@@ -88,7 +89,7 @@ const PROCESSING_LEASE_MS = 90_000;
 const DIRECT_SUBMISSION_RESOLUTION_MAX_WAIT_MS = 90_000;
 const DIRECT_SUBMISSION_RESOLUTION_POLL_MS = 2_000;
 const DIRECT_SUBMISSION_PROCESSING_LEASE_MS = 4 * 60_000;
-const FIRESTORE_TRANSACTION_ATTEMPTS = 6;
+const COMMERCE_TRANSACTION_ATTEMPTS = 6;
 const HELIUS_ASSETS_PAGE_LIMIT = 1000;
 const HELIUS_ASSETS_MAX_SEARCH_PAGES = 64;
 const SOLANA_MAX_RAW_TX_BYTES = 1232;
@@ -106,7 +107,10 @@ const requestSchema = z.object({
 
 type ClaimEnv = Pick<Env, 'COSIGNER_SECRET' | 'HELIUS_API_KEY'> &
   Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
-type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
+type CommerceContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
+type CommerceTransaction = Awaited<ReturnType<typeof deliveryReceiptRuntime.beginTransaction>>;
+type CommerceWrite = ReturnType<typeof deliveryReceiptRuntime.updateWrite>;
+type CommerceTransform = NonNullable<Parameters<typeof deliveryReceiptRuntime.updateWrite>[0]['transforms']>[number];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
 type ProviderContext = {
   apiKey: string;
@@ -176,7 +180,6 @@ type ClaimDependencies = {
   claim: typeof claimStripeReceipt;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
 };
@@ -452,16 +455,16 @@ function orderClaimFields(args: {
   return fields;
 }
 
-function timestamp(value: number): Record<string, unknown> {
-  return { timestampValue: new Date(value).toISOString() };
+function timestamp(value: number) {
+  return deliveryReceiptRuntime.commerceTimestamp(value);
 }
 
 async function runTransaction<T>(
-  context: FirestoreContext,
-  operation: (transaction: string) => Promise<{ result: T; writes?: Record<string, unknown>[] }>,
+  context: CommerceContext,
+  operation: (transaction: CommerceTransaction) => Promise<{ result: T; writes?: CommerceWrite[] }>,
 ): Promise<T> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: string | undefined;
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    let transaction: CommerceTransaction | undefined;
     try {
       transaction = await deliveryReceiptRuntime.beginTransaction(context);
       const { result, writes } = await operation(transaction);
@@ -471,7 +474,7 @@ async function runTransaction<T>(
       return result;
     } catch (error) {
       if (transaction) await deliveryReceiptRuntime.rollbackTransactionBestEffort(context, transaction);
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await deliveryReceiptRuntime.pause(Math.min(400, 25 * 2 ** attempt), context.signal);
         continue;
       }
@@ -485,19 +488,19 @@ function updateWrite(args: {
   path: string;
   fields: Record<string, unknown>;
   deleted?: string[];
-  transforms?: Record<string, unknown>[];
-}): Record<string, unknown> {
+  transforms?: CommerceTransform[];
+}): CommerceWrite {
   return deliveryReceiptRuntime.updateWrite({
     path: args.path,
     fields: args.fields,
-    updateMask: [...Object.keys(args.fields), ...(args.deleted || [])],
+    fieldPaths: [...Object.keys(args.fields), ...(args.deleted || [])],
     transforms: args.transforms,
-    currentDocument: { exists: true },
+    mustExist: true,
   });
 }
 
 async function startClaim(
-  context: FirestoreContext,
+  context: CommerceContext,
   code: string,
   recipientWallet: string,
   attemptId: string,
@@ -601,8 +604,8 @@ async function startClaim(
           processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
         },
         transforms: [
-          { fieldPath: 'processingStartedAt', setToServerValue: 'REQUEST_TIME' },
-          { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+          { fieldPath: 'processingStartedAt', value: commerceFieldValue.serverTimestamp() },
+          { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
         ],
       }),
       updateWrite({
@@ -610,7 +613,7 @@ async function startClaim(
         fields: orderFields,
         transforms: processingPrefixes.map((prefix) => ({
           fieldPath: `${prefix}.processingStartedAt`,
-          setToServerValue: 'REQUEST_TIME',
+          value: commerceFieldValue.serverTimestamp(),
         })),
       }),
     ];
@@ -635,7 +638,7 @@ async function startClaim(
   });
 }
 
-function cleanupContext(context: FirestoreContext): FirestoreContext {
+function cleanupContext(context: CommerceContext): CommerceContext {
   return {
     ...context,
     nowMs: Date.now(),
@@ -653,7 +656,7 @@ function claimPrefixes(started: Pick<StartedClaim, 'boxId' | 'updatePluralOrderC
 }
 
 async function clearProcessing(
-  context: FirestoreContext,
+  context: CommerceContext,
   started: StartedClaim,
   code: string,
   error: unknown,
@@ -689,8 +692,8 @@ async function clearProcessing(
             fields: { status: 'unclaimed', lastClaimError: lastError },
             deleted: ['processingAttemptId', 'processingStartedAt', 'processingLeaseExpiresAt'],
             transforms: [
-              { fieldPath: 'lastClaimErrorAt', setToServerValue: 'REQUEST_TIME' },
-              { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+              { fieldPath: 'lastClaimErrorAt', value: commerceFieldValue.serverTimestamp() },
+              { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
             ],
           }),
           updateWrite({ path: started.orderPath, fields: orderFields, deleted: orderDeleted }),
@@ -708,7 +711,7 @@ async function clearProcessing(
 }
 
 async function rememberSubmittedTransaction(
-  context: FirestoreContext,
+  context: CommerceContext,
   code: string,
   attemptId: string,
   receiptTx: string,
@@ -747,14 +750,14 @@ async function rememberSubmittedTransaction(
             ? { processingLeaseExpiresAt: timestamp(Date.now() + DIRECT_SUBMISSION_PROCESSING_LEASE_MS) }
             : {}),
         },
-        transforms: [{ fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' }],
+        transforms: [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }],
       })],
     };
   });
 }
 
 async function finalizeClaim(
-  context: FirestoreContext,
+  context: CommerceContext,
   started: StartedClaim,
   code: string,
   recipientWallet: string,
@@ -827,8 +830,8 @@ async function finalizeClaim(
             ...(figureIds?.length ? [] : ['figureIds']),
           ],
           transforms: [
-            { fieldPath: 'claimedAt', setToServerValue: 'REQUEST_TIME' },
-            { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+            { fieldPath: 'claimedAt', value: commerceFieldValue.serverTimestamp() },
+            { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
           ],
         }),
         updateWrite({
@@ -837,7 +840,7 @@ async function finalizeClaim(
           deleted: orderDeleted,
           transforms: prefixes.map((prefix) => ({
             fieldPath: `${prefix}.claimedAt`,
-            setToServerValue: 'REQUEST_TIME',
+            value: commerceFieldValue.serverTimestamp(),
           })),
         }),
       ],
@@ -1631,7 +1634,7 @@ type ClaimExecution = {
 async function claimStripeReceipt(
   body: StripeReceiptClaimRequest,
   env: ClaimEnv,
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   provider: ProviderContext,
   onContext: (context: ClaimLogContext) => void = () => undefined,
 ): Promise<ClaimExecution> {
@@ -1643,7 +1646,7 @@ async function claimStripeReceipt(
   let sentSubmission: Omit<DirectCardReceiptClaimSubmission, 'signature'> | null = null;
   let keepDirectRecipientLock = false;
   try {
-    const claim = await startClaim(firestore, code, recipient.wallet, attemptId, firestore.nowMs);
+    const claim = await startClaim(commerce, code, recipient.wallet, attemptId, commerce.nowMs);
     if (claim.status === 'already_claimed') {
       if (claim.receiptKind) {
         return {
@@ -1664,7 +1667,7 @@ async function claimStripeReceipt(
       catch {}
       if (runtime && runtime.itemsPerBox >= BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX) {
         try {
-          const order = await deliveryReceiptRuntime.readDocument(firestore, dropDeliveryOrderPath(claim.dropId, claim.deliveryId));
+          const order = await deliveryReceiptRuntime.readDocument(commerce, dropDeliveryOrderPath(claim.dropId, claim.deliveryId));
           const assignment = order
             ? stripeAssignedIrlClaimForBox(order.fields, claim.boxId, {
                 itemsPerBox: runtime.itemsPerBox,
@@ -1730,7 +1733,7 @@ async function claimStripeReceipt(
       const target = claim.directFigureReceipt;
       const finalizeDirect = async (receiptTx: string | null): Promise<ClaimExecution> => {
         const receiptTxs = await finalizeClaim(
-          firestore,
+          commerce,
           claim,
           code,
           recipient.wallet,
@@ -1764,7 +1767,7 @@ async function claimStripeReceipt(
       });
       for (const terminal of persisted.terminalSubmissions) {
         const { signature, ...submission } = terminal;
-        await rememberSubmittedTransaction(firestore, code, attemptId, signature, submission);
+        await rememberSubmittedTransaction(commerce, code, attemptId, signature, submission);
       }
       const recipientReceipt = persisted.evidence === 'verified'
         ? null
@@ -1804,7 +1807,7 @@ async function claimStripeReceipt(
         adminReceipt,
         persistSubmission: async (candidate) => {
           const { signature, ...details } = candidate;
-          await rememberSubmittedTransaction(firestore, code, attemptId, signature, details);
+          await rememberSubmittedTransaction(commerce, code, attemptId, signature, details);
           sentReceiptTx = signature;
           sentSubmission = details;
         },
@@ -1817,7 +1820,7 @@ async function claimStripeReceipt(
     if (flow === 'openable_pack' && assignment) {
       const finalizeFigures = async (receiptTx: string | null): Promise<ClaimExecution> => {
         const receiptTxs = await finalizeClaim(
-          firestore,
+          commerce,
           claim,
           code,
           recipient.wallet,
@@ -1882,7 +1885,7 @@ async function claimStripeReceipt(
       return recipientReceipt;
     };
     const finalizeBox = async (receiptTx: string | null): Promise<ClaimExecution> => {
-      const receiptTxs = await finalizeClaim(firestore, claim, code, recipient.wallet, receiptTx, 'box', 1);
+      const receiptTxs = await finalizeClaim(commerce, claim, code, recipient.wallet, receiptTx, 'box', 1);
       return {
         response: responseForClaim({
           dropId: claim.dropId,
@@ -1936,7 +1939,7 @@ async function claimStripeReceipt(
         submittedAtMs: details.submittedAtMs,
       }])[0];
       await rememberSubmittedTransaction(
-        firestore,
+        commerce,
         code,
         attemptId,
         maybeSent,
@@ -1957,7 +1960,7 @@ async function claimStripeReceipt(
         error: summarizeError(normalized),
       });
     } else if (started) {
-      await clearProcessing(firestore, started, code, normalized);
+      await clearProcessing(commerce, started, code, normalized);
     }
     throw normalized;
   }
@@ -1967,7 +1970,6 @@ const defaultDependencies: ClaimDependencies = {
   claim: claimStripeReceipt,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
 };
@@ -2045,9 +2047,9 @@ export async function handleStripeReceiptClaim(
       { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
       {
         commerceDb: env.COMMERCE_DB,
+        repository: new D1CommerceRepository(env.COMMERCE_DB),
         nowMs,
         providerFetch: trackedFetch,
-        requestCommerceDocument: dependencies.requestCommerceDocument,
         signal: controller.signal,
       },
       { apiKey, providerFetch: trackedFetch, signal: controller.signal },

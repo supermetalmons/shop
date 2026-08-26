@@ -6,15 +6,16 @@ import {
   type StripeCheckoutKind,
 } from './stripeCheckoutCore.ts';
 import {
-  STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
-  STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CURRENCY,
   STRIPE_OFFCHAIN_FULFILLMENT_MODE,
   normalizeStripeCheckoutQuantity,
   resolveMintSelectionVariantIndex,
 } from './stripeCheckoutSession.ts';
-import { canonicalWalletAddress } from './walletLifecycle.ts';
+import {
+  normalizeStripeCheckoutIdentity,
+  type StripeCheckoutIdentity,
+} from './checkoutIdentity.ts';
 import {
   STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   isStripeCheckoutFulfillmentEventType,
@@ -25,11 +26,7 @@ export const STRIPE_WEBHOOK_PATH = '/webhooks/stripe';
 
 export type StripeWebhookSecretScope = 'devnet' | 'mainnet';
 
-export type StripeCheckoutDocumentData = {
-  uid: string;
-  owner: string;
-  ownerKind: typeof STRIPE_CHECKOUT_OWNER_KIND_FIREBASE | typeof STRIPE_CHECKOUT_OWNER_KIND_WALLET;
-  firebaseUid?: string;
+export type StripeCheckoutDocumentData = StripeCheckoutIdentity & {
   variantKey?: string;
   quantity: number;
   unitAmountCents: number;
@@ -234,30 +231,10 @@ export function validateStripeCheckoutDocumentData(params: {
     throw new Error('App-created Stripe checkout has invalid unit amount');
   }
 
-  const uid = normalizedString(checkout.uid);
-  if (!uid) throw new Error('App-created Stripe checkout is missing uid');
-  const ownerKind = normalizedString(checkout.ownerKind);
-  const firebaseUid = normalizedString(checkout.firebaseUid);
-  let owner: string;
-  if (ownerKind === STRIPE_CHECKOUT_OWNER_KIND_FIREBASE) {
-    owner = `${STRIPE_CHECKOUT_OWNER_KIND_FIREBASE}:${uid}`;
-    requireString(checkout.owner, owner, 'owner');
-    requireString(firebaseUid, uid, 'Firebase uid');
-  } else if (ownerKind === STRIPE_CHECKOUT_OWNER_KIND_WALLET) {
-    const wallet = canonicalWalletAddress(checkout.owner);
-    if (!wallet || uid !== wallet || firebaseUid) {
-      throw new Error('App-created Stripe checkout has invalid wallet owner');
-    }
-    owner = wallet;
-  } else {
-    throw new Error('App-created Stripe checkout has invalid owner kind');
-  }
+  const identity = normalizeStripeCheckoutIdentity(checkout);
   const deliveryId = positiveIntegerOrNull(checkout.deliveryId);
   return {
-    uid,
-    owner,
-    ownerKind,
-    ...(firebaseUid ? { firebaseUid } : {}),
+    ...identity,
     ...(expectedVariantKey ? { variantKey: expectedVariantKey } : {}),
     quantity,
     unitAmountCents,

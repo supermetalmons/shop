@@ -39,6 +39,9 @@ export function checkCommerceD1(): Record<string, unknown> {
   if (!migrations.some((row) => String(row.name).endsWith('0006_paused_wipe.sql'))) {
     fail('Commerce D1 paused-wipe migration is missing.');
   }
+  if (!migrations.some((row) => String(row.name).endsWith('0007_native_repository_expand.sql'))) {
+    fail('Commerce D1 native-repository expansion migration is missing.');
+  }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -46,12 +49,13 @@ export function checkCommerceD1(): Record<string, unknown> {
       'commerce_authority_control',
       'commerce_documents',
       'commerce_commit_guards',
+      'commerce_native_precondition_guards',
       'commerce_wipe_guards',
       'commerce_import_manifests',
       'commerce_transactions',
       'commerce_transaction_reads'
     ) ORDER BY name`);
-  if (authoritativeTables.length !== 7 || authoritativeTables.some((row) => row.strict !== 1)) {
+  if (authoritativeTables.length !== 8 || authoritativeTables.some((row) => row.strict !== 1)) {
     fail('Commerce D1 authoritative strict table inventory is invalid.');
   }
   const authorityRows = queryRemoteCommerceD1('SELECT * FROM commerce_authority_control');
@@ -105,6 +109,25 @@ export function checkCommerceD1(): Record<string, unknown> {
         AND manual_refund_review_required = 1`),
     'commerce_documents_manual_review',
   );
+  requireIndex(
+    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
+      FROM commerce_documents
+      WHERE document_kind = 'delivery_order' AND drop_id = 'drop' AND status = 'ready_to_ship'
+      ORDER BY processed_at_seconds DESC, processed_at_nanos DESC, document_path DESC`),
+    'commerce_documents_drop_processed_cursor',
+  );
+
+  const invalidProcessedTimeRows = queryRemoteCommerceD1(`SELECT COUNT(*) AS count
+    FROM commerce_documents
+    WHERE
+      (processed_at_seconds IS NULL) <> (processed_at_nanos IS NULL) OR
+      processed_at_seconds < 0 OR
+      processed_at_nanos < 0 OR
+      processed_at_nanos > 999999999`);
+  if (
+    invalidProcessedTimeRows.length !== 1 ||
+    safeInteger(invalidProcessedTimeRows[0].count, 'Commerce processed-time invalid count') !== 0
+  ) fail('Commerce D1 processed-time projections are invalid.');
 
   const kindCounts = Object.fromEntries(queryRemoteCommerceD1(`SELECT document_kind, COUNT(*) AS count
     FROM commerce_documents GROUP BY document_kind ORDER BY document_kind`).map((row) => [

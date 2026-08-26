@@ -319,7 +319,7 @@ export type StripeCheckoutManualReviewSummary = {
   dropId: string;
   sessionId: string;
   owner: string;
-  firebaseUid?: string;
+  authSubject?: string;
   quantity?: number;
   amountTotal?: number;
   currency?: string;

@@ -30,7 +30,7 @@ export type StripeCheckoutManualReviewEmailMessage = {
   livemode: boolean;
   variantKey?: string;
   owner?: string;
-  firebaseUid?: string;
+  authSubject?: string;
   manualRefundReviewReason?: string;
   lastFulfillmentError?: unknown;
   createdAt?: number;
@@ -203,7 +203,7 @@ function stripeCheckoutManualReviewEmailDetails(
     { label: 'Mode', value: message.livemode ? 'live' : 'test' },
     { label: 'Variant', value: message.variantKey || 'unknown' },
     { label: 'Owner', value: message.owner || 'unknown' },
-    { label: 'Firebase UID', value: message.firebaseUid || 'unknown' },
+    { label: 'Auth subject', value: message.authSubject || 'unknown' },
     { label: 'Review reason', value: message.manualRefundReviewReason || 'unknown' },
     { label: 'Checkout path', value: message.checkoutPath },
     { label: 'Created at', value: timestampEmailValue(message.createdAt) },

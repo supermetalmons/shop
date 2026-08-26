@@ -11,12 +11,16 @@ import {
   STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
 } from '../../../../../shared/fulfillmentSources.js';
 import {
+  STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+  STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   STRIPE_CHECKOUT_STATUS,
   STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
   STRIPE_OFFCHAIN_CURRENCY,
   normalizeStripeCheckoutQuantity,
+  stripeCheckoutAnonymousOwnerId,
   stripeCheckoutShippingCountriesForDropFamily,
 } from '../../../../../shared/stripeCheckoutSession.js';
+import { canonicalWalletAddress } from '../../../../../shared/walletLifecycle.js';
 import {
   isStripeOffchainFulfillmentSession,
 } from '../../../../../shared/stripeWebhook.js';
@@ -34,7 +38,7 @@ export {
 } from '../../../../../shared/fulfillmentSources.js';
 export {
   STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES,
-  STRIPE_CHECKOUT_OWNER_KIND_FIREBASE,
+  STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
   STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   STRIPE_CHECKOUT_SHIPPING_COUNTRY,
   STRIPE_CHECKOUT_STATUS,
@@ -46,7 +50,7 @@ export {
   buildStripeCheckoutSessionMetadata,
   normalizeStripeCheckoutQuantity,
   resolveMintSelectionVariantIndex,
-  stripeCheckoutOwnerId,
+  stripeCheckoutAnonymousOwnerId,
 } from '../../../../../shared/stripeCheckoutSession.js';
 export {
   isStripeOffchainFulfillmentSession,
@@ -91,12 +95,15 @@ export type StripeCheckoutLineItemsLike = {
   has_more?: boolean;
 };
 
-export type StripeOffchainDeliveryOrderDocumentInput = {
+type StripeOffchainDeliveryOrderIdentity = {
+  owner: string;
+  ownerKind: typeof STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS | typeof STRIPE_CHECKOUT_OWNER_KIND_WALLET;
+  authSubject?: string;
+};
+
+export type StripeOffchainDeliveryOrderDocumentInput = StripeOffchainDeliveryOrderIdentity & {
   dropId: string;
   deliveryId: number;
-  owner: string;
-  ownerKind?: string;
-  firebaseUid?: string;
   receiptOwner: string;
   metadataId?: number;
   metadataIds?: number[];
@@ -148,6 +155,27 @@ function nonNegativeIntegerOrNull(value: unknown): number | null {
 function positiveIntegerOrNull(value: unknown): number | null {
   const numeric = integerOrNull(value);
   return numeric != null && numeric > 0 ? numeric : null;
+}
+
+function normalizeStripeOffchainDeliveryOrderIdentity(
+  args: StripeOffchainDeliveryOrderIdentity,
+): StripeOffchainDeliveryOrderIdentity {
+  const authSubject = normalizedString(args.authSubject);
+  if (args.ownerKind === STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS) {
+    if (!authSubject || args.owner !== stripeCheckoutAnonymousOwnerId(authSubject)) {
+      throw new Error('Stripe delivery order has invalid anonymous owner');
+    }
+    return { owner: args.owner, ownerKind: args.ownerKind, authSubject };
+  }
+  const owner = canonicalWalletAddress(args.owner);
+  if (!owner || (args.authSubject !== undefined && !authSubject) || authSubject.length > 128) {
+    throw new Error('Stripe delivery order has invalid wallet owner');
+  }
+  return {
+    owner,
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_WALLET,
+    ...(authSubject ? { authSubject } : {}),
+  };
 }
 
 function integerInRangeOrNull(value: unknown, min: number, max: number): number | null {
@@ -441,6 +469,7 @@ function normalizeStripeReceiptClaims(
 }
 
 export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDeliveryOrderDocumentInput): Record<string, unknown> {
+  const identity = normalizeStripeOffchainDeliveryOrderIdentity(args);
   const metadataIds = normalizeStripeMetadataIds(args);
   const stripeReceiptClaims = normalizeStripeReceiptClaims(args, metadataIds);
   const stripeReceiptClaimsByBoxId = buildStripeReceiptClaimsByBoxId(stripeReceiptClaims);
@@ -451,9 +480,7 @@ export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDel
     dropId: args.dropId,
     source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
     status: 'ready_to_ship',
-    owner: args.owner,
-    ...(args.ownerKind ? { ownerKind: args.ownerKind } : {}),
-    ...(args.firebaseUid ? { firebaseUid: args.firebaseUid } : {}),
+    ...identity,
     receiptOwner: args.receiptOwner,
     addressSnapshot: args.addressSnapshot,
     itemIds: [],
@@ -480,6 +507,7 @@ export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDel
 }
 
 export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliveryOrderDocumentInput): Record<string, unknown> {
+  const identity = normalizeStripeOffchainDeliveryOrderIdentity(args);
   const metadataIds = normalizeStripeMetadataIds(args);
   const stripeReceiptClaims = normalizeStripeReceiptClaims(args, metadataIds);
   const stripeReceiptClaimCodesByBoxId = Object.fromEntries(
@@ -491,9 +519,7 @@ export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliv
   return {
     dropId: args.dropId,
     deliveryId: args.deliveryId,
-    owner: args.owner,
-    ...(args.ownerKind ? { ownerKind: args.ownerKind } : {}),
-    ...(args.firebaseUid ? { firebaseUid: args.firebaseUid } : {}),
+    ...identity,
     receiptOwner: args.receiptOwner,
     quantity: metadataIds.length,
     firstMetadataId: metadataIds[0],

@@ -15,7 +15,7 @@ export type CommerceAuthorityControl = {
   documentsRevision: number;
 };
 
-export class CommerceMaintenanceError extends ProfileReadError {
+class CommerceMaintenanceError extends ProfileReadError {
   constructor() {
     super('unavailable', 503, 'Commerce is temporarily unavailable for maintenance.', {
       reason: 'commerce-maintenance',

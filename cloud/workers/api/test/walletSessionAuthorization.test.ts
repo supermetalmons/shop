@@ -8,7 +8,7 @@ import { deliveryReceiptTestHooks } from '../src/deliveryReceipts.js';
 import { irlClaimTestHooks } from '../src/irlClaim.js';
 import { revealDudesTestHooks } from '../src/revealDudes.js';
 
-const UID = 'firebase-uid';
+const AUTH_SUBJECT = 'anon:00000000-0000-4000-8000-000000000001';
 const WALLET = Keypair.generate().publicKey.toBase58();
 
 function walletSessionDb(): D1Database {
@@ -18,16 +18,16 @@ function walletSessionDb(): D1Database {
     exec: async () => ({ count: 0, duration: 0 }),
     prepare: (sql: string) => {
       assert.match(sql, /FROM wallet_sessions/);
-      let firebaseUid: unknown;
+      let authSubject: unknown;
       let statement: D1PreparedStatement;
       statement = {
         all: async () => { throw new Error('Unexpected D1 all'); },
         bind: (...values: unknown[]) => {
-          [firebaseUid] = values;
+          [authSubject] = values;
           return statement;
         },
-        first: async () => firebaseUid === UID ? {
-          firebase_uid: UID,
+        first: async () => authSubject === AUTH_SUBJECT ? {
+          auth_subject: AUTH_SUBJECT,
           wallet: WALLET,
           expires_at_ms: 253_402_300_799_999,
           updated_at_ms: 1_700_000_000_000,
@@ -65,7 +65,7 @@ test('delivery, reveal, claim, receipt, and admin authorization load wallet sess
     adminIrlRedeemPrepareTestHooks.loadWalletSession,
   ];
   for (const loadWalletSession of loaders) {
-    assert.equal(await loadWalletSession(context, db, UID), WALLET);
+    assert.equal(await loadWalletSession(context, db, AUTH_SUBJECT), WALLET);
   }
   assert.equal(firestoreRequests, 0);
 });

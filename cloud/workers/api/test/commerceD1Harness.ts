@@ -1,13 +1,18 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { commerceDocumentIdentity } from '../src/commerceDocumentStore.ts';
-import { decodeFirestoreFields } from '../src/firestoreContract.ts';
-import {
-  FirestoreWriteConflict,
-  ProfileReadError,
-  type CommerceDocumentRequest,
-  type CommerceDocumentRequester,
-} from '../src/firestoreRest.ts';
+import { decodeFirestoreFields, FirestoreWriteConflict } from '../src/firestoreContract.ts';
+import { ProfileReadError } from '../src/dataAccess.ts';
+
+type CommerceDocumentRequest = {
+  body?: string;
+  commerceDb: D1Database;
+  method: 'GET' | 'POST';
+  nowMs: number;
+  url: string;
+};
+
+type CommerceDocumentRequester = (args: CommerceDocumentRequest) => Promise<unknown | null>;
 
 class PreparedStatement {
   private values: SQLInputValue[] = [];

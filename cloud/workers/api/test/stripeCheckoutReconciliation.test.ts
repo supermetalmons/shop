@@ -7,6 +7,7 @@ import {
   reconcileStaleStripeFulfillments,
   stripeCheckoutReconciliationTestHooks,
 } from '../src/stripeCheckoutReconciliation.ts';
+import { commerceKeys, type CommerceDocumentRecord } from '../src/commerceRepository.ts';
 
 function queue(send: Queue['send']): Queue {
   return {
@@ -147,52 +148,45 @@ test('Stripe fulfillment reconciliation defers invalid candidates behind the bac
   assert.deepEqual((marked[0] as { value: unknown }).value, invalidCandidate);
 });
 
-test('Stripe fulfillment reconciliation query and decoder select only stale marked checkouts', () => {
-  const cutoffMs = Date.parse('2026-08-23T00:15:00.000Z');
-  const query = stripeCheckoutReconciliationTestHooks.stripeCheckoutReconciliationQuery(cutoffMs, 100) as {
-    structuredQuery: Record<string, unknown>;
+function checkoutRecord(
+  dropId: string,
+  sessionId: string,
+  data: Record<string, unknown>,
+): CommerceDocumentRecord {
+  return {
+    createTime: '2026-08-23T00:00:00.000000000Z',
+    data: data as CommerceDocumentRecord['data'],
+    key: commerceKeys.stripeCheckout(dropId, sessionId),
+    processedAt: null,
+    updateTime: '2026-08-23T00:00:00.000000001Z',
+    version: 1,
   };
-  assert.deepEqual(query.structuredQuery.orderBy, [
-    { field: { fieldPath: 'updatedAt' }, direction: 'ASCENDING' },
-    { field: { fieldPath: '__name__' }, direction: 'ASCENDING' },
-  ]);
+}
+
+test('Stripe fulfillment reconciliation decoder selects only stale marked D1 checkouts', () => {
+  const cutoffMs = Date.parse('2026-08-23T00:15:00.000Z');
   const candidates = stripeCheckoutReconciliationTestHooks.parseRequeueCandidates([
-    {
-      document: {
-        name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_binder_devnet/stripeCheckouts/cs_test_stale',
-        fields: {
-          fulfillmentProcessor: { stringValue: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR },
-          lastStripeWebhookEventId: { stringValue: 'evt_test_stale' },
-          lastStripeWebhookEventType: { stringValue: 'checkout.session.completed' },
-          status: { stringValue: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING },
-          updatedAt: { timestampValue: '2026-08-23T00:00:00.000Z' },
-        },
-      },
-    },
-    {
-      document: {
-        name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_binder_devnet/stripeCheckouts/cs_test_processing',
-        fields: {
-          fulfillmentProcessor: { stringValue: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR },
-          lastStripeWebhookEventId: { stringValue: 'evt_test_processing' },
-          lastStripeWebhookEventType: { stringValue: 'checkout.session.async_payment_succeeded' },
-          status: { stringValue: STRIPE_CHECKOUT_STATUS.PROCESSING },
-          updatedAt: { timestampValue: '2026-08-23T00:05:00.000Z' },
-        },
-      },
-    },
-    {
-      document: {
-        name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_binder_devnet/stripeCheckouts/cs_test_recent',
-        fields: {
-          fulfillmentProcessor: { stringValue: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR },
-          lastStripeWebhookEventId: { stringValue: 'evt_test_recent' },
-          lastStripeWebhookEventType: { stringValue: 'checkout.session.completed' },
-          status: { stringValue: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING },
-          updatedAt: { timestampValue: '2026-08-23T00:30:00.000Z' },
-        },
-      },
-    },
+    checkoutRecord('card_nft_binder_devnet', 'cs_test_recent', {
+      fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
+      lastStripeWebhookEventId: 'evt_test_recent',
+      lastStripeWebhookEventType: 'checkout.session.completed',
+      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
+      updatedAt: Date.parse('2026-08-23T00:30:00.000Z'),
+    }),
+    checkoutRecord('card_nft_binder_devnet', 'cs_test_processing', {
+      fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
+      lastStripeWebhookEventId: 'evt_test_processing',
+      lastStripeWebhookEventType: 'checkout.session.async_payment_succeeded',
+      status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+      updatedAt: Date.parse('2026-08-23T00:05:00.000Z'),
+    }),
+    checkoutRecord('card_nft_binder_devnet', 'cs_test_stale', {
+      fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
+      lastStripeWebhookEventId: 'evt_test_stale',
+      lastStripeWebhookEventType: 'checkout.session.completed',
+      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
+      updatedAt: Date.parse('2026-08-23T00:00:00.000Z'),
+    }),
   ], cutoffMs);
   assert.deepEqual(candidates, [
     {

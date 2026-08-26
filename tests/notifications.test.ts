@@ -251,7 +251,7 @@ test('stripe checkout manual review email builder includes details and escapes h
       livemode: false,
       variantKey: 'xl',
       owner: 'owner<&>',
-      firebaseUid: 'uid-123',
+      authSubject: 'uid-123',
       manualRefundReviewReason: 'needs <review>',
       lastFulfillmentError: { message: 'bad <tag> & "quotes"' },
       createdAt: Date.UTC(2026, 0, 2, 3, 4, 5),
@@ -263,6 +263,8 @@ test('stripe checkout manual review email builder includes details and escapes h
   assert.equal(content.subject, '[TEST] Stripe Checkout Manual Review — Card NFT 2 <Drop>');
   assert.match(content.text, /Mode: test/);
   assert.match(content.text, /Session ID: cs_test_123/);
+  assert.match(content.text, /Auth subject: uid-123/);
+  assert.doesNotMatch(content.text, /Firebase/);
   assert.match(content.text, /Review reason: needs <review>/);
   assert.match(content.text, /Created at: 2026-01-02T03:04:05.000Z/);
   assert.match(content.html, /Card NFT 2 &lt;Drop&gt;/);

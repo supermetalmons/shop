@@ -76,13 +76,14 @@ import {
   type RequestIdentity,
 } from './requestIdentity.js';
 import {
-  FirestoreWriteConflict,
-  ProfileReadError,
-  commerceDocumentRequest,
-  isRecord,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
+import {
+  CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+} from './commerceRepository.js';
 import { adminIrlRedeemRuntime } from './adminIrlRedeemPrepare.js';
 import {
   createDeliveryPackStatusProjectionOutbox,
@@ -99,7 +100,7 @@ const PREPARED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PROCESSING_LEASE_MS = 10 * 60 * 1000;
 const RECEIPT_INDEX_MAX_WAIT_MS = 30_000;
 const RECEIPT_INDEX_POLL_MS = 2_000;
-const FIRESTORE_TRANSACTION_ATTEMPTS = 6;
+const COMMERCE_TRANSACTION_ATTEMPTS = 6;
 const MAX_ITEMS = 32;
 const MAX_DELIVERY_ALLOCATION_ATTEMPTS = 16;
 const HELIUS_ASSET_PAGE_LIMIT = 1000;
@@ -126,7 +127,10 @@ const requestSchema = z.object({
 type FinalizeRequest = z.infer<typeof requestSchema>;
 type FinalizeEnv = Pick<Env, 'COSIGNER_SECRET' | 'HELIUS_API_KEY'> &
   Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB' | 'OPS_DB'>>;
-type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
+type CommerceContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
+type CommerceTransaction = Awaited<ReturnType<typeof deliveryReceiptRuntime.beginTransaction>>;
+type CommerceWrite = ReturnType<typeof deliveryReceiptRuntime.updateWrite>;
+type CommerceTransform = NonNullable<Parameters<typeof deliveryReceiptRuntime.updateWrite>[0]['transforms']>[number];
 type ProviderContext = Parameters<typeof adminIrlRedeemRuntime.fetchAsset>[0];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
 type OnchainConfig = Awaited<ReturnType<typeof deliveryReceiptRuntime.fetchOnchainConfig>>;
@@ -206,7 +210,6 @@ type FinalizeDependencies = {
   finalize: typeof finalizeAdminIrlRedeem;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
 };
@@ -422,26 +425,26 @@ function requestPath(body: FinalizeRequest): string {
   return dropAdminIrlRedeemRequestPath(body.dropId, body.requestId);
 }
 
-function timestamp(value: number): Record<string, unknown> {
-  return { timestampValue: new Date(value).toISOString() };
+function timestamp(value: number) {
+  return deliveryReceiptRuntime.commerceTimestamp(value);
 }
 
-function deleteFieldsWrite(path: string, fields: Record<string, unknown>, deleted: string[], transforms: Record<string, unknown>[]): Record<string, unknown> {
+function deleteFieldsWrite(path: string, fields: Record<string, unknown>, deleted: string[], transforms: CommerceTransform[]): CommerceWrite {
   return deliveryReceiptRuntime.updateWrite({
     path,
     fields,
-    updateMask: [...Object.keys(fields), ...deleted],
+    fieldPaths: [...Object.keys(fields), ...deleted],
     transforms,
-    currentDocument: { exists: true },
+    mustExist: true,
   });
 }
 
 async function runTransaction<T>(
-  context: FirestoreContext,
-  operation: (transaction: string) => Promise<{ result: T; writes?: Record<string, unknown>[] }>,
+  context: CommerceContext,
+  operation: (transaction: CommerceTransaction) => Promise<{ result: T; writes?: CommerceWrite[] }>,
 ): Promise<T> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: string | undefined;
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    let transaction: CommerceTransaction | undefined;
     try {
       transaction = await deliveryReceiptRuntime.beginTransaction(context);
       const { result, writes } = await operation(transaction);
@@ -451,7 +454,7 @@ async function runTransaction<T>(
       return result;
     } catch (error) {
       if (transaction) await deliveryReceiptRuntime.rollbackTransactionBestEffort(context, transaction);
-      if (error instanceof FirestoreWriteConflict && attempt + 1 < FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await deliveryReceiptRuntime.pause(Math.min(400, 25 * 2 ** attempt), context.signal);
         continue;
       }
@@ -462,7 +465,7 @@ async function runTransaction<T>(
 }
 
 async function startFinalize(
-  context: FirestoreContext,
+  context: CommerceContext,
   body: FinalizeRequest,
   wallet: string,
   attemptId: string,
@@ -514,15 +517,15 @@ async function startFinalize(
         processingAttemptId: attemptId,
         processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
       }, ['preparedExpiresAt'], [
-        { fieldPath: 'processingStartedAt', setToServerValue: 'REQUEST_TIME' },
-        { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        { fieldPath: 'processingStartedAt', value: commerceFieldValue.serverTimestamp() },
+        { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
       ])],
     };
   });
 }
 
-async function clearProcessing(context: FirestoreContext, body: FinalizeRequest, attemptId: string, error: unknown): Promise<void> {
-  const cleanup: FirestoreContext = { ...context, nowMs: Date.now(), signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS) };
+async function clearProcessing(context: CommerceContext, body: FinalizeRequest, attemptId: string, error: unknown): Promise<void> {
+  const cleanup: CommerceContext = { ...context, nowMs: Date.now(), signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS) };
   await runTransaction(cleanup, async (transaction) => {
     const document = await deliveryReceiptRuntime.readDocument(cleanup, requestPath(body), transaction);
     if (!document || document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
@@ -535,8 +538,8 @@ async function clearProcessing(context: FirestoreContext, body: FinalizeRequest,
         lastFinalizeError: summarizeError(error),
         preparedExpiresAt: timestamp(Date.now() + PREPARED_TTL_MS),
       }, ['processingAttemptId', 'processingStartedAt', 'processingLeaseExpiresAt'], [
-        { fieldPath: 'lastFinalizeErrorAt', setToServerValue: 'REQUEST_TIME' },
-        { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+        { fieldPath: 'lastFinalizeErrorAt', value: commerceFieldValue.serverTimestamp() },
+        { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
       ])],
     };
   }).catch((cleanupError) => {
@@ -706,13 +709,13 @@ function mplCoreBurn(asset: PublicKey, collection: PublicKey, signer: PublicKey)
 }
 
 async function updateRequest(
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   path: string,
   fields: Record<string, unknown>,
   deleted: string[] = [],
 ): Promise<void> {
-  await deliveryReceiptRuntime.commitWrites(firestore, [deleteFieldsWrite(path, fields, deleted, [
-    { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+  await deliveryReceiptRuntime.commitWrites(commerce, [deleteFieldsWrite(path, fields, deleted, [
+    { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
   ])]);
 }
 
@@ -726,7 +729,7 @@ async function mintPackReceipts(
   signer: Keypair,
   collection: PublicKey,
   items: RequestItem[],
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   path: string,
   existing: string[],
 ): Promise<string[]> {
@@ -754,7 +757,7 @@ async function mintPackReceipts(
       ];
       let completed = false;
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (firestore.signal.aborted) throw firestore.signal.reason;
+        if (commerce.signal.aborted) throw commerce.signal.reason;
         try {
           const { blockhash } = await connection.getLatestBlockhash('confirmed');
           const transaction = deliveryReceiptRuntime.buildTransaction(instructions, signer.publicKey, blockhash, signer);
@@ -762,12 +765,12 @@ async function mintPackReceipts(
           const signature = await deliveryReceiptRuntime.sendAndConfirmSignedTransaction(
             connection,
             transaction,
-            firestore.signal,
+            commerce.signal,
             'Admin IRL receipt mint',
           );
           if (!receiptTxs.includes(signature)) receiptTxs.push(signature);
           pending.splice(0, batchSize);
-          await updateRequest(firestore, path, { receiptTxs });
+          await updateRequest(commerce, path, { receiptTxs });
           completed = true;
           break;
         } catch (error) {
@@ -780,7 +783,7 @@ async function mintPackReceipts(
             completed = true;
             break;
           }
-          if (attempt < 2) await deliveryReceiptRuntime.pause(Math.min(4_000, 600 * 2 ** attempt), firestore.signal);
+          if (attempt < 2) await deliveryReceiptRuntime.pause(Math.min(4_000, 600 * 2 ** attempt), commerce.signal);
         }
       }
       if (completed) break;
@@ -824,7 +827,7 @@ async function ensureInternalDelivery(
   runtime: Runtime,
   signer: Keypair,
   onchain: OnchainConfig,
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   path: string,
   request: StartedRequest,
 ): Promise<InternalDelivery> {
@@ -866,7 +869,7 @@ async function ensureInternalDelivery(
       signature = await deliveryReceiptRuntime.sendAndConfirmSignedTransaction(
         connection,
         transaction,
-        firestore.signal,
+        commerce.signal,
         'Admin IRL internal delivery',
       );
     } catch (error) {
@@ -874,7 +877,7 @@ async function ensureInternalDelivery(
       if (!landed) throw error;
     }
     const result = { deliveryId, deliveryPda: deliveryPda.toBase58(), deliveryTx: signature };
-    await updateRequest(firestore, path, {
+    await updateRequest(commerce, path, {
       internalDeliveryId: deliveryId,
       internalDeliveryPda: result.deliveryPda,
       ...(signature ? { internalDeliveryTx: signature } : {}),
@@ -892,7 +895,7 @@ async function ensureInternalDelivery(
     const deliveryId = deliveryReceiptRuntime.secureRandomInt(2 ** 31 - 1) + 1;
     const [pda, bump] = deliveryReceiptRuntime.deriveDeliveryPda(runtime, deliveryId);
     if (await connection.getAccountInfo(pda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } })) continue;
-    await updateRequest(firestore, path, { internalDeliveryId: deliveryId, internalDeliveryPda: pda.toBase58() });
+    await updateRequest(commerce, path, { internalDeliveryId: deliveryId, internalDeliveryPda: pda.toBase58() });
     return send(deliveryId, pda, bump);
   }
   throw new AdminIrlRedeemFinalizeError('unavailable', 'Failed to allocate hidden Admin IRL delivery id.');
@@ -902,7 +905,7 @@ async function closeInternalDelivery(
   connection: Connection,
   runtime: Runtime,
   signer: Keypair,
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   path: string,
   request: StartedRequest,
   internal: InternalDelivery,
@@ -925,10 +928,10 @@ async function closeInternalDelivery(
     const signature = await deliveryReceiptRuntime.sendAndConfirmSignedTransaction(
       connection,
       transaction,
-      firestore.signal,
+      commerce.signal,
       'Admin IRL internal delivery close',
     );
-    await updateRequest(firestore, path, { closeDeliveryTx: signature });
+    await updateRequest(commerce, path, { closeDeliveryTx: signature });
     return signature;
   } catch (error) {
     console.warn({
@@ -1119,14 +1122,14 @@ function markerConflict(reason?: string): AdminIrlRedeemFinalizeError {
 }
 
 async function markerResolution(
-  firestore: FirestoreContext,
-  transaction: string,
+  commerce: CommerceContext,
+  transaction: CommerceTransaction,
   dropId: string,
   selectionKey: string,
   boxes: ReadonlyArray<{ originalAssetId: string; receiptAssetId?: string }>,
 ): Promise<AdminIrlRedeemMarkerReuseResolution> {
   const markers = await Promise.all(markerPaths(dropId, boxes).map((path) =>
-    deliveryReceiptRuntime.readDocument(firestore, path, transaction)));
+    deliveryReceiptRuntime.readDocument(commerce, path, transaction)));
   return resolveAdminIrlRedeemMarkerReuse({
     dropId,
     selectionKey,
@@ -1154,7 +1157,7 @@ function completedMarkerReuse(
   };
 }
 
-function completeRequestWrite(path: string, completed: Record<string, unknown>): Record<string, unknown> {
+function completeRequestWrite(path: string, completed: Record<string, unknown>): CommerceWrite {
   const fields: Record<string, unknown> = {
     status: 'complete',
     ...(Number.isSafeInteger(completed.deliveryId) ? { deliveryId: completed.deliveryId } : {}),
@@ -1171,13 +1174,13 @@ function completeRequestWrite(path: string, completed: Record<string, unknown>):
   return deleteFieldsWrite(path, fields, [
     'processingAttemptId', 'processingStartedAt', 'processingLeaseExpiresAt', 'preparedExpiresAt',
   ], [
-    { fieldPath: 'completedAt', setToServerValue: 'REQUEST_TIME' },
-    { fieldPath: 'updatedAt', setToServerValue: 'REQUEST_TIME' },
+    { fieldPath: 'completedAt', value: commerceFieldValue.serverTimestamp() },
+    { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
   ]);
 }
 
 async function completeFromExistingMarkers(
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   body: FinalizeRequest,
   attemptId: string,
   request: StartedRequest,
@@ -1186,15 +1189,15 @@ async function completeFromExistingMarkers(
   const result = await runTransaction<
     { status: 'none' } |
     { status: 'complete'; request: Record<string, unknown> }
-  >(firestore, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(firestore, requestPath(body), transaction);
+  >(commerce, async (transaction) => {
+    const document = await deliveryReceiptRuntime.readDocument(commerce, requestPath(body), transaction);
     if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
     if (document.fields.status === 'complete') return { result: { status: 'complete' as const, request: document.fields } };
     if (document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
       throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
     }
     const resolution = await markerResolution(
-      firestore,
+      commerce,
       transaction,
       body.dropId,
       selectionKey,
@@ -1203,7 +1206,7 @@ async function completeFromExistingMarkers(
     if (resolution.status === 'none') return { result: { status: 'none' as const } };
     if (resolution.status === 'conflict') throw markerConflict(resolution.reason);
     const order = await deliveryReceiptRuntime.readDocument(
-      firestore,
+      commerce,
       dropDeliveryOrderPath(body.dropId, resolution.deliveryId),
       transaction,
     );
@@ -1228,16 +1231,16 @@ function newClaimCodes(quantity: number): string[] {
   return generateUniqueStripeReceiptClaimCodes(quantity);
 }
 
-function createWithTimestamps(path: string, fields: Record<string, unknown>, timestamps: string[]): Record<string, unknown> {
+function createWithTimestamps(path: string, fields: Record<string, unknown>, timestamps: string[]): CommerceWrite {
   return deliveryReceiptRuntime.createWrite({
     path,
     fields,
-    transforms: timestamps.map((fieldPath) => ({ fieldPath, setToServerValue: 'REQUEST_TIME' })),
+    transforms: timestamps.map((fieldPath) => ({ fieldPath, value: commerceFieldValue.serverTimestamp() })),
   });
 }
 
 async function publishPack(
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   runtime: Runtime,
   body: FinalizeRequest,
   attemptId: string,
@@ -1262,18 +1265,18 @@ async function publishPack(
       { status: 'collision' } |
       { status: 'complete'; request: Record<string, unknown> } |
       { status: 'created'; request: Record<string, unknown>; order: Record<string, unknown> }
-    >(firestore, async (transaction) => {
-      const document = await deliveryReceiptRuntime.readDocument(firestore, requestPath(body), transaction);
+    >(commerce, async (transaction) => {
+      const document = await deliveryReceiptRuntime.readDocument(commerce, requestPath(body), transaction);
       if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
       if (document.fields.status === 'complete') return { result: { status: 'complete' as const, request: document.fields } };
       if (document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
       }
-      const resolution = await markerResolution(firestore, transaction, runtime.dropId, selectionKey, boxesWithCodes);
+      const resolution = await markerResolution(commerce, transaction, runtime.dropId, selectionKey, boxesWithCodes);
       if (resolution.status === 'conflict') throw markerConflict(resolution.reason);
       if (resolution.status === 'reuse') {
         const existingOrder = await deliveryReceiptRuntime.readDocument(
-          firestore,
+          commerce,
           dropDeliveryOrderPath(runtime.dropId, resolution.deliveryId),
           transaction,
         );
@@ -1284,10 +1287,10 @@ async function publishPack(
           writes: [completeRequestWrite(document.path, completed)],
         };
       }
-      if (await deliveryReceiptRuntime.readDocument(firestore, orderPath, transaction)) {
+      if (await deliveryReceiptRuntime.readDocument(commerce, orderPath, transaction)) {
         return { result: { status: 'collision' as const } };
       }
-      const claims = await Promise.all(claimPaths.map((path) => deliveryReceiptRuntime.readDocument(firestore, path, transaction)));
+      const claims = await Promise.all(claimPaths.map((path) => deliveryReceiptRuntime.readDocument(commerce, path, transaction)));
       if (claims.some(Boolean)) return { result: { status: 'collision' as const } };
       const order = buildAdminIrlRedeemDeliveryOrderDocument({
         dropId: runtime.dropId,
@@ -1299,8 +1302,8 @@ async function publishPack(
         receiptTxs,
         boxes: boxesWithCodes,
       });
-      Object.assign(order, createDeliveryPackStatusProjectionOutbox(runtime, order, firestore.nowMs).fields);
-      const writes: Record<string, unknown>[] = [createWithTimestamps(orderPath, order, ['createdAt', 'processedAt'])];
+      Object.assign(order, createDeliveryPackStatusProjectionOutbox(runtime, order, commerce.nowMs).fields);
+      const writes: CommerceWrite[] = [createWithTimestamps(orderPath, order, ['createdAt', 'processedAt'])];
       boxesWithCodes.forEach((box, index) => {
         writes.push(createWithTimestamps(claimPaths[index], buildAdminIrlRedeemClaimCodeDocument({
           dropId: runtime.dropId,
@@ -1311,7 +1314,7 @@ async function publishPack(
           box,
         }), ['createdAt', 'updatedAt']));
       });
-      const markerWrites = new Map<string, Record<string, unknown>>();
+      const markerWrites = new Map<string, CommerceWrite>();
       boxesWithCodes.forEach((box) => {
         const marker = buildAdminIrlRedeemMarkerDocument({
           dropId: runtime.dropId,
@@ -1355,7 +1358,7 @@ async function publishPack(
 }
 
 async function publishCard(
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   runtime: Runtime,
   body: FinalizeRequest,
   attemptId: string,
@@ -1374,14 +1377,14 @@ async function publishCard(
       { status: 'collision' } |
       { status: 'complete'; request: Record<string, unknown> } |
       { status: 'created'; request: Record<string, unknown> }
-    >(firestore, async (transaction) => {
-      const document = await deliveryReceiptRuntime.readDocument(firestore, requestPath(body), transaction);
+    >(commerce, async (transaction) => {
+      const document = await deliveryReceiptRuntime.readDocument(commerce, requestPath(body), transaction);
       if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
       if (document.fields.status === 'complete') return { result: { status: 'complete' as const, request: document.fields } };
       if (document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
       }
-      const existingMarker = await deliveryReceiptRuntime.readDocument(firestore, markerPath, transaction);
+      const existingMarker = await deliveryReceiptRuntime.readDocument(commerce, markerPath, transaction);
       if (existingMarker) {
         const marker = existingMarker.fields;
         const existingDeliveryId = Math.floor(Number(marker.deliveryId));
@@ -1395,8 +1398,8 @@ async function publishCard(
           !Number.isSafeInteger(existingDeliveryId) || existingDeliveryId < 1 || marker.owner !== request.owner
         ) throw markerConflict('card receipt marker mismatch');
         const [order, claim] = await Promise.all([
-          deliveryReceiptRuntime.readDocument(firestore, dropDeliveryOrderPath(runtime.dropId, existingDeliveryId), transaction),
-          deliveryReceiptRuntime.readDocument(firestore, `claimCodes/${existingClaimCode}`, transaction),
+          deliveryReceiptRuntime.readDocument(commerce, dropDeliveryOrderPath(runtime.dropId, existingDeliveryId), transaction),
+          deliveryReceiptRuntime.readDocument(commerce, `claimCodes/${existingClaimCode}`, transaction),
         ]);
         if (!order || !claim) throw markerConflict('card receipt marker order or claim missing');
         const item = Array.isArray(order.fields.items) && isRecord(order.fields.items[0]) ? order.fields.items[0] : {};
@@ -1425,8 +1428,8 @@ async function publishCard(
         return { result: { status: 'complete' as const, request: completed }, writes: [completeRequestWrite(document.path, completed)] };
       }
       const [orderExists, claimExists] = await Promise.all([
-        deliveryReceiptRuntime.readDocument(firestore, orderPath, transaction),
-        deliveryReceiptRuntime.readDocument(firestore, claimPath, transaction),
+        deliveryReceiptRuntime.readDocument(commerce, orderPath, transaction),
+        deliveryReceiptRuntime.readDocument(commerce, claimPath, transaction),
       ]);
       if (orderExists || claimExists) return { result: { status: 'collision' as const } };
       const order = buildAdminIrlRedeemCardDeliveryOrderDocument({
@@ -1479,14 +1482,14 @@ async function publishCard(
 }
 
 function scheduleAdminPackStatusProjection(args: {
-  firestore: FirestoreContext;
+  commerce: CommerceContext;
   response: AdminIrlRedeemFinalizeResponse;
   runtime: Runtime;
   waitUntil: FinalizeWaitUntil;
 }): void {
   if (!Number.isSafeInteger(args.response.deliveryId) || Number(args.response.deliveryId) < 1) return;
   scheduleDeliveryPackStatusProjection({
-    context: args.firestore,
+    context: args.commerce,
     deliveryId: Number(args.response.deliveryId),
     dropId: args.runtime.dropId,
     waitUntil: args.waitUntil,
@@ -1497,7 +1500,7 @@ async function finalizeAdminIrlRedeem(
   body: FinalizeRequest,
   identity: RequestIdentity,
   env: FinalizeEnv,
-  firestore: FirestoreContext,
+  commerce: CommerceContext,
   provider: ProviderContext,
   waitUntil: FinalizeWaitUntil,
 ): Promise<{ response: AdminIrlRedeemFinalizeResponse; targetKind: AdminIrlRedeemTargetKind; outcome: string }> {
@@ -1509,7 +1512,7 @@ async function finalizeAdminIrlRedeem(
   try {
     wallet = canonicalWallet(await resolveRequestWallet(
       identity,
-      (uid) => adminIrlRedeemRuntime.loadWalletSession(firestore, env.OPS_DB, uid),
+      (uid) => adminIrlRedeemRuntime.loadWalletSession(commerce, env.OPS_DB, uid),
     ));
   } catch (error) {
     if (isRecord(error) && error.code === 'unavailable') {
@@ -1521,12 +1524,12 @@ async function finalizeAdminIrlRedeem(
     throw error;
   }
   const attemptId = `admin_irl:${crypto.randomUUID()}`;
-  const started = await startFinalize(firestore, body, wallet, attemptId, firestore.nowMs);
+  const started = await startFinalize(commerce, body, wallet, attemptId, commerce.nowMs);
   if (started.status === 'complete') {
     const targetKind = started.request.targetKind === 'card_receipt' ? 'card_receipt' : 'pack';
     const response = completeResponse(body.dropId, body.requestId, started.request);
     if (targetKind === 'pack') {
-      scheduleAdminPackStatusProjection({ firestore, response, runtime, waitUntil });
+      scheduleAdminPackStatusProjection({ commerce, response, runtime, waitUntil });
     }
     return { response, targetKind, outcome: 'already_complete' };
   }
@@ -1545,7 +1548,7 @@ async function finalizeAdminIrlRedeem(
       await verifyCardTransfer(connection, runtime, body.transferSignature, started.request.owner, signer.publicKey.toBase58(), onchain.coreCollection, card.assetId);
       await waitForCardReceipt(provider, runtime, card.assetId, card.refId, signer.publicKey.toBase58());
       return {
-        response: await publishCard(firestore, runtime, body, attemptId, started.request, signer.publicKey.toBase58(), {
+        response: await publishCard(commerce, runtime, body, attemptId, started.request, signer.publicKey.toBase58(), {
           figureId: card.refId,
           receiptAssetId: card.assetId,
         }),
@@ -1554,19 +1557,19 @@ async function finalizeAdminIrlRedeem(
       };
     }
     await verifyPackTransfer(connection, body.transferSignature, started.request.owner, signer.publicKey.toBase58(), onchain.coreCollection, started.request.itemIds);
-    const existing = await completeFromExistingMarkers(firestore, body, attemptId, started.request);
+    const existing = await completeFromExistingMarkers(commerce, body, attemptId, started.request);
     if (existing) {
-      scheduleAdminPackStatusProjection({ firestore, response: existing, runtime, waitUntil });
+      scheduleAdminPackStatusProjection({ commerce, response: existing, runtime, waitUntil });
       return { response: existing, targetKind: 'pack', outcome: 'marker_reuse' };
     }
-    const internal = await ensureInternalDelivery(connection, runtime, signer, onchain, firestore, requestPath(body), started.request);
+    const internal = await ensureInternalDelivery(connection, runtime, signer, onchain, commerce, requestPath(body), started.request);
     const receiptTxs = await mintPackReceipts(
       connection,
       runtime,
       signer,
       onchain.coreCollection,
       started.request.items,
-      firestore,
+      commerce,
       requestPath(body),
       started.request.receiptTxs,
     );
@@ -1583,16 +1586,16 @@ async function finalizeAdminIrlRedeem(
         });
       }
       const dudeIds = await deliveryReceiptRuntime.assignDudesForBox(
-        firestore,
+        commerce,
         runtime,
         matches[0].id,
         deliveryReceiptRuntime.secureRandomInt,
       );
       boxes.push({ boxId: item.refId, originalAssetId: item.assetId, receiptAssetId: matches[0].id, dudeIds });
     }
-    const closeDeliveryTx = await closeInternalDelivery(connection, runtime, signer, firestore, requestPath(body), started.request, internal);
+    const closeDeliveryTx = await closeInternalDelivery(connection, runtime, signer, commerce, requestPath(body), started.request, internal);
     const response = await publishPack(
-      firestore,
+      commerce,
       runtime,
       body,
       attemptId,
@@ -1603,14 +1606,14 @@ async function finalizeAdminIrlRedeem(
       receiptTxs,
       boxes,
     );
-    scheduleAdminPackStatusProjection({ firestore, response, runtime, waitUntil });
+    scheduleAdminPackStatusProjection({ commerce, response, runtime, waitUntil });
     return {
       response,
       targetKind: 'pack',
       outcome: 'completed',
     };
   } catch (error) {
-    await clearProcessing(firestore, body, attemptId, error);
+    await clearProcessing(commerce, body, attemptId, error);
     throw error;
   }
 }
@@ -1619,7 +1622,6 @@ const defaultDependencies: FinalizeDependencies = {
   finalize: finalizeAdminIrlRedeem,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
 };
@@ -1688,9 +1690,9 @@ export async function handleAdminIrlRedeemFinalize(
       { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
       {
         commerceDb: env.COMMERCE_DB,
+        repository: new D1CommerceRepository(env.COMMERCE_DB),
         nowMs,
         providerFetch: trackedFetch,
-        requestCommerceDocument: dependencies.requestCommerceDocument,
         signal: controller.signal,
         dataDb: env.DATA_DB,
       },

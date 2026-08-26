@@ -9,7 +9,7 @@ const WALLET_SESSION_RECONCILE_LEASE_MS = 120_000;
 const WALLET_SESSION_WRITE_ATTEMPTS = 5;
 
 export type D1WalletSession = {
-  firebaseUid: string;
+  authSubject: string;
   wallet: string;
   expiresAtMs: number;
   updatedAtMs: number;
@@ -52,7 +52,7 @@ function safeInteger(value: unknown, minimum = 0): number | null {
 
 function sessionFromRow(row: Record<string, unknown> | null): D1WalletSession | null {
   if (!row) return null;
-  const firebaseUid = typeof row.firebase_uid === 'string' ? row.firebase_uid : '';
+  const authSubject = typeof row.auth_subject === 'string' ? row.auth_subject : '';
   const wallet = canonicalWalletAddress(row.wallet);
   const expiresAtMs = safeInteger(row.expires_at_ms);
   const updatedAtMs = safeInteger(row.updated_at_ms);
@@ -66,8 +66,8 @@ function sessionFromRow(row: Record<string, unknown> | null): D1WalletSession | 
     ? null
     : safeInteger(row.reconcile_lease_expires_at_ms);
   if (
-    !firebaseUid ||
-    firebaseUid.length > 128 ||
+    !authSubject ||
+    authSubject.length > 128 ||
     !wallet ||
     expiresAtMs === null ||
     updatedAtMs === null ||
@@ -78,7 +78,7 @@ function sessionFromRow(row: Record<string, unknown> | null): D1WalletSession | 
     throw new WalletSessionD1InvalidDataError();
   }
   return {
-    firebaseUid,
+    authSubject,
     wallet,
     expiresAtMs,
     updatedAtMs,
@@ -89,7 +89,8 @@ function sessionFromRow(row: Record<string, unknown> | null): D1WalletSession | 
 }
 
 function changed(result: D1Result): boolean {
-  return Number(result.meta.changes || 0) === 1;
+  const changes = Number(result.meta.changes || 0);
+  return changes === 1 || changes === 2;
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -98,12 +99,12 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 export async function loadD1WalletSession(
   db: D1Database,
-  firebaseUid: string,
+  authSubject: string,
   signal?: AbortSignal,
 ): Promise<D1WalletSession | null> {
   throwIfAborted(signal);
   const row = await db.prepare(`SELECT
-      firebase_uid,
+      auth_subject,
       wallet,
       expires_at_ms,
       updated_at_ms,
@@ -111,8 +112,8 @@ export async function loadD1WalletSession(
       reconcile_lease_id,
       reconcile_lease_expires_at_ms
     FROM wallet_sessions
-    WHERE firebase_uid = ?`)
-    .bind(firebaseUid)
+    WHERE auth_subject = ?`)
+    .bind(authSubject)
     .first<Record<string, unknown>>();
   throwIfAborted(signal);
   return sessionFromRow(row);
@@ -120,12 +121,12 @@ export async function loadD1WalletSession(
 
 export async function resolveD1WalletSession(
   db: D1Database,
-  firebaseUid: string,
+  authSubject: string,
   signal?: AbortSignal,
 ): Promise<WalletSessionResolution> {
-  const session = await loadD1WalletSession(db, firebaseUid, signal);
+  const session = await loadD1WalletSession(db, authSubject, signal);
   return resolveWalletSessionBinding({
-    uid: firebaseUid,
+    uid: authSubject,
     sessionExists: session !== null,
     sessionData: session,
   });
@@ -139,10 +140,10 @@ function leaseActive(session: D1WalletSession, nowMs: number): boolean {
 
 async function requireD1WalletSession(
   db: D1Database,
-  firebaseUid: string,
+  authSubject: string,
   signal?: AbortSignal,
 ): Promise<D1WalletSession> {
-  const session = await loadD1WalletSession(db, firebaseUid, signal);
+  const session = await loadD1WalletSession(db, authSubject, signal);
   if (!session) throw new WalletSessionD1InvalidDataError();
   return session;
 }
@@ -150,7 +151,7 @@ async function requireD1WalletSession(
 export async function establishD1WalletSession(args: {
   baseline: D1WalletSession | null;
   db: D1Database;
-  firebaseUid: string;
+  authSubject: string;
   nowMs: number;
   signal?: AbortSignal;
   wallet: string;
@@ -158,9 +159,9 @@ export async function establishD1WalletSession(args: {
   throwIfAborted(args.signal);
   const wallet = canonicalWalletAddress(args.wallet);
   if (
-    typeof args.firebaseUid !== 'string' ||
-    args.firebaseUid.length < 1 ||
-    args.firebaseUid.length > 128 ||
+    typeof args.authSubject !== 'string' ||
+    args.authSubject.length < 1 ||
+    args.authSubject.length > 128 ||
     wallet !== args.wallet ||
     !Number.isSafeInteger(args.nowMs) ||
     args.nowMs < 0 ||
@@ -170,11 +171,11 @@ export async function establishD1WalletSession(args: {
   }
   for (let attempt = 0; attempt < WALLET_SESSION_WRITE_ATTEMPTS; attempt += 1) {
     throwIfAborted(args.signal);
-    const current = await loadD1WalletSession(args.db, args.firebaseUid, args.signal);
+    const current = await loadD1WalletSession(args.db, args.authSubject, args.signal);
     if (!current) {
       if (args.baseline) throw new WalletSessionD1SupersededError();
       const inserted = await args.db.prepare(`INSERT INTO wallet_sessions (
-          firebase_uid,
+          auth_subject,
           wallet,
           expires_at_ms,
           updated_at_ms,
@@ -182,16 +183,16 @@ export async function establishD1WalletSession(args: {
           reconcile_lease_id,
           reconcile_lease_expires_at_ms
         ) VALUES (?, ?, ?, ?, 1, NULL, NULL)
-        ON CONFLICT (firebase_uid) DO NOTHING`)
+        ON CONFLICT (auth_subject) DO NOTHING`)
         .bind(
-          args.firebaseUid,
+          args.authSubject,
           wallet,
           WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS,
           args.nowMs,
         )
         .run();
       if (changed(inserted)) {
-        return requireD1WalletSession(args.db, args.firebaseUid, args.signal);
+        return requireD1WalletSession(args.db, args.authSubject, args.signal);
       }
       continue;
     }
@@ -201,16 +202,16 @@ export async function establishD1WalletSession(args: {
           expires_at_ms = ?,
           updated_at_ms = MAX(updated_at_ms, ?),
           wallet_revision = wallet_revision + 1
-        WHERE firebase_uid = ? AND wallet = ?`)
+        WHERE auth_subject = ? AND wallet = ?`)
         .bind(
           WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS,
           args.nowMs,
-          args.firebaseUid,
+          args.authSubject,
           wallet,
         )
         .run();
       if (changed(renewed)) {
-        return requireD1WalletSession(args.db, args.firebaseUid, args.signal);
+        return requireD1WalletSession(args.db, args.authSubject, args.signal);
       }
       continue;
     }
@@ -231,7 +232,7 @@ export async function establishD1WalletSession(args: {
         reconcile_lease_id = NULL,
         reconcile_lease_expires_at_ms = NULL
       WHERE
-        firebase_uid = ? AND
+        auth_subject = ? AND
         wallet = ? AND
         wallet_revision = ? AND
         (
@@ -242,32 +243,32 @@ export async function establishD1WalletSession(args: {
         wallet,
         WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS,
         args.nowMs,
-        args.firebaseUid,
+        args.authSubject,
         current.wallet,
         current.walletRevision,
         args.nowMs,
       )
       .run();
     if (changed(rebound)) {
-      return requireD1WalletSession(args.db, args.firebaseUid, args.signal);
+      return requireD1WalletSession(args.db, args.authSubject, args.signal);
     }
   }
   throw new WalletSessionD1SupersededError();
 }
 
-async function ensureLegacyD1WalletSession(
+async function ensureCompatibleD1WalletSession(
   db: D1Database,
-  firebaseUid: string,
+  authSubject: string,
   nowMs: number,
   signal?: AbortSignal,
 ): Promise<D1WalletSession | null> {
-  const existing = await loadD1WalletSession(db, firebaseUid, signal);
+  const existing = await loadD1WalletSession(db, authSubject, signal);
   if (existing) return existing;
-  const wallet = canonicalWalletAddress(firebaseUid);
+  const wallet = canonicalWalletAddress(authSubject);
   if (!wallet) return null;
   throwIfAborted(signal);
   await db.prepare(`INSERT INTO wallet_sessions (
-      firebase_uid,
+      auth_subject,
       wallet,
       expires_at_ms,
       updated_at_ms,
@@ -275,22 +276,22 @@ async function ensureLegacyD1WalletSession(
       reconcile_lease_id,
       reconcile_lease_expires_at_ms
     ) VALUES (?, ?, ?, ?, 1, NULL, NULL)
-    ON CONFLICT (firebase_uid) DO NOTHING`)
-    .bind(firebaseUid, wallet, WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS, nowMs)
+    ON CONFLICT (auth_subject) DO NOTHING`)
+    .bind(authSubject, wallet, WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS, nowMs)
     .run();
-  return loadD1WalletSession(db, firebaseUid, signal);
+  return loadD1WalletSession(db, authSubject, signal);
 }
 
 export async function acquireWalletSessionReconcileLease(args: {
   db: D1Database;
-  firebaseUid: string;
+  authSubject: string;
   leaseId?: string;
   nowMs: number;
   signal?: AbortSignal;
 }): Promise<WalletSessionLease | null> {
-  const session = await ensureLegacyD1WalletSession(
+  const session = await ensureCompatibleD1WalletSession(
     args.db,
-    args.firebaseUid,
+    args.authSubject,
     args.nowMs,
     args.signal,
   );
@@ -303,7 +304,7 @@ export async function acquireWalletSessionReconcileLease(args: {
       reconcile_lease_id = ?,
       reconcile_lease_expires_at_ms = ?
     WHERE
-      firebase_uid = ? AND
+      auth_subject = ? AND
       wallet = ? AND
       wallet_revision = ? AND
       (
@@ -313,7 +314,7 @@ export async function acquireWalletSessionReconcileLease(args: {
     .bind(
       id,
       expiresAtMs,
-      args.firebaseUid,
+      args.authSubject,
       session.wallet,
       session.walletRevision,
       args.nowMs,
@@ -326,14 +327,14 @@ export async function acquireWalletSessionReconcileLease(args: {
 
 export async function releaseWalletSessionReconcileLease(
   db: D1Database,
-  firebaseUid: string,
+  authSubject: string,
   leaseId: string,
 ): Promise<void> {
   await db.prepare(`UPDATE wallet_sessions
     SET
       reconcile_lease_id = NULL,
       reconcile_lease_expires_at_ms = NULL
-    WHERE firebase_uid = ? AND reconcile_lease_id = ?`)
-    .bind(firebaseUid, leaseId)
+    WHERE auth_subject = ? AND reconcile_lease_id = ?`)
+    .bind(authSubject, leaseId)
     .run();
 }

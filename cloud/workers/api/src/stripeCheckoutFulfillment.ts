@@ -58,8 +58,8 @@ import {
   STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   type StripeCheckoutFulfillmentJobV1,
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
-import { FirestoreWriteConflict } from './firestoreRest.js';
-import { createWorkerStripeCheckoutStore } from './stripeCheckoutFirestore.js';
+import { CommerceWriteConflict } from './commerceRepository.js';
+import { createStripeCheckoutStore } from './stripeCheckout/store.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import { resolveD1WalletSession } from './walletSessionD1.js';
 
@@ -448,7 +448,7 @@ function packStatusEventQuantity(runtime: Pick<FulfillmentRuntime, 'itemsPerBox'
 
 function flowDependencies(
   env: FulfillmentEnv,
-  store: ReturnType<typeof createWorkerStripeCheckoutStore>,
+  store: ReturnType<typeof createStripeCheckoutStore>,
   signal: AbortSignal,
 ): StripeCheckoutFlowDeps<FulfillmentRuntime, StripeCheckoutOnchainConfig> {
   const countPackStatus = async ({
@@ -507,7 +507,7 @@ function flowDependencies(
     },
     sendAndConfirmSignedTx,
     withTimeout,
-    isAlreadyExistsError: (error) => error instanceof FirestoreWriteConflict && error.status === 'ALREADY_EXISTS',
+    isAlreadyExistsError: (error) => error instanceof CommerceWriteConflict && error.code === 'already-exists',
     summarizeError: summary,
     programs: {
       bubblegumProgramId: BUBBLEGUM_PROGRAM_ID,
@@ -599,7 +599,7 @@ export async function processStripeCheckoutFulfillmentJob(
   signal: AbortSignal,
   options: { persistenceSignal?: AbortSignal; treatRetryableFailureAsTerminal?: boolean } = {},
 ): Promise<FulfillmentProcessingResult> {
-  const store = createWorkerStripeCheckoutStore({
+  const store = createStripeCheckoutStore({
     commerceDb: env.COMMERCE_DB,
     signal: options.persistenceSignal || signal,
   });

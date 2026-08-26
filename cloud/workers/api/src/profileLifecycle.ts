@@ -10,7 +10,7 @@ import {
 import { isStaffWalletAddress } from '../../../../shared/fulfillmentAccess.js';
 import { parseDropDeliveryOrderPath } from './dropPaths.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
-import { stripeCheckoutOwnerId } from '../../../../shared/stripeCheckoutSession.js';
+import { stripeCheckoutAnonymousOwnerId } from '../../../../shared/stripeCheckoutSession.js';
 import type {
   ReconcileProfileStateRequest,
   ReconcileProfileStateResponse,
@@ -28,19 +28,16 @@ import {
   type RequestIdentity,
 } from './requestIdentity.js';
 import {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  FirestoreWriteConflict,
-  ProfileReadError,
-  commerceDocumentRequest,
-  decodeFirestoreFields,
-  firestoreString,
-  isRecord,
   readBoundedText,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { ProfileReadError } from './dataAccess.js';
+import {
+  CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+  type CommerceDocumentRecord,
+} from './commerceRepository.js';
 import { isProfileRequestOriginAllowed } from './profileReads.js';
 import { ensureD1Profile } from './profileD1.js';
 import {
@@ -62,7 +59,7 @@ export type ProfileLifecyclePath = typeof SOLANA_AUTH_PATH | typeof PROFILE_RECO
 const AUTH_TIMEOUT_MS = 15_000;
 const RECONCILE_TIMEOUT_MS = 55_000;
 const MAX_REQUEST_BYTES = 4096;
-const FIRESTORE_TRANSACTION_ATTEMPTS = 5;
+const COMMERCE_TRANSACTION_ATTEMPTS = 5;
 const STRIPE_OWNER_MERGE_BATCH_SIZE = 450;
 
 const solanaAuthSchema = z.object({
@@ -76,18 +73,12 @@ const reconcileSchema = z.object({
   includeDeliveryRecovery: z.boolean().optional(),
 }).strict();
 
-type FirestoreCommon = {
-  commerceDb: D1Database;
-  nowMs: number;
-  providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
-  signal: AbortSignal;
-};
+type ProfileLifecycleRepository = Pick<D1CommerceRepository, 'query' | 'run'>;
 
-type FirestoreDocument = {
-  fields: Record<string, unknown>;
-  name: string;
-  updateTime: string;
+type CommerceCommon = {
+  nowMs: number;
+  repository: ProfileLifecycleRepository;
+  signal: AbortSignal;
 };
 
 type ProfileLifecycleMetrics = {
@@ -104,12 +95,12 @@ export type ProfileLifecycleResult = {
 
 type ProfileLifecycleDependencies = {
   acquireWalletSessionReconcileLease: typeof acquireWalletSessionReconcileLease;
+  createCommerceRepository: (db: D1Database) => ProfileLifecycleRepository;
   establishD1WalletSession: typeof establishD1WalletSession;
   isStaffWallet: typeof isStaffWalletAddress;
   loadD1WalletSession: typeof loadD1WalletSession;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   timeoutMs: number;
   upsertProfile: (
     db: D1Database | undefined,
@@ -203,17 +194,6 @@ async function parseRequestBody(
   return result.data;
 }
 
-function parseFirestoreDocument(value: unknown): FirestoreDocument | null {
-  if (!isRecord(value) || typeof value.name !== 'string' || typeof value.updateTime !== 'string') return null;
-  const fields = decodeFirestoreFields(value.fields);
-  if (!fields) return null;
-  return { fields, name: value.name, updateTime: value.updateTime };
-}
-
-function documentName(path: string): string {
-  return `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`;
-}
-
 async function pauseForConflict(signal: AbortSignal, attempt: number): Promise<void> {
   if (signal.aborted) throw signal.reason;
   const delay = Math.min(400, 25 * 2 ** attempt);
@@ -257,65 +237,8 @@ function validateWalletSessionSignature(params: {
   if (!signatureValid) throw new ProfileReadError('unauthenticated', 401, 'Invalid signature');
 }
 
-async function beginTransaction(common: FirestoreCommon): Promise<string> {
-  const value = await common.requestCommerceDocument({
-    ...common,
-    body: JSON.stringify({ options: { readWrite: {} } }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:beginTransaction`,
-  });
-  if (!isRecord(value) || typeof value.transaction !== 'string' || !value.transaction) {
-    throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-  }
-  return value.transaction;
-}
-
-async function rollbackTransaction(common: FirestoreCommon, transaction: string): Promise<void> {
-  await common.requestCommerceDocument({
-    ...common,
-    body: JSON.stringify({ transaction }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:rollback`,
-  });
-}
-
-async function commitTransaction(common: FirestoreCommon, transaction: string, writes: unknown[]): Promise<void> {
-  await common.requestCommerceDocument({
-    ...common,
-    body: JSON.stringify({ transaction, writes }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-  });
-}
-
-function queryDocuments(value: unknown): FirestoreDocument[] {
-  if (!Array.isArray(value)) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-  const documents: FirestoreDocument[] = [];
-  for (const entry of value) {
-    if (!isRecord(entry)) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-    if (entry.document === undefined && typeof entry.readTime === 'string') continue;
-    const document = parseFirestoreDocument(entry.document);
-    if (!document) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-    documents.push(document);
-  }
-  return documents;
-}
-
-function stripeOwnerQuery(owner: string, transaction: string): Record<string, unknown> {
-  return {
-    structuredQuery: {
-      select: { fields: [{ fieldPath: 'owner' }] },
-      from: [{ collectionId: 'deliveryOrders', allDescendants: true }],
-      where: { fieldFilter: { field: { fieldPath: 'owner' }, op: 'EQUAL', value: firestoreString(owner) } },
-      limit: STRIPE_OWNER_MERGE_BATCH_SIZE,
-    },
-    transaction,
-  };
-}
-
-function deliveryOrderPath(document: FirestoreDocument): string {
-  if (!document.name.startsWith(FIRESTORE_DOCUMENT_NAME_PREFIX)) throw new StripeOwnerMergeUnexpectedPathError();
-  const path = document.name.slice(FIRESTORE_DOCUMENT_NAME_PREFIX.length);
+function deliveryOrderPath(document: CommerceDocumentRecord): string {
+  const path = document.key.path;
   const identity = parseDropDeliveryOrderPath(path);
   if (!identity) throw new StripeOwnerMergeUnexpectedPathError();
   const normalizedDropId = normalizeDropId(identity.dropId);
@@ -324,42 +247,39 @@ function deliveryOrderPath(document: FirestoreDocument): string {
 }
 
 async function mergeStripeOwnerBatch(params: {
-  common: FirestoreCommon;
-  firebaseOwner: string;
-  uid: string;
+  common: CommerceCommon;
+  authSubject: string;
+  sourceOwner: string;
   wallet: string;
 }): Promise<number> {
-  for (let attempt = 0; attempt < FIRESTORE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    const transaction = await beginTransaction(params.common);
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
     try {
-      const value = await params.common.requestCommerceDocument({
-        ...params.common,
-        body: JSON.stringify(stripeOwnerQuery(params.firebaseOwner, transaction)),
-        method: 'POST',
-        url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+      return await params.common.repository.run(params.common.nowMs, async (unit) => {
+        const documents = await unit.query({
+          filters: [{ field: 'owner', op: 'equal', value: params.sourceOwner }],
+          kind: 'delivery_order',
+          limit: STRIPE_OWNER_MERGE_BATCH_SIZE,
+        });
+        if (documents.length > STRIPE_OWNER_MERGE_BATCH_SIZE) {
+          throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
+        }
+        for (const document of documents) {
+          deliveryOrderPath(document);
+          await unit.update(document.key, {
+            firebaseUid: commerceFieldValue.delete(),
+            mergedFirebaseUid: commerceFieldValue.delete(),
+            mergedAuthSubject: params.authSubject,
+            owner: params.wallet,
+            ownerKind: 'wallet',
+            ownerMergedAt: commerceFieldValue.serverTimestamp(),
+            previousOwner: stripeCheckoutAnonymousOwnerId(params.authSubject),
+          });
+        }
+        return documents.length;
       });
-      const documents = queryDocuments(value);
-      if (documents.length > STRIPE_OWNER_MERGE_BATCH_SIZE) {
-        throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-      }
-      const paths = documents.map(deliveryOrderPath);
-      const updateFields = {
-        owner: firestoreString(params.wallet),
-        mergedFirebaseUid: firestoreString(params.uid),
-        previousOwner: firestoreString(params.firebaseOwner),
-      };
-      await commitTransaction(params.common, transaction, paths.map((path) => ({
-        update: { name: documentName(path), fields: updateFields },
-        updateMask: { fieldPaths: Object.keys(updateFields) },
-        updateTransforms: [{ fieldPath: 'ownerMergedAt', setToServerValue: 'REQUEST_TIME' }],
-      })));
-      return paths.length;
     } catch (error) {
-      if (!(error instanceof FirestoreWriteConflict)) {
-        await rollbackTransaction(params.common, transaction).catch(() => undefined);
-        throw error;
-      }
-      if (attempt + 1 >= FIRESTORE_TRANSACTION_ATTEMPTS) {
+      if (!(error instanceof CommerceWriteConflict)) throw error;
+      if (attempt + 1 >= COMMERCE_TRANSACTION_ATTEMPTS) {
         throw new ProfileReadError('aborted', 409, 'Stripe order reconciliation changed. Try again.');
       }
       await pauseForConflict(params.common.signal, attempt);
@@ -369,59 +289,40 @@ async function mergeStripeOwnerBatch(params: {
 }
 
 async function mergeStripeOrders(params: {
-  common: FirestoreCommon;
-  uid: string;
+  common: CommerceCommon;
+  authSubject: string;
   wallet: string;
 }): Promise<number> {
-  const firebaseOwner = stripeCheckoutOwnerId(params.uid);
   let merged = 0;
-  for (;;) {
-    const batchCount = await mergeStripeOwnerBatch({ ...params, firebaseOwner });
-    merged += batchCount;
-    if (batchCount < STRIPE_OWNER_MERGE_BATCH_SIZE) return merged;
+  for (const sourceOwner of [
+    stripeCheckoutAnonymousOwnerId(params.authSubject),
+    `firebase:${params.authSubject}`,
+  ]) {
+    for (;;) {
+      const batchCount = await mergeStripeOwnerBatch({ ...params, sourceOwner });
+      merged += batchCount;
+      if (batchCount < STRIPE_OWNER_MERGE_BATCH_SIZE) break;
+    }
   }
+  return merged;
 }
 
-function deliveryRecoveryQuery(owner: string): Record<string, unknown> {
-  return {
-    structuredQuery: {
-      select: { fields: ['status', 'createdAt', 'receiptRecovery'].map((fieldPath) => ({ fieldPath })) },
-      from: [{ collectionId: 'deliveryOrders', allDescendants: true }],
-      where: {
-        compositeFilter: {
-          op: 'AND',
-          filters: [
-            { fieldFilter: { field: { fieldPath: 'owner' }, op: 'EQUAL', value: firestoreString(owner) } },
-            {
-              fieldFilter: {
-                field: { fieldPath: 'status' },
-                op: 'IN',
-                value: { arrayValue: { values: ['processing', 'prepared'].map(firestoreString) } },
-              },
-            },
-          ],
-        },
-      },
-    },
-  };
-}
-
-async function loadDeliveryRecoveryState(common: FirestoreCommon, wallet: string, nowMs: number) {
-  const value = await common.requestCommerceDocument({
-    ...common,
-    body: JSON.stringify(deliveryRecoveryQuery(wallet)),
-    method: 'POST',
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
+async function loadDeliveryRecoveryState(common: CommerceCommon, wallet: string, nowMs: number) {
+  const documents = await common.repository.query({
+    filters: [
+      { field: 'owner', op: 'equal', value: wallet },
+      { field: 'status', op: 'in', value: ['processing', 'prepared'] },
+    ],
+    kind: 'delivery_order',
   });
-  const documents = queryDocuments(value);
   let remainingProcessing = 0;
   const nextCheckCandidates: Array<number | null> = [];
   for (const document of documents) {
-    if (document.fields.status === 'processing') {
+    if (document.data.status === 'processing') {
       remainingProcessing += 1;
-      nextCheckCandidates.push(processingDeliveryRecoveryNextCheckMs(document.fields, nowMs));
-    } else if (document.fields.status === 'prepared') {
-      nextCheckCandidates.push(preparedDeliveryRecoveryNextCheckMs(document.fields, nowMs));
+      nextCheckCandidates.push(processingDeliveryRecoveryNextCheckMs(document.data, nowMs));
+    } else if (document.data.status === 'prepared') {
+      nextCheckCandidates.push(preparedDeliveryRecoveryNextCheckMs(document.data, nowMs));
     }
   }
   return buildWalletDeliveryRecoveryState({ remainingProcessing, nextCheckCandidates });
@@ -429,7 +330,7 @@ async function loadDeliveryRecoveryState(common: FirestoreCommon, wallet: string
 
 async function reconcileProfileState(params: {
   body: ReconcileProfileStateRequest;
-  common: FirestoreCommon;
+  common: CommerceCommon;
   db: D1Database | undefined;
   dependencies: Pick<ProfileLifecycleDependencies,
     | 'acquireWalletSessionReconcileLease'
@@ -449,7 +350,7 @@ async function reconcileProfileState(params: {
     try {
       lease = await params.dependencies.acquireWalletSessionReconcileLease({
         db: params.db,
-        firebaseUid: params.identity.authSubject,
+        authSubject: params.identity.authSubject,
         nowMs: params.nowMs,
         signal: params.common.signal,
       });
@@ -463,8 +364,8 @@ async function reconcileProfileState(params: {
     wallet = lease.wallet;
     try {
       mergedStripeDeliveryOrders = await mergeStripeOrders({
+        authSubject: params.identity.authSubject,
         common: params.common,
-        uid: params.identity.authSubject,
         wallet,
       });
     } finally {
@@ -500,12 +401,12 @@ async function reconcileProfileState(params: {
 
 const defaultDependencies: ProfileLifecycleDependencies = {
   acquireWalletSessionReconcileLease,
+  createCommerceRepository: (db) => new D1CommerceRepository(db),
   establishD1WalletSession,
   isStaffWallet: isStaffWalletAddress,
   loadD1WalletSession,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   timeoutMs: AUTH_TIMEOUT_MS,
   upsertProfile: async (db, profile, signal) => {
     if (!db) throw new Error('OPS_DB is unavailable');
@@ -528,15 +429,6 @@ export async function handleProfileLifecycleRequest(
     ...overrides,
   };
   const metrics: ProfileLifecycleMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
-    try {
-      return await dependencies.providerFetch(input, init);
-    } finally {
-      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = errorResponse(new ProfileReadError('invalid-argument', 405, 'Method not allowed.'));
@@ -562,11 +454,9 @@ export async function handleProfileLifecycleRequest(
       dependencies.nowMs(),
     );
     const nowMs = dependencies.nowMs();
-    const common: FirestoreCommon = {
-      commerceDb: env.COMMERCE_DB,
+    const common: CommerceCommon = {
       nowMs,
-      providerFetch: trackedFetch,
-      requestCommerceDocument: dependencies.requestCommerceDocument,
+      repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
       signal: controller.signal,
     };
     if (path === SOLANA_AUTH_PATH) {
@@ -596,9 +486,9 @@ export async function handleProfileLifecycleRequest(
           wallet,
         });
         await dependencies.establishD1WalletSession({
+          authSubject: identity.authSubject,
           baseline,
           db: env.OPS_DB,
-          firebaseUid: identity.authSubject,
           nowMs,
           signal: controller.signal,
           wallet,

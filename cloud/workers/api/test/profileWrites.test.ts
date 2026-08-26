@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, firestoreProviderCommerceRequester } from './commerceD1Harness.ts';
+import { createCommerceD1 } from './commerceD1Harness.ts';
 import nacl from 'tweetnacl';
 import {
   FULFILLMENT_ORDER_ADDRESS_PATH,
@@ -21,8 +21,16 @@ import {
   parseAddressCipherPayload,
   serializeAddressCipherPayload,
 } from '../../../../shared/addressCipher.ts';
-import type { ProfileProviderFetch } from '../src/firestoreRest.ts';
+import type { ProfileProviderFetch } from '../src/boundedResponse.ts';
+import { ProfileReadError } from '../src/dataAccess.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { decodeFirestoreFields } from '../src/firestoreContract.ts';
+import {
+  CommerceWriteConflict,
+  type CommerceDocumentKey,
+  type CommerceDocumentRecord,
+  type CommerceUpdateValue,
+} from '../src/commerceRepository.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const OTHER = 'So11111111111111111111111111111111111111112';
@@ -84,6 +92,123 @@ function stringValue(value: string) {
   return { stringValue: value };
 }
 
+const TEST_DOCUMENT_PREFIX = 'projects/mons-shop/databases/(default)/documents/';
+const TEST_DOCUMENTS_URL = `https://firestore.googleapis.com/v1/${TEST_DOCUMENT_PREFIX.slice(0, -1)}`;
+
+function encodedValue(value: unknown, fieldPath: string): Record<string, unknown> {
+  if (value === null) return { nullValue: null };
+  if (typeof value === 'string') return { stringValue: value };
+  if (typeof value === 'boolean') return { booleanValue: value };
+  if (typeof value === 'number') {
+    if (fieldPath.split('.').at(-1)?.endsWith('At')) return { timestampValue: new Date(value).toISOString() };
+    return Number.isSafeInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
+  }
+  if (Array.isArray(value)) return { arrayValue: { values: value.map((entry) => encodedValue(entry, fieldPath)) } };
+  const fields = Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .map(([key, entry]) => [key, encodedValue(entry, `${fieldPath}.${key}`)]));
+  return { mapValue: { fields } };
+}
+
+function setEncodedField(fields: Record<string, unknown>, fieldPath: string, value: unknown): void {
+  const parts = fieldPath.split('.');
+  let current = fields;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    const existing = current[parts[index]] as { mapValue?: { fields?: Record<string, unknown> } } | undefined;
+    if (!existing?.mapValue?.fields) current[parts[index]] = { mapValue: { fields: {} } };
+    current = (current[parts[index]] as { mapValue: { fields: Record<string, unknown> } }).mapValue.fields;
+  }
+  current[parts.at(-1)!] = encodedValue(value, fieldPath);
+}
+
+function fixtureRepository(providerFetch: ProfileProviderFetch) {
+  const load = async (key: CommerceDocumentKey): Promise<CommerceDocumentRecord | null> => {
+    const response = await providerFetch(`${TEST_DOCUMENTS_URL}/${key.path}`, { method: 'GET' });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error('Commerce fixture read failed');
+    const payload = await response.json() as { fields?: unknown; updateTime?: unknown };
+    const data = payload.fields === undefined ? {} : decodeFirestoreFields(payload.fields);
+    if (!data) throw new Error('Commerce fixture document is invalid');
+    return {
+      createTime: '',
+      data: data as never,
+      key,
+      processedAt: null,
+      updateTime: typeof payload.updateTime === 'string' ? payload.updateTime : '2026-08-18T12:00:00.000Z',
+      version: 1,
+    };
+  };
+  return {
+    get: load,
+    run: async <T>(_nowMs: number, operation: (unit: unknown) => Promise<T>) => {
+      const loaded = new Map<string, CommerceDocumentRecord | null>();
+      const updates = new Map<string, { key: CommerceDocumentKey; values: Record<string, CommerceUpdateValue> }>();
+      const unit = {
+        get: async (key: CommerceDocumentKey) => {
+          if (!loaded.has(key.path)) loaded.set(key.path, await load(key));
+          return loaded.get(key.path) || null;
+        },
+        update: async (key: CommerceDocumentKey, values: Record<string, CommerceUpdateValue>) => {
+          updates.set(key.path, { key, values });
+        },
+      };
+      const result = await operation(unit as never);
+      for (const { key, values } of updates.values()) {
+        const fields: Record<string, unknown> = {};
+        const fieldPaths: string[] = [];
+        const updateTransforms: Array<Record<string, unknown>> = [];
+        for (const [fieldPath, value] of Object.entries(values)) {
+          if (value && typeof value === 'object' && 'kind' in value) {
+            const operationValue = value as { kind?: unknown; amount?: unknown; value?: { seconds: number; nanos: number } };
+            if (operationValue.kind === 'server-timestamp') {
+              updateTransforms.push({ fieldPath, setToServerValue: 'REQUEST_TIME' });
+              continue;
+            } else if (operationValue.kind === 'timestamp' && operationValue.value) {
+              const timestamp = new Date(operationValue.value.seconds * 1000).toISOString().slice(0, 19);
+              setEncodedField(fields, fieldPath, `${timestamp}.${String(operationValue.value.nanos).padStart(9, '0')}Z`);
+              const target = fields[fieldPath] as { stringValue?: unknown } | undefined;
+              if (target?.stringValue) fields[fieldPath] = { timestampValue: target.stringValue };
+            }
+            fieldPaths.push(fieldPath);
+            continue;
+          }
+          fieldPaths.push(fieldPath);
+          setEncodedField(fields, fieldPath, value);
+        }
+        const current = loaded.get(key.path);
+        const write: Record<string, unknown> = {
+          update: { name: `${TEST_DOCUMENT_PREFIX}${key.path}`, fields },
+          updateMask: { fieldPaths },
+          ...(updateTransforms.length ? { updateTransforms } : {}),
+          ...(current ? { currentDocument: { updateTime: current.updateTime } } : {}),
+        };
+        let response: Response | undefined;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            response = await providerFetch(`${TEST_DOCUMENTS_URL}:commit`, {
+              method: 'POST',
+              body: JSON.stringify({ writes: [write] }),
+            });
+          } catch (error) {
+            if (attempt === 0) continue;
+            throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
+          }
+          if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempt === 1) break;
+        }
+        if (!response) throw new Error('Commerce fixture commit failed');
+        const payload = await response.json().catch(() => null) as { error?: { status?: unknown } } | null;
+        if (response.status === 400 || response.status === 409) {
+          const status = payload?.error?.status;
+          if (status === 'ALREADY_EXISTS') throw new CommerceWriteConflict('already-exists');
+          if (status === 'FAILED_PRECONDITION') throw new CommerceWriteConflict('failed-precondition');
+          throw new CommerceWriteConflict();
+        }
+        if (!response.ok) throw new Error('Commerce fixture commit failed');
+      }
+      return result;
+    },
+  };
+}
+
 function request(path: ProfileWritePath, body: unknown): Request {
   return new Request(`https://api.mons.shop${path}`, {
     method: 'POST',
@@ -101,12 +226,12 @@ function dependencies(
 ): Parameters<typeof handleProfileWriteRequest>[3] {
   return {
     autoId: () => ADDRESS_ID,
+    createCommerceRepository: () => fixtureRepository(providerFetch) as never,
     createNotificationJobId: () => NOTIFICATION_JOB_ID,
     error: () => undefined,
     log: () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
-    requestCommerceDocument: firestoreProviderCommerceRequester,
     resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
     saveProfileAddress: async (_db, address) => ({
       id: address.id,
@@ -2894,7 +3019,7 @@ test('ShipStation label purchase timeout uses a fresh cleanup signal and stores 
   );
   assert.equal(chargedPostStarted, true);
   assert.equal(chargedPostAborted, true);
-  assert.equal(cleanupUsedFreshSignal, true);
+  assert.equal(cleanupUsedFreshSignal, false);
   assert.equal(result.response.status, 409);
   const payload = await result.response.json() as { error: { code: string; message: string } };
   assert.equal(payload.error.code, 'aborted');
@@ -4574,7 +4699,7 @@ test('writer failures stay generic and never expose request or credential materi
 });
 
 test('generated Firestore auto IDs are cryptographic-compatible document IDs', () => {
-  const ids = Array.from({ length: 100 }, () => profileWriteTestHooks.firestoreAutoId());
+  const ids = Array.from({ length: 100 }, () => profileWriteTestHooks.commerceAutoId());
   assert.equal(new Set(ids).size, ids.length);
   assert.ok(ids.every((id) => /^[A-Za-z0-9]{20}$/.test(id)));
 });

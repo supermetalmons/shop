@@ -99,18 +99,18 @@ import {
   type RequestIdentity,
 } from './requestIdentity.js';
 import {
-  FIRESTORE_DATABASE_NAME,
-  FIRESTORE_DOCUMENTS_BASE_URL,
-  FIRESTORE_DOCUMENT_NAME_PREFIX,
-  FirestoreWriteConflict,
-  ProfileReadError,
-  commerceDocumentRequest,
-  decodeFirestoreFields,
-  isRecord,
   readBoundedText,
-  type CommerceDocumentRequester,
   type ProfileProviderFetch,
-} from './firestoreRest.js';
+} from './boundedResponse.js';
+import { isRecord, ProfileReadError } from './dataAccess.js';
+import {
+  CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeys,
+  type CommerceDocumentData,
+  type CommerceUpdateValue,
+} from './commerceRepository.js';
 import { saveD1ProfileAddress } from './profileD1.js';
 import {
   resolveD1WalletSession,
@@ -157,6 +157,8 @@ type ProfileWriteMetrics = {
   providerDurationMs: number;
 };
 
+type ProfileWriteCommerceRepository = Pick<D1CommerceRepository, 'get' | 'run'>;
+
 export type ProfileWriteResult = {
   response: Response;
   metrics: ProfileWriteMetrics;
@@ -165,13 +167,13 @@ export type ProfileWriteResult = {
 
 type ProfileWriteDependencies = {
   autoId: () => string;
+  createCommerceRepository: (db: D1Database) => ProfileWriteCommerceRepository;
   createNotificationJobId: () => string;
   error: (entry: Record<string, unknown>) => void;
   log: (entry: Record<string, unknown>) => void;
   nowMs: () => number;
   pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
   resolveD1WalletSession: (
     db: D1Database | undefined,
     uid: string,
@@ -209,7 +211,7 @@ const MAX_SHIPSTATION_RATES_REQUEST_BYTES = 2048;
 const MAX_SHIPSTATION_SHIPMENT_REQUEST_BYTES = 2048;
 const SHIPSTATION_CLAIM_TTL_MS = 120_000;
 const SHIPSTATION_RATE_REQUEST_TTL_MS = 10 * 60_000;
-const FIRESTORE_MUTATION_ATTEMPTS = 3;
+const COMMERCE_MUTATION_ATTEMPTS = 3;
 const ADMIN_WALLETS = new Set(FULFILLMENT_ADMIN_WALLET_ADDRESSES);
 const ADDRESS_ADMIN_WALLETS = new Set(FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES);
 const SHIPPER_DROP_IDS_BY_WALLET = new Map(
@@ -301,13 +303,13 @@ class ShipStationProfileError extends ProfileReadError {
 
 const defaultDependencies: ProfileWriteDependencies = {
   autoId: createProfileAddressId,
+  createCommerceRepository: (db) => new D1CommerceRepository(db),
   createNotificationJobId: () => crypto.randomUUID(),
   error: (entry) => console.error(entry),
   log: (entry) => console.log(entry),
   nowMs: () => Date.now(),
   pauseForRatePoll,
   providerFetch: (input, init) => fetch(input, init),
-  requestCommerceDocument: commerceDocumentRequest,
   resolveD1WalletSession: (db, uid, signal) => {
     if (!db) throw new Error('OPS_DB is unavailable');
     return resolveD1WalletSession(db, uid, signal);
@@ -437,32 +439,6 @@ function supportedDropId(value: string): string {
   return dropId;
 }
 
-function firestoreString(value: string): { stringValue: string } {
-  return { stringValue: value };
-}
-
-function documentName(path: string): string {
-  return `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`;
-}
-
-async function commitWrites(
-  common: {
-    commerceDb: D1Database;
-    nowMs: number;
-    providerFetch: ProfileProviderFetch;
-    requestCommerceDocument: CommerceDocumentRequester;
-    signal: AbortSignal;
-  },
-  writes: unknown[],
-): Promise<void> {
-  await common.requestCommerceDocument({
-    ...common,
-    body: JSON.stringify({ writes }),
-    method: 'POST',
-    url: `https://firestore.googleapis.com/v1/${FIRESTORE_DATABASE_NAME}/documents:commit`,
-  });
-}
-
 async function saveAddress(
   body: z.infer<typeof saveAddressSchema>,
   wallet: string,
@@ -543,7 +519,7 @@ function markerFieldPaths(): string[] {
 }
 
 async function markBuyerOrderShippedEmailQueued(args: {
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   jobId: string;
@@ -561,25 +537,10 @@ async function markBuyerOrderShippedEmailQueued(args: {
       }
       return {
         value: true,
-        write: {
-          update: {
-            name: documentName(`drops/${args.dropId}/deliveryOrders/${args.deliveryId}`),
-            fields: {
-              [BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD]: firestoreString(BUYER_ORDER_SHIPPED_EMAIL_QUEUED),
-              [BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD]: firestoreString(args.jobId),
-            },
-          },
-          updateMask: {
-            fieldPaths: [
-              BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD,
-              BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD,
-            ],
-          },
-          updateTransforms: [{
-            fieldPath: BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD,
-            setToServerValue: 'REQUEST_TIME',
-          }],
-          currentDocument: { updateTime: document.updateTime },
+        updates: {
+          [BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD]: BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
+          [BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD]: args.jobId,
+          [BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
         },
       };
     },
@@ -589,7 +550,7 @@ async function markBuyerOrderShippedEmailQueued(args: {
 async function updateFulfillmentStatus(
   body: z.infer<typeof fulfillmentStatusSchema>,
   wallet: string,
-  common: FirestoreWriteCommon,
+  common: CommerceWriteCommon,
   env: ProfileWriteEnv,
   dependencies: Pick<
     ProfileWriteDependencies,
@@ -604,7 +565,7 @@ async function updateFulfillmentStatus(
     common,
     deliveryId: body.deliveryId,
     dropId,
-    build: (document): { value: FulfillmentStatusMutation; write: Record<string, unknown> } => {
+    build: (document): { value: FulfillmentStatusMutation; updates: Record<string, CommerceUpdateValue> } => {
       const nextStatus = body.status || '';
       const currentTrackingCode = normalizeOptionalFulfillmentTrackingCode(
         document.fields.fulfillmentTrackingCode,
@@ -630,27 +591,26 @@ async function updateFulfillmentStatus(
         jobId: document.fields[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD],
         createJobId: dependencies.createNotificationJobId,
       });
-      const updateFields: Record<string, unknown> = {
-        dropId: firestoreString(dropId),
-        fulfillmentUpdatedBy: firestoreString(wallet),
-        ...(nextStatus ? { fulfillmentStatus: firestoreString(nextStatus) } : {}),
+      const updates: Record<string, CommerceUpdateValue> = {
+        dropId,
+        fulfillmentUpdatedBy: wallet,
+        fulfillmentStatus: nextStatus || commerceFieldValue.delete(),
+        fulfillmentUpdatedAt: commerceFieldValue.serverTimestamp(),
       };
-      const updateMask = ['dropId', 'fulfillmentUpdatedBy', 'fulfillmentStatus'];
       if (nextStatus === 'Shipped') {
-        updateMask.push('fulfillmentTrackingCode');
-        if (nextTrackingCode) updateFields.fulfillmentTrackingCode = firestoreString(nextTrackingCode);
+        updates.fulfillmentTrackingCode = nextTrackingCode || commerceFieldValue.delete();
       }
       if (decision.kind === 'send') {
-        updateFields[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] = firestoreString(BUYER_ORDER_SHIPPED_EMAIL_PENDING);
-        updateFields[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD] = firestoreString(decision.jobId);
-        updateFields[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD] = firestoreString(decision.idempotencyKey);
-        updateMask.push(...markerFieldPaths());
+        updates[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] = BUYER_ORDER_SHIPPED_EMAIL_PENDING;
+        updates[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD] = decision.jobId;
+        updates[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD] = decision.idempotencyKey;
+        updates[BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD] = commerceFieldValue.delete();
         order[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] = BUYER_ORDER_SHIPPED_EMAIL_PENDING;
         order[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD] = decision.jobId;
         order[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD] = decision.idempotencyKey;
         delete order[BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD];
       } else if (decision.clearPending) {
-        updateMask.push(...markerFieldPaths());
+        for (const field of markerFieldPaths()) updates[field] = commerceFieldValue.delete();
         delete order[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD];
         delete order[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD];
         delete order[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD];
@@ -671,15 +631,7 @@ async function updateFulfillmentStatus(
             ...(nextTrackingCode ? { fulfillmentTrackingCode: nextTrackingCode } : {}),
           },
         },
-        write: {
-          update: {
-            name: documentName(`drops/${dropId}/deliveryOrders/${body.deliveryId}`),
-            fields: updateFields,
-          },
-          updateMask: { fieldPaths: updateMask },
-          updateTransforms: [{ fieldPath: 'fulfillmentUpdatedAt', setToServerValue: 'REQUEST_TIME' }],
-          currentDocument: { updateTime: document.updateTime },
-        },
+        updates,
       };
     },
   });
@@ -752,64 +704,34 @@ async function updateFulfillmentStatus(
   return mutation.response;
 }
 
-type FirestoreWriteCommon = {
-  commerceDb: D1Database;
+type CommerceWriteCommon = {
   nowMs: number;
   pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
   providerFetch: ProfileProviderFetch;
-  requestCommerceDocument: CommerceDocumentRequester;
+  repository: ProfileWriteCommerceRepository;
   signal: AbortSignal;
 };
 
 type DeliveryOrderDocument = {
   fields: Record<string, unknown>;
-  updateTime: string;
 };
 
-function firestoreTimestamp(milliseconds: number): { timestampValue: string } {
-  const timestamp = new Date(milliseconds);
-  if (!Number.isFinite(timestamp.getTime())) {
-    throw new ProfileReadError('internal', 500, 'Profile request failed.');
-  }
-  return { timestampValue: timestamp.toISOString() };
+function commerceMoney(value: { currency: string; amount: number }): { currency: string; amount: number } {
+  return { currency: value.currency, amount: value.amount };
 }
 
-function firestoreNumber(value: number): { integerValue: string } | { doubleValue: number } {
-  return Number.isSafeInteger(value) ? { integerValue: String(value) } : { doubleValue: value };
+function commercePackage(value: ShipStationPackageInput): ShipStationPackageInput {
+  return { ...value };
 }
 
-function firestoreMap(fields: Record<string, unknown>): { mapValue: { fields: Record<string, unknown> } } {
-  return { mapValue: { fields } };
-}
-
-function firestoreMoney(value: { currency: string; amount: number }): ReturnType<typeof firestoreMap> {
-  return firestoreMap({
-    currency: firestoreString(value.currency),
-    amount: firestoreNumber(value.amount),
-  });
-}
-
-function firestorePackage(value: ShipStationPackageInput): ReturnType<typeof firestoreMap> {
-  return firestoreMap({
-    length: firestoreNumber(value.length),
-    width: firestoreNumber(value.width),
-    height: firestoreNumber(value.height),
-    weight: firestoreNumber(value.weight),
-  });
-}
-
-function firestoreRateQuotes(
+function commerceRateQuotes(
   rates: GetFulfillmentShipStationRatesResponse['rates'],
-): { arrayValue: { values: Array<ReturnType<typeof firestoreMap>> } } {
-  return {
-    arrayValue: {
-      values: rates.map((rate) => firestoreMap({
-        rateId: firestoreString(rate.rateId),
-        shipmentId: firestoreString(rate.shipmentId),
-        totalAmount: firestoreMoney(rate.totalAmount),
-      })),
-    },
-  };
+): Array<{ rateId: string; shipmentId: string; totalAmount: { currency: string; amount: number } }> {
+  return rates.map((rate) => ({
+    rateId: rate.rateId,
+    shipmentId: rate.shipmentId,
+    totalAmount: commerceMoney(rate.totalAmount),
+  }));
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -841,23 +763,13 @@ function storedShipStationRateQuotes(value: unknown): Array<{
 }
 
 async function loadDeliveryOrderDocument(
-  common: FirestoreWriteCommon,
+  common: CommerceWriteCommon,
   dropId: string,
   deliveryId: number,
 ): Promise<DeliveryOrderDocument> {
-  const orderPath = `drops/${dropId}/deliveryOrders/${deliveryId}`;
-  const payload = await common.requestCommerceDocument({
-    ...common,
-    method: 'GET',
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}/${orderPath}`,
-  });
-  if (payload === null) throw new ProfileReadError('not-found', 404, 'Delivery order not found');
-  if (!isRecord(payload) || typeof payload.updateTime !== 'string' || !payload.updateTime) {
-    throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-  }
-  const fields = payload.fields === undefined ? {} : decodeFirestoreFields(payload.fields);
-  if (!fields) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-  return { fields, updateTime: payload.updateTime };
+  const payload = await common.repository.get(commerceKeys.deliveryOrder(dropId, String(deliveryId)));
+  if (!payload) throw new ProfileReadError('not-found', 404, 'Delivery order not found');
+  return { fields: payload.data };
 }
 
 async function pauseForMutationRetry(signal: AbortSignal, attempt: number): Promise<void> {
@@ -879,21 +791,23 @@ async function pauseForMutationRetry(signal: AbortSignal, attempt: number): Prom
 }
 
 async function mutateDeliveryOrder<T>(args: {
-  build: (document: DeliveryOrderDocument) => { value: T; write?: Record<string, unknown> };
-  common: FirestoreWriteCommon;
+  build: (document: DeliveryOrderDocument) => { value: T; updates?: Record<string, CommerceUpdateValue> };
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
 }): Promise<T> {
-  for (let attempt = 0; attempt < FIRESTORE_MUTATION_ATTEMPTS; attempt += 1) {
-    const document = await loadDeliveryOrderDocument(args.common, args.dropId, args.deliveryId);
-    const mutation = args.build(document);
-    if (!mutation.write) return mutation.value;
+  for (let attempt = 0; attempt < COMMERCE_MUTATION_ATTEMPTS; attempt += 1) {
     try {
-      await commitWrites(args.common, [mutation.write]);
-      return mutation.value;
+      return await args.common.repository.run(args.common.nowMs, async (unit) => {
+        const record = await unit.get(commerceKeys.deliveryOrder(args.dropId, String(args.deliveryId)));
+        if (!record) throw new ProfileReadError('not-found', 404, 'Delivery order not found');
+        const mutation = args.build({ fields: record.data });
+        if (mutation.updates) await unit.update(record.key, mutation.updates);
+        return mutation.value;
+      });
     } catch (error) {
-      if (!(error instanceof FirestoreWriteConflict)) throw error;
-      if (attempt + 1 >= FIRESTORE_MUTATION_ATTEMPTS) {
+      if (!(error instanceof CommerceWriteConflict)) throw error;
+      if (attempt + 1 >= COMMERCE_MUTATION_ATTEMPTS) {
         throw new ProfileReadError('aborted', 409, 'The delivery order changed. Try again.');
       }
       await pauseForMutationRetry(args.common.signal, attempt);
@@ -1048,7 +962,7 @@ function requireRateMutationState(
 async function updateFulfillmentAddress(
   body: z.infer<typeof fulfillmentAddressSchema>,
   wallet: string,
-  common: FirestoreWriteCommon,
+  common: CommerceWriteCommon,
   addressSecret: string,
 ): Promise<UpdateFulfillmentAddressResponse> {
   const dropId = supportedDropId(body.dropId);
@@ -1057,12 +971,11 @@ async function updateFulfillmentAddress(
     throw new ProfileReadError('permission-denied', 403, 'Fulfillment address admin access denied.');
   }
   const encryptedAddress = encryptFulfillmentAddress(body.full, addressSecret);
-  const orderPath = `drops/${dropId}/deliveryOrders/${body.deliveryId}`;
   return mutateDeliveryOrder<UpdateFulfillmentAddressResponse>({
     common,
     dropId,
     deliveryId: body.deliveryId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       rejectIrlShipStationOrder(order);
       const shipstation = shipStationState(order);
       if (optionalString(shipstation.shipmentId)) {
@@ -1117,30 +1030,15 @@ async function updateFulfillmentAddress(
       };
       return {
         value: { deliveryId: body.deliveryId, address },
-        write: {
-          update: {
-            name: documentName(orderPath),
-            fields: {
-              addressSnapshot: firestoreMap({
-                encrypted: firestoreString(encryptedAddress.encrypted),
-                hint: firestoreString(encryptedAddress.hint),
-              }),
-              fulfillmentAddressUpdatedBy: firestoreString(wallet),
-            },
-          },
-          updateMask: {
-            fieldPaths: [
-              'addressSnapshot.encrypted',
-              'addressSnapshot.hint',
-              'fulfillmentAddressUpdatedBy',
-              'shipstation.rateQuotes',
-              'shipstation.ratesClaimId',
-              'shipstation.ratesClaimedAt',
-              'shipstation.ratesClaimedBy',
-            ],
-          },
-          updateTransforms: [{ fieldPath: 'fulfillmentAddressUpdatedAt', setToServerValue: 'REQUEST_TIME' }],
-          currentDocument: { updateTime },
+        updates: {
+          'addressSnapshot.encrypted': encryptedAddress.encrypted,
+          'addressSnapshot.hint': encryptedAddress.hint,
+          fulfillmentAddressUpdatedBy: wallet,
+          fulfillmentAddressUpdatedAt: commerceFieldValue.serverTimestamp(),
+          'shipstation.rateQuotes': commerceFieldValue.delete(),
+          'shipstation.ratesClaimId': commerceFieldValue.delete(),
+          'shipstation.ratesClaimedAt': commerceFieldValue.delete(),
+          'shipstation.ratesClaimedBy': commerceFieldValue.delete(),
         },
       };
     },
@@ -1200,18 +1098,17 @@ function requireShipStationPackageWeight(
 
 async function claimFulfillmentShipStationShipment(args: {
   claimId: string;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   onWriteAttempt: () => void;
   wallet: string;
 }): Promise<ShipStationShipmentClaim> {
-  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
   return mutateDeliveryOrder<ShipStationShipmentClaim>({
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       rejectIrlShipStationOrder(order);
       const shipstation = shipStationState(order);
       const shipmentId = optionalString(shipstation.shipmentId);
@@ -1230,22 +1127,12 @@ async function claimFulfillmentShipStationShipment(args: {
       args.onWriteAttempt();
       return {
         value: { alreadyAdded: false, claimId: args.claimId, order },
-        write: {
-          update: {
-            name: documentName(orderPath),
-            fields: {
-              dropId: firestoreString(args.dropId),
-              shipstation: firestoreMap({
-                claimId: firestoreString(args.claimId),
-                claimedBy: firestoreString(args.wallet),
-              }),
-            },
-          },
-          updateMask: {
-            fieldPaths: ['dropId', 'shipstation.claimId', 'shipstation.claimedBy', 'shipstation.claimFenceId'],
-          },
-          updateTransforms: [{ fieldPath: 'shipstation.claimedAt', setToServerValue: 'REQUEST_TIME' }],
-          currentDocument: { updateTime },
+        updates: {
+          dropId: args.dropId,
+          'shipstation.claimId': args.claimId,
+          'shipstation.claimedBy': args.wallet,
+          'shipstation.claimFenceId': commerceFieldValue.delete(),
+          'shipstation.claimedAt': commerceFieldValue.serverTimestamp(),
         },
       };
     },
@@ -1261,62 +1148,40 @@ function shipStationShipmentFailureMessage(error: unknown): string {
 
 async function transitionFulfillmentShipStationShipmentClaim(args: {
   claimId: string;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   errorMessage: string;
   retain: boolean;
   wallet: string;
 }): Promise<void> {
-  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
   await mutateDeliveryOrder<void>({
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       const shipstation = shipStationState(order);
       const currentClaimId = optionalString(shipstation.claimId);
       const currentClaimedBy = optionalString(shipstation.claimedBy);
       if (currentClaimId !== args.claimId || currentClaimedBy !== args.wallet) return { value: undefined };
-      const fields = args.retain
+      const updates: Record<string, CommerceUpdateValue> = args.retain
         ? {
-            claimId: firestoreString(args.claimId),
-            claimedBy: firestoreString(args.wallet),
-            lastError: firestoreString(args.errorMessage),
+            'shipstation.claimId': args.claimId,
+            'shipstation.claimedBy': args.wallet,
+            'shipstation.claimFenceId': commerceFieldValue.delete(),
+            'shipstation.lastError': args.errorMessage,
+            'shipstation.claimedAt': commerceFieldValue.serverTimestamp(),
           }
         : {
-            claimFenceId: firestoreString(args.claimId),
-            lastError: firestoreString(args.errorMessage),
+            'shipstation.claimId': commerceFieldValue.delete(),
+            'shipstation.claimedAt': commerceFieldValue.delete(),
+            'shipstation.claimedBy': commerceFieldValue.delete(),
+            'shipstation.claimFenceId': args.claimId,
+            'shipstation.lastError': args.errorMessage,
           };
       return {
         value: undefined,
-        write: {
-          update: {
-            name: documentName(orderPath),
-            fields: { shipstation: firestoreMap(fields) },
-          },
-          updateMask: {
-            fieldPaths: args.retain
-              ? [
-                  'shipstation.claimId',
-                  'shipstation.claimedBy',
-                  'shipstation.claimFenceId',
-                  'shipstation.lastError',
-                ]
-              : [
-                  'shipstation.claimId',
-                  'shipstation.claimedAt',
-                  'shipstation.claimedBy',
-                  'shipstation.claimFenceId',
-                  'shipstation.lastError',
-                ],
-          },
-          updateTransforms: [
-            ...(args.retain ? [{ fieldPath: 'shipstation.claimedAt', setToServerValue: 'REQUEST_TIME' }] : []),
-            { fieldPath: 'shipstation.lastErrorAt', setToServerValue: 'REQUEST_TIME' },
-          ],
-          currentDocument: { updateTime },
-        },
+        updates: { ...updates, 'shipstation.lastErrorAt': commerceFieldValue.serverTimestamp() },
       };
     },
   });
@@ -1324,7 +1189,7 @@ async function transitionFulfillmentShipStationShipmentClaim(args: {
 
 async function safelyTransitionFulfillmentShipStationShipmentClaim(args: {
   claimId: string;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   errorMessage: string;
@@ -1356,7 +1221,7 @@ async function safelyTransitionFulfillmentShipStationShipmentClaim(args: {
 
 async function persistFulfillmentShipStationShipment(args: {
   claimId: string;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   externalShipmentId: string;
@@ -1365,12 +1230,11 @@ async function persistFulfillmentShipStationShipment(args: {
   storedPackage?: ShipStationPackageInput;
   wallet: string;
 }): Promise<void> {
-  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
   await mutateDeliveryOrder<void>({
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       const shipstation = shipStationState(order);
       if (
         optionalString(shipstation.claimId) !== args.claimId ||
@@ -1384,40 +1248,21 @@ async function persistFulfillmentShipStationShipment(args: {
       }
       return {
         value: undefined,
-        write: {
-          update: {
-            name: documentName(orderPath),
-            fields: {
-              dropId: firestoreString(args.dropId),
-              shipstation: firestoreMap({
-                shipmentId: firestoreString(args.shipmentId),
-                externalShipmentId: firestoreString(args.externalShipmentId),
-                shipmentNumber: firestoreString(String(args.deliveryId)),
-                createdBy: firestoreString(args.wallet),
-                ...(args.storedPackage ? { package: firestorePackage(args.storedPackage) } : {}),
-                packageCount: firestoreNumber(args.packageCount),
-              }),
-            },
-          },
-          updateMask: {
-            fieldPaths: [
-              'dropId',
-              'shipstation.shipmentId',
-              'shipstation.externalShipmentId',
-              'shipstation.shipmentNumber',
-              'shipstation.createdBy',
-              ...(args.storedPackage ? ['shipstation.package'] : []),
-              'shipstation.packageCount',
-              'shipstation.claimId',
-              'shipstation.claimedAt',
-              'shipstation.claimedBy',
-              'shipstation.claimFenceId',
-              'shipstation.lastError',
-              'shipstation.lastErrorAt',
-            ],
-          },
-          updateTransforms: [{ fieldPath: 'shipstation.createdAt', setToServerValue: 'REQUEST_TIME' }],
-          currentDocument: { updateTime },
+        updates: {
+          dropId: args.dropId,
+          'shipstation.shipmentId': args.shipmentId,
+          'shipstation.externalShipmentId': args.externalShipmentId,
+          'shipstation.shipmentNumber': String(args.deliveryId),
+          'shipstation.createdBy': args.wallet,
+          ...(args.storedPackage ? { 'shipstation.package': commercePackage(args.storedPackage) } : {}),
+          'shipstation.packageCount': args.packageCount,
+          'shipstation.claimId': commerceFieldValue.delete(),
+          'shipstation.claimedAt': commerceFieldValue.delete(),
+          'shipstation.claimedBy': commerceFieldValue.delete(),
+          'shipstation.claimFenceId': commerceFieldValue.delete(),
+          'shipstation.lastError': commerceFieldValue.delete(),
+          'shipstation.lastErrorAt': commerceFieldValue.delete(),
+          'shipstation.createdAt': commerceFieldValue.serverTimestamp(),
         },
       };
     },
@@ -1450,7 +1295,7 @@ function applyShipStationAddressPatch(
 async function addFulfillmentOrderToShipStation(
   body: z.infer<typeof shipStationShipmentSchema>,
   wallet: string,
-  common: FirestoreWriteCommon,
+  common: CommerceWriteCommon,
   env: ProfileWriteEnv,
 ): Promise<AddFulfillmentOrderToShipStationResponse> {
   const dropId = supportedDropId(body.dropId);
@@ -1610,30 +1455,30 @@ async function addFulfillmentOrderToShipStation(
 function labelDocumentFields(
   label: FulfillmentShipStationLabel,
   wallet: string,
-): Record<string, unknown> {
+): CommerceDocumentData {
   if (!label.purchasedAt) throw new ProfileReadError('internal', 500, 'Profile request failed.');
   return {
-    labelId: firestoreString(label.labelId),
-    shipmentId: firestoreString(label.shipmentId),
-    status: firestoreString(label.status),
-    ...(label.rateId ? { rateId: firestoreString(label.rateId) } : {}),
-    ...(label.trackingNumber ? { trackingNumber: firestoreString(label.trackingNumber) } : {}),
-    ...(label.carrierId ? { carrierId: firestoreString(label.carrierId) } : {}),
-    ...(label.carrierCode ? { carrierCode: firestoreString(label.carrierCode) } : {}),
-    ...(label.carrierName ? { carrierName: firestoreString(label.carrierName) } : {}),
-    ...(label.serviceCode ? { serviceCode: firestoreString(label.serviceCode) } : {}),
-    ...(label.serviceName ? { serviceName: firestoreString(label.serviceName) } : {}),
-    ...(label.shipmentCost ? { shipmentCost: firestoreMoney(label.shipmentCost) } : {}),
-    ...(label.insuranceCost ? { insuranceCost: firestoreMoney(label.insuranceCost) } : {}),
-    ...(label.totalCost ? { totalCost: firestoreMoney(label.totalCost) } : {}),
-    ...(label.purchasedBy ? { purchasedBy: firestoreString(label.purchasedBy) } : {}),
-    purchasedAt: firestoreTimestamp(label.purchasedAt),
-    recordedBy: firestoreString(wallet),
+    labelId: label.labelId,
+    shipmentId: label.shipmentId,
+    status: label.status,
+    ...(label.rateId ? { rateId: label.rateId } : {}),
+    ...(label.trackingNumber ? { trackingNumber: label.trackingNumber } : {}),
+    ...(label.carrierId ? { carrierId: label.carrierId } : {}),
+    ...(label.carrierCode ? { carrierCode: label.carrierCode } : {}),
+    ...(label.carrierName ? { carrierName: label.carrierName } : {}),
+    ...(label.serviceCode ? { serviceCode: label.serviceCode } : {}),
+    ...(label.serviceName ? { serviceName: label.serviceName } : {}),
+    ...(label.shipmentCost ? { shipmentCost: commerceMoney(label.shipmentCost) } : {}),
+    ...(label.insuranceCost ? { insuranceCost: commerceMoney(label.insuranceCost) } : {}),
+    ...(label.totalCost ? { totalCost: commerceMoney(label.totalCost) } : {}),
+    ...(label.purchasedBy ? { purchasedBy: label.purchasedBy } : {}),
+    purchasedAt: label.purchasedAt,
+    recordedBy: wallet,
   };
 }
 
 async function persistFulfillmentShipStationLabel(args: {
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   confirmedPurchase?: boolean;
   deliveryId: number;
   dropId: string;
@@ -1650,12 +1495,11 @@ async function persistFulfillmentShipStationLabel(args: {
     purchasedAt: args.result.label.purchasedAt || args.fallbackLabel?.purchasedAt || args.common.nowMs,
   };
   const labelFields = labelDocumentFields(label, args.wallet);
-  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
   return mutateDeliveryOrder({
     common: args.common,
     dropId: args.dropId,
     deliveryId: args.deliveryId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       const shipstation = shipStationState(order);
       if (args.expectedRateMutation) requireRateMutationState(order, args.expectedRateMutation);
       if (optionalString(shipstation.shipmentId) !== label.shipmentId) {
@@ -1693,53 +1537,43 @@ async function persistFulfillmentShipStationLabel(args: {
         currentLabel,
         label,
       );
-      const fields: Record<string, unknown> = {
-        dropId: firestoreString(args.dropId),
-        shipstation: firestoreMap({ label: firestoreMap(labelFields) }),
-        ...(trackingCodeUpdate ? { fulfillmentTrackingCode: firestoreString(trackingCodeUpdate) } : {}),
+      const updates: Record<string, CommerceUpdateValue> = {
+        dropId: args.dropId,
+        'shipstation.label': labelFields,
+        'shipstation.rateQuotes': commerceFieldValue.delete(),
       };
-      const updateMask = [
-        'dropId',
-        'shipstation.label',
-        'shipstation.rateQuotes',
-      ];
       if (args.expectedRateMutation) {
-        updateMask.push(
-          'shipstation.ratesClaimId',
-          'shipstation.ratesClaimedAt',
-          'shipstation.ratesClaimedBy',
-        );
+        updates['shipstation.ratesClaimId'] = commerceFieldValue.delete();
+        updates['shipstation.ratesClaimedAt'] = commerceFieldValue.delete();
+        updates['shipstation.ratesClaimedBy'] = commerceFieldValue.delete();
       }
-      if (trackingCodeUpdate !== undefined) updateMask.push('fulfillmentTrackingCode');
+      if (trackingCodeUpdate !== undefined) {
+        updates.fulfillmentTrackingCode = trackingCodeUpdate || commerceFieldValue.delete();
+      }
       if (shouldClearShipStationPurchaseState(label, args.confirmedPurchase)) {
-        updateMask.push('shipstation.labelPurchase');
+        updates['shipstation.labelPurchase'] = commerceFieldValue.delete();
       }
       return {
         value: label,
-        write: {
-          update: { name: documentName(orderPath), fields },
-          updateMask: { fieldPaths: updateMask },
-          currentDocument: { updateTime },
-        },
+        updates,
       };
     },
   });
 }
 
 async function transitionShipStationPurchaseState(args: {
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   expectedRequestId?: string;
   expectedShipmentId: string;
   wallet: string;
 }): Promise<{ label?: FulfillmentShipStationLabel; purchaseUnknown: boolean }> {
-  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
   return mutateDeliveryOrder<{ label?: FulfillmentShipStationLabel; purchaseUnknown: boolean }>({
     common: args.common,
     dropId: args.dropId,
     deliveryId: args.deliveryId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       const shipstation = shipStationState(order);
       if (optionalString(shipstation.shipmentId) !== args.expectedShipmentId) {
         throw new ProfileReadError(
@@ -1757,25 +1591,10 @@ async function transitionShipStationPurchaseState(args: {
       }
       return {
         value: { purchaseUnknown: true },
-        write: {
-          update: {
-            name: documentName(orderPath),
-            fields: {
-              shipstation: firestoreMap({
-                labelPurchase: firestoreMap({
-                  status: firestoreString('unknown'),
-                  checkedBy: firestoreString(args.wallet),
-                }),
-              }),
-            },
-          },
-          updateMask: {
-            fieldPaths: ['shipstation.labelPurchase.status', 'shipstation.labelPurchase.checkedBy'],
-          },
-          updateTransforms: [
-            { fieldPath: 'shipstation.labelPurchase.checkedAt', setToServerValue: 'REQUEST_TIME' },
-          ],
-          currentDocument: { updateTime },
+        updates: {
+          'shipstation.labelPurchase.status': 'unknown',
+          'shipstation.labelPurchase.checkedBy': args.wallet,
+          'shipstation.labelPurchase.checkedAt': commerceFieldValue.serverTimestamp(),
         },
       };
     },
@@ -1811,7 +1630,7 @@ function regressesVoidedShipStationLabel(
 
 async function reconcileFulfillmentShipStationLabel(args: {
   apiKey: string;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   expectedPurchaseRequestId?: string;
@@ -1876,7 +1695,7 @@ async function reconcileFulfillmentShipStationLabel(args: {
 async function getFulfillmentShipStationLabel(
   body: z.infer<typeof shipStationLabelSchema>,
   wallet: string,
-  common: FirestoreWriteCommon,
+  common: CommerceWriteCommon,
   apiKey: string,
 ): Promise<GetFulfillmentShipStationLabelResponse> {
   const dropId = supportedDropId(body.dropId);
@@ -1945,7 +1764,7 @@ function expectedFulfillmentShipStationLabelForVoid(
 }
 
 async function persistVoidedFulfillmentShipStationLabel(args: {
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   label: FulfillmentShipStationLabel;
@@ -1976,7 +1795,7 @@ function shipStationLabelVoidFailure(error: unknown): { code: string; message: s
 async function recoverAmbiguousFulfillmentShipStationLabelVoid(args: {
   apiKey: string;
   body: z.infer<typeof shipStationLabelVoidSchema>;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   dropId: string;
   shipmentId: string;
   wallet: string;
@@ -2036,7 +1855,7 @@ async function recoverAmbiguousFulfillmentShipStationLabelVoid(args: {
 async function voidFulfillmentShipStationLabel(
   body: z.infer<typeof shipStationLabelVoidSchema>,
   wallet: string,
-  common: FirestoreWriteCommon,
+  common: CommerceWriteCommon,
   apiKey: string,
 ): Promise<VoidFulfillmentShipStationLabelResponse> {
   const dropId = supportedDropId(body.dropId);
@@ -2110,17 +1929,16 @@ type ShipStationLabelPurchaseClaim =
 
 async function claimFulfillmentShipStationLabelPurchase(args: {
   body: z.infer<typeof shipStationLabelPurchaseSchema>;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   dropId: string;
   shipmentId: string;
   wallet: string;
 }): Promise<ShipStationLabelPurchaseClaim> {
-  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.body.deliveryId}`;
   return mutateDeliveryOrder<ShipStationLabelPurchaseClaim>({
     common: args.common,
     deliveryId: args.body.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       rejectIrlShipStationOrder(order);
       const shipstation = shipStationState(order);
       if (optionalString(shipstation.shipmentId) !== args.shipmentId) {
@@ -2161,39 +1979,18 @@ async function claimFulfillmentShipStationLabelPurchase(args: {
       }
       return {
         value: { alreadyPurchased: false },
-        write: {
-          update: {
-            name: documentName(orderPath),
-            fields: {
-              shipstation: firestoreMap({
-                labelPurchase: firestoreMap({
-                  status: firestoreString('purchasing'),
-                  requestId: firestoreString(args.body.requestId),
-                  rateId: firestoreString(args.body.rateId),
-                  expectedTotal: firestoreMoney(args.body.expectedTotal),
-                  claimedBy: firestoreString(args.wallet),
-                }),
-              }),
-            },
-          },
-          updateMask: {
-            fieldPaths: [
-              'shipstation.labelPurchase.status',
-              'shipstation.labelPurchase.requestId',
-              'shipstation.labelPurchase.rateId',
-              'shipstation.labelPurchase.expectedTotal',
-              'shipstation.labelPurchase.claimedBy',
-              'shipstation.labelPurchase.lastError',
-              'shipstation.labelPurchase.lastErrorAt',
-              'shipstation.labelPurchase.lastErrorBy',
-              'shipstation.labelPurchase.checkedAt',
-              'shipstation.labelPurchase.checkedBy',
-            ],
-          },
-          updateTransforms: [
-            { fieldPath: 'shipstation.labelPurchase.claimedAt', setToServerValue: 'REQUEST_TIME' },
-          ],
-          currentDocument: { updateTime },
+        updates: {
+          'shipstation.labelPurchase.status': 'purchasing',
+          'shipstation.labelPurchase.requestId': args.body.requestId,
+          'shipstation.labelPurchase.rateId': args.body.rateId,
+          'shipstation.labelPurchase.expectedTotal': commerceMoney(args.body.expectedTotal),
+          'shipstation.labelPurchase.claimedBy': args.wallet,
+          'shipstation.labelPurchase.lastError': commerceFieldValue.delete(),
+          'shipstation.labelPurchase.lastErrorAt': commerceFieldValue.delete(),
+          'shipstation.labelPurchase.lastErrorBy': commerceFieldValue.delete(),
+          'shipstation.labelPurchase.checkedAt': commerceFieldValue.delete(),
+          'shipstation.labelPurchase.checkedBy': commerceFieldValue.delete(),
+          'shipstation.labelPurchase.claimedAt': commerceFieldValue.serverTimestamp(),
         },
       };
     },
@@ -2213,19 +2010,18 @@ function shipStationLabelPurchaseFailure(error: unknown): { code: string; messag
 
 async function transitionFulfillmentShipStationLabelPurchase(args: {
   body: z.infer<typeof shipStationLabelPurchaseSchema>;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   dropId: string;
   message: string;
   nextStatus: 'unknown' | 'failed';
   shipmentId: string;
   wallet: string;
 }): Promise<{ label?: FulfillmentShipStationLabel; purchaseUnknown: boolean }> {
-  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.body.deliveryId}`;
   return mutateDeliveryOrder<{ label?: FulfillmentShipStationLabel; purchaseUnknown: boolean }>({
     common: args.common,
     deliveryId: args.body.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       const shipstation = shipStationState(order);
       if (optionalString(shipstation.shipmentId) !== args.shipmentId) {
         throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
@@ -2239,36 +2035,14 @@ async function transitionFulfillmentShipStationLabelPurchase(args: {
       }
       return {
         value: { purchaseUnknown: args.nextStatus === 'unknown' },
-        write: {
-          update: {
-            name: documentName(orderPath),
-            fields: {
-              shipstation: firestoreMap({
-                labelPurchase: firestoreMap({
-                  status: firestoreString(args.nextStatus),
-                  requestId: firestoreString(args.body.requestId),
-                  rateId: firestoreString(args.body.rateId),
-                  expectedTotal: firestoreMoney(args.body.expectedTotal),
-                  lastError: firestoreString(args.message.slice(0, 500)),
-                  lastErrorBy: firestoreString(args.wallet),
-                }),
-              }),
-            },
-          },
-          updateMask: {
-            fieldPaths: [
-              'shipstation.labelPurchase.status',
-              'shipstation.labelPurchase.requestId',
-              'shipstation.labelPurchase.rateId',
-              'shipstation.labelPurchase.expectedTotal',
-              'shipstation.labelPurchase.lastError',
-              'shipstation.labelPurchase.lastErrorBy',
-            ],
-          },
-          updateTransforms: [
-            { fieldPath: 'shipstation.labelPurchase.lastErrorAt', setToServerValue: 'REQUEST_TIME' },
-          ],
-          currentDocument: { updateTime },
+        updates: {
+          'shipstation.labelPurchase.status': args.nextStatus,
+          'shipstation.labelPurchase.requestId': args.body.requestId,
+          'shipstation.labelPurchase.rateId': args.body.rateId,
+          'shipstation.labelPurchase.expectedTotal': commerceMoney(args.body.expectedTotal),
+          'shipstation.labelPurchase.lastError': args.message.slice(0, 500),
+          'shipstation.labelPurchase.lastErrorBy': args.wallet,
+          'shipstation.labelPurchase.lastErrorAt': commerceFieldValue.serverTimestamp(),
         },
       };
     },
@@ -2278,7 +2052,7 @@ async function transitionFulfillmentShipStationLabelPurchase(args: {
 async function recoverAmbiguousFulfillmentShipStationLabelPurchase(args: {
   apiKey: string;
   body: z.infer<typeof shipStationLabelPurchaseSchema>;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   dropId: string;
   message: string;
   shipmentId: string;
@@ -2358,7 +2132,7 @@ async function recoverAmbiguousFulfillmentShipStationLabelPurchase(args: {
 async function purchaseFulfillmentShipStationLabel(
   body: z.infer<typeof shipStationLabelPurchaseSchema>,
   wallet: string,
-  common: FirestoreWriteCommon,
+  common: CommerceWriteCommon,
   apiKey: string,
 ): Promise<PurchaseFulfillmentShipStationLabelResponse> {
   const dropId = supportedDropId(body.dropId);
@@ -2634,38 +2408,28 @@ function orderShipStationPackageCount(order: Record<string, unknown>): number {
 }
 
 async function persistUnsupportedShipStationPackageCount(args: {
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   expected: ShipStationRateMutationExpectation;
   packageCount: number;
 }): Promise<void> {
-  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
   await mutateDeliveryOrder<void>({
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       requireRateMutationState(order, args.expected);
       return {
         value: undefined,
-        write: {
-          update: {
-            name: documentName(orderPath),
-            fields: { shipstation: firestoreMap({ packageCount: firestoreNumber(args.packageCount) }) },
-          },
-          updateMask: {
-            fieldPaths: [
-              'shipstation.packageCount',
-              'shipstation.package',
-              'shipstation.rateQuotes',
-              'shipstation.rateRequest',
-              'shipstation.ratesClaimId',
-              'shipstation.ratesClaimedAt',
-              'shipstation.ratesClaimedBy',
-            ],
-          },
-          currentDocument: { updateTime },
+        updates: {
+          'shipstation.packageCount': args.packageCount,
+          'shipstation.package': commerceFieldValue.delete(),
+          'shipstation.rateQuotes': commerceFieldValue.delete(),
+          'shipstation.rateRequest': commerceFieldValue.delete(),
+          'shipstation.ratesClaimId': commerceFieldValue.delete(),
+          'shipstation.ratesClaimedAt': commerceFieldValue.delete(),
+          'shipstation.ratesClaimedBy': commerceFieldValue.delete(),
         },
       };
     },
@@ -2691,7 +2455,7 @@ async function pauseForRatePoll(signal: AbortSignal, delayMs: number): Promise<v
 }
 
 async function persistPendingShipStationRateRequest(args: {
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   expected: ShipStationRateMutationExpectation;
@@ -2700,46 +2464,24 @@ async function persistPendingShipStationRateRequest(args: {
   request: PendingShipStationRateRequest;
   shipmentId: string;
 }): Promise<void> {
-  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
   await mutateDeliveryOrder<void>({
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       requireRateMutationState(order, args.expected);
       if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(shipStationState(order).label))) {
         throw new ProfileReadError('failed-precondition', 409, 'This shipment already has a label.');
       }
       return {
         value: undefined,
-        write: {
-          update: {
-            name: documentName(orderPath),
-            fields: {
-              shipstation: firestoreMap({
-                rateRequest: firestoreMap({
-                  requestId: firestoreString(args.request.requestId),
-                  ...(args.request.createdAt ? { createdAt: firestoreString(args.request.createdAt) } : {}),
-                  shipmentId: firestoreString(args.shipmentId),
-                  inputHash: firestoreString(args.inputHash),
-                  package: firestorePackage(args.package),
-                }),
-              }),
-            },
-          },
-          updateMask: {
-            fieldPaths: [
-              'shipstation.rateRequest.requestId',
-              'shipstation.rateRequest.createdAt',
-              'shipstation.rateRequest.shipmentId',
-              'shipstation.rateRequest.inputHash',
-              'shipstation.rateRequest.package',
-            ],
-          },
-          updateTransforms: [
-            { fieldPath: 'shipstation.rateRequest.requestedAt', setToServerValue: 'REQUEST_TIME' },
-          ],
-          currentDocument: { updateTime },
+        updates: {
+          'shipstation.rateRequest.requestId': args.request.requestId,
+          'shipstation.rateRequest.createdAt': args.request.createdAt || commerceFieldValue.delete(),
+          'shipstation.rateRequest.shipmentId': args.shipmentId,
+          'shipstation.rateRequest.inputHash': args.inputHash,
+          'shipstation.rateRequest.package': commercePackage(args.package),
+          'shipstation.rateRequest.requestedAt': commerceFieldValue.serverTimestamp(),
         },
       };
     },
@@ -2748,7 +2490,7 @@ async function persistPendingShipStationRateRequest(args: {
 
 async function getCompletedShipStationRates(args: {
   apiKey: string;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   expected: ShipStationRateMutationExpectation;
@@ -2800,18 +2542,17 @@ async function getCompletedShipStationRates(args: {
 
 async function releaseShipStationRatesClaim(args: {
   claimId: string;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   shipmentId: string;
   wallet: string;
 }): Promise<void> {
-  const orderPath = `drops/${args.dropId}/deliveryOrders/${args.deliveryId}`;
   return mutateDeliveryOrder<void>({
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order, updateTime }) => {
+    build: ({ fields: order }) => {
       const shipstation = shipStationState(order);
       if (optionalString(shipstation.shipmentId) !== args.shipmentId) return { value: undefined };
       const currentClaimId = optionalString(shipstation.ratesClaimId);
@@ -2823,26 +2564,17 @@ async function releaseShipStationRatesClaim(args: {
       if (!currentClaimId && optionalString(shipstation.ratesClaimFenceId) === args.claimId) {
         return { value: undefined };
       }
-      const fieldPaths = currentClaimId
-        ? [
-            'shipstation.ratesClaimId',
-            'shipstation.ratesClaimedAt',
-            'shipstation.ratesClaimedBy',
-            'shipstation.ratesClaimFenceId',
-          ]
-        : ['shipstation.ratesClaimFenceId'];
+      const updates: Record<string, CommerceUpdateValue> = currentClaimId
+        ? {
+            'shipstation.ratesClaimId': commerceFieldValue.delete(),
+            'shipstation.ratesClaimedAt': commerceFieldValue.delete(),
+            'shipstation.ratesClaimedBy': commerceFieldValue.delete(),
+            'shipstation.ratesClaimFenceId': commerceFieldValue.delete(),
+          }
+        : { 'shipstation.ratesClaimFenceId': args.claimId };
       return {
         value: undefined,
-        write: {
-          update: {
-            name: documentName(orderPath),
-            fields: currentClaimId
-              ? {}
-              : { shipstation: firestoreMap({ ratesClaimFenceId: firestoreString(args.claimId) }) },
-          },
-          updateMask: { fieldPaths },
-          currentDocument: { updateTime },
-        },
+        updates,
       };
     },
   });
@@ -2850,7 +2582,7 @@ async function releaseShipStationRatesClaim(args: {
 
 async function safelyReleaseShipStationRatesClaim(args: {
   claimId: string;
-  common: FirestoreWriteCommon;
+  common: CommerceWriteCommon;
   deliveryId: number;
   dropId: string;
   shipmentId: string;
@@ -2881,7 +2613,7 @@ async function safelyReleaseShipStationRatesClaim(args: {
 async function getFulfillmentShipStationRates(
   body: z.infer<typeof shipStationRatesSchema>,
   wallet: string,
-  common: FirestoreWriteCommon,
+  common: CommerceWriteCommon,
   env: ProfileWriteEnv,
 ): Promise<GetFulfillmentShipStationRatesResponse> {
   const dropId = supportedDropId(body.dropId);
@@ -2942,12 +2674,11 @@ async function getFulfillmentShipStationRates(
       };
     }
     const initialExpectation = rateMutationExpectation(order, shipmentId);
-    const orderPath = `drops/${dropId}/deliveryOrders/${body.deliveryId}`;
     const claimedOrder = await mutateDeliveryOrder<Record<string, unknown>>({
       common,
       deliveryId: body.deliveryId,
       dropId,
-      build: ({ fields: currentOrder, updateTime }) => {
+      build: ({ fields: currentOrder }) => {
         const currentShipstation = requireRateMutationState(currentOrder, initialExpectation);
         const currentPurchase = isRecord(currentShipstation.labelPurchase) ? currentShipstation.labelPurchase : {};
         const currentPurchaseStatus = optionalString(currentPurchase.status);
@@ -2966,26 +2697,12 @@ async function getFulfillmentShipStationRates(
         claimWriteAttempted = true;
         return {
           value: currentOrder,
-          write: {
-            update: {
-              name: documentName(orderPath),
-              fields: {
-                shipstation: firestoreMap({
-                  ratesClaimId: firestoreString(claimId),
-                  ratesClaimedBy: firestoreString(wallet),
-                }),
-              },
-            },
-            updateMask: {
-              fieldPaths: [
-                'shipstation.rateQuotes',
-                'shipstation.ratesClaimId',
-                'shipstation.ratesClaimedBy',
-                'shipstation.ratesClaimFenceId',
-              ],
-            },
-            updateTransforms: [{ fieldPath: 'shipstation.ratesClaimedAt', setToServerValue: 'REQUEST_TIME' }],
-            currentDocument: { updateTime },
+          updates: {
+            'shipstation.rateQuotes': commerceFieldValue.delete(),
+            'shipstation.ratesClaimId': claimId,
+            'shipstation.ratesClaimedBy': wallet,
+            'shipstation.ratesClaimFenceId': commerceFieldValue.delete(),
+            'shipstation.ratesClaimedAt': commerceFieldValue.serverTimestamp(),
           },
         };
       },
@@ -3082,22 +2799,13 @@ async function getFulfillmentShipStationRates(
       common,
       deliveryId: body.deliveryId,
       dropId,
-      build: ({ fields: currentOrder, updateTime }) => {
+      build: ({ fields: currentOrder }) => {
         requireRateMutationState(currentOrder, claimedExpectation);
         return {
           value: undefined,
-          write: {
-            update: {
-              name: documentName(orderPath),
-              fields: {
-                shipstation: firestoreMap({
-                  package: firestorePackage(storedPackage),
-                  packageCount: firestoreNumber(1),
-                }),
-              },
-            },
-            updateMask: { fieldPaths: ['shipstation.package', 'shipstation.packageCount'] },
-            currentDocument: { updateTime },
+          updates: {
+            'shipstation.package': commercePackage(storedPackage),
+            'shipstation.packageCount': 1,
           },
         };
       },
@@ -3149,39 +2857,23 @@ async function getFulfillmentShipStationRates(
       common,
       deliveryId: body.deliveryId,
       dropId,
-      build: ({ fields: currentOrder, updateTime }) => {
+      build: ({ fields: currentOrder }) => {
         requireRateMutationState(currentOrder, claimedExpectation);
         if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(shipStationState(currentOrder).label))) {
           throw new ProfileReadError('failed-precondition', 409, 'This shipment already has a label.');
         }
         return {
           value: undefined,
-          write: {
-            update: {
-              name: documentName(orderPath),
-              fields: {
-                shipstation: firestoreMap({
-                  package: firestorePackage(storedPackage),
-                  packageCount: firestoreNumber(1),
-                  rateQuotes: firestoreRateQuotes(rateResponse.rates),
-                  ratesUpdatedBy: firestoreString(wallet),
-                }),
-              },
-            },
-            updateMask: {
-              fieldPaths: [
-                'shipstation.package',
-                'shipstation.packageCount',
-                'shipstation.rateQuotes',
-                'shipstation.rateRequest',
-                'shipstation.ratesUpdatedBy',
-                'shipstation.ratesClaimId',
-                'shipstation.ratesClaimedAt',
-                'shipstation.ratesClaimedBy',
-              ],
-            },
-            updateTransforms: [{ fieldPath: 'shipstation.ratesUpdatedAt', setToServerValue: 'REQUEST_TIME' }],
-            currentDocument: { updateTime },
+          updates: {
+            'shipstation.package': commercePackage(storedPackage),
+            'shipstation.packageCount': 1,
+            'shipstation.rateQuotes': commerceRateQuotes(rateResponse.rates),
+            'shipstation.rateRequest': commerceFieldValue.delete(),
+            'shipstation.ratesUpdatedBy': wallet,
+            'shipstation.ratesClaimId': commerceFieldValue.delete(),
+            'shipstation.ratesClaimedAt': commerceFieldValue.delete(),
+            'shipstation.ratesClaimedBy': commerceFieldValue.delete(),
+            'shipstation.ratesUpdatedAt': commerceFieldValue.serverTimestamp(),
           },
         };
       },
@@ -3263,11 +2955,10 @@ export async function handleProfileWriteRequest(
       throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
     }
     const common = {
-      commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       pauseForRatePoll: dependencies.pauseForRatePoll,
       providerFetch: trackedFetch,
-      requestCommerceDocument: dependencies.requestCommerceDocument,
+      repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
       signal: controller.signal,
     };
     const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({
@@ -3383,6 +3074,6 @@ export async function handleProfileWriteRequest(
 }
 
 export const profileWriteTestHooks = {
-  firestoreAutoId: createProfileAddressId,
+  commerceAutoId: createProfileAddressId,
   shipStationRateInputHash,
 };
