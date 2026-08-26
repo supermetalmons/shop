@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import bs58 from 'bs58';
 import { Keypair, PublicKey } from '@solana/web3.js';
@@ -1548,19 +1547,6 @@ test('scheduled reconciliation fails a wrong valid key and publishes its valid s
   assert.deepEqual(harness.events, ['failed-marker', 'claim', 'queued-marker', 'cursor']);
 });
 
-test('scheduled ready-notification reconciliation has its Firestore indexes', () => {
-  const config = JSON.parse(readFileSync('firestore.indexes.json', 'utf8')) as {
-    indexes: Array<{ collectionGroup: string; queryScope: string; fields: Array<{ fieldPath: string }> }>;
-  };
-  for (const stateField of ['buyerOrderReceivedEmailState', 'shipperReadyToShipEmailState']) {
-    assert.equal(config.indexes.some((index) => (
-      index.collectionGroup === 'deliveryOrders' &&
-      index.queryScope === 'COLLECTION_GROUP' &&
-      index.fields.map((field) => field.fieldPath).join(',') === `status,${stateField},__name__`
-    )), true);
-  }
-});
-
 test('ready-to-ship issue requests use the production Firestore and bounded Solana adapters idempotently', async () => {
   const signer = Keypair.generate();
   const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
@@ -2030,18 +2016,6 @@ test('scheduled projection reconciliation round-robins drops within global and c
   assert.equal(requested.includes('little_swag_boxes:21'), true);
   assert.equal(requested.includes('poncho_drifella:31'), true);
   assert.equal(maxActive, 2);
-});
-
-test('due pack-status projection recovery has its Firestore index', () => {
-  const config = JSON.parse(readFileSync('firestore.indexes.json', 'utf8')) as {
-    indexes: Array<{ collectionGroup: string; queryScope: string; fields: Array<{ fieldPath: string }> }>;
-  };
-  assert.equal(config.indexes.some((index) => (
-    index.collectionGroup === 'deliveryOrders' &&
-    index.queryScope === 'COLLECTION' &&
-    index.fields.map((field) => field.fieldPath).join(',') ===
-      'packStatusProjectionState,packStatusProjectionNextAttemptAtMs,__name__'
-  )), true);
 });
 
 test('explicit recovery uses the production Firestore adapter and preserves not-found scheduling', async () => {

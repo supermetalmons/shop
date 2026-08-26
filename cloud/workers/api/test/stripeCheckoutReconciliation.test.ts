@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.ts';
 import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.ts';
@@ -210,20 +209,4 @@ test('Stripe fulfillment reconciliation query and decoder select only stale mark
       stripeEventType: 'checkout.session.async_payment_succeeded',
     },
   ]);
-});
-
-test('Stripe fulfillment reconciliation has its required Firestore index', () => {
-  const config = JSON.parse(readFileSync('firestore.indexes.json', 'utf8')) as {
-    indexes: Array<Record<string, unknown>>;
-  };
-  assert.equal(config.indexes.some((index) => (
-    index.collectionGroup === 'stripeCheckouts' &&
-    index.queryScope === 'COLLECTION_GROUP' &&
-    JSON.stringify(index.fields) === JSON.stringify([
-      { fieldPath: 'status', order: 'ASCENDING' },
-      { fieldPath: 'fulfillmentProcessor', order: 'ASCENDING' },
-      { fieldPath: 'updatedAt', order: 'ASCENDING' },
-      { fieldPath: '__name__', order: 'ASCENDING' },
-    ])
-  )), true);
 });

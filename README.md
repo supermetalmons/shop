@@ -15,8 +15,8 @@ control, rate-limit state, and shipment and fulfillment data.
   profiles, delivery, claims, Stripe, ShipStation, notifications, admin routes,
   scheduled reconciliation, and Queue consumers.
 - Ops D1 stores opaque anonymous-session hashes and the irreversible Firebase-auth
-  removal record. Firestore client rules deny every browser read and
-  write; the API Worker accesses operational data with its service accounts.
+  removal record. The historical Firestore database is frozen behind its last
+  deployed deny-all client rules and is not an application runtime path.
 - The `mons-shop-data` D1 database is authoritative for public pack-status
   summaries and events.
 - The `mons-shop-ops` D1 database stores profiles, encrypted saved addresses,
@@ -34,7 +34,7 @@ control, rate-limit state, and shipment and fulfillment data.
 - `shared/deploymentRegistry.ts` is the canonical secret-free drop registry.
   `src/config/deployment.ts` is its frontend projection and
   `cloud/workers/api/src/dropConfig.ts` is its API projection.
-- `scripts/ops/` contains the retained Firestore and operational utilities.
+- `scripts/ops/` contains the guarded Cloudflare operational utilities.
 
 There is one root dependency graph. Do not add a nested package for server
 code.
@@ -64,16 +64,14 @@ npm run check:frontend
 npm run dry-run:frontend
 npm run check:api
 npm run dry-run:api
-npm run test:firestore-rules
 npm run check
 ```
 
 `check:frontend` runs frontend typechecking, repository tests, the production
 build, and browser-bundle validation. `dry-run:frontend` adds a native Wrangler
-dry run. `check` is the full repository gate, including API and
-runtime tests, Firestore rules, dead-code checks, on-chain tests, generated
-Worker types, Worker startup validation, and both production bundles. Java is
-required for the Firestore Emulator suite.
+dry run. `check` is the full repository gate, including API and runtime tests,
+dead-code checks, on-chain tests, generated Worker types, Worker startup
+validation, and both production bundles.
 
 ## Anonymous Auth and Firestore
 
@@ -84,22 +82,15 @@ the frontend Worker's same-origin `/api/*` gateway and a fixed CSRF header.
 
 Firebase ID tokens are not accepted. The completed removal is recorded
 irreversibly in Ops D1, and arbitrary bearer tokens fail closed without a Google
-certificate lookup. The retained Firestore catch-all rules reject every browser
-read and write, and the historical database is not an application runtime path.
+certificate lookup. The historical Firestore database remains protected by its
+last deployed deny-all client rules. This repository does not manage or deploy
+Firebase resources, and application runtime code must not add Firestore queries.
+Google Cloud project administrators own that frozen policy and must verify the
+deny-all rules after any project, IAM, or Firestore configuration change. If the
+policy cannot be maintained, archive and decommission the historical database.
 
 Commerce documents, profiles, saved addresses, wallet sessions, and operational
-controls are D1-only. Firebase tooling remains only for deny-rule validation and
-deployment.
-
-Deploy Firestore indexes and deny-all client rules from the repository root:
-
-```bash
-npm run deploy:firestore
-```
-
-The command runs the emulator rules suite before changing the `mons-shop`
-project, then deploys the retained indexes and deny rules. Application runtime
-code must not add new Firestore queries.
+controls are D1-only.
 
 ### Wallet sessions
 
@@ -313,8 +304,8 @@ node_modules/.bin/wrangler secret list \
   --env-file cloud/workers/api/release.env
 ```
 
-Do not store runtime secrets in Firebase configuration, `release.env`,
-repository files, command arguments, logs, or frontend environment variables.
+Do not store runtime secrets in `release.env`, repository files, command
+arguments, logs, or frontend environment variables.
 `SHIPSTATION_SHIP_FROM` is one JSON object; its Worker secret value is the
 canonical fulfillment origin address.
 
@@ -389,8 +380,8 @@ The retained tools are intentionally narrow:
   updated API and frontend are deployed, then resume `d1`. Mutation requires
   interactive confirmation unless `--yes` is supplied explicitly.
 
-Active operator commands use the configured Cloudflare D1 databases. Firebase
-CLI access is retained only for deny-rule validation and deployment.
+Active operator commands use the configured Cloudflare D1 databases and require
+no Firebase CLI access.
 
 ## Address encryption
 
@@ -402,7 +393,7 @@ node -e "const nacl=require('tweetnacl');const kp=nacl.box.keyPair();console.log
 ```
 
 Keep the private key only in the API Worker's
-`ADDRESS_DECRYPTION_SECRET`. Never ship it to the frontend or Firebase public
+`ADDRESS_DECRYPTION_SECRET`. Never ship it to the frontend or any public
 configuration.
 
 ## On-chain deployments and metadata compatibility

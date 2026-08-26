@@ -25,9 +25,6 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-.firebase/
-firebase-debug.log
-firestore-debug.log
 onchain/target/
 onchain/.anchor/
 onchain/test-ledger/
