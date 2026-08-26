@@ -4,7 +4,6 @@ import {
   buildCommerceAuthorityMutationSql,
   parseCommerceAuthorityControlArgs,
 } from '../scripts/ops/commerceAuthorityControl.ts';
-import { parseCommerceCutoverArgs } from '../scripts/ops/cutoverCommerceToD1.ts';
 
 test('commerce authority mutations require explicit write and revision guards', () => {
   assert.deepEqual(parseCommerceAuthorityControlArgs(['status']), {
@@ -28,17 +27,5 @@ test('commerce authority mutations require explicit write and revision guards', 
   const pauseSql = buildCommerceAuthorityMutationSql('paused', 7, 100);
   assert.match(pauseSql, /authority_state IN \('firestore', 'd1'\)/);
   assert.doesNotMatch(pauseSql, /import_manifest_sha256 = NULL/);
-});
-test('commerce snapshot import is dry-run by default and guarded when mutating', () => {
-  assert.deepEqual(parseCommerceCutoverArgs([]), {
-    expectedRevision: undefined,
-    firestoreServiceAccountFile: undefined,
-    write: false,
-  });
-  assert.throws(() => parseCommerceCutoverArgs(['--write']));
-  assert.deepEqual(parseCommerceCutoverArgs(['--write', '--expected-revision', '3']), {
-    expectedRevision: 3,
-    firestoreServiceAccountFile: undefined,
-    write: true,
-  });
+  assert.throws(() => parseCommerceAuthorityControlArgs(['firestore', '--expected-revision', '7', '--write']));
 });

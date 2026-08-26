@@ -88,8 +88,8 @@ certificate lookup. The retained Firestore catch-all rules reject every browser
 read and write, and the historical database is not an application runtime path.
 
 Commerce documents, profiles, saved addresses, wallet sessions, and operational
-controls are D1-only. Firebase tooling remains only for retained historical
-cutover, audit, and deny-rule workflows.
+controls are D1-only. Firebase tooling remains only for deny-rule validation and
+deployment.
 
 Deploy Firestore indexes and deny-all client rules from the repository root:
 
@@ -100,16 +100,6 @@ npm run deploy:firestore
 The command runs the emulator rules suite before changing the `mons-shop`
 project, then deploys the retained indexes and deny rules. Application runtime
 code must not add new Firestore queries.
-
-On macOS, install the device-local reader and writer credentials used by
-historical cutover and audit tools with:
-
-```bash
-npm run setup:api:firestore-keychain
-```
-
-Tools that support a service-account file require a temporary mode-0600 file.
-Do not put service-account JSON in repository files or frontend configuration.
 
 ### Wallet sessions
 
@@ -299,29 +289,6 @@ Pause and resume always advance the control revision, including repeated
 requests for the same state, so in-flight cursor updates become stale. All
 mutations require `--write`; `status` is read-only.
 
-For the one-time Firestore cutover, record the original legacy control state,
-manually set `workerControls/readyNotifications.paused` to `true`, and wait at
-least 65 seconds. Then run:
-
-```bash
-npm run db:migrate:api
-npm run check:pack-status-d1
-npm run check:ops-d1
-npm run ready-notifications-control -- import-firestore --write
-npm run deploy:api
-npm run ready-notifications-control -- status
-```
-
-The one-time import uses Firebase CLI credentials, refuses an unpaused or
-malformed legacy control, copies its validated cursor, and requires the
-untouched seeded D1 row. If the recorded original state was active, resume with
-`npm run ready-notifications-control -- resume --write`; otherwise leave D1
-paused. Observe at least two five-minute schedule cycles after publication.
-Leave the legacy Firestore control paused and retain the old rate-limit
-documents and Firestore secrets during the rollback window. A rollback to the
-previous Worker is safe but remains paused until the legacy control is resumed;
-the accepted direct-cutover tradeoff is a temporary counter reset.
-
 ### Worker secrets
 
 Cloudflare Worker secrets are the runtime secret system. The required inventory
@@ -357,18 +324,16 @@ canonical fulfillment origin address.
 guarded maintenance cutover. The Worker preserves the existing commerce API
 and transaction behavior through the D1 document-store adapter.
 
-Inspect authority or rehearse the export/import with:
+Inspect or pause the authoritative database with:
 
 ```bash
 npm run check:commerce-d1
 npm run commerce-authority-control -- status
-npm run cutover-commerce-to-d1
+npm run commerce-authority-control -- paused --expected-revision <revision> --write
+npm run commerce-authority-control -- d1 --expected-revision <revision> --write
 ```
 
-The export/import command is read-only unless `--write` and the current paused
-authority revision are supplied. It creates a private R2 archive, replaces D1
-from the same snapshot, and verifies exact document hashes before `d1` can be
-selected. The `d1` authority transition is irreversible.
+Authority mutations require the current revision and explicit `--write`.
 
 ### Queues, schedules, and notifications
 
@@ -401,30 +366,6 @@ node_modules/.bin/wrangler tail mons-shop-api --format json
 Queue processing is idempotent. Replay dead-letter jobs only after fixing the
 underlying failure and identifying the affected jobs.
 
-### Legacy shipment ownership
-
-Audit legacy wallet-owned shipments with:
-
-```bash
-npm run migrate:firebase-wallet-ownership -- status
-```
-
-Apply only the mapped shipment ownership changes, then rerun the audit:
-
-```bash
-npm run migrate:firebase-wallet-ownership -- apply --write
-npm run migrate:firebase-wallet-ownership -- status
-```
-
-Unmapped Firebase-only orders are reported and retained without reassignment.
-Firebase authentication has been removed irreversibly. If an ownership audit
-finds a late mapped shipment, roll forward with:
-
-```bash
-npm run migrate:firebase-wallet-ownership -- apply --write
-npm run migrate:firebase-wallet-ownership -- status
-```
-
 ## Operations
 
 The retained tools are intentionally narrow:
@@ -438,8 +379,6 @@ The retained tools are intentionally narrow:
   ready-notification singleton, and the permanent Firebase-auth removal record.
 - `npm run ready-notifications-control` inspects or changes the D1 notification
   control; every mutation requires `--write`.
-- `npm run migrate:firebase-wallet-ownership` audits or backfills legacy
-  Firebase-owned shipment documents for UIDs already bound to Solana wallets.
 - `npm run test-resend-notification-email` sends a synthetic notification
   through the production API queue.
 - `npm run wipe-drop` (`scripts/ops/wipeDrop.ts`) is the guarded repository and
@@ -450,9 +389,8 @@ The retained tools are intentionally narrow:
   updated API and frontend are deployed, then resume `d1`. Mutation requires
   interactive confirmation unless `--yes` is supplied explicitly.
 
-Historical cutover and audit operations use Google Cloud Firestore or Firebase
-CLI credentials. Active operator commands use the configured Cloudflare D1
-databases, and neither path represents browser data access.
+Active operator commands use the configured Cloudflare D1 databases. Firebase
+CLI access is retained only for deny-rule validation and deployment.
 
 ## Address encryption
 

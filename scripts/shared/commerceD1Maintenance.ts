@@ -83,39 +83,6 @@ function runWrangler(args: string[], json = true): string {
   }
 }
 
-export function uploadPrivateCommerceArchiveObject(filePath: string, objectKey: string): void {
-  const s3Endpoint = String(process.env.COMMERCE_R2_S3_ENDPOINT || '').trim();
-  if (s3Endpoint) {
-    execFileSync(
-      'aws',
-      [
-        's3',
-        'cp',
-        filePath,
-        `s3://mons-shop-commerce-archive/${objectKey}`,
-        '--endpoint-url',
-        s3Endpoint,
-        '--only-show-errors',
-      ],
-      {
-        cwd: repoRoot,
-        env: { ...process.env, AWS_EC2_METADATA_DISABLED: 'true', AWS_REGION: 'auto' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
-    return;
-  }
-  runWrangler([
-    'r2',
-    'object',
-    'put',
-    `mons-shop-commerce-archive/${objectKey}`,
-    '--remote',
-    '--file',
-    filePath,
-  ], false);
-}
-
 function parseEnvelope(output: string): CommerceD1Row[][] {
   let parsed: unknown;
   try {

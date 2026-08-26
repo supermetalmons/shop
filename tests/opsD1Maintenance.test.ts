@@ -4,17 +4,14 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import {
   assertOpsD1Integrity,
-  buildImportReadyNotificationsControlSql,
   buildSetReadyNotificationsPausedSql,
   parseReadyNotificationsControl,
   validateReadyNotificationCursorPath,
   type OpsD1IntegrityInput,
 } from '../scripts/shared/opsD1Maintenance.ts';
 import {
-  parseLegacyReadyNotificationsControl,
   parseReadyNotificationsControlArgs,
   runReadyNotificationsControl,
-  type ReadyNotificationsControlDependencies,
 } from '../scripts/ops/readyNotificationsControl.ts';
 import {
   parseRevealSubmissionsControl,
@@ -574,32 +571,6 @@ test('pause and resume always advance the D1 control revision', () => {
   }
 });
 
-test('Firestore import copies a validated cursor exactly once into the seed', () => {
-  const db = database();
-  const cursorPath = 'drops/card_nft_2/deliveryOrders/7';
-  try {
-    const statement = db.prepare(
-      buildImportReadyNotificationsControlSql(cursorPath, 5_000),
-    );
-    const imported = parseReadyNotificationsControl(statement.get()!);
-    assert.equal(imported.paused, true);
-    assert.equal(imported.cursorPath, cursorPath);
-    assert.equal(imported.revision, 2);
-    assert.equal(imported.cursorUpdatedAtMs, 5_000);
-    assert.equal(statement.get(), undefined);
-    assert.throws(
-      () =>
-        buildImportReadyNotificationsControlSql(
-          "drops/card_nft_2/deliveryOrders/7' OR 1=1",
-          5_000,
-        ),
-      /canonical delivery-order path/,
-    );
-  } finally {
-    db.close();
-  }
-});
-
 test('ready-notification operator arguments guard every mutation', () => {
   assert.deepEqual(parseReadyNotificationsControlArgs(['status']), {
     command: 'status',
@@ -613,9 +584,9 @@ test('ready-notification operator arguments guard every mutation', () => {
     parseReadyNotificationsControlArgs(['resume', '--write']),
     { command: 'resume', write: true },
   );
-  assert.deepEqual(
-    parseReadyNotificationsControlArgs(['import-firestore', '--write']),
-    { command: 'import-firestore', write: true },
+  assert.throws(
+    () => parseReadyNotificationsControlArgs(['import-firestore', '--write']),
+    /Expected status, pause, or resume/,
   );
   assert.throws(
     () => parseReadyNotificationsControlArgs(['pause']),
@@ -631,42 +602,7 @@ test('ready-notification operator arguments guard every mutation', () => {
   );
 });
 
-test('legacy control validation requires Firestore shape and canonical cursor', () => {
-  assert.deepEqual(
-    parseLegacyReadyNotificationsControl({
-      path: 'workerControls/readyNotifications',
-      id: 'readyNotifications',
-      data: { paused: true },
-    }),
-    { paused: true, cursorPath: null },
-  );
-  assert.deepEqual(
-    parseLegacyReadyNotificationsControl({
-      path: 'workerControls/readyNotifications',
-      id: 'readyNotifications',
-      data: {
-        paused: true,
-        cursorPath: 'drops/card_nft_2/deliveryOrders/19',
-      },
-    }),
-    {
-      paused: true,
-      cursorPath: 'drops/card_nft_2/deliveryOrders/19',
-    },
-  );
-  assert.throws(
-    () => parseLegacyReadyNotificationsControl(undefined),
-    /missing/,
-  );
-  assert.throws(
-    () =>
-      parseLegacyReadyNotificationsControl({
-        path: 'workerControls/readyNotifications',
-        id: 'readyNotifications',
-        data: { paused: true, cursorPath: null },
-      }),
-    /non-empty string/,
-  );
+test('ready-notification cursor validation remains strict', () => {
   assert.equal(
     validateReadyNotificationCursorPath(
       'drops/little_swag_hoodies/deliveryOrders/9007199254740991',
@@ -679,64 +615,6 @@ test('legacy control validation requires Firestore shape and canonical cursor', 
   );
 });
 
-test('operator imports only a paused legacy control and passes its cursor', async () => {
-  const calls: unknown[] = [];
-  const baseControl = parseReadyNotificationsControl(controlRow());
-  const dependencies: ReadyNotificationsControlDependencies = {
-    importControl: (cursorPath, nowMs) => {
-      calls.push(['import', cursorPath, nowMs]);
-      return { ...baseControl, paused: true, cursorPath, revision: 2 };
-    },
-    nowMs: () => 1_700_000_000_000,
-    readControl: () => {
-      calls.push(['read']);
-      return baseControl;
-    },
-    readLegacyControl: async () => ({
-      paused: true,
-      cursorPath: 'drops/card_nft_2/deliveryOrders/8',
-    }),
-    setPaused: (paused, expectedRevision, nowMs) => {
-      calls.push(['set', paused, expectedRevision, nowMs]);
-      return { ...baseControl, paused, revision: 2 };
-    },
-  };
-  await runReadyNotificationsControl(
-    { command: 'pause', write: true },
-    dependencies,
-  );
-  await runReadyNotificationsControl(
-    { command: 'resume', write: true },
-    dependencies,
-  );
-  await runReadyNotificationsControl(
-    { command: 'import-firestore', write: true },
-    dependencies,
-  );
-  assert.deepEqual(calls, [
-    ['read'],
-    ['set', true, 1, 1_700_000_000_000],
-    ['read'],
-    ['set', false, 1, 1_700_000_000_000],
-    [
-      'import',
-      'drops/card_nft_2/deliveryOrders/8',
-      1_700_000_000_000,
-    ],
-  ]);
-
-  await assert.rejects(
-    runReadyNotificationsControl(
-      { command: 'import-firestore', write: true },
-      {
-        ...dependencies,
-        readLegacyControl: async () => ({ paused: false, cursorPath: null }),
-      },
-    ),
-    /must be paused/,
-  );
-});
-
 test('operator validates D1 control before pause or resume mutation', async () => {
   let mutations = 0;
   const baseControl = parseReadyNotificationsControl(controlRow());
@@ -744,14 +622,12 @@ test('operator validates D1 control before pause or resume mutation', async () =
     runReadyNotificationsControl(
       { command: 'pause', write: true },
       {
-        importControl: () => baseControl,
         nowMs: () => 1_700_000_000_000,
         readControl: () => parseReadyNotificationsControl(controlRow({
           cursor_path: 'drops/Card_NFT_2/deliveryOrders/7',
           cursor_updated_at_ms: 1,
           updated_at_ms: 1,
         })),
-        readLegacyControl: async () => ({ paused: true, cursorPath: null }),
         setPaused: () => {
           mutations += 1;
           return baseControl;

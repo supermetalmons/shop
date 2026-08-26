@@ -1291,42 +1291,6 @@ RETURNING
   cursor_updated_at_ms`;
 }
 
-function sqlNullableString(value: string | null): string {
-  return value === null ? 'NULL' : `'${value.replaceAll("'", "''")}'`;
-}
-
-export function buildImportReadyNotificationsControlSql(
-  cursorPath: string | null,
-  nowMs: number,
-): string {
-  const timestamp = mutationTimestamp(nowMs);
-  const normalizedCursor = cursorPath === null
-    ? null
-    : validateReadyNotificationCursorPath(cursorPath);
-  return `UPDATE worker_controls
-SET
-  paused = 1,
-  cursor_path = ${sqlNullableString(normalizedCursor)},
-  revision = revision + 1,
-  updated_at_ms = ${timestamp},
-  cursor_updated_at_ms = ${normalizedCursor === null ? 'NULL' : timestamp}
-WHERE
-  control_key = 'ready_notifications' AND
-  paused = 0 AND
-  cursor_path IS NULL AND
-  revision = 1 AND
-  created_at_ms = 0 AND
-  updated_at_ms = 0 AND
-  cursor_updated_at_ms IS NULL
-RETURNING
-  control_key,
-  paused,
-  cursor_path,
-  revision,
-  created_at_ms,
-  updated_at_ms,
-  cursor_updated_at_ms`;
-}
 function runControlMutation(sql: string, failureMessage: string): ReadyNotificationsControl {
   const rows = queryRemoteOpsD1(sql);
   if (rows.length !== 1) {
@@ -1343,15 +1307,5 @@ export function setRemoteReadyNotificationsPaused(
   return runControlMutation(
     buildSetReadyNotificationsPausedSql(paused, expectedRevision, nowMs),
     'Ready-notification control changed concurrently; inspect its current state before retrying.',
-  );
-}
-
-export function importRemoteReadyNotificationsControl(
-  cursorPath: string | null,
-  nowMs = Date.now(),
-): ReadyNotificationsControl {
-  return runControlMutation(
-    buildImportReadyNotificationsControlSql(cursorPath, nowMs),
-    'Ready-notification control import requires the untouched seeded Ops D1 control.',
   );
 }

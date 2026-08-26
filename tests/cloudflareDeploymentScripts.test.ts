@@ -78,10 +78,6 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
     'node --import tsx scripts/ops/readyNotificationsControl.ts',
   );
   assert.equal(
-    packageJson.scripts['migrate:firebase-wallet-ownership'],
-    'node --import tsx scripts/ops/migrateFirebaseWalletOwnership.ts',
-  );
-  assert.equal(
     packageJson.scripts['deploy:api'],
     'npm run check:api && npm run db:migrate:api && npm run check:pack-status-d1 && npm run check:ops-d1 && npm run check:commerce-d1 && wrangler deploy --strict --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env',
   );

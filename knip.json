@@ -24,7 +24,7 @@
         "tests/**/*.ts"
       ],
       "ignoreDependencies": ["buffer"],
-      "ignoreBinaries": ["anchor", "gcloud", "mkfifo", "solana", "swift"],
+      "ignoreBinaries": ["anchor", "mkfifo", "solana"],
       "ignoreExportsUsedInFile": { "type": true }
     }
   }

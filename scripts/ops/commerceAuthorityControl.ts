@@ -4,7 +4,7 @@ import {
   safeInteger,
 } from '../shared/commerceD1Maintenance.ts';
 
-type Command = 'status' | 'firestore' | 'paused' | 'd1';
+type Command = 'status' | 'paused' | 'd1';
 
 type Args = {
   command: Command;
@@ -18,8 +18,8 @@ function fail(message: string): never {
 
 export function parseCommerceAuthorityControlArgs(argv: string[]): Args {
   const command = argv[0];
-  if (command !== 'status' && command !== 'firestore' && command !== 'paused' && command !== 'd1') {
-    fail('Usage: npm run commerce-authority-control -- <status|firestore|paused|d1> [--expected-revision <n>] [--write]');
+  if (command !== 'status' && command !== 'paused' && command !== 'd1') {
+    fail('Usage: npm run commerce-authority-control -- <status|paused|d1> [--expected-revision <n>] [--write]');
   }
   let expectedRevision: number | undefined;
   let write = false;
@@ -66,14 +66,6 @@ export function buildCommerceAuthorityMutationSql(
       SET authority_state = 'paused', revision = revision + 1,
         paused_at_ms = ${nowMs}, updated_at_ms = ${nowMs}
       WHERE singleton = 1 AND authority_state IN ('firestore', 'd1') AND revision = ${expectedRevision}
-      RETURNING *`;
-  }
-  if (command === 'firestore') {
-    return `UPDATE commerce_authority_control
-      SET authority_state = 'firestore', revision = revision + 1,
-        paused_at_ms = NULL, cutover_at_ms = NULL,
-        import_manifest_sha256 = NULL, updated_at_ms = ${nowMs}
-      WHERE singleton = 1 AND authority_state = 'paused' AND revision = ${expectedRevision}
       RETURNING *`;
   }
   return `UPDATE commerce_authority_control
