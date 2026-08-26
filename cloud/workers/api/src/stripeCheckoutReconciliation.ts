@@ -31,7 +31,7 @@ type RequeueCandidate = {
 type ReconciliationEnv = Pick<Env,
   | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'
   | 'STRIPE_FULFILLMENT_QUEUE'
->;
+> & Partial<Pick<Env, 'COMMERCE_DB'>>;
 
 type ReconciliationDependencies = {
   error?: (entry: Record<string, unknown>) => void;
@@ -102,6 +102,7 @@ async function loadCandidates(
   }
   const value = await authenticatedFirestoreRequest({
     accessTokenProvider,
+    commerceDb: env.COMMERCE_DB,
     body: JSON.stringify(stripeCheckoutReconciliationQuery(cutoffMs, MAX_REQUEUES_PER_RUN)),
     method: 'POST',
     nowMs: Date.now(),
@@ -126,6 +127,7 @@ export async function reconcileStaleStripeFulfillments(
     : loadCandidates(env, nowMs - REQUEUE_AFTER_MS, signal));
   const store = createWorkerStripeCheckoutStore({
     accessTokenProvider,
+    commerceDb: env.COMMERCE_DB,
     providerFetch: (input, init) => fetch(input, init),
     serviceAccountJson: env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
     signal,

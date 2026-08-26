@@ -105,7 +105,7 @@ const requestSchema = z.object({
 }).strict();
 
 type ClaimEnv = Pick<Env, 'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'> &
-  Partial<Pick<Env, 'OPS_DB'>>;
+  Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
 type FirestoreContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
 type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
 type ProviderContext = {
@@ -2046,6 +2046,7 @@ export async function handleStripeReceiptClaim(
       { ...env, COSIGNER_SECRET: cosignerSecret, FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON: serviceAccountJson, HELIUS_API_KEY: apiKey },
       {
         accessTokenProvider: dependencies.accessTokenProvider,
+        commerceDb: env.COMMERCE_DB,
         nowMs,
         providerFetch: trackedFetch,
         serviceAccountJson,

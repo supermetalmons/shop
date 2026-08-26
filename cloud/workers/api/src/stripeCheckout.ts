@@ -54,7 +54,7 @@ type CheckoutEnv = Pick<Env,
   | 'STRIPE_RESTRICTED_KEY_LIVE'
   | 'STRIPE_SECRET_KEY'
   | 'STRIPE_SECRET_KEY_LIVE'
-> & Partial<Pick<Env, 'OPS_DB'>>;
+> & Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
 
 type StripeCheckoutMetrics = {
   upstreamCalls: number;
@@ -439,6 +439,7 @@ async function persistCheckoutDocument(
   providerFetch: ProfileProviderFetch,
   signal: AbortSignal,
   nowMs: number,
+  commerceDb?: D1Database,
 ): Promise<void> {
   const fields: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(document)) {
@@ -447,6 +448,7 @@ async function persistCheckoutDocument(
   }
   await authenticatedFirestoreRequest({
     accessTokenProvider,
+    commerceDb,
     body: JSON.stringify({
       writes: [{
         update: { name: `${FIRESTORE_DOCUMENT_NAME_PREFIX}${path}`, fields },
@@ -552,6 +554,7 @@ export async function handleStripeCheckoutSession(
           trackedFetch,
           controller.signal,
           dependencies.nowMs(),
+          env.COMMERCE_DB,
         )),
       nowMs: dependencies.nowMs,
     });

@@ -55,6 +55,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     const worker = server.getWorker<Env>('mons-shop-api');
     await worker.applyD1Migrations('DATA_DB');
     await worker.applyD1Migrations('OPS_DB');
+    await worker.applyD1Migrations('COMMERCE_DB');
     const health = await worker.fetch('https://api.mons.shop/health');
     assert.equal(health.status, 200);
     assert.deepEqual(await health.json(), { ok: true });

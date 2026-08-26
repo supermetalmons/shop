@@ -90,7 +90,7 @@ type FulfillmentEnv = Pick<Env,
   | 'STRIPE_RESTRICTED_KEY_LIVE'
   | 'STRIPE_SECRET_KEY'
   | 'STRIPE_SECRET_KEY_LIVE'
-> & Partial<Pick<Env, 'DATA_DB' | 'OPS_DB'>>;
+> & Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB' | 'OPS_DB'>>;
 
 type FulfillmentProcessingResult = {
   fulfillment: StripeCheckoutFulfillmentProcessResult;
@@ -603,6 +603,7 @@ export async function processStripeCheckoutFulfillmentJob(
 ): Promise<FulfillmentProcessingResult> {
   const store = createWorkerStripeCheckoutStore({
     accessTokenProvider,
+    commerceDb: env.COMMERCE_DB,
     providerFetch: (input, init) => fetch(input, init),
     serviceAccountJson: env.FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON,
     signal: options.persistenceSignal || signal,

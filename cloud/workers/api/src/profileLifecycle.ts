@@ -79,6 +79,7 @@ const reconcileSchema = z.object({
 
 type FirestoreCommon = {
   accessTokenProvider: GoogleAccessTokenProvider;
+  commerceDb?: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
@@ -122,7 +123,9 @@ type ProfileLifecycleDependencies = {
   verifyIdentity: typeof verifyRequestIdentity;
 };
 
-type ProfileLifecycleEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'OPS_DB'>>;
+type ProfileLifecycleEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
+  'COMMERCE_DB' | 'OPS_DB'
+>>;
 
 class WalletSessionSupersededError extends ProfileReadError {
   constructor() {
@@ -573,6 +576,7 @@ export async function handleProfileLifecycleRequest(
     const nowMs = dependencies.nowMs();
     const common: FirestoreCommon = {
       accessTokenProvider: dependencies.accessTokenProvider,
+      commerceDb: env.COMMERCE_DB,
       nowMs,
       providerFetch: trackedFetch,
       serviceAccountJson,

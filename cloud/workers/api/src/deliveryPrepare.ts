@@ -122,7 +122,7 @@ const requestSchema = z.object({
 type DeliveryPrepareEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
-> & Partial<Pick<Env, 'OPS_DB'>>;
+> & Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
 
 type DeliveryPrepareErrorCode =
   | 'invalid-argument'
@@ -162,6 +162,7 @@ type DeliveryRuntime = {
 
 type FirestoreContext = {
   accessTokenProvider: GoogleAccessTokenProvider;
+  commerceDb?: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
@@ -1507,6 +1508,7 @@ export async function handleDeliveryPrepare(
       ...(prepareAttemptId ? { prepareAttemptId } : {}),
       context: {
         accessTokenProvider: dependencies.accessTokenProvider,
+        commerceDb: env.COMMERCE_DB,
         nowMs,
         providerFetch: trackedFetch,
         serviceAccountJson,

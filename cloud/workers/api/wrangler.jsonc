@@ -1,137 +1,147 @@
 {
-  "$schema": "../../../node_modules/wrangler/config-schema.json",
-  "name": "mons-shop-api",
-  "account_id": "e25f90fc073ea309b54b8b5144bf28e0",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-08-08",
-  "compatibility_flags": ["nodejs_compat"],
-  "workers_dev": false,
-  "preview_urls": true,
-  "placement": {
-    "mode": "smart"
-  },
-  "d1_databases": [
-    {
-      "binding": "DATA_DB",
-      "database_name": "mons-shop-data",
-      "database_id": "4b09f942-b0c6-4a1e-81df-cb802fbf7099",
-      "migrations_dir": "migrations"
-    },
+	"$schema": "../../../node_modules/wrangler/config-schema.json",
+	"name": "mons-shop-api",
+	"account_id": "e25f90fc073ea309b54b8b5144bf28e0",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-08-08",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"workers_dev": false,
+	"preview_urls": true,
+	"placement": {
+		"mode": "smart"
+	},
+	"d1_databases": [
+		{
+			"binding": "DATA_DB",
+			"database_name": "mons-shop-data",
+			"database_id": "4b09f942-b0c6-4a1e-81df-cb802fbf7099",
+			"migrations_dir": "migrations"
+		},
     {
       "binding": "OPS_DB",
       "database_name": "mons-shop-ops",
       "database_id": "6f8f6e7e-e6b1-4e1d-bd68-ece26fd918d5",
       "migrations_dir": "ops-migrations"
-    }
-  ],
-  "ratelimits": [
-    {
-      "name": "STAFF_AUTH_CHALLENGE_RATE_LIMITER",
-      "namespace_id": "1142143110",
-      "simple": {
-        "limit": 10,
-        "period": 60
-      }
     },
     {
-      "name": "STAFF_AUTH_SESSION_RATE_LIMITER",
-      "namespace_id": "1361289553",
-      "simple": {
-        "limit": 30,
-        "period": 60
-      }
-    },
-    {
-      "name": "ANONYMOUS_AUTH_SESSION_RATE_LIMITER",
-      "namespace_id": "1874210346",
-      "simple": {
-        "limit": 20,
-        "period": 60
-      }
-    }
-  ],
-  "routes": [
-    {
-      "pattern": "api.mons.shop",
-      "custom_domain": true
-    }
-  ],
-  "triggers": {
-    "crons": ["*/5 * * * *"]
-  },
-  "secrets": {
-    "required": [
-      "HELIUS_API_KEY",
-      "COSIGNER_SECRET",
-      "RESEND_API_KEY",
-      "RESEND_CONTACTS_API_KEY",
-      "NOTIFICATION_ENQUEUE_SECRET",
-      "FIRESTORE_SERVICE_ACCOUNT_JSON",
-      "FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON",
-      "ADDRESS_DECRYPTION_SECRET",
-      "SHIPSTATION_API_KEY",
-      "SHIPSTATION_SHIP_FROM",
-      "STRIPE_SECRET_KEY",
-      "STRIPE_RESTRICTED_KEY",
-      "STRIPE_SECRET_KEY_LIVE",
-      "STRIPE_RESTRICTED_KEY_LIVE",
-      "STRIPE_WEBHOOK_SECRET_DEVNET",
-      "STRIPE_WEBHOOK_SECRET"
-    ]
-  },
-  "queues": {
-    "producers": [
-      {
-        "binding": "NOTIFICATION_EMAIL_QUEUE",
-        "queue": "mons-shop-notification-emails"
-      },
-      {
-        "binding": "REVEAL_BACKGROUND_QUEUE",
-        "queue": "mons-shop-reveal-reconciliation"
-      },
+      "binding": "COMMERCE_DB",
+      "database_name": "mons-shop-commerce",
+      "database_id": "b9ff0689-3433-47f2-84c1-64677fe85db1",
+      "migrations_dir": "commerce-migrations"
+		}
+	],
+	"ratelimits": [
+		{
+			"name": "STAFF_AUTH_CHALLENGE_RATE_LIMITER",
+			"namespace_id": "1142143110",
+			"simple": {
+				"limit": 10,
+				"period": 60
+			}
+		},
+		{
+			"name": "STAFF_AUTH_SESSION_RATE_LIMITER",
+			"namespace_id": "1361289553",
+			"simple": {
+				"limit": 30,
+				"period": 60
+			}
+		},
+		{
+			"name": "ANONYMOUS_AUTH_SESSION_RATE_LIMITER",
+			"namespace_id": "1874210346",
+			"simple": {
+				"limit": 20,
+				"period": 60
+			}
+		}
+	],
+	"routes": [
+		{
+			"pattern": "api.mons.shop",
+			"custom_domain": true
+		}
+	],
+	"triggers": {
+		"crons": [
+			"*/5 * * * *"
+		]
+	},
+	"secrets": {
+		"required": [
+			"HELIUS_API_KEY",
+			"COSIGNER_SECRET",
+			"RESEND_API_KEY",
+			"RESEND_CONTACTS_API_KEY",
+			"NOTIFICATION_ENQUEUE_SECRET",
+			"FIRESTORE_SERVICE_ACCOUNT_JSON",
+			"FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON",
+			"ADDRESS_DECRYPTION_SECRET",
+			"SHIPSTATION_API_KEY",
+			"SHIPSTATION_SHIP_FROM",
+			"STRIPE_SECRET_KEY",
+			"STRIPE_RESTRICTED_KEY",
+			"STRIPE_SECRET_KEY_LIVE",
+			"STRIPE_RESTRICTED_KEY_LIVE",
+			"STRIPE_WEBHOOK_SECRET_DEVNET",
+			"STRIPE_WEBHOOK_SECRET"
+		]
+	},
+	"queues": {
+		"producers": [
+			{
+				"binding": "NOTIFICATION_EMAIL_QUEUE",
+				"queue": "mons-shop-notification-emails"
+			},
+			{
+				"binding": "REVEAL_BACKGROUND_QUEUE",
+				"queue": "mons-shop-reveal-reconciliation"
+			},
       {
         "binding": "STRIPE_FULFILLMENT_QUEUE",
         "queue": "mons-shop-stripe-fulfillment"
-      }
-    ],
-    "consumers": [
-      {
-        "queue": "mons-shop-notification-emails",
-        "max_batch_size": 5,
-        "max_batch_timeout": 5,
-        "max_retries": 5,
-        "max_concurrency": 1,
-        "dead_letter_queue": "mons-shop-notification-emails-dlq"
-      },
-      {
-        "queue": "mons-shop-reveal-reconciliation",
-        "max_batch_size": 1,
-        "max_batch_timeout": 1,
-        "max_retries": 10,
-        "max_concurrency": 1,
-        "dead_letter_queue": "mons-shop-reveal-reconciliation-dlq"
-      },
+			}
+		],
+		"consumers": [
+			{
+				"queue": "mons-shop-notification-emails",
+				"max_batch_size": 5,
+				"max_batch_timeout": 5,
+				"max_retries": 5,
+				"max_concurrency": 1,
+				"dead_letter_queue": "mons-shop-notification-emails-dlq"
+			},
+			{
+				"queue": "mons-shop-reveal-reconciliation",
+				"max_batch_size": 1,
+				"max_batch_timeout": 1,
+				"max_retries": 10,
+				"max_concurrency": 1,
+				"dead_letter_queue": "mons-shop-reveal-reconciliation-dlq"
+			},
       {
         "queue": "mons-shop-stripe-fulfillment",
-        "max_batch_size": 1,
-        "max_batch_timeout": 1,
-        "max_retries": 10,
-        "max_concurrency": 1,
+				"max_batch_size": 1,
+				"max_batch_timeout": 1,
+				"max_retries": 10,
+				"max_concurrency": 1,
         "retry_delay": 60,
         "dead_letter_queue": "mons-shop-stripe-fulfillment-dlq"
       }
-    ]
-  },
-  "observability": {
-    "enabled": true,
-    "logs": {
-      "enabled": true,
-      "head_sampling_rate": 1,
-      "invocation_logs": false,
-      "persist": true
-    },
-    "traces": {
-      "enabled": false
-    }
-  }
+		]
+	},
+	"observability": {
+		"enabled": true,
+		"logs": {
+			"enabled": true,
+			"head_sampling_rate": 1,
+			"invocation_logs": false,
+			"persist": true
+		},
+		"traces": {
+			"enabled": false
+		}
+	}
 }

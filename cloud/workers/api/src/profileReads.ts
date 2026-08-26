@@ -256,6 +256,7 @@ type ProfileReadDependencies = {
 type ProfileReadEnv = Pick<Env, 'FIRESTORE_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
   | 'ADDRESS_DECRYPTION_SECRET'
   | 'OPS_DB'
+  | 'COMMERCE_DB'
   | 'STRIPE_SECRET_KEY'
   | 'STRIPE_RESTRICTED_KEY'
   | 'STRIPE_SECRET_KEY_LIVE'
@@ -301,6 +302,14 @@ function deliveryOrderSummaryFromDocument(document: unknown): DeliveryOrderSumma
 function queryDocuments(value: unknown): unknown[] {
   if (!Array.isArray(value)) throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
   return value.flatMap((entry) => isRecord(entry) && isRecord(entry.document) ? [entry.document] : []);
+}
+
+function deliveryHistoryFromDocuments(documents: readonly unknown[]): DeliveryOrderSummary[] {
+  const orders = documents
+    .map(deliveryOrderSummaryFromDocument)
+    .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
+  orders.sort((left, right) => deliveryOrderSummarySortAt(right) - deliveryOrderSummarySortAt(left));
+  return orders;
 }
 
 type ParsedReadRequest = {
@@ -534,7 +543,7 @@ async function loadSessionWallet(args: {
   return wallet;
 }
 
-async function loadDeliveryHistory(args: {
+async function loadFirestoreDeliveryHistory(args: {
   accessTokenProvider: GoogleAccessTokenProvider;
   nowMs: number;
   owner: string;
@@ -548,11 +557,7 @@ async function loadDeliveryHistory(args: {
     method: 'POST',
     url: `${FIRESTORE_DOCUMENTS_BASE_URL}:runQuery`,
   });
-  const orders = queryDocuments(payload)
-    .map(deliveryOrderSummaryFromDocument)
-    .filter((entry): entry is DeliveryOrderSummary => Boolean(entry));
-  orders.sort((left, right) => deliveryOrderSummarySortAt(right) - deliveryOrderSummarySortAt(left));
-  return orders;
+  return deliveryHistoryFromDocuments(queryDocuments(payload));
 }
 
 async function loadAdminProfile(args: {
@@ -563,10 +568,10 @@ async function loadAdminProfile(args: {
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
   signal: AbortSignal;
-}, profileEmailLoader: typeof loadProfileEmail): Promise<GetAdminProfileViewResponse> {
+}, profileEmailLoader: typeof loadProfileEmail, ordersLoader: () => Promise<DeliveryOrderSummary[]>): Promise<GetAdminProfileViewResponse> {
   const [email, orders] = await Promise.all([
     profileEmailLoader(args),
-    loadDeliveryHistory({ ...args, owner: args.ownerWallet }),
+    ordersLoader(),
   ]);
   return {
     profile: {
@@ -624,7 +629,7 @@ function documentPath(value: unknown): string | null {
     : null;
 }
 
-async function loadDeliveryOrderOwners(args: {
+async function loadFirestoreDeliveryOrderOwners(args: {
   accessTokenProvider: GoogleAccessTokenProvider;
   cursor?: string;
   nowMs: number;
@@ -748,7 +753,30 @@ function timestampCursor(document: unknown): FulfillmentOrdersCursor | null {
   };
 }
 
-async function loadFulfillmentOrders(args: {
+function fulfillmentOrdersFromDocuments(args: {
+  addressSecret: string;
+  canViewSensitiveAddress: boolean;
+  documents: readonly unknown[];
+  dropId: string;
+  limit: number;
+}): { orders: FulfillmentOrder[]; nextCursor: FulfillmentOrdersCursor | null } {
+  const hasMore = args.documents.length > args.limit;
+  const page = hasMore ? args.documents.slice(0, args.limit) : args.documents;
+  const decryptAddress = addressDecryptor(args.addressSecret);
+  const orders = page.flatMap((document) => {
+    const parsed = fulfillmentDocumentIdentity(document, args.dropId);
+    if (!parsed) return [];
+    const order = fulfillmentOrderFromRecord(parsed.id, parsed.fields, {
+      canViewSensitiveAddress: args.canViewSensitiveAddress,
+      decryptAddress,
+      dropId: args.dropId,
+    });
+    return order ? [order] : [];
+  });
+  return { orders, nextCursor: hasMore && page.length ? timestampCursor(page.at(-1)) : null };
+}
+
+async function loadFirestoreFulfillmentOrders(args: {
   accessTokenProvider: GoogleAccessTokenProvider;
   addressSecret: string;
   canViewSensitiveAddress: boolean;
@@ -767,20 +795,7 @@ async function loadFulfillmentOrders(args: {
     url: `${FIRESTORE_DOCUMENTS_BASE_URL}/drops/${encodeURIComponent(args.dropId)}:runQuery`,
   });
   const documents = queryDocuments(payload);
-  const hasMore = documents.length > args.limit;
-  const page = hasMore ? documents.slice(0, args.limit) : documents;
-  const decryptAddress = addressDecryptor(args.addressSecret);
-  const orders = page.flatMap((document) => {
-    const parsed = fulfillmentDocumentIdentity(document, args.dropId);
-    if (!parsed) return [];
-    const order = fulfillmentOrderFromRecord(parsed.id, parsed.fields, {
-      canViewSensitiveAddress: args.canViewSensitiveAddress,
-      decryptAddress,
-      dropId: args.dropId,
-    });
-    return order ? [order] : [];
-  });
-  return { orders, nextCursor: hasMore && page.length ? timestampCursor(page.at(-1)) : null };
+  return fulfillmentOrdersFromDocuments({ ...args, documents });
 }
 
 function stripeKeys(env: Partial<Pick<Env, 'STRIPE_SECRET_KEY' | 'STRIPE_RESTRICTED_KEY' | 'STRIPE_SECRET_KEY_LIVE' | 'STRIPE_RESTRICTED_KEY_LIVE'>>, mode: 'test' | 'live'): string[] {
@@ -823,25 +838,17 @@ async function fetchStripeSession(
   throw new Error(lastCredentialFailure ? 'stripe-credentials' : 'stripe-not-configured');
 }
 
-async function loadManualReviewCheckouts(args: {
-  accessTokenProvider: GoogleAccessTokenProvider;
+async function manualReviewFromDocuments(args: {
   canViewSensitiveAddress: boolean;
+  documents: readonly unknown[];
   dropId: string;
   env: Partial<Pick<Env, 'STRIPE_SECRET_KEY' | 'STRIPE_RESTRICTED_KEY' | 'STRIPE_SECRET_KEY_LIVE' | 'STRIPE_RESTRICTED_KEY_LIVE'>>;
-  nowMs: number;
   providerFetch: ProfileProviderFetch;
-  serviceAccountJson: string;
   signal: AbortSignal;
 }): Promise<{ checkouts: FulfillmentManualReviewCheckout[] }> {
-  const payload = await authenticatedFirestoreRequest({
-    ...args,
-    body: JSON.stringify(manualReviewQuery()),
-    method: 'POST',
-    url: `${FIRESTORE_DOCUMENTS_BASE_URL}/drops/${encodeURIComponent(args.dropId)}:runQuery`,
-  });
   const mode = DEPLOYMENT_DROPS[args.dropId]?.solanaCluster === 'mainnet-beta' ? 'live' : 'test';
   const keys = stripeKeys(args.env, mode);
-  const summaries = await Promise.all(queryDocuments(payload).map(async (document) => {
+  const summaries = await Promise.all(args.documents.map(async (document) => {
     if (!isRecord(document)) return null;
     const fields = decodeFirestoreFields(document.fields);
     if (!fields || !isManualReviewCheckout(fields)) return null;
@@ -865,6 +872,27 @@ async function loadManualReviewCheckouts(args: {
     (right.failedAt || right.createdAt || 0) - (left.failedAt || left.createdAt || 0) ||
     right.sessionId.localeCompare(left.sessionId));
   return { checkouts };
+}
+
+async function loadFirestoreManualReviewDocuments(args: {
+  accessTokenProvider: GoogleAccessTokenProvider;
+  dropId: string;
+  nowMs: number;
+  providerFetch: ProfileProviderFetch;
+  serviceAccountJson: string;
+  signal: AbortSignal;
+}): Promise<unknown[]> {
+  const payload = await authenticatedFirestoreRequest({
+    ...args,
+    body: JSON.stringify(manualReviewQuery()),
+    method: 'POST',
+    url: `${FIRESTORE_DOCUMENTS_BASE_URL}/drops/${encodeURIComponent(args.dropId)}:runQuery`,
+  });
+  return queryDocuments(payload).sort((left, right) => {
+    const leftName = isRecord(left) && typeof left.name === 'string' ? left.name : '';
+    const rightName = isRecord(right) && typeof right.name === 'string' ? right.name : '';
+    return leftName.localeCompare(rightName);
+  });
 }
 
 async function loadProfileStateProfile(args: {
@@ -950,9 +978,12 @@ export async function handleProfileReadRequest(
     const serviceAccountJson = typeof env.FIRESTORE_SERVICE_ACCOUNT_JSON === 'string'
       ? env.FIRESTORE_SERVICE_ACCOUNT_JSON
       : '';
-    if (!serviceAccountJson) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+    if (!serviceAccountJson) {
+      throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+    }
     const common = {
       accessTokenProvider: dependencies.accessTokenProvider,
+      commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: trackedFetch,
       serviceAccountJson,
@@ -965,7 +996,7 @@ export async function handleProfileReadRequest(
     };
     if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
       const owner = identity.kind === 'staff-wallet' ? identity.wallet : `firebase:${identity.authSubject}`;
-      const orders = await loadDeliveryHistory({ ...common, owner });
+      const orders = await loadFirestoreDeliveryHistory({ ...common, owner });
       return { response: jsonResponse({ orders }, 200), metrics, authOutcome: 'accepted' };
     }
     if (path === PROFILE_STATE_PATH) {
@@ -989,7 +1020,7 @@ export async function handleProfileReadRequest(
       }
       const [profileResult, shipmentsResult] = await Promise.allSettled([
         loadProfileStateProfile({ ...common, db: env.OPS_DB, ownerWallet: wallet }, dependencies.loadProfileEmail),
-        loadDeliveryHistory({ ...common, owner: wallet }),
+        loadFirestoreDeliveryHistory({ ...common, owner: wallet }),
       ]);
       const profile = profileStateSection(profileResult, controller.signal);
       const shipments = profileStateSection(shipmentsResult, controller.signal);
@@ -1012,7 +1043,7 @@ export async function handleProfileReadRequest(
         throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
       }
       return {
-        response: jsonResponse(await loadDeliveryOrderOwners({
+        response: jsonResponse(await loadFirestoreDeliveryOrderOwners({
           ...common,
           cursor: typeof requestBody.cursor === 'string' ? requestBody.cursor : undefined,
           pageSize: requestBody.pageSize,
@@ -1028,7 +1059,7 @@ export async function handleProfileReadRequest(
       if (path === FULFILLMENT_ORDERS_PATH) {
         const addressSecret = typeof env.ADDRESS_DECRYPTION_SECRET === 'string' ? env.ADDRESS_DECRYPTION_SECRET : '';
         return {
-          response: jsonResponse(await loadFulfillmentOrders({
+          response: jsonResponse(await loadFirestoreFulfillmentOrders({
             ...common,
             addressSecret,
             canViewSensitiveAddress: access.canViewSensitiveAddress,
@@ -1043,12 +1074,17 @@ export async function handleProfileReadRequest(
         };
       }
       return {
-        response: jsonResponse(await loadManualReviewCheckouts({
-          ...common,
-          canViewSensitiveAddress: access.canViewSensitiveAddress,
-          dropId,
-          env,
-        }), 200),
+        response: jsonResponse(await (async () => {
+          const documents = await loadFirestoreManualReviewDocuments({ ...common, dropId });
+          return manualReviewFromDocuments({
+            canViewSensitiveAddress: access.canViewSensitiveAddress,
+            documents,
+            dropId,
+            env,
+            providerFetch: trackedFetch,
+            signal: controller.signal,
+          });
+        })(), 200),
         metrics,
         authOutcome: 'accepted',
       };
@@ -1057,7 +1093,7 @@ export async function handleProfileReadRequest(
     const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({ ...sessionCommon, uid }));
     if (path === PROFILE_SHIPMENTS_PATH) {
       if (wallet !== ownerWallet) throw new ProfileReadError('unauthenticated', 401, 'Wallet session changed. Sign in again.');
-      const orders = await loadDeliveryHistory({ ...common, owner: ownerWallet });
+      const orders = await loadFirestoreDeliveryHistory({ ...common, owner: ownerWallet });
       const response: GetProfileShipmentsResponse = { responseMode: 'shipments', wallet, orders };
       return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted' };
     }
@@ -1068,6 +1104,7 @@ export async function handleProfileReadRequest(
       response: jsonResponse(await loadAdminProfile(
         { ...common, db: env.OPS_DB, ownerWallet },
         dependencies.loadProfileEmail,
+        () => loadFirestoreDeliveryHistory({ ...common, owner: ownerWallet }),
       ), 200),
       metrics,
       authOutcome: 'accepted',

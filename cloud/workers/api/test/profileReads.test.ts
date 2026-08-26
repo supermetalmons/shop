@@ -699,3 +699,108 @@ test('invalid service-account material fails closed before Firestore access', as
     (error) => error instanceof ProfileReadError && error.status === 503,
   );
 });
+
+test('all seven commerce read routes use D1 without Firestore in d1 mode', async () => {
+  const order = orderDocument();
+  (order.fields as Record<string, unknown>).buyerOrderShippedEmailState = stringValue('pending');
+  const checkout = {
+    name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/stripeCheckouts/cs_test_review',
+    fields: {
+      manualRefundReviewRequired: { booleanValue: true },
+      status: stringValue('fulfillment_failed'),
+      sessionId: stringValue('cs_test_review'),
+      owner: stringValue(OWNER),
+      quantity: integerValue(2),
+    },
+  };
+  const modelRow = (document: typeof order | typeof checkout, kind: 'delivery_order' | 'stripe_checkout') => ({
+    document_path: document.name.split('/documents/')[1],
+    document_kind: kind,
+    drop_id: 'card_nft_2',
+    document_id: document.name.split('/').at(-1),
+    fields_json: JSON.stringify(document.fields),
+    version: 1,
+    create_time: '2026-08-18T10:00:00Z',
+    update_time: '2026-08-18T12:00:00Z',
+  });
+  const db = {
+    prepare(sql: string) {
+      let bindings: unknown[] = [];
+      const statement = {
+        bind(...values: unknown[]) {
+          bindings = values;
+          return this;
+        },
+        first: async () => sql.includes('commerce_authority_control')
+          ? { authority_state: 'd1', revision: 2, documents_revision: 0 }
+          : null,
+        all: async () => ({
+          success: true,
+          meta: {},
+          results: bindings[0] === 'stripe_checkout'
+            ? [modelRow(checkout, 'stripe_checkout')]
+            : [modelRow(order, 'delivery_order')],
+        }),
+      };
+      return statement;
+    },
+  } as unknown as D1Database;
+  const env = {
+    COMMERCE_DB: db,
+    FIRESTORE_SERVICE_ACCOUNT_JSON: 'unused',
+    ADDRESS_DECRYPTION_SECRET: '',
+    OPS_DB: {} as D1Database,
+    STRIPE_SECRET_KEY: 'sk_test_primary',
+  };
+  let firestoreCalls = 0;
+  const providerFetch: typeof fetch = async (input) => {
+    if (String(input).includes('firestore.googleapis.com')) {
+      firestoreCalls += 1;
+      throw new Error('D1 route reached Firestore');
+    }
+    return Response.json({});
+  };
+  const anonymousDependencies = profileDependencies(providerFetch, {
+  });
+  const staffDependencies = profileDependencies(providerFetch, {
+    loadProfileEmail: async () => 'owner@example.com',
+    resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+    verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+  });
+  const calls: Array<[ProfileReadPath, unknown, Parameters<typeof handleProfileReadRequest>[3]]> = [
+    [PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }, anonymousDependencies],
+    [PROFILE_STATE_PATH, {}, anonymousDependencies],
+    [ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, {}, anonymousDependencies],
+    [ADMIN_PROFILE_PATH, { ownerWallet: OWNER }, staffDependencies],
+    [ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize: 2 }, staffDependencies],
+    [FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 2, cursor: null }, staffDependencies],
+    [FULFILLMENT_MANUAL_REVIEW_PATH, { dropId: 'card_nft_2' }, staffDependencies],
+  ];
+  for (const [path, body, dependencies] of calls) {
+    const result = await handleProfileReadRequest(tokenRequest(path, body), env, path, dependencies);
+    assert.equal(result.response.status, 200, path);
+    const payload = await result.response.json();
+    if (path === FULFILLMENT_ORDERS_PATH) {
+      assert.doesNotMatch(JSON.stringify(payload), /buyerOrderShippedEmailState/);
+    }
+  }
+  assert.equal(firestoreCalls, 0);
+});
+
+test('commerce authority failures fail closed without Firestore fallback', async () => {
+  let firestoreCalls = 0;
+  const result = await handleProfileReadRequest(
+    tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
+    {
+      COMMERCE_DB: {} as D1Database,
+      FIRESTORE_SERVICE_ACCOUNT_JSON: 'test-service-account',
+    },
+    PROFILE_SHIPMENTS_PATH,
+    profileDependencies(async () => {
+      firestoreCalls += 1;
+      return Response.json([{ document: orderDocument() }]);
+    }),
+  );
+  assert.equal(result.response.status, 500);
+  assert.equal(firestoreCalls, 0);
+});

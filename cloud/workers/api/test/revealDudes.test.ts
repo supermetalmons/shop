@@ -44,6 +44,7 @@ function env(signer = COSIGNER, backgroundQueue = queue()): Env {
   return {
     DATA_DB: {} as D1Database,
     OPS_DB: {} as D1Database,
+    COMMERCE_DB: {} as D1Database,
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,

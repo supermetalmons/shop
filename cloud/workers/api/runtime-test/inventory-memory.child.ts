@@ -164,6 +164,7 @@ const providerFetch: ProviderFetch = async (_input, init) => {
 const env: Env = {
   DATA_DB: {} as D1Database,
   OPS_DB: {} as D1Database,
+  COMMERCE_DB: {} as D1Database,
   STAFF_AUTH_CHALLENGE_RATE_LIMITER: { limit: async () => ({ success: true }) },
   STAFF_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },
   ANONYMOUS_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },

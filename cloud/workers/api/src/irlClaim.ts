@@ -106,7 +106,7 @@ const MPL_CORE_CPI_SIGNER = new PublicKey(MPL_CORE_CPI_SIGNER_ADDRESS);
 type IrlClaimEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'FIRESTORE_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY'
-> & Partial<Pick<Env, 'OPS_DB'>>;
+> & Partial<Pick<Env, 'COMMERCE_DB' | 'OPS_DB'>>;
 
 type IrlClaimErrorCode =
   | 'invalid-argument'
@@ -148,6 +148,7 @@ type IrlClaimRuntime = {
 
 type FirestoreReadContext = {
   accessTokenProvider: GoogleAccessTokenProvider;
+  commerceDb?: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
@@ -1253,6 +1254,7 @@ export async function handleIrlClaimPrepare(
       dependencies,
       context: {
         accessTokenProvider: dependencies.accessTokenProvider,
+        commerceDb: env.COMMERCE_DB,
         nowMs: dependencies.nowMs(),
         providerFetch: trackedFetch,
         serviceAccountJson,

@@ -189,7 +189,7 @@ type ProfileWriteDependencies = {
 };
 
 type ProfileWriteEnv = Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env,
-  'ADDRESS_DECRYPTION_SECRET' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
+  'ADDRESS_DECRYPTION_SECRET' | 'COMMERCE_DB' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB' | 'SHIPSTATION_API_KEY' | 'SHIPSTATION_SHIP_FROM'
 >>;
 
 const PROFILE_WRITE_TIMEOUT_MS = 15_000;
@@ -450,6 +450,7 @@ function documentName(path: string): string {
 async function commitWrites(
   common: {
     accessTokenProvider: GoogleAccessTokenProvider;
+    commerceDb?: D1Database;
     nowMs: number;
     providerFetch: ProfileProviderFetch;
     serviceAccountJson: string;
@@ -3272,6 +3273,7 @@ export async function handleProfileWriteRequest(
     if (!serviceAccountJson) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
     const common = {
       accessTokenProvider: dependencies.accessTokenProvider,
+      commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       pauseForRatePoll: dependencies.pauseForRatePoll,
       providerFetch: trackedFetch,

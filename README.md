@@ -5,7 +5,7 @@ on-chain through the custom box-minter program and MPL Core assets. The browser
 uses Worker-managed anonymous sessions and Solana wallet signatures for identity.
 Privileged application traffic runs through Cloudflare, order and assignment records remain in Firestore, and D1
 owns profiles, saved addresses, the public pack-status projection, Worker
-control, and rate-limit state.
+control, rate-limit state, and the shipment and fulfillment read models.
 
 ## Architecture
 
@@ -22,6 +22,10 @@ control, and rate-limit state.
 - The `mons-shop-ops` D1 database stores profiles, encrypted saved addresses,
   wallet-session bindings, the ready-notification control, and receipt-transfer
   fixed-window rate-limit buckets.
+- The `mons-shop-commerce` D1 database stores complete server-only projections
+  of Firestore delivery orders and Stripe checkouts. Firestore remains the
+  commerce write authority while the read source advances through `firestore`,
+  `dual`, and `d1` modes.
 - The API Worker's existing cron, Queue producers and consumers, dead-letter
   queues, bindings, routes, and secrets are declared in
   `cloud/workers/api/wrangler.jsonc`.
@@ -176,15 +180,17 @@ The focused production primitives are:
 ```bash
 npm run db:migrate:data
 npm run db:migrate:ops
+npm run db:migrate:commerce
 npm run db:migrate:api
 npm run check:pack-status-d1
 npm run check:ops-d1
+npm run check:commerce-d1
 npm run deploy:api
 ```
 
 `db:migrate:api` applies both immutable migration histories. `deploy:api` runs
-the API checks, applies both pending remote D1 migration sets, checks remote
-pack-status and ops-state integrity, and then publishes the API Worker with
+the API checks, applies all pending remote D1 migration sets, checks remote
+pack-status, ops-state, and commerce read-model integrity, and then publishes the API Worker with
 native `wrangler deploy --strict`. This order ensures the deployed code never
 expects a schema that has not been applied.
 
@@ -346,6 +352,25 @@ Do not store runtime secrets in Firebase configuration, `release.env`,
 repository files, command arguments, logs, or frontend environment variables.
 `SHIPSTATION_SHIP_FROM` is one JSON object; its Worker secret value is the
 canonical fulfillment origin address.
+
+### Commerce database
+
+`mons-shop-commerce` is the authoritative commerce document database after the
+guarded maintenance cutover. The Worker preserves the existing commerce API
+and transaction behavior through the D1 document-store adapter.
+
+Inspect authority or rehearse the export/import with:
+
+```bash
+npm run check:commerce-d1
+npm run commerce-authority-control -- status
+npm run cutover-commerce-to-d1
+```
+
+The export/import command is read-only unless `--write` and the current paused
+authority revision are supplied. It creates a private R2 archive, replaces D1
+from the same snapshot, and verifies exact document hashes before `d1` can be
+selected. The `d1` authority transition is irreversible.
 
 ### Queues, schedules, and notifications
 

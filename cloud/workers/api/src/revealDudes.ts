@@ -199,6 +199,7 @@ type ProviderContext = {
 
 type FirestoreContext = {
   accessTokenProvider: GoogleAccessTokenProvider;
+  commerceDb?: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
@@ -1757,7 +1758,7 @@ function retryRevealBackgroundJob(
 
 export async function processRevealBackgroundJobMessage(
   message: Message<unknown>,
-  env: Pick<Env, 'HELIUS_API_KEY' | 'OPS_DB'> & Partial<Pick<Env, 'DATA_DB'>>,
+  env: Pick<Env, 'HELIUS_API_KEY' | 'OPS_DB'> & Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB'>>,
   overrides: Partial<RevealBackgroundJobDependencies> = {},
 ): Promise<void> {
   const dependencies = { ...defaultRevealBackgroundJobDependencies, ...overrides };
@@ -1790,6 +1791,7 @@ export async function processRevealBackgroundJobMessage(
   }
   const firestoreContext: FirestoreContext = {
     accessTokenProvider: dependencies.accessTokenProvider,
+    commerceDb: env.COMMERCE_DB,
     nowMs: dependencies.nowMs(),
     providerFetch: dependencies.providerFetch,
     serviceAccountJson: '',
@@ -1970,6 +1972,7 @@ export async function handleRevealDudes(
     const storageControl = await dependencies.loadStorageControl(env.OPS_DB, controller.signal);
     const firestoreContext: FirestoreContext = {
       accessTokenProvider: dependencies.accessTokenProvider,
+      commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: meteredFetch,
       serviceAccountJson,

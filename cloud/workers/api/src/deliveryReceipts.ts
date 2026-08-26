@@ -211,7 +211,7 @@ type RecoverRequest = z.infer<typeof recoverSchema>;
 type DeliveryReceiptsEnv = Pick<
   Env,
   'COSIGNER_SECRET' | 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'
-> & Partial<Pick<Env, 'DATA_DB'>>;
+> & Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB'>>;
 
 type DeliveryReceiptErrorCode =
   | 'invalid-argument'
@@ -297,6 +297,7 @@ type DecodedOnchainConfig = {
 
 type FirestoreContext = {
   accessTokenProvider: GoogleAccessTokenProvider;
+  commerceDb?: D1Database;
   nowMs: number;
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
@@ -2007,7 +2008,7 @@ async function runDueDeliveryPackStatusProjectionQuery(
 }
 
 export async function reconcilePendingDeliveryPackStatusProjections(
-  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'DATA_DB'>>,
+  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON'> & Partial<Pick<Env, 'COMMERCE_DB' | 'DATA_DB'>>,
   signal: AbortSignal,
   overrides: {
     accessTokenProvider?: GoogleAccessTokenProvider;
@@ -2024,6 +2025,7 @@ export async function reconcilePendingDeliveryPackStatusProjections(
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
   const context: FirestoreContext = {
     accessTokenProvider: overrides.accessTokenProvider || backgroundFirestoreAccessTokenProvider,
+    commerceDb: env.COMMERCE_DB,
     nowMs: dueAtMs,
     providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
     serviceAccountJson,
@@ -3360,7 +3362,7 @@ async function publishReadyToShipNotifications(args: {
 }
 
 export async function reconcilePendingReadyToShipNotifications(
-  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'>,
+  env: Pick<Env, 'FIRESTORE_WRITER_SERVICE_ACCOUNT_JSON' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'> & Partial<Pick<Env, 'COMMERCE_DB'>>,
   signal: AbortSignal,
   overrides: {
     accessTokenProvider?: GoogleAccessTokenProvider;
@@ -3373,6 +3375,7 @@ export async function reconcilePendingReadyToShipNotifications(
   if (!serviceAccountJson) throw new Error('firestore_writer_service_account_not_configured');
   const context: FirestoreContext = {
     accessTokenProvider: overrides.accessTokenProvider || backgroundFirestoreAccessTokenProvider,
+    commerceDb: env.COMMERCE_DB,
     nowMs: (overrides.nowMs || Date.now)(),
     providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
     serviceAccountJson,
@@ -4239,6 +4242,7 @@ export async function handleDeliveryReceiptRequest(
     }
     const common: FirestoreContext = {
       accessTokenProvider: dependencies.accessTokenProvider,
+      commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: trackedFetch,
       serviceAccountJson,

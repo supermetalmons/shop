@@ -24,6 +24,7 @@ import {
 
 type StripeCheckoutFirestoreContext = {
   accessTokenProvider: GoogleAccessTokenProvider;
+  commerceDb?: D1Database;
   providerFetch: ProfileProviderFetch;
   serviceAccountJson: string;
   signal: AbortSignal;

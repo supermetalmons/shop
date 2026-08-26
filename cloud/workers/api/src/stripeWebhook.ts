@@ -40,7 +40,7 @@ type StripeWebhookEnv = Pick<Env,
   | 'STRIPE_FULFILLMENT_QUEUE'
   | 'STRIPE_WEBHOOK_SECRET'
   | 'STRIPE_WEBHOOK_SECRET_DEVNET'
->;
+> & Partial<Pick<Env, 'COMMERCE_DB'>>;
 
 type StripeWebhookMetrics = {
   upstreamCalls: number;
@@ -299,6 +299,7 @@ async function loadCheckoutDocument(
   path: string,
   common: {
     accessTokenProvider: GoogleAccessTokenProvider;
+    commerceDb?: D1Database;
     nowMs: number;
     providerFetch: ProfileProviderFetch;
     serviceAccountJson: string;
@@ -372,6 +373,7 @@ async function mutateCheckout(
   action: Extract<StripeWebhookAction, { kind: 'enqueue' }>,
   common: {
     accessTokenProvider: GoogleAccessTokenProvider;
+    commerceDb?: D1Database;
     nowMs: number;
     providerFetch: ProfileProviderFetch;
     serviceAccountJson: string;
@@ -502,6 +504,7 @@ export async function handleStripeWebhookRequest(
       };
       const transition = await mutateCheckout(action, {
         accessTokenProvider: dependencies.accessTokenProvider,
+        commerceDb: env.COMMERCE_DB,
         nowMs: dependencies.nowMs(),
         providerFetch: trackedFetch,
         serviceAccountJson,

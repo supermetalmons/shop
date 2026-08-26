@@ -172,6 +172,7 @@ import {
   isInternalStaffAuthorization,
   isStaffOnlyApiPath,
 } from './requestIdentity.js';
+import { loadCommerceAuthorityControl } from './commerceDocumentStore.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -211,6 +212,21 @@ const STRIPE_FULFILLMENT_RECONCILIATION_TIMEOUT_MS = 60_000;
 const STRIPE_FULFILLMENT_MAX_RETRIES = 10;
 const STRIPE_FULFILLMENT_TERMINAL_ATTEMPT = STRIPE_FULFILLMENT_MAX_RETRIES + 1;
 const STRIPE_FULFILLMENT_RETRY_DELAY_SECONDS = 60;
+const COMMERCE_MUTATION_PATHS = new Set([
+  STRIPE_CHECKOUT_SESSION_PATH,
+  STRIPE_WEBHOOK_PATH,
+  IRL_CLAIM_PREPARE_PATH,
+  STRIPE_RECEIPT_CLAIM_PATH,
+  RECEIPT_TRANSFER_PREPARE_PATH,
+  DELIVERY_PREPARE_PATH,
+  DELIVERY_RECEIPTS_ISSUE_PATH,
+  DELIVERY_RECEIPTS_RECOVER_PATH,
+  ADMIN_IRL_REDEEM_PREPARE_PATH,
+  ADMIN_IRL_REDEEM_FINALIZE_PATH,
+  REVEAL_DUDES_PATH,
+  '/profile/reconcile',
+  ...Array.from(PROFILE_WRITE_PATHS).filter((path) => path !== PROFILE_ADDRESSES_PATH),
+]);
 const KNOWN_LOG_ROUTES = new Set([
   '/health',
   NOTIFICATION_ENQUEUE_PATH,
@@ -323,6 +339,10 @@ export async function runScheduledReconciliations(
   overrides: Partial<ScheduledReconcilers> = {},
 ): Promise<void> {
   const reconcilers = { ...defaultScheduledReconcilers, ...overrides };
+  if (env.COMMERCE_DB && (await loadCommerceAuthorityControl(env.COMMERCE_DB)).state === 'paused') {
+    await reconcilers.ops(env, signal);
+    return;
+  }
   const results = await Promise.allSettled([
     reconcilers.stripe(env, signal),
     reconcilers.packStatus(env, signal),
@@ -405,6 +425,15 @@ export async function processBackgroundJobBatch(
   overrides: Partial<BackgroundJobProcessors> = {},
 ): Promise<void> {
   const processors = { ...defaultBackgroundJobProcessors, ...overrides };
+  if (env.COMMERCE_DB && (await loadCommerceAuthorityControl(env.COMMERCE_DB)).state === 'paused') {
+    processors.log({
+      event: 'background_job_commerce_maintenance',
+      queue: batch.queue,
+      messageCount: batch.messages.length,
+    });
+    for (const message of batch.messages) message.retry();
+    return;
+  }
   const processor = batch.queue === NOTIFICATION_EMAIL_QUEUE_NAME
     ? processors.notification
     : batch.queue === REVEAL_BACKGROUND_QUEUE_NAME
@@ -1651,6 +1680,15 @@ export async function handleRequest(
       ok: false,
       error: { code: 'unauthenticated', message: 'Staff wallet authentication is required.' },
     }, 401));
+  }
+  if (request.method === 'POST' && COMMERCE_MUTATION_PATHS.has(pathname)) {
+    const authority = await loadCommerceAuthorityControl(env.COMMERCE_DB);
+    if (authority.state === 'paused') {
+      return applyProfileCors(request, jsonResponse({
+        ok: false,
+        error: 'commerce-maintenance',
+      }, 503, { 'Retry-After': '60' }));
+    }
   }
   const packStatusDropId = packStatusDropIdFromPathname(pathname);
   const isPackStatusRoute = packStatusDropId !== undefined;

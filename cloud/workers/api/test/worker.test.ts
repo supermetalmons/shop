@@ -39,6 +39,7 @@ const allowRateLimit = { limit: async () => ({ success: true }) } satisfies Rate
 
 function env(options: {
   apiKey?: string;
+  commerceState?: 'firestore' | 'paused' | 'd1';
   dataDb?: D1Database;
   opsDb?: D1Database;
   resendContactsApiKey?: string;
@@ -53,6 +54,17 @@ function env(options: {
   return {
     DATA_DB: options.dataDb || {} as D1Database,
     OPS_DB: options.opsDb || {} as D1Database,
+    COMMERCE_DB: {
+      prepare() {
+        return {
+          first: async () => ({
+            authority_state: options.commerceState || 'firestore',
+            revision: 1,
+            documents_revision: 0,
+          }),
+        } as D1PreparedStatement;
+      },
+    } as unknown as D1Database,
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
@@ -165,6 +177,25 @@ test('scheduled reconciliation isolates all four subsystems and reports failures
     },
   );
   assert.deepEqual(calls.sort(), ['notifications', 'ops', 'packStatus', 'stripe']);
+});
+
+test('commerce maintenance blocks HTTP mutations and skips commerce cron work', async () => {
+  const response = await handleRequest(
+    new Request('https://api.mons.shop/checkout/session', { method: 'POST' }),
+    env({ commerceState: 'paused' }),
+  );
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('Retry-After'), '60');
+  assert.deepEqual(await response.json(), { ok: false, error: 'commerce-maintenance' });
+
+  const calls: string[] = [];
+  await runScheduledReconciliations(env({ commerceState: 'paused' }), new AbortController().signal, {
+    notifications: async () => { calls.push('notifications'); return 0; },
+    ops: async () => { calls.push('ops'); },
+    packStatus: async () => { calls.push('packStatus'); return 0; },
+    stripe: async () => { calls.push('stripe'); return { enqueued: 0, failed: 0 }; },
+  });
+  assert.deepEqual(calls, ['ops']);
 });
 
 const NOTIFICATION_JOB = createNotificationEmailJobV1({

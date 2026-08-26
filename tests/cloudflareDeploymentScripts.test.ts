@@ -54,8 +54,12 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
     'wrangler d1 migrations apply mons-shop-ops --remote --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env',
   );
   assert.equal(
+    packageJson.scripts['db:migrate:commerce'],
+    'wrangler d1 migrations apply mons-shop-commerce --remote --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env',
+  );
+  assert.equal(
     packageJson.scripts['db:migrate:api'],
-    'npm run db:migrate:data && npm run db:migrate:ops',
+    'npm run db:migrate:data && npm run db:migrate:ops && npm run db:migrate:commerce',
   );
   assert.equal(
     packageJson.scripts['check:pack-status-d1'],
@@ -64,6 +68,10 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   assert.equal(
     packageJson.scripts['check:ops-d1'],
     'node --import tsx scripts/ops/checkOpsD1.ts',
+  );
+  assert.equal(
+    packageJson.scripts['check:commerce-d1'],
+    'node --import tsx scripts/ops/checkCommerceD1.ts',
   );
   assert.equal(
     packageJson.scripts['ready-notifications-control'],
@@ -75,11 +83,11 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   );
   assert.equal(
     packageJson.scripts['deploy:api'],
-    'npm run check:api && npm run db:migrate:api && npm run check:pack-status-d1 && npm run check:ops-d1 && wrangler deploy --strict --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env',
+    'npm run check:api && npm run db:migrate:api && npm run check:pack-status-d1 && npm run check:ops-d1 && npm run check:commerce-d1 && wrangler deploy --strict --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env',
   );
 });
 
-test('API Worker binds separate immutable data and ops D1 histories', () => {
+test('API Worker binds separate immutable data, ops, and commerce D1 histories', () => {
   assert.deepEqual(apiWrangler.d1_databases, [
     {
       binding: 'DATA_DB',
@@ -92,6 +100,12 @@ test('API Worker binds separate immutable data and ops D1 histories', () => {
       database_name: 'mons-shop-ops',
       database_id: '6f8f6e7e-e6b1-4e1d-bd68-ece26fd918d5',
       migrations_dir: 'ops-migrations',
+    },
+    {
+      binding: 'COMMERCE_DB',
+      database_name: 'mons-shop-commerce',
+      database_id: 'b9ff0689-3433-47f2-84c1-64677fe85db1',
+      migrations_dir: 'commerce-migrations',
     },
   ]);
 });
