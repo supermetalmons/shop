@@ -5,7 +5,7 @@ Cloudflare Worker, and repository tools.
 
 ## Boundary rules
 
-- Keep modules runtime-neutral: no Firebase, Node-only, DOM, React, Solana SDK,
+- Keep modules runtime-neutral: no retired-provider SDKs, Node-only, DOM, React, Solana SDK,
   secret, or environment-variable dependencies.
 - Put pure calculations, serialized API contracts, codecs, normalization,
   deployment data, and shared presentation data here.

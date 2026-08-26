@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "cutover": "d1-native",
+  "date": "2026-08-26",
+  "status": "complete",
+  "commits": {
+    "compatibilityBridge": "eeacf56",
+    "bridgeHardening": "2a9e7ba",
+    "conflictHardening": "013ccd5",
+    "indexVerification": "1347fd5",
+    "identityCanonicalization": "a018383",
+    "contractTeardown": "e1f8f8d",
+    "d1ParserCompatibility": "1037b6c"
+  },
+  "migrations": {
+    "commerce": [
+      "0007_native_repository_expand.sql",
+      "0008_canonicalize_identity_documents.sql",
+      "0009_remove_firestore_compatibility.sql"
+    ],
+    "ops": [
+      "0014_auth_subject_bridge.sql",
+      "0015_auth_subject_cutover.sql",
+      "0016_remove_migration_controls.sql"
+    ]
+  },
+  "deployments": {
+    "releaseAApi": "e9d0fd8b-d855-4d4b-837e-8674c9f75e58",
+    "releaseAFrontend": "705af75c-1707-43cd-9ad2-b0d12afe66cf",
+    "releaseBApi": "721e0535-fd5c-4c74-ae67-1f0b20d6db0b",
+    "releaseCApi": "f4c7338f-e4cf-48e8-b299-6ca939860132",
+    "releaseCFrontend": "4c61d7ab-fbdf-441b-9e4b-ea460614a323"
+  },
+  "d1TimeTravelBookmarks": {
+    "preReleaseA": {
+      "commerce": "00000078-00000000-000050d3-8e8225c120e8f29934e3b39085a1c3d0",
+      "ops": "0000023e-00000000-000050d3-0ad4658c1c0a60add08d952ca680a456"
+    },
+    "preReleaseB": {
+      "commerce": "00000087-00000000-000050d3-ef954c109e8fb40c99a3e129e32b8887",
+      "ops": "0000024d-00000000-000050d3-5f757a1cea5acbe69d787adfd7b447a6"
+    },
+    "preReleaseC": {
+      "commerce": "0000008c-00000000-000050d3-1dd60751b8a680864088041853801be4",
+      "ops": "00000252-00000000-000050d3-d8a4a55b2c028fd900e95feb5960e75e"
+    },
+    "postReleaseC": {
+      "commerce": "0000008d-0000001e-000050d3-c9671a3dba64442e2bc0599f216117ef",
+      "ops": "00000255-00000000-000050d3-f85be87718f80fbf25074d96af463452"
+    }
+  },
+  "commerce": {
+    "authorityState": "d1",
+    "authorityRevision": 5,
+    "documentCount": 14607,
+    "kindCounts": {
+      "admin_irl_redeem_pack_marker": 110,
+      "admin_irl_redeem_receipt_marker": 116,
+      "admin_irl_redeem_request": 35,
+      "box_assignment": 3408,
+      "claim_code": 585,
+      "delivery_order": 539,
+      "dude_assignment": 9374,
+      "dude_pool": 6,
+      "offchain_order": 120,
+      "stripe_checkout": 314
+    },
+    "preCanonicalizationSha256": "7f61f054b000918bd9f7394b04e55a808b97c6f8942db45ef024ab699fa5142b",
+    "expectedCanonicalSha256": "cedc44c5b1e786ddc2f72766d1a0af80939d1b1f9980cee797a15ae7d8b9304e",
+    "postContractSha256": "cedc44c5b1e786ddc2f72766d1a0af80939d1b1f9980cee797a15ae7d8b9304e",
+    "legacyIdentityOccurrences": 0,
+    "compatibilityColumns": 0,
+    "emulatedTransactionTables": 0
+  },
+  "ops": {
+    "anonymousSessions": 56,
+    "profiles": 691,
+    "addresses": 503,
+    "walletSessions": 1200,
+    "revealSubmissions": 14,
+    "packStatusSummaries": 3,
+    "packStatusEvents": 870,
+    "packStatusGeneration": 3,
+    "legacyProviderRetiredAt": "2026-08-25T20:30:53.000Z"
+  },
+  "queues": {
+    "mons-shop-notification-emails": 0,
+    "mons-shop-notification-emails-dlq": 0,
+    "mons-shop-reveal-reconciliation": 0,
+    "mons-shop-reveal-reconciliation-dlq": 0,
+    "mons-shop-stripe-fulfillment": 0,
+    "mons-shop-stripe-fulfillment-dlq": 0
+  },
+  "secrets": {
+    "apiWorker": [
+      "ADDRESS_DECRYPTION_SECRET",
+      "COSIGNER_SECRET",
+      "HELIUS_API_KEY",
+      "NOTIFICATION_ENQUEUE_SECRET",
+      "RESEND_API_KEY",
+      "RESEND_CONTACTS_API_KEY",
+      "SHIPSTATION_API_KEY",
+      "SHIPSTATION_SHIP_FROM",
+      "STRIPE_RESTRICTED_KEY",
+      "STRIPE_RESTRICTED_KEY_LIVE",
+      "STRIPE_SECRET_KEY",
+      "STRIPE_SECRET_KEY_LIVE",
+      "STRIPE_WEBHOOK_SECRET",
+      "STRIPE_WEBHOOK_SECRET_DEVNET"
+    ],
+    "frontendWorker": []
+  },
+  "health": {
+    "frontendStatus": 200,
+    "apiStatus": 200,
+    "apiBody": {
+      "ok": true
+    },
+    "packStatusStatus": 200,
+    "rpcStatus": 200,
+    "queueBacklogsVerifiedEmpty": true
+  },
+  "gcpProject": {
+    "projectId": "mons-shop",
+    "projectNumber": "804781326988",
+    "lifecycleState": "DELETE_REQUESTED",
+    "recoverableUntil": "2026-09-25",
+    "verificationMode": "read-only",
+    "archiveCreated": false
+  }
+}
