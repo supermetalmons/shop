@@ -13,8 +13,8 @@ import {
 } from '../src/lib/fulfillmentExports.ts';
 import { normalizeBoxDisplayImage } from '../src/lib/dropContent.ts';
 import { figureMetadataCacheKey } from '../src/lib/figureMetadata.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
 import {
-  ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
   filterFulfillmentOrdersByVisibility,
 } from '../src/lib/fulfillmentOrderVisibility.ts';
 import type { FulfillmentOrder } from '../src/types.ts';
@@ -102,7 +102,7 @@ test('fulfillment exports contain only orders from the selected visibility list'
   const standardOrder = cardOrder({ deliveryId: 7 });
   const redeemedOrder = cardOrder({
     deliveryId: 8,
-    source: ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
+    source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
     fulfillmentStatus: 'Shipped',
   });
   const orders = [standardOrder, redeemedOrder];

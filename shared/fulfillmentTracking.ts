@@ -17,3 +17,10 @@ export function resolveFulfillmentTrackingHref(value: unknown): string | undefin
     return undefined;
   }
 }
+
+export function shouldDisplayFulfillmentTrackingCode(
+  status: unknown,
+  trackingCode: unknown,
+): boolean {
+  return status === 'Shipped' && Boolean(normalizeOptionalFulfillmentTrackingCode(trackingCode));
+}

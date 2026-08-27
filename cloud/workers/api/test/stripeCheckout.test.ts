@@ -11,7 +11,8 @@ import {
 } from '../../../../shared/stripeCheckoutSession.ts';
 import {
   handleStripeCheckoutSession,
-  stripeCheckoutTestHooks,
+  requireFulfillmentPrerequisites,
+  stripeKeys,
 } from '../src/stripeCheckout.ts';
 
 const DROP: StripeCheckoutSessionDrop = {
@@ -251,16 +252,16 @@ test('checkout prerequisites validate cosigner identity and address decryption m
     COSIGNER_SECRET: bs58.encode(cosigner.secretKey),
     ADDRESS_DECRYPTION_SECRET: Buffer.alloc(32, 7).toString('base64'),
   });
-  assert.doesNotThrow(() => stripeCheckoutTestHooks.requireFulfillmentPrerequisites(validEnv, {
+  assert.doesNotThrow(() => requireFulfillmentPrerequisites(validEnv, {
     ...ONCHAIN_CONFIG,
     admin: cosigner.publicKey.toBase58(),
   }));
   assert.throws(
-    () => stripeCheckoutTestHooks.requireFulfillmentPrerequisites(validEnv, ONCHAIN_CONFIG),
+    () => requireFulfillmentPrerequisites(validEnv, ONCHAIN_CONFIG),
     /does not match on-chain admin/,
   );
   assert.throws(
-    () => stripeCheckoutTestHooks.requireFulfillmentPrerequisites({ ...validEnv, ADDRESS_DECRYPTION_SECRET: '' }, {
+    () => requireFulfillmentPrerequisites({ ...validEnv, ADDRESS_DECRYPTION_SECRET: '' }, {
       ...ONCHAIN_CONFIG,
       admin: cosigner.publicKey.toBase58(),
     }),
@@ -269,7 +270,7 @@ test('checkout prerequisites validate cosigner identity and address decryption m
 });
 
 test('checkout Stripe key selection preserves secret-first credential fallback by mode', () => {
-  assert.deepEqual(stripeCheckoutTestHooks.stripeKeys(env(), 'test'), ['sk_test_primary', 'rk_test_fallback']);
-  assert.deepEqual(stripeCheckoutTestHooks.stripeKeys(env(), 'live'), ['sk_live_primary', 'rk_live_fallback']);
-  assert.deepEqual(stripeCheckoutTestHooks.stripeKeys(env({ STRIPE_SECRET_KEY: 'sk_live_wrong' }), 'test'), ['rk_test_fallback']);
+  assert.deepEqual(stripeKeys(env(), 'test'), ['sk_test_primary', 'rk_test_fallback']);
+  assert.deepEqual(stripeKeys(env(), 'live'), ['sk_live_primary', 'rk_live_fallback']);
+  assert.deepEqual(stripeKeys(env({ STRIPE_SECRET_KEY: 'sk_live_wrong' }), 'test'), ['rk_test_fallback']);
 });

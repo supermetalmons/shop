@@ -84,12 +84,30 @@ import {
   D1CommerceRepository,
   commerceFieldValue,
 } from './commerceRepository.js';
-import { adminIrlRedeemRuntime } from './adminIrlRedeemPrepare.js';
+import {
+  buildRuntime as buildAdminIrlRedeemRuntime,
+  fetchAsset as fetchAdminIrlRedeemAsset,
+  fetchAssetProof as fetchAdminIrlRedeemAssetProof,
+  loadBoundWallet as loadAdminIrlRedeemBoundWallet,
+  parseProof as parseAdminIrlRedeemProof,
+  receiptDropIdentity as adminIrlRedeemReceiptDropIdentity,
+  rpcCall as adminIrlRedeemRpcCall,
+} from './adminIrlRedeemOnchain.js';
 import {
   createDeliveryPackStatusProjectionOutbox,
   deliveryReceiptRuntime,
   scheduleDeliveryPackStatusProjection,
 } from './deliveryReceipts.js';
+import {
+  DeliveryReceiptError,
+  buildTransaction as buildDeliveryTransaction,
+  closeDeliveryInstruction,
+  decodeCosigner,
+  deriveDeliveryPda,
+  fetchOnchainConfig as fetchDeliveryOnchainConfig,
+  mintReceiptsInstruction,
+  sendAndConfirmSignedTransaction,
+} from './deliveryReceiptOnchain.js';
 
 export const ADMIN_IRL_REDEEM_FINALIZE_PATH = '/admin/irl-redeem/finalize';
 
@@ -131,9 +149,9 @@ type CommerceContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0]
 type CommerceTransaction = Awaited<ReturnType<typeof deliveryReceiptRuntime.beginTransaction>>;
 type CommerceWrite = ReturnType<typeof deliveryReceiptRuntime.updateWrite>;
 type CommerceTransform = NonNullable<Parameters<typeof deliveryReceiptRuntime.updateWrite>[0]['transforms']>[number];
-type ProviderContext = Parameters<typeof adminIrlRedeemRuntime.fetchAsset>[0];
-type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
-type OnchainConfig = Awaited<ReturnType<typeof deliveryReceiptRuntime.fetchOnchainConfig>>;
+type ProviderContext = Parameters<typeof fetchAdminIrlRedeemAsset>[0];
+type Runtime = ReturnType<typeof buildAdminIrlRedeemRuntime>;
+type OnchainConfig = Awaited<ReturnType<typeof fetchDeliveryOnchainConfig>>;
 type FinalizeWaitUntil = (promise: Promise<unknown>) => void;
 
 export type AdminIrlRedeemFinalizeErrorCode =
@@ -259,7 +277,7 @@ function summarizeError(error: unknown): Record<string, unknown> {
 
 function normalizedError(error: unknown, fallback: string): AdminIrlRedeemFinalizeError {
   if (error instanceof AdminIrlRedeemFinalizeError) return error;
-  if (error instanceof deliveryReceiptRuntime.DeliveryReceiptError) {
+  if (error instanceof DeliveryReceiptError) {
     return new AdminIrlRedeemFinalizeError(error.code, error.message, error.details);
   }
   if (error instanceof ProfileReadError) {
@@ -746,7 +764,7 @@ async function mintPackReceipts(
       const instructions = [
         ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
         ...batch.map((item) => mplCoreBurn(item.asset, collection, signer.publicKey)),
-        deliveryReceiptRuntime.mintReceiptsInstruction({
+        mintReceiptsInstruction({
           runtime,
           signer: signer.publicKey,
           recipient: signer.publicKey,
@@ -760,9 +778,9 @@ async function mintPackReceipts(
         if (commerce.signal.aborted) throw commerce.signal.reason;
         try {
           const { blockhash } = await connection.getLatestBlockhash('confirmed');
-          const transaction = deliveryReceiptRuntime.buildTransaction(instructions, signer.publicKey, blockhash, signer);
+          const transaction = buildDeliveryTransaction(instructions, signer.publicKey, blockhash, signer);
           if (transaction.serialize().length > SOLANA_MAX_RAW_TX_BYTES) throw new RangeError('transaction too large');
-          const signature = await deliveryReceiptRuntime.sendAndConfirmSignedTransaction(
+          const signature = await sendAndConfirmSignedTransaction(
             connection,
             transaction,
             commerce.signal,
@@ -866,7 +884,7 @@ async function ensureInternalDelivery(
     const transaction = await buildTransactionWithLookupTables(instructions, signer, blockhash, lookupTables);
     let signature: string | null = null;
     try {
-      signature = await deliveryReceiptRuntime.sendAndConfirmSignedTransaction(
+      signature = await sendAndConfirmSignedTransaction(
         connection,
         transaction,
         commerce.signal,
@@ -885,7 +903,7 @@ async function ensureInternalDelivery(
     return result;
   };
   if (request.internalDeliveryId && request.internalDeliveryPda) {
-    const [pda, bump] = deliveryReceiptRuntime.deriveDeliveryPda(runtime, request.internalDeliveryId);
+    const [pda, bump] = deriveDeliveryPda(runtime, request.internalDeliveryId);
     if (pda.toBase58() !== request.internalDeliveryPda) {
       throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL internal delivery PDA does not match delivery id.');
     }
@@ -893,7 +911,7 @@ async function ensureInternalDelivery(
   }
   for (let attempt = 0; attempt < MAX_DELIVERY_ALLOCATION_ATTEMPTS; attempt += 1) {
     const deliveryId = deliveryReceiptRuntime.secureRandomInt(2 ** 31 - 1) + 1;
-    const [pda, bump] = deliveryReceiptRuntime.deriveDeliveryPda(runtime, deliveryId);
+    const [pda, bump] = deriveDeliveryPda(runtime, deliveryId);
     if (await connection.getAccountInfo(pda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } })) continue;
     await updateRequest(commerce, path, { internalDeliveryId: deliveryId, internalDeliveryPda: pda.toBase58() });
     return send(deliveryId, pda, bump);
@@ -911,13 +929,13 @@ async function closeInternalDelivery(
   internal: InternalDelivery,
 ): Promise<string | null> {
   if (request.closeDeliveryTx) return request.closeDeliveryTx;
-  const [pda, bump] = deliveryReceiptRuntime.deriveDeliveryPda(runtime, internal.deliveryId);
+  const [pda, bump] = deriveDeliveryPda(runtime, internal.deliveryId);
   if (!await connection.getAccountInfo(pda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } })) return null;
   try {
     const { blockhash } = await connection.getLatestBlockhash('confirmed');
-    const transaction = deliveryReceiptRuntime.buildTransaction([
+    const transaction = buildDeliveryTransaction([
       ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
-      deliveryReceiptRuntime.closeDeliveryInstruction({
+      closeDeliveryInstruction({
         runtime,
         signer: signer.publicKey,
         deliveryPda: pda,
@@ -925,7 +943,7 @@ async function closeInternalDelivery(
         deliveryBump: bump,
       }),
     ], signer.publicKey, blockhash, signer);
-    const signature = await deliveryReceiptRuntime.sendAndConfirmSignedTransaction(
+    const signature = await sendAndConfirmSignedTransaction(
       connection,
       transaction,
       commerce.signal,
@@ -949,7 +967,7 @@ function receiptMatches(asset: unknown, runtime: Runtime, boxId: number, owner: 
   if (!isRecord(asset) || !isRecord(asset.ownership) || asset.ownership.owner !== owner) return false;
   return assetMatchesReceiptMetadataIdentity(
     asset,
-    adminIrlRedeemRuntime.receiptDropIdentity(runtime),
+    adminIrlRedeemReceiptDropIdentity(runtime),
     { kind: 'box', id: boxId },
   );
 }
@@ -973,7 +991,7 @@ async function scanAssetsByOwner(
       options: HELIUS_COLLECTION_GROUPING_OPTIONS,
       ...(grouping ? { grouping } : {}),
     };
-    const result = await adminIrlRedeemRuntime.rpcCall(provider, runtime, 'searchAssets', params);
+    const result = await adminIrlRedeemRpcCall(provider, runtime, 'searchAssets', params);
     const items = heliusSearchAssetsItems(result);
     items.forEach(visit);
     if (!heliusSearchAssetsHasNextPage(result, page, items, HELIUS_ASSET_PAGE_LIMIT)) return;
@@ -1021,7 +1039,7 @@ async function findReceiptAssets(
     const transactions = await connection.getTransactions(normalizeReceiptTxs(receiptTxs), { maxSupportedTransactionVersion: 0 });
     const ids = transactions.flatMap(bubblegumLeafAssetIds);
     if (ids.length === items.length) {
-      const assets = await mapWithConcurrency(ids, 4, (id) => adminIrlRedeemRuntime.fetchAsset(provider, runtime, id));
+      const assets = await mapWithConcurrency(ids, 4, (id) => fetchAdminIrlRedeemAsset(provider, runtime, id));
       assets.forEach(add);
       if (items.every((item) => (direct.get(item.refId) || []).length === 1)) return direct;
     }
@@ -1061,18 +1079,18 @@ async function waitForCardReceipt(
   let lastTransient: unknown;
   while (Date.now() - startedAt <= RECEIPT_INDEX_MAX_WAIT_MS) {
     try {
-      const asset = await adminIrlRedeemRuntime.fetchAsset(provider, runtime, receiptAssetId);
+      const asset = await fetchAdminIrlRedeemAsset(provider, runtime, receiptAssetId);
       lastOwner = isRecord(asset.ownership) && typeof asset.ownership.owner === 'string' ? asset.ownership.owner : '';
       if (lastOwner === admin) {
-        if (!assetMatchesReceiptMetadataIdentity(asset, adminIrlRedeemRuntime.receiptDropIdentity(runtime), { kind: 'figure', id: figureId })) {
+        if (!assetMatchesReceiptMetadataIdentity(asset, adminIrlRedeemReceiptDropIdentity(runtime), { kind: 'figure', id: figureId })) {
           throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem receipt does not belong to the requested drop.');
         }
-        const proof = await adminIrlRedeemRuntime.fetchAssetProof(provider, runtime, receiptAssetId);
+        const proof = await fetchAdminIrlRedeemAssetProof(provider, runtime, receiptAssetId);
         if (adminIrlCardReceiptProofHasIdentity(proof)) {
-          if (!assetMatchesReceiptDropIdentity(asset, proof, adminIrlRedeemRuntime.receiptDropIdentity(runtime), { kind: 'figure', id: figureId })) {
+          if (!assetMatchesReceiptDropIdentity(asset, proof, adminIrlRedeemReceiptDropIdentity(runtime), { kind: 'figure', id: figureId })) {
             throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem receipt proof belongs to a different drop.');
           }
-          adminIrlRedeemRuntime.parseProof(asset, proof, runtime, admin);
+          parseAdminIrlRedeemProof(asset, proof, runtime, admin);
           return;
         }
       }
@@ -1506,13 +1524,13 @@ async function finalizeAdminIrlRedeem(
 ): Promise<{ response: AdminIrlRedeemFinalizeResponse; targetKind: AdminIrlRedeemTargetKind; outcome: string }> {
   const config = API_DROPS[body.dropId];
   if (!config) throw new AdminIrlRedeemFinalizeError('invalid-argument', `Unsupported dropId: ${body.dropId}`);
-  const runtime = adminIrlRedeemRuntime.buildRuntime(config);
+  const runtime = buildAdminIrlRedeemRuntime(config);
   runtimeSupportsFinalize(runtime);
   let wallet: string;
   try {
     wallet = canonicalWallet(await resolveRequestWallet(
       identity,
-      (uid) => adminIrlRedeemRuntime.loadBoundWallet(commerce, env.OPS_DB, uid),
+      (uid) => loadAdminIrlRedeemBoundWallet(commerce, env.OPS_DB, uid),
     ));
   } catch (error) {
     if (isRecord(error) && error.code === 'unavailable') {
@@ -1535,8 +1553,8 @@ async function finalizeAdminIrlRedeem(
   }
   try {
     const connection = createConnection(provider, runtime);
-    const onchain = await deliveryReceiptRuntime.fetchOnchainConfig(connection, runtime);
-    const signer = deliveryReceiptRuntime.decodeCosigner(env.COSIGNER_SECRET);
+    const onchain = await fetchDeliveryOnchainConfig(connection, runtime);
+    const signer = decodeCosigner(env.COSIGNER_SECRET);
     if (!signer.publicKey.equals(onchain.admin)) {
       throw new AdminIrlRedeemFinalizeError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.');
     }

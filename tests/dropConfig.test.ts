@@ -1,21 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import {
   FRONTEND_DROPS,
-  defaultDropFamilyForDropId as defaultFrontendDropFamilyForDropId,
-  normalizeDropFamily as normalizeFrontendDropFamily,
 } from '../src/config/deployment.ts';
 import {
   API_DROPS,
-  defaultDropFamilyForDropId as defaultApiDropFamilyForDropId,
-  normalizeDropFamily as normalizeApiDropFamily,
 } from '../cloud/workers/api/src/dropConfig.ts';
 import {
-  defaultDropFamilyForDropId as defaultRegistryDropFamilyForDropId,
-  normalizeDropFamily as normalizeRegistryDropFamily,
   requireDropFamily,
 } from '../scripts/shared/deploymentRegistry.ts';
+import {
+  defaultDropFamilyForDropId,
+  normalizeDropFamily,
+} from '../shared/deploymentCore.ts';
 import {
   LEGACY_DROP_ROUTE_ALIASES,
   listUpcomingDropRoutes,
@@ -23,6 +20,7 @@ import {
   resolveUpcomingDropRouteByPath,
   resolveUpcomingRouteDrop,
 } from '../src/lib/dropConfig.ts';
+import { resolveAppRoute, WIP_ROUTES } from '../src/routes.ts';
 
 const UPCOMING_ROUTES = [
   {
@@ -77,28 +75,122 @@ test('upcoming routes expose their exact preview configuration', () => {
 });
 
 test('Clear Cards keeps its public upcoming route separate from its WIP route', () => {
-  const router = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
-  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const wipRoute = resolveAppRoute({ pathname: '/clear_cards/wip' });
 
-  assert.match(router, /const canonicalClearCardsWipPath = '\/clear_cards\/wip';/);
-  assert.match(app, /\{ path: '\/clear_cards\/wip' \}/);
-  assert.doesNotMatch(app, /ClearCardDropPreview/);
+  assert.equal(wipRoute.kind, 'wip');
+  assert.equal(wipRoute.path, '/clear_cards/wip');
+  assert.equal(wipRoute.wipExperience, 'clear_cards');
+  assert.equal(wipRoute.walletCluster, 'mainnet-beta');
+  assert.equal(wipRoute.replacementHref, null);
   assert.deepEqual(resolveUpcomingDropRouteByPath('/clear_cards'), UPCOMING_ROUTES[0]);
   assert.equal(resolveUpcomingDropRouteByPath('/clear_cards/wip'), null);
 });
 
 test('pack WIP routes stay separate from their live drop routes', () => {
-  const router = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
-  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const expectedWipRoutes = [
+    ['/card_nft_2/wip', 'card_nft_2'],
+    ['/little_swag_boxes/wip', 'little_swag_boxes'],
+    ['/poncho_drifella/wip', 'poncho_drifella'],
+  ] as const;
 
-  assert.match(router, /const canonicalLittleSwagBoxesWipPath = '\/little_swag_boxes\/wip';/);
-  assert.match(router, /const canonicalPonchoDrifellaWipPath = '\/poncho_drifella\/wip';/);
-  assert.match(app, /\{ path: '\/little_swag_boxes\/wip', dropId: 'little_swag_boxes' \}/);
-  assert.match(app, /\{ path: '\/poncho_drifella\/wip', dropId: 'poncho_drifella' \}/);
+  for (const [pathname, experience] of expectedWipRoutes) {
+    const route = resolveAppRoute({ pathname });
+    assert.equal(route.kind, 'wip');
+    assert.equal(route.path, pathname);
+    assert.equal(route.wipExperience, experience);
+  }
+
   assert.equal(resolveFrontendDropByPath('/little_swag_boxes/wip'), null);
   assert.equal(resolveFrontendDropByPath('/poncho_drifella/wip'), null);
   assert.equal(resolveFrontendDropByPath('/little_swag_boxes'), FRONTEND_DROPS.little_swag_boxes);
   assert.equal(resolveFrontendDropByPath('/poncho_drifella'), FRONTEND_DROPS.poncho_drifella);
+});
+
+test('the route resolver keeps the complete WIP table in one exported definition', () => {
+  assert.deepEqual(WIP_ROUTES, [
+    { path: '/card_nft_2/wip', experience: 'card_nft_2', dropId: 'card_nft_2' },
+    {
+      path: '/little_swag_boxes/wip',
+      experience: 'little_swag_boxes',
+      dropId: 'little_swag_boxes',
+    },
+    {
+      path: '/poncho_drifella/wip',
+      experience: 'poncho_drifella',
+      dropId: 'poncho_drifella',
+    },
+    { path: '/clear_cards/wip', experience: 'clear_cards' },
+  ]);
+});
+
+test('route aliases replace only the pathname and preserve search and hash bytes', () => {
+  const cases = [
+    ['/ff', '/fulfillment', 'fulfillment'],
+    ['/fullfillment', '/fulfillment', 'fulfillment'],
+    ['/notify-me', '/notify_me', 'notify'],
+    ['/drifella_binder', '/card_nft_binder', 'drop'],
+  ] as const;
+
+  for (const [pathname, targetPath, kind] of cases) {
+    const route = resolveAppRoute({
+      pathname: `${pathname}/`,
+      search: '?code=a%2Fb&next=%2Fclaim',
+      hash: '#receipt-1',
+    });
+    assert.equal(route.kind, kind);
+    assert.equal(route.path, targetPath);
+    assert.equal(route.replacementHref, `${targetPath}?code=a%2Fb&next=%2Fclaim#receipt-1`);
+  }
+});
+
+test('claim deep links render the home shop without replacing their URL', () => {
+  const route = resolveAppRoute({
+    pathname: '/claim/',
+    search: '?code=claim%2F123',
+    hash: '#receipt',
+  });
+
+  assert.equal(route.kind, 'claim');
+  assert.equal(route.path, '/');
+  assert.equal(route.claimDeepLinkCode, 'claim/123');
+  assert.equal(route.replacementHref, null);
+  assert.equal(route.walletCluster, 'mainnet-beta');
+  assert.equal(resolveAppRoute({ pathname: '/claim' }).claimDeepLinkCode, '');
+});
+
+test('home and special routes keep their canonical paths and neutral wallet cluster', () => {
+  for (const [pathname, kind] of [
+    ['/', 'home'],
+    ['/fulfillment', 'fulfillment'],
+    ['/notify_me', 'notify'],
+  ] as const) {
+    const route = resolveAppRoute({ pathname });
+    assert.equal(route.kind, kind);
+    assert.equal(route.path, pathname);
+    assert.equal(route.replacementHref, null);
+    assert.equal(route.walletCluster, 'mainnet-beta');
+  }
+});
+
+test('live deployments take precedence over upcoming routes at the same path', () => {
+  const liveRoute = resolveAppRoute({ pathname: '/clear_cards/' });
+  const upcomingRoute = resolveAppRoute({ pathname: '/tbd/' });
+
+  assert.equal(liveRoute.kind, 'drop');
+  assert.equal(liveRoute.drop, FRONTEND_DROPS.clear_cards);
+  assert.equal(liveRoute.upcoming, null);
+  assert.equal(upcomingRoute.kind, 'upcoming');
+  assert.equal(upcomingRoute.upcoming?.path, '/tbd');
+});
+
+test('unknown and case-mismatched paths fall back to home while preserving URL suffixes', () => {
+  for (const pathname of ['/does-not-exist/', '/clear_cards/unknown', '/CLEAR_CARDS']) {
+    const route = resolveAppRoute({ pathname, search: '?from=unknown', hash: '#top' });
+    assert.equal(route.kind, 'home');
+    assert.equal(route.path, '/');
+    assert.equal(route.claimDeepLinkCode, null);
+    assert.equal(route.replacementHref, '/?from=unknown#top');
+  }
 });
 
 test('Clear Cards resolves its live drop instead of the notify-only state', () => {
@@ -155,19 +247,11 @@ test('card NFT binder resolves its live mainnet deployment config', () => {
   assert.equal(API_DROPS.card_nft_binder?.dropId, 'card_nft_binder');
 });
 
-test('drop family names normalize and default from IDs across registry contracts', () => {
+test('drop family names normalize and default from IDs', () => {
   for (const family of ['card_nft_binder', 'drifella_shirt', 'clear_cards', 'tbd'] as const) {
-    assert.equal(defaultFrontendDropFamilyForDropId(` ${family.toUpperCase()} `), family);
-    assert.equal(normalizeFrontendDropFamily(` ${family.toUpperCase()} `), family);
-    assert.equal(normalizeFrontendDropFamily(undefined, ` ${family.toUpperCase()} `), family);
-
-    assert.equal(defaultApiDropFamilyForDropId(` ${family.toUpperCase()} `), family);
-    assert.equal(normalizeApiDropFamily(` ${family.toUpperCase()} `), family);
-    assert.equal(normalizeApiDropFamily(undefined, ` ${family.toUpperCase()} `), family);
-
-    assert.equal(defaultRegistryDropFamilyForDropId(` ${family.toUpperCase()} `), family);
-    assert.equal(normalizeRegistryDropFamily(` ${family.toUpperCase()} `), family);
-    assert.equal(normalizeRegistryDropFamily(undefined, ` ${family.toUpperCase()} `), family);
+    assert.equal(defaultDropFamilyForDropId(` ${family.toUpperCase()} `), family);
+    assert.equal(normalizeDropFamily(` ${family.toUpperCase()} `), family);
+    assert.equal(normalizeDropFamily(undefined, ` ${family.toUpperCase()} `), family);
     assert.equal(requireDropFamily(` ${family.toUpperCase()} `, 'dropFamily'), family);
   }
 });

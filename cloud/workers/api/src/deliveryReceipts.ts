@@ -222,7 +222,7 @@ type DeliveryReceiptErrorCode =
   | 'unavailable'
   | 'internal';
 
-class DeliveryReceiptError extends Error {
+export class DeliveryReceiptError extends Error {
   constructor(
     readonly code: DeliveryReceiptErrorCode,
     message: string,
@@ -536,7 +536,7 @@ function runtimeForDrop(rawDropId: string): DeliveryRuntime {
   };
 }
 
-function decodeCosigner(secret: string): Keypair {
+export function decodeCosigner(secret: string): Keypair {
   let decoded: Uint8Array;
   try {
     decoded = bs58.decode(secret.trim());
@@ -2024,7 +2024,7 @@ function heliusOrigin(cluster: SolanaCluster): string {
   return `https://${cluster === 'mainnet-beta' ? 'mainnet' : cluster}.helius-rpc.com/`;
 }
 
-function createConnection(context: ProviderContext, runtime: DeliveryRuntime): Connection {
+export function createConnection(context: ProviderContext, runtime: DeliveryRuntime): Connection {
   const boundedFetch: FetchFn = async (input, init) => {
     const controller = new AbortController();
     const onAbort = () => controller.abort(context.signal.reason);
@@ -2082,7 +2082,7 @@ function u32LE(value: number): Buffer {
   return buffer;
 }
 
-function deriveDeliveryPda(runtime: DeliveryRuntime, deliveryId: number): [PublicKey, number] {
+export function deriveDeliveryPda(runtime: DeliveryRuntime, deliveryId: number): [PublicKey, number] {
   const singleton = PublicKey.findProgramAddressSync(
     [Buffer.from(BOX_MINTER_CONFIG_SEED)],
     runtime.boxMinterProgramId,
@@ -2215,7 +2215,7 @@ function assertOnchainConfigMatchesRuntime(runtime: DeliveryRuntime, config: Dec
   }
 }
 
-async function fetchOnchainConfig(
+export async function fetchOnchainConfig(
   connection: Connection,
   runtime: DeliveryRuntime,
 ): Promise<DecodedOnchainConfig> {
@@ -2480,7 +2480,7 @@ function encodeMintReceiptsArgs(
   ]);
 }
 
-function mintReceiptsInstruction(args: {
+export function mintReceiptsInstruction(args: {
   runtime: DeliveryRuntime;
   signer: PublicKey;
   recipient: PublicKey;
@@ -2508,7 +2508,7 @@ function mintReceiptsInstruction(args: {
   });
 }
 
-function closeDeliveryInstruction(args: {
+export function closeDeliveryInstruction(args: {
   runtime: DeliveryRuntime;
   signer: PublicKey;
   deliveryPda: PublicKey;
@@ -2531,7 +2531,7 @@ function closeDeliveryInstruction(args: {
   });
 }
 
-function buildTransaction(
+export function buildTransaction(
   instructions: readonly TransactionInstruction[],
   payer: PublicKey,
   blockhash: string,
@@ -2641,7 +2641,7 @@ async function waitForSignature(
   }
 }
 
-async function sendAndConfirmSignedTransaction(
+export async function sendAndConfirmSignedTransaction(
   connection: Connection,
   transaction: VersionedTransaction,
   signal: AbortSignal,
@@ -4211,26 +4211,17 @@ export const deliveryReceiptTestHooks = {
 export const deliveryReceiptRuntime = {
   assignDudesForBox,
   beginTransaction,
-  buildTransaction,
-  closeDeliveryInstruction,
   commitWrites,
   countNormalIrlPackStatus,
-  createConnection,
   createWrite,
-  decodeCosigner,
-  DeliveryReceiptError,
-  deriveDeliveryPda,
-  fetchOnchainConfig,
   commerceInteger,
   commerceString,
   commerceTimestamp,
   commerceValue,
-  mintReceiptsInstruction,
   pause,
   readDocument,
   rollbackTransactionBestEffort,
   runtimeForDrop,
   secureRandomInt,
-  sendAndConfirmSignedTransaction,
   updateWrite,
 };

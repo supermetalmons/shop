@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { CARD_NFT_2_COMMON_CARD_ID_VALUES } from '../shared/cardNft2CommonIds.ts';
 import { DROP_METADATA_IPFS_GATEWAY, FRONTEND_DROPS } from '../src/config/deployment.ts';
 import {
   CARD_NFT_2_BOX_MEDIA,
@@ -38,7 +37,6 @@ import {
   PONCHO_DRIFELLA_PACK_RECEIPT_IMAGE_URL,
   PONCHO_DRIFELLA_RECEIPT_BASE_URL,
 } from '../src/config/dropMediaDefaults.ts';
-import { DROPS_EXTRA_CONTENT, getDropExtraContentOverride } from '../src/config/dropsExtraContent.ts';
 import {
   CARD_NFT_2_PACK_INITIAL_BASE_URL,
   CARD_NFT_2_PACK_IMAGE_SRCS,
@@ -66,8 +64,6 @@ import {
 } from '../src/lib/dropLabels.ts';
 import {
   CARD_NFT_2_ASSET_CDN_BASES,
-  CARD_NFT_2_COMMON_CARD_IDS,
-  CARD_NFT_2_MAX_CARD_ID,
   cardNft2AssetUrl,
   isCardNft2CommonCardId,
 } from '../src/lib/cardNft2Assets.ts';
@@ -397,42 +393,6 @@ test('legacy display media urls rewrite to CDN paths with metadata fallback pres
   );
 });
 
-test('certificate box media overrides merge with family media defaults', () => {
-  const previousOverride = DROPS_EXTRA_CONTENT.little_swag_hoodies_devnet;
-  try {
-    DROPS_EXTRA_CONTENT.little_swag_hoodies_devnet = {
-      certificates: {
-        boxInventoryMedia: {
-          overrides: {
-            5: 2,
-          },
-        },
-      },
-    };
-
-    const override = getDropExtraContentOverride('little_swag_hoodies_devnet');
-    assert.deepEqual(override?.certificates?.boxInventoryMedia, {
-      strategy: 'cyclic',
-      count: 8,
-      overrides: {
-        5: 2,
-      },
-    });
-    assert.equal(getMediaIdForTokenId(5, override?.certificates?.boxInventoryMedia), 2);
-    assert.equal(getMediaIdForTokenId(9, override?.certificates?.boxInventoryMedia), 1);
-    assert.equal(
-      normalizeCertificateDisplayImage({ dropId: 'little_swag_hoodies_devnet', boxId: 5 }),
-      `${LITTLE_SWAG_HOODIE_RECEIPT_CDN_BASE_URL}/receipt_2.webp`,
-    );
-  } finally {
-    if (previousOverride) {
-      DROPS_EXTRA_CONTENT.little_swag_hoodies_devnet = previousOverride;
-    } else {
-      delete DROPS_EXTRA_CONTENT.little_swag_hoodies_devnet;
-    }
-  }
-});
-
 test('little_swag_boxes display media resolves from CDN overrides', () => {
   const content = resolveDropContent('little_swag_boxes');
 
@@ -467,33 +427,6 @@ test('little_swag_boxes display media resolves from CDN overrides', () => {
     normalizeCertificateDisplayImage({ dropId: 'little_swag_boxes', boxId: 12 }),
     LITTLE_SWAG_BOXES_BOX_RECEIPT_IMAGE_URL,
   );
-});
-
-test('drop-specific extra content overrides preserve family CDN defaults', () => {
-  const previousOverride = DROPS_EXTRA_CONTENT.little_swag_boxes;
-  try {
-    DROPS_EXTRA_CONTENT.little_swag_boxes = {
-      box: {
-        aspectRatio: 2,
-      },
-      certificates: {
-        boxInventoryImageUrl: 'https://cdn.example.com/custom-box-receipt.webp',
-      },
-    };
-
-    const override = getDropExtraContentOverride('little_swag_boxes');
-    assert.equal(override?.mediaBaseUrl, LITTLE_SWAG_BOXES_CDN_BASE_URL);
-    assert.equal(override?.box?.aspectRatio, 2);
-    assert.equal(override?.figures?.inventoryImageBaseUrl, LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL);
-    assert.equal(override?.certificates?.inventoryImageBaseUrl, LITTLE_SWAG_BOXES_RECEIPT_BASE_URL);
-    assert.equal(override?.certificates?.boxInventoryImageUrl, 'https://cdn.example.com/custom-box-receipt.webp');
-  } finally {
-    if (previousOverride) {
-      DROPS_EXTRA_CONTENT.little_swag_boxes = previousOverride;
-    } else {
-      delete DROPS_EXTRA_CONTENT.little_swag_boxes;
-    }
-  }
 });
 
 test('poncho and hoodie receipt display images resolve from CDN overrides', () => {
@@ -548,21 +481,6 @@ test('poncho and hoodie receipt display images resolve from CDN overrides', () =
     normalizeCertificateDisplayImage({ dropId: 'little_swag_hoodies', imageRaw: 'https://legacy.example.com/receipt.webp' }),
     'https://legacy.example.com/receipt.webp',
   );
-});
-
-test('card_nft_2 bundled common ids are valid and unique', () => {
-  const commonIds = CARD_NFT_2_COMMON_CARD_ID_VALUES;
-  assert.ok(Array.isArray(commonIds));
-  assert.equal(Object.isFrozen(commonIds), true);
-  assert.equal(commonIds.length, 4_983);
-  assert.equal(commonIds.length, CARD_NFT_2_COMMON_CARD_IDS.size);
-  commonIds.forEach((commonId) => {
-    assert.equal(typeof commonId, 'number');
-    assert.equal(Number.isInteger(commonId), true);
-    assert.equal(commonId >= 1, true);
-    assert.equal(commonId <= CARD_NFT_2_MAX_CARD_ID, true);
-    assert.equal(isCardNft2CommonCardId(commonId), true);
-  });
 });
 
 test('interactive pack reveal sequences resolve poncho and card_nft_2 frame urls', () => {

@@ -1,6 +1,5 @@
 import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef } from 'react';
 import { acquireBodyScrollLock, releaseBodyScrollLock } from '../lib/bodyScrollLock';
-import { DEFAULT_BACKGROUND_BLUR_RADIUS } from '../lib/backgroundBlur';
 import { canRestoreFocus } from '../lib/focusTrap';
 import { BodyPortal, useBackgroundBlur } from './BackgroundBlurLayer';
 import { useModalFocusScope } from './ModalFocusScope';
@@ -16,7 +15,6 @@ interface ModalProps {
   showCloseButton?: boolean;
   closeOnEscape?: boolean;
   blurBackground?: boolean;
-  blurRadius?: number;
   suspended?: boolean;
   returnFocusRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
@@ -33,7 +31,6 @@ export function Modal({
   showCloseButton = true,
   closeOnEscape = true,
   blurBackground = false,
-  blurRadius = DEFAULT_BACKGROUND_BLUR_RADIUS,
   suspended = false,
   returnFocusRef,
   children,
@@ -48,7 +45,6 @@ export function Modal({
   useBackgroundBlur({
     open: blurBackground && open && !suspended,
     active: blurBackground && open && !suspended,
-    radius: blurRadius,
   });
 
   useEffect(() => {

@@ -1,68 +1,43 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE as CANONICAL_ADMIN_IRL_REDEEM_SOURCE,
-  STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE as CANONICAL_STRIPE_OFFCHAIN_SOURCE,
+  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
+  STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
   isAdminIrlRedeemDeliveryOrderSource,
-  isReceiptClaimDeliveryOrderSource as isCanonicalReceiptClaimDeliveryOrderSource,
+  isReceiptClaimDeliveryOrderSource,
   isStripeOffchainDeliveryOrderSource,
 } from '../shared/fulfillmentSources.ts';
 import { buildPackStatusCountersFromRebuildInputs } from '../shared/packStatus.ts';
 import {
-  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
-  STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
-  isReceiptClaimDeliveryOrderSource,
-} from '../cloud/workers/api/src/stripeCheckout/contract.ts';
-import {
-  ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
   filterFulfillmentOrdersByVisibility,
   isRedeemedForIrlFulfillmentOrder,
 } from '../src/lib/fulfillmentOrderVisibility.ts';
 
-test('legacy delivery-order source exports resolve to the canonical contract', () => {
-  assert.equal(
-    ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
-    CANONICAL_ADMIN_IRL_REDEEM_SOURCE,
-  );
-  assert.equal(
-    ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
-    CANONICAL_ADMIN_IRL_REDEEM_SOURCE,
-  );
-  assert.equal(
-    STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
-    CANONICAL_STRIPE_OFFCHAIN_SOURCE,
-  );
-  assert.equal(
-    isReceiptClaimDeliveryOrderSource,
-    isCanonicalReceiptClaimDeliveryOrderSource,
-  );
-});
-
 test('delivery-order source predicates preserve exact unknown and missing behavior', () => {
   assert.equal(
-    isAdminIrlRedeemDeliveryOrderSource(CANONICAL_ADMIN_IRL_REDEEM_SOURCE),
+    isAdminIrlRedeemDeliveryOrderSource(ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE),
     true,
   );
   assert.equal(
-    isStripeOffchainDeliveryOrderSource(CANONICAL_STRIPE_OFFCHAIN_SOURCE),
+    isStripeOffchainDeliveryOrderSource(STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE),
     true,
   );
   assert.equal(
-    isCanonicalReceiptClaimDeliveryOrderSource(
-      CANONICAL_ADMIN_IRL_REDEEM_SOURCE,
+    isReceiptClaimDeliveryOrderSource(
+      ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
     ),
     true,
   );
   assert.equal(
-    isCanonicalReceiptClaimDeliveryOrderSource(
-      CANONICAL_STRIPE_OFFCHAIN_SOURCE,
+    isReceiptClaimDeliveryOrderSource(
+      STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
     ),
     true,
   );
-  assert.equal(isCanonicalReceiptClaimDeliveryOrderSource('manual_delivery'), false);
-  assert.equal(isCanonicalReceiptClaimDeliveryOrderSource(''), false);
-  assert.equal(isCanonicalReceiptClaimDeliveryOrderSource(undefined), false);
-  assert.equal(isCanonicalReceiptClaimDeliveryOrderSource(null), false);
+  assert.equal(isReceiptClaimDeliveryOrderSource('manual_delivery'), false);
+  assert.equal(isReceiptClaimDeliveryOrderSource(''), false);
+  assert.equal(isReceiptClaimDeliveryOrderSource(undefined), false);
+  assert.equal(isReceiptClaimDeliveryOrderSource(null), false);
 });
 
 test('frontend visibility still isolates only canonical Admin IRL orders', () => {
@@ -79,7 +54,7 @@ test('frontend visibility still isolates only canonical Admin IRL orders', () =>
     },
     {
       deliveryId: 3,
-      source: CANONICAL_ADMIN_IRL_REDEEM_SOURCE,
+      source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
       fulfillmentStatus: 'Preparing',
     },
   ];
@@ -116,19 +91,19 @@ test('pack rebuild keeps Stripe quantity and Admin IRL card exclusion behavior',
     deliveryOrders: [
       {
         status: 'ready_to_ship',
-        source: CANONICAL_STRIPE_OFFCHAIN_SOURCE,
+        source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
         metadataIds: [101, 102],
         quantity: 9,
       },
       {
         status: 'ready_to_ship',
-        source: CANONICAL_ADMIN_IRL_REDEEM_SOURCE,
+        source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
         adminIrlRedeem: { targetKind: 'card_receipt' },
         items: [{ kind: 'dude' }],
       },
       {
         status: 'ready_to_ship',
-        source: CANONICAL_ADMIN_IRL_REDEEM_SOURCE,
+        source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE,
         adminIrlRedeem: { targetKind: 'pack' },
         items: [{ kind: 'box' }],
       },

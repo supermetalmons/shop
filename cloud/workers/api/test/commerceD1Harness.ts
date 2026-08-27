@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
-import { commerceKeyFromPath } from '../src/commerceRepository.ts';
+import type {
+  CommerceDocumentData,
+  CommerceDocumentKey,
+  CommerceTimestamp,
+} from '../src/commerceRepository.ts';
 
 class PreparedStatement {
   private values: SQLInputValue[] = [];
@@ -83,7 +87,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function decodeFixtureValue(value: unknown): unknown {
+function decodeLegacyFirestoreFixtureValue(value: unknown): unknown {
   if (!isRecord(value) || Object.keys(value).length !== 1) return undefined;
   if (Object.hasOwn(value, 'nullValue')) return null;
   if (typeof value.booleanValue === 'boolean') return value.booleanValue;
@@ -102,7 +106,7 @@ function decodeFixtureValue(value: unknown): unknown {
   if (isRecord(value.arrayValue)) {
     if (value.arrayValue.values === undefined) return [];
     if (!Array.isArray(value.arrayValue.values)) return undefined;
-    const decoded = value.arrayValue.values.map(decodeFixtureValue);
+    const decoded = value.arrayValue.values.map(decodeLegacyFirestoreFixtureValue);
     return decoded.some((entry) => entry === undefined) ? undefined : decoded;
   }
   if (isRecord(value.mapValue)) {
@@ -110,7 +114,7 @@ function decodeFixtureValue(value: unknown): unknown {
     if (!isRecord(value.mapValue.fields)) return undefined;
     const decoded: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value.mapValue.fields)) {
-      const result = decodeFixtureValue(entry);
+      const result = decodeLegacyFirestoreFixtureValue(entry);
       if (result === undefined) return undefined;
       decoded[key] = result;
     }
@@ -119,59 +123,56 @@ function decodeFixtureValue(value: unknown): unknown {
   return undefined;
 }
 
-export function decodeFixtureFields(fields: unknown): Record<string, unknown> | null {
+export function decodeLegacyFirestoreFixtureFields(fields: unknown): Record<string, unknown> | null {
   if (!isRecord(fields)) return null;
   const decoded: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(fields)) {
-    const result = decodeFixtureValue(entry);
+    const result = decodeLegacyFirestoreFixtureValue(entry);
     if (result === undefined) return null;
     decoded[key] = result;
   }
   return decoded;
 }
 
-function processedTimestamp(fields: Record<string, unknown>): { seconds: number; nanos: number } | null {
-  const value = isRecord(fields.processedAt) ? fields.processedAt.timestampValue : undefined;
-  if (typeof value !== 'string') return null;
-  const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z$/.exec(value);
-  if (!match) return null;
-  const seconds = Date.parse(`${match[1]}Z`) / 1000;
-  return Number.isSafeInteger(seconds) && seconds >= 0
-    ? { seconds, nanos: Number((match[2] || '').padEnd(9, '0')) }
-    : null;
-}
+export type CommerceDocumentSeed = {
+  key: CommerceDocumentKey;
+  data: CommerceDocumentData;
+  version?: number;
+  createTime?: string;
+  updateTime?: string;
+  processedAt?: CommerceTimestamp | null;
+};
 
 export function seedCommerceDocument(
   harness: CommerceD1Harness,
-  document: { fields?: Record<string, unknown>; name: string; updateTime?: string },
+  seed: CommerceDocumentSeed,
 ): void {
-  const marker = '/documents/';
-  const markerIndex = document.name.indexOf(marker);
-  const path = markerIndex >= 0 ? document.name.slice(markerIndex + marker.length) : document.name;
-  const identity = commerceKeyFromPath(path);
-  const fields = document.fields || {};
-  const decoded = decodeFixtureFields(fields);
-  if (!identity || !decoded) throw new Error(`Invalid commerce test document: ${path}`);
-  const processedAt = processedTimestamp(fields);
-  const updateTime = document.updateTime || '2026-01-01T00:00:00.000Z';
+  const updateTime = seed.updateTime || '2026-01-01T00:00:00.000Z';
+  const createTime = seed.createTime || updateTime;
+  const version = seed.version ?? 1;
   harness.database.prepare(`INSERT INTO commerce_documents (
     document_path, document_kind, drop_id, document_id, document_json,
     version, create_time, update_time, processed_at_seconds, processed_at_nanos
-  ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(document_path) DO UPDATE SET
+    document_kind = excluded.document_kind,
+    drop_id = excluded.drop_id,
+    document_id = excluded.document_id,
     document_json = excluded.document_json,
-    version = commerce_documents.version + 1,
+    version = excluded.version,
+    create_time = excluded.create_time,
     update_time = excluded.update_time,
     processed_at_seconds = excluded.processed_at_seconds,
     processed_at_nanos = excluded.processed_at_nanos`).run(
-    path,
-    identity.kind,
-    identity.dropId,
-    identity.documentId,
-    JSON.stringify(decoded),
+    seed.key.path,
+    seed.key.kind,
+    seed.key.dropId,
+    seed.key.documentId,
+    JSON.stringify(seed.data),
+    version,
+    createTime,
     updateTime,
-    updateTime,
-    processedAt?.seconds ?? null,
-    processedAt?.nanos ?? null,
+    seed.processedAt?.seconds ?? null,
+    seed.processedAt?.nanos ?? null,
   );
 }

@@ -19,6 +19,7 @@ import {
   BUBBLEGUM_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { commerceKeys } from '../src/commerceRepository.ts';
 import {
   handleIrlClaimPrepare,
   IRL_CLAIM_PREPARE_PATH,
@@ -209,16 +210,12 @@ test('IRL claim handler returns the expected partially signed transaction', asyn
 test('IRL claim reads wallet sessions from D1 and preserves legacy collection-group resolution', async () => {
   const harness = createCommerceD1Harness();
   seedCommerceDocument(harness, {
-    name: 'projects/mons-shop/databases/(default)/documents/claimCodes/1234567890',
-    fields: {
-      dropId: { stringValue: DROP_ID },
-      boxId: { integerValue: '7' },
-      dudeIds: { arrayValue: { values: [1, 2, 3].map((id) => ({ integerValue: String(id) })) } },
-    },
+    key: commerceKeys.claimCode('1234567890'),
+    data: { dropId: DROP_ID, boxId: 7, dudeIds: [1, 2, 3] },
   });
   seedCommerceDocument(harness, {
-    name: `projects/mons-shop/databases/(default)/documents/drops/${DROP_ID}/boxAssignments/asset-1`,
-    fields: { irlClaimCode: { stringValue: '1234567890' } },
+    key: commerceKeys.boxAssignment(DROP_ID, 'asset-1'),
+    data: { irlClaimCode: '1234567890' },
   });
   const context = {
     commerceDb: harness.db,

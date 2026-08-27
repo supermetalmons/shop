@@ -77,8 +77,24 @@ import {
   D1CommerceRepository,
   commerceFieldValue,
 } from './commerceRepository.js';
-import { adminIrlRedeemRuntime } from './adminIrlRedeemPrepare.js';
+import {
+  buildRuntime as buildAdminIrlRedeemRuntime,
+  fetchAsset as fetchAdminIrlRedeemAsset,
+  fetchAssetProof as fetchAdminIrlRedeemAssetProof,
+  loadLookupTable as loadAdminIrlRedeemLookupTable,
+  parseProof as parseAdminIrlRedeemProof,
+  receiptDropIdentity as adminIrlRedeemReceiptDropIdentity,
+  rpcCall as adminIrlRedeemRpcCall,
+} from './adminIrlRedeemOnchain.js';
 import { deliveryReceiptRuntime } from './deliveryReceipts.js';
+import {
+  DeliveryReceiptError,
+  createConnection as createDeliveryConnection,
+  decodeCosigner,
+  fetchOnchainConfig as fetchDeliveryOnchainConfig,
+  mintReceiptsInstruction,
+  sendAndConfirmSignedTransaction,
+} from './deliveryReceiptOnchain.js';
 
 export const STRIPE_RECEIPT_CLAIM_PATH = '/receipts/stripe/claim';
 
@@ -111,7 +127,7 @@ type CommerceContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0]
 type CommerceTransaction = Awaited<ReturnType<typeof deliveryReceiptRuntime.beginTransaction>>;
 type CommerceWrite = ReturnType<typeof deliveryReceiptRuntime.updateWrite>;
 type CommerceTransform = NonNullable<Parameters<typeof deliveryReceiptRuntime.updateWrite>[0]['transforms']>[number];
-type Runtime = ReturnType<typeof adminIrlRedeemRuntime.buildRuntime>;
+type Runtime = ReturnType<typeof buildAdminIrlRedeemRuntime>;
 type ProviderContext = {
   apiKey: string;
   providerFetch: ProfileProviderFetch;
@@ -221,7 +237,7 @@ function errorResponse(error: StripeReceiptClaimError): Response {
 
 function normalizedError(error: unknown, fallback: string): StripeReceiptClaimError {
   if (error instanceof StripeReceiptClaimError) return error;
-  if (error instanceof deliveryReceiptRuntime.DeliveryReceiptError) {
+  if (error instanceof DeliveryReceiptError) {
     return new StripeReceiptClaimError(error.code, error.message, error.details);
   }
   if (error instanceof ProfileReadError) {
@@ -248,7 +264,7 @@ function summarizeError(error: unknown): Record<string, unknown> {
   return { kind: normalized.name, code: normalized.code, message: normalized.message };
 }
 
-async function readRequestBody(request: Request, signal: AbortSignal): Promise<StripeReceiptClaimRequest> {
+export async function readRequestBody(request: Request, signal: AbortSignal): Promise<StripeReceiptClaimRequest> {
   const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
   if (contentType !== 'application/json') {
     await request.body?.cancel().catch(() => undefined);
@@ -331,7 +347,7 @@ function directReceiptAssetId(value: Record<string, unknown>): string {
     : '';
 }
 
-function normalizeSubmissions(value: unknown): DirectCardReceiptClaimSubmission[] {
+export function normalizeSubmissions(value: unknown): DirectCardReceiptClaimSubmission[] {
   if (!Array.isArray(value)) return [];
   const bySignature = new Map<string, DirectCardReceiptClaimSubmission>();
   for (const entry of value) {
@@ -370,7 +386,7 @@ function positiveStoredInteger(value: unknown): number | undefined {
   return Number.isSafeInteger(normalized) && normalized > 0 ? normalized : undefined;
 }
 
-function responseForClaim(args: {
+export function responseForClaim(args: {
   dropId: string;
   deliveryId: number;
   receiptTxs: string[];
@@ -396,7 +412,7 @@ function responseForClaim(args: {
   };
 }
 
-function orderTarget(order: Record<string, unknown>, code: string, boxId: number): {
+export function orderTarget(order: Record<string, unknown>, code: string, boxId: number): {
   updatePluralOrderClaim: boolean;
   updateSingularOrderClaim: boolean;
 } {
@@ -499,7 +515,7 @@ function updateWrite(args: {
   });
 }
 
-async function startClaim(
+export async function startClaim(
   context: CommerceContext,
   code: string,
   recipientWallet: string,
@@ -655,7 +671,7 @@ function claimPrefixes(started: Pick<StartedClaim, 'boxId' | 'updatePluralOrderC
   ];
 }
 
-async function clearProcessing(
+export async function clearProcessing(
   context: CommerceContext,
   started: StartedClaim,
   code: string,
@@ -710,7 +726,7 @@ async function clearProcessing(
   }
 }
 
-async function rememberSubmittedTransaction(
+export async function rememberSubmittedTransaction(
   context: CommerceContext,
   code: string,
   attemptId: string,
@@ -756,7 +772,7 @@ async function rememberSubmittedTransaction(
   });
 }
 
-async function finalizeClaim(
+export async function finalizeClaim(
   context: CommerceContext,
   started: StartedClaim,
   code: string,
@@ -852,14 +868,14 @@ function runtimeForDrop(dropId: string): Runtime {
   const config = getApiDrop(dropId);
   if (!config) throw new StripeReceiptClaimError('failed-precondition', 'Claim code has an unsupported drop id.');
   try {
-    return adminIrlRedeemRuntime.buildRuntime(config);
+    return buildAdminIrlRedeemRuntime(config);
   } catch (error) {
     throw normalizedError(error, 'Receipt claim drop configuration is invalid.');
   }
 }
 
 function createConnection(provider: ProviderContext, runtime: Runtime): Connection {
-  return deliveryReceiptRuntime.createConnection({
+  return createDeliveryConnection({
     apiKey: provider.apiKey,
     fetch: provider.providerFetch,
     signal: provider.signal,
@@ -868,7 +884,7 @@ function createConnection(provider: ProviderContext, runtime: Runtime): Connecti
 
 async function fetchAsset(provider: ProviderContext, runtime: Runtime, assetId: string): Promise<DasAsset> {
   try {
-    return await adminIrlRedeemRuntime.fetchAsset(provider, runtime, assetId);
+    return await fetchAdminIrlRedeemAsset(provider, runtime, assetId);
   } catch (error) {
     throw normalizedError(error, 'Receipt claim provider is temporarily unavailable.');
   }
@@ -880,7 +896,7 @@ async function fetchAssetProof(
   assetId: string,
 ): Promise<Record<string, unknown>> {
   try {
-    return await adminIrlRedeemRuntime.fetchAssetProof(provider, runtime, assetId);
+    return await fetchAdminIrlRedeemAssetProof(provider, runtime, assetId);
   } catch (error) {
     throw normalizedError(error, 'Receipt claim provider is temporarily unavailable.');
   }
@@ -897,7 +913,7 @@ async function scanOwnedAssetPages(args: {
   for (let page = 1; page <= HELIUS_ASSETS_MAX_SEARCH_PAGES; page += 1) {
     let result: unknown;
     try {
-      result = await adminIrlRedeemRuntime.rpcCall(args.provider, args.runtime, 'searchAssets', {
+      result = await adminIrlRedeemRpcCall(args.provider, args.runtime, 'searchAssets', {
         ownerAddress: args.owner,
         page,
         limit: HELIUS_ASSETS_PAGE_LIMIT,
@@ -956,7 +972,7 @@ function assetOwner(asset: DasAsset): string {
 }
 
 function receiptIdentity(runtime: Runtime) {
-  return adminIrlRedeemRuntime.receiptDropIdentity(runtime);
+  return adminIrlRedeemReceiptDropIdentity(runtime);
 }
 
 async function proofMatches(
@@ -1041,7 +1057,7 @@ async function findFigureReceiptById(
     throw new StripeReceiptClaimError('failed-precondition', 'Direct card receipt claim proof belongs to a different drop.');
   }
   try {
-    adminIrlRedeemRuntime.parseProof(asset, proof, runtime, owner);
+    parseAdminIrlRedeemProof(asset, proof, runtime, owner);
   } catch (error) {
     throw normalizedError(error, 'Direct card receipt claim proof is invalid.');
   }
@@ -1277,7 +1293,7 @@ function encodingTooLarge(error: unknown): boolean {
   );
 }
 
-async function buildWithOptionalLookupTable(args: {
+export async function buildWithOptionalLookupTable(args: {
   provider: ProviderContext;
   runtime: Runtime;
   build: (lookupTables: AddressLookupTableAccount[]) => VersionedTransaction;
@@ -1287,7 +1303,7 @@ async function buildWithOptionalLookupTable(args: {
   let lookupTables: AddressLookupTableAccount[] | undefined;
   const loadLookupTables = async () => {
     if (lookupTables) return lookupTables;
-    try { lookupTables = await adminIrlRedeemRuntime.loadLookupTable(args.provider, args.runtime); }
+    try { lookupTables = await loadAdminIrlRedeemLookupTable(args.provider, args.runtime); }
     catch { lookupTables = []; }
     return lookupTables;
   };
@@ -1333,7 +1349,7 @@ async function sendSigned(
 ): Promise<string> {
   const signature = signedTransactionSignature(transaction);
   try {
-    return await deliveryReceiptRuntime.sendAndConfirmSignedTransaction(connection, transaction, signal, label);
+    return await sendAndConfirmSignedTransaction(connection, transaction, signal, label);
   } catch (error) {
     const normalized = normalizedError(error, `${label} transaction failed.`);
     const details = isRecord(normalized.details) ? normalized.details : {};
@@ -1349,7 +1365,7 @@ async function sendSigned(
 }
 
 function transferInstruction(args: {
-  proof: ReturnType<typeof adminIrlRedeemRuntime.parseProof>;
+  proof: ReturnType<typeof parseAdminIrlRedeemProof>;
   owner: PublicKey;
   recipient: PublicKey;
   coreCollection: PublicKey;
@@ -1378,7 +1394,7 @@ function transferInstruction(args: {
 }
 
 function burnInstruction(args: {
-  proof: ReturnType<typeof adminIrlRedeemRuntime.parseProof>;
+  proof: ReturnType<typeof parseAdminIrlRedeemProof>;
   owner: PublicKey;
   coreCollection: PublicKey;
 }): TransactionInstruction {
@@ -1411,8 +1427,8 @@ function proofForAsset(
   proof: Record<string, unknown>,
   runtime: Runtime,
   owner: string,
-): ReturnType<typeof adminIrlRedeemRuntime.parseProof> {
-  try { return adminIrlRedeemRuntime.parseProof(asset, proof, runtime, owner); }
+): ReturnType<typeof parseAdminIrlRedeemProof> {
+  try { return parseAdminIrlRedeemProof(asset, proof, runtime, owner); }
   catch (error) { throw normalizedError(error, 'Receipt proof is invalid.'); }
 }
 
@@ -1588,7 +1604,7 @@ async function sendOpenableClaim(args: {
   const instructions = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
     burnInstruction({ proof, owner: args.signer.publicKey, coreCollection: args.coreCollection }),
-    deliveryReceiptRuntime.mintReceiptsInstruction({
+    mintReceiptsInstruction({
       runtime: args.runtime,
       signer: args.signer.publicKey,
       recipient: args.recipient,
@@ -1621,7 +1637,7 @@ function keepsProcessing(error: unknown): boolean {
   return isRecord(details) && details.keepReceiptClaimProcessing === true;
 }
 
-function claimFlowFor(directFigureReceipt: StartedClaim['directFigureReceipt'], itemsPerBox: number): ClaimFlow {
+export function claimFlowFor(directFigureReceipt: StartedClaim['directFigureReceipt'], itemsPerBox: number): ClaimFlow {
   if (directFigureReceipt) return 'direct_figure';
   return itemsPerBox >= BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX ? 'openable_pack' : 'legacy_pack';
 }
@@ -1631,7 +1647,7 @@ type ClaimExecution = {
   outcome: 'already_claimed' | 'claimed_box' | 'claimed_figures' | 'claimed_direct_figure';
 };
 
-async function claimStripeReceipt(
+export async function claimStripeReceipt(
   body: StripeReceiptClaimRequest,
   env: ClaimEnv,
   commerce: CommerceContext,
@@ -1711,9 +1727,9 @@ async function claimStripeReceipt(
       ? requireOpenableAssignment(claim.orderIrlClaims, runtime, claim.boxId)
       : null;
     const connection = createConnection(provider, runtime);
-    const onchain = await deliveryReceiptRuntime.fetchOnchainConfig(connection, runtime);
+    const onchain = await fetchDeliveryOnchainConfig(connection, runtime);
     let signer: Keypair;
-    try { signer = deliveryReceiptRuntime.decodeCosigner(env.COSIGNER_SECRET); }
+    try { signer = decodeCosigner(env.COSIGNER_SECRET); }
     catch (error) { throw normalizedError(error, 'Receipt claiming is temporarily unavailable.'); }
     if (!signer.publicKey.equals(onchain.admin)) {
       throw new StripeReceiptClaimError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.', {
@@ -2096,17 +2112,3 @@ export async function handleStripeReceiptClaim(
     clearTimeout(timeout);
   }
 }
-
-export const stripeReceiptClaimTestHooks = {
-  buildWithOptionalLookupTable,
-  claimFlowFor,
-  claimStripeReceipt,
-  clearProcessing,
-  finalizeClaim,
-  rememberSubmittedTransaction,
-  normalizeSubmissions,
-  orderTarget,
-  readRequestBody,
-  responseForClaim,
-  startClaim,
-};

@@ -6,7 +6,7 @@ import {
   isDirectDeliveryItemsPerBox,
   normalizeDeliveryUnitsPerBox,
   usesCardNft2DeliveryFees,
-} from '../lib/shipping';
+} from '../../shared/shipping.ts';
 
 interface DeliveryFormProps {
   onSubmit: (payload: { formatted: string; country: string; countryCode: string; email: string }) => Promise<void>;
@@ -15,7 +15,6 @@ interface DeliveryFormProps {
   boxNamePrefix?: string;
   figureNamePrefix?: string;
   mode?: 'card' | 'modal';
-  onCancel?: () => void;
   submitDisabled?: boolean;
   countryCode?: string;
   onCountryCodeChange?: (code: string) => void;
@@ -38,7 +37,6 @@ export function DeliveryForm({
   boxNamePrefix,
   figureNamePrefix,
   mode = 'card',
-  onCancel,
   submitDisabled,
   countryCode,
   onCountryCodeChange,
@@ -229,11 +227,6 @@ export function DeliveryForm({
       <div className="muted small">{shippingNote}</div>
       {error ? <div className="error">{error}</div> : null}
       <div className={`row${mode === 'modal' ? ' row--end' : ''}`}>
-        {onCancel ? (
-          <button type="button" className="ghost" onClick={onCancel} disabled={saving}>
-            Cancel
-          </button>
-        ) : null}
         <button type="submit" disabled={saving || submitDisabled || shipmentPending}>
           {saving
             ? 'Sending…'

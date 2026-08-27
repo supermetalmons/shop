@@ -2,7 +2,6 @@ import {
   CSSProperties,
   DependencyList,
   FormEvent,
-  ReactNode,
   RefObject,
   useCallback,
   useEffect,
@@ -58,7 +57,6 @@ interface MintPanelProps {
   onError?: (message: string) => void;
   title?: string;
   boxMedia?: MintPanelBoxMedia;
-  previewContent?: ReactNode;
   boxNamePrefix?: string;
   dropId?: string;
   receiptPoolId?: string;
@@ -670,7 +668,6 @@ export function MintPanel({
   onError,
   title,
   boxMedia,
-  previewContent,
   boxNamePrefix,
   dropId,
   receiptPoolId,
@@ -700,7 +697,6 @@ export function MintPanel({
   const computedRemaining = stats?.remaining ?? Math.max(0, total - minted);
   const remaining = REMAINING_OVERRIDE === null ? computedRemaining : Math.max(0, Math.floor(REMAINING_OVERRIDE));
   const remainingReady = REMAINING_OVERRIDE !== null || Boolean(stats);
-  const hasCustomPreview = previewContent != null;
   const maxSelectablePerTx = stats?.maxPerTx ?? maxPerTx;
   const sizeSelection = mintSelection?.kind === 'size' ? mintSelection : undefined;
   const sizeOptions = sizeSelection?.options ?? [];
@@ -897,12 +893,10 @@ export function MintPanel({
   useDismissiblePopover(packStatusInfoOpen, packStatusInfoRef, setPackStatusInfoOpen);
 
   useLayoutEffect(() => {
-    if (hasCustomPreview) return;
     const el = previewRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
 
     const update = () => {
-
       const style = window.getComputedStyle(el);
       const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
       const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
@@ -929,7 +923,7 @@ export function MintPanel({
       ro.disconnect();
       window.removeEventListener('resize', update);
     };
-  }, [hasCustomPreview]);
+  }, []);
 
   const soldOut = remaining <= 0;
   const layout = useMemo(
@@ -1123,74 +1117,72 @@ export function MintPanel({
   return (
     <section className="mint-panel">
       <div ref={previewRef} className="mint-panel__preview">
-        {previewContent ?? (
-          <div
-            className="mint-panel__boxes"
-            style={{
-              ['--box-width' as never]: `${layout.width}px`,
-              ['--box-height' as never]: `${layout.height}px`,
-              ['--box-gap-x' as never]: `${layout.gapX}px`,
-              ['--box-gap-y' as never]: `${layout.gapY}px`,
-              ['--box-cols' as never]: String(layout.cols),
-              ['--box-media-scale' as never]: String(effectiveBoxMediaScale),
-              ['--box-compact-media-scale' as never]: String(effectiveBoxCompactMediaScale),
-            }}
-            aria-label={`Mint preview: ${quantityLabel}`}
-          >
-            {Array.from({ length: previewQuantity }, (_, idx) => (
-              hasMintBoxVideoSources ? (
-                <div key={idx} className="mint-panel__box mint-panel__box--media mint-panel__box-stack">
-                  <MintPanelBoxVideo
-                    playIfActive={playMintBoxVideoIfActive}
-                    registerVideo={registerMintBoxVideo}
-                    sources={mintBoxVideoSources}
-                  />
-                  {mintBoxVideoFallbackImageSrcs.map((src, fallbackIdx) => (
-                    <img
-                      key={src}
-                      className="mint-panel__box"
-                      src={src}
-                      alt=""
-                      aria-hidden="true"
-                      draggable={false}
-                      hidden={fallbackIdx > 0}
-                      loading="eager"
-                      data-mint-media-fallback="true"
-                      onDragStart={(evt) => evt.preventDefault()}
-                      onLoad={(evt) => hideLoadedImageFallbacks(evt.currentTarget)}
-                      onError={(evt) => hideImageShowFallback(evt.currentTarget)}
-                    />
-                  ))}
-                  <div
-                    className="mint-panel__box mint-panel__box--fallback"
-                    aria-hidden="true"
-                    data-mint-media-fallback="true"
-                  />
-                </div>
-              ) : mintBoxImageSrc ? (
-                <div key={idx} className="mint-panel__box mint-panel__box-stack">
+        <div
+          className="mint-panel__boxes"
+          style={{
+            ['--box-width' as never]: `${layout.width}px`,
+            ['--box-height' as never]: `${layout.height}px`,
+            ['--box-gap-x' as never]: `${layout.gapX}px`,
+            ['--box-gap-y' as never]: `${layout.gapY}px`,
+            ['--box-cols' as never]: String(layout.cols),
+            ['--box-media-scale' as never]: String(effectiveBoxMediaScale),
+            ['--box-compact-media-scale' as never]: String(effectiveBoxCompactMediaScale),
+          }}
+          aria-label={`Mint preview: ${quantityLabel}`}
+        >
+          {Array.from({ length: previewQuantity }, (_, idx) => (
+            hasMintBoxVideoSources ? (
+              <div key={idx} className="mint-panel__box mint-panel__box--media mint-panel__box-stack">
+                <MintPanelBoxVideo
+                  playIfActive={playMintBoxVideoIfActive}
+                  registerVideo={registerMintBoxVideo}
+                  sources={mintBoxVideoSources}
+                />
+                {mintBoxVideoFallbackImageSrcs.map((src, fallbackIdx) => (
                   <img
+                    key={src}
                     className="mint-panel__box"
-                    src={mintBoxImageSrc}
+                    src={src}
                     alt=""
                     aria-hidden="true"
                     draggable={false}
+                    hidden={fallbackIdx > 0}
+                    loading="eager"
+                    data-mint-media-fallback="true"
                     onDragStart={(evt) => evt.preventDefault()}
                     onLoad={(evt) => hideLoadedImageFallbacks(evt.currentTarget)}
                     onError={(evt) => hideImageShowFallback(evt.currentTarget)}
                   />
-                  <div
-                    className="mint-panel__box mint-panel__box--fallback"
-                    aria-hidden="true"
-                    data-mint-media-fallback="true"
-                  />
-                </div>
-              ) : (
-                <div key={idx} className="mint-panel__box mint-panel__box--fallback" aria-hidden="true" />
-              )
-            ))}
-          </div>
-        )}
+                ))}
+                <div
+                  className="mint-panel__box mint-panel__box--fallback"
+                  aria-hidden="true"
+                  data-mint-media-fallback="true"
+                />
+              </div>
+            ) : mintBoxImageSrc ? (
+              <div key={idx} className="mint-panel__box mint-panel__box-stack">
+                <img
+                  className="mint-panel__box"
+                  src={mintBoxImageSrc}
+                  alt=""
+                  aria-hidden="true"
+                  draggable={false}
+                  onDragStart={(evt) => evt.preventDefault()}
+                  onLoad={(evt) => hideLoadedImageFallbacks(evt.currentTarget)}
+                  onError={(evt) => hideImageShowFallback(evt.currentTarget)}
+                />
+                <div
+                  className="mint-panel__box mint-panel__box--fallback"
+                  aria-hidden="true"
+                  data-mint-media-fallback="true"
+                />
+              </div>
+            ) : (
+              <div key={idx} className="mint-panel__box mint-panel__box--fallback" aria-hidden="true" />
+            )
+          ))}
+        </div>
       </div>
       {terminalState ? (
         <div className={terminalFooterClassName}>

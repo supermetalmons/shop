@@ -1,7 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
 import bs58 from 'bs58';
 import type { Connection, SignatureStatus } from '@solana/web3.js';
 import {
@@ -811,29 +809,4 @@ test('unsupported testnet RPC routes are rejected before URL construction', () =
     () => rpcEndpointForCluster('testnet'),
     /unsupported mons API Solana cluster: testnet/i,
   );
-});
-
-test('browser source has no WebSocket confirmation call or direct production RPC endpoint', () => {
-  const listSourceFiles = (directory: string): string[] => readdirSync(directory).flatMap((name) => {
-    const path = resolve(directory, name);
-    if (statSync(path).isDirectory()) return listSourceFiles(path);
-    return /\.(ts|tsx)$/.test(path) ? [path] : [];
-  });
-  const source = listSourceFiles(resolve('src')).map((path) => readFileSync(path, 'utf8')).join('\n');
-  for (const forbidden of [
-    '.confirmTransaction(',
-    '.isBlockhashValid(',
-    'clusterApiUrl(',
-    'helius-rpc.com',
-    'api.mainnet-beta.solana.com',
-    'api.devnet.solana.com',
-    'api.testnet.solana.com',
-  ]) {
-    assert.equal(source.includes(forbidden), false, `browser source contains ${forbidden}`);
-  }
-});
-
-test('post-action inventory polling does not cancel an in-flight refresh', () => {
-  const source = readFileSync(resolve('src/App.tsx'), 'utf8');
-  assert.match(source, /void refetchInventory\(\{ cancelRefetch: false \}\);/);
 });

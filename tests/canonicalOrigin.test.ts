@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { runBrowserBootstrap } from '../src/bootstrap.ts';
 import { canonicalProductionUrl } from '../src/lib/canonicalOrigin.ts';
 
 test('www production URLs redirect to the canonical origin without changing the route', () => {
@@ -12,11 +12,26 @@ test('www production URLs redirect to the canonical origin without changing the 
   assert.equal(canonicalProductionUrl('http://localhost:5173/card_nft_2'), null);
 });
 
-test('the canonical redirect happens before browser setup or React initialization', () => {
-  const source = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
-  const redirect = source.indexOf('window.location.replace(canonicalUrl)');
-  const browserSetup = source.indexOf('installMobileInteractionGuards()');
-  const appInitialization = source.indexOf('const queryClient = new QueryClient()');
-  assert.ok(redirect > 0 && browserSetup > redirect && appInitialization > browserSetup);
-  assert.match(source, /if \(!canonicalUrl\) \{\s*const queryClient = new QueryClient\(\)/);
+test('the canonical redirect prevents browser setup and app mounting', () => {
+  const calls: string[] = [];
+  const result = runBrowserBootstrap('https://mons.shop/card_nft_2', {
+    redirect: (url) => calls.push(`redirect:${url}`),
+    setup: () => calls.push('setup'),
+    mount: () => calls.push('mount'),
+  });
+
+  assert.equal(result, 'redirected');
+  assert.deepEqual(calls, ['redirect:https://mons.shop/card_nft_2']);
+});
+
+test('browser setup completes before mounting when no redirect is needed', () => {
+  const calls: string[] = [];
+  const result = runBrowserBootstrap(null, {
+    redirect: (url) => calls.push(`redirect:${url}`),
+    setup: () => calls.push('setup'),
+    mount: () => calls.push('mount'),
+  });
+
+  assert.equal(result, 'mounted');
+  assert.deepEqual(calls, ['setup', 'mount']);
 });

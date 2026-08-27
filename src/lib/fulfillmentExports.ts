@@ -14,7 +14,7 @@ import {
   isUsedReceiptClaimStatus,
 } from './fulfillmentCodes';
 import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './dropContent';
-import { isDirectDeliveryItemsPerBox } from './shipping';
+import { isDirectDeliveryItemsPerBox } from '../../shared/shipping.ts';
 import { findCountryByCode } from './countries';
 import {
   resolveFulfillmentDirectDeliveryBoxLabel,

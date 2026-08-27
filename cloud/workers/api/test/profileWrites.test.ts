@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1 } from './commerceD1Harness.ts';
+import {
+  createCommerceD1,
+  createCommerceD1Harness,
+  seedCommerceDocument,
+} from './commerceD1Harness.ts';
 import nacl from 'tweetnacl';
 import {
   FULFILLMENT_ORDER_ADDRESS_PATH,
@@ -12,9 +16,10 @@ import {
   FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
   PROFILE_ADDRESSES_PATH,
   handleProfileWriteRequest,
-  profileWriteTestHooks,
+  shipStationRateInputHash,
   type ProfileWritePath,
 } from '../src/profileWrites.ts';
+import { createProfileAddressId } from '../../../../shared/profileD1.ts';
 import {
   encryptAddressCipherText,
   decryptAddressCipherText,
@@ -24,11 +29,18 @@ import {
 import type { ProfileProviderFetch } from '../src/boundedResponse.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
-import { decodeFixtureFields } from './commerceD1Harness.ts';
+import { decodeLegacyFirestoreFixtureFields } from './commerceD1Harness.ts';
 import {
   CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeys,
+  isCommerceDeleteField,
+  isCommerceServerTimestamp,
+  isCommerceTimestamp,
   type CommerceDocumentKey,
   type CommerceDocumentRecord,
+  type CommerceUnitOfWork,
   type CommerceUpdateValue,
 } from '../src/commerceRepository.ts';
 
@@ -120,13 +132,13 @@ function setEncodedField(fields: Record<string, unknown>, fieldPath: string, val
   current[parts.at(-1)!] = encodedValue(value, fieldPath);
 }
 
-function fixtureRepository(providerFetch: ProfileProviderFetch) {
+function legacyFirestoreFixtureRepository(providerFetch: ProfileProviderFetch) {
   const load = async (key: CommerceDocumentKey): Promise<CommerceDocumentRecord | null> => {
     const response = await providerFetch(`${TEST_DOCUMENTS_URL}/${key.path}`, { method: 'GET' });
     if (response.status === 404) return null;
     if (!response.ok) throw new Error('Commerce fixture read failed');
     const payload = await response.json() as { fields?: unknown; updateTime?: unknown };
-    const data = payload.fields === undefined ? {} : decodeFixtureFields(payload.fields);
+    const data = payload.fields === undefined ? {} : decodeLegacyFirestoreFixtureFields(payload.fields);
     if (!data) throw new Error('Commerce fixture document is invalid');
     return {
       createTime: '',
@@ -157,17 +169,19 @@ function fixtureRepository(providerFetch: ProfileProviderFetch) {
         const fieldPaths: string[] = [];
         const updateTransforms: Array<Record<string, unknown>> = [];
         for (const [fieldPath, value] of Object.entries(values)) {
-          if (value && typeof value === 'object' && 'kind' in value) {
-            const operationValue = value as { kind?: unknown; amount?: unknown; value?: { seconds: number; nanos: number } };
-            if (operationValue.kind === 'server-timestamp') {
-              updateTransforms.push({ fieldPath, setToServerValue: 'REQUEST_TIME' });
-              continue;
-            } else if (operationValue.kind === 'timestamp' && operationValue.value) {
-              const timestamp = new Date(operationValue.value.seconds * 1000).toISOString().slice(0, 19);
-              setEncodedField(fields, fieldPath, `${timestamp}.${String(operationValue.value.nanos).padStart(9, '0')}Z`);
-              const target = fields[fieldPath] as { stringValue?: unknown } | undefined;
-              if (target?.stringValue) fields[fieldPath] = { timestampValue: target.stringValue };
-            }
+          if (isCommerceServerTimestamp(value)) {
+            updateTransforms.push({ fieldPath, setToServerValue: 'REQUEST_TIME' });
+            continue;
+          }
+          if (isCommerceTimestamp(value)) {
+            const timestamp = new Date(value.value.seconds * 1000).toISOString().slice(0, 19);
+            setEncodedField(fields, fieldPath, `${timestamp}.${String(value.value.nanos).padStart(9, '0')}Z`);
+            const target = fields[fieldPath] as { stringValue?: unknown } | undefined;
+            if (target?.stringValue) fields[fieldPath] = { timestampValue: target.stringValue };
+            fieldPaths.push(fieldPath);
+            continue;
+          }
+          if (isCommerceDeleteField(value)) {
             fieldPaths.push(fieldPath);
             continue;
           }
@@ -220,13 +234,14 @@ function request(path: ProfileWritePath, body: unknown): Request {
   });
 }
 
-function dependencies(
+function profileWriteDependencies(
   providerFetch: ProfileProviderFetch,
+  createCommerceRepository: NonNullable<Parameters<typeof handleProfileWriteRequest>[3]>['createCommerceRepository'],
   overrides: Partial<Parameters<typeof handleProfileWriteRequest>[3]> = {},
 ): Parameters<typeof handleProfileWriteRequest>[3] {
   return {
     autoId: () => ADDRESS_ID,
-    createCommerceRepository: () => fixtureRepository(providerFetch) as never,
+    createCommerceRepository,
     createNotificationJobId: () => NOTIFICATION_JOB_ID,
     error: () => undefined,
     log: () => undefined,
@@ -246,6 +261,28 @@ function dependencies(
     warn: () => undefined,
     ...overrides,
   };
+}
+
+function legacyFirestoreDependencies(
+  providerFetch: ProfileProviderFetch,
+  overrides: Partial<Parameters<typeof handleProfileWriteRequest>[3]> = {},
+): Parameters<typeof handleProfileWriteRequest>[3] {
+  return profileWriteDependencies(
+    providerFetch,
+    () => legacyFirestoreFixtureRepository(providerFetch) as never,
+    overrides,
+  );
+}
+
+function d1Dependencies(
+  providerFetch: ProfileProviderFetch,
+  overrides: Partial<Parameters<typeof handleProfileWriteRequest>[3]> = {},
+): Parameters<typeof handleProfileWriteRequest>[3] {
+  return profileWriteDependencies(
+    providerFetch,
+    (database) => new D1CommerceRepository(database),
+    overrides,
+  );
 }
 
 const env = { COMMERCE_DB: createCommerceD1() };
@@ -326,7 +363,7 @@ test('address route authenticates and atomically persists the exact D1 profile a
     }),
     env,
     PROFILE_ADDRESSES_PATH,
-    dependencies(providerFetch, {
+    d1Dependencies(providerFetch, {
       autoId: () => assert.fail('client-supplied address id used the server generator'),
       saveProfileAddress: async (_db, address) => {
         persisted = address;
@@ -381,7 +418,7 @@ test('address route maps D1 failures to a generic unavailable response with one 
     }),
     env,
     PROFILE_ADDRESSES_PATH,
-    dependencies(providerFetch, {
+    d1Dependencies(providerFetch, {
       autoId: () => {
         autoIds += 1;
         return ADDRESS_ID;
@@ -410,7 +447,7 @@ test('address route uses D1 wallet sessions without requesting Commerce authSess
     }),
     { ...env, OPS_DB: {} as D1Database },
     PROFILE_ADDRESSES_PATH,
-    dependencies(async () => {
+    d1Dependencies(async () => {
       providerCalls += 1;
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
@@ -434,7 +471,7 @@ test('address route applies the request deadline to D1 persistence', async () =>
     }),
     env,
     PROFILE_ADDRESSES_PATH,
-    dependencies(providerFetch, {
+    d1Dependencies(providerFetch, {
       timeoutMs: 5,
       saveProfileAddress: async (_db, _address, signal) => new Promise((_resolve, reject) => {
         const abort = () => reject(signal.reason);
@@ -447,7 +484,7 @@ test('address route applies the request deadline to D1 persistence', async () =>
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
 });
 
-test('status route preserves, replaces, and deletes tracking fields with exact update masks', async () => {
+test('legacy Firestore fixtures preserve status update-mask compatibility', async () => {
   const cases = [
     {
       body: { dropId: 'card_nft_2', deliveryId: 7, status: 'Preparing' },
@@ -520,7 +557,7 @@ test('status route preserves, replaces, and deletes tracking fields with exact u
       request(FULFILLMENT_ORDER_STATUS_PATH, entry.body),
       env,
       FULFILLMENT_ORDER_STATUS_PATH,
-      dependencies(providerFetch),
+      legacyFirestoreDependencies(providerFetch),
     );
     assert.equal(result.response.status, 200);
     assert.deepEqual(await result.response.json(), entry.expectedResponse);
@@ -534,6 +571,210 @@ test('status route preserves, replaces, and deletes tracking fields with exact u
       currentDocument: { updateTime: '2026-08-18T12:00:00.000000Z' },
     });
   }
+});
+
+test('legacy Firestore fixture repository preserves mutation-like JSON values', async () => {
+  let commit: { writes: Array<Record<string, unknown>> } | undefined;
+  const repository = legacyFirestoreFixtureRepository(async (input, init) => {
+    const url = String(input);
+    if (url.endsWith('/drops/card_nft_2/deliveryOrders/7')) {
+      return Response.json({ fields: {}, updateTime: '2026-08-18T12:00:00.000000Z' });
+    }
+    if (url.endsWith('/documents:commit')) {
+      commit = JSON.parse(String(init?.body));
+      return Response.json({});
+    }
+    return assert.fail(`Unexpected fixture request: ${url}`);
+  });
+  const key = commerceKeys.deliveryOrder('card_nft_2', '7');
+  await repository.run(NOW_MS, async (unit) => {
+    const transaction = unit as {
+      get(key: CommerceDocumentKey): Promise<CommerceDocumentRecord | null>;
+      update(key: CommerceDocumentKey, values: Record<string, CommerceUpdateValue>): Promise<void>;
+    };
+    await transaction.get(key);
+    await transaction.update(key, {
+      payload: { kind: 'delete-field', label: 'kept' },
+    });
+  });
+  assert.deepEqual(
+    ((commit?.writes[0] as { update?: { fields?: Record<string, unknown> } })?.update?.fields || {}).payload,
+    {
+      mapValue: {
+        fields: {
+          kind: { stringValue: 'delete-field' },
+          label: { stringValue: 'kept' },
+        },
+      },
+    },
+  );
+});
+
+test('status route persists its behavior through the current D1 repository', async () => {
+  const harness = createCommerceD1Harness();
+  const key = commerceKeys.deliveryOrder('card_nft_2', '7');
+  seedCommerceDocument(harness, {
+    key,
+    data: {
+      deliveryId: 7,
+      fulfillmentTrackingCode: ' https://tracking.example/old ',
+      items: [{ kind: 'dude', refId: 1 }],
+      owner: OWNER,
+      shipstation: {
+        labelPurchase: { status: 'idle' },
+        rateQuotes: [{ rateId: 'rate-1' }],
+      },
+      status: 'ready_to_ship',
+    },
+  });
+  const repository = new D1CommerceRepository(harness.db);
+  let mutationAttempts = 0;
+  const result = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      status: 'Preparing',
+    }),
+    { COMMERCE_DB: harness.db },
+    FULFILLMENT_ORDER_STATUS_PATH,
+    d1Dependencies(async () => assert.fail('D1 status update reached a retired provider'), {
+      createCommerceRepository: () => ({
+        get: (documentKey) => repository.get(documentKey),
+        run: async <T>(nowMs: number, operation: (unit: CommerceUnitOfWork) => Promise<T>) => {
+          mutationAttempts += 1;
+          if (mutationAttempts === 1) throw new CommerceWriteConflict();
+          return repository.run(nowMs, operation);
+        },
+      }),
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), {
+    deliveryId: 7,
+    fulfillmentStatus: 'Preparing',
+    fulfillmentTrackingCode: 'https://tracking.example/old',
+  });
+  assert.equal(mutationAttempts, 2);
+  const stored = await repository.get(key);
+  assert.equal(stored?.data.fulfillmentStatus, 'Preparing');
+  assert.equal(stored?.data.fulfillmentUpdatedAt, NOW_MS);
+  assert.equal(stored?.data.fulfillmentUpdatedBy, OWNER);
+  assert.deepEqual(stored?.data.shipstation, {
+    labelPurchase: { status: 'idle' },
+    rateQuotes: [{ rateId: 'rate-1' }],
+  });
+
+  const cleared = await handleProfileWriteRequest(
+    request(FULFILLMENT_ORDER_STATUS_PATH, {
+      dropId: 'card_nft_2',
+      deliveryId: 7,
+      status: '',
+    }),
+    { COMMERCE_DB: harness.db },
+    FULFILLMENT_ORDER_STATUS_PATH,
+    d1Dependencies(async () => assert.fail('D1 status update reached a retired provider'), {
+      createCommerceRepository: () => repository,
+    }),
+  );
+  assert.equal(cleared.response.status, 200);
+  assert.deepEqual(await cleared.response.json(), {
+    deliveryId: 7,
+    fulfillmentStatus: '',
+    fulfillmentTrackingCode: 'https://tracking.example/old',
+  });
+  const clearedRecord = await repository.get(key);
+  assert.equal(Object.hasOwn(clearedRecord?.data || {}, 'fulfillmentStatus'), false);
+  assert.deepEqual(clearedRecord?.data.shipstation, stored?.data.shipstation);
+});
+
+test('profile-write D1 mutation matrix preserves nested shipment, rates, label, and recovery state', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.deliveryOrder('card_nft_2', '7');
+  seedCommerceDocument(harness, {
+    key,
+    data: {
+      deliveryId: 7,
+      fulfillmentTrackingCode: 'tracking-old',
+      owner: OWNER,
+      shipstation: {
+        claimId: 'shipment-claim',
+        claimedAt: 1,
+        customState: { preserved: true },
+        label: { labelId: 'label-old', status: 'active' },
+        labelPurchase: { requestId: 'purchase-one', status: 'purchased' },
+        rateQuotes: [{ rateId: 'rate-old' }],
+        rateRequest: { requestHash: 'request-old' },
+        ratesClaimId: 'rates-claim',
+        ratesClaimedAt: 2,
+        shipmentId: 'shipment-old',
+      },
+      status: 'ready_to_ship',
+    },
+  });
+  const update = (
+    nowMs: number,
+    values: Record<string, CommerceUpdateValue>,
+  ) => repository.run(nowMs, async (unit) => unit.update(key, values));
+
+  await update(NOW_MS, {
+    'shipstation.claimId': commerceFieldValue.delete(),
+    'shipstation.claimedAt': commerceFieldValue.serverTimestamp(),
+    'shipstation.shipmentId': 'shipment-new',
+  });
+  await update(NOW_MS + 1, {
+    'shipstation.rateQuotes': [{
+      rateId: 'rate-new',
+      shipmentId: 'shipment-new',
+      totalAmount: { currency: 'usd', amount: 10 },
+    }],
+    'shipstation.ratesClaimId': commerceFieldValue.delete(),
+    'shipstation.ratesClaimedAt': commerceFieldValue.delete(),
+    'shipstation.ratesUpdatedAt': commerceFieldValue.serverTimestamp(),
+  });
+  await update(NOW_MS + 2, {
+    fulfillmentTrackingCode: 'tracking-new',
+    'shipstation.label': { labelId: 'label-new', status: 'active' },
+    'shipstation.labelPurchase': { requestId: 'purchase-two', status: 'purchased' },
+  });
+  await update(NOW_MS + 3, {
+    fulfillmentTrackingCode: commerceFieldValue.delete(),
+    'shipstation.label': { labelId: 'label-new', status: 'voided' },
+  });
+  await update(NOW_MS + 4, {
+    'shipstation.lastErrorAt': commerceFieldValue.serverTimestamp(),
+    'shipstation.rateRequest': commerceFieldValue.delete(),
+  });
+
+  const stored = await repository.get(key);
+  assert.equal(Object.hasOwn(stored?.data || {}, 'fulfillmentTrackingCode'), false);
+  assert.deepEqual(stored?.data.shipstation, {
+    claimedAt: NOW_MS,
+    customState: { preserved: true },
+    label: { labelId: 'label-new', status: 'voided' },
+    labelPurchase: { requestId: 'purchase-two', status: 'purchased' },
+    lastErrorAt: NOW_MS + 4,
+    rateQuotes: [{
+      rateId: 'rate-new',
+      shipmentId: 'shipment-new',
+      totalAmount: { currency: 'usd', amount: 10 },
+    }],
+    ratesUpdatedAt: NOW_MS + 1,
+    shipmentId: 'shipment-new',
+  });
+
+  const stale = await repository.begin(NOW_MS + 5);
+  await stale.get(key);
+  await stale.update(key, { 'shipstation.lastError': 'stale' });
+  await update(NOW_MS + 6, { 'shipstation.lastError': 'fresh' });
+  await assert.rejects(
+    stale.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+  assert.equal(
+    ((await repository.get(key))?.data.shipstation as Record<string, unknown>).lastError,
+    'fresh',
+  );
 });
 
 test('status route atomically marks, queues, and finalizes the first shipped email', async () => {
@@ -579,7 +820,7 @@ test('status route atomically marks, queues, and finalizes the first shipped ema
       }),
     },
     FULFILLMENT_ORDER_STATUS_PATH,
-    dependencies(providerFetch, {
+    legacyFirestoreDependencies(providerFetch, {
       error: (entry) => logs.push(entry),
       log: (entry) => logs.push(entry),
       warn: (entry) => logs.push(entry),
@@ -672,7 +913,7 @@ test('status route leaves a pending marker and returns 503 when Queue publicatio
       }),
     },
     FULFILLMENT_ORDER_STATUS_PATH,
-    dependencies(providerFetch, { error: (entry) => errors.push(entry) }),
+    legacyFirestoreDependencies(providerFetch, { error: (entry) => errors.push(entry) }),
   );
   assert.equal(result.response.status, 503);
   assert.deepEqual(await result.response.json(), {
@@ -732,7 +973,7 @@ test('status route retries a Commerce conflict before publishing one Queue job',
       }),
     },
     FULFILLMENT_ORDER_STATUS_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.equal(commits, 3);
@@ -776,7 +1017,7 @@ test('status route retries a pending shipped notification and skips a queued one
         }),
       },
       FULFILLMENT_ORDER_STATUS_PATH,
-      dependencies(providerFetch),
+      legacyFirestoreDependencies(providerFetch),
     );
     assert.equal(result.response.status, 200);
     assert.equal(queued.length, expectedQueueCount);
@@ -827,7 +1068,7 @@ test('status route explicitly replays a queued shipped email with a fresh idempo
       }),
     },
     FULFILLMENT_ORDER_STATUS_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.equal(queued.length, 1);
@@ -873,7 +1114,7 @@ test('status route clears a pending marker when shipment is reversed', async () 
     }),
     env,
     FULFILLMENT_ORDER_STATUS_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   const write = commit?.writes[0];
@@ -932,7 +1173,7 @@ test('status route returns success when only queued-marker finalization fails', 
       }),
     },
     FULFILLMENT_ORDER_STATUS_PATH,
-    dependencies(providerFetch, { error: (entry) => errors.push(entry) }),
+    legacyFirestoreDependencies(providerFetch, { error: (entry) => errors.push(entry) }),
   );
   assert.equal(result.response.status, 200);
   assert.equal(queued.length, 1);
@@ -966,7 +1207,7 @@ test('fulfillment address route encrypts the address and conditionally clears st
     request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full }),
     fulfillmentEnv,
     FULFILLMENT_ORDER_ADDRESS_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   const payload = await result.response.json() as {
@@ -1038,7 +1279,7 @@ test('fulfillment address route retries the full read and validation after a Com
     }),
     fulfillmentEnv,
     FULFILLMENT_ORDER_ADDRESS_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.equal(reads, 2);
@@ -1056,7 +1297,7 @@ test('fulfillment address route preserves authorization and order-state guards',
     request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }),
     fulfillmentEnv,
     FULFILLMENT_ORDER_ADDRESS_PATH,
-    dependencies(async () => {
+    legacyFirestoreDependencies(async () => {
       providerCalls += 1;
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
@@ -1083,7 +1324,7 @@ test('fulfillment address route preserves authorization and order-state guards',
       request(FULFILLMENT_ORDER_ADDRESS_PATH, { dropId: 'card_nft_2', deliveryId: 7, full: 'address' }),
       fulfillmentEnv,
       FULFILLMENT_ORDER_ADDRESS_PATH,
-      dependencies(async (input) => {
+      legacyFirestoreDependencies(async (input) => {
         const url = new URL(String(input));
         if (url.pathname.endsWith('/deliveryOrders/7')) {
           return Response.json(orderDocument(orderFields));
@@ -1103,7 +1344,7 @@ test('ShipStation shipment route returns an existing Commerce shipment without c
     request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    dependencies(async (input) => {
+    legacyFirestoreDependencies(async (input) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') {
         shipStationCalls += 1;
@@ -1140,7 +1381,7 @@ test('ShipStation shipment route never cleans up a claim it did not acquire', as
       request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-      dependencies(async (input) => {
+      legacyFirestoreDependencies(async (input) => {
         const url = new URL(String(input));
         if (url.hostname === 'api.shipstation.com') {
           shipStationCalls += 1;
@@ -1169,7 +1410,7 @@ test('ShipStation shipment route fails before claiming when provider configurati
       request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
       missingEnv,
       FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-      dependencies(async (input) => {
+      legacyFirestoreDependencies(async (input) => {
         const url = new URL(String(input));
         if (url.pathname.endsWith('/deliveryOrders/7')) orderReads += 1;
         if (url.pathname.endsWith('/documents:commit')) commits += 1;
@@ -1194,7 +1435,7 @@ test('ShipStation shipment route safely releases a claim after its commit respon
     request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    dependencies(async (input, init) => {
+    legacyFirestoreDependencies(async (input, init) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') {
         shipStationCalls += 1;
@@ -1300,7 +1541,7 @@ test('ShipStation shipment route claims, decrypts, creates, and conditionally pe
     }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), {
@@ -1411,7 +1652,7 @@ test('ShipStation shipment route raises an international default parcel above de
     }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual(createBody?.shipments[0].packages, [{
@@ -1443,7 +1684,7 @@ test('ShipStation shipment route retains its claim when final persistence confli
     request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    dependencies(async (input, init) => {
+    legacyFirestoreDependencies(async (input, init) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') {
         if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
@@ -1536,7 +1777,7 @@ test('ShipStation shipment route adopts an external-id match without creating a 
     }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), {
@@ -1589,7 +1830,7 @@ test('ShipStation shipment route retains only its own claim after an ambiguous c
       request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-      dependencies(providerFetch),
+      legacyFirestoreDependencies(providerFetch),
     );
     assert.equal(result.response.status, 409);
     const payload = await result.response.json() as { error: { code: string; message: string } };
@@ -1645,7 +1886,7 @@ test('ShipStation shipment route releases its claim after a definitive provider 
     request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 409);
   const payload = await result.response.json() as {
@@ -1737,7 +1978,7 @@ test('ShipStation shipment route releases a structured 5xx rejection and accepts
     request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, body),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
 
   const rejected = await run({ dropId: 'card_nft_2', deliveryId: 7 });
@@ -1796,7 +2037,7 @@ test('ShipStation shipment route preserves its sanitized provider error when cla
       request(FULFILLMENT_SHIPSTATION_SHIPMENT_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
-      dependencies(async (input, init) => {
+      legacyFirestoreDependencies(async (input, init) => {
         const url = new URL(String(input));
         if (url.hostname === 'api.shipstation.com') {
           if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
@@ -1894,7 +2135,7 @@ test('ShipStation label route refreshes and conditionally persists an active sto
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   const payload = await result.response.json() as {
@@ -1963,7 +2204,7 @@ test('ShipStation label route adopts a discovered label and resolves an uncertai
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(adopted.response.status, 200);
   assert.equal((await adopted.response.json() as { label: { labelId: string } }).label.labelId, 'adopted-label');
@@ -1975,7 +2216,7 @@ test('ShipStation label route adopts a discovered label and resolves an uncertai
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(unknown.response.status, 200);
   assert.deepEqual(await unknown.response.json(), {
@@ -2045,7 +2286,7 @@ test('ShipStation label adoption replaces stale metadata from the previous label
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual((await result.response.json() as { label: Record<string, unknown> }).label, {
@@ -2113,7 +2354,7 @@ test('ShipStation label route keeps a voided label terminal across stale provide
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.equal((await result.response.json() as { label: { status: string } }).label.status, 'voided');
@@ -2152,7 +2393,7 @@ test('ShipStation label route does not overwrite a label created during adoption
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 409);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
@@ -2188,7 +2429,7 @@ test('ShipStation label route rejects a label from another shipment before persi
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 409);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
@@ -2217,7 +2458,7 @@ test('ShipStation label route rejects a shipment change before transitioning pur
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 409);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
@@ -2236,7 +2477,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     { ...fulfillmentEnv, SHIPSTATION_API_KEY: '' },
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(commerceFetch),
+    legacyFirestoreDependencies(commerceFetch),
   );
   assert.equal(missing.response.status, 409);
   assert.equal((await missing.response.json() as { error: { code: string } }).error.code, 'failed-precondition');
@@ -2246,7 +2487,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(async (input) => {
+    legacyFirestoreDependencies(async (input) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') return Response.json({}, { status: 429 });
       return commerceFetch(input);
@@ -2259,7 +2500,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(async (input) => {
+    legacyFirestoreDependencies(async (input) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') {
         return new Response('{}', { headers: { 'Content-Length': String(300 * 1024) } });
@@ -2274,7 +2515,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(async (input) => {
+    legacyFirestoreDependencies(async (input) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') return Response.json({});
       return commerceFetch(input);
@@ -2288,7 +2529,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(async (input) => {
+    legacyFirestoreDependencies(async (input) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') return Response.json({ labels: [{}] });
       return commerceFetch(input);
@@ -2302,7 +2543,7 @@ test('ShipStation label route fails closed for missing configuration and oversiz
     request(FULFILLMENT_SHIPSTATION_LABEL_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PATH,
-    dependencies(async (input, init) => {
+    legacyFirestoreDependencies(async (input, init) => {
       const url = new URL(String(input));
       if (url.hostname !== 'api.shipstation.com') return commerceFetch(input);
       return new Promise<Response>((_resolve, reject) => {
@@ -2358,7 +2599,7 @@ test('ShipStation label void route persists the exact label and conditionally re
       request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-      dependencies(providerFetch),
+      legacyFirestoreDependencies(providerFetch),
     );
     return { result, putCalls, commit };
   };
@@ -2432,7 +2673,7 @@ test('ShipStation label void route is idempotent and rejects stale or ineligible
     request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
     activeEnv,
     FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
 
   const idempotent = await run();
@@ -2463,7 +2704,7 @@ test('ShipStation label void route maps definite rejection without leaking provi
     request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-    dependencies(async (input) => {
+    legacyFirestoreDependencies(async (input) => {
       const url = new URL(String(input));
       if (url.hostname === 'api.shipstation.com') {
         return Response.json({
@@ -2544,7 +2785,7 @@ test('ShipStation label void route reconciles an ambiguous provider result with 
     request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.equal((await result.response.json() as { label: { status: string } }).label.status, 'voided');
@@ -2564,7 +2805,7 @@ test('ShipStation label void route does not overwrite a replacement label after 
       request(FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH, LABEL_VOID_BODY),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-      dependencies(async (input) => {
+      legacyFirestoreDependencies(async (input) => {
         const url = new URL(String(input));
         if (url.hostname === 'api.shipstation.com') {
           return Response.json({ approved: true, message: 'Refund requested' });
@@ -2680,7 +2921,7 @@ test('ShipStation label purchase route claims, validates, purchases, and atomica
     request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), {
@@ -2756,7 +2997,7 @@ test('ShipStation label purchase route adopts an existing provider label without
     request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   const payload = await result.response.json() as {
@@ -2850,7 +3091,7 @@ test('ShipStation label purchase route records definite failures and unresolved 
       request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-      dependencies(providerFetch),
+      legacyFirestoreDependencies(providerFetch),
     );
     assert.equal(result.response.status, 409, mode);
     const payload = await result.response.json() as { error: { code: string; message: string } };
@@ -2942,7 +3183,7 @@ test('ShipStation label purchase stays unknown after a successful charge and rep
     request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    dependencies(providerFetch, { timeoutMs: 2_000 }),
+    legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
   );
   assert.equal(result.response.status, 409);
   const payload = await result.response.json() as { error: { code: string; message: string } };
@@ -3015,7 +3256,7 @@ test('ShipStation label purchase timeout uses a fresh cleanup signal and stores 
     request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    dependencies(providerFetch, { timeoutMs: 75 }),
+    legacyFirestoreDependencies(providerFetch, { timeoutMs: 75 }),
   );
   assert.equal(chargedPostStarted, true);
   assert.equal(chargedPostAborted, true);
@@ -3080,7 +3321,7 @@ test('ShipStation label purchase cleanup failure keeps the claim blocked and log
       request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-      dependencies(providerFetch, { timeoutMs: 2_000 }),
+      legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
     );
     assert.equal(result.response.status, 409);
     const payload = await result.response.json() as { error: { code: string; message: string } };
@@ -3163,7 +3404,7 @@ test('ShipStation label purchase route reconciles a label after an ambiguous cha
     request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   const payload = await result.response.json() as {
@@ -3227,7 +3468,7 @@ test('ShipStation label purchase route never charges after its Commerce claim is
     request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 409);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
@@ -3340,7 +3581,7 @@ test('ShipStation rates route refreshes a single package without replacing its S
     }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   const payload = await result.response.json() as {
@@ -3475,7 +3716,7 @@ test('ShipStation rates route preserves manual declarations, repairs zeroed pack
       request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_RATES_PATH,
-      dependencies(providerFetch),
+      legacyFirestoreDependencies(providerFetch),
     );
     assert.equal(result.response.status, 200);
     return shipmentUpdate;
@@ -3662,7 +3903,7 @@ test('ShipStation rates route rejects a parcel lighter than its declared product
     request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 409);
   assert.deepEqual(await result.response.json(), {
@@ -3703,7 +3944,7 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
       country_of_origin: 'US',
       sku: 'card-nft-2',
     };
-    const inputHash = await profileWriteTestHooks.shipStationRateInputHash({
+    const inputHash = await shipStationRateInputHash({
       ship_to: SHIP_TO,
       ship_from: SHIP_FROM,
       packages: [{
@@ -3819,7 +4060,7 @@ test('ShipStation rates route resumes and polls pending requests with exact dela
       request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_RATES_PATH,
-      dependencies(providerFetch, {
+      legacyFirestoreDependencies(providerFetch, {
         pauseForRatePoll: async (_signal, delayMs) => { delays.push(delayMs); },
       }),
     );
@@ -3917,7 +4158,7 @@ test('ShipStation rates route maps rate limits, timeouts, and oversized response
       request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_RATES_PATH,
-      dependencies(providerFetch, { ...(mode === 'timeout' ? { timeoutMs: 50 } : {}) }),
+      legacyFirestoreDependencies(providerFetch, { ...(mode === 'timeout' ? { timeoutMs: 50 } : {}) }),
     );
   };
 
@@ -3964,7 +4205,7 @@ test('ShipStation rates route rejects a fresh foreign claim before reading a mul
     request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 409);
   assert.equal(shipmentReads, 0);
@@ -4026,7 +4267,7 @@ test('ShipStation rates route rejects same-id label state changes', async () => 
     request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 409);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
@@ -4085,7 +4326,7 @@ test('ShipStation rates route stops when an updated shipment becomes multi-packa
     request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), {
@@ -4180,7 +4421,7 @@ test('ShipStation rates route rejects concurrent label, purchase, and claim chan
       request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
       fulfillmentEnv,
       FULFILLMENT_SHIPSTATION_RATES_PATH,
-      dependencies(providerFetch),
+      legacyFirestoreDependencies(providerFetch),
     );
     assert.equal(result.response.status, 409, race);
     assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted', race);
@@ -4240,7 +4481,7 @@ test('ShipStation rates route preserves purchase, package-count, and refresh-cla
     request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   const purchase = await invoke();
   assert.equal(purchase.response.status, 200);
@@ -4262,7 +4503,7 @@ test('ShipStation rates route preserves purchase, package-count, and refresh-cla
     request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     { ...fulfillmentEnv, SHIPSTATION_SHIP_FROM: '' },
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(missingOrigin.response.status, 409);
   assert.equal((await missingOrigin.response.json() as { error: { code: string } }).error.code, 'failed-precondition');
@@ -4319,7 +4560,7 @@ test('ShipStation rates route safely releases its own claim after an upstream fa
     request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 502);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'unavailable');
@@ -4390,7 +4631,7 @@ test('ShipStation rates route releases a claim whose successful commit response 
     request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch, { timeoutMs: 2_000 }),
+    legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
   );
   assert.equal(result.response.status, 409);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
@@ -4467,7 +4708,7 @@ test('ShipStation rates route releases a claim that becomes visible during clean
     request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch, { timeoutMs: 2_000 }),
+    legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
   );
   assert.equal(result.response.status, 502);
   assert.equal(cleanupReads, 2);
@@ -4533,7 +4774,7 @@ test('ShipStation rates route never releases a replacement claim', async () => {
     request(FULFILLMENT_SHIPSTATION_RATES_PATH, { dropId: 'card_nft_2', deliveryId: 7 }),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_RATES_PATH,
-    dependencies(providerFetch),
+    legacyFirestoreDependencies(providerFetch),
   );
   assert.equal(result.response.status, 502);
   assert.equal(commits.length, 1);
@@ -4557,7 +4798,7 @@ test('write routes reject invalid payloads, unauthorized wallets, and missing or
       request(PROFILE_ADDRESSES_PATH, body),
       env,
       PROFILE_ADDRESSES_PATH,
-      dependencies(neverFetch),
+      legacyFirestoreDependencies(neverFetch),
     );
     assert.equal(result.response.status, 400);
   }
@@ -4591,7 +4832,7 @@ test('write routes reject invalid payloads, unauthorized wallets, and missing or
       request(path, body),
       fulfillmentEnv,
       path,
-      dependencies(neverFetch),
+      legacyFirestoreDependencies(neverFetch),
     );
     assert.equal(result.response.status, 400);
   }
@@ -4601,7 +4842,7 @@ test('write routes reject invalid payloads, unauthorized wallets, and missing or
     request(PROFILE_ADDRESSES_PATH, { encrypted: 'cipher', country: 'US', hint: 'hint' }),
     env,
     PROFILE_ADDRESSES_PATH,
-    dependencies(neverFetch, {
+    legacyFirestoreDependencies(neverFetch, {
       verifyIdentity: async () => {
         throw new RequestIdentityError('invalid-token');
       },
@@ -4618,7 +4859,7 @@ test('write routes reject invalid payloads, unauthorized wallets, and missing or
     }),
     env,
     FULFILLMENT_ORDER_STATUS_PATH,
-    dependencies(neverFetch, {
+    legacyFirestoreDependencies(neverFetch, {
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     }),
   );
@@ -4628,7 +4869,7 @@ test('write routes reject invalid payloads, unauthorized wallets, and missing or
     request(PROFILE_ADDRESSES_PATH, { encrypted: 'cipher', country: 'US', hint: 'hint' }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_ADDRESSES_PATH,
-    dependencies(neverFetch),
+    legacyFirestoreDependencies(neverFetch),
   );
   assert.equal(retiredSecret.response.status, 200);
   assert.equal(upstreamCalls, 0);
@@ -4644,7 +4885,7 @@ test('write routes reject invalid payloads, unauthorized wallets, and missing or
     request(FULFILLMENT_ORDER_STATUS_PATH, { dropId: 'card_nft_2', deliveryId: 7, status: 'Preparing' }),
     env,
     FULFILLMENT_ORDER_STATUS_PATH,
-    dependencies(deniedFetch, {
+    legacyFirestoreDependencies(deniedFetch, {
       resolveD1AuthWalletBinding: async () => ({ wallet: OTHER, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OTHER }),
     }),
@@ -4661,7 +4902,7 @@ test('write routes reject invalid payloads, unauthorized wallets, and missing or
     request(FULFILLMENT_ORDER_STATUS_PATH, { dropId: 'card_nft_2', deliveryId: 7, status: 'Preparing' }),
     env,
     FULFILLMENT_ORDER_STATUS_PATH,
-    dependencies(missingOrderFetch),
+    legacyFirestoreDependencies(missingOrderFetch),
   );
   assert.equal(missingOrder.response.status, 404);
 });
@@ -4681,7 +4922,7 @@ test('writer failures stay generic and never expose request or credential materi
     }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_ADDRESSES_PATH,
-    dependencies(providerFetch, {
+    legacyFirestoreDependencies(providerFetch, {
       saveProfileAddress: async () => {
         throw new Error('private D1 writer-secret');
       },
@@ -4699,7 +4940,7 @@ test('writer failures stay generic and never expose request or credential materi
 });
 
 test('generated Commerce auto IDs are cryptographic-compatible document IDs', () => {
-  const ids = Array.from({ length: 100 }, () => profileWriteTestHooks.commerceAutoId());
+  const ids = Array.from({ length: 100 }, createProfileAddressId);
   assert.equal(new Set(ids).size, ids.length);
   assert.ok(ids.every((id) => /^[A-Za-z0-9]{20}$/.test(id)));
 });

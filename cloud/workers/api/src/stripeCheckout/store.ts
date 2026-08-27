@@ -43,21 +43,30 @@ export interface StripeCheckoutStore {
   runTransaction<T>(operation: (transaction: StripeCheckoutTransaction) => Promise<T>): Promise<T>;
 }
 
-export class StripeCheckoutServerTimestamp {
+export type StripeCheckoutServerTimestamp = Readonly<{ kind: 'server_timestamp' }>;
+export type StripeCheckoutDeleteField = Readonly<{ kind: 'delete_field' }>;
+export type StripeCheckoutIncrement = Readonly<{ kind: 'increment'; operand: number }>;
+export type StripeCheckoutTimestamp = Readonly<{
+  kind: 'timestamp';
+  milliseconds: number;
+  toMillis: () => number;
+}>;
+
+class StripeCheckoutServerTimestampValue {
   readonly kind = 'server_timestamp';
 }
 
-export class StripeCheckoutDeleteField {
+class StripeCheckoutDeleteFieldValue {
   readonly kind = 'delete_field';
 }
 
-export class StripeCheckoutIncrement {
+class StripeCheckoutIncrementValue {
   readonly kind = 'increment';
 
   constructor(readonly operand: number) {}
 }
 
-export class StripeCheckoutTimestamp {
+class StripeCheckoutTimestampValue {
   readonly kind = 'timestamp';
 
   constructor(readonly milliseconds: number) {}
@@ -68,11 +77,13 @@ export class StripeCheckoutTimestamp {
 }
 
 export const stripeCheckoutFieldValue = Object.freeze({
-  delete: (): StripeCheckoutDeleteField => new StripeCheckoutDeleteField(),
-  increment: (operand: number): StripeCheckoutIncrement => new StripeCheckoutIncrement(operand),
-  serverTimestamp: (): StripeCheckoutServerTimestamp => new StripeCheckoutServerTimestamp(),
+  delete: (): StripeCheckoutDeleteField => Object.freeze(new StripeCheckoutDeleteFieldValue()),
+  increment: (operand: number): StripeCheckoutIncrement =>
+    Object.freeze(new StripeCheckoutIncrementValue(operand)),
+  serverTimestamp: (): StripeCheckoutServerTimestamp =>
+    Object.freeze(new StripeCheckoutServerTimestampValue()),
   timestampFromMillis: (milliseconds: number): StripeCheckoutTimestamp =>
-    new StripeCheckoutTimestamp(milliseconds),
+    Object.freeze(new StripeCheckoutTimestampValue(milliseconds)),
 });
 
 const TRANSACTION_ATTEMPTS = 5;
@@ -123,15 +134,18 @@ function jsonValue(value: unknown): CommerceJsonValue {
 }
 
 function updateValue(value: unknown): CommerceUpdateValue {
-  if (value instanceof StripeCheckoutServerTimestamp) return commerceFieldValue.serverTimestamp();
-  if (value instanceof StripeCheckoutDeleteField) return commerceFieldValue.delete();
-  if (value instanceof StripeCheckoutIncrement) return commerceFieldValue.increment(value.operand);
-  if (value instanceof StripeCheckoutTimestamp) {
+  if (value instanceof StripeCheckoutServerTimestampValue) return commerceFieldValue.serverTimestamp();
+  if (value instanceof StripeCheckoutDeleteFieldValue) return commerceFieldValue.delete();
+  if (value instanceof StripeCheckoutIncrementValue) return commerceFieldValue.increment(value.operand);
+  if (value instanceof StripeCheckoutTimestampValue) {
     if (!Number.isSafeInteger(value.milliseconds) || value.milliseconds < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe checkout timestamp.');
     }
     const seconds = Math.floor(value.milliseconds / 1000);
-    return commerceFieldValue.timestamp(seconds, (value.milliseconds - seconds * 1000) * 1_000_000);
+    return commerceFieldValue.timestamp(
+      seconds,
+      (value.milliseconds - seconds * 1000) * 1_000_000,
+    );
   }
   return jsonValue(value);
 }

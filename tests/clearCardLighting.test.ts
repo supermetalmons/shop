@@ -4,7 +4,6 @@ import {
   createClearCardLightingPreset,
   DEFAULT_CLEAR_CARD_LIGHTING_PRESET_ID,
 } from '../src/clearCardLighting.ts';
-import { clearCardDropPreviewLightingPresetId } from '../src/components/ClearCardDropPreview.tsx';
 
 test('light storefront preset keeps the supplied white-background lighting values', () => {
   const config = createClearCardLightingPreset('dgpm-light-upcoming-white-bg');
@@ -81,12 +80,4 @@ test('final v4 duplicates final v3 with four physical lights disabled and is the
   assert.deepEqual(light, expectedLight);
   assert.deepEqual(dark, expectedDark);
   assert.deepEqual(createClearCardLightingPreset(), light);
-});
-
-test('MintPanel Clear Cards preview preserves its theme-specific lighting', () => {
-  assert.equal(clearCardDropPreviewLightingPresetId(true), 'light-upcoming');
-  assert.equal(
-    clearCardDropPreviewLightingPresetId(false),
-    'dgpm-light-upcoming-white-bg',
-  );
 });

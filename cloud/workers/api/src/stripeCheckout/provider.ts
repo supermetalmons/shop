@@ -1,5 +1,5 @@
-import type Stripe from 'stripe';
 import { StripeCheckoutFulfillmentError } from './errors.js';
+import type Stripe from 'stripe';
 
 const cachedStripeClientsByKey = new Map<string, Stripe>();
 let cachedStripeCtor: typeof import('stripe').default | null = null;

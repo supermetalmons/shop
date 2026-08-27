@@ -60,6 +60,7 @@ import {
   type DeploymentRegistryDrop,
   type PaymentRoutingConfig,
 } from '../shared/deploymentRegistry.ts';
+import type { DeploymentDropProjectionCore } from '../shared/deploymentProjection.ts';
 import {
   API_DROPS,
   getApiDrop,
@@ -100,15 +101,39 @@ const STRIPE_CHECKOUT_CORE_SOURCE_URL = new URL(
   '../shared/stripeCheckoutCore.ts',
   import.meta.url,
 );
-const FRONTEND_SOURCE_URL = new URL(
-  '../src/config/deployment.ts',
-  import.meta.url,
-);
-const API_SOURCE_URL = new URL(
-  '../cloud/workers/api/src/dropConfig.ts',
-  import.meta.url,
-);
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const COMMON_PROJECTION_FIELDS = [
+  'solanaCluster',
+  'dropId',
+  'dropFamily',
+  'collectionName',
+  'displayName',
+  'salesMode',
+  'receiptPoolId',
+  'metadataBase',
+  'metadataBaseAliases',
+  'metadataPathFormat',
+  'mintSelection',
+  'treasury',
+  'paymentRouting',
+  'priceSol',
+  'discountPriceSol',
+  'stripeCheckoutEnabled',
+  'stripeLiveUnitAmountCents',
+  'discountMintsPerWallet',
+  'discountMerkleRoot',
+  'maxSupply',
+  'receiptMaxId',
+  'itemsPerBox',
+  'maxPerTx',
+  'namePrefix',
+  'figureNamePrefix',
+  'symbol',
+  'boxMinterProgramId',
+  'boxMinterConfigPda',
+  'collectionMint',
+  'receiptsMerkleTree',
+] as const satisfies readonly (keyof DeploymentDropProjectionCore)[];
 
 test('deployment registry CLIs remain importable by raw Node strip-types execution', () => {
   const moduleUrls = [
@@ -398,6 +423,9 @@ test('one nonempty canonical registry owns both public projections', async () =>
     assert.equal(apiDrop.treasury, deploymentTreasuryAlias(canonical));
     assert.deepEqual(frontend.paymentRouting, canonical.paymentRouting);
     assert.deepEqual(apiDrop.paymentRouting, canonical.paymentRouting);
+    for (const field of COMMON_PROJECTION_FIELDS) {
+      assert.deepEqual(frontend[field], apiDrop[field], `${dropId}.${field}`);
+    }
     for (const field of [
       'solanaCluster',
       'dropFamily',
@@ -419,7 +447,6 @@ test('one nonempty canonical registry owns both public projections', async () =>
       'collectionMint',
       'receiptsMerkleTree',
     ] as const) {
-      assert.deepEqual(frontend[field], apiDrop[field], `${dropId}.${field}`);
       assert.deepEqual(frontend[field], canonical[field], `${dropId}.${field}`);
     }
     assert.equal('deliveryLookupTable' in frontend, false);
@@ -757,41 +784,6 @@ test('clear cards Tensor marketplace uses the drop slug URL', () => {
     )?.href,
     tensorHref,
   );
-});
-
-test('checked-in projection modules contain no registry rows or generated core templates', async () => {
-  const [canonicalSource, frontendSource, apiSource] = await Promise.all([
-    readFile(CANONICAL_SOURCE_URL, 'utf8'),
-    readFile(FRONTEND_SOURCE_URL, 'utf8'),
-    readFile(API_SOURCE_URL, 'utf8'),
-  ]);
-  for (const dropId of Object.keys(DEPLOYMENT_DROPS)) {
-    assert.match(canonicalSource, new RegExp(`\\b${dropId}\\b`));
-    const embeddedRow = new RegExp(
-      `dropId:\\s*["']${dropId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']`,
-    );
-    assert.doesNotMatch(frontendSource, embeddedRow);
-    assert.doesNotMatch(apiSource, embeddedRow);
-  }
-  assert.equal(
-    canonicalSource.match(/export const DEPLOYMENT_DROPS/g)?.length,
-    1,
-  );
-  const generatorSource = await readFile(
-    new URL('../scripts/shared/deploymentRegistry.ts', import.meta.url),
-    'utf8',
-  );
-  assert.doesNotMatch(generatorSource, /createFrontendDrop/);
-  assert.doesNotMatch(generatorSource, /createApiDrop/);
-  assert.doesNotMatch(
-    generatorSource,
-    /BEGIN AUTO-GENERATED FRONTEND DROP REGISTRY/,
-  );
-  assert.doesNotMatch(
-    generatorSource,
-    /BEGIN AUTO-GENERATED API DROP REGISTRY/,
-  );
-  assert.doesNotMatch(frontendSource, /FORCE_SOLD_OUT_DROP_OVERRIDES/);
 });
 
 test('canonical registry reader requires an existing file', async (t) => {

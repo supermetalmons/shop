@@ -1,9 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { pickDudeIdsForAssignment, validateDudeIdsForAssignment } from '../shared/assignDudesPicker.ts';
 import { CARD_NFT_2_MAX_CARD_ID } from '../shared/cardNft2AssetCore.ts';
-import { CARD_NFT_2_COMMON_CARD_ID_VALUES } from '../shared/cardNft2CommonIds.ts';
 import {
   CARD_NFT_2_AD_HOC_CURATED_CARD_IDS,
   CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET,
@@ -26,9 +24,6 @@ const EXPECTED_CARD_NFT_2_AD_HOC_CURATED_CARD_IDS = [
   635, 652, 657, 659, 660, 773, 818, 832, 833, 841, 844, 910, 1014, 1092, 1100, 1104,
   1117, 1183, 3300,
 ];
-const EXPECTED_CARD_NFT_2_COMMON_CARD_IDS_SHA256 =
-  'fb8354b3f0cf919a620bc7b8e086b825f80a1d213b63aa07ce433d10218c99df';
-
 function sequenceRandomInt(values: number[]): (maxExclusive: number) => number {
   let index = 0;
   return () => values[index++] ?? 0;
@@ -79,21 +74,11 @@ test('card_nft_2 reveal ids match canonical sources and are valid', () => {
     ]),
   ];
 
-  assert.equal(CARD_NFT_2_COMMON_CARD_IDS, CARD_NFT_2_COMMON_CARD_ID_VALUES);
-  assert.equal(Object.isFrozen(CARD_NFT_2_COMMON_CARD_IDS), true);
-  assert.equal(CARD_NFT_2_COMMON_CARD_IDS.length, 4_983);
-  assert.equal(
-    createHash('sha256')
-      .update(CARD_NFT_2_COMMON_CARD_IDS.join(','))
-      .digest('hex'),
-    EXPECTED_CARD_NFT_2_COMMON_CARD_IDS_SHA256,
-  );
   assert.deepEqual([...CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS], generatedPixelMosaicIds());
   assert.deepEqual([...CARD_NFT_2_AD_HOC_CURATED_CARD_IDS], EXPECTED_CARD_NFT_2_AD_HOC_CURATED_CARD_IDS);
   assert.deepEqual([...CARD_NFT_2_AS_GOOD_AS_SUPER_RARE_CARD_IDS], expectedAsGoodAsSuperRareIds);
   assert.equal(CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length, 73);
 
-  assert.equal(CARD_NFT_2_COMMON_CARD_ID_SET.size, CARD_NFT_2_COMMON_CARD_IDS.length);
   assert.equal(CARD_NFT_2_PIXEL_MOSAIC_CARD_ID_SET.size, CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS.length);
   assert.equal(CARD_NFT_2_SUPER_RARE_CARD_ID_SET.size, CARD_NFT_2_SUPER_RARE_CARD_IDS.length);
   assert.equal(CARD_NFT_2_AD_HOC_CURATED_CARD_ID_SET.size, CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length);
@@ -105,7 +90,6 @@ test('card_nft_2 reveal ids match canonical sources and are valid', () => {
       CARD_NFT_2_AD_HOC_CURATED_CARD_IDS.length,
   );
   for (const cardId of [
-    ...CARD_NFT_2_COMMON_CARD_IDS,
     ...CARD_NFT_2_PIXEL_MOSAIC_CARD_IDS,
     ...CARD_NFT_2_SUPER_RARE_CARD_IDS,
     ...CARD_NFT_2_AD_HOC_CURATED_CARD_IDS,

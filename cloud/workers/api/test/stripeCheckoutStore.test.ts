@@ -1,10 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CommerceWriteConflict } from '../src/commerceRepository.ts';
+import { CommerceWriteConflict, commerceKeys } from '../src/commerceRepository.ts';
 import {
-  StripeCheckoutDeleteField,
-  StripeCheckoutIncrement,
-  StripeCheckoutServerTimestamp,
   createStripeCheckoutStore,
   stripeCheckoutFieldValue,
 } from '../src/stripeCheckout/store.ts';
@@ -14,11 +11,11 @@ test('Stripe checkout D1 store applies fields, deletes, increments, and timestam
   const nowMs = 1_800_000_000_000;
   const harness = createCommerceD1Harness();
   seedCommerceDocument(harness, {
-    name: 'projects/mons-shop/databases/(default)/documents/drops/drop/stripeCheckouts/session',
-    fields: {
-      removed: { stringValue: 'old' },
-      processingAttemptCount: { integerValue: '2' },
-      status: { stringValue: 'pending' },
+    key: commerceKeys.stripeCheckout('drop', 'session'),
+    data: {
+      removed: 'old',
+      processingAttemptCount: 2,
+      status: 'pending',
     },
   });
   const store = createStripeCheckoutStore({
@@ -40,9 +37,44 @@ test('Stripe checkout D1 store applies fields, deletes, increments, and timestam
     status: 'processing',
     updatedAt: nowMs,
   });
-  assert.equal(stripeCheckoutFieldValue.serverTimestamp() instanceof StripeCheckoutServerTimestamp, true);
-  assert.equal(stripeCheckoutFieldValue.delete() instanceof StripeCheckoutDeleteField, true);
-  assert.equal(stripeCheckoutFieldValue.increment(1) instanceof StripeCheckoutIncrement, true);
+  const serverTimestamp = stripeCheckoutFieldValue.serverTimestamp();
+  const deleteField = stripeCheckoutFieldValue.delete();
+  const increment = stripeCheckoutFieldValue.increment(1);
+  const timestamp = stripeCheckoutFieldValue.timestampFromMillis(nowMs);
+  assert.equal(serverTimestamp.kind, 'server_timestamp');
+  assert.equal(deleteField.kind, 'delete_field');
+  assert.equal(increment.kind, 'increment');
+  assert.equal(increment.operand, 1);
+  assert.equal(timestamp.kind, 'timestamp');
+  assert.equal(timestamp.toMillis(), nowMs);
+  assert.equal(Object.isFrozen(serverTimestamp), true);
+  assert.equal(Object.isFrozen(deleteField), true);
+  assert.equal(Object.isFrozen(increment), true);
+  assert.equal(Object.isFrozen(timestamp), true);
+});
+
+test('Stripe checkout store preserves plain JSON with mutation-like kind fields', async () => {
+  const harness = createCommerceD1Harness();
+  seedCommerceDocument(harness, {
+    key: commerceKeys.stripeCheckout('drop', 'plain-json'),
+    data: { dropId: 'drop', sessionId: 'plain-json' },
+  });
+  const reference = createStripeCheckoutStore({ commerceDb: harness.db })
+    .doc('drops/drop/stripeCheckouts/plain-json');
+  const collisions = {
+    deleteField: { kind: 'delete_field' },
+    increment: { kind: 'increment', operand: 3 },
+    serverTimestamp: { kind: 'server_timestamp' },
+    timestamp: { kind: 'timestamp', milliseconds: 123 },
+  };
+
+  await reference.update(collisions);
+
+  assert.deepEqual((await reference.get()).data(), {
+    dropId: 'drop',
+    sessionId: 'plain-json',
+    ...collisions,
+  });
 });
 
 test('Stripe checkout D1 store distinguishes missing documents and rejects invalid paths', async () => {
@@ -57,9 +89,9 @@ test('Stripe checkout D1 store distinguishes missing documents and rejects inval
 test('Stripe checkout D1 transactions retry aborted commits with fresh reads', async () => {
   const harness = createCommerceD1Harness();
   seedCommerceDocument(harness, {
-    name: 'projects/mons-shop/databases/(default)/documents/drops/drop/stripeCheckouts/session',
+    key: commerceKeys.stripeCheckout('drop', 'session'),
+    data: { status: 'fulfillment_pending' },
     updateTime: '2026-08-23T00:00:00.000Z',
-    fields: { status: { stringValue: 'fulfillment_pending' } },
   });
   const store = createStripeCheckoutStore({ commerceDb: harness.db });
   const competingStore = createStripeCheckoutStore({ commerceDb: harness.db });
@@ -82,8 +114,8 @@ test('Stripe checkout D1 transactions retry aborted commits with fresh reads', a
 test('Stripe checkout D1 transactions surface create collisions without retrying', async () => {
   const harness = createCommerceD1Harness();
   seedCommerceDocument(harness, {
-    name: 'projects/mons-shop/databases/(default)/documents/drops/drop/deliveryOrders/1',
-    fields: { deliveryId: { integerValue: '1' } },
+    key: commerceKeys.deliveryOrder('drop', '1'),
+    data: { deliveryId: 1 },
   });
   const store = createStripeCheckoutStore({ commerceDb: harness.db });
   let attempts = 0;

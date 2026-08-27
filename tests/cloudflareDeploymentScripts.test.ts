@@ -27,7 +27,19 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   assert.equal(packageJson.devDependencies.wrangler, '4.120.0');
   assert.equal(
     packageJson.scripts['check:frontend'],
-    'npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm test && npm run build && npm run validate:browser-bundle',
+    'npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm run test:shop-api && npm run test:card-nft-2-common-ids && npm test && npm run build && npm run validate:browser-bundle',
+  );
+  assert.equal(
+    packageJson.scripts['test:shop-api'],
+    'node --import tsx --test tests/api/shopApiClient.test.ts',
+  );
+  assert.equal(
+    packageJson.scripts['test:card-nft-2-common-ids'],
+    'node --import tsx --test tests/api/cardNft2CommonIds.test.ts',
+  );
+  assert.equal(
+    packageJson.scripts['test:api'],
+    'node --import tsx --test cloud/workers/api/test/*.test.ts tests/api/*.test.ts',
   );
   assert.equal(
     packageJson.scripts['dry-run:frontend'],

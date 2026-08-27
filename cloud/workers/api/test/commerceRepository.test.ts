@@ -87,6 +87,25 @@ test('native writes persist canonical documents and lossless cursor timestamps',
   );
 });
 
+test('plain JSON objects with mutation-like kind fields remain document data', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.claimCode('PLAIN-JSON');
+  const collisions = {
+    arrayUnion: { kind: 'array-union', values: [1, 2] },
+    deleteField: { kind: 'delete-field' },
+    increment: { kind: 'increment', amount: 2 },
+    serverTimestamp: { kind: 'server-timestamp' },
+    timestamp: { kind: 'timestamp', value: { seconds: 1, nanos: 2 } },
+  };
+
+  await repository.run(10, async (unit) => {
+    await unit.create(key, collisions);
+  });
+
+  assert.deepEqual((await repository.get(key))?.data, collisions);
+});
+
 test('native cursors preserve nanosecond and document-path ordering', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);

@@ -5,9 +5,24 @@ import type { DecodedBoxMinterConfigData } from '../../../../shared/boxMinterCon
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { StripeCheckoutFulfillmentError } from '../src/stripeCheckout/errors.ts';
 import {
-  StripeCheckoutServerTimestamp,
-} from '../src/stripeCheckout/store.ts';
-import { stripeCheckoutFulfillmentTestHooks } from '../src/stripeCheckoutFulfillment.ts';
+  flowDependencies,
+  fulfillmentRuntime,
+  isMplCoreCollectionAccount,
+  lazyAddressEncryptor,
+  packStatusEventQuantity,
+  validateOnchainConfig,
+  workerFulfillmentCompletionFields,
+} from '../src/stripeCheckoutFulfillment.ts';
+
+const stripeCheckoutFulfillmentTestHooks = {
+  flowDependencies,
+  fulfillmentRuntime,
+  isMplCoreCollectionAccount,
+  lazyAddressEncryptor,
+  packStatusEventQuantity,
+  validateOnchainConfig,
+  workerFulfillmentCompletionFields,
+};
 
 function matchingConfig(): {
   decoded: DecodedBoxMinterConfigData;
@@ -242,5 +257,8 @@ test('Stripe fulfillment defers address encryption setup until the address is pe
 test('Stripe fulfillment provides Worker completion fields for the atomic fulfilled write', () => {
   const fields = stripeCheckoutFulfillmentTestHooks.workerFulfillmentCompletionFields();
   assert.equal(fields.fulfillmentCompletedBy, 'cloudflare_queue_v1');
-  assert.ok(fields.fulfillmentCompletedAt instanceof StripeCheckoutServerTimestamp);
+  assert.equal(
+    (fields.fulfillmentCompletedAt as { kind?: unknown }).kind,
+    'server_timestamp',
+  );
 });

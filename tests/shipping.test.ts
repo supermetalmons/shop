@@ -3,12 +3,9 @@ import assert from 'node:assert/strict';
 import {
   calculateDeliveryLamports,
   canDeliverItemKind,
+  countDeliveryFigures,
   isDirectDeliveryItemsPerBox,
   normalizeDeliveryUnitsPerBox,
-} from '../src/lib/shipping.ts';
-import {
-  countDeliveryFigures,
-  normalizeDeliveryUnitsPerBox as normalizeDeliveryUnitsPerBoxShared,
 } from '../shared/shipping.ts';
 
 const dude = { kind: 'dude' as const };
@@ -81,17 +78,17 @@ test('direct delivery, certificate counting, and invalid-input policies remain e
   assert.equal(isDirectDeliveryItemsPerBox(0.9), true);
 
   assert.equal(
-    Number.isNaN(normalizeDeliveryUnitsPerBoxShared(Number.NaN, 'arithmetic')),
+    Number.isNaN(normalizeDeliveryUnitsPerBox(Number.NaN, 'arithmetic')),
     true,
   );
   assert.equal(
-    normalizeDeliveryUnitsPerBoxShared(Number.POSITIVE_INFINITY, 'arithmetic'),
+    normalizeDeliveryUnitsPerBox(Number.POSITIVE_INFINITY, 'arithmetic'),
     Number.POSITIVE_INFINITY,
   );
   assert.equal(
-    normalizeDeliveryUnitsPerBoxShared(Number.NEGATIVE_INFINITY, 'arithmetic'),
+    normalizeDeliveryUnitsPerBox(Number.NEGATIVE_INFINITY, 'arithmetic'),
     1,
   );
-  assert.equal(normalizeDeliveryUnitsPerBoxShared(2.9, 'arithmetic'), 2);
-  assert.equal(normalizeDeliveryUnitsPerBoxShared(0, 'arithmetic'), 1);
+  assert.equal(normalizeDeliveryUnitsPerBox(2.9, 'arithmetic'), 2);
+  assert.equal(normalizeDeliveryUnitsPerBox(0, 'arithmetic'), 1);
 });

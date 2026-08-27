@@ -41,11 +41,6 @@ import {
   claimStripeReceipt,
   createStripeCheckoutSession,
   finalizeAdminIrlRedeem,
-  getAdminProfileView,
-  getAnonymousStripeDeliveryHistory,
-  getDropPackStatus,
-  listDeliveryOrderOwners,
-  packStatusDisplayLabelsForDropId,
   prepareAdminIrlRedeemTx,
   prepareReceiptTransferTx,
   recoverMyDeliveryOrders,
@@ -53,10 +48,19 @@ import {
   requestDeliveryTx,
   revealDudes,
   revealDudesSubmissionUnknownDetails,
-  saveEncryptedAddress,
-  supportsFrontendPackStatus,
   issueReceipts,
-} from './lib/api';
+} from './api/commerce';
+import {
+  getAdminProfileView,
+  getAnonymousStripeDeliveryHistory,
+  listDeliveryOrderOwners,
+  saveEncryptedAddress,
+} from './api/profile';
+import {
+  getDropPackStatus,
+  packStatusDisplayLabelsForDropId,
+  supportsFrontendPackStatus,
+} from './api/shop';
 import {
   canAdminIrlRedeemCardReceipt,
   canAdminIrlRedeemSelection,
@@ -239,12 +243,12 @@ import {
   type PendingSubmittedDeliveryTransaction,
   type PendingSubmittedTransaction,
 } from './lib/pendingPreparedTransactions';
-import { calculateDeliveryLamports, canDeliverItemKind, isDirectDeliveryItemsPerBox } from './lib/shipping';
+import { calculateDeliveryLamports, canDeliverItemKind, isDirectDeliveryItemsPerBox } from '../shared/shipping.ts';
 import {
   normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
   shouldDisplayFulfillmentTrackingCode,
-} from './lib/fulfillmentTracking';
+} from '../shared/fulfillmentTracking.ts';
 import { hasAlphabeticClaimCodeCharacters, isStripeReceiptClaimCode } from './lib/stripeReceiptClaims';
 import {
   STRIPE_TEST_UNIT_AMOUNT_CENTS_DEFAULT,
@@ -261,18 +265,50 @@ import {
   PreviewVideoSource,
   RecoverDeliveryOrdersArgs,
 } from './types';
-import { type FrontendDeploymentConfig, getFrontendDrop, isDropFamily, normalizeDropId, resolveDropAssetUrl } from './config/deployment';
+import {
+  type FrontendDeploymentConfig,
+  getFrontendDrop,
+  isDropFamily,
+  listFrontendDrops,
+  normalizeDropId,
+  resolveDropAssetUrl,
+} from './config/deployment';
 import {
   usesAssetGatedRevealFlow,
   usesClearCard3dRevealFlow,
   usesInteractiveCardPackRevealFlow,
-  type DropRevealMode,
   type DropRevealRenderer,
 } from './config/dropsExtraContent';
 import { getNormalizedPathname, navigate } from './navigation';
+import { WIP_ROUTES } from './routes';
+import {
+  DISCOUNT_USED_STORAGE_PREFIX,
+  discountUsedScope,
+  discountUsedVersion,
+  hiddenInventoryKey,
+  loadDiscountUsedCount,
+  loadHiddenAssets,
+  loadPendingReveals,
+  loadRecentReveals,
+  persistDiscountUsedCount,
+  persistHiddenAssets,
+  persistPendingReveals,
+  persistRecentReveals,
+  type LocalPendingReveal,
+} from './shop/persistedState';
+import { startPostActionInventoryPolling } from './shop/postActionPolling';
+import {
+  applyRevealRequestRetry,
+  requestRevealWithSubmissionRecovery,
+  resolveRevealOverlayPhaseAfterReveal,
+  type RevealOverlayPhase,
+} from './shop/reveal';
+import {
+  persistPreparedReservationOrThrow,
+  withBrowserLock,
+} from './shop/preparedSubmission';
 import {
   dropPath,
-  listFrontendDrops,
   resolveFrontendDropByPath,
   resolveUpcomingDropRouteByPath,
 } from './lib/dropConfig';
@@ -319,12 +355,6 @@ import {
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
 const BUILD_INFO = getBuildInfo();
-const ADMIN_MENU_WIP_PATHS: { path: string; dropId?: string }[] = [
-  { path: '/card_nft_2/wip', dropId: 'card_nft_2' },
-  { path: '/little_swag_boxes/wip', dropId: 'little_swag_boxes' },
-  { path: '/poncho_drifella/wip', dropId: 'poncho_drifella' },
-  { path: '/clear_cards/wip' },
-];
 const REVEAL_CLOSE_FALLBACK_MS = 380;
 const PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS = 10_000;
 const RECEIPT_STATUS_CHECK_TIMEOUT_MS = 12_000;
@@ -372,16 +402,6 @@ function createPendingPreparedOperationId(): string {
 }
 
 const STRIPE_CHECKOUT_HISTORY_POLL_WINDOW_MS = 2 * 60_000;
-
-async function withBrowserLock<T>(name: string, run: () => Promise<T>): Promise<T> {
-  if (typeof navigator === 'undefined' || typeof navigator.locks?.request !== 'function') {
-    throw new Error('This browser cannot safely coordinate wallet transactions. Update your browser and try again.');
-  }
-  return navigator.locks.request(name, { ifAvailable: true }, async (lock) => {
-    if (!lock) throw new Error('Another wallet transaction is already in progress. Wait for it to finish and try again.');
-    return run();
-  });
-}
 
 function anonymousStripeDeliveryHistoryQueryKey(authSubject: string | null, markerKey: string) {
   return ['anonymousStripeDeliveryHistory', authSubject, markerKey] as const;
@@ -447,151 +467,6 @@ function moveLittleSwagBoxesFamilyToEnd<T extends { dropId?: string }>(items: re
   return trailing.length ? [...leading, ...trailing] : [...leading];
 }
 
-function hiddenInventoryKey(wallet?: string) {
-  return wallet ? `monsHiddenAssets:${wallet}` : 'monsHiddenAssets:disconnected';
-}
-
-function loadHiddenAssets(wallet?: string): Set<string> {
-  if (typeof window === 'undefined' || !wallet) return new Set();
-  try {
-    const raw = window.localStorage?.getItem(hiddenInventoryKey(wallet));
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set();
-    return new Set(parsed.filter((v) => typeof v === 'string' && v));
-  } catch {
-    return new Set();
-  }
-}
-
-function persistHiddenAssets(wallet: string, ids: Set<string>) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage?.setItem(hiddenInventoryKey(wallet), JSON.stringify(Array.from(ids)));
-  } catch {}
-}
-
-function pendingRevealKey(wallet?: string) {
-  return wallet ? `monsPendingReveals:${wallet}` : 'monsPendingReveals:disconnected';
-}
-
-function loadPendingReveals(wallet?: string): LocalPendingReveal[] {
-  if (typeof window === 'undefined' || !wallet) return [];
-  try {
-    const raw = window.localStorage?.getItem(pendingRevealKey(wallet));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    const entries: LocalPendingReveal[] = [];
-    parsed.forEach((entry) => {
-      if (!entry || typeof entry !== 'object') return;
-      const id = typeof entry.id === 'string' ? entry.id : '';
-      const createdAt = typeof entry.createdAt === 'number' ? entry.createdAt : 0;
-      if (!id || !createdAt) return;
-      const dropId = typeof entry.dropId === 'string' ? entry.dropId : undefined;
-      const name = typeof entry.name === 'string' ? entry.name : undefined;
-      const image = typeof entry.image === 'string' ? entry.image : undefined;
-      const boxId = typeof entry.boxId === 'string' ? entry.boxId : undefined;
-      entries.push({ id, createdAt, dropId, name, image, boxId });
-    });
-    return entries;
-  } catch {
-    return [];
-  }
-}
-
-function persistPendingReveals(wallet: string, entries: LocalPendingReveal[]) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage?.setItem(pendingRevealKey(wallet), JSON.stringify(entries));
-  } catch {}
-}
-
-function recentRevealKey(wallet?: string) {
-  return wallet ? `monsRecentReveals:${wallet}` : 'monsRecentReveals:disconnected';
-}
-
-function loadRecentReveals(wallet?: string): string[] {
-  if (typeof window === 'undefined' || !wallet) return [];
-  try {
-    const raw = window.localStorage?.getItem(recentRevealKey(wallet));
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((id) => typeof id === 'string' && id);
-  } catch {
-    return [];
-  }
-}
-
-function persistRecentReveals(wallet: string, ids: string[]) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage?.setItem(recentRevealKey(wallet), JSON.stringify(ids));
-  } catch {}
-}
-
-const DISCOUNT_USED_STORAGE_PREFIX = 'monsDiscountUsed';
-function discountUsedVersion(
-  drop: Pick<FrontendDeploymentConfig, 'dropId' | 'boxMinterProgramId' | 'discountMerkleRoot' | 'discountMintsPerWallet'>,
-): string {
-  return `${String(drop.dropId || '').trim().toLowerCase()}:${drop.boxMinterProgramId}:${drop.discountMerkleRoot}:${drop.discountMintsPerWallet}`;
-}
-
-function discountUsedScope(drop: Pick<FrontendDeploymentConfig, 'dropId'>): string {
-  return `${DISCOUNT_USED_STORAGE_PREFIX}:${String(drop.dropId || '').trim().toLowerCase()}`;
-}
-
-function discountUsedKey(version: string, wallet?: string) {
-  return wallet
-    ? `${DISCOUNT_USED_STORAGE_PREFIX}:${version}:${wallet}`
-    : `${DISCOUNT_USED_STORAGE_PREFIX}:${version}:disconnected`;
-}
-
-function cleanupDiscountUsedKeys(scopePrefix: string, wallet: string, keepKey: string) {
-  if (typeof window === 'undefined') return;
-  try {
-    const keysToRemove: string[] = [];
-    const walletSuffix = `:${wallet}`;
-    for (let i = 0; i < window.localStorage.length; i += 1) {
-      const key = window.localStorage.key(i);
-      if (!key || !key.startsWith(`${scopePrefix}:`)) continue;
-      if (!key.endsWith(walletSuffix)) continue;
-      if (key !== keepKey) keysToRemove.push(key);
-    }
-    keysToRemove.forEach((key) => window.localStorage?.removeItem(key));
-  } catch {}
-}
-
-function parseDiscountUsedCount(raw: string | null | undefined): number {
-  const parsed = Math.floor(Number(raw));
-  if (!Number.isFinite(parsed) || parsed < 1) return 0;
-  return parsed;
-}
-
-function loadDiscountUsedCount(scopePrefix: string, version: string, wallet?: string): number {
-  if (typeof window === 'undefined' || !wallet) return 0;
-  const key = discountUsedKey(version, wallet);
-  cleanupDiscountUsedKeys(scopePrefix, wallet, key);
-  try {
-    return parseDiscountUsedCount(window.localStorage?.getItem(key));
-  } catch {
-    return 0;
-  }
-}
-
-function persistDiscountUsedCount(scopePrefix: string, version: string, wallet: string, usedCount: number) {
-  if (typeof window === 'undefined') return;
-  const key = discountUsedKey(version, wallet);
-  cleanupDiscountUsedKeys(scopePrefix, wallet, key);
-  try {
-    if (usedCount > 0) {
-      window.localStorage?.setItem(key, String(usedCount));
-    } else {
-      window.localStorage?.removeItem(key);
-    }
-  } catch {}
-}
 
 function formatOrderStatus(status: string): string {
   const normalized = String(status || '').replace(/_/g, ' ').trim();
@@ -813,17 +688,7 @@ const RECEIPT_TRANSFER_WALLET_CHANGED_MESSAGE =
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
-type RevealOverlayPhase = 'preparing' | 'ready' | 'revealed';
 type ImageViewerSize = 'receipt' | 'shipment' | 'shipment-figure';
-
-type LocalPendingReveal = {
-  id: string;
-  createdAt: number;
-  dropId?: string;
-  name?: string;
-  image?: string;
-  boxId?: string;
-};
 
 const EMPTY_LOCAL_MINTED_BOXES: readonly LocalMintedBox[] = [];
 
@@ -1119,26 +984,6 @@ function calcRevealTargetRectForRenderer(
   return calcRevealTargetRect(viewportWidth, viewportHeight, aspectRatio);
 }
 
-function resolveRevealOverlayPhaseAfterReveal({
-  currentPhase,
-  revealMode,
-  usesAssetGatedFlow,
-  frame,
-  mediaStart,
-  hasResults,
-}: {
-  currentPhase: RevealOverlayPhase;
-  revealMode: DropRevealMode;
-  usesAssetGatedFlow: boolean;
-  frame: number;
-  mediaStart: number;
-  hasResults: boolean;
-}): RevealOverlayPhase {
-  if (currentPhase === 'preparing') return currentPhase;
-  if (revealMode === 'static') return hasResults ? 'revealed' : 'ready';
-  if (usesAssetGatedFlow) return 'ready';
-  return frame >= mediaStart && hasResults ? 'revealed' : 'ready';
-}
 
 function cardNft2PackVideoSourcesForBrowser(): CardNft2PackVideoSources {
   if (typeof document === 'undefined') return CARD_NFT_2_PACK_VIDEO_SOURCES;
@@ -3894,17 +3739,10 @@ function App({
   useEffect(() => {
     if (!shouldPollInventory) return;
     if (typeof window === 'undefined') return;
-    let cancelled = false;
-    const tick = () => {
-      if (cancelled) return;
-      void refetchInventory({ cancelRefetch: false });
-    };
-    tick();
-    const interval = window.setInterval(tick, 3_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
+    return startPostActionInventoryPolling(refetchInventory, {
+      setInterval: (run, delayMs) => window.setInterval(run, delayMs),
+      clearInterval: (timer) => window.clearInterval(timer as number),
+    });
   }, [shouldPollInventory, refetchInventory]);
 
   useEffect(() => {
@@ -5153,33 +4991,20 @@ function App({
       const usesClearCard3dFlow = usesClearCard3dRevealFlow(revealContent.reveal.renderer);
       const usesAssetGatedFlow = usesAssetGatedRevealFlow(revealContent.reveal.renderer);
       if (!requestIsCurrent()) return 'resolved';
-      let resp: Awaited<ReturnType<typeof revealDudes>>;
-      try {
-        resp = await revealDudes(walletAddress, boxAssetId, revealDrop.dropId);
-      } catch (error) {
-        const recoveryDetails = revealDudesSubmissionUnknownDetails(error, revealDrop.dropId);
-        if (!recoveryDetails) throw error;
-        if (!requestIsCurrent()) return 'resolved';
-        let outcome: Awaited<ReturnType<typeof reconcileSubmittedTransaction>>;
-        try {
-          outcome = await reconcileSubmittedTransaction(
+      const revealResult = await requestRevealWithSubmissionRecovery({
+        request: () => revealDudes(walletAddress, boxAssetId, revealDrop.dropId),
+        recoveryDetails: (error) => revealDudesSubmissionUnknownDetails(error, revealDrop.dropId),
+        reconcile: (submission, options) =>
+          reconcileSubmittedTransaction(
             getDropConnection(revealDrop.dropId),
-            recoveryDetails.submission,
-            {
-              detectExpiry: false,
-              timeoutMs: 75_000,
-              signal: reconciliationController.signal,
-            },
-          );
-        } catch (recoveryError) {
-          if (!requestIsCurrent()) return 'resolved';
-          throw recoveryError;
-        }
-        if (!requestIsCurrent()) return 'resolved';
-        if (outcome !== 'confirmed') throw error;
-        resp = await revealDudes(walletAddress, boxAssetId, revealDrop.dropId);
-      }
-      if (!requestIsCurrent()) return 'resolved';
+            submission,
+            options,
+          ),
+        isCurrent: requestIsCurrent,
+        signal: reconciliationController.signal,
+      });
+      if (revealResult.status === 'stale') return 'resolved';
+      const resp = revealResult.response;
       const clearCardId = usesClearCard3dFlow
         ? clearCardModelIdFromRevealResult(resp?.dudeIds)
         : undefined;
@@ -5326,17 +5151,13 @@ function App({
       const requestSession = revealOverlaySessionRef.current;
       void (async () => {
         const status = await handleRevealDudes(boxAssetId, dropId);
-        if (status !== 'retry' || revealOverlaySessionRef.current !== requestSession) return;
-        setRevealOverlay((prev) => {
-          if (
-            !prev ||
-            prev.id !== boxAssetId ||
-            prev.dropId !== dropId ||
-            prev.phase !== 'ready' ||
-            prev.revealedIds?.length
-          ) return prev;
-          return { ...prev, hasRevealAttempted: false };
-        });
+        setRevealOverlay((current) => applyRevealRequestRetry(current, {
+          status,
+          requestSession,
+          currentSession: revealOverlaySessionRef.current,
+          boxAssetId,
+          dropId,
+        }));
       })();
     }
   };
@@ -6232,9 +6053,15 @@ function App({
             deliveryId: resp.deliveryId,
             itemIds: [...deliverableIds],
           };
-          if (!rememberPendingPreparedTransaction(activeDeliveryReservation)) {
+          try {
+            persistPreparedReservationOrThrow(
+              activeDeliveryReservation,
+              rememberPendingPreparedTransaction,
+              'Unable to save shipment reservation',
+            );
+          } catch (error) {
             activeDeliveryReservation = null;
-            throw new Error('Unable to save shipment reservation');
+            throw error;
           }
           pendingPreparedSubmissionKeysRef.current.add(deliveryWallet);
           try {
@@ -7229,9 +7056,15 @@ function App({
             certificates: [...resp.certificates],
             certificateId: resp.certificateId,
           };
-          if (!rememberPendingPreparedTransaction(activeClaimReservation)) {
+          try {
+            persistPreparedReservationOrThrow(
+              activeClaimReservation,
+              rememberPendingPreparedTransaction,
+              'Unable to save claim reservation',
+            );
+          } catch (error) {
             activeClaimReservation = null;
-            throw new Error('Unable to save claim reservation');
+            throw error;
           }
           pendingPreparedSubmissionKeysRef.current.add(claimWallet);
           try {
@@ -8263,7 +8096,7 @@ function App({
               {adminMenuSectionLabel('wip', wipPickerOpened)}
             </button>
             {wipPickerOpened
-              ? ADMIN_MENU_WIP_PATHS.map((entry) => (
+              ? WIP_ROUTES.map((entry) => (
                   <button
                     key={entry.path}
                     type="button"

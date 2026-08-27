@@ -19,6 +19,10 @@ import {
 } from '../../../../shared/stripeWebhook.ts';
 import { handleStripeWebhookRequest } from '../src/stripeWebhook.ts';
 import { createStripeCheckoutStore } from '../src/stripeCheckout/store.ts';
+import {
+  commerceKeys,
+  type CommerceDocumentData,
+} from '../src/commerceRepository.ts';
 
 const DEVNET_SECRET = 'whsec_devnet_test_secret';
 const MAINNET_SECRET = 'whsec_mainnet_test_secret';
@@ -140,30 +144,10 @@ async function signedRequest(
   });
 }
 
-function storedValue(value: unknown): Record<string, unknown> {
-  if (value === null) return { nullValue: null };
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'boolean') return { booleanValue: value };
-  if (typeof value === 'number') return { integerValue: String(value) };
-  if (Array.isArray(value)) return { arrayValue: { values: value.map(storedValue) } };
-  if (value && typeof value === 'object') {
-    return {
-      mapValue: {
-        fields: Object.fromEntries(
-          Object.entries(value).map(([key, entry]) => [key, storedValue(entry)]),
-        ),
-      },
-    };
-  }
-  throw new Error('unsupported test value');
-}
-
 function storedDocument(document: Record<string, unknown>, updateTime = '2026-08-20T10:00:00.000000Z') {
   return {
-    name: `projects/mons-shop/databases/(default)/documents/drops/${document.dropId}/stripeCheckouts/${document.sessionId}`,
-    fields: Object.fromEntries(
-      Object.entries(document).map(([key, value]) => [key, storedValue(value)]),
-    ),
+    key: commerceKeys.stripeCheckout(String(document.dropId), String(document.sessionId)),
+    data: document as CommerceDocumentData,
     updateTime,
   };
 }

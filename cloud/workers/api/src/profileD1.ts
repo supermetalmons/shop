@@ -58,7 +58,7 @@ function isRetryableD1Error(error: unknown): boolean {
   return RETRYABLE_D1_ERROR_PARTS.some((part) => text.includes(part));
 }
 
-async function runD1Write<T>(
+export async function runD1Write<T>(
   signal: AbortSignal | undefined,
   operation: () => Promise<T>,
 ): Promise<T> {
@@ -178,7 +178,3 @@ export async function ensureD1Profile(
     .bind(profile.wallet, profile.createdAtMs, profile.updatedAtMs)
     .run());
 }
-
-export const profileD1TestHooks = {
-  runD1Write,
-};

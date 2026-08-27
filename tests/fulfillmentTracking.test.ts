@@ -1,33 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  normalizeOptionalFulfillmentTrackingCode as normalizeClientTrackingCode,
+  normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
-  sanitizeFulfillmentTrackingCode as sanitizeClientTrackingCode,
+  sanitizeFulfillmentTrackingCode,
   shouldDisplayFulfillmentTrackingCode,
-} from '../src/lib/fulfillmentTracking.ts';
-import {
-  normalizeOptionalFulfillmentTrackingCode as normalizeSharedTrackingCode,
-  resolveFulfillmentTrackingHref as resolveSharedTrackingHref,
-  sanitizeFulfillmentTrackingCode as sanitizeSharedTrackingCode,
 } from '../shared/fulfillmentTracking.ts';
 
 test('fulfillment tracking code sanitizers trim outer whitespace only', () => {
   const trackingLink = 'https://carrier.example/track?id=AB 123&ref=CD';
-  assert.equal(sanitizeClientTrackingCode(`  ${trackingLink}\t\n`), trackingLink);
-  assert.equal(sanitizeSharedTrackingCode(`  ${trackingLink}\t\n`), trackingLink);
+  assert.equal(sanitizeFulfillmentTrackingCode(`  ${trackingLink}\t\n`), trackingLink);
 });
 
 test('fulfillment tracking code normalizers omit empty sanitized values', () => {
-  assert.equal(normalizeClientTrackingCode('   \t\n'), undefined);
-  assert.equal(normalizeSharedTrackingCode('   \t\n'), undefined);
+  assert.equal(normalizeOptionalFulfillmentTrackingCode('   \t\n'), undefined);
 });
 
 test('fulfillment tracking hrefs allow absolute https urls only', () => {
-  const resolvers = [
-    { name: 'client', resolve: resolveFulfillmentTrackingHref },
-    { name: 'shared', resolve: resolveSharedTrackingHref },
-  ];
   const cases: Array<{ name: string; value: unknown; expected: string | undefined }> = [
     {
       name: 'trimmed HTTPS URL',
@@ -51,10 +40,8 @@ test('fulfillment tracking hrefs allow absolute https urls only', () => {
     { name: 'non-string value', value: null, expected: undefined },
   ];
 
-  for (const resolver of resolvers) {
-    for (const entry of cases) {
-      assert.equal(resolver.resolve(entry.value), entry.expected, `${resolver.name}: ${entry.name}`);
-    }
+  for (const entry of cases) {
+    assert.equal(resolveFulfillmentTrackingHref(entry.value), entry.expected, entry.name);
   }
 });
 

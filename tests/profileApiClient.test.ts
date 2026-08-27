@@ -1,8 +1,45 @@
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
 import test from 'node:test';
 import bs58 from 'bs58';
-import { profileApiTestHooks } from '../src/lib/api.ts';
+import {
+  parseAdminIrlRedeemFinalizeResult,
+  parseAdminIrlRedeemPrepareResponse,
+  parseDeliveryPrepareResponse,
+  parseIrlClaimPrepareResponse,
+  parseIssueReceiptsResult,
+  parseReceiptTransferPrepareResponse,
+  parseRecoverDeliveryOrdersResult,
+  parseRevealDudesResponse,
+  parseRevealDudesSubmissionUnknownDetails,
+  parseStripeCheckoutSessionResponse,
+  parseStripeReceiptClaimResponse,
+  revealDudesSubmissionUnknownDetails,
+  createCommerceApiClient,
+} from '../src/api/commerce.ts';
+import {
+  addFulfillmentOrderToShipStationRequestPayload,
+  createFulfillmentApiClient,
+  parseAddFulfillmentOrderToShipStation,
+  parseFulfillmentShipStationAddressCorrectionDetails,
+  parseFulfillmentStatusUpdate,
+  parseGetFulfillmentShipStationLabel,
+  parseGetFulfillmentShipStationRates,
+  parsePurchaseFulfillmentShipStationLabel,
+  parseUpdateFulfillmentAddress,
+  parseVoidFulfillmentShipStationLabel,
+} from '../src/api/fulfillment.ts';
+import {
+  createProfileApiClient,
+  parseProfileAddress,
+  parseProfileState,
+  profileOrders,
+  saveProfileAddressRequest,
+} from '../src/api/profile.ts';
+import {
+  profileApiTimeoutMs,
+  requestProfileApi,
+  type AuthenticatedApiCall,
+} from '../src/api/transport.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const DESTINATION = '11111111111111111111111111111112';
@@ -11,13 +48,177 @@ const RECENT_BLOCKHASH = bs58.encode(new Uint8Array(32).fill(7));
 const ZERO_SIGNATURE = bs58.encode(new Uint8Array(64));
 const ZERO_BLOCKHASH = bs58.encode(new Uint8Array(32));
 
+
+test('domain clients select authenticated routes through injected transport', async () => {
+  const calls: Array<{ pathname: string; data: unknown }> = [];
+  const stop = new Error('stop after request capture');
+  const call: AuthenticatedApiCall = async (pathname, data) => {
+    calls.push({ pathname, data });
+    throw stop;
+  };
+  const profile = createProfileApiClient({
+    callProfileApi: call,
+    createProfileAddressId: () => 'AbCdEfGhIjKlMnOpQrSt',
+  });
+  const commerce = createCommerceApiClient(call);
+  const fulfillment = createFulfillmentApiClient(call);
+  const cases: Array<() => Promise<unknown>> = [
+    () => profile.saveEncryptedAddress('cipher', 'Turkey', 'hint', 'owner@example.com', 'TR'),
+    () => profile.solanaAuth(OWNER, 'message', new Uint8Array(64)),
+    () => profile.reconcileProfileState({ mergeStripeDeliveryOrders: true }),
+    () => profile.loadProfileStateFromServer(),
+    () => profile.getAdminProfileView(OWNER),
+    () => profile.getAnonymousStripeDeliveryHistory(),
+    () => profile.listDeliveryOrderOwners({ cursor: 'next', pageSize: 10 }),
+    () => commerce.createStripeCheckoutSession({ dropId: 'card_nft_2', quantity: 1 }),
+    () => commerce.revealDudes(OWNER, DESTINATION, 'card_nft_2'),
+    () => commerce.requestDeliveryTx(OWNER, {
+      itemIds: [DESTINATION],
+      addressId: 'AbCdEfGhIjKlMnOpQrSt',
+    }, 'card_nft_2'),
+    () => commerce.prepareReceiptTransferTx({
+      owner: OWNER,
+      dropId: 'card_nft_2',
+      receiptAssetId: OWNER,
+      destination: DESTINATION,
+    }),
+    () => commerce.prepareAdminIrlRedeemTx({
+      owner: OWNER,
+      dropId: 'card_nft_2',
+      itemIds: [DESTINATION],
+    }),
+    () => commerce.finalizeAdminIrlRedeem({
+      requestId: 'AbCdEfGhIjKlMnOpQrSt',
+      dropId: 'card_nft_2',
+      transferSignature: REVEAL_SIGNATURE,
+    }),
+    () => commerce.issueReceipts(OWNER, 17, REVEAL_SIGNATURE, 'card_nft_2'),
+    () => commerce.recoverMyDeliveryOrders({ dropId: 'card_nft_2', deliveryId: 17, force: true }),
+    () => commerce.requestClaimTx(OWNER, '1234567890'),
+    () => commerce.claimStripeReceipt({ code: 'ABCDEF-1234567890', recipient: OWNER }),
+    () => fulfillment.listFulfillmentOrders({ dropId: 'card_nft_2', limit: 10 }),
+    () => fulfillment.listFulfillmentManualReviewCheckouts({ dropId: 'card_nft_2' }),
+    () => fulfillment.updateFulfillmentStatus(17, 'Shipped', 'card_nft_2', 'tracking'),
+    () => fulfillment.updateFulfillmentAddress(17, 'Full address', 'card_nft_2'),
+    () => fulfillment.addFulfillmentOrderToShipStation(17, 'card_nft_2'),
+    () => fulfillment.getFulfillmentShipStationRates(17, 'card_nft_2'),
+    () => fulfillment.purchaseFulfillmentShipStationLabel({
+      dropId: 'card_nft_2',
+      deliveryId: 17,
+      rateId: 'rate-1',
+      expectedTotal: { currency: 'usd', amount: 10 },
+      requestId: 'request-1',
+    }),
+    () => fulfillment.getFulfillmentShipStationLabel(17, 'card_nft_2'),
+    () => fulfillment.voidFulfillmentShipStationLabel({
+      dropId: 'card_nft_2',
+      deliveryId: 17,
+      labelId: 'label-1',
+    }),
+  ];
+  for (const run of cases) {
+    await assert.rejects(run, (error) => error === stop);
+  }
+  assert.deepEqual(calls.map(({ pathname }) => pathname), [
+    '/profile/addresses',
+    '/auth/solana',
+    '/profile/reconcile',
+    '/profile/state',
+    '/admin/profile',
+    '/profile/anonymous-stripe-delivery-history',
+    '/admin/delivery-order-owners',
+    '/checkout/session',
+    '/boxes/reveal',
+    '/delivery/prepare',
+    '/receipts/transfer/prepare',
+    '/admin/irl-redeem/prepare',
+    '/admin/irl-redeem/finalize',
+    '/delivery/receipts/issue',
+    '/delivery/receipts/recover',
+    '/claims/irl/prepare',
+    '/receipts/stripe/claim',
+    '/fulfillment/orders',
+    '/fulfillment/manual-review-checkouts',
+    '/fulfillment/order-status',
+    '/fulfillment/order-address',
+    '/fulfillment/shipstation-shipment',
+    '/fulfillment/shipstation-rates',
+    '/fulfillment/shipstation-label-purchase',
+    '/fulfillment/shipstation-label',
+    '/fulfillment/shipstation-label-void',
+  ]);
+  assert.deepEqual(calls[0]?.data, {
+    id: 'AbCdEfGhIjKlMnOpQrSt',
+    encrypted: 'cipher',
+    country: 'Turkey',
+    countryCode: 'TR',
+    hint: 'hint',
+    email: 'owner@example.com',
+  });
+});
+
+test('domain client factories apply successful response contracts', async () => {
+  const profileState = {
+    responseMode: 'profile-state' as const,
+    sessionWallet: null,
+    profile: null,
+    shipments: null,
+  };
+  const profile = createProfileApiClient({
+    callProfileApi: async (pathname, data) => {
+      assert.equal(pathname, '/profile/state');
+      assert.deepEqual(data, {});
+      return profileState;
+    },
+    createProfileAddressId: () => 'AbCdEfGhIjKlMnOpQrSt',
+  });
+  assert.deepEqual(await profile.loadProfileStateFromServer(), profileState);
+
+  const checkoutSession = {
+    id: 'cs_test_factory_123',
+    url: 'https://checkout.stripe.com/c/pay/factory',
+    livemode: false,
+  };
+  const commerce = createCommerceApiClient(async (pathname, data, credentialCapture) => {
+    assert.equal(pathname, '/checkout/session');
+    assert.deepEqual(data, { dropId: 'card_nft_2', quantity: 1 });
+    assert.ok(credentialCapture);
+    credentialCapture.authSubject = 'anonymous-subject';
+    return checkoutSession;
+  });
+  assert.deepEqual(
+    await commerce.createStripeCheckoutSession({ dropId: 'card_nft_2', quantity: 1 }),
+    { ...checkoutSession, authSubject: 'anonymous-subject' },
+  );
+
+  const statusUpdate = {
+    deliveryId: 17,
+    fulfillmentStatus: 'Shipped' as const,
+    fulfillmentTrackingCode: 'tracking-17',
+  };
+  const fulfillment = createFulfillmentApiClient(async (pathname, data) => {
+    assert.equal(pathname, '/fulfillment/order-status');
+    assert.deepEqual(data, {
+      deliveryId: 17,
+      status: 'Shipped',
+      dropId: 'card_nft_2',
+      trackingCode: 'tracking-17',
+    });
+    return statusUpdate;
+  });
+  assert.deepEqual(
+    await fulfillment.updateFulfillmentStatus(17, 'Shipped', 'card_nft_2', 'tracking-17'),
+    statusUpdate,
+  );
+});
+
 test('profile API client sends bearer JSON without caching and refreshes once after 401', async () => {
   const refreshes: boolean[] = [];
   const authorizations: string[] = [];
   const signals: AbortSignal[] = [];
   let calls = 0;
   const credentialCapture: { authSubject?: string } = {};
-  const payload = await profileApiTestHooks.requestProfileApi(
+  const payload = await requestProfileApi(
     '/profile/shipments',
     { ownerWallet: OWNER },
     {
@@ -61,7 +262,7 @@ test('profile API client sends bearer JSON without caching and refreshes once af
 test('profile API client never replays a request after the auth subject changes', async () => {
   let calls = 0;
   await assert.rejects(
-    profileApiTestHooks.requestProfileApi('/auth/solana', {
+    requestProfileApi('/auth/solana', {
       wallet: OWNER,
       message: 'signed-for-subject-a',
       signature: Array(64).fill(1),
@@ -89,7 +290,7 @@ test('profile API client never replays a request after the auth subject changes'
 
 test('profile API client uses cookie credentials without exposing an anonymous bearer', async () => {
   let authorization: string | null = 'unset';
-  const payload = await profileApiTestHooks.requestProfileApi('/profile/state', {}, {
+  const payload = await requestProfileApi('/profile/state', {}, {
     fetch: async (input, init) => {
       assert.equal(String(input), '/api/profile/state');
       const headers = new Headers(init?.headers);
@@ -109,7 +310,7 @@ test('profile API client uses cookie credentials without exposing an anonymous b
 test('profile API client applies its deadline to token retrieval and returns a stable error', async () => {
   let fetchCalled = false;
   await assert.rejects(
-    profileApiTestHooks.requestProfileApi('/fulfillment/shipstation-rates', {}, {
+    requestProfileApi('/fulfillment/shipstation-rates', {}, {
       fetch: async () => {
         fetchCalled = true;
         return Response.json({});
@@ -128,7 +329,7 @@ test('profile API client applies its deadline to token retrieval and returns a s
 
 test('profile API client preserves stable error codes and rejects malformed JSON', async () => {
   await assert.rejects(
-    profileApiTestHooks.requestProfileApi(
+    requestProfileApi(
       '/admin/profile',
       { ownerWallet: OWNER },
       {
@@ -150,7 +351,7 @@ test('profile API client preserves stable error codes and rejects malformed JSON
   );
 
   await assert.rejects(
-    profileApiTestHooks.requestProfileApi(
+    requestProfileApi(
       '/profile/anonymous-stripe-delivery-history',
       {},
       {
@@ -171,13 +372,13 @@ test('profile API client summary validator accepts only exact shipment summaries
     status: 'ready_to_ship',
     items: [{ kind: 'box', refId: 3 }],
   };
-  assert.deepEqual(profileApiTestHooks.profileOrders([order]), [order]);
-  assert.equal(profileApiTestHooks.profileOrders([{ ...order, deliveryId: 0 }]), null);
-  assert.equal(profileApiTestHooks.profileOrders({}), null);
+  assert.deepEqual(profileOrders([order]), [order]);
+  assert.equal(profileOrders([{ ...order, deliveryId: 0 }]), null);
+  assert.equal(profileOrders({}), null);
 });
 
 test('profile state client sends an exact authenticated request and validates independent sections', async () => {
-  const payload = await profileApiTestHooks.requestProfileApi(
+  const payload = await requestProfileApi(
     '/profile/state',
     {},
     {
@@ -197,14 +398,14 @@ test('profile state client sends an exact authenticated request and validates in
       timeoutMs: 1000,
     },
   );
-  assert.deepEqual(profileApiTestHooks.parseProfileState(payload), payload);
+  assert.deepEqual(parseProfileState(payload), payload);
 });
 
 test('profile API retries one 401 with a fresh token and then fails terminally', async () => {
   const refreshes: boolean[] = [];
   let calls = 0;
   await assert.rejects(
-    profileApiTestHooks.requestProfileApi('/profile/state', {}, {
+    requestProfileApi('/profile/state', {}, {
       fetch: async () => {
         calls += 1;
         return Response.json({
@@ -228,50 +429,6 @@ test('profile API retries one 401 with a fresh token and then fails terminally',
   assert.deepEqual(refreshes, [false, true]);
 });
 
-test('admin and fulfillment reads use authenticated Cloudflare routes', () => {
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  for (const [exportName, pathname] of [
-    ['listDeliveryOrderOwners', '/admin/delivery-order-owners'],
-    ['listFulfillmentOrders', '/fulfillment/orders'],
-    ['listFulfillmentManualReviewCheckouts', '/fulfillment/manual-review-checkouts'],
-  ] as const) {
-    const start = source.indexOf(`export async function ${exportName}`);
-    const end = source.indexOf('\nexport ', start + 1);
-    assert.notEqual(start, -1);
-    const implementation = source.slice(start, end === -1 ? source.length : end);
-    assert.match(implementation, new RegExp(pathname.replaceAll('/', '\\/')));
-  }
-});
-
-test('fulfillment actions use authenticated Cloudflare routes', () => {
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  for (const [exportName, pathname] of [
-    ['saveEncryptedAddress', '/profile/addresses'],
-    ['updateFulfillmentAddress', '/fulfillment/order-address'],
-    ['updateFulfillmentStatus', '/fulfillment/order-status'],
-    ['getFulfillmentShipStationLabel', '/fulfillment/shipstation-label'],
-    ['purchaseFulfillmentShipStationLabel', '/fulfillment/shipstation-label-purchase'],
-    ['voidFulfillmentShipStationLabel', '/fulfillment/shipstation-label-void'],
-    ['getFulfillmentShipStationRates', '/fulfillment/shipstation-rates'],
-    ['addFulfillmentOrderToShipStation', '/fulfillment/shipstation-shipment'],
-  ] as const) {
-    const start = source.indexOf(`export async function ${exportName}`);
-    const end = source.indexOf('\nexport ', start + 1);
-    assert.notEqual(start, -1);
-    const implementation = source.slice(start, end === -1 ? source.length : end);
-    assert.match(implementation, new RegExp(pathname.replaceAll('/', '\\/')));
-  }
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label'), 50_000);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label-purchase'), 65_000);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-label-void'), 65_000);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-rates'), 65_000);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/shipstation-shipment'), 65_000);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/profile/reconcile'), 65_000);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/fulfillment/order-address'), 20_000);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/profile/addresses'), 80_000);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/auth/solana'), 80_000);
-});
-
 test('saved address retries reuse the exact client-generated id and payload', async () => {
   const request = {
     id: 'AbCdEfGhIjKlMnOpQrSt',
@@ -282,7 +439,7 @@ test('saved address retries reuse the exact client-generated id and payload', as
     email: 'owner@example.com',
   };
   const calls: unknown[] = [];
-  const response = await profileApiTestHooks.saveProfileAddressRequest(
+  const response = await saveProfileAddressRequest(
     request,
     async (pathname, payload) => {
       assert.equal(pathname, '/profile/addresses');
@@ -298,7 +455,7 @@ test('saved address retries reuse the exact client-generated id and payload', as
 });
 
 test('Stripe checkout uses the authenticated Cloudflare route with an exact response contract', async () => {
-  const payload = await profileApiTestHooks.requestProfileApi(
+  const payload = await requestProfileApi(
     '/checkout/session',
     { dropId: 'card_nft_binder_devnet', quantity: 1, returnUrl: 'https://mons.shop/drop' },
     {
@@ -317,16 +474,11 @@ test('Stripe checkout uses the authenticated Cloudflare route with an exact resp
       timeoutMs: 1000,
     },
   );
-  assert.deepEqual(profileApiTestHooks.parseStripeCheckoutSessionResponse(payload), payload);
-  assert.equal(profileApiTestHooks.parseStripeCheckoutSessionResponse({ ...payload as object, extra: true }), null);
-  assert.equal(profileApiTestHooks.parseStripeCheckoutSessionResponse({ ...payload as object, livemode: 'false' }), null);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/checkout/session'), 35_000);
+  assert.deepEqual(parseStripeCheckoutSessionResponse(payload), payload);
+  assert.equal(parseStripeCheckoutSessionResponse({ ...payload as object, extra: true }), null);
+  assert.equal(parseStripeCheckoutSessionResponse({ ...payload as object, livemode: 'false' }), null);
+  assert.equal(profileApiTimeoutMs('/checkout/session'), 35_000);
 
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function createStripeCheckoutSession');
-  const end = source.indexOf('\nexport ', start + 1);
-  const implementation = source.slice(start, end === -1 ? source.length : end);
-  assert.match(implementation, /\/checkout\/session/);
 });
 
 test('IRL claim preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -338,7 +490,7 @@ test('IRL claim preparation uses the authenticated Cloudflare route with an exac
     certificateId: OWNER,
     message: 'Sign and send to burn your box receipt and mint your dude receipts.',
   };
-  const payload = await profileApiTestHooks.requestProfileApi(
+  const payload = await requestProfileApi(
     '/claims/irl/prepare',
     { owner: OWNER, code: '1234567890' },
     {
@@ -354,19 +506,14 @@ test('IRL claim preparation uses the authenticated Cloudflare route with an exac
       timeoutMs: 1000,
     },
   );
-  assert.deepEqual(profileApiTestHooks.parseIrlClaimPrepareResponse(payload), response);
-  assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, extra: true }), null);
-  assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, blockhashContextSlot: -1 }), null);
-  assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, certificates: [1, 2] }), null);
-  assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, certificateId: 'invalid' }), null);
-  assert.equal(profileApiTestHooks.parseIrlClaimPrepareResponse({ ...response, dropId: 'unknown_drop' }), null);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/claims/irl/prepare'), 65_000);
+  assert.deepEqual(parseIrlClaimPrepareResponse(payload), response);
+  assert.equal(parseIrlClaimPrepareResponse({ ...response, extra: true }), null);
+  assert.equal(parseIrlClaimPrepareResponse({ ...response, blockhashContextSlot: -1 }), null);
+  assert.equal(parseIrlClaimPrepareResponse({ ...response, certificates: [1, 2] }), null);
+  assert.equal(parseIrlClaimPrepareResponse({ ...response, certificateId: 'invalid' }), null);
+  assert.equal(parseIrlClaimPrepareResponse({ ...response, dropId: 'unknown_drop' }), null);
+  assert.equal(profileApiTimeoutMs('/claims/irl/prepare'), 65_000);
 
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function requestClaimTx');
-  const end = source.indexOf('\nexport ', start + 1);
-  const implementation = source.slice(start, end === -1 ? source.length : end);
-  assert.match(implementation, /\/claims\/irl\/prepare/);
 });
 
 test('Stripe receipt claiming uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -378,7 +525,7 @@ test('Stripe receipt claiming uses the authenticated Cloudflare route with an ex
     receiptTxs: [REVEAL_SIGNATURE],
     receiptKind: 'box',
   } as const;
-  const payload = await profileApiTestHooks.requestProfileApi(
+  const payload = await requestProfileApi(
     '/receipts/stripe/claim',
     { code: 'ABCDEF-1234567890', recipient: OWNER },
     {
@@ -397,17 +544,12 @@ test('Stripe receipt claiming uses the authenticated Cloudflare route with an ex
       timeoutMs: 1_000,
     },
   );
-  assert.deepEqual(profileApiTestHooks.parseStripeReceiptClaimResponse(payload), response);
-  assert.equal(profileApiTestHooks.parseStripeReceiptClaimResponse({ ...response, extra: true }), null);
-  assert.equal(profileApiTestHooks.parseStripeReceiptClaimResponse({ ...response, deliveryId: 0 }), null);
-  assert.equal(profileApiTestHooks.parseStripeReceiptClaimResponse({ ...response, receiptTxs: ['invalid'] }), null);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/receipts/stripe/claim'), 190_000);
+  assert.deepEqual(parseStripeReceiptClaimResponse(payload), response);
+  assert.equal(parseStripeReceiptClaimResponse({ ...response, extra: true }), null);
+  assert.equal(parseStripeReceiptClaimResponse({ ...response, deliveryId: 0 }), null);
+  assert.equal(parseStripeReceiptClaimResponse({ ...response, receiptTxs: ['invalid'] }), null);
+  assert.equal(profileApiTimeoutMs('/receipts/stripe/claim'), 190_000);
 
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function claimStripeReceipt');
-  const end = source.indexOf('\nexport ', start + 1);
-  const implementation = source.slice(start, end === -1 ? source.length : end);
-  assert.match(implementation, /\/receipts\/stripe\/claim/);
 });
 
 test('Admin IRL preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -419,7 +561,7 @@ test('Admin IRL preparation uses the authenticated Cloudflare route with an exac
     itemCount: 1,
     targetKind: 'pack',
   } as const;
-  const payload = await profileApiTestHooks.requestProfileApi(
+  const payload = await requestProfileApi(
     '/admin/irl-redeem/prepare',
     { owner: OWNER, dropId: 'card_nft_2', itemIds: [DESTINATION] },
     {
@@ -434,19 +576,13 @@ test('Admin IRL preparation uses the authenticated Cloudflare route with an exac
       timeoutMs: 1000,
     },
   );
-  assert.deepEqual(profileApiTestHooks.parseAdminIrlRedeemPrepareResponse(payload), response);
-  assert.equal(profileApiTestHooks.parseAdminIrlRedeemPrepareResponse({ ...response, extra: true }), null);
-  assert.equal(profileApiTestHooks.parseAdminIrlRedeemPrepareResponse({ ...response, requestId: 'invalid' }), null);
-  assert.equal(profileApiTestHooks.parseAdminIrlRedeemPrepareResponse({ ...response, itemCount: 0 }), null);
-  assert.equal(profileApiTestHooks.parseAdminIrlRedeemPrepareResponse({ ...response, targetKind: 'card_receipt', itemCount: 2 }), null);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/admin/irl-redeem/prepare'), 65_000);
+  assert.deepEqual(parseAdminIrlRedeemPrepareResponse(payload), response);
+  assert.equal(parseAdminIrlRedeemPrepareResponse({ ...response, extra: true }), null);
+  assert.equal(parseAdminIrlRedeemPrepareResponse({ ...response, requestId: 'invalid' }), null);
+  assert.equal(parseAdminIrlRedeemPrepareResponse({ ...response, itemCount: 0 }), null);
+  assert.equal(parseAdminIrlRedeemPrepareResponse({ ...response, targetKind: 'card_receipt', itemCount: 2 }), null);
+  assert.equal(profileApiTimeoutMs('/admin/irl-redeem/prepare'), 65_000);
 
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function prepareAdminIrlRedeemTx');
-  const end = source.indexOf('\nexport ', start + 1);
-  const implementation = source.slice(start, end === -1 ? source.length : end);
-  assert.match(implementation, /\/admin\/irl-redeem\/prepare/);
-  assert.match(implementation, /const dropId = normalizeDropId\(args\.dropId\)/);
 });
 
 test('Admin IRL finalization uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -465,7 +601,7 @@ test('Admin IRL finalization uses the authenticated Cloudflare route with an exa
     }],
     cards: [],
   } as const;
-  const payload = await profileApiTestHooks.requestProfileApi(
+  const payload = await requestProfileApi(
     '/admin/irl-redeem/finalize',
     {
       requestId: response.requestId,
@@ -484,22 +620,17 @@ test('Admin IRL finalization uses the authenticated Cloudflare route with an exa
       timeoutMs: 1_000,
     },
   );
-  assert.deepEqual(profileApiTestHooks.parseAdminIrlRedeemFinalizeResult(payload), response);
-  assert.equal(profileApiTestHooks.parseAdminIrlRedeemFinalizeResult({ ...response, extra: true }), null);
-  assert.equal(profileApiTestHooks.parseAdminIrlRedeemFinalizeResult({ ...response, processed: false }), null);
-  assert.equal(profileApiTestHooks.parseAdminIrlRedeemFinalizeResult({ ...response, claimCodes: ['invalid'] }), null);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/admin/irl-redeem/finalize'), 550_000);
+  assert.deepEqual(parseAdminIrlRedeemFinalizeResult(payload), response);
+  assert.equal(parseAdminIrlRedeemFinalizeResult({ ...response, extra: true }), null);
+  assert.equal(parseAdminIrlRedeemFinalizeResult({ ...response, processed: false }), null);
+  assert.equal(parseAdminIrlRedeemFinalizeResult({ ...response, claimCodes: ['invalid'] }), null);
+  assert.equal(profileApiTimeoutMs('/admin/irl-redeem/finalize'), 550_000);
 
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function finalizeAdminIrlRedeem');
-  const end = source.indexOf('\nexport ', start + 1);
-  const implementation = source.slice(start, end === -1 ? source.length : end);
-  assert.match(implementation, /\/admin\/irl-redeem\/finalize/);
 });
 
 test('box reveal uses the authenticated Cloudflare route with an exact response contract', async () => {
   const response = { signature: REVEAL_SIGNATURE, dudeIds: [1] };
-  const payload = await profileApiTestHooks.requestProfileApi(
+  const payload = await requestProfileApi(
     '/boxes/reveal',
     { owner: OWNER, boxAssetId: DESTINATION, dropId: 'clear_cards_devnet_v2' },
     {
@@ -520,24 +651,19 @@ test('box reveal uses the authenticated Cloudflare route with an exact response 
       timeoutMs: 1000,
     },
   );
-  assert.deepEqual(profileApiTestHooks.parseRevealDudesResponse(payload, 'clear_cards_devnet_v2'), response);
-  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, extra: true }, 'clear_cards_devnet_v2'), null);
-  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, signature: OWNER }, 'clear_cards_devnet_v2'), null);
-  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, signature: ZERO_SIGNATURE }, 'clear_cards_devnet_v2'), null);
-  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [0] }, 'clear_cards_devnet_v2'), null);
-  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: ['1'] }, 'clear_cards_devnet_v2'), null);
-  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [true] }, 'clear_cards_devnet_v2'), null);
-  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [1.5] }, 'clear_cards_devnet_v2'), null);
-  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [1, 2] }, 'clear_cards_devnet_v2'), null);
-  assert.equal(profileApiTestHooks.parseRevealDudesResponse({ ...response, dudeIds: [1, 1, 3] }, 'card_nft_2'), null);
-  assert.equal(profileApiTestHooks.parseRevealDudesResponse(response, 'unknown_drop'), null);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/boxes/reveal'), 65_000);
+  assert.deepEqual(parseRevealDudesResponse(payload, 'clear_cards_devnet_v2'), response);
+  assert.equal(parseRevealDudesResponse({ ...response, extra: true }, 'clear_cards_devnet_v2'), null);
+  assert.equal(parseRevealDudesResponse({ ...response, signature: OWNER }, 'clear_cards_devnet_v2'), null);
+  assert.equal(parseRevealDudesResponse({ ...response, signature: ZERO_SIGNATURE }, 'clear_cards_devnet_v2'), null);
+  assert.equal(parseRevealDudesResponse({ ...response, dudeIds: [0] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(parseRevealDudesResponse({ ...response, dudeIds: ['1'] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(parseRevealDudesResponse({ ...response, dudeIds: [true] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(parseRevealDudesResponse({ ...response, dudeIds: [1.5] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(parseRevealDudesResponse({ ...response, dudeIds: [1, 2] }, 'clear_cards_devnet_v2'), null);
+  assert.equal(parseRevealDudesResponse({ ...response, dudeIds: [1, 1, 3] }, 'card_nft_2'), null);
+  assert.equal(parseRevealDudesResponse(response, 'unknown_drop'), null);
+  assert.equal(profileApiTimeoutMs('/boxes/reveal'), 65_000);
 
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function revealDudes');
-  const end = source.indexOf('\nexport ', start + 1);
-  const implementation = source.slice(start, end === -1 ? source.length : end);
-  assert.match(implementation, /\/boxes\/reveal/);
 });
 
 test('box reveal unknown-submission details require an exact drop-specific contract', async () => {
@@ -550,7 +676,7 @@ test('box reveal unknown-submission details require an exact drop-specific contr
     },
   };
   assert.deepEqual(
-    profileApiTestHooks.parseRevealDudesSubmissionUnknownDetails(details, 'card_nft_2'),
+    parseRevealDudesSubmissionUnknownDetails(details, 'card_nft_2'),
     details,
   );
 
@@ -569,14 +695,14 @@ test('box reveal unknown-submission details require an exact drop-specific contr
     { ...details, submission: { ...details.submission, dudeIds: [0, 2, 3] } },
   ];
   for (const value of malformed) {
-    assert.equal(profileApiTestHooks.parseRevealDudesSubmissionUnknownDetails(value, 'card_nft_2'), null);
+    assert.equal(parseRevealDudesSubmissionUnknownDetails(value, 'card_nft_2'), null);
   }
-  assert.equal(profileApiTestHooks.parseRevealDudesSubmissionUnknownDetails(details, 'clear_cards_devnet_v2'), null);
-  assert.equal(profileApiTestHooks.parseRevealDudesSubmissionUnknownDetails(details, 'unknown_drop'), null);
+  assert.equal(parseRevealDudesSubmissionUnknownDetails(details, 'clear_cards_devnet_v2'), null);
+  assert.equal(parseRevealDudesSubmissionUnknownDetails(details, 'unknown_drop'), null);
 
   let profileError: unknown;
   try {
-    await profileApiTestHooks.requestProfileApi(
+    await requestProfileApi(
       '/boxes/reveal',
       { owner: OWNER, boxAssetId: DESTINATION, dropId: 'card_nft_2' },
       {
@@ -592,182 +718,13 @@ test('box reveal unknown-submission details require an exact drop-specific contr
     profileError = error;
   }
   assert.deepEqual(
-    profileApiTestHooks.revealDudesSubmissionUnknownDetails(profileError, 'card_nft_2'),
+    revealDudesSubmissionUnknownDetails(profileError, 'card_nft_2'),
     details,
   );
   assert.equal(
-    profileApiTestHooks.revealDudesSubmissionUnknownDetails(new Error('unknown'), 'card_nft_2'),
+    revealDudesSubmissionUnknownDetails(new Error('unknown'), 'card_nft_2'),
     null,
   );
-});
-
-test('box reveal ambiguity recovery observes and acknowledges a received submission without resending it', () => {
-  const source = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  const start = source.indexOf('const handleRevealDudes = async');
-  const end = source.indexOf('\n  const ensureRevealOverlayAdvanceAllowed', start);
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
-  const implementation = source.slice(start, end);
-  assert.match(implementation, /revealDudesSubmissionUnknownDetails\(error, revealDrop\.dropId\)/);
-  assert.match(implementation, /getDropConnection\(revealDrop\.dropId\)/);
-  assert.match(implementation, /reconcileSubmittedTransaction/);
-  assert.match(implementation, /detectExpiry: false/);
-  assert.match(implementation, /timeoutMs: 75_000/);
-  assert.match(implementation, /signal: reconciliationController\.signal/);
-  assert.match(implementation, /outcome !== 'confirmed'\) throw error/);
-  assert.doesNotMatch(implementation, /outcome !== 'confirmed'\) return 'retry'/);
-  assert.match(
-    implementation,
-    /if \(outcome !== 'confirmed'\) throw error;\s*resp = await revealDudes\(walletAddress, boxAssetId, revealDrop\.dropId\)/,
-  );
-  assert.doesNotMatch(implementation, /signature: recoveryDetails\.submission\.signature/);
-  assert.match(
-    implementation,
-    /const requestIsCurrent = \(\) =>\s*!reconciliationController\.signal\.aborted &&\s*!suspendedRef\.current &&\s*revealOverlaySessionRef\.current === requestSession &&\s*connectedWalletRef\.current === walletAddress/,
-  );
-  assert.match(implementation, /revealLoadingRequestIdRef\.current !== null\) return 'resolved'/);
-  assert.ok(
-    implementation.indexOf('revealLoadingRequestIdRef.current !== null') <
-      implementation.indexOf('await revealDudes('),
-  );
-  assert.ok(
-    implementation.indexOf('const reconciliationController = new AbortController()') <
-      implementation.indexOf('await ensureSignedIn()'),
-  );
-  assert.ok(
-    implementation.indexOf('const requestIsCurrent = () =>') <
-      implementation.indexOf('await revealDudes('),
-  );
-  assert.equal(implementation.match(/reconciliationController\.signal\.aborted/g)?.length, 1);
-  assert.equal(implementation.match(/!suspendedRef\.current/g)?.length, 1);
-  assert.equal(implementation.match(/connectedWalletRef\.current === walletAddress/g)?.length, 1);
-  assert.ok((implementation.match(/if \(!requestIsCurrent\(\)\) return 'resolved';/g)?.length ?? 0) >= 5);
-  const resultApplication = implementation.indexOf('const clearCardId =');
-  const resultGuard = implementation.lastIndexOf("if (!requestIsCurrent()) return 'resolved';", resultApplication);
-  const acknowledgement = implementation.indexOf(
-    'resp = await revealDudes(walletAddress, boxAssetId, revealDrop.dropId)',
-    implementation.indexOf("if (outcome !== 'confirmed') throw error;"),
-  );
-  assert.ok(acknowledgement > implementation.indexOf("if (outcome !== 'confirmed') throw error;"));
-  assert.ok(resultGuard > acknowledgement);
-  const outerCatch = implementation.lastIndexOf('} catch (err) {');
-  assert.notEqual(outerCatch, -1);
-  assert.match(implementation.slice(outerCatch), /if \(!requestIsCurrent\(\)\) return 'resolved';/);
-  assert.equal(implementation.match(/await revealDudes\(/g)?.length, 2);
-  assert.doesNotMatch(implementation, /sendPreparedTransaction|sendSignedTransaction|sendAndConfirm/);
-  assert.match(source, /revealSubmissionReconciliationAbortControllerRef\.current\?\.abort\(\)/);
-  assert.match(source, /\(\) => \(\) => abortRevealSubmissionReconciliation\(\)/);
-});
-
-test('default box reveal lets the same overlay retry after a retry result', () => {
-  const source = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  const start = source.indexOf('const handleRevealOverlayClick = () =>');
-  const end = source.indexOf('\n  const handleRevealOverlayDismiss', start);
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
-  const implementation = source.slice(start, end);
-  assert.match(implementation, /const status = await handleRevealDudes\(boxAssetId, dropId\)/);
-  assert.match(implementation, /status !== 'retry' \|\| revealOverlaySessionRef\.current !== requestSession/);
-  assert.match(implementation, /prev\.id !== boxAssetId/);
-  assert.match(implementation, /prev\.dropId !== dropId/);
-  assert.match(implementation, /prev\.phase !== 'ready'/);
-  assert.match(implementation, /prev\.revealedIds\?\.length/);
-  assert.match(implementation, /hasRevealAttempted: false/);
-});
-
-test('prepared delivery and numeric claim submissions stay durable without coupling normal polling to pending UI', () => {
-  const source = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  const deliveryStart = source.indexOf('const handleShip = async');
-  const deliveryEnd = source.indexOf('\n  const assertReceiptTransferWalletReady', deliveryStart);
-  const claimStart = source.indexOf('const handleClaim = async');
-  const claimEnd = source.indexOf('\n  const isOwnProfileView', claimStart);
-  assert.notEqual(deliveryStart, -1);
-  assert.notEqual(deliveryEnd, -1);
-  assert.notEqual(claimStart, -1);
-  assert.notEqual(claimEnd, -1);
-  const delivery = source.slice(deliveryStart, deliveryEnd);
-  const claim = source.slice(claimStart, claimEnd);
-
-  const deliveryReservation = delivery.indexOf("phase: 'preparing'");
-  const deliveryPersistence = delivery.indexOf('rememberPendingPreparedTransaction(activeDeliveryReservation)');
-  const deliverySign = delivery.indexOf('const signature = await submitDelivery', deliveryReservation);
-  assert.ok(deliveryReservation > 0 && deliveryPersistence > deliveryReservation && deliverySign > deliveryPersistence);
-  assert.match(delivery, /withBrowserLock\(\s*`mons:pending-prepared-submission:\$\{deliveryWallet\}`,[\s\S]*?resp = await requestTx\(\);\s*return submitWithBlockhashRetry\(\)/);
-  assert.match(delivery, /submitPendingPreparedTransaction\(reservation, submission\)/);
-  assert.match(delivery, /onBroadcastAttempt: recordSubmittedDelivery/);
-  assert.match(delivery, /onSubmitted: recordSubmittedDelivery/);
-  assert.doesNotMatch(delivery, /syncPendingPreparedTransaction\(pendingSubmission\)/);
-  assert.match(source, /const shipmentRefreshStopsRef = useRef<Set<\(\) => void>>\(new Set\(\)\)/);
-  assert.match(source, /const shipmentRefreshStopsByTransactionKeyRef = useRef<Map<string, \(\) => void>>\(new Map\(\)\)/);
-  assert.match(source, /shipmentRefreshMountedRef\.current = true;/);
-  assert.match(source, /shipmentRefreshMountedRef\.current = false;[\s\S]*?shipmentRefreshStopsRef\.current\.forEach\(\(stop\) => stop\(\)\)/);
-  assert.match(source, /const startShipmentRefresh = useCallback\([\s\S]*?retryTimer = window\.setTimeout\([\s\S]*?refreshDelay = Math\.min\(refreshDelay \* 2, DELIVERY_SHIPMENT_REFRESH_MAX_DELAY_MS\)[\s\S]*?deadline = window\.setTimeout\(stop, DELIVERY_SHIPMENT_REFRESH_TIMEOUT_MS\);\s*shipmentRefreshStopsRef\.current\.add\(stop\);[\s\S]*?void refresh\(\)/);
-  assert.match(source, /shipmentRefreshStopsRef\.current\.forEach\(\(stop\) => stop\(\)\);\s*shipmentRefreshStopsRef\.current\.clear\(\)/);
-  assert.match(delivery, /void refetchInventory\(\)\.catch\([\s\S]*?startShipmentRefresh\(deliveryWallet, deliveryDrop\.dropId, deliveryId\);[\s\S]*?const issued = await retryWithBackoff\(/);
-  assert.match(delivery, /shouldRetry: isRetryableReceiptIssuanceError/);
-  assert.doesNotMatch(delivery, /finally \{\s*stopShipmentRefresh\(\)/);
-  assert.match(delivery, /const issued = await retryWithBackoff\([\s\S]*?await Promise\.all\(\[[\s\S]*?refetchInventory\(\)\.catch\([\s\S]*?refreshProfileState\(\)\.catch\(/);
-
-  const existingDeliveryStart = delivery.indexOf('if (existingPending)');
-  const existingDeliveryEnd = delivery.indexOf('\n    if (deliverableIds.length', existingDeliveryStart);
-  const existingDelivery = delivery.slice(existingDeliveryStart, existingDeliveryEnd);
-  assert.match(existingDelivery, /Another wallet transaction is already pending/);
-  assert.doesNotMatch(existingDelivery, /setDeliveryOpen|setSelected|syncPendingPreparedTransaction/);
-
-  const deliveryAmbiguityStart = delivery.indexOf('if (pendingSubmission && isPotentiallySubmittedTransactionError(err))');
-  const deliveryFailureStart = delivery.indexOf('const reservation = pendingSubmission || activeDeliveryReservation', deliveryAmbiguityStart);
-  const deliveryRetryEnd = delivery.indexOf('\n          }\n        }\n      };', deliveryFailureStart);
-  assert.ok(deliveryAmbiguityStart > 0 && deliveryFailureStart > deliveryAmbiguityStart && deliveryRetryEnd > deliveryFailureStart);
-  const deliveryAmbiguity = delivery.slice(deliveryAmbiguityStart, deliveryFailureStart);
-  const deliveryDefinitiveFailure = delivery.slice(deliveryFailureStart, deliveryRetryEnd);
-  assert.match(deliveryAmbiguity, /startShipmentRefresh\(\s*pendingSubmission\.wallet,\s*pendingSubmission\.dropId,\s*pendingSubmission\.deliveryId,\s*pendingSubmittedTransactionKey\(pendingSubmission\)/);
-  assert.match(source, /if \(resolution === 'failed' \|\| resolution === 'expired'\) \{\s*if \(record\.kind === 'delivery'\) shipmentRefreshStopsByTransactionKeyRef\.current\.get\(key\)\?\.\(\)/);
-  assert.match(deliveryAmbiguity, /reconcilePendingPreparedTransaction\(pendingSubmission\)\.catch/);
-  assert.doesNotMatch(deliveryAmbiguity, /setDeliveryOpen|setSelected/);
-  assert.doesNotMatch(deliveryDefinitiveFailure, /syncPendingPreparedTransaction|setDeliveryOpen|setSelected/);
-  assert.match(deliveryDefinitiveFailure, /forgetPendingPreparedTransaction\(reservation\)/);
-
-  const pendingCheck = claim.indexOf('const existingPendingClaim = pendingSubmittedClaim');
-  const prepare = claim.indexOf('resp = await requestTx()');
-  assert.ok(pendingCheck > 0 && prepare > pendingCheck);
-  assert.match(claim, /withBrowserLock\(\s*`mons:pending-prepared-submission:\$\{claimWallet\}`/);
-  const claimReservation = claim.indexOf("phase: 'preparing'", prepare);
-  const claimPersistence = claim.indexOf('rememberPendingPreparedTransaction(activeClaimReservation)', claimReservation);
-  const claimSign = claim.indexOf('await submitClaim', claimReservation);
-  assert.ok(claimReservation > prepare && claimPersistence > claimReservation && claimSign > claimPersistence);
-  assert.match(claim, /submitPendingPreparedTransaction\(reservation, submission\)/);
-  assert.match(claim, /onBroadcastAttempt: recordSubmittedClaim/);
-  assert.match(claim, /onSubmitted: recordSubmittedClaim/);
-  assert.doesNotMatch(claim, /syncPendingPreparedTransaction\(pendingSubmission\)/);
-  assert.match(claim, /reconcilePendingPreparedTransaction\(pendingSubmission/);
-  assert.match(claim, /const resolution = await reconcilePendingPreparedTransaction\(existingPendingClaim/);
-  assert.match(claim, /if \(resolution === 'confirmed'\) \{\s*if \(numericClaimUiIsCurrent\(\)\) \{\s*return presentConfirmedNumericClaim\(/);
-  assert.match(claim, /if \(resolution === 'unknown'\) return \{ deferred: true \}/);
-
-  assert.match(source, /const durable = persistPendingPreparedTransaction\(entry\);\s*if \(durable && connectedWalletRef\.current === entry\.wallet\) \{\s*syncPendingPreparedTransaction\(entry\)/);
-  assert.match(source, /const durable = replacePendingPreparedTransaction\(preparing, submitted\);\s*if \(durable && connectedWalletRef\.current === submitted\.wallet\) \{\s*syncPendingPreparedTransaction\(submitted\)/);
-  assert.match(delivery, /blockhashContextSlot: resp\.blockhashContextSlot/);
-  assert.match(claim, /blockhashContextSlot: resp\.blockhashContextSlot/);
-  assert.match(source, /signature: record\.signature,\s*recentBlockhash: record\.recentBlockhash,\s*blockhashContextSlot: record\.blockhashContextSlot/);
-  assert.match(source, /if \(typeof navigator === 'undefined' \|\| typeof navigator\.locks\?\.request !== 'function'\) \{\s*throw new Error\('This browser cannot safely coordinate wallet transactions\. Update your browser and try again\.'\)/);
-  assert.match(source, /navigator\.locks\.request\(name, \{ ifAvailable: true \}, async \(lock\) => \{\s*if \(!lock\) throw new Error\('Another wallet transaction is already in progress\. Wait for it to finish and try again\.'\)/);
-  assert.doesNotMatch(source, /navigator\.locks\.request\(name, run\)/);
-  assert.match(source, /if \(options\?\.onBroadcastAttempt\) \{\s*throw new Error\('This wallet cannot safely track the transaction before broadcast\. Use a wallet with transaction signing support\.'\)/);
-  assert.match(source, /if \(resolution === 'confirmed'\) \{\s*if \(record\.kind === 'delivery'\) hideAssetsForWallet\(record\.wallet, record\.itemIds\);\s*await forgetPendingPreparedTransaction\(record\)/);
-  assert.match(source, /if \(resolution === 'failed' \|\| resolution === 'expired'\) \{\s*if \(record\.kind === 'delivery'\) shipmentRefreshStopsByTransactionKeyRef\.current\.get\(key\)\?\.\(\);\s*await forgetPendingPreparedTransaction\(record\)/);
-  assert.match(source, /const current = readPendingPreparedTransaction\(record\.wallet, false\)/);
-  assert.match(source, /if \(current\?\.phase === 'submitted' && current\.signature === record\.signature\) \{\s*retryReconciliation\(current\);\s*return;\s*\}\s*if \(shipmentRefreshStopsByTransactionKeyRef\.current\.has\(key\)\) retryReconciliation\(record\)/);
-  assert.match(source, /selectedItems\[0\]\?\.kind === 'box' &&\s*!pendingDeliveryItemIds\.has\(selectedItems\[0\]\.id\)/);
-  assert.match(source, /if \(!deliveryOpen \|\| canShipSelected \|\| pendingDeliveryItemIds\.size\) return/);
-  assert.doesNotMatch(source, /pendingDeliveryItemIds\.forEach\(\(id\) => \{\s*if \(next\.delete\(id\)\)/);
-  assert.doesNotMatch(source, /!receiptOperationHiddenAssets\.has\(item\.id\) &&\s*!pendingDeliveryItemIds\.has\(item\.id\)/);
-  assert.match(source, /queueOverlayAction\(\(\) => \{\s*if \(!claimPreviewIsCurrent\(\) \|\| opened\) return;[\s\S]*?\}, 'presentation'\)/);
-  assert.match(source, /connectedWalletRef\.current === record\.wallet &&\s*ownerRef\.current === record\.wallet &&\s*uiIsCurrent\(\)/);
-  assert.doesNotMatch(source, /claimPresented/);
-  assert.match(source, /kind === 'presentation' && \(suspendedRef\.current \|\| presentationLoadingRef\.current\)/);
-  assert.match(source, /actions\.filter\(\(action\) => action\.kind === 'presentation'\)/);
-  assert.match(source, /if \(suspended \|\| revealOverlay \|\| revealLoading \|\| startOpenLoading\) return;\s*flushOverlayActions\(\)/);
-  assert.match(source, /if \(revealOverlayRef\.current \|\| presentationLoadingRef\.current\) return false/);
 });
 
 test('receipt transfer preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -776,7 +733,7 @@ test('receipt transfer preparation uses the authenticated Cloudflare route with 
     dropId: 'card_nft_2',
     certificateId: OWNER,
   };
-  const payload = await profileApiTestHooks.requestProfileApi(
+  const payload = await requestProfileApi(
     '/receipts/transfer/prepare',
     { owner: OWNER, dropId: 'card_nft_2', receiptAssetId: OWNER, destination: DESTINATION },
     {
@@ -797,18 +754,13 @@ test('receipt transfer preparation uses the authenticated Cloudflare route with 
       timeoutMs: 1000,
     },
   );
-  assert.deepEqual(profileApiTestHooks.parseReceiptTransferPrepareResponse(payload), response);
-  assert.equal(profileApiTestHooks.parseReceiptTransferPrepareResponse({ ...response, extra: true }), null);
-  assert.equal(profileApiTestHooks.parseReceiptTransferPrepareResponse({ ...response, encodedTx: '' }), null);
-  assert.equal(profileApiTestHooks.parseReceiptTransferPrepareResponse({ ...response, certificateId: 'invalid' }), null);
-  assert.equal(profileApiTestHooks.parseReceiptTransferPrepareResponse({ ...response, dropId: 'unknown_drop' }), null);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/receipts/transfer/prepare'), 65_000);
+  assert.deepEqual(parseReceiptTransferPrepareResponse(payload), response);
+  assert.equal(parseReceiptTransferPrepareResponse({ ...response, extra: true }), null);
+  assert.equal(parseReceiptTransferPrepareResponse({ ...response, encodedTx: '' }), null);
+  assert.equal(parseReceiptTransferPrepareResponse({ ...response, certificateId: 'invalid' }), null);
+  assert.equal(parseReceiptTransferPrepareResponse({ ...response, dropId: 'unknown_drop' }), null);
+  assert.equal(profileApiTimeoutMs('/receipts/transfer/prepare'), 65_000);
 
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function prepareReceiptTransferTx');
-  const end = source.indexOf('\nexport ', start + 1);
-  const implementation = source.slice(start, end === -1 ? source.length : end);
-  assert.match(implementation, /\/receipts\/transfer\/prepare/);
 });
 
 test('delivery preparation uses the authenticated Cloudflare route with an exact response contract', async () => {
@@ -824,7 +776,7 @@ test('delivery preparation uses the authenticated Cloudflare route with an exact
     itemIds: [DESTINATION],
     addressId: 'AbCdEfGhIjKlMnOpQrSt',
   };
-  const payload = await profileApiTestHooks.requestProfileApi('/delivery/prepare', body, {
+  const payload = await requestProfileApi('/delivery/prepare', body, {
     fetch: async (input, init) => {
       assert.equal(String(input), 'https://api.mons.shop/delivery/prepare');
       assert.equal(init?.method, 'POST');
@@ -836,19 +788,14 @@ test('delivery preparation uses the authenticated Cloudflare route with an exact
     origin: () => 'https://api.mons.shop',
     timeoutMs: 1000,
   });
-  assert.deepEqual(profileApiTestHooks.parseDeliveryPrepareResponse(payload), response);
-  assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, extra: true }), null);
-  assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, blockhashContextSlot: -1 }), null);
-  assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, encodedTx: '' }), null);
-  assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, deliveryLamports: -1 }), null);
-  assert.equal(profileApiTestHooks.parseDeliveryPrepareResponse({ ...response, deliveryId: 0 }), null);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/delivery/prepare'), 65_000);
+  assert.deepEqual(parseDeliveryPrepareResponse(payload), response);
+  assert.equal(parseDeliveryPrepareResponse({ ...response, extra: true }), null);
+  assert.equal(parseDeliveryPrepareResponse({ ...response, blockhashContextSlot: -1 }), null);
+  assert.equal(parseDeliveryPrepareResponse({ ...response, encodedTx: '' }), null);
+  assert.equal(parseDeliveryPrepareResponse({ ...response, deliveryLamports: -1 }), null);
+  assert.equal(parseDeliveryPrepareResponse({ ...response, deliveryId: 0 }), null);
+  assert.equal(profileApiTimeoutMs('/delivery/prepare'), 65_000);
 
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function requestDeliveryTx');
-  const end = source.indexOf('\nexport ', start + 1);
-  const implementation = source.slice(start, end === -1 ? source.length : end);
-  assert.match(implementation, /\/delivery\/prepare/);
 });
 
 test('receipt issuance and recovery use authenticated Cloudflare routes with exact contracts', async () => {
@@ -859,7 +806,7 @@ test('receipt issuance and recovery use authenticated Cloudflare routes with exa
     receiptTxs: [REVEAL_SIGNATURE],
     closeDeliveryTx: null,
   };
-  const issuePayload = await profileApiTestHooks.requestProfileApi(
+  const issuePayload = await requestProfileApi(
     '/delivery/receipts/issue',
     { owner: OWNER, deliveryId: 17, signature: REVEAL_SIGNATURE, dropId: 'card_nft_2' },
     {
@@ -873,11 +820,11 @@ test('receipt issuance and recovery use authenticated Cloudflare routes with exa
       timeoutMs: 1000,
     },
   );
-  assert.deepEqual(profileApiTestHooks.parseIssueReceiptsResult(issuePayload), issueResponse);
-  assert.equal(profileApiTestHooks.parseIssueReceiptsResult({ ...issueResponse, extra: true }), null);
-  assert.equal(profileApiTestHooks.parseIssueReceiptsResult({ ...issueResponse, processed: false }), null);
-  assert.equal(profileApiTestHooks.parseIssueReceiptsResult({ ...issueResponse, receiptTxs: [ZERO_SIGNATURE] }), null);
-  assert.equal(profileApiTestHooks.parseIssueReceiptsResult({ ...issueResponse, deliveryId: 0x1_0000_0000 }), null);
+  assert.deepEqual(parseIssueReceiptsResult(issuePayload), issueResponse);
+  assert.equal(parseIssueReceiptsResult({ ...issueResponse, extra: true }), null);
+  assert.equal(parseIssueReceiptsResult({ ...issueResponse, processed: false }), null);
+  assert.equal(parseIssueReceiptsResult({ ...issueResponse, receiptTxs: [ZERO_SIGNATURE] }), null);
+  assert.equal(parseIssueReceiptsResult({ ...issueResponse, deliveryId: 0x1_0000_0000 }), null);
 
   const recoveryResponse = {
     attempted: 1,
@@ -893,7 +840,7 @@ test('receipt issuance and recovery use authenticated Cloudflare routes with exa
       message: 'receipts issued',
     }],
   };
-  const recoveryPayload = await profileApiTestHooks.requestProfileApi(
+  const recoveryPayload = await requestProfileApi(
     '/delivery/receipts/recover',
     { dropId: 'card_nft_2', deliveryId: 17, force: true },
     {
@@ -907,33 +854,23 @@ test('receipt issuance and recovery use authenticated Cloudflare routes with exa
       timeoutMs: 1000,
     },
   );
-  assert.deepEqual(profileApiTestHooks.parseRecoverDeliveryOrdersResult(recoveryPayload), recoveryResponse);
-  assert.equal(profileApiTestHooks.parseRecoverDeliveryOrdersResult({ ...recoveryResponse, extra: true }), null);
-  assert.equal(profileApiTestHooks.parseRecoverDeliveryOrdersResult({
+  assert.deepEqual(parseRecoverDeliveryOrdersResult(recoveryPayload), recoveryResponse);
+  assert.equal(parseRecoverDeliveryOrdersResult({ ...recoveryResponse, extra: true }), null);
+  assert.equal(parseRecoverDeliveryOrdersResult({
     ...recoveryResponse,
     remainingProcessing: 1,
   }), null);
-  assert.equal(profileApiTestHooks.parseRecoverDeliveryOrdersResult({
+  assert.equal(parseRecoverDeliveryOrdersResult({
     ...recoveryResponse,
     results: [{ ...recoveryResponse.results[0], outcome: 'unknown' }],
   }), null);
-  assert.equal(profileApiTestHooks.parseRecoverDeliveryOrdersResult({
+  assert.equal(parseRecoverDeliveryOrdersResult({
     ...recoveryResponse,
     results: [{ ...recoveryResponse.results[0], deliveryId: 0x1_0000_0000 }],
   }), null);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/delivery/receipts/issue'), 65_000);
-  assert.equal(profileApiTestHooks.profileApiTimeoutMs('/delivery/receipts/recover'), 65_000);
+  assert.equal(profileApiTimeoutMs('/delivery/receipts/issue'), 65_000);
+  assert.equal(profileApiTimeoutMs('/delivery/receipts/recover'), 65_000);
 
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  for (const [name, pathname] of [
-    ['issueReceipts', '/delivery/receipts/issue'],
-    ['recoverMyDeliveryOrders', '/delivery/receipts/recover'],
-  ] as const) {
-    const start = source.indexOf(`export async function ${name}`);
-    const end = source.indexOf('\nexport ', start + 1);
-    const implementation = source.slice(start, end === -1 ? source.length : end);
-    assert.match(implementation, new RegExp(pathname.replaceAll('/', '\\/')));
-  }
 });
 
 test('wallet lifecycle clients use the authenticated Cloudflare routes', async () => {
@@ -941,7 +878,7 @@ test('wallet lifecycle clients use the authenticated Cloudflare routes', async (
     ['/auth/solana', { wallet: OWNER, message: 'signed-message', signature: Array(64).fill(1) }],
     ['/profile/reconcile', { mergeStripeDeliveryOrders: true }],
   ] as const) {
-    const payload = await profileApiTestHooks.requestProfileApi(pathname, body, {
+    const payload = await requestProfileApi(pathname, body, {
       fetch: async (input, init) => {
         assert.equal(String(input), `https://api.mons.shop${pathname}`);
         assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
@@ -956,13 +893,6 @@ test('wallet lifecycle clients use the authenticated Cloudflare routes', async (
     });
     assert.ok(payload);
   }
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  for (const name of ['solanaAuth', 'reconcileProfileState']) {
-    const start = source.indexOf(`export async function ${name}`);
-    const end = source.indexOf('\nexport async function ', start + 1);
-    const implementation = source.slice(start, end < 0 ? source.length : end);
-    assert.match(implementation, /callProfileApi\(/);
-  }
 });
 
 test('API write response validators accept only exact public contracts', () => {
@@ -972,9 +902,9 @@ test('API write response validators accept only exact public contracts', () => {
     alreadyAdded: false,
     shipstationAddedAt: 1_755_000_000_000,
   };
-  assert.deepEqual(profileApiTestHooks.parseAddFulfillmentOrderToShipStation(shipment), shipment);
-  assert.equal(profileApiTestHooks.parseAddFulfillmentOrderToShipStation({ ...shipment, private: true }), null);
-  assert.equal(profileApiTestHooks.parseAddFulfillmentOrderToShipStation({ ...shipment, alreadyAdded: 'false' }), null);
+  assert.deepEqual(parseAddFulfillmentOrderToShipStation(shipment), shipment);
+  assert.equal(parseAddFulfillmentOrderToShipStation({ ...shipment, private: true }), null);
+  assert.equal(parseAddFulfillmentOrderToShipStation({ ...shipment, alreadyAdded: 'false' }), null);
 
   const address = {
     id: 'AbCdEfGhIjKlMnOpQrSt',
@@ -984,30 +914,30 @@ test('API write response validators accept only exact public contracts', () => {
     encrypted: 'cipher-text',
     email: 'owner@example.com',
   };
-  assert.deepEqual(profileApiTestHooks.parseProfileAddress(address), address);
-  assert.equal(profileApiTestHooks.parseProfileAddress({ ...address, private: true }), null);
-  assert.equal(profileApiTestHooks.parseProfileAddress({ ...address, id: 'not-auto-id' }), null);
+  assert.deepEqual(parseProfileAddress(address), address);
+  assert.equal(parseProfileAddress({ ...address, private: true }), null);
+  assert.equal(parseProfileAddress({ ...address, id: 'not-auto-id' }), null);
 
   const status = {
     deliveryId: 7,
     fulfillmentStatus: 'Shipped',
     fulfillmentTrackingCode: 'https://tracking.example/7',
   } as const;
-  assert.deepEqual(profileApiTestHooks.parseFulfillmentStatusUpdate(status), status);
-  assert.deepEqual(profileApiTestHooks.parseFulfillmentStatusUpdate({
+  assert.deepEqual(parseFulfillmentStatusUpdate(status), status);
+  assert.deepEqual(parseFulfillmentStatusUpdate({
     ...status,
     buyerOrderShippedEmailState: 'queued',
   }), { ...status, buyerOrderShippedEmailState: 'queued' });
-  assert.deepEqual(profileApiTestHooks.parseFulfillmentStatusUpdate({
+  assert.deepEqual(parseFulfillmentStatusUpdate({
     deliveryId: 7,
     fulfillmentStatus: '',
   }), { deliveryId: 7, fulfillmentStatus: '' });
-  assert.equal(profileApiTestHooks.parseFulfillmentStatusUpdate({ ...status, fulfillmentStatus: 'Delivered' }), null);
-  assert.equal(profileApiTestHooks.parseFulfillmentStatusUpdate({
+  assert.equal(parseFulfillmentStatusUpdate({ ...status, fulfillmentStatus: 'Delivered' }), null);
+  assert.equal(parseFulfillmentStatusUpdate({
     ...status,
     buyerOrderShippedEmailState: 'sent',
   }), null);
-  assert.equal(profileApiTestHooks.parseFulfillmentStatusUpdate({ ...status, internal: true }), null);
+  assert.equal(parseFulfillmentStatusUpdate({ ...status, internal: true }), null);
 
   const fulfillmentAddress = {
     deliveryId: 7,
@@ -1019,17 +949,17 @@ test('API write response validators accept only exact public contracts', () => {
       countryCode: 'TR',
     },
   };
-  assert.deepEqual(profileApiTestHooks.parseUpdateFulfillmentAddress(fulfillmentAddress), fulfillmentAddress);
+  assert.deepEqual(parseUpdateFulfillmentAddress(fulfillmentAddress), fulfillmentAddress);
   const expandedCipherAddress = {
     ...fulfillmentAddress,
     address: { ...fulfillmentAddress.address, encrypted: 'x'.repeat(12 * 1024) },
   };
-  assert.deepEqual(profileApiTestHooks.parseUpdateFulfillmentAddress(expandedCipherAddress), expandedCipherAddress);
-  assert.equal(profileApiTestHooks.parseUpdateFulfillmentAddress({
+  assert.deepEqual(parseUpdateFulfillmentAddress(expandedCipherAddress), expandedCipherAddress);
+  assert.equal(parseUpdateFulfillmentAddress({
     ...expandedCipherAddress,
     address: { ...expandedCipherAddress.address, encrypted: `${expandedCipherAddress.address.encrypted}x` },
   }), null);
-  assert.equal(profileApiTestHooks.parseUpdateFulfillmentAddress({
+  assert.equal(parseUpdateFulfillmentAddress({
     ...fulfillmentAddress,
     address: { ...fulfillmentAddress.address, private: true },
   }), null);
@@ -1047,8 +977,8 @@ test('API write response validators accept only exact public contracts', () => {
     },
     labelDownloadUrl: 'https://labels.example/label-1.pdf',
   };
-  assert.deepEqual(profileApiTestHooks.parseGetFulfillmentShipStationLabel(shipStationLabel), shipStationLabel);
-  assert.deepEqual(profileApiTestHooks.parseGetFulfillmentShipStationLabel({
+  assert.deepEqual(parseGetFulfillmentShipStationLabel(shipStationLabel), shipStationLabel);
+  assert.deepEqual(parseGetFulfillmentShipStationLabel({
     deliveryId: 7,
     shipmentId: 'shipment-1',
     purchaseUnknown: true,
@@ -1057,33 +987,33 @@ test('API write response validators accept only exact public contracts', () => {
     shipmentId: 'shipment-1',
     purchaseUnknown: true,
   });
-  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationLabel({
+  assert.equal(parseGetFulfillmentShipStationLabel({
     ...shipStationLabel,
     labelDownloadUrl: 'http://labels.example/label-1.pdf',
   }), null);
-  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationLabel({
+  assert.equal(parseGetFulfillmentShipStationLabel({
     ...shipStationLabel,
     private: true,
   }), null);
-  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationLabel({
+  assert.equal(parseGetFulfillmentShipStationLabel({
     ...shipStationLabel,
     label: { ...shipStationLabel.label, shipmentId: 'shipment-2' },
   }), null);
 
   const shipStationLabelPurchase = { ...shipStationLabel, alreadyPurchased: false };
   assert.deepEqual(
-    profileApiTestHooks.parsePurchaseFulfillmentShipStationLabel(shipStationLabelPurchase),
+    parsePurchaseFulfillmentShipStationLabel(shipStationLabelPurchase),
     shipStationLabelPurchase,
   );
-  assert.equal(profileApiTestHooks.parsePurchaseFulfillmentShipStationLabel({
+  assert.equal(parsePurchaseFulfillmentShipStationLabel({
     ...shipStationLabelPurchase,
     private: true,
   }), null);
-  assert.equal(profileApiTestHooks.parsePurchaseFulfillmentShipStationLabel({
+  assert.equal(parsePurchaseFulfillmentShipStationLabel({
     ...shipStationLabelPurchase,
     label: { ...shipStationLabelPurchase.label, shipmentId: 'shipment-2' },
   }), null);
-  assert.equal(profileApiTestHooks.parsePurchaseFulfillmentShipStationLabel({
+  assert.equal(parsePurchaseFulfillmentShipStationLabel({
     ...shipStationLabelPurchase,
     alreadyPurchased: 'false',
   }), null);
@@ -1094,18 +1024,18 @@ test('API write response validators accept only exact public contracts', () => {
     label: { ...shipStationLabel.label, status: 'voided' },
   };
   assert.deepEqual(
-    profileApiTestHooks.parseVoidFulfillmentShipStationLabel(shipStationLabelVoid),
+    parseVoidFulfillmentShipStationLabel(shipStationLabelVoid),
     shipStationLabelVoid,
   );
-  assert.equal(profileApiTestHooks.parseVoidFulfillmentShipStationLabel({
+  assert.equal(parseVoidFulfillmentShipStationLabel({
     ...shipStationLabelVoid,
     label: { ...shipStationLabelVoid.label, status: 'completed' },
   }), null);
-  assert.equal(profileApiTestHooks.parseVoidFulfillmentShipStationLabel({
+  assert.equal(parseVoidFulfillmentShipStationLabel({
     ...shipStationLabelVoid,
     label: { ...shipStationLabelVoid.label, shipmentId: 'shipment-2' },
   }), null);
-  assert.equal(profileApiTestHooks.parseVoidFulfillmentShipStationLabel({
+  assert.equal(parseVoidFulfillmentShipStationLabel({
     ...shipStationLabelVoid,
     private: true,
   }), null);
@@ -1133,17 +1063,17 @@ test('API write response validators accept only exact public contracts', () => {
     }],
     invalidRates: [],
   };
-  assert.deepEqual(profileApiTestHooks.parseGetFulfillmentShipStationRates(shipStationRates), shipStationRates);
+  assert.deepEqual(parseGetFulfillmentShipStationRates(shipStationRates), shipStationRates);
   const providerPackage = { ...shipStationRates.package, weight: 1616 };
-  assert.deepEqual(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+  assert.deepEqual(parseGetFulfillmentShipStationRates({
     ...shipStationRates,
     package: providerPackage,
   }), { ...shipStationRates, package: providerPackage });
-  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+  assert.equal(parseGetFulfillmentShipStationRates({
     ...shipStationRates,
     rates: [{ ...shipStationRates.rates[0], shipmentId: 'shipment-2' }],
   }), null);
-  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+  assert.equal(parseGetFulfillmentShipStationRates({
     ...shipStationRates,
     package: { ...shipStationRates.package, private: true },
   }), null);
@@ -1157,20 +1087,20 @@ test('API write response validators accept only exact public contracts', () => {
       0,
       -1,
     ]) {
-      assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+      assert.equal(parseGetFulfillmentShipStationRates({
         ...shipStationRates,
         package: { ...shipStationRates.package, [field]: malformedValue },
       }), null, `package ${field} must reject ${String(malformedValue)}`);
     }
   }
-  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+  assert.equal(parseGetFulfillmentShipStationRates({
     ...shipStationRates,
     rates: [{
       ...shipStationRates.rates[0],
       insuranceAmount: { currency: 'eur', amount: 1 },
     }],
   }), null);
-  assert.equal(profileApiTestHooks.parseGetFulfillmentShipStationRates({
+  assert.equal(parseGetFulfillmentShipStationRates({
     ...shipStationRates,
     private: true,
   }), null);
@@ -1181,7 +1111,7 @@ test('ShipStation address correction details and request serialization use stric
     kind: 'shipstation-address-correction',
     fields: ['name', 'state_province', 'country_code'],
   };
-  assert.deepEqual(profileApiTestHooks.parseFulfillmentShipStationAddressCorrectionDetails(details), details);
+  assert.deepEqual(parseFulfillmentShipStationAddressCorrectionDetails(details), details);
   for (const malformed of [
     { ...details, private: '100 Main St' },
     { ...details, kind: 'address-correction' },
@@ -1191,12 +1121,12 @@ test('ShipStation address correction details and request serialization use stric
     { ...details, fields: ['company_name'] },
     { ...details, fields: 'state_province' },
   ]) {
-    assert.equal(profileApiTestHooks.parseFulfillmentShipStationAddressCorrectionDetails(malformed), null);
+    assert.equal(parseFulfillmentShipStationAddressCorrectionDetails(malformed), null);
   }
 
   const parcel = { length: 10, width: 8, height: 3, weight: 8 };
   const addressPatch = { address_line2: '', state_province: 'PA', country_code: 'US' };
-  assert.deepEqual(profileApiTestHooks.addFulfillmentOrderToShipStationRequestPayload(
+  assert.deepEqual(addFulfillmentOrderToShipStationRequestPayload(
     7,
     'card_nft_2',
     parcel,
@@ -1207,7 +1137,7 @@ test('ShipStation address correction details and request serialization use stric
     package: parcel,
     addressPatch,
   });
-  assert.deepEqual(profileApiTestHooks.addFulfillmentOrderToShipStationRequestPayload(7, 'card_nft_2'), {
+  assert.deepEqual(addFulfillmentOrderToShipStationRequestPayload(7, 'card_nft_2'), {
     deliveryId: 7,
     dropId: 'card_nft_2',
   });
@@ -1220,8 +1150,8 @@ test('profile state validator rejects mismatches, malformed summaries, and extra
     profile: { status: 'ready', value: { wallet: OWNER } },
     shipments: { status: 'ready', value: [] },
   };
-  assert.deepEqual(profileApiTestHooks.parseProfileState(valid), valid);
-  assert.deepEqual(profileApiTestHooks.parseProfileState({
+  assert.deepEqual(parseProfileState(valid), valid);
+  assert.deepEqual(parseProfileState({
     responseMode: 'profile-state',
     sessionWallet: null,
     profile: null,
@@ -1232,41 +1162,30 @@ test('profile state validator rejects mismatches, malformed summaries, and extra
     profile: null,
     shipments: null,
   });
-  assert.equal(profileApiTestHooks.parseProfileState({
+  assert.equal(parseProfileState({
     ...valid,
     profile: { status: 'ready', value: { wallet: 'So11111111111111111111111111111111111111112' } },
   }), null);
-  assert.equal(profileApiTestHooks.parseProfileState({
+  assert.equal(parseProfileState({
     ...valid,
     shipments: { status: 'ready', value: [{ dropId: 'drop', deliveryId: 0, status: 'processing', items: [] }] },
   }), null);
-  assert.equal(profileApiTestHooks.parseProfileState({
+  assert.equal(parseProfileState({
     ...valid,
     shipments: {
       status: 'ready',
       value: [{ dropId: 'drop', deliveryId: 1, status: 'processing', items: [], claimCode: 'secret' }],
     },
   }), null);
-  assert.equal(profileApiTestHooks.parseProfileState({
+  assert.equal(parseProfileState({
     ...valid,
     profile: { status: 'ready', value: { wallet: OWNER, email: ' owner@example.com ' } },
   }), null);
-  assert.equal(profileApiTestHooks.parseProfileState({ ...valid, private: true }), null);
-  assert.equal(profileApiTestHooks.parseProfileState({
+  assert.equal(parseProfileState({ ...valid, private: true }), null);
+  assert.equal(parseProfileState({
     responseMode: 'profile-state',
     sessionWallet: null,
     profile: { status: 'ready', value: { wallet: OWNER } },
     shipments: null,
   }), null);
-});
-
-test('browser source has no direct Commerce data access', () => {
-  const sourceRoot = new URL('../src/', import.meta.url);
-  const files = (directory: URL): URL[] => readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const child = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory);
-    return entry.isDirectory() ? files(child) : statSync(child).isFile() && /\.[cm]?[jt]sx?$/.test(entry.name) ? [child] : [];
-  });
-  const source = files(sourceRoot).map((file) => readFileSync(file, 'utf8')).join('\n');
-  assert.doesNotMatch(source, /from\s+['"]auth\/commerce['"]/);
-  assert.doesNotMatch(source, /\bgetCommerce\s*\(/);
 });

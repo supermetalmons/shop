@@ -8,7 +8,7 @@ export {
   normalizeCardNft2CardId,
 } from './cardNft2AssetCore.ts';
 
-export const CARD_NFT_2_COMMON_CARD_IDS: ReadonlySet<number> =
+const CARD_NFT_2_COMMON_CARD_IDS: ReadonlySet<number> =
   new Set(CARD_NFT_2_COMMON_CARD_ID_VALUES);
 
 export function isCardNft2CommonCardId(cardId: unknown): boolean {

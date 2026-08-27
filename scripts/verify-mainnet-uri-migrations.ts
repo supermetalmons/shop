@@ -12,6 +12,7 @@ import {
   assertNoMutableLegacy,
   assertProgramState,
   assertTreeConfig,
+  assertUpgradeTransaction,
   paginateDasAssets,
   parseRawCollection,
   parseRawCoreAsset,
@@ -90,21 +91,36 @@ async function getAccount(address: string): Promise<RpcAccount> {
 }
 
 async function verifyDrop(spec: (typeof MAINNET_URI_DROPS)[number]) {
-  const [program, programDataAccount, configAccount, collectionAccount, treeAccount, treeConfigAccount] = await Promise.all([
-    getAccount(spec.program),
-    getAccount(spec.programData),
+  const attestation = spec.programAttestation;
+  const [
+    program,
+    programDataAccount,
+    configAccount,
+    collectionAccount,
+    treeAccount,
+    treeConfigAccount,
+    upgradeTransaction,
+  ] = await Promise.all([
+    getAccount(attestation.address),
+    getAccount(attestation.programData),
     getAccount(spec.config),
     getAccount(spec.collection),
     getAccount(spec.receiptsTree),
     getAccount(spec.receiptsTreeConfig),
+    rpc<unknown>('getTransaction', [
+      attestation.upgradeSignature,
+      { commitment: 'finalized', encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 },
+    ]),
   ]);
   const programData = assertProgramState(
     spec,
     program.owner,
     program.executable,
+    accountData(program, attestation.address),
     programDataAccount.owner,
-    accountData(programDataAccount, spec.programData),
+    accountData(programDataAccount, attestation.programData),
   );
+  assertUpgradeTransaction(spec, upgradeTransaction);
   const config = assertConfigState(spec, configAccount.owner, accountData(configAccount, spec.config));
   if (collectionAccount.owner !== MPL_CORE) throw new Error(`${spec.dropId} collection owner mismatch`);
   const collection = parseRawCollection(accountData(collectionAccount, spec.collection));
@@ -150,11 +166,12 @@ async function verifyDrop(spec: (typeof MAINNET_URI_DROPS)[number]) {
   return {
     dropId: spec.dropId,
     program: {
-      address: spec.program,
-      programData: spec.programData,
+      address: attestation.address,
+      programData: attestation.programData,
       deploymentSlot: programData.slot,
       elfSha256: programData.payloadSha256,
       authority: programData.authority,
+      upgradeSignature: attestation.upgradeSignature,
     },
     config: {
       address: spec.config,

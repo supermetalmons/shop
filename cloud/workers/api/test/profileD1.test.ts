@@ -3,14 +3,14 @@ import test from 'node:test';
 import {
   ensureD1Profile,
   loadD1Profile,
-  profileD1TestHooks,
+  runD1Write,
 } from '../src/profileD1.ts';
 
 const WALLET = '11111111111111111111111111111111';
 
 test('D1 writes retry recognized transient failures once', async () => {
   let attempts = 0;
-  const result = await profileD1TestHooks.runD1Write(undefined, async () => {
+  const result = await runD1Write(undefined, async () => {
     attempts += 1;
     if (attempts === 1) throw new Error('D1_ERROR: Network connection lost');
     return 'saved';
@@ -22,7 +22,7 @@ test('D1 writes retry recognized transient failures once', async () => {
 test('D1 writes do not retry permanent failures', async () => {
   let attempts = 0;
   await assert.rejects(
-    profileD1TestHooks.runD1Write(undefined, async () => {
+    runD1Write(undefined, async () => {
       attempts += 1;
       throw new Error('D1_ERROR: constraint failed');
     }),
@@ -34,7 +34,7 @@ test('D1 writes do not retry permanent failures', async () => {
 test('an aborted request never starts a D1 write', async () => {
   let attempts = 0;
   await assert.rejects(
-    profileD1TestHooks.runD1Write(AbortSignal.abort(new Error('stopped')), async () => {
+    runD1Write(AbortSignal.abort(new Error('stopped')), async () => {
       attempts += 1;
     }),
     /stopped/,
@@ -44,7 +44,7 @@ test('an aborted request never starts a D1 write', async () => {
 
 test('an in-flight D1 write reaches a definite outcome after the request deadline', async () => {
   const controller = new AbortController();
-  const result = profileD1TestHooks.runD1Write(controller.signal, async () => {
+  const result = runD1Write(controller.signal, async () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     return 'saved';
   });
@@ -55,7 +55,7 @@ test('an in-flight D1 write reaches a definite outcome after the request deadlin
 test('an in-flight transient D1 write retries after the request deadline', async () => {
   const controller = new AbortController();
   let attempts = 0;
-  const result = profileD1TestHooks.runD1Write(controller.signal, async () => {
+  const result = runD1Write(controller.signal, async () => {
     attempts += 1;
     if (attempts === 1) {
       await new Promise((resolve) => setTimeout(resolve, 20));

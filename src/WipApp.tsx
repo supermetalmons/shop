@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  InteractiveCardPackRevealOverlay,
-  PonchoRevealOverlay,
-  type InteractiveCardPackRevealOverlayProps,
-} from './components/PonchoRevealOverlay';
+import { PonchoRevealOverlay } from './components/PonchoRevealOverlay';
 import { CARD_NFT_2_PACK_INITIAL_COUNT } from './config/dropMediaDefaults';
 import {
   createPonchoDrifellaImageCache,
@@ -40,12 +36,9 @@ type OverlayRect = { left: number; top: number; width: number; height: number };
 
 export type PackWipDropId = 'card_nft_2' | 'little_swag_boxes' | 'poncho_drifella';
 
-type WipLocalPlayProps = {
-  mode?: 'local-play';
+export type WipAppProps = {
   dropId?: PackWipDropId;
 };
-
-export type WipAppProps = WipLocalPlayProps | InteractiveCardPackRevealOverlayProps;
 
 function calcWipTargetRect(): OverlayRect {
   if (typeof window === 'undefined') {
@@ -398,9 +391,6 @@ function LocalPlayWipApp({ dropId }: { dropId: Exclude<PackWipDropId, 'little_sw
 }
 
 export default function WipApp(props: WipAppProps) {
-  if (props.mode === 'inventory-unbox') {
-    return <InteractiveCardPackRevealOverlay {...props} />;
-  }
   const dropId = props.dropId || 'card_nft_2';
   if (dropId === 'little_swag_boxes') {
     return <LittleSwagBoxesWipApp />;

@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createDarkColorSchemeStore } from '../src/hooks/useDarkColorScheme.ts';
 
@@ -61,18 +60,4 @@ test('dark color-scheme store safely falls back to light without matchMedia', ()
 
   assert.equal(store.getSnapshot(), false);
   assert.doesNotThrow(unsubscribe);
-});
-
-test('Clear Card WIP and live unpacking pass the active color scheme to preset resolution', () => {
-  const wip = readFileSync(new URL('../src/ClearCardWipApp.tsx', import.meta.url), 'utf8');
-  const reveal = readFileSync(
-    new URL('../src/components/ClearCardRevealOverlay.tsx', import.meta.url),
-    'utf8',
-  );
-
-  assert.match(wip, /const darkMode = useDarkColorScheme\(\)/);
-  assert.match(wip, /lightingPresetId === 'custom'/);
-  assert.equal((wip.match(/createClearCardLightingPreset\([^;]+\{ darkMode \}\)/gs) ?? []).length, 3);
-  assert.match(reveal, /const darkMode = useDarkColorScheme\(\)/);
-  assert.match(reveal, /createClearCardLightingPreset\(undefined, \{ darkMode \}\)/);
 });

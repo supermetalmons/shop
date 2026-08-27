@@ -291,7 +291,7 @@ async function fetchOnchainConfig(
   };
 }
 
-function requireFulfillmentPrerequisites(env: CheckoutEnv, config: StripeCheckoutOnchainConfig): void {
+export function requireFulfillmentPrerequisites(env: CheckoutEnv, config: StripeCheckoutOnchainConfig): void {
   let secretKey: Uint8Array;
   try {
     secretKey = bs58.decode(String(env.COSIGNER_SECRET || '').trim());
@@ -322,7 +322,7 @@ function requireFulfillmentPrerequisites(env: CheckoutEnv, config: StripeCheckou
   }
 }
 
-function stripeKeys(env: CheckoutEnv, mode: StripeCheckoutMode): string[] {
+export function stripeKeys(env: CheckoutEnv, mode: StripeCheckoutMode): string[] {
   const candidates = mode === 'test'
     ? [env.STRIPE_SECRET_KEY, env.STRIPE_RESTRICTED_KEY]
     : [env.STRIPE_SECRET_KEY_LIVE, env.STRIPE_RESTRICTED_KEY_LIVE];
@@ -574,12 +574,3 @@ export async function handleStripeCheckoutSession(
     clearTimeout(timeout);
   }
 }
-
-export const stripeCheckoutTestHooks = {
-  checkoutDrop,
-  createStripeProviderSession,
-  fetchOnchainConfig,
-  persistCheckoutDocument,
-  requireFulfillmentPrerequisites,
-  stripeKeys,
-};

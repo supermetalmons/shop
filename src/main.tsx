@@ -2,97 +2,39 @@ import { Buffer } from 'buffer';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { getNormalizedPathname, subscribeToNavigation } from './navigation';
+import { subscribeToNavigation } from './navigation';
 import { getBuildInfo } from './lib/buildInfo';
-import type { SolanaCluster } from './config/deployment';
-import {
-  LEGACY_DROP_ROUTE_ALIASES,
-  resolveFrontendDropByPath,
-  resolveUpcomingDropRouteByPath,
-} from './lib/dropConfig';
 import { installMobileInteractionGuards } from './lib/mobileInteractionGuards';
 import { canonicalProductionUrl } from './lib/canonicalOrigin';
+import { runBrowserBootstrap } from './bootstrap';
+import { resolveAppRoute, type ResolvedAppRoute } from './routes';
 import ShopRoute from './ShopRoute';
 import { BackgroundBlurProvider } from './components/BackgroundBlurLayer';
 import './styles.css';
 
-const canonicalUrl = canonicalProductionUrl(window.location.href);
-if (canonicalUrl) {
-  window.location.replace(canonicalUrl);
-} else {
-  if (!window.Buffer) window.Buffer = Buffer;
-  installMobileInteractionGuards();
-  document.title = getBuildInfo() === 'local dev' ? 'localshop' : 'mons.shop';
-}
-
-const canonicalFulfillmentPath = '/fulfillment';
-const canonicalDrifPath = '/notify_me';
-const canonicalCardNft2WipPath = '/card_nft_2/wip';
-const canonicalClearCardsWipPath = '/clear_cards/wip';
-const canonicalLittleSwagBoxesWipPath = '/little_swag_boxes/wip';
-const canonicalPonchoDrifellaWipPath = '/poncho_drifella/wip';
-const canonicalClaimPath = '/claim';
-const drifPaths = new Set([canonicalDrifPath]);
-const wipExperiencesByPath = {
-  [canonicalCardNft2WipPath]: 'card_nft_2',
-  [canonicalClearCardsWipPath]: 'clear_cards',
-  [canonicalLittleSwagBoxesWipPath]: 'little_swag_boxes',
-  [canonicalPonchoDrifellaWipPath]: 'poncho_drifella',
-} as const;
 const DrifApp = React.lazy(() => import('./DrifApp'));
 const FulfillmentRoute = React.lazy(() => import('./FulfillmentRoute'));
-const NEUTRAL_WALLET_CLUSTER: SolanaCluster = 'mainnet-beta';
 
-type RouteAlias = {
-  targetPath: string;
-  replaceUrl: boolean;
-};
+const routesEqual = (a: ResolvedAppRoute, b: ResolvedAppRoute): boolean =>
+  a.kind === b.kind &&
+  a.path === b.path &&
+  a.claimDeepLinkCode === b.claimDeepLinkCode &&
+  a.drop === b.drop &&
+  a.upcoming === b.upcoming &&
+  a.wipExperience === b.wipExperience;
 
-const ROUTE_ALIASES: Record<string, RouteAlias> = {
-  '/ff': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
-  '/fullfillment': { targetPath: canonicalFulfillmentPath, replaceUrl: true },
-  '/notify-me': { targetPath: canonicalDrifPath, replaceUrl: true },
-  ...LEGACY_DROP_ROUTE_ALIASES,
-  [canonicalClaimPath]: { targetPath: '/', replaceUrl: false },
-};
+const resolveCurrentRoute = (): ResolvedAppRoute => {
+  const route = resolveAppRoute({
+    pathname: window.location.pathname,
+    search: window.location.search,
+    hash: window.location.hash,
+  });
 
-type CurrentRoute = {
-  path: string;
-  claimDeepLinkCode: string | null;
-};
-
-const claimDeepLinkCodeFromSearch = (): string => new URLSearchParams(window.location.search).get('code') ?? '';
-
-const routesEqual = (a: CurrentRoute, b: CurrentRoute): boolean =>
-  a.path === b.path && a.claimDeepLinkCode === b.claimDeepLinkCode;
-
-const resolveCurrentRoute = (): CurrentRoute => {
-  const path = getNormalizedPathname();
-  const alias = ROUTE_ALIASES[path];
-  const normalizedPath = alias ? alias.targetPath : path;
-  const claimDeepLinkCode = path === canonicalClaimPath ? claimDeepLinkCodeFromSearch() : null;
-
-  if (alias?.replaceUrl) {
-    const search = window.location.search || '';
-    const hash = window.location.hash || '';
-    window.history.replaceState(window.history.state, '', `${alias.targetPath}${search}${hash}`);
+  if (route.replacementHref) {
+    window.history.replaceState(window.history.state, '', route.replacementHref);
   }
 
-  if (
-    normalizedPath === '/' ||
-    normalizedPath === canonicalFulfillmentPath ||
-    normalizedPath in wipExperiencesByPath ||
-    drifPaths.has(normalizedPath) ||
-    resolveUpcomingDropRouteByPath(normalizedPath) ||
-    resolveFrontendDropByPath(normalizedPath)
-  ) {
-    return { path: normalizedPath, claimDeepLinkCode };
-  }
-
-  const search = window.location.search || '';
-  const hash = window.location.hash || '';
-  window.history.replaceState(window.history.state, '', `/${search}${hash}`);
-  return { path: '/', claimDeepLinkCode: null };
+  return route;
 };
 
 function RoutedApp() {
@@ -110,27 +52,19 @@ function RoutedApp() {
   }, []);
 
   React.useEffect(() => {
-    if (drifPaths.has(route.path)) return;
+    if (route.kind === 'notify') return;
     document.body.classList.remove('drif-body');
-  }, [route.path]);
+  }, [route.kind]);
 
   return <RoutedContent route={route} />;
 }
 
 type RoutedContentProps = {
-  route: CurrentRoute;
+  route: ResolvedAppRoute;
 };
 
 function RoutedContent({ route }: RoutedContentProps) {
-  const { path } = route;
-  const isDrifRoute = drifPaths.has(path);
-  const wipExperience =
-    wipExperiencesByPath[path as keyof typeof wipExperiencesByPath] || null;
-  const isFulfillmentRoute = path === canonicalFulfillmentPath;
-  const routeDrop = resolveFrontendDropByPath(path);
-  const upcomingRoute = routeDrop ? null : resolveUpcomingDropRouteByPath(path);
-
-  if (isDrifRoute) {
+  if (route.kind === 'notify') {
     return (
       <React.Suspense fallback={null}>
         <DrifApp />
@@ -138,7 +72,7 @@ function RoutedContent({ route }: RoutedContentProps) {
     );
   }
 
-  if (isFulfillmentRoute) {
+  if (route.kind === 'fulfillment') {
     return (
       <React.Suspense fallback={null}>
         <FulfillmentRoute />
@@ -148,23 +82,31 @@ function RoutedContent({ route }: RoutedContentProps) {
 
   return (
     <ShopRoute
-      cluster={routeDrop?.solanaCluster || upcomingRoute?.solanaCluster || NEUTRAL_WALLET_CLUSTER}
-      currentPath={path}
+      cluster={route.walletCluster}
+      currentPath={route.path}
       claimDeepLinkCode={route.claimDeepLinkCode}
-      wipExperience={wipExperience}
+      wipExperience={route.wipExperience}
     />
   );
 }
 
-if (!canonicalUrl) {
-  const queryClient = new QueryClient();
-  ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-    <React.StrictMode>
-      <QueryClientProvider client={queryClient}>
-        <BackgroundBlurProvider>
-          <RoutedApp />
-        </BackgroundBlurProvider>
-      </QueryClientProvider>
-    </React.StrictMode>,
-  );
-}
+runBrowserBootstrap(canonicalProductionUrl(window.location.href), {
+  redirect: (url) => window.location.replace(url),
+  setup: () => {
+    if (!window.Buffer) window.Buffer = Buffer;
+    installMobileInteractionGuards();
+    document.title = getBuildInfo() === 'local dev' ? 'localshop' : 'mons.shop';
+  },
+  mount: () => {
+    const queryClient = new QueryClient();
+    ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+      <React.StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <BackgroundBlurProvider>
+            <RoutedApp />
+          </BackgroundBlurProvider>
+        </QueryClientProvider>
+      </React.StrictMode>,
+    );
+  },
+});

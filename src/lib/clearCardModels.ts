@@ -3,7 +3,6 @@ import {
   CLEAR_CARDS_PACK_MODEL_URL,
 } from '../config/dropMediaDefaults';
 
-export const CLEAR_CARD_PREVIEW_MODEL_URL = '/clear_card_preview.glb';
 export const DEFAULT_CLEAR_PACK_MODEL_URL = CLEAR_CARDS_PACK_MODEL_URL;
 export const CLEAR_CARD_MODEL_COUNT = 192;
 

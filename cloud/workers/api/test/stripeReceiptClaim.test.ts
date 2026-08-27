@@ -5,11 +5,39 @@ import { Keypair } from '@solana/web3.js';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
 import {
+  commerceKeyFromPath,
+  type CommerceDocumentData,
+} from '../src/commerceRepository.ts';
+import {
   STRIPE_RECEIPT_CLAIM_PATH,
   StripeReceiptClaimError,
+  buildWithOptionalLookupTable,
+  claimFlowFor,
+  claimStripeReceipt,
+  clearProcessing,
+  finalizeClaim,
   handleStripeReceiptClaim,
-  stripeReceiptClaimTestHooks,
+  normalizeSubmissions,
+  orderTarget,
+  readRequestBody,
+  rememberSubmittedTransaction,
+  responseForClaim,
+  startClaim,
 } from '../src/stripeReceiptClaim.ts';
+
+const stripeReceiptClaimTestHooks = {
+  buildWithOptionalLookupTable,
+  claimFlowFor,
+  claimStripeReceipt,
+  clearProcessing,
+  finalizeClaim,
+  normalizeSubmissions,
+  orderTarget,
+  readRequestBody,
+  rememberSubmittedTransaction,
+  responseForClaim,
+  startClaim,
+};
 
 const CODE = 'ABCDEF-1234567890';
 const DROP_ID = 'card_nft_2';
@@ -63,21 +91,6 @@ function dependencies(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function storedValue(value: unknown): Record<string, unknown> {
-  if (value === null) return { nullValue: null };
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'boolean') return { booleanValue: value };
-  if (typeof value === 'number') return { integerValue: String(value) };
-  if (Array.isArray(value)) return { arrayValue: { values: value.map(storedValue) } };
-  return {
-    mapValue: {
-      fields: Object.fromEntries(Object.entries(value as Record<string, unknown>).map(
-        ([key, entry]) => [key, storedValue(entry)],
-      )),
-    },
-  };
-}
-
 function conflictDatabase(db: D1Database, conflicts: number): D1Database {
   return {
     ...db,
@@ -98,9 +111,11 @@ function commerceContext(
 ) {
   const harness = createCommerceD1Harness();
   for (const [path, fields] of Object.entries(documents)) {
+    const key = commerceKeyFromPath(path);
+    if (!key) throw new Error(`Invalid commerce fixture path: ${path}`);
     seedCommerceDocument(harness, {
-      name: `projects/mons-shop/databases/(default)/documents/${path}`,
-      fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, storedValue(value)])),
+      key,
+      data: fields as CommerceDocumentData,
       updateTime: '2026-08-22T00:00:00.000Z',
     });
   }

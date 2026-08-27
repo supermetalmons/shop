@@ -11,7 +11,7 @@ import {
 } from './commerceRepository.js';
 import { createStripeCheckoutStore } from './stripeCheckout/store.js';
 
-const REQUEUE_AFTER_MS = 15 * 60 * 1000;
+export const STRIPE_FULFILLMENT_REQUEUE_AFTER_MS = 15 * 60 * 1000;
 type RequeueCandidate = {
   checkoutPath: string;
   dropId: string;
@@ -40,7 +40,7 @@ function reconciliationError(error: unknown): Record<string, unknown> {
     : { name: 'UnknownError' };
 }
 
-function parseRequeueCandidates(
+export function parseRequeueCandidates(
   value: readonly CommerceDocumentRecord[],
   cutoffMs: number,
 ): RequeueCandidate[] {
@@ -94,8 +94,8 @@ export async function reconcileStaleStripeFulfillments(
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
   const errorLog = overrides.error || ((entry: Record<string, unknown>) => console.error(entry));
   const candidates = await (overrides.loadCandidates
-    ? overrides.loadCandidates(nowMs - REQUEUE_AFTER_MS, signal)
-    : loadCandidates(env, nowMs - REQUEUE_AFTER_MS, signal));
+    ? overrides.loadCandidates(nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS, signal)
+    : loadCandidates(env, nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS, signal));
   const store = createStripeCheckoutStore({
     commerceDb: env.COMMERCE_DB,
     signal,
@@ -171,8 +171,3 @@ export async function reconcileStaleStripeFulfillments(
   if (failed) throw new Error(`Stripe fulfillment reconciliation failed for ${failed} checkout(s)`);
   return { enqueued, failed };
 }
-
-export const stripeCheckoutReconciliationTestHooks = {
-  parseRequeueCandidates,
-  requeueAfterMs: REQUEUE_AFTER_MS,
-};

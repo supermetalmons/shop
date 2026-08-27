@@ -14,6 +14,15 @@ const TREE_CONFIG_DISCRIMINATOR = Buffer.from([122, 245, 175, 248, 171, 34, 0, 2
 export type Asset = Record<string, any>;
 type DropKind = 'little_swag_boxes' | 'poncho_drifella' | 'card_nft_2';
 
+export type ProgramAttestation = Readonly<{
+  address: string;
+  programData: string;
+  deploymentSlot: number;
+  elfSha256: string;
+  authority: string;
+  upgradeSignature: string;
+}>;
+
 type UriPath = {
   kind: 'box' | 'figure';
   corePath: string;
@@ -27,6 +36,7 @@ export type DropSpec = {
   programData: string;
   deploymentSlot: number;
   elfSha256: string;
+  programAttestation: ProgramAttestation;
   config: string;
   configBytes: number;
   configSha256: string;
@@ -41,6 +51,33 @@ export type DropSpec = {
   fixedMaximumFigures?: number;
   coreAuthority: string;
 };
+
+export const MAINNET_PROGRAM_ATTESTATIONS: Readonly<Record<DropKind, ProgramAttestation>> = Object.freeze({
+  little_swag_boxes: Object.freeze({
+    address: '22NeePs5wgkzP4j5sPzfzJqXsFAu9SUMiGBznPQVaAep',
+    programData: '2u35tdkjBJkT79tdT58XeNEw216B82BPVmMeD8WoEfa6',
+    deploymentSlot: 437_191_823,
+    elfSha256: '0b0b2572727d787e6c78c462afbab6d5d88124ada7b8cf65b1df94f90bbd974f',
+    authority: ADMIN,
+    upgradeSignature: '44x6htchVQ7US11rtPp1H5a2SJqhUr3xXPZSzCqAmkPJcXM8ckgiLxDdAMWMN1duNgu8bDTuKeTxXe7oLmve1uHe',
+  }),
+  poncho_drifella: Object.freeze({
+    address: 'C96UF1dNPzAiRoWPDyU1BRVez5Rfqf2WeFy6gipkBS5A',
+    programData: '3rmLDxbb6AFQfAKjWMjvFF7axnXBJYBigATFdCSm9Mvv',
+    deploymentSlot: 437_216_909,
+    elfSha256: '705a938ea341c07b2469bda68f6b229bc68976202c335a17fa697b46469292fc',
+    authority: ADMIN,
+    upgradeSignature: '3dKajKrvf8JEoVT8Bgcoiw5pcByeWtMyTdjSN97wKCnoeK5yRP1RYHojmeX8be4pXcc4dDTnHhiwCmenGmNhG9sW',
+  }),
+  card_nft_2: Object.freeze({
+    address: '7FGMn1z6TMi6ndyVooP9n1y3zuWhcrxfcJgcSQs6VNNU',
+    programData: 'EoFbiCxRabimw8NHUNcdtMuVTuxVcriZSFZys4GvkWMK',
+    deploymentSlot: 438_693_777,
+    elfSha256: '99fa84062b79da099b72b0559523e9781b0a6b31113ed0747c4ba56d15637ab5',
+    authority: ADMIN,
+    upgradeSignature: '5WnCJ7BqTqNo45AprD6L2MBvU5mu97MHHPErGRHET44sTc9rhPPetBzA4isfUmKrKPpQ7vixNZBkcj5ED9r1omTc',
+  }),
+});
 
 export type DecodedConfig = {
   admin: string;
@@ -79,6 +116,7 @@ export const MAINNET_URI_DROPS: readonly DropSpec[] = Object.freeze([
     programData: '2u35tdkjBJkT79tdT58XeNEw216B82BPVmMeD8WoEfa6',
     deploymentSlot: 437_191_823,
     elfSha256: '0b0b2572727d787e6c78c462afbab6d5d88124ada7b8cf65b1df94f90bbd974f',
+    programAttestation: MAINNET_PROGRAM_ATTESTATIONS.little_swag_boxes,
     config: 'iGsmSPPYJovrb7jNFCX6BimZN5Z7dpkmCuW9SYAgcMc',
     configBytes: 289,
     configSha256: '8654ebab1f6870156bc412e231a16ec9ff5f54be6cf3e7dfdc2379c3c6fee613',
@@ -102,6 +140,7 @@ export const MAINNET_URI_DROPS: readonly DropSpec[] = Object.freeze([
     programData: '3rmLDxbb6AFQfAKjWMjvFF7axnXBJYBigATFdCSm9Mvv',
     deploymentSlot: 437_216_909,
     elfSha256: '705a938ea341c07b2469bda68f6b229bc68976202c335a17fa697b46469292fc',
+    programAttestation: MAINNET_PROGRAM_ATTESTATIONS.poncho_drifella,
     config: '2bYowarQZyoBjHmu1fzHDnWUfQRctLL4YHr7yhYjnVQq',
     configBytes: 307,
     configSha256: 'b94040fb4d1bf8d68b7cb17e93ebaad9cffb8bf315d729d2b7760d43ee60c068',
@@ -124,6 +163,7 @@ export const MAINNET_URI_DROPS: readonly DropSpec[] = Object.freeze([
     programData: 'EoFbiCxRabimw8NHUNcdtMuVTuxVcriZSFZys4GvkWMK',
     deploymentSlot: 437_244_047,
     elfSha256: 'a11f08436c0c1f7da6d3254f5191ba297a7d73b243bd14f3f81622c61eb5cb66',
+    programAttestation: MAINNET_PROGRAM_ATTESTATIONS.card_nft_2,
     config: '5Wm8XacaTagt9UTdYuGSUmVk87GgMLeyeV5JerzjTNqm',
     configBytes: 376,
     configSha256: '8d2bb5abe151e5255d0bc5c97af90bef8b23d1a4b63858f4bf60a7dcdcbf3627',
@@ -207,7 +247,7 @@ function decodeConfig(spec: DropSpec, data: Buffer): DecodedConfig {
 }
 
 export function assertConfigState(spec: DropSpec, owner: string, data: Buffer): DecodedConfig {
-  if (owner !== spec.program) throw new Error(`${spec.dropId} config owner mismatch`);
+  if (owner !== spec.programAttestation.address) throw new Error(`${spec.dropId} config owner mismatch`);
   if (sha256(data) !== spec.configSha256) throw new Error(`${spec.dropId} config hash mismatch`);
   const decoded = decodeConfig(spec, data);
   if (decoded.admin !== ADMIN
@@ -229,23 +269,89 @@ export function parseProgramData(data: Buffer): { slot: number; authority: strin
   };
 }
 
+function parseProgramAccount(data: Buffer): { programData: string } {
+  if (data.length !== 36 || data.readUInt32LE(0) !== 2) {
+    throw new Error('Invalid upgradeable Program account');
+  }
+  return { programData: new PublicKey(data.subarray(4)).toBase58() };
+}
+
 export function assertProgramState(
   spec: DropSpec,
   programOwner: string,
   executable: boolean,
+  programAccountData: Buffer,
   programDataOwner: string,
   data: Buffer,
 ): ReturnType<typeof parseProgramData> {
   if (programOwner !== UPGRADEABLE_LOADER || !executable || programDataOwner !== UPGRADEABLE_LOADER) {
     throw new Error(`${spec.dropId} program account mismatch`);
   }
+  if (parseProgramAccount(programAccountData).programData !== spec.programAttestation.programData) {
+    throw new Error(`${spec.dropId} ProgramData pointer mismatch`);
+  }
   const decoded = parseProgramData(data);
-  if (decoded.slot !== spec.deploymentSlot
-    || decoded.authority !== ADMIN
-    || decoded.payloadSha256 !== spec.elfSha256) {
+  if (decoded.slot !== spec.programAttestation.deploymentSlot
+    || decoded.authority !== spec.programAttestation.authority
+    || decoded.payloadSha256 !== spec.programAttestation.elfSha256) {
     throw new Error(`${spec.dropId} deployed program mismatch`);
   }
   return decoded;
+}
+
+type UpgradeTransaction = {
+  slot?: unknown;
+  meta?: { err?: unknown } | null;
+  transaction?: {
+    signatures?: unknown;
+    message?: {
+      accountKeys?: unknown;
+      instructions?: unknown;
+    };
+  };
+};
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
+}
+
+export function assertUpgradeTransaction(spec: DropSpec, value: unknown): void {
+  const transaction = objectValue(value) as UpgradeTransaction | null;
+  const attestation = spec.programAttestation;
+  if (!transaction
+    || transaction.slot !== attestation.deploymentSlot
+    || !transaction.meta
+    || transaction.meta.err !== null) {
+    throw new Error(`${spec.dropId} upgrade transaction failed or has the wrong slot`);
+  }
+  const signatures = transaction.transaction?.signatures;
+  if (!Array.isArray(signatures) || signatures[0] !== attestation.upgradeSignature) {
+    throw new Error(`${spec.dropId} upgrade transaction signature mismatch`);
+  }
+  const accountKeys = transaction.transaction?.message?.accountKeys;
+  if (!Array.isArray(accountKeys)) throw new Error(`${spec.dropId} malformed upgrade transaction accounts`);
+  const addresses = accountKeys.map((entry) => {
+    if (typeof entry === 'string') return entry;
+    return objectValue(entry)?.pubkey;
+  });
+  if (![attestation.address, attestation.programData, UPGRADEABLE_LOADER]
+    .every((address) => addresses.includes(address))) {
+    throw new Error(`${spec.dropId} upgrade transaction account mismatch`);
+  }
+  const instructions = transaction.transaction?.message?.instructions;
+  if (!Array.isArray(instructions)) throw new Error(`${spec.dropId} malformed upgrade transaction instructions`);
+  const hasUpgrade = instructions.some((entry) => {
+    const instruction = objectValue(entry);
+    const parsed = objectValue(instruction?.parsed);
+    const info = objectValue(parsed?.info);
+    return instruction?.program === 'bpf-upgradeable-loader'
+      && instruction?.programId === UPGRADEABLE_LOADER
+      && parsed?.type === 'upgrade'
+      && info?.programAccount === attestation.address
+      && info?.programDataAccount === attestation.programData
+      && info?.authority === attestation.authority;
+  });
+  if (!hasUpgrade) throw new Error(`${spec.dropId} parsed upgrade instruction mismatch`);
 }
 
 export function parseRawCollection(data: Buffer): { updateAuthority: string; name: string; uri: string } {

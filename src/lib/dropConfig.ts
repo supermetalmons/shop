@@ -1,11 +1,11 @@
 import {
-  FRONTEND_DROPS,
+  getFrontendDrop,
   isDropFamily,
+  listFrontendDrops,
   normalizeDropId,
   type DropFamily,
   type FrontendDropConfig,
   type SolanaCluster,
-  getFrontendDrop,
 } from '../config/deployment';
 import { CARD_NFT_2_PACK_PREVIEW_ASPECT_RATIO, CARD_NFT_2_PACK_PREVIEW_IMAGE_URL } from './cardNft2Packs';
 import {
@@ -107,12 +107,6 @@ const UPCOMING_DROP_ROUTES: readonly UpcomingDropRouteConfig[] = [
     boxNamePrefix: 'shirt',
   },
 ];
-
-export function listFrontendDrops(): FrontendDropConfig[] {
-  return Object.keys(FRONTEND_DROPS)
-    .sort((a, b) => a.localeCompare(b))
-    .map((dropId) => FRONTEND_DROPS[dropId]);
-}
 
 export function listUpcomingDropRoutes(): UpcomingDropRouteConfig[] {
   return [...UPCOMING_DROP_ROUTES];

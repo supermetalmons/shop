@@ -1,6 +1,6 @@
 const NAVIGATION_EVENT = 'mons:navigate';
 
-const normalizePathname = (pathname: string): string => {
+export const normalizePathname = (pathname: string): string => {
   const normalized = pathname.replace(/\/+$/, '');
   return normalized || '/';
 };
@@ -9,7 +9,8 @@ const buildUrl = (pathname: string): string => {
   return normalizePathname(pathname.startsWith('/') ? pathname : `/${pathname}`);
 };
 
-export const getNormalizedPathname = (pathname = window.location.pathname): string => normalizePathname(pathname);
+export const getNormalizedPathname = (pathname = window.location.pathname): string =>
+  normalizePathname(pathname);
 
 export const navigate = (pathname: string, options?: { replace?: boolean }): void => {
   const targetPath = normalizePathname(pathname.startsWith('/') ? pathname : `/${pathname}`);

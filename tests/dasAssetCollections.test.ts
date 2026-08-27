@@ -1,32 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  assetGroupingAllowsTreeVerifiedCollectionMatch as frontendAssetGroupingAllowsTreeVerifiedCollectionMatch,
-  assetGroupingCollectionMints as frontendAssetGroupingCollectionMints,
-  uniqueAssetGroupingCollectionMint as frontendUniqueAssetGroupingCollectionMint,
-} from '../src/lib/dasAssetCollections.ts';
-import {
-  assetGroupingAllowsTreeVerifiedCollectionMatch as sharedAssetGroupingAllowsTreeVerifiedCollectionMatch,
-  assetGroupingCollectionMints as sharedAssetGroupingCollectionMints,
-  uniqueAssetGroupingCollectionMint as functionsUniqueAssetGroupingCollectionMint,
+  assetGroupingAllowsTreeVerifiedCollectionMatch,
+  assetGroupingCollectionMints,
+  uniqueAssetGroupingCollectionMint,
 } from '../shared/dasAssetCollections.ts';
 
-const helperPairs = [
-  {
-    label: 'frontend',
-    assetGroupingAllowsTreeVerifiedCollectionMatch: frontendAssetGroupingAllowsTreeVerifiedCollectionMatch,
-    assetGroupingCollectionMints: frontendAssetGroupingCollectionMints,
-    uniqueAssetGroupingCollectionMint: frontendUniqueAssetGroupingCollectionMint,
-  },
-  {
-    label: 'shared',
-    assetGroupingAllowsTreeVerifiedCollectionMatch: sharedAssetGroupingAllowsTreeVerifiedCollectionMatch,
-    assetGroupingCollectionMints: sharedAssetGroupingCollectionMints,
-    uniqueAssetGroupingCollectionMint: functionsUniqueAssetGroupingCollectionMint,
-  },
-];
-
-test('DAS collection helpers stay aligned across frontend facade and shared core', () => {
+test('DAS collection helpers normalize collection groupings', () => {
   const cases = [
     {
       name: 'null asset',
@@ -89,19 +69,17 @@ test('DAS collection helpers stay aligned across frontend facade and shared core
     },
   ];
 
-  for (const helper of helperPairs) {
-    for (const entry of cases) {
-      assert.deepEqual(
-        helper.assetGroupingCollectionMints(entry.asset),
-        entry.collections,
-        `${helper.label}: ${entry.name} collections`,
-      );
-      assert.equal(
-        helper.uniqueAssetGroupingCollectionMint(entry.asset),
-        entry.unique,
-        `${helper.label}: ${entry.name} unique collection`,
-      );
-    }
+  for (const entry of cases) {
+    assert.deepEqual(
+      assetGroupingCollectionMints(entry.asset),
+      entry.collections,
+      `${entry.name} collections`,
+    );
+    assert.equal(
+      uniqueAssetGroupingCollectionMint(entry.asset),
+      entry.unique,
+      `${entry.name} unique collection`,
+    );
   }
 });
 
@@ -144,13 +122,11 @@ test('DAS collection helpers allow tree proof only when grouping is inconclusive
     },
   ];
 
-  for (const helper of helperPairs) {
-    for (const entry of cases) {
-      assert.equal(
-        helper.assetGroupingAllowsTreeVerifiedCollectionMatch(entry.asset, entry.expectedCollectionMint),
-        entry.allowed,
-        `${helper.label}: ${entry.name}`,
-      );
-    }
+  for (const entry of cases) {
+    assert.equal(
+      assetGroupingAllowsTreeVerifiedCollectionMatch(entry.asset, entry.expectedCollectionMint),
+      entry.allowed,
+      entry.name,
+    );
   }
 });

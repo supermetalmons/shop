@@ -88,6 +88,7 @@ import {
   type ProfileProviderFetch,
 } from './boundedResponse.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
+import { requestSolanaRpc } from './solanaProvider.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -382,7 +383,7 @@ function configuredPublicKey(label: string, value: string | undefined, required 
   }
 }
 
-function buildRuntime(config: ApiDropConfig): AdminIrlRedeemRuntime {
+export function buildRuntime(config: ApiDropConfig): AdminIrlRedeemRuntime {
   const dropId = normalizeDropId(config.dropId);
   const maxSupply = Number(config.maxSupply);
   const itemsPerBox = Number(config.itemsPerBox);
@@ -483,7 +484,7 @@ function createProviderAttemptScope(overallSignal: AbortSignal, timeoutMs: numbe
   };
 }
 
-async function rpcCall(
+export async function rpcCall(
   context: ProviderContext,
   runtime: AdminIrlRedeemRuntime,
   method: string,
@@ -496,40 +497,33 @@ async function rpcCall(
       context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
     );
     try {
-      const response = await context.providerFetch(
-        `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-          redirect: 'manual',
-          signal: attemptScope.signal,
-        },
-      );
-      if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt === 0) {
-        await cancelResponseBody(response);
-        await pause(context.signal);
-        continue;
-      }
-      if (!response.ok) {
-        await cancelResponseBody(response);
+      const transport = await requestSolanaRpc({
+        fetch: context.providerFetch,
+        url: `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
+        id,
+        method,
+        params,
+        maxResponseBytes: PROVIDER_MAX_BYTES,
+        signal: attemptScope.signal,
+      });
+      if (transport.kind === 'http-error') {
+        if (TRANSIENT_HTTP_STATUSES.has(transport.status) && attempt === 0) {
+          await pause(context.signal);
+          continue;
+        }
         throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
       }
-      const payload = await readBoundedJson(response, PROVIDER_MAX_BYTES, attemptScope.signal);
-      if (!isRecord(payload) || payload.jsonrpc !== '2.0' || payload.id !== id) {
+      if (transport.kind === 'invalid-response') {
         throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid response.');
       }
-      if (isRecord(payload.error)) {
-        const upstreamCode = Number(payload.error.code);
+      if (transport.kind === 'rpc-error') {
+        const upstreamCode = Number(transport.error.code);
         throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.', {
           method,
           ...(Number.isFinite(upstreamCode) ? { upstreamCode } : {}),
         });
       }
-      if (!Object.hasOwn(payload, 'result')) {
-        throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid response.');
-      }
-      return payload.result;
+      return transport.value;
     } catch (error) {
       if (context.signal.aborted) throw context.signal.reason;
       if (attemptScope.timedOut()) {
@@ -629,7 +623,7 @@ async function fetchAssetOnce(
   return value;
 }
 
-async function fetchAsset(
+export async function fetchAsset(
   context: ProviderContext,
   runtime: AdminIrlRedeemRuntime,
   assetId: string,
@@ -653,7 +647,7 @@ async function fetchAsset(
     : new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
 }
 
-async function fetchAssetProof(
+export async function fetchAssetProof(
   context: ProviderContext,
   runtime: AdminIrlRedeemRuntime,
   assetId: string,
@@ -785,7 +779,7 @@ async function loadLatestBlockhash(context: ProviderContext, runtime: AdminIrlRe
   return blockhash;
 }
 
-async function loadLookupTable(
+export async function loadLookupTable(
   context: ProviderContext,
   runtime: AdminIrlRedeemRuntime,
 ): Promise<AddressLookupTableAccount[]> {
@@ -811,7 +805,7 @@ async function loadLookupTable(
   }
 }
 
-async function loadBoundWallet(
+export async function loadBoundWallet(
   context: CommerceContext,
   db: D1Database | undefined,
   uid: string,
@@ -898,7 +892,7 @@ function commerceAutoId(): string {
   return id;
 }
 
-function receiptDropIdentity(runtime: AdminIrlRedeemRuntime) {
+export function receiptDropIdentity(runtime: AdminIrlRedeemRuntime) {
   return {
     collectionMintStr: runtime.collectionMint.toBase58(),
     metadataBase: runtime.config.metadataBase,
@@ -920,7 +914,7 @@ function bytes32(value: string, label: string): Buffer {
   return Buffer.from(decoded);
 }
 
-function parseProof(
+export function parseProof(
   asset: DasAsset,
   proof: Record<string, unknown>,
   runtime: AdminIrlRedeemRuntime,
@@ -1494,17 +1488,4 @@ export const adminIrlRedeemPrepareTestHooks = {
   rpcCall,
   serializeCardTransaction,
   serializePackTransaction,
-};
-
-export const adminIrlRedeemRuntime = {
-  assertSupportedRuntime,
-  buildRuntime,
-  fetchAsset,
-  fetchAssetProof,
-  loadLookupTable,
-  loadOnchainState,
-  loadBoundWallet,
-  parseProof,
-  receiptDropIdentity,
-  rpcCall,
 };

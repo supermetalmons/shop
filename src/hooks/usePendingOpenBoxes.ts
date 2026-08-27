@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { fetchPendingOpenBoxes, type DropFetchOptions } from '../lib/api';
+import { fetchPendingOpenBoxes, type DropFetchOptions } from '../lib/shopApi';
 import type { PendingOpenBox } from '../types';
 
 export function pendingOpenBoxesQueryKeyPrefix(owner?: string) {

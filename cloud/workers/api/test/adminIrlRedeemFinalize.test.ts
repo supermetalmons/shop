@@ -20,6 +20,7 @@ import {
 } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
+import { commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_PATH,
   AdminIrlRedeemFinalizeError,
@@ -119,26 +120,11 @@ function dependencies(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function storedValue(value: unknown): Record<string, unknown> {
-  if (value === null) return { nullValue: null };
-  if (typeof value === 'string') return { stringValue: value };
-  if (typeof value === 'boolean') return { booleanValue: value };
-  if (typeof value === 'number') return { integerValue: String(value) };
-  if (Array.isArray(value)) return { arrayValue: { values: value.map(storedValue) } };
-  return {
-    mapValue: {
-      fields: Object.fromEntries(Object.entries(value as Record<string, unknown>).map(
-        ([key, entry]) => [key, storedValue(entry)],
-      )),
-    },
-  };
-}
-
 function commerceContext(fields: Record<string, unknown>) {
   const harness = createCommerceD1Harness();
   seedCommerceDocument(harness, {
-    name: `projects/mons-shop/databases/(default)/documents/drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
-    fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, storedValue(value)])),
+    key: commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
+    data: fields as CommerceDocumentData,
     updateTime: '2026-08-22T00:00:00.000Z',
   });
   return {

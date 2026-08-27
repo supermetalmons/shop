@@ -11,39 +11,29 @@ import {
 } from '../../shared/dropMediaDefaults.js';
 import {
   DEPLOYMENT_DROPS,
-  projectDeploymentPaymentRouting,
 } from '../../shared/deploymentRegistry.js';
 import type {
   DeploymentMediaMapConfig,
   DeploymentRegistryDrop,
-  PaymentRoutingConfig,
 } from '../../shared/deploymentRegistry.js';
 import {
   canonicalizeDropAssetUrl as canonicalizeSharedDropAssetUrl,
-  defaultDropFamilyForDropId as defaultSharedDropFamilyForDropId,
   dropPathsFromBase,
-  normalizeDiscountMintsPerWallet,
   normalizeDropBase as normalizeSharedDropBase,
-  normalizeDropFamily as normalizeSharedDropFamily,
+  normalizeDropFamily,
   normalizeDropId as normalizeSharedDropId,
-  normalizeDropSalesMode,
-  normalizeMetadataPathFormat,
-  normalizeMintSelectionConfig,
-  normalizeMetadataBaseAliases,
 } from '../../shared/deploymentCore.js';
 import type {
   DropFamily as SharedDropFamily,
   DropPaths,
-  DropSalesMode,
-  MetadataPathFormat,
   MintSelectionConfig as SharedMintSelectionConfig,
   SolanaCluster as SharedSolanaCluster,
 } from '../../shared/deploymentCore.js';
 import { normalizeMediaMapConfig } from '../../shared/mediaMap.js';
 import {
-  assertStripeLivePriceConfigured,
-  resolveStripeCheckoutEnabledForDropFamily,
-} from '../../shared/stripeCheckoutCore.js';
+  projectDeploymentDropCore,
+  type DeploymentDropProjectionCore,
+} from '../../shared/deploymentProjection.js';
 
 export type SolanaCluster = SharedSolanaCluster;
 export type DropFamily = SharedDropFamily;
@@ -52,41 +42,11 @@ export type FigureMediaConfig = MediaMapConfig;
 type BoxMediaConfig = MediaMapConfig;
 export type MintSelectionConfig = SharedMintSelectionConfig;
 
-export type FrontendDropConfig = {
-  solanaCluster: SolanaCluster;
-  dropId: string;
-  dropFamily: DropFamily;
-  collectionName: string;
-  displayName?: string;
-  salesMode?: DropSalesMode;
-  receiptPoolId?: string;
-  metadataBase: string;
-  metadataBaseAliases?: string[];
-  metadataPathFormat: MetadataPathFormat;
+export type FrontendDropConfig = DeploymentDropProjectionCore & {
   secondaryMarketHref?: string;
   figureMedia?: FigureMediaConfig;
   boxMedia?: BoxMediaConfig;
   forceSoldOut?: boolean;
-  mintSelection?: MintSelectionConfig;
-  treasury: string;
-  paymentRouting?: PaymentRoutingConfig;
-  priceSol: number;
-  discountPriceSol: number;
-  stripeCheckoutEnabled?: boolean;
-  stripeLiveUnitAmountCents?: number;
-  discountMintsPerWallet: number;
-  discountMerkleRoot: string;
-  maxSupply: number;
-  receiptMaxId?: number;
-  itemsPerBox: number;
-  maxPerTx: number;
-  namePrefix: string;
-  figureNamePrefix: string;
-  symbol: string;
-  boxMinterProgramId: string;
-  boxMinterConfigPda?: string;
-  collectionMint: string;
-  receiptsMerkleTree: string;
   paths: DropPaths;
 };
 
@@ -106,8 +66,6 @@ const IPFS_PROTOCOL = 'ipfs://';
 export const normalizeDropBase = normalizeSharedDropBase;
 export const canonicalizeDropAssetUrl = canonicalizeSharedDropAssetUrl;
 export const normalizeDropId = normalizeSharedDropId;
-export const defaultDropFamilyForDropId = defaultSharedDropFamilyForDropId;
-export const normalizeDropFamily = normalizeSharedDropFamily;
 
 export function resolveDropAssetUrl(url: string): string {
   const canonical = canonicalizeDropAssetUrl(url);
@@ -178,90 +136,27 @@ function normalizeOptionalString(value: unknown): string | undefined {
 }
 
 function projectFrontendDrop(config: DeploymentRegistryDrop): FrontendDropConfig {
-  const normalizedDropId = normalizeDropId(config.dropId);
-  const dropFamily = normalizeDropFamily(config.dropFamily, normalizedDropId);
-  const metadataPathFormat = normalizeMetadataPathFormat(config.metadataPathFormat);
-  const metadataBase = normalizeDropBase(config.metadataBase);
-  const metadataBaseAliases = normalizeMetadataBaseAliases(
-    metadataBase,
-    config.metadataBaseAliases,
-  );
+  const core = projectDeploymentDropCore(config);
   const figureMedia =
     normalizeMediaMapConfig(config.figureMedia) ||
-    defaultFigureMediaConfigForDropFamily(dropFamily);
+    defaultFigureMediaConfigForDropFamily(core.dropFamily);
   const boxMedia =
     normalizeMediaMapConfig(config.boxMedia) ||
-    defaultBoxMediaConfigForDropFamily(dropFamily);
-  const mintSelection = normalizeMintSelectionConfig(config.mintSelection);
-  const boxMinterConfigPda = normalizeOptionalString(config.boxMinterConfigPda);
-  const stripeCheckout = resolveStripeCheckoutEnabledForDropFamily(
-    config.stripeCheckoutEnabled,
-    dropFamily,
-  );
-  assertStripeLivePriceConfigured({
-    dropId: normalizedDropId,
-    solanaCluster: config.solanaCluster,
-    stripeCheckoutEnabled: stripeCheckout.enabled,
-    stripeLiveUnitAmountCents: config.stripeLiveUnitAmountCents,
-  });
+    defaultBoxMediaConfigForDropFamily(core.dropFamily);
   const forceSoldOut = config.forceSoldOut === true;
   const secondaryMarketHref =
     normalizeOptionalString(config.secondaryMarketHref) ||
-    secondaryMarketplaceLinksForDropId(normalizedDropId).find(
+    secondaryMarketplaceLinksForDropId(core.dropId).find(
       (link) => link.key === 'tensor',
     )?.href;
 
   return {
-    solanaCluster: config.solanaCluster,
-    dropId: normalizedDropId,
-    dropFamily,
-    collectionName: config.collectionName,
-    ...(normalizeOptionalString(config.displayName)
-      ? { displayName: normalizeOptionalString(config.displayName) }
-      : {}),
-    ...(normalizeDropSalesMode(config.salesMode) !== 'standard'
-      ? { salesMode: normalizeDropSalesMode(config.salesMode) }
-      : {}),
-    ...(normalizeOptionalString(config.receiptPoolId)
-      ? { receiptPoolId: normalizeOptionalString(config.receiptPoolId) }
-      : {}),
-    metadataBase,
-    ...(metadataBaseAliases.length ? { metadataBaseAliases } : {}),
-    metadataPathFormat,
-    ...projectDeploymentPaymentRouting(config),
-    priceSol: config.priceSol,
-    discountPriceSol: config.discountPriceSol,
-    ...(config.stripeLiveUnitAmountCents != null
-      ? { stripeLiveUnitAmountCents: config.stripeLiveUnitAmountCents }
-      : {}),
-    discountMintsPerWallet: normalizeDiscountMintsPerWallet(
-      config.discountMintsPerWallet,
-    ),
-    discountMerkleRoot: config.discountMerkleRoot,
-    maxSupply: config.maxSupply,
-    ...(config.receiptMaxId != null
-      ? { receiptMaxId: config.receiptMaxId }
-      : {}),
-    itemsPerBox: config.itemsPerBox,
-    maxPerTx: config.maxPerTx,
-    namePrefix: config.namePrefix,
-    figureNamePrefix: normalizeOptionalString(config.figureNamePrefix) || 'figure',
-    symbol: config.symbol,
-    boxMinterProgramId: config.boxMinterProgramId,
-    ...(boxMinterConfigPda ? { boxMinterConfigPda } : {}),
-    collectionMint: config.collectionMint,
-    receiptsMerkleTree: config.receiptsMerkleTree,
+    ...core,
     secondaryMarketHref,
     ...(figureMedia ? { figureMedia } : {}),
     ...(boxMedia ? { boxMedia } : {}),
-    ...(mintSelection ? { mintSelection } : {}),
-    ...(stripeCheckout.enabled
-      ? { stripeCheckoutEnabled: true }
-      : stripeCheckout.disabledOverride
-        ? { stripeCheckoutEnabled: false }
-        : {}),
     ...(forceSoldOut ? { forceSoldOut: true } : {}),
-    paths: dropPathsFromBase(metadataBase, metadataPathFormat),
+    paths: dropPathsFromBase(core.metadataBase, core.metadataPathFormat),
   };
 }
 

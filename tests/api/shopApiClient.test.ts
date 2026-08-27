@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { QueryClient } from '@tanstack/react-query';
-import { CARD_NFT_2_PACK_BASE_URL } from '../src/config/dropMediaDefaults.ts';
+import { CARD_NFT_2_PACK_BASE_URL } from '../../src/config/dropMediaDefaults.ts';
 import {
   SHOP_API_MAX_RESPONSE_ITEMS,
   SHOP_INVENTORY_BOX_ID_MAX_UTF8_BYTES,
@@ -11,9 +10,10 @@ import {
   SHOP_PENDING_OPEN_MAX_DUDE_ASSET_IDS,
   isExactShopInventoryResponse,
   isExactShopPendingOpenBoxesResponse,
-} from '../shared/shopApi.ts';
-import { fetchInventory, fetchPackStatus, fetchPendingOpenBoxes } from '../src/lib/shopApi.ts';
-import { rpcEndpointForCluster, SHOP_SOLANA_CONNECTION_CONFIG } from '../src/lib/shopRpc.ts';
+} from '../../shared/shopApi.ts';
+import { createShopApiClient } from '../../src/api/shop.ts';
+import { fetchInventory, fetchPackStatus, fetchPendingOpenBoxes } from '../../src/lib/shopApi.ts';
+import { rpcEndpointForCluster, SHOP_SOLANA_CONNECTION_CONFIG } from '../../src/lib/shopRpc.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const PACK_STATUS = {
@@ -164,15 +164,16 @@ test('pack-status client propagates aborts and API errors', async () => {
   });
 });
 
-test('pack-status frontend facade has no direct Commerce fallback', () => {
-  const source = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function getDropPackStatus');
-  const end = source.indexOf('export async function listFulfillmentOrders', start);
-  assert.notEqual(start, -1);
-  assert.notEqual(end, -1);
-  const implementation = source.slice(start, end);
-  assert.match(implementation, /fetchPackStatus\(normalizedDropId\)/);
-  assert.doesNotMatch(implementation, /auth\/commerce|getCommerce|getDoc/);
+test('pack-status frontend client delegates only to the shop transport', async () => {
+  const calls: string[] = [];
+  const client = createShopApiClient({
+    fetchPackStatus: async (dropId) => {
+      calls.push(dropId);
+      return null;
+    },
+  });
+  assert.equal(await client.getDropPackStatus(' CARD_NFT_2 '), null);
+  assert.deepEqual(calls, ['card_nft_2']);
 });
 
 test('inventory client accepts exact string bounds and rejects each over-limit field', async () => {

@@ -45,7 +45,7 @@ import {
   stripeClientForKey,
   stripeCredentialErrorSummary,
   type StripeApiMode,
-} from './client.js';
+} from './provider.js';
 import type {
   StripeCheckoutManualReviewAddress,
 } from '../../../../../shared/contracts.js';

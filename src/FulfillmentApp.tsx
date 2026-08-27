@@ -23,7 +23,7 @@ import {
   updateFulfillmentAddress,
   updateFulfillmentStatus,
   voidFulfillmentShipStationLabel,
-} from './lib/api';
+} from './api/fulfillment';
 import {
   FulfillmentManualReviewCheckout,
   FulfillmentOrder,
@@ -39,13 +39,9 @@ import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import {
-  figureMetadataCacheKey,
-  figureMetadataHasImage,
-  getCachedFigureMetadata,
   loadFigureMetadata,
   loadFigureMetadataBatch,
   type FigureMetadataRecord,
-  type FigureMetadataTarget,
 } from './lib/figureMetadata';
 import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './lib/dropContent';
 import { dropAssetLabel } from './lib/dropLabels';
@@ -56,7 +52,7 @@ import {
   fulfillmentOrderLooseFigureIds,
   isUsedReceiptClaimStatus,
 } from './lib/fulfillmentCodes';
-import { isDirectDeliveryItemsPerBox } from './lib/shipping';
+import { isDirectDeliveryItemsPerBox } from '../shared/shipping.ts';
 import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { Modal } from './components/Modal';
 import { ShopHeader } from './components/ShopHeader';
@@ -105,7 +101,7 @@ import {
   resolveFulfillmentTrackingHref,
   sanitizeFulfillmentTrackingCode,
   shouldDisplayFulfillmentTrackingCode,
-} from './lib/fulfillmentTracking';
+} from '../shared/fulfillmentTracking.ts';
 import {
   isDropFamily,
   listFrontendDrops,
@@ -121,6 +117,25 @@ import {
   SHIPSTATION_PACKAGE_RANGE_MESSAGE,
 } from '../shared/shipstationPackage.js';
 import { buildShipStationCustomsDeclaration } from '../shared/shipstationCustoms.js';
+import {
+  dedupeManualReviewCheckouts,
+  formatManualReviewAmount,
+  formatOrderDate,
+  manualReviewCheckoutKey,
+  manualReviewIssueText,
+  shortenStripeSessionId,
+  sortManualReviewCheckouts,
+} from './fulfillment/manualReview';
+import {
+  dedupeOrdersByKey,
+  fulfillmentOrderKey,
+  groupFulfillmentOrders,
+  sortFulfillmentOrders,
+} from './fulfillment/orders';
+import {
+  collectFulfillmentFigureMetadataTargets,
+  mergeFigureMetadataRecords,
+} from './fulfillment/figureMetadata';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const SHIPSTATION_AWAITING_SHIPMENT_URL = 'https://ship.shipstation.com/orders/awaiting-shipment';
@@ -153,62 +168,6 @@ type SecretCodePreviewImageCache = Map<string, Promise<HTMLImageElement>>;
 type FulfillmentSecretCodeDownloadTarget =
   | { kind: 'box'; index: number }
   | { kind: 'card-claim'; index: number };
-
-function formatOrderDate(ts?: number) {
-  if (!ts) return 'Date pending';
-  return new Date(ts).toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
-
-function formatManualReviewAmount(amountTotal?: number, currency?: string) {
-  if (typeof amountTotal !== 'number' || !Number.isFinite(amountTotal)) return 'Amount pending';
-  const currencyCode = String(currency || '').trim().toUpperCase();
-  const amount = amountTotal / 100;
-  if (currencyCode) {
-    try {
-      return new Intl.NumberFormat(undefined, { style: 'currency', currency: currencyCode }).format(amount);
-    } catch {
-      return `${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currencyCode}`;
-    }
-  }
-  return amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function shortenStripeSessionId(sessionId: string) {
-  const value = String(sessionId || '').trim();
-  if (value.length <= 24) return value || 'Session unavailable';
-  return `${value.slice(0, 12)}…${value.slice(-6)}`;
-}
-
-function manualReviewCheckoutKey(checkout: Pick<FulfillmentManualReviewCheckout, 'dropId' | 'sessionId'>): string {
-  return `${checkout.dropId}:${checkout.sessionId}`;
-}
-
-function manualReviewSortValue(checkout: FulfillmentManualReviewCheckout): number {
-  return checkout.failedAt || checkout.createdAt || 0;
-}
-
-function sortManualReviewCheckouts(checkouts: FulfillmentManualReviewCheckout[]): FulfillmentManualReviewCheckout[] {
-  return [...checkouts].sort(
-    (a, b) =>
-      manualReviewSortValue(b) - manualReviewSortValue(a) ||
-      a.dropId.localeCompare(b.dropId) ||
-      b.sessionId.localeCompare(a.sessionId),
-  );
-}
-
-function dedupeManualReviewCheckouts(checkouts: FulfillmentManualReviewCheckout[]): FulfillmentManualReviewCheckout[] {
-  const seen = new Set<string>();
-  return checkouts.filter((checkout) => {
-    const key = manualReviewCheckoutKey(checkout);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function manualReviewIssueText(checkout: FulfillmentManualReviewCheckout): string {
-  return checkout.errorMessage || checkout.manualRefundReviewReason || 'Manual review required';
-}
 
 type ShipStationPackageDraft = { length: string; width: string; height: string; weight: string };
 
@@ -365,34 +324,6 @@ function listOrderFigureIds(order: FulfillmentOrder): number[] {
   return [...fulfillmentOrderLooseFigureIds(order), ...order.boxes.flatMap((box) => box.dudeIds)];
 }
 
-function collectFulfillmentFigureMetadataTargets(args: {
-  entries: Array<{ drop: FrontendDeploymentConfig; figureIds: readonly number[] }>;
-  figureMetadataByKey: Record<string, FigureMetadataRecord>;
-}): FigureMetadataTarget[] {
-  const targets = new Map<string, FigureMetadataTarget>();
-  args.entries.forEach(({ drop, figureIds }) => {
-    if (isDirectDeliveryItemsPerBox(drop.itemsPerBox)) return;
-
-    const dropContent = resolveDropContent(drop);
-    const shouldUseMetadataFallback = dropContent.figures.fulfillmentPreviewMode === 'metadata_stills';
-    figureIds.forEach((figureIdRaw) => {
-      const figureId = Math.floor(Number(figureIdRaw));
-      if (!Number.isFinite(figureId) || figureId <= 0) return;
-      if (!shouldUseMetadataFallback) {
-        const hasMappedMedia = Boolean(
-          dropContent.figures.fulfillmentMediaBaseUrl && getMediaIdForFigureId(figureId, drop.figureMedia),
-        );
-        if (hasMappedMedia) return;
-      }
-      const key = figureMetadataCacheKey(drop.dropId, figureId);
-      const cached = args.figureMetadataByKey[key] || getCachedFigureMetadata(drop.dropId, figureId);
-      if (figureMetadataHasImage(cached)) return;
-      targets.set(key, { dropId: drop.dropId, figureId });
-    });
-  });
-  return Array.from(targets.values());
-}
-
 type DuplicateFigureSummary = {
   groupKey: string;
   figureId: number;
@@ -401,36 +332,7 @@ type DuplicateFigureSummary = {
   sortValue: number;
 };
 
-type FulfillmentOrderGroup = {
-  pageIndex: number;
-  groupKey: string;
-  orders: FulfillmentOrder[];
-  collapseSharedContact: boolean;
-};
-
 type FulfillmentOrdersCursorByDropId = Record<string, FulfillmentOrdersCursor | null>;
-
-function fulfillmentOrderKey(order: Pick<FulfillmentOrder, 'dropId' | 'deliveryId'>): string {
-  return `${order.dropId}:${order.deliveryId}`;
-}
-
-function fulfillmentOrderGroupKey(order: FulfillmentOrder): string {
-  const owner = typeof order.owner === 'string' ? order.owner.trim() : '';
-  return owner ? `owner:${owner}` : `delivery:${fulfillmentOrderKey(order)}`;
-}
-
-function fulfillmentOrderSortValue(order: FulfillmentOrder): number {
-  return order.processedAt || order.createdAt || 0;
-}
-
-function sortFulfillmentOrders(orders: FulfillmentOrder[]): FulfillmentOrder[] {
-  return [...orders].sort(
-    (a, b) =>
-      fulfillmentOrderSortValue(b) - fulfillmentOrderSortValue(a) ||
-      a.dropId.localeCompare(b.dropId) ||
-      b.deliveryId - a.deliveryId,
-  );
-}
 
 function getBoxContentsStyle(itemCount: number): CSSProperties {
   const columns = Math.max(1, Math.min(itemCount, 3));
@@ -734,59 +636,6 @@ function useDismissibleMenu<T extends HTMLElement>(
   }, [menuRef, open, setOpen]);
 }
 
-function dedupeOrdersByKey(orders: FulfillmentOrder[], existingOrderKeys?: Set<string>): FulfillmentOrder[] {
-  const seen = existingOrderKeys ? new Set(existingOrderKeys) : new Set<string>();
-  return orders.filter((order) => {
-    const key = fulfillmentOrderKey(order);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function normalizeFulfillmentOrderMatchValue(value: string): string {
-  return value
-    .normalize('NFKC')
-    .replace(/[\s\u200B\u200C\u200D\u2060\uFEFF]+/g, '')
-    .toLowerCase();
-}
-
-function parseFulfillmentOrderFullAddress(full?: string | null): { name: string; deliveryAddress: string } | null {
-  if (typeof full !== 'string') return null;
-  const normalized = full.replace(/\r\n/g, '\n').trim();
-  if (!normalized || normalized === '***') return null;
-  const [name, ...addressLines] = normalized.split('\n');
-  const deliveryAddress = addressLines.join('\n');
-  if (!name || !deliveryAddress) return null;
-  return { name, deliveryAddress };
-}
-
-function canCollapseFulfillmentOrderGroupContact(orders: FulfillmentOrder[]): boolean {
-  if (orders.length < 2) return false;
-  const [firstOrder, ...restOrders] = orders;
-  const firstAddress = parseFulfillmentOrderFullAddress(firstOrder.address.full);
-  if (!firstAddress) return false;
-  const firstEmail = normalizeFulfillmentOrderMatchValue(
-    typeof firstOrder.address.email === 'string' ? firstOrder.address.email : '',
-  );
-  const firstName = normalizeFulfillmentOrderMatchValue(firstAddress.name);
-  const firstDeliveryAddress = normalizeFulfillmentOrderMatchValue(firstAddress.deliveryAddress);
-  if (!firstName) return false;
-
-  return restOrders.every((order) => {
-    const currentAddress = parseFulfillmentOrderFullAddress(order.address.full);
-    if (!currentAddress) return false;
-    const currentEmail = normalizeFulfillmentOrderMatchValue(
-      typeof order.address.email === 'string' ? order.address.email : '',
-    );
-    return (
-      currentEmail === firstEmail &&
-      normalizeFulfillmentOrderMatchValue(currentAddress.deliveryAddress) === firstDeliveryAddress &&
-      normalizeFulfillmentOrderMatchValue(currentAddress.name) === firstName
-    );
-  });
-}
-
 function summarizeDuplicateFigures(args: {
   orders: FulfillmentOrder[];
   previewMode: 'media_map_folder' | 'metadata_stills';
@@ -828,29 +677,6 @@ function summarizeDuplicateFigures(args: {
   return Array.from(grouped.values())
     .filter((entry) => entry.count >= minimumCount)
     .sort((a, b) => b.count - a.count || a.sortValue - b.sortValue || a.figureId - b.figureId);
-}
-
-function mergeFigureMetadataRecords(
-  prev: Record<string, FigureMetadataRecord>,
-  records: FigureMetadataRecord[],
-): Record<string, FigureMetadataRecord> {
-  let changed = false;
-  const next = { ...prev };
-  records.forEach((record) => {
-    const key = figureMetadataCacheKey(record.dropId, record.id);
-    const existing = next[key];
-    if (
-      figureMetadataHasImage(existing) &&
-      existing.image === record.image &&
-      existing.name === record.name &&
-      existing.attributes === record.attributes
-    ) {
-      return;
-    }
-    next[key] = record;
-    changed = true;
-  });
-  return changed ? next : prev;
 }
 
 function FigureTileImage(props: {
@@ -1497,36 +1323,15 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
     [displayedOrders],
   );
 
-  const orderByKey = useMemo(() => new Map(orders.map((order) => [fulfillmentOrderKey(order), order] as const)), [orders]);
-  const displayedOrderKeys = useMemo(() => new Set(displayedOrders.map((order) => fulfillmentOrderKey(order))), [displayedOrders]);
-
-  const groupedOrders = useMemo(() => {
-    const groups: FulfillmentOrderGroup[] = [];
-    orderPageKeys.forEach((pageOrderKeys, pageIndex) => {
-      const visibleGroups = new Map<string, FulfillmentOrder[]>();
-      pageOrderKeys.forEach((orderKey) => {
-        const order = orderByKey.get(orderKey);
-        if (!order) return;
-        const groupKey = fulfillmentOrderGroupKey(order);
-        if (!displayedOrderKeys.has(orderKey)) return;
-        const visibleGroupOrders = visibleGroups.get(groupKey);
-        if (visibleGroupOrders) {
-          visibleGroupOrders.push(order);
-        } else {
-          visibleGroups.set(groupKey, [order]);
-        }
-      });
-      visibleGroups.forEach((visibleGroupOrders, groupKey) => {
-        groups.push({
-          pageIndex,
-          groupKey,
-          orders: visibleGroupOrders,
-          collapseSharedContact: canCollapseFulfillmentOrderGroupContact(visibleGroupOrders),
-        });
-      });
-    });
-    return groups;
-  }, [displayedOrderKeys, orderByKey, orderPageKeys]);
+  const groupedOrders = useMemo(
+    () =>
+      groupFulfillmentOrders({
+        orders,
+        pageOrderKeys: orderPageKeys,
+        visibleOrderKeys: new Set(displayedOrders.map((order) => fulfillmentOrderKey(order))),
+      }),
+    [displayedOrders, orderPageKeys, orders],
+  );
 
   const duplicateDropOrders = useMemo(() => {
     if (!duplicateDrop) return [];

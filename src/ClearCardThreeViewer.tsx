@@ -271,7 +271,6 @@ type ClearCardThreeViewerProps = {
   hitProgressionMode?: ClearCardHitProgressionMode;
   revealReady?: boolean;
   initiallyRevealed: boolean;
-  cameraZoom?: number;
   ariaLabel?: string;
   onStatusChange: (status: ViewerStatus) => void;
   onCardModelLoadStatusChange?: (status: ClearCardModelLoadStatus) => void;
@@ -625,7 +624,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
       hitProgressionMode = 'fixed',
       revealReady = true,
       initiallyRevealed,
-      cameraZoom = 1,
       ariaLabel,
       onStatusChange,
       onCardModelLoadStatusChange,
@@ -1455,7 +1453,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
         }
 
         camera.aspect = cameraAspect;
-        camera.zoom = Math.max(0.1, cameraZoom);
         const verticalFov = THREE.MathUtils.degToRad(camera.fov);
         const fitHeightDistance = projectedHeight / (2 * Math.tan(verticalFov / 2));
         const fitWidthDistance =
@@ -3075,7 +3072,6 @@ const ClearCardThreeViewer = forwardRef<ClearCardThreeViewerHandle, ClearCardThr
     }, [
       interactionFrameRateMode,
       cancelUnrestrictedDrag,
-      cameraZoom,
       onStatusChange,
       packModelUrl,
       resetTilt,

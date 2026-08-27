@@ -104,13 +104,24 @@ import {
 } from './boundedResponse.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
-  CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
-  commerceKeys,
   type CommerceDocumentData,
   type CommerceUpdateValue,
 } from './commerceRepository.js';
+import {
+  loadDeliveryOrderDocument,
+  mutateDeliveryOrder,
+  type CommerceWriteCommon,
+  type ProfileWriteCommerceRepository,
+} from './profileWriteCommerce.js';
+import {
+  commerceMoney,
+  commercePackage,
+  commerceRateQuotes,
+  optionalString,
+  storedShipStationRateQuotes,
+} from './profileWriteRates.js';
 import { saveD1ProfileAddress } from './profileD1.js';
 import {
   resolveD1AuthWalletBinding,
@@ -156,8 +167,6 @@ type ProfileWriteMetrics = {
   upstreamCalls: number;
   providerDurationMs: number;
 };
-
-type ProfileWriteCommerceRepository = Pick<D1CommerceRepository, 'get' | 'run'>;
 
 export type ProfileWriteResult = {
   response: Response;
@@ -211,7 +220,6 @@ const MAX_SHIPSTATION_RATES_REQUEST_BYTES = 2048;
 const MAX_SHIPSTATION_SHIPMENT_REQUEST_BYTES = 2048;
 const SHIPSTATION_CLAIM_TTL_MS = 120_000;
 const SHIPSTATION_RATE_REQUEST_TTL_MS = 10 * 60_000;
-const COMMERCE_MUTATION_ATTEMPTS = 3;
 const ADMIN_WALLETS = new Set(FULFILLMENT_ADMIN_WALLET_ADDRESSES);
 const ADDRESS_ADMIN_WALLETS = new Set(FULFILLMENT_ADDRESS_ADMIN_WALLET_ADDRESSES);
 const SHIPPER_DROP_IDS_BY_WALLET = new Map(
@@ -702,118 +710,6 @@ async function updateFulfillmentStatus(
     });
   }
   return mutation.response;
-}
-
-type CommerceWriteCommon = {
-  nowMs: number;
-  pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
-  providerFetch: ProfileProviderFetch;
-  repository: ProfileWriteCommerceRepository;
-  signal: AbortSignal;
-};
-
-type DeliveryOrderDocument = {
-  fields: Record<string, unknown>;
-};
-
-function commerceMoney(value: { currency: string; amount: number }): { currency: string; amount: number } {
-  return { currency: value.currency, amount: value.amount };
-}
-
-function commercePackage(value: ShipStationPackageInput): ShipStationPackageInput {
-  return { ...value };
-}
-
-function commerceRateQuotes(
-  rates: GetFulfillmentShipStationRatesResponse['rates'],
-): Array<{ rateId: string; shipmentId: string; totalAmount: { currency: string; amount: number } }> {
-  return rates.map((rate) => ({
-    rateId: rate.rateId,
-    shipmentId: rate.shipmentId,
-    totalAmount: commerceMoney(rate.totalAmount),
-  }));
-}
-
-function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-function storedShipStationMoney(value: unknown): { currency: string; amount: number } | undefined {
-  if (!isRecord(value)) return undefined;
-  const currency = optionalString(value.currency)?.toLowerCase() ?? '';
-  const amount = typeof value.amount === 'number' ? value.amount : Number.NaN;
-  return /^[a-z]{3}$/.test(currency) && Number.isFinite(amount) && amount >= 0
-    ? { currency, amount }
-    : undefined;
-}
-
-function storedShipStationRateQuotes(value: unknown): Array<{
-  rateId: string;
-  shipmentId: string;
-  totalAmount: { currency: string; amount: number };
-}> {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((entry) => {
-    if (!isRecord(entry)) return [];
-    const rateId = optionalString(entry.rateId);
-    const shipmentId = optionalString(entry.shipmentId);
-    const totalAmount = storedShipStationMoney(entry.totalAmount);
-    return rateId && shipmentId && totalAmount ? [{ rateId, shipmentId, totalAmount }] : [];
-  }).slice(0, 100);
-}
-
-async function loadDeliveryOrderDocument(
-  common: CommerceWriteCommon,
-  dropId: string,
-  deliveryId: number,
-): Promise<DeliveryOrderDocument> {
-  const payload = await common.repository.get(commerceKeys.deliveryOrder(dropId, String(deliveryId)));
-  if (!payload) throw new ProfileReadError('not-found', 404, 'Delivery order not found');
-  return { fields: payload.data };
-}
-
-async function pauseForMutationRetry(signal: AbortSignal, attempt: number): Promise<void> {
-  if (signal.aborted) throw signal.reason;
-  await new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    };
-    const timeout = setTimeout(finish, 25 * (attempt + 1));
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
-}
-
-async function mutateDeliveryOrder<T>(args: {
-  build: (document: DeliveryOrderDocument) => { value: T; updates?: Record<string, CommerceUpdateValue> };
-  common: CommerceWriteCommon;
-  deliveryId: number;
-  dropId: string;
-}): Promise<T> {
-  for (let attempt = 0; attempt < COMMERCE_MUTATION_ATTEMPTS; attempt += 1) {
-    try {
-      return await args.common.repository.run(args.common.nowMs, async (unit) => {
-        const record = await unit.get(commerceKeys.deliveryOrder(args.dropId, String(args.deliveryId)));
-        if (!record) throw new ProfileReadError('not-found', 404, 'Delivery order not found');
-        const mutation = args.build({ fields: record.data });
-        if (mutation.updates) await unit.update(record.key, mutation.updates);
-        return mutation.value;
-      });
-    } catch (error) {
-      if (!(error instanceof CommerceWriteConflict)) throw error;
-      if (attempt + 1 >= COMMERCE_MUTATION_ATTEMPTS) {
-        throw new ProfileReadError('aborted', 409, 'The delivery order changed. Try again.');
-      }
-      await pauseForMutationRetry(args.common.signal, attempt);
-    }
-  }
-  throw new ProfileReadError('aborted', 409, 'The delivery order changed. Try again.');
 }
 
 function decodeBase64(value: string): Uint8Array | null {
@@ -2362,7 +2258,7 @@ function canonicalJson(value: unknown): string {
     .join(',')}}`;
 }
 
-async function shipStationRateInputHash(value: unknown): Promise<string> {
+export async function shipStationRateInputHash(value: unknown): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest(
     'SHA-256',
     new TextEncoder().encode(canonicalJson(value)),
@@ -3072,8 +2968,3 @@ export async function handleProfileWriteRequest(
     clearTimeout(timeout);
   }
 }
-
-export const profileWriteTestHooks = {
-  commerceAutoId: createProfileAddressId,
-  shipStationRateInputHash,
-};

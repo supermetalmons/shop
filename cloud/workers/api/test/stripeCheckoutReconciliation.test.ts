@@ -4,8 +4,9 @@ import { createCommerceD1 } from './commerceD1Harness.ts';
 import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.ts';
 import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.ts';
 import {
+  STRIPE_FULFILLMENT_REQUEUE_AFTER_MS,
+  parseRequeueCandidates,
   reconcileStaleStripeFulfillments,
-  stripeCheckoutReconciliationTestHooks,
 } from '../src/stripeCheckoutReconciliation.ts';
 import { commerceKeys, type CommerceDocumentRecord } from '../src/commerceRepository.ts';
 
@@ -52,7 +53,7 @@ test('Stripe fulfillment reconciliation requeues and marks stale pending checkou
     },
   );
   assert.deepEqual(result, { enqueued: 1, failed: 0 });
-  assert.equal(cutoffMs, nowMs - stripeCheckoutReconciliationTestHooks.requeueAfterMs);
+  assert.equal(cutoffMs, nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS);
   assert.deepEqual(marked, [candidate]);
   assert.deepEqual(jobs, [{
     version: 1,
@@ -165,7 +166,7 @@ function checkoutRecord(
 
 test('Stripe fulfillment reconciliation decoder selects only stale marked D1 checkouts', () => {
   const cutoffMs = Date.parse('2026-08-23T00:15:00.000Z');
-  const candidates = stripeCheckoutReconciliationTestHooks.parseRequeueCandidates([
+  const candidates = parseRequeueCandidates([
     checkoutRecord('card_nft_binder_devnet', 'cs_test_recent', {
       fulfillmentProcessor: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
       lastStripeWebhookEventId: 'evt_test_recent',

@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, decodeFixtureFields } from './commerceD1Harness.ts';
+import {
+  createCommerceD1,
+  createCommerceD1Harness,
+  decodeLegacyFirestoreFixtureFields,
+  seedCommerceDocument,
+} from './commerceD1Harness.ts';
 import {
   ADMIN_PROFILE_PATH,
   ADMIN_DELIVERY_ORDER_OWNERS_PATH,
@@ -69,48 +74,11 @@ function orderDocument(owner = OWNER, deliveryId = 7) {
 
 function profileDependencies(
   providerFetch: ProfileProviderFetch,
+  createCommerceRepository: NonNullable<Parameters<typeof handleProfileReadRequest>[3]>['createCommerceRepository'],
   overrides: Partial<Parameters<typeof handleProfileReadRequest>[3]> = {},
 ): Parameters<typeof handleProfileReadRequest>[3] {
   return {
-    createCommerceRepository: () => ({
-      query: async <T extends CommerceDocumentData>(query: CommerceQuery) => {
-        const response = await providerFetch('https://commerce.test/documents:runQuery', {
-          method: 'POST',
-          body: JSON.stringify(query),
-        });
-        const payload = await response.json() as unknown;
-        if (!Array.isArray(payload)) throw new Error('Invalid repository fixture');
-        return payload.flatMap((entry): CommerceDocumentRecord<T>[] => {
-          const document = entry && typeof entry === 'object' && 'document' in entry
-            ? (entry as { document?: unknown }).document
-            : undefined;
-          if (!document || typeof document !== 'object') return [];
-          const raw = document as { name?: unknown; fields?: unknown; updateTime?: unknown };
-          if (typeof raw.name !== 'string') return [];
-          const fields = decodeFixtureFields(raw.fields);
-          if (!fields) return [];
-          const delivery = raw.name.match(/\/drops\/([^/]+)\/deliveryOrders\/([^/]+)$/);
-          const checkout = raw.name.match(/\/drops\/([^/]+)\/stripeCheckouts\/([^/]+)$/);
-          const key = delivery
-            ? commerceKeys.deliveryOrder(delivery[1], delivery[2])
-            : checkout ? commerceKeys.stripeCheckout(checkout[1], checkout[2]) : null;
-          if (!key) return [];
-          const timestamp = (raw.fields as { processedAt?: { timestampValue?: unknown } })?.processedAt?.timestampValue;
-          const milliseconds = typeof timestamp === 'string' ? Date.parse(timestamp) : Number.NaN;
-          const fraction = typeof timestamp === 'string' ? timestamp.match(/\.(\d{1,9})Z$/)?.[1] || '' : '';
-          return [{
-            createTime: '',
-            data: fields as T,
-            key,
-            processedAt: Number.isFinite(milliseconds)
-              ? { seconds: Math.floor(milliseconds / 1000), nanos: Number(fraction.padEnd(9, '0')) || 0 }
-              : null,
-            updateTime: typeof raw.updateTime === 'string' ? raw.updateTime : '',
-            version: 1,
-          }];
-        });
-      },
-    } as Pick<D1CommerceRepository, 'query'>),
+    createCommerceRepository,
     loadProfileEmail: async () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
@@ -121,7 +89,64 @@ function profileDependencies(
   };
 }
 
-test('shipment and anonymous history routes preserve exact source-query behavior', async () => {
+function legacyFirestoreProfileDependencies(
+  providerFetch: ProfileProviderFetch,
+  overrides: Partial<Parameters<typeof handleProfileReadRequest>[3]> = {},
+): Parameters<typeof handleProfileReadRequest>[3] {
+  const createCommerceRepository = () => ({
+    query: async <T extends CommerceDocumentData>(query: CommerceQuery) => {
+      const response = await providerFetch('https://commerce.test/documents:runQuery', {
+        method: 'POST',
+        body: JSON.stringify(query),
+      });
+      const payload = await response.json() as unknown;
+      if (!Array.isArray(payload)) throw new Error('Invalid repository fixture');
+      return payload.flatMap((entry): CommerceDocumentRecord<T>[] => {
+        const document = entry && typeof entry === 'object' && 'document' in entry
+          ? (entry as { document?: unknown }).document
+          : undefined;
+        if (!document || typeof document !== 'object') return [];
+        const raw = document as { name?: unknown; fields?: unknown; updateTime?: unknown };
+        if (typeof raw.name !== 'string') return [];
+        const fields = decodeLegacyFirestoreFixtureFields(raw.fields);
+        if (!fields) return [];
+        const delivery = raw.name.match(/\/drops\/([^/]+)\/deliveryOrders\/([^/]+)$/);
+        const checkout = raw.name.match(/\/drops\/([^/]+)\/stripeCheckouts\/([^/]+)$/);
+        const key = delivery
+          ? commerceKeys.deliveryOrder(delivery[1], delivery[2])
+          : checkout ? commerceKeys.stripeCheckout(checkout[1], checkout[2]) : null;
+        if (!key) return [];
+        const timestamp = (raw.fields as { processedAt?: { timestampValue?: unknown } })?.processedAt?.timestampValue;
+        const milliseconds = typeof timestamp === 'string' ? Date.parse(timestamp) : Number.NaN;
+        const fraction = typeof timestamp === 'string' ? timestamp.match(/\.(\d{1,9})Z$/)?.[1] || '' : '';
+        return [{
+          createTime: '',
+          data: fields as T,
+          key,
+          processedAt: Number.isFinite(milliseconds)
+            ? { seconds: Math.floor(milliseconds / 1000), nanos: Number(fraction.padEnd(9, '0')) || 0 }
+            : null,
+          updateTime: typeof raw.updateTime === 'string' ? raw.updateTime : '',
+          version: 1,
+        }];
+      });
+    },
+  } as Pick<D1CommerceRepository, 'query'>);
+  return profileDependencies(providerFetch, createCommerceRepository, overrides);
+}
+
+function d1ProfileDependencies(
+  providerFetch: ProfileProviderFetch,
+  overrides: Partial<Parameters<typeof handleProfileReadRequest>[3]> = {},
+): Parameters<typeof handleProfileReadRequest>[3] {
+  return profileDependencies(
+    providerFetch,
+    (database) => new D1CommerceRepository(database),
+    overrides,
+  );
+}
+
+test('legacy Firestore fixtures preserve shipment and anonymous history query compatibility', async () => {
   const queries: Record<string, unknown>[] = [];
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
@@ -135,7 +160,7 @@ test('shipment and anonymous history routes preserve exact source-query behavior
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
-    profileDependencies(providerFetch),
+    legacyFirestoreProfileDependencies(providerFetch),
   );
   assert.equal(shipments.response.status, 200);
   assert.deepEqual(await shipments.response.json(), {
@@ -154,7 +179,7 @@ test('shipment and anonymous history routes preserve exact source-query behavior
     tokenRequest(ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
-    profileDependencies(providerFetch),
+    legacyFirestoreProfileDependencies(providerFetch),
   );
   assert.equal(anonymous.response.status, 200);
   assert.deepEqual(await anonymous.response.json(), {
@@ -179,7 +204,7 @@ test('profile state derives identity server-side and returns independently bound
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
-    profileDependencies(async (input) => {
+    legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) {
         return Response.json({
@@ -245,7 +270,7 @@ test('profile state uses D1 wallet sessions without requesting Commerce authSess
       OPS_DB: {} as D1Database,
     },
     PROFILE_STATE_PATH,
-    profileDependencies(providerFetch, {
+    legacyFirestoreProfileDependencies(providerFetch, {
       resolveD1AuthWalletBinding: async () => ({ wallet: OWNER, source: 'binding' }),
     }),
   );
@@ -258,7 +283,7 @@ test('staff profile state uses the wallet principal without a Auth session row',
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
-    profileDependencies(async (input) => {
+    legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
       if (url.endsWith('/documents:runQuery')) return Response.json([]);
@@ -282,7 +307,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
-    profileDependencies(async () => assert.fail('missing session reached Commerce'), {
+    legacyFirestoreProfileDependencies(async () => assert.fail('missing session reached Commerce'), {
       resolveD1AuthWalletBinding: async () => ({ wallet: null, reason: 'missing-binding' }),
     }),
   );
@@ -298,7 +323,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     {
-      ...profileDependencies(async (input) => {
+      ...legacyFirestoreProfileDependencies(async (input) => {
         const url = String(input);
         if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
         if (url.endsWith('/documents:runQuery')) return Response.json([]);
@@ -321,7 +346,7 @@ test('profile state reports section failures without discarding successful data'
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
-    profileDependencies(async (input) => {
+    legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'busy' }, { status: 503 });
       if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
@@ -349,7 +374,7 @@ test('profile state rejects invalid D1 sessions and non-empty requests', async (
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
-    profileDependencies(async () => assert.fail('invalid D1 session reached Commerce'), {
+    legacyFirestoreProfileDependencies(async () => assert.fail('invalid D1 session reached Commerce'), {
       resolveD1AuthWalletBinding: async () => { throw new Error('invalid D1 session'); },
     }),
   );
@@ -359,7 +384,7 @@ test('profile state rejects invalid D1 sessions and non-empty requests', async (
     tokenRequest(PROFILE_STATE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
-    profileDependencies(async () => assert.fail('invalid request reached provider')),
+    legacyFirestoreProfileDependencies(async () => assert.fail('invalid request reached provider')),
   );
   assert.equal(invalidBody.response.status, 400);
 });
@@ -374,7 +399,7 @@ test('shipment route rejects mismatched sessions and malformed requests before s
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
-    profileDependencies(providerFetch, {
+    legacyFirestoreProfileDependencies(providerFetch, {
       resolveD1AuthWalletBinding: async () => ({ wallet: OTHER, source: 'binding' }),
     }),
   );
@@ -390,7 +415,7 @@ test('shipment route rejects mismatched sessions and malformed requests before s
       tokenRequest(PROFILE_SHIPMENTS_PATH, body),
       { COMMERCE_DB: createCommerceD1() },
       PROFILE_SHIPMENTS_PATH,
-      profileDependencies(async () => assert.fail('invalid request reached provider')),
+      legacyFirestoreProfileDependencies(async () => assert.fail('invalid request reached provider')),
     );
     assert.equal(invalid.response.status, 400);
     assert.equal((await invalid.response.json() as { error: { code: string } }).error.code, 'invalid-argument');
@@ -404,7 +429,7 @@ test('shipment route preserves legacy wallet-shaped Auth UIDs when no session do
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
     {
-      ...profileDependencies(async (_input, init) => {
+      ...legacyFirestoreProfileDependencies(async (_input, init) => {
         const query = JSON.parse(String(init?.body)) as CommerceQuery;
         const owner = query.filters?.find((filter) => filter.field === 'owner')?.value;
         if (typeof owner === 'string') owners.push(owner);
@@ -424,7 +449,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
-    profileDependencies(async () => Response.json([]), {
+    legacyFirestoreProfileDependencies(async () => Response.json([]), {
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     }),
   );
@@ -434,7 +459,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
-    profileDependencies(async () => {
+    legacyFirestoreProfileDependencies(async () => {
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       loadProfileEmail: async () => 'owner@example.com',
@@ -449,7 +474,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
-    profileDependencies(async (input) => {
+    legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ fields: { email: stringValue('owner@example.com') } });
       if (url.endsWith('/documents:runQuery')) return Response.json([{ document: orderDocument() }]);
@@ -480,7 +505,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
-    profileDependencies(async (input) => {
+    legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
       if (url.endsWith('/documents:runQuery')) return Response.json([]);
@@ -497,7 +522,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
-    profileDependencies(async (input) => {
+    legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.endsWith('/documents:runQuery')) return Response.json([]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
@@ -525,7 +550,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize: 2 }),
     env,
     ADMIN_DELIVERY_ORDER_OWNERS_PATH,
-    profileDependencies(async (_input, init) => {
+    legacyFirestoreProfileDependencies(async (_input, init) => {
       const query = JSON.parse(String(init?.body)) as CommerceQuery;
       assert.equal(query.kind, 'delivery_order');
       return Response.json([
@@ -543,7 +568,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 2, cursor: null }),
     env,
     FULFILLMENT_ORDERS_PATH,
-    profileDependencies(async (_input, init) => {
+    legacyFirestoreProfileDependencies(async (_input, init) => {
       const query = JSON.parse(String(init?.body)) as CommerceQuery;
       assert.equal(query.limit, 3);
       return Response.json([{ document: {
@@ -582,7 +607,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     tokenRequest(FULFILLMENT_MANUAL_REVIEW_PATH, { dropId: 'card_nft_2' }),
     env,
     FULFILLMENT_MANUAL_REVIEW_PATH,
-    profileDependencies(async (input, init) => {
+    legacyFirestoreProfileDependencies(async (input, init) => {
       const url = String(input);
       if (url.includes('api.stripe.com')) {
         assert.equal(new Headers(init?.headers).get('stripe-version'), '2026-07-29.dahlia');
@@ -596,7 +621,6 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
           sessionId: stringValue('cs_test_review'),
           owner: stringValue(OWNER),
           ownerKind: stringValue('wallet'),
-          uid: stringValue(OWNER),
           quantity: integerValue(2),
           stripeSessionSummary: { mapValue: { fields: { amount_total: integerValue(4200), currency: stringValue('usd') } } },
         },
@@ -620,55 +644,33 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
 });
 
 test('all seven commerce read routes use D1 without Commerce in d1 mode', async () => {
-  const order = orderDocument();
-  (order.fields as Record<string, unknown>).buyerOrderShippedEmailState = stringValue('pending');
-  const checkout = {
-    name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/stripeCheckouts/cs_test_review',
-    fields: {
-      manualRefundReviewRequired: { booleanValue: true },
-      status: stringValue('fulfillment_failed'),
-      sessionId: stringValue('cs_test_review'),
-      owner: stringValue(OWNER),
-      quantity: integerValue(2),
+  const harness = createCommerceD1Harness();
+  seedCommerceDocument(harness, {
+    key: commerceKeys.deliveryOrder('card_nft_2', '7'),
+    data: {
+      buyerOrderShippedEmailState: 'pending',
+      createdAt: Date.parse('2026-08-18T10:00:00.000Z'),
+      deliveryId: 7,
+      dropId: 'card_nft_2',
+      items: [{ kind: 'box', refId: 3 }],
+      owner: OWNER,
+      processedAt: Date.parse('2026-08-18T11:00:00.000Z'),
+      status: 'ready_to_ship',
     },
-  };
-  const modelRow = (document: typeof order | typeof checkout, kind: 'delivery_order' | 'stripe_checkout') => ({
-    document_path: document.name.split('/documents/')[1],
-    document_kind: kind,
-    drop_id: 'card_nft_2',
-    document_id: document.name.split('/').at(-1),
-    fields_json: JSON.stringify(document.fields),
-    document_json: JSON.stringify(decodeFixtureFields(document.fields)),
-    version: 1,
-    create_time: '2026-08-18T10:00:00Z',
-    update_time: '2026-08-18T12:00:00Z',
-    processed_at_seconds: kind === 'delivery_order' ? 1_787_050_800 : null,
-    processed_at_nanos: kind === 'delivery_order' ? 0 : null,
+    processedAt: { seconds: Date.parse('2026-08-18T11:00:00.000Z') / 1000, nanos: 0 },
   });
-  const db = {
-    prepare(sql: string) {
-      let bindings: unknown[] = [];
-      const statement = {
-        bind(...values: unknown[]) {
-          bindings = values;
-          return this;
-        },
-        first: async () => sql.includes('commerce_authority_control')
-          ? { authority_state: 'd1', revision: 2, documents_revision: 0 }
-          : null,
-        all: async () => ({
-          success: true,
-          meta: {},
-          results: bindings[0] === 'stripe_checkout'
-            ? [modelRow(checkout, 'stripe_checkout')]
-            : [modelRow(order, 'delivery_order')],
-        }),
-      };
-      return statement;
+  seedCommerceDocument(harness, {
+    key: commerceKeys.stripeCheckout('card_nft_2', 'cs_test_review'),
+    data: {
+      manualRefundReviewRequired: true,
+      owner: OWNER,
+      quantity: 2,
+      sessionId: 'cs_test_review',
+      status: 'fulfillment_failed',
     },
-  } as unknown as D1Database;
+  });
   const env = {
-    COMMERCE_DB: db,
+    COMMERCE_DB: harness.db,
     ADDRESS_DECRYPTION_SECRET: '',
     OPS_DB: {} as D1Database,
     STRIPE_SECRET_KEY: 'sk_test_primary',
@@ -681,13 +683,10 @@ test('all seven commerce read routes use D1 without Commerce in d1 mode', async 
     }
     return Response.json({});
   };
-  const anonymousDependencies = profileDependencies(providerFetch, {
-    createCommerceRepository: (database) => new D1CommerceRepository(database),
-  });
-  const staffDependencies = profileDependencies(providerFetch, {
+  const anonymousDependencies = d1ProfileDependencies(providerFetch);
+  const staffDependencies = d1ProfileDependencies(providerFetch, {
     loadProfileEmail: async () => 'owner@example.com',
     resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
-    createCommerceRepository: (database) => new D1CommerceRepository(database),
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
   });
   const calls: Array<[ProfileReadPath, unknown, Parameters<typeof handleProfileReadRequest>[3]]> = [
@@ -710,6 +709,103 @@ test('all seven commerce read routes use D1 without Commerce in d1 mode', async 
   assert.equal(commerceCalls, 0);
 });
 
+test('D1 profile reads enforce owner, drop, status, ordering, and cursor filters', async () => {
+  const harness = createCommerceD1Harness();
+  const seedOrder = (args: {
+    deliveryId: number;
+    dropId: string;
+    nanos: number;
+    owner: string;
+    seconds: number;
+    status: string;
+  }) => seedCommerceDocument(harness, {
+    key: commerceKeys.deliveryOrder(args.dropId, String(args.deliveryId)),
+    data: {
+      createdAt: args.seconds * 1_000 - 500,
+      deliveryId: args.deliveryId,
+      dropId: args.dropId,
+      items: [{ kind: 'box', refId: args.deliveryId }],
+      owner: args.owner,
+      processedAt: args.seconds * 1_000,
+      status: args.status,
+    },
+    processedAt: { seconds: args.seconds, nanos: args.nanos },
+  });
+  seedOrder({ deliveryId: 1, dropId: 'card_nft_2', nanos: 1, owner: OWNER, seconds: 100, status: 'ready_to_ship' });
+  seedOrder({ deliveryId: 2, dropId: 'card_nft_2', nanos: 2, owner: OTHER, seconds: 100, status: 'ready_to_ship' });
+  seedOrder({ deliveryId: 3, dropId: 'card_nft_2', nanos: 0, owner: OWNER, seconds: 101, status: 'processing' });
+  seedOrder({ deliveryId: 4, dropId: 'little_swag_boxes', nanos: 0, owner: OWNER, seconds: 102, status: 'ready_to_ship' });
+  seedOrder({ deliveryId: 5, dropId: 'card_nft_2', nanos: 0, owner: OWNER, seconds: 103, status: 'failed' });
+
+  const anonymousDependencies = d1ProfileDependencies(async () => Response.json({}));
+  const shipments = await handleProfileReadRequest(
+    tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
+    { COMMERCE_DB: harness.db, OPS_DB: {} as D1Database },
+    PROFILE_SHIPMENTS_PATH,
+    anonymousDependencies,
+  );
+  assert.equal(shipments.response.status, 200);
+  const shipmentPayload = await shipments.response.json() as { orders: Array<{ deliveryId: number }> };
+  assert.deepEqual(shipmentPayload.orders.map((order) => order.deliveryId), [4, 3, 1]);
+
+  const staffDependencies = d1ProfileDependencies(async () => Response.json({}), {
+    resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
+    verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+  });
+  const fulfillmentEnv = {
+    COMMERCE_DB: harness.db,
+    ADDRESS_DECRYPTION_SECRET: '',
+    OPS_DB: {} as D1Database,
+  };
+  const firstPage = await handleProfileReadRequest(
+    tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 1, cursor: null }),
+    fulfillmentEnv,
+    FULFILLMENT_ORDERS_PATH,
+    staffDependencies,
+  );
+  assert.equal(firstPage.response.status, 200);
+  const firstPayload = await firstPage.response.json() as {
+    orders: Array<{ deliveryId: number }>;
+    nextCursor: { processedAt: { seconds: number; nanos: number }; id: string } | null;
+  };
+  assert.deepEqual(firstPayload.orders.map((order) => order.deliveryId), [2]);
+  assert.deepEqual(firstPayload.nextCursor, { processedAt: { seconds: 100, nanos: 2 }, id: '2' });
+
+  const secondPage = await handleProfileReadRequest(
+    tokenRequest(FULFILLMENT_ORDERS_PATH, {
+      dropId: 'card_nft_2',
+      limit: 1,
+      cursor: firstPayload.nextCursor,
+    }),
+    fulfillmentEnv,
+    FULFILLMENT_ORDERS_PATH,
+    staffDependencies,
+  );
+  assert.equal(secondPage.response.status, 200);
+  const secondPayload = await secondPage.response.json() as {
+    orders: Array<{ deliveryId: number }>;
+    nextCursor: unknown;
+  };
+  assert.deepEqual(secondPayload.orders.map((order) => order.deliveryId), [1]);
+  assert.equal(secondPayload.nextCursor, null);
+});
+
+test('current D1 rejects legacy uid identity fields on commerce documents', () => {
+  const harness = createCommerceD1Harness();
+  assert.throws(() => seedCommerceDocument(harness, {
+    key: commerceKeys.stripeCheckout('card_nft_2', 'cs_test_review'),
+    data: {
+      manualRefundReviewRequired: true,
+      owner: OWNER,
+      ownerKind: 'wallet',
+      quantity: 2,
+      sessionId: 'cs_test_review',
+      status: 'fulfillment_failed',
+      uid: UID,
+    },
+  }), /commerce document contains noncanonical identity data/);
+});
+
 test('commerce authority failures fail closed without a provider fallback', async () => {
   let providerCalls = 0;
   const result = await handleProfileReadRequest(
@@ -718,7 +814,7 @@ test('commerce authority failures fail closed without a provider fallback', asyn
       COMMERCE_DB: {} as D1Database,
     },
     PROFILE_SHIPMENTS_PATH,
-    profileDependencies(async () => {
+    legacyFirestoreProfileDependencies(async () => {
       providerCalls += 1;
       return Response.json([{ document: orderDocument() }]);
     }, { createCommerceRepository: (database) => new D1CommerceRepository(database) }),

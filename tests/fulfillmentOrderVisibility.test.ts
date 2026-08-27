@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { FulfillmentOrder } from '../src/types.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
 import {
-  ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
   canEditFulfillmentOrderAddress,
   filterFulfillmentOrdersByVisibility,
   isRedeemedForIrlFulfillmentOrder,
@@ -14,8 +14,8 @@ const orders: TestOrder[] = [
   { deliveryId: 1, fulfillmentStatus: 'Preparing' },
   { deliveryId: 2, fulfillmentStatus: 'Shipped' },
   { deliveryId: 3 },
-  { deliveryId: 4, source: ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE, fulfillmentStatus: 'Preparing' },
-  { deliveryId: 5, source: ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE, fulfillmentStatus: 'Shipped' },
+  { deliveryId: 4, source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE, fulfillmentStatus: 'Preparing' },
+  { deliveryId: 5, source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE, fulfillmentStatus: 'Shipped' },
 ];
 
 function visibleOrderIds(filter: Parameters<typeof filterFulfillmentOrdersByVisibility>[1]): number[] {
@@ -44,7 +44,7 @@ test('address editing is unavailable after an order is added to ShipStation', ()
   assert.equal(canEditFulfillmentOrderAddress({ shipstationShipmentId: 'se-shipment' }, options), false);
   assert.equal(
     canEditFulfillmentOrderAddress(
-      { source: ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE },
+      { source: ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE },
       options,
     ),
     false,

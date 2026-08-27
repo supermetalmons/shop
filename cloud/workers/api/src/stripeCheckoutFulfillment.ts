@@ -115,7 +115,7 @@ function configuredPublicKey(label: string, value: string | undefined): PublicKe
   }
 }
 
-function fulfillmentRuntime(rawDropId: unknown): FulfillmentRuntime {
+export function fulfillmentRuntime(rawDropId: unknown): FulfillmentRuntime {
   const dropId = typeof rawDropId === 'string' ? normalizeDropId(rawDropId) : '';
   if (!dropId || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId)) {
     throw fulfillmentError('invalid-argument', 'Invalid dropId');
@@ -308,7 +308,7 @@ async function sendAndConfirmSignedTx(
   });
 }
 
-function validateOnchainConfig(
+export function validateOnchainConfig(
   runtime: FulfillmentRuntime,
   decoded: DecodedBoxMinterConfigData,
 ): StripeCheckoutOnchainConfig {
@@ -359,7 +359,7 @@ function validateOnchainConfig(
   };
 }
 
-function isMplCoreCollectionAccount(
+export function isMplCoreCollectionAccount(
   account: { data: Uint8Array; owner: PublicKey } | null,
 ): boolean {
   return account !== null &&
@@ -417,7 +417,7 @@ function addressEncryptor(secret: string): (plaintext: string) => { encrypted: s
   };
 }
 
-function lazyAddressEncryptor(secret: string): ReturnType<typeof addressEncryptor> {
+export function lazyAddressEncryptor(secret: string): ReturnType<typeof addressEncryptor> {
   let encrypt: ReturnType<typeof addressEncryptor> | undefined;
   return (plaintext) => {
     if (!encrypt) encrypt = addressEncryptor(secret);
@@ -442,11 +442,11 @@ function stripeKeys(env: FulfillmentEnv): string[] {
   ].map((value) => String(value || '').trim()).filter(Boolean)));
 }
 
-function packStatusEventQuantity(runtime: Pick<FulfillmentRuntime, 'itemsPerBox'>, quantity: number): number {
+export function packStatusEventQuantity(runtime: Pick<FulfillmentRuntime, 'itemsPerBox'>, quantity: number): number {
   return quantity * packStatusCardsPerPack(runtime);
 }
 
-function flowDependencies(
+export function flowDependencies(
   env: FulfillmentEnv,
   store: ReturnType<typeof createStripeCheckoutStore>,
   signal: AbortSignal,
@@ -586,7 +586,7 @@ function flowDependencies(
   };
 }
 
-function workerFulfillmentCompletionFields(): StripeCheckoutFulfillmentCompletionFields {
+export function workerFulfillmentCompletionFields(): StripeCheckoutFulfillmentCompletionFields {
   return {
     fulfillmentCompletedBy: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
     fulfillmentCompletedAt: stripeCheckoutFieldValue.serverTimestamp(),
@@ -659,13 +659,3 @@ export async function processStripeCheckoutFulfillmentJob(
   }
   return { fulfillment, notifications };
 }
-
-export const stripeCheckoutFulfillmentTestHooks = {
-  flowDependencies,
-  fulfillmentRuntime,
-  isMplCoreCollectionAccount,
-  lazyAddressEncryptor,
-  packStatusEventQuantity,
-  validateOnchainConfig,
-  workerFulfillmentCompletionFields,
-};

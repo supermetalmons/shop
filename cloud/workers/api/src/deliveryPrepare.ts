@@ -70,6 +70,7 @@ import {
   type ProfileProviderFetch,
 } from './boundedResponse.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
+import { requestSolanaRpc } from './solanaProvider.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -482,32 +483,28 @@ async function rpcCall(
       context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
     );
     try {
-      const response = await context.providerFetch(
-        `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-          redirect: 'manual',
-          signal: attemptScope.signal,
-        },
-      );
-      if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt === 0) {
-        await cancelResponseBody(response);
-        await pause(context.signal);
-        continue;
-      }
-      if (!response.ok) {
-        await cancelResponseBody(response);
+      const transport = await requestSolanaRpc({
+        fetch: context.providerFetch,
+        url: `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
+        id,
+        method,
+        params,
+        maxResponseBytes: PROVIDER_MAX_BYTES,
+        signal: attemptScope.signal,
+      });
+      if (transport.kind === 'http-error') {
+        if (TRANSIENT_HTTP_STATUSES.has(transport.status) && attempt === 0) {
+          await pause(context.signal);
+          continue;
+        }
         throw new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
       }
-      const payload = await readBoundedJson(response, PROVIDER_MAX_BYTES, attemptScope.signal);
-      if (!isRecord(payload) || payload.jsonrpc !== '2.0' || payload.id !== id) {
+      if (transport.kind === 'invalid-response') {
         throw new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid response.');
       }
-      if (isRecord(payload.error)) {
-        const upstreamCode = Number(payload.error.code);
-        if (attempt === 0 && isTransientShopRpcError(payload.error)) {
+      if (transport.kind === 'rpc-error') {
+        const upstreamCode = Number(transport.error.code);
+        if (attempt === 0 && isTransientShopRpcError(transport.error)) {
           await pause(context.signal);
           continue;
         }
@@ -516,10 +513,7 @@ async function rpcCall(
           ...(Number.isFinite(upstreamCode) ? { upstreamCode } : {}),
         });
       }
-      if (!Object.hasOwn(payload, 'result')) {
-        throw new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid response.');
-      }
-      return payload.result;
+      return transport.value;
     } catch (error) {
       if (context.signal.aborted) throw context.signal.reason;
       if (attemptScope.timedOut()) {

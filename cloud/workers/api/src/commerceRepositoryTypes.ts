@@ -135,11 +135,13 @@ export type CommerceUpdateValue =
 export type CommerceDocumentWriteData = { [key: string]: CommerceUpdateValue };
 
 export const commerceFieldValue = Object.freeze({
-  arrayUnion: (...values: CommerceJsonValue[]): CommerceUpdateValue => new ArrayUnionValue(values),
-  delete: (): CommerceUpdateValue => new DeleteFieldValue(),
-  increment: (amount: number): CommerceUpdateValue => new IncrementValue(amount),
-  serverTimestamp: (): CommerceUpdateValue => new ServerTimestampValue(),
-  timestamp: (seconds: number, nanos = 0): CommerceUpdateValue => new TimestampValue({ seconds, nanos }),
+  arrayUnion: (...values: CommerceJsonValue[]): CommerceUpdateValue =>
+    Object.freeze(new ArrayUnionValue(Object.freeze([...values]))),
+  delete: (): CommerceUpdateValue => Object.freeze(new DeleteFieldValue()),
+  increment: (amount: number): CommerceUpdateValue => Object.freeze(new IncrementValue(amount)),
+  serverTimestamp: (): CommerceUpdateValue => Object.freeze(new ServerTimestampValue()),
+  timestamp: (seconds: number, nanos = 0): CommerceUpdateValue =>
+    Object.freeze(new TimestampValue(Object.freeze({ seconds, nanos }))),
 });
 
 export function isCommerceServerTimestamp(value: unknown): value is ServerTimestampValue {

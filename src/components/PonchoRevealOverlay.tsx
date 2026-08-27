@@ -7,7 +7,6 @@ import {
   useState,
   type AnimationEvent,
   type CSSProperties,
-  type ReactNode,
   type RefObject,
   type SyntheticEvent,
   type TransitionEvent,
@@ -95,9 +94,7 @@ export type PonchoCardViewerOverlayProps = {
   suspended?: boolean;
   ariaLabel?: string;
   card?: DrifCardConfig;
-  cardIdLabel?: string;
   loadingImageSrc?: string;
-  controls?: ReactNode;
   onDismiss?: () => void;
   onTransitionEnd?: (evt: TransitionEvent<HTMLDivElement>) => void;
 };
@@ -1495,9 +1492,7 @@ export function PonchoCardViewerOverlay({
   suspended = false,
   ariaLabel = 'Card viewer',
   card,
-  cardIdLabel,
   loadingImageSrc,
-  controls,
   onDismiss,
   onTransitionEnd,
 }: PonchoCardViewerOverlayProps) {
@@ -1524,7 +1519,6 @@ export function PonchoCardViewerOverlay({
       onDragStart={(evt) => evt.preventDefault()}
     >
       <div className="reveal-overlay__backdrop" />
-      {cardIdLabel ? <div className="poncho-card-viewer-overlay__card-id">{cardIdLabel}</div> : null}
       <div className="reveal-overlay__frame" onTransitionEnd={onTransitionEnd}>
         <div className="wip-reveal__stage wip-reveal__stage--visible">
           {card ? (
@@ -1545,7 +1539,6 @@ export function PonchoCardViewerOverlay({
           ) : null}
         </div>
       </div>
-      {controls}
     </ModalFocusScope>
   );
 }

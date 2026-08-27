@@ -6,11 +6,10 @@ import { ModalFocusScope } from './components/ModalFocusScope';
 import { WalletContextProvider } from './wallet/WalletContext';
 import type { SolanaCluster } from './config/deployment';
 import { navigate } from './navigation';
+import type { ShopWipExperience } from './routes';
 
 const PackWipApp = React.lazy(() => import('./WipApp'));
 const ClearCardWipApp = React.lazy(() => import('./ClearCardWipApp'));
-type PackWipExperience = 'card_nft_2' | 'little_swag_boxes' | 'poncho_drifella';
-type ShopWipExperience = PackWipExperience | 'clear_cards';
 
 type WipRouteShellProps = {
   experience: ShopWipExperience;

@@ -236,73 +236,6 @@ const CLEAR_CARDS_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   },
 };
 
-export const DROPS_EXTRA_CONTENT: Record<string, DropExtraContentOverride> = {
-};
-
-function mergeOverrideSection<T extends object>(base: T | undefined, override: T | undefined): T | undefined {
-  if (!base) return override;
-  if (!override) return base;
-  return { ...base, ...override };
-}
-
-function mergeRevealOverride(
-  base: DropExtraContentOverride['reveal'] | undefined,
-  override: DropExtraContentOverride['reveal'] | undefined,
-): DropExtraContentOverride['reveal'] | undefined {
-  const merged = mergeOverrideSection(base, override);
-  if (!merged) return undefined;
-  return {
-    ...merged,
-    frameTiming: mergeOverrideSection(base?.frameTiming, override?.frameTiming),
-    frameSequence: mergeOverrideSection(base?.frameSequence, override?.frameSequence),
-    sound: mergeOverrideSection(base?.sound, override?.sound),
-  };
-}
-
-function mergeMediaMapConfig(base: MediaMapConfig | undefined, override: MediaMapConfig | undefined): MediaMapConfig | undefined {
-  if (!base) return override;
-  if (!override) return base;
-  const overrides = {
-    ...(base.overrides || {}),
-    ...(override.overrides || {}),
-  };
-  return {
-    ...base,
-    ...override,
-    ...(Object.keys(overrides).length ? { overrides } : {}),
-  };
-}
-
-function mergeCertificateOverride(
-  base: DropExtraContentOverride['certificates'] | undefined,
-  override: DropExtraContentOverride['certificates'] | undefined,
-): DropExtraContentOverride['certificates'] | undefined {
-  const merged = mergeOverrideSection(base, override);
-  if (!merged) return undefined;
-  const boxInventoryMedia = mergeMediaMapConfig(base?.boxInventoryMedia, override?.boxInventoryMedia);
-  return {
-    ...merged,
-    ...(boxInventoryMedia ? { boxInventoryMedia } : {}),
-  };
-}
-
-function mergeDropExtraContentOverrides(
-  familyOverride: DropExtraContentOverride | undefined,
-  dropOverride: DropExtraContentOverride | undefined,
-): DropExtraContentOverride | undefined {
-  if (!familyOverride) return dropOverride;
-  if (!dropOverride) return familyOverride;
-  return {
-    ...familyOverride,
-    ...dropOverride,
-    box: mergeOverrideSection(familyOverride.box, dropOverride.box),
-    mintPanel: mergeOverrideSection(familyOverride.mintPanel, dropOverride.mintPanel),
-    reveal: mergeRevealOverride(familyOverride.reveal, dropOverride.reveal),
-    figures: mergeOverrideSection(familyOverride.figures, dropOverride.figures),
-    certificates: mergeCertificateOverride(familyOverride.certificates, dropOverride.certificates),
-  };
-}
-
 function getDropFamilyExtraContentOverride(normalizedDropId: string): DropExtraContentOverride | undefined {
   if (isDropFamily(normalizedDropId, 'drifella_shirt')) return DRIFELLA_SHIRT_FAMILY_EXTRA_CONTENT;
   if (isDropFamily(normalizedDropId, 'poncho_drifella')) return PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT;
@@ -317,6 +250,5 @@ function getDropFamilyExtraContentOverride(normalizedDropId: string): DropExtraC
 export function getDropExtraContentOverride(dropId?: string): DropExtraContentOverride | undefined {
   const normalizedDropId = normalizeDropId(dropId || '');
   if (!normalizedDropId) return undefined;
-  const dropOverride = DROPS_EXTRA_CONTENT[normalizedDropId];
-  return mergeDropExtraContentOverrides(getDropFamilyExtraContentOverride(normalizedDropId), dropOverride);
+  return getDropFamilyExtraContentOverride(normalizedDropId);
 }

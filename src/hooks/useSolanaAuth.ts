@@ -5,11 +5,15 @@ import {
   loadProfileStateFromServer,
   reconcileProfileState,
   solanaAuth,
-  type ReconcileProfileStateRequest,
-  type ReconcileProfileStateResponse,
-} from '../lib/api';
+} from '../api/profile';
 import { isRetryableApiError, retryWithBackoff } from '../lib/apiErrors';
-import type { DeliveryOrderSummary, GetProfileStateResponse, Profile } from '../types';
+import type {
+  DeliveryOrderSummary,
+  GetProfileStateResponse,
+  Profile,
+  ReconcileProfileStateRequest,
+  ReconcileProfileStateResponse,
+} from '../types';
 import { buildSignInMessage } from '../lib/solana';
 import { normalizeApiErrorCode } from '../../shared/apiErrorCode';
 import { deliveryOrderSummarySortAt } from '../../shared/deliveryOrderSummary.js';

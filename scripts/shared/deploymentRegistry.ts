@@ -22,9 +22,7 @@ import {
   clonePaymentRoutingConfig,
   deploymentTreasuryAlias,
   normalizeAndValidatePaymentRouting,
-  projectDeploymentPaymentRouting,
   type BoxMinterConfigTombstone,
-  type BoxMinterConfigTombstonesMap,
   type DeploymentMediaMapConfig,
   type DeploymentRegistryDrop,
   type PaymentRoutingConfig,
@@ -43,7 +41,6 @@ import {
   resolveStripeProductTaxCodeForDropFamily,
   STRIPE_UNIT_AMOUNT_CENTS_MAX,
   STRIPE_UNIT_AMOUNT_CENTS_MIN,
-  type StripeCheckoutEnabledResolution,
 } from '../../shared/stripeCheckoutCore.ts';
 import {
   BOX_MINTER_CONFIG_SEED,
@@ -67,7 +64,6 @@ import {
   normalizeMintSelectionConfig,
   type DropFamily,
   type DropSalesMode,
-  type DropPaths,
   type MetadataPathFormat,
   type MintSelectionConfig,
   type SolanaCluster,
@@ -79,36 +75,26 @@ import {
 } from './optimisticTextFile.ts';
 
 export {
-  BOX_MINTER_CONFIG_TOMBSTONES,
   CARD_NFT_2_STRIPE_PRODUCT_TAX_CODE,
   canonicalizeDropAssetUrl,
   defaultDropFamilyForDropId,
   dropPathsFromBase,
-  metadataBasesForDrop,
   normalizeDropBase,
-  normalizeDropFamily,
   normalizeDropId,
   normalizeDropSalesMode,
-  normalizeMetadataBaseAliases,
-  deploymentTreasuryAlias,
   clonePaymentRoutingConfig,
   normalizeAndValidatePaymentRouting,
-  projectDeploymentPaymentRouting,
   resolveStripeCheckoutEnabledForDropFamily,
   resolveStripeProductTaxCodeForDropFamily,
 };
 export type {
   DropFamily,
   DropSalesMode,
-  DropPaths,
   MetadataPathFormat,
   MintSelectionConfig,
   BoxMinterConfigTombstone,
-  BoxMinterConfigTombstonesMap,
   PaymentRoutingConfig,
   ReceiptPoolDeployment,
-  SolanaCluster,
-  StripeCheckoutEnabledResolution,
 };
 
 export type MediaMapConfigSerialized = DeploymentMediaMapConfig;
@@ -259,13 +245,13 @@ function defaultSecondaryMarketHref(dropId: string): string | undefined {
     : undefined;
 }
 
-export function defaultFrontendFigureMediaForDropFamily(
+function defaultFrontendFigureMediaForDropFamily(
   dropFamily: DropFamily,
 ): FigureMediaConfigSerialized | undefined {
   return defaultFigureMediaConfigForDropFamily(dropFamily);
 }
 
-export function defaultFrontendBoxMediaForDropFamily(
+function defaultFrontendBoxMediaForDropFamily(
   dropFamily: DropFamily,
 ): BoxMediaConfigSerialized | undefined {
   return defaultBoxMediaConfigForDropFamily(dropFamily);
@@ -2074,12 +2060,4 @@ export function writeDeploymentRegistryFile(args: {
     }
     throw error;
   }
-}
-
-export function asDeploymentDropConfigSerialized(
-  drop: DeploymentRegistryDrop,
-): DeploymentDropConfigSerialized {
-  const normalized = normalizeDeploymentDropForRegistry(drop);
-  if (!normalized) throw new Error('Invalid deployment registry drop');
-  return normalized;
 }

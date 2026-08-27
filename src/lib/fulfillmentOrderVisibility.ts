@@ -1,11 +1,8 @@
 import type { FulfillmentOrder } from '../types';
 import {
-  ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE as ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE,
   isAdminIrlRedeemDeliveryOrderSource,
 } from '../../shared/fulfillmentSources';
 import { normalizeFulfillmentStatus } from './fulfillmentStatus';
-
-export { ADMIN_IRL_REDEEM_FULFILLMENT_ORDER_SOURCE };
 
 export const FULFILLMENT_ORDER_VISIBILITY_OPTIONS = [
   { value: 'not_shipped', label: 'Not shipped' },
