@@ -1,7 +1,7 @@
 {
   "version": 1,
   "status": "complete",
-  "generatedAt": "2026-08-27T09:45:53Z",
+  "generatedAt": "2026-08-27T10:05:29Z",
   "source": {
     "branch": "main",
     "deployedCommit": "193999624480c06e2c39c88c95960c793208ddc0",
@@ -39,6 +39,8 @@
   "migrations": {
     "ops": "0017_auth_wallet_bindings.sql",
     "commerce": "0010_cloudflare_native_identity_queries.sql",
+    "commerceFollowUp": "0011_delivery_owner_partial_index.sql",
+    "migrationSourceCommit": "a20e0c5e5cc0fc7529e9e00ca11141896979f5a6",
     "pendingAfterDeployment": 0
   },
   "deployment": {
@@ -56,7 +58,7 @@
     "postDeployment": {
       "data": "00000107-00000000-000050d4-3d83e7a89f2bbbd53f59ad87b2652767",
       "ops": "000002fb-00000008-000050d4-649259f091cb7384ae330318561c4522",
-      "commerce": "0000012d-0000000b-000050d4-04f8b0ac257a85ae473c080feb5064f2"
+      "commerce": "00000139-00000005-000050d4-50285ecd5e8957f64f2f265968b3be3d"
     }
   },
   "data": {
