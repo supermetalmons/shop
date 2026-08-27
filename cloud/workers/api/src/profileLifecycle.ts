@@ -41,14 +41,14 @@ import {
 import { isProfileRequestOriginAllowed } from './profileReads.js';
 import { ensureD1Profile } from './profileD1.js';
 import {
-  WalletSessionD1BusyError,
-  WalletSessionD1SupersededError,
-  acquireWalletSessionReconcileLease,
-  establishD1WalletSession,
-  loadD1WalletSession,
-  releaseWalletSessionReconcileLease,
-  resolveD1WalletSession,
-} from './walletSessionD1.js';
+  AuthWalletBindingD1BusyError,
+  AuthWalletBindingD1SupersededError,
+  acquireAuthWalletBindingReconcileLease,
+  establishD1AuthWalletBinding,
+  loadD1AuthWalletBinding,
+  releaseAuthWalletBindingReconcileLease,
+  resolveD1AuthWalletBinding,
+} from './authWalletBindingD1.js';
 
 export const SOLANA_AUTH_PATH = '/auth/solana';
 export const PROFILE_RECONCILE_PATH = '/profile/reconcile';
@@ -94,11 +94,11 @@ export type ProfileLifecycleResult = {
 };
 
 type ProfileLifecycleDependencies = {
-  acquireWalletSessionReconcileLease: typeof acquireWalletSessionReconcileLease;
+  acquireAuthWalletBindingReconcileLease: typeof acquireAuthWalletBindingReconcileLease;
   createCommerceRepository: (db: D1Database) => ProfileLifecycleRepository;
-  establishD1WalletSession: typeof establishD1WalletSession;
+  establishD1AuthWalletBinding: typeof establishD1AuthWalletBinding;
   isStaffWallet: typeof isStaffWalletAddress;
-  loadD1WalletSession: typeof loadD1WalletSession;
+  loadD1AuthWalletBinding: typeof loadD1AuthWalletBinding;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
@@ -107,14 +107,14 @@ type ProfileLifecycleDependencies = {
     profile: Parameters<typeof ensureD1Profile>[1],
     signal: AbortSignal,
   ) => Promise<void>;
-  releaseWalletSessionReconcileLease: typeof releaseWalletSessionReconcileLease;
-  resolveD1WalletSession: typeof resolveD1WalletSession;
+  releaseAuthWalletBindingReconcileLease: typeof releaseAuthWalletBindingReconcileLease;
+  resolveD1AuthWalletBinding: typeof resolveD1AuthWalletBinding;
   verifyIdentity: typeof verifyRequestIdentity;
 };
 
 type ProfileLifecycleEnv = Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
-class WalletSessionSupersededError extends ProfileReadError {
+class AuthWalletBindingSupersededError extends ProfileReadError {
   constructor() {
     super(
       'failed-precondition',
@@ -122,7 +122,7 @@ class WalletSessionSupersededError extends ProfileReadError {
       'A newer wallet sign-in superseded this request. Sign in again.',
       { reason: WALLET_SESSION_SUPERSEDED_ERROR_REASON },
     );
-    this.name = 'WalletSessionSupersededError';
+    this.name = 'AuthWalletBindingSupersededError';
   }
 }
 
@@ -213,7 +213,7 @@ async function pauseForConflict(signal: AbortSignal, attempt: number): Promise<v
   });
 }
 
-function validateWalletSessionSignature(params: {
+function validateAuthWalletSignature(params: {
   identity: Extract<RequestIdentity, { kind: 'anonymous' }>;
   message: string;
   nowMs: number;
@@ -328,9 +328,9 @@ async function reconcileProfileState(params: {
   common: CommerceCommon;
   db: D1Database | undefined;
   dependencies: Pick<ProfileLifecycleDependencies,
-    | 'acquireWalletSessionReconcileLease'
-    | 'releaseWalletSessionReconcileLease'
-    | 'resolveD1WalletSession'
+    | 'acquireAuthWalletBindingReconcileLease'
+    | 'releaseAuthWalletBindingReconcileLease'
+    | 'resolveD1AuthWalletBinding'
   >;
   identity: RequestIdentity;
   nowMs: number;
@@ -343,14 +343,14 @@ async function reconcileProfileState(params: {
   } else if (params.body.mergeStripeDeliveryOrders === true) {
     let lease;
     try {
-      lease = await params.dependencies.acquireWalletSessionReconcileLease({
+      lease = await params.dependencies.acquireAuthWalletBindingReconcileLease({
         db: params.db,
         authSubject: params.identity.authSubject,
         nowMs: params.nowMs,
         signal: params.common.signal,
       });
     } catch (error) {
-      if (error instanceof WalletSessionD1BusyError) {
+      if (error instanceof AuthWalletBindingD1BusyError) {
         throw new ProfileReadError('aborted', 409, error.message);
       }
       throw error;
@@ -364,17 +364,17 @@ async function reconcileProfileState(params: {
         wallet,
       });
     } finally {
-      await params.dependencies.releaseWalletSessionReconcileLease(
+      await params.dependencies.releaseAuthWalletBindingReconcileLease(
         params.db,
         params.identity.authSubject,
         lease.id,
       ).catch((error) => console.error({
-        event: 'wallet_session_reconcile_lease_release_failed',
+        event: 'auth_wallet_binding_reconcile_lease_release_failed',
         error: error instanceof Error ? error.message : String(error),
       }));
     }
   } else {
-    const resolution = await params.dependencies.resolveD1WalletSession(
+    const resolution = await params.dependencies.resolveD1AuthWalletBinding(
       params.db,
       params.identity.authSubject,
       params.common.signal,
@@ -395,11 +395,11 @@ async function reconcileProfileState(params: {
 
 
 const defaultDependencies: ProfileLifecycleDependencies = {
-  acquireWalletSessionReconcileLease,
+  acquireAuthWalletBindingReconcileLease,
   createCommerceRepository: (db) => new D1CommerceRepository(db),
-  establishD1WalletSession,
+  establishD1AuthWalletBinding,
   isStaffWallet: isStaffWalletAddress,
-  loadD1WalletSession,
+  loadD1AuthWalletBinding,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: AUTH_TIMEOUT_MS,
@@ -407,8 +407,8 @@ const defaultDependencies: ProfileLifecycleDependencies = {
     if (!db) throw new Error('OPS_DB is unavailable');
     await ensureD1Profile(db, profile, signal);
   },
-  releaseWalletSessionReconcileLease,
-  resolveD1WalletSession,
+  releaseAuthWalletBindingReconcileLease,
+  resolveD1AuthWalletBinding,
   verifyIdentity: verifyRequestIdentity,
 };
 
@@ -467,12 +467,12 @@ export async function handleProfileLifecycleRequest(
       const originHostname = new URL(origin).hostname;
       if (!env.OPS_DB) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
       try {
-        const baseline = await dependencies.loadD1WalletSession(
+        const baseline = await dependencies.loadD1AuthWalletBinding(
           env.OPS_DB,
           identity.authSubject,
           controller.signal,
         );
-        validateWalletSessionSignature({
+        validateAuthWalletSignature({
           identity,
           message: authBody.message,
           nowMs,
@@ -480,7 +480,7 @@ export async function handleProfileLifecycleRequest(
           signature: authBody.signature,
           wallet,
         });
-        await dependencies.establishD1WalletSession({
+        await dependencies.establishD1AuthWalletBinding({
           authSubject: identity.authSubject,
           baseline,
           db: env.OPS_DB,
@@ -489,8 +489,8 @@ export async function handleProfileLifecycleRequest(
           wallet,
         });
       } catch (error) {
-        if (error instanceof WalletSessionD1SupersededError) throw new WalletSessionSupersededError();
-        if (error instanceof WalletSessionD1BusyError) {
+        if (error instanceof AuthWalletBindingD1SupersededError) throw new AuthWalletBindingSupersededError();
+        if (error instanceof AuthWalletBindingD1BusyError) {
           throw new ProfileReadError('aborted', 409, error.message);
         }
         if (

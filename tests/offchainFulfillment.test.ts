@@ -65,6 +65,7 @@ import {
 import { stripeCheckoutFieldValue } from '../cloud/workers/api/src/stripeCheckout/store.ts';
 import {
   createStripeCheckoutSessionCore,
+  createStripeCheckoutIdentity,
   normalizeStripeCheckoutReturnUrl,
   stripeCheckoutProductName,
   stripeCheckoutProductTaxCodeForDrop,
@@ -516,7 +517,6 @@ test('buildStripeCheckoutManualReviewSummary includes failed manual-review check
     manualRefundReviewReason: 'delivery_order_creation_failed',
     owner: 'anonymous:anonymous_subject',
     ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
-    uid: 'anonymous_subject',
     authSubject: 'anonymous_subject',
     quantity: '15',
     createdAt: timestampLike(1_000),
@@ -618,9 +618,7 @@ test('wallet-owned manual-review summaries do not fabricate an auth subject', ()
     checkout: {
       status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
       manualRefundReviewRequired: true,
-      owner: wallet,
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_WALLET,
-      uid: wallet,
+      ...createStripeCheckoutIdentity(wallet, wallet),
     },
     dropId: 'card_nft_2',
     session: null,
@@ -636,10 +634,8 @@ test('manual-review summaries retain records with invalid identity metadata', ()
     checkout: {
       status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
       manualRefundReviewRequired: true,
+      ...createStripeCheckoutIdentity('anon:one'),
       owner: 'anonymous:anon:wrong',
-      ownerKind: 'anonymous',
-      uid: 'anon:one',
-      authSubject: 'anon:one',
     },
     dropId: 'card_nft_2',
     session: null,
@@ -1664,19 +1660,30 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
 });
 
 test('validateStripeCheckoutDocumentData accepts only the app-created session contract', () => {
-  assert.deepEqual(buildStripeCheckoutSessionMetadata({ dropId: 'little_swag_hoodies_devnet', uid: 'anon_uid_123', variantKey: 'XL' }), {
+  assert.deepEqual(buildStripeCheckoutSessionMetadata({
     dropId: 'little_swag_hoodies_devnet',
-    uid: 'anon_uid_123',
+    identity: createStripeCheckoutIdentity('anon_uid_123'),
+    variantKey: 'XL',
+  }), {
+    dropId: 'little_swag_hoodies_devnet',
+    identitySchema: 'owner-v1',
+    ...createStripeCheckoutIdentity('anon_uid_123'),
     fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
     placeholder: 'stripe_direct_delivery',
     quantity: '1',
     variantKey: 'XL',
   });
   assert.deepEqual(
-    buildStripeCheckoutSessionMetadata({ dropId: 'little_swag_hoodies_devnet', uid: 'anon_uid_123', variantKey: 'XL', quantity: 3 }),
+    buildStripeCheckoutSessionMetadata({
+      dropId: 'little_swag_hoodies_devnet',
+      identity: createStripeCheckoutIdentity('anon_uid_123'),
+      variantKey: 'XL',
+      quantity: 3,
+    }),
     {
       dropId: 'little_swag_hoodies_devnet',
-      uid: 'anon_uid_123',
+      identitySchema: 'owner-v1',
+      ...createStripeCheckoutIdentity('anon_uid_123'),
       fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
       placeholder: 'stripe_direct_delivery',
       quantity: '3',
@@ -1687,7 +1694,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
   const checkout = buildStripeCheckoutDocument({
     dropId: 'little_swag_hoodies_devnet',
     sessionId: 'cs_test_123',
-    uid: 'anon_uid_123',
+    ...createStripeCheckoutIdentity('anon_uid_123'),
     variantKey: 'XL',
     unitAmountCents: 100,
     createdAt: 'createdAt',
@@ -1696,10 +1703,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
   assert.deepEqual(checkout, {
     sessionId: 'cs_test_123',
     dropId: 'little_swag_hoodies_devnet',
-    uid: 'anon_uid_123',
-    owner: 'anonymous:anon_uid_123',
-    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
-    authSubject: 'anon_uid_123',
+    ...createStripeCheckoutIdentity('anon_uid_123'),
     variantKey: 'XL',
     quantity: STRIPE_OFFCHAIN_CHECKOUT_QUANTITY,
     currency: STRIPE_OFFCHAIN_CURRENCY,
@@ -1719,10 +1723,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
       checkout,
     }),
     {
-      uid: 'anon_uid_123',
-      owner: 'anonymous:anon_uid_123',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
-      authSubject: 'anon_uid_123',
+      ...createStripeCheckoutIdentity('anon_uid_123'),
       variantKey: 'XL',
       quantity: 1,
       unitAmountCents: 100,
@@ -1733,7 +1734,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
   const multiCheckout = buildStripeCheckoutDocument({
     dropId: 'little_swag_hoodies_devnet',
     sessionId: 'cs_test_multi',
-    uid: 'anon_uid_123',
+    ...createStripeCheckoutIdentity('anon_uid_123'),
     variantKey: 'XL',
     quantity: 3,
     unitAmountCents: 100,
@@ -1748,10 +1749,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
       checkout: multiCheckout,
     }),
     {
-      uid: 'anon_uid_123',
-      owner: 'anonymous:anon_uid_123',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
-      authSubject: 'anon_uid_123',
+      ...createStripeCheckoutIdentity('anon_uid_123'),
       variantKey: 'XL',
       quantity: 3,
       unitAmountCents: 100,
@@ -1762,7 +1760,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
   const liveCheckout = buildStripeCheckoutDocument({
     dropId: 'little_swag_hoodies',
     sessionId: 'cs_live_123',
-    uid: 'anon_uid_123',
+    ...createStripeCheckoutIdentity('anon_uid_123'),
     variantKey: 'XL',
     unitAmountCents: 24900,
     livemode: true,
@@ -1778,10 +1776,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
       checkout: liveCheckout,
     }),
     {
-      uid: 'anon_uid_123',
-      owner: 'anonymous:anon_uid_123',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
-      authSubject: 'anon_uid_123',
+      ...createStripeCheckoutIdentity('anon_uid_123'),
       variantKey: 'XL',
       quantity: 1,
       unitAmountCents: 24900,
@@ -1794,8 +1789,7 @@ test('validateStripeCheckoutDocumentData accepts only the app-created session co
   const staffCheckout = buildStripeCheckoutDocument({
     dropId: 'little_swag_hoodies_devnet',
     sessionId: 'cs_test_staff',
-    uid: staffWallet,
-    wallet: staffWallet,
+    ...createStripeCheckoutIdentity(staffWallet, staffWallet),
     variantKey: 'XL',
     unitAmountCents: 100,
     createdAt: 'createdAt',
@@ -1849,12 +1843,13 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
   assert.deepEqual(
     buildStripeCheckoutSessionMetadata({
       dropId: 'card_nft_2',
-      uid: 'anon_uid_pack',
+      identity: createStripeCheckoutIdentity('anon_uid_pack'),
       quantity: STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY,
     }),
     {
       dropId: 'card_nft_2',
-      uid: 'anon_uid_pack',
+      identitySchema: 'owner-v1',
+      ...createStripeCheckoutIdentity('anon_uid_pack'),
       fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
       placeholder: 'stripe_direct_delivery',
       quantity: '15',
@@ -1864,7 +1859,7 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
     () =>
       buildStripeCheckoutSessionMetadata({
         dropId: 'card_nft_2',
-        uid: 'anon_uid_pack',
+        identity: createStripeCheckoutIdentity('anon_uid_pack'),
         quantity: 16,
       }),
     /1 to 15/,
@@ -1873,7 +1868,7 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
   const checkout = buildStripeCheckoutDocument({
     dropId: 'card_nft_2',
     sessionId: 'cs_test_pack',
-    uid: 'anon_uid_pack',
+    ...createStripeCheckoutIdentity('anon_uid_pack'),
     quantity: 15,
     unitAmountCents: 100,
     createdAt: 'createdAt',
@@ -1887,10 +1882,7 @@ test('Stripe checkout contract accepts pack documents without variantKey up to m
       checkout,
     }),
     {
-      uid: 'anon_uid_pack',
-      owner: 'anonymous:anon_uid_pack',
-      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
-      authSubject: 'anon_uid_pack',
+      ...createStripeCheckoutIdentity('anon_uid_pack'),
       quantity: 15,
       unitAmountCents: 100,
       livemode: false,
@@ -2102,7 +2094,7 @@ test('startStripeCheckoutFulfillmentDocument processes only pending checkout doc
         ...buildStripeCheckoutDocument({
           dropId,
           sessionId,
-          uid: 'anon_uid_123',
+          ...createStripeCheckoutIdentity('anon_uid_123'),
           variantKey,
           unitAmountCents: 100,
           createdAt: 'createdAt',
@@ -2144,7 +2136,7 @@ test('startStripeCheckoutFulfillmentDocument starts pack documents without varia
       ...buildStripeCheckoutDocument({
         dropId,
         sessionId,
-        uid: 'anon_uid_pack',
+        ...createStripeCheckoutIdentity('anon_uid_pack'),
         quantity: 2,
         unitAmountCents: 100,
         createdAt: 'createdAt',
@@ -2190,7 +2182,7 @@ test('startStripeCheckoutFulfillmentDocument skips active processing leases', as
       ...buildStripeCheckoutDocument({
         dropId,
         sessionId,
-        uid: 'anon_uid_123',
+        ...createStripeCheckoutIdentity('anon_uid_123'),
         variantKey,
         unitAmountCents: 100,
         createdAt: 'createdAt',
@@ -2233,7 +2225,7 @@ test('startStripeCheckoutFulfillmentDocument reclaims expired processing leases'
       ...buildStripeCheckoutDocument({
         dropId,
         sessionId,
-        uid: 'anon_uid_123',
+        ...createStripeCheckoutIdentity('anon_uid_123'),
         variantKey,
         unitAmountCents: 100,
         createdAt: 'createdAt',
@@ -2277,7 +2269,7 @@ test('startStripeCheckoutFulfillmentDocument uses legacy processingStartedAt as 
     ...buildStripeCheckoutDocument({
       dropId,
       sessionId,
-      uid: 'anon_uid_123',
+      ...createStripeCheckoutIdentity('anon_uid_123'),
       variantKey,
       unitAmountCents: 100,
       createdAt: 'createdAt',
@@ -2880,7 +2872,7 @@ test('checkout session core rejects bad returnUrl before config fetch', async ()
   let configFetches = 0;
   await assert.rejects(
     () => createStripeCheckoutSessionCore({
-      uid: 'anon_uid_123',
+      identity: createStripeCheckoutIdentity('anon_uid_123'),
       body: {
         dropId: 'little_swag_hoodies_devnet',
         variantKey: 'XL',
@@ -2905,7 +2897,7 @@ test('checkout session core rejects disabled drops before config fetch', async (
   let configFetches = 0;
   await assert.rejects(
     () => createStripeCheckoutSessionCore({
-      uid: 'anon_uid_123',
+      identity: createStripeCheckoutIdentity('anon_uid_123'),
       body: { dropId: 'little_swag_hoodies', variantKey: 'XL', returnUrl: 'https://mons.shop/drop' },
     }, {
       getDrop: (dropId) => ({
@@ -2942,7 +2934,7 @@ test('checkout session core persists the established Stripe checkout document', 
   const writes: Array<{ path: string; document: Record<string, unknown> }> = [];
   const collectionMint = pubkey(3).toBase58();
   const result = await createStripeCheckoutSessionCore({
-    uid: 'anon_uid_123',
+    identity: createStripeCheckoutIdentity('anon_uid_123'),
     requestOrigin: 'https://mons.shop',
     body: { dropId: 'card_nft_binder_devnet', quantity: 1, returnUrl: 'https://mons.shop/drop' },
   }, {
@@ -2995,10 +2987,7 @@ test('checkout session core persists the established Stripe checkout document', 
   assert.deepEqual(writes[0]?.document, {
     sessionId: 'cs_test_123',
     dropId: 'card_nft_binder_devnet',
-    uid: 'anon_uid_123',
-    owner: 'anonymous:anon_uid_123',
-    ownerKind: 'anonymous',
-    authSubject: 'anon_uid_123',
+    ...createStripeCheckoutIdentity('anon_uid_123'),
     quantity: 1,
     currency: 'usd',
     unitAmountCents: 100,

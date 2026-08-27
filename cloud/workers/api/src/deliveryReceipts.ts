@@ -114,7 +114,7 @@ import {
   type CommerceUnitOfWork,
   type CommerceUpdateValue,
 } from './commerceRepository.js';
-import { resolveD1WalletSession } from './walletSessionD1.js';
+import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
   BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
   READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
@@ -696,14 +696,14 @@ function createWrite(args: {
   };
 }
 
-async function loadWalletSession(
+async function loadBoundWallet(
   context: CommerceContext,
   db: D1Database | undefined,
   uid: string,
 ): Promise<string> {
   try {
     if (!db) throw new DeliveryReceiptError('unavailable', 'Receipt data is temporarily unavailable.');
-    const resolution = await resolveD1WalletSession(db, uid, context.signal);
+    const resolution = await resolveD1AuthWalletBinding(db, uid, context.signal);
     if ('reason' in resolution) {
       throw new DeliveryReceiptError('unauthenticated', 'Sign in with your wallet first.');
     }
@@ -744,19 +744,21 @@ async function runPendingReadyNotificationQuery(
   context: CommerceContext,
   ownerWallet: string,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await repository(context).query({
-    kind: 'delivery_order',
-    filters: [
-      { field: 'owner', op: 'equal', value: ownerWallet },
-      { field: 'status', op: 'equal', value: 'ready_to_ship' },
-    ],
-  });
-  return decodeDeliveryOrderQuery(value, true)
-    .filter((document) => (
-      document.fields[BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD] === READY_TO_SHIP_NOTIFICATION_PENDING ||
-      document.fields[SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD] === READY_TO_SHIP_NOTIFICATION_PENDING
-    ))
-    .slice(0, MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL);
+  const documents: DeliveryOrderDocument[] = [];
+  let startAfterPath: string | undefined;
+  while (documents.length < MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL) {
+    const value = await repository(context).queryPendingReadyNotifications({
+      owner: ownerWallet,
+      limit: READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE,
+      ...(startAfterPath ? { startAfterPath } : {}),
+    });
+    const remaining = MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL - documents.length;
+    documents.push(...decodeDeliveryOrderQuery(value, true).slice(0, remaining));
+    if (value.length < READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE) break;
+    startAfterPath = value[value.length - 1]?.key.path;
+    if (!startAfterPath) break;
+  }
+  return documents;
 }
 
 async function runPendingReadyNotificationReconciliationQuery(
@@ -764,18 +766,11 @@ async function runPendingReadyNotificationReconciliationQuery(
   limit: number,
   startAfterCursorPath?: string,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await repository(context).query({
-    kind: 'delivery_order',
-    filters: [{ field: 'status', op: 'equal', value: 'ready_to_ship' }],
-    orderBy: [{ field: 'documentPath', direction: 'asc' }],
-    ...(startAfterCursorPath ? { startAfter: [startAfterCursorPath] } : {}),
+  const value = await repository(context).queryPendingReadyNotifications({
+    limit,
+    ...(startAfterCursorPath ? { startAfterPath: startAfterCursorPath } : {}),
   });
-  return decodeDeliveryOrderQuery(value, false)
-    .filter((document) => (
-      document.fields[BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD] === READY_TO_SHIP_NOTIFICATION_PENDING ||
-      document.fields[SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD] === READY_TO_SHIP_NOTIFICATION_PENDING
-    ))
-    .slice(0, limit);
+  return decodeDeliveryOrderQuery(value, false);
 }
 
 function decodeDeliveryOrderQuery(
@@ -1854,19 +1849,12 @@ async function runDueDeliveryPackStatusProjectionQuery(
   dueAtMs: number,
   limit: number,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await repository(context).query({
-    kind: 'delivery_order',
+  const value = await repository(context).queryDuePackStatusProjections({
     dropId,
-    filters: [{ field: PACK_STATUS_PROJECTION_STATE_FIELD, op: 'equal', value: PACK_STATUS_PROJECTION_PENDING }],
+    dueAtMs,
+    limit,
   });
-  return decodeDeliveryOrderQuery(value, false)
-    .filter((document) => Number(document.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]) <= dueAtMs)
-    .sort((left, right) => (
-      Number(left.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]) -
-        Number(right.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]) ||
-      (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
-    ))
-    .slice(0, limit);
+  return decodeDeliveryOrderQuery(value, false);
 }
 
 export async function reconcilePendingDeliveryPackStatusProjections(
@@ -3764,7 +3752,7 @@ async function issueReceiptsRequest(
   provider: ProviderContext,
   waitUntil: DeliveryReceiptWaitUntil,
 ): Promise<ReceiptIssueResult> {
-  const wallet = await resolveRequestWallet(identity, (uid) => loadWalletSession(commerce, env.OPS_DB, uid));
+  const wallet = await resolveRequestWallet(identity, (uid) => loadBoundWallet(commerce, env.OPS_DB, uid));
   const ownerWallet = canonicalPublicKey(body.owner, 'wallet address').toBase58();
   if (wallet !== ownerWallet) throw new DeliveryReceiptError('permission-denied', 'Owners only.');
   if (!isNonZeroBase58Bytes(body.signature, 64)) {
@@ -3844,7 +3832,7 @@ async function recoverReceiptsRequest(
   provider: ProviderContext,
   waitUntil: DeliveryReceiptWaitUntil,
 ): Promise<RecoverDeliveryOrdersResult> {
-  const wallet = await resolveRequestWallet(identity, (uid) => loadWalletSession(commerce, env.OPS_DB, uid));
+  const wallet = await resolveRequestWallet(identity, (uid) => loadBoundWallet(commerce, env.OPS_DB, uid));
   if (body.deliveryId !== undefined && body.dropId === undefined) {
     throw new DeliveryReceiptError('invalid-argument', 'deliveryId requires dropId.');
   }
@@ -4200,7 +4188,7 @@ export const deliveryReceiptTestHooks = {
   DeliveryReceiptError,
   handlePreparedRecoveryFailure,
   issueReceiptsRequest,
-  loadWalletSession,
+  loadBoundWallet,
   markDeliveryReady,
   markReadyToShipNotificationsQueued,
   normalizeAssignedDudeIds,

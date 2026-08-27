@@ -209,13 +209,12 @@ function readyNotificationControlHarness(args: {
   const batchSizes: number[] = [];
   const reads: boolean[] = [];
   const execute = (statement: ReadyNotificationTestStatement): D1Result<Record<string, unknown>> => {
-    if (statement.query.includes('FROM wallet_sessions')) {
+    if (statement.query.includes('FROM auth_wallet_bindings')) {
       return readyNotificationD1Result([{
         auth_subject: 'auth-uid',
         wallet: OWNER,
-        expires_at_ms: 253_402_300_799_999,
         updated_at_ms: READY_NOTIFICATION_NOW_MS,
-        wallet_revision: 1,
+        revision: 1,
         reconcile_lease_id: null,
         reconcile_lease_expires_at_ms: null,
       }]);
@@ -713,6 +712,35 @@ test('pending ready recovery queries all outbox marker states', async () => {
   assert.equal(result.length, 1);
   assert.equal(result[0].fields.buyerOrderReceivedEmailState, 'pending');
   assert.equal(result[0].fields.shipperReadyToShipEmailState, 'pending');
+});
+
+test('pending ready recovery pages past malformed identities', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(READY_NOTIFICATION_NOW_MS, async (unit) => {
+    for (let deliveryId = 1; deliveryId <= 8; deliveryId += 1) {
+      await unit.create(
+        commerceKeys.deliveryOrder('card_nft_2', String(deliveryId)),
+        {
+          ...readyNotificationOrderFields(deliveryId),
+          deliveryId: 999,
+        } as any,
+      );
+    }
+    await unit.create(
+      commerceKeys.deliveryOrder('card_nft_2', '9'),
+      readyNotificationOrderFields(9) as any,
+    );
+  });
+  const context = {
+    commerceDb: harness.db,
+    nowMs: READY_NOTIFICATION_NOW_MS,
+    providerFetch: async () => assert.fail('commerce persistence must not use provider fetch'),
+    signal: new AbortController().signal,
+    dataDb: undefined as D1Database | undefined,
+  };
+  const result = await deliveryReceiptTestHooks.runPendingReadyNotificationQuery(context, OWNER);
+  assert.deepEqual(result.map((document) => document.id), ['9']);
 });
 
 test('receipt routes enforce bounded JSON and required runtime configuration', async () => {

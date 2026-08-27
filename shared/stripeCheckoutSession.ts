@@ -15,16 +15,15 @@ import {
   type StripeCheckoutKind,
   type StripeCheckoutMode,
 } from './stripeCheckoutCore.ts';
-import { canonicalWalletAddress } from './walletLifecycle.ts';
 import {
-  STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
-  STRIPE_CHECKOUT_OWNER_KIND_WALLET,
-  stripeCheckoutAnonymousOwnerId,
+  normalizeStripeCheckoutIdentity,
+  type StripeCheckoutIdentity,
 } from './checkoutIdentity.ts';
 
 export {
   STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
   STRIPE_CHECKOUT_OWNER_KIND_WALLET,
+  createStripeCheckoutIdentity,
   stripeCheckoutAnonymousOwnerId,
 } from './checkoutIdentity.ts';
 
@@ -108,11 +107,9 @@ export type StripeCheckoutOnchainConfig = {
   mintVariantNextIds: readonly number[];
 };
 
-export type StripeCheckoutDocumentInput = {
+export type StripeCheckoutDocumentInput = StripeCheckoutIdentity & {
   dropId: string;
   sessionId: string;
-  uid: string;
-  wallet?: string;
   variantKey?: string;
   unitAmountCents: number;
   quantity?: number;
@@ -431,15 +428,19 @@ function assertStripeCheckoutAvailable(args: {
 
 export function buildStripeCheckoutSessionMetadata(args: {
   dropId: string;
-  uid: string;
+  identity: StripeCheckoutIdentity;
   variantKey?: string;
   quantity?: number;
 }): Record<string, string> {
   const quantity = normalizeStripeCheckoutQuantity(args.quantity);
   const variantKey = normalizedString(args.variantKey);
+  const identity = normalizeStripeCheckoutIdentity(args.identity);
   return {
     dropId: args.dropId,
-    uid: args.uid,
+    identitySchema: 'owner-v1',
+    ownerKind: identity.ownerKind,
+    owner: identity.owner,
+    ...('authSubject' in identity ? { authSubject: identity.authSubject } : {}),
     fulfillmentMode: STRIPE_OFFCHAIN_FULFILLMENT_MODE,
     placeholder: 'stripe_direct_delivery',
     quantity: String(quantity),
@@ -450,15 +451,11 @@ export function buildStripeCheckoutSessionMetadata(args: {
 export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): Record<string, unknown> {
   const quantity = normalizeStripeCheckoutQuantity(args.quantity);
   const variantKey = normalizedString(args.variantKey);
-  const wallet = args.wallet === undefined ? null : canonicalWalletAddress(args.wallet);
-  if (args.wallet !== undefined && !wallet) throw new Error('App-created Stripe checkout has invalid wallet');
+  const identity = normalizeStripeCheckoutIdentity(args);
   return {
     sessionId: args.sessionId,
     dropId: args.dropId,
-    uid: args.uid,
-    owner: wallet || stripeCheckoutAnonymousOwnerId(args.uid),
-    ownerKind: wallet ? STRIPE_CHECKOUT_OWNER_KIND_WALLET : STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
-    ...(wallet ? {} : { authSubject: args.uid }),
+    ...identity,
     ...(variantKey ? { variantKey } : {}),
     quantity,
     currency: STRIPE_OFFCHAIN_CURRENCY,
@@ -473,8 +470,7 @@ export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): 
 
 export async function createStripeCheckoutSessionCore(
   input: {
-    uid: string;
-    wallet?: string;
+    identity: StripeCheckoutIdentity;
     requestOrigin?: string;
     allowedOrigins?: readonly string[];
     body: unknown;
@@ -482,6 +478,7 @@ export async function createStripeCheckoutSessionCore(
   dependencies: StripeCheckoutSessionCoreDependencies,
 ): Promise<StripeCheckoutSessionCoreResult> {
   const request = parseStripeCheckoutSessionRequest(input.body);
+  const identity = normalizeStripeCheckoutIdentity(input.identity);
   let successUrl: string;
   let cancelUrl: string;
   try {
@@ -534,13 +531,13 @@ export async function createStripeCheckoutSessionCore(
     billingAddressCollection: 'auto',
     successUrl,
     cancelUrl,
-    clientReferenceId: `${input.uid}:${drop.dropId}:${nowMs}`.slice(0, 200),
+    clientReferenceId: `${identity.owner}:${drop.dropId}:${nowMs}`.slice(0, 200),
     quantity,
     currency: STRIPE_OFFCHAIN_CURRENCY,
     unitAmountCents,
     productName: stripeCheckoutProductName(drop, variantKey, mode),
     productTaxCode,
-    metadata: buildStripeCheckoutSessionMetadata({ dropId: drop.dropId, uid: input.uid, variantKey, quantity }),
+    metadata: buildStripeCheckoutSessionMetadata({ dropId: drop.dropId, identity, variantKey, quantity }),
     allowedCountries: stripeCheckoutShippingCountriesForDropFamily(drop.dropFamily),
   };
   const session = await dependencies.createProviderSession(providerRequest, mode);
@@ -560,8 +557,7 @@ export async function createStripeCheckoutSessionCore(
   const document = buildStripeCheckoutDocument({
     dropId: drop.dropId,
     sessionId: session.id,
-    uid: input.uid,
-    ...(input.wallet ? { wallet: input.wallet } : {}),
+    ...identity,
     ...(variantKey ? { variantKey } : {}),
     unitAmountCents,
     quantity,

@@ -61,7 +61,7 @@ import {
 import { CommerceWriteConflict } from './commerceRepository.js';
 import { createStripeCheckoutStore } from './stripeCheckout/store.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
-import { resolveD1WalletSession } from './walletSessionD1.js';
+import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 
 const RPC_TIMEOUT_MS = 8_000;
 const TX_SEND_TIMEOUT_MS = 12_000;
@@ -523,7 +523,7 @@ function flowDependencies(
     resolveWalletOwner: async (authSubject) => {
       if (!env.OPS_DB) return null;
       try {
-        return (await resolveD1WalletSession(env.OPS_DB, authSubject, signal)).wallet;
+        return (await resolveD1AuthWalletBinding(env.OPS_DB, authSubject, signal)).wallet;
       } catch {
         throw fulfillmentError('unavailable', 'Wallet ownership is temporarily unavailable');
       }

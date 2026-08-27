@@ -22,11 +22,12 @@ const OPS_D1_MIGRATIONS = [
   '0014_auth_subject_bridge.sql',
   '0015_auth_subject_cutover.sql',
   '0016_remove_migration_controls.sql',
+  '0017_auth_wallet_bindings.sql',
 ] as const;
 
 const PRODUCTION_MIN_PROFILE_COUNT = 690;
 const PRODUCTION_MIN_PROFILE_ADDRESS_COUNT = 503;
-const PRODUCTION_MIN_WALLET_SESSION_COUNT = 1197;
+const PRODUCTION_MIN_AUTH_WALLET_BINDING_COUNT = 1197;
 const PRODUCTION_MIN_REVEAL_SUBMISSION_CUTOVER_COUNT = 14;
 
 export type OpsD1Row = Record<string, unknown>;
@@ -78,8 +79,8 @@ export type OpsD1IntegrityInput = {
   revealSubmissionStorageControlColumns: OpsD1Row[];
   schema: OpsD1Row[];
   tableList: OpsD1Row[];
-  walletSessionColumns: OpsD1Row[];
-  walletSessionCounts: OpsD1Row[];
+  authWalletBindingColumns: OpsD1Row[];
+  authWalletBindingCounts: OpsD1Row[];
   workerControlColumns: OpsD1Row[];
 };
 
@@ -91,14 +92,14 @@ export type OpsD1IntegrityReport = {
   readyNotifications: ReadyNotificationsControl;
   revealSubmissionCount: number;
   revealSubmissionStorage: RevealSubmissionStorageControl;
-  walletSessionCount: number;
+  authWalletBindingCount: number;
 };
 
 type OpsD1IntegrityMinimums = {
   profileAddressCount: number;
   profileCount: number;
   revealSubmissionCutoverCount: number;
-  walletSessionCount: number;
+  authWalletBindingCount: number;
 };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -276,11 +277,11 @@ const expectedSchema = new Map<
     },
   ],
   [
-    'wallet_sessions',
+    'auth_wallet_bindings',
     {
-      fingerprint: '7c76ffd0d0590a521cfd8c5ed53a69006210ecff6f1fd5dac759a8a52ac60a35',
+      fingerprint: '3345a6bd59f40909c4b1c6518e94b7562b820d62339703ff3260105b3a75029d',
       type: 'table',
-      tableName: 'wallet_sessions',
+      tableName: 'auth_wallet_bindings',
     },
   ],
   [
@@ -361,12 +362,11 @@ const expectedProfileAddressColumns: readonly ExpectedColumn[] = [
   ['updated_at_ms', 'INTEGER', 1, 0],
 ];
 
-const expectedWalletSessionColumns: readonly ExpectedColumn[] = [
+const expectedAuthWalletBindingColumns: readonly ExpectedColumn[] = [
   ['auth_subject', 'TEXT', 1, 1],
   ['wallet', 'TEXT', 1, 0],
-  ['expires_at_ms', 'INTEGER', 1, 0],
   ['updated_at_ms', 'INTEGER', 1, 0],
-  ['wallet_revision', 'INTEGER', 1, 0],
+  ['revision', 'INTEGER', 1, 0],
   ['reconcile_lease_id', 'TEXT', 0, 0],
   ['reconcile_lease_expires_at_ms', 'INTEGER', 0, 0],
 ];
@@ -650,7 +650,7 @@ export function assertOpsD1Integrity(
     profileAddressCount: 0,
     profileCount: 0,
     revealSubmissionCutoverCount: 0,
-    walletSessionCount: 0,
+    authWalletBindingCount: 0,
   },
 ): OpsD1IntegrityReport {
   if (
@@ -713,9 +713,9 @@ export function assertOpsD1Integrity(
     'rate_limit_buckets',
   );
   assertExactColumns(
-    input.walletSessionColumns,
-    expectedWalletSessionColumns,
-    'wallet_sessions',
+    input.authWalletBindingColumns,
+    expectedAuthWalletBindingColumns,
+    'auth_wallet_bindings',
   );
   assertExactColumns(
     input.revealSubmissionColumns,
@@ -756,15 +756,15 @@ export function assertOpsD1Integrity(
   if (profileCount < minimums.profileCount || profileAddressCount < minimums.profileAddressCount) {
     return fail('Ops D1 profile counts are below the production cutover baseline.');
   }
-  if (input.walletSessionCounts.length !== 1) {
-    return fail('Ops D1 wallet-session count is invalid.');
+  if (input.authWalletBindingCounts.length !== 1) {
+    return fail('Ops D1 auth-wallet binding count is invalid.');
   }
-  const walletSessionCount = safeInteger(
-    input.walletSessionCounts[0].wallet_session_count,
-    'Ops D1 wallet-session count',
+  const authWalletBindingCount = safeInteger(
+    input.authWalletBindingCounts[0].auth_wallet_binding_count,
+    'Ops D1 auth-wallet binding count',
   );
-  if (walletSessionCount < minimums.walletSessionCount) {
-    return fail('Ops D1 wallet-session count is below the production cutover baseline.');
+  if (authWalletBindingCount < minimums.authWalletBindingCount) {
+    return fail('Ops D1 auth-wallet binding count is below the production cutover baseline.');
   }
   if (input.revealSubmissionCounts.length !== 1) {
     return fail('Ops D1 reveal-submission count is invalid.');
@@ -788,7 +788,7 @@ export function assertOpsD1Integrity(
     readyNotifications: parseReadyNotificationsControl(input.controls[0]),
     revealSubmissionCount,
     revealSubmissionStorage,
-    walletSessionCount,
+    authWalletBindingCount,
   };
 }
 
@@ -991,15 +991,15 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
           'reveal_submissions',
           'staff_auth_challenges',
           'staff_auth_sessions',
-          'wallet_sessions',
+          'auth_wallet_bindings',
           'worker_controls'
         )
       ORDER BY name`),
-    walletSessionColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(wallet_sessions)',
+    authWalletBindingColumns: queryRemoteOpsD1(
+      'PRAGMA table_info(auth_wallet_bindings)',
     ),
-    walletSessionCounts: queryRemoteOpsD1(
-      'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions',
+    authWalletBindingCounts: queryRemoteOpsD1(
+      'SELECT COUNT(*) AS auth_wallet_binding_count FROM auth_wallet_bindings',
     ),
     workerControlColumns: queryRemoteOpsD1(
       'PRAGMA table_info(worker_controls)',
@@ -1008,7 +1008,7 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
     profileAddressCount: PRODUCTION_MIN_PROFILE_ADDRESS_COUNT,
     profileCount: PRODUCTION_MIN_PROFILE_COUNT,
     revealSubmissionCutoverCount: PRODUCTION_MIN_REVEAL_SUBMISSION_CUTOVER_COUNT,
-    walletSessionCount: PRODUCTION_MIN_WALLET_SESSION_COUNT,
+    authWalletBindingCount: PRODUCTION_MIN_AUTH_WALLET_BINDING_COUNT,
   });
 }
 

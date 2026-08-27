@@ -10,9 +10,9 @@ import {
   type ProfileLifecyclePath,
 } from '../src/profileLifecycle.ts';
 import {
-  WalletSessionD1BusyError,
-  WalletSessionD1SupersededError,
-} from '../src/walletSessionD1.ts';
+  AuthWalletBindingD1BusyError,
+  AuthWalletBindingD1SupersededError,
+} from '../src/authWalletBindingD1.ts';
 import {
   CommerceWriteConflict,
   commerceKeys,
@@ -249,16 +249,15 @@ function dependencies(
     ? {
         authSubject: UID,
         wallet: String(decodedFields(harness.session).wallet || ''),
-        expiresAtMs: 253_402_300_799_999,
         updatedAtMs: NOW_MS,
-        walletRevision: harness.version,
+        revision: harness.version,
         reconcileLeaseId: null,
         reconcileLeaseExpiresAtMs: null,
       }
     : null;
   return {
     createCommerceRepository: () => commerceRepository(harness) as never,
-    acquireWalletSessionReconcileLease: async () => {
+    acquireAuthWalletBindingReconcileLease: async () => {
       const session = d1Session();
       return session ? {
         id: '00000000-0000-4000-8000-000000000001',
@@ -266,19 +265,19 @@ function dependencies(
         expiresAtMs: NOW_MS + 120_000,
       } : null;
     },
-    establishD1WalletSession: async (args) => {
+    establishD1AuthWalletBinding: async (args) => {
       harness.session = document(`authSessions/${UID}`, { wallet: args.wallet }, harness.version++);
       return d1Session()!;
     },
-    loadD1WalletSession: async () => d1Session(),
+    loadD1AuthWalletBinding: async () => d1Session(),
     nowMs: () => NOW_MS,
     providerFetch: harness.fetch.bind(harness),
-    releaseWalletSessionReconcileLease: async () => undefined,
-    resolveD1WalletSession: async () => {
+    releaseAuthWalletBindingReconcileLease: async () => undefined,
+    resolveD1AuthWalletBinding: async () => {
       const session = d1Session();
       return session
-        ? { wallet: session.wallet, source: 'session' as const }
-        : { wallet: null, reason: 'legacy_uid_invalid' as const };
+        ? { wallet: session.wallet, source: 'binding' as const }
+        : { wallet: null, reason: 'missing-binding' as const };
     },
     timeoutMs,
     upsertProfile: async () => undefined,
@@ -394,19 +393,18 @@ test('D1 wallet-session mode persists without Commerce session access', async ()
     { ...env(), OPS_DB: {} as D1Database },
     SOLANA_AUTH_PATH,
     dependencies(d1Harness, 500, {
-      establishD1WalletSession: async (args) => {
+      establishD1AuthWalletBinding: async (args) => {
         establishedWallet = args.wallet;
         return {
           authSubject: args.authSubject,
           wallet: args.wallet,
-          expiresAtMs: 253_402_300_799_999,
           updatedAtMs: args.nowMs,
-          walletRevision: 1,
+          revision: 1,
           reconcileLeaseId: null,
           reconcileLeaseExpiresAtMs: null,
         };
       },
-      loadD1WalletSession: async () => null,
+      loadD1AuthWalletBinding: async () => null,
     }),
   );
   assert.equal(d1.response.status, 200);
@@ -420,7 +418,7 @@ test('Solana auth preserves D1 superseded and busy response contracts', async ()
     env(),
     SOLANA_AUTH_PATH,
     dependencies(new CommerceHarness(), 500, {
-      establishD1WalletSession: async () => { throw new WalletSessionD1SupersededError(); },
+      establishD1AuthWalletBinding: async () => { throw new AuthWalletBindingD1SupersededError(); },
     }),
   );
   assert.equal(superseded.response.status, 409);
@@ -438,7 +436,7 @@ test('Solana auth preserves D1 superseded and busy response contracts', async ()
     env(),
     SOLANA_AUTH_PATH,
     dependencies(new CommerceHarness(), 500, {
-      establishD1WalletSession: async () => { throw new WalletSessionD1BusyError(); },
+      establishD1AuthWalletBinding: async () => { throw new AuthWalletBindingD1BusyError(); },
     }),
   );
   assert.equal(busy.response.status, 409);
@@ -462,12 +460,12 @@ test('D1 reconciliation holds and releases its lease without reading Commerce se
     { ...env(), OPS_DB: {} as D1Database },
     PROFILE_RECONCILE_PATH,
     dependencies(harness, 500, {
-      acquireWalletSessionReconcileLease: async () => ({
+      acquireAuthWalletBindingReconcileLease: async () => ({
         id: '00000000-0000-4000-8000-000000000001',
         wallet: OWNER,
         expiresAtMs: NOW_MS + 120_000,
       }),
-      releaseWalletSessionReconcileLease: async () => {
+      releaseAuthWalletBindingReconcileLease: async () => {
         released = true;
       },
     }),
@@ -493,8 +491,8 @@ test('staff reconciliation uses its wallet directly and skips legacy Auth order 
     env(),
     PROFILE_RECONCILE_PATH,
     dependencies(new CommerceHarness(), 500, {
-      acquireWalletSessionReconcileLease: async () => assert.fail('staff identity acquired a Auth reconciliation lease'),
-      resolveD1WalletSession: async () => assert.fail('staff identity resolved a Auth wallet session'),
+      acquireAuthWalletBindingReconcileLease: async () => assert.fail('staff identity acquired a Auth reconciliation lease'),
+      resolveD1AuthWalletBinding: async () => assert.fail('staff identity resolved a Auth wallet session'),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
@@ -508,7 +506,7 @@ test('staff principals cannot enter the Auth wallet-binding route', async () => 
     env(),
     SOLANA_AUTH_PATH,
     dependencies(new CommerceHarness(), 500, {
-      loadD1WalletSession: async () => assert.fail('staff identity reached Auth wallet-session loading'),
+      loadD1AuthWalletBinding: async () => assert.fail('staff identity reached Auth wallet-session loading'),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
@@ -526,7 +524,7 @@ test('anonymous principals cannot bind an allowlisted staff wallet', async () =>
     SOLANA_AUTH_PATH,
     dependencies(new CommerceHarness(), 500, {
       isStaffWallet: (wallet) => wallet === OWNER,
-      loadD1WalletSession: async () => assert.fail('allowlisted staff wallet reached Auth wallet-session loading'),
+      loadD1AuthWalletBinding: async () => assert.fail('allowlisted staff wallet reached Auth wallet-session loading'),
     }),
   );
   assert.equal(result.response.status, 403);

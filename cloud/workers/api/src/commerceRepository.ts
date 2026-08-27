@@ -11,6 +11,7 @@ import {
   type CommerceDocumentKind,
   type CommerceDocumentRecord,
   type CommerceDocumentWriteData,
+  type CommerceFilterValue,
   type CommerceIndexedField,
   type CommerceJsonValue,
   type CommerceQuery,
@@ -18,6 +19,8 @@ import {
   type CommerceUpdateValue,
 } from './commerceRepositoryTypes.js';
 import { isCommerceDocumentSegment } from '../../../../shared/commerceDocumentPath.js';
+import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.js';
+import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 
 export * from './commerceRepositoryTypes.js';
 
@@ -57,8 +60,23 @@ type StoredDocument = {
 
 type PendingDocument = StoredDocument | null;
 
-const DOCUMENT_COLUMNS = `document_path, document_kind, drop_id, document_id, document_json,
-  version, create_time, update_time, processed_at_seconds, processed_at_nanos`;
+const DOCUMENT_COLUMN_NAMES = [
+  'document_path',
+  'document_kind',
+  'drop_id',
+  'document_id',
+  'document_json',
+  'version',
+  'create_time',
+  'update_time',
+  'processed_at_seconds',
+  'processed_at_nanos',
+] as const;
+const DOCUMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.join(', ');
+
+function qualifiedDocumentColumns(alias: string): string {
+  return DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
+}
 
 const INDEXED_COLUMNS: Readonly<Record<CommerceIndexedField, string>> = Object.freeze({
   buyerOrderReceivedEmailState: 'buyer_notification_state',
@@ -202,10 +220,6 @@ function nextTimestamp(value: CommerceTimestamp): CommerceTimestamp {
     : { seconds: value.seconds + 1, nanos: 0 };
 }
 
-function compareStrings(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 function dataField(data: CommerceDocumentData, fieldPath: string): unknown {
   let current: unknown = data;
   for (const part of fieldPath.split('.')) {
@@ -336,48 +350,152 @@ function publicRecord<T extends CommerceDocumentData>(document: StoredDocument):
   });
 }
 
-function compare(left: unknown, right: unknown): number {
-  if (isTimestampLike(left) && isTimestampLike(right)) {
-    return compareTimestamps(left, right);
-  }
-  if (typeof left === 'number' && typeof right === 'number') return left - right;
-  if (typeof left === 'string' && typeof right === 'string') return compareStrings(left, right);
-  if (typeof left === 'boolean' && typeof right === 'boolean') return Number(left) - Number(right);
-  const encodedLeft = canonicalJson(left);
-  const encodedRight = canonicalJson(right);
-  return encodedLeft < encodedRight ? -1 : encodedLeft > encodedRight ? 1 : 0;
-}
-
 function isTimestampLike(value: unknown): value is CommerceTimestamp {
   return isObject(value) && validTimestamp(value as CommerceTimestamp);
 }
 
-function orderValue(document: StoredDocument, field: CommerceQuery['orderBy'] extends readonly (infer T)[] | undefined
-  ? T extends { field: infer F } ? F : never
-  : never): unknown {
-  if (field === 'documentPath') return document.key.path;
-  if (field === 'processedAt') return document.processedAt;
-  return dataField(document.data, field);
-}
-
-function queryMatches(document: StoredDocument, query: CommerceQuery): boolean {
-  return (query.filters || []).every((filter) => {
-    const value = dataField(document.data, filter.field);
-    if (filter.op === 'equal') return canonicalJson(value) === canonicalJson(filter.value);
-    return Array.isArray(filter.value) && filter.value.some((entry) => canonicalJson(value) === canonicalJson(entry));
-  });
+function sqlFilterValue(value: CommerceFilterValue): string | number {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'boolean') return Number(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query filter.');
 }
 
 function ensureQuery(query: CommerceQuery): void {
   if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 0)) {
     throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query limit.');
   }
-  if (query.filters?.some((filter) => filter.op === 'in' && (!Array.isArray(filter.value) || filter.value.length === 0))) {
-    throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query filter.');
+  for (const filter of query.filters || []) {
+    if (filter.op === 'in') {
+      if (!Array.isArray(filter.value) || filter.value.length === 0) {
+        throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query filter.');
+      }
+      filter.value.forEach(sqlFilterValue);
+    } else {
+      if (Array.isArray(filter.value)) {
+        throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query filter.');
+      }
+      sqlFilterValue(filter.value as CommerceFilterValue);
+    }
   }
-  if (query.startAfter && query.startAfter.length > (query.orderBy?.length || 0)) {
-    throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query cursor.');
+  const orderBy = query.orderBy || [];
+  if (!query.startAfter) return;
+  if (
+    orderBy.length === 1 &&
+    orderBy[0].field === 'documentPath' &&
+    query.startAfter.length === 1 &&
+    typeof query.startAfter[0] === 'string'
+  ) return;
+  if (
+    orderBy.length === 2 &&
+    orderBy[0].field === 'processedAt' &&
+    orderBy[0].direction === 'desc' &&
+    orderBy[1].field === 'documentPath' &&
+    orderBy[1].direction === 'desc' &&
+    query.startAfter.length === 2 &&
+    isTimestampLike(query.startAfter[0]) &&
+    typeof query.startAfter[1] === 'string'
+  ) return;
+  throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query cursor.');
+}
+
+type CompiledCommerceQuery = {
+  bindings: Array<string | number>;
+  sql: string;
+};
+
+function compileCommerceQuery(query: CommerceQuery): CompiledCommerceQuery {
+  ensureQuery(query);
+  const bindings: Array<string | number> = [query.kind];
+  const predicates = ['document_kind = ?'];
+  if (query.dropId !== undefined) {
+    if (query.dropId === null) predicates.push('drop_id IS NULL');
+    else {
+      predicates.push('drop_id = ?');
+      bindings.push(query.dropId);
+    }
   }
+  for (const filter of query.filters || []) {
+    const column = INDEXED_COLUMNS[filter.field];
+    if (filter.op === 'equal') {
+      predicates.push(`${column} = ?`);
+      bindings.push(sqlFilterValue(filter.value as CommerceFilterValue));
+    } else {
+      const values = filter.value as readonly CommerceFilterValue[];
+      predicates.push(`${column} IN (${values.map(() => '?').join(', ')})`);
+      bindings.push(...values.map(sqlFilterValue));
+    }
+  }
+  const orderBy = query.orderBy || [];
+  if (query.startAfter && orderBy[0]?.field === 'documentPath') {
+    predicates.push(`document_path ${orderBy[0].direction === 'asc' ? '>' : '<'} ?`);
+    bindings.push(query.startAfter[0] as string);
+  } else if (query.startAfter) {
+    const processedAt = query.startAfter[0] as CommerceTimestamp;
+    const documentPath = query.startAfter[1] as string;
+    predicates.push(`(
+      processed_at_seconds IS NULL OR
+      processed_at_seconds < ? OR
+      (processed_at_seconds = ? AND processed_at_nanos < ?) OR
+      (processed_at_seconds = ? AND processed_at_nanos = ? AND document_path < ?)
+    )`);
+    bindings.push(
+      processedAt.seconds,
+      processedAt.seconds,
+      processedAt.nanos,
+      processedAt.seconds,
+      processedAt.nanos,
+      documentPath,
+    );
+  }
+  const orderParts: string[] = [];
+  for (const order of orderBy) {
+    const direction = order.direction === 'asc' ? 'ASC' : 'DESC';
+    if (order.field === 'documentPath') orderParts.push(`document_path ${direction}`);
+    else if (order.field === 'processedAt') {
+      orderParts.push(`processed_at_seconds ${direction}`, `processed_at_nanos ${direction}`);
+    } else orderParts.push(`${INDEXED_COLUMNS[order.field]} ${direction}`);
+  }
+  if (!orderParts.length) orderParts.push('document_path ASC');
+  else if (!orderBy.some((order) => order.field === 'documentPath')) orderParts.push('document_path ASC');
+  let sql = `SELECT ${DOCUMENT_COLUMNS} FROM commerce_documents
+    WHERE ${predicates.join(' AND ')}
+    ORDER BY ${orderParts.join(', ')}`;
+  if (query.limit !== undefined) {
+    sql += ' LIMIT ?';
+    bindings.push(query.limit);
+  }
+  return { bindings, sql };
+}
+
+function reportInefficientQuery(
+  operation: string,
+  kind: CommerceDocumentKind,
+  result: D1Result,
+  rowsReturned: number,
+): void {
+  const rowsRead = Number(result.meta.rows_read);
+  if (!Number.isSafeInteger(rowsRead) || rowsRead < 100 || rowsRead <= Math.max(rowsReturned, 1) * 10) return;
+  const timings = result.meta.timings;
+  const sqlDurationMs = timings && typeof timings === 'object' && !Array.isArray(timings)
+    ? Number((timings as Record<string, unknown>).sql_duration_ms)
+    : Number.NaN;
+  console.warn({
+    event: 'commerce_d1_query_inefficient',
+    operation,
+    kind,
+    rowsRead,
+    rowsReturned,
+    sqlDurationMs: Number.isFinite(sqlDurationMs) ? sqlDurationMs : Number(result.meta.duration) || 0,
+    totalAttempts: Number(result.meta.total_attempts) || 1,
+  });
+}
+
+function positiveQueryLimit(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query limit.');
+  }
+  return value;
 }
 
 export async function loadCommerceAuthorityControl(db: D1Database): Promise<CommerceAuthorityControl> {
@@ -422,6 +540,87 @@ export class D1CommerceRepository {
   async query<T extends CommerceDocumentData>(query: CommerceQuery): Promise<CommerceDocumentRecord<T>[]> {
     const unit = await this.begin(Date.now());
     return unit.query<T>(query);
+  }
+
+  async queryPendingReadyNotifications(args: {
+    limit: number;
+    owner?: string;
+    startAfterPath?: string;
+  }): Promise<CommerceDocumentRecord[]> {
+    await authority(this.db);
+    const limit = positiveQueryLimit(args.limit);
+    const ownerPredicate = args.owner === undefined ? '' : ' AND owner = ?';
+    const cursorPredicate = args.startAfterPath === undefined ? '' : ' AND document_path > ?';
+    const armBindings = () => [
+      ...(args.owner === undefined ? [] : [args.owner]),
+      ...(args.startAfterPath === undefined ? [] : [args.startAfterPath]),
+    ];
+    const bindings = [...armBindings(), ...armBindings(), limit];
+    const result = await this.db.prepare(`WITH candidate_paths AS (
+      SELECT document_path FROM commerce_documents
+        INDEXED BY commerce_delivery_orders_buyer_notifications_pending
+      WHERE
+        document_kind = 'delivery_order' AND
+        status = 'ready_to_ship' AND
+        buyer_notification_state = 'pending'${ownerPredicate}${cursorPredicate}
+      UNION
+      SELECT document_path FROM commerce_documents
+        INDEXED BY commerce_delivery_orders_shipper_notifications_pending
+      WHERE
+        document_kind = 'delivery_order' AND
+        status = 'ready_to_ship' AND
+        shipper_notification_state = 'pending'${ownerPredicate}${cursorPredicate}
+    )
+    SELECT ${qualifiedDocumentColumns('document')}
+    FROM commerce_documents AS document
+    JOIN candidate_paths USING (document_path)
+    ORDER BY document.document_path ASC
+    LIMIT ?`).bind(...bindings).all<DocumentRow>();
+    reportInefficientQuery('pending-ready-notifications', 'delivery_order', result, result.results.length);
+    return result.results.map(parseRow).map((document) => publicRecord(document));
+  }
+
+  async queryDuePackStatusProjections(args: {
+    dropId: string;
+    dueAtMs: number;
+    limit: number;
+  }): Promise<CommerceDocumentRecord[]> {
+    await authority(this.db);
+    const limit = positiveQueryLimit(args.limit);
+    if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce projection cutoff.');
+    }
+    const result = await this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+      FROM commerce_documents
+      WHERE
+        document_kind = 'delivery_order' AND
+        drop_id = ? AND
+        pack_projection_state = 'pending' AND
+        pack_projection_next_attempt_ms <= ?
+      ORDER BY pack_projection_next_attempt_ms ASC, document_path ASC
+      LIMIT ?`).bind(args.dropId, args.dueAtMs, limit).all<DocumentRow>();
+    reportInefficientQuery('due-pack-status-projections', 'delivery_order', result, result.results.length);
+    return result.results.map(parseRow).map((document) => publicRecord(document));
+  }
+
+  async queryStaleStripeFulfillments(cutoffMs: number): Promise<CommerceDocumentRecord[]> {
+    await authority(this.db);
+    if (!Number.isSafeInteger(cutoffMs) || cutoffMs < 0) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe reconciliation cutoff.');
+    }
+    const result = await this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+      FROM commerce_documents
+      WHERE
+        document_kind = 'stripe_checkout' AND
+        fulfillment_processor = '${STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR}' AND
+        status IN ('${STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING}', '${STRIPE_CHECKOUT_STATUS.PROCESSING}') AND
+        json_type(document_json, '$.updatedAt') IN ('integer', 'real') AND
+        json_type(document_json, '$.lastStripeWebhookEventId') = 'text' AND
+        CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) <= ?
+      ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) ASC, document_path ASC
+      LIMIT 100`).bind(cutoffMs).all<DocumentRow>();
+    reportInefficientQuery('stale-stripe-fulfillments', 'stripe_checkout', result, result.results.length);
+    return result.results.map(parseRow).map((document) => publicRecord(document));
   }
 
   async begin(nowMs: number): Promise<CommerceUnitOfWork> {
@@ -476,50 +675,15 @@ export class CommerceUnitOfWork {
   async query<T extends CommerceDocumentData>(query: CommerceQuery): Promise<CommerceDocumentRecord<T>[]> {
     this.assertOpen();
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
-    ensureQuery(query);
     const control = await authority(this.db);
     if (this.expectedDocumentsRevision !== null && this.expectedDocumentsRevision !== control.documentsRevision) {
       throw new CommerceWriteConflict();
     }
     this.expectedDocumentsRevision = control.documentsRevision;
-    let sql = `SELECT ${DOCUMENT_COLUMNS} FROM commerce_documents WHERE document_kind = ?`;
-    const bindings: Array<string | number | null> = [query.kind];
-    if (query.dropId !== undefined) {
-      sql += query.dropId === null ? ' AND drop_id IS NULL' : ' AND drop_id = ?';
-      if (query.dropId !== null) bindings.push(query.dropId);
-    }
-    const direct = query.filters?.find((filter) => {
-      const value = filter.value;
-      return filter.op === 'equal' && (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean');
-    });
-    if (direct) {
-      sql += ` AND ${INDEXED_COLUMNS[direct.field]} = ?`;
-      bindings.push(typeof direct.value === 'boolean' ? Number(direct.value) : direct.value as string | number);
-    }
-    const result = await this.db.prepare(sql).bind(...bindings).all<DocumentRow>();
-    let documents = result.results.map(parseRow).filter((document) => queryMatches(document, query));
-    const orderBy = query.orderBy || [];
-    documents.sort((left, right) => {
-      for (const order of orderBy) {
-        const result = compare(orderValue(left, order.field), orderValue(right, order.field));
-        if (result) return order.direction === 'desc' ? -result : result;
-      }
-      return compareStrings(left.key.path, right.key.path);
-    });
-    if (query.startAfter) {
-      documents = documents.filter((document) => {
-        let result = 0;
-        for (let index = 0; index < query.startAfter!.length; index += 1) {
-          const order = orderBy[index];
-          if (!order) break;
-          result = compare(orderValue(document, order.field), query.startAfter![index]);
-          if (order.direction === 'desc') result = -result;
-          if (result) break;
-        }
-        return result > 0;
-      });
-    }
-    if (query.limit !== undefined) documents = documents.slice(0, query.limit);
+    const compiled = compileCommerceQuery(query);
+    const result = await this.db.prepare(compiled.sql).bind(...compiled.bindings).all<DocumentRow>();
+    const documents = result.results.map(parseRow);
+    reportInefficientQuery('query', query.kind, result, documents.length);
     for (const document of documents) this.recordRead(document.key.path, document.version, document);
     return documents.map((document) => publicRecord<T>(document));
   }

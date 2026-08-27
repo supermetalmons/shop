@@ -49,6 +49,9 @@ export function checkCommerceD1(): Record<string, unknown> {
   if (!migrations.some((row) => String(row.name).endsWith('0009_remove_firestore_compatibility.sql'))) {
     fail('Commerce D1 contract migration is missing.');
   }
+  if (!migrations.some((row) => String(row.name).endsWith('0010_cloudflare_native_identity_queries.sql'))) {
+    fail('Commerce D1 native identity and query migration is missing.');
+  }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -102,11 +105,14 @@ export function checkCommerceD1(): Record<string, unknown> {
   const removedState = queryRemoteCommerceD1(`SELECT
     (SELECT COUNT(*) FROM pragma_table_info('commerce_documents') WHERE name = 'fields_json') AS fields_json_count,
     (SELECT COUNT(*) FROM pragma_table_list
-      WHERE name IN ('commerce_transactions', 'commerce_transaction_reads')) AS transaction_table_count`);
+      WHERE name IN ('commerce_transactions', 'commerce_transaction_reads')) AS transaction_table_count,
+    (SELECT COUNT(*) FROM commerce_documents
+      WHERE json_type(document_json, '$.uid') IS NOT NULL) AS root_uid_count`);
   if (
     removedState.length !== 1 ||
     safeInteger(removedState[0].fields_json_count, 'Commerce compatibility column count') !== 0 ||
-    safeInteger(removedState[0].transaction_table_count, 'Commerce transaction table count') !== 0
+    safeInteger(removedState[0].transaction_table_count, 'Commerce transaction table count') !== 0 ||
+    safeInteger(removedState[0].root_uid_count, 'Commerce root UID count') !== 0
   ) fail('Commerce D1 compatibility state remains after contract migration.');
 
   const requiredTriggers = new Set([
@@ -119,6 +125,8 @@ export function checkCommerceD1(): Record<string, unknown> {
     'commerce_documents_insert_authority_guard',
     'commerce_documents_update_authority_guard',
     'commerce_documents_delete_authority_guard',
+    'commerce_documents_identity_insert_guard',
+    'commerce_documents_identity_update_guard',
   ]);
   const triggers = queryRemoteCommerceD1(`SELECT name FROM sqlite_master
     WHERE type = 'trigger' AND name LIKE 'commerce_%' ORDER BY name`);
@@ -130,8 +138,9 @@ export function checkCommerceD1(): Record<string, unknown> {
   requireIndex(
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
       FROM commerce_documents
-      WHERE document_kind = 'delivery_order' AND owner = 'owner' AND status = 'ready_to_ship'`),
-    'commerce_documents_owner_processed_cursor',
+      WHERE document_kind = 'delivery_order' AND owner = 'owner'
+      ORDER BY document_path LIMIT 450`),
+    'commerce_documents_delivery_owner_path',
   );
   requireIndex(
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
@@ -152,6 +161,37 @@ export function checkCommerceD1(): Record<string, unknown> {
       WHERE document_kind = 'delivery_order' AND drop_id = 'drop' AND status = 'ready_to_ship'
       ORDER BY processed_at_seconds DESC, processed_at_nanos DESC, document_path DESC`),
     'commerce_documents_drop_processed_cursor',
+  );
+  const notificationPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN WITH candidate_paths AS (
+    SELECT document_path FROM commerce_documents
+      INDEXED BY commerce_delivery_orders_buyer_notifications_pending
+    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
+      AND buyer_notification_state = 'pending' AND document_path > 'drops/a/deliveryOrders/1'
+    UNION
+    SELECT document_path FROM commerce_documents
+      INDEXED BY commerce_delivery_orders_shipper_notifications_pending
+    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
+      AND shipper_notification_state = 'pending' AND document_path > 'drops/a/deliveryOrders/1'
+  ) SELECT document_path FROM candidate_paths ORDER BY document_path LIMIT 8`);
+  requireIndex(notificationPlan, 'commerce_delivery_orders_buyer_notifications_pending');
+  requireIndex(notificationPlan, 'commerce_delivery_orders_shipper_notifications_pending');
+  requireIndex(
+    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents
+      WHERE document_kind = 'delivery_order' AND drop_id = 'drop'
+        AND pack_projection_state = 'pending' AND pack_projection_next_attempt_ms <= 1
+      ORDER BY pack_projection_next_attempt_ms, document_path LIMIT 4`),
+    'commerce_documents_pack_projection',
+  );
+  requireIndex(
+    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents
+      WHERE document_kind = 'stripe_checkout'
+        AND fulfillment_processor = 'cloudflare_queue_v1'
+        AND status IN ('fulfillment_pending', 'processing')
+        AND json_type(document_json, '$.updatedAt') IN ('integer', 'real')
+        AND json_type(document_json, '$.lastStripeWebhookEventId') = 'text'
+        AND CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) <= 1
+      ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER), document_path LIMIT 100`),
+    'commerce_stripe_checkouts_reconciliation_due',
   );
 
   const invalidProcessedTimeRows = queryRemoteCommerceD1(`SELECT COUNT(*) AS count

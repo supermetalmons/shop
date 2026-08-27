@@ -1,12 +1,11 @@
 import bs58 from 'bs58';
 import { isBase58Bytes } from './solanaRpcProxy.ts';
 
-export const WALLET_SESSION_COMPATIBILITY_EXPIRES_AT_MS = 253_402_300_799_999;
 const WALLET_SIGN_IN_MAX_SKEW_MS = 2 * 24 * 60 * 60 * 1000;
 
-export type WalletSessionResolution =
-  | { wallet: string; source: 'session' | 'legacy_uid' }
-  | { wallet: null; reason: 'legacy_uid_invalid' | 'missing_wallet' | 'invalid_wallet' };
+export type AuthWalletBindingResolution =
+  | { wallet: string; source: 'binding' }
+  | { wallet: null; reason: 'missing-binding' | 'invalid-wallet' };
 
 export type ParsedSolanaSignInMessage = {
   wallet: string;
@@ -36,25 +35,13 @@ export function canonicalWalletAddress(value: unknown): string | null {
   }
 }
 
-export function resolveWalletSessionBinding(params: {
-  uid: string;
-  sessionExists: boolean;
-  sessionData: unknown;
-}): WalletSessionResolution {
-  if (!params.sessionExists) {
-    const wallet = canonicalWalletAddress(params.uid);
-    return wallet
-      ? { wallet, source: 'legacy_uid' }
-      : { wallet: null, reason: 'legacy_uid_invalid' };
-  }
-  const data = params.sessionData as { wallet?: unknown } | null;
-  if (typeof data?.wallet !== 'string' || !data.wallet) {
-    return { wallet: null, reason: 'missing_wallet' };
-  }
+export function resolveAuthWalletBinding(binding: unknown): AuthWalletBindingResolution {
+  if (!binding) return { wallet: null, reason: 'missing-binding' };
+  const data = binding as { wallet?: unknown };
   const wallet = canonicalWalletAddress(data.wallet);
   return wallet
-    ? { wallet, source: 'session' }
-    : { wallet: null, reason: 'invalid_wallet' };
+    ? { wallet, source: 'binding' }
+    : { wallet: null, reason: 'invalid-wallet' };
 }
 
 export function parseSolanaSignInMessage(message: unknown): ParsedSolanaSignInMessage {

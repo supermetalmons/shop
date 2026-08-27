@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "status": "complete",
+  "generatedAt": "2026-08-27T09:12:27Z",
+  "source": {
+    "branch": "main",
+    "baseCommit": "6332c6f56f7c573b002137d7cc01a7f1cebf613f",
+    "deploymentSource": "verified workspace changes"
+  },
+  "validation": {
+    "fullRepositoryCheck": "passed",
+    "apiTests": 467,
+    "workerdRuntimeTests": 4,
+    "repositoryTests": 1092,
+    "onchainTests": 35,
+    "apiDryRun": "passed",
+    "apiStartupProfile": "passed",
+    "deadCode": "passed",
+    "browserBundle": "passed",
+    "legacyRuntime": "passed"
+  },
+  "maintenance": {
+    "authorityBefore": {
+      "state": "d1",
+      "revision": 5,
+      "documentsRevision": 676
+    },
+    "authorityPaused": {
+      "state": "paused",
+      "revision": 6,
+      "documentsRevision": 676
+    },
+    "authorityAfter": {
+      "state": "d1",
+      "revision": 7,
+      "documentsRevision": 676
+    }
+  },
+  "migrations": {
+    "ops": "0017_auth_wallet_bindings.sql",
+    "commerce": "0010_cloudflare_native_identity_queries.sql",
+    "pendingAfterDeployment": 0
+  },
+  "deployment": {
+    "worker": "mons-shop-api",
+    "versionNumber": 108,
+    "versionId": "822c1f63-e12e-4865-87cb-b2ab9241d51b",
+    "startupTimeMs": 64
+  },
+  "d1TimeTravelBookmarks": {
+    "preDeployment": {
+      "data": "00000106-00000000-000050d4-9af7a7fbf3035b53195d1750c25dd086",
+      "ops": "000002fb-00000000-000050d4-78be6c7b38ed944908cadd92123e67cf",
+      "commerce": "0000012d-00000000-000050d4-de0575953d9ee8c98f5706726fd48951"
+    },
+    "postDeployment": {
+      "data": "00000107-00000000-000050d4-3d83e7a89f2bbbd53f59ad87b2652767",
+      "ops": "000002fb-00000008-000050d4-649259f091cb7384ae330318561c4522",
+      "commerce": "0000012d-0000000b-000050d4-04f8b0ac257a85ae473c080feb5064f2"
+    }
+  },
+  "data": {
+    "authWalletBindings": 1205,
+    "authWalletSelfBindings": 0,
+    "anonymousAuthSessions": 110,
+    "commerceDocuments": 14613,
+    "rootUidOccurrences": 0,
+    "historicalNestedStripeUidSnapshots": 120,
+    "packStatusSummaries": 3,
+    "packStatusEvents": 872,
+    "packStatusCacheGeneration": 3
+  },
+  "health": {
+    "storefrontStatus": 200,
+    "apiStatus": 200,
+    "packStatusStatus": 200,
+    "anonymousSessionSmoke": "created-and-revoked",
+    "queueBacklogs": 0,
+    "deadLetterBacklogs": 0
+  }
+}

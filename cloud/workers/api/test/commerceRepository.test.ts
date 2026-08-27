@@ -126,6 +126,101 @@ test('native cursors preserve nanosecond and document-path ordering', async () =
   assert.deepEqual(records.map((record) => record.key.documentId), ['2', '1']);
 });
 
+test('native queries apply every filter, boolean, order, cursor, and limit in D1', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(10, async (unit) => {
+    await unit.create(commerceKeys.stripeCheckout('drop', 'a'), {
+      fulfillmentProcessor: 'queue',
+      manualRefundReviewRequired: true,
+      status: 'processing',
+    });
+    await unit.create(commerceKeys.stripeCheckout('drop', 'b'), {
+      fulfillmentProcessor: 'queue',
+      manualRefundReviewRequired: true,
+      status: 'pending',
+    });
+    await unit.create(commerceKeys.stripeCheckout('drop', 'c'), {
+      fulfillmentProcessor: 'other',
+      manualRefundReviewRequired: true,
+      status: 'processing',
+    });
+  });
+  const records = await repository.query({
+    dropId: 'drop',
+    filters: [
+      { field: 'fulfillmentProcessor', op: 'equal', value: 'queue' },
+      { field: 'status', op: 'in', value: ['processing', 'pending'] },
+      { field: 'manualRefundReviewRequired', op: 'equal', value: true },
+    ],
+    kind: 'stripe_checkout',
+    limit: 1,
+    orderBy: [{ field: 'documentPath', direction: 'desc' }],
+    startAfter: ['drops/drop/stripeCheckouts/c'],
+  });
+  assert.deepEqual(records.map((record) => record.key.documentId), ['b']);
+});
+
+test('native reconciliation queries are bounded, ordered, and duplicate-free', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(10, async (unit) => {
+    await unit.create(commerceKeys.deliveryOrder('drop', '1'), {
+      buyerOrderReceivedEmailState: 'pending',
+      owner: 'owner-a',
+      packStatusProjectionNextAttemptAtMs: 30,
+      packStatusProjectionState: 'pending',
+      shipperReadyToShipEmailState: 'pending',
+      status: 'ready_to_ship',
+    });
+    await unit.create(commerceKeys.deliveryOrder('drop', '2'), {
+      buyerOrderReceivedEmailState: 'queued',
+      owner: 'owner-a',
+      packStatusProjectionNextAttemptAtMs: 10,
+      packStatusProjectionState: 'pending',
+      shipperReadyToShipEmailState: 'pending',
+      status: 'ready_to_ship',
+    });
+    await unit.create(commerceKeys.deliveryOrder('drop', '3'), {
+      buyerOrderReceivedEmailState: 'queued',
+      owner: 'owner-b',
+      packStatusProjectionNextAttemptAtMs: 20,
+      packStatusProjectionState: 'pending',
+      shipperReadyToShipEmailState: 'queued',
+      status: 'ready_to_ship',
+    });
+    await unit.create(commerceKeys.stripeCheckout('drop', 'recent'), {
+      fulfillmentProcessor: 'cloudflare_queue_v1',
+      status: 'processing',
+      updatedAt: 40,
+    });
+    await unit.create(commerceKeys.stripeCheckout('drop', 'old'), {
+      fulfillmentProcessor: 'cloudflare_queue_v1',
+      lastStripeWebhookEventId: 'evt_old',
+      status: 'fulfillment_pending',
+      updatedAt: 5,
+    });
+    for (let index = 0; index < 101; index += 1) {
+      await unit.create(commerceKeys.stripeCheckout('drop', `malformed-${String(index).padStart(3, '0')}`), {
+        fulfillmentProcessor: 'cloudflare_queue_v1',
+        status: 'fulfillment_pending',
+        updatedAt: index,
+      });
+    }
+  });
+  const pending = await repository.queryPendingReadyNotifications({ owner: 'owner-a', limit: 8 });
+  assert.deepEqual(pending.map((record) => record.key.documentId), ['1', '2']);
+  const after = await repository.queryPendingReadyNotifications({
+    limit: 8,
+    startAfterPath: 'drops/drop/deliveryOrders/1',
+  });
+  assert.deepEqual(after.map((record) => record.key.documentId), ['2']);
+  const due = await repository.queryDuePackStatusProjections({ dropId: 'drop', dueAtMs: 25, limit: 4 });
+  assert.deepEqual(due.map((record) => record.key.documentId), ['2', '3']);
+  const stale = await repository.queryStaleStripeFulfillments(20);
+  assert.deepEqual(stale.map((record) => record.key.documentId), ['old']);
+});
+
 test('native timestamps remain monotonic and path ordering is binary', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);

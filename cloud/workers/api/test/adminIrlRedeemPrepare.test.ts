@@ -129,7 +129,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
   return {
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER.toBase58() }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
-    loadWalletSession: async () => OWNER.toBase58(),
+    loadBoundWallet: async () => OWNER.toBase58(),
     loadReceiptMarker: async () => false,
     createRequest: async () => undefined,
     fetchAsset: async () => packAsset(),
@@ -276,7 +276,7 @@ test('Admin IRL preparation enforces exact requests, methods, authentication, an
   assert.equal(anonymousOnly.response.status, 401);
 
   const wrongOwner = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
-    loadWalletSession: async () => ADMIN.toBase58(),
+    loadBoundWallet: async () => ADMIN.toBase58(),
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN.toBase58() }),
   }));
   assert.equal(wrongOwner.response.status, 403);

@@ -11,6 +11,7 @@ import {
 } from '../../../../shared/boxMinterConfigCodec.js';
 import {
   StripeCheckoutSessionError,
+  createStripeCheckoutIdentity,
   createStripeCheckoutSessionCore,
   type StripeCheckoutOnchainConfig,
   type StripeCheckoutProviderRequest,
@@ -20,11 +21,10 @@ import {
 import type { StripeCheckoutMode } from '../../../../shared/stripeCheckoutCore.js';
 import {
   RequestIdentityError,
-  requestIdentitySubject,
   verifyRequestIdentity,
   type RequestIdentity,
 } from './requestIdentity.js';
-import { resolveD1WalletSession } from './walletSessionD1.js';
+import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
   cancelResponseBody,
   readBoundedJson,
@@ -78,13 +78,13 @@ type CheckoutDependencies = {
   loadOnchainConfig?: (drop: StripeCheckoutSessionDrop) => Promise<StripeCheckoutOnchainConfig>;
   requireFulfillmentPrerequisites?: (config: StripeCheckoutOnchainConfig) => void;
   persistCheckout?: (path: string, document: Record<string, unknown>) => Promise<void>;
-  resolveWalletSession: typeof resolveD1WalletSession;
+  resolveAuthWalletBinding: typeof resolveD1AuthWalletBinding;
 };
 
 const defaultDependencies: CheckoutDependencies = {
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  resolveWalletSession: resolveD1WalletSession,
+  resolveAuthWalletBinding: resolveD1AuthWalletBinding,
   verifyIdentity: verifyRequestIdentity,
 };
 
@@ -476,15 +476,17 @@ export async function handleStripeCheckoutSession(
     const resolvedWallet = identity.kind === 'staff-wallet'
       ? identity.wallet
       : env.OPS_DB
-        ? (await dependencies.resolveWalletSession(
+        ? (await dependencies.resolveAuthWalletBinding(
             env.OPS_DB,
             identity.authSubject,
             controller.signal,
           )).wallet
         : null;
     const result = await createStripeCheckoutSessionCore({
-      uid: resolvedWallet || requestIdentitySubject(identity),
-      ...(resolvedWallet ? { wallet: resolvedWallet } : {}),
+      identity: createStripeCheckoutIdentity(
+        identity.kind === 'staff-wallet' ? identity.wallet : identity.authSubject,
+        resolvedWallet || undefined,
+      ),
       requestOrigin: request.headers.get('Origin') || undefined,
       allowedOrigins: request.headers.get('Origin') ? [request.headers.get('Origin')!] : [],
       body,

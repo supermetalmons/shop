@@ -132,7 +132,7 @@ test('checkout handler authenticates, creates one session, and persists the exac
     billingAddressCollection: 'auto',
     successUrl: 'https://mons.shop/drop?stripe_checkout=success&session_id={CHECKOUT_SESSION_ID}',
     cancelUrl: 'https://mons.shop/drop?stripe_checkout=cancel',
-    clientReferenceId: 'auth-uid:card_nft_binder_devnet:1700000000000',
+    clientReferenceId: 'anonymous:auth-uid:card_nft_binder_devnet:1700000000000',
     quantity: 1,
     currency: 'usd',
     unitAmountCents: 100,
@@ -140,7 +140,10 @@ test('checkout handler authenticates, creates one session, and persists the exac
     productTaxCode: 'txcd_99999999',
     metadata: {
       dropId: DROP.dropId,
-      uid: 'auth-uid',
+      identitySchema: 'owner-v1',
+      ownerKind: 'anonymous',
+      owner: 'anonymous:auth-uid',
+      authSubject: 'auth-uid',
       fulfillmentMode: 'admin_variant_receipt',
       placeholder: 'stripe_direct_delivery',
       quantity: '1',
@@ -152,6 +155,7 @@ test('checkout handler authenticates, creates one session, and persists the exac
   assert.equal(writes[0]?.document.owner, 'anonymous:auth-uid');
   assert.equal(writes[0]?.document.ownerKind, 'anonymous');
   assert.equal(writes[0]?.document.authSubject, 'auth-uid');
+  assert.equal(Object.hasOwn(writes[0]?.document || {}, 'uid'), false);
 });
 
 test('staff checkout persists the wallet as the direct order owner', async () => {
@@ -169,7 +173,7 @@ test('staff checkout persists the wallet as the direct order owner', async () =>
   assert.equal(result.response.status, 200);
   assert.equal(checkout?.owner, STAFF_WALLET);
   assert.equal(checkout?.ownerKind, 'wallet');
-  assert.equal(checkout?.uid, STAFF_WALLET);
+  assert.equal(Object.hasOwn(checkout || {}, 'uid'), false);
   assert.equal(Object.hasOwn(checkout || {}, 'authSubject'), false);
   assert.equal(Object.hasOwn(checkout || {}, 'authSubject'), false);
 });
@@ -183,13 +187,13 @@ test('linked anonymous checkout persists the wallet as the direct order owner', 
       persistCheckout: async (_path: string, document: Record<string, unknown>) => {
         checkout = document;
       },
-      resolveWalletSession: async () => ({ wallet: STAFF_WALLET, source: 'session' as const }),
+      resolveAuthWalletBinding: async () => ({ wallet: STAFF_WALLET, source: 'binding' as const }),
     }),
   );
   assert.equal(result.response.status, 200);
   assert.equal(checkout?.owner, STAFF_WALLET);
   assert.equal(checkout?.ownerKind, 'wallet');
-  assert.equal(checkout?.uid, STAFF_WALLET);
+  assert.equal(Object.hasOwn(checkout || {}, 'uid'), false);
   assert.equal(Object.hasOwn(checkout || {}, 'authSubject'), false);
   assert.equal(Object.hasOwn(checkout || {}, 'authSubject'), false);
 });

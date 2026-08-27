@@ -138,7 +138,7 @@ function request(body: unknown, headers: HeadersInit = {}): Request {
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
-    loadWalletSession: async () => OWNER.toBase58(),
+    loadBoundWallet: async () => OWNER.toBase58(),
     loadClaim: async () => ({ dropId: DROP_ID, boxId: 7, dudeIds: [1, 2, 3] }),
     resolveLegacyDropIds: async () => [],
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
@@ -238,9 +238,8 @@ test('IRL claim reads wallet sessions from D1 and preserves legacy collection-gr
         first: async () => ({
           auth_subject: 'auth-uid',
           wallet: OWNER.toBase58(),
-          expires_at_ms: 253_402_300_799_999,
           updated_at_ms: 1_700_000_000_000,
-          wallet_revision: 1,
+          revision: 1,
           reconcile_lease_id: null,
           reconcile_lease_expires_at_ms: null,
         }),
@@ -253,7 +252,7 @@ test('IRL claim reads wallet sessions from D1 and preserves legacy collection-gr
       throw new Error('Unexpected D1 session');
     },
   } as D1Database;
-  assert.equal(await irlClaimTestHooks.loadWalletSession(context, commerceSourceDb, 'auth-uid'), OWNER.toBase58());
+  assert.equal(await irlClaimTestHooks.loadBoundWallet(context, commerceSourceDb, 'auth-uid'), OWNER.toBase58());
   assert.deepEqual(await irlClaimTestHooks.loadClaim(context, '1234567890'), {
     dropId: DROP_ID,
     boxId: 7,
@@ -488,7 +487,7 @@ test('IRL claim handler rejects authentication and wallet-session mismatches', a
   const mismatch = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     env(),
-    dependencies({ loadWalletSession: async () => Keypair.generate().publicKey.toBase58() }),
+    dependencies({ loadBoundWallet: async () => Keypair.generate().publicKey.toBase58() }),
   );
   assert.equal(mismatch.response.status, 403);
   assert.equal((await mismatch.response.json() as { error: { code: string } }).error.code, 'permission-denied');

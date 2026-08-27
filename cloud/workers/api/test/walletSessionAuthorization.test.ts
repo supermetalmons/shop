@@ -11,13 +11,13 @@ import { revealDudesTestHooks } from '../src/revealDudes.js';
 const AUTH_SUBJECT = 'anon:00000000-0000-4000-8000-000000000001';
 const WALLET = Keypair.generate().publicKey.toBase58();
 
-function walletSessionDb(): D1Database {
+function authWalletBindingDb(): D1Database {
   return {
     batch: async () => [],
     dump: async () => new ArrayBuffer(0),
     exec: async () => ({ count: 0, duration: 0 }),
     prepare: (sql: string) => {
-      assert.match(sql, /FROM wallet_sessions/);
+      assert.match(sql, /FROM auth_wallet_bindings/);
       let authSubject: unknown;
       let statement: D1PreparedStatement;
       statement = {
@@ -29,9 +29,8 @@ function walletSessionDb(): D1Database {
         first: async () => authSubject === AUTH_SUBJECT ? {
           auth_subject: AUTH_SUBJECT,
           wallet: WALLET,
-          expires_at_ms: 253_402_300_799_999,
           updated_at_ms: 1_700_000_000_000,
-          wallet_revision: 1,
+          revision: 1,
           reconcile_lease_id: null,
           reconcile_lease_expires_at_ms: null,
         } : null,
@@ -44,7 +43,7 @@ function walletSessionDb(): D1Database {
   } as D1Database;
 }
 
-test('delivery, reveal, claim, receipt, and admin authorization load wallet sessions only from D1', async () => {
+test('delivery, reveal, claim, receipt, and admin authorization load auth-wallet bindings only from D1', async () => {
   let providerRequests = 0;
   const context = {
     commerceDb: createCommerceD1(),
@@ -55,16 +54,16 @@ test('delivery, reveal, claim, receipt, and admin authorization load wallet sess
     },
     signal: new AbortController().signal,
   };
-  const db = walletSessionDb();
+  const db = authWalletBindingDb();
   const loaders = [
-    deliveryPrepareTestHooks.loadWalletSession,
-    revealDudesTestHooks.loadWalletSession,
-    irlClaimTestHooks.loadWalletSession,
-    deliveryReceiptTestHooks.loadWalletSession,
-    adminIrlRedeemPrepareTestHooks.loadWalletSession,
+    deliveryPrepareTestHooks.loadBoundWallet,
+    revealDudesTestHooks.loadBoundWallet,
+    irlClaimTestHooks.loadBoundWallet,
+    deliveryReceiptTestHooks.loadBoundWallet,
+    adminIrlRedeemPrepareTestHooks.loadBoundWallet,
   ];
-  for (const loadWalletSession of loaders) {
-    assert.equal(await loadWalletSession(context, db, AUTH_SUBJECT), WALLET);
+  for (const loadBoundWallet of loaders) {
+    assert.equal(await loadBoundWallet(context, db, AUTH_SUBJECT), WALLET);
   }
   assert.equal(providerRequests, 0);
 });

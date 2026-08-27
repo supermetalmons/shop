@@ -1512,7 +1512,7 @@ async function finalizeAdminIrlRedeem(
   try {
     wallet = canonicalWallet(await resolveRequestWallet(
       identity,
-      (uid) => adminIrlRedeemRuntime.loadWalletSession(commerce, env.OPS_DB, uid),
+      (uid) => adminIrlRedeemRuntime.loadBoundWallet(commerce, env.OPS_DB, uid),
     ));
   } catch (error) {
     if (isRecord(error) && error.code === 'unavailable') {

@@ -190,18 +190,18 @@ test('Stripe fulfillment reconciliation decoder selects only stale marked D1 che
   ], cutoffMs);
   assert.deepEqual(candidates, [
     {
-      checkoutPath: 'drops/card_nft_binder_devnet/stripeCheckouts/cs_test_stale',
-      dropId: 'card_nft_binder_devnet',
-      sessionId: 'cs_test_stale',
-      stripeEventId: 'evt_test_stale',
-      stripeEventType: 'checkout.session.completed',
-    },
-    {
       checkoutPath: 'drops/card_nft_binder_devnet/stripeCheckouts/cs_test_processing',
       dropId: 'card_nft_binder_devnet',
       sessionId: 'cs_test_processing',
       stripeEventId: 'evt_test_processing',
       stripeEventType: 'checkout.session.async_payment_succeeded',
+    },
+    {
+      checkoutPath: 'drops/card_nft_binder_devnet/stripeCheckouts/cs_test_stale',
+      dropId: 'card_nft_binder_devnet',
+      sessionId: 'cs_test_stale',
+      stripeEventId: 'evt_test_stale',
+      stripeEventType: 'checkout.session.completed',
     },
   ]);
 });

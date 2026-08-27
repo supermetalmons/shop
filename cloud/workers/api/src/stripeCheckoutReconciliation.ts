@@ -12,8 +12,6 @@ import {
 import { createStripeCheckoutStore } from './stripeCheckout/store.js';
 
 const REQUEUE_AFTER_MS = 15 * 60 * 1000;
-const MAX_REQUEUES_PER_RUN = 100;
-
 type RequeueCandidate = {
   checkoutPath: string;
   dropId: string;
@@ -47,10 +45,7 @@ function parseRequeueCandidates(
   cutoffMs: number,
 ): RequeueCandidate[] {
   const candidates: RequeueCandidate[] = [];
-  const ordered = [...value].sort((left, right) =>
-    Number(left.data.updatedAt) - Number(right.data.updatedAt) ||
-    (left.key.path < right.key.path ? -1 : left.key.path > right.key.path ? 1 : 0));
-  for (const document of ordered) {
+  for (const document of value) {
     if (document.key.kind !== 'stripe_checkout' || !document.key.dropId) continue;
     const dropId = document.key.dropId;
     const sessionId = document.key.documentId;
@@ -75,7 +70,7 @@ function parseRequeueCandidates(
         : 'checkout.session.completed',
     });
   }
-  return candidates.slice(0, MAX_REQUEUES_PER_RUN);
+  return candidates;
 }
 
 async function loadCandidates(
@@ -85,17 +80,7 @@ async function loadCandidates(
 ): Promise<RequeueCandidate[]> {
   signal.throwIfAborted();
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
-  const value = await repository.query({
-    kind: 'stripe_checkout',
-    filters: [
-      { field: 'fulfillmentProcessor', op: 'equal', value: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR },
-      {
-        field: 'status',
-        op: 'in',
-        value: [STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING, STRIPE_CHECKOUT_STATUS.PROCESSING],
-      },
-    ],
-  });
+  const value = await repository.queryStaleStripeFulfillments(cutoffMs);
   signal.throwIfAborted();
   return parseRequeueCandidates(value, cutoffMs);
 }

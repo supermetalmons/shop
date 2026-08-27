@@ -73,7 +73,7 @@ import {
   commerceKeys,
 } from './commerceRepository.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
-import { resolveD1WalletSession } from './walletSessionD1.js';
+import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import {
   RevealSubmissionOwnerMismatchError,
@@ -174,7 +174,7 @@ type RevealDudesDependencies = {
   loadPendingOpen: typeof loadPendingOpen;
   loadRevealSubmission: typeof loadRevealSubmission;
   loadStorageControl: typeof requireRevealSubmissionStorageControl;
-  loadWalletSession: typeof loadWalletSession;
+  loadBoundWallet: typeof loadBoundWallet;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   randomInt: (maxExclusive: number) => number;
@@ -263,7 +263,7 @@ const defaultDependencies: RevealDudesDependencies = {
   loadPendingOpen,
   loadRevealSubmission,
   loadStorageControl: requireRevealSubmissionStorageControl,
-  loadWalletSession,
+  loadBoundWallet,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   randomInt: secureRandomInt,
@@ -691,14 +691,14 @@ async function loadPendingOpen(
   };
 }
 
-async function loadWalletSession(
+async function loadBoundWallet(
   context: RevealContext,
   db: D1Database | undefined,
   uid: string,
 ): Promise<string> {
   try {
     if (!db) throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
-    const resolution = await resolveD1WalletSession(db, uid, context.signal);
+    const resolution = await resolveD1AuthWalletBinding(db, uid, context.signal);
     if ('reason' in resolution) throw new RevealDudesError('unauthenticated', 'Sign in with your wallet first.');
     return resolution.wallet;
   } catch (error) {
@@ -1894,7 +1894,7 @@ export async function handleRevealDudes(
     };
     const sessionWallet = await resolveRequestWallet(
       identity,
-      (uid) => dependencies.loadWalletSession(revealContext, env.OPS_DB, uid),
+      (uid) => dependencies.loadBoundWallet(revealContext, env.OPS_DB, uid),
     );
     if (sessionWallet !== owner.toBase58()) {
       authOutcome = 'rejected';
@@ -2225,7 +2225,7 @@ export const revealDudesTestHooks = {
   loadLatestBlockhash,
   loadPendingOpen,
   loadRevealSubmission,
-  loadWalletSession,
+  loadBoundWallet,
   reconcileRevealSubmission,
   reserveRevealSubmission,
   revealBackgroundJobTimeoutMs: REVEAL_BACKGROUND_JOB_TIMEOUT_MS,

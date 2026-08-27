@@ -81,7 +81,7 @@ import {
   loadD1ProfileAddress,
   type D1ProfileAddress,
 } from './profileD1.js';
-import { resolveD1WalletSession } from './walletSessionD1.js';
+import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 
 export const DELIVERY_PREPARE_PATH = '/delivery/prepare';
 
@@ -235,7 +235,7 @@ type DeliveryPrepareDependencies = {
     context: ProviderContext,
     runtime: DeliveryRuntime,
   ) => Promise<OnchainState>;
-  loadWalletSession: (
+  loadBoundWallet: (
     context: CommerceContext,
     db: D1Database | undefined,
     uid: string,
@@ -811,14 +811,14 @@ async function deliveryPdaExists(
   return result.value !== null;
 }
 
-async function loadWalletSession(
+async function loadBoundWallet(
   context: CommerceContext,
   db: D1Database | undefined,
   uid: string,
 ): Promise<string> {
   try {
     if (!db) throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
-    const resolution = await resolveD1WalletSession(db, uid, context.signal);
+    const resolution = await resolveD1AuthWalletBinding(db, uid, context.signal);
     if ('reason' in resolution) throw new DeliveryPrepareError('unauthenticated', 'Sign in with your wallet first.');
     return resolution.wallet;
   } catch (error) {
@@ -1242,7 +1242,7 @@ async function prepareDelivery(args: {
 }): Promise<PrepareDeliveryResponse> {
   const sessionWallet = await resolveRequestWallet(
     args.identity,
-    (uid) => args.dependencies.loadWalletSession(args.context, args.env.OPS_DB, uid),
+    (uid) => args.dependencies.loadBoundWallet(args.context, args.env.OPS_DB, uid),
   );
   const owner = canonicalPublicKey(args.body.owner, 'wallet address');
   const ownerWallet = owner.toBase58();
@@ -1383,7 +1383,7 @@ const defaultDependencies: DeliveryPrepareDependencies = {
   loadLatestBlockhash,
   loadLookupTable,
   loadOnchainState,
-  loadWalletSession,
+  loadBoundWallet,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
@@ -1511,7 +1511,7 @@ export const deliveryPrepareTestHooks = {
   loadLatestBlockhash,
   loadLookupTable,
   loadOnchainState,
-  loadWalletSession,
+  loadBoundWallet,
   orderItem,
   prepareDelivery,
   secureDeliveryId,

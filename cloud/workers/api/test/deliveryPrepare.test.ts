@@ -159,7 +159,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
   return {
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
-    loadWalletSession: async () => OWNER.publicKey.toBase58(),
+    loadBoundWallet: async () => OWNER.publicKey.toBase58(),
     loadAddress: async () => ({
       decoded: { id: ADDRESS_ID, country: 'US', countryCode: 'US', encrypted: 'cipher' },
     }),
@@ -623,7 +623,7 @@ test('delivery preparation enforces authentication, session ownership, exact req
   assert.equal(unsupportedUnauthenticated.dropId, undefined);
 
   const denied = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
-    loadWalletSession: async () => Keypair.generate().publicKey.toBase58(),
+    loadBoundWallet: async () => Keypair.generate().publicKey.toBase58(),
   }));
   assert.equal(denied.response.status, 403);
 

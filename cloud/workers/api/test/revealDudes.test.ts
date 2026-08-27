@@ -85,7 +85,7 @@ function request(body: unknown, init: { method?: string; headers?: HeadersInit }
 function dependencies(overrides: Record<string, unknown> = {}) {
   return {
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'anon:reveal-test' }),
-    loadWalletSession: async () => OWNER.toBase58(),
+    loadBoundWallet: async () => OWNER.toBase58(),
     loadStorageControl: async () => ({
       paused: false,
       source: 'd1' as const,
@@ -184,7 +184,7 @@ test('reveal handler rejects wallet-session mismatches before any reveal work', 
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     dependencies({
-      loadWalletSession: async () => Keypair.generate().publicKey.toBase58(),
+      loadBoundWallet: async () => Keypair.generate().publicKey.toBase58(),
       validateOnchainConfig: async () => {
         onchainCalls += 1;
         throw new Error('unexpected');

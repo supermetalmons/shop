@@ -98,9 +98,8 @@ test('Stripe fulfillment resolves late checkout ownership through Ops D1', async
           return {
             auth_subject: 'anonymous-subject',
             wallet,
-            expires_at_ms: 253_402_300_799_999,
             updated_at_ms: 1,
-            wallet_revision: 1,
+            revision: 1,
             reconcile_lease_id: null,
             reconcile_lease_expires_at_ms: null,
           };

@@ -178,7 +178,9 @@ function checkoutDocument(options: {
   const document = buildStripeCheckoutDocument({
     dropId: options.dropId || DEVNET_DROP,
     sessionId: options.sessionId || 'cs_test_123',
-    uid: 'auth-user',
+    owner: 'anonymous:auth-user',
+    ownerKind: 'anonymous',
+    authSubject: 'auth-user',
     quantity: 1,
     unitAmountCents: 100,
     livemode: options.livemode === true,
@@ -467,7 +469,7 @@ test('signed mainnet webhook uses the live secret and preserves fulfilled idempo
 
 test('invalid and missing checkout documents stay retryable', async () => {
   const invalidDocument = checkoutDocument();
-  delete invalidDocument.uid;
+  delete invalidDocument.authSubject;
   const invalidContext = checkoutEnvironment(invalidDocument);
   const invalid = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), invalidContext.env, {
     log: () => undefined,

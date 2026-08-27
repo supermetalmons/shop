@@ -232,7 +232,7 @@ function dependencies(
     log: () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
-    resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
+    resolveD1AuthWalletBinding: async () => ({ wallet: OWNER, source: 'binding' }),
     saveProfileAddress: async (_db, address) => ({
       id: address.id,
       country: address.country,
@@ -414,7 +414,7 @@ test('address route uses D1 wallet sessions without requesting Commerce authSess
       providerCalls += 1;
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
-      resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: OWNER, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     }),
   );
@@ -1060,7 +1060,7 @@ test('fulfillment address route preserves authorization and order-state guards',
       providerCalls += 1;
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
-      resolveD1WalletSession: async () => ({ wallet: adminWallet, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: adminWallet, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: adminWallet }),
     }),
   );
@@ -4645,7 +4645,7 @@ test('write routes reject invalid payloads, unauthorized wallets, and missing or
     env,
     FULFILLMENT_ORDER_STATUS_PATH,
     dependencies(deniedFetch, {
-      resolveD1WalletSession: async () => ({ wallet: OTHER, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: OTHER, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OTHER }),
     }),
   );

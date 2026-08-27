@@ -95,7 +95,7 @@ import {
   commerceKeys,
   type CommerceDocumentRecord,
 } from './commerceRepository.js';
-import { resolveD1WalletSession } from './walletSessionD1.js';
+import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 
 export const ADMIN_IRL_REDEEM_PREPARE_PATH = '/admin/irl-redeem/prepare';
 export { ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER };
@@ -242,7 +242,7 @@ type AdminIrlRedeemPrepareDependencies = {
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
-  loadWalletSession: (
+  loadBoundWallet: (
     context: CommerceContext,
     db: D1Database | undefined,
     uid: string,
@@ -811,7 +811,7 @@ async function loadLookupTable(
   }
 }
 
-async function loadWalletSession(
+async function loadBoundWallet(
   context: CommerceContext,
   db: D1Database | undefined,
   uid: string,
@@ -820,7 +820,7 @@ async function loadWalletSession(
     if (!db) {
       throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem preparation is temporarily unavailable.');
     }
-    const resolution = await resolveD1WalletSession(db, uid, context.signal);
+    const resolution = await resolveD1AuthWalletBinding(db, uid, context.signal);
     if ('reason' in resolution) throw new AdminIrlRedeemPrepareError('unauthenticated', 'Sign in with your wallet first.');
     return resolution.wallet;
   } catch (error) {
@@ -1169,7 +1169,7 @@ async function prepareAdminIrlRedeem(args: {
   const ownerWallet = owner.toBase58();
   const sessionWallet = await resolveRequestWallet(
     args.identity,
-    (uid) => args.dependencies.loadWalletSession(args.commerceContext, args.db, uid),
+    (uid) => args.dependencies.loadBoundWallet(args.commerceContext, args.db, uid),
   );
   if (!walletHasAdminIrlRedeemAccess(sessionWallet, ADMIN_IRL_REDEEM_WALLETS)) {
     throw new AdminIrlRedeemPrepareError('permission-denied', 'Admin IRL Redeem access denied.');
@@ -1337,7 +1337,7 @@ const defaultDependencies: AdminIrlRedeemPrepareDependencies = {
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
   getDrop: getApiDrop,
-  loadWalletSession,
+  loadBoundWallet,
   loadReceiptMarker,
   createRequest,
   fetchAsset,
@@ -1488,7 +1488,7 @@ export const adminIrlRedeemPrepareTestHooks = {
   loadOnchainState,
   loadPendingOpenAccounts,
   loadReceiptMarker,
-  loadWalletSession,
+  loadBoundWallet,
   parseProof,
   prepareAdminIrlRedeem,
   rpcCall,
@@ -1503,7 +1503,7 @@ export const adminIrlRedeemRuntime = {
   fetchAssetProof,
   loadLookupTable,
   loadOnchainState,
-  loadWalletSession,
+  loadBoundWallet,
   parseProof,
   receiptDropIdentity,
   rpcCall,

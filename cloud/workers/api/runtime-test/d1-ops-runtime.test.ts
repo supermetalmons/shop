@@ -25,14 +25,14 @@ import {
 import { profileReadTestHooks } from '../src/profileReads.ts';
 import { deliveryPrepareTestHooks } from '../src/deliveryPrepare.ts';
 import {
-  WalletSessionD1BusyError,
-  WalletSessionD1SupersededError,
-  acquireWalletSessionReconcileLease,
-  establishD1WalletSession,
-  loadD1WalletSession,
-  releaseWalletSessionReconcileLease,
-  resolveD1WalletSession,
-} from '../src/walletSessionD1.ts';
+  AuthWalletBindingD1BusyError,
+  AuthWalletBindingD1SupersededError,
+  acquireAuthWalletBindingReconcileLease,
+  establishD1AuthWalletBinding,
+  loadD1AuthWalletBinding,
+  releaseAuthWalletBindingReconcileLease,
+  resolveD1AuthWalletBinding,
+} from '../src/authWalletBindingD1.ts';
 import {
   loadD1RevealSubmission,
   loadRevealSubmissionStorageControl,
@@ -118,6 +118,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       '0014_auth_subject_bridge.sql',
       '0015_auth_subject_cutover.sql',
       '0016_remove_migration_controls.sql',
+      '0017_auth_wallet_bindings.sql',
     ]);
     const authRetirement = await env.OPS_DB.prepare(`SELECT revision, legacy_provider_disabled_at_ms
       FROM auth_provider_retirement
@@ -321,59 +322,59 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       WHERE singleton = 1`).run());
     assert.equal((await env.OPS_DB.prepare(`SELECT COUNT(*) AS count FROM sqlite_schema
       WHERE name IN ('profile_storage_control', 'wallet_session_storage_control')`).first<{ count: number }>())?.count, 0);
-    assert.deepEqual(await resolveD1WalletSession(env.OPS_DB, 'missing-firebase-uid'), {
+    assert.deepEqual(await resolveD1AuthWalletBinding(env.OPS_DB, 'missing-firebase-uid'), {
       wallet: null,
-      reason: 'legacy_uid_invalid',
+      reason: 'missing-binding',
     });
-    assert.deepEqual(await resolveD1WalletSession(env.OPS_DB, RACE_WALLET), {
-      wallet: RACE_WALLET,
-      source: 'legacy_uid',
+    assert.deepEqual(await resolveD1AuthWalletBinding(env.OPS_DB, RACE_WALLET), {
+      wallet: null,
+      reason: 'missing-binding',
     });
-    await assert.rejects(establishD1WalletSession({
+    await assert.rejects(establishD1AuthWalletBinding({
       baseline: null,
       db: env.OPS_DB,
       authSubject: 'invalid-wallet-session-uid',
       nowMs: 1_000,
       wallet: '1'.repeat(45),
-    }), /Wallet-session data is invalid/);
+    }), /Auth-wallet binding data is invalid/);
     assert.equal((await env.OPS_DB.prepare(
-      'SELECT COUNT(*) AS count FROM wallet_sessions WHERE auth_subject = ?',
+      'SELECT COUNT(*) AS count FROM auth_wallet_bindings WHERE auth_subject = ?',
     ).bind('invalid-wallet-session-uid').first<{ count: number }>())?.count, 0);
     const sessionUid = 'runtime-wallet-session-uid';
-    const initialSession = await establishD1WalletSession({
+    const initialSession = await establishD1AuthWalletBinding({
       baseline: null,
       db: env.OPS_DB,
       authSubject: sessionUid,
       nowMs: 1_000,
       wallet: PROFILE_WALLET,
     });
-    assert.equal(initialSession.walletRevision, 1);
-    const reboundSession = await establishD1WalletSession({
+    assert.equal(initialSession.revision, 1);
+    const reboundSession = await establishD1AuthWalletBinding({
       baseline: initialSession,
       db: env.OPS_DB,
       authSubject: sessionUid,
       nowMs: 2_000,
       wallet: RACE_WALLET,
     });
-    assert.equal(reboundSession.walletRevision, 2);
+    assert.equal(reboundSession.revision, 2);
     await assert.rejects(
-      establishD1WalletSession({
+      establishD1AuthWalletBinding({
         baseline: initialSession,
         db: env.OPS_DB,
         authSubject: sessionUid,
         nowMs: 3_000,
         wallet: PROFILE_WALLET,
       }),
-      WalletSessionD1SupersededError,
+      AuthWalletBindingD1SupersededError,
     );
-    const lease = await acquireWalletSessionReconcileLease({
+    const lease = await acquireAuthWalletBindingReconcileLease({
       db: env.OPS_DB,
       authSubject: sessionUid,
       leaseId: '00000000-0000-4000-8000-000000000001',
       nowMs: 4_000,
     });
     assert.equal(lease?.wallet, RACE_WALLET);
-    const renewedDuringLease = await establishD1WalletSession({
+    const renewedDuringLease = await establishD1AuthWalletBinding({
       baseline: reboundSession,
       db: env.OPS_DB,
       authSubject: sessionUid,
@@ -381,31 +382,31 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       wallet: RACE_WALLET,
     });
     assert.equal(renewedDuringLease.wallet, RACE_WALLET);
-    assert.equal(renewedDuringLease.walletRevision, 3);
+    assert.equal(renewedDuringLease.revision, 3);
     await assert.rejects(
-      establishD1WalletSession({
+      establishD1AuthWalletBinding({
         baseline: reboundSession,
         db: env.OPS_DB,
         authSubject: sessionUid,
         nowMs: 5_500,
         wallet: PROFILE_WALLET,
       }),
-      WalletSessionD1SupersededError,
+      AuthWalletBindingD1SupersededError,
     );
     await assert.rejects(
-      establishD1WalletSession({
+      establishD1AuthWalletBinding({
         baseline: renewedDuringLease,
         db: env.OPS_DB,
         authSubject: sessionUid,
         nowMs: 6_000,
         wallet: PROFILE_WALLET,
       }),
-      WalletSessionD1BusyError,
+      AuthWalletBindingD1BusyError,
     );
-    await releaseWalletSessionReconcileLease(env.OPS_DB, sessionUid, lease!.id);
-    const releasedSession = await loadD1WalletSession(env.OPS_DB, sessionUid);
+    await releaseAuthWalletBindingReconcileLease(env.OPS_DB, sessionUid, lease!.id);
+    const releasedSession = await loadD1AuthWalletBinding(env.OPS_DB, sessionUid);
     assert.equal(releasedSession?.reconcileLeaseId, null);
-    const reboundAfterRelease = await establishD1WalletSession({
+    const reboundAfterRelease = await establishD1AuthWalletBinding({
       baseline: releasedSession,
       db: env.OPS_DB,
       authSubject: sessionUid,
@@ -413,32 +414,32 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       wallet: PROFILE_WALLET,
     });
     assert.equal(reboundAfterRelease.wallet, PROFILE_WALLET);
-    const expiringLease = await acquireWalletSessionReconcileLease({
+    const expiringLease = await acquireAuthWalletBindingReconcileLease({
       db: env.OPS_DB,
       authSubject: sessionUid,
       leaseId: '00000000-0000-4000-8000-000000000002',
       nowMs: 20_000,
     });
-    await releaseWalletSessionReconcileLease(
+    await releaseAuthWalletBindingReconcileLease(
       env.OPS_DB,
       sessionUid,
       '00000000-0000-4000-8000-000000000099',
     );
-    await assert.rejects(acquireWalletSessionReconcileLease({
+    await assert.rejects(acquireAuthWalletBindingReconcileLease({
       db: env.OPS_DB,
       authSubject: sessionUid,
       leaseId: '00000000-0000-4000-8000-000000000003',
       nowMs: 21_000,
-    }), WalletSessionD1BusyError);
-    const reclaimedLease = await acquireWalletSessionReconcileLease({
+    }), AuthWalletBindingD1BusyError);
+    const reclaimedLease = await acquireAuthWalletBindingReconcileLease({
       db: env.OPS_DB,
       authSubject: sessionUid,
       leaseId: '00000000-0000-4000-8000-000000000004',
       nowMs: expiringLease!.expiresAtMs + 1,
     });
     assert.equal(reclaimedLease?.id, '00000000-0000-4000-8000-000000000004');
-    await releaseWalletSessionReconcileLease(env.OPS_DB, sessionUid, reclaimedLease!.id);
-    await establishD1WalletSession({
+    await releaseAuthWalletBindingReconcileLease(env.OPS_DB, sessionUid, reclaimedLease!.id);
+    await establishD1AuthWalletBinding({
       baseline: null,
       db: env.OPS_DB,
       authSubject: 'duplicate-wallet-session-uid',
@@ -446,11 +447,11 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       wallet: PROFILE_WALLET,
     });
     assert.equal((await env.OPS_DB.prepare(
-      'SELECT COUNT(*) AS count FROM wallet_sessions WHERE wallet = ?',
+      'SELECT COUNT(*) AS count FROM auth_wallet_bindings WHERE wallet = ?',
     ).bind(PROFILE_WALLET).first<{ count: number }>())?.count, 2);
-    assert.deepEqual(await resolveD1WalletSession(env.OPS_DB, sessionUid), {
+    assert.deepEqual(await resolveD1AuthWalletBinding(env.OPS_DB, sessionUid), {
       wallet: PROFILE_WALLET,
-      source: 'session',
+      source: 'binding',
     });
     assert.deepEqual(await saveD1ProfileAddress(env.OPS_DB, {
       wallet: PROFILE_WALLET,

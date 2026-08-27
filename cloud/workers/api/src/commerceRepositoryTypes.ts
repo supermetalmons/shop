@@ -61,12 +61,14 @@ export type CommerceIndexedField =
 
 export type CommerceOrderField = CommerceIndexedField | 'documentPath' | 'processedAt';
 
+export type CommerceFilterValue = string | number | boolean;
+
 export type CommerceQuery = Readonly<{
   dropId?: string | null;
   filters?: readonly Readonly<{
     field: CommerceIndexedField;
     op: 'equal' | 'in';
-    value: CommerceJsonValue | readonly CommerceJsonValue[];
+    value: CommerceFilterValue | readonly CommerceFilterValue[];
   }>[];
   kind: CommerceDocumentKind;
   limit?: number;
@@ -74,7 +76,7 @@ export type CommerceQuery = Readonly<{
     direction: 'asc' | 'desc';
     field: CommerceOrderField;
   }>[];
-  startAfter?: readonly (CommerceJsonValue | CommerceTimestamp)[];
+  startAfter?: readonly (CommerceFilterValue | CommerceTimestamp)[];
 }>;
 
 export type CommerceWriteConflictCode = 'aborted' | 'already-exists' | 'failed-precondition';

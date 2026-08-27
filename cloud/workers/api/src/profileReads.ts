@@ -59,8 +59,8 @@ import {
   loadD1Profile,
 } from './profileD1.js';
 import {
-  resolveD1WalletSession,
-} from './walletSessionD1.js';
+  resolveD1AuthWalletBinding,
+} from './authWalletBindingD1.js';
 
 export {
   type ProfileProviderFetch,
@@ -229,11 +229,11 @@ type ProfileReadDependencies = {
   loadProfileEmail: typeof loadProfileEmail;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
-  resolveD1WalletSession: (
+  resolveD1AuthWalletBinding: (
     db: D1Database | undefined,
     uid: string,
     signal: AbortSignal,
-  ) => ReturnType<typeof resolveD1WalletSession>;
+  ) => ReturnType<typeof resolveD1AuthWalletBinding>;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
 };
@@ -252,9 +252,9 @@ const defaultDependencies: ProfileReadDependencies = {
   loadProfileEmail,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
-  resolveD1WalletSession: (db, uid, signal) => {
+  resolveD1AuthWalletBinding: (db, uid, signal) => {
     if (!db) throw new Error('OPS_DB is unavailable');
-    return resolveD1WalletSession(db, uid, signal);
+    return resolveD1AuthWalletBinding(db, uid, signal);
   },
   timeoutMs: PROFILE_READ_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
@@ -397,14 +397,14 @@ async function parseExactRequestBody(
 
 async function loadOptionalSessionWallet(args: {
   db: D1Database | undefined;
-  resolveD1WalletSession: ProfileReadDependencies['resolveD1WalletSession'];
+  resolveD1AuthWalletBinding: ProfileReadDependencies['resolveD1AuthWalletBinding'];
   signal: AbortSignal;
   uid: string;
 }): Promise<string | null> {
   try {
-    const resolution = await args.resolveD1WalletSession(args.db, args.uid, args.signal);
+    const resolution = await args.resolveD1AuthWalletBinding(args.db, args.uid, args.signal);
     if ('reason' in resolution) {
-      if (resolution.reason === 'legacy_uid_invalid') return null;
+      if (resolution.reason === 'missing-binding') return null;
       throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
     }
     return resolution.wallet;
@@ -416,7 +416,7 @@ async function loadOptionalSessionWallet(args: {
 
 async function loadSessionWallet(args: {
   db: D1Database | undefined;
-  resolveD1WalletSession: ProfileReadDependencies['resolveD1WalletSession'];
+  resolveD1AuthWalletBinding: ProfileReadDependencies['resolveD1AuthWalletBinding'];
   signal: AbortSignal;
   uid: string;
 }): Promise<string> {
@@ -820,7 +820,7 @@ export async function handleProfileReadRequest(
     };
     const sessionCommon = {
       db: env.OPS_DB,
-      resolveD1WalletSession: dependencies.resolveD1WalletSession,
+      resolveD1AuthWalletBinding: dependencies.resolveD1AuthWalletBinding,
       signal: controller.signal,
     };
     if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {

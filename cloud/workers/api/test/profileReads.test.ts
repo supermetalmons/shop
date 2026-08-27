@@ -114,7 +114,7 @@ function profileDependencies(
     loadProfileEmail: async () => undefined,
     nowMs: () => NOW_MS,
     providerFetch,
-    resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
+    resolveD1AuthWalletBinding: async () => ({ wallet: OWNER, source: 'binding' }),
     timeoutMs: 500,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     ...overrides,
@@ -246,7 +246,7 @@ test('profile state uses D1 wallet sessions without requesting Commerce authSess
     },
     PROFILE_STATE_PATH,
     profileDependencies(providerFetch, {
-      resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: OWNER, source: 'binding' }),
     }),
   );
   assert.equal(result.response.status, 200);
@@ -264,7 +264,7 @@ test('staff profile state uses the wallet principal without a Auth session row',
       if (url.endsWith('/documents:runQuery')) return Response.json([]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
-      resolveD1WalletSession: async () => assert.fail('staff identity reached Auth wallet-session resolution'),
+      resolveD1AuthWalletBinding: async () => assert.fail('staff identity reached Auth wallet-session resolution'),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
@@ -283,7 +283,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     profileDependencies(async () => assert.fail('missing session reached Commerce'), {
-      resolveD1WalletSession: async () => ({ wallet: null, reason: 'legacy_uid_invalid' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: null, reason: 'missing-binding' }),
     }),
   );
   assert.deepEqual(await missing.response.json(), {
@@ -304,7 +304,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
         if (url.endsWith('/documents:runQuery')) return Response.json([]);
         return Response.json({ error: 'unexpected' }, { status: 500 });
       }),
-      resolveD1WalletSession: async () => ({ wallet: OWNER, source: 'legacy_uid' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: OWNER, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: OWNER }),
     },
   );
@@ -350,7 +350,7 @@ test('profile state rejects invalid D1 sessions and non-empty requests', async (
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
     profileDependencies(async () => assert.fail('invalid D1 session reached Commerce'), {
-      resolveD1WalletSession: async () => { throw new Error('invalid D1 session'); },
+      resolveD1AuthWalletBinding: async () => { throw new Error('invalid D1 session'); },
     }),
   );
   assert.equal(malformedSession.response.status, 503);
@@ -375,7 +375,7 @@ test('shipment route rejects mismatched sessions and malformed requests before s
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
     profileDependencies(providerFetch, {
-      resolveD1WalletSession: async () => ({ wallet: OTHER, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: OTHER, source: 'binding' }),
     }),
   );
   assert.equal(mismatch.response.status, 401);
@@ -438,7 +438,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       loadProfileEmail: async () => 'owner@example.com',
-      resolveD1WalletSession: async () => ({ wallet: OTHER, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: OTHER, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
     }),
   );
@@ -456,7 +456,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
       loadProfileEmail: async () => 'owner@example.com',
-      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
@@ -486,7 +486,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
       if (url.endsWith('/documents:runQuery')) return Response.json([]);
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
-      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
@@ -505,7 +505,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
       loadProfileEmail: async () => {
         throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
       },
-      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
@@ -533,7 +533,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
         { document: { name: 'projects/mons-shop/databases/(default)/documents/drops/a/deliveryOrders/2', fields: { owner: stringValue(OTHER) } } },
       ]);
     }, {
-      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
@@ -559,7 +559,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
         },
       } }]);
     }, {
-      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
@@ -602,7 +602,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
         },
       } }]);
     }, {
-      resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+      resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
@@ -686,7 +686,7 @@ test('all seven commerce read routes use D1 without Commerce in d1 mode', async 
   });
   const staffDependencies = profileDependencies(providerFetch, {
     loadProfileEmail: async () => 'owner@example.com',
-    resolveD1WalletSession: async () => ({ wallet: ADMIN, source: 'session' }),
+    resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
     createCommerceRepository: (database) => new D1CommerceRepository(database),
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
   });

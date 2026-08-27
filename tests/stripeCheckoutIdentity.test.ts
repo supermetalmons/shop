@@ -5,6 +5,7 @@ import {
   STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   buildStripeCheckoutDocument,
   buildStripeCheckoutSessionMetadata,
+  createStripeCheckoutIdentity,
   stripeCheckoutAnonymousOwnerId,
 } from '../shared/stripeCheckoutSession.ts';
 import { normalizeStripeCheckoutIdentity } from '../shared/checkoutIdentity.ts';
@@ -17,7 +18,7 @@ function checkoutDocument() {
   return buildStripeCheckoutDocument({
     dropId: 'card_nft_binder_devnet',
     sessionId: 'cs_test_123',
-    uid: AUTH_SUBJECT,
+    ...createStripeCheckoutIdentity(AUTH_SUBJECT),
     quantity: 1,
     unitAmountCents: 100,
     createdAt: 'created',
@@ -28,15 +29,21 @@ function checkoutDocument() {
 test('new anonymous checkout documents use only the canonical identity contract', () => {
   const checkout = checkoutDocument();
   assert.equal(stripeCheckoutAnonymousOwnerId(AUTH_SUBJECT), `anonymous:${AUTH_SUBJECT}`);
-  assert.equal(checkout.uid, AUTH_SUBJECT);
+  assert.equal(Object.hasOwn(checkout, 'uid'), false);
   assert.equal(checkout.authSubject, AUTH_SUBJECT);
   assert.equal(checkout.owner, `anonymous:${AUTH_SUBJECT}`);
   assert.equal(checkout.ownerKind, STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS);
   assert.deepEqual(
-    buildStripeCheckoutSessionMetadata({ dropId: 'card_nft_binder_devnet', uid: AUTH_SUBJECT }),
+    buildStripeCheckoutSessionMetadata({
+      dropId: 'card_nft_binder_devnet',
+      identity: createStripeCheckoutIdentity(AUTH_SUBJECT),
+    }),
     {
       dropId: 'card_nft_binder_devnet',
-      uid: AUTH_SUBJECT,
+      identitySchema: 'owner-v1',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      owner: `anonymous:${AUTH_SUBJECT}`,
+      authSubject: AUTH_SUBJECT,
       fulfillmentMode: 'admin_variant_receipt',
       placeholder: 'stripe_direct_delivery',
       quantity: '1',
@@ -51,7 +58,6 @@ test('checkout identity normalization preserves the canonical document contract'
     dropId: 'card_nft_binder_devnet',
     sessionId: 'cs_test_123',
   }), {
-    uid: AUTH_SUBJECT,
     owner: `anonymous:${AUTH_SUBJECT}`,
     ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
     authSubject: AUTH_SUBJECT,
@@ -73,18 +79,20 @@ test('checkout identity normalization rejects mismatched and contaminated record
   }
 
   assert.deepEqual(normalizeStripeCheckoutIdentity({
-    uid: WALLET,
     owner: WALLET,
     ownerKind: STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   }), {
-    uid: WALLET,
     owner: WALLET,
     ownerKind: STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   });
   assert.throws(() => normalizeStripeCheckoutIdentity({
-    uid: WALLET,
     owner: WALLET,
     ownerKind: STRIPE_CHECKOUT_OWNER_KIND_WALLET,
     authSubject: '',
+  }));
+  assert.throws(() => normalizeStripeCheckoutIdentity({
+    uid: WALLET,
+    owner: WALLET,
+    ownerKind: STRIPE_CHECKOUT_OWNER_KIND_WALLET,
   }));
 });

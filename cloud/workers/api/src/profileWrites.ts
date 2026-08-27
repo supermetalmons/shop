@@ -113,8 +113,8 @@ import {
 } from './commerceRepository.js';
 import { saveD1ProfileAddress } from './profileD1.js';
 import {
-  resolveD1WalletSession,
-} from './walletSessionD1.js';
+  resolveD1AuthWalletBinding,
+} from './authWalletBindingD1.js';
 import {
   BUYER_ORDER_SHIPPED_EMAIL_PENDING,
   BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
@@ -174,11 +174,11 @@ type ProfileWriteDependencies = {
   nowMs: () => number;
   pauseForRatePoll: (signal: AbortSignal, delayMs: number) => Promise<void>;
   providerFetch: ProfileProviderFetch;
-  resolveD1WalletSession: (
+  resolveD1AuthWalletBinding: (
     db: D1Database | undefined,
     uid: string,
     signal: AbortSignal,
-  ) => ReturnType<typeof resolveD1WalletSession>;
+  ) => ReturnType<typeof resolveD1AuthWalletBinding>;
   saveProfileAddress: (
     db: D1Database | undefined,
     address: Parameters<typeof saveD1ProfileAddress>[1],
@@ -310,9 +310,9 @@ const defaultDependencies: ProfileWriteDependencies = {
   nowMs: () => Date.now(),
   pauseForRatePoll,
   providerFetch: (input, init) => fetch(input, init),
-  resolveD1WalletSession: (db, uid, signal) => {
+  resolveD1AuthWalletBinding: (db, uid, signal) => {
     if (!db) throw new Error('OPS_DB is unavailable');
-    return resolveD1WalletSession(db, uid, signal);
+    return resolveD1AuthWalletBinding(db, uid, signal);
   },
   saveProfileAddress: (db, address, signal) => {
     if (!db) throw new Error('OPS_DB is unavailable');
@@ -415,12 +415,12 @@ async function parseExactRequestBody(
 
 async function loadSessionWallet(args: {
   db: D1Database | undefined;
-  resolveD1WalletSession: ProfileWriteDependencies['resolveD1WalletSession'];
+  resolveD1AuthWalletBinding: ProfileWriteDependencies['resolveD1AuthWalletBinding'];
   signal: AbortSignal;
   uid: string;
 }): Promise<string> {
   try {
-    const resolution = await args.resolveD1WalletSession(args.db, args.uid, args.signal);
+    const resolution = await args.resolveD1AuthWalletBinding(args.db, args.uid, args.signal);
     if ('reason' in resolution) {
       throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
     }
@@ -2963,7 +2963,7 @@ export async function handleProfileWriteRequest(
     };
     const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({
       db: env.OPS_DB,
-      resolveD1WalletSession: dependencies.resolveD1WalletSession,
+      resolveD1AuthWalletBinding: dependencies.resolveD1AuthWalletBinding,
       signal: controller.signal,
       uid,
     }));

@@ -9,7 +9,7 @@ import {
 import { dropDeliveryOrderPath } from '../cloud/workers/api/src/dropPaths.ts';
 import {
   parseSolanaSignInMessage,
-  resolveWalletSessionBinding,
+  resolveAuthWalletBinding,
   validateSolanaSignInMessage,
   WalletLifecycleValidationError,
 } from '../shared/walletLifecycle.ts';
@@ -61,24 +61,11 @@ test('wallet recovery scheduling remains runtime-neutral and deterministic', () 
   });
 });
 
-test('wallet session resolution preserves bound and legacy wallet behavior', () => {
-  assert.deepEqual(resolveWalletSessionBinding({
-    uid: OWNER_ONE,
-    sessionExists: false,
-    sessionData: null,
-  }), { wallet: OWNER_ONE, source: 'legacy_uid' });
-  assert.deepEqual(resolveWalletSessionBinding({
-    uid: 'auth-uid',
-    sessionExists: false,
-    sessionData: null,
-  }), { wallet: null, reason: 'legacy_uid_invalid' });
-  assert.deepEqual(resolveWalletSessionBinding({
-    uid: 'auth-uid',
-    sessionExists: true,
-    sessionData: { wallet: OWNER_TWO },
-  }), { wallet: OWNER_TWO, source: 'session' });
-  for (const sessionData of [{}, { wallet: '' }, { wallet: ` ${OWNER_ONE}` }]) {
-    assert.ok('reason' in resolveWalletSessionBinding({ uid: OWNER_ONE, sessionExists: true, sessionData }));
+test('auth-wallet resolution requires an explicit valid binding', () => {
+  assert.deepEqual(resolveAuthWalletBinding(null), { wallet: null, reason: 'missing-binding' });
+  assert.deepEqual(resolveAuthWalletBinding({ wallet: OWNER_TWO }), { wallet: OWNER_TWO, source: 'binding' });
+  for (const binding of [{}, { wallet: '' }, { wallet: ` ${OWNER_ONE}` }]) {
+    assert.deepEqual(resolveAuthWalletBinding(binding), { wallet: null, reason: 'invalid-wallet' });
   }
 });
 

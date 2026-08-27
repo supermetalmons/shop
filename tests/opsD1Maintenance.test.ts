@@ -37,6 +37,7 @@ const migrationSql = [
   '0014_auth_subject_bridge.sql',
   '0015_auth_subject_cutover.sql',
   '0016_remove_migration_controls.sql',
+  '0017_auth_wallet_bindings.sql',
 ]
   .map((name) => readFileSync(
     new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
@@ -46,6 +47,11 @@ const migrationSql = [
 
 const removeMigrationControlsSql = readFileSync(
   new URL('../cloud/workers/api/ops-migrations/0016_remove_migration_controls.sql', import.meta.url),
+  'utf8',
+);
+
+const authWalletBindingsSql = readFileSync(
+  new URL('../cloud/workers/api/ops-migrations/0017_auth_wallet_bindings.sql', import.meta.url),
   'utf8',
 );
 
@@ -112,6 +118,7 @@ function integrityInput(
         { name: '0014_auth_subject_bridge.sql' },
         { name: '0015_auth_subject_cutover.sql' },
         { name: '0016_remove_migration_controls.sql' },
+        { name: '0017_auth_wallet_bindings.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
@@ -141,10 +148,10 @@ function integrityInput(
         FROM pragma_table_list
         WHERE
           schema = 'main' AND
-          name IN ('auth_provider_retirement', 'anonymous_auth_sessions', 'profile_addresses', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions', 'worker_controls')
+          name IN ('auth_provider_retirement', 'anonymous_auth_sessions', 'auth_wallet_bindings', 'profile_addresses', 'profiles', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'worker_controls')
         ORDER BY name`),
-      walletSessionColumns: queryRows(db, 'PRAGMA table_info(wallet_sessions)'),
-      walletSessionCounts: queryRows(db, 'SELECT COUNT(*) AS wallet_session_count FROM wallet_sessions'),
+      authWalletBindingColumns: queryRows(db, 'PRAGMA table_info(auth_wallet_bindings)'),
+      authWalletBindingCounts: queryRows(db, 'SELECT COUNT(*) AS auth_wallet_binding_count FROM auth_wallet_bindings'),
       workerControlColumns: queryRows(db, 'PRAGMA table_info(worker_controls)'),
       ...overrides,
     };
@@ -163,11 +170,12 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
     assert.deepEqual(controls, [controlRow()]);
     const tables = queryRows(
       db,
-      "SELECT name, strict FROM pragma_table_list WHERE name IN ('auth_provider_retirement', 'anonymous_auth_sessions', 'profile_addresses', 'profiles', 'worker_controls', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions', 'wallet_sessions') ORDER BY name",
+      "SELECT name, strict FROM pragma_table_list WHERE name IN ('auth_provider_retirement', 'anonymous_auth_sessions', 'auth_wallet_bindings', 'profile_addresses', 'profiles', 'worker_controls', 'rate_limit_buckets', 'reveal_submission_storage_control', 'reveal_submissions', 'staff_auth_challenges', 'staff_auth_sessions') ORDER BY name",
     );
     assert.deepEqual(tables, [
       { name: 'anonymous_auth_sessions', strict: 1 },
       { name: 'auth_provider_retirement', strict: 1 },
+      { name: 'auth_wallet_bindings', strict: 1 },
       { name: 'profile_addresses', strict: 1 },
       { name: 'profiles', strict: 1 },
       { name: 'rate_limit_buckets', strict: 1 },
@@ -175,7 +183,6 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
       { name: 'reveal_submissions', strict: 1 },
       { name: 'staff_auth_challenges', strict: 1 },
       { name: 'staff_auth_sessions', strict: 1 },
-      { name: 'wallet_sessions', strict: 1 },
       { name: 'worker_controls', strict: 1 },
     ]);
     assert.deepEqual(
@@ -193,7 +200,9 @@ test('ops migration creates strict state tables, seed, and expiry index', () => 
 
 test('final Ops cutover preserves sessions, reveals, and retirement timestamps exactly', () => {
   const db = new DatabaseSync(':memory:');
-  db.exec(migrationSql.replace(removeMigrationControlsSql, ''));
+  db.exec(migrationSql
+    .replace(removeMigrationControlsSql, '')
+    .replace(authWalletBindingsSql, ''));
   const insertWallet = db.prepare(`INSERT INTO wallet_sessions (
     auth_subject, wallet, expires_at_ms, updated_at_ms, wallet_revision,
     reconcile_lease_id, reconcile_lease_expires_at_ms
@@ -234,7 +243,15 @@ test('final Ops cutover preserves sessions, reveals, and retirement timestamps e
       `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
     );
   }
-  const walletBefore = queryRows(db, 'SELECT * FROM wallet_sessions ORDER BY auth_subject');
+  const walletBefore = queryRows(db, `SELECT
+    auth_subject,
+    wallet,
+    updated_at_ms,
+    wallet_revision AS revision,
+    reconcile_lease_id,
+    reconcile_lease_expires_at_ms
+    FROM wallet_sessions
+    ORDER BY auth_subject`);
   const authBefore = queryRows(db, 'SELECT * FROM anonymous_auth_sessions ORDER BY session_id');
   const revealBefore = queryRows(db, 'SELECT * FROM reveal_submissions ORDER BY box_asset_id');
   const controlBefore = queryRows(db, `SELECT singleton, paused, revision, created_at_ms, updated_at_ms, cutover_at_ms
@@ -242,7 +259,9 @@ test('final Ops cutover preserves sessions, reveals, and retirement timestamps e
   const retirementBefore = queryRows(db, `SELECT revision, created_at_ms, updated_at_ms,
     firebase_disabled_at_ms FROM anonymous_auth_control`)[0];
   db.exec(removeMigrationControlsSql);
-  assert.deepEqual(queryRows(db, 'SELECT * FROM wallet_sessions ORDER BY auth_subject'), walletBefore);
+  db.exec(authWalletBindingsSql);
+  assert.deepEqual(queryRows(db, 'SELECT * FROM auth_wallet_bindings ORDER BY auth_subject'), walletBefore);
+  assert.equal(queryRows(db, "SELECT name FROM sqlite_schema WHERE name = 'wallet_sessions'").length, 0);
   assert.deepEqual(queryRows(db, 'SELECT * FROM anonymous_auth_sessions ORDER BY session_id'), authBefore);
   assert.deepEqual(queryRows(db, 'SELECT * FROM reveal_submissions ORDER BY box_asset_id'), revealBefore);
   assert.deepEqual(queryRows(db, 'SELECT * FROM reveal_submission_storage_control'), controlBefore);
@@ -416,7 +435,7 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
       updatedAtMs: report.revealSubmissionStorage.updatedAtMs,
       cutoverAtMs: report.revealSubmissionStorage.cutoverAtMs,
     },
-    walletSessionCount: 0,
+    authWalletBindingCount: 0,
   });
   assert.ok(report.revealSubmissionStorage.updatedAtMs > 0);
   assert.ok(report.authProviderRetirement.updatedAtMs > 0);
@@ -433,7 +452,7 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
       profileAddressCount: 1,
       profileCount: 1,
       revealSubmissionCutoverCount: 1,
-      walletSessionCount: 1,
+      authWalletBindingCount: 1,
     }),
     /cutover baseline/,
   );
@@ -442,7 +461,7 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
       profileAddressCount: 0,
       profileCount: 0,
       revealSubmissionCutoverCount: 1,
-      walletSessionCount: 0,
+      authWalletBindingCount: 0,
     }),
     /reveal-submission count is below/,
   );
@@ -456,7 +475,7 @@ test('ops D1 integrity requires exact migrations, schema, quick check, and singl
       profileAddressCount: 0,
       profileCount: 0,
       revealSubmissionCutoverCount: 1,
-      walletSessionCount: 0,
+      authWalletBindingCount: 0,
     }),
     /reveal-submission count is below/,
   );

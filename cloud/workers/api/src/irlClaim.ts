@@ -76,7 +76,7 @@ import {
 } from './boundedResponse.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { D1CommerceRepository, commerceKeys } from './commerceRepository.js';
-import { resolveD1WalletSession } from './walletSessionD1.js';
+import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 
 export const IRL_CLAIM_PREPARE_PATH = '/claims/irl/prepare';
 
@@ -167,7 +167,7 @@ type IrlClaimDependencies = {
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
   getDrop: (dropId: string) => ApiDropConfig | undefined;
-  loadWalletSession: (
+  loadBoundWallet: (
     context: CommerceReadContext,
     db: D1Database | undefined,
     uid: string,
@@ -717,14 +717,14 @@ async function loadLookupTable(
   }
 }
 
-async function loadWalletSession(
+async function loadBoundWallet(
   context: CommerceReadContext,
   db: D1Database | undefined,
   uid: string,
 ): Promise<string> {
   try {
     if (!db) throw new IrlClaimError('unavailable', 'IRL claims are temporarily unavailable.');
-    const resolution = await resolveD1WalletSession(db, uid, context.signal);
+    const resolution = await resolveD1AuthWalletBinding(db, uid, context.signal);
     if ('reason' in resolution) throw new IrlClaimError('unauthenticated', 'Sign in with your wallet first.');
     return resolution.wallet;
   } catch (error) {
@@ -1050,7 +1050,7 @@ async function prepareClaim(args: {
 }): Promise<PrepareIrlClaimResponse> {
   const sessionWallet = await resolveRequestWallet(
     args.identity,
-    (uid) => args.dependencies.loadWalletSession(args.context, args.env.OPS_DB, uid),
+    (uid) => args.dependencies.loadBoundWallet(args.context, args.env.OPS_DB, uid),
   );
   const owner = canonicalWallet(args.body.owner);
   if (sessionWallet !== owner) throw new IrlClaimError('permission-denied', 'Owners only');
@@ -1163,7 +1163,7 @@ const defaultDependencies: IrlClaimDependencies = {
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
   getDrop: getApiDrop,
-  loadWalletSession,
+  loadBoundWallet,
   loadClaim,
   resolveLegacyDropIds,
   fetchOwnedAssets,
@@ -1280,7 +1280,7 @@ export const irlClaimTestHooks = {
   loadLatestBlockhash,
   loadLookupTable,
   loadOnchainState,
-  loadWalletSession,
+  loadBoundWallet,
   mintReceiptsInstruction,
   parseProof,
   rpcCall,
