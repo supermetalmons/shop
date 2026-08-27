@@ -7,6 +7,12 @@ import {
   type ShopRpcId,
   type ShopRpcMethod,
 } from '../../../../shared/solanaRpcProxy.js';
+import {
+  PUBLIC_RATE_LIMITS,
+  isAllowedPublicOrigin,
+  observePublicRateLimit,
+  publicCorsHeaders,
+} from './publicRequestPolicy.js';
 
 const MAX_RPC_REQUEST_BODY_BYTES = 32 * 1024;
 const MAX_RPC_RESPONSE_BODY_BYTES = 4 * 1024 * 1024;
@@ -20,6 +26,7 @@ export type RpcRequestMetrics = {
 };
 
 export type RpcProxyDependencies = {
+  log: (entry: Record<string, unknown>) => void;
   providerFetch: RpcProviderFetch;
   providerTimeoutMs: number;
   providerAttemptTimeoutMs: number;
@@ -69,34 +76,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function isAllowedRpcOrigin(origin: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(origin);
-  } catch {
-    return false;
-  }
-  if (url.origin !== origin || url.username || url.password || url.pathname !== '/' || url.search || url.hash) return false;
-  if (url.protocol === 'https:' && (url.hostname === 'mons.shop' || url.hostname === 'www.mons.shop')) return true;
-  if (
-    (url.protocol === 'http:' || url.protocol === 'https:') &&
-    (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
-  ) return true;
-  if (url.protocol !== 'https:') return false;
-  const match = url.hostname.match(/^([^.]+)-mons-shop\.lil-org\.workers\.dev$/);
-  return match?.[1] === 'candidate' || /^[0-9a-f]{8}$/i.test(match?.[1] || '');
-}
-
 function rpcCorsHeaders(origin: string | null): Record<string, string> {
-  const allowedOrigin = origin && isAllowedRpcOrigin(origin) ? origin : null;
+  const allowedOrigin = origin && isAllowedPublicOrigin(origin) ? origin : null;
   return {
-    ...(allowedOrigin ? { 'Access-Control-Allow-Origin': allowedOrigin } : {}),
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Solana-Client',
-    'Access-Control-Max-Age': '86400',
+    ...(allowedOrigin ? publicCorsHeaders(
+      allowedOrigin,
+      'POST, OPTIONS',
+      'Content-Type, Solana-Client',
+    ) : {}),
     'Cache-Control': 'no-store',
     'Content-Type': 'application/json; charset=utf-8',
-    'Timing-Allow-Origin': allowedOrigin || 'https://mons.shop',
     'Vary': 'Origin',
     'X-Content-Type-Options': 'nosniff',
   };
@@ -300,7 +289,7 @@ function requireRpcRequest(value: unknown) {
 
 export function handleRpcPreflight(request: Request): Response {
   const origin = request.headers.get('Origin');
-  if (!origin || !isAllowedRpcOrigin(origin)) {
+  if (!origin || !isAllowedPublicOrigin(origin)) {
     return rpcErrorResponse(origin, null, -32096, 'Origin not allowed', 403);
   }
   return new Response(null, { status: 204, headers: rpcCorsHeaders(origin) });
@@ -308,7 +297,7 @@ export function handleRpcPreflight(request: Request): Response {
 
 export function handleRpcMethodNotAllowed(request: Request): Response {
   const origin = request.headers.get('Origin');
-  if (origin && !isAllowedRpcOrigin(origin)) {
+  if (!origin || !isAllowedPublicOrigin(origin)) {
     return rpcErrorResponse(origin, null, -32096, 'Origin not allowed', 403);
   }
   return rpcErrorResponse(origin, null, -32600, 'Invalid request', 405, { Allow: 'POST, OPTIONS' });
@@ -322,7 +311,7 @@ export async function handleRpcPost(
   metrics: RpcRequestMetrics,
 ): Promise<{ response: Response; rpcMethod?: ShopRpcMethod }> {
   const origin = request.headers.get('Origin');
-  if (origin && !isAllowedRpcOrigin(origin)) {
+  if (!origin || !isAllowedPublicOrigin(origin)) {
     return { response: rpcErrorResponse(origin, null, -32096, 'Origin not allowed', 403) };
   }
   let rawBody: unknown;
@@ -355,6 +344,18 @@ export async function handleRpcPost(
   if (!requestBody) {
     return { response: rpcErrorResponse(origin, null, -32600, 'Invalid request', 400) };
   }
+  const rpcClass = requestBody.method === 'sendTransaction' ? 'write' : 'read';
+  await observePublicRateLimit({
+    binding: rpcClass === 'write'
+      ? env.PUBLIC_RPC_WRITE_RATE_LIMITER
+      : env.PUBLIC_RPC_READ_RATE_LIMITER,
+    keyScope: `${cluster}:${rpcClass}`,
+    limit: rpcClass === 'write' ? PUBLIC_RATE_LIMITS.rpcWrite : PUBLIC_RATE_LIMITS.rpcRead,
+    log: dependencies.log,
+    request,
+    route: `/rpc/${cluster}`,
+    rpcClass,
+  });
   const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
   if (!apiKey) {
     return {
@@ -386,4 +387,9 @@ export async function handleRpcPost(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export function handleRpcInternalError(request: Request): Response {
+  const origin = request.headers.get('Origin');
+  return rpcErrorResponse(origin, null, -32603, 'Internal error', 500);
 }

@@ -62,6 +62,13 @@ import {
   readD1PackStatus,
   readPackStatusMetadata,
 } from './d1PackStatus.js';
+import {
+  PUBLIC_RATE_LIMITS,
+  applyPublicCors,
+  observePublicRateLimit,
+  publicCorsHeaders,
+  publicRequestOrigin,
+} from './publicRequestPolicy.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -209,7 +216,6 @@ export type WorkerDependencies = RpcProxyDependencies & {
   inventoryMaxCursorPages: number;
   inventoryMaxProviderCalls: number;
   inventoryMaxResponseBodyBytes: number;
-  log: (entry: Record<string, unknown>) => void;
   resendFetch: ProviderFetch;
   resendTimeoutMs: number;
   validateInventoryResponse: typeof isExactShopInventoryResponse;
@@ -245,6 +251,40 @@ export function jsonResponse(body: unknown, status: number, headers?: HeadersIni
     status,
     headers: { ...BASE_HEADERS, ...headers },
   });
+}
+
+function publicOriginDeniedResponse(): Response {
+  return new Response(JSON.stringify({ ok: false, error: 'invalid-request' }), {
+    status: 403,
+    headers: {
+      'Cache-Control': 'no-store',
+      'Content-Type': 'application/json; charset=utf-8',
+      'Vary': 'Origin',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
+
+export function handlePublicPreflight(request: Request): Response {
+  const origin = publicRequestOrigin(request);
+  if (!origin) return publicOriginDeniedResponse();
+  return new Response(null, {
+    status: 204,
+    headers: {
+      ...publicCorsHeaders(origin, 'POST, OPTIONS'),
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+export function handlePublicMethodNotAllowed(request: Request): Response {
+  const origin = publicRequestOrigin(request);
+  if (!origin) return publicOriginDeniedResponse();
+  return applyPublicCors(
+    jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'POST, OPTIONS' }),
+    origin,
+    'POST, OPTIONS',
+  );
 }
 
 function isExistingResendContactError(value: unknown): boolean {
@@ -1092,6 +1132,12 @@ export async function handlePost(
   dependencies: WorkerDependencies,
   metrics: WorkerRequestMetrics,
 ): Promise<{ response: Response; includeDevnet: boolean }> {
+  const origin = publicRequestOrigin(request);
+  if (!origin) return { response: publicOriginDeniedResponse(), includeDevnet: false };
+  const result = (response: Response, includeDevnet: boolean) => ({
+    response: applyPublicCors(response, origin, 'POST, OPTIONS'),
+    includeDevnet,
+  });
   let parsedRequest:
     | { kind: 'inventory'; body: ShopInventoryRequest }
     | { kind: 'pending-open-boxes'; body: ShopPendingOpenBoxesRequest };
@@ -1100,15 +1146,23 @@ export async function handlePost(
       ? { kind: 'inventory', body: await parseShopRequestBody(request, isExactShopInventoryRequest) }
       : { kind: 'pending-open-boxes', body: await parseShopRequestBody(request, isExactShopPendingOpenBoxesRequest) };
   } catch {
-    return { response: jsonResponse({ ok: false, error: 'invalid-request' }, 400), includeDevnet: false };
+    return result(jsonResponse({ ok: false, error: 'invalid-request' }, 400), false);
   }
   const requestBody = parsedRequest.body;
+  await observePublicRateLimit({
+    binding: env.PUBLIC_SHOP_RATE_LIMITER,
+    keyScope: pathname,
+    limit: PUBLIC_RATE_LIMITS.shop,
+    log: dependencies.log,
+    request,
+    route: pathname,
+  });
   const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
   if (!apiKey) {
-    return {
-      response: jsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
-      includeDevnet: requestBody.includeDevnet === true,
-    };
+    return result(
+      jsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
+      requestBody.includeDevnet === true,
+    );
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), dependencies.providerTimeoutMs);
@@ -1136,20 +1190,20 @@ export async function handlePost(
       pathname === '/inventory' &&
       utf8ByteLength(text) > dependencies.inventoryMaxResponseBodyBytes
     ) throw new ProviderFailure('limit');
-    return {
-      response: new Response(text, { status: 200, headers: BASE_HEADERS }),
-      includeDevnet: requestBody.includeDevnet === true,
-    };
+    return result(
+      new Response(text, { status: 200, headers: BASE_HEADERS }),
+      requestBody.includeDevnet === true,
+    );
   } catch (error) {
     controller.abort();
     const kind = error instanceof ProviderFailure ? error.kind : 'unavailable';
-    return {
-      response: jsonResponse(
+    return result(
+      jsonResponse(
         { ok: false, error: kind === 'timeout' || kind === 'deadline' ? 'provider-timeout' : 'provider-unavailable' },
         kind === 'timeout' || kind === 'deadline' ? 504 : 502,
       ),
-      includeDevnet: requestBody.includeDevnet === true,
-    };
+      requestBody.includeDevnet === true,
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -1161,6 +1215,9 @@ export async function handleNotificationSubscription(
   dependencies: WorkerDependencies,
   metrics: WorkerRequestMetrics,
 ): Promise<Response> {
+  const origin = publicRequestOrigin(request);
+  if (!origin) return publicOriginDeniedResponse();
+  const respond = (response: Response) => applyPublicCors(response, origin, 'POST, OPTIONS');
   let rawEmail: string;
   try {
     rawEmail = (await parseJsonRequestBody(
@@ -1168,15 +1225,24 @@ export async function handleNotificationSubscription(
       isExactSubscribeToNotificationsRequest,
     )).email;
   } catch {
-    return jsonResponse({ ok: false, error: 'invalid-request' }, 400);
+    return respond(jsonResponse({ ok: false, error: 'invalid-request' }, 400));
   }
   const email = normalizeNotificationEmailRecipient(rawEmail);
-  if (!email) return jsonResponse({ ok: false, error: 'invalid-email' }, 400);
+  if (!email) return respond(jsonResponse({ ok: false, error: 'invalid-email' }, 400));
+
+  await observePublicRateLimit({
+    binding: env.PUBLIC_NOTIFICATION_RATE_LIMITER,
+    keyScope: 'notification-subscription',
+    limit: PUBLIC_RATE_LIMITS.notification,
+    log: dependencies.log,
+    request,
+    route: '/notifications/subscribe',
+  });
 
   const apiKey = typeof env.RESEND_CONTACTS_API_KEY === 'string'
     ? env.RESEND_CONTACTS_API_KEY.trim()
     : '';
-  if (!apiKey) return jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+  if (!apiKey) return respond(jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
 
   const controller = new AbortController();
   const timeout = setTimeout(
@@ -1197,11 +1263,11 @@ export async function handleNotificationSubscription(
     });
     if (providerResponse.status === 409) {
       await cancelResponseBody(providerResponse);
-      return jsonResponse({ subscribed: true }, 200);
+      return respond(jsonResponse({ subscribed: true }, 200));
     }
     if (!providerResponse.body) {
       await cancelResponseBody(providerResponse);
-      return jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+      return respond(jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
     }
     let payload: unknown;
     try {
@@ -1213,14 +1279,14 @@ export async function handleNotificationSubscription(
         controller.signal,
       ));
     } catch {
-      return controller.signal.aborted
+      return respond(controller.signal.aborted
         ? jsonResponse({ ok: false, error: 'provider-timeout' }, 504)
-        : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+        : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
     }
     if (!providerResponse.ok) {
-      return isExistingResendContactError(payload)
+      return respond(isExistingResendContactError(payload)
         ? jsonResponse({ subscribed: true }, 200)
-        : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+        : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
     }
     if (
       typeof payload !== 'object' ||
@@ -1229,13 +1295,13 @@ export async function handleNotificationSubscription(
       typeof (payload as Record<string, unknown>).id !== 'string' ||
       !(payload as Record<string, unknown>).id
     ) {
-      return jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+      return respond(jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
     }
-    return jsonResponse({ subscribed: true }, 200);
+    return respond(jsonResponse({ subscribed: true }, 200));
   } catch {
-    return controller.signal.aborted
+    return respond(controller.signal.aborted
       ? jsonResponse({ ok: false, error: 'provider-timeout' }, 504)
-      : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502);
+      : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
   } finally {
     clearTimeout(timeout);
     metrics.providerDurationMs += performance.now() - startedAt;

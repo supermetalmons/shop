@@ -168,6 +168,10 @@ const env: Env = {
   STAFF_AUTH_CHALLENGE_RATE_LIMITER: { limit: async () => ({ success: true }) },
   STAFF_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },
   ANONYMOUS_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  PUBLIC_RPC_READ_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  PUBLIC_RPC_WRITE_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  PUBLIC_SHOP_RATE_LIMITER: { limit: async () => ({ success: true }) },
+  PUBLIC_NOTIFICATION_RATE_LIMITER: { limit: async () => ({ success: true }) },
   NOTIFICATION_EMAIL_QUEUE: {
     send: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
     sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
@@ -203,6 +207,7 @@ const response = await handleRequest(new Request('https://api.mons.shop/inventor
   headers: {
     'CF-Connecting-IP': '203.0.113.10',
     'Content-Type': 'application/json',
+    Origin: 'https://mons.shop',
   },
   body: JSON.stringify({ owner, includeDevnet: true }),
 }), env, {

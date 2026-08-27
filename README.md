@@ -356,6 +356,10 @@ node_modules/.bin/wrangler tail mons-shop-api --format json
 Queue processing is idempotent. Replay dead-letter jobs only after fixing the
 underlying failure and identifying the affected jobs.
 
+Inventory, pending-box, notification-subscription, and RPC browser requests are
+accepted only from `mons.shop`, `www.mons.shop`, localhost, and `127.0.0.1`.
+Candidate and version-preview frontend origins are intentionally unsupported.
+
 ## Operations
 
 The retained tools are intentionally narrow:

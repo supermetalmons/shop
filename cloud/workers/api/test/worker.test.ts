@@ -37,14 +37,29 @@ const SIGNATURE = bs58.encode(new Uint8Array(64).fill(1));
 const TRANSACTION = Buffer.from([1, 2, 3]).toString('base64');
 const allowRateLimit = { limit: async () => ({ success: true }) } satisfies RateLimit;
 
+function rateLimiter(limit: RateLimit['limit']): RateLimit {
+  return { limit };
+}
+
+function d1Database(prepare: D1Database['prepare']): D1Database {
+  const database = {} as D1Database;
+  database.prepare = prepare;
+  return database;
+}
+
 function env(options: {
   apiKey?: string;
+  commerceDb?: D1Database;
   commerceState?: 'paused' | 'd1';
   dataDb?: D1Database;
   opsDb?: D1Database;
   resendContactsApiKey?: string;
   notificationEnqueueSecret?: string;
   notificationQueue?: Queue;
+  publicNotificationRateLimiter?: RateLimit;
+  publicRpcReadRateLimiter?: RateLimit;
+  publicRpcWriteRateLimiter?: RateLimit;
+  publicShopRateLimiter?: RateLimit;
 } = {}): Env {
   const notificationQueue: Queue = options.notificationQueue || {
     send: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
@@ -54,20 +69,22 @@ function env(options: {
   return {
     DATA_DB: options.dataDb || {} as D1Database,
     OPS_DB: options.opsDb || {} as D1Database,
-    COMMERCE_DB: {
-      prepare() {
-        return {
-          first: async () => ({
-            authority_state: options.commerceState || 'd1',
-            revision: 1,
-            documents_revision: 0,
-          }),
-        } as D1PreparedStatement;
-      },
-    } as unknown as D1Database,
+    COMMERCE_DB: options.commerceDb || d1Database(function prepare() {
+      return {
+        first: async () => ({
+          authority_state: options.commerceState || 'd1',
+          revision: 1,
+          documents_revision: 0,
+        }),
+      } as D1PreparedStatement;
+    }),
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
+    PUBLIC_RPC_READ_RATE_LIMITER: options.publicRpcReadRateLimiter || allowRateLimit,
+    PUBLIC_RPC_WRITE_RATE_LIMITER: options.publicRpcWriteRateLimiter || allowRateLimit,
+    PUBLIC_SHOP_RATE_LIMITER: options.publicShopRateLimiter || allowRateLimit,
+    PUBLIC_NOTIFICATION_RATE_LIMITER: options.publicNotificationRateLimiter || allowRateLimit,
     NOTIFICATION_EMAIL_QUEUE: notificationQueue,
     REVEAL_BACKGROUND_QUEUE: notificationQueue,
     STRIPE_FULFILLMENT_QUEUE: notificationQueue,
@@ -229,9 +246,19 @@ async function notificationEnqueueRequest(
 }
 
 function request(pathname: string, body: unknown = { owner: OWNER }, headers: Record<string, string> = {}): Request {
+  const publicOrigin: Record<string, string> = pathname === '/inventory' ||
+    pathname === '/pending-open-boxes' ||
+    pathname === '/notifications/subscribe'
+    ? { Origin: 'https://mons.shop' }
+    : {};
   return new Request(`https://api.mons.shop${pathname}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.8', ...headers },
+    headers: {
+      'Content-Type': 'application/json',
+      'CF-Connecting-IP': '203.0.113.8',
+      ...publicOrigin,
+      ...headers,
+    },
     body: JSON.stringify(body),
   });
 }
@@ -1130,19 +1157,31 @@ test('notification subscription validates exact bounded JSON before calling Rese
   for (const invalidRequest of [
     new Request('https://api.mons.shop/notifications/subscribe', {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain' },
+      headers: {
+        'Content-Type': 'text/plain',
+        'CF-Connecting-IP': '203.0.113.8',
+        Origin: 'https://mons.shop',
+      },
       body: JSON.stringify({ email: 'buyer@example.com' }),
     }),
     request('/notifications/subscribe', { email: 'buyer@example.com', extra: true }),
     request('/notifications/subscribe', { email: 42 }),
     new Request('https://api.mons.shop/notifications/subscribe', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '203.0.113.8',
+        Origin: 'https://mons.shop',
+      },
       body: '{',
     }),
     new Request('https://api.mons.shop/notifications/subscribe', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '203.0.113.8',
+        Origin: 'https://mons.shop',
+      },
       body: JSON.stringify({ email: `${'a'.repeat(1024)}@example.com` }),
     }),
   ]) {
@@ -1355,6 +1394,26 @@ test('production config has exact authentication rate limits', () => {
       namespace_id: '1874210346',
       simple: { limit: 20, period: 60 },
     },
+    {
+      name: 'PUBLIC_RPC_READ_RATE_LIMITER',
+      namespace_id: '798946091',
+      simple: { limit: 5000, period: 60 },
+    },
+    {
+      name: 'PUBLIC_RPC_WRITE_RATE_LIMITER',
+      namespace_id: '2126420685',
+      simple: { limit: 500, period: 60 },
+    },
+    {
+      name: 'PUBLIC_SHOP_RATE_LIMITER',
+      namespace_id: '1950264148',
+      simple: { limit: 600, period: 60 },
+    },
+    {
+      name: 'PUBLIC_NOTIFICATION_RATE_LIMITER',
+      namespace_id: '1844980764',
+      simple: { limit: 60, period: 60 },
+    },
   ]);
 });
 
@@ -1366,13 +1425,13 @@ test('RPC routing applies its restricted CORS policy and HTTP-only contract', as
   const allowed = await handleRequest(new Request('https://api.mons.shop/rpc/mainnet-beta', {
     method: 'OPTIONS',
     headers: {
-      Origin: 'https://candidate-mons-shop.lil-org.workers.dev',
+      Origin: 'https://www.mons.shop',
       'Access-Control-Request-Method': 'POST',
       'Access-Control-Request-Headers': 'content-type,solana-client',
     },
   }), env(), quietDependencies(providerFetch));
   assert.equal(allowed.status, 204);
-  assert.equal(allowed.headers.get('access-control-allow-origin'), 'https://candidate-mons-shop.lil-org.workers.dev');
+  assert.equal(allowed.headers.get('access-control-allow-origin'), 'https://www.mons.shop');
   assert.equal(allowed.headers.get('access-control-allow-headers'), 'Content-Type, Solana-Client');
   assert.equal(allowed.headers.get('vary'), 'Origin');
 
@@ -1386,7 +1445,7 @@ test('RPC routing applies its restricted CORS policy and HTTP-only contract', as
     method: 'OPTIONS',
     headers: { Origin: 'https://deadbeef-mons-shop.lil-org.workers.dev' },
   }), env(), quietDependencies(providerFetch));
-  assert.equal(versionPreview.status, 204);
+  assert.equal(versionPreview.status, 403);
 
   const denied = await handleRequest(new Request('https://api.mons.shop/rpc/mainnet-beta', {
     method: 'OPTIONS',
@@ -1438,7 +1497,7 @@ test('RPC proxy accepts only the exact browser method surface and selects the re
     headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.8' },
     body: JSON.stringify(rpcBody('getLatestBlockhash', [{ commitment: 'confirmed' }], 'cli')),
   });
-  assert.equal((await handleRequest(noOrigin, env(), quietDependencies(providerFetch))).status, 200);
+  assert.equal((await handleRequest(noOrigin, env(), quietDependencies(providerFetch))).status, 403);
 });
 
 test('@solana/web3.js emits request shapes accepted by the exact RPC contract', async () => {
@@ -1591,7 +1650,12 @@ test('RPC requests do not depend on Cloudflare connecting IP metadata', async ()
     headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
     body: JSON.stringify(body),
   });
-  assert.equal((await handleRequest(noIp, env(), quietDependencies(providerFetch))).status, 200);
+  const noIpLogs: Record<string, unknown>[] = [];
+  assert.equal((await handleRequest(noIp, env(), {
+    ...quietDependencies(providerFetch),
+    log: (entry) => noIpLogs.push(entry),
+  })).status, 200);
+  assert.equal(noIpLogs.some((entry) => entry.event === 'public_rate_limit_key_missing'), true);
 
   let called = false;
   const missingSecret = await handleRequest(
@@ -1839,14 +1903,23 @@ test('requests reject extra keys, invalid addresses, and bodies over 1 KiB', asy
   }
   const oversized = new Request('https://api.mons.shop/inventory', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Content-Length': '2048' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': '2048',
+      'CF-Connecting-IP': '203.0.113.8',
+      Origin: 'https://mons.shop',
+    },
     body: JSON.stringify({ owner: OWNER }),
   });
   const response = await handleRequest(oversized, env(), quietDependencies(providerFetch));
   assert.equal(response.status, 400);
   const wrongType = new Request('https://api.mons.shop/inventory', {
     method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },
+    headers: {
+      'Content-Type': 'text/plain',
+      'CF-Connecting-IP': '203.0.113.8',
+      Origin: 'https://mons.shop',
+    },
     body: JSON.stringify({ owner: OWNER }),
   });
   assert.equal((await handleRequest(wrongType, env(), quietDependencies(providerFetch))).status, 400);

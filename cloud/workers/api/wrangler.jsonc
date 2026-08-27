@@ -56,6 +56,38 @@
 				"limit": 20,
 				"period": 60
 			}
+		},
+		{
+			"name": "PUBLIC_RPC_READ_RATE_LIMITER",
+			"namespace_id": "798946091",
+			"simple": {
+				"limit": 5000,
+				"period": 60
+			}
+		},
+		{
+			"name": "PUBLIC_RPC_WRITE_RATE_LIMITER",
+			"namespace_id": "2126420685",
+			"simple": {
+				"limit": 500,
+				"period": 60
+			}
+		},
+		{
+			"name": "PUBLIC_SHOP_RATE_LIMITER",
+			"namespace_id": "1950264148",
+			"simple": {
+				"limit": 600,
+				"period": 60
+			}
+		},
+		{
+			"name": "PUBLIC_NOTIFICATION_RATE_LIMITER",
+			"namespace_id": "1844980764",
+			"simple": {
+				"limit": 60,
+				"period": 60
+			}
 		}
 	],
 	"routes": [
