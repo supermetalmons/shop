@@ -299,8 +299,9 @@ canonical fulfillment origin address.
 
 `mons-shop-commerce` is the authoritative commerce document database. Its
 schema starts at
-`cloud/workers/api/commerce-migrations/0001_current_schema.sql`; append
-`0002_<description>.sql` for the next change. The Worker preserves the existing
+`cloud/workers/api/commerce-migrations/0001_current_schema.sql`; migration
+`0002_authority_control_lease.sql` adds operational serialization, so append
+`0003_<description>.sql` for the next change. The Worker preserves the existing
 commerce API and transaction behavior through the D1 document-store adapter.
 
 Inspect or pause the authoritative database with:
@@ -320,6 +321,9 @@ authority before resuming those Queues. Queue names and the account ID are read
 from `cloud/workers/api/wrangler.jsonc`; the token is never printed.
 
 Authority mutations still require the current revision and explicit `--write`.
+Mutation and repair commands are serialized by a renewable 30-minute D1 lease;
+an active lease rejects concurrent commands. If a process exits before release,
+retry after the lease expires.
 If an operation is interrupted, rerun the same command with the same expected
 revision. The coordinator repairs an already-completed authority transition and
 only changes Queue states that still differ from the requested state. A partial

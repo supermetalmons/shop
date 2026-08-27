@@ -10,6 +10,8 @@ const ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/i;
 const QUEUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const QUEUE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const CLOUDFLARE_QUEUE_REQUEST_TIMEOUT_MS = 30_000;
+const CLOUDFLARE_QUEUE_INVENTORY_MAX_PAGES = 5;
+const CLOUDFLARE_QUEUE_MAINTENANCE_MAX_QUEUES = 8;
 
 type CloudflareEnvelope = {
   result?: unknown;
@@ -77,6 +79,9 @@ export function parseCloudflareQueueMaintenanceConfig(
   if (queueNames.length === 0) {
     return fail('Cloudflare Worker configuration contains no Queue producer/consumer pairs.');
   }
+  if (queueNames.length > CLOUDFLARE_QUEUE_MAINTENANCE_MAX_QUEUES) {
+    return fail('Cloudflare Worker configuration contains too many Queue producer/consumer pairs.');
+  }
   return { accountId: value.account_id, queueNames };
 }
 
@@ -119,7 +124,7 @@ function resultInfo(value: unknown, expectedPage: number): number {
     page !== expectedPage ||
     !Number.isSafeInteger(totalPages) ||
     totalPages < expectedPage ||
-    totalPages > 1000
+    totalPages > CLOUDFLARE_QUEUE_INVENTORY_MAX_PAGES
   ) return fail('Cloudflare Queue inventory pagination is invalid.');
   return totalPages;
 }

@@ -7,10 +7,15 @@ const schemaSql = readFileSync(
   new URL('../cloud/workers/api/commerce-migrations/0001_current_schema.sql', import.meta.url),
   'utf8',
 );
+const leaseMigrationSql = readFileSync(
+  new URL('../cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', import.meta.url),
+  'utf8',
+);
 
 function database(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
   db.exec(schemaSql);
+  db.exec(leaseMigrationSql);
   return db;
 }
 
@@ -22,7 +27,7 @@ function planDetails(db: DatabaseSync, sql: string): string {
   return db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((row) => String(row.detail)).join('\n');
 }
 
-test('Commerce baseline creates its exact current authority and guard schema', () => {
+test('Commerce migrations create the exact current authority and guard schema', () => {
   const db = database();
   try {
     assert.deepEqual({ ...db.prepare('SELECT * FROM commerce_authority_control').get()! }, {
@@ -39,6 +44,7 @@ test('Commerce baseline creates its exact current authority and guard schema', (
         ORDER BY name`).all().map((row) => String(row.name)),
       [
         'commerce_authority_control',
+        'commerce_authority_control_lease',
         'commerce_commit_guards',
         'commerce_documents',
         'commerce_wipe_guards',
@@ -86,6 +92,29 @@ test('Commerce authority pause and resume remain revision guarded', () => {
     assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
       authority_state = 'other', revision = 4, updated_at_ms = 3
       WHERE singleton = 1`));
+  } finally {
+    db.close();
+  }
+});
+
+test('Commerce authority coordination lease migration is strict and singleton', () => {
+  const db = database();
+  try {
+    assert.deepEqual(
+      db.prepare("SELECT name FROM pragma_table_info('commerce_authority_control_lease') ORDER BY cid")
+        .all().map((row) => String(row.name)),
+      ['singleton', 'lease_token', 'acquired_at_ms', 'expires_at_ms'],
+    );
+    assert.equal(db.prepare(`SELECT strict FROM pragma_table_list
+      WHERE schema = 'main' AND name = 'commerce_authority_control_lease'`).get()!.strict, 1);
+    db.prepare(`INSERT INTO commerce_authority_control_lease
+      (singleton, lease_token, acquired_at_ms, expires_at_ms) VALUES (1, ?, 10, 20)`)
+      .run('123e4567-e89b-42d3-a456-426614174000');
+    assert.throws(() => db.prepare(`INSERT INTO commerce_authority_control_lease
+      (singleton, lease_token, acquired_at_ms, expires_at_ms) VALUES (1, ?, 20, 30)`)
+      .run('223e4567-e89b-42d3-a456-426614174000'));
+    assert.throws(() => db.prepare(`UPDATE commerce_authority_control_lease
+      SET expires_at_ms = acquired_at_ms`).run());
   } finally {
     db.close();
   }

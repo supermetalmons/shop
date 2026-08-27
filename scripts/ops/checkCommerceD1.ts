@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { assertCanonicalCommerceIdentity } from '../shared/commerceIdentityValidation.ts';
 import {
@@ -9,6 +10,9 @@ import {
 function fail(message: string): never {
   throw new Error(message);
 }
+
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const LEASE_SCHEMA_FINGERPRINT = 'b8e9609fcf244967ef15c64b437e49cf400930cd46579ffe4c7a5c8b0100fe81';
 
 function requireIndex(plan: Record<string, unknown>[], indexName: string): void {
   if (!plan.some((row) => String(row.detail || '').includes(indexName))) {
@@ -22,7 +26,11 @@ export function checkCommerceD1(): Record<string, unknown> {
   if (queryRemoteCommerceD1('PRAGMA foreign_key_check').length !== 0) fail('Commerce D1 foreign-key check failed.');
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
-  if (migrations.length !== 1 || migrations[0].name !== '0001_current_schema.sql') {
+  if (
+    migrations.length !== 2 ||
+    migrations[0].name !== '0001_current_schema.sql' ||
+    migrations[1].name !== '0002_authority_control_lease.sql'
+  ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
 
@@ -33,6 +41,7 @@ export function checkCommerceD1(): Record<string, unknown> {
     ORDER BY name`);
   const requiredTables = [
     'commerce_authority_control',
+    'commerce_authority_control_lease',
     'commerce_commit_guards',
     'commerce_documents',
     'commerce_wipe_guards',
@@ -81,10 +90,26 @@ export function checkCommerceD1(): Record<string, unknown> {
   const authorityColumns = queryRemoteCommerceD1(
     "SELECT name FROM pragma_table_info('commerce_authority_control') ORDER BY cid",
   ).map((row) => String(row.name));
+  const leaseColumns = queryRemoteCommerceD1(
+    "SELECT name FROM pragma_table_info('commerce_authority_control_lease') ORDER BY cid",
+  ).map((row) => String(row.name));
+  const leaseSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'table' AND name = 'commerce_authority_control_lease'`);
+  const leaseFingerprint = leaseSchema.length === 1
+    ? createHash('sha256').update(String(leaseSchema[0].sql || '').replace(/\s+/g, ' ').trim()).digest('hex')
+    : '';
+  const leaseRows = queryRemoteCommerceD1('SELECT lease_token, acquired_at_ms, expires_at_ms FROM commerce_authority_control_lease');
+  if (leaseRows.length > 1 || leaseRows.some((row) => {
+    const acquiredAtMs = safeInteger(row.acquired_at_ms, 'Commerce authority lease acquisition');
+    const expiresAtMs = safeInteger(row.expires_at_ms, 'Commerce authority lease expiry');
+    return !UUID_V4_PATTERN.test(String(row.lease_token || '')) || expiresAtMs <= acquiredAtMs;
+  })) fail('Commerce D1 authority coordination lease is invalid.');
   const identityState = queryRemoteCommerceD1(`SELECT COUNT(*) AS root_uid_count
     FROM commerce_documents WHERE json_type(document_json, '$.uid') IS NOT NULL`);
   if (
     authorityColumns.join(',') !== 'singleton,authority_state,revision,documents_revision,paused_at_ms,updated_at_ms' ||
+    leaseColumns.join(',') !== 'singleton,lease_token,acquired_at_ms,expires_at_ms' ||
+    leaseFingerprint !== LEASE_SCHEMA_FINGERPRINT ||
     identityState.length !== 1 ||
     safeInteger(identityState[0].root_uid_count, 'Commerce root UID count') !== 0
   ) fail('Commerce D1 contains noncanonical schema or identity state.');

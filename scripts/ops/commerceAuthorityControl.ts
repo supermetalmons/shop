@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import {
   queryRemoteCommerceD1,
   safeInteger,
+  sqlString,
 } from '../shared/commerceD1Maintenance.ts';
 import {
   createCloudflareQueueMaintenanceClient,
@@ -47,12 +48,23 @@ type CommerceAuthorityQuery = (
 
 type CommerceAuthorityControlDependencies = {
   apiToken: string;
+  leaseToken: () => string;
   nowMs: () => number;
   providerFetch: typeof fetch;
   queryCommerceD1: CommerceAuthorityQuery;
   queueClient?: CloudflareQueueMaintenanceClient;
   queueConfig: CloudflareQueueMaintenanceConfig;
 };
+
+type CommerceAuthorityLease = {
+  acquiredAtMs: number;
+  expiresAtMs: number;
+  token: string;
+};
+
+const COMMERCE_AUTHORITY_LEASE_TTL_MS = 30 * 60_000;
+const D1_NOW_MS_SQL = "(CAST(strftime('%s', 'now') AS INTEGER) * 1000)";
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 class AuthorityTransitionError extends Error {
   constructor(message: string, readonly confirmedUnchanged: boolean) {
@@ -99,6 +111,139 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
+function leaseToken(value: unknown): string {
+  const token = typeof value === 'string' ? value.trim() : '';
+  if (!UUID_V4_PATTERN.test(token)) return fail('Commerce authority coordination lease token is invalid.');
+  return token.toLowerCase();
+}
+
+function parseLeaseRow(value: unknown, expectedToken: string): CommerceAuthorityLease {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return fail('Commerce authority coordination lease response is invalid.');
+  }
+  const row = value as Record<string, unknown>;
+  const token = leaseToken(row.lease_token);
+  const acquiredAtMs = safeInteger(row.acquired_at_ms, 'Commerce authority coordination lease acquisition');
+  const expiresAtMs = safeInteger(row.expires_at_ms, 'Commerce authority coordination lease expiry');
+  if (token !== expectedToken || expiresAtMs <= acquiredAtMs) {
+    return fail('Commerce authority coordination lease response is invalid.');
+  }
+  return { acquiredAtMs, expiresAtMs, token };
+}
+
+async function acquireCommerceAuthorityLease(
+  queryCommerceD1: CommerceAuthorityQuery,
+  token: string,
+): Promise<CommerceAuthorityLease> {
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await queryCommerceD1(`INSERT INTO commerce_authority_control_lease (
+        singleton, lease_token, acquired_at_ms, expires_at_ms
+      ) VALUES (
+        1,
+        ${sqlString(token)},
+        ${D1_NOW_MS_SQL},
+        ${D1_NOW_MS_SQL} + ${COMMERCE_AUTHORITY_LEASE_TTL_MS}
+      )
+      ON CONFLICT(singleton) DO UPDATE SET
+        lease_token = excluded.lease_token,
+        acquired_at_ms = excluded.acquired_at_ms,
+        expires_at_ms = excluded.expires_at_ms
+      WHERE commerce_authority_control_lease.expires_at_ms <= ${D1_NOW_MS_SQL}
+      RETURNING lease_token, acquired_at_ms, expires_at_ms`);
+  } catch {
+    return fail('Commerce authority coordination lease could not be acquired.');
+  }
+  if (rows.length === 0) return fail('Another commerce authority control operation is already running.');
+  if (rows.length !== 1) return fail('Commerce authority coordination lease response is invalid.');
+  return parseLeaseRow(rows[0], token);
+}
+
+async function renewCommerceAuthorityLease(
+  queryCommerceD1: CommerceAuthorityQuery,
+  lease: CommerceAuthorityLease,
+): Promise<CommerceAuthorityLease> {
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await queryCommerceD1(`UPDATE commerce_authority_control_lease
+      SET expires_at_ms = ${D1_NOW_MS_SQL} + ${COMMERCE_AUTHORITY_LEASE_TTL_MS}
+      WHERE singleton = 1 AND lease_token = ${sqlString(lease.token)}
+        AND expires_at_ms > ${D1_NOW_MS_SQL}
+      RETURNING lease_token, acquired_at_ms, expires_at_ms`);
+  } catch {
+    return fail('Commerce authority coordination lease could not be renewed.');
+  }
+  if (rows.length !== 1) return fail('Commerce authority coordination lease ownership was lost.');
+  return parseLeaseRow(rows[0], lease.token);
+}
+
+async function releaseCommerceAuthorityLease(
+  queryCommerceD1: CommerceAuthorityQuery,
+  lease: CommerceAuthorityLease,
+): Promise<void> {
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await queryCommerceD1(`DELETE FROM commerce_authority_control_lease
+      WHERE singleton = 1 AND lease_token = ${sqlString(lease.token)}
+      RETURNING lease_token`);
+  } catch {
+    return fail('Commerce authority coordination lease could not be released.');
+  }
+  if (rows.length !== 1 || leaseToken(rows[0].lease_token) !== lease.token) {
+    return fail('Commerce authority coordination lease ownership was lost before release.');
+  }
+}
+
+async function withCommerceAuthorityLease(args: {
+  leaseToken: string;
+  queryCommerceD1: CommerceAuthorityQuery;
+  run: (renew: () => Promise<void>) => Promise<CommerceAuthorityControlResult>;
+}): Promise<CommerceAuthorityControlResult> {
+  let lease = await acquireCommerceAuthorityLease(
+    args.queryCommerceD1,
+    args.leaseToken,
+  );
+  const renew = async () => {
+    lease = await renewCommerceAuthorityLease(args.queryCommerceD1, lease);
+  };
+  let operationResult: CommerceAuthorityControlResult | undefined;
+  let operationError: unknown;
+  try {
+    operationResult = await args.run(renew);
+  } catch (error) {
+    operationError = error;
+  }
+  let releaseError: unknown;
+  try {
+    await releaseCommerceAuthorityLease(args.queryCommerceD1, lease);
+  } catch (error) {
+    releaseError = error;
+  }
+  if (operationError !== undefined) {
+    if (releaseError === undefined) throw operationError;
+    if (operationError instanceof CommerceAuthorityCoordinationError) {
+      throw new CommerceAuthorityCoordinationError(
+        `${operationError.message} Coordination lease release could not be confirmed.`,
+        operationError.result,
+        [...operationError.errors, releaseError],
+      );
+    }
+    throw new AggregateError(
+      [operationError, releaseError],
+      'Commerce authority control failed and its coordination lease release could not be confirmed.',
+    );
+  }
+  if (!operationResult) return fail('Commerce authority control returned no result.');
+  if (releaseError !== undefined) {
+    throw new CommerceAuthorityCoordinationError(
+      'Commerce authority coordination completed, but its lease release could not be confirmed.',
+      operationResult,
+      [releaseError],
+    );
+  }
+  return operationResult;
+}
+
 export function parseCommerceAuthorityControlArgs(argv: string[]): Args {
   const command = argv[0];
   if (command !== 'status' && command !== 'paused' && command !== 'd1') {
@@ -141,18 +286,26 @@ export function buildCommerceAuthorityMutationSql(
   command: Exclude<Command, 'status'>,
   expectedRevision: number,
   nowMs: number,
+  coordinationLeaseToken: string,
 ): string {
+  const leaseGuard = `AND EXISTS (
+        SELECT 1 FROM commerce_authority_control_lease
+        WHERE singleton = 1 AND lease_token = ${sqlString(leaseToken(coordinationLeaseToken))}
+          AND expires_at_ms > ${D1_NOW_MS_SQL}
+      )`;
   if (command === 'paused') {
     return `UPDATE commerce_authority_control
       SET authority_state = 'paused', revision = revision + 1,
         paused_at_ms = ${nowMs}, updated_at_ms = ${nowMs}
       WHERE singleton = 1 AND authority_state = 'd1' AND revision = ${expectedRevision}
+        ${leaseGuard}
       RETURNING *`;
   }
   return `UPDATE commerce_authority_control
     SET authority_state = 'd1', revision = revision + 1,
       paused_at_ms = NULL, updated_at_ms = ${nowMs}
     WHERE singleton = 1 AND authority_state = 'paused' AND revision = ${expectedRevision}
+      ${leaseGuard}
       RETURNING *`;
 }
 
@@ -206,6 +359,7 @@ async function transitionAuthority(args: {
   authority: CommerceAuthority;
   command: Exclude<Command, 'status'>;
   expectedRevision: number;
+  leaseToken: string;
   nowMs: number;
   queryCommerceD1: CommerceAuthorityQuery;
 }): Promise<{ authority: CommerceAuthority; changed: boolean }> {
@@ -214,6 +368,7 @@ async function transitionAuthority(args: {
       args.command,
       args.expectedRevision,
       args.nowMs,
+      args.leaseToken,
     ));
     if (rows.length !== 1) throw new Error('transition rejected');
     const authority = parseAuthorityRow(rows[0]);
@@ -285,6 +440,26 @@ function result(args: {
   };
 }
 
+type QueueMutationGuard = (queues: readonly CloudflareQueueDeliveryState[]) => Promise<void>;
+
+async function renewLeaseWithState(args: {
+  authority: CommerceAuthority;
+  authorityChanged: boolean;
+  initialQueues: readonly CloudflareQueueDeliveryState[];
+  queues: readonly CloudflareQueueDeliveryState[];
+  renewLease: () => Promise<void>;
+}): Promise<void> {
+  try {
+    await args.renewLease();
+  } catch (error) {
+    throw new CommerceAuthorityCoordinationError(
+      'Commerce authority coordination lease ownership was lost; no further Queue changes were attempted.',
+      result(args),
+      [error],
+    );
+  }
+}
+
 async function refreshQueues(
   client: CloudflareQueueMaintenanceClient,
   fallback: CloudflareQueueDeliveryState[],
@@ -298,6 +473,7 @@ async function refreshQueues(
 
 async function rollbackPausedQueues(args: {
   attemptedNames: readonly string[];
+  beforeMutation: QueueMutationGuard;
   client: CloudflareQueueMaintenanceClient;
   queues: CloudflareQueueDeliveryState[];
 }): Promise<QueueOperationError[]> {
@@ -305,6 +481,7 @@ async function rollbackPausedQueues(args: {
   for (const name of [...args.attemptedNames].reverse()) {
     const queue = args.queues.find((entry) => entry.name === name);
     if (!queue) continue;
+    await args.beforeMutation(args.queues);
     try {
       replaceQueueState(args.queues, await args.client.setDeliveryPaused(queue, false));
     } catch (error) {
@@ -323,6 +500,7 @@ async function rollbackPausedQueues(args: {
 }
 
 async function prepareQueuesPaused(args: {
+  beforeMutation: QueueMutationGuard;
   client: CloudflareQueueMaintenanceClient;
   initialQueues: CloudflareQueueDeliveryState[];
 }): Promise<{
@@ -335,6 +513,7 @@ async function prepareQueuesPaused(args: {
     for (const queue of queues) {
       if (queue.deliveryPaused) continue;
       attemptedNames.push(queue.name);
+      await args.beforeMutation(queues);
       replaceQueueState(queues, await args.client.setDeliveryPaused(queue, true));
     }
     queues = await args.client.listDeliveryStates();
@@ -343,8 +522,10 @@ async function prepareQueuesPaused(args: {
     }
     return { attemptedNames, queues };
   } catch (error) {
+    if (error instanceof CommerceAuthorityCoordinationError) throw error;
     const rollbackErrors = await rollbackPausedQueues({
       attemptedNames,
+      beforeMutation: args.beforeMutation,
       client: args.client,
       queues,
     });
@@ -355,6 +536,7 @@ async function prepareQueuesPaused(args: {
 }
 
 async function ensureQueuesPaused(args: {
+  beforeMutation: QueueMutationGuard;
   client: CloudflareQueueMaintenanceClient;
   queues: CloudflareQueueDeliveryState[];
 }): Promise<{
@@ -367,6 +549,7 @@ async function ensureQueuesPaused(args: {
   for (let pass = 0; pass < 2; pass += 1) {
     for (const queue of queues) {
       if (queue.deliveryPaused) continue;
+      await args.beforeMutation(queues);
       try {
         replaceQueueState(queues, await args.client.setDeliveryPaused(queue, true));
       } catch (error) {
@@ -410,14 +593,26 @@ async function pauseForMaintenance(args: {
   expectedRevision: number;
   initialQueues: CloudflareQueueDeliveryState[];
   mode: 'transition' | 'repair';
+  leaseToken: string;
   nowMs: number;
   queryCommerceD1: CommerceAuthorityQuery;
+  renewLease: () => Promise<void>;
 }): Promise<CommerceAuthorityControlResult> {
+  let authority = args.authority;
+  let authorityChanged = false;
   let queues = args.initialQueues.map((queue) => ({ ...queue }));
+  const renewLease = (currentQueues: readonly CloudflareQueueDeliveryState[] = queues) => renewLeaseWithState({
+    authority,
+    authorityChanged,
+    initialQueues: args.initialQueues,
+    queues: currentQueues,
+    renewLease: args.renewLease,
+  });
   let attemptedNames: string[] = [];
   if (args.mode === 'transition') {
     try {
       ({ attemptedNames, queues } = await prepareQueuesPaused({
+        beforeMutation: renewLease,
         client: args.client,
         initialQueues: args.initialQueues,
       }));
@@ -446,16 +641,16 @@ async function pauseForMaintenance(args: {
         error.errors,
       );
     }
+    await renewLease();
   }
 
-  let authority = args.authority;
-  let authorityChanged = false;
   if (args.mode === 'transition') {
     try {
       const transition = await transitionAuthority({
         authority,
         command: 'paused',
         expectedRevision: args.expectedRevision,
+        leaseToken: args.leaseToken,
         nowMs: args.nowMs,
         queryCommerceD1: args.queryCommerceD1,
       });
@@ -463,8 +658,10 @@ async function pauseForMaintenance(args: {
       authorityChanged = transition.changed;
     } catch (error) {
       if (error instanceof AuthorityTransitionError && error.confirmedUnchanged) {
+        await renewLease();
         const rollbackErrors = await rollbackPausedQueues({
           attemptedNames,
+          beforeMutation: renewLease,
           client: args.client,
           queues,
         });
@@ -500,10 +697,12 @@ async function pauseForMaintenance(args: {
         [error],
       );
     }
+    await renewLease();
   }
 
-  const ensured = await ensureQueuesPaused({ client: args.client, queues });
+  const ensured = await ensureQueuesPaused({ beforeMutation: renewLease, client: args.client, queues });
   queues = ensured.queues;
+  await renewLease();
   let verifiedAuthority: CommerceAuthority;
   try {
     verifiedAuthority = await readAuthority(args.queryCommerceD1);
@@ -557,14 +756,23 @@ async function resumeAfterMaintenance(args: {
   expectedRevision: number;
   initialQueues: CloudflareQueueDeliveryState[];
   mode: 'transition' | 'repair';
+  leaseToken: string;
   nowMs: number;
   queryCommerceD1: CommerceAuthorityQuery;
+  renewLease: () => Promise<void>;
 }): Promise<CommerceAuthorityControlResult> {
   let authority = args.authority;
   let authorityChanged = false;
   let queues = args.initialQueues.map((queue) => ({ ...queue }));
+  const renewLease = (currentQueues: readonly CloudflareQueueDeliveryState[] = queues) => renewLeaseWithState({
+    authority,
+    authorityChanged,
+    initialQueues: args.initialQueues,
+    queues: currentQueues,
+    renewLease: args.renewLease,
+  });
   if (args.mode === 'transition') {
-    const ensured = await ensureQueuesPaused({ client: args.client, queues });
+    const ensured = await ensureQueuesPaused({ beforeMutation: renewLease, client: args.client, queues });
     queues = ensured.queues;
     const active = queues.filter((queue) => !queue.deliveryPaused).map((queue) => queue.name);
     if (!ensured.verified || active.length) {
@@ -581,11 +789,13 @@ async function resumeAfterMaintenance(args: {
         ensured.errors,
       );
     }
+    await renewLease();
     try {
       const transition = await transitionAuthority({
         authority,
         command: 'd1',
         expectedRevision: args.expectedRevision,
+        leaseToken: args.leaseToken,
         nowMs: args.nowMs,
         queryCommerceD1: args.queryCommerceD1,
       });
@@ -604,6 +814,7 @@ async function resumeAfterMaintenance(args: {
         [error],
       );
     }
+    await renewLease();
   }
 
   let verifiedBeforeResume: CommerceAuthority;
@@ -634,10 +845,12 @@ async function resumeAfterMaintenance(args: {
     );
   }
   authority = verifiedBeforeResume;
+  await renewLease();
 
   const resumePatchErrors = new Map<string, unknown>();
   for (const queue of queues) {
     if (!queue.deliveryPaused) continue;
+    await renewLease(queues);
     try {
       replaceQueueState(queues, await args.client.setDeliveryPaused(queue, false));
     } catch (error) {
@@ -650,6 +863,7 @@ async function resumeAfterMaintenance(args: {
   } catch (error) {
     queueVerificationError = error;
   }
+  await renewLease();
   const state = result({
     authority,
     authorityChanged,
@@ -667,7 +881,8 @@ async function resumeAfterMaintenance(args: {
   }
   if (verificationError !== undefined ||
     !sameAuthority(authority, verifiedAfterResume) || verifiedAfterResume.authority_state !== 'd1') {
-    const restored = await ensureQueuesPaused({ client: args.client, queues });
+    await renewLease();
+    const restored = await ensureQueuesPaused({ beforeMutation: renewLease, client: args.client, queues });
     const coordinationResult = result({
       authority: verifiedAfterResume,
       authorityChanged,
@@ -733,9 +948,9 @@ export async function runCommerceAuthorityControl(
     token: apiToken,
     fetch: overrides.providerFetch,
   });
-  const authority = await readAuthority(queryCommerceD1);
-  const initialQueues = await client.listDeliveryStates();
   if (args.command === 'status') {
+    const authority = await readAuthority(queryCommerceD1);
+    const initialQueues = await client.listDeliveryStates();
     return result({
       authority,
       authorityChanged: false,
@@ -743,20 +958,33 @@ export async function runCommerceAuthorityControl(
       queues: initialQueues,
     });
   }
+  const command = args.command;
   const expectedRevision = safeInteger(args.expectedRevision, 'Expected revision');
-  const mode = transitionMode(authority, args.command, expectedRevision);
-  const common = {
-    authority,
-    client,
-    expectedRevision,
-    initialQueues,
-    mode,
-    nowMs: (overrides.nowMs || Date.now)(),
+  const nowMs = overrides.nowMs || Date.now;
+  const token = leaseToken(overrides.leaseToken ? overrides.leaseToken() : crypto.randomUUID());
+  return withCommerceAuthorityLease({
+    leaseToken: token,
     queryCommerceD1,
-  };
-  return args.command === 'paused'
-    ? pauseForMaintenance(common)
-    : resumeAfterMaintenance(common);
+    run: async (renewLease) => {
+      const authority = await readAuthority(queryCommerceD1);
+      const initialQueues = await client.listDeliveryStates();
+      await renewLease();
+      const common = {
+        authority,
+        client,
+        expectedRevision,
+        initialQueues,
+        leaseToken: token,
+        mode: transitionMode(authority, command, expectedRevision),
+        nowMs: nowMs(),
+        queryCommerceD1,
+        renewLease,
+      };
+      return command === 'paused'
+        ? pauseForMaintenance(common)
+        : resumeAfterMaintenance(common);
+    },
+  });
 }
 
 async function main(): Promise<void> {

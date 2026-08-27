@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import {
   CommerceAuthorityCoordinationError,
@@ -20,6 +21,7 @@ import {
 const ACCOUNT_ID = 'a'.repeat(32);
 const QUEUE_NAMES = ['queue-a', 'queue-b', 'queue-c'];
 const QUEUE_CONFIG = { accountId: ACCOUNT_ID, queueNames: QUEUE_NAMES };
+const LEASE_TOKEN = '123e4567-e89b-42d3-a456-426614174000';
 
 function authorityRow(state: 'paused' | 'd1', revision: number, updatedAtMs = 0) {
   return {
@@ -36,13 +38,51 @@ function authorityHarness(
   initialRevision: number,
   events: string[],
   failedTransitions: Set<'paused' | 'd1'> = new Set(),
+  options: {
+    leaseNowMs?: number;
+    failLeaseRelease?: boolean;
+    initialLease?: { acquired_at_ms: number; expires_at_ms: number; lease_token: string };
+  } = {},
 ) {
   let current = authorityRow(initialState, initialRevision);
+  let lease = options.initialLease ? { ...options.initialLease } : null;
+  const leaseNowMs = options.leaseNowMs ?? 100;
   return {
     get current() {
       return current;
     },
+    get lease() {
+      return lease && { ...lease };
+    },
+    replaceLease(next: { acquired_at_ms: number; expires_at_ms: number; lease_token: string }) {
+      lease = { ...next };
+    },
     async query(sql: string): Promise<Record<string, unknown>[]> {
+      if (/^\s*INSERT INTO commerce_authority_control_lease/.test(sql)) {
+        const token = /VALUES \(\s*1,\s*'([^']+)'/s.exec(sql)?.[1];
+        assert.ok(token);
+        if (lease && lease.expires_at_ms > leaseNowMs) return [];
+        lease = {
+          lease_token: token,
+          acquired_at_ms: leaseNowMs,
+          expires_at_ms: leaseNowMs + 30 * 60_000,
+        };
+        return [{ ...lease }];
+      }
+      if (/^\s*UPDATE commerce_authority_control_lease/.test(sql)) {
+        const token = /lease_token = '([^']+)'/.exec(sql)?.[1];
+        if (!lease || lease.lease_token !== token || lease.expires_at_ms <= leaseNowMs) return [];
+        lease = { ...lease, expires_at_ms: leaseNowMs + 30 * 60_000 };
+        return [{ ...lease }];
+      }
+      if (/^\s*DELETE FROM commerce_authority_control_lease/.test(sql)) {
+        if (options.failLeaseRelease) throw new Error('private lease release failure');
+        const token = /lease_token = '([^']+)'/.exec(sql)?.[1];
+        if (!lease || lease.lease_token !== token) return [];
+        const released = lease;
+        lease = null;
+        return [{ lease_token: released.lease_token }];
+      }
       if (/^\s*SELECT/.test(sql)) {
         events.push('d1:read');
         return [{ ...current }];
@@ -50,6 +90,8 @@ function authorityHarness(
       const target = sql.includes("SET authority_state = 'paused'") ? 'paused' : 'd1';
       events.push(`d1:${target}`);
       if (failedTransitions.has(target)) throw new Error('private D1 failure');
+      const guardToken = /AND lease_token = '([^']+)'/.exec(sql)?.[1];
+      if (!lease || lease.lease_token !== guardToken || lease.expires_at_ms <= leaseNowMs) return [];
       const source = target === 'paused' ? 'd1' : 'paused';
       const expectedRevision = Number(sql.match(/AND revision = (\d+)/)?.[1]);
       if (current.authority_state !== source || current.revision !== expectedRevision) return [];
@@ -91,11 +133,13 @@ function queueHarness(args: {
 
 function dependencies(args: {
   authority: ReturnType<typeof authorityHarness>;
+  leaseToken?: string;
   nowMs?: number;
   queueClient: CloudflareQueueMaintenanceClient;
 }) {
   return {
     apiToken: 'private-api-token',
+    leaseToken: () => args.leaseToken || LEASE_TOKEN,
     nowMs: () => args.nowMs ?? 100,
     queryCommerceD1: args.authority.query,
     queueClient: args.queueClient,
@@ -117,14 +161,42 @@ test('commerce authority mutations require explicit write and revision guards', 
     expectedRevision: 7,
     write: true,
   });
-  const sql = buildCommerceAuthorityMutationSql('d1', 7, 100);
+  const sql = buildCommerceAuthorityMutationSql('d1', 7, 100, LEASE_TOKEN);
   assert.match(sql, /authority_state = 'paused'/);
   assert.match(sql, /revision = 7/);
   assert.match(sql, /paused_at_ms = NULL/);
   assert.match(sql, /updated_at_ms = 100/);
-  const pauseSql = buildCommerceAuthorityMutationSql('paused', 7, 100);
+  assert.match(sql, /commerce_authority_control_lease/);
+  assert.match(sql, new RegExp(LEASE_TOKEN));
+  assert.match(sql, /strftime\('%s', 'now'\)/);
+  const pauseSql = buildCommerceAuthorityMutationSql('paused', 7, 100, LEASE_TOKEN);
   assert.match(pauseSql, /authority_state = 'd1'/);
   assert.throws(() => parseCommerceAuthorityControlArgs(['replace', '--expected-revision', '7', '--write']));
+});
+
+test('commerce authority lease and guarded transition execute against the current schema', async () => {
+  const database = new DatabaseSync(':memory:');
+  try {
+    database.exec(readFileSync('cloud/workers/api/commerce-migrations/0001_current_schema.sql', 'utf8'));
+    database.exec(readFileSync('cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', 'utf8'));
+    const events: string[] = [];
+    const result = await runCommerceAuthorityControl(
+      parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '1', '--write']),
+      {
+        apiToken: 'private-api-token',
+        leaseToken: () => LEASE_TOKEN,
+        nowMs: () => 100,
+        queryCommerceD1: async (sql) => database.prepare(sql).all().map((row) => ({ ...row })),
+        queueClient: queueHarness({ events }),
+        queueConfig: QUEUE_CONFIG,
+      },
+    );
+    assert.equal(result.authority.authority_state, 'paused');
+    assert.equal(result.authority.revision, 2);
+    assert.equal(database.prepare('SELECT COUNT(*) AS count FROM commerce_authority_control_lease').get()!.count, 0);
+  } finally {
+    database.close();
+  }
 });
 
 test('Queue maintenance configuration preserves the producer/consumer intersection order', () => {
@@ -151,6 +223,11 @@ test('Queue maintenance configuration preserves the producer/consumer intersecti
       ],
     },
   }).queueNames, ['queue-c', 'queue-a', 'queue-b']);
+  const excessiveQueues = Array.from({ length: 17 }, (_, index) => ({ queue: `queue-${index}` }));
+  assert.throws(() => parseCloudflareQueueMaintenanceConfig({
+    account_id: ACCOUNT_ID,
+    queues: { consumers: excessiveQueues, producers: excessiveQueues },
+  }), /too many/);
 });
 
 test('Queue maintenance configuration accepts JSONC comments and trailing commas', (t) => {
@@ -257,6 +334,16 @@ test('Cloudflare Queue client bounds stalled control-plane requests', async () =
     }),
   });
   await assert.rejects(client.listDeliveryStates(), /inventory request failed/);
+  const excessiveInventory = createCloudflareQueueMaintenanceClient({
+    config: { accountId: ACCOUNT_ID, queueNames: ['queue-a'] },
+    token: 'private-cloudflare-api-token',
+    fetch: async () => Response.json({
+      success: true,
+      result: [],
+      result_info: { page: 1, total_pages: 11 },
+    }),
+  });
+  await assert.rejects(excessiveInventory.listDeliveryStates(), /pagination is invalid/);
 });
 
 test('status requires Cloudflare credentials and reports Queue and D1 state without mutations', async () => {
@@ -286,6 +373,46 @@ test('status requires Cloudflare credentials and reports Queue and D1 state with
     changed: { authorityChanged: false, queuesChanged: false },
   });
   assert.deepEqual(events, ['d1:read', 'queues:list']);
+  assert.equal(authority.lease, null);
+});
+
+test('status does not acquire or replace an active coordination lease', async () => {
+  const events: string[] = [];
+  const activeLease = {
+    acquired_at_ms: 50,
+    expires_at_ms: 200,
+    lease_token: '223e4567-e89b-42d3-a456-426614174000',
+  };
+  const authority = authorityHarness('d1', 7, events, new Set(), { initialLease: activeLease });
+  const state = await runCommerceAuthorityControl(
+    parseCommerceAuthorityControlArgs(['status']),
+    dependencies({ authority, queueClient: queueHarness({ events }) }),
+  );
+  assert.equal(state.authority.authority_state, 'd1');
+  assert.deepEqual(authority.lease, activeLease);
+});
+
+test('expired coordination lease is atomically replaced for idempotent repair', async () => {
+  const events: string[] = [];
+  const authority = authorityHarness('d1', 8, events, new Set(), {
+    initialLease: {
+      acquired_at_ms: 1,
+      expires_at_ms: 99,
+      lease_token: '223e4567-e89b-42d3-a456-426614174000',
+    },
+  });
+  const state = await runCommerceAuthorityControl(
+    parseCommerceAuthorityControlArgs(['d1', '--expected-revision', '7', '--write']),
+    dependencies({
+      authority,
+      leaseToken: '323e4567-e89b-42d3-a456-426614174000',
+      nowMs: 100,
+      queueClient: queueHarness({ events, initial: { 'queue-c': true } }),
+    }),
+  );
+  assert.equal(state.changed.authorityChanged, false);
+  assert.ok(state.queues.every((queue) => !queue.deliveryPaused));
+  assert.equal(authority.lease, null);
 });
 
 test('pause changes every Queue before transitioning D1', async () => {
@@ -312,68 +439,135 @@ test('pause changes every Queue before transitioning D1', async () => {
     queues: QUEUE_NAMES.map((name) => ({ name, deliveryPaused: true })),
     changed: { authorityChanged: true, queuesChanged: true },
   });
+  assert.equal(authority.lease, null);
 });
 
-test('pause re-pauses Queues changed by a concurrent d1 repair after its pre-CAS readback', async () => {
+test('successful result is preserved when conditional lease release fails', async () => {
   const events: string[] = [];
+  const authority = authorityHarness('d1', 7, events, new Set(), { failLeaseRelease: true });
+  let failure: CommerceAuthorityCoordinationError | undefined;
+  await assert.rejects(
+    runCommerceAuthorityControl(
+      parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '7', '--write']),
+      dependencies({ authority, queueClient: queueHarness({ events }) }),
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof CommerceAuthorityCoordinationError);
+      failure = error;
+      return true;
+    },
+  );
+  assert.equal(failure?.result.authority.authority_state, 'paused');
+  assert.ok(failure?.result.queues.every((queue) => queue.deliveryPaused));
+  assert.match(failure?.message || '', /release could not be confirmed/);
+  assert.equal((failure?.message || '').includes(LEASE_TOKEN), false);
+  assert.equal(authority.lease?.lease_token, LEASE_TOKEN);
+});
+
+test('active pause lease rejects concurrent mutations and repairs before authority or Queue reads', async () => {
+  const events: string[] = [];
+  const authority = authorityHarness('d1', 7, events);
   const states = new Map(QUEUE_NAMES.map((name) => [name, queueState(name, false)]));
-  let current = authorityRow('d1', 7);
-  let releaseMutation = () => {};
-  const mutationGate = new Promise<void>((resolve) => { releaseMutation = resolve; });
-  let releaseVerifiedPause = () => {};
-  const verifiedPause = new Promise<void>((resolve) => { releaseVerifiedPause = resolve; });
-  let listCount = 0;
+  let releasePause = () => {};
+  const pauseGate = new Promise<void>((resolve) => { releasePause = resolve; });
+  let signalPause = () => {};
+  const pauseStarted = new Promise<void>((resolve) => { signalPause = resolve; });
   const queueClient: CloudflareQueueMaintenanceClient = {
     async listDeliveryStates() {
-      listCount += 1;
-      events.push(`queues:list:${listCount}`);
-      if (listCount === 2) releaseVerifiedPause();
       return QUEUE_NAMES.map((name) => ({ ...states.get(name)! }));
     },
     async setDeliveryPaused(queue, deliveryPaused) {
-      events.push(`queue:${queue.name}:${deliveryPaused}`);
+      if (queue.name === 'queue-a' && deliveryPaused) {
+        signalPause();
+        await pauseGate;
+      }
       const updated = queueState(queue.name, deliveryPaused);
       states.set(queue.name, updated);
       return { ...updated };
     },
   };
-  const query = async (sql: string): Promise<Record<string, unknown>[]> => {
-    if (/^\s*SELECT/.test(sql)) {
-      events.push(`d1:read:${current.authority_state}:${current.revision}`);
-      return [{ ...current }];
-    }
-    events.push('d1:paused:waiting');
-    await mutationGate;
-    current = authorityRow('paused', 8, 100);
-    events.push('d1:paused:committed');
-    return [{ ...current }];
-  };
-  const shared = {
-    apiToken: 'private-api-token',
-    nowMs: () => 100,
-    queryCommerceD1: query,
-    queueClient,
-    queueConfig: QUEUE_CONFIG,
-  };
   const pause = runCommerceAuthorityControl(
     parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '7', '--write']),
-    shared,
+    dependencies({ authority, leaseToken: LEASE_TOKEN, queueClient }),
   );
-  await verifiedPause;
-  const repair = await runCommerceAuthorityControl(
-    parseCommerceAuthorityControlArgs(['d1', '--expected-revision', '7', '--write']),
-    shared,
-  );
-  events.push('d1:repair:completed');
-  releaseMutation();
+  await pauseStarted;
+  const authorityReadsBefore = events.filter((event) => event === 'd1:read').length;
+  let repairQueueReads = 0;
+  for (const [command, token] of [
+    ['paused', '223e4567-e89b-42d3-a456-426614174000'],
+    ['d1', '323e4567-e89b-42d3-a456-426614174000'],
+  ] as const) {
+    await assert.rejects(
+      runCommerceAuthorityControl(
+        parseCommerceAuthorityControlArgs([command, '--expected-revision', '7', '--write']),
+        dependencies({
+          authority,
+          leaseToken: token,
+          queueClient: {
+            async listDeliveryStates() {
+              repairQueueReads += 1;
+              return [];
+            },
+            async setDeliveryPaused() {
+              throw new Error('unexpected concurrent Queue mutation');
+            },
+          },
+        }),
+      ),
+      /already running/,
+    );
+  }
+  assert.equal(repairQueueReads, 0);
+  assert.equal(events.filter((event) => event === 'd1:read').length, authorityReadsBefore);
+  releasePause();
   const paused = await pause;
-  assert.equal(repair.authority.authority_state, 'd1');
-  assert.ok(repair.queues.every((queue) => !queue.deliveryPaused));
   assert.equal(paused.authority.authority_state, 'paused');
   assert.ok(paused.queues.every((queue) => queue.deliveryPaused));
   assert.ok([...states.values()].every((queue) => queue.deliveryPaused));
-  assert.ok(events.indexOf('d1:repair:completed') < events.indexOf('d1:paused:committed'));
-  assert.ok(events.lastIndexOf('queue:queue-c:true') > events.indexOf('d1:paused:committed'));
+  assert.equal(authority.lease, null);
+});
+
+test('lease takeover stops later Queue mutations without rolling back successor state', async () => {
+  const events: string[] = [];
+  const authority = authorityHarness('d1', 7, events);
+  let patches = 0;
+  const queueClient = queueHarness({ events });
+  const guardedClient: CloudflareQueueMaintenanceClient = {
+    listDeliveryStates: queueClient.listDeliveryStates,
+    async setDeliveryPaused(queue, deliveryPaused) {
+      const updated = await queueClient.setDeliveryPaused(queue, deliveryPaused);
+      patches += 1;
+      if (patches === 1) {
+        authority.replaceLease({
+          acquired_at_ms: 100,
+          expires_at_ms: 30 * 60_000,
+          lease_token: '223e4567-e89b-42d3-a456-426614174000',
+        });
+      }
+      return updated;
+    },
+  };
+  let failure: CommerceAuthorityCoordinationError | undefined;
+  await assert.rejects(
+    runCommerceAuthorityControl(
+      parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '7', '--write']),
+      dependencies({ authority, queueClient: guardedClient }),
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof CommerceAuthorityCoordinationError);
+      failure = error;
+      return true;
+    },
+  );
+  assert.equal(authority.current.authority_state, 'd1');
+  assert.deepEqual(events.filter((event) => event.startsWith('queue:')), ['queue:queue-a:true']);
+  assert.deepEqual(failure?.result.queues, [
+    { name: 'queue-a', deliveryPaused: true },
+    { name: 'queue-b', deliveryPaused: false },
+    { name: 'queue-c', deliveryPaused: false },
+  ]);
+  assert.match(failure?.message || '', /lease ownership was lost/);
+  assert.equal((failure?.message || '').includes(LEASE_TOKEN), false);
 });
 
 test('pause rolls back every attempted Queue when one pause fails and leaves D1 active', async () => {
@@ -406,6 +600,7 @@ test('pause rolls back every attempted Queue when one pause fails and leaves D1 
   ]);
   assert.equal(events.includes('d1:paused'), false);
   assert.equal(authority.current.authority_state, 'd1');
+  assert.equal(authority.lease, null);
   assert.deepEqual(failure?.result.queues, QUEUE_NAMES.map((name) => ({
     name,
     deliveryPaused: false,
@@ -415,7 +610,7 @@ test('pause rolls back every attempted Queue when one pause fails and leaves D1 
 
 test('pause retains rollback errors while preserving the verified result state', async () => {
   const events: string[] = [];
-  const authority = authorityHarness('d1', 7, events);
+  const authority = authorityHarness('d1', 7, events, new Set(), { failLeaseRelease: true });
   const queueClient = queueHarness({
     events,
     failures: new Set(['queue-b:true', 'queue-a:false']),
@@ -444,6 +639,8 @@ test('pause retains rollback errors while preserving the verified result state',
   assert.ok(rollbackError instanceof Error);
   assert.ok(rollbackError.cause instanceof Error);
   assert.match(failure?.message || '', /queue-a/);
+  assert.match(failure?.message || '', /lease release/);
+  assert.equal(authority.lease?.lease_token, LEASE_TOKEN);
 });
 
 test('pause verifies read-back state before transitioning D1', async () => {
@@ -699,7 +896,7 @@ test('partial Queue resume keeps D1 active and reports every Queue still paused'
 });
 
 test('partial Queue resume rechecks authority and restores pauses before reporting', async () => {
-  let authority = authorityRow('paused', 7);
+  const authority = authorityHarness('paused', 7, []);
   let reads = 0;
   const states = new Map(QUEUE_NAMES.map((name) => [name, queueState(name, true)]));
   const queueClient: CloudflareQueueMaintenanceClient = {
@@ -716,11 +913,9 @@ test('partial Queue resume rechecks authority and restores pauses before reporti
   const query = async (sql: string): Promise<Record<string, unknown>[]> => {
     if (/^\s*SELECT/.test(sql)) {
       reads += 1;
-      if (reads === 3) authority = authorityRow('paused', 9, 200);
-      return [{ ...authority }];
+      if (reads === 3) return [authorityRow('paused', 9, 200)];
     }
-    authority = authorityRow('d1', 8, 100);
-    return [{ ...authority }];
+    return authority.query(sql);
   };
   let failure: CommerceAuthorityCoordinationError | undefined;
   await assert.rejects(
@@ -728,6 +923,7 @@ test('partial Queue resume rechecks authority and restores pauses before reporti
       parseCommerceAuthorityControlArgs(['d1', '--expected-revision', '7', '--write']),
       {
         apiToken: 'private-api-token',
+        leaseToken: () => LEASE_TOKEN,
         nowMs: () => 100,
         queryCommerceD1: query,
         queueClient,
