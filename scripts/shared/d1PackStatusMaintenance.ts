@@ -41,6 +41,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const configPath = 'cloud/workers/api/wrangler.jsonc';
 const envFilePath = 'cloud/workers/api/release.env';
 const databaseName = 'mons-shop-data';
+const WRANGLER_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
 const PACK_STATUS_D1_MIGRATIONS = [
   '0001_current_schema.sql',
@@ -90,6 +91,7 @@ function runWrangler(args: string[], json = false): string {
       env: process.env,
       maxBuffer: 32 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: WRANGLER_COMMAND_TIMEOUT_MS,
     }).trim();
   } catch (error) {
     const output = error && typeof error === 'object'
