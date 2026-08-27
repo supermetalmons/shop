@@ -3,7 +3,10 @@ import {
   buildCommerceIdentityManifest,
   type CommerceIdentityDocument,
 } from '../shared/commerceIdentityCanonicalization.ts';
-import { queryRemoteCommerceD1 } from '../shared/commerceD1Maintenance.ts';
+import {
+  commerceD1DocumentIdentity,
+  queryRemoteCommerceD1,
+} from '../shared/commerceD1Maintenance.ts';
 
 function requiredString(value: unknown, label: string): string {
   if (typeof value !== 'string' || !value) throw new Error(`${label} is invalid.`);
@@ -13,6 +16,7 @@ function requiredString(value: unknown, label: string): string {
 function parseDocument(row: Record<string, unknown>): CommerceIdentityDocument {
   const path = requiredString(row.document_path, 'Commerce document path');
   const kind = requiredString(row.document_kind, `${path} kind`);
+  if (commerceD1DocumentIdentity(path)?.kind !== kind) throw new Error(`${path} identity is invalid.`);
   const createTime = requiredString(row.create_time, `${path} create time`);
   const updateTime = requiredString(row.update_time, `${path} update time`);
   const version = Number(row.version);

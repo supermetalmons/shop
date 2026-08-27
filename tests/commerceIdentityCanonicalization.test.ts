@@ -9,6 +9,7 @@ import {
 } from '../scripts/shared/commerceIdentityCanonicalization.ts';
 
 const migrationDirectory = 'cloud/workers/api/commerce-migrations';
+const WALLET = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 
 function migrationDatabase(): DatabaseSync {
   const database = new DatabaseSync(':memory:');
@@ -77,14 +78,14 @@ test('commerce identity canonicalization rewrites anonymous and merged wallet ow
   assert.deepEqual(canonicalizeCommerceIdentity({
     firebaseUid: 'legacy-one',
     mergedFirebaseUid: 'legacy-one',
-    owner: 'wallet-address',
+    owner: WALLET,
     ownerKind: 'firebase',
     previousOwner: 'firebase:legacy-one',
   }), {
     changed: true,
     data: {
       mergedAuthSubject: 'legacy-one',
-      owner: 'wallet-address',
+      owner: WALLET,
       ownerKind: 'wallet',
       previousOwner: 'anonymous:legacy-one',
     },
@@ -119,6 +120,54 @@ test('commerce identity canonicalization rejects ambiguous legacy shapes', () =>
   assert.throws(() => canonicalizeCommerceIdentity({ nested: { owner: 'firebase:anon:one' } }), /Legacy identity value/);
 });
 
+test('commerce identity canonicalization rejects inconsistent canonical shapes', () => {
+  assert.throws(() => canonicalizeCommerceIdentity({
+    uid: 'anon:one',
+    authSubject: 'anon:two',
+    owner: 'anonymous:anon:three',
+    ownerKind: 'anonymous',
+  }), /canonical anonymous identity/);
+  assert.throws(() => canonicalizeCommerceIdentity({
+    authSubject: 'anon:one',
+    mergedAuthSubject: 'anon:two',
+    owner: WALLET,
+    ownerKind: 'wallet',
+    previousOwner: 'anonymous:anon:two',
+  }), /canonical wallet identity/);
+  assert.throws(() => canonicalizeCommerceIdentity({
+    mergedAuthSubject: 'anon:one',
+    owner: WALLET,
+    ownerKind: 'wallet',
+    previousOwner: 'anonymous:anon:two',
+  }), /canonical merged identity/);
+  assert.throws(() => canonicalizeCommerceIdentity({
+    owner: 'not-a-wallet',
+    ownerKind: 'wallet',
+  }), /canonical wallet identity/);
+  assert.throws(() => canonicalizeCommerceIdentity({
+    owner: WALLET,
+    ownerKind: 'wallet',
+    uid: null,
+  }), /canonical wallet uid/);
+  assert.throws(() => canonicalizeCommerceIdentity({
+    metadata: { authSubject: 'anon:nested' },
+  }), /nested canonical identity/);
+  assert.throws(() => canonicalizeCommerceIdentity({
+    metadata: { owner: 'anonymous:anon:nested' },
+  }), /nested canonical identity/);
+  assert.throws(() => canonicalizeCommerceIdentity({
+    authSubject: 'anon:one',
+    owner: 'anonymous:anon:one',
+    ownerKind: 'anonymous',
+    previousOwner: 'unexpected',
+  }), /canonical anonymous identity/);
+  assert.throws(() => canonicalizeCommerceIdentity({
+    owner: WALLET,
+    ownerKind: 'wallet',
+    previousOwner: 'unexpected',
+  }), /canonical merged identity/);
+});
+
 test('commerce identity manifest is deterministic and preserves metadata in its hashes', () => {
   const documents = [{
     createTime: '2026-08-01T00:00:00.000Z',
@@ -149,9 +198,9 @@ test('commerce migration canonicalizes exact legacy shapes and preserves row met
   const database = migrationDatabase();
   try {
     insertDocument(database, 'canonical', {
-      owner: 'wallet-canonical',
+      owner: WALLET,
       ownerKind: 'wallet',
-      uid: 'wallet-canonical',
+      uid: WALLET,
     }, 1);
     insertDocument(database, 'legacy', {
       firebaseUid: 'subject-one',
@@ -162,7 +211,7 @@ test('commerce migration canonicalizes exact legacy shapes and preserves row met
     insertDocument(database, 'merged', {
       firebaseUid: 'subject-two',
       mergedFirebaseUid: 'subject-two',
-      owner: 'wallet-merged',
+      owner: WALLET,
       ownerKind: 'firebase',
       previousOwner: 'firebase:subject-two',
       uid: 'subject-two',
@@ -175,13 +224,13 @@ test('commerce migration canonicalizes exact legacy shapes and preserves row met
 
     assert.deepEqual(identityDocuments(database).map((document) => [document.path, document.data]), [
       ['drops/drop/stripeCheckouts/canonical', {
-        owner: 'wallet-canonical', ownerKind: 'wallet', uid: 'wallet-canonical',
+        owner: WALLET, ownerKind: 'wallet', uid: WALLET,
       }],
       ['drops/drop/stripeCheckouts/legacy', {
         authSubject: 'subject-one', owner: 'anonymous:subject-one', ownerKind: 'anonymous', uid: 'subject-one',
       }],
       ['drops/drop/stripeCheckouts/merged', {
-        mergedAuthSubject: 'subject-two', owner: 'wallet-merged', ownerKind: 'wallet',
+        mergedAuthSubject: 'subject-two', owner: WALLET, ownerKind: 'wallet',
         previousOwner: 'anonymous:subject-two', uid: 'subject-two',
       }],
     ]);

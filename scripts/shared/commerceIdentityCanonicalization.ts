@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { canonicalWalletAddress } from '../../shared/walletLifecycle.ts';
 
 export type CommerceIdentityDocument = {
   createTime: string;
@@ -77,6 +78,74 @@ function assertNoLegacyValue(value: unknown, path = '$'): void {
   }
 }
 
+function optionalCanonicalSubject(data: Record<string, unknown>, key: string): string | null {
+  if (!Object.hasOwn(data, key)) return null;
+  const subject = data[key];
+  if (typeof subject !== 'string' || !subject || subject.trim() !== subject || subject.length > 128) {
+    throw new Error(`Commerce document has an invalid ${key}.`);
+  }
+  return subject;
+}
+
+function assertNoNestedCanonicalIdentity(value: unknown, path = '$'): void {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertNoNestedCanonicalIdentity(entry, `${path}[${index}]`));
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, entry] of Object.entries(value)) {
+    if (path !== '$' && (
+      key === 'authSubject' || key === 'mergedAuthSubject' || key === 'ownerKind' ||
+      ((key === 'owner' || key === 'previousOwner') &&
+        typeof entry === 'string' && entry.startsWith('anonymous:'))
+    )) {
+      throw new Error(`Commerce document has a nested canonical identity at ${path}.${key}.`);
+    }
+    assertNoNestedCanonicalIdentity(entry, `${path}.${key}`);
+  }
+}
+
+function assertCanonicalIdentity(data: Record<string, unknown>): void {
+  assertNoNestedCanonicalIdentity(data);
+  const authSubject = optionalCanonicalSubject(data, 'authSubject');
+  const mergedAuthSubject = optionalCanonicalSubject(data, 'mergedAuthSubject');
+  const ownerKind = data.ownerKind;
+  const owner = typeof data.owner === 'string' ? data.owner : '';
+  const previousOwner = typeof data.previousOwner === 'string' ? data.previousOwner : '';
+  const hasIdentity = authSubject !== null || mergedAuthSubject !== null ||
+    owner.startsWith('anonymous:') || previousOwner.startsWith('anonymous:') ||
+    Object.hasOwn(data, 'ownerKind');
+  if (!hasIdentity) return;
+  if (ownerKind === 'anonymous') {
+    if (!authSubject || mergedAuthSubject || owner !== `anonymous:${authSubject}` ||
+      Object.hasOwn(data, 'previousOwner') ||
+      (Object.hasOwn(data, 'uid') && data.uid !== authSubject)) {
+      throw new Error('Commerce document has an invalid canonical anonymous identity.');
+    }
+    return;
+  }
+  if (ownerKind === 'wallet') {
+    if (canonicalWalletAddress(owner) !== owner ||
+      (authSubject && mergedAuthSubject && authSubject !== mergedAuthSubject)) {
+      throw new Error('Commerce document has an invalid canonical wallet identity.');
+    }
+    if (mergedAuthSubject && previousOwner !== `anonymous:${mergedAuthSubject}`) {
+      throw new Error('Commerce document has an invalid canonical merged identity.');
+    }
+    if (!mergedAuthSubject && Object.hasOwn(data, 'previousOwner')) {
+      throw new Error('Commerce document has an invalid canonical merged identity.');
+    }
+    if (Object.hasOwn(data, 'uid')) {
+      const uid = data.uid;
+      const validUid = typeof uid === 'string' && Boolean(uid) && uid.trim() === uid && uid.length <= 128 &&
+        (uid === owner || uid === authSubject || uid === mergedAuthSubject);
+      if (!validUid) throw new Error('Commerce document has an invalid canonical wallet uid.');
+    }
+    return;
+  }
+  throw new Error('Commerce document has an invalid canonical owner kind.');
+}
+
 export function canonicalizeCommerceIdentity(
   data: Record<string, unknown>,
 ): { changed: boolean; data: Record<string, unknown> } {
@@ -88,6 +157,7 @@ export function canonicalizeCommerceIdentity(
   );
   if (!hasLegacySubject && !hasMergedLegacySubject && !hasLegacyValue) {
     assertNoLegacyValue(data);
+    assertCanonicalIdentity(data);
     return { changed: false, data };
   }
   if (!hasLegacySubject || hasCanonicalSubject || data.ownerKind !== 'firebase') {
@@ -122,13 +192,15 @@ export function canonicalizeCommerceIdentity(
   }
 
   assertNoLegacyValue(next);
+  assertCanonicalIdentity(next);
   return { changed: true, data: next };
 }
 
 export function buildCommerceIdentityManifest(
   documents: readonly CommerceIdentityDocument[],
 ): CommerceIdentityManifest {
-  const ordered = [...documents].sort((left, right) => left.path.localeCompare(right.path));
+  const ordered = [...documents].sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
   const before = createHash('sha256');
   const after = createHash('sha256');
   const kindCounts: Record<string, number> = {};

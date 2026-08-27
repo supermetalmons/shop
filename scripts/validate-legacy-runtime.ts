@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 
 const excluded = new Set([
   'scripts/validate-browser-bundle.ts',
@@ -18,9 +19,16 @@ const activePrefixes = [
 
 const activeFiles = new Set([
   'package.json',
+  'package-lock.json',
+  'vite.config.ts',
   'wrangler.jsonc',
+  'tsconfig.json',
+  'tsconfig.node.json',
+  'tsconfig.tools.json',
+  'cloud/workers/api/release.env',
   'cloud/workers/api/wrangler.jsonc',
   'cloud/workers/api/worker-configuration.d.ts',
+  'cloud/workers/frontend/release.env',
   'cloud/workers/frontend/worker-configuration.d.ts',
 ]);
 
@@ -45,7 +53,16 @@ function isActive(path: string): boolean {
   return !path.includes('/test/') && !path.includes('/runtime-test/') && !path.includes('/migrations/');
 }
 
-const violations = trackedFiles().filter(isActive).flatMap((path) => {
+function filesIn(path: string): string[] {
+  if (!existsSync(path)) return [];
+  return statSync(path).isDirectory()
+    ? readdirSync(path).flatMap((entry) => filesIn(join(path, entry)))
+    : [path];
+}
+
+const extraFiles = process.argv.slice(2).flatMap(filesIn);
+const files = [...trackedFiles().filter(isActive), ...extraFiles];
+const violations = [...new Set(files)].flatMap((path) => {
   if (!existsSync(path)) return [];
   const text = readFileSync(path, 'utf8');
   return forbidden.filter(({ pattern }) => pattern.test(text)).map(({ label }) => ({ label, path }));

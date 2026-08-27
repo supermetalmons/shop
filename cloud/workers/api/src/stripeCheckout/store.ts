@@ -202,7 +202,9 @@ class D1StripeCheckoutTransaction implements StripeCheckoutTransaction {
 
   create(reference: StripeCheckoutDocumentReference, data: StripeCheckoutDocumentData): void {
     const key = d1Reference(reference).key;
-    this.writes.push((unit) => unit.create(key, writeData(data)));
+    this.writes.push(async (unit) => {
+      await unit.create(key, writeData(data));
+    });
   }
 
   update(reference: StripeCheckoutDocumentReference, data: StripeCheckoutDocumentData): void {

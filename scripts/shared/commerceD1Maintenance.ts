@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isCommerceDocumentSegment } from '../../shared/commerceDocumentPath.ts';
 
 export type CommerceD1Row = Record<string, unknown>;
 
@@ -128,10 +129,11 @@ export function commerceD1DocumentIdentity(path: string): {
   kind: CommerceD1DocumentKind;
 } | null {
   const segments = path.split('/');
-  if (segments.length === 2 && segments[0] === 'claimCodes' && segments[1]) {
+  if (segments.length === 2 && segments[0] === 'claimCodes' && isCommerceDocumentSegment(segments[1])) {
     return { kind: 'claim_code', dropId: null, documentId: segments[1] };
   }
-  if (segments.length !== 4 || segments[0] !== 'drops' || !segments[1] || !segments[3]) return null;
+  if (segments.length !== 4 || segments[0] !== 'drops' ||
+    !isCommerceDocumentSegment(segments[1]) || !isCommerceDocumentSegment(segments[3])) return null;
   const kind = new Map<string, CommerceD1DocumentKind>([
     ['deliveryOrders', 'delivery_order'],
     ['stripeCheckouts', 'stripe_checkout'],

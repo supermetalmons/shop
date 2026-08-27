@@ -334,9 +334,7 @@ export function manualReviewCheckoutFromRecord(args: {
   try {
     const identity = normalizeStripeCheckoutIdentity(checkout);
     authSubject = identity.ownerKind === 'anonymous' ? identity.authSubject : undefined;
-  } catch {
-    return null;
-  }
+  } catch {}
   return {
     dropId: args.dropId,
     sessionId: args.sessionId,

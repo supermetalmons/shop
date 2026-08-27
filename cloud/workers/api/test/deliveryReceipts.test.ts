@@ -825,6 +825,29 @@ test('prepared recovery failures reread the leased order and preserve retryable 
   assert.equal(recovery.nextPreparedProbeAt, 90_000);
 });
 
+test('native assignment initializes a missing dude pool', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const assign = deliveryReceiptRuntime.assignDudesForBox;
+  const context = {
+    commerceDb: harness.db,
+    repository,
+    nowMs: 1_700_000_000_000,
+    providerFetch: fetch,
+    signal: new AbortController().signal,
+  } as Parameters<typeof assign>[0];
+  const runtime = {
+    config: { dropFamily: 'poncho_drifella' },
+    dropId: 'drop',
+    itemsPerBox: 1,
+    maxDudeId: 2,
+  } as Parameters<typeof assign>[1];
+
+  assert.deepEqual(await assign(context, runtime, 'box', () => 0), [1]);
+  assert.deepEqual((await repository.get(commerceKeys.dudePool('drop')))?.data.available, [2]);
+  assert.deepEqual((await repository.get(commerceKeys.boxAssignment('drop', 'box')))?.data.dudeIds, [1]);
+});
+
 test('stored assignment validation rejects malformed or duplicate ids', () => {
   const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
   assert.throws(

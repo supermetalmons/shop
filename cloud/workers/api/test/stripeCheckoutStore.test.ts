@@ -11,6 +11,7 @@ import {
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 
 test('Stripe checkout D1 store applies fields, deletes, increments, and timestamps', async () => {
+  const nowMs = 1_800_000_000_000;
   const harness = createCommerceD1Harness();
   seedCommerceDocument(harness, {
     name: 'projects/mons-shop/databases/(default)/documents/drops/drop/stripeCheckouts/session',
@@ -22,7 +23,7 @@ test('Stripe checkout D1 store applies fields, deletes, increments, and timestam
   });
   const store = createStripeCheckoutStore({
     commerceDb: harness.db,
-    nowMs: () => 1_700_000_000_000,
+    nowMs: () => nowMs,
   });
   const reference = store.doc('drops/drop/stripeCheckouts/session');
   await reference.update({
@@ -30,14 +31,14 @@ test('Stripe checkout D1 store applies fields, deletes, increments, and timestam
     updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
     removed: stripeCheckoutFieldValue.delete(),
     processingAttemptCount: stripeCheckoutFieldValue.increment(1),
-    processingLeaseExpiresAt: stripeCheckoutFieldValue.timestampFromMillis(1_700_000_001_000),
+    processingLeaseExpiresAt: stripeCheckoutFieldValue.timestampFromMillis(nowMs + 1_000),
   });
   assert.deepEqual(reference.path, 'drops/drop/stripeCheckouts/session');
   assert.deepEqual((await reference.get()).data(), {
     processingAttemptCount: 3,
-    processingLeaseExpiresAt: 1_700_000_001_000,
+    processingLeaseExpiresAt: nowMs + 1_000,
     status: 'processing',
-    updatedAt: 1_700_000_000_000,
+    updatedAt: nowMs,
   });
   assert.equal(stripeCheckoutFieldValue.serverTimestamp() instanceof StripeCheckoutServerTimestamp, true);
   assert.equal(stripeCheckoutFieldValue.delete() instanceof StripeCheckoutDeleteField, true);

@@ -39,7 +39,7 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   );
   assert.equal(
     packageJson.scripts['dry-run:api'],
-    'wrangler deploy --dry-run --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env',
+    'node -e "require(\'fs\').mkdirSync(\'.cache\',{recursive:true})" && wrangler deploy --dry-run --outfile .cache/mons-shop-api-dry-run.js --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env && npm run validate:legacy-runtime -- .cache/mons-shop-api-dry-run.js',
   );
   assert.equal(
     packageJson.scripts['check:api'],

@@ -31,6 +31,9 @@ test('native repository keys cover every commerce document kind', () => {
     commerceKeys.adminIrlRedeemReceiptMarker('poncho', 'id').path,
     'drops/poncho/adminIrlRedeemReceiptMarkers/id',
   );
+  assert.throws(() => commerceKeys.claimCode('café'), /Invalid commerce document key/);
+  assert.throws(() => commerceKeys.deliveryOrder('drop', 'bad id'), /Invalid commerce document key/);
+  assert.throws(() => commerceKeys.deliveryOrder('dröp', '1'), /Invalid commerce document key/);
 });
 
 test('native writes persist canonical documents and lossless cursor timestamps', async () => {
@@ -121,6 +124,33 @@ test('native cursors preserve nanosecond and document-path ordering', async () =
     ],
   });
   assert.deepEqual(records.map((record) => record.key.documentId), ['2', '1']);
+});
+
+test('native timestamps remain monotonic and path ordering is binary', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const existing = commerceKeys.claimCode('existing');
+  await repository.run(2_000, async (unit) => unit.create(existing, {
+    updatedAt: commerceFieldValue.serverTimestamp(),
+  }));
+  const before = await repository.get(existing);
+  await repository.run(1_000, async (unit) => unit.update(existing, {
+    updatedAt: commerceFieldValue.serverTimestamp(),
+  }));
+  const after = await repository.get(existing);
+  assert.equal(after?.data.updatedAt, 2_001);
+  assert.equal(Boolean(before && after && after.updateTime > before.updateTime), true);
+
+  await repository.run(3_000, async (unit) => {
+    await unit.create(commerceKeys.claimCode('a'), {});
+    await unit.create(commerceKeys.claimCode('_'), {});
+    await unit.create(commerceKeys.claimCode('A'), {});
+  });
+  const ordered = await repository.query({
+    kind: 'claim_code',
+    orderBy: [{ field: 'documentPath', direction: 'asc' }],
+  });
+  assert.deepEqual(ordered.map((record) => record.key.documentId), ['A', '_', 'a', 'existing']);
 });
 
 test('native repository migration backfills lossless processed-time columns', () => {

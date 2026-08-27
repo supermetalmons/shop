@@ -17,6 +17,7 @@ import {
   type CommerceTimestamp,
   type CommerceUpdateValue,
 } from './commerceRepositoryTypes.js';
+import { isCommerceDocumentSegment } from '../../../../shared/commerceDocumentPath.js';
 
 export * from './commerceRepositoryTypes.js';
 
@@ -89,7 +90,8 @@ function documentKey<K extends CommerceDocumentKind>(
   dropId: string | null,
   documentId: string,
 ): CommerceDocumentKey<K> {
-  if (!documentId || documentId.includes('/') || (kind !== 'claim_code' && !dropId) || dropId?.includes('/')) {
+  if (!isCommerceDocumentSegment(documentId) ||
+    (kind !== 'claim_code' && !isCommerceDocumentSegment(dropId))) {
     throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce document key.');
   }
   const path = kind === 'claim_code'
@@ -188,6 +190,20 @@ function timestampString(value: CommerceTimestamp): string {
 
 function timestampMilliseconds(value: CommerceTimestamp): number {
   return value.seconds * 1000 + Math.floor(value.nanos / 1_000_000);
+}
+
+function compareTimestamps(left: CommerceTimestamp, right: CommerceTimestamp): number {
+  return left.seconds - right.seconds || left.nanos - right.nanos;
+}
+
+function nextTimestamp(value: CommerceTimestamp): CommerceTimestamp {
+  return value.nanos < 999_000_000
+    ? { seconds: value.seconds, nanos: (Math.floor(value.nanos / 1_000_000) + 1) * 1_000_000 }
+    : { seconds: value.seconds + 1, nanos: 0 };
+}
+
+function compareStrings(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function dataField(data: CommerceDocumentData, fieldPath: string): unknown {
@@ -322,10 +338,10 @@ function publicRecord<T extends CommerceDocumentData>(document: StoredDocument):
 
 function compare(left: unknown, right: unknown): number {
   if (isTimestampLike(left) && isTimestampLike(right)) {
-    return left.seconds - right.seconds || left.nanos - right.nanos;
+    return compareTimestamps(left, right);
   }
   if (typeof left === 'number' && typeof right === 'number') return left - right;
-  if (typeof left === 'string' && typeof right === 'string') return left.localeCompare(right);
+  if (typeof left === 'string' && typeof right === 'string') return compareStrings(left, right);
   if (typeof left === 'boolean' && typeof right === 'boolean') return Number(left) - Number(right);
   const encodedLeft = canonicalJson(left);
   const encodedRight = canonicalJson(right);
@@ -437,12 +453,15 @@ export class CommerceUnitOfWork {
   private readonly pending = new Map<string, PendingDocument>();
   private readonly createPaths = new Set<string>();
   private readonly existingPaths = new Set<string>();
+  private commitTimestamp: CommerceTimestamp;
   private writesStarted = false;
 
   constructor(
     private readonly db: D1Database,
-    private readonly nowMs: number,
-  ) {}
+    nowMs: number,
+  ) {
+    this.commitTimestamp = timestampFromMilliseconds(nowMs);
+  }
 
   async get<T extends CommerceDocumentData>(
     key: CommerceDocumentKey,
@@ -485,7 +504,7 @@ export class CommerceUnitOfWork {
         const result = compare(orderValue(left, order.field), orderValue(right, order.field));
         if (result) return order.direction === 'desc' ? -result : result;
       }
-      return left.key.path.localeCompare(right.key.path);
+      return compareStrings(left.key.path, right.key.path);
     });
     if (query.startAfter) {
       documents = documents.filter((document) => {
@@ -505,12 +524,17 @@ export class CommerceUnitOfWork {
     return documents.map((document) => publicRecord<T>(document));
   }
 
-  async create(key: CommerceDocumentKey, data: CommerceDocumentWriteData): Promise<void> {
+  async create(
+    key: CommerceDocumentKey,
+    data: CommerceDocumentWriteData,
+  ): Promise<CommerceDocumentRecord> {
     this.assertOpen();
     const current = await this.loadForMutation(key);
     if (current) throw new CommerceWriteConflict('already-exists');
     this.createPaths.add(key.path);
-    this.pending.set(key.path, this.newDocument(key, data));
+    const document = this.newDocument(key, data);
+    this.pending.set(key.path, document);
+    return publicRecord(document);
   }
 
   async set(
@@ -559,7 +583,7 @@ export class CommerceUnitOfWork {
         guardId,
         JSON.stringify(Array.from(this.expectations, ([path, version]) => ({ path, version }))),
         this.expectedDocumentsRevision,
-        this.nowMs,
+        timestampMilliseconds(this.commitTimestamp),
       ),
     ];
     for (const [path, document] of this.pending) {
@@ -594,7 +618,8 @@ export class CommerceUnitOfWork {
       ));
     }
     statements.push(this.db.prepare(`UPDATE commerce_authority_control
-      SET documents_revision = documents_revision + 1, updated_at_ms = ? WHERE singleton = 1`).bind(this.nowMs));
+      SET documents_revision = documents_revision + 1, updated_at_ms = ? WHERE singleton = 1`)
+      .bind(timestampMilliseconds(this.commitTimestamp)));
     statements.push(this.db.prepare('DELETE FROM commerce_commit_guards WHERE guard_id = ?').bind(guardId));
     try {
       await this.db.batch(statements);
@@ -647,6 +672,10 @@ export class CommerceUnitOfWork {
     if (expected !== undefined && expected !== version) throw new CommerceWriteConflict();
     this.expectations.set(path, version);
     if (!this.original.has(path)) this.original.set(path, document);
+    const storedTimestamp = document ? parseTimestampString(document.updateTime) : null;
+    if (storedTimestamp && compareTimestamps(storedTimestamp, this.commitTimestamp) >= 0) {
+      this.commitTimestamp = nextTimestamp(storedTimestamp);
+    }
   }
 
   private async loadForMutation(key: CommerceDocumentKey): Promise<StoredDocument | null> {
@@ -657,7 +686,7 @@ export class CommerceUnitOfWork {
   }
 
   private newDocument(key: CommerceDocumentKey, data: CommerceDocumentWriteData): StoredDocument {
-    const now = timestampFromMilliseconds(this.nowMs);
+    const now = this.commitTimestamp;
     const materialized = this.materializeDocument(data, now);
     const commitTime = timestampString(now);
     return {
@@ -665,7 +694,7 @@ export class CommerceUnitOfWork {
       data: materialized.data,
       key,
       processedAt: materialized.processedAt,
-      updateTime: versionedTimestamp(commitTime, 1),
+      updateTime: commitTime,
       version: 1,
     };
   }
@@ -675,7 +704,7 @@ export class CommerceUnitOfWork {
     current: StoredDocument | null,
     data: CommerceDocumentWriteData,
   ): StoredDocument {
-    const now = timestampFromMilliseconds(this.nowMs);
+    const now = this.commitTimestamp;
     const materialized = this.materializeDocument(data, now);
     const version = (current?.version || 0) + 1;
     const commitTime = timestampString(now);
@@ -684,7 +713,7 @@ export class CommerceUnitOfWork {
       data: materialized.data,
       key,
       processedAt: materialized.processedAt,
-      updateTime: versionedTimestamp(commitTime, version),
+      updateTime: commitTime,
       version,
     };
   }
@@ -696,7 +725,7 @@ export class CommerceUnitOfWork {
     requireExisting: boolean,
   ): StoredDocument {
     if (requireExisting && !current) throw new CommerceWriteConflict('failed-precondition');
-    const now = timestampFromMilliseconds(this.nowMs);
+    const now = this.commitTimestamp;
     const data = current ? cloneData(current.data) : {};
     let processedAt = current?.processedAt || null;
     for (const [fieldPath, update] of Object.entries(updates)) {
@@ -717,7 +746,7 @@ export class CommerceUnitOfWork {
       data,
       key,
       processedAt,
-      updateTime: versionedTimestamp(commitTime, version),
+      updateTime: commitTime,
       version,
     };
   }
@@ -738,10 +767,4 @@ export class CommerceUnitOfWork {
     }
     return { data: materialized, processedAt };
   }
-}
-
-function versionedTimestamp(commitTime: string, version: number): string {
-  const parsed = parseTimestampString(commitTime);
-  if (!parsed) return commitTime;
-  return timestampString({ seconds: parsed.seconds, nanos: Math.min(999_999_999, parsed.nanos + version % 1_000_000) });
 }

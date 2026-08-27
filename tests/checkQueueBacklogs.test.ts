@@ -11,13 +11,17 @@ const names = [
   'mons-shop-stripe-fulfillment-dlq',
 ];
 
-function fetcher(backlogCount = 0): typeof fetch {
+function fetcher(backlogCount = 0, pageSize = names.length): typeof fetch {
   return async (input) => {
-    const url = String(input);
-    if (url.endsWith('/queues')) {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/queues')) {
+      const page = Number(url.searchParams.get('page'));
+      const totalPages = Math.ceil(names.length / pageSize);
       return Response.json({
         success: true,
-        result: names.map((queue_name, index) => ({ queue_name, queue_id: `queue-${index}` })),
+        result: names.slice((page - 1) * pageSize, page * pageSize)
+          .map((queue_name, index) => ({ queue_name, queue_id: `queue-${(page - 1) * pageSize + index}` })),
+        result_info: { page, per_page: pageSize, total_count: names.length, total_pages: totalPages },
       });
     }
     return Response.json({
@@ -32,7 +36,7 @@ function fetcher(backlogCount = 0): typeof fetch {
 }
 
 test('queue backlog check requires all active and dead-letter queues to be empty', async () => {
-  const report = await checkQueueBacklogs('token', fetcher());
+  const report = await checkQueueBacklogs('token', fetcher(0, 2));
   assert.deepEqual(Object.keys(report), names);
   assert.ok(Object.values(report).every((entry) => entry.backlogCount === 0));
   await assert.rejects(checkQueueBacklogs('token', fetcher(1)), /backlog is not empty/);

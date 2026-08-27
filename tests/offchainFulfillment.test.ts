@@ -630,6 +630,25 @@ test('wallet-owned manual-review summaries do not fabricate an auth subject', ()
   assert.equal(Object.hasOwn(summary || {}, 'authSubject'), false);
 });
 
+test('manual-review summaries retain records with invalid identity metadata', () => {
+  const summary = manualReviewCheckoutFromRecord({
+    canViewSensitiveAddress: false,
+    checkout: {
+      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
+      manualRefundReviewRequired: true,
+      owner: 'anonymous:anon:wrong',
+      ownerKind: 'anonymous',
+      uid: 'anon:one',
+      authSubject: 'anon:one',
+    },
+    dropId: 'card_nft_2',
+    session: null,
+    sessionId: 'cs_test_invalid_identity_manual_review',
+  });
+  assert.equal(summary?.owner, 'anonymous:anon:wrong');
+  assert.equal(Object.hasOwn(summary || {}, 'authSubject'), false);
+});
+
 test('manual-review checkout summary excludes non-failed or non-manual-review checkout docs', () => {
   const included = {
     status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,

@@ -576,6 +576,7 @@ type CommerceWrite = {
   path: string;
   values: CommerceDocumentWriteData;
   expectedUpdateTime?: string;
+  mustExist?: boolean;
 };
 
 function keyForPath(path: string): CommerceDocumentKey {
@@ -637,7 +638,8 @@ async function applyWrite(unit: CommerceUnitOfWork, write: CommerceWrite): Promi
     if (!current || current.updateTime !== write.expectedUpdateTime) throw new CommerceWriteConflict();
   }
   if (write.operation === 'create') await unit.create(key, write.values);
-  else await unit.update(key, write.values);
+  else if (write.mustExist || write.expectedUpdateTime) await unit.update(key, write.values);
+  else await unit.set(key, write.values, { merge: true });
 }
 
 async function commitWrites(
@@ -675,6 +677,7 @@ function updateWrite(args: {
       ...Object.fromEntries((args.transforms || []).map((transform) => [transform.fieldPath, transform.value])),
     },
     ...(args.expectedUpdateTime ? { expectedUpdateTime: args.expectedUpdateTime } : {}),
+    ...(args.mustExist ? { mustExist: true } : {}),
   };
 }
 
@@ -841,7 +844,7 @@ function compareDeliveryRecoveryCandidates(
     if (rightStatus === 'processing') return 1;
   }
   const priority = deliveryRecoveryPriorityMs(left.fields) - deliveryRecoveryPriorityMs(right.fields);
-  return priority || left.path.localeCompare(right.path);
+  return priority || (left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
 }
 
 function deliveryRecoveryEligibility(
@@ -1861,7 +1864,7 @@ async function runDueDeliveryPackStatusProjectionQuery(
     .sort((left, right) => (
       Number(left.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]) -
         Number(right.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]) ||
-      left.path.localeCompare(right.path)
+      (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)
     ))
     .slice(0, limit);
 }

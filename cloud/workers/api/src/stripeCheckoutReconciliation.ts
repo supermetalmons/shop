@@ -48,7 +48,8 @@ function parseRequeueCandidates(
 ): RequeueCandidate[] {
   const candidates: RequeueCandidate[] = [];
   const ordered = [...value].sort((left, right) =>
-    Number(left.data.updatedAt) - Number(right.data.updatedAt) || left.key.path.localeCompare(right.key.path));
+    Number(left.data.updatedAt) - Number(right.data.updatedAt) ||
+    (left.key.path < right.key.path ? -1 : left.key.path > right.key.path ? 1 : 0));
   for (const document of ordered) {
     if (document.key.kind !== 'stripe_checkout' || !document.key.dropId) continue;
     const dropId = document.key.dropId;

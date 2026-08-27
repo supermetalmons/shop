@@ -13,6 +13,7 @@ const REQUIRED_QUEUES = [
 
 type CloudflareEnvelope = {
   result?: unknown;
+  result_info?: unknown;
   success?: unknown;
 };
 
@@ -20,13 +21,21 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-async function cloudflareJson(url: string, token: string, providerFetch: typeof fetch): Promise<unknown> {
+async function cloudflareEnvelope(
+  url: string,
+  token: string,
+  providerFetch: typeof fetch,
+): Promise<CloudflareEnvelope> {
   const response = await providerFetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const payload = await response.json().catch(() => null) as CloudflareEnvelope | null;
   if (!response.ok || payload?.success !== true) fail('Cloudflare Queue metrics request failed.');
-  return payload.result;
+  return payload;
+}
+
+async function cloudflareResult(url: string, token: string, providerFetch: typeof fetch): Promise<unknown> {
+  return (await cloudflareEnvelope(url, token, providerFetch)).result;
 }
 
 export async function checkQueueBacklogs(
@@ -34,8 +43,25 @@ export async function checkQueueBacklogs(
   providerFetch: typeof fetch = fetch,
 ): Promise<Record<string, { backlogBytes: number; backlogCount: number; oldestMessageTimestampMs: number }>> {
   if (!token) fail('CLOUDFLARE_API_TOKEN is required.');
-  const listed = await cloudflareJson(API_BASE, token, providerFetch);
-  if (!Array.isArray(listed)) fail('Cloudflare Queue inventory is invalid.');
+  const listed: unknown[] = [];
+  let totalPages = 1;
+  for (let page = 1; page <= totalPages; page += 1) {
+    const payload = await cloudflareEnvelope(`${API_BASE}?page=${page}&per_page=100`, token, providerFetch);
+    if (!Array.isArray(payload.result) || !payload.result_info ||
+      typeof payload.result_info !== 'object' || Array.isArray(payload.result_info)) {
+      fail('Cloudflare Queue inventory is invalid.');
+    }
+    const info = payload.result_info as Record<string, unknown>;
+    const responsePage = Number(info.page);
+    const responseTotalPages = Number(info.total_pages);
+    if (responsePage !== page || !Number.isSafeInteger(responseTotalPages) ||
+      responseTotalPages < page || responseTotalPages > 1000 ||
+      (page > 1 && responseTotalPages !== totalPages)) {
+      fail('Cloudflare Queue inventory pagination is invalid.');
+    }
+    totalPages = responseTotalPages;
+    listed.push(...payload.result);
+  }
   const queues = new Map(listed.flatMap((value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
     const row = value as Record<string, unknown>;
@@ -47,7 +73,7 @@ export async function checkQueueBacklogs(
   for (const name of REQUIRED_QUEUES) {
     const id = queues.get(name);
     if (!id) fail(`Required Queue is missing: ${name}.`);
-    const value = await cloudflareJson(`${API_BASE}/${id}/metrics`, token, providerFetch);
+    const value = await cloudflareResult(`${API_BASE}/${id}/metrics`, token, providerFetch);
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${name} metrics are invalid.`);
     const row = value as Record<string, unknown>;
     const backlogCount = Number(row.backlog_count);

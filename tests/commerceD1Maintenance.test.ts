@@ -34,4 +34,8 @@ test('Commerce D1 document rows reject malformed data and inconsistent identity'
   assert.throws(() => parseCommerceD1DocumentRow(row({ version: 0 })), /version is invalid/);
   assert.throws(() => parseCommerceD1DocumentRow(row({ update_time: 'invalid' })), /identity is inconsistent/);
   assert.throws(() => parseCommerceD1DocumentRow(row({ document_path: 'unsupported/path' })), /path is unsupported/);
+  assert.throws(() => parseCommerceD1DocumentRow(row({
+    document_path: 'drops/dröp/deliveryOrders/7',
+    drop_id: 'dröp',
+  })), /path is unsupported/);
 });

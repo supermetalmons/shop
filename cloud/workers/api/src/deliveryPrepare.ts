@@ -894,15 +894,16 @@ async function createDeliveryOrder(
   const key = commerceKeys.deliveryOrder(input.dropId, String(input.deliveryId));
   try {
     if (key.path !== input.path) throw new DeliveryPrepareError('internal', 'Delivery preparation failed.');
-    await commerceRepository(context).run(context.nowMs, async (unit) => unit.create(key, fields));
+    const created = await commerceRepository(context).run(
+      context.nowMs,
+      async (unit) => unit.create(key, fields),
+    );
+    return created.updateTime;
   } catch (error) {
     const reconciled = await reconcile();
     if (reconciled) return reconciled;
     throw error;
   }
-  const created = await commerceRepository(context).get(key);
-  if (!created) throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
-  return created.updateTime;
 }
 
 async function reconcileCreatedDeliveryOrder(
