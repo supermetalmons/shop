@@ -53,10 +53,17 @@ test('the final Commerce D1 schema retains its reconciliation indexes', () => {
     }
     db.exec('ANALYZE');
     assert.deepEqual(indexColumns(db, 'commerce_documents_delivery_owner_path'), [
-      'document_kind',
       'owner',
       'document_path',
     ]);
+    assert.equal(
+      String(db.prepare(`SELECT sql FROM sqlite_schema
+        WHERE type = 'index' AND name = 'commerce_documents_delivery_owner_path'`).get()!.sql)
+        .replace(/\s+/g, ' ')
+        .trim(),
+      `CREATE INDEX commerce_documents_delivery_owner_path ON commerce_documents (owner, document_path)
+        WHERE document_kind = 'delivery_order'`.replace(/\s+/g, ' ').trim(),
+    );
     assert.deepEqual(indexColumns(db, 'commerce_documents_pack_projection'), [
       'document_kind',
       'drop_id',

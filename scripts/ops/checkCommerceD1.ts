@@ -52,6 +52,9 @@ export function checkCommerceD1(): Record<string, unknown> {
   if (!migrations.some((row) => String(row.name).endsWith('0010_cloudflare_native_identity_queries.sql'))) {
     fail('Commerce D1 native identity and query migration is missing.');
   }
+  if (!migrations.some((row) => String(row.name).endsWith('0011_delivery_owner_partial_index.sql'))) {
+    fail('Commerce D1 delivery-owner partial-index migration is missing.');
+  }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -134,6 +137,16 @@ export function checkCommerceD1(): Record<string, unknown> {
     triggers.length !== requiredTriggers.size ||
     triggers.some((row) => !requiredTriggers.has(String(row.name)))
   ) fail('Commerce D1 trigger inventory is invalid.');
+
+  const deliveryOwnerIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'index' AND name = 'commerce_documents_delivery_owner_path'`);
+  const deliveryOwnerIndexSql = String(deliveryOwnerIndex[0]?.sql || '').replace(/\s+/g, ' ').trim();
+  if (
+    deliveryOwnerIndex.length !== 1 ||
+    deliveryOwnerIndexSql !== `CREATE INDEX commerce_documents_delivery_owner_path
+      ON commerce_documents (owner, document_path)
+      WHERE document_kind = 'delivery_order'`.replace(/\s+/g, ' ').trim()
+  ) fail('Commerce D1 delivery-owner partial index is invalid.');
 
   requireIndex(
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
