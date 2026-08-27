@@ -293,6 +293,7 @@ test('request boundary preserves the Stripe webhook failure envelope', async () 
     received: true,
     error: 'Stripe webhook processing failed',
   });
+  assert.equal(response.headers.get('access-control-allow-origin'), null);
   assert.match(response.headers.get('Server-Timing') || '', /total;dur=/);
 });
 
@@ -1444,6 +1445,38 @@ test('internal notification enqueue sends the exact validated JSON job once', as
   assert.deepEqual(sent, [{ body: NOTIFICATION_JOB, options: { contentType: 'json' } }]);
 });
 
+test('route logging failures do not alter internal enqueue responses', async (context) => {
+  context.mock.method(console, 'error', () => {
+    throw new Error('fallback logger unavailable');
+  });
+  let sends = 0;
+  let logAttempts = 0;
+  const notificationQueue: Queue = {
+    send: async () => {
+      sends += 1;
+      return { metadata: { metrics: { backlogCount: 1, backlogBytes: 100 } } };
+    },
+    sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+  };
+  const response = await handleRequest(
+    await notificationEnqueueRequest(),
+    env({ notificationQueue }),
+    {
+      ...quietDependencies(fetch),
+      log: () => {
+        logAttempts += 1;
+        throw new Error('logger unavailable');
+      },
+    },
+  );
+  assert.equal(response.status, 202);
+  assert.deepEqual(await response.json(), { queued: true });
+  assert.equal(response.headers.get('access-control-allow-origin'), null);
+  assert.equal(sends, 1);
+  assert.equal(logAttempts, 2);
+});
+
 test('internal notification enqueue rejects signed invalid jobs and surfaces queue failures', async () => {
   const invalid = await handleRequest(
     await notificationEnqueueRequest({ ...NOTIFICATION_JOB, recipients: ['not an email'] }),
@@ -1524,16 +1557,23 @@ test('public routes accept only mons.shop and local browser origins', async () =
     assert.equal(response.headers.get('access-control-allow-origin'), origin);
     assert.equal(response.headers.get('vary'), 'Origin');
   }
+  let opsReads = 0;
+  const opsDb = d1Database(function prepare() {
+    opsReads += 1;
+    throw new Error('OPS D1 must not run before public origin validation');
+  });
+  const staffAuthorization = `Bearer mons_staff_v1.123e4567-e89b-42d3-a456-426614174000.${'A'.repeat(43)}`;
   for (const origin of [undefined, 'https://candidate-mons-shop.lil-org.workers.dev', 'https://evil.example']) {
     let upstreamCalls = 0;
     const response = await handleRequest(new Request('https://api.mons.shop/inventory', {
       method: 'POST',
       headers: {
+        Authorization: staffAuthorization,
         'Content-Type': 'application/json',
         ...(origin ? { Origin: origin } : {}),
       },
       body: JSON.stringify({ owner: OWNER }),
-    }), env(), quietDependencies(async () => {
+    }), env({ opsDb }), quietDependencies(async () => {
       upstreamCalls += 1;
       return Response.json({});
     }));
@@ -1541,13 +1581,27 @@ test('public routes accept only mons.shop and local browser origins', async () =
     assert.equal(response.headers.get('access-control-allow-origin'), null);
     assert.equal(upstreamCalls, 0);
   }
+  const rpc = await handleRequest(new Request('https://api.mons.shop/rpc/mainnet-beta', {
+    method: 'POST',
+    headers: {
+      Authorization: staffAuthorization,
+      'Content-Type': 'application/json',
+      Origin: 'https://candidate-mons-shop.lil-org.workers.dev',
+    },
+    body: JSON.stringify(rpcBody('getLatestBlockhash', [{ commitment: 'confirmed' }])),
+  }), env({ opsDb }), quietDependencies(fetch));
+  assert.equal(rpc.status, 403);
+  assert.equal(rpc.headers.get('access-control-allow-origin'), null);
+  assert.equal(opsReads, 0);
 });
 
 test('public rate limits are observe-only and select the route-specific binding', async () => {
   const calls: string[] = [];
+  const keys: Array<[string, string]> = [];
   const logs: Record<string, unknown>[] = [];
-  const denied = (name: string) => rateLimiter(async () => {
+  const denied = (name: string) => rateLimiter(async ({ key }) => {
     calls.push(name);
+    keys.push([name, key]);
     return { success: false };
   });
   const providerFetch: ProviderFetch = async (_input, init) => {
@@ -1597,6 +1651,11 @@ test('public rate limits are observe-only and select the route-specific binding'
   assert.equal(notification.status, 200);
   assert.equal(resendCalls, 1);
   assert.deepEqual(calls, ['rpc-read', 'rpc-write', 'shop', 'notification']);
+  assert.deepEqual(keys, [
+    ['rpc-read', '203.0.113.8'],
+    ['rpc-write', '203.0.113.8'],
+    ['shop', '/inventory:203.0.113.8'],
+  ]);
   assert.equal(logs.filter((entry) => entry.event === 'public_rate_limit_would_block').length, 3);
   assert.equal(logs.some((entry) => entry.event === 'public_rate_limit_check_failed'), true);
   assert.equal(JSON.stringify(logs).includes('203.0.113.8'), false);

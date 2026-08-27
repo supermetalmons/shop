@@ -349,7 +349,6 @@ export async function handleRpcPost(
     binding: rpcClass === 'write'
       ? env.PUBLIC_RPC_WRITE_RATE_LIMITER
       : env.PUBLIC_RPC_READ_RATE_LIMITER,
-    keyScope: `${cluster}:${rpcClass}`,
     limit: rpcClass === 'write' ? PUBLIC_RATE_LIMITS.rpcWrite : PUBLIC_RATE_LIMITS.rpcRead,
     log: dependencies.log,
     request,

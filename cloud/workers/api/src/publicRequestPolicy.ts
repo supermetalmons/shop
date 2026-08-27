@@ -62,9 +62,30 @@ export function applyPublicCors(
   return response;
 }
 
+function canonicalPublicRequestIp(value: string | null): string | null {
+  const candidate = value?.trim() || '';
+  if (!candidate || candidate.length > 64) return null;
+  if (!candidate.includes(':')) {
+    const octets = candidate.split('.');
+    if (
+      octets.length !== 4 ||
+      octets.some((octet) => !/^(?:0|[1-9][0-9]{0,2})$/.test(octet) || Number(octet) > 255)
+    ) return null;
+    return octets.map((octet) => String(Number(octet))).join('.');
+  }
+  if (!/^[0-9a-f:.]+$/i.test(candidate)) return null;
+  try {
+    const hostname = new URL(`http://[${candidate}]/`).hostname;
+    return hostname.startsWith('[') && hostname.endsWith(']')
+      ? hostname.slice(1, -1).toLowerCase()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function connectingIp(request: Request): string | null {
-  const value = request.headers.get('CF-Connecting-IP')?.trim() || '';
-  return value && value.length <= 64 && /^[0-9a-f:.]+$/i.test(value) ? value : null;
+  return canonicalPublicRequestIp(request.headers.get('CF-Connecting-IP'));
 }
 
 function emit(log: (entry: Record<string, unknown>) => void, entry: Record<string, unknown>): void {
@@ -86,7 +107,7 @@ function shouldEmit(request: Request): boolean {
 
 export async function observePublicRateLimit(args: {
   binding: RateLimit;
-  keyScope: string;
+  keyScope?: string;
   limit: number;
   log: (entry: Record<string, unknown>) => void;
   request: Request;
@@ -104,7 +125,9 @@ export async function observePublicRateLimit(args: {
     return;
   }
   try {
-    const outcome = await args.binding.limit({ key: `${args.keyScope}:${ip}` });
+    const outcome = await args.binding.limit({
+      key: args.keyScope ? `${args.keyScope}:${ip}` : ip,
+    });
     if (outcome.success) return;
     if (shouldEmit(args.request)) emit(args.log, {
       event: 'public_rate_limit_would_block',

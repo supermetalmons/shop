@@ -193,6 +193,7 @@ type RequestExecution = {
   metrics: WorkerRequestMetrics;
   pathname: string;
   startedAt: number;
+  terminalLog: (entry: Record<string, unknown>) => void;
 };
 
 type DispatchResult = {
@@ -200,12 +201,39 @@ type DispatchResult = {
   logFields?: Record<string, unknown>;
 };
 
+function reportError(entry: Record<string, unknown>): void {
+  try {
+    console.error(entry);
+  } catch {}
+}
+
+function reportInfo(entry: Record<string, unknown>): void {
+  try {
+    console.log(entry);
+  } catch {}
+}
+
 function requestExecution(
   request: Request,
   dependencyOverrides: Partial<WorkerDependencies>,
 ): RequestExecution {
+  const terminalLog = dependencyOverrides.log || defaultDependencies.log;
   return {
-    dependencies: { ...defaultDependencies, ...dependencyOverrides },
+    dependencies: {
+      ...defaultDependencies,
+      ...dependencyOverrides,
+      log: (entry) => {
+        try {
+          terminalLog(entry);
+        } catch (error) {
+          reportError({
+            event: 'shop_api_route_log_failed',
+            loggedEvent: typeof entry.event === 'string' ? entry.event : 'unknown',
+            error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' },
+          });
+        }
+      },
+    },
     metrics: {
       upstreamCalls: 0,
       providerDurationMs: 0,
@@ -215,6 +243,7 @@ function requestExecution(
     },
     pathname: new URL(request.url).pathname,
     startedAt: performance.now(),
+    terminalLog,
   };
 }
 
@@ -244,7 +273,7 @@ function finalizeRequest(
     );
   }
   try {
-    execution.dependencies.log({
+    execution.terminalLog({
       event: 'shop_api_request',
       route: logRoute(execution.pathname),
       method: request.method,
@@ -256,13 +285,43 @@ function finalizeRequest(
       ...logFields,
     });
   } catch (error) {
-    console.error({
+    reportError({
       event: 'shop_api_request_log_failed',
       route: logRoute(execution.pathname),
       error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' },
     });
   }
   return response;
+}
+
+function internalJsonResponse(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Cache-Control': 'no-store',
+      'Content-Type': 'application/json; charset=utf-8',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
+
+function isStrictPublicRequestPath(pathname: string): boolean {
+  return pathname === '/inventory' ||
+    pathname === '/pending-open-boxes' ||
+    pathname === '/notifications/subscribe' ||
+    pathname === '/rpc/mainnet-beta' ||
+    pathname === '/rpc/devnet';
+}
+
+function strictPublicOriginDeniedResponse(request: Request, pathname: string): Response {
+  if (pathname === '/rpc/mainnet-beta' || pathname === '/rpc/devnet') {
+    return request.method === 'OPTIONS'
+      ? handleRpcPreflight(request)
+      : handleRpcMethodNotAllowed(request);
+  }
+  return request.method === 'OPTIONS'
+    ? handlePublicPreflight(request)
+    : handlePublicMethodNotAllowed(request);
 }
 
 function isProfileErrorPath(pathname: string): boolean {
@@ -309,7 +368,7 @@ function unexpectedResponse(request: Request, pathname: string): Response {
     return jsonResponse({ ok: false, error: 'provider-unavailable' }, 503);
   }
   if (pathname === STRIPE_WEBHOOK_PATH) {
-    return jsonResponse({
+    return internalJsonResponse({
       received: true,
       error: 'Stripe webhook processing failed',
     }, 500);
@@ -320,7 +379,7 @@ function unexpectedResponse(request: Request, pathname: string): Response {
       error: { code: 'unavailable', message: 'Service is temporarily unavailable.' },
     }, 503));
   }
-  return jsonResponse({ ok: false, error: 'internal' }, 500);
+  return internalJsonResponse({ ok: false, error: 'internal' }, 500);
 }
 
 async function dispatchRequest(
@@ -330,8 +389,12 @@ async function dispatchRequest(
   waitUntil?: (promise: Promise<unknown>) => void,
 ): Promise<DispatchResult> {
   const { dependencies, metrics, pathname } = execution;
+  const strictPublicRequest = isStrictPublicRequestPath(pathname);
+  if (strictPublicRequest && !publicRequestOrigin(request)) {
+    return { response: strictPublicOriginDeniedResponse(request, pathname) };
+  }
   let staffAuthenticated = false;
-  if (!STAFF_AUTH_PATHS.has(pathname)) {
+  if (!STAFF_AUTH_PATHS.has(pathname) && !strictPublicRequest) {
     const authorization = request.headers.get('Authorization');
     if (isStaffSessionAuthorization(authorization)) {
       try {
@@ -342,7 +405,7 @@ async function dispatchRequest(
         request = new Request(request, { headers });
       } catch (error) {
         if (error instanceof StaffAuthError && error.code === 'unauthenticated') {
-          console.log({ event: 'staff_auth_request_rejected', route: pathname });
+          reportInfo({ event: 'staff_auth_request_rejected', route: pathname });
           return {
             response: applyProfileCors(request, jsonResponse({
               ok: false,
@@ -351,7 +414,7 @@ async function dispatchRequest(
             logFields: { profileAuthOutcome: 'rejected' },
           };
         }
-        console.error({
+        reportError({
           event: 'staff_auth_request_unavailable',
           route: pathname,
           error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' },
@@ -753,7 +816,7 @@ export async function handleRequest(
   try {
     result = await dispatchRequest(request, env, execution, waitUntil);
   } catch (error) {
-    console.error({
+    reportError({
       event: 'shop_api_unhandled_error',
       route: logRoute(execution.pathname),
       error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' },
