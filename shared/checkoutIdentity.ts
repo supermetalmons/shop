@@ -50,7 +50,7 @@ export function createStripeCheckoutIdentity(
 }
 
 export function normalizeStripeCheckoutIdentity(checkout: Record<string, unknown>): StripeCheckoutIdentity {
-  if (Object.hasOwn(checkout, 'uid')) throw new Error('App-created Stripe checkout has legacy identity data');
+  if (Object.hasOwn(checkout, 'uid')) throw new Error('App-created Stripe checkout has noncanonical identity data');
   const ownerKind = normalizedString(checkout.ownerKind);
 
   if (ownerKind === STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS) {

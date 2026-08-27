@@ -39,7 +39,6 @@
   },
   "application": {
     "compatibilitySourceCommit": "16312aa1f7bee53db121897bab94af0c413e2601",
-    "firebaseFunctions": "deployed",
     "cloudflareCandidateVersion": "8ffa7013-9a36-48b5-a8be-4567852ee681",
     "cloudflarePreviousProductionVersion": "3e2ba63b-e97b-474d-9dbc-a2f7c67fb805",
     "cloudflareProductionVersion": "fe521892-4d2d-41df-a841-16478508d3f1"

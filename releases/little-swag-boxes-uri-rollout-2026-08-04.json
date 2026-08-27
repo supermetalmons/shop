@@ -1,12 +1,6 @@
 {
   "schemaVersion": 1,
   "deployedSourceCommit": "d2bdc913202de6d0b8e068992401f49ff7be420d",
-  "firebase": {
-    "project": "mons-shop",
-    "region": "us-central1",
-    "functionsUpdated": 30,
-    "status": "success"
-  },
   "cloudflare": {
     "account": "lil org",
     "worker": "mons-shop",

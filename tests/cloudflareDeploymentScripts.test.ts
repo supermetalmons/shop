@@ -27,7 +27,7 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   assert.equal(packageJson.devDependencies.wrangler, '4.120.0');
   assert.equal(
     packageJson.scripts['check:frontend'],
-    'npm run validate:legacy-runtime && npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm test && npm run build && npm run validate:browser-bundle',
+    'npm run types:frontend-worker:check && npm run typecheck:frontend-worker && npm run test:frontend-worker && npm run typecheck && npm test && npm run build && npm run validate:browser-bundle',
   );
   assert.equal(
     packageJson.scripts['dry-run:frontend'],
@@ -39,11 +39,11 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   );
   assert.equal(
     packageJson.scripts['dry-run:api'],
-    'node -e "require(\'fs\').mkdirSync(\'.cache\',{recursive:true})" && wrangler deploy --dry-run --outfile .cache/mons-shop-api-dry-run.js --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env && npm run validate:legacy-runtime -- .cache/mons-shop-api-dry-run.js',
+    'node -e "require(\'fs\').mkdirSync(\'.cache\',{recursive:true})" && wrangler deploy --dry-run --outfile .cache/mons-shop-api-dry-run.js --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env && node --experimental-strip-types scripts/validate-api-bundle.ts .cache/mons-shop-api-dry-run.js',
   );
   assert.equal(
     packageJson.scripts['check:api'],
-    'npm run validate:legacy-runtime && npm run types:api:check && npm run typecheck:api && npm run test:api && npm run test:api:runtime && npm run dry-run:api && npm run startup:api',
+    'npm run types:api:check && npm run typecheck:api && npm run test:api && npm run test:api:runtime && npm run dry-run:api && npm run startup:api',
   );
   assert.equal(
     packageJson.scripts['db:migrate:data'],
@@ -83,7 +83,7 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   );
 });
 
-test('API Worker binds separate immutable data, ops, and commerce D1 histories', () => {
+test('API Worker binds separate data, ops, and commerce D1 baselines', () => {
   assert.deepEqual(apiWrangler.d1_databases, [
     {
       binding: 'DATA_DB',

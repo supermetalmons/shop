@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import {
@@ -67,30 +67,13 @@ function plan() {
 function database(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys = ON');
-  for (const file of readdirSync('cloud/workers/api/commerce-migrations').sort()) {
-    if (file.startsWith('0009_')) {
-      db.exec(`UPDATE commerce_authority_control SET
-        authority_state = 'paused', revision = 2, paused_at_ms = 1, updated_at_ms = 1
-        WHERE singleton = 1`);
-    }
-    db.exec(readFileSync(`cloud/workers/api/commerce-migrations/${file}`, 'utf8'));
-  }
-  const manifestHash = 'a'.repeat(64);
-  db.exec(`UPDATE commerce_authority_control SET
-    authority_state = 'paused', revision = 2, paused_at_ms = 1, updated_at_ms = 1
-    WHERE singleton = 1`);
-  db.prepare(`INSERT INTO commerce_import_manifests (
-    manifest_sha256, document_count, kind_counts_json, source_updated_at_ms, imported_at_ms, archive_object_prefix
-  ) VALUES (?, 0, '{}', 1, 1, 'test')`).run(manifestHash);
-  db.prepare(`UPDATE commerce_authority_control SET
-    authority_state = 'd1', revision = 3, import_manifest_sha256 = ?, cutover_at_ms = 2, updated_at_ms = 2
-    WHERE singleton = 1`).run(manifestHash);
+  db.exec(readFileSync('cloud/workers/api/commerce-migrations/0001_current_schema.sql', 'utf8'));
   return db;
 }
 
 function pauseCommerce(db: DatabaseSync): void {
   db.exec(`UPDATE commerce_authority_control SET
-    authority_state = 'paused', revision = 4, paused_at_ms = 3, updated_at_ms = 3
+    authority_state = 'paused', revision = 2, paused_at_ms = 3, updated_at_ms = 3
     WHERE singleton = 1`);
 }
 
@@ -203,7 +186,7 @@ test('Commerce D1 wipe SQL deletes exact documents and advances revision once', 
   assert.deepEqual({ ...db.prepare(`SELECT documents_revision, revision, authority_state
     FROM commerce_authority_control`).get() }, {
     documents_revision: 1,
-    revision: 4,
+    revision: 2,
     authority_state: 'paused',
   });
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_wipe_guards').get()!.count, 0);

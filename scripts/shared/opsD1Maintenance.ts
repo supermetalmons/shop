@@ -6,29 +6,8 @@ import { isCanonicalReadyNotificationCursorPath } from '../../shared/readyToShip
 
 export const READY_NOTIFICATIONS_CONTROL_KEY = 'ready_notifications';
 const OPS_D1_MIGRATIONS = [
-  '0001_ops_state.sql',
-  '0002_profiles.sql',
-  '0003_profiles_d1_final.sql',
-  '0004_profile_integrity.sql',
-  '0005_profile_write_safety.sql',
-  '0006_wallet_sessions.sql',
-  '0007_wallet_sessions_d1_only.sql',
-  '0008_reveal_submissions.sql',
-  '0009_reveal_submissions_d1_only.sql',
-  '0010_reveal_submissions_baseline_index.sql',
-  '0011_staff_wallet_auth.sql',
-  '0012_anonymous_auth.sql',
-  '0013_remove_firebase_auth_fallback.sql',
-  '0014_auth_subject_bridge.sql',
-  '0015_auth_subject_cutover.sql',
-  '0016_remove_migration_controls.sql',
-  '0017_auth_wallet_bindings.sql',
+  '0001_current_schema.sql',
 ] as const;
-
-const PRODUCTION_MIN_PROFILE_COUNT = 690;
-const PRODUCTION_MIN_PROFILE_ADDRESS_COUNT = 503;
-export const PRODUCTION_AUTH_WALLET_BINDING_BASELINE = 1205;
-const PRODUCTION_MIN_REVEAL_SUBMISSION_CUTOVER_COUNT = 14;
 
 export type OpsD1Row = Record<string, unknown>;
 
@@ -46,19 +25,9 @@ export type RevealSubmissionStorageControl = {
   paused: boolean;
   revision: number;
   updatedAtMs: number;
-  cutoverAtMs: number | null;
-};
-
-export type AuthProviderRetirement = {
-  revision: number;
-  createdAtMs: number;
-  updatedAtMs: number;
-  legacyProviderDisabledAtMs: number;
 };
 
 export type OpsD1IntegrityInput = {
-  authProviderRetirement: OpsD1Row[];
-  authProviderRetirementColumns: OpsD1Row[];
   anonymousAuthSessionColumns: OpsD1Row[];
   anonymousAuthSessionCounts: OpsD1Row[];
   anonymousAuthSessionExpiryIndexColumns: OpsD1Row[];
@@ -73,7 +42,7 @@ export type OpsD1IntegrityInput = {
   quickCheck: OpsD1Row[];
   rateLimitBucketColumns: OpsD1Row[];
   revealSubmissionColumns: OpsD1Row[];
-  revealSubmissionBaselineIndexColumns: OpsD1Row[];
+  revealSubmissionStatusIndexColumns: OpsD1Row[];
   revealSubmissionCounts: OpsD1Row[];
   revealSubmissionStorageControl: OpsD1Row[];
   revealSubmissionStorageControlColumns: OpsD1Row[];
@@ -85,20 +54,12 @@ export type OpsD1IntegrityInput = {
 };
 
 export type OpsD1IntegrityReport = {
-  authProviderRetirement: AuthProviderRetirement;
   anonymousAuthSessionCount: number;
   profileAddressCount: number;
   profileCount: number;
   readyNotifications: ReadyNotificationsControl;
   revealSubmissionCount: number;
   revealSubmissionStorage: RevealSubmissionStorageControl;
-  authWalletBindingCount: number;
-};
-
-type OpsD1IntegrityMinimums = {
-  profileAddressCount: number;
-  profileCount: number;
-  revealSubmissionCutoverCount: number;
   authWalletBindingCount: number;
 };
 
@@ -116,14 +77,10 @@ const expectedSchema = new Map<
   string,
   { fingerprint: string; type: string; tableName: string }
 >([
-  ['auth_provider_retirement', { fingerprint: '05a3cd026372bf98dbadbc764b028930f9f1fcf3294a542efd2c6b08fe5d39bc', type: 'table', tableName: 'auth_provider_retirement' }],
-  ['auth_provider_retirement_delete_guard', { fingerprint: 'a8c936557fa24491dbc92b5f99324cb68633866b79426b226e78f045ba81969d', type: 'trigger', tableName: 'auth_provider_retirement' }],
-  ['auth_provider_retirement_insert_guard', { fingerprint: '025c6efe39d94b9e03fe87a14f468de810ddc353f6b143a6a6114dc988c30edc', type: 'trigger', tableName: 'auth_provider_retirement' }],
-  ['auth_provider_retirement_update_guard', { fingerprint: '85cb4a800c0d199e055d6c0b7ad0dffb3009003104027b69544d9c0723667903', type: 'trigger', tableName: 'auth_provider_retirement' }],
-  ['reveal_submission_storage_control', { fingerprint: 'c56576538e111e7dcb61ca0159f55af0487e30d389c125fdf914e4075748f30e', type: 'table', tableName: 'reveal_submission_storage_control' }],
+  ['reveal_submission_storage_control', { fingerprint: '0853bb4e152ba2684f234566a2a99b5ab120b00784d3c37f3729eb43ce8bee15', type: 'table', tableName: 'reveal_submission_storage_control' }],
   ['reveal_submission_control_delete_guard', { fingerprint: '618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
   ['reveal_submission_control_insert_guard', { fingerprint: 'b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
-  ['reveal_submission_control_update_guard', { fingerprint: 'd523fb91e74871a128fff75ec6687b8617309ad10b0287905ae35f2f0acc51cb', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
+  ['reveal_submission_control_update_guard', { fingerprint: '957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
   [
     'anonymous_auth_sessions',
     {
@@ -321,14 +278,6 @@ const expectedAnonymousAuthSessionColumns: readonly ExpectedColumn[] = [
   ['expires_at_ms', 'INTEGER', 1, 0],
 ];
 
-const expectedAuthProviderRetirementColumns: readonly ExpectedColumn[] = [
-  ['singleton', 'INTEGER', 1, 1],
-  ['revision', 'INTEGER', 1, 0],
-  ['created_at_ms', 'INTEGER', 1, 0],
-  ['updated_at_ms', 'INTEGER', 1, 0],
-  ['legacy_provider_disabled_at_ms', 'INTEGER', 1, 0],
-];
-
 const expectedRateLimitBucketColumns: readonly ExpectedColumn[] = [
   ['scope', 'TEXT', 1, 1],
   ['subject_hash', 'TEXT', 1, 2],
@@ -394,7 +343,6 @@ const expectedRevealSubmissionStorageControlColumns: readonly ExpectedColumn[] =
   ['revision', 'INTEGER', 1, 0],
   ['created_at_ms', 'INTEGER', 1, 0],
   ['updated_at_ms', 'INTEGER', 1, 0],
-  ['cutover_at_ms', 'INTEGER', 1, 0],
 ];
 
 function fail(message: string): never {
@@ -526,14 +474,14 @@ function assertExpiryIndexColumns(rows: OpsD1Row[]): void {
   assertExactInteger(rows[0].cid, 7, 'Ops D1 expiry index column id');
 }
 
-function assertRevealSubmissionBaselineIndexColumns(rows: OpsD1Row[]): void {
+function assertRevealSubmissionStatusIndexColumns(rows: OpsD1Row[]): void {
   if (
     rows.length !== 2 ||
     rows[0].seqno !== 0 ||
     rows[0].name !== 'status' ||
     rows[1].seqno !== 1 ||
     rows[1].name !== 'created_at_ms'
-  ) fail('Ops D1 reveal-submission baseline index columns are not exact.');
+  ) fail('Ops D1 reveal-submission status index columns are not exact.');
 }
 
 function assertSingleColumnIndex(rows: OpsD1Row[], name: string, cid: number, label: string): void {
@@ -609,49 +557,15 @@ function parseRevealSubmissionStorageControl(
   ) return fail('Reveal-submission storage control is invalid.');
   const revision = safeInteger(row.revision, 'Reveal-submission storage revision', 1);
   const updatedAtMs = safeInteger(row.updated_at_ms, 'Reveal-submission storage update timestamp');
-  const cutoverAtMs = row.cutover_at_ms === null
-    ? null
-    : safeInteger(row.cutover_at_ms, 'Reveal-submission cutover timestamp');
-  if (
-    cutoverAtMs === null
-  ) return fail('Reveal-submission cutover state is invalid.');
   return {
     paused: row.paused === 1,
     revision,
     updatedAtMs,
-    cutoverAtMs,
-  };
-}
-
-function parseAuthProviderRetirement(row: OpsD1Row): AuthProviderRetirement {
-  if (row.singleton !== 1) return fail('Auth-provider retirement record is invalid.');
-  const createdAtMs = safeInteger(row.created_at_ms, 'Auth-provider retirement creation timestamp');
-  const updatedAtMs = safeInteger(row.updated_at_ms, 'Auth-provider retirement update timestamp');
-  const legacyProviderDisabledAtMs = safeInteger(
-    row.legacy_provider_disabled_at_ms,
-    'Legacy-provider disable timestamp',
-  );
-  if (
-    updatedAtMs < createdAtMs ||
-    legacyProviderDisabledAtMs < createdAtMs ||
-    legacyProviderDisabledAtMs > updatedAtMs
-  ) return fail('Auth-provider retirement timestamps are invalid.');
-  return {
-    revision: safeInteger(row.revision, 'Auth-provider retirement revision', 1),
-    createdAtMs,
-    updatedAtMs,
-    legacyProviderDisabledAtMs,
   };
 }
 
 export function assertOpsD1Integrity(
   input: OpsD1IntegrityInput,
-  minimums: OpsD1IntegrityMinimums = {
-    profileAddressCount: 0,
-    profileCount: 0,
-    revealSubmissionCutoverCount: 0,
-    authWalletBindingCount: 0,
-  },
 ): OpsD1IntegrityReport {
   if (
     input.quickCheck.length !== 1 ||
@@ -675,16 +589,11 @@ export function assertOpsD1Integrity(
     'anonymous_auth_sessions',
   );
   assertExactColumns(
-    input.authProviderRetirementColumns,
-    expectedAuthProviderRetirementColumns,
-    'auth_provider_retirement',
-  );
-  assertExactColumns(
     input.workerControlColumns,
     expectedWorkerControlColumns,
     'worker_controls',
   );
-  assertRevealSubmissionBaselineIndexColumns(input.revealSubmissionBaselineIndexColumns);
+  assertRevealSubmissionStatusIndexColumns(input.revealSubmissionStatusIndexColumns);
   assertSingleColumnIndex(
     input.anonymousAuthSessionExpiryIndexColumns,
     'expires_at_ms',
@@ -734,13 +643,9 @@ export function assertOpsD1Integrity(
   if (input.revealSubmissionStorageControl.length !== 1) {
     return fail('Ops D1 must contain exactly one reveal-submission storage control.');
   }
-  if (input.authProviderRetirement.length !== 1) {
-    return fail('Ops D1 must contain exactly one auth-provider retirement record.');
-  }
   if (input.anonymousAuthSessionCounts.length !== 1) {
     return fail('Ops D1 anonymous-auth session count is invalid.');
   }
-  const authProviderRetirement = parseAuthProviderRetirement(input.authProviderRetirement[0]);
   const anonymousAuthSessionCount = safeInteger(
     input.anonymousAuthSessionCounts[0].anonymous_auth_session_count,
     'Ops D1 anonymous-auth session count',
@@ -753,9 +658,6 @@ export function assertOpsD1Integrity(
   }
   const profileCount = safeInteger(input.profileCounts[0].profile_count, 'Ops D1 profile count');
   const profileAddressCount = safeInteger(input.profileCounts[0].profile_address_count, 'Ops D1 profile address count');
-  if (profileCount < minimums.profileCount || profileAddressCount < minimums.profileAddressCount) {
-    return fail('Ops D1 profile counts are below the production cutover baseline.');
-  }
   if (input.authWalletBindingCounts.length !== 1) {
     return fail('Ops D1 auth-wallet binding count is invalid.');
   }
@@ -763,9 +665,6 @@ export function assertOpsD1Integrity(
     input.authWalletBindingCounts[0].auth_wallet_binding_count,
     'Ops D1 auth-wallet binding count',
   );
-  if (authWalletBindingCount < minimums.authWalletBindingCount) {
-    return fail('Ops D1 auth-wallet binding count is below the production cutover baseline.');
-  }
   if (input.revealSubmissionCounts.length !== 1) {
     return fail('Ops D1 reveal-submission count is invalid.');
   }
@@ -773,15 +672,7 @@ export function assertOpsD1Integrity(
     input.revealSubmissionCounts[0].reveal_submission_count,
     'Ops D1 reveal-submission count',
   );
-  const revealSubmissionCutoverCount = safeInteger(
-    input.revealSubmissionCounts[0].reveal_submission_cutover_count,
-    'Ops D1 cutover reveal-submission count',
-  );
-  if (revealSubmissionCutoverCount < minimums.revealSubmissionCutoverCount) {
-    return fail('Ops D1 reveal-submission count is below the production cutover baseline.');
-  }
   return {
-    authProviderRetirement,
     anonymousAuthSessionCount,
     profileAddressCount,
     profileCount,
@@ -900,16 +791,6 @@ export function readRemoteReadyNotificationsControl(): ReadyNotificationsControl
 
 export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
   return assertOpsD1Integrity({
-    authProviderRetirement: queryRemoteOpsD1(`SELECT
-      singleton,
-      revision,
-      created_at_ms,
-      updated_at_ms,
-      legacy_provider_disabled_at_ms
-      FROM auth_provider_retirement`),
-    authProviderRetirementColumns: queryRemoteOpsD1(
-      'PRAGMA table_info(auth_provider_retirement)',
-    ),
     anonymousAuthSessionColumns: queryRemoteOpsD1(
       'PRAGMA table_info(anonymous_auth_sessions)',
     ),
@@ -946,26 +827,17 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
     revealSubmissionColumns: queryRemoteOpsD1(
       'PRAGMA table_info(reveal_submissions)',
     ),
-    revealSubmissionBaselineIndexColumns: queryRemoteOpsD1(
+    revealSubmissionStatusIndexColumns: queryRemoteOpsD1(
       'PRAGMA index_info(reveal_submissions_status_created_at_ms)',
     ),
     revealSubmissionCounts: queryRemoteOpsD1(
-      `SELECT
-        (SELECT COUNT(*) FROM reveal_submissions) AS reveal_submission_count,
-        (SELECT COUNT(*)
-          FROM reveal_submissions AS submission
-          JOIN reveal_submission_storage_control AS control ON control.singleton = 1
-          WHERE
-            submission.status = 'confirmed' AND
-            submission.created_at_ms <= control.cutover_at_ms
-        ) AS reveal_submission_cutover_count`,
+      'SELECT COUNT(*) AS reveal_submission_count FROM reveal_submissions',
     ),
     revealSubmissionStorageControl: queryRemoteOpsD1(`SELECT
       singleton,
       paused,
       revision,
-      updated_at_ms,
-      cutover_at_ms
+      updated_at_ms
       FROM reveal_submission_storage_control`),
     revealSubmissionStorageControlColumns: queryRemoteOpsD1(
       'PRAGMA table_info(reveal_submission_storage_control)',
@@ -983,7 +855,6 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
         schema = 'main' AND
         name IN (
           'profile_addresses',
-          'auth_provider_retirement',
           'anonymous_auth_sessions',
           'profiles',
           'rate_limit_buckets',
@@ -1004,11 +875,6 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
     workerControlColumns: queryRemoteOpsD1(
       'PRAGMA table_info(worker_controls)',
     ),
-  }, {
-    profileAddressCount: PRODUCTION_MIN_PROFILE_ADDRESS_COUNT,
-    profileCount: PRODUCTION_MIN_PROFILE_COUNT,
-    revealSubmissionCutoverCount: PRODUCTION_MIN_REVEAL_SUBMISSION_CUTOVER_COUNT,
-    authWalletBindingCount: PRODUCTION_AUTH_WALLET_BINDING_BASELINE,
   });
 }
 

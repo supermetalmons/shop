@@ -91,7 +91,6 @@ function dependencies(overrides: Record<string, unknown> = {}) {
       source: 'd1' as const,
       revision: 1,
       updatedAtMs: 0,
-      cutoverAtMs: 500,
     }),
     validateOnchainConfig: async () => ({
       admin: COSIGNER.publicKey,
@@ -209,7 +208,6 @@ test('paused reveal storage rejects requests before reveal reads or mutations', 
         source: 'd1' as const,
         revision: 1,
         updatedAtMs: 0,
-        cutoverAtMs: 500,
       }),
       loadRevealSubmission: async () => {
         revealReads += 1;
@@ -1684,7 +1682,6 @@ test('paused reveal storage retries background jobs without reading submissions'
       source: 'd1' as const,
       revision: 1,
       updatedAtMs: 0,
-      cutoverAtMs: 500,
     }),
     loadRevealSubmission: async () => {
       reads += 1;

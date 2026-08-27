@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
 import { commerceKeyFromPath } from '../src/commerceRepository.ts';
 
@@ -71,23 +71,7 @@ export function d1Database(database: DatabaseSync): D1Database {
 export function createCommerceD1Harness(): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys = ON');
-  for (const file of readdirSync('cloud/workers/api/commerce-migrations').sort()) {
-    if (file.startsWith('0009_')) {
-      database.exec(`UPDATE commerce_authority_control SET
-        authority_state = 'paused', revision = 2, paused_at_ms = 1, updated_at_ms = 1
-        WHERE singleton = 1`);
-    }
-    database.exec(readFileSync(`cloud/workers/api/commerce-migrations/${file}`, 'utf8'));
-  }
-  database.exec(`UPDATE commerce_authority_control SET
-    authority_state = 'paused', revision = 2, paused_at_ms = 1, updated_at_ms = 1
-    WHERE singleton = 1`);
-  database.prepare(`INSERT INTO commerce_import_manifests (
-    manifest_sha256, document_count, kind_counts_json, source_updated_at_ms, imported_at_ms, archive_object_prefix
-  ) VALUES (?, 0, '{}', 1, 1, 'test')`).run('a'.repeat(64));
-  database.prepare(`UPDATE commerce_authority_control SET
-    authority_state = 'd1', revision = 3, cutover_at_ms = 2, paused_at_ms = NULL,
-    import_manifest_sha256 = ?, updated_at_ms = 2 WHERE singleton = 1`).run('a'.repeat(64));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0001_current_schema.sql', 'utf8'));
   return { database, db: d1Database(database) };
 }
 

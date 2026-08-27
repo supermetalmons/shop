@@ -273,29 +273,13 @@ test('authoritative rebuild derives assignment and delivery counters from Commer
   assert.equal(result.counters.redeemedIrlNormal, 2);
 });
 
-test('migration 0004 introduces synchronized metadata and an unconditional delete guard', () => {
-  const migration = readFileSync(
-    'cloud/workers/api/migrations/0004_pack_status_metadata_compat.sql',
+test('pack-status baseline includes metadata and immutable event guards', () => {
+  const baseline = readFileSync(
+    'cloud/workers/api/migrations/0001_current_schema.sql',
     'utf8',
   );
-  assert.match(migration, /CREATE TABLE pack_status_metadata/);
-  assert.match(migration, /INSERT INTO pack_status_metadata/);
-  assert.match(migration, /CREATE TRIGGER pack_status_rollout_metadata_sync/);
-  assert.match(migration, /CREATE TRIGGER pack_status_metadata_rollout_sync/);
-  assert.match(migration, /DROP TRIGGER pack_status_event_delete_guard/);
-  const deleteGuard = migration.slice(migration.indexOf('CREATE TRIGGER pack_status_event_delete_guard'));
-  assert.doesNotMatch(deleteGuard, /\bWHEN\b/);
-  assert.match(deleteGuard, /RAISE\(ABORT, 'pack-status events are immutable'\)/);
-});
-
-test('migration 0005 removes the rollout compatibility schema', () => {
-  const migration = readFileSync(
-    'cloud/workers/api/migrations/0005_remove_pack_status_rollout.sql',
-    'utf8',
-  );
-  assert.match(migration, /DROP TRIGGER pack_status_metadata_rollout_sync/);
-  assert.match(migration, /DROP TRIGGER pack_status_rollout_metadata_sync/);
-  assert.match(migration, /DROP TRIGGER pack_status_rollout_d1_only_insert_guard/);
-  assert.match(migration, /DROP TRIGGER pack_status_rollout_d1_only_update_guard/);
-  assert.match(migration, /DROP TABLE pack_status_rollout/);
+  assert.match(baseline, /CREATE TABLE pack_status_metadata/);
+  assert.match(baseline, /VALUES \(1, 1, 0\)/);
+  assert.match(baseline, /CREATE TRIGGER pack_status_event_delete_guard/);
+  assert.match(baseline, /RAISE\(ABORT, 'pack-status events are immutable'\)/);
 });

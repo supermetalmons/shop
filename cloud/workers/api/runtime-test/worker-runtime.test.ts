@@ -53,14 +53,6 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     await worker.applyD1Migrations('OPS_DB');
     await worker.applyD1Migrations('COMMERCE_DB');
     const runtimeEnv = await worker.getEnv();
-    const manifest = 'a'.repeat(64);
-    await runtimeEnv.COMMERCE_DB.prepare(`INSERT INTO commerce_import_manifests (
-      manifest_sha256, document_count, kind_counts_json, source_updated_at_ms, imported_at_ms, archive_object_prefix
-    ) VALUES (?, 0, '{}', 1, 1, 'runtime-test')`).bind(manifest).run();
-    await runtimeEnv.COMMERCE_DB.prepare(`UPDATE commerce_authority_control SET
-      authority_state = 'd1', revision = revision + 1, cutover_at_ms = 1,
-      paused_at_ms = NULL, import_manifest_sha256 = ?, updated_at_ms = 1
-      WHERE singleton = 1`).bind(manifest).run();
     const health = await worker.fetch('https://api.mons.shop/health');
     assert.equal(health.status, 200);
     assert.deepEqual(await health.json(), { ok: true });

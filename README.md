@@ -165,7 +165,7 @@ npm run check:commerce-d1
 npm run deploy:api
 ```
 
-`db:migrate:api` applies both immutable migration histories. `deploy:api` runs
+`db:migrate:api` applies all three D1 migration sets. `deploy:api` runs
 the API checks, applies all pending remote D1 migration sets, checks remote
 pack-status, ops-state, and commerce read-model integrity, and then publishes the API Worker with
 native `wrangler deploy --strict`. This order ensures the deployed code never
@@ -174,24 +174,20 @@ expects a schema that has not been applied.
 D1 changes and Worker publication are separate platform operations. Production
 recovery is fix-forward: if any step fails, stop, inspect the remote state,
 correct the problem, and rerun the same command. The currently deployed Worker
-remains active until publication succeeds, while any already-applied D1
-migration remains part of database history. After a production defect, publish
-a corrected version through the same checks. Do not edit applied SQL or attempt
+remains active until publication succeeds, while every applied D1 migration
+remains recorded in its database. After a production defect, publish a
+corrected version through the same checks. Do not edit applied SQL or attempt
 to reverse the deployment workflow by hand.
 
 ### Pack-status D1
 
 The API Worker binds the existing `mons-shop-data` database as `DATA_DB`.
-Customer pack-status endpoints read D1 only; the retired provider is not a
-fallback. The projection includes supported-drop summaries, immutable event
-history, and cache-generation metadata.
+Customer pack-status endpoints read its supported-drop summaries, immutable
+event history, and cache-generation metadata.
 
-D1 files under `cloud/workers/api/migrations/` are immutable history. Never
-edit, rename, reorder, or remove a migration that may have been applied.
-Introduce schema changes by appending the next numbered migration. A fresh
-database must apply the complete history in order and finish with the same
-steady-state schema as production; intermediate schema in historical files is
-expected.
+`cloud/workers/api/migrations/0001_current_schema.sql` is the clean pack-status
+baseline. Never edit a migration after it has been applied. Introduce the next
+schema change as `0002_<description>.sql`, then continue numbering in order.
 
 Apply pending production migrations and verify the result with:
 
@@ -227,10 +223,10 @@ schedule.
 
 ### Operations D1
 
-The API Worker binds `mons-shop-ops` as `OPS_DB`. Its immutable migration
-history is separate from pack status under
-`cloud/workers/api/ops-migrations/`. Append a numbered migration for every
-future change; never edit or remove one that may have been applied.
+The API Worker binds `mons-shop-ops` as `OPS_DB`. Its schema is separate from
+pack status and starts at
+`cloud/workers/api/ops-migrations/0001_current_schema.sql`. Append
+`0002_<description>.sql` for the next change and never edit an applied file.
 
 Apply and verify this database independently with:
 
@@ -239,16 +235,13 @@ npm run db:migrate:ops
 npm run check:ops-d1
 ```
 
-The integrity check validates Wrangler migration history, every strict table,
-the expiry index, foreign keys, SQLite quick check, the singleton
-ready-notification control, the reveal-submission source and production count
-baseline, and the profile-storage source. Receipt-transfer
-caller and asset buckets use exact ten-minute fixed windows. Expired buckets
-are cleaned in bounded batches by the existing five-minute Worker schedule;
-there is no legacy-provider backfill for these ephemeral counters.
+The integrity check validates the schema baseline, every strict table, expiry
+indexes, foreign keys, SQLite quick check, singleton controls, and current
+table shapes. Receipt-transfer caller and asset buckets use exact ten-minute
+fixed windows. Expired buckets are cleaned in bounded batches by the existing
+five-minute Worker schedule.
 
-Reveal submissions live in Ops D1 after their guarded one-way cutover. Inspect
-or pause that subsystem with:
+Reveal submissions live in Ops D1. Inspect or pause that subsystem with:
 
 ```bash
 npm run reveal-submissions-control -- status
@@ -256,13 +249,9 @@ npm run reveal-submissions-control -- pause --write
 npm run reveal-submissions-control -- resume --write
 ```
 
-The production legacy-database-to-D1 cutover completed on 2026-08-25. The D1
-source is permanent and the Worker fails closed unless all 14 pre-cutover
-submissions are present. Recover by fixing forward.
-
 Profiles and append-only encrypted saved addresses live only in the Ops D1
-database. The Ops integrity check enforces the production cutover count floors
-and permanently D1-only source.
+database. The Ops integrity check validates their schema and current row
+integrity without hard-coded production count floors.
 
 Inspect and mutate the notification control only through the guarded operator
 command:
@@ -308,9 +297,11 @@ canonical fulfillment origin address.
 
 ### Commerce database
 
-`mons-shop-commerce` is the authoritative commerce document database after the
-guarded maintenance cutover. The Worker preserves the existing commerce API
-and transaction behavior through the D1 document-store adapter.
+`mons-shop-commerce` is the authoritative commerce document database. Its
+schema starts at
+`cloud/workers/api/commerce-migrations/0001_current_schema.sql`; append
+`0002_<description>.sql` for the next change. The Worker preserves the existing
+commerce API and transaction behavior through the D1 document-store adapter.
 
 Inspect or pause the authoritative database with:
 

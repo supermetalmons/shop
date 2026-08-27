@@ -33,16 +33,12 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
     const worker = server.getWorker<Env>('mons-shop-api');
     await worker.applyD1Migrations('DATA_DB');
     const env = await worker.getEnv();
-    assert.deepEqual(await readPackStatusMetadata(env.DATA_DB), { cacheGeneration: 2 });
+    assert.deepEqual(await readPackStatusMetadata(env.DATA_DB), { cacheGeneration: 1 });
     const migrations = await env.DATA_DB.prepare(
-      "SELECT name FROM d1_migrations WHERE name LIKE '%pack_status%' ORDER BY name",
+      'SELECT name FROM d1_migrations ORDER BY name',
     ).all<{ name: string }>();
     assert.deepEqual(migrations.results.map((row) => row.name), [
-      '0001_pack_status.sql',
-      '0002_pack_status_event_type_guard.sql',
-      '0003_pack_status_d1_only.sql',
-      '0004_pack_status_metadata_compat.sql',
-      '0005_remove_pack_status_rollout.sql',
+      '0001_current_schema.sql',
     ]);
 
     await env.DATA_DB.prepare(
@@ -132,7 +128,7 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
       rebuiltAtMs: 500,
       updatedAtMs: 500,
     });
-    assert.deepEqual(await readPackStatusMetadata(env.DATA_DB), { cacheGeneration: 3 });
+    assert.deepEqual(await readPackStatusMetadata(env.DATA_DB), { cacheGeneration: 2 });
 
     const staleRebuildSql = buildD1SummaryRebuildSql({
       dropId: 'card_nft_2',
@@ -153,7 +149,7 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
     );
     assert.equal((await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2'))?.totalInitialSupply, 10);
     assert.equal((await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2'))?.rebuiltAtMs, 500);
-    assert.deepEqual(await readPackStatusMetadata(env.DATA_DB), { cacheGeneration: 3 });
+    assert.deepEqual(await readPackStatusMetadata(env.DATA_DB), { cacheGeneration: 2 });
 
     await env.DATA_DB.prepare(
       'UPDATE pack_status_metadata SET cache_generation = 4, updated_at_ms = 700 WHERE singleton = 1',

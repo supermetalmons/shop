@@ -4,7 +4,6 @@ import { readRemoteOpsD1Integrity } from '../shared/opsD1Maintenance.ts';
 
 export function formatOpsD1Report(): string {
   const {
-    authProviderRetirement,
     anonymousAuthSessionCount,
     profileAddressCount,
     profileCount,
@@ -14,7 +13,7 @@ export function formatOpsD1Report(): string {
     authWalletBindingCount,
   } = readRemoteOpsD1Integrity();
   const cursor = readyNotifications.cursorPath || 'none';
-  return `Ops D1 is healthy: anonymous auth ${anonymousAuthSessionCount} sessions, legacy provider retired at ${new Date(authProviderRetirement.legacyProviderDisabledAtMs).toISOString()}, revision ${authProviderRetirement.revision}; ready notifications ${readyNotifications.paused ? 'paused' : 'active'}, cursor ${cursor}, revision ${readyNotifications.revision}; reveal submissions ${revealSubmissionCount}, ${revealSubmissionStorage.paused ? 'paused' : 'active'}, revision ${revealSubmissionStorage.revision}; profiles ${profileCount}, addresses ${profileAddressCount}; auth-wallet bindings ${authWalletBindingCount}.`;
+  return `Ops D1 is healthy: anonymous auth ${anonymousAuthSessionCount} sessions; ready notifications ${readyNotifications.paused ? 'paused' : 'active'}, cursor ${cursor}, revision ${readyNotifications.revision}; reveal submissions ${revealSubmissionCount}, ${revealSubmissionStorage.paused ? 'paused' : 'active'}, revision ${revealSubmissionStorage.revision}; profiles ${profileCount}, addresses ${profileAddressCount}; auth-wallet bindings ${authWalletBindingCount}.`;
 }
 
 function isDirectRun(): boolean {

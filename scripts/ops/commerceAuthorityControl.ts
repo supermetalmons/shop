@@ -50,8 +50,6 @@ const statusSql = `SELECT
   revision,
   documents_revision,
   paused_at_ms,
-  cutover_at_ms,
-  import_manifest_sha256,
   updated_at_ms
 FROM commerce_authority_control
 WHERE singleton = 1`;
@@ -70,9 +68,8 @@ export function buildCommerceAuthorityMutationSql(
   }
   return `UPDATE commerce_authority_control
     SET authority_state = 'd1', revision = revision + 1,
-      paused_at_ms = NULL, cutover_at_ms = COALESCE(cutover_at_ms, ${nowMs}), updated_at_ms = ${nowMs}
+      paused_at_ms = NULL, updated_at_ms = ${nowMs}
     WHERE singleton = 1 AND authority_state = 'paused' AND revision = ${expectedRevision}
-      AND import_manifest_sha256 IS NOT NULL
     RETURNING *`;
 }
 

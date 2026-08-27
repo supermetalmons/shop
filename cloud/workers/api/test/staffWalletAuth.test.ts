@@ -143,7 +143,7 @@ function database(): {
 } {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec('PRAGMA foreign_keys = ON');
-  sqlite.exec(readFileSync('cloud/workers/api/ops-migrations/0011_staff_wallet_auth.sql', 'utf8'));
+  sqlite.exec(readFileSync('cloud/workers/api/ops-migrations/0001_current_schema.sql', 'utf8'));
   const db = new TestD1Database(sqlite);
   const challengeLimiter = new TestRateLimit(10);
   const sessionLimiter = new TestRateLimit(30);

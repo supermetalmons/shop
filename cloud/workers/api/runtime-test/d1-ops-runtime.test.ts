@@ -102,29 +102,8 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       'SELECT name FROM d1_migrations ORDER BY name',
     ).all<{ name: string }>();
     assert.deepEqual(migrations.results.map((row) => row.name), [
-      '0001_ops_state.sql',
-      '0002_profiles.sql',
-      '0003_profiles_d1_final.sql',
-      '0004_profile_integrity.sql',
-      '0005_profile_write_safety.sql',
-      '0006_wallet_sessions.sql',
-      '0007_wallet_sessions_d1_only.sql',
-      '0008_reveal_submissions.sql',
-      '0009_reveal_submissions_d1_only.sql',
-      '0010_reveal_submissions_baseline_index.sql',
-      '0011_staff_wallet_auth.sql',
-      '0012_anonymous_auth.sql',
-      '0013_remove_firebase_auth_fallback.sql',
-      '0014_auth_subject_bridge.sql',
-      '0015_auth_subject_cutover.sql',
-      '0016_remove_migration_controls.sql',
-      '0017_auth_wallet_bindings.sql',
+      '0001_current_schema.sql',
     ]);
-    const authRetirement = await env.OPS_DB.prepare(`SELECT revision, legacy_provider_disabled_at_ms
-      FROM auth_provider_retirement
-      WHERE singleton = 1`).first<Record<string, unknown>>();
-    assert.equal(authRetirement?.revision, 2);
-    assert.ok(Number.isSafeInteger(authRetirement?.legacy_provider_disabled_at_ms));
     const anonymousExpiry = 30 * 24 * 60 * 60 * 1000;
     await env.OPS_DB.batch([
       env.OPS_DB.prepare(`INSERT INTO anonymous_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?)`)
@@ -157,75 +136,18 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       Number((await env.OPS_DB.prepare('SELECT COUNT(*) AS count FROM anonymous_auth_sessions').first<{ count: number }>())?.count),
       1,
     );
-    await assert.rejects(loadRevealSubmissionStorageControl(env.OPS_DB));
-    await env.OPS_DB.batch(Array.from({ length: 14 }, (_, index) => env.OPS_DB.prepare(
-      `INSERT INTO reveal_submissions (
-        drop_id, box_asset_id, schema_version, owner_wallet, signature,
-        recent_blockhash, blockhash_context_slot, dude_ids_json,
-        reservation_id, status, revision, created_at_ms, updated_at_ms, confirmed_at_ms
-      ) VALUES ('baseline', ?, 1, ?, ?, ?, 1, '[1]', ?, 'confirmed', 1, 1, 1, 1)`,
-    ).bind(
-      String(index).padStart(32, '0'),
-      RACE_WALLET,
-      '2'.repeat(64),
-      '3'.repeat(32),
-      `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
-    )));
     const revealStorageControl = await loadRevealSubmissionStorageControl(env.OPS_DB);
     assert.equal(revealStorageControl.paused, false);
-    assert.equal(revealStorageControl.revision, 3);
-    assert.ok(revealStorageControl.updatedAtMs > 0);
-    assert.equal(revealStorageControl.cutoverAtMs, revealStorageControl.updatedAtMs);
-    const baselinePlan = await env.OPS_DB.prepare(`EXPLAIN QUERY PLAN
-      SELECT COUNT(*)
+    assert.equal(revealStorageControl.revision, 1);
+    assert.equal(revealStorageControl.updatedAtMs, 0);
+    const statusPlan = await env.OPS_DB.prepare(`EXPLAIN QUERY PLAN
+      SELECT box_asset_id
       FROM reveal_submissions
-      WHERE status = 'confirmed' AND created_at_ms <= ?`)
-      .bind(revealStorageControl.cutoverAtMs)
+      WHERE status = 'confirmed'
+      ORDER BY created_at_ms`)
       .all<{ detail: string }>();
-    assert.ok(baselinePlan.results.some((row) =>
+    assert.ok(statusPlan.results.some((row) =>
       row.detail.includes('reveal_submissions_status_created_at_ms')));
-    for (const status of ['pending', 'failed'] as const) {
-      await env.OPS_DB.prepare(`UPDATE reveal_submissions
-        SET status = ?, confirmed_at_ms = NULL, revision = revision + 1, updated_at_ms = 2
-        WHERE drop_id = 'baseline' AND box_asset_id = ?`)
-        .bind(status, String(0).padStart(32, '0'))
-        .run();
-      await assert.rejects(loadRevealSubmissionStorageControl(env.OPS_DB));
-      await env.OPS_DB.prepare(`UPDATE reveal_submissions
-        SET status = 'confirmed', confirmed_at_ms = 2, revision = revision + 1
-        WHERE drop_id = 'baseline' AND box_asset_id = ?`)
-        .bind(String(0).padStart(32, '0'))
-        .run();
-    }
-    await env.OPS_DB.prepare(`UPDATE reveal_submissions
-      SET status = 'failed', confirmed_at_ms = NULL, revision = revision + 1
-      WHERE drop_id = 'baseline' AND box_asset_id = ?`)
-      .bind(String(0).padStart(32, '0'))
-      .run();
-    const newerTimestamp = revealStorageControl.cutoverAtMs + 1;
-    await env.OPS_DB.prepare(`INSERT INTO reveal_submissions (
-      drop_id, box_asset_id, schema_version, owner_wallet, signature,
-      recent_blockhash, blockhash_context_slot, dude_ids_json,
-      reservation_id, status, revision, created_at_ms, updated_at_ms, confirmed_at_ms
-    ) VALUES ('newer', ?, 1, ?, ?, ?, 1, '[1]', ?, 'confirmed', 1, ?, ?, ?)`)
-      .bind(
-        '9'.repeat(32),
-        RACE_WALLET,
-        '4'.repeat(64),
-        '5'.repeat(32),
-        '00000000-0000-4000-8000-999999999999',
-        newerTimestamp,
-        newerTimestamp,
-        newerTimestamp,
-      )
-      .run();
-    await assert.rejects(loadRevealSubmissionStorageControl(env.OPS_DB));
-    await env.OPS_DB.prepare(`UPDATE reveal_submissions
-      SET status = 'confirmed', confirmed_at_ms = updated_at_ms, revision = revision + 1
-      WHERE drop_id = 'baseline' AND box_asset_id = ?`)
-      .bind(String(0).padStart(32, '0'))
-      .run();
-    assert.equal((await loadRevealSubmissionStorageControl(env.OPS_DB)).paused, false);
     const initialReveal: RevealSubmissionRecord = {
       owner: REVEAL_OWNER,
       signature: REVEAL_SIGNATURE,
@@ -318,11 +240,11 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       SET
         revision = revision + 1,
         updated_at_ms = updated_at_ms + 1,
-        cutover_at_ms = cutover_at_ms + 1
+        created_at_ms = created_at_ms + 1
       WHERE singleton = 1`).run());
     assert.equal((await env.OPS_DB.prepare(`SELECT COUNT(*) AS count FROM sqlite_schema
       WHERE name IN ('profile_storage_control', 'wallet_session_storage_control')`).first<{ count: number }>())?.count, 0);
-    assert.deepEqual(await resolveD1AuthWalletBinding(env.OPS_DB, 'missing-firebase-uid'), {
+    assert.deepEqual(await resolveD1AuthWalletBinding(env.OPS_DB, 'missing-auth-subject'), {
       wallet: null,
       reason: 'missing-binding',
     });
@@ -608,15 +530,6 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
         .run(),
     );
     await assert.rejects(env.OPS_DB.prepare(
-      "UPDATE profile_storage_control SET read_source = 'firestore_fallback' WHERE singleton = 1",
-    ).run());
-    await assert.rejects(env.OPS_DB.prepare(
-      'DELETE FROM profile_storage_control WHERE singleton = 1',
-    ).run());
-    await assert.rejects(env.OPS_DB.prepare(
-      "INSERT OR REPLACE INTO profile_storage_control (singleton, read_source, updated_at_ms) VALUES (1, 'firestore_fallback', 0)",
-    ).run());
-    await assert.rejects(env.OPS_DB.prepare(
       `INSERT INTO profile_addresses (
         wallet, address_id, encrypted, country, country_code,
         hint, email, label, created_at_ms, updated_at_ms
@@ -679,7 +592,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       ).run(),
     );
 
-    const callerBucket = receiptTransferCallerRateLimitBucket('runtime-firebase-uid');
+    const callerBucket = receiptTransferCallerRateLimitBucket('runtime-auth-subject');
     const concurrent = await Promise.all(Array.from(
       { length: RECEIPT_TRANSFER_CALLER_RATE_LIMIT + 5 },
       () => consumeReceiptTransferRateLimit(env.OPS_DB, callerBucket, 10_000),
@@ -709,7 +622,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       windowStartedAtMs: 10_000 + RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS,
     });
 
-    const reversedBucket = receiptTransferCallerRateLimitBucket('reversed-runtime-firebase-uid');
+    const reversedBucket = receiptTransferCallerRateLimitBucket('reversed-runtime-auth-subject');
     const newerStartedAtMs = 2_000_000;
     const olderSampledAtMs = newerStartedAtMs - 1_000;
     assert.deepEqual(
@@ -762,7 +675,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     );
 
     const assetBucket = receiptTransferAssetRateLimitBucket({
-      uid: 'runtime-firebase-uid',
+      uid: 'runtime-auth-subject',
       cluster: 'mainnet-beta',
       ownerWallet: 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx',
       receiptAssetId: 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu',

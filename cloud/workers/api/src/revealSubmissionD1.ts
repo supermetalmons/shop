@@ -12,7 +12,6 @@ export type RevealSubmissionStorageControl = {
   paused: boolean;
   revision: number;
   updatedAtMs: number;
-  cutoverAtMs: number | null;
 };
 
 type StoredRevealSubmission = {
@@ -24,8 +23,6 @@ type NormalizeRevealSubmission = (
   raw: Record<string, unknown>,
   boxAssetId: string,
 ) => RevealSubmissionRecord;
-
-const REQUIRED_CUTOVER_SUBMISSION_COUNT = 14;
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw signal.reason;
@@ -61,38 +58,22 @@ export async function loadRevealSubmissionStorageControl(
   signal?: AbortSignal,
 ): Promise<RevealSubmissionStorageControl> {
   throwIfAborted(signal);
-  const columns = await db.prepare('PRAGMA table_info(reveal_submission_storage_control)')
-    .all<{ name: string }>();
-  throwIfAborted(signal);
-  const hasMigrationSource = columns.results.some((column) => column.name === 'storage_source');
   const row = await db.prepare(`SELECT
       paused,
-      ${hasMigrationSource ? 'storage_source' : "'d1' AS storage_source"},
       revision,
-      updated_at_ms,
-      cutover_at_ms,
-      (SELECT COUNT(*)
-        FROM reveal_submissions
-        WHERE status = 'confirmed' AND created_at_ms <= control.cutover_at_ms
-      ) AS cutover_submission_count
-    FROM reveal_submission_storage_control AS control
+      updated_at_ms
+    FROM reveal_submission_storage_control
     WHERE singleton = 1`)
     .first<Record<string, unknown>>();
   throwIfAborted(signal);
   const revision = safeInteger(row?.revision);
   const updatedAtMs = safeInteger(row?.updated_at_ms);
-  const cutoverAtMs = row?.cutover_at_ms === null ? null : safeInteger(row?.cutover_at_ms);
-  const cutoverSubmissionCount = safeInteger(row?.cutover_submission_count);
   if (
     !row ||
     (row.paused !== 0 && row.paused !== 1) ||
-    row.storage_source !== 'd1' ||
     revision === null ||
     revision < 1 ||
-    updatedAtMs === null ||
-    cutoverAtMs === null ||
-    cutoverSubmissionCount === null ||
-    cutoverSubmissionCount < REQUIRED_CUTOVER_SUBMISSION_COUNT
+    updatedAtMs === null
   ) {
     throw new Error('Reveal-submission storage control is invalid');
   }
@@ -100,7 +81,6 @@ export async function loadRevealSubmissionStorageControl(
     paused: row.paused === 1,
     revision,
     updatedAtMs,
-    cutoverAtMs,
   };
 }
 

@@ -14,7 +14,6 @@ export type RevealSubmissionsControl = {
   paused: boolean;
   revision: number;
   updatedAtMs: number;
-  cutoverAtMs: number;
 };
 
 export type RevealSubmissionsControlDependencies = {
@@ -87,7 +86,6 @@ export function parseRevealSubmissionsControl(
     paused: row.paused === 1,
     revision: safeInteger(row.revision, 'Reveal-submission storage revision', 1),
     updatedAtMs: safeInteger(row.updated_at_ms, 'Reveal-submission storage update timestamp'),
-    cutoverAtMs: safeInteger(row.cutover_at_ms, 'Reveal-submission cutover timestamp'),
   };
 }
 
@@ -95,8 +93,7 @@ const controlSelect = `SELECT
   singleton,
   paused,
   revision,
-  updated_at_ms,
-  cutover_at_ms
+  updated_at_ms
 FROM reveal_submission_storage_control
 WHERE singleton = 1`;
 
@@ -115,7 +112,7 @@ export function readRemoteRevealSubmissionCount(): number {
 }
 
 function returningControl(): string {
-  return 'RETURNING singleton, paused, revision, updated_at_ms, cutover_at_ms';
+  return 'RETURNING singleton, paused, revision, updated_at_ms';
 }
 
 export function setRemoteRevealSubmissionsPaused(
@@ -173,7 +170,6 @@ export function formatRevealSubmissionsControl(result: {
     `Rows: ${result.submissionCount}.`,
     `Revision: ${result.control.revision}.`,
     `Updated at: ${new Date(result.control.updatedAtMs).toISOString()}.`,
-    `Cutover at: ${new Date(result.control.cutoverAtMs).toISOString()}.`,
   ].join(' ');
 }
 

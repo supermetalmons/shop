@@ -1,3 +1,5 @@
+PRAGMA foreign_keys = ON;
+
 CREATE TABLE pack_status (
   drop_id TEXT PRIMARY KEY,
   version INTEGER NOT NULL CHECK (version = 1),
@@ -38,15 +40,17 @@ CREATE TABLE pack_status_events (
   )
 );
 
-CREATE TABLE pack_status_rollout (
+CREATE TABLE pack_status_metadata (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-  read_source TEXT NOT NULL CHECK (read_source IN ('firestore', 'd1')),
-  cache_generation INTEGER NOT NULL DEFAULT 1 CHECK (cache_generation > 0),
+  cache_generation INTEGER NOT NULL CHECK (cache_generation > 0),
   updated_at_ms INTEGER NOT NULL
 );
 
-INSERT INTO pack_status_rollout (singleton, read_source, cache_generation, updated_at_ms)
-VALUES (1, 'firestore', 1, 0);
+INSERT INTO pack_status_metadata (
+  singleton,
+  cache_generation,
+  updated_at_ms
+) VALUES (1, 1, 0);
 
 CREATE TRIGGER pack_status_event_apply
 AFTER INSERT ON pack_status_events
@@ -60,4 +64,44 @@ BEGIN
     redeemed_unsealed_cards = redeemed_unsealed_cards + NEW.redeemed_unsealed_cards_delta,
     updated_at_ms = MAX(updated_at_ms, NEW.created_at_ms)
   WHERE drop_id = NEW.drop_id;
+END;
+
+CREATE TRIGGER pack_status_event_delete_guard
+BEFORE DELETE ON pack_status_events
+BEGIN
+  SELECT RAISE(ABORT, 'pack-status events are immutable');
+END;
+
+CREATE TRIGGER pack_status_event_immutable
+BEFORE UPDATE ON pack_status_events
+BEGIN
+  SELECT RAISE(ABORT, 'pack-status events are immutable');
+END;
+
+CREATE TRIGGER pack_status_event_type_guard
+BEFORE INSERT ON pack_status_events
+WHEN NOT (
+  (
+    NEW.event_type = 'onlineReveal' AND
+    NEW.unsealed_online_delta > 0 AND
+    NEW.redeemed_irl_normal_delta = 0 AND
+    NEW.redeemed_irl_stripe_delta = 0 AND
+    NEW.redeemed_unsealed_cards_delta = 0
+  ) OR
+  (
+    NEW.event_type = 'redeemedIrlNormal' AND
+    NEW.unsealed_online_delta = 0 AND
+    NEW.redeemed_irl_stripe_delta = 0 AND
+    NEW.redeemed_irl_normal_delta + NEW.redeemed_unsealed_cards_delta > 0
+  ) OR
+  (
+    NEW.event_type = 'redeemedIrlStripe' AND
+    NEW.unsealed_online_delta = 0 AND
+    NEW.redeemed_irl_normal_delta = 0 AND
+    NEW.redeemed_irl_stripe_delta > 0 AND
+    NEW.redeemed_unsealed_cards_delta = 0
+  )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'invalid pack-status event deltas');
 END;

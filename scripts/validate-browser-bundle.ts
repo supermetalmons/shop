@@ -11,17 +11,10 @@ const forbiddenStrings = [
   'api.mainnet-beta.solana.com',
   'api.devnet.solana.com',
   'api.testnet.solana.com',
-  'signInAnonymously',
-  'firestore.googleapis.com',
-  'identitytoolkit.googleapis.com',
-  'securetoken.googleapis.com',
-  'mons-shop.firebaseapp.com',
-  'VITE_FIREBASE_API_KEY',
 ];
 
 const forbiddenPatterns = [
   { label: 'Google API key', pattern: /AIza[0-9A-Za-z_-]{35}/ },
-  { label: 'Firebase hosting domain', pattern: /[a-z0-9-]+\.(?:firebaseapp\.com|web\.app)/i },
 ] as const;
 
 function listFiles(directory: string): string[] {
@@ -43,5 +36,5 @@ if (violations.length) {
   violations.forEach(({ path, label }) => console.error(`[browser-bundle] Found ${label} in ${path}`));
   process.exitCode = 1;
 } else {
-  console.log('[browser-bundle] No direct Helius credentials/endpoints, Solana public RPC hosts, or Firebase Auth runtime found.');
+  console.log('[browser-bundle] No direct Helius credentials/endpoints, Solana public RPC hosts, or Google API keys found.');
 }

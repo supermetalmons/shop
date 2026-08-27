@@ -1,7 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
-import { DatabaseSync } from 'node:sqlite';
 import {
   CommerceRepositoryError,
   CommerceWriteConflict,
@@ -253,39 +251,6 @@ test('native timestamps remain monotonic and path ordering is binary', async () 
     orderBy: [{ field: 'documentPath', direction: 'asc' }],
   });
   assert.deepEqual(ordered.map((record) => record.key.documentId), ['A', '_', 'a', 'existing']);
-});
-
-test('native repository migration backfills lossless processed-time columns', () => {
-  const database = new DatabaseSync(':memory:');
-  const migrationDirectory = 'cloud/workers/api/commerce-migrations';
-  for (const file of readdirSync(migrationDirectory).sort().filter((file) => file < '0007')) {
-    database.exec(readFileSync(`${migrationDirectory}/${file}`, 'utf8'));
-  }
-  database.exec(`UPDATE commerce_authority_control SET
-    authority_state = 'paused', revision = 2, paused_at_ms = 1, updated_at_ms = 1
-    WHERE singleton = 1`);
-  database.prepare(`INSERT INTO commerce_import_manifests (
-    manifest_sha256, document_count, kind_counts_json, source_updated_at_ms, imported_at_ms, archive_object_prefix
-  ) VALUES (?, 1, '{"delivery_order":1}', 1, 1, 'test')`).run('a'.repeat(64));
-  database.prepare(`UPDATE commerce_authority_control SET
-    authority_state = 'd1', revision = 3, cutover_at_ms = 2,
-    import_manifest_sha256 = ?, updated_at_ms = 2 WHERE singleton = 1`).run('a'.repeat(64));
-  database.prepare(`INSERT INTO commerce_documents (
-    document_path, document_kind, drop_id, document_id, fields_json, document_json,
-    version, create_time, update_time
-  ) VALUES (?, 'delivery_order', 'poncho', '7', ?, ?, 1, ?, ?)`).run(
-    'drops/poncho/deliveryOrders/7',
-    JSON.stringify({ processedAt: { timestampValue: '2026-08-18T12:00:00.123456789Z' } }),
-    JSON.stringify({ processedAt: 1_787_054_400_123 }),
-    '2026-08-18T12:00:00.000Z',
-    '2026-08-18T12:00:00.000000001Z',
-  );
-  database.exec(readFileSync(`${migrationDirectory}/0007_native_repository_expand.sql`, 'utf8'));
-  assert.deepEqual(
-    { ...database.prepare(`SELECT processed_at_seconds, processed_at_nanos
-      FROM commerce_documents WHERE document_path = ?`).get('drops/poncho/deliveryOrders/7') },
-    { processed_at_seconds: 1_787_054_400, processed_at_nanos: 123_456_789 },
-  );
 });
 
 test('point reads and queries conflict on stale versions and collection revisions', async () => {

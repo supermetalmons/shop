@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url';
-import { canonicalizeCommerceIdentity } from '../shared/commerceIdentityCanonicalization.ts';
+import { assertCanonicalCommerceIdentity } from '../shared/commerceIdentityValidation.ts';
 import {
   commerceD1DocumentIdentity,
   queryRemoteCommerceD1,
@@ -21,51 +21,26 @@ export function checkCommerceD1(): Record<string, unknown> {
   if (quick.length !== 1 || quick[0].quick_check !== 'ok') fail('Commerce D1 quick check failed.');
   if (queryRemoteCommerceD1('PRAGMA foreign_key_check').length !== 0) fail('Commerce D1 foreign-key check failed.');
 
-  const migrations = queryRemoteCommerceD1(`SELECT name FROM d1_migrations ORDER BY id`);
-  if (!migrations.some((row) => String(row.name).endsWith('0001_read_models.sql'))) {
-    fail('Commerce D1 migration history is incomplete.');
-  }
-  if (!migrations.some((row) => String(row.name).endsWith('0002_per_kind_dual_cycles.sql'))) {
-    fail('Commerce D1 per-kind cutover migration is missing.');
-  }
-  if (!migrations.some((row) => String(row.name).endsWith('0003_queue_health.sql'))) {
-    fail('Commerce D1 queue-health migration is missing.');
-  }
-  if (!migrations.some((row) => String(row.name).endsWith('0004_authoritative_store.sql'))) {
-    fail('Commerce D1 authoritative-store migration is missing.');
-  }
-  if (!migrations.some((row) => String(row.name).endsWith('0005_remove_read_model.sql'))) {
-    fail('Commerce D1 read-model cleanup migration is missing.');
-  }
-  if (!migrations.some((row) => String(row.name).endsWith('0006_paused_wipe.sql'))) {
-    fail('Commerce D1 paused-wipe migration is missing.');
-  }
-  if (!migrations.some((row) => String(row.name).endsWith('0007_native_repository_expand.sql'))) {
-    fail('Commerce D1 native-repository expansion migration is missing.');
-  }
-  if (!migrations.some((row) => String(row.name).endsWith('0008_canonicalize_identity_documents.sql'))) {
-    fail('Commerce D1 identity canonicalization migration is missing.');
-  }
-  if (!migrations.some((row) => String(row.name).endsWith('0009_remove_firestore_compatibility.sql'))) {
-    fail('Commerce D1 contract migration is missing.');
-  }
-  if (!migrations.some((row) => String(row.name).endsWith('0010_cloudflare_native_identity_queries.sql'))) {
-    fail('Commerce D1 native identity and query migration is missing.');
-  }
-  if (!migrations.some((row) => String(row.name).endsWith('0011_delivery_owner_partial_index.sql'))) {
-    fail('Commerce D1 delivery-owner partial-index migration is missing.');
+  const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
+  if (migrations.length !== 1 || migrations[0].name !== '0001_current_schema.sql') {
+    fail('Commerce D1 schema baseline is invalid.');
   }
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
-    WHERE schema = 'main' AND name IN (
-      'commerce_authority_control',
-      'commerce_documents',
-      'commerce_commit_guards',
-      'commerce_wipe_guards',
-      'commerce_import_manifests'
-    ) ORDER BY name`);
-  if (authoritativeTables.length !== 5 || authoritativeTables.some((row) => row.strict !== 1)) {
+    WHERE schema = 'main' AND name NOT LIKE 'sqlite_%' AND name NOT GLOB '_cf_*'
+      AND name <> 'd1_migrations'
+    ORDER BY name`);
+  const requiredTables = [
+    'commerce_authority_control',
+    'commerce_commit_guards',
+    'commerce_documents',
+    'commerce_wipe_guards',
+  ];
+  if (
+    authoritativeTables.length !== requiredTables.length ||
+    authoritativeTables.some((row, index) => row.name !== requiredTables[index] || row.strict !== 1)
+  ) {
     fail('Commerce D1 authoritative strict table inventory is invalid.');
   }
   const authorityRows = queryRemoteCommerceD1('SELECT * FROM commerce_authority_control');
@@ -97,31 +72,26 @@ export function checkCommerceD1(): Record<string, unknown> {
       fail('Commerce D1 contains invalid authoritative fields JSON.');
     }
     try {
-      if (canonicalizeCommerceIdentity(document).changed) {
-        fail('Commerce D1 contains a legacy identity document after canonicalization.');
-      }
+      assertCanonicalCommerceIdentity(document);
     } catch {
-      fail('Commerce D1 contains an invalid or legacy identity document after canonicalization.');
+      fail('Commerce D1 contains an invalid identity document.');
     }
   }
 
-  const removedState = queryRemoteCommerceD1(`SELECT
-    (SELECT COUNT(*) FROM pragma_table_info('commerce_documents') WHERE name = 'fields_json') AS fields_json_count,
-    (SELECT COUNT(*) FROM pragma_table_list
-      WHERE name IN ('commerce_transactions', 'commerce_transaction_reads')) AS transaction_table_count,
-    (SELECT COUNT(*) FROM commerce_documents
-      WHERE json_type(document_json, '$.uid') IS NOT NULL) AS root_uid_count`);
+  const authorityColumns = queryRemoteCommerceD1(
+    "SELECT name FROM pragma_table_info('commerce_authority_control') ORDER BY cid",
+  ).map((row) => String(row.name));
+  const identityState = queryRemoteCommerceD1(`SELECT COUNT(*) AS root_uid_count
+    FROM commerce_documents WHERE json_type(document_json, '$.uid') IS NOT NULL`);
   if (
-    removedState.length !== 1 ||
-    safeInteger(removedState[0].fields_json_count, 'Commerce compatibility column count') !== 0 ||
-    safeInteger(removedState[0].transaction_table_count, 'Commerce transaction table count') !== 0 ||
-    safeInteger(removedState[0].root_uid_count, 'Commerce root UID count') !== 0
-  ) fail('Commerce D1 compatibility state remains after contract migration.');
+    authorityColumns.join(',') !== 'singleton,authority_state,revision,documents_revision,paused_at_ms,updated_at_ms' ||
+    identityState.length !== 1 ||
+    safeInteger(identityState[0].root_uid_count, 'Commerce root UID count') !== 0
+  ) fail('Commerce D1 contains noncanonical schema or identity state.');
 
   const requiredTriggers = new Set([
     'commerce_authority_transition_guard',
     'commerce_authority_delete_guard',
-    'commerce_authority_d1_manifest_guard',
     'commerce_authority_revision_guard',
     'commerce_commit_guard_validate',
     'commerce_wipe_guard_validate',
