@@ -312,7 +312,18 @@ npm run commerce-authority-control -- paused --expected-revision <revision> --wr
 npm run commerce-authority-control -- d1 --expected-revision <revision> --write
 ```
 
-Authority mutations require the current revision and explicit `--write`.
+All authority-control commands require a scoped `CLOUDFLARE_API_TOKEN` with
+Queues Write and the D1 permissions Wrangler needs for the remote authority
+query or mutation. A pause command pauses every Queue both produced and consumed
+by the API Worker before changing D1 authority. A `d1` command restores D1
+authority before resuming those Queues. Queue names and the account ID are read
+from `cloud/workers/api/wrangler.jsonc`; the token is never printed.
+
+Authority mutations still require the current revision and explicit `--write`.
+If an operation is interrupted, rerun the same command with the same expected
+revision. The coordinator repairs an already-completed authority transition and
+only changes Queue states that still differ from the requested state. A partial
+resume leaves D1 authoritative and exits with the Queues that remain paused.
 
 ### Queues, schedules, and notifications
 
