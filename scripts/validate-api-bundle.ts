@@ -5,7 +5,8 @@ if (!paths.length) throw new Error('Provide at least one API bundle path.');
 
 const forbidden = [
   { label: 'Google API key', pattern: /AIza[0-9A-Za-z_-]{35}/ },
-  { label: 'Stripe secret key', pattern: /\bsk_(?:live|test)_[0-9A-Za-z]{16,}\b/ },
+  { label: 'Stripe API key', pattern: /\b(?:s|r)k_(?:live|test)_[0-9A-Za-z]{16,}\b/ },
+  { label: 'Stripe webhook secret', pattern: /\bwhsec_[0-9A-Za-z]{16,}\b/ },
   { label: 'private key', pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
 ] as const;
 
