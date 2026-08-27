@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import {
   assertD1Integrity,
   buildD1SummaryRebuildSql,
@@ -19,8 +20,30 @@ const dropRows = [
   ['poncho_drifella', 140, 420, 3],
 ] as const;
 
+const packStatusMigrationPaths = [
+  'cloud/workers/api/migrations/0001_current_schema.sql',
+  'cloud/workers/api/migrations/0002_pack_status_event_conflict_guard.sql',
+] as const;
+
+function applicationSchema(): Record<string, unknown>[] {
+  const database = new DatabaseSync(':memory:');
+  try {
+    for (const path of packStatusMigrationPaths) database.exec(readFileSync(path, 'utf8'));
+    return database.prepare(`SELECT name, type, tbl_name, sql
+      FROM sqlite_schema
+      WHERE
+        name NOT LIKE 'sqlite_%' AND
+        name NOT GLOB '_cf_*' AND
+        name <> 'd1_migrations'
+      ORDER BY name`).all().map((row) => ({ ...row }));
+  } finally {
+    database.close();
+  }
+}
+
 function integrityInput(): D1IntegrityInput {
   return {
+    migrations: packStatusMigrationPaths.map((path) => ({ name: path.split('/').at(-1) })),
     metadata: [{ singleton: 1, cache_generation: 8 }],
     summaries: dropRows.map(([dropId, totalInitialSupply, totalCards, cardsPerPack]) => ({
       drop_id: dropId,
@@ -40,16 +63,7 @@ function integrityInput(): D1IntegrityInput {
       { drop_id: 'little_swag_boxes', event_count: 100, historical_event_count: 100, applied_event_count: 0 },
       { drop_id: 'poncho_drifella', event_count: 70, historical_event_count: 70, applied_event_count: 0 },
     ],
-    schema: [
-      { name: 'pack_status', type: 'table' },
-      { name: 'pack_status_events', type: 'table' },
-      { name: 'pack_status_metadata', type: 'table' },
-      { name: 'pack_status_event_apply', type: 'trigger' },
-      { name: 'pack_status_event_conflict_guard', type: 'trigger' },
-      { name: 'pack_status_event_delete_guard', type: 'trigger' },
-      { name: 'pack_status_event_immutable', type: 'trigger' },
-      { name: 'pack_status_event_type_guard', type: 'trigger' },
-    ],
+    schema: applicationSchema(),
     quickCheck: [{ quick_check: 'ok' }],
     foreignKeyCheck: [],
     invalidEvents: [],
@@ -93,7 +107,7 @@ test('D1 integrity requires valid metadata, exact supported summaries, guards, a
   assert.throws(() => assertD1Integrity({
     ...input,
     schema: input.schema.filter((row) => row.name !== 'pack_status_metadata'),
-  }), /pack_status_metadata/);
+  }), /schema/);
   assert.throws(() => assertD1Integrity({
     ...input,
     eventCounts: [...input.eventCounts, {
@@ -121,6 +135,20 @@ test('D1 integrity requires valid metadata, exact supported summaries, guards, a
     ...input,
     invalidEvents: [{ drop_id: 'card_nft_2', event_type: 'onlineReveal', event_key: 'bad' }],
   }), /invalid pack-status event payloads/);
+});
+
+test('D1 integrity rejects an incomplete migration ledger and drifted trigger SQL', () => {
+  const input = integrityInput();
+  assert.throws(() => assertD1Integrity({
+    ...input,
+    migrations: input.migrations.filter((row) => row.name !== '0002_pack_status_event_conflict_guard.sql'),
+  }), /migrations/);
+  assert.throws(() => assertD1Integrity({
+    ...input,
+    schema: input.schema.map((row) => row.name === 'pack_status_event_conflict_guard'
+      ? { ...row, sql: String(row.sql).replace('payload conflict', 'payload drift') }
+      : row),
+  }), /schema/);
 });
 
 test('authoritative rebuild SQL updates one allowlisted summary and metadata generation once', () => {

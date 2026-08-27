@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -13,6 +14,7 @@ export type D1IntegrityInput = {
   foreignKeyCheck: D1Row[];
   invalidEvents: D1Row[];
   metadata: D1Row[];
+  migrations: D1Row[];
   quickCheck: D1Row[];
   schema: D1Row[];
   summaries: D1Row[];
@@ -40,15 +42,19 @@ const configPath = 'cloud/workers/api/wrangler.jsonc';
 const envFilePath = 'cloud/workers/api/release.env';
 const databaseName = 'mons-shop-data';
 const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'wrangler.cmd' : 'wrangler');
-const expectedSchema = new Map([
-  ['pack_status', 'table'],
-  ['pack_status_events', 'table'],
-  ['pack_status_metadata', 'table'],
-  ['pack_status_event_apply', 'trigger'],
-  ['pack_status_event_conflict_guard', 'trigger'],
-  ['pack_status_event_delete_guard', 'trigger'],
-  ['pack_status_event_immutable', 'trigger'],
-  ['pack_status_event_type_guard', 'trigger'],
+const PACK_STATUS_D1_MIGRATIONS = [
+  '0001_current_schema.sql',
+  '0002_pack_status_event_conflict_guard.sql',
+] as const;
+const expectedSchema = new Map<string, { fingerprint: string; tableName: string; type: string }>([
+  ['pack_status', { fingerprint: '07ce5b3993d512fd6187ef3b166dc8999eb9d63be0784e3b274dcb8c6f41c670', tableName: 'pack_status', type: 'table' }],
+  ['pack_status_events', { fingerprint: 'ec23d654f43dd5879550aca3dea7091cf173359a42c63bfa833e7b34e92a0055', tableName: 'pack_status_events', type: 'table' }],
+  ['pack_status_metadata', { fingerprint: '12e69decbe56b47f9e776ec9cf1458343a81fdb67e9dca10c9e7d53db5682e64', tableName: 'pack_status_metadata', type: 'table' }],
+  ['pack_status_event_apply', { fingerprint: 'fe74b0ff2c6530b0a7b351b4a5b8c0f8307b552d0cf6d7744efe131cea1fc482', tableName: 'pack_status_events', type: 'trigger' }],
+  ['pack_status_event_conflict_guard', { fingerprint: '05fb483b2243983d69647aa643b251a8d0dab79406f5be6024b1abf99647b905', tableName: 'pack_status_events', type: 'trigger' }],
+  ['pack_status_event_delete_guard', { fingerprint: '79a1f81ed7e9daaa311764ad15da4289545a31391c60c6e61acc2b2a36fb11d3', tableName: 'pack_status_events', type: 'trigger' }],
+  ['pack_status_event_immutable', { fingerprint: '422a24523511b6a2b34d10d6b6807f25c7a6b88ea075e757c55b888a49b35b38', tableName: 'pack_status_events', type: 'trigger' }],
+  ['pack_status_event_type_guard', { fingerprint: '69e2502196836b0c734bc7f25a37627a1eab8bd14d885852546992c830224451', tableName: 'pack_status_events', type: 'trigger' }],
 ]);
 
 function fail(message: string): never {
@@ -159,6 +165,30 @@ function exactStringSet(actual: string[], expected: readonly string[], label: st
   ) fail(`${label} are not exact.`);
 }
 
+function schemaFingerprint(value: unknown): string {
+  const normalized = requiredString(value, 'D1 schema SQL')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return createHash('sha256').update(normalized).digest('hex');
+}
+
+function assertExactSchema(rows: D1Row[]): void {
+  if (rows.length !== expectedSchema.size) fail('D1 pack-status application schema is not exact.');
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const name = requiredString(row.name, 'D1 schema name');
+    const expected = expectedSchema.get(name);
+    if (
+      seen.has(name) ||
+      !expected ||
+      row.type !== expected.type ||
+      row.tbl_name !== expected.tableName ||
+      schemaFingerprint(row.sql) !== expected.fingerprint
+    ) fail('D1 pack-status application schema is not exact.');
+    seen.add(name);
+  }
+}
+
 export function assertD1Integrity(input: D1IntegrityInput): D1IntegrityReport {
   if (
     input.metadata.length !== 1 ||
@@ -171,14 +201,12 @@ export function assertD1Integrity(input: D1IntegrityInput): D1IntegrityReport {
   ) fail('D1 quick_check failed.');
   if (input.foreignKeyCheck.length !== 0) fail('D1 foreign_key_check failed.');
   if (input.invalidEvents.length !== 0) fail('D1 contains invalid pack-status event payloads.');
-
-  const actualSchema = new Map(input.schema.map((row) => [
-    requiredString(row.name, 'd1.schema.name'),
-    requiredString(row.type, 'd1.schema.type'),
-  ]));
-  for (const [name, type] of expectedSchema) {
-    if (actualSchema.get(name) !== type) fail(`Missing D1 ${type} ${name}.`);
-  }
+  exactStringSet(
+    input.migrations.map((row) => requiredString(row.name, 'D1 migration name')),
+    PACK_STATUS_D1_MIGRATIONS,
+    'D1 pack-status migrations',
+  );
+  assertExactSchema(input.schema);
 
   const summaries = input.summaries.map(parseSummary);
   exactStringSet(summaries.map((summary) => summary.dropId), PACK_STATUS_SUPPORTED_DROP_IDS, 'D1 pack-status summaries');
@@ -217,6 +245,7 @@ export function assertD1Integrity(input: D1IntegrityInput): D1IntegrityReport {
 
 export function readD1Integrity(): D1IntegrityReport {
   return assertD1Integrity({
+    migrations: queryD1('SELECT name FROM d1_migrations ORDER BY id'),
     metadata: queryD1('SELECT singleton, cache_generation FROM pack_status_metadata ORDER BY singleton'),
     summaries: queryD1(`SELECT
       drop_id, version, total_initial_supply, total_cards, cards_per_pack,
@@ -254,8 +283,11 @@ export function readD1Integrity(): D1IntegrityReport {
         )
       )
       ORDER BY drop_id, event_type, event_key`),
-    schema: queryD1(`SELECT name, type FROM sqlite_schema
-      WHERE name IN (${[...expectedSchema.keys()].map(sqlString).join(', ')})
+    schema: queryD1(`SELECT name, type, tbl_name, sql FROM sqlite_schema
+      WHERE
+        name NOT LIKE 'sqlite_%' AND
+        name NOT GLOB '_cf_*' AND
+        name <> 'd1_migrations'
       ORDER BY name`),
     quickCheck: queryD1('PRAGMA quick_check'),
     foreignKeyCheck: queryD1('PRAGMA foreign_key_check'),
