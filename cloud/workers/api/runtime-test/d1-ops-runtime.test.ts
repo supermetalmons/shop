@@ -37,6 +37,7 @@ import {
   loadD1RevealSubmission,
   loadRevealSubmissionStorageControl,
   reserveD1RevealSubmission,
+  RevealSubmissionStoragePausedError,
   setD1RevealSubmissionStatus,
   type RevealSubmissionRecord,
 } from '../src/revealSubmissionD1.ts';
@@ -103,6 +104,7 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     ).all<{ name: string }>();
     assert.deepEqual(migrations.results.map((row) => row.name), [
       '0001_current_schema.sql',
+      '0002_reveal_submission_write_fence.sql',
     ]);
     const anonymousExpiry = 30 * 24 * 60 * 60 * 1000;
     await env.OPS_DB.batch([
@@ -224,6 +226,155 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       REVEAL_BOX_ASSET_ID,
       normalizeRuntimeRevealSubmission,
     ))?.status, 'confirmed');
+    const replaceBoxAssetId = '4'.repeat(44);
+    const terminalBoxAssetId = '5'.repeat(44);
+    const insertBoxAssetId = '6'.repeat(44);
+    const replaceExisting: RevealSubmissionRecord = {
+      ...initialReveal,
+      signature: '6'.repeat(88),
+      reservationId: '123e4567-e89b-42d3-8456-426614174003',
+    };
+    const terminalExisting: RevealSubmissionRecord = {
+      ...initialReveal,
+      signature: '7'.repeat(88),
+      reservationId: '123e4567-e89b-42d3-8456-426614174004',
+    };
+    await reserveD1RevealSubmission({
+      boxAssetId: replaceBoxAssetId,
+      candidate: replaceExisting,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 5_100,
+    });
+    assert.equal(await setD1RevealSubmissionStatus({
+      boxAssetId: replaceBoxAssetId,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 5_200,
+      status: 'failed',
+      submission: replaceExisting,
+    }), 'failed');
+    await reserveD1RevealSubmission({
+      boxAssetId: terminalBoxAssetId,
+      candidate: terminalExisting,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 5_300,
+    });
+    await env.OPS_DB.prepare(`UPDATE reveal_submission_storage_control
+      SET paused = 1, revision = revision + 1, updated_at_ms = 6_000
+      WHERE singleton = 1`).run();
+    const insertedAfterResume: RevealSubmissionRecord = {
+      ...initialReveal,
+      signature: '8'.repeat(88),
+      reservationId: '123e4567-e89b-42d3-8456-426614174005',
+    };
+    const replacementAfterResume: RevealSubmissionRecord = {
+      ...replaceExisting,
+      signature: '9'.repeat(88),
+      reservationId: '123e4567-e89b-42d3-8456-426614174006',
+    };
+    await assert.rejects(
+      reserveD1RevealSubmission({
+        boxAssetId: insertBoxAssetId,
+        candidate: insertedAfterResume,
+        db: env.OPS_DB,
+        dropId: REVEAL_DROP_ID,
+        normalize: normalizeRuntimeRevealSubmission,
+        nowMs: 6_100,
+      }),
+      RevealSubmissionStoragePausedError,
+    );
+    await assert.rejects(
+      reserveD1RevealSubmission({
+        boxAssetId: replaceBoxAssetId,
+        candidate: replacementAfterResume,
+        db: env.OPS_DB,
+        dropId: REVEAL_DROP_ID,
+        normalize: normalizeRuntimeRevealSubmission,
+        nowMs: 6_200,
+        replaceSubmission: { ...replaceExisting, status: 'failed' },
+      }),
+      RevealSubmissionStoragePausedError,
+    );
+    await assert.rejects(
+      setD1RevealSubmissionStatus({
+        boxAssetId: terminalBoxAssetId,
+        db: env.OPS_DB,
+        dropId: REVEAL_DROP_ID,
+        normalize: normalizeRuntimeRevealSubmission,
+        nowMs: 6_300,
+        status: 'confirmed',
+        submission: terminalExisting,
+      }),
+      RevealSubmissionStoragePausedError,
+    );
+    assert.equal((await loadD1RevealSubmission(
+      env.OPS_DB,
+      REVEAL_DROP_ID,
+      insertBoxAssetId,
+      normalizeRuntimeRevealSubmission,
+    )), null);
+    assert.equal((await loadD1RevealSubmission(
+      env.OPS_DB,
+      REVEAL_DROP_ID,
+      replaceBoxAssetId,
+      normalizeRuntimeRevealSubmission,
+    ))?.status, 'failed');
+    assert.equal((await loadD1RevealSubmission(
+      env.OPS_DB,
+      REVEAL_DROP_ID,
+      terminalBoxAssetId,
+      normalizeRuntimeRevealSubmission,
+    ))?.status, 'pending');
+    const deletedWhilePaused = await env.OPS_DB.prepare(`DELETE FROM reveal_submissions
+      WHERE drop_id = ? AND box_asset_id = ?`)
+      .bind(REVEAL_DROP_ID, REVEAL_BOX_ASSET_ID)
+      .run();
+    assert.equal(Number(deletedWhilePaused.meta.changes), 1);
+    await env.OPS_DB.prepare(`UPDATE reveal_submission_storage_control
+      SET paused = 0, revision = revision + 1, updated_at_ms = 7_000
+      WHERE singleton = 1`).run();
+    assert.deepEqual(await reserveD1RevealSubmission({
+      boxAssetId: insertBoxAssetId,
+      candidate: insertedAfterResume,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 7_100,
+    }), { submission: insertedAfterResume, owned: true });
+    assert.deepEqual(await reserveD1RevealSubmission({
+      boxAssetId: replaceBoxAssetId,
+      candidate: replacementAfterResume,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 7_200,
+      replaceSubmission: { ...replaceExisting, status: 'failed' },
+    }), { submission: replacementAfterResume, owned: true });
+    assert.equal(await setD1RevealSubmissionStatus({
+      boxAssetId: terminalBoxAssetId,
+      db: env.OPS_DB,
+      dropId: REVEAL_DROP_ID,
+      normalize: normalizeRuntimeRevealSubmission,
+      nowMs: 7_300,
+      status: 'confirmed',
+      submission: terminalExisting,
+    }), 'confirmed');
+    const pauseGuardSchema = await env.OPS_DB.prepare(`SELECT name
+      FROM sqlite_schema
+      WHERE name IN (
+        'reveal_submission_insert_pause_guard',
+        'reveal_submission_update_pause_guard'
+      )
+      ORDER BY name`).all<{ name: string }>();
+    assert.deepEqual(pauseGuardSchema.results.map((row) => row.name), [
+      'reveal_submission_insert_pause_guard',
+      'reveal_submission_update_pause_guard',
+    ]);
     await assert.rejects(env.OPS_DB.prepare(`INSERT INTO reveal_submissions (
       drop_id, box_asset_id, schema_version, owner_wallet, signature,
       recent_blockhash, blockhash_context_slot, dude_ids_json,

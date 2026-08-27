@@ -45,6 +45,7 @@ function integrityInput(): D1IntegrityInput {
       { name: 'pack_status_events', type: 'table' },
       { name: 'pack_status_metadata', type: 'table' },
       { name: 'pack_status_event_apply', type: 'trigger' },
+      { name: 'pack_status_event_conflict_guard', type: 'trigger' },
       { name: 'pack_status_event_delete_guard', type: 'trigger' },
       { name: 'pack_status_event_immutable', type: 'trigger' },
       { name: 'pack_status_event_type_guard', type: 'trigger' },
@@ -273,13 +274,19 @@ test('authoritative rebuild derives assignment and delivery counters from Commer
   assert.equal(result.counters.redeemedIrlNormal, 2);
 });
 
-test('pack-status baseline includes metadata and immutable event guards', () => {
+test('pack-status migrations include metadata, immutable event guards, and replay conflict protection', () => {
   const baseline = readFileSync(
     'cloud/workers/api/migrations/0001_current_schema.sql',
+    'utf8',
+  );
+  const conflictGuard = readFileSync(
+    'cloud/workers/api/migrations/0002_pack_status_event_conflict_guard.sql',
     'utf8',
   );
   assert.match(baseline, /CREATE TABLE pack_status_metadata/);
   assert.match(baseline, /VALUES \(1, 1, 0\)/);
   assert.match(baseline, /CREATE TRIGGER pack_status_event_delete_guard/);
   assert.match(baseline, /RAISE\(ABORT, 'pack-status events are immutable'\)/);
+  assert.match(conflictGuard, /CREATE TRIGGER pack_status_event_conflict_guard/);
+  assert.match(conflictGuard, /RAISE\(ABORT, 'pack-status event payload conflict'\)/);
 });

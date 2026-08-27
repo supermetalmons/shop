@@ -14,6 +14,8 @@ export type RevealSubmissionStorageControl = {
   updatedAtMs: number;
 };
 
+const REVEAL_SUBMISSIONS_PAUSED_MESSAGE = 'reveal submissions are paused';
+
 type StoredRevealSubmission = {
   submission: RevealSubmissionRecord;
   revision: number;
@@ -50,6 +52,24 @@ export class RevealSubmissionOwnerMismatchError extends Error {
   constructor() {
     super('Reveal submission owner changed');
     this.name = 'RevealSubmissionOwnerMismatchError';
+  }
+}
+
+export class RevealSubmissionStoragePausedError extends Error {
+  constructor() {
+    super('reveal_submissions_paused');
+    this.name = 'RevealSubmissionStoragePausedError';
+  }
+}
+
+async function runRevealSubmissionMutation<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(REVEAL_SUBMISSIONS_PAUSED_MESSAGE)) {
+      throw new RevealSubmissionStoragePausedError();
+    }
+    throw error;
   }
 }
 
@@ -161,7 +181,7 @@ export async function reserveD1RevealSubmission(args: {
   const dudeIdsJson = JSON.stringify(candidate.dudeIds);
   for (let attempt = 0; attempt < 6; attempt += 1) {
     throwIfAborted(args.signal);
-    const inserted = await args.db.prepare(`INSERT INTO reveal_submissions (
+    const inserted = await runRevealSubmissionMutation(() => args.db.prepare(`INSERT INTO reveal_submissions (
         drop_id,
         box_asset_id,
         schema_version,
@@ -190,7 +210,7 @@ export async function reserveD1RevealSubmission(args: {
         args.nowMs,
         args.nowMs,
       )
-      .run();
+      .run());
     if (changed(inserted)) return { submission: candidate, owned: true };
     const existing = await loadStoredRevealSubmission(
       args.db,
@@ -217,7 +237,7 @@ export async function reserveD1RevealSubmission(args: {
     ) {
       return { submission: existing.submission, owned: false };
     }
-    const replaced = await args.db.prepare(`UPDATE reveal_submissions
+    const replaced = await runRevealSubmissionMutation(() => args.db.prepare(`UPDATE reveal_submissions
       SET
         schema_version = 1,
         owner_wallet = ?,
@@ -247,7 +267,7 @@ export async function reserveD1RevealSubmission(args: {
         args.boxAssetId,
         existing.revision,
       )
-      .run();
+      .run());
     if (changed(replaced)) return { submission: candidate, owned: true };
   }
   throw new Error('Reveal submission changed concurrently');
@@ -264,7 +284,7 @@ export async function setD1RevealSubmissionStatus(args: {
   submission: RevealSubmissionRecord;
 }): Promise<'confirmed' | 'failed' | 'stale'> {
   throwIfAborted(args.signal);
-  const updated = await args.db.prepare(`UPDATE reveal_submissions
+  const updated = await runRevealSubmissionMutation(() => args.db.prepare(`UPDATE reveal_submissions
     SET
       status = ?,
       revision = revision + 1,
@@ -286,7 +306,7 @@ export async function setD1RevealSubmissionStatus(args: {
       args.submission.reservationId,
       args.submission.signature,
     )
-    .run();
+    .run());
   if (changed(updated)) return args.status;
   const current = await loadD1RevealSubmission(
     args.db,

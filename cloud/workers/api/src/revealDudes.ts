@@ -77,6 +77,7 @@ import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import {
   RevealSubmissionOwnerMismatchError,
+  RevealSubmissionStoragePausedError,
   loadD1RevealSubmission,
   loadRevealSubmissionStorageControl,
   reserveD1RevealSubmission,
@@ -807,6 +808,9 @@ async function runRevealSubmissionD1Operation<T>(
     return await operation(context.opsDb);
   } catch (error) {
     if (error instanceof RevealDudesError || context.signal.aborted) throw error;
+    if (error instanceof RevealSubmissionStoragePausedError) {
+      throw new RevealDudesError('unavailable', 'Reveal migration is in progress. Try again.');
+    }
     if (error instanceof RevealSubmissionOwnerMismatchError) {
       throw new RevealDudesError('permission-denied', 'Owners only.');
     }
@@ -2193,6 +2197,9 @@ export async function handleRevealDudes(
   } catch (error) {
     let normalized: RevealDudesError;
     if (error instanceof RevealDudesError) normalized = error;
+    else if (error instanceof RevealSubmissionStoragePausedError) {
+      normalized = new RevealDudesError('unavailable', 'Reveal migration is in progress. Try again.');
+    }
     else if (error instanceof ProfileReadError) {
       normalized = new RevealDudesError(error.code, error.message, error.details);
     } else if (controller.signal.aborted) {

@@ -45,6 +45,7 @@ const expectedSchema = new Map([
   ['pack_status_events', 'table'],
   ['pack_status_metadata', 'table'],
   ['pack_status_event_apply', 'trigger'],
+  ['pack_status_event_conflict_guard', 'trigger'],
   ['pack_status_event_delete_guard', 'trigger'],
   ['pack_status_event_immutable', 'trigger'],
   ['pack_status_event_type_guard', 'trigger'],

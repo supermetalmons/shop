@@ -10,6 +10,7 @@ import {
 } from '@solana/web3.js';
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { RevealSubmissionStoragePausedError } from '../src/revealSubmissionD1.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import {
   REVEAL_DUDES_PATH,
@@ -224,6 +225,26 @@ test('paused reveal storage rejects requests before reveal reads or mutations', 
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'unavailable');
   assert.equal(revealReads, 0);
   assert.equal(assignments, 0);
+});
+
+test('reveal handler maps a reservation pause race to the maintenance response', async () => {
+  const result = await handleRevealDudes(
+    request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+    env(),
+    dependencies({
+      reserveRevealSubmission: async () => {
+        throw new RevealSubmissionStoragePausedError();
+      },
+    }),
+  );
+
+  assert.equal(result.response.status, 503);
+  assert.deepEqual(await result.response.json(), {
+    error: {
+      code: 'unavailable',
+      message: 'Reveal migration is in progress. Try again.',
+    },
+  });
 });
 
 test('reveal handler maps invalid and unavailable request identity', async () => {
@@ -1695,6 +1716,28 @@ test('paused reveal storage retries background jobs without reading submissions'
   assert.equal(reads, 0);
   assert.equal(paused.actions.acks, 0);
   assert.deepEqual(paused.actions.retries, [{ delaySeconds: 5 }]);
+});
+
+test('reveal background consumer retries a terminal-write pause race with existing backoff', async () => {
+  const raced = revealQueueMessage(revealJob(), 3);
+
+  await processRevealBackgroundJobMessage(raced.message, revealConsumerEnv(), {
+    loadStorageControl: dependencies().loadStorageControl,
+    loadRevealSubmission: async () => submission(),
+    reconcileRevealSubmission: async () => 'confirmed',
+    confirmRevealSubmission: async () => {
+      throw new RevealSubmissionStoragePausedError();
+    },
+    countOnlineRevealPackStatus: async () => {
+      throw new Error('unexpected pack-status count');
+    },
+    log: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+  });
+
+  assert.equal(raced.actions.acks, 0);
+  assert.deepEqual(raced.actions.retries, [{ delaySeconds: 30 }]);
 });
 
 test('reveal background consumer confirms, counts, and safely repeats confirmed jobs', async () => {

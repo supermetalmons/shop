@@ -39,6 +39,7 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
     ).all<{ name: string }>();
     assert.deepEqual(migrations.results.map((row) => row.name), [
       '0001_current_schema.sql',
+      '0002_pack_status_event_conflict_guard.sql',
     ]);
 
     await env.DATA_DB.prepare(
@@ -61,6 +62,78 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
     };
     assert.equal(await applyD1PackStatusEvent(env.DATA_DB, onlineReveal), 'applied');
     assert.equal(await applyD1PackStatusEvent(env.DATA_DB, onlineReveal), 'duplicate');
+    assert.equal(await applyD1PackStatusEvent(env.DATA_DB, {
+      ...onlineReveal,
+      createdAtMs: onlineReveal.createdAtMs + 1,
+    }), 'duplicate');
+    await assert.rejects(
+      applyD1PackStatusEvent(env.DATA_DB, { ...onlineReveal, quantity: 4 }),
+      (error: unknown) => error instanceof Error && error.message === 'pack_status_event_conflict',
+    );
+    const persistedEvent = [
+      onlineReveal.dropId,
+      onlineReveal.type,
+      onlineReveal.eventKey,
+      onlineReveal.quantity,
+      1,
+      0,
+      0,
+      0,
+      null,
+      null,
+      onlineReveal.boxAssetId,
+      onlineReveal.signature,
+      1,
+      onlineReveal.createdAtMs,
+    ] satisfies unknown[];
+    const replayMismatches = [
+      ['quantity', 3, 4],
+      ['unsealed_online_delta', 4, 2],
+      ['redeemed_irl_normal_delta', 5, 1],
+      ['redeemed_irl_stripe_delta', 6, 1],
+      ['redeemed_unsealed_cards_delta', 7, 1],
+      ['delivery_id', 8, 7],
+      ['checkout_session_id', 9, 'cs_changed'],
+      ['box_asset_id', 10, 'box-changed'],
+      ['signature', 11, 'signature-changed'],
+      ['apply_delta', 12, 0],
+    ] as const;
+    for (const [field, index, value] of replayMismatches) {
+      const bindings = [...persistedEvent];
+      bindings[index] = value;
+      await assert.rejects(
+        env.DATA_DB.prepare(`INSERT INTO pack_status_events (
+          drop_id, event_type, event_key, quantity,
+          unsealed_online_delta, redeemed_irl_normal_delta, redeemed_irl_stripe_delta,
+          redeemed_unsealed_cards_delta, delivery_id, checkout_session_id,
+          box_asset_id, signature, apply_delta, created_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(drop_id, event_type, event_key) DO NOTHING`)
+          .bind(...bindings)
+          .run(),
+        /pack-status event payload conflict/,
+        field,
+      );
+    }
+    assert.equal((await env.DATA_DB.prepare(
+      `SELECT COUNT(*) AS count
+      FROM pack_status_events
+      WHERE drop_id = ? AND event_type = ? AND event_key = ?`,
+    ).bind(onlineReveal.dropId, onlineReveal.type, onlineReveal.eventKey)
+      .first<{ count: number }>())?.count, 1);
+    assert.deepEqual(await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2'), {
+      version: 1,
+      dropId: 'card_nft_2',
+      totalInitialSupply: 10,
+      totalCards: 30,
+      cardsPerPack: 3,
+      unsealedOnline: 2,
+      redeemedIrlNormal: 2,
+      redeemedIrlStripe: 3,
+      redeemedUnsealedCards: 4,
+      rebuiltAtMs: 100,
+      updatedAtMs: 300,
+    });
     await applyD1PackStatusEvent(env.DATA_DB, {
       dropId: 'card_nft_2',
       type: 'redeemedIrlNormal',
@@ -209,6 +282,7 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
     assert.deepEqual(schema.results.map((row) => row.name), [
       'pack_status',
       'pack_status_event_apply',
+      'pack_status_event_conflict_guard',
       'pack_status_event_delete_guard',
       'pack_status_event_immutable',
       'pack_status_event_type_guard',

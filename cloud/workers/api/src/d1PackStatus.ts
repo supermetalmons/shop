@@ -29,6 +29,8 @@ export type D1PackStatusRecord = PackStatusStatsFields & {
   updatedAtMs: number;
 };
 
+const PACK_STATUS_EVENT_CONFLICT_MESSAGE = 'pack-status event payload conflict';
+
 type PackStatusRow = {
   drop_id: string;
   version: number;
@@ -227,40 +229,48 @@ export async function applyD1PackStatusEvent(
   if (unsealedOnline + redeemedIrlNormal + redeemedIrlStripe + redeemedUnsealedCards <= 0) {
     throw new Error('invalid_pack_status_event_increments');
   }
-  const result = await db.prepare(
-    `INSERT INTO pack_status_events (
-      drop_id,
-      event_type,
-      event_key,
-      quantity,
-      unsealed_online_delta,
-      redeemed_irl_normal_delta,
-      redeemed_irl_stripe_delta,
-      redeemed_unsealed_cards_delta,
-      delivery_id,
-      checkout_session_id,
-      box_asset_id,
-      signature,
-      apply_delta,
-      created_at_ms
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(drop_id, event_type, event_key) DO NOTHING`,
-  ).bind(
-    event.dropId,
-    event.type,
-    event.eventKey,
-    event.quantity,
-    unsealedOnline,
-    redeemedIrlNormal,
-    redeemedIrlStripe,
-    redeemedUnsealedCards,
-    event.deliveryId ?? null,
-    event.checkoutSessionId ?? null,
-    event.boxAssetId ?? null,
-    event.signature ?? null,
-    1,
-    event.createdAtMs,
-  ).run();
+  let result: D1Result;
+  try {
+    result = await db.prepare(
+      `INSERT INTO pack_status_events (
+        drop_id,
+        event_type,
+        event_key,
+        quantity,
+        unsealed_online_delta,
+        redeemed_irl_normal_delta,
+        redeemed_irl_stripe_delta,
+        redeemed_unsealed_cards_delta,
+        delivery_id,
+        checkout_session_id,
+        box_asset_id,
+        signature,
+        apply_delta,
+        created_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(drop_id, event_type, event_key) DO NOTHING`,
+    ).bind(
+      event.dropId,
+      event.type,
+      event.eventKey,
+      event.quantity,
+      unsealedOnline,
+      redeemedIrlNormal,
+      redeemedIrlStripe,
+      redeemedUnsealedCards,
+      event.deliveryId ?? null,
+      event.checkoutSessionId ?? null,
+      event.boxAssetId ?? null,
+      event.signature ?? null,
+      1,
+      event.createdAtMs,
+    ).run();
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(PACK_STATUS_EVENT_CONFLICT_MESSAGE)) {
+      throw new Error('pack_status_event_conflict');
+    }
+    throw error;
+  }
   if (!result.success) throw new Error('pack_status_d1_event_insert_failed');
   return Number(result.meta.changes) > 0 ? 'applied' : 'duplicate';
 }

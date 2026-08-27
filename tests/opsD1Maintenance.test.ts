@@ -20,10 +20,13 @@ import {
   type RevealSubmissionsControlDependencies,
 } from '../scripts/ops/revealSubmissionsControl.ts';
 
-const schemaSql = readFileSync(
-  new URL('../cloud/workers/api/ops-migrations/0001_current_schema.sql', import.meta.url),
+const schemaSql = [
+  '0001_current_schema.sql',
+  '0002_reveal_submission_write_fence.sql',
+].map((name) => readFileSync(
+  new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
   'utf8',
-);
+)).join('\n');
 
 function database(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
@@ -61,7 +64,10 @@ function integrityInput(
       controls: queryRows(db, 'SELECT * FROM worker_controls ORDER BY control_key'),
       expiryIndexColumns: queryRows(db, 'PRAGMA index_info(rate_limit_buckets_expires_at_ms)'),
       foreignKeyCheck: queryRows(db, 'PRAGMA foreign_key_check'),
-      migrations: [{ name: '0001_current_schema.sql' }],
+      migrations: [
+        { name: '0001_current_schema.sql' },
+        { name: '0002_reveal_submission_write_fence.sql' },
+      ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
         (SELECT COUNT(*) FROM profiles) AS profile_count,

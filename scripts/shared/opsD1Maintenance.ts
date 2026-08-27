@@ -7,6 +7,7 @@ import { isCanonicalReadyNotificationCursorPath } from '../../shared/readyToShip
 export const READY_NOTIFICATIONS_CONTROL_KEY = 'ready_notifications';
 const OPS_D1_MIGRATIONS = [
   '0001_current_schema.sql',
+  '0002_reveal_submission_write_fence.sql',
 ] as const;
 
 export type OpsD1Row = Record<string, unknown>;
@@ -81,6 +82,8 @@ const expectedSchema = new Map<
   ['reveal_submission_control_delete_guard', { fingerprint: '618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
   ['reveal_submission_control_insert_guard', { fingerprint: 'b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
   ['reveal_submission_control_update_guard', { fingerprint: '957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
+  ['reveal_submission_insert_pause_guard', { fingerprint: '3b8dadcac0fccb8f2e509e4abc8623394ec2e6f44a60c06ec39f454c10038a2c', type: 'trigger', tableName: 'reveal_submissions' }],
+  ['reveal_submission_update_pause_guard', { fingerprint: 'c394783d4dd4dd368662a543a07eac104e5018fb1d87df4fe4b8314fbf1570c1', type: 'trigger', tableName: 'reveal_submissions' }],
   [
     'anonymous_auth_sessions',
     {
