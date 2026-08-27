@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { parseConfigFileTextToJson } from 'typescript';
 
 const CLOUDFLARE_API_ORIGIN = 'https://api.cloudflare.com/client/v4';
 const DEFAULT_CONFIG_PATH = fileURLToPath(
@@ -8,6 +9,7 @@ const DEFAULT_CONFIG_PATH = fileURLToPath(
 const ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/i;
 const QUEUE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 const QUEUE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const CLOUDFLARE_QUEUE_REQUEST_TIMEOUT_MS = 30_000;
 
 type CloudflareEnvelope = {
   result?: unknown;
@@ -81,13 +83,17 @@ export function parseCloudflareQueueMaintenanceConfig(
 export function readCloudflareQueueMaintenanceConfig(
   configPath = DEFAULT_CONFIG_PATH,
 ): CloudflareQueueMaintenanceConfig {
-  let parsed: unknown;
+  let source: string;
   try {
-    parsed = JSON.parse(readFileSync(configPath, 'utf8')) as unknown;
+    source = readFileSync(configPath, 'utf8');
   } catch {
     return fail('Cloudflare Worker configuration could not be read.');
   }
-  return parseCloudflareQueueMaintenanceConfig(parsed);
+  const parsed = parseConfigFileTextToJson(configPath, source);
+  if (parsed.error || parsed.config === undefined) {
+    return fail('Cloudflare Worker configuration could not be read.');
+  }
+  return parseCloudflareQueueMaintenanceConfig(parsed.config);
 }
 
 function queueResource(value: unknown): CloudflareQueueDeliveryState {
@@ -122,10 +128,13 @@ export function createCloudflareQueueMaintenanceClient(args: {
   config: CloudflareQueueMaintenanceConfig;
   token: string;
   fetch?: typeof fetch;
+  timeoutMs?: number;
 }): CloudflareQueueMaintenanceClient {
   const token = args.token.trim();
   if (!token) fail('CLOUDFLARE_API_TOKEN is required.');
   const providerFetch = args.fetch || fetch;
+  const timeoutMs = args.timeoutMs ?? CLOUDFLARE_QUEUE_REQUEST_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) fail('Cloudflare Queue request timeout is invalid.');
   const accountUrl = `${CLOUDFLARE_API_ORIGIN}/accounts/${encodeURIComponent(args.config.accountId)}/queues`;
 
   const request = async (
@@ -140,6 +149,7 @@ export function createCloudflareQueueMaintenanceClient(args: {
       response = await providerFetch(url, {
         ...init,
         headers,
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch {
       return fail(`Cloudflare Queue ${operation} failed.`);

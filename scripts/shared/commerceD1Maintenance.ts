@@ -39,6 +39,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const configPath = 'cloud/workers/api/wrangler.jsonc';
 const envFilePath = 'cloud/workers/api/release.env';
 const databaseName = 'mons-shop-commerce';
+const WRANGLER_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const wranglerBinary = resolve(
   repoRoot,
   'node_modules',
@@ -68,6 +69,7 @@ function runWrangler(args: string[], json = true): string {
         env: process.env,
         maxBuffer: 64 * 1024 * 1024,
         stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: WRANGLER_COMMAND_TIMEOUT_MS,
       },
     ).trim();
   } catch (error) {

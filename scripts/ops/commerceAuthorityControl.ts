@@ -61,23 +61,36 @@ class AuthorityTransitionError extends Error {
   }
 }
 
-class QueuePausePreparationError extends Error {
+class QueueOperationError extends Error {
+  constructor(
+    message: string,
+    readonly queueName: string,
+    cause?: unknown,
+  ) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = 'QueueOperationError';
+  }
+}
+
+class QueuePausePreparationError extends AggregateError {
   constructor(
     readonly queues: CloudflareQueueDeliveryState[],
-    readonly rollbackFailures: string[],
+    readonly rollbackErrors: QueueOperationError[],
     readonly rollbackVerified: boolean,
+    preparationError: unknown,
   ) {
-    super('Cloudflare Queue pause failed.');
+    super([preparationError, ...rollbackErrors], 'Cloudflare Queue pause failed.');
     this.name = 'QueuePausePreparationError';
   }
 }
 
-export class CommerceAuthorityCoordinationError extends Error {
+export class CommerceAuthorityCoordinationError extends AggregateError {
   constructor(
     message: string,
     readonly result: CommerceAuthorityControlResult,
+    errors: Iterable<unknown> = [],
   ) {
-    super(message);
+    super(errors, message);
     this.name = 'CommerceAuthorityCoordinationError';
   }
 }
@@ -287,18 +300,26 @@ async function rollbackPausedQueues(args: {
   attemptedNames: readonly string[];
   client: CloudflareQueueMaintenanceClient;
   queues: CloudflareQueueDeliveryState[];
-}): Promise<string[]> {
-  const failures: string[] = [];
+}): Promise<QueueOperationError[]> {
+  const errors: QueueOperationError[] = [];
   for (const name of [...args.attemptedNames].reverse()) {
     const queue = args.queues.find((entry) => entry.name === name);
     if (!queue) continue;
     try {
       replaceQueueState(args.queues, await args.client.setDeliveryPaused(queue, false));
-    } catch {
-      failures.push(name);
+    } catch (error) {
+      errors.push(new QueueOperationError(
+        `Cloudflare Queue rollback failed for ${name}.`,
+        name,
+        error,
+      ));
     }
   }
-  return args.attemptedNames.filter((name) => failures.includes(name));
+  const failures = new Set(errors.map((error) => error.queueName));
+  return args.attemptedNames.flatMap((name) => {
+    if (!failures.has(name)) return [];
+    return errors.filter((error) => error.queueName === name);
+  });
 }
 
 async function prepareQueuesPaused(args: {
@@ -321,16 +342,66 @@ async function prepareQueuesPaused(args: {
       throw new Error('Cloudflare Queue pause verification failed.');
     }
     return { attemptedNames, queues };
-  } catch {
-    const rollbackFailures = await rollbackPausedQueues({
+  } catch (error) {
+    const rollbackErrors = await rollbackPausedQueues({
       attemptedNames,
       client: args.client,
       queues,
     });
     const refreshed = await refreshQueues(args.client, queues);
     queues = refreshed.queues;
-    throw new QueuePausePreparationError(queues, rollbackFailures, refreshed.verified);
+    throw new QueuePausePreparationError(queues, rollbackErrors, refreshed.verified, error);
   }
+}
+
+async function ensureQueuesPaused(args: {
+  client: CloudflareQueueMaintenanceClient;
+  queues: CloudflareQueueDeliveryState[];
+}): Promise<{
+  errors: Error[];
+  queues: CloudflareQueueDeliveryState[];
+  verified: boolean;
+}> {
+  let queues = args.queues.map((queue) => ({ ...queue }));
+  const patchErrors = new Map<string, unknown[]>();
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const queue of queues) {
+      if (queue.deliveryPaused) continue;
+      try {
+        replaceQueueState(queues, await args.client.setDeliveryPaused(queue, true));
+      } catch (error) {
+        patchErrors.set(queue.name, [...(patchErrors.get(queue.name) || []), error]);
+      }
+    }
+    try {
+      queues = await args.client.listDeliveryStates();
+    } catch (error) {
+      return {
+        errors: [
+          ...Array.from(patchErrors, ([name, causes]) => new QueueOperationError(
+            `Cloudflare Queue pause failed for ${name}.`,
+            name,
+            causes.length === 1 ? causes[0] : new AggregateError(causes),
+          )),
+          new Error('Cloudflare Queue pause verification failed.', { cause: error }),
+        ],
+        queues,
+        verified: false,
+      };
+    }
+    if (queues.every((queue) => queue.deliveryPaused)) {
+      return { errors: [], queues, verified: true };
+    }
+  }
+  return {
+    errors: queues.flatMap((queue) => queue.deliveryPaused ? [] : [new QueueOperationError(
+      `Cloudflare Queue delivery remains active for ${queue.name}.`,
+      queue.name,
+      patchErrors.has(queue.name) ? new AggregateError(patchErrors.get(queue.name) || []) : undefined,
+    )]),
+    queues,
+    verified: true,
+  };
 }
 
 async function pauseForMaintenance(args: {
@@ -342,30 +413,39 @@ async function pauseForMaintenance(args: {
   nowMs: number;
   queryCommerceD1: CommerceAuthorityQuery;
 }): Promise<CommerceAuthorityControlResult> {
-  let queues: CloudflareQueueDeliveryState[];
-  let attemptedNames: string[];
-  try {
-    ({ attemptedNames, queues } = await prepareQueuesPaused({
-      client: args.client,
-      initialQueues: args.initialQueues,
-    }));
-  } catch (error) {
-    if (!(error instanceof QueuePausePreparationError)) throw error;
-    queues = error.queues;
-    const state = result({
-      authority: args.authority,
-      authorityChanged: false,
-      initialQueues: args.initialQueues,
-      queues,
-    });
-    const paused = state.queues.filter((queue) => queue.deliveryPaused).map((queue) => queue.name);
-    const priorStateRestored = !queueStatesChanged(args.initialQueues, queues);
-    const suffix = !error.rollbackVerified
-      ? ' Prior Queue delivery state could not be verified.'
-      : error.rollbackFailures.length || !priorStateRestored
-      ? ` Queue delivery remains paused for: ${paused.join(', ') || error.rollbackFailures.join(', ')}.`
-      : ' Prior Queue delivery state was restored.';
-    throw new CommerceAuthorityCoordinationError(`Cloudflare Queue pause failed.${suffix}`, state);
+  let queues = args.initialQueues.map((queue) => ({ ...queue }));
+  let attemptedNames: string[] = [];
+  if (args.mode === 'transition') {
+    try {
+      ({ attemptedNames, queues } = await prepareQueuesPaused({
+        client: args.client,
+        initialQueues: args.initialQueues,
+      }));
+    } catch (error) {
+      if (!(error instanceof QueuePausePreparationError)) throw error;
+      queues = error.queues;
+      const state = result({
+        authority: args.authority,
+        authorityChanged: false,
+        initialQueues: args.initialQueues,
+        queues,
+      });
+      const paused = state.queues.filter((queue) => queue.deliveryPaused).map((queue) => queue.name);
+      const priorStateRestored = !queueStatesChanged(args.initialQueues, queues);
+      const rollbackNames = error.rollbackErrors.map((failure) => failure.queueName);
+      const suffix = !error.rollbackVerified
+        ? ' Prior Queue delivery state could not be verified.'
+        : !priorStateRestored
+        ? ` Prior Queue delivery state was not restored${paused.length ? `; delivery remains paused for: ${paused.join(', ')}` : ''}.`
+        : rollbackNames.length
+        ? ` Prior Queue delivery state was restored after rollback failures for: ${rollbackNames.join(', ')}.`
+        : ' Prior Queue delivery state was restored.';
+      throw new CommerceAuthorityCoordinationError(
+        `Cloudflare Queue pause failed.${suffix}`,
+        state,
+        error.errors,
+      );
+    }
   }
 
   let authority = args.authority;
@@ -383,7 +463,7 @@ async function pauseForMaintenance(args: {
       authorityChanged = transition.changed;
     } catch (error) {
       if (error instanceof AuthorityTransitionError && error.confirmedUnchanged) {
-        const rollbackFailures = await rollbackPausedQueues({
+        const rollbackErrors = await rollbackPausedQueues({
           attemptedNames,
           client: args.client,
           queues,
@@ -396,12 +476,17 @@ async function pauseForMaintenance(args: {
           initialQueues: args.initialQueues,
           queues,
         });
+        const rollbackNames = rollbackErrors.map((failure) => failure.queueName);
         const suffix = !refreshed.verified
           ? ' Queue rollback could not be verified.'
-          : rollbackFailures.length
-          ? ` Queue rollback failed for: ${rollbackFailures.join(', ')}.`
+          : rollbackNames.length
+          ? ` Queue rollback failed for: ${rollbackNames.join(', ')}.`
           : ' Prior Queue delivery state was restored.';
-        throw new CommerceAuthorityCoordinationError(`${error.message}${suffix}`, state);
+        throw new CommerceAuthorityCoordinationError(
+          `${error.message}${suffix}`,
+          state,
+          [error, ...rollbackErrors],
+        );
       }
       const state = result({
         authority,
@@ -412,11 +497,28 @@ async function pauseForMaintenance(args: {
       throw new CommerceAuthorityCoordinationError(
         'Commerce authority transition could not be confirmed; Queue delivery remains paused.',
         state,
+        [error],
       );
     }
   }
 
-  const verifiedAuthority = await readAuthority(args.queryCommerceD1);
+  const ensured = await ensureQueuesPaused({ client: args.client, queues });
+  queues = ensured.queues;
+  let verifiedAuthority: CommerceAuthority;
+  try {
+    verifiedAuthority = await readAuthority(args.queryCommerceD1);
+  } catch (error) {
+    throw new CommerceAuthorityCoordinationError(
+      'Commerce authority could not be verified after Queue delivery was paused.',
+      result({
+        authority,
+        authorityChanged,
+        initialQueues: args.initialQueues,
+        queues,
+      }),
+      [...ensured.errors, error],
+    );
+  }
   if (!sameAuthority(authority, verifiedAuthority)) {
     const state = result({
       authority: verifiedAuthority,
@@ -427,14 +529,26 @@ async function pauseForMaintenance(args: {
     throw new CommerceAuthorityCoordinationError(
       'Commerce authority changed during Queue coordination; Queue delivery remains paused.',
       state,
+      ensured.errors,
     );
   }
-  return result({
+  const state = result({
     authority: verifiedAuthority,
     authorityChanged,
     initialQueues: args.initialQueues,
     queues,
   });
+  const active = state.queues.filter((queue) => !queue.deliveryPaused).map((queue) => queue.name);
+  if (!ensured.verified || active.length) {
+    throw new CommerceAuthorityCoordinationError(
+      ensured.verified
+        ? `Commerce authority is paused, but Queue delivery remains active for: ${active.join(', ')}.`
+        : 'Commerce authority is paused, but Queue delivery state could not be verified.',
+      state,
+      ensured.errors,
+    );
+  }
+  return state;
 }
 
 async function resumeAfterMaintenance(args: {
@@ -450,23 +564,21 @@ async function resumeAfterMaintenance(args: {
   let authorityChanged = false;
   let queues = args.initialQueues.map((queue) => ({ ...queue }));
   if (args.mode === 'transition') {
-    try {
-      const preparation = await prepareQueuesPaused({
-        client: args.client,
-        initialQueues: args.initialQueues,
-      });
-      queues = preparation.queues;
-    } catch (error) {
-      if (!(error instanceof QueuePausePreparationError)) throw error;
-      const state = result({
-        authority,
-        authorityChanged: false,
-        initialQueues: args.initialQueues,
-        queues: error.queues,
-      });
+    const ensured = await ensureQueuesPaused({ client: args.client, queues });
+    queues = ensured.queues;
+    const active = queues.filter((queue) => !queue.deliveryPaused).map((queue) => queue.name);
+    if (!ensured.verified || active.length) {
       throw new CommerceAuthorityCoordinationError(
-        'Cloudflare Queue pause failed; Commerce authority remains paused.',
-        state,
+        ensured.verified
+          ? `Cloudflare Queue pause failed for: ${active.join(', ')}; Commerce authority remains paused.`
+          : 'Cloudflare Queue pause could not be verified; Commerce authority remains paused.',
+        result({
+          authority,
+          authorityChanged: false,
+          initialQueues: args.initialQueues,
+          queues,
+        }),
+        ensured.errors,
       );
     }
     try {
@@ -489,11 +601,26 @@ async function resumeAfterMaintenance(args: {
       throw new CommerceAuthorityCoordinationError(
         error instanceof Error ? error.message : 'Commerce authority transition failed.',
         state,
+        [error],
       );
     }
   }
 
-  const verifiedBeforeResume = await readAuthority(args.queryCommerceD1);
+  let verifiedBeforeResume: CommerceAuthority;
+  try {
+    verifiedBeforeResume = await readAuthority(args.queryCommerceD1);
+  } catch (error) {
+    throw new CommerceAuthorityCoordinationError(
+      'Commerce authority could not be verified before Queue delivery resumed.',
+      result({
+        authority,
+        authorityChanged,
+        initialQueues: args.initialQueues,
+        queues,
+      }),
+      [error],
+    );
+  }
   if (!sameAuthority(authority, verifiedBeforeResume) || verifiedBeforeResume.authority_state !== 'd1') {
     const state = result({
       authority: verifiedBeforeResume,
@@ -508,25 +635,20 @@ async function resumeAfterMaintenance(args: {
   }
   authority = verifiedBeforeResume;
 
+  const resumePatchErrors = new Map<string, unknown>();
   for (const queue of queues) {
     if (!queue.deliveryPaused) continue;
     try {
       replaceQueueState(queues, await args.client.setDeliveryPaused(queue, false));
-    } catch {}
+    } catch (error) {
+      resumePatchErrors.set(queue.name, error);
+    }
   }
+  let queueVerificationError: unknown;
   try {
     queues = await args.client.listDeliveryStates();
-  } catch {
-    const state = result({
-      authority,
-      authorityChanged,
-      initialQueues: args.initialQueues,
-      queues,
-    });
-    throw new CommerceAuthorityCoordinationError(
-      'Commerce authority is active, but Queue delivery state could not be verified.',
-      state,
-    );
+  } catch (error) {
+    queueVerificationError = error;
   }
   const state = result({
     authority,
@@ -535,35 +657,64 @@ async function resumeAfterMaintenance(args: {
     queues,
   });
   const paused = state.queues.filter((queue) => queue.deliveryPaused).map((queue) => queue.name);
+  let verifiedAfterResume: CommerceAuthority;
+  let verificationError: unknown;
+  try {
+    verifiedAfterResume = await readAuthority(args.queryCommerceD1);
+  } catch (error) {
+    verifiedAfterResume = authority;
+    verificationError = error;
+  }
+  if (verificationError !== undefined ||
+    !sameAuthority(authority, verifiedAfterResume) || verifiedAfterResume.authority_state !== 'd1') {
+    const restored = await ensureQueuesPaused({ client: args.client, queues });
+    const coordinationResult = result({
+      authority: verifiedAfterResume,
+      authorityChanged,
+      initialQueues: args.initialQueues,
+      queues: restored.queues,
+    });
+    const allPaused = restored.verified && coordinationResult.queues.every((queue) => queue.deliveryPaused);
+    const errors = [
+      ...(queueVerificationError === undefined ? [] : [queueVerificationError]),
+      ...(verificationError === undefined ? [] : [verificationError]),
+      ...restored.errors,
+    ];
+    throw new CommerceAuthorityCoordinationError(
+      verificationError !== undefined
+        ? allPaused
+          ? 'Commerce authority could not be verified after Queue delivery resumed; Queue delivery was paused again.'
+          : 'Commerce authority could not be verified after Queue delivery resumed; Queue delivery could not be fully paused.'
+        : allPaused
+        ? 'Commerce authority changed while Queue delivery resumed; Queue delivery was paused again.'
+        : 'Commerce authority changed while Queue delivery resumed; Queue delivery could not be fully paused.',
+      coordinationResult,
+      errors,
+    );
+  }
+  if (queueVerificationError !== undefined) {
+    throw new CommerceAuthorityCoordinationError(
+      'Commerce authority is active, but Queue delivery state could not be verified.',
+      state,
+      [
+        ...Array.from(resumePatchErrors, ([name, cause]) => new QueueOperationError(
+          `Cloudflare Queue resume failed for ${name}.`,
+          name,
+          cause,
+        )),
+        queueVerificationError,
+      ],
+    );
+  }
   if (paused.length) {
     throw new CommerceAuthorityCoordinationError(
       `Commerce authority is active, but Queue delivery remains paused for: ${paused.join(', ')}.`,
       state,
-    );
-  }
-  const verifiedAfterResume = await readAuthority(args.queryCommerceD1);
-  if (!sameAuthority(authority, verifiedAfterResume) || verifiedAfterResume.authority_state !== 'd1') {
-    let restoredQueues = queues;
-    try {
-      restoredQueues = (await prepareQueuesPaused({
-        client: args.client,
-        initialQueues: queues,
-      })).queues;
-    } catch (error) {
-      if (error instanceof QueuePausePreparationError) restoredQueues = error.queues;
-    }
-    const coordinationResult = result({
-        authority: verifiedAfterResume,
-        authorityChanged,
-        initialQueues: args.initialQueues,
-        queues: restoredQueues,
-      });
-    const allPaused = coordinationResult.queues.every((queue) => queue.deliveryPaused);
-    throw new CommerceAuthorityCoordinationError(
-      allPaused
-        ? 'Commerce authority changed while Queue delivery resumed; Queue delivery was paused again.'
-        : 'Commerce authority changed while Queue delivery resumed; Queue delivery could not be fully paused.',
-      coordinationResult,
+      paused.map((name) => new QueueOperationError(
+        `Cloudflare Queue delivery remains paused for ${name}.`,
+        name,
+        resumePatchErrors.get(name),
+      )),
     );
   }
   return state;

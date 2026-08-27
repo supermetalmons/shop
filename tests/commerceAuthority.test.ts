@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
   CommerceAuthorityCoordinationError,
@@ -150,6 +153,24 @@ test('Queue maintenance configuration preserves the producer/consumer intersecti
   }).queueNames, ['queue-c', 'queue-a', 'queue-b']);
 });
 
+test('Queue maintenance configuration accepts JSONC comments and trailing commas', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'mons-queue-config-'));
+  t.after(() => rmSync(directory, { force: true, recursive: true }));
+  const configPath = join(directory, 'wrangler.jsonc');
+  writeFileSync(configPath, `{
+    // production account
+    "account_id": "${ACCOUNT_ID}",
+    "queues": {
+      "consumers": [{ "queue": "queue-a" },],
+      "producers": [{ "binding": "QUEUE", "queue": "queue-a" },],
+    },
+  }`);
+  assert.deepEqual(readCloudflareQueueMaintenanceConfig(configPath), {
+    accountId: ACCOUNT_ID,
+    queueNames: ['queue-a'],
+  });
+});
+
 test('Cloudflare Queue client lists and patches delivery state without exposing its token', async () => {
   const token = 'private-cloudflare-api-token';
   const states = new Map([
@@ -223,6 +244,21 @@ test('Cloudflare Queue client lists and patches delivery state without exposing 
   });
 });
 
+test('Cloudflare Queue client bounds stalled control-plane requests', async () => {
+  const client = createCloudflareQueueMaintenanceClient({
+    config: { accountId: ACCOUNT_ID, queueNames: ['queue-a'] },
+    token: 'private-cloudflare-api-token',
+    timeoutMs: 5,
+    fetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      if (!signal) return reject(new Error('missing abort signal'));
+      if (signal.aborted) return reject(signal.reason);
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  });
+  await assert.rejects(client.listDeliveryStates(), /inventory request failed/);
+});
+
 test('status requires Cloudflare credentials and reports Queue and D1 state without mutations', async () => {
   const events: string[] = [];
   const authority = authorityHarness('d1', 7, events);
@@ -268,6 +304,7 @@ test('pause changes every Queue before transitioning D1', async () => {
     'queue:queue-c:true',
     'queues:list',
     'd1:paused',
+    'queues:list',
     'd1:read',
   ]);
   assert.deepEqual(state, {
@@ -275,6 +312,68 @@ test('pause changes every Queue before transitioning D1', async () => {
     queues: QUEUE_NAMES.map((name) => ({ name, deliveryPaused: true })),
     changed: { authorityChanged: true, queuesChanged: true },
   });
+});
+
+test('pause re-pauses Queues changed by a concurrent d1 repair after its pre-CAS readback', async () => {
+  const events: string[] = [];
+  const states = new Map(QUEUE_NAMES.map((name) => [name, queueState(name, false)]));
+  let current = authorityRow('d1', 7);
+  let releaseMutation = () => {};
+  const mutationGate = new Promise<void>((resolve) => { releaseMutation = resolve; });
+  let releaseVerifiedPause = () => {};
+  const verifiedPause = new Promise<void>((resolve) => { releaseVerifiedPause = resolve; });
+  let listCount = 0;
+  const queueClient: CloudflareQueueMaintenanceClient = {
+    async listDeliveryStates() {
+      listCount += 1;
+      events.push(`queues:list:${listCount}`);
+      if (listCount === 2) releaseVerifiedPause();
+      return QUEUE_NAMES.map((name) => ({ ...states.get(name)! }));
+    },
+    async setDeliveryPaused(queue, deliveryPaused) {
+      events.push(`queue:${queue.name}:${deliveryPaused}`);
+      const updated = queueState(queue.name, deliveryPaused);
+      states.set(queue.name, updated);
+      return { ...updated };
+    },
+  };
+  const query = async (sql: string): Promise<Record<string, unknown>[]> => {
+    if (/^\s*SELECT/.test(sql)) {
+      events.push(`d1:read:${current.authority_state}:${current.revision}`);
+      return [{ ...current }];
+    }
+    events.push('d1:paused:waiting');
+    await mutationGate;
+    current = authorityRow('paused', 8, 100);
+    events.push('d1:paused:committed');
+    return [{ ...current }];
+  };
+  const shared = {
+    apiToken: 'private-api-token',
+    nowMs: () => 100,
+    queryCommerceD1: query,
+    queueClient,
+    queueConfig: QUEUE_CONFIG,
+  };
+  const pause = runCommerceAuthorityControl(
+    parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '7', '--write']),
+    shared,
+  );
+  await verifiedPause;
+  const repair = await runCommerceAuthorityControl(
+    parseCommerceAuthorityControlArgs(['d1', '--expected-revision', '7', '--write']),
+    shared,
+  );
+  events.push('d1:repair:completed');
+  releaseMutation();
+  const paused = await pause;
+  assert.equal(repair.authority.authority_state, 'd1');
+  assert.ok(repair.queues.every((queue) => !queue.deliveryPaused));
+  assert.equal(paused.authority.authority_state, 'paused');
+  assert.ok(paused.queues.every((queue) => queue.deliveryPaused));
+  assert.ok([...states.values()].every((queue) => queue.deliveryPaused));
+  assert.ok(events.indexOf('d1:repair:completed') < events.indexOf('d1:paused:committed'));
+  assert.ok(events.lastIndexOf('queue:queue-c:true') > events.indexOf('d1:paused:committed'));
 });
 
 test('pause rolls back every attempted Queue when one pause fails and leaves D1 active', async () => {
@@ -312,6 +411,39 @@ test('pause rolls back every attempted Queue when one pause fails and leaves D1 
     deliveryPaused: false,
   })));
   assert.equal(failure?.message.includes('private-api-token'), false);
+});
+
+test('pause retains rollback errors while preserving the verified result state', async () => {
+  const events: string[] = [];
+  const authority = authorityHarness('d1', 7, events);
+  const queueClient = queueHarness({
+    events,
+    failures: new Set(['queue-b:true', 'queue-a:false']),
+  });
+  let failure: CommerceAuthorityCoordinationError | undefined;
+  await assert.rejects(
+    runCommerceAuthorityControl(
+      parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '7', '--write']),
+      dependencies({ authority, queueClient }),
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof CommerceAuthorityCoordinationError);
+      assert.ok(error instanceof AggregateError);
+      failure = error;
+      return true;
+    },
+  );
+  assert.equal(authority.current.authority_state, 'd1');
+  assert.deepEqual(failure?.result.queues, [
+    { name: 'queue-a', deliveryPaused: true },
+    { name: 'queue-b', deliveryPaused: false },
+    { name: 'queue-c', deliveryPaused: false },
+  ]);
+  const rollbackError = failure?.errors.find((error) =>
+    error instanceof Error && error.message === 'Cloudflare Queue rollback failed for queue-a.');
+  assert.ok(rollbackError instanceof Error);
+  assert.ok(rollbackError.cause instanceof Error);
+  assert.match(failure?.message || '', /queue-a/);
 });
 
 test('pause verifies read-back state before transitioning D1', async () => {
@@ -454,6 +586,35 @@ test('resume normalizes a mixed Queue state before transitioning D1', async () =
   assert.ok(state.queues.every((queue) => !queue.deliveryPaused));
 });
 
+test('resume normalization retains successful Queue pauses when another pause fails', async () => {
+  const events: string[] = [];
+  const authority = authorityHarness('paused', 7, events);
+  const queueClient = queueHarness({
+    events,
+    failures: new Set(['queue-b:true']),
+  });
+  let failure: CommerceAuthorityCoordinationError | undefined;
+  await assert.rejects(
+    runCommerceAuthorityControl(
+      parseCommerceAuthorityControlArgs(['d1', '--expected-revision', '7', '--write']),
+      dependencies({ authority, queueClient }),
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof CommerceAuthorityCoordinationError);
+      failure = error;
+      return true;
+    },
+  );
+  assert.deepEqual(failure?.result.authority, authorityRow('paused', 7));
+  assert.deepEqual(failure?.result.queues, [
+    { name: 'queue-a', deliveryPaused: true },
+    { name: 'queue-b', deliveryPaused: false },
+    { name: 'queue-c', deliveryPaused: true },
+  ]);
+  assert.equal(events.some((event) => event.endsWith(':false')), false);
+  assert.equal(events.includes('d1:d1'), false);
+});
+
 test('resume keeps normalized Queues paused when the D1 transition is rejected', async () => {
   const events: string[] = [];
   const authority = authorityHarness('paused', 7, events, new Set(['d1']));
@@ -535,6 +696,53 @@ test('partial Queue resume keeps D1 active and reports every Queue still paused'
   assert.deepEqual(failure?.result.changed, { authorityChanged: true, queuesChanged: true });
   assert.match(failure?.message || '', /queue-b/);
   assert.equal(events.filter((event) => event === 'd1:d1').length, 1);
+});
+
+test('partial Queue resume rechecks authority and restores pauses before reporting', async () => {
+  let authority = authorityRow('paused', 7);
+  let reads = 0;
+  const states = new Map(QUEUE_NAMES.map((name) => [name, queueState(name, true)]));
+  const queueClient: CloudflareQueueMaintenanceClient = {
+    async listDeliveryStates() {
+      return QUEUE_NAMES.map((name) => ({ ...states.get(name)! }));
+    },
+    async setDeliveryPaused(queue, deliveryPaused) {
+      if (queue.name === 'queue-b' && !deliveryPaused) throw new Error('resume failed');
+      const updated = queueState(queue.name, deliveryPaused);
+      states.set(queue.name, updated);
+      return { ...updated };
+    },
+  };
+  const query = async (sql: string): Promise<Record<string, unknown>[]> => {
+    if (/^\s*SELECT/.test(sql)) {
+      reads += 1;
+      if (reads === 3) authority = authorityRow('paused', 9, 200);
+      return [{ ...authority }];
+    }
+    authority = authorityRow('d1', 8, 100);
+    return [{ ...authority }];
+  };
+  let failure: CommerceAuthorityCoordinationError | undefined;
+  await assert.rejects(
+    runCommerceAuthorityControl(
+      parseCommerceAuthorityControlArgs(['d1', '--expected-revision', '7', '--write']),
+      {
+        apiToken: 'private-api-token',
+        nowMs: () => 100,
+        queryCommerceD1: query,
+        queueClient,
+        queueConfig: QUEUE_CONFIG,
+      },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof CommerceAuthorityCoordinationError);
+      failure = error;
+      return true;
+    },
+  );
+  assert.deepEqual(failure?.result.authority, authorityRow('paused', 9, 200));
+  assert.ok(failure?.result.queues.every((queue) => queue.deliveryPaused));
+  assert.ok([...states.values()].every((queue) => queue.deliveryPaused));
 });
 
 test('resume verifies read-back state even when every PATCH reports success', async () => {
