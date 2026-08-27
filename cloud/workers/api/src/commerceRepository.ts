@@ -487,8 +487,13 @@ function reportInefficientQuery(
     rowsRead,
     rowsReturned,
     sqlDurationMs: Number.isFinite(sqlDurationMs) ? sqlDurationMs : Number(result.meta.duration) || 0,
-    totalAttempts: Number(result.meta.total_attempts) || 1,
+    retryCount: d1RetryCount(result.meta),
   });
+}
+
+export function d1RetryCount(meta: { total_attempts?: unknown }): number {
+  const totalAttempts = Number(meta.total_attempts);
+  return Number.isSafeInteger(totalAttempts) && totalAttempts > 1 ? totalAttempts - 1 : 0;
 }
 
 function positiveQueryLimit(value: number): number {

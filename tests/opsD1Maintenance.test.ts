@@ -6,6 +6,7 @@ import {
   assertOpsD1Integrity,
   buildSetReadyNotificationsPausedSql,
   parseReadyNotificationsControl,
+  PRODUCTION_AUTH_WALLET_BINDING_BASELINE,
   validateReadyNotificationCursorPath,
   type OpsD1IntegrityInput,
 } from '../scripts/shared/opsD1Maintenance.ts';
@@ -54,6 +55,10 @@ const authWalletBindingsSql = readFileSync(
   new URL('../cloud/workers/api/ops-migrations/0017_auth_wallet_bindings.sql', import.meta.url),
   'utf8',
 );
+
+test('Ops health preserves the complete auth-wallet binding baseline', () => {
+  assert.equal(PRODUCTION_AUTH_WALLET_BINDING_BASELINE, 1_205);
+});
 
 function database(): DatabaseSync {
   const db = new DatabaseSync(':memory:');

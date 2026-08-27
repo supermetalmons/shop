@@ -8,6 +8,7 @@ import {
   D1CommerceRepository,
   commerceFieldValue,
   commerceKeys,
+  d1RetryCount,
 } from '../src/commerceRepository.ts';
 import { createCommerceD1Harness } from './commerceD1Harness.ts';
 
@@ -34,6 +35,12 @@ test('native repository keys cover every commerce document kind', () => {
   assert.throws(() => commerceKeys.claimCode('café'), /Invalid commerce document key/);
   assert.throws(() => commerceKeys.deliveryOrder('drop', 'bad id'), /Invalid commerce document key/);
   assert.throws(() => commerceKeys.deliveryOrder('dröp', '1'), /Invalid commerce document key/);
+});
+
+test('D1 query telemetry reports retries rather than total attempts', () => {
+  assert.equal(d1RetryCount({ total_attempts: 1 }), 0);
+  assert.equal(d1RetryCount({ total_attempts: 3 }), 2);
+  assert.equal(d1RetryCount({}), 0);
 });
 
 test('native writes persist canonical documents and lossless cursor timestamps', async () => {

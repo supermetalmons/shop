@@ -11,7 +11,7 @@
     "fullRepositoryCheck": "passed",
     "apiTests": 469,
     "workerdRuntimeTests": 4,
-    "repositoryTests": 1092,
+    "repositoryTests": 1093,
     "onchainTests": 35,
     "apiDryRun": "passed",
     "apiStartupProfile": "passed",
