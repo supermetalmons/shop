@@ -1,0 +1,119 @@
+{
+  "version": 1,
+  "status": "complete",
+  "generatedAt": "2026-08-27T07:46:36Z",
+  "source": {
+    "branch": "codex/native-d1-firebase-cleanup",
+    "commit": "5b26816929bad13ed4c430d7f81c485284166339",
+    "mainBase": "475eb8a0b40048e037ebc8ef493511625c3077f8",
+    "historyPreserved": true
+  },
+  "validation": {
+    "legacyRuntime": "passed",
+    "apiTypecheck": "passed",
+    "apiTests": 467,
+    "workerdRuntimeTests": 4,
+    "frontendWorkerTests": 2,
+    "repositoryTests": 1091,
+    "frontendBuild": "passed",
+    "browserBundle": "passed",
+    "deadCode": "passed",
+    "toolsTypecheck": "passed",
+    "apiDryRun": "passed",
+    "apiStartupProfile": "passed"
+  },
+  "migrations": {
+    "pendingBeforeDeployment": {
+      "data": 0,
+      "ops": 0,
+      "commerce": 0
+    },
+    "deploymentApplyResult": {
+      "data": "no-op",
+      "ops": "no-op",
+      "commerce": "no-op"
+    }
+  },
+  "deployments": {
+    "api": {
+      "previousVersionId": "145f3b95-3192-46a0-96a3-4727e44b9383",
+      "versionId": "51c8e373-a2a8-4fdc-a88c-49d98a0c40fc",
+      "deploymentId": "2450d48f-10bb-46c9-822c-1b010cb33157",
+      "deployedAt": "2026-08-27T07:45:26.172277Z",
+      "trafficPercentage": 100
+    },
+    "frontend": {
+      "versionId": "4c61d7ab-fbdf-441b-9e4b-ea460614a323",
+      "deploymentId": "30eee292-affe-447d-9c6f-309370ef03d7",
+      "redeployed": false,
+      "reason": "The active frontend exactly matched the attested native-cutover release."
+    }
+  },
+  "d1TimeTravelBookmarks": {
+    "preDeployment": {
+      "data": "00000102-00000000-000050d4-974cd4f70c10e7bbf7e8bf2fce085a84",
+      "ops": "000002f3-00000000-000050d4-8b3977cc84a9e47e672793a8d2ffef0e",
+      "commerce": "0000011b-00000000-000050d4-fff88ac190e5f0dc894b46acf07f98b3"
+    },
+    "postDeployment": {
+      "data": "00000103-00000000-000050d4-3457a6e42fdfd0c244d300536663cdf8",
+      "ops": "000002f3-00000000-000050d4-8b3977cc84a9e47e672793a8d2ffef0e",
+      "commerce": "0000011b-00000000-000050d4-fff88ac190e5f0dc894b46acf07f98b3"
+    }
+  },
+  "d1": {
+    "packStatus": {
+      "summaries": 3,
+      "events": 872,
+      "cacheGeneration": 3
+    },
+    "ops": {
+      "anonymousAuthSessions": 110,
+      "profiles": 691,
+      "addresses": 505,
+      "walletSessions": 1205,
+      "revealSubmissions": 16,
+      "readyNotificationsPaused": true,
+      "readyNotificationsRevision": 4,
+      "retirementRevision": 2
+    },
+    "commerce": {
+      "authorityState": "d1",
+      "authorityRevision": 5,
+      "authoritativeDocuments": 14613,
+      "kindCounts": {
+        "admin_irl_redeem_pack_marker": 110,
+        "admin_irl_redeem_receipt_marker": 116,
+        "admin_irl_redeem_request": 35,
+        "box_assignment": 3410,
+        "claim_code": 585,
+        "delivery_order": 541,
+        "dude_assignment": 9376,
+        "dude_pool": 6,
+        "offchain_order": 120,
+        "stripe_checkout": 314
+      },
+      "legacyIdentityOccurrences": 0,
+      "compatibilityColumns": 0,
+      "emulatedTransactionTables": 0
+    }
+  },
+  "queues": {
+    "mons-shop-notification-emails": 0,
+    "mons-shop-notification-emails-dlq": 0,
+    "mons-shop-reveal-reconciliation": 0,
+    "mons-shop-reveal-reconciliation-dlq": 0,
+    "mons-shop-stripe-fulfillment": 0,
+    "mons-shop-stripe-fulfillment-dlq": 0
+  },
+  "health": {
+    "storefrontStatus": 200,
+    "apiStatus": 200,
+    "apiBody": {
+      "ok": true
+    },
+    "packStatusStatus": 200,
+    "rpcStatus": 200,
+    "rpcReturnedBlockhash": true
+  }
+}
