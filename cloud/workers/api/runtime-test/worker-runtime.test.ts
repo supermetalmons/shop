@@ -59,13 +59,19 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.match(health.headers.get('cache-control') || '', /no-store/);
     assert.match(health.headers.get('server-timing') || '', /total;dur=/);
 
-    const inventoryPreflight = await worker.fetch('https://api.mons.shop/inventory', { method: 'OPTIONS' });
+    const inventoryPreflight = await worker.fetch('https://api.mons.shop/inventory', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://mons.shop' },
+    });
     assert.equal(inventoryPreflight.status, 204);
-    assert.equal(inventoryPreflight.headers.get('access-control-allow-origin'), '*');
+    assert.equal(inventoryPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
 
-    const notificationPreflight = await worker.fetch('https://api.mons.shop/notifications/subscribe', { method: 'OPTIONS' });
+    const notificationPreflight = await worker.fetch('https://api.mons.shop/notifications/subscribe', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://mons.shop' },
+    });
     assert.equal(notificationPreflight.status, 204);
-    assert.equal(notificationPreflight.headers.get('access-control-allow-origin'), '*');
+    assert.equal(notificationPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
 
     const packStatusPreflight = await worker.fetch('https://api.mons.shop/pack-status/card_nft_2', { method: 'OPTIONS' });
     assert.equal(packStatusPreflight.status, 204);
@@ -370,7 +376,10 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
 
     const invalidNotification = await worker.fetch('https://api.mons.shop/notifications/subscribe', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'https://mons.shop',
+      },
       body: JSON.stringify({ email: 'not an email' }),
     });
     assert.equal(invalidNotification.status, 400);

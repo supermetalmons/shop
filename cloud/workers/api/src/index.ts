@@ -1,6 +1,7 @@
 import {
   handleRpcPost,
   handleRpcPreflight,
+  handleRpcInternalError,
   handleRpcMethodNotAllowed,
 } from './rpcProxy.js';
 import {
@@ -86,6 +87,7 @@ import {
   handleStaffAuthRequest,
   isAllowedStaffAuthOrigin,
   isStaffSessionAuthorization,
+  StaffAuthError,
   verifyStaffSession,
   type StaffAuthPath,
 } from './staffWalletAuth.js';
@@ -107,6 +109,8 @@ import { processBackgroundJobBatch } from './workerBackgroundJobs.js';
 import {
   CORS_HEADERS,
   defaultDependencies,
+  handlePublicMethodNotAllowed,
+  handlePublicPreflight,
   handleNotificationSubscription,
   handlePackStatus,
   handlePost,
@@ -115,6 +119,10 @@ import {
   type WorkerDependencies,
   type WorkerRequestMetrics,
 } from './workerPublicRoutes.js';
+import {
+  applyPublicCors,
+  publicRequestOrigin,
+} from './publicRequestPolicy.js';
 
 export { runScheduledReconciliations } from './workerScheduled.js';
 export {
@@ -180,22 +188,148 @@ const KNOWN_LOG_ROUTES = new Set([
   ...STAFF_AUTH_PATHS,
 ]);
 
-export async function handleRequest(
+type RequestExecution = {
+  dependencies: WorkerDependencies;
+  metrics: WorkerRequestMetrics;
+  pathname: string;
+  startedAt: number;
+};
+
+type DispatchResult = {
+  response: Response;
+  logFields?: Record<string, unknown>;
+};
+
+function requestExecution(
+  request: Request,
+  dependencyOverrides: Partial<WorkerDependencies>,
+): RequestExecution {
+  return {
+    dependencies: { ...defaultDependencies, ...dependencyOverrides },
+    metrics: {
+      upstreamCalls: 0,
+      providerDurationMs: 0,
+      expectedAssetIds: 0,
+      expectedAssetRecoveryFailures: 0,
+      expectedAssetResolved: 0,
+    },
+    pathname: new URL(request.url).pathname,
+    startedAt: performance.now(),
+  };
+}
+
+function logRoute(pathname: string): string {
+  return packStatusDropIdFromPathname(pathname) !== undefined
+    ? '/pack-status/:dropId'
+    : KNOWN_LOG_ROUTES.has(pathname) ? pathname : 'not-found';
+}
+
+function finalizeRequest(
+  request: Request,
+  execution: RequestExecution,
+  response: Response,
+  logFields: Record<string, unknown> = {},
+): Response {
+  const totalDurationMs = performance.now() - execution.startedAt;
+  try {
+    response.headers.set(
+      'Server-Timing',
+      `total;dur=${totalDurationMs.toFixed(1)}, provider;dur=${execution.metrics.providerDurationMs.toFixed(1)}`,
+    );
+  } catch {
+    response = new Response(response.body, response);
+    response.headers.set(
+      'Server-Timing',
+      `total;dur=${totalDurationMs.toFixed(1)}, provider;dur=${execution.metrics.providerDurationMs.toFixed(1)}`,
+    );
+  }
+  try {
+    execution.dependencies.log({
+      event: 'shop_api_request',
+      route: logRoute(execution.pathname),
+      method: request.method,
+      status: response.status,
+      durationMs: Math.round(totalDurationMs),
+      providerDurationMs: Math.round(execution.metrics.providerDurationMs),
+      upstreamCalls: execution.metrics.upstreamCalls,
+      includeDevnet: false,
+      ...logFields,
+    });
+  } catch (error) {
+    console.error({
+      event: 'shop_api_request_log_failed',
+      route: logRoute(execution.pathname),
+      error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' },
+    });
+  }
+  return response;
+}
+
+function isProfileErrorPath(pathname: string): boolean {
+  return ANONYMOUS_AUTH_PATHS.has(pathname) ||
+    STAFF_AUTH_PATHS.has(pathname) ||
+    PROFILE_READ_PATHS.has(pathname) ||
+    PROFILE_WRITE_PATHS.has(pathname) ||
+    PROFILE_LIFECYCLE_PATHS.has(pathname) ||
+    pathname === STRIPE_CHECKOUT_SESSION_PATH ||
+    pathname === IRL_CLAIM_PREPARE_PATH ||
+    pathname === STRIPE_RECEIPT_CLAIM_PATH ||
+    pathname === RECEIPT_TRANSFER_PREPARE_PATH ||
+    pathname === DELIVERY_PREPARE_PATH ||
+    pathname === DELIVERY_RECEIPTS_ISSUE_PATH ||
+    pathname === DELIVERY_RECEIPTS_RECOVER_PATH ||
+    pathname === ADMIN_IRL_REDEEM_PREPARE_PATH ||
+    pathname === ADMIN_IRL_REDEEM_FINALIZE_PATH ||
+    pathname === REVEAL_DUDES_PATH ||
+    isStaffOnlyApiPath(pathname);
+}
+
+function unexpectedResponse(request: Request, pathname: string): Response {
+  if (pathname === '/rpc/mainnet-beta' || pathname === '/rpc/devnet') {
+    return handleRpcInternalError(request);
+  }
+  if (
+    pathname === '/inventory' ||
+    pathname === '/pending-open-boxes' ||
+    pathname === '/notifications/subscribe'
+  ) {
+    const response = new Response(JSON.stringify({ ok: false, error: 'provider-unavailable' }), {
+      status: 503,
+      headers: {
+        'Cache-Control': 'no-store',
+        'Content-Type': 'application/json; charset=utf-8',
+        'Vary': 'Origin',
+        'X-Content-Type-Options': 'nosniff',
+      },
+    });
+    const origin = publicRequestOrigin(request);
+    return origin ? applyPublicCors(response, origin, 'POST, OPTIONS') : response;
+  }
+  if (packStatusDropIdFromPathname(pathname) !== undefined) {
+    return jsonResponse({ ok: false, error: 'provider-unavailable' }, 503);
+  }
+  if (pathname === STRIPE_WEBHOOK_PATH) {
+    return jsonResponse({
+      received: true,
+      error: 'Stripe webhook processing failed',
+    }, 500);
+  }
+  if (isProfileErrorPath(pathname)) {
+    return applyProfileCors(request, jsonResponse({
+      ok: false,
+      error: { code: 'unavailable', message: 'Service is temporarily unavailable.' },
+    }, 503));
+  }
+  return jsonResponse({ ok: false, error: 'internal' }, 500);
+}
+
+async function dispatchRequest(
   request: Request,
   env: Env,
-  dependencyOverrides: Partial<WorkerDependencies> = {},
+  execution: RequestExecution,
   waitUntil?: (promise: Promise<unknown>) => void,
-): Promise<Response> {
-  const dependencies = { ...defaultDependencies, ...dependencyOverrides };
-  const startedAt = performance.now();
-  const metrics: WorkerRequestMetrics = {
-    upstreamCalls: 0,
-    providerDurationMs: 0,
-    expectedAssetIds: 0,
-    expectedAssetRecoveryFailures: 0,
-    expectedAssetResolved: 0,
-  };
-  const pathname = new URL(request.url).pathname;
+): Promise<DispatchResult> {
+  const { dependencies, metrics, pathname } = execution;
   let staffAuthenticated = false;
   if (!STAFF_AUTH_PATHS.has(pathname)) {
     const authorization = request.headers.get('Authorization');
@@ -206,12 +340,32 @@ export async function handleRequest(
         const headers = new Headers(request.headers);
         headers.set('Authorization', internalStaffAuthorization(staffSession.wallet));
         request = new Request(request, { headers });
-      } catch {
-        console.log({ event: 'staff_auth_request_rejected', route: pathname });
-        return applyProfileCors(request, jsonResponse({
-          ok: false,
-          error: { code: 'unauthenticated', message: 'Authentication is required.' },
-        }, 401));
+      } catch (error) {
+        if (error instanceof StaffAuthError && error.code === 'unauthenticated') {
+          console.log({ event: 'staff_auth_request_rejected', route: pathname });
+          return {
+            response: applyProfileCors(request, jsonResponse({
+              ok: false,
+              error: { code: 'unauthenticated', message: 'Authentication is required.' },
+            }, 401)),
+            logFields: { profileAuthOutcome: 'rejected' },
+          };
+        }
+        console.error({
+          event: 'staff_auth_request_unavailable',
+          route: pathname,
+          error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' },
+        });
+        return {
+          response: applyProfileCors(request, jsonResponse({
+            ok: false,
+            error: {
+              code: 'unavailable',
+              message: 'Staff authentication is temporarily unavailable.',
+            },
+          }, 503)),
+          logFields: { profileAuthOutcome: 'provider-failure' },
+        };
       }
     } else if (isInternalStaffAuthorization(authorization)) {
       const headers = new Headers(request.headers);
@@ -220,30 +374,23 @@ export async function handleRequest(
     }
   }
   if (request.method !== 'OPTIONS' && isStaffOnlyApiPath(pathname) && !staffAuthenticated) {
-    const durationMs = Math.round(performance.now() - startedAt);
-    dependencies.log({
-      event: 'shop_api_request',
-      route: KNOWN_LOG_ROUTES.has(pathname) ? pathname : 'not-found',
-      method: request.method,
-      status: 401,
-      durationMs,
-      providerDurationMs: 0,
-      upstreamCalls: 0,
-      includeDevnet: false,
-      profileAuthOutcome: 'rejected',
-    });
-    return applyProfileCors(request, jsonResponse({
-      ok: false,
-      error: { code: 'unauthenticated', message: 'Staff wallet authentication is required.' },
-    }, 401));
+    return {
+      response: applyProfileCors(request, jsonResponse({
+        ok: false,
+        error: { code: 'unauthenticated', message: 'Staff wallet authentication is required.' },
+      }, 401)),
+      logFields: { profileAuthOutcome: 'rejected' },
+    };
   }
   if (request.method === 'POST' && COMMERCE_MUTATION_PATHS.has(pathname)) {
     const authority = await loadCommerceAuthorityControl(env.COMMERCE_DB);
     if (authority.state === 'paused') {
-      return applyProfileCors(request, jsonResponse({
-        ok: false,
-        error: 'commerce-maintenance',
-      }, 503, { 'Retry-After': '60' }));
+      return {
+        response: applyProfileCors(request, jsonResponse({
+          ok: false,
+          error: 'commerce-maintenance',
+        }, 503, { 'Retry-After': '60' })),
+      };
     }
   }
   const packStatusDropId = packStatusDropIdFromPathname(pathname);
@@ -313,9 +460,10 @@ export async function handleRequest(
   } else if (request.method === 'OPTIONS' && (
     pathname === '/inventory' ||
     pathname === '/notifications/subscribe' ||
-    pathname === '/pending-open-boxes' ||
-    (isPackStatusRoute && packStatusDropId !== null)
+    pathname === '/pending-open-boxes'
   )) {
+    response = handlePublicPreflight(request);
+  } else if (request.method === 'OPTIONS' && isPackStatusRoute && packStatusDropId !== null) {
     response = new Response(null, { status: 204, headers: { ...CORS_HEADERS, 'Cache-Control': 'no-store', 'Timing-Allow-Origin': '*' } });
   } else if (isPackStatusRoute) {
     if (packStatusDropId === null) {
@@ -536,10 +684,10 @@ export async function handleRequest(
   } else if (pathname === '/notifications/subscribe') {
     response = request.method === 'POST'
       ? await handleNotificationSubscription(request, env, dependencies, metrics)
-      : jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'POST, OPTIONS' });
+      : handlePublicMethodNotAllowed(request);
   } else if (pathname === '/inventory' || pathname === '/pending-open-boxes') {
     if (request.method !== 'POST') {
-      response = jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'POST, OPTIONS' });
+      response = handlePublicMethodNotAllowed(request);
     } else {
       const result = await handlePost(request, env, pathname, dependencies, metrics);
       response = result.response;
@@ -548,58 +696,71 @@ export async function handleRequest(
   } else {
     response = jsonResponse({ ok: false, error: 'not-found' }, 404);
   }
-  const totalDurationMs = performance.now() - startedAt;
-  response.headers.set('Server-Timing', `total;dur=${totalDurationMs.toFixed(1)}, provider;dur=${metrics.providerDurationMs.toFixed(1)}`);
-  const logRoute = isPackStatusRoute ? '/pack-status/:dropId' : KNOWN_LOG_ROUTES.has(pathname) ? pathname : 'not-found';
-  dependencies.log({
-    event: 'shop_api_request',
-    route: logRoute,
-    method: request.method,
-    status: response.status,
-    durationMs: Math.round(totalDurationMs),
-    providerDurationMs: Math.round(metrics.providerDurationMs),
-    upstreamCalls: metrics.upstreamCalls,
-    includeDevnet,
-    ...(packStatusDropId ? { dropId: packStatusDropId } : {}),
-    ...(providerCacheStatus ? { providerCacheStatus } : {}),
-    ...(pathname === '/inventory' ? {
-      expectedAssetIds: metrics.expectedAssetIds,
-      expectedAssetRecoveryFailures: metrics.expectedAssetRecoveryFailures,
-      expectedAssetResolved: metrics.expectedAssetResolved,
-    } : {}),
-    ...(rpcMethod ? { rpcMethod } : {}),
-    ...(checkoutDropId ? { checkoutDropId } : {}),
-    ...(checkoutMode ? { checkoutMode } : {}),
-    ...(irlClaimDropId ? { irlClaimDropId } : {}),
-    ...(stripeReceiptClaimDropId ? { stripeReceiptClaimDropId } : {}),
-    ...(stripeReceiptClaimDeliveryId === undefined ? {} : { stripeReceiptClaimDeliveryId }),
-    ...(stripeReceiptClaimOutcome ? { stripeReceiptClaimOutcome } : {}),
-    ...(receiptTransferDropId ? { receiptTransferDropId } : {}),
-    ...(deliveryPrepareDropId ? { deliveryPrepareDropId } : {}),
-    ...(deliveryReceiptDropId ? { deliveryReceiptDropId } : {}),
-    ...(deliveryReceiptDeliveryId === undefined ? {} : { deliveryReceiptDeliveryId }),
-    ...(deliveryReceiptVerification ? { deliveryReceiptVerification } : {}),
-    ...(deliveryRecoveryAttempted === undefined ? {} : { deliveryRecoveryAttempted }),
-    ...(deliveryRecoveryRecovered === undefined ? {} : { deliveryRecoveryRecovered }),
-    ...(adminIrlRedeemPrepareDropId ? { adminIrlRedeemPrepareDropId } : {}),
-    ...(adminIrlRedeemPrepareTargetKind ? { adminIrlRedeemPrepareTargetKind } : {}),
-    ...(adminIrlRedeemPrepareItemCount === undefined ? {} : { adminIrlRedeemPrepareItemCount }),
-    ...(adminIrlRedeemFinalizeDropId ? { adminIrlRedeemFinalizeDropId } : {}),
-    ...(adminIrlRedeemFinalizeTargetKind ? { adminIrlRedeemFinalizeTargetKind } : {}),
-    ...(adminIrlRedeemFinalizeDeliveryId === undefined ? {} : { adminIrlRedeemFinalizeDeliveryId }),
-    ...(adminIrlRedeemFinalizeOutcome ? { adminIrlRedeemFinalizeOutcome } : {}),
-    ...(revealDropId ? { revealDropId } : {}),
-    ...(revealBoxAssetId ? { revealBoxAssetId } : {}),
-    ...(revealAssignmentOutcome ? { revealAssignmentOutcome } : {}),
-    ...(revealTransactionOutcome ? { revealTransactionOutcome } : {}),
-    ...(webhookEventId ? { webhookEventId } : {}),
-    ...(webhookEventType ? { webhookEventType } : {}),
-    ...(webhookOutcome ? { webhookOutcome } : {}),
-    ...(profileAuthOutcome ? { profileAuthOutcome } : {}),
-    ...(profileStateSections ? { profileStateSections } : {}),
-    ...(mergedStripeDeliveryOrders === undefined ? {} : { mergedStripeDeliveryOrders }),
-  });
-  return response;
+  return {
+    response,
+    logFields: {
+      includeDevnet,
+      ...(packStatusDropId ? { dropId: packStatusDropId } : {}),
+      ...(providerCacheStatus ? { providerCacheStatus } : {}),
+      ...(pathname === '/inventory' ? {
+        expectedAssetIds: metrics.expectedAssetIds,
+        expectedAssetRecoveryFailures: metrics.expectedAssetRecoveryFailures,
+        expectedAssetResolved: metrics.expectedAssetResolved,
+      } : {}),
+      ...(rpcMethod ? { rpcMethod } : {}),
+      ...(checkoutDropId ? { checkoutDropId } : {}),
+      ...(checkoutMode ? { checkoutMode } : {}),
+      ...(irlClaimDropId ? { irlClaimDropId } : {}),
+      ...(stripeReceiptClaimDropId ? { stripeReceiptClaimDropId } : {}),
+      ...(stripeReceiptClaimDeliveryId === undefined ? {} : { stripeReceiptClaimDeliveryId }),
+      ...(stripeReceiptClaimOutcome ? { stripeReceiptClaimOutcome } : {}),
+      ...(receiptTransferDropId ? { receiptTransferDropId } : {}),
+      ...(deliveryPrepareDropId ? { deliveryPrepareDropId } : {}),
+      ...(deliveryReceiptDropId ? { deliveryReceiptDropId } : {}),
+      ...(deliveryReceiptDeliveryId === undefined ? {} : { deliveryReceiptDeliveryId }),
+      ...(deliveryReceiptVerification ? { deliveryReceiptVerification } : {}),
+      ...(deliveryRecoveryAttempted === undefined ? {} : { deliveryRecoveryAttempted }),
+      ...(deliveryRecoveryRecovered === undefined ? {} : { deliveryRecoveryRecovered }),
+      ...(adminIrlRedeemPrepareDropId ? { adminIrlRedeemPrepareDropId } : {}),
+      ...(adminIrlRedeemPrepareTargetKind ? { adminIrlRedeemPrepareTargetKind } : {}),
+      ...(adminIrlRedeemPrepareItemCount === undefined ? {} : { adminIrlRedeemPrepareItemCount }),
+      ...(adminIrlRedeemFinalizeDropId ? { adminIrlRedeemFinalizeDropId } : {}),
+      ...(adminIrlRedeemFinalizeTargetKind ? { adminIrlRedeemFinalizeTargetKind } : {}),
+      ...(adminIrlRedeemFinalizeDeliveryId === undefined ? {} : { adminIrlRedeemFinalizeDeliveryId }),
+      ...(adminIrlRedeemFinalizeOutcome ? { adminIrlRedeemFinalizeOutcome } : {}),
+      ...(revealDropId ? { revealDropId } : {}),
+      ...(revealBoxAssetId ? { revealBoxAssetId } : {}),
+      ...(revealAssignmentOutcome ? { revealAssignmentOutcome } : {}),
+      ...(revealTransactionOutcome ? { revealTransactionOutcome } : {}),
+      ...(webhookEventId ? { webhookEventId } : {}),
+      ...(webhookEventType ? { webhookEventType } : {}),
+      ...(webhookOutcome ? { webhookOutcome } : {}),
+      ...(profileAuthOutcome ? { profileAuthOutcome } : {}),
+      ...(profileStateSections ? { profileStateSections } : {}),
+      ...(mergedStripeDeliveryOrders === undefined ? {} : { mergedStripeDeliveryOrders }),
+    },
+  };
+}
+
+export async function handleRequest(
+  request: Request,
+  env: Env,
+  dependencyOverrides: Partial<WorkerDependencies> = {},
+  waitUntil?: (promise: Promise<unknown>) => void,
+): Promise<Response> {
+  const execution = requestExecution(request, dependencyOverrides);
+  let result: DispatchResult;
+  try {
+    result = await dispatchRequest(request, env, execution, waitUntil);
+  } catch (error) {
+    console.error({
+      event: 'shop_api_unhandled_error',
+      route: logRoute(execution.pathname),
+      error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' },
+    });
+    result = { response: unexpectedResponse(request, execution.pathname) };
+  }
+  return finalizeRequest(request, execution, result.response, result.logFields);
 }
 
 export default {

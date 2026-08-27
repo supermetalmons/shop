@@ -57,7 +57,6 @@ const productionExportBaseline = [
   ["cloud/workers/api/src/revealDudes.ts","exports","revealBackgroundJobRetryDelaySeconds"],
   ["cloud/workers/api/src/revealDudes.ts","exports","RevealDudesError"],
   ["cloud/workers/api/src/revealDudes.ts","exports","revealDudesTestHooks"],
-  ["cloud/workers/api/src/staffWalletAuth.ts","exports","StaffAuthError"],
   ["cloud/workers/api/src/stripeCheckout.ts","exports","requireFulfillmentPrerequisites"],
   ["cloud/workers/api/src/stripeCheckout.ts","exports","stripeKeys"],
   ["cloud/workers/api/src/stripeCheckout/contract.ts","exports","ACCOUNT_ADMIN_DELIVERY_ORDER"],

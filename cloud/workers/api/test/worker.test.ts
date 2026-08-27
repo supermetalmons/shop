@@ -195,13 +195,17 @@ test('scheduled reconciliation isolates all four subsystems and reports failures
 });
 
 test('commerce maintenance blocks HTTP mutations and skips commerce cron work', async () => {
+  const requestLogs: Record<string, unknown>[] = [];
   const response = await handleRequest(
     new Request('https://api.mons.shop/checkout/session', { method: 'POST' }),
     env({ commerceState: 'paused' }),
+    { ...quietDependencies(fetch), log: (entry) => requestLogs.push(entry) },
   );
   assert.equal(response.status, 503);
   assert.equal(response.headers.get('Retry-After'), '60');
+  assert.match(response.headers.get('Server-Timing') || '', /total;dur=/);
   assert.deepEqual(await response.json(), { ok: false, error: 'commerce-maintenance' });
+  assert.equal(requestLogs.filter((entry) => entry.event === 'shop_api_request').length, 1);
 
   const calls: string[] = [];
   await runScheduledReconciliations(env({ commerceState: 'paused' }), new AbortController().signal, {
@@ -211,6 +215,85 @@ test('commerce maintenance blocks HTTP mutations and skips commerce cron work', 
     stripe: async () => { calls.push('stripe'); return { enqueued: 0, failed: 0 }; },
   });
   assert.deepEqual(calls, ['ops']);
+});
+
+test('request boundary distinguishes staff rejection from authentication infrastructure failure', async () => {
+  const token = `mons_staff_v1.123e4567-e89b-42d3-a456-426614174000.${'A'.repeat(43)}`;
+  const requestFor = () => request('/admin/profile', { wallet: OWNER }, {
+    Authorization: `Bearer ${token}`,
+    Origin: 'https://mons.shop',
+  });
+  const rejectedLogs: Record<string, unknown>[] = [];
+  const rejected = await handleRequest(requestFor(), env({
+    opsDb: d1Database(function prepare() {
+      return { bind() { return this; }, first: async () => null } as D1PreparedStatement;
+    }),
+  }), { ...quietDependencies(fetch), log: (entry) => rejectedLogs.push(entry) });
+  assert.equal(rejected.status, 401);
+  assert.equal((await rejected.json() as { error: { code: string } }).error.code, 'unauthenticated');
+  assert.match(rejected.headers.get('Server-Timing') || '', /total;dur=/);
+  assert.equal(rejectedLogs.filter((entry) => entry.event === 'shop_api_request').length, 1);
+
+  const unavailableLogs: Record<string, unknown>[] = [];
+  const unavailable = await handleRequest(requestFor(), env({
+    opsDb: d1Database(function prepare() {
+      throw new Error('D1 unavailable');
+    }),
+  }), { ...quietDependencies(fetch), log: (entry) => unavailableLogs.push(entry) });
+  assert.equal(unavailable.status, 503);
+  assert.deepEqual(await unavailable.json(), {
+    ok: false,
+    error: {
+      code: 'unavailable',
+      message: 'Staff authentication is temporarily unavailable.',
+    },
+  });
+  assert.equal(unavailable.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.match(unavailable.headers.get('Server-Timing') || '', /total;dur=/);
+  assert.equal(unavailableLogs.filter((entry) => entry.event === 'shop_api_request').length, 1);
+});
+
+test('request boundary sanitizes unexpected failures and survives terminal log failures', async () => {
+  let logAttempts = 0;
+  const response = await handleRequest(request('/checkout/session', {
+    dropId: 'card_nft_binder_devnet',
+  }, { Origin: 'https://mons.shop' }), env({
+    commerceDb: d1Database(function prepare() {
+      throw new Error('sensitive database failure');
+    }),
+  }), {
+    ...quietDependencies(fetch),
+    log: () => {
+      logAttempts += 1;
+      throw new Error('logger failed');
+    },
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    ok: false,
+    error: { code: 'unavailable', message: 'Service is temporarily unavailable.' },
+  });
+  assert.equal(response.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.match(response.headers.get('Server-Timing') || '', /total;dur=/);
+  assert.equal(logAttempts, 1);
+});
+
+test('request boundary preserves the Stripe webhook failure envelope', async () => {
+  const response = await handleRequest(new Request('https://api.mons.shop/webhooks/stripe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  }), env({
+    commerceDb: d1Database(function prepare() {
+      throw new Error('D1 unavailable');
+    }),
+  }), quietDependencies(fetch));
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), {
+    received: true,
+    error: 'Stripe webhook processing failed',
+  });
+  assert.match(response.headers.get('Server-Timing') || '', /total;dur=/);
 });
 
 const NOTIFICATION_JOB = createNotificationEmailJobV1({
@@ -357,22 +440,31 @@ test('health, routing, methods, CORS, and no-store headers are stable', async ()
   assert.match(health.headers.get('cache-control') || '', /no-store/);
   assert.match(health.headers.get('server-timing') || '', /total;dur=/);
 
-  const cors = await handleRequest(new Request('https://api.mons.shop/inventory', { method: 'OPTIONS' }), env(), quietDependencies(fetch));
+  const cors = await handleRequest(new Request('https://api.mons.shop/inventory', {
+    method: 'OPTIONS',
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
   assert.equal(cors.status, 204);
-  assert.equal(cors.headers.get('access-control-allow-origin'), '*');
+  assert.equal(cors.headers.get('access-control-allow-origin'), 'https://mons.shop');
+  assert.equal(cors.headers.get('vary'), 'Origin');
   assert.match(cors.headers.get('cache-control') || '', /no-store/);
 
   const notificationCors = await handleRequest(new Request('https://api.mons.shop/notifications/subscribe', {
     method: 'OPTIONS',
+    headers: { Origin: 'https://mons.shop' },
   }), env(), quietDependencies(fetch));
   assert.equal(notificationCors.status, 204);
-  assert.equal(notificationCors.headers.get('access-control-allow-origin'), '*');
+  assert.equal(notificationCors.headers.get('access-control-allow-origin'), 'https://mons.shop');
 
-  const notificationMethod = await handleRequest(new Request('https://api.mons.shop/notifications/subscribe'), env(), quietDependencies(fetch));
+  const notificationMethod = await handleRequest(new Request('https://api.mons.shop/notifications/subscribe', {
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
   assert.equal(notificationMethod.status, 405);
   assert.equal(notificationMethod.headers.get('allow'), 'POST, OPTIONS');
 
-  const method = await handleRequest(new Request('https://api.mons.shop/inventory'), env(), quietDependencies(fetch));
+  const method = await handleRequest(new Request('https://api.mons.shop/inventory', {
+    headers: { Origin: 'https://mons.shop' },
+  }), env(), quietDependencies(fetch));
   assert.equal(method.status, 405);
   assert.deepEqual(await method.json(), { ok: false, error: 'method-not-allowed' });
 
@@ -1415,6 +1507,99 @@ test('production config has exact authentication rate limits', () => {
       simple: { limit: 60, period: 60 },
     },
   ]);
+});
+
+test('public routes accept only mons.shop and local browser origins', async () => {
+  for (const origin of [
+    'https://mons.shop',
+    'https://www.mons.shop',
+    'http://localhost:5173',
+    'https://127.0.0.1:8787',
+  ]) {
+    const response = await handleRequest(new Request('https://api.mons.shop/inventory', {
+      method: 'OPTIONS',
+      headers: { Origin: origin },
+    }), env(), quietDependencies(fetch));
+    assert.equal(response.status, 204, origin);
+    assert.equal(response.headers.get('access-control-allow-origin'), origin);
+    assert.equal(response.headers.get('vary'), 'Origin');
+  }
+  for (const origin of [undefined, 'https://candidate-mons-shop.lil-org.workers.dev', 'https://evil.example']) {
+    let upstreamCalls = 0;
+    const response = await handleRequest(new Request('https://api.mons.shop/inventory', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(origin ? { Origin: origin } : {}),
+      },
+      body: JSON.stringify({ owner: OWNER }),
+    }), env(), quietDependencies(async () => {
+      upstreamCalls += 1;
+      return Response.json({});
+    }));
+    assert.equal(response.status, 403, origin);
+    assert.equal(response.headers.get('access-control-allow-origin'), null);
+    assert.equal(upstreamCalls, 0);
+  }
+});
+
+test('public rate limits are observe-only and select the route-specific binding', async () => {
+  const calls: string[] = [];
+  const logs: Record<string, unknown>[] = [];
+  const denied = (name: string) => rateLimiter(async () => {
+    calls.push(name);
+    return { success: false };
+  });
+  const providerFetch: ProviderFetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body));
+    return rpcResult(body.id, null);
+  };
+  const read = await handleRequest(
+    rpcRequest('/rpc/mainnet-beta', rpcBody('getLatestBlockhash', [{ commitment: 'confirmed' }])),
+    env({ publicRpcReadRateLimiter: denied('rpc-read') }),
+    { ...quietDependencies(providerFetch), log: (entry) => logs.push(entry) },
+  );
+  assert.equal(read.status, 200);
+
+  const write = await handleRequest(
+    rpcRequest('/rpc/mainnet-beta', rpcBody('sendTransaction', [
+      TRANSACTION,
+      { encoding: 'base64', preflightCommitment: 'confirmed' },
+    ])),
+    env({ publicRpcWriteRateLimiter: denied('rpc-write') }),
+    { ...quietDependencies(providerFetch), log: (entry) => logs.push(entry) },
+  );
+  assert.equal(write.status, 200);
+
+  const shop = await handleRequest(
+    request('/inventory'),
+    env({ apiKey: '', publicShopRateLimiter: denied('shop') }),
+    { ...quietDependencies(providerFetch), log: (entry) => logs.push(entry) },
+  );
+  assert.equal(shop.status, 502);
+
+  let resendCalls = 0;
+  const notification = await handleRequest(
+    request('/notifications/subscribe', { email: 'buyer@example.com' }),
+    env({ publicNotificationRateLimiter: rateLimiter(async () => {
+      calls.push('notification');
+      throw new Error('limiter unavailable');
+    }) }),
+    {
+      ...quietDependencies(fetch),
+      log: (entry) => logs.push(entry),
+      resendFetch: async () => {
+        resendCalls += 1;
+        return Response.json({ id: 'contact-1' });
+      },
+    },
+  );
+  assert.equal(notification.status, 200);
+  assert.equal(resendCalls, 1);
+  assert.deepEqual(calls, ['rpc-read', 'rpc-write', 'shop', 'notification']);
+  assert.equal(logs.filter((entry) => entry.event === 'public_rate_limit_would_block').length, 3);
+  assert.equal(logs.some((entry) => entry.event === 'public_rate_limit_check_failed'), true);
+  assert.equal(JSON.stringify(logs).includes('203.0.113.8'), false);
 });
 
 test('RPC routing applies its restricted CORS policy and HTTP-only contract', async () => {
