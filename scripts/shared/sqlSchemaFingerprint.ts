@@ -49,7 +49,7 @@ export function sqlSchemaFingerprint(sql: string): string {
       pendingSpace = normalized.length > 0 && !lineCommentBoundary;
       continue;
     }
-    if (pendingSpace) normalized += ' ';
+    if (pendingSpace && normalized.at(-1) !== '(' && character !== ')') normalized += ' ';
     pendingSpace = false;
     lineCommentBoundary = false;
     if (character === '-' && sql[index + 1] === '-') {

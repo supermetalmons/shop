@@ -12,9 +12,9 @@ function fail(message: string): never {
 }
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT = '05f62e818d0d94cd00448cded8ddc9e809e2fdb1b110523e8c79c387aaad5996';
-const LEASE_SCHEMA_FINGERPRINT = 'b8e9609fcf244967ef15c64b437e49cf400930cd46579ffe4c7a5c8b0100fe81';
-const WIPE_GUARD_SCHEMA_FINGERPRINT = 'e34d79093242f8e10cbc4d080e8a12f314ce27ecd50a8154d3ce956a095ae1b8';
+const AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT = '0564c72e0abee388a0138b0dc80e5ce4a8ab93801c85a3b109106e1b81171c73';
+const LEASE_SCHEMA_FINGERPRINT = 'a243cba949108449376cf4df9b99eadb75d80e118120dd367f093636e57eb752';
+const WIPE_GUARD_SCHEMA_FINGERPRINT = 'b6aca59498285edd6d66adb915170774a8fb17903802bcce4c783b81317cb40a';
 
 function requireIndex(plan: Record<string, unknown>[], indexName: string): void {
   if (!plan.some((row) => String(row.detail || '').includes(indexName))) {

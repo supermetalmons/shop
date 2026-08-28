@@ -79,16 +79,16 @@ const expectedSchema = new Map<
   string,
   { fingerprint: string; type: string; tableName: string }
 >([
-  ['reveal_submission_storage_control', { fingerprint: '0853bb4e152ba2684f234566a2a99b5ab120b00784d3c37f3729eb43ce8bee15', type: 'table', tableName: 'reveal_submission_storage_control' }],
+  ['reveal_submission_storage_control', { fingerprint: '44ec185eabc12b3992ee96e826b39ae182b32222d3eba3dc71b1fb9063dffb7a', type: 'table', tableName: 'reveal_submission_storage_control' }],
   ['reveal_submission_control_delete_guard', { fingerprint: '618977009b6bee7cf3d40c4cfcf2960308bffd65e5b60d9301143645813a3d1e', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
   ['reveal_submission_control_insert_guard', { fingerprint: 'b6a050331e2963b75a17192d41e0a7232d6127f14cf8f3248a125590421d4e72', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
   ['reveal_submission_control_update_guard', { fingerprint: '957b34444242934db86c074d42114b05f8759d26394761385f2a5d67373068ed', type: 'trigger', tableName: 'reveal_submission_storage_control' }],
-  ['reveal_submission_insert_pause_guard', { fingerprint: '3b8dadcac0fccb8f2e509e4abc8623394ec2e6f44a60c06ec39f454c10038a2c', type: 'trigger', tableName: 'reveal_submissions' }],
-  ['reveal_submission_update_pause_guard', { fingerprint: 'c394783d4dd4dd368662a543a07eac104e5018fb1d87df4fe4b8314fbf1570c1', type: 'trigger', tableName: 'reveal_submissions' }],
+  ['reveal_submission_insert_pause_guard', { fingerprint: '9f89b1dcab58b8d0a393f2f7635b333ef1f639b39a6266b87a6ed8fbd0fb191e', type: 'trigger', tableName: 'reveal_submissions' }],
+  ['reveal_submission_update_pause_guard', { fingerprint: '5a362dc398826eb64ff82b68270d905cc901f16d8a3e0078b5746187447f9109', type: 'trigger', tableName: 'reveal_submissions' }],
   [
     'anonymous_auth_sessions',
     {
-      fingerprint: 'b1985b6c05977420c7e68edcb7a501d8877808554064df78d8475d88741921a0',
+      fingerprint: 'c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304',
       type: 'table',
       tableName: 'anonymous_auth_sessions',
     },
@@ -112,7 +112,7 @@ const expectedSchema = new Map<
   [
     'staff_auth_challenges',
     {
-      fingerprint: '86954545cba1f42dd9a778efc90615ca911eebcfe5e9727416e50176c680f67e',
+      fingerprint: 'be5e9df3a253cc9d96aeccda32a1a721c5c5eb7ac2e675141b04e65363716c3d',
       type: 'table',
       tableName: 'staff_auth_challenges',
     },
@@ -128,7 +128,7 @@ const expectedSchema = new Map<
   [
     'staff_auth_sessions',
     {
-      fingerprint: '402a5a3d60d61711a21037db9cf4dc959835983e6bf6c4c877a1d176f3d0deee',
+      fingerprint: 'a6ebff862853658e5b87850acb93aec844dfa0b8085a2cbdb60b2e367054f83e',
       type: 'table',
       tableName: 'staff_auth_sessions',
     },
@@ -160,7 +160,7 @@ const expectedSchema = new Map<
   [
     'reveal_submissions',
     {
-      fingerprint: 'c38f2cc6730267cd001cd0ff72fe77e5fd282d13fa7f26d010c03e08223cf09c',
+      fingerprint: '2969c31b94fccd46624b138514ba3f530efe5a9029e70380f371061ba98776bd',
       type: 'table',
       tableName: 'reveal_submissions',
     },
@@ -168,7 +168,7 @@ const expectedSchema = new Map<
   [
     'profile_address_conflict_guard',
     {
-      fingerprint: '6504ae117f42990c9b0559ff2c7e4b097df0ead3548c95369cd541c7850634c2',
+      fingerprint: '0a6293e7bfb45c4d3ef6adb0ebb84ae783302e74c63bd6e7836b9ed220f9ba37',
       type: 'trigger',
       tableName: 'profile_addresses',
     },
@@ -184,7 +184,7 @@ const expectedSchema = new Map<
   [
     'profile_address_idempotent_insert',
     {
-      fingerprint: '84e281a297546ef97e1bea092fbb86158bd330721441c106f7ff374f2dc8112a',
+      fingerprint: 'cb6d829aa40baebe78460238d63d2ea3ac314ccdce7de15c13dbdfc9bc38cb43',
       type: 'trigger',
       tableName: 'profile_addresses',
     },
@@ -200,7 +200,7 @@ const expectedSchema = new Map<
   [
     'profile_addresses',
     {
-      fingerprint: '4e4f30d79d313311d118f477d6fc4dbc552bf9fd007acd603771619748abd2c8',
+      fingerprint: 'e274ccc9b59b452a97582a0d6f9900011b2d4f6624ed0b03359e1e66c5f847e0',
       type: 'table',
       tableName: 'profile_addresses',
     },
@@ -216,7 +216,7 @@ const expectedSchema = new Map<
   [
     'profiles',
     {
-      fingerprint: '44bd3280983418705513ff1a0003f8b1a83f849dbd74155f4322691d2ceb9135',
+      fingerprint: '3262625a85ab2d17847b5f0208d2257b050bbcdcc0b0b46dc244a010b7fbaa94',
       type: 'table',
       tableName: 'profiles',
     },
@@ -224,7 +224,7 @@ const expectedSchema = new Map<
   [
     'rate_limit_buckets',
     {
-      fingerprint: 'da1e804caa6b13afc0d440ee31eb28f970bf726c1b9453c5f66c1729ecf09520',
+      fingerprint: 'db8c0bd0339313fcf1149032e5357b5097e9721ecc194e371474dd683ff9dd4e',
       type: 'table',
       tableName: 'rate_limit_buckets',
     },
@@ -240,7 +240,7 @@ const expectedSchema = new Map<
   [
     'auth_wallet_bindings',
     {
-      fingerprint: '3345a6bd59f40909c4b1c6518e94b7562b820d62339703ff3260105b3a75029d',
+      fingerprint: 'b412176e9f183c875e87bb91b77690f5c9e9d377747ca507b021908257cd9331',
       type: 'table',
       tableName: 'auth_wallet_bindings',
     },
@@ -248,7 +248,7 @@ const expectedSchema = new Map<
   [
     'worker_controls',
     {
-      fingerprint: 'a3234f2e0eba2083f1cd408e728576c1edb6e0407cf2bdb0746296199ef4f980',
+      fingerprint: '8f536c805d444279ad7a826c0ee46142241ecfd2215ccf6ceada12b5d4df13da',
       type: 'table',
       tableName: 'worker_controls',
     },

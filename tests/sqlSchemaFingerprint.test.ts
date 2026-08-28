@@ -45,6 +45,18 @@ test('SQL fingerprints isolate quotes and block comments from SQL whitespace', (
   );
 });
 
+test('SQL fingerprints ignore whitespace immediately inside parentheses', () => {
+  assert.equal(
+    sqlSchemaFingerprint(`CREATE TABLE sample (
+      first TEXT CHECK (
+        length(first) > 0
+      ),
+      second TEXT
+    );`),
+    sqlSchemaFingerprint('CREATE TABLE sample (first TEXT CHECK (length(first) > 0), second TEXT);'),
+  );
+});
+
 test('SQL fingerprints do not treat Unicode identifier characters as whitespace', () => {
   const unicodeSpace = `CREATE TABLE sample (first\u00a0second TEXT)`;
   const asciiSpace = 'CREATE TABLE sample (first second TEXT)';

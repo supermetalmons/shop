@@ -49,14 +49,14 @@ const PACK_STATUS_D1_MIGRATIONS = [
   '0003_pack_status_historical_replay.sql',
 ] as const;
 const expectedSchema = new Map<string, { fingerprint: string; tableName: string; type: string }>([
-  ['pack_status', { fingerprint: '07ce5b3993d512fd6187ef3b166dc8999eb9d63be0784e3b274dcb8c6f41c670', tableName: 'pack_status', type: 'table' }],
-  ['pack_status_events', { fingerprint: 'ec23d654f43dd5879550aca3dea7091cf173359a42c63bfa833e7b34e92a0055', tableName: 'pack_status_events', type: 'table' }],
-  ['pack_status_metadata', { fingerprint: '12e69decbe56b47f9e776ec9cf1458343a81fdb67e9dca10c9e7d53db5682e64', tableName: 'pack_status_metadata', type: 'table' }],
+  ['pack_status', { fingerprint: '4bc49284d6f2ffc61a1ce7a28f56b011d32397479613a844e1957c573348a0fc', tableName: 'pack_status', type: 'table' }],
+  ['pack_status_events', { fingerprint: 'd4c1f3c04824ac6097092fe208a3c6f9bb20d4aa197f434772e6215d9232c526', tableName: 'pack_status_events', type: 'table' }],
+  ['pack_status_metadata', { fingerprint: 'c0f6fd7207ba44fad84a6e52ed70f3df71a215d48da5bbedec0665f0b5107672', tableName: 'pack_status_metadata', type: 'table' }],
   ['pack_status_event_apply', { fingerprint: 'fe74b0ff2c6530b0a7b351b4a5b8c0f8307b552d0cf6d7744efe131cea1fc482', tableName: 'pack_status_events', type: 'trigger' }],
-  ['pack_status_event_conflict_guard', { fingerprint: '406d74d5889e890df051bf0900b9aefc3ce8f546551bbfb7f318fa6f01438ab5', tableName: 'pack_status_events', type: 'trigger' }],
+  ['pack_status_event_conflict_guard', { fingerprint: 'f4769665a637ade96f6e6748874468f4fdd02ec8d82b0fdca9bb211d6ce9d7b6', tableName: 'pack_status_events', type: 'trigger' }],
   ['pack_status_event_delete_guard', { fingerprint: '79a1f81ed7e9daaa311764ad15da4289545a31391c60c6e61acc2b2a36fb11d3', tableName: 'pack_status_events', type: 'trigger' }],
   ['pack_status_event_immutable', { fingerprint: '422a24523511b6a2b34d10d6b6807f25c7a6b88ea075e757c55b888a49b35b38', tableName: 'pack_status_events', type: 'trigger' }],
-  ['pack_status_event_type_guard', { fingerprint: '69e2502196836b0c734bc7f25a37627a1eab8bd14d885852546992c830224451', tableName: 'pack_status_events', type: 'trigger' }],
+  ['pack_status_event_type_guard', { fingerprint: 'da993846e30d04596e294d0d5a1a088687961c9144acade9b379da9c42438b03', tableName: 'pack_status_events', type: 'trigger' }],
 ]);
 
 function fail(message: string): never {
