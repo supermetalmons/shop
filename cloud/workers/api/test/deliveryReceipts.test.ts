@@ -19,8 +19,8 @@ import {
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import {
   compareAndSetReadyNotificationCursor,
-  loadReadyNotificationControl,
-} from '../src/d1ReadyNotificationControl.ts';
+  loadReadyNotificationCursor,
+} from '../src/d1ReadyNotificationCursor.ts';
 import {
   READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
   READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
@@ -192,7 +192,7 @@ class ReadyNotificationTestDatabase implements D1Database {
   }
 }
 
-function readyNotificationControlHarness(args: {
+function readyNotificationCursorHarness(args: {
   cursorPath?: string | null;
   exists?: boolean;
   failCursorWrites?: number;
@@ -207,7 +207,6 @@ function readyNotificationControlHarness(args: {
   let revision = args.revision || 1;
   let insertAttempts = 0;
   const batchSizes: number[] = [];
-  const reads: boolean[] = [];
   const execute = (statement: ReadyNotificationTestStatement): D1Result<Record<string, unknown>> => {
     if (statement.query.includes('FROM auth_wallet_bindings')) {
       return readyNotificationD1Result([{
@@ -223,14 +222,12 @@ function readyNotificationControlHarness(args: {
       insertAttempts += 1;
       if (exists) return readyNotificationD1Result();
       exists = true;
-      paused = false;
       cursorPath = null;
       revision = 1;
       return readyNotificationD1Result([], 1);
     }
-    if (statement.query.includes('SELECT control_key, paused, cursor_path, revision')) {
+    if (statement.query.includes('SELECT control_key, cursor_path, revision')) {
       if (!exists) return readyNotificationD1Result();
-      reads.push(paused);
       return readyNotificationD1Result([{
         control_key: 'ready_notifications',
         cursor_path: cursorPath,
@@ -246,7 +243,6 @@ function readyNotificationControlHarness(args: {
       const [nextCursorPath, , , controlKey, expectedRevision] = statement.values;
       if (
         !exists ||
-        paused ||
         controlKey !== 'ready_notifications' ||
         expectedRevision !== revision ||
         typeof nextCursorPath !== 'string'
@@ -262,82 +258,82 @@ function readyNotificationControlHarness(args: {
   return {
     batchSizes,
     db,
-    reads,
     get cursorPath() { return cursorPath; },
     get exists() { return exists; },
     get insertAttempts() { return insertAttempts; },
     get revision() { return revision; },
-    setPaused(value: boolean) {
-      paused = value;
-      revision += 1;
-    },
   };
 }
 
-test('D1 notification control loads and advances its cursor with revision CAS', async () => {
-  const control = readyNotificationControlHarness();
-  assert.deepEqual(await loadReadyNotificationControl(control.db, READY_NOTIFICATION_NOW_MS), {
+test('D1 notification cursor loads and advances with revision CAS', async () => {
+  const cursor = readyNotificationCursorHarness();
+  assert.deepEqual(await loadReadyNotificationCursor(cursor.db, READY_NOTIFICATION_NOW_MS), {
     cursorPath: null,
-    paused: false,
     revision: 1,
   });
   assert.equal(await compareAndSetReadyNotificationCursor(
-    control.db,
+    cursor.db,
     'drops/card_nft_2/deliveryOrders/7',
     1,
     READY_NOTIFICATION_NOW_MS + 1,
   ), true);
   assert.equal(await compareAndSetReadyNotificationCursor(
-    control.db,
+    cursor.db,
     'drops/card_nft_2/deliveryOrders/8',
     1,
     READY_NOTIFICATION_NOW_MS + 2,
   ), false);
-  assert.deepEqual(await loadReadyNotificationControl(control.db, READY_NOTIFICATION_NOW_MS + 3), {
+  assert.deepEqual(await loadReadyNotificationCursor(cursor.db, READY_NOTIFICATION_NOW_MS + 3), {
     cursorPath: 'drops/card_nft_2/deliveryOrders/7',
-    paused: false,
     revision: 2,
   });
 });
 
-test('D1 notification control rejects malformed cursor paths and does not advance while paused', async () => {
-  const malformed = readyNotificationControlHarness({ cursorPath: 'deliveryOrders/7' });
+test('D1 notification cursor rejects malformed state and ignores the legacy paused column', async () => {
+  const malformed = readyNotificationCursorHarness({ cursorPath: 'deliveryOrders/7' });
   await assert.rejects(
-    loadReadyNotificationControl(malformed.db, READY_NOTIFICATION_NOW_MS),
-    /invalid_ready_notification_control/,
+    loadReadyNotificationCursor(malformed.db, READY_NOTIFICATION_NOW_MS),
+    /invalid_ready_notification_cursor/,
   );
-  const paused = readyNotificationControlHarness({ paused: true });
+  const legacyPaused = readyNotificationCursorHarness({ paused: true });
   assert.equal(await compareAndSetReadyNotificationCursor(
-    paused.db,
+    legacyPaused.db,
     'drops/card_nft_2/deliveryOrders/7',
     1,
     READY_NOTIFICATION_NOW_MS,
-  ), false);
+  ), true);
   await assert.rejects(
     compareAndSetReadyNotificationCursor(
-      paused.db,
+      legacyPaused.db,
       'deliveryOrders/7',
       1,
       READY_NOTIFICATION_NOW_MS,
     ),
-    /invalid_ready_notification_control_cursor/,
+    /invalid_ready_notification_cursor_path/,
   );
-  const noncanonical = readyNotificationControlHarness({
+  const noncanonical = readyNotificationCursorHarness({
     cursorPath: 'drops/Card_NFT_2/deliveryOrders/7',
   });
   await assert.rejects(
-    loadReadyNotificationControl(noncanonical.db, READY_NOTIFICATION_NOW_MS),
-    /invalid_ready_notification_control/,
+    loadReadyNotificationCursor(noncanonical.db, READY_NOTIFICATION_NOW_MS),
+    /invalid_ready_notification_cursor/,
   );
   await assert.rejects(
     compareAndSetReadyNotificationCursor(
-      paused.db,
+      legacyPaused.db,
       'drops/Card_NFT_2/deliveryOrders/7',
-      1,
+      2,
       READY_NOTIFICATION_NOW_MS,
     ),
-    /invalid_ready_notification_control_cursor/,
+    /invalid_ready_notification_cursor_path/,
   );
+  const missing = readyNotificationCursorHarness({ exists: false });
+  assert.deepEqual(await loadReadyNotificationCursor(missing.db, READY_NOTIFICATION_NOW_MS), {
+    cursorPath: null,
+    revision: 1,
+  });
+  assert.equal(missing.insertAttempts, 1);
+  assert.deepEqual(missing.batchSizes, [2]);
 });
 
 function request(path: string, body: unknown, init: RequestInit = {}): Request {
@@ -361,7 +357,7 @@ function env(overrides: Partial<Pick<Env,
     COSIGNER_SECRET: bs58.encode(Keypair.generate().secretKey),
     HELIUS_API_KEY: 'helius-test-key',
     NOTIFICATION_EMAIL_QUEUE: notificationQueue(),
-    OPS_DB: readyNotificationControlHarness().db,
+    OPS_DB: readyNotificationCursorHarness().db,
     ...overrides,
   };
 }
@@ -556,14 +552,12 @@ test('native ready-notification publication claims, queues, and finalizes atomic
     'drops/card_nft_2/deliveryOrders/7',
   );
   assert.ok(document);
-  const control = readyNotificationControlHarness();
   const jobs: unknown[] = [];
   assert.equal(await deliveryReceiptTestHooks.publishReadyToShipNotifications({
     context: native.context,
     deliveryId: 7,
     document,
     dropId: 'card_nft_2',
-    opsDb: control.db,
     queue: notificationQueue({
       sendBatch: async (messages) => {
         jobs.push(...Array.from(messages, (message) => message.body));
@@ -578,6 +572,42 @@ test('native ready-notification publication claims, queues, and finalizes atomic
   assert.equal(jobs.length, 1);
   assert.equal(finalized?.fields.buyerOrderReceivedEmailState, 'queued');
   assert.equal(finalized?.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
+});
+
+test('pre-enqueue cancellation releases the ready-notification claim and attempt', async () => {
+  const native = await nativeDeliveryContext(readyNotificationOrderFields(7));
+  const document = await deliveryReceiptRuntime.readDocument(
+    native.context,
+    'drops/card_nft_2/deliveryOrders/7',
+  );
+  assert.ok(document);
+  const cancellation = new DOMException('request cancelled', 'AbortError');
+  const controller = new AbortController();
+  controller.abort(cancellation);
+  native.context.signal = controller.signal;
+  let queueCalls = 0;
+  await assert.rejects(
+    deliveryReceiptTestHooks.publishReadyToShipNotifications({
+      context: native.context,
+      deliveryId: 7,
+      document,
+      dropId: 'card_nft_2',
+      queue: notificationQueue({
+        sendBatch: async () => {
+          queueCalls += 1;
+          return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+        },
+      }),
+    }),
+    (error: unknown) => error === cancellation,
+  );
+  const released = await deliveryReceiptRuntime.readDocument(
+    native.context,
+    'drops/card_nft_2/deliveryOrders/7',
+  );
+  assert.equal(queueCalls, 0);
+  assert.equal(released?.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD], 0);
+  assert.equal(released?.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
 });
 
 test('native pack-status projection applies once and marks the delivery complete', async () => {

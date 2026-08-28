@@ -136,8 +136,8 @@ import {
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import {
   compareAndSetReadyNotificationCursor,
-  loadReadyNotificationControl,
-} from './d1ReadyNotificationControl.js';
+  loadReadyNotificationCursor,
+} from './d1ReadyNotificationCursor.js';
 
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
@@ -256,13 +256,6 @@ class ReadyToShipNotificationFinalizationError extends ReadyToShipNotificationEn
   constructor() {
     super('Delivery completed and notifications were queued, but their recovery state could not be saved. Retry later.');
     this.name = 'ReadyToShipNotificationFinalizationError';
-  }
-}
-
-class ReadyToShipNotificationControlError extends ReadyToShipNotificationEnqueueError {
-  constructor() {
-    super('Delivery completed, but notification publication is paused or unavailable. Retry later.');
-    this.name = 'ReadyToShipNotificationControlError';
   }
 }
 
@@ -3033,7 +3026,6 @@ async function publishReadyToShipNotifications(args: {
   deliveryId: number;
   document: DeliveryOrderDocument;
   dropId: string;
-  opsDb: D1Database;
   queue: Env['NOTIFICATION_EMAIL_QUEUE'];
 }): Promise<boolean> {
   const expectedIdentity = { deliveryId: args.deliveryId, dropId: args.dropId };
@@ -3117,9 +3109,6 @@ async function publishReadyToShipNotifications(args: {
   }
   try {
     args.context.signal.throwIfAborted();
-    const latestControl = await loadReadyNotificationControl(args.opsDb, args.context.nowMs);
-    args.context.signal.throwIfAborted();
-    if (latestControl.paused) throw new ReadyToShipNotificationControlError();
   } catch (error) {
     await releaseReadyToShipNotificationClaim(
       cleanupContext(args.context),
@@ -3133,16 +3122,7 @@ async function publishReadyToShipNotifications(args: {
         error: summarizeError(releaseError),
       });
     });
-    console.error({
-      event: 'ready_to_ship_notifications_control_unavailable',
-      dropId: args.dropId,
-      deliveryId: args.deliveryId,
-      error: summarizeError(error),
-    });
-    args.context.signal.throwIfAborted();
-    throw error instanceof ReadyToShipNotificationControlError
-      ? error
-      : new ReadyToShipNotificationControlError();
+    throw error;
   }
   if (!jobs.length) {
     console.log({
@@ -3225,18 +3205,14 @@ export async function reconcilePendingReadyToShipNotifications(
   };
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
   signal.throwIfAborted();
-  const control = await loadReadyNotificationControl(env.OPS_DB, context.nowMs);
+  const cursor = await loadReadyNotificationCursor(env.OPS_DB, context.nowMs);
   signal.throwIfAborted();
-  if (control.paused) {
-    log({ event: 'ready_to_ship_notifications_reconciliation_paused' });
-    return 0;
-  }
   const afterCursor = await runPendingReadyNotificationReconciliationQuery(
     context,
     READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE,
-    control.cursorPath || undefined,
+    cursor.cursorPath || undefined,
   );
-  const wrapped = control.cursorPath && afterCursor.length < READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE
+  const wrapped = cursor.cursorPath && afterCursor.length < READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE
     ? await runPendingReadyNotificationReconciliationQuery(
         context,
         READY_NOTIFICATION_RECONCILIATION_SCAN_SIZE - afterCursor.length,
@@ -3284,7 +3260,6 @@ export async function reconcilePendingReadyToShipNotifications(
         deliveryId: resolution.identity.deliveryId,
         document,
         dropId,
-        opsDb: env.OPS_DB,
         queue: env.NOTIFICATION_EMAIL_QUEUE,
       });
       if (published) processed += 1;
@@ -3297,7 +3272,7 @@ export async function reconcilePendingReadyToShipNotifications(
       await compareAndSetReadyNotificationCursor(
         env.OPS_DB,
         lastVisitedPath,
-        control.revision,
+        cursor.revision,
         (overrides.nowMs || Date.now)(),
       );
     } catch (error) {
@@ -3554,7 +3529,6 @@ async function retryIssueReceipts(args: {
       deliveryId,
       document,
       dropId: runtime.dropId,
-      opsDb: args.env.OPS_DB,
       queue: args.env.NOTIFICATION_EMAIL_QUEUE,
     });
     return {
@@ -3692,7 +3666,6 @@ async function retryIssueReceipts(args: {
     deliveryId,
     document: readyDocument,
     dropId: runtime.dropId,
-    opsDb: args.env.OPS_DB,
     queue: args.env.NOTIFICATION_EMAIL_QUEUE,
   });
   return { processed: true, deliveryId, receiptsMinted, receiptTxs, closeDeliveryTx };

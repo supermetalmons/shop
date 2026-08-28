@@ -6,8 +6,8 @@ import { createCommerceD1 } from '../test/commerceD1Harness.ts';
 import { createTestHarness } from 'wrangler';
 import {
   compareAndSetReadyNotificationCursor,
-  loadReadyNotificationControl,
-} from '../src/d1ReadyNotificationControl.ts';
+  loadReadyNotificationCursor,
+} from '../src/d1ReadyNotificationCursor.ts';
 import {
   cleanupExpiredReceiptTransferRateLimitBuckets,
   consumeReceiptTransferRateLimit,
@@ -77,7 +77,7 @@ function normalizeRuntimeRevealSubmission(
   };
 }
 
-test('ops D1 migrations enforce notification control and receipt-transfer limits', async () => {
+test('ops D1 migrations preserve the notification cursor and receipt-transfer limits', async () => {
   const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   const runtimeConfig = {
     ...productionConfig,
@@ -105,6 +105,8 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
     assert.deepEqual(migrations.results.map((row) => row.name), [
       '0001_current_schema.sql',
       '0002_reveal_submission_write_fence.sql',
+      '0003_remove_ready_notification_pause.sql',
+      '0004_repair_ready_notification_cursor.sql',
     ]);
     const anonymousExpiry = 30 * 24 * 60 * 60 * 1000;
     await env.OPS_DB.batch([
@@ -686,18 +688,15 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
         hint, email, label, created_at_ms, updated_at_ms
       ) VALUES (?, 'QbCdEfGhIjKlMnOpQrSt', 'cipher', 'US', 'US', 'hint', NULL, NULL, 0, 0)`,
     ).bind('So11111111111111111111111111111111111111112').run());
-    assert.deepEqual(await loadReadyNotificationControl(env.OPS_DB, 1_000), {
+    assert.deepEqual(await loadReadyNotificationCursor(env.OPS_DB, 1_000), {
       cursorPath: null,
-      paused: false,
       revision: 1,
     });
-
     await env.OPS_DB.prepare(
       "DELETE FROM worker_controls WHERE control_key = 'ready_notifications'",
     ).run();
-    assert.deepEqual(await loadReadyNotificationControl(env.OPS_DB, 2_000), {
+    assert.deepEqual(await loadReadyNotificationCursor(env.OPS_DB, 2_000), {
       cursorPath: null,
-      paused: false,
       revision: 1,
     });
     assert.equal(await compareAndSetReadyNotificationCursor(
@@ -712,34 +711,33 @@ test('ops D1 migrations enforce notification control and receipt-transfer limits
       1,
       4_000,
     ), false);
-    assert.deepEqual(await loadReadyNotificationControl(env.OPS_DB, 4_000), {
+    assert.deepEqual(await loadReadyNotificationCursor(env.OPS_DB, 5_000), {
       cursorPath: 'drops/card_nft_2/deliveryOrders/7',
-      paused: false,
       revision: 2,
     });
 
-    await env.OPS_DB.prepare(
-      `UPDATE worker_controls
-      SET paused = 1, revision = revision + 1, updated_at_ms = ?
-      WHERE control_key = 'ready_notifications'`,
-    ).bind(5_000).run();
-    assert.deepEqual(await loadReadyNotificationControl(env.OPS_DB, 5_000), {
-      cursorPath: 'drops/card_nft_2/deliveryOrders/7',
-      paused: true,
-      revision: 3,
-    });
     assert.equal(await compareAndSetReadyNotificationCursor(
       env.OPS_DB,
       'drops/card_nft_2/deliveryOrders/8',
-      3,
+      2,
       6_000,
-    ), false);
+    ), true);
+    assert.deepEqual(await loadReadyNotificationCursor(env.OPS_DB, 7_000), {
+      cursorPath: 'drops/card_nft_2/deliveryOrders/8',
+      revision: 3,
+    });
+    assert.equal(
+      (await env.OPS_DB.prepare(`SELECT COUNT(*) AS count
+        FROM pragma_table_info('worker_controls')
+        WHERE name = 'paused'`).first<{ count: number }>())?.count,
+      0,
+    );
     await assert.rejects(
       env.OPS_DB.prepare(
         `INSERT INTO worker_controls (
-          control_key, paused, cursor_path, revision,
+          control_key, cursor_path, revision,
           created_at_ms, updated_at_ms, cursor_updated_at_ms
-        ) VALUES ('other', 0, NULL, 1, 0, 0, NULL)`,
+        ) VALUES ('other', NULL, 1, 0, 0, NULL)`,
       ).run(),
     );
 

@@ -4,15 +4,10 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import {
   assertOpsD1Integrity,
-  buildSetReadyNotificationsPausedSql,
-  parseReadyNotificationsControl,
+  parseReadyNotificationCursor,
   validateReadyNotificationCursorPath,
   type OpsD1IntegrityInput,
 } from '../scripts/shared/opsD1Maintenance.ts';
-import {
-  parseReadyNotificationsControlArgs,
-  runReadyNotificationsControl,
-} from '../scripts/ops/readyNotificationsControl.ts';
 import {
   parseRevealSubmissionsControl,
   parseRevealSubmissionsControlArgs,
@@ -23,6 +18,8 @@ import {
 const schemaSql = [
   '0001_current_schema.sql',
   '0002_reveal_submission_write_fence.sql',
+  '0003_remove_ready_notification_pause.sql',
+  '0004_repair_ready_notification_cursor.sql',
 ].map((name) => readFileSync(
   new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
   'utf8',
@@ -34,6 +31,63 @@ function database(): DatabaseSync {
   return db;
 }
 
+test('pause-removal migration preserves the ready-notification cursor exactly', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    for (const name of ['0001_current_schema.sql', '0002_reveal_submission_write_fence.sql']) {
+      db.exec(readFileSync(
+        new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
+        'utf8',
+      ));
+    }
+    db.exec(`UPDATE worker_controls
+      SET
+        paused = 1,
+        cursor_path = 'drops/card_nft_2/deliveryOrders/7',
+        revision = 9,
+        updated_at_ms = 2_000,
+        cursor_updated_at_ms = 2_000`);
+    db.exec(readFileSync(
+      new URL('../cloud/workers/api/ops-migrations/0003_remove_ready_notification_pause.sql', import.meta.url),
+      'utf8',
+    ));
+    assert.deepEqual(queryRows(db, 'SELECT * FROM worker_controls'), [{
+      control_key: 'ready_notifications',
+      cursor_path: 'drops/card_nft_2/deliveryOrders/7',
+      revision: 9,
+      created_at_ms: 0,
+      updated_at_ms: 2_000,
+      cursor_updated_at_ms: 2_000,
+    }]);
+    assert.equal(queryRows(db, `SELECT name FROM pragma_table_info('worker_controls')
+      WHERE name = 'paused'`).length, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test('cursor repair migration recreates only a missing singleton', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(schemaSql);
+    const preserved = queryRows(db, 'SELECT * FROM worker_controls');
+    db.exec('DELETE FROM worker_controls');
+    db.exec(readFileSync(
+      new URL('../cloud/workers/api/ops-migrations/0004_repair_ready_notification_cursor.sql', import.meta.url),
+      'utf8',
+    ));
+    assert.deepEqual(queryRows(db, 'SELECT * FROM worker_controls'), [controlRow()]);
+    db.exec(readFileSync(
+      new URL('../cloud/workers/api/ops-migrations/0004_repair_ready_notification_cursor.sql', import.meta.url),
+      'utf8',
+    ));
+    assert.deepEqual(queryRows(db, 'SELECT * FROM worker_controls'), [controlRow()]);
+    assert.equal(preserved.length, 1);
+  } finally {
+    db.close();
+  }
+});
+
 function queryRows(db: DatabaseSync, sql: string) {
   return db.prepare(sql).all().map((row) => ({ ...row }));
 }
@@ -41,7 +95,6 @@ function queryRows(db: DatabaseSync, sql: string) {
 function controlRow(overrides: Record<string, unknown> = {}) {
   return {
     control_key: 'ready_notifications',
-    paused: 0,
     cursor_path: null,
     revision: 1,
     created_at_ms: 0,
@@ -67,6 +120,8 @@ function integrityInput(
       migrations: [
         { name: '0001_current_schema.sql' },
         { name: '0002_reveal_submission_write_fence.sql' },
+        { name: '0003_remove_ready_notification_pause.sql' },
+        { name: '0004_repair_ready_notification_cursor.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
@@ -161,7 +216,7 @@ test('Ops baseline enforces rate-limit, profile, and control invariants', () => 
     assert.throws(() =>
       insertBucket.run('caller', 'e'.repeat(64), 2, null, null, null, 3_000, 603_001, 1, 3_000));
     assert.throws(() => db.exec(`INSERT INTO worker_controls VALUES (
-      'other', 0, NULL, 1, 0, 0, NULL
+      'other', NULL, 1, 0, 0, NULL
     )`));
     assert.throws(() => db.exec(`UPDATE worker_controls SET paused = 'false'`));
     db.exec(`INSERT INTO profiles VALUES (
@@ -208,7 +263,7 @@ test('Ops integrity rejects ledger, schema, and foreign-key drift', () => {
   );
   assert.throws(() => assertOpsD1Integrity(integrityInput({
     schema: healthy.schema.map((row) => row.name === 'worker_controls'
-      ? { ...row, sql: String(row.sql).replace('paused IN (0, 1)', 'paused IN (0, 1, 2)') }
+      ? { ...row, sql: String(row.sql).replace('BETWEEN 1 AND 1500', 'BETWEEN 1 AND 1501') }
       : row),
   })), /schema/);
   assert.throws(() => assertOpsD1Integrity(integrityInput({
@@ -222,7 +277,7 @@ test('Ops integrity rejects ledger, schema, and foreign-key drift', () => {
   })), /strict flag/);
   assert.throws(() => assertOpsD1Integrity(integrityInput({
     workerControlColumns: healthy.workerControlColumns.map((row) =>
-      row.name === 'paused' ? { ...row, type: 'TEXT' } : row),
+      row.name === 'cursor_path' ? { ...row, type: 'INTEGER' } : row),
   })), /worker_controls columns/);
   assert.throws(() => assertOpsD1Integrity(integrityInput({
     rateLimitBucketColumns: healthy.rateLimitBucketColumns.map((row) =>
@@ -235,17 +290,7 @@ test('Ops integrity rejects ledger, schema, and foreign-key drift', () => {
   assert.throws(() => assertOpsD1Integrity(integrityInput({ controls: [] })), /exactly one worker control/);
 });
 
-test('ready-notification controls validate cursors and guarded mutations', async () => {
-  assert.deepEqual(parseReadyNotificationsControlArgs(['status']), {
-    command: 'status',
-    write: false,
-  });
-  assert.deepEqual(parseReadyNotificationsControlArgs(['pause', '--write']), {
-    command: 'pause',
-    write: true,
-  });
-  assert.throws(() => parseReadyNotificationsControlArgs(['pause']), /requires --write/);
-  assert.throws(() => parseReadyNotificationsControlArgs(['status', '--write']), /read-only/);
+test('ready-notification cursor validation has no pause state', () => {
   assert.equal(
     validateReadyNotificationCursorPath('drops/little_swag_hoodies/deliveryOrders/7'),
     'drops/little_swag_hoodies/deliveryOrders/7',
@@ -254,42 +299,18 @@ test('ready-notification controls validate cursors and guarded mutations', async
     () => validateReadyNotificationCursorPath('drops/Card_NFT_2/deliveryOrders/7'),
     /canonical delivery-order path/,
   );
-
-  const db = database();
-  try {
-    const first = parseReadyNotificationsControl(
-      db.prepare(buildSetReadyNotificationsPausedSql(true, 1, 1_000)).get()!,
-    );
-    const second = parseReadyNotificationsControl(
-      db.prepare(buildSetReadyNotificationsPausedSql(false, 2, 2_000)).get()!,
-    );
-    assert.equal(db.prepare(buildSetReadyNotificationsPausedSql(true, 2, 3_000)).get(), undefined);
-    assert.deepEqual([first.paused, first.revision], [true, 2]);
-    assert.deepEqual([second.paused, second.revision], [false, 3]);
-  } finally {
-    db.close();
-  }
-
-  let mutations = 0;
-  await assert.rejects(
-    runReadyNotificationsControl(
-      { command: 'pause', write: true },
-      {
-        nowMs: () => 1_000,
-        readControl: () => parseReadyNotificationsControl(controlRow({
-          cursor_path: 'invalid',
-          cursor_updated_at_ms: 1,
-          updated_at_ms: 1,
-        })),
-        setPaused: () => {
-          mutations += 1;
-          return parseReadyNotificationsControl(controlRow());
-        },
-      },
-    ),
-    /canonical delivery-order path/,
-  );
-  assert.equal(mutations, 0);
+  assert.deepEqual(parseReadyNotificationCursor(controlRow({
+    cursor_path: 'drops/little_swag_hoodies/deliveryOrders/7',
+    updated_at_ms: 1_000,
+    cursor_updated_at_ms: 1_000,
+  })), {
+    controlKey: 'ready_notifications',
+    cursorPath: 'drops/little_swag_hoodies/deliveryOrders/7',
+    revision: 1,
+    createdAtMs: 0,
+    updatedAtMs: 1_000,
+    cursorUpdatedAtMs: 1_000,
+  });
 });
 
 test('reveal-submission controls expose status, pause, and resume only', async () => {

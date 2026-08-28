@@ -4,17 +4,18 @@ import { fileURLToPath } from 'node:url';
 import { isCanonicalReadyNotificationCursorPath } from '../../shared/readyToShipNotificationReconciliation.ts';
 import { sqlSchemaFingerprint } from './sqlSchemaFingerprint.ts';
 
-export const READY_NOTIFICATIONS_CONTROL_KEY = 'ready_notifications';
+export const READY_NOTIFICATION_CURSOR_KEY = 'ready_notifications';
 const OPS_D1_MIGRATIONS = [
   '0001_current_schema.sql',
   '0002_reveal_submission_write_fence.sql',
+  '0003_remove_ready_notification_pause.sql',
+  '0004_repair_ready_notification_cursor.sql',
 ] as const;
 
 export type OpsD1Row = Record<string, unknown>;
 
-export type ReadyNotificationsControl = {
-  controlKey: typeof READY_NOTIFICATIONS_CONTROL_KEY;
-  paused: boolean;
+export type ReadyNotificationCursorState = {
+  controlKey: typeof READY_NOTIFICATION_CURSOR_KEY;
   cursorPath: string | null;
   revision: number;
   createdAtMs: number;
@@ -58,7 +59,7 @@ export type OpsD1IntegrityReport = {
   anonymousAuthSessionCount: number;
   profileAddressCount: number;
   profileCount: number;
-  readyNotifications: ReadyNotificationsControl;
+  readyNotificationCursor: ReadyNotificationCursorState;
   revealSubmissionCount: number;
   revealSubmissionStorage: RevealSubmissionStorageControl;
   authWalletBindingCount: number;
@@ -248,7 +249,7 @@ const expectedSchema = new Map<
   [
     'worker_controls',
     {
-      fingerprint: '8f536c805d444279ad7a826c0ee46142241ecfd2215ccf6ceada12b5d4df13da',
+      fingerprint: '345e3d3708aaf05c53d253386e7c95c04d1fb40f2ea4d8c3bb8c3b2d22724e5c',
       type: 'table',
       tableName: 'worker_controls',
     },
@@ -264,7 +265,6 @@ type ExpectedColumn = readonly [
 
 const expectedWorkerControlColumns: readonly ExpectedColumn[] = [
   ['control_key', 'TEXT', 1, 1],
-  ['paused', 'INTEGER', 1, 0],
   ['cursor_path', 'TEXT', 0, 0],
   ['revision', 'INTEGER', 1, 0],
   ['created_at_ms', 'INTEGER', 1, 0],
@@ -501,14 +501,11 @@ export function validateReadyNotificationCursorPath(value: unknown): string {
   return value;
 }
 
-export function parseReadyNotificationsControl(
+export function parseReadyNotificationCursor(
   row: OpsD1Row,
-): ReadyNotificationsControl {
-  if (row.control_key !== READY_NOTIFICATIONS_CONTROL_KEY) {
-    return fail('Ready-notification control key is invalid.');
-  }
-  if (row.paused !== 0 && row.paused !== 1) {
-    return fail('Ready-notification paused state is invalid.');
+): ReadyNotificationCursorState {
+  if (row.control_key !== READY_NOTIFICATION_CURSOR_KEY) {
+    return fail('Ready-notification cursor key is invalid.');
   }
   const cursorPath = row.cursor_path === null
     ? null
@@ -539,8 +536,7 @@ export function parseReadyNotificationsControl(
     return fail('Ready-notification cursor timestamps are inconsistent.');
   }
   return {
-    controlKey: READY_NOTIFICATIONS_CONTROL_KEY,
-    paused: row.paused === 1,
+    controlKey: READY_NOTIFICATION_CURSOR_KEY,
     cursorPath,
     revision,
     createdAtMs,
@@ -677,7 +673,7 @@ export function assertOpsD1Integrity(
     anonymousAuthSessionCount,
     profileAddressCount,
     profileCount,
-    readyNotifications: parseReadyNotificationsControl(input.controls[0]),
+    readyNotificationCursor: parseReadyNotificationCursor(input.controls[0]),
     revealSubmissionCount,
     revealSubmissionStorage,
     authWalletBindingCount,
@@ -773,23 +769,12 @@ export function queryRemoteOpsD1(sql: string): OpsD1Row[] {
 
 const controlSelect = `SELECT
   control_key,
-  paused,
   cursor_path,
   revision,
   created_at_ms,
   updated_at_ms,
   cursor_updated_at_ms
 FROM worker_controls`;
-
-export function readRemoteReadyNotificationsControl(): ReadyNotificationsControl {
-  const rows = queryRemoteOpsD1(
-    `${controlSelect} WHERE control_key = 'ready_notifications'`,
-  );
-  if (rows.length !== 1) {
-    return fail('Ready-notification control is missing from Ops D1.');
-  }
-  return parseReadyNotificationsControl(rows[0]);
-}
 
 export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
   return assertOpsD1Integrity({
@@ -878,56 +863,4 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
       'PRAGMA table_info(worker_controls)',
     ),
   });
-}
-
-function mutationTimestamp(value: number): number {
-  return safeInteger(value, 'Ready-notification mutation timestamp');
-}
-
-export function buildSetReadyNotificationsPausedSql(
-  paused: boolean,
-  expectedRevision: number,
-  nowMs: number,
-): string {
-  const revision = safeInteger(
-    expectedRevision,
-    'Ready-notification expected revision',
-    1,
-  );
-  const timestamp = mutationTimestamp(nowMs);
-  return `UPDATE worker_controls
-SET
-  paused = ${paused ? 1 : 0},
-  revision = revision + 1,
-  updated_at_ms = MAX(updated_at_ms, ${timestamp})
-WHERE
-  control_key = 'ready_notifications' AND
-  revision = ${revision}
-RETURNING
-  control_key,
-  paused,
-  cursor_path,
-  revision,
-  created_at_ms,
-  updated_at_ms,
-  cursor_updated_at_ms`;
-}
-
-function runControlMutation(sql: string, failureMessage: string): ReadyNotificationsControl {
-  const rows = queryRemoteOpsD1(sql);
-  if (rows.length !== 1) {
-    return fail(failureMessage);
-  }
-  return parseReadyNotificationsControl(rows[0]);
-}
-
-export function setRemoteReadyNotificationsPaused(
-  paused: boolean,
-  expectedRevision: number,
-  nowMs = Date.now(),
-): ReadyNotificationsControl {
-  return runControlMutation(
-    buildSetReadyNotificationsPausedSql(paused, expectedRevision, nowMs),
-    'Ready-notification control changed concurrently; inspect its current state before retrying.',
-  );
 }

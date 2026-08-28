@@ -87,7 +87,7 @@ test('Cloudflare releases use direct pinned Wrangler commands', () => {
   );
   assert.equal(
     packageJson.scripts['ready-notifications-control'],
-    'node --import tsx scripts/ops/readyNotificationsControl.ts',
+    undefined,
   );
   assert.equal(
     packageJson.scripts['deploy:api'],
