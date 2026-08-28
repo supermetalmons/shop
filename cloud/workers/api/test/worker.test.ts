@@ -24,12 +24,26 @@ import {
   signNotificationEnqueueRequest,
 } from '../../../../shared/notificationEnqueueAuth.ts';
 import {
-  handleRequest,
+  handleRequest as rawHandleRequest,
   runScheduledReconciliations,
   sleepWithAbort,
   type ProviderFetch,
 } from '../src/index.ts';
 import { isStaffOnlyApiPath } from '../src/requestIdentity.ts';
+import { createDeferredWorkCollector } from './deferredWork.ts';
+
+type RequestDependencies = Parameters<typeof rawHandleRequest>[3];
+
+async function handleRequest(
+  request: Request,
+  requestEnv: Env,
+  dependencies: RequestDependencies = {},
+): Promise<Response> {
+  const deferred = createDeferredWorkCollector();
+  const response = await rawHandleRequest(request, requestEnv, deferred.defer, dependencies);
+  await deferred.drain();
+  return response;
+}
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const CARD_COLLECTION = 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu';
@@ -1085,6 +1099,124 @@ test('pack-status route reads and internally caches D1 while preserving the resp
   );
   assert.equal(second.status, 200);
   assert.equal(logs.at(-1)?.providerCacheStatus, 'D1-HIT');
+});
+
+test('request boundary defers a pack-status cache write without delaying the response', async () => {
+  let resolveCacheWrite!: () => void;
+  const cacheWrite = new Promise<void>((resolve) => {
+    resolveCacheWrite = resolve;
+  });
+  let guardedCacheWrite: Promise<unknown> | undefined;
+  const catchCacheWrite = cacheWrite.catch.bind(cacheWrite);
+  Object.defineProperty(cacheWrite, 'catch', {
+    value: (onRejected: (reason: unknown) => unknown) => {
+      guardedCacheWrite = catchCacheWrite(onRejected);
+      return guardedCacheWrite;
+    },
+  });
+  const deferred = createDeferredWorkCollector();
+  const responsePromise = rawHandleRequest(
+    new Request('https://api.mons.shop/pack-status/card_nft_2'),
+    env({ dataDb: packStatusD1() }),
+    deferred.defer,
+    {
+      ...quietDependencies(fetch),
+      cache: {
+        match: async () => undefined,
+        put: () => cacheWrite,
+      },
+    },
+  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const response = await Promise.race([
+      responsePromise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error('Response waited for deferred cache work')), 1_000);
+      }),
+    ]);
+    assert.equal(response.status, 200);
+    assert.equal(deferred.promises.length, 1);
+    const deferredPromise = deferred.promises[0];
+    assert.equal(deferredPromise, guardedCacheWrite);
+    let settled = false;
+    void deferredPromise.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    assert.equal(settled, false);
+    resolveCacheWrite();
+    await deferred.drain();
+    assert.equal(settled, true);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    resolveCacheWrite();
+  }
+});
+
+test('request boundary maps pack-status deferral registration failures to the route envelope', async (context) => {
+  const cause = new Error('waitUntil rejected pack-status work');
+  const errors: Record<string, unknown>[] = [];
+  context.mock.method(console, 'error', (entry: unknown) => {
+    errors.push(entry as Record<string, unknown>);
+  });
+  const response = await rawHandleRequest(
+    new Request('https://api.mons.shop/pack-status/card_nft_2'),
+    env({ dataDb: packStatusD1() }),
+    () => { throw cause; },
+    {
+      ...quietDependencies(fetch),
+      cache: {
+        match: async () => undefined,
+        put: async () => undefined,
+      },
+    },
+  );
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { ok: false, error: 'provider-unavailable' });
+  assert.deepEqual(errors.find((entry) => entry.event === 'shop_api_unhandled_error')?.error, {
+    name: 'DeferredWorkRegistrationError',
+    cause: { name: 'Error', message: cause.message },
+  });
+});
+
+test('early route exits retain matched-route log fields', async () => {
+  for (const request of [
+    new Request('https://api.mons.shop/inventory', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://mons.shop' },
+    }),
+    new Request('https://api.mons.shop/inventory', {
+      headers: { Origin: 'https://mons.shop' },
+    }),
+  ]) {
+    const logs: Record<string, unknown>[] = [];
+    await handleRequest(request, env(), {
+      ...quietDependencies(fetch),
+      log: (entry) => logs.push(entry),
+    });
+    assert.deepEqual({
+      expectedAssetIds: logs[0]?.expectedAssetIds,
+      expectedAssetRecoveryFailures: logs[0]?.expectedAssetRecoveryFailures,
+      expectedAssetResolved: logs[0]?.expectedAssetResolved,
+    }, {
+      expectedAssetIds: 0,
+      expectedAssetRecoveryFailures: 0,
+      expectedAssetResolved: 0,
+    });
+  }
+
+  for (const request of [
+    new Request('https://api.mons.shop/pack-status/card_nft_2', { method: 'OPTIONS' }),
+    new Request('https://api.mons.shop/pack-status/card_nft_2', { method: 'POST' }),
+  ]) {
+    const logs: Record<string, unknown>[] = [];
+    await handleRequest(request, env(), {
+      ...quietDependencies(fetch),
+      log: (entry) => logs.push(entry),
+    });
+    assert.equal(logs[0]?.dropId, 'card_nft_2');
+  }
 });
 
 test('pack-status route rejects malformed cache entries and refreshes them from D1', async () => {

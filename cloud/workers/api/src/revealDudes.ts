@@ -74,6 +74,11 @@ import {
 } from './commerceRepository.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
+import {
+  registerDeferredWork,
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import {
   RevealSubmissionOwnerMismatchError,
@@ -186,8 +191,6 @@ type RevealDudesDependencies = {
   validateOnchainConfig: typeof validateOnchainConfig;
   verifyIdentity: typeof verifyRequestIdentity;
 };
-
-type RevealWaitUntil = (promise: Promise<unknown>) => void;
 
 type ProviderContext = {
   apiKey: string;
@@ -1493,37 +1496,26 @@ async function failRevealSubmissionSafely(
   }
 }
 
-function completeWaitUntil(promise: Promise<unknown>): void {
-  void promise.catch((error) => {
-    console.error({ event: 'reveal_background_error', error: summarizeError(error) });
-  });
-}
-
 function scheduleRevealBackground(
-  waitUntil: RevealWaitUntil,
+  defer: DeferredWork,
   promise: Promise<unknown>,
 ): void {
   const guarded = promise.catch((error) => {
     console.error({ event: 'reveal_background_error', error: summarizeError(error) });
   });
-  try {
-    waitUntil(guarded);
-  } catch (error) {
-    console.error({ event: 'reveal_wait_until_failed', error: summarizeError(error) });
-    completeWaitUntil(guarded);
-  }
+  registerDeferredWork(defer, guarded);
 }
 
 function scheduleConfirmedPackStatusRepair(
   dependencies: RevealDudesDependencies,
-  waitUntil: RevealWaitUntil,
+  defer: DeferredWork,
   context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   submission: RevealSubmission,
 ): void {
   scheduleRevealBackground(
-    waitUntil,
+    defer,
     dependencies.countOnlineRevealPackStatus(
       {
         ...context,
@@ -1803,14 +1795,14 @@ export async function processRevealBackgroundJobMessage(
 
 function scheduleFailedSubmission(
   dependencies: RevealDudesDependencies,
-  waitUntil: RevealWaitUntil,
+  defer: DeferredWork,
   context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   submission: RevealSubmission,
 ): void {
   scheduleRevealBackground(
-    waitUntil,
+    defer,
     failRevealSubmissionSafely(
       dependencies.failRevealSubmission,
       {
@@ -1828,8 +1820,8 @@ function scheduleFailedSubmission(
 export async function handleRevealDudes(
   request: Request,
   env: Env,
+  defer: DeferredWork,
   overrides: Partial<RevealDudesDependencies> = {},
-  waitUntil: RevealWaitUntil = completeWaitUntil,
 ): Promise<RevealDudesResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
   const metrics: RevealMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
@@ -1917,7 +1909,7 @@ export async function handleRevealDudes(
       transactionOutcome = 'confirmed';
       scheduleConfirmedPackStatusRepair(
         dependencies,
-        waitUntil,
+        defer,
         revealContext,
         runtime,
         boxAssetId,
@@ -1951,7 +1943,7 @@ export async function handleRevealDudes(
         );
         scheduleConfirmedPackStatusRepair(
           dependencies,
-          waitUntil,
+          defer,
           revealContext,
           runtime,
           boxAssetId,
@@ -2034,7 +2026,7 @@ export async function handleRevealDudes(
       if (controller.signal.aborted) {
         scheduleFailedSubmission(
           dependencies,
-          waitUntil,
+          defer,
           revealContext,
           runtime,
           boxAssetId,
@@ -2047,7 +2039,7 @@ export async function handleRevealDudes(
       transactionOutcome = 'confirmed';
       scheduleConfirmedPackStatusRepair(
         dependencies,
-        waitUntil,
+        defer,
         revealContext,
         runtime,
         boxAssetId,
@@ -2085,7 +2077,7 @@ export async function handleRevealDudes(
         );
         scheduleConfirmedPackStatusRepair(
           dependencies,
-          waitUntil,
+          defer,
           revealContext,
           runtime,
           boxAssetId,
@@ -2124,7 +2116,7 @@ export async function handleRevealDudes(
       transactionOutcome = 'failed';
       scheduleFailedSubmission(
         dependencies,
-        waitUntil,
+        defer,
         revealContext,
         runtime,
         boxAssetId,
@@ -2153,7 +2145,7 @@ export async function handleRevealDudes(
       if (controller.signal.aborted) {
         scheduleFailedSubmission(
           dependencies,
-          waitUntil,
+          defer,
           revealContext,
           runtime,
           boxAssetId,
@@ -2179,7 +2171,7 @@ export async function handleRevealDudes(
     );
     scheduleConfirmedPackStatusRepair(
       dependencies,
-      waitUntil,
+      defer,
       revealContext,
       runtime,
       boxAssetId,
@@ -2195,6 +2187,7 @@ export async function handleRevealDudes(
       transactionOutcome,
     };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
     let normalized: RevealDudesError;
     if (error instanceof RevealDudesError) normalized = error;
     else if (error instanceof RevealSubmissionStoragePausedError) {

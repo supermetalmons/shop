@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCommerceD1, createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
+import {
+  createDeferredWorkCollector,
+  failOnDeferredWork,
+  isDeferredWorkRegistrationError,
+} from './deferredWork.ts';
 import bs58 from 'bs58';
 import {
   Keypair,
@@ -19,6 +24,7 @@ import {
   MPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { registerDeferredWork } from '../src/deferredWork.ts';
 import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
 import { commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import {
@@ -136,11 +142,11 @@ function commerceContext(fields: Record<string, unknown>) {
 }
 
 test('Admin IRL finalization returns the exact synchronous response and metrics', async () => {
-  const deferred: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   const result = await handleAdminIrlRedeemFinalize(
     request(),
     env(),
-    (promise) => deferred.push(promise),
+    deferred.defer,
     dependencies(),
   );
   assert.equal(result.response.status, 200);
@@ -151,14 +157,33 @@ test('Admin IRL finalization returns the exact synchronous response and metrics'
   assert.equal(result.deliveryId, 7);
   assert.equal(result.outcome, 'completed');
   assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
-  assert.deepEqual(deferred, []);
+  assert.deepEqual(deferred.promises, []);
+});
+
+test('Admin IRL finalization propagates deferred-work registration failures', async () => {
+  const cause = new Error('waitUntil rejected finalization work');
+  await assert.rejects(
+    handleAdminIrlRedeemFinalize(
+      request(),
+      env(),
+      () => { throw cause; },
+      dependencies({
+        finalize: async (...args: Parameters<typeof adminIrlRedeemFinalizeTestHooks.finalizeAdminIrlRedeem>) => {
+          registerDeferredWork(args[5], Promise.resolve());
+          assert.fail('registration failure must stop finalization');
+        },
+      }),
+    ),
+    (error: unknown) =>
+      isDeferredWorkRegistrationError(error, cause),
+  );
 });
 
 test('Admin IRL finalization enforces method, content type, and exact bounded input', async () => {
   const wrongMethod = await handleAdminIrlRedeemFinalize(
     new Request(`https://api.mons.shop${ADMIN_IRL_REDEEM_FINALIZE_PATH}`),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies(),
   );
   assert.equal(wrongMethod.response.status, 405);
@@ -167,7 +192,7 @@ test('Admin IRL finalization enforces method, content type, and exact bounded in
   const wrongType = await handleAdminIrlRedeemFinalize(
     request(undefined, { headers: { 'Content-Type': 'text/plain' } }),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies(),
   );
   assert.equal(wrongType.response.status, 400);
@@ -175,7 +200,7 @@ test('Admin IRL finalization enforces method, content type, and exact bounded in
   const extra = await handleAdminIrlRedeemFinalize(
     request({ requestId: REQUEST_ID, dropId: DROP_ID, transferSignature: SIGNATURE, extra: true }),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies(),
   );
   assert.equal(extra.response.status, 400);
@@ -185,7 +210,7 @@ test('Admin IRL finalization enforces method, content type, and exact bounded in
     headers: { 'Content-Type': 'application/json', 'Content-Length': '5000' },
     body: '{}',
   });
-  const tooLarge = await handleAdminIrlRedeemFinalize(oversized, env(), () => undefined, dependencies());
+  const tooLarge = await handleAdminIrlRedeemFinalize(oversized, env(), failOnDeferredWork, dependencies());
   assert.equal(tooLarge.response.status, 400);
 });
 
@@ -193,7 +218,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   const unauthenticated = await handleAdminIrlRedeemFinalize(
     request(),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(unauthenticated.response.status, 401);
@@ -205,7 +230,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   const anonymousOnly = await handleAdminIrlRedeemFinalize(
     request(),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies({ verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }) }),
   );
   assert.equal(anonymousOnly.response.status, 401);
@@ -213,7 +238,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   const conflict = await handleAdminIrlRedeemFinalize(
     request(),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies({
       finalize: async () => { throw new AdminIrlRedeemFinalizeError('aborted', 'Already processing.'); },
     }),
@@ -224,7 +249,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   const unavailable = await handleAdminIrlRedeemFinalize(
     request(),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies({
       finalize: async () => { throw new AdminIrlRedeemFinalizeError('unavailable', 'Provider unavailable.'); },
     }),
@@ -232,7 +257,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   assert.equal(unavailable.response.status, 502);
   assert.equal(unavailable.authOutcome, 'provider-failure');
 
-  const deferred: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   let finalizeAborted = false;
   let cleanupSettled = false;
   let releaseCleanup: (() => void) | undefined;
@@ -242,7 +267,7 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   const deadline = await handleAdminIrlRedeemFinalize(
     request(),
     env(),
-    (promise) => deferred.push(promise),
+    deferred.defer,
     dependencies({
       timeoutMs: 1,
       finalize: async (...args: Parameters<typeof adminIrlRedeemFinalizeTestHooks.finalizeAdminIrlRedeem>) => {
@@ -264,11 +289,11 @@ test('Admin IRL finalization maps authentication, business, provider, and deadli
   assert.equal(deadline.response.status, 504);
   assert.equal(deadline.outcome, 'deadline-exceeded');
   assert.equal(finalizeAborted, true);
-  assert.equal(deferred.length, 1);
+  assert.equal(deferred.promises.length, 1);
   assert.equal(cleanupSettled, false);
   assert.ok(releaseCleanup);
   releaseCleanup();
-  await Promise.all(deferred);
+  await deferred.drain();
   assert.equal(cleanupSettled, true);
 });
 

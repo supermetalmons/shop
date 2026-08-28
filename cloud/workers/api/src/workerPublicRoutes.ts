@@ -62,6 +62,7 @@ import {
   readD1PackStatus,
   readPackStatusMetadata,
 } from './d1PackStatus.js';
+import { registerDeferredWork, type DeferredWork } from './deferredWork.js';
 import {
   PUBLIC_RATE_LIMITS,
   applyPublicCors,
@@ -1065,8 +1066,10 @@ export async function handlePackStatus(
   dropId: string,
   env: Pick<Env, 'DATA_DB'>,
   dependencies: WorkerDependencies,
-  waitUntil?: (promise: Promise<unknown>) => void,
+  defer: DeferredWork,
 ): Promise<{ response: Response; cacheStatus?: string }> {
+  let cacheWrite: Promise<void> | undefined;
+  let result: { response: Response; cacheStatus?: string };
   try {
     if (typeof env.DATA_DB?.prepare !== 'function') throw new Error('pack_status_data_db_not_configured');
     const metadata = await readPackStatusMetadata(env.DATA_DB);
@@ -1099,17 +1102,15 @@ export async function handlePackStatus(
       const cacheResponse = Response.json(packStatus, {
         headers: { 'Cache-Control': `max-age=${D1_PACK_STATUS_CACHE_TTL_SECONDS}` },
       });
-      const write = dependencies.cache.put(cacheRequest, cacheResponse).catch((error) => {
+      cacheWrite = dependencies.cache.put(cacheRequest, cacheResponse).catch((error) => {
         dependencies.log({
           event: 'pack_status_d1_cache_write_failed',
           dropId,
           error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
         });
       });
-      if (waitUntil) waitUntil(write);
-      else await write;
     }
-    return {
+    result = {
       response: jsonResponse({ ok: true, packStatus }, 200),
       cacheStatus: 'D1-MISS',
     };
@@ -1123,6 +1124,8 @@ export async function handlePackStatus(
       response: jsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
     };
   }
+  if (cacheWrite) registerDeferredWork(defer, cacheWrite);
+  return result;
 }
 
 export async function handlePost(

@@ -108,6 +108,11 @@ import {
   mintReceiptsInstruction,
   sendAndConfirmSignedTransaction,
 } from './deliveryReceiptOnchain.js';
+import {
+  registerDeferredWork,
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 
 export const ADMIN_IRL_REDEEM_FINALIZE_PATH = '/admin/irl-redeem/finalize';
 
@@ -152,8 +157,6 @@ type CommerceTransform = NonNullable<Parameters<typeof deliveryReceiptRuntime.up
 type ProviderContext = Parameters<typeof fetchAdminIrlRedeemAsset>[0];
 type Runtime = ReturnType<typeof buildAdminIrlRedeemRuntime>;
 type OnchainConfig = Awaited<ReturnType<typeof fetchDeliveryOnchainConfig>>;
-type FinalizeWaitUntil = (promise: Promise<unknown>) => void;
-
 export type AdminIrlRedeemFinalizeErrorCode =
   | 'invalid-argument'
   | 'unauthenticated'
@@ -1503,7 +1506,7 @@ function scheduleAdminPackStatusProjection(args: {
   commerce: CommerceContext;
   response: AdminIrlRedeemFinalizeResponse;
   runtime: Runtime;
-  waitUntil: FinalizeWaitUntil;
+  waitUntil: DeferredWork;
 }): void {
   if (!Number.isSafeInteger(args.response.deliveryId) || Number(args.response.deliveryId) < 1) return;
   scheduleDeliveryPackStatusProjection({
@@ -1520,7 +1523,7 @@ async function finalizeAdminIrlRedeem(
   env: FinalizeEnv,
   commerce: CommerceContext,
   provider: ProviderContext,
-  waitUntil: FinalizeWaitUntil,
+  waitUntil: DeferredWork,
 ): Promise<{ response: AdminIrlRedeemFinalizeResponse; targetKind: AdminIrlRedeemTargetKind; outcome: string }> {
   const config = API_DROPS[body.dropId];
   if (!config) throw new AdminIrlRedeemFinalizeError('invalid-argument', `Unsupported dropId: ${body.dropId}`);
@@ -1631,6 +1634,7 @@ async function finalizeAdminIrlRedeem(
       outcome: 'completed',
     };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
     await clearProcessing(commerce, body, attemptId, error);
     throw error;
   }
@@ -1668,7 +1672,7 @@ async function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal): Promi
 export async function handleAdminIrlRedeemFinalize(
   request: Request,
   env: FinalizeEnv,
-  waitUntil: FinalizeWaitUntil,
+  defer: DeferredWork,
   overrides: Partial<FinalizeDependencies> = {},
 ): Promise<AdminIrlRedeemFinalizeResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -1715,7 +1719,7 @@ export async function handleAdminIrlRedeemFinalize(
         dataDb: env.DATA_DB,
       },
       { apiKey, providerFetch: trackedFetch, signal: controller.signal },
-      waitUntil,
+      defer,
     );
     const result = await waitForSignal(finalization, controller.signal);
     return {
@@ -1728,16 +1732,12 @@ export async function handleAdminIrlRedeemFinalize(
       outcome: result.outcome,
     };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
     let normalized: AdminIrlRedeemFinalizeError;
     if (controller.signal.aborted) {
       if (finalization) {
         const cleanup = finalization.then(() => undefined, () => undefined);
-        try {
-          waitUntil(cleanup);
-        } catch (trackingError) {
-          void cleanup;
-          console.warn({ event: 'admin_irl_redeem_finalize_cleanup_tracking_failed', error: summarizeError(trackingError) });
-        }
+        registerDeferredWork(defer, cleanup);
       }
       normalized = new AdminIrlRedeemFinalizeError('deadline-exceeded', 'Admin IRL redeem finalization timed out.');
     } else if (error instanceof RequestIdentityError) {

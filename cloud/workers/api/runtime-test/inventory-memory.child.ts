@@ -12,6 +12,7 @@ import {
   type ProviderFetch,
 } from '../src/index.js';
 import { MAX_INVENTORY_RESPONSE_BODY_BYTES } from '../src/inventoryLimits.js';
+import { failOnDeferredWork } from '../test/deferredWork.js';
 
 const MIB = 1024 * 1024;
 const DATA_PAGE_COUNT = 32;
@@ -210,7 +211,7 @@ const response = await handleRequest(new Request('https://api.mons.shop/inventor
     Origin: 'https://mons.shop',
   },
   body: JSON.stringify({ owner, includeDevnet: true }),
-}), env, {
+}), env, failOnDeferredWork, {
   providerFetch,
   randomUint32: () => 0,
   sleep: async () => undefined,

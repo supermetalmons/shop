@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCommerceD1, createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
+import { createDeferredWorkCollector, failOnDeferredWork } from './deferredWork.ts';
 import { Keypair } from '@solana/web3.js';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
@@ -212,7 +213,7 @@ test('Stripe receipt claim route preserves the authenticated request and exact r
   const result = await handleStripeReceiptClaim(
     request(),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies({
       verifyIdentity: async () => {
         observedUid = 'auth-uid';
@@ -245,7 +246,7 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
   const unauthenticated = await handleStripeReceiptClaim(
     request(),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(unauthenticated.response.status, 401);
@@ -257,7 +258,7 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
   const method = await handleStripeReceiptClaim(
     new Request(`https://api.mons.shop${STRIPE_RECEIPT_CLAIM_PATH}`),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies(),
   );
   assert.equal(method.response.status, 405);
@@ -266,7 +267,7 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
   const extra = await handleStripeReceiptClaim(
     request({ code: CODE, recipient: RECIPIENT, extra: true }),
     env(),
-    () => undefined,
+    failOnDeferredWork,
     dependencies(),
   );
   assert.equal(extra.response.status, 400);
@@ -274,7 +275,7 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
   const missingSecret = await handleStripeReceiptClaim(
     request(),
     env({ COSIGNER_SECRET: '' }),
-    () => undefined,
+    failOnDeferredWork,
     dependencies(),
   );
   assert.equal(missingSecret.response.status, 502);
@@ -282,12 +283,12 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
 });
 
 test('Stripe receipt claim handler returns its deadline and tracks unfinished cleanup', async () => {
-  const deferred: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   let aborted = false;
   const result = await handleStripeReceiptClaim(
     request(),
     env(),
-    (promise) => deferred.push(promise),
+    deferred.defer,
     dependencies({
       timeoutMs: 1,
       claim: async (
@@ -312,8 +313,8 @@ test('Stripe receipt claim handler returns its deadline and tracks unfinished cl
   assert.equal(result.dropId, DROP_ID);
   assert.equal(result.deliveryId, DELIVERY_ID);
   assert.equal(aborted, true);
-  assert.equal(deferred.length, 1);
-  await Promise.all(deferred);
+  assert.equal(deferred.promises.length, 1);
+  await deferred.drain();
 });
 
 test('Stripe receipt claim start writes compatible claim and order leases', async () => {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCommerceD1, createCommerceD1Harness } from './commerceD1Harness.ts';
+import { failOnDeferredWork, isDeferredWorkRegistrationError } from './deferredWork.ts';
 import bs58 from 'bs58';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import {
@@ -17,6 +18,7 @@ import {
   handleDeliveryReceiptRequest,
 } from '../src/deliveryReceipts.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { registerDeferredWork } from '../src/deferredWork.ts';
 import {
   compareAndSetReadyNotificationCursor,
   loadReadyNotificationCursor,
@@ -446,7 +448,7 @@ test('issue route preserves the authenticated request and response contract', as
     }),
     env(),
     DELIVERY_RECEIPTS_ISSUE_PATH,
-    () => undefined,
+    failOnDeferredWork,
     dependencies({
       issue: async (body: unknown) => {
         observed = body;
@@ -480,12 +482,51 @@ test('issue route preserves the authenticated request and response contract', as
   });
 });
 
+test('receipt handler propagates deferred-work registration failures', async () => {
+  const cause = new Error('waitUntil rejected receipt work');
+  await assert.rejects(
+    handleDeliveryReceiptRequest(
+      request(DELIVERY_RECEIPTS_ISSUE_PATH, {
+        owner: OWNER,
+        deliveryId: 7,
+        signature: SIGNATURE,
+        dropId: 'card_nft_2',
+      }),
+      env(),
+      DELIVERY_RECEIPTS_ISSUE_PATH,
+      () => { throw cause; },
+      dependencies({
+        issue: async (...args: Parameters<typeof deliveryReceiptTestHooks.issueReceiptsRequest>) => {
+          registerDeferredWork(args[5], Promise.resolve());
+          assert.fail('registration failure must stop receipt processing');
+        },
+      }),
+    ),
+    (error: unknown) =>
+      isDeferredWorkRegistrationError(error, cause),
+  );
+});
+
+test('recovery failure normalization propagates deferred-work registration failures', () => {
+  const cause = new Error('waitUntil rejected recovered receipt work');
+  let registrationError: unknown;
+  try {
+    registerDeferredWork(() => { throw cause; }, Promise.resolve());
+  } catch (error) {
+    registrationError = error;
+  }
+  assert.throws(
+    () => deliveryReceiptTestHooks.deliveryRecoveryFailure(registrationError),
+    (error: unknown) => isDeferredWorkRegistrationError(error, cause),
+  );
+});
+
 test('recovery route accepts the empty filter and reports recovery metrics', async () => {
   const result = await handleDeliveryReceiptRequest(
     request(DELIVERY_RECEIPTS_RECOVER_PATH, {}),
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
-    () => undefined,
+    failOnDeferredWork,
     dependencies(),
   );
   assert.equal(result.response.status, 200);
@@ -641,7 +682,7 @@ test('receipt routes reject methods and strict invalid payloads before service e
     new Request(`https://api.mons.shop${DELIVERY_RECEIPTS_ISSUE_PATH}`),
     env(),
     DELIVERY_RECEIPTS_ISSUE_PATH,
-    () => undefined,
+    failOnDeferredWork,
     dependencies({ issue: async () => { called = true; throw new Error('unexpected'); } }),
   );
   assert.equal(method.response.status, 405);
@@ -657,7 +698,7 @@ test('receipt routes reject methods and strict invalid payloads before service e
     }),
     env(),
     DELIVERY_RECEIPTS_ISSUE_PATH,
-    () => undefined,
+    failOnDeferredWork,
     dependencies({ issue: async () => { called = true; throw new Error('unexpected'); } }),
   );
   assert.equal(invalid.response.status, 400);
@@ -682,7 +723,7 @@ test('receipt routes reject methods and strict invalid payloads before service e
       request(DELIVERY_RECEIPTS_ISSUE_PATH, body),
       env(),
       DELIVERY_RECEIPTS_ISSUE_PATH,
-      () => undefined,
+      failOnDeferredWork,
       dependencies({ issue: async () => { called = true; throw new Error('unexpected'); } }),
     );
     assert.equal(noncanonical.response.status, 400);
@@ -700,7 +741,7 @@ test('receipt errors omit internal details from the public envelope', async () =
     }),
     env(),
     DELIVERY_RECEIPTS_ISSUE_PATH,
-    () => undefined,
+    failOnDeferredWork,
     dependencies({
       issue: async () => {
         throw new deliveryReceiptTestHooks.DeliveryReceiptError(
@@ -778,7 +819,7 @@ test('receipt routes enforce bounded JSON and required runtime configuration', a
     request(DELIVERY_RECEIPTS_RECOVER_PATH, { dropId: 'x'.repeat(5000) }),
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
-    () => undefined,
+    failOnDeferredWork,
     dependencies(),
   );
   assert.equal(oversized.response.status, 400);
@@ -787,7 +828,7 @@ test('receipt routes enforce bounded JSON and required runtime configuration', a
     request(DELIVERY_RECEIPTS_RECOVER_PATH, {}),
     env({ HELIUS_API_KEY: '' }),
     DELIVERY_RECEIPTS_RECOVER_PATH,
-    () => undefined,
+    failOnDeferredWork,
     dependencies(),
   );
   assert.equal(unavailable.response.status, 503);
@@ -799,7 +840,7 @@ test('receipt routes map invalid authentication and provider authentication fail
     request(DELIVERY_RECEIPTS_RECOVER_PATH, {}),
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
-    () => undefined,
+    failOnDeferredWork,
     dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(invalid.response.status, 401);
@@ -809,7 +850,7 @@ test('receipt routes map invalid authentication and provider authentication fail
     request(DELIVERY_RECEIPTS_RECOVER_PATH, {}),
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
-    () => undefined,
+    failOnDeferredWork,
     dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('provider-unavailable'); } }),
   );
   assert.equal(provider.response.status, 503);
@@ -821,7 +862,7 @@ test('receipt route deadline is stable and retryable', async () => {
     request(DELIVERY_RECEIPTS_RECOVER_PATH, {}),
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
-    () => undefined,
+    failOnDeferredWork,
     dependencies({
       timeoutMs: 5,
       verifyIdentity: async (_authorization: unknown, _fetch: unknown, signal: AbortSignal) =>

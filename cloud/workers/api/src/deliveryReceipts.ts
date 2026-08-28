@@ -138,6 +138,11 @@ import {
   compareAndSetReadyNotificationCursor,
   loadReadyNotificationCursor,
 } from './d1ReadyNotificationCursor.js';
+import {
+  registerDeferredWork,
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
@@ -348,8 +353,6 @@ export type DeliveryReceiptRequestResult = {
   recovered?: number;
 };
 
-type DeliveryReceiptWaitUntil = (promise: Promise<unknown>) => void;
-
 type DeliveryReceiptDependencies = {
   issue: (
     body: IssueRequest,
@@ -357,7 +360,7 @@ type DeliveryReceiptDependencies = {
     env: DeliveryReceiptsEnv,
     commerce: CommerceContext,
     provider: ProviderContext,
-    waitUntil: DeliveryReceiptWaitUntil,
+    waitUntil: DeferredWork,
   ) => Promise<ReceiptIssueResult>;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
@@ -367,7 +370,7 @@ type DeliveryReceiptDependencies = {
     env: DeliveryReceiptsEnv,
     commerce: CommerceContext,
     provider: ProviderContext,
-    waitUntil: DeliveryReceiptWaitUntil,
+    waitUntil: DeferredWork,
   ) => Promise<RecoverDeliveryOrdersResult>;
   timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
@@ -1949,7 +1952,7 @@ export function scheduleDeliveryPackStatusProjection(args: {
   context: CommerceContext;
   deliveryId: number;
   dropId: string;
-  waitUntil: DeliveryReceiptWaitUntil;
+  waitUntil: DeferredWork;
 }): void {
   const task = projectPendingDeliveryPackStatus(args).catch((error) => {
     console.error({
@@ -1959,17 +1962,7 @@ export function scheduleDeliveryPackStatusProjection(args: {
       error: summarizeError(error),
     });
   });
-  try {
-    args.waitUntil(task);
-  } catch (error) {
-    void task;
-    console.error({
-      event: 'delivery_pack_status_projection_tracking_failed',
-      dropId: args.dropId,
-      deliveryId: args.deliveryId,
-      error: summarizeError(error),
-    });
-  }
+  registerDeferredWork(args.waitUntil, task);
 }
 
 async function readBoundedProviderResponse(response: Response, signal: AbortSignal): Promise<Uint8Array> {
@@ -3472,7 +3465,7 @@ async function retryIssueReceipts(args: {
   env: DeliveryReceiptsEnv;
   commerce: CommerceContext;
   provider: ProviderContext;
-  waitUntil: DeliveryReceiptWaitUntil;
+  waitUntil: DeferredWork;
   randomInt: (maxExclusive: number) => number;
 }): Promise<ReceiptIssueResult> {
   const owner = canonicalPublicKey(args.request.ownerWallet, 'wallet address');
@@ -3717,13 +3710,28 @@ function normalizeRecoveryMessage(error: unknown): string | undefined {
   return value ? value.slice(0, 300) : undefined;
 }
 
+function deliveryRecoveryFailure(error: unknown): {
+  errorCode: string | undefined;
+  message: string | undefined;
+  outcome: DeliveryRecoveryOutcome;
+} {
+  rethrowDeferredWorkRegistrationError(error);
+  const errorCode = normalizeRecoveryErrorCode(error);
+  const message = normalizeRecoveryMessage(error);
+  const outcome: DeliveryRecoveryOutcome = errorCode === 'failed-precondition' &&
+    /delivery record pda not found/i.test(message || '')
+    ? 'missing_delivery'
+    : 'failed';
+  return { errorCode, message, outcome };
+}
+
 async function issueReceiptsRequest(
   body: IssueRequest,
   identity: RequestIdentity,
   env: DeliveryReceiptsEnv,
   commerce: CommerceContext,
   provider: ProviderContext,
-  waitUntil: DeliveryReceiptWaitUntil,
+  waitUntil: DeferredWork,
 ): Promise<ReceiptIssueResult> {
   const wallet = await resolveRequestWallet(identity, (uid) => loadBoundWallet(commerce, env.OPS_DB, uid));
   const ownerWallet = canonicalPublicKey(body.owner, 'wallet address').toBase58();
@@ -3803,7 +3811,7 @@ async function recoverReceiptsRequest(
   env: DeliveryReceiptsEnv,
   commerce: CommerceContext,
   provider: ProviderContext,
-  waitUntil: DeliveryReceiptWaitUntil,
+  waitUntil: DeferredWork,
 ): Promise<RecoverDeliveryOrdersResult> {
   const wallet = await resolveRequestWallet(identity, (uid) => loadBoundWallet(commerce, env.OPS_DB, uid));
   if (body.deliveryId !== undefined && body.dropId === undefined) {
@@ -3952,12 +3960,7 @@ async function recoverReceiptsRequest(
       });
       await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), document.path, {}).catch(() => undefined);
     } catch (error) {
-      const errorCode = normalizeRecoveryErrorCode(error);
-      const message = normalizeRecoveryMessage(error);
-      const outcome: DeliveryRecoveryOutcome = errorCode === 'failed-precondition' &&
-        /delivery record pda not found/i.test(message || '')
-        ? 'missing_delivery'
-        : 'failed';
+      const { errorCode, message, outcome } = deliveryRecoveryFailure(error);
       const cleanup = cleanupContext(commerce);
       if (base.statusBefore === 'prepared') {
         await handlePreparedRecoveryFailure(
@@ -4004,7 +4007,7 @@ export async function handleDeliveryReceiptRequest(
   request: Request,
   env: DeliveryReceiptsEnv,
   path: typeof DELIVERY_RECEIPTS_ISSUE_PATH | typeof DELIVERY_RECEIPTS_RECOVER_PATH,
-  waitUntil: DeliveryReceiptWaitUntil,
+  defer: DeferredWork,
   overrides: Partial<DeliveryReceiptDependencies> = {},
 ): Promise<DeliveryReceiptRequestResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -4072,7 +4075,7 @@ export async function handleDeliveryReceiptRequest(
         env,
         common,
         provider,
-        waitUntil,
+        defer,
       );
       return {
         response: jsonResponse(result),
@@ -4092,7 +4095,7 @@ export async function handleDeliveryReceiptRequest(
       env,
       common,
       provider,
-      waitUntil,
+      defer,
     );
     return {
       response: jsonResponse(result),
@@ -4105,6 +4108,7 @@ export async function handleDeliveryReceiptRequest(
       recovered: result.recovered,
     };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
     let receiptError: DeliveryReceiptError;
     if (controller.signal.aborted) {
       receiptError = new DeliveryReceiptError('deadline-exceeded', 'Delivery receipt request timed out.');
@@ -4157,6 +4161,7 @@ export const deliveryReceiptTestHooks = {
   decodeDeliveryRecord,
   decodeCosigner,
   deliveryRecoveryEligibility,
+  deliveryRecoveryFailure,
   deriveDeliveryPda,
   DeliveryReceiptError,
   handlePreparedRecoveryFailure,

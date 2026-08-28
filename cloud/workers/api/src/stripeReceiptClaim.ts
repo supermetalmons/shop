@@ -95,6 +95,7 @@ import {
   mintReceiptsInstruction,
   sendAndConfirmSignedTransaction,
 } from './deliveryReceiptOnchain.js';
+import { registerDeferredWork, type DeferredWork } from './deferredWork.js';
 
 export const STRIPE_RECEIPT_CLAIM_PATH = '/receipts/stripe/claim';
 
@@ -2014,7 +2015,7 @@ async function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal): Promi
 export async function handleStripeReceiptClaim(
   request: Request,
   env: ClaimEnv,
-  waitUntil: (promise: Promise<unknown>) => void,
+  defer: DeferredWork,
   overrides: Partial<ClaimDependencies> = {},
 ): Promise<StripeReceiptClaimRequestResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -2085,8 +2086,7 @@ export async function handleStripeReceiptClaim(
     if (controller.signal.aborted) {
       if (execution) {
         const cleanup = execution.then(() => undefined, () => undefined);
-        try { waitUntil(cleanup); }
-        catch { void cleanup; }
+        registerDeferredWork(defer, cleanup);
       }
       normalized = new StripeReceiptClaimError('deadline-exceeded', 'Receipt claim request timed out.');
     } else if (error instanceof RequestIdentityError) {

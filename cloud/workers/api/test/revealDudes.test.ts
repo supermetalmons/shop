@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCommerceD1, createCommerceD1Harness } from './commerceD1Harness.ts';
+import {
+  createDeferredWorkCollector,
+  failOnDeferredWork,
+  isDeferredWorkRegistrationError,
+} from './deferredWork.ts';
 import bs58 from 'bs58';
 import {
   Keypair,
@@ -144,7 +149,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
 test('reveal handler returns the confirmed signature and assigned ids', async () => {
   let confirmations = 0;
   let counted = false;
-  let waitUntilCalls = 0;
+  const deferred = createDeferredWorkCollector();
   const queued: Array<{ body: unknown; options?: QueueSendOptions }> = [];
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
@@ -152,6 +157,7 @@ test('reveal handler returns the confirmed signature and assigned ids', async ()
       queued.push({ body, options });
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
+    deferred.defer,
     dependencies({
       confirmRevealSubmission: async () => {
         confirmations += 1;
@@ -160,9 +166,6 @@ test('reveal handler returns the confirmed signature and assigned ids', async ()
         counted = true;
       },
     }),
-    () => {
-      waitUntilCalls += 1;
-    },
   );
 
   assert.equal(result.response.status, 200);
@@ -175,11 +178,26 @@ test('reveal handler returns the confirmed signature and assigned ids', async ()
   assert.equal(bs58.decode(payload.signature).length, 64);
   assert.deepEqual(payload.dudeIds, [9]);
   assert.equal(confirmations, 1);
+  assert.equal(deferred.promises.length, 1);
+  await deferred.drain();
   assert.equal(counted, true);
-  assert.equal(waitUntilCalls, 1);
   assert.equal(queued.length, 1);
   assert.equal(isRevealBackgroundJob(queued[0].body), true);
   assert.equal(queued[0].options?.delaySeconds, 5);
+});
+
+test('reveal handler propagates deferred-work registration failures', async () => {
+  const cause = new Error('waitUntil rejected reveal work');
+  await assert.rejects(
+    handleRevealDudes(
+      request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+      env(),
+      () => { throw cause; },
+      dependencies(),
+    ),
+    (error: unknown) =>
+      isDeferredWorkRegistrationError(error, cause),
+  );
 });
 
 test('reveal handler rejects wallet-session mismatches before any reveal work', async () => {
@@ -187,6 +205,7 @@ test('reveal handler rejects wallet-session mismatches before any reveal work', 
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
+    failOnDeferredWork,
     dependencies({
       loadBoundWallet: async () => Keypair.generate().publicKey.toBase58(),
       validateOnchainConfig: async () => {
@@ -207,6 +226,7 @@ test('paused reveal storage rejects requests before reveal reads or mutations', 
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
+    failOnDeferredWork,
     dependencies({
       loadStorageControl: async () => ({
         paused: true,
@@ -235,6 +255,7 @@ test('reveal handler maps a reservation pause race to the maintenance response',
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
+    failOnDeferredWork,
     dependencies({
       reserveRevealSubmission: async () => {
         throw new RevealSubmissionStoragePausedError();
@@ -260,6 +281,7 @@ test('reveal handler maps invalid and unavailable request identity', async () =>
     const result = await handleRevealDudes(
       request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
       env(),
+      failOnDeferredWork,
       dependencies({
         verifyIdentity: async () => {
           throw new RequestIdentityError(kind);
@@ -272,7 +294,7 @@ test('reveal handler maps invalid and unavailable request identity', async () =>
 });
 
 test('reveal handler rejects methods and malformed exact request bodies', async () => {
-  const method = await handleRevealDudes(request({}, { method: 'GET' }), env(), dependencies());
+  const method = await handleRevealDudes(request({}, { method: 'GET' }), env(), failOnDeferredWork, dependencies());
   assert.equal(method.response.status, 405);
   assert.equal(method.response.headers.get('allow'), 'POST, OPTIONS');
 
@@ -283,7 +305,7 @@ test('reveal handler rejects methods and malformed exact request bodies', async 
     { owner: OWNER.toBase58(), boxAssetId: 'invalid', dropId: DROP_ID },
     { owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: 'unsupported' },
   ]) {
-    const result = await handleRevealDudes(request(body), env(), dependencies());
+    const result = await handleRevealDudes(request(body), env(), failOnDeferredWork, dependencies());
     assert.equal(result.response.status, 400);
     assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'invalid-argument');
   }
@@ -293,7 +315,7 @@ test('reveal handler queues before send and returns stable recovery details for 
   let submittedSignature = '';
   const events: string[] = [];
   const queued: unknown[] = [];
-  const background: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(COSIGNER, queue(async (body) => {
@@ -301,6 +323,7 @@ test('reveal handler queues before send and returns stable recovery details for 
       queued.push(body);
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
+    deferred.defer,
     dependencies({
       sendAndConfirmTransaction: async (_context: unknown, _runtime: unknown, transaction: VersionedTransaction) => {
         events.push('send');
@@ -311,9 +334,6 @@ test('reveal handler queues before send and returns stable recovery details for 
         throw new Error('unexpected direct pack-status count');
       },
     }),
-    (promise) => {
-      background.push(promise);
-    },
   );
 
   assert.equal(result.response.status, 503);
@@ -330,7 +350,7 @@ test('reveal handler queues before send and returns stable recovery details for 
   assert.deepEqual(events, ['queue', 'send']);
   assert.equal(queued.length, 1);
   assert.equal(isRevealBackgroundJob(queued[0]), true);
-  assert.equal(background.length, 0);
+  assert.equal(deferred.promises.length, 0);
 });
 
 test('durably confirmed stored submission recovers without a provider secret or RPC reads', async () => {
@@ -339,13 +359,14 @@ test('durably confirmed stored submission recovers without a provider secret or 
   let sendCalls = 0;
   let confirmCalls = 0;
   let countCalls = 0;
-  let waitUntilCalls = 0;
+  const deferred = createDeferredWorkCollector();
   let requestSignal: AbortSignal | undefined;
   let repairSignal: AbortSignal | undefined;
   const stored = submission({ status: 'confirmed' });
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     { ...env(), HELIUS_API_KEY: '' },
+    deferred.defer,
     dependencies({
       loadRevealSubmission: async (context: Parameters<typeof revealDudesTestHooks.loadRevealSubmission>[0]) => {
         requestSignal = context.signal;
@@ -372,9 +393,6 @@ test('durably confirmed stored submission recovers without a provider secret or 
         repairSignal = context.signal;
       },
     }),
-    () => {
-      waitUntilCalls += 1;
-    },
   );
 
   assert.equal(result.response.status, 200);
@@ -383,8 +401,9 @@ test('durably confirmed stored submission recovers without a provider secret or 
   assert.equal(pendingCalls, 0);
   assert.equal(sendCalls, 0);
   assert.equal(confirmCalls, 0);
+  assert.equal(deferred.promises.length, 1);
+  await deferred.drain();
   assert.equal(countCalls, 1);
-  assert.equal(waitUntilCalls, 1);
   assert.ok(requestSignal);
   assert.ok(repairSignal);
   assert.notEqual(repairSignal, requestSignal);
@@ -398,6 +417,7 @@ test('stored reveal submission rejects a different owner before reconciliation o
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
+    failOnDeferredWork,
     dependencies({
       loadRevealSubmission: async () => submission({ owner: Keypair.generate().publicKey.toBase58() }),
       reconcileRevealSubmission: async () => {
@@ -429,7 +449,7 @@ test('unknown stored submission returns recovery details without resending or re
   let pendingCalls = 0;
   let sendCalls = 0;
   let queueCalls = 0;
-  const background: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   const stored = submission();
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
@@ -437,6 +457,7 @@ test('unknown stored submission returns recovery details without resending or re
       queueCalls += 1;
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
+    deferred.defer,
     dependencies({
       loadRevealSubmission: async () => stored,
       reconcileRevealSubmission: async () => 'unknown',
@@ -449,9 +470,6 @@ test('unknown stored submission returns recovery details without resending or re
         throw new Error('unexpected send');
       },
     }),
-    (promise) => {
-      background.push(promise);
-    },
   );
 
   assert.equal(result.response.status, 503);
@@ -467,17 +485,18 @@ test('unknown stored submission returns recovery details without resending or re
   assert.equal(pendingCalls, 0);
   assert.equal(sendCalls, 0);
   assert.equal(queueCalls, 0);
-  assert.equal(background.length, 0);
+  assert.equal(deferred.promises.length, 0);
 });
 
 test('reconciled stored submission completes durable bookkeeping before acknowledgement', async () => {
   const stored = submission();
   let confirmCalls = 0;
   let countCalls = 0;
-  let waitUntilCalls = 0;
+  const deferred = createDeferredWorkCollector();
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
+    deferred.defer,
     dependencies({
       loadRevealSubmission: async () => stored,
       reconcileRevealSubmission: async () => 'confirmed',
@@ -503,16 +522,14 @@ test('reconciled stored submission completes durable bookkeeping before acknowle
         throw new Error('unexpected send');
       },
     }),
-    () => {
-      waitUntilCalls += 1;
-    },
   );
 
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), { signature: SIGNATURE, dudeIds: [9] });
   assert.equal(confirmCalls, 1);
+  assert.equal(deferred.promises.length, 1);
+  await deferred.drain();
   assert.equal(countCalls, 1);
-  assert.equal(waitUntilCalls, 1);
 });
 
 test('failed or expired stored submissions are conditionally replaced after pending validation', async () => {
@@ -520,10 +537,12 @@ test('failed or expired stored submissions are conditionally replaced after pend
     let pendingCalls = 0;
     let replacementSignature = '';
     let sendCalls = 0;
+    const deferred = createDeferredWorkCollector();
     const stored = submission(storedOutcome === 'failed' ? { status: 'failed' } : {});
     const result = await handleRevealDudes(
       request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
       env(),
+      deferred.defer,
       dependencies({
         loadRevealSubmission: async () => stored,
         reconcileRevealSubmission: async () => {
@@ -556,6 +575,8 @@ test('failed or expired stored submissions are conditionally replaced after pend
     assert.equal(pendingCalls, 1);
     assert.equal(sendCalls, 1);
     assert.deepEqual(await result.response.json(), { signature: replacementSignature, dudeIds: [9] });
+    assert.equal(deferred.promises.length, 1);
+    await deferred.drain();
   }
 });
 
@@ -565,10 +586,11 @@ test('reservation loser returns the confirmed winner without sending its candida
   let sendCalls = 0;
   let confirmCalls = 0;
   let countCalls = 0;
-  const background: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
+    deferred.defer,
     dependencies({
       reserveRevealSubmission: async (
         _context: unknown,
@@ -591,9 +613,6 @@ test('reservation loser returns the confirmed winner without sending its candida
         countCalls += 1;
       },
     }),
-    (promise) => {
-      background.push(promise);
-    },
   );
 
   assert.notEqual(candidateSignature, winner.signature);
@@ -602,22 +621,23 @@ test('reservation loser returns the confirmed winner without sending its candida
   assert.equal(result.transactionOutcome, 'confirmed');
   assert.deepEqual(await result.response.json(), { signature: winner.signature, dudeIds: winner.dudeIds });
   assert.equal(confirmCalls, 1);
+  assert.equal(deferred.promises.length, 1);
+  await deferred.drain();
   assert.equal(countCalls, 1);
-  assert.equal(background.length, 1);
-  await background[0];
 });
 
 test('reservation loser returns an unknown winner without sending or re-enqueuing', async () => {
   const winner = submission();
   let sendCalls = 0;
   let queueCalls = 0;
-  const background: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(COSIGNER, queue(async () => {
       queueCalls += 1;
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
+    deferred.defer,
     dependencies({
       reserveRevealSubmission: async () => ({ submission: winner, owned: false }),
       reconcileRevealSubmission: async () => 'unknown',
@@ -626,16 +646,13 @@ test('reservation loser returns an unknown winner without sending or re-enqueuin
         throw new Error('unexpected send');
       },
     }),
-    (promise) => {
-      background.push(promise);
-    },
   );
 
   assert.equal(result.response.status, 503);
   assert.equal(result.transactionOutcome, 'unknown');
   assert.equal(sendCalls, 0);
   assert.equal(queueCalls, 0);
-  assert.equal(background.length, 0);
+  assert.equal(deferred.promises.length, 0);
 });
 
 test('reveal handler records explicit transaction failures as failed for retry', async () => {
@@ -643,6 +660,7 @@ test('reveal handler records explicit transaction failures as failed for retry',
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
+    failOnDeferredWork,
     dependencies({
       sendAndConfirmTransaction: async () => {
         throw new RevealDudesError('failed-precondition', 'transaction failed', {
@@ -672,12 +690,13 @@ test('queue failure schedules fresh cleanup and prevents broadcast', async () =>
   let sendCalls = 0;
   let requestSignal: AbortSignal | undefined;
   let failureSignal: AbortSignal | undefined;
-  const background: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(COSIGNER, queue(async () => {
       throw new Error('queue unavailable');
     })),
+    deferred.defer,
     dependencies({
       reserveRevealSubmission: async (
         context: Parameters<typeof revealDudesTestHooks.reserveRevealSubmission>[0],
@@ -700,16 +719,13 @@ test('queue failure schedules fresh cleanup and prevents broadcast', async () =>
         throw new Error('unexpected send');
       },
     }),
-    (promise) => {
-      background.push(promise);
-    },
   );
 
   assert.equal(result.response.status, 503);
   assert.equal(result.transactionOutcome, 'failed');
   assert.equal(sendCalls, 0);
-  assert.equal(background.length, 1);
-  await background[0];
+  assert.equal(deferred.promises.length, 1);
+  await deferred.drain();
   assert.equal(failCalls, 1);
   assert.ok(requestSignal);
   assert.ok(failureSignal);
@@ -722,10 +738,11 @@ test('pre-send abort after reservation schedules one fresh failure transition wi
   let failureSignal: AbortSignal | undefined;
   let failureCalls = 0;
   let providerCalls = 0;
-  const background: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
+    deferred.defer,
     dependencies({
       providerFetch: async () => {
         providerCalls += 1;
@@ -754,16 +771,13 @@ test('pre-send abort after reservation schedules one fresh failure transition wi
         return 'failed' as const;
       },
     }),
-    (promise) => {
-      background.push(promise);
-    },
   );
 
   assert.equal(result.response.status, 504);
   assert.equal(result.transactionOutcome, 'failed');
   assert.equal(providerCalls, 0);
-  assert.equal(background.length, 1);
-  await background[0];
+  assert.equal(deferred.promises.length, 1);
+  await deferred.drain();
   assert.equal(failureCalls, 1);
   assert.ok(requestSignal);
   assert.ok(failureSignal);
@@ -776,10 +790,11 @@ test('aborted reservation commit recovery schedules a fresh conditional failure 
   let requestSignal: AbortSignal | undefined;
   let failureSignal: AbortSignal | undefined;
   let failedSignature = '';
-  const background: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
+    deferred.defer,
     dependencies({
       reserveRevealSubmission: async (
         context: Parameters<typeof revealDudesTestHooks.reserveRevealSubmission>[0],
@@ -804,14 +819,11 @@ test('aborted reservation commit recovery schedules a fresh conditional failure 
         return 'failed' as const;
       },
     }),
-    (promise) => {
-      background.push(promise);
-    },
   );
 
   assert.equal(result.response.status, 504);
-  assert.equal(background.length, 1);
-  await background[0];
+  assert.equal(deferred.promises.length, 1);
+  await deferred.drain();
   assert.ok(requestSignal);
   assert.ok(failureSignal);
   assert.equal(requestSignal.aborted, true);
@@ -824,13 +836,14 @@ test('confirmed reveal status-write failures return recovery details and leave r
   let confirmCalls = 0;
   let countCalls = 0;
   let queueCalls = 0;
-  const background: Promise<unknown>[] = [];
+  const deferred = createDeferredWorkCollector();
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(COSIGNER, queue(async () => {
       queueCalls += 1;
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
+    deferred.defer,
     dependencies({
       confirmRevealSubmission: async () => {
         confirmCalls += 1;
@@ -840,9 +853,6 @@ test('confirmed reveal status-write failures return recovery details and leave r
         countCalls += 1;
       },
     }),
-    (promise) => {
-      background.push(promise);
-    },
   );
 
   assert.equal(result.response.status, 503);
@@ -850,7 +860,7 @@ test('confirmed reveal status-write failures return recovery details and leave r
   const payload = await result.response.json() as { error: { code: string; details: { kind: string } } };
   assert.equal(payload.error.code, 'unavailable');
   assert.equal(payload.error.details.kind, 'reveal-submission-unknown');
-  assert.equal(background.length, 0);
+  assert.equal(deferred.promises.length, 0);
   assert.equal(confirmCalls, 1);
   assert.equal(countCalls, 0);
   assert.equal(queueCalls, 1);
@@ -858,9 +868,11 @@ test('confirmed reveal status-write failures return recovery details and leave r
 
 test('pack-status count outages cannot block a confirmed response', async () => {
   let countCalls = 0;
+  const deferred = createDeferredWorkCollector();
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
+    deferred.defer,
     dependencies({
       countOnlineRevealPackStatus: async () => {
         countCalls += 1;
@@ -871,6 +883,8 @@ test('pack-status count outages cannot block a confirmed response', async () => 
 
   assert.equal(result.response.status, 200);
   assert.equal(result.transactionOutcome, 'confirmed');
+  assert.equal(deferred.promises.length, 1);
+  await deferred.drain();
   assert.equal(countCalls, 1);
 });
 
