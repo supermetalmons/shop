@@ -109,7 +109,7 @@ test('ready-to-ship outbox creates exact buyer and shipper jobs', async () => {
       jobId: SHIPPER_JOB_ID,
       kind: 'shipper_ready_to_ship',
       idempotencyKey: 'card_nft_2:7:ready_to_ship',
-      recipients: ['supermetalxbosch@gmail.com'],
+      recipients: ['fulfillment@mons.shop'],
       subject: 'New order - Card NFT 2',
       context: { dropId: 'card_nft_2', deliveryId: 7 },
     },
@@ -136,7 +136,7 @@ test('ready-to-ship outbox independently plans buyer-only and shipper-only deliv
     createJobId: () => SHIPPER_JOB_ID,
   });
   assert.deepEqual(shipperOnly.pending.map((entry) => entry.kind), ['shipper_ready_to_ship']);
-  assert.deepEqual(shipperReadyToShipRecipients('card_nft_2'), ['supermetalxbosch@gmail.com']);
+  assert.deepEqual(shipperReadyToShipRecipients('card_nft_2'), ['fulfillment@mons.shop']);
   assert.deepEqual(shipperReadyToShipRecipients('clear_cards_devnet_v2'), []);
 });
 

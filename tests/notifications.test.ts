@@ -192,7 +192,7 @@ test('shipper ready email builder uses a compact order number and escapes html',
   const content = buildShipperReadyToShipEmailContent(
     {
       idempotencyKey: 'test-shipper-ready',
-      recipients: ['ivan@ivan.lol'],
+      recipients: ['development@support.mons.shop'],
       dropId: 'card_nft_2',
       dropName: 'Card NFT 2 <Drop>',
       deliveryId: 123,
@@ -243,7 +243,7 @@ test('stripe checkout manual review email builder includes details and escapes h
   const content = buildStripeCheckoutManualReviewEmailContent(
     {
       idempotencyKey: 'test-stripe-manual-review',
-      recipients: ['ivan@ivan.lol'],
+      recipients: ['development@support.mons.shop'],
       dropId: 'card_nft_2',
       dropName: 'Card NFT 2 <Drop>',
       sessionId: 'cs_test_123',
@@ -275,7 +275,7 @@ test('stripe checkout manual review email builder includes details and escapes h
 test('stripe checkout manual review email bounds oversized provider errors', () => {
   const content = buildStripeCheckoutManualReviewEmailContent({
     idempotencyKey: 'test-stripe-manual-review-large-error',
-    recipients: ['ivan@ivan.lol'],
+    recipients: ['development@support.mons.shop'],
     dropId: 'card_nft_2',
     dropName: 'Card NFT 2',
     sessionId: 'cs_test_large_error',
@@ -293,7 +293,7 @@ test('buyer order received email builder includes item thumbnails and escapes ht
   const content = buildBuyerOrderReceivedEmailContent(
     {
       idempotencyKey: 'test-order-received',
-      recipients: ['ivan@ivan.lol'],
+      recipients: ['development@support.mons.shop'],
       dropId: 'card_nft_2',
       dropName: 'Card NFT 2 <Drop>',
       deliveryId: 123,
@@ -358,7 +358,7 @@ test('buyer order shipped email builder includes tracking link and escapes html'
   const content = buildBuyerOrderShippedEmailContent(
     {
       idempotencyKey: 'test-order-shipped',
-      recipients: ['ivan@ivan.lol'],
+      recipients: ['development@support.mons.shop'],
       dropId: 'little_swag_hoodies',
       dropName: 'Little Swag Hoodies <Drop>',
       deliveryId: 456,
@@ -391,7 +391,7 @@ test('buyer order update email builder includes the patience message and custome
   const content = buildBuyerOrderUpdateEmailContent(
     {
       idempotencyKey: 'test-order-update',
-      recipients: ['ivan@ivan.lol'],
+      recipients: ['development@support.mons.shop'],
       dropId: 'card_nft_2',
       dropName: 'Card NFT 2',
       deliveryId: 300026190,

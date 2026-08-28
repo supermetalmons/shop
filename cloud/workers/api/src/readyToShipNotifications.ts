@@ -107,7 +107,7 @@ const SHIPPER_READY_TO_SHIP_DROP_IDS = new Set([
   ...CARD_FULFILLMENT_DROP_IDS,
   ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
 ]);
-const SHIPPER_READY_TO_SHIP_RECIPIENTS = ['supermetalxbosch@gmail.com'] as const;
+const SHIPPER_READY_TO_SHIP_RECIPIENTS = ['fulfillment@mons.shop'] as const;
 
 function markerForKind(kind: ReadyToShipNotificationKind): ReadyToShipNotificationMarkerDefinition {
   const marker = MARKERS.find((candidate) => candidate.kind === kind);

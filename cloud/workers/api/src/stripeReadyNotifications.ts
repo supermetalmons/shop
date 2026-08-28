@@ -31,7 +31,7 @@ const SHIPPER_DROP_IDS = new Set([
   ...CARD_FULFILLMENT_DROP_IDS,
   ...CARD_NFT_BINDER_FULFILLMENT_DROP_IDS,
 ]);
-const SHIPPER_RECIPIENTS = ['supermetalxbosch@gmail.com'] as const;
+const SHIPPER_RECIPIENTS = ['fulfillment@mons.shop'] as const;
 
 export async function createStripeReadyToShipNotificationJobs(args: {
   order: Record<string, unknown>;

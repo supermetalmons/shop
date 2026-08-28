@@ -10,7 +10,7 @@ import { createStripeReadyToShipNotificationJobs } from '../stripeReadyNotificat
 import { STRIPE_CHECKOUT_STATUS } from './contract.js';
 import { normalizeStripeCheckoutIdentity } from '../../../../../shared/checkoutIdentity.js';
 
-const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'ivan@ivan.lol';
+const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'development@support.mons.shop';
 
 type CheckoutDocument = {
   path: string;

@@ -39,7 +39,7 @@ test('Stripe ready orders create the exact buyer and shipper jobs', async () => 
       jobId: JOB_IDS[1],
       kind: 'shipper_ready_to_ship',
       idempotencyKey: 'card_nft_2:7:ready_to_ship',
-      recipients: ['supermetalxbosch@gmail.com'],
+      recipients: ['fulfillment@mons.shop'],
     },
   ]);
 });

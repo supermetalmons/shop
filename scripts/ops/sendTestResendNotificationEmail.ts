@@ -89,7 +89,7 @@ type BuiltTestEmail = {
 };
 
 const ENQUEUE_SECRET_NAME = 'NOTIFICATION_ENQUEUE_SECRET';
-const TEST_RECIPIENT = 'ivan@ivan.lol';
+const TEST_RECIPIENT = 'development@support.mons.shop';
 const TEST_DROP_ID = 'local_resend_test';
 const TEST_DROP_NAME = 'Local Resend Test';
 const DEFAULT_ORDER_BACKED_DROP_IDS = ['little_swag_boxes', 'poncho_drifella', 'little_swag_hoodies', 'card_nft_2'];
@@ -99,7 +99,7 @@ const ORDER_LOOKUP_MAX_DOCS = ORDER_LOOKUP_PAGE_SIZE * ORDER_LOOKUP_MAX_PAGES;
 const SHIPPED_FULFILLMENT_STATUS: FulfillmentStatus = 'Shipped';
 function usage(): string {
   return [
-    'Queue one Resend notification test email to ivan@ivan.lol through Cloudflare.',
+    'Queue one Resend notification test email to development@support.mons.shop through Cloudflare.',
     '',
     'Usage:',
     '  npm run test-resend-notification-email',
