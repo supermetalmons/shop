@@ -331,9 +331,18 @@ test('native preconditions distinguish create, existence, and version conflicts 
 
 test('native repository fails closed while commerce is paused', async () => {
   const harness = createCommerceD1Harness();
+  const nowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
+  harness.database.exec(`INSERT INTO commerce_authority_control_lease (
+    singleton, lease_token, acquired_at_ms, expires_at_ms
+  ) VALUES (
+    1, '123e4567-e89b-42d3-a456-426614174000',
+    ${nowMsSql}, ${nowMsSql} + 60000
+  )`);
   harness.database.exec(`UPDATE commerce_authority_control SET
-    authority_state = 'paused', revision = revision + 1, paused_at_ms = 20, updated_at_ms = 20
+    authority_state = 'paused', revision = revision + 1, paused_at_ms = NULL,
+    updated_at_ms = ${nowMsSql}
     WHERE singleton = 1`);
+  harness.database.exec('DELETE FROM commerce_authority_control_lease');
   const repository = new D1CommerceRepository(harness.db);
   await assert.rejects(repository.get(commerceKeys.claimCode('ABC')), (error: unknown) => {
     assert.ok(error instanceof CommerceRepositoryError);

@@ -60,9 +60,8 @@ export function parseCloudflareQueueMaintenanceConfig(
     return fail('Cloudflare Worker configuration contains an invalid account_id.');
   }
   if (!isRecord(value.queues) ||
-    !Array.isArray(value.queues.consumers) || value.queues.consumers.length === 0 ||
-    !Array.isArray(value.queues.producers) || value.queues.producers.length === 0) {
-    return fail('Cloudflare Worker configuration contains no Queue producer/consumer pairs.');
+    !Array.isArray(value.queues.consumers) || value.queues.consumers.length === 0) {
+    return fail('Cloudflare Worker configuration contains no Queue consumers.');
   }
   const consumerNames = value.queues.consumers.map((consumer) => {
     if (!isRecord(consumer)) return fail('Cloudflare Worker Queue consumer configuration is invalid.');
@@ -71,18 +70,10 @@ export function parseCloudflareQueueMaintenanceConfig(
   if (new Set(consumerNames).size !== consumerNames.length) {
     return fail('Cloudflare Worker Queue consumer names must be unique.');
   }
-  const producerNames = new Set(value.queues.producers.map((producer) => {
-    if (!isRecord(producer)) return fail('Cloudflare Worker Queue producer configuration is invalid.');
-    return queueName(producer.queue);
-  }));
-  const queueNames = consumerNames.filter((name) => producerNames.has(name));
-  if (queueNames.length === 0) {
-    return fail('Cloudflare Worker configuration contains no Queue producer/consumer pairs.');
+  if (consumerNames.length > CLOUDFLARE_QUEUE_MAINTENANCE_MAX_QUEUES) {
+    return fail('Cloudflare Worker configuration contains too many Queue consumers.');
   }
-  if (queueNames.length > CLOUDFLARE_QUEUE_MAINTENANCE_MAX_QUEUES) {
-    return fail('Cloudflare Worker configuration contains too many Queue producer/consumer pairs.');
-  }
-  return { accountId: value.account_id, queueNames };
+  return { accountId: value.account_id, queueNames: consumerNames };
 }
 
 export function readCloudflareQueueMaintenanceConfig(

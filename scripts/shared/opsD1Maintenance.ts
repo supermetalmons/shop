@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isCanonicalReadyNotificationCursorPath } from '../../shared/readyToShipNotificationReconciliation.ts';
+import { sqlSchemaFingerprint } from './sqlSchemaFingerprint.ts';
 
 export const READY_NOTIFICATIONS_CONTROL_KEY = 'ready_notifications';
 const OPS_D1_MIGRATIONS = [
@@ -396,10 +396,7 @@ function assertExactInteger(
 }
 
 function schemaFingerprint(value: unknown): string {
-  const normalized = requiredString(value, 'Ops D1 schema SQL')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return createHash('sha256').update(normalized).digest('hex');
+  return sqlSchemaFingerprint(requiredString(value, 'Ops D1 schema SQL'));
 }
 
 function assertExactSchema(rows: OpsD1Row[]): void {

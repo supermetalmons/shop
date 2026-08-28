@@ -5,10 +5,15 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   buildCommerceD1PlanFromDocuments,
   buildCommerceD1WipeSql,
+  CommerceD1WipeOutcomeUnknownError,
   COMMERCE_WIPE_MINIMUM_PAUSE_MS,
+  applySynchronousWipePhases,
   requireExecutableCommerceD1Wipe,
   requireNoProtectedD1History,
+  sameCommerceD1Plan,
+  withCommerceWipeAuthorityLease,
 } from '../scripts/ops/wipeDrop.ts';
+import { acquireCommerceAuthorityLease } from '../scripts/shared/commerceD1Maintenance.ts';
 import type {
   CommerceD1Authority,
   CommerceD1Document,
@@ -16,10 +21,13 @@ import type {
 
 const authority: CommerceD1Authority = {
   state: 'paused',
-  revision: 4,
+  revision: 2,
   documentsRevision: 0,
-  pausedAtMs: 1,
+  pausedAtMs: 1_000,
+  databaseNowMs: 67_000,
 };
+const authorityLeaseToken = '123e4567-e89b-42d3-a456-426614174000';
+const databaseClocks = new WeakMap<DatabaseSync, { seconds: number }>();
 
 function document(
   kind: CommerceD1Document['kind'],
@@ -66,16 +74,65 @@ function plan() {
 
 function database(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
+  const clock = { seconds: 1 };
+  databaseClocks.set(db, clock);
+  db.function('strftime', { varargs: true }, () => String(clock.seconds));
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0001_current_schema.sql', 'utf8'));
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', 'utf8'));
+  db.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
   return db;
 }
 
+function setDatabaseNow(db: DatabaseSync, seconds: number): void {
+  const clock = databaseClocks.get(db);
+  if (!clock) throw new Error('Missing test database clock');
+  clock.seconds = seconds;
+}
+
+function insertAuthorityLease(db: DatabaseSync): void {
+  db.prepare(`INSERT INTO commerce_authority_control_lease (
+    singleton, lease_token, acquired_at_ms, expires_at_ms
+  ) VALUES (
+    1, ?, CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+    CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000
+  )`).run(authorityLeaseToken);
+}
+
 function pauseCommerce(db: DatabaseSync): void {
+  setDatabaseNow(db, 1);
+  insertAuthorityLease(db);
   db.exec(`UPDATE commerce_authority_control SET
-    authority_state = 'paused', revision = 2, paused_at_ms = 3, updated_at_ms = 3
+    authority_state = 'paused', revision = 2, paused_at_ms = NULL,
+    updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
     WHERE singleton = 1`);
+  db.exec(`UPDATE commerce_authority_control SET
+    paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+    updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    WHERE singleton = 1`);
+  db.exec('DELETE FROM commerce_authority_control_lease');
+  setDatabaseNow(db, 67);
+}
+
+function clearCommerceReadiness(db: DatabaseSync): void {
+  insertAuthorityLease(db);
+  db.exec(`UPDATE commerce_authority_control SET
+    paused_at_ms = NULL,
+    updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    WHERE singleton = 1`);
+  db.exec('DELETE FROM commerce_authority_control_lease');
+}
+
+function markCommerceReady(db: DatabaseSync): void {
+  const clock = databaseClocks.get(db);
+  if (!clock) throw new Error('Missing test database clock');
+  insertAuthorityLease(db);
+  db.exec(`UPDATE commerce_authority_control SET
+    paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+    updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    WHERE singleton = 1`);
+  db.exec('DELETE FROM commerce_authority_control_lease');
+  clock.seconds += 66;
 }
 
 function insertDocument(db: DatabaseSync, value: CommerceD1Document): void {
@@ -127,16 +184,86 @@ test('Commerce D1 wipe planning supports active dry-runs but execution requires 
     claimDocuments: [],
   }));
   assert.throws(
-    () => requireExecutableCommerceD1Wipe({ ...authority, pausedAtMs: null }, 100_000),
+    () => requireExecutableCommerceD1Wipe({ ...authority, pausedAtMs: null }),
     /must be paused/,
   );
   assert.throws(
-    () => requireExecutableCommerceD1Wipe(authority, COMMERCE_WIPE_MINIMUM_PAUSE_MS),
+    () => requireExecutableCommerceD1Wipe({
+      ...authority,
+      databaseNowMs: COMMERCE_WIPE_MINIMUM_PAUSE_MS,
+    }),
     /at least 65 seconds/,
   );
-  assert.doesNotThrow(() =>
-    requireExecutableCommerceD1Wipe(authority, COMMERCE_WIPE_MINIMUM_PAUSE_MS + 1),
-  );
+  assert.doesNotThrow(() => requireExecutableCommerceD1Wipe(authority));
+});
+
+test('Commerce D1 plan comparison ignores only observation time', () => {
+  const first = plan();
+  assert.equal(sameCommerceD1Plan(first, {
+    ...first,
+    authority: { ...first.authority, databaseNowMs: first.authority.databaseNowMs + 1_000 },
+  }), true);
+  assert.equal(sameCommerceD1Plan(first, {
+    ...first,
+    authority: { ...first.authority, revision: first.authority.revision + 1 },
+  }), false);
+  assert.equal(sameCommerceD1Plan(first, {
+    ...first,
+    authority: { ...first.authority, pausedAtMs: null },
+  }), false);
+});
+
+test('Commerce wipe holds and releases the shared authority lease', async (t) => {
+  const db = database();
+  t.after(() => db.close());
+  const query = async (sql: string) => db.prepare(sql).all().map((row) => ({ ...row }));
+  const result = await withCommerceWipeAuthorityLease({
+    queryCommerceD1: query,
+    token: authorityLeaseToken,
+    run: async (renew) => {
+      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_authority_control_lease').get()!.count, 1);
+      await assert.rejects(
+        acquireCommerceAuthorityLease(query, '223e4567-e89b-42d3-a456-426614174000'),
+        /already running/,
+      );
+      await renew();
+      return 'completed';
+    },
+  });
+  assert.equal(result, 'completed');
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_authority_control_lease').get()!.count, 0);
+});
+
+test('Commerce and repository commits run synchronously with pre-commit cleanup', () => {
+  const events: string[] = [];
+  applySynchronousWipePhases({
+    prepareRepo: () => {
+      events.push('prepare');
+      return 'prepared';
+    },
+    commitData: () => events.push('data'),
+    applyPreparedRepo: (prepared) => events.push(`repo:${prepared}`),
+    abortPreparedRepo: () => events.push('abort'),
+  });
+  assert.deepEqual(events, ['prepare', 'data', 'repo:prepared']);
+
+  events.length = 0;
+  assert.throws(() => applySynchronousWipePhases({
+    prepareRepo: () => 'prepared',
+    commitData: () => { throw new Error('data failed'); },
+    applyPreparedRepo: () => events.push('repo'),
+    abortPreparedRepo: () => events.push('abort'),
+  }), /data failed/);
+  assert.deepEqual(events, ['abort']);
+
+  events.length = 0;
+  assert.throws(() => applySynchronousWipePhases({
+    prepareRepo: () => 'prepared',
+    commitData: () => { throw new CommerceD1WipeOutcomeUnknownError(new Error('network')); },
+    applyPreparedRepo: () => events.push('repo'),
+    abortPreparedRepo: () => events.push('abort'),
+  }), CommerceD1WipeOutcomeUnknownError);
+  assert.deepEqual(events, []);
 });
 
 test('Commerce D1 wipe planning rejects cross-drop claim ownership', () => {
@@ -190,7 +317,8 @@ test('Commerce D1 wipe SQL deletes exact documents and advances revision once', 
     revision: 2,
     authority_state: 'paused',
   });
-  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_wipe_guards').get()!.count, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_wipe_guards').get()!.count, 1);
+  assert.equal(db.prepare('SELECT expectations_json FROM commerce_wipe_guards').get()!.expectations_json, '[]');
 });
 
 test('Commerce D1 wipe SQL rolls back on version drift and refuses non-D1 authority', (t) => {
@@ -214,6 +342,53 @@ test('Commerce D1 wipe SQL rolls back on version drift and refuses non-D1 author
     ...wipePlan,
     authority: { ...wipePlan.authority, state: 'd1' },
   }, 'guard', 100_000), /must be paused/);
+});
+
+test('Commerce D1 wipe SQL atomically requires maintenance readiness and authority revision', (t) => {
+  const wipePlan = plan();
+  const db = database();
+  t.after(() => db.close());
+  const assignment = document('box_assignment', 'target', 'box-a', { irlClaimCode: '1111111111' });
+  insertDocument(db, assignment);
+  pauseCommerce(db);
+  clearCommerceReadiness(db);
+  assert.throws(
+    () => executeTransaction(db, buildCommerceD1WipeSql({
+      ...wipePlan,
+      documentsToDelete: [{ path: assignment.path, version: 1 }],
+    }, 'not-ready', 100_000)),
+    /maintenance is not ready/,
+  );
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_documents').get()!.count, 1);
+  db.exec('UPDATE commerce_authority_control SET revision = 3 WHERE singleton = 1');
+  markCommerceReady(db);
+  assert.throws(
+    () => executeTransaction(db, buildCommerceD1WipeSql({
+      ...wipePlan,
+      documentsToDelete: [{ path: assignment.path, version: 1 }],
+    }, 'stale-authority', 100_000)),
+    /commerce wipe conflict/,
+  );
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_documents').get()!.count, 1);
+});
+
+test('Commerce D1 empty wipes still execute the authority guard', (t) => {
+  const db = database();
+  t.after(() => db.close());
+  pauseCommerce(db);
+  const emptyPlan = { ...plan(), documentsToDelete: [] };
+  const sql = buildCommerceD1WipeSql(emptyPlan, 'empty', 100_000);
+  assert.equal((sql.match(/INSERT INTO commerce_wipe_guards/g) || []).length, 1);
+  assert.equal((sql.match(/DELETE FROM commerce_documents/g) || []).length, 0);
+  executeTransaction(db, sql);
+  assert.equal(db.prepare('SELECT documents_revision FROM commerce_authority_control').get()!.documents_revision, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_wipe_guards').get()!.count, 1);
+
+  clearCommerceReadiness(db);
+  assert.throws(
+    () => executeTransaction(db, buildCommerceD1WipeSql(emptyPlan, 'not-ready-empty', 100_000)),
+    /maintenance is not ready/,
+  );
 });
 
 test('Commerce D1 wipe SQL chunks guards and deletes below the statement limit', () => {

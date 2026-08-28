@@ -32,11 +32,15 @@ import {
   type DiscountMerkleDatasetReference,
 } from '../shared/discountMerkleDataset.ts';
 import {
+  acquireCommerceAuthorityLease,
   executeRemoteCommerceD1File,
   queryRemoteCommerceD1,
   queryRemoteCommerceDocuments,
   readRemoteCommerceAuthority,
+  releaseCommerceAuthorityLease,
+  renewCommerceAuthorityLease,
   sqlString,
+  type CommerceAuthorityQuery,
   type CommerceD1Authority,
   type CommerceD1Document,
 } from '../shared/commerceD1Maintenance.ts';
@@ -66,6 +70,23 @@ type Args = {
   dryRun: boolean;
   yes: boolean;
 };
+
+class WipeInterruptedError extends Error {
+  readonly exitCode: number;
+
+  constructor(exitCode: number) {
+    super('Wipe interrupted.');
+    this.name = 'WipeInterruptedError';
+    this.exitCode = exitCode;
+  }
+}
+
+export class CommerceD1WipeOutcomeUnknownError extends Error {
+  constructor(cause: unknown) {
+    super('Commerce D1 wipe outcome could not be confirmed.', { cause });
+    this.name = 'CommerceD1WipeOutcomeUnknownError';
+  }
+}
 
 export type CanonicalDeleteTarget = {
   relativePath: string;
@@ -110,7 +131,62 @@ export type CommerceD1Plan = {
   targetDocumentCount: number;
 };
 
+export function sameCommerceD1Plan(
+  left: CommerceD1Plan,
+  right: CommerceD1Plan,
+): boolean {
+  const stable = (plan: CommerceD1Plan) => {
+    const { databaseNowMs: _databaseNowMs, ...authority } = plan.authority;
+    return { ...plan, authority };
+  };
+  return isDeepStrictEqual(stable(left), stable(right));
+}
+
+export async function withCommerceWipeAuthorityLease<T>(args: {
+  queryCommerceD1: CommerceAuthorityQuery;
+  run: (renew: () => Promise<void>) => Promise<T>;
+  token?: string;
+}): Promise<T> {
+  let lease = await acquireCommerceAuthorityLease(
+    args.queryCommerceD1,
+    args.token || crypto.randomUUID(),
+  );
+  const renew = async () => {
+    lease = await renewCommerceAuthorityLease(args.queryCommerceD1, lease);
+  };
+  let result: T | undefined;
+  let completed = false;
+  let operationError: unknown;
+  try {
+    result = await args.run(renew);
+    completed = true;
+  } catch (error) {
+    operationError = error;
+  }
+  let releaseError: unknown;
+  try {
+    await releaseCommerceAuthorityLease(args.queryCommerceD1, lease);
+  } catch (error) {
+    releaseError = error;
+  }
+  if (operationError !== undefined) {
+    if (releaseError === undefined) throw operationError;
+    throw new AggregateError(
+      [operationError, releaseError],
+      'Commerce wipe failed and its authority lease release could not be confirmed.',
+    );
+  }
+  if (releaseError !== undefined) {
+    throw new Error('Commerce wipe completed, but its authority lease release could not be confirmed.', {
+      cause: releaseError,
+    });
+  }
+  if (!completed) return fail('Commerce wipe returned no result.');
+  return result as T;
+}
+
 export const COMMERCE_WIPE_MINIMUM_PAUSE_MS = 65_000;
+const COMMERCE_WIPE_D1_PAUSE_THRESHOLD_MS = COMMERCE_WIPE_MINIMUM_PAUSE_MS + 1_000;
 
 function usage(): string {
   return [
@@ -895,11 +971,11 @@ export function buildCommerceD1PlanFromDocuments(args: {
   };
 }
 
-export function requireExecutableCommerceD1Wipe(authority: CommerceD1Authority, nowMs = Date.now()): void {
+export function requireExecutableCommerceD1Wipe(authority: CommerceD1Authority): void {
   if (authority.state !== 'paused' || authority.pausedAtMs === null) {
     fail('Commerce D1 must be paused with commerce-authority-control before a drop can be wiped.');
   }
-  if (nowMs - authority.pausedAtMs < COMMERCE_WIPE_MINIMUM_PAUSE_MS) {
+  if (authority.databaseNowMs - authority.pausedAtMs < COMMERCE_WIPE_D1_PAUSE_THRESHOLD_MS) {
     fail(`Commerce D1 must remain paused for at least ${COMMERCE_WIPE_MINIMUM_PAUSE_MS / 1000} seconds before a drop can be wiped.`);
   }
 }
@@ -4539,6 +4615,27 @@ export function applyRepoWipe(
   );
 }
 
+function abortPreparedRepoAfterDataFailure<TPrepared>(args: {
+  abortPreparedRepo?: (prepared: TPrepared) => void;
+  dataError: unknown;
+  prepared: TPrepared;
+}): never {
+  if (args.dataError instanceof CommerceD1WipeOutcomeUnknownError) throw args.dataError;
+  if (args.abortPreparedRepo) {
+    try {
+      args.abortPreparedRepo(args.prepared);
+    } catch (abortError) {
+      throw new Error(
+        `Commerce D1 wipe failed and prepared repository cleanup also failed: ${
+          abortError instanceof Error ? abortError.message : String(abortError)
+        }`,
+        { cause: args.dataError },
+      );
+    }
+  }
+  throw args.dataError;
+}
+
 export async function applyWipePhases<TPrepared>(args: {
   prepareRepo: () => TPrepared;
   applyData: () => Promise<void>;
@@ -4549,88 +4646,178 @@ export async function applyWipePhases<TPrepared>(args: {
   try {
     await args.applyData();
   } catch (dataError) {
-    if (args.abortPreparedRepo) {
-      try {
-        args.abortPreparedRepo(prepared);
-      } catch (abortError) {
-        throw new Error(
-          `Commerce D1 wipe failed and prepared repository cleanup also failed: ${
-            abortError instanceof Error
-              ? abortError.message
-              : String(abortError)
-          }`,
-          { cause: dataError },
-        );
-      }
-    }
-    throw dataError;
+    abortPreparedRepoAfterDataFailure({
+      abortPreparedRepo: args.abortPreparedRepo,
+      dataError,
+      prepared,
+    });
+  }
+  args.applyPreparedRepo(prepared);
+}
+
+export function applySynchronousWipePhases<TPrepared>(args: {
+  prepareRepo: () => TPrepared;
+  commitData: () => void;
+  applyPreparedRepo: (prepared: TPrepared) => void;
+  abortPreparedRepo?: (prepared: TPrepared) => void;
+}): void {
+  const prepared = args.prepareRepo();
+  try {
+    args.commitData();
+  } catch (dataError) {
+    abortPreparedRepoAfterDataFailure({
+      abortPreparedRepo: args.abortPreparedRepo,
+      dataError,
+      prepared,
+    });
   }
   args.applyPreparedRepo(prepared);
 }
 
 export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, nowMs: number): string {
-  requireExecutableCommerceD1Wipe(plan.authority, nowMs);
+  requireExecutableCommerceD1Wipe(plan.authority);
   if (!guardId || !Number.isSafeInteger(nowMs) || nowMs < 0) fail('Commerce D1 wipe metadata is invalid.');
   const expectations = plan.documentsToDelete.map((document) => ({
     path: document.path,
     version: document.version,
   }));
-  if (!expectations.length) return '';
-  const chunks = Array.from(
-    { length: Math.ceil(expectations.length / 50) },
-    (_, index) => expectations.slice(index * 50, index * 50 + 50),
-  );
+  const chunks = expectations.length
+    ? Array.from(
+        { length: Math.ceil(expectations.length / 50) },
+        (_, index) => expectations.slice(index * 50, index * 50 + 50),
+      )
+    : [[]];
   const guardIds = chunks.map((_, index) => `${guardId}:${index}`);
   const guards = chunks.map((chunk, index) => `INSERT INTO commerce_wipe_guards (
-    guard_id, expectations_json, expected_documents_revision, created_at_ms
+    guard_id, expectations_json, expected_documents_revision,
+    expected_authority_revision, created_at_ms
   ) VALUES (
     ${sqlString(guardIds[index])}, ${sqlString(JSON.stringify(chunk))},
-    ${plan.authority.documentsRevision}, ${nowMs}
+    ${plan.authority.documentsRevision}, ${plan.authority.revision}, ${nowMs}
   );`).join('\n');
-  const deletes = chunks.map((chunk) => `DELETE FROM commerce_documents
+  const deletes = chunks.filter((chunk) => chunk.length).map((chunk) => `DELETE FROM commerce_documents
   WHERE document_path IN (${chunk.map((document) => sqlString(document.path)).join(', ')});`).join('\n');
-  const cleanup = guardIds.map((id) =>
-    `DELETE FROM commerce_wipe_guards WHERE guard_id = ${sqlString(id)};`
+  const scrubGuards = guardIds.map((id) =>
+    `UPDATE commerce_wipe_guards SET expectations_json = '[]' WHERE guard_id = ${sqlString(id)};`
   ).join('\n');
+  const advanceRevision = expectations.length
+    ? `UPDATE commerce_authority_control
+  SET documents_revision = documents_revision + 1,
+    updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+  WHERE singleton = 1 AND authority_state = 'paused'
+    AND revision = ${plan.authority.revision}
+    AND documents_revision = ${plan.authority.documentsRevision};`
+    : '';
   return `${guards}
   ${deletes}
-  UPDATE commerce_authority_control
-  SET documents_revision = documents_revision + 1, updated_at_ms = ${nowMs}
-  WHERE singleton = 1 AND authority_state = 'paused'
-    AND documents_revision = ${plan.authority.documentsRevision};
-  ${cleanup}`;
+  ${advanceRevision}
+  ${scrubGuards}`;
 }
 
-export function applyCommerceD1Wipe(dropId: string, plan: CommerceD1Plan, nowMs = Date.now()): void {
+function readCommerceD1WipeOutcome(
+  dropId: string,
+  plan: CommerceD1Plan,
+  operationGuardPrefix: string,
+): 'committed' | 'unknown' {
+  const claimCountSql = plan.claimCodesToDelete.length
+    ? `(SELECT COUNT(*) FROM commerce_documents
+        WHERE document_kind = 'claim_code'
+          AND document_id IN (${plan.claimCodesToDelete.map(sqlString).join(', ')}))`
+    : '0';
+  let rows: Record<string, unknown>[];
+  try {
+    rows = queryRemoteCommerceD1(`SELECT
+      authority_state,
+      revision,
+      documents_revision,
+      paused_at_ms,
+      CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS database_now_ms,
+      (SELECT COUNT(*) FROM commerce_documents
+        WHERE drop_id = ${sqlString(dropId)}) AS target_count,
+      ${claimCountSql} AS claim_count,
+      (SELECT COUNT(*) FROM commerce_wipe_guards
+        WHERE substr(guard_id, 1, ${operationGuardPrefix.length}) = ${sqlString(operationGuardPrefix)}) AS guard_count
+      FROM commerce_authority_control WHERE singleton = 1`);
+  } catch {
+    return 'unknown';
+  }
+  if (rows.length !== 1) return 'unknown';
+  const row = rows[0];
+  const revision = Number(row.revision);
+  const documentsRevision = Number(row.documents_revision);
+  const pausedAtMs = Number(row.paused_at_ms);
+  const databaseNowMs = Number(row.database_now_ms);
+  const targetCount = Number(row.target_count);
+  const claimCount = Number(row.claim_count);
+  const guardCount = Number(row.guard_count);
+  if (
+    row.authority_state !== 'paused' ||
+    revision !== plan.authority.revision ||
+    row.paused_at_ms === null ||
+    !Number.isSafeInteger(documentsRevision) ||
+    !Number.isSafeInteger(pausedAtMs) ||
+    !Number.isSafeInteger(databaseNowMs) ||
+    databaseNowMs - pausedAtMs < COMMERCE_WIPE_D1_PAUSE_THRESHOLD_MS ||
+    !Number.isSafeInteger(targetCount) ||
+    !Number.isSafeInteger(claimCount) ||
+    !Number.isSafeInteger(guardCount)
+  ) return 'unknown';
+  const revisionDelta = plan.documentsToDelete.length ? 1 : 0;
+  const expectedGuardCount = Math.max(1, Math.ceil(plan.documentsToDelete.length / 50));
+  if (
+    documentsRevision === plan.authority.documentsRevision + revisionDelta &&
+    targetCount === 0 &&
+    claimCount === 0 &&
+    guardCount === expectedGuardCount
+  ) return 'committed';
+  return 'unknown';
+}
+
+export function commitCommerceD1Wipe(
+  dropId: string,
+  plan: CommerceD1Plan,
+  nowMs = Date.now(),
+): string {
   dropId = validateDropId(dropId, 'drop id');
-  requireExecutableCommerceD1Wipe(plan.authority, nowMs);
-  if (!plan.documentsToDelete.length) return;
+  requireExecutableCommerceD1Wipe(plan.authority);
+  const operationGuardId = `wipe:${dropId}:${crypto.randomUUID()}`;
+  const operationGuardPrefix = `${operationGuardId}:`;
   const directory = mkdtempSync(path.join(tmpdir(), 'mons-shop-commerce-wipe-'));
   const filePath = path.join(directory, 'wipe.sql');
   try {
-    writeFileSync(filePath, buildCommerceD1WipeSql(plan, crypto.randomUUID(), nowMs), {
+    writeFileSync(filePath, buildCommerceD1WipeSql(plan, operationGuardId, nowMs), {
       encoding: 'utf8',
       mode: 0o600,
     });
-    executeRemoteCommerceD1File(filePath);
+    try {
+      executeRemoteCommerceD1File(filePath);
+    } catch (error) {
+      if (readCommerceD1WipeOutcome(dropId, plan, operationGuardPrefix) === 'committed') {
+        return operationGuardPrefix;
+      }
+      throw new CommerceD1WipeOutcomeUnknownError(error);
+    }
   } finally {
     rmSync(directory, { force: true, recursive: true });
   }
-  const authority = readRemoteCommerceAuthority();
-  if (
-    authority.state !== 'paused' ||
-    authority.revision !== plan.authority.revision ||
-    authority.documentsRevision !== plan.authority.documentsRevision + 1
-  ) fail('Commerce D1 authority verification failed after the wipe.');
-  const remainingDropRows = queryRemoteCommerceD1(`SELECT COUNT(*) AS count FROM commerce_documents
-    WHERE drop_id = ${sqlString(dropId)}`);
-  const remainingClaimRows = plan.claimCodesToDelete.length
-    ? queryRemoteCommerceD1(`SELECT COUNT(*) AS count FROM commerce_documents
-        WHERE document_kind = 'claim_code'
-          AND document_id IN (${plan.claimCodesToDelete.map(sqlString).join(', ')})`)
-    : [{ count: 0 }];
-  if (Number(remainingDropRows[0]?.count) !== 0 || Number(remainingClaimRows[0]?.count) !== 0) {
-    fail('Commerce D1 documents remain after the wipe.');
+  return operationGuardPrefix;
+}
+
+export function verifyCommerceD1Wipe(
+  dropId: string,
+  plan: CommerceD1Plan,
+  operationGuardPrefix: string,
+): void {
+  dropId = validateDropId(dropId, 'drop id');
+  if (readCommerceD1WipeOutcome(dropId, plan, operationGuardPrefix) !== 'committed') {
+    fail('Commerce D1 wipe verification failed.');
+  }
+  const dropGuardPrefix = `wipe:${dropId}:`;
+  const deleted = queryRemoteCommerceD1(`DELETE FROM commerce_wipe_guards
+    WHERE substr(guard_id, 1, ${dropGuardPrefix.length}) = ${sqlString(dropGuardPrefix)}
+    RETURNING guard_id`);
+  if (!deleted.some((row) => String(row.guard_id).startsWith(operationGuardPrefix))) {
+    fail('Commerce D1 wipe guard cleanup could not be confirmed.');
   }
 }
 
@@ -4670,55 +4857,83 @@ async function main() {
   }
 
   let releaseRegistryLock: (() => boolean) | undefined;
+  let authorityLeaseActive = false;
+  let requestedExitCode: number | undefined;
   const releaseOnExit = () => releaseRegistryLock?.();
-  const handleSigint = () => {
+  const handleSignal = (exitCode: number) => {
+    if (authorityLeaseActive) {
+      requestedExitCode ??= exitCode;
+      return;
+    }
     releaseRegistryLock?.();
-    process.exit(130);
+    process.exit(exitCode);
   };
-  const handleSigterm = () => {
-    releaseRegistryLock?.();
-    process.exit(143);
-  };
+  const handleSigint = () => handleSignal(130);
+  const handleSigterm = () => handleSignal(143);
   process.once('exit', releaseOnExit);
-  process.once('SIGINT', handleSigint);
-  process.once('SIGTERM', handleSigterm);
+  process.on('SIGINT', handleSigint);
+  process.on('SIGTERM', handleSigterm);
 
   try {
     releaseRegistryLock = acquireDeploymentRegistryMutationLock({
       root,
       operation: `wipe ${args.dropId}`,
     });
-    const lockedRepoPlan = await buildRepoPlan({ root, dropId: args.dropId });
-    if (lockedRepoPlan.extraReferences.length) {
-      fail(
-        `Found additional tracked references to ${args.dropId} outside the canonical wipe paths:\n` +
-          lockedRepoPlan.extraReferences.map((relPath) => `- ${relPath}`).join('\n') +
-          `\nRemove or rename those references first, then retry.`,
-      );
-    }
-    assertRepoWipeRegistryWritable(lockedRepoPlan);
-    const lockedCommercePlan = buildCommerceD1Plan(args.dropId);
-    requireExecutableCommerceD1Wipe(lockedCommercePlan.authority);
-    if (
-      !isDeepStrictEqual(lockedRepoPlan, repoPlan) ||
-      !isDeepStrictEqual(lockedCommercePlan, commercePlan)
-    ) {
-      fail('Repository or Commerce D1 state changed after the wipe plan was shown. Rerun to review a fresh plan.');
-    }
+    authorityLeaseActive = true;
+    try {
+      await withCommerceWipeAuthorityLease({
+        queryCommerceD1: queryRemoteCommerceD1,
+        run: async (renewLease) => {
+          const throwIfInterrupted = () => {
+            if (requestedExitCode !== undefined) throw new WipeInterruptedError(requestedExitCode);
+          };
+          throwIfInterrupted();
+          const lockedRepoPlan = await buildRepoPlan({ root, dropId: args.dropId });
+          throwIfInterrupted();
+          if (lockedRepoPlan.extraReferences.length) {
+            fail(
+              `Found additional tracked references to ${args.dropId} outside the canonical wipe paths:\n` +
+                lockedRepoPlan.extraReferences.map((relPath) => `- ${relPath}`).join('\n') +
+                `\nRemove or rename those references first, then retry.`,
+            );
+          }
+          assertRepoWipeRegistryWritable(lockedRepoPlan);
+          const lockedCommercePlan = buildCommerceD1Plan(args.dropId);
+          await renewLease();
+          throwIfInterrupted();
+          requireExecutableCommerceD1Wipe(lockedCommercePlan.authority);
+          if (
+            !isDeepStrictEqual(lockedRepoPlan, repoPlan) ||
+            !sameCommerceD1Plan(lockedCommercePlan, commercePlan)
+          ) {
+            fail('Repository or Commerce D1 state changed after the wipe plan was shown. Rerun to review a fresh plan.');
+          }
 
-    await applyWipePhases({
-      prepareRepo: () => prepareRepoWipe(lockedRepoPlan),
-      applyData: async () => applyCommerceD1Wipe(args.dropId, lockedCommercePlan),
-      applyPreparedRepo: (prepared) => applyPreparedRepoWipe(prepared),
-      abortPreparedRepo: (prepared) => abortPreparedRepoWipe(prepared),
-    });
-
-    console.log('');
-    console.log(
-      `wipe complete: removed ${args.dropId} from local config, deleted ${lockedRepoPlan.canonicalDeleteTargets.length} canonical file(s), ` +
-      `deleted ${lockedCommercePlan.documentsToDelete.length} Commerce D1 document(s), including ` +
-      `${lockedCommercePlan.claimCodesToDelete.length} claimCodes doc(s)`,
-    );
+          await renewLease();
+          throwIfInterrupted();
+          let operationGuardPrefix = '';
+          applySynchronousWipePhases({
+            prepareRepo: () => prepareRepoWipe(lockedRepoPlan),
+            commitData: () => {
+              operationGuardPrefix = commitCommerceD1Wipe(args.dropId, lockedCommercePlan);
+            },
+            applyPreparedRepo: (prepared) => applyPreparedRepoWipe(prepared),
+            abortPreparedRepo: (prepared) => abortPreparedRepoWipe(prepared),
+          });
+          await renewLease();
+          verifyCommerceD1Wipe(args.dropId, lockedCommercePlan, operationGuardPrefix);
+          console.log('');
+          console.log(
+            `wipe complete: removed ${args.dropId} from local config, deleted ${lockedRepoPlan.canonicalDeleteTargets.length} canonical file(s), ` +
+              `deleted ${lockedCommercePlan.documentsToDelete.length} Commerce D1 document(s), including ` +
+              `${lockedCommercePlan.claimCodesToDelete.length} claimCodes doc(s)`,
+          );
+        },
+      });
+    } finally {
+      authorityLeaseActive = false;
+    }
+    if (requestedExitCode !== undefined) process.exitCode = requestedExitCode;
   } finally {
     const released = releaseRegistryLock ? releaseRegistryLock() : true;
     if (!releaseRegistryLock || released) {
@@ -4738,6 +4953,6 @@ if (isDirectRun()) {
   main().catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
     console.error(message);
-    process.exit(1);
+    process.exit(err instanceof WipeInterruptedError ? err.exitCode : 1);
   });
 }

@@ -33,6 +33,17 @@ export type CommerceD1Authority = {
   revision: number;
   documentsRevision: number;
   pausedAtMs: number | null;
+  databaseNowMs: number;
+};
+
+export type CommerceAuthorityQuery = (
+  sql: string,
+) => Record<string, unknown>[] | Promise<Record<string, unknown>[]>;
+
+export type CommerceAuthorityLease = {
+  acquiredAtMs: number;
+  expiresAtMs: number;
+  token: string;
 };
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -40,6 +51,9 @@ const configPath = 'cloud/workers/api/wrangler.jsonc';
 const envFilePath = 'cloud/workers/api/release.env';
 const databaseName = 'mons-shop-commerce';
 const WRANGLER_COMMAND_TIMEOUT_MS = 10 * 60_000;
+const COMMERCE_AUTHORITY_LEASE_TTL_MS = 30 * 60_000;
+export const COMMERCE_D1_NOW_MS_SQL = "(CAST(strftime('%s', 'now') AS INTEGER) * 1000)";
+const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const wranglerBinary = resolve(
   repoRoot,
   'node_modules',
@@ -114,6 +128,94 @@ export function queryRemoteCommerceD1(sql: string): CommerceD1Row[] {
   ]));
   if (results.length !== 1) return fail('Expected exactly one Commerce D1 statement result.');
   return results[0];
+}
+
+export function commerceAuthorityLeaseToken(value: unknown): string {
+  const token = typeof value === 'string' ? value.trim() : '';
+  if (!UUID_V4_PATTERN.test(token)) return fail('Commerce authority coordination lease token is invalid.');
+  return token.toLowerCase();
+}
+
+function parseCommerceAuthorityLeaseRow(
+  value: unknown,
+  expectedToken: string,
+): CommerceAuthorityLease {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return fail('Commerce authority coordination lease response is invalid.');
+  }
+  const row = value as Record<string, unknown>;
+  const token = commerceAuthorityLeaseToken(row.lease_token);
+  const acquiredAtMs = safeInteger(row.acquired_at_ms, 'Commerce authority coordination lease acquisition');
+  const expiresAtMs = safeInteger(row.expires_at_ms, 'Commerce authority coordination lease expiry');
+  if (token !== expectedToken || expiresAtMs <= acquiredAtMs) {
+    return fail('Commerce authority coordination lease response is invalid.');
+  }
+  return { acquiredAtMs, expiresAtMs, token };
+}
+
+export async function acquireCommerceAuthorityLease(
+  queryCommerceD1: CommerceAuthorityQuery,
+  rawToken: string,
+): Promise<CommerceAuthorityLease> {
+  const token = commerceAuthorityLeaseToken(rawToken);
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await queryCommerceD1(`INSERT INTO commerce_authority_control_lease (
+        singleton, lease_token, acquired_at_ms, expires_at_ms
+      ) VALUES (
+        1,
+        ${sqlString(token)},
+        ${COMMERCE_D1_NOW_MS_SQL},
+        ${COMMERCE_D1_NOW_MS_SQL} + ${COMMERCE_AUTHORITY_LEASE_TTL_MS}
+      )
+      ON CONFLICT(singleton) DO UPDATE SET
+        lease_token = excluded.lease_token,
+        acquired_at_ms = excluded.acquired_at_ms,
+        expires_at_ms = excluded.expires_at_ms
+      WHERE commerce_authority_control_lease.expires_at_ms <= ${COMMERCE_D1_NOW_MS_SQL}
+      RETURNING lease_token, acquired_at_ms, expires_at_ms`);
+  } catch {
+    return fail('Commerce authority coordination lease could not be acquired.');
+  }
+  if (rows.length === 0) return fail('Another commerce authority control operation is already running.');
+  if (rows.length !== 1) return fail('Commerce authority coordination lease response is invalid.');
+  return parseCommerceAuthorityLeaseRow(rows[0], token);
+}
+
+export async function renewCommerceAuthorityLease(
+  queryCommerceD1: CommerceAuthorityQuery,
+  lease: CommerceAuthorityLease,
+): Promise<CommerceAuthorityLease> {
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await queryCommerceD1(`UPDATE commerce_authority_control_lease
+      SET expires_at_ms = ${COMMERCE_D1_NOW_MS_SQL} + ${COMMERCE_AUTHORITY_LEASE_TTL_MS}
+      WHERE singleton = 1 AND lease_token = ${sqlString(lease.token)}
+        AND expires_at_ms > ${COMMERCE_D1_NOW_MS_SQL}
+      RETURNING lease_token, acquired_at_ms, expires_at_ms`);
+  } catch {
+    return fail('Commerce authority coordination lease could not be renewed.');
+  }
+  if (rows.length !== 1) return fail('Commerce authority coordination lease ownership was lost.');
+  return parseCommerceAuthorityLeaseRow(rows[0], lease.token);
+}
+
+export async function releaseCommerceAuthorityLease(
+  queryCommerceD1: CommerceAuthorityQuery,
+  lease: CommerceAuthorityLease,
+): Promise<void> {
+  let rows: Record<string, unknown>[];
+  try {
+    rows = await queryCommerceD1(`DELETE FROM commerce_authority_control_lease
+      WHERE singleton = 1 AND lease_token = ${sqlString(lease.token)}
+      RETURNING lease_token`);
+  } catch {
+    return fail('Commerce authority coordination lease could not be released.');
+  }
+  if (
+    rows.length !== 1 ||
+    commerceAuthorityLeaseToken(rows[0].lease_token) !== lease.token
+  ) return fail('Commerce authority coordination lease ownership was lost before release.');
 }
 
 function requiredString(value: unknown, label: string): string {
@@ -195,7 +297,8 @@ export function queryRemoteCommerceDocuments(sql: string): CommerceD1Document[] 
 }
 
 export function readRemoteCommerceAuthority(): CommerceD1Authority {
-  const rows = queryRemoteCommerceD1(`SELECT authority_state, revision, documents_revision, paused_at_ms
+  const rows = queryRemoteCommerceD1(`SELECT authority_state, revision, documents_revision, paused_at_ms,
+      CAST(strftime('%s', 'now') AS INTEGER) * 1000 AS database_now_ms
     FROM commerce_authority_control WHERE singleton = 1`);
   if (rows.length !== 1) return fail('Commerce D1 authority control is invalid.');
   const state = rows[0].authority_state;
@@ -209,6 +312,7 @@ export function readRemoteCommerceAuthority(): CommerceD1Authority {
     pausedAtMs: rows[0].paused_at_ms === null
       ? null
       : safeInteger(rows[0].paused_at_ms, 'Commerce D1 pause timestamp'),
+    databaseNowMs: safeInteger(rows[0].database_now_ms, 'Commerce D1 current timestamp'),
   };
 }
 

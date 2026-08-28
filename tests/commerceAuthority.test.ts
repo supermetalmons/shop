@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import {
+  COMMERCE_IN_FLIGHT_DRAIN_WAIT_MS,
   CommerceAuthorityCoordinationError,
   buildCommerceAuthorityMutationSql,
   parseCommerceAuthorityControlArgs,
@@ -23,12 +24,17 @@ const QUEUE_NAMES = ['queue-a', 'queue-b', 'queue-c'];
 const QUEUE_CONFIG = { accountId: ACCOUNT_ID, queueNames: QUEUE_NAMES };
 const LEASE_TOKEN = '123e4567-e89b-42d3-a456-426614174000';
 
-function authorityRow(state: 'paused' | 'd1', revision: number, updatedAtMs = 0) {
+function authorityRow(
+  state: 'paused' | 'd1',
+  revision: number,
+  updatedAtMs = 0,
+  pausedAtMs: number | null = state === 'paused' ? updatedAtMs || 1 : null,
+) {
   return {
     authority_state: state,
     revision,
     documents_revision: 12,
-    paused_at_ms: state === 'paused' ? updatedAtMs || 1 : null,
+    paused_at_ms: state === 'paused' ? pausedAtMs : null,
     updated_at_ms: updatedAtMs,
   };
 }
@@ -39,6 +45,8 @@ function authorityHarness(
   events: string[],
   failedTransitions: Set<'paused' | 'd1'> = new Set(),
   options: {
+    d1NowMs?: number;
+    failedReadiness?: Set<'clear' | 'ready'>;
     leaseNowMs?: number;
     failLeaseRelease?: boolean;
     initialLease?: { acquired_at_ms: number; expires_at_ms: number; lease_token: string };
@@ -46,6 +54,7 @@ function authorityHarness(
 ) {
   let current = authorityRow(initialState, initialRevision);
   let lease = options.initialLease ? { ...options.initialLease } : null;
+  const d1NowMs = options.d1NowMs ?? 100;
   const leaseNowMs = options.leaseNowMs ?? 100;
   return {
     get current() {
@@ -87,6 +96,27 @@ function authorityHarness(
         events.push('d1:read');
         return [{ ...current }];
       }
+      if (/^\s*UPDATE commerce_authority_control\s+SET paused_at_ms/.test(sql)) {
+        const readiness = /SET paused_at_ms = NULL/.test(sql) ? 'clear' : 'ready';
+        events.push(`d1:${readiness}`);
+        if (options.failedReadiness?.has(readiness)) throw new Error('private D1 failure');
+        const guardToken = /AND lease_token = '([^']+)'/.exec(sql)?.[1];
+        const expectedRevision = Number(sql.match(/AND revision = (\d+)/)?.[1]);
+        if (
+          !lease ||
+          lease.lease_token !== guardToken ||
+          lease.expires_at_ms <= leaseNowMs ||
+          current.authority_state !== 'paused' ||
+          current.revision !== expectedRevision ||
+          (readiness === 'ready' && current.paused_at_ms !== null)
+        ) return [];
+        current = {
+          ...current,
+          paused_at_ms: readiness === 'ready' ? d1NowMs : null,
+          updated_at_ms: d1NowMs,
+        };
+        return [{ ...current }];
+      }
       const target = sql.includes("SET authority_state = 'paused'") ? 'paused' : 'd1';
       events.push(`d1:${target}`);
       if (failedTransitions.has(target)) throw new Error('private D1 failure');
@@ -95,8 +125,7 @@ function authorityHarness(
       const source = target === 'paused' ? 'd1' : 'paused';
       const expectedRevision = Number(sql.match(/AND revision = (\d+)/)?.[1]);
       if (current.authority_state !== source || current.revision !== expectedRevision) return [];
-      const updatedAtMs = Number(sql.match(/updated_at_ms = (\d+)/)?.[1]);
-      current = authorityRow(target, current.revision + 1, updatedAtMs);
+      current = authorityRow(target, current.revision + 1, d1NowMs, null);
       return [{ ...current }];
     },
   };
@@ -134,16 +163,16 @@ function queueHarness(args: {
 function dependencies(args: {
   authority: ReturnType<typeof authorityHarness>;
   leaseToken?: string;
-  nowMs?: number;
   queueClient: CloudflareQueueMaintenanceClient;
+  wait?: (durationMs: number) => Promise<void>;
 }) {
   return {
     apiToken: 'private-api-token',
     leaseToken: () => args.leaseToken || LEASE_TOKEN,
-    nowMs: () => args.nowMs ?? 100,
     queryCommerceD1: args.authority.query,
     queueClient: args.queueClient,
     queueConfig: QUEUE_CONFIG,
+    wait: args.wait || (async () => {}),
   };
 }
 
@@ -161,16 +190,18 @@ test('commerce authority mutations require explicit write and revision guards', 
     expectedRevision: 7,
     write: true,
   });
-  const sql = buildCommerceAuthorityMutationSql('d1', 7, 100, LEASE_TOKEN);
+  const sql = buildCommerceAuthorityMutationSql('d1', 7, LEASE_TOKEN);
   assert.match(sql, /authority_state = 'paused'/);
   assert.match(sql, /revision = 7/);
   assert.match(sql, /paused_at_ms = NULL/);
-  assert.match(sql, /updated_at_ms = 100/);
+  assert.match(sql, /updated_at_ms = \(CAST\(strftime\('%s', 'now'\) AS INTEGER\) \* 1000\)/);
+  assert.doesNotMatch(sql, /updated_at_ms = 100/);
   assert.match(sql, /commerce_authority_control_lease/);
   assert.match(sql, new RegExp(LEASE_TOKEN));
   assert.match(sql, /strftime\('%s', 'now'\)/);
-  const pauseSql = buildCommerceAuthorityMutationSql('paused', 7, 100, LEASE_TOKEN);
+  const pauseSql = buildCommerceAuthorityMutationSql('paused', 7, LEASE_TOKEN);
   assert.match(pauseSql, /authority_state = 'd1'/);
+  assert.match(pauseSql, /paused_at_ms = NULL/);
   assert.throws(() => parseCommerceAuthorityControlArgs(['replace', '--expected-revision', '7', '--write']));
 });
 
@@ -179,27 +210,29 @@ test('commerce authority lease and guarded transition execute against the curren
   try {
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0001_current_schema.sql', 'utf8'));
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', 'utf8'));
+    database.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
     const events: string[] = [];
     const result = await runCommerceAuthorityControl(
       parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '1', '--write']),
       {
         apiToken: 'private-api-token',
         leaseToken: () => LEASE_TOKEN,
-        nowMs: () => 100,
         queryCommerceD1: async (sql) => database.prepare(sql).all().map((row) => ({ ...row })),
         queueClient: queueHarness({ events }),
         queueConfig: QUEUE_CONFIG,
+        wait: async () => {},
       },
     );
     assert.equal(result.authority.authority_state, 'paused');
     assert.equal(result.authority.revision, 2);
+    assert.notEqual(result.authority.paused_at_ms, null);
     assert.equal(database.prepare('SELECT COUNT(*) AS count FROM commerce_authority_control_lease').get()!.count, 0);
   } finally {
     database.close();
   }
 });
 
-test('Queue maintenance configuration preserves the producer/consumer intersection order', () => {
+test('Queue maintenance configuration covers every consumer in configuration order', () => {
   const config = readCloudflareQueueMaintenanceConfig();
   assert.equal(config.accountId, 'e25f90fc073ea309b54b8b5144bf28e0');
   assert.deepEqual(config.queueNames, [
@@ -222,7 +255,11 @@ test('Queue maintenance configuration preserves the producer/consumer intersecti
         { binding: 'C', queue: 'queue-c' },
       ],
     },
-  }).queueNames, ['queue-c', 'queue-a', 'queue-b']);
+  }).queueNames, ['queue-c', 'queue-a', 'queue-dlq', 'queue-b']);
+  assert.deepEqual(parseCloudflareQueueMaintenanceConfig({
+    account_id: ACCOUNT_ID,
+    queues: { consumers: [{ queue: 'consumer-only' }] },
+  }).queueNames, ['consumer-only']);
   const excessiveQueues = Array.from({ length: 17 }, (_, index) => ({ queue: `queue-${index}` }));
   assert.throws(() => parseCloudflareQueueMaintenanceConfig({
     account_id: ACCOUNT_ID,
@@ -406,7 +443,6 @@ test('expired coordination lease is atomically replaced for idempotent repair', 
     dependencies({
       authority,
       leaseToken: '323e4567-e89b-42d3-a456-426614174000',
-      nowMs: 100,
       queueClient: queueHarness({ events, initial: { 'queue-c': true } }),
     }),
   );
@@ -417,11 +453,19 @@ test('expired coordination lease is atomically replaced for idempotent repair', 
 
 test('pause changes every Queue before transitioning D1', async () => {
   const events: string[] = [];
+  const waits: number[] = [];
   const authority = authorityHarness('d1', 7, events);
   const queueClient = queueHarness({ events });
   const state = await runCommerceAuthorityControl(
     parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '7', '--write']),
-    dependencies({ authority, queueClient }),
+    dependencies({
+      authority,
+      queueClient,
+      wait: async (durationMs) => {
+        waits.push(durationMs);
+        events.push(`drain:${waits.length}`);
+      },
+    }),
   );
   assert.deepEqual(events, [
     'd1:read',
@@ -430,10 +474,16 @@ test('pause changes every Queue before transitioning D1', async () => {
     'queue:queue-b:true',
     'queue:queue-c:true',
     'queues:list',
+    'drain:1',
+    'queues:list',
     'd1:paused',
+    'drain:2',
     'queues:list',
     'd1:read',
+    'd1:ready',
   ]);
+  assert.deepEqual(waits, [COMMERCE_IN_FLIGHT_DRAIN_WAIT_MS, COMMERCE_IN_FLIGHT_DRAIN_WAIT_MS]);
+  assert.ok(COMMERCE_IN_FLIGHT_DRAIN_WAIT_MS > 15 * 60_000);
   assert.deepEqual(state, {
     authority: authorityRow('paused', 8, 100),
     queues: QUEUE_NAMES.map((name) => ({ name, deliveryPaused: true })),
@@ -702,6 +752,7 @@ test('pause restores Queue delivery when the D1 transition is confirmed unchange
     'queue:queue-b:true',
     'queue:queue-c:true',
     'queues:list',
+    'queues:list',
     'd1:paused',
     'd1:read',
     'queue:queue-c:false',
@@ -722,9 +773,77 @@ test('pause repairs Queue state idempotently when the same authority transition 
     parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '7', '--write']),
     dependencies({ authority, queueClient }),
   );
-  assert.deepEqual(events, ['d1:read', 'queues:list', 'queue:queue-b:true', 'queues:list', 'd1:read']);
+  assert.deepEqual(events, [
+    'd1:read',
+    'queues:list',
+    'd1:clear',
+    'queue:queue-b:true',
+    'queues:list',
+    'queues:list',
+    'd1:read',
+    'd1:ready',
+  ]);
   assert.deepEqual(state.changed, { authorityChanged: false, queuesChanged: true });
   assert.ok(state.queues.every((queue) => queue.deliveryPaused));
+});
+
+test('pause repair clears readiness before draining and leaves it cleared on failure', async () => {
+  const events: string[] = [];
+  const authority = authorityHarness('paused', 8, events);
+  const queueClient = queueHarness({
+    events,
+    initial: Object.fromEntries(QUEUE_NAMES.map((name) => [name, true])),
+  });
+  let failure: CommerceAuthorityCoordinationError | undefined;
+  await assert.rejects(
+    runCommerceAuthorityControl(
+      parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '7', '--write']),
+      dependencies({
+        authority,
+        queueClient,
+        wait: async () => { throw new Error('private wait failure'); },
+      }),
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof CommerceAuthorityCoordinationError);
+      failure = error;
+      return true;
+    },
+  );
+  assert.equal(authority.current.paused_at_ms, null);
+  assert.equal(failure?.result.authority.paused_at_ms, null);
+  assert.deepEqual(events, ['d1:read', 'queues:list', 'd1:clear', 'queues:list']);
+});
+
+test('new pause leaves readiness cleared when the post-transition drain fails', async () => {
+  const events: string[] = [];
+  const waits: number[] = [];
+  const authority = authorityHarness('d1', 7, events);
+  const queueClient = queueHarness({ events });
+  let failure: CommerceAuthorityCoordinationError | undefined;
+  await assert.rejects(
+    runCommerceAuthorityControl(
+      parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '7', '--write']),
+      dependencies({
+        authority,
+        queueClient,
+        wait: async (durationMs) => {
+          waits.push(durationMs);
+          if (waits.length === 2) throw new Error('private request drain failure');
+        },
+      }),
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof CommerceAuthorityCoordinationError);
+      failure = error;
+      return true;
+    },
+  );
+  assert.deepEqual(waits, [COMMERCE_IN_FLIGHT_DRAIN_WAIT_MS, COMMERCE_IN_FLIGHT_DRAIN_WAIT_MS]);
+  assert.equal(authority.current.authority_state, 'paused');
+  assert.equal(authority.current.paused_at_ms, null);
+  assert.equal(failure?.result.authority.paused_at_ms, null);
+  assert.equal(events.includes('d1:ready'), false);
 });
 
 test('resume transitions D1 before resuming Queues', async () => {
@@ -924,10 +1043,10 @@ test('partial Queue resume rechecks authority and restores pauses before reporti
       {
         apiToken: 'private-api-token',
         leaseToken: () => LEASE_TOKEN,
-        nowMs: () => 100,
         queryCommerceD1: query,
         queueClient,
         queueConfig: QUEUE_CONFIG,
+        wait: async () => {},
       },
     ),
     (error: unknown) => {

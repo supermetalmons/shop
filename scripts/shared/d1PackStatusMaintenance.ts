@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   PACK_STATUS_SUPPORTED_DROP_IDS,
   type PackStatusCounters,
 } from '../../shared/packStatus.ts';
+import { sqlSchemaFingerprint } from './sqlSchemaFingerprint.ts';
 
 type D1Row = Record<string, unknown>;
 
@@ -46,13 +46,14 @@ const wranglerBinary = resolve(repoRoot, 'node_modules', '.bin', process.platfor
 const PACK_STATUS_D1_MIGRATIONS = [
   '0001_current_schema.sql',
   '0002_pack_status_event_conflict_guard.sql',
+  '0003_pack_status_historical_replay.sql',
 ] as const;
 const expectedSchema = new Map<string, { fingerprint: string; tableName: string; type: string }>([
   ['pack_status', { fingerprint: '07ce5b3993d512fd6187ef3b166dc8999eb9d63be0784e3b274dcb8c6f41c670', tableName: 'pack_status', type: 'table' }],
   ['pack_status_events', { fingerprint: 'ec23d654f43dd5879550aca3dea7091cf173359a42c63bfa833e7b34e92a0055', tableName: 'pack_status_events', type: 'table' }],
   ['pack_status_metadata', { fingerprint: '12e69decbe56b47f9e776ec9cf1458343a81fdb67e9dca10c9e7d53db5682e64', tableName: 'pack_status_metadata', type: 'table' }],
   ['pack_status_event_apply', { fingerprint: 'fe74b0ff2c6530b0a7b351b4a5b8c0f8307b552d0cf6d7744efe131cea1fc482', tableName: 'pack_status_events', type: 'trigger' }],
-  ['pack_status_event_conflict_guard', { fingerprint: '05fb483b2243983d69647aa643b251a8d0dab79406f5be6024b1abf99647b905', tableName: 'pack_status_events', type: 'trigger' }],
+  ['pack_status_event_conflict_guard', { fingerprint: '406d74d5889e890df051bf0900b9aefc3ce8f546551bbfb7f318fa6f01438ab5', tableName: 'pack_status_events', type: 'trigger' }],
   ['pack_status_event_delete_guard', { fingerprint: '79a1f81ed7e9daaa311764ad15da4289545a31391c60c6e61acc2b2a36fb11d3', tableName: 'pack_status_events', type: 'trigger' }],
   ['pack_status_event_immutable', { fingerprint: '422a24523511b6a2b34d10d6b6807f25c7a6b88ea075e757c55b888a49b35b38', tableName: 'pack_status_events', type: 'trigger' }],
   ['pack_status_event_type_guard', { fingerprint: '69e2502196836b0c734bc7f25a37627a1eab8bd14d885852546992c830224451', tableName: 'pack_status_events', type: 'trigger' }],
@@ -168,10 +169,7 @@ function exactStringSet(actual: string[], expected: readonly string[], label: st
 }
 
 function schemaFingerprint(value: unknown): string {
-  const normalized = requiredString(value, 'D1 schema SQL')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return createHash('sha256').update(normalized).digest('hex');
+  return sqlSchemaFingerprint(requiredString(value, 'D1 schema SQL'));
 }
 
 function assertExactSchema(rows: D1Row[]): void {

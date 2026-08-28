@@ -77,6 +77,7 @@ export function createCommerceD1Harness(): CommerceD1Harness {
   database.exec('PRAGMA foreign_keys = ON');
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0001_current_schema.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
   return { database, db: d1Database(database) };
 }
 

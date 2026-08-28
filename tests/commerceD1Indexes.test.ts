@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
+import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
 
 const schemaSql = readFileSync(
   new URL('../cloud/workers/api/commerce-migrations/0001_current_schema.sql', import.meta.url),
@@ -11,11 +12,18 @@ const leaseMigrationSql = readFileSync(
   new URL('../cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', import.meta.url),
   'utf8',
 );
+const wipeReadinessMigrationSql = readFileSync(
+  new URL('../cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', import.meta.url),
+  'utf8',
+);
+const authorityLeaseToken = '123e4567-e89b-42d3-a456-426614174000';
+const d1NowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
 
 function database(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
   db.exec(schemaSql);
   db.exec(leaseMigrationSql);
+  db.exec(wipeReadinessMigrationSql);
   return db;
 }
 
@@ -58,6 +66,7 @@ test('Commerce migrations create the exact current authority and guard schema', 
         'commerce_authority_delete_guard',
         'commerce_authority_revision_guard',
         'commerce_authority_transition_guard',
+        'commerce_authority_update_guard',
         'commerce_commit_guard_validate',
         'commerce_documents_delete_authority_guard',
         'commerce_documents_identity_insert_guard',
@@ -75,8 +84,12 @@ test('Commerce migrations create the exact current authority and guard schema', 
 test('Commerce authority pause and resume remain revision guarded', () => {
   const db = database();
   try {
+    db.prepare(`INSERT INTO commerce_authority_control_lease (
+      singleton, lease_token, acquired_at_ms, expires_at_ms
+    ) VALUES (1, ?, ${d1NowMsSql}, ${d1NowMsSql} + 60000)`).run(authorityLeaseToken);
     db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'paused', revision = 2, paused_at_ms = 1, updated_at_ms = 1
+      authority_state = 'paused', revision = 2, paused_at_ms = NULL,
+      updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`);
     assert.throws(() => db.prepare(`INSERT INTO commerce_documents (
       document_path, document_kind, drop_id, document_id, document_json,
@@ -84,14 +97,80 @@ test('Commerce authority pause and resume remain revision guarded', () => {
     ) VALUES ('claimCodes/code', 'claim_code', NULL, 'code', '{}', 1, 'created', 'updated')`).run(),
     /commerce authority is not d1/);
     db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'd1', revision = 3, paused_at_ms = NULL, updated_at_ms = 2
+      authority_state = 'd1', revision = 3, paused_at_ms = NULL,
+      updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`);
     assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'paused', paused_at_ms = 3, updated_at_ms = 3
+      authority_state = 'paused', paused_at_ms = NULL, updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`), /revision conflict/);
     assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'other', revision = 4, updated_at_ms = 3
+      authority_state = 'other', revision = 4, updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`));
+  } finally {
+    db.close();
+  }
+});
+
+test('Commerce readiness markers require a leased D1-time update', () => {
+  const db = database();
+  try {
+    assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'paused', revision = 2,
+      paused_at_ms = ${d1NowMsSql}, updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`), /coordination lease is required/);
+
+    db.prepare(`INSERT INTO commerce_authority_control_lease (
+      singleton, lease_token, acquired_at_ms, expires_at_ms
+    ) VALUES (1, ?, ${d1NowMsSql}, ${d1NowMsSql} + 60000)`).run(authorityLeaseToken);
+    assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'paused', revision = 2,
+      paused_at_ms = ${d1NowMsSql}, updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`), /invalid commerce authority readiness mutation/);
+
+    db.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'paused', revision = 2, paused_at_ms = NULL,
+      updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`);
+    for (const offset of [-1000, 1000]) {
+      assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
+        paused_at_ms = ${d1NowMsSql} + ${offset}, updated_at_ms = ${d1NowMsSql}
+        WHERE singleton = 1`), /invalid commerce authority readiness mutation/);
+    }
+    db.exec(`UPDATE commerce_authority_control SET
+      paused_at_ms = ${d1NowMsSql}, updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`);
+    const ready = db.prepare(`SELECT paused_at_ms, updated_at_ms
+      FROM commerce_authority_control WHERE singleton = 1`).get()!;
+    assert.equal(ready.paused_at_ms, ready.updated_at_ms);
+
+    db.exec('DELETE FROM commerce_authority_control_lease');
+    assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
+      paused_at_ms = NULL, updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`), /coordination lease is required/);
+    assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'd1', revision = 3, paused_at_ms = NULL,
+      updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`), /coordination lease is required/);
+
+    db.prepare(`INSERT INTO commerce_authority_control_lease (
+      singleton, lease_token, acquired_at_ms, expires_at_ms
+    ) VALUES (1, ?, ${d1NowMsSql} - 2000, ${d1NowMsSql} - 1000)`).run(authorityLeaseToken);
+    assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
+      paused_at_ms = NULL, updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`), /coordination lease is required/);
+
+    db.exec('DELETE FROM commerce_authority_control_lease');
+    db.prepare(`INSERT INTO commerce_authority_control_lease (
+      singleton, lease_token, acquired_at_ms, expires_at_ms
+    ) VALUES (1, ?, ${d1NowMsSql}, ${d1NowMsSql} + 60000)`).run(authorityLeaseToken);
+    db.exec(`UPDATE commerce_authority_control SET
+      paused_at_ms = NULL, updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`);
+    db.exec('DELETE FROM commerce_authority_control_lease');
+    assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'd1', revision = 3, paused_at_ms = NULL,
+      updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`), /coordination lease is required/);
   } finally {
     db.close();
   }
@@ -115,6 +194,85 @@ test('Commerce authority coordination lease migration is strict and singleton', 
       .run('223e4567-e89b-42d3-a456-426614174000'));
     assert.throws(() => db.prepare(`UPDATE commerce_authority_control_lease
       SET expires_at_ms = acquired_at_ms`).run());
+  } finally {
+    db.close();
+  }
+});
+
+test('Commerce wipe guards require an authority revision and maintenance readiness', () => {
+  const db = database();
+  try {
+    assert.deepEqual(
+      db.prepare("SELECT name FROM pragma_table_info('commerce_wipe_guards') ORDER BY cid")
+        .all().map((row) => String(row.name)),
+      [
+        'guard_id',
+        'expectations_json',
+        'expected_documents_revision',
+        'created_at_ms',
+        'expected_authority_revision',
+      ],
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test('Commerce wipe guard fingerprints preserve SQL literal contents', () => {
+  const db = database();
+  try {
+    const sql = String(db.prepare(`SELECT sql FROM sqlite_schema
+      WHERE type = 'trigger' AND name = 'commerce_wipe_guard_validate'`).get()!.sql);
+    assert.notEqual(
+      sqlSchemaFingerprint(sql),
+      sqlSchemaFingerprint(sql.replace('commerce wipe conflict', 'commerce  wipe conflict')),
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test('Commerce wipe readiness migration clears legacy paused markers', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(schemaSql);
+    db.exec(leaseMigrationSql);
+    db.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'paused', revision = 2, paused_at_ms = 1, updated_at_ms = 1
+      WHERE singleton = 1`);
+    db.exec(wipeReadinessMigrationSql);
+    assert.equal(
+      db.prepare('SELECT paused_at_ms FROM commerce_authority_control WHERE singleton = 1').get()!.paused_at_ms,
+      null,
+    );
+    assert.throws(() => db.prepare(`INSERT INTO commerce_wipe_guards (
+      guard_id, expectations_json, expected_documents_revision,
+      expected_authority_revision, created_at_ms
+    ) VALUES ('legacy', '[]', 0, 2, 1)`).run(), /maintenance is not ready/);
+  } finally {
+    db.close();
+  }
+});
+
+test('Commerce authority cannot resume while a wipe guard remains', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(schemaSql);
+    db.exec(leaseMigrationSql);
+    db.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'paused', revision = 2, paused_at_ms = 1, updated_at_ms = 1
+      WHERE singleton = 1`);
+    db.exec(`INSERT INTO commerce_wipe_guards (
+      guard_id, expectations_json, expected_documents_revision, created_at_ms
+    ) VALUES ('wipe:target:pending:0', '[]', 0, 1)`);
+    db.exec(wipeReadinessMigrationSql);
+    db.prepare(`INSERT INTO commerce_authority_control_lease (
+      singleton, lease_token, acquired_at_ms, expires_at_ms
+    ) VALUES (1, ?, ${d1NowMsSql}, ${d1NowMsSql} + 60000)`).run(authorityLeaseToken);
+    assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'd1', revision = 3, paused_at_ms = NULL,
+      updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`), /invalid commerce authority readiness mutation/);
   } finally {
     db.close();
   }

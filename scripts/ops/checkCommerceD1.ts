@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { assertCanonicalCommerceIdentity } from '../shared/commerceIdentityValidation.ts';
 import {
@@ -6,13 +5,16 @@ import {
   queryRemoteCommerceD1,
   safeInteger,
 } from '../shared/commerceD1Maintenance.ts';
+import { sqlSchemaFingerprint } from '../shared/sqlSchemaFingerprint.ts';
 
 function fail(message: string): never {
   throw new Error(message);
 }
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT = '05f62e818d0d94cd00448cded8ddc9e809e2fdb1b110523e8c79c387aaad5996';
 const LEASE_SCHEMA_FINGERPRINT = 'b8e9609fcf244967ef15c64b437e49cf400930cd46579ffe4c7a5c8b0100fe81';
+const WIPE_GUARD_SCHEMA_FINGERPRINT = 'e34d79093242f8e10cbc4d080e8a12f314ce27ecd50a8154d3ce956a095ae1b8';
 
 function requireIndex(plan: Record<string, unknown>[], indexName: string): void {
   if (!plan.some((row) => String(row.detail || '').includes(indexName))) {
@@ -27,9 +29,10 @@ export function checkCommerceD1(): Record<string, unknown> {
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 2 ||
+    migrations.length !== 3 ||
     migrations[0].name !== '0001_current_schema.sql' ||
-    migrations[1].name !== '0002_authority_control_lease.sql'
+    migrations[1].name !== '0002_authority_control_lease.sql' ||
+    migrations[2].name !== '0003_wipe_readiness_guard.sql'
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -93,10 +96,23 @@ export function checkCommerceD1(): Record<string, unknown> {
   const leaseColumns = queryRemoteCommerceD1(
     "SELECT name FROM pragma_table_info('commerce_authority_control_lease') ORDER BY cid",
   ).map((row) => String(row.name));
+  const wipeGuardColumns = queryRemoteCommerceD1(
+    "SELECT name FROM pragma_table_info('commerce_wipe_guards') ORDER BY cid",
+  ).map((row) => String(row.name));
   const leaseSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
     WHERE type = 'table' AND name = 'commerce_authority_control_lease'`);
   const leaseFingerprint = leaseSchema.length === 1
-    ? createHash('sha256').update(String(leaseSchema[0].sql || '').replace(/\s+/g, ' ').trim()).digest('hex')
+    ? sqlSchemaFingerprint(String(leaseSchema[0].sql || ''))
+    : '';
+  const wipeGuardSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'trigger' AND name = 'commerce_wipe_guard_validate'`);
+  const wipeGuardFingerprint = wipeGuardSchema.length === 1
+    ? sqlSchemaFingerprint(String(wipeGuardSchema[0].sql || ''))
+    : '';
+  const authorityUpdateGuardSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'trigger' AND name = 'commerce_authority_update_guard'`);
+  const authorityUpdateGuardFingerprint = authorityUpdateGuardSchema.length === 1
+    ? sqlSchemaFingerprint(String(authorityUpdateGuardSchema[0].sql || ''))
     : '';
   const leaseRows = queryRemoteCommerceD1('SELECT lease_token, acquired_at_ms, expires_at_ms FROM commerce_authority_control_lease');
   if (leaseRows.length > 1 || leaseRows.some((row) => {
@@ -109,13 +125,17 @@ export function checkCommerceD1(): Record<string, unknown> {
   if (
     authorityColumns.join(',') !== 'singleton,authority_state,revision,documents_revision,paused_at_ms,updated_at_ms' ||
     leaseColumns.join(',') !== 'singleton,lease_token,acquired_at_ms,expires_at_ms' ||
+    wipeGuardColumns.join(',') !== 'guard_id,expectations_json,expected_documents_revision,created_at_ms,expected_authority_revision' ||
+    authorityUpdateGuardFingerprint !== AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT ||
     leaseFingerprint !== LEASE_SCHEMA_FINGERPRINT ||
+    wipeGuardFingerprint !== WIPE_GUARD_SCHEMA_FINGERPRINT ||
     identityState.length !== 1 ||
     safeInteger(identityState[0].root_uid_count, 'Commerce root UID count') !== 0
   ) fail('Commerce D1 contains noncanonical schema or identity state.');
 
   const requiredTriggers = new Set([
     'commerce_authority_transition_guard',
+    'commerce_authority_update_guard',
     'commerce_authority_delete_guard',
     'commerce_authority_revision_guard',
     'commerce_commit_guard_validate',

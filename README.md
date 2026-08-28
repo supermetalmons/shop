@@ -187,7 +187,7 @@ event history, and cache-generation metadata.
 
 `cloud/workers/api/migrations/0001_current_schema.sql` is the clean pack-status
 baseline. Never edit a migration after it has been applied. Introduce the next
-schema change as `0002_<description>.sql`, then continue numbering in order.
+schema change as `0004_<description>.sql`, then continue numbering in order.
 
 Apply pending production migrations and verify the result with:
 
@@ -226,7 +226,7 @@ schedule.
 The API Worker binds `mons-shop-ops` as `OPS_DB`. Its schema is separate from
 pack status and starts at
 `cloud/workers/api/ops-migrations/0001_current_schema.sql`. Append
-`0002_<description>.sql` for the next change and never edit an applied file.
+`0003_<description>.sql` for the next change and never edit an applied file.
 
 Apply and verify this database independently with:
 
@@ -300,8 +300,9 @@ canonical fulfillment origin address.
 `mons-shop-commerce` is the authoritative commerce document database. Its
 schema starts at
 `cloud/workers/api/commerce-migrations/0001_current_schema.sql`; migration
-`0002_authority_control_lease.sql` adds operational serialization, so append
-`0003_<description>.sql` for the next change. The Worker preserves the existing
+`0002_authority_control_lease.sql` adds operational serialization and
+`0003_wipe_readiness_guard.sql` makes destructive maintenance readiness atomic,
+so append `0004_<description>.sql` for the next change. The Worker preserves the existing
 commerce API and transaction behavior through the D1 document-store adapter.
 
 Inspect or pause the authoritative database with:
@@ -315,19 +316,23 @@ npm run commerce-authority-control -- d1 --expected-revision <revision> --write
 
 All authority-control commands require a scoped `CLOUDFLARE_API_TOKEN` with
 Queues Write and the D1 permissions Wrangler needs for the remote authority
-query or mutation. A pause command pauses every Queue both produced and consumed
-by the API Worker before changing D1 authority. A `d1` command restores D1
-authority before resuming those Queues. Queue names and the account ID are read
-from `cloud/workers/api/wrangler.jsonc`; the token is never printed.
+query or mutation. A new pause takes about 30 minutes: it pauses every configured
+consumer Queue and drains in-flight consumers before changing D1 authority, then
+drains in-flight HTTP and scheduled work. The command sets `paused_at_ms` only
+after both drains and a final Queue-pause check; a null value means maintenance
+is not ready. A `d1` command restores D1 authority before resuming those Queues.
+Queue names and the account ID are read from
+`cloud/workers/api/wrangler.jsonc`; the token is never printed.
 
 Authority mutations still require the current revision and explicit `--write`.
 Mutation and repair commands are serialized by a renewable 30-minute D1 lease;
 an active lease rejects concurrent commands. If a process exits before release,
 retry after the lease expires.
 If an operation is interrupted, rerun the same command with the same expected
-revision. The coordinator repairs an already-completed authority transition and
-only changes Queue states that still differ from the requested state. A partial
-resume leaves D1 authoritative and exits with the Queues that remain paused.
+revision. A pause repair clears `paused_at_ms` and repeats the full Queue drain
+before marking maintenance ready again. The coordinator only changes Queue
+states that still differ from the requested state. A partial resume leaves D1
+authoritative and exits with the Queues that remain paused.
 
 ### Queues, schedules, and notifications
 
@@ -382,10 +387,14 @@ The retained tools are intentionally narrow:
 - `npm run wipe-drop` (`scripts/ops/wipeDrop.ts`) is the guarded repository and
   Commerce D1 cleanup utility. It refuses drops with pack-status or reveal
   history. Use `--dry-run` to inspect proposed changes without pausing. Before
-  mutation, pause Commerce D1 with `commerce-authority-control`, wait at least
-  65 seconds, and rerun the command; keep Commerce paused until the
-  updated API and frontend are deployed, then resume `d1`. Mutation requires
-  interactive confirmation unless `--yes` is supplied explicitly.
+  mutation, pause Commerce D1 with `commerce-authority-control`; a new pause
+  takes about 30 minutes and returns only after `paused_at_ms` marks maintenance ready.
+  `wipe-drop` then requires that readiness marker to be at least 65 seconds old.
+  During mutation it holds the authority lease and keeps a D1 wipe guard until
+  the repository commit finishes, so resume is blocked after an interrupted
+  wipe. Keep Commerce paused until the updated API and frontend are deployed,
+  then resume `d1`. Mutation requires interactive confirmation unless `--yes`
+  is supplied explicitly.
 
 Active operator commands use the configured Cloudflare D1 databases and require
 no legacy-provider CLI access.

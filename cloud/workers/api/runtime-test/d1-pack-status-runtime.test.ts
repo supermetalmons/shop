@@ -40,6 +40,7 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
     assert.deepEqual(migrations.results.map((row) => row.name), [
       '0001_current_schema.sql',
       '0002_pack_status_event_conflict_guard.sql',
+      '0003_pack_status_historical_replay.sql',
     ]);
 
     await env.DATA_DB.prepare(
@@ -96,7 +97,6 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
       ['checkout_session_id', 9, 'cs_changed'],
       ['box_asset_id', 10, 'box-changed'],
       ['signature', 11, 'signature-changed'],
-      ['apply_delta', 12, 0],
     ] as const;
     for (const [field, index, value] of replayMismatches) {
       const bindings = [...persistedEvent];
@@ -115,6 +115,38 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
         field,
       );
     }
+    const historicalReplay = {
+      ...onlineReveal,
+      eventKey: 'historical-box',
+      boxAssetId: 'historical-box',
+      signature: 'historical-signature',
+      createdAtMs: 250,
+    };
+    await env.DATA_DB.prepare(`INSERT INTO pack_status_events (
+      drop_id, event_type, event_key, quantity,
+      unsealed_online_delta, redeemed_irl_normal_delta, redeemed_irl_stripe_delta,
+      redeemed_unsealed_cards_delta, delivery_id, checkout_session_id,
+      box_asset_id, signature, apply_delta, created_at_ms
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`)
+      .bind(
+        historicalReplay.dropId,
+        historicalReplay.type,
+        historicalReplay.eventKey,
+        historicalReplay.quantity,
+        historicalReplay.increments.unsealedOnline,
+        0,
+        0,
+        0,
+        null,
+        null,
+        historicalReplay.boxAssetId,
+        historicalReplay.signature,
+        historicalReplay.createdAtMs,
+      )
+      .run();
+    const beforeHistoricalReplay = await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2');
+    assert.equal(await applyD1PackStatusEvent(env.DATA_DB, historicalReplay), 'duplicate');
+    assert.deepEqual(await readD1PackStatusRecord(env.DATA_DB, 'card_nft_2'), beforeHistoricalReplay);
     assert.equal((await env.DATA_DB.prepare(
       `SELECT COUNT(*) AS count
       FROM pack_status_events
@@ -181,7 +213,7 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
       redeemedIrlStripe: 0,
       redeemedUnsealedCards: 0,
     }, 500, [
-      { dropId: 'card_nft_2', eventCount: 3, historicalEventCount: 0, appliedEventCount: 3 },
+      { dropId: 'card_nft_2', eventCount: 4, historicalEventCount: 1, appliedEventCount: 3 },
       { dropId: 'little_swag_boxes', eventCount: 0, historicalEventCount: 0, appliedEventCount: 0 },
       { dropId: 'poncho_drifella', eventCount: 0, historicalEventCount: 0, appliedEventCount: 0 },
     ]);
@@ -232,7 +264,7 @@ test('D1 pack-status steady state keeps events, metadata, and rebuilds atomic', 
     const eventCount = await env.DATA_DB.prepare(
       "SELECT COUNT(*) AS event_count FROM pack_status_events WHERE drop_id = 'card_nft_2'",
     ).first<{ event_count: number }>();
-    assert.equal(eventCount?.event_count, 3);
+    assert.equal(eventCount?.event_count, 4);
     await applyD1PackStatusEvent(env.DATA_DB, {
       ...onlineReveal,
       eventKey: 'box-after-rebuild',

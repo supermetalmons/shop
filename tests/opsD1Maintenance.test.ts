@@ -212,6 +212,11 @@ test('Ops integrity rejects ledger, schema, and foreign-key drift', () => {
       : row),
   })), /schema/);
   assert.throws(() => assertOpsD1Integrity(integrityInput({
+    schema: healthy.schema.map((row) => row.name === 'reveal_submission_insert_pause_guard'
+      ? { ...row, sql: String(row.sql).replace('reveal submissions are paused', 'reveal  submissions are paused') }
+      : row),
+  })), /schema/);
+  assert.throws(() => assertOpsD1Integrity(integrityInput({
     tableList: healthy.tableList.map((row) =>
       row.name === 'worker_controls' ? { ...row, strict: 0 } : row),
   })), /strict flag/);

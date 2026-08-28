@@ -23,6 +23,7 @@ const dropRows = [
 const packStatusMigrationPaths = [
   'cloud/workers/api/migrations/0001_current_schema.sql',
   'cloud/workers/api/migrations/0002_pack_status_event_conflict_guard.sql',
+  'cloud/workers/api/migrations/0003_pack_status_historical_replay.sql',
 ] as const;
 
 function applicationSchema(): Record<string, unknown>[] {
@@ -141,12 +142,18 @@ test('D1 integrity rejects an incomplete migration ledger and drifted trigger SQ
   const input = integrityInput();
   assert.throws(() => assertD1Integrity({
     ...input,
-    migrations: input.migrations.filter((row) => row.name !== '0002_pack_status_event_conflict_guard.sql'),
+    migrations: input.migrations.filter((row) => row.name !== '0003_pack_status_historical_replay.sql'),
   }), /migrations/);
   assert.throws(() => assertD1Integrity({
     ...input,
     schema: input.schema.map((row) => row.name === 'pack_status_event_conflict_guard'
       ? { ...row, sql: String(row.sql).replace('payload conflict', 'payload drift') }
+      : row),
+  }), /schema/);
+  assert.throws(() => assertD1Integrity({
+    ...input,
+    schema: input.schema.map((row) => row.name === 'pack_status_event_conflict_guard'
+      ? { ...row, sql: String(row.sql).replace('payload conflict', 'payload  conflict') }
       : row),
   }), /schema/);
 });
@@ -311,10 +318,16 @@ test('pack-status migrations include metadata, immutable event guards, and repla
     'cloud/workers/api/migrations/0002_pack_status_event_conflict_guard.sql',
     'utf8',
   );
+  const historicalReplay = readFileSync(
+    'cloud/workers/api/migrations/0003_pack_status_historical_replay.sql',
+    'utf8',
+  );
   assert.match(baseline, /CREATE TABLE pack_status_metadata/);
   assert.match(baseline, /VALUES \(1, 1, 0\)/);
   assert.match(baseline, /CREATE TRIGGER pack_status_event_delete_guard/);
   assert.match(baseline, /RAISE\(ABORT, 'pack-status events are immutable'\)/);
   assert.match(conflictGuard, /CREATE TRIGGER pack_status_event_conflict_guard/);
   assert.match(conflictGuard, /RAISE\(ABORT, 'pack-status event payload conflict'\)/);
+  assert.match(historicalReplay, /DROP TRIGGER pack_status_event_conflict_guard/);
+  assert.doesNotMatch(historicalReplay, /apply_delta IS NEW\.apply_delta/);
 });
