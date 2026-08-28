@@ -276,20 +276,18 @@ test('delivery preparation preserves raw address fields in the native create', a
 });
 
 test('delivery preparation reconciles an applied D1 commit when its result is lost', async () => {
-  const harness = createCommerceD1Harness();
-  let batches = 0;
-  const db = {
-    ...harness.db,
-    async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
-      const result = await harness.db.batch<T>(statements);
-      batches += 1;
-      if (batches === 1) throw new TypeError('commit result lost');
-      return result;
+  let commitBatches = 0;
+  const harness = createCommerceD1Harness({
+    observeBatchAfterCommit: ({ statements }) => {
+      if (statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))) {
+        commitBatches += 1;
+        if (commitBatches === 1) throw new TypeError('commit result lost');
+      }
     },
-  } as D1Database;
+  });
   const updateTime = await deliveryPrepareTestHooks.createDeliveryOrder({
     nowMs: NOW_MS,
-    repository: new D1CommerceRepository(db),
+    repository: new D1CommerceRepository(harness.db),
     signal: new AbortController().signal,
   }, {
     path: `drops/${DROP_ID}/deliveryOrders/7`,
@@ -306,7 +304,7 @@ test('delivery preparation reconciles an applied D1 commit when its result is lo
     prepareAttemptId: '123e4567-e89b-42d3-a456-426614174000',
   });
   assert.equal(Date.parse(updateTime), NOW_MS);
-  assert.equal(batches, 1);
+  assert.equal(commitBatches, 1);
 });
 
 test('delivery preparation retries Commerce collisions with a fresh delivery id', async () => {

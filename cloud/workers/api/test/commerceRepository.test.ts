@@ -8,7 +8,12 @@ import {
   commerceKeys,
   d1RetryCount,
 } from '../src/commerceRepository.ts';
-import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
+import {
+  type CommerceD1BatchObservation,
+  type CommerceD1CallObservation,
+  createCommerceD1Harness,
+  seedCommerceDocument,
+} from './commerceD1Harness.ts';
 
 function pauseCommerce(harness: ReturnType<typeof createCommerceD1Harness>): void {
   const nowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
@@ -31,86 +36,32 @@ function isUnavailableCommerceError(error: unknown): boolean {
   return true;
 }
 
-function createPausingDocumentReadHarness(): ReturnType<typeof createCommerceD1Harness> {
-  let harness: ReturnType<typeof createCommerceD1Harness>;
-  let armed = true;
-  harness = createCommerceD1Harness({
-    observeStatement: ({ method, sql }) => {
-      const normalized = sql.replace(/\s+/g, ' ');
-      if (
-        armed &&
-        (method === 'first' || method === 'all') &&
-        normalized.includes('FROM commerce_documents')
-      ) {
-        armed = false;
-        pauseCommerce(harness);
-      }
-    },
-  });
-  return harness;
+function assertAuthoritativeReadBatch(observation: CommerceD1BatchObservation): void {
+  assert.equal(observation.statements.length, 2);
+  const authoritySql = observation.statements[0].sql.replace(/\s+/g, ' ');
+  const dataSql = observation.statements[1].sql.replace(/\s+/g, ' ');
+  assert.match(
+    authoritySql,
+    /FROM commerce_authority_control WHERE singleton = 1/,
+  );
+  assert.match(dataSql, /(?:FROM|JOIN) commerce_documents/);
+  assert.match(dataSql, /FROM commerce_authority_control AS authority CROSS JOIN/);
+  assert.match(dataSql, /authority\.singleton\s*=\s*1/);
+  assert.match(dataSql, /authority_state\s*=\s*'d1'/);
 }
 
-function createChangingQueryHarness(
-  seed: (harness: ReturnType<typeof createCommerceD1Harness>) => void,
-): {
-  authorityReads: () => number;
-  harness: ReturnType<typeof createCommerceD1Harness>;
-  queryReads: () => number;
-} {
-  let harness: ReturnType<typeof createCommerceD1Harness>;
-  let authorityReads = 0;
-  let queryReads = 0;
-  harness = createCommerceD1Harness({
-    observeStatement: ({ method, sql }) => {
-      const normalized = sql.replace(/\s+/g, ' ');
-      if (method === 'first' && normalized.includes(
-        'FROM commerce_authority_control WHERE singleton = 1',
-      )) authorityReads += 1;
-      if (method !== 'all' || !normalized.includes('FROM commerce_documents')) return;
-      queryReads += 1;
-      if (queryReads !== 1) return;
-      harness.database.exec('BEGIN');
-      try {
-        seed(harness);
-        harness.database.exec(`UPDATE commerce_authority_control
-          SET documents_revision = documents_revision + 1 WHERE singleton = 1`);
-        harness.database.exec('COMMIT');
-      } catch (error) {
-        harness.database.exec('ROLLBACK');
-        throw error;
-      }
-    },
-  });
-  return {
-    authorityReads: () => authorityReads,
-    harness,
-    queryReads: () => queryReads,
-  };
-}
-
-function createContinuousRevisionRacingHarness(): {
-  authorityReads: () => number;
-  harness: ReturnType<typeof createCommerceD1Harness>;
-} {
-  let harness: ReturnType<typeof createCommerceD1Harness>;
-  let authorityReads = 0;
-  harness = createCommerceD1Harness({
-    observeStatement: ({ method, sql }) => {
-      if (
-        method === 'first' &&
-        sql.replace(/\s+/g, ' ').includes(
-          'FROM commerce_authority_control WHERE singleton = 1',
-        )
-      ) {
-        authorityReads += 1;
-        if (authorityReads % 2 === 1) {
-          harness.database.exec(`UPDATE commerce_authority_control
-            SET documents_revision = documents_revision + 1 WHERE singleton = 1`);
-        }
-      }
-    },
-  });
-  return { authorityReads: () => authorityReads, harness };
+async function readWithSingleBatch<T>(
+  calls: CommerceD1CallObservation[],
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previousCount = calls.length;
+  const result = await operation();
+  assert.equal(calls.length, previousCount + 1);
+  const call = calls[previousCount];
+  assert.equal(call.method, 'batch');
+  if (call.method !== 'batch') assert.fail('Expected one D1 batch call.');
+  assertAuthoritativeReadBatch(call);
+  return result;
 }
 
 test('native repository keys cover every commerce document kind', () => {
@@ -480,103 +431,180 @@ test('units revalidate cached authority when committing after a pause', async ()
   );
 });
 
-test('native repository fails closed while commerce is paused', async () => {
-  const harness = createCommerceD1Harness();
+test('standalone reads use one authoritative two-statement batch', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({
+    observeCall: (observation) => calls.push(observation),
+  });
+  const repository = new D1CommerceRepository(harness.db);
+  const existingKey = commerceKeys.claimCode('EXISTING');
+  seedCommerceDocument(harness, { key: existingKey, data: { status: 'unused' } });
+
+  const existing = await readWithSingleBatch(calls, () => repository.get(existingKey));
+  assert.deepEqual(existing?.data, { status: 'unused' });
+  assert.equal(calls[0].method, 'batch');
+  if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch call.');
+  assert.match(calls[0].statements[1].sql, /document_path = \?\s+LIMIT 1/);
+
+  const missing = await readWithSingleBatch(calls, () => repository.get(commerceKeys.claimCode('MISSING')));
+  assert.equal(missing, null);
+  assert.equal(calls[1].method, 'batch');
+  if (calls[1].method !== 'batch') assert.fail('Expected one D1 batch call.');
+  assert.match(calls[1].statements[1].sql, /document_path = \?\s+LIMIT 1/);
+
+  assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.query({ kind: 'delivery_order' })),
+    [],
+  );
+  assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.query({ kind: 'claim_code', limit: 0 })),
+    [],
+  );
+  assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.queryPendingReadyNotifications({ limit: 1 })),
+    [],
+  );
+  assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.queryDuePackStatusProjections({
+      dropId: 'drop',
+      dueAtMs: 1,
+      limit: 1,
+    })),
+    [],
+  );
+  assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.queryStaleStripeFulfillments(1)),
+    [],
+  );
+  const staleCall = calls.at(-1);
+  assert.equal(staleCall?.method, 'batch');
+  if (staleCall?.method !== 'batch') assert.fail('Expected one D1 batch call.');
+  assert.match(staleCall.statements[1].sql, /INDEXED BY commerce_stripe_checkouts_reconciliation_due/);
+  assert.equal(calls.length, 7);
+});
+
+test('all standalone reads fail closed when commerce is paused', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({
+    observeCall: (observation) => calls.push(observation),
+  });
   pauseCommerce(harness);
   const repository = new D1CommerceRepository(harness.db);
-  await assert.rejects(repository.get(commerceKeys.claimCode('ABC')), isUnavailableCommerceError);
+  const operations: readonly {
+    name: string;
+    read: (value: D1CommerceRepository) => Promise<unknown>;
+  }[] = [
+    { name: 'get', read: (value) => value.get(commerceKeys.claimCode('MISSING')) },
+    { name: 'query', read: (value) => value.query({ kind: 'claim_code' }) },
+    {
+      name: 'queryPendingReadyNotifications',
+      read: (value) => value.queryPendingReadyNotifications({ limit: 1 }),
+    },
+    {
+      name: 'queryDuePackStatusProjections',
+      read: (value) => value.queryDuePackStatusProjections({ dropId: 'drop', dueAtMs: 1, limit: 1 }),
+    },
+    {
+      name: 'queryStaleStripeFulfillments',
+      read: (value) => value.queryStaleStripeFulfillments(1),
+    },
+  ];
+
+  for (const operation of operations) {
+    const previousCount = calls.length;
+    await assert.rejects(operation.read(repository), isUnavailableCommerceError, operation.name);
+    assert.equal(calls.length, previousCount + 1, operation.name);
+    const call = calls[previousCount];
+    assert.equal(call.method, 'batch', operation.name);
+    if (call.method !== 'batch') assert.fail(`${operation.name} did not use one D1 batch.`);
+    assertAuthoritativeReadBatch(call);
+  }
 });
 
-test('repository read helpers revalidate authority after reading', async () => {
-  const getHarness = createPausingDocumentReadHarness();
-  await assert.rejects(
-    new D1CommerceRepository(getHarness.db).get(commerceKeys.claimCode('ABC')),
-    isUnavailableCommerceError,
-  );
-
-  const queryHarness = createPausingDocumentReadHarness();
-  await assert.rejects(
-    new D1CommerceRepository(queryHarness.db).query({ kind: 'claim_code' }),
-    isUnavailableCommerceError,
-  );
-
-  const pendingHarness = createPausingDocumentReadHarness();
-  await assert.rejects(
-    new D1CommerceRepository(pendingHarness.db).queryPendingReadyNotifications({ limit: 1 }),
-    isUnavailableCommerceError,
-  );
-
-  const projectionHarness = createPausingDocumentReadHarness();
-  await assert.rejects(
-    new D1CommerceRepository(projectionHarness.db).queryDuePackStatusProjections({
-      dropId: 'drop',
-      dueAtMs: 1,
-      limit: 1,
-    }),
-    isUnavailableCommerceError,
-  );
-
-  const fulfillmentHarness = createPausingDocumentReadHarness();
-  await assert.rejects(
-    new D1CommerceRepository(fulfillmentHarness.db).queryStaleStripeFulfillments(1),
-    isUnavailableCommerceError,
-  );
-});
-
-test('point reads perform only begin and final authority checks', async () => {
-  let authorityReads = 0;
-  const harness = createCommerceD1Harness({
-    observeStatement: ({ method, sql }) => {
-      if (method === 'first' && sql.includes('FROM commerce_authority_control')) authorityReads += 1;
+test('standalone read batch failures log and preserve the D1 cause', async () => {
+  const cause = new Error('D1 batch failed');
+  const logs: unknown[][] = [];
+  const originalConsoleError = console.error;
+  const harness = createCommerceD1Harness();
+  const db = new Proxy(harness.db, {
+    get(target, property, receiver) {
+      if (property === 'batch') return async () => { throw cause; };
+      return Reflect.get(target, property, receiver);
     },
   });
-  await new D1CommerceRepository(harness.db).get(commerceKeys.claimCode('MISSING'));
-  assert.equal(authorityReads, 2);
+
+  console.error = (...values: unknown[]) => { logs.push(values); };
+  try {
+    await assert.rejects(
+      new D1CommerceRepository(db).get(commerceKeys.claimCode('MISSING')),
+      (error: unknown) => {
+        assert.ok(error instanceof CommerceRepositoryError);
+        assert.equal(error.code, 'unavailable');
+        assert.equal(error.cause, cause);
+        return true;
+      },
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.deepEqual(logs, [[{
+    event: 'commerce_d1_read_failed',
+    error: { name: 'Error', message: 'D1 batch failed' },
+  }]]);
 });
 
-test('public queries retry one collection revision conflict', async () => {
-  const racing = createChangingQueryHarness((harness) => seedCommerceDocument(harness, {
-    key: commerceKeys.claimCode('NEW'),
+test('a pause committed after a read batch affects only the next read', async () => {
+  let harness: ReturnType<typeof createCommerceD1Harness>;
+  let batchCount = 0;
+  harness = createCommerceD1Harness({
+    observeBatchAfterCommit: () => {
+      batchCount += 1;
+      if (batchCount === 1) pauseCommerce(harness);
+    },
+  });
+  const key = commerceKeys.claimCode('EXISTING');
+  seedCommerceDocument(harness, { key, data: { status: 'unused' } });
+  const repository = new D1CommerceRepository(harness.db);
+
+  assert.deepEqual((await repository.get(key))?.data, { status: 'unused' });
+  assert.equal(batchCount, 1);
+  await assert.rejects(repository.get(key), isUnavailableCommerceError);
+  assert.equal(batchCount, 2);
+});
+
+test('a revision committed after a query batch does not retry that snapshot', async () => {
+  let harness: ReturnType<typeof createCommerceD1Harness>;
+  let batchCount = 0;
+  harness = createCommerceD1Harness({
+    observeBatchAfterCommit: () => {
+      batchCount += 1;
+      if (batchCount !== 1) return;
+      harness.database.exec('BEGIN');
+      try {
+        seedCommerceDocument(harness, {
+          key: commerceKeys.claimCode('NEW'),
+          data: { status: 'unused' },
+        });
+        harness.database.exec(`UPDATE commerce_authority_control
+          SET documents_revision = documents_revision + 1 WHERE singleton = 1`);
+        harness.database.exec('COMMIT');
+      } catch (error) {
+        harness.database.exec('ROLLBACK');
+        throw error;
+      }
+    },
+  });
+  seedCommerceDocument(harness, {
+    key: commerceKeys.claimCode('EXISTING'),
     data: { status: 'unused' },
-  }));
-  const records = await new D1CommerceRepository(racing.harness.db).query({ kind: 'claim_code' });
-  assert.deepEqual(records.map((record) => record.key.documentId), ['NEW']);
-  assert.equal(racing.authorityReads(), 4);
-  assert.equal(racing.queryReads(), 2);
-
-  const specialized = createChangingQueryHarness((harness) => seedCommerceDocument(harness, {
-    key: commerceKeys.deliveryOrder('drop', '1'),
-    data: {
-      packStatusProjectionNextAttemptAtMs: 0,
-      packStatusProjectionState: 'pending',
-    },
-  }));
-  const due = await new D1CommerceRepository(specialized.harness.db).queryDuePackStatusProjections({
-    dropId: 'drop',
-    dueAtMs: 1,
-    limit: 1,
   });
-  assert.deepEqual(due.map((record) => record.key.documentId), ['1']);
-  assert.equal(specialized.authorityReads(), 4);
-  assert.equal(specialized.queryReads(), 2);
-});
+  const repository = new D1CommerceRepository(harness.db);
 
-test('public queries map continuous collection revision conflicts to unavailable', async () => {
-  const racing = createContinuousRevisionRacingHarness();
-  await assert.rejects(
-    new D1CommerceRepository(racing.harness.db).query({ kind: 'claim_code' }),
-    isUnavailableCommerceError,
-  );
-  assert.equal(racing.authorityReads(), 6);
+  const first = await repository.query({ kind: 'claim_code' });
+  assert.deepEqual(first.map((record) => record.key.documentId), ['EXISTING']);
+  assert.equal(batchCount, 1);
 
-  const specialized = createContinuousRevisionRacingHarness();
-  await assert.rejects(
-    new D1CommerceRepository(specialized.harness.db).queryDuePackStatusProjections({
-      dropId: 'drop',
-      dueAtMs: 1,
-      limit: 1,
-    }),
-    isUnavailableCommerceError,
-  );
-  assert.equal(specialized.authorityReads(), 6);
+  const second = await repository.query({ kind: 'claim_code' });
+  assert.deepEqual(second.map((record) => record.key.documentId), ['EXISTING', 'NEW']);
+  assert.equal(batchCount, 2);
 });

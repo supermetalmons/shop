@@ -13,21 +13,29 @@ class PreparedStatement {
     private readonly database: DatabaseSync,
     private readonly sql: string,
     private readonly observeStatement?: CommerceD1StatementObserver,
+    private readonly observeCall?: CommerceD1CallObserver,
   ) {}
 
   bind(...values: unknown[]): D1PreparedStatement {
-    const statement = new PreparedStatement(this.database, this.sql, this.observeStatement);
+    const statement = new PreparedStatement(
+      this.database,
+      this.sql,
+      this.observeStatement,
+      this.observeCall,
+    );
     statement.values = values as SQLInputValue[];
     return statement as unknown as D1PreparedStatement;
   }
 
   async first<T>(): Promise<T | null> {
+    this.observeCall?.({ method: 'first', sql: this.sql });
     const result = (this.statement().get(...this.values) as T | undefined) ?? null;
     this.observeStatement?.({ method: 'first', sql: this.sql });
     return result;
   }
 
   async all<T>(): Promise<D1Result<T>> {
+    this.observeCall?.({ method: 'all', sql: this.sql });
     const result: D1Result<T> = {
       success: true,
       results: this.statement().all(...this.values) as T[],
@@ -38,17 +46,36 @@ class PreparedStatement {
   }
 
   async run<T>(): Promise<D1Result<T>> {
-    const execution = this.statement().run(...this.values);
-    const result: D1Result<T> = {
-      success: true,
-      results: [],
-      meta: {
-        changes: Number(execution.changes),
-        last_row_id: Number(execution.lastInsertRowid),
-      } as D1Meta & Record<string, unknown>,
-    };
+    this.observeCall?.({ method: 'run', sql: this.sql });
+    return this.runInBatch<T>();
+  }
+
+  async runInBatch<T>(): Promise<D1Result<T>> {
+    const statement = this.statement();
+    let result: D1Result<T>;
+    if (statement.columns().length) {
+      result = {
+        success: true,
+        results: statement.all(...this.values) as T[],
+        meta: {} as D1Meta & Record<string, unknown>,
+      };
+    } else {
+      const execution = statement.run(...this.values);
+      result = {
+        success: true,
+        results: [],
+        meta: {
+          changes: Number(execution.changes),
+          last_row_id: Number(execution.lastInsertRowid),
+        } as D1Meta & Record<string, unknown>,
+      };
+    }
     this.observeStatement?.({ method: 'run', sql: this.sql });
     return result;
+  }
+
+  batchObservation(): CommerceD1BatchStatementObservation {
+    return { sql: this.sql };
   }
 
   private statement(): StatementSync {
@@ -63,6 +90,25 @@ export type CommerceD1StatementObservation = Readonly<{
 
 export type CommerceD1StatementObserver = (observation: CommerceD1StatementObservation) => void;
 
+export type CommerceD1BatchStatementObservation = Readonly<{
+  sql: string;
+}>;
+
+export type CommerceD1BatchObservation = Readonly<{
+  statements: readonly CommerceD1BatchStatementObservation[];
+}>;
+
+export type CommerceD1BatchObserver = (observation: CommerceD1BatchObservation) => void;
+
+export type CommerceD1CallObservation =
+  | CommerceD1StatementObservation
+  | Readonly<{
+    method: 'batch';
+    statements: readonly CommerceD1BatchStatementObservation[];
+  }>;
+
+export type CommerceD1CallObserver = (observation: CommerceD1CallObservation) => void;
+
 export type CommerceD1Harness = {
   database: DatabaseSync;
   db: D1Database;
@@ -71,37 +117,61 @@ export type CommerceD1Harness = {
 export function d1Database(
   database: DatabaseSync,
   observeStatement?: CommerceD1StatementObserver,
+  observeBatchAfterCommit?: CommerceD1BatchObserver,
+  observeCall?: CommerceD1CallObserver,
 ): D1Database {
   return {
     prepare: (sql: string) => new PreparedStatement(
       database,
       sql,
       observeStatement,
+      observeCall,
     ) as unknown as D1PreparedStatement,
     async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+      const preparedStatements = statements.map((statement) => {
+        if (!(statement instanceof PreparedStatement)) throw new TypeError('Invalid commerce D1 statement.');
+        return statement;
+      });
+      const observation = {
+        statements: preparedStatements.map((statement) => statement.batchObservation()),
+      };
+      observeCall?.({ method: 'batch', ...observation });
+      const results: D1Result<T>[] = [];
       database.exec('BEGIN');
       try {
-        const results = [];
-        for (const statement of statements) results.push(await statement.run<T>());
+        for (const statement of preparedStatements) results.push(await statement.runInBatch<T>());
         database.exec('COMMIT');
-        return results;
       } catch (error) {
         database.exec('ROLLBACK');
         throw error;
       }
+      observeBatchAfterCommit?.(observation);
+      return results;
     },
   } as unknown as D1Database;
 }
 
 export function createCommerceD1Harness(
-  options: Readonly<{ observeStatement?: CommerceD1StatementObserver }> = {},
+  options: Readonly<{
+    observeBatchAfterCommit?: CommerceD1BatchObserver;
+    observeCall?: CommerceD1CallObserver;
+    observeStatement?: CommerceD1StatementObserver;
+  }> = {},
 ): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys = ON');
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0001_current_schema.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
-  return { database, db: d1Database(database, options.observeStatement) };
+  return {
+    database,
+    db: d1Database(
+      database,
+      options.observeStatement,
+      options.observeBatchAfterCommit,
+      options.observeCall,
+    ),
+  };
 }
 
 export function createCommerceD1(): D1Database {

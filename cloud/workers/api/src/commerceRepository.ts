@@ -24,29 +24,10 @@ import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripe
 
 export * from './commerceRepositoryTypes.js';
 
-type AuthorityRow = {
-  authority_state: 'paused' | 'd1';
-  revision: number;
-  documents_revision: number;
-};
-
 export type CommerceAuthorityControl = {
   state: 'paused' | 'd1';
   revision: number;
   documentsRevision: number;
-};
-
-type DocumentRow = {
-  create_time: string;
-  document_id: string;
-  document_json: string;
-  document_kind: CommerceDocumentKind;
-  document_path: string;
-  drop_id: string | null;
-  processed_at_nanos: number | null;
-  processed_at_seconds: number | null;
-  update_time: string;
-  version: number;
 };
 
 type StoredDocument = {
@@ -73,7 +54,8 @@ const DOCUMENT_COLUMN_NAMES = [
   'processed_at_nanos',
 ] as const;
 const DOCUMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.join(', ');
-const COMMERCE_READ_ATTEMPTS = 3;
+const COMMERCE_AUTHORITY_SELECT = `SELECT authority_state, revision, documents_revision
+  FROM commerce_authority_control WHERE singleton = 1`;
 
 function qualifiedDocumentColumns(alias: string): string {
   return DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
@@ -297,47 +279,85 @@ function parseTimestampString(value: string): CommerceTimestamp | null {
   return { seconds, nanos: Number((match[2] || '').padEnd(9, '0')) };
 }
 
-function parseRow(row: DocumentRow): StoredDocument {
+function unavailableCommerce(cause?: unknown): CommerceRepositoryError {
+  const error = new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
+  if (cause !== undefined) error.cause = cause;
+  return error;
+}
+
+function reportCommerceReadFailure(error: unknown): void {
+  try {
+    console.error({
+      event: 'commerce_d1_read_failed',
+      error: error instanceof Error
+        ? { name: error.name, message: error.message }
+        : { name: 'UnknownError' },
+    });
+  } catch {}
+}
+
+function unavailableCommerceData(): CommerceRepositoryError {
+  return new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
+}
+
+function parseRow(value: unknown): StoredDocument {
+  if (!isObject(value)) throw unavailableCommerceData();
+  const row = value;
+  const documentPath = row.document_path;
+  const documentId = row.document_id;
+  const dropId = row.drop_id;
+  const version = row.version;
+  const createTime = row.create_time;
+  const updateTime = row.update_time;
+  const processedAtSeconds = row.processed_at_seconds;
+  const processedAtNanos = row.processed_at_nanos;
+  if (
+    typeof documentPath !== 'string' ||
+    typeof documentId !== 'string' ||
+    (dropId !== null && typeof dropId !== 'string') ||
+    typeof row.document_json !== 'string' ||
+    typeof version !== 'number' ||
+    !Number.isSafeInteger(version) ||
+    version < 1 ||
+    typeof createTime !== 'string' ||
+    typeof updateTime !== 'string' ||
+    (processedAtSeconds !== null && (
+      typeof processedAtSeconds !== 'number' || !Number.isSafeInteger(processedAtSeconds)
+    )) ||
+    (processedAtNanos !== null && (
+      typeof processedAtNanos !== 'number' || !Number.isInteger(processedAtNanos)
+    ))
+  ) throw unavailableCommerceData();
   let data: unknown;
   try {
     data = JSON.parse(row.document_json);
   } catch {
-    throw new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
+    throw unavailableCommerceData();
   }
-  const key = parseDocumentKey(row.document_kind, row.drop_id, row.document_id, row.document_path);
-  if (
-    !isObject(data) || !key ||
-    !Number.isSafeInteger(row.version) || row.version < 1
-  ) throw new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
-  const projectedProcessedAt = row.processed_at_seconds === null && row.processed_at_nanos === null
+  let key: CommerceDocumentKey | null;
+  try {
+    key = commerceKeyFromPath(documentPath);
+  } catch {
+    throw unavailableCommerceData();
+  }
+  if (!isObject(data) || !key || key.kind !== row.document_kind || key.dropId !== dropId || key.documentId !== documentId) {
+    throw unavailableCommerceData();
+  }
+  const projectedProcessedAt = processedAtSeconds === null && processedAtNanos === null
     ? null
-    : { seconds: row.processed_at_seconds, nanos: row.processed_at_nanos };
+    : { seconds: processedAtSeconds, nanos: processedAtNanos };
   const processedAt = projectedProcessedAt;
   if (processedAt && !validTimestamp(processedAt as CommerceTimestamp)) {
-    throw new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
+    throw unavailableCommerceData();
   }
   return {
-    createTime: row.create_time,
+    createTime,
     data: data as CommerceDocumentData,
     key,
     processedAt: processedAt as CommerceTimestamp | null,
-    updateTime: row.update_time,
-    version: row.version,
+    updateTime,
+    version,
   };
-}
-
-function parseDocumentKey(
-  kind: CommerceDocumentKind,
-  dropId: string | null,
-  documentId: string,
-  path: string,
-): CommerceDocumentKey | null {
-  try {
-    const key = documentKey(kind, dropId, documentId);
-    return key.path === path ? key : null;
-  } catch {
-    return null;
-  }
 }
 
 function publicRecord<T extends CommerceDocumentData>(document: StoredDocument): CommerceDocumentRecord<T> {
@@ -405,7 +425,7 @@ type CompiledCommerceQuery = {
   sql: string;
 };
 
-function compileCommerceQuery(query: CommerceQuery): CompiledCommerceQuery {
+function compileCommerceQuery(query: CommerceQuery, authoritative = false): CompiledCommerceQuery {
   ensureQuery(query);
   const bindings: Array<string | number> = [query.kind];
   const predicates = ['document_kind = ?'];
@@ -459,7 +479,11 @@ function compileCommerceQuery(query: CommerceQuery): CompiledCommerceQuery {
   }
   if (!orderParts.length) orderParts.push('document_path ASC');
   else if (!orderBy.some((order) => order.field === 'documentPath')) orderParts.push('document_path ASC');
-  let sql = `SELECT ${DOCUMENT_COLUMNS} FROM commerce_documents
+  const from = authoritative
+    ? 'commerce_authority_control AS authority CROSS JOIN commerce_documents'
+    : 'commerce_documents';
+  if (authoritative) predicates.unshift("authority.singleton = 1 AND authority.authority_state = 'd1'");
+  let sql = `SELECT ${DOCUMENT_COLUMNS} FROM ${from}
     WHERE ${predicates.join(' AND ')}
     ORDER BY ${orderParts.join(', ')}`;
   if (query.limit !== undefined) {
@@ -504,32 +528,38 @@ function positiveQueryLimit(value: number): number {
   return value;
 }
 
-export async function loadCommerceAuthorityControl(db: D1Database): Promise<CommerceAuthorityControl> {
-  let row: AuthorityRow | null;
-  try {
-    row = await db.prepare(`SELECT authority_state, revision, documents_revision
-      FROM commerce_authority_control WHERE singleton = 1`).first<AuthorityRow>();
-  } catch {
-    throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
-  }
+function authorityStatement(db: D1Database): D1PreparedStatement {
+  return db.prepare(COMMERCE_AUTHORITY_SELECT);
+}
+
+function parseAuthorityControl(row: unknown): CommerceAuthorityControl {
+  if (!isObject(row)) throw unavailableCommerce();
+  const state = row.authority_state;
+  const revision = row.revision;
+  const documentsRevision = row.documents_revision;
   if (
-    !row || !['paused', 'd1'].includes(row.authority_state) ||
-    !Number.isSafeInteger(row.revision) || !Number.isSafeInteger(row.documents_revision)
-  ) {
-    throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
+    (state !== 'paused' && state !== 'd1') ||
+    typeof revision !== 'number' ||
+    !Number.isSafeInteger(revision) ||
+    typeof documentsRevision !== 'number' ||
+    !Number.isSafeInteger(documentsRevision)
+  ) throw unavailableCommerce();
+  return { state, revision, documentsRevision };
+}
+
+export async function loadCommerceAuthorityControl(db: D1Database): Promise<CommerceAuthorityControl> {
+  let row: Record<string, unknown> | null;
+  try {
+    row = await authorityStatement(db).first<Record<string, unknown>>();
+  } catch {
+    throw unavailableCommerce();
   }
-  return {
-    state: row.authority_state,
-    revision: row.revision,
-    documentsRevision: row.documents_revision,
-  };
+  return parseAuthorityControl(row);
 }
 
 async function authority(db: D1Database): Promise<CommerceAuthorityControl> {
   const control = await loadCommerceAuthorityControl(db);
-  if (control.state !== 'd1') {
-    throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
-  }
+  if (control.state !== 'd1') throw unavailableCommerce();
   return control;
 }
 
@@ -539,11 +569,28 @@ export class D1CommerceRepository {
   async get<T extends CommerceDocumentData>(
     key: CommerceDocumentKey,
   ): Promise<CommerceDocumentRecord<T> | null> {
-    return this.readWithAuthority((unit) => unit.get<T>(key));
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
+      WHERE authority.singleton = 1 AND authority.authority_state = 'd1' AND document_path = ?
+      LIMIT 1`).bind(key.path));
+    if (result.results.length > 1) throw unavailableCommerce();
+    const document = result.results[0] ? parseRow(result.results[0]) : null;
+    if (document && (
+      document.key.kind !== key.kind ||
+      document.key.dropId !== key.dropId ||
+      document.key.documentId !== key.documentId
+    )) throw new CommerceRepositoryError('internal', 'Commerce document identity mismatch.');
+    return document ? publicRecord<T>(document) : null;
   }
 
   async query<T extends CommerceDocumentData>(query: CommerceQuery): Promise<CommerceDocumentRecord<T>[]> {
-    return this.readWithAuthority((unit) => unit.query<T>(query));
+    const compiled = compileCommerceQuery(query, true);
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(compiled.sql).bind(...compiled.bindings),
+    );
+    const documents = result.results.map(parseRow);
+    reportInefficientQuery('query', query.kind, result, documents.length);
+    return documents.map((document) => publicRecord<T>(document));
   }
 
   async queryPendingReadyNotifications(args: {
@@ -551,38 +598,44 @@ export class D1CommerceRepository {
     owner?: string;
     startAfterPath?: string;
   }): Promise<CommerceDocumentRecord[]> {
-    return this.readCollectionWithAuthority(async () => {
-      const limit = positiveQueryLimit(args.limit);
-      const ownerPredicate = args.owner === undefined ? '' : ' AND owner = ?';
-      const cursorPredicate = args.startAfterPath === undefined ? '' : ' AND document_path > ?';
-      const armBindings = () => [
-        ...(args.owner === undefined ? [] : [args.owner]),
-        ...(args.startAfterPath === undefined ? [] : [args.startAfterPath]),
-      ];
-      const bindings = [...armBindings(), ...armBindings(), limit];
-      const result = await this.db.prepare(`WITH candidate_paths AS (
-        SELECT document_path FROM commerce_documents
-          INDEXED BY commerce_delivery_orders_buyer_notifications_pending
-        WHERE
-          document_kind = 'delivery_order' AND
-          status = 'ready_to_ship' AND
-          buyer_notification_state = 'pending'${ownerPredicate}${cursorPredicate}
-        UNION
-        SELECT document_path FROM commerce_documents
-          INDEXED BY commerce_delivery_orders_shipper_notifications_pending
-        WHERE
-          document_kind = 'delivery_order' AND
-          status = 'ready_to_ship' AND
-          shipper_notification_state = 'pending'${ownerPredicate}${cursorPredicate}
-      )
-      SELECT ${qualifiedDocumentColumns('document')}
-      FROM commerce_documents AS document
-      JOIN candidate_paths USING (document_path)
-      ORDER BY document.document_path ASC
-      LIMIT ?`).bind(...bindings).all<DocumentRow>();
-      reportInefficientQuery('pending-ready-notifications', 'delivery_order', result, result.results.length);
-      return result.results.map(parseRow).map((document) => publicRecord(document));
-    });
+    const limit = positiveQueryLimit(args.limit);
+    const ownerPredicate = args.owner === undefined ? '' : ' AND document.owner = ?';
+    const cursorPredicate = args.startAfterPath === undefined ? '' : ' AND document.document_path > ?';
+    const armBindings = () => [
+      ...(args.owner === undefined ? [] : [args.owner]),
+      ...(args.startAfterPath === undefined ? [] : [args.startAfterPath]),
+    ];
+    const bindings = [...armBindings(), ...armBindings(), limit];
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(`WITH candidate_paths AS (
+      SELECT document.document_path
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents AS document
+        INDEXED BY commerce_delivery_orders_buyer_notifications_pending
+      WHERE
+        authority.singleton = 1 AND
+        authority.authority_state = 'd1' AND
+        document.document_kind = 'delivery_order' AND
+        document.status = 'ready_to_ship' AND
+        document.buyer_notification_state = 'pending'${ownerPredicate}${cursorPredicate}
+      UNION
+      SELECT document.document_path
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents AS document
+        INDEXED BY commerce_delivery_orders_shipper_notifications_pending
+      WHERE
+        authority.singleton = 1 AND
+        authority.authority_state = 'd1' AND
+        document.document_kind = 'delivery_order' AND
+        document.status = 'ready_to_ship' AND
+        document.shipper_notification_state = 'pending'${ownerPredicate}${cursorPredicate}
+    )
+    SELECT ${qualifiedDocumentColumns('document')}
+    FROM commerce_documents AS document
+    JOIN candidate_paths USING (document_path)
+    ORDER BY document.document_path ASC
+    LIMIT ?`).bind(...bindings));
+    reportInefficientQuery('pending-ready-notifications', 'delivery_order', result, result.results.length);
+    return result.results.map(parseRow).map((document) => publicRecord(document));
   }
 
   async queryDuePackStatusProjections(args: {
@@ -590,44 +643,45 @@ export class D1CommerceRepository {
     dueAtMs: number;
     limit: number;
   }): Promise<CommerceDocumentRecord[]> {
-    return this.readCollectionWithAuthority(async () => {
-      const limit = positiveQueryLimit(args.limit);
-      if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
-        throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce projection cutoff.');
-      }
-      const result = await this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-        FROM commerce_documents
-        WHERE
-          document_kind = 'delivery_order' AND
-          drop_id = ? AND
-          pack_projection_state = 'pending' AND
-          pack_projection_next_attempt_ms <= ?
-        ORDER BY pack_projection_next_attempt_ms ASC, document_path ASC
-        LIMIT ?`).bind(args.dropId, args.dueAtMs, limit).all<DocumentRow>();
-      reportInefficientQuery('due-pack-status-projections', 'delivery_order', result, result.results.length);
-      return result.results.map(parseRow).map((document) => publicRecord(document));
-    });
+    const limit = positiveQueryLimit(args.limit);
+    if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce projection cutoff.');
+    }
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
+      WHERE
+        authority.singleton = 1 AND
+        authority.authority_state = 'd1' AND
+        document_kind = 'delivery_order' AND
+        drop_id = ? AND
+        pack_projection_state = 'pending' AND
+        pack_projection_next_attempt_ms <= ?
+      ORDER BY pack_projection_next_attempt_ms ASC, document_path ASC
+      LIMIT ?`).bind(args.dropId, args.dueAtMs, limit));
+    reportInefficientQuery('due-pack-status-projections', 'delivery_order', result, result.results.length);
+    return result.results.map(parseRow).map((document) => publicRecord(document));
   }
 
   async queryStaleStripeFulfillments(cutoffMs: number): Promise<CommerceDocumentRecord[]> {
-    return this.readCollectionWithAuthority(async () => {
-      if (!Number.isSafeInteger(cutoffMs) || cutoffMs < 0) {
-        throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe reconciliation cutoff.');
-      }
-      const result = await this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-        FROM commerce_documents
-        WHERE
-          document_kind = 'stripe_checkout' AND
-          fulfillment_processor = '${STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR}' AND
-          status IN ('${STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING}', '${STRIPE_CHECKOUT_STATUS.PROCESSING}') AND
-          json_type(document_json, '$.updatedAt') IN ('integer', 'real') AND
-          json_type(document_json, '$.lastStripeWebhookEventId') = 'text' AND
-          CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) <= ?
-        ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) ASC, document_path ASC
-        LIMIT 100`).bind(cutoffMs).all<DocumentRow>();
-      reportInefficientQuery('stale-stripe-fulfillments', 'stripe_checkout', result, result.results.length);
-      return result.results.map(parseRow).map((document) => publicRecord(document));
-    });
+    if (!Number.isSafeInteger(cutoffMs) || cutoffMs < 0) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe reconciliation cutoff.');
+    }
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents INDEXED BY commerce_stripe_checkouts_reconciliation_due
+      WHERE
+        authority.singleton = 1 AND
+        authority.authority_state = 'd1' AND
+        document_kind = 'stripe_checkout' AND
+        fulfillment_processor = '${STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR}' AND
+        status IN ('${STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING}', '${STRIPE_CHECKOUT_STATUS.PROCESSING}') AND
+        json_type(document_json, '$.updatedAt') IN ('integer', 'real') AND
+        json_type(document_json, '$.lastStripeWebhookEventId') = 'text' AND
+        CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) <= ?
+      ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) ASC, document_path ASC
+      LIMIT 100`).bind(cutoffMs));
+    reportInefficientQuery('stale-stripe-fulfillments', 'stripe_checkout', result, result.results.length);
+    return result.results.map(parseRow).map((document) => publicRecord(document));
   }
 
   async begin(nowMs: number): Promise<CommerceUnitOfWork> {
@@ -650,35 +704,32 @@ export class D1CommerceRepository {
     }
   }
 
-  private async readWithAuthority<T>(operation: (unit: CommerceUnitOfWork) => Promise<T>): Promise<T> {
-    for (let attempt = 0; attempt < COMMERCE_READ_ATTEMPTS; attempt += 1) {
-      const unit = await this.begin(Date.now());
-      let value: T;
-      try {
-        value = await operation(unit);
-      } catch (error) {
-        unit.rollback();
-        throw error;
-      }
-      try {
-        await unit.commit();
-        return value;
-      } catch (error) {
-        unit.rollback();
-        if (!(error instanceof CommerceWriteConflict) || error.code !== 'aborted') throw error;
-      }
+  private async readBatchWithAuthority(
+    statement: () => D1PreparedStatement,
+  ): Promise<D1Result<Record<string, unknown>>> {
+    let results: D1Result<Record<string, unknown>>[];
+    try {
+      results = await this.db.batch<Record<string, unknown>>([
+        authorityStatement(this.db),
+        statement(),
+      ]);
+    } catch (error) {
+      reportCommerceReadFailure(error);
+      throw unavailableCommerce(error);
     }
-    throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
-  }
-
-  private async readCollectionWithAuthority<T>(operation: () => Promise<T>): Promise<T> {
-    for (let attempt = 0; attempt < COMMERCE_READ_ATTEMPTS; attempt += 1) {
-      const control = await authority(this.db);
-      const value = await operation();
-      const current = await authority(this.db);
-      if (control.documentsRevision === current.documentsRevision) return value;
-    }
-    throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
+    if (results.length !== 2) throw unavailableCommerce();
+    const [authorityResult, dataResult] = results;
+    if (
+      authorityResult.success !== true ||
+      dataResult.success !== true ||
+      authorityResult.results.length !== 1 ||
+      !Array.isArray(dataResult.results) ||
+      !isObject(authorityResult.meta) ||
+      !isObject(dataResult.meta)
+    ) throw unavailableCommerce();
+    const control = parseAuthorityControl(authorityResult.results[0]);
+    if (control.state !== 'd1') throw unavailableCommerce();
+    return dataResult;
   }
 }
 
@@ -715,7 +766,7 @@ export class CommerceUnitOfWork {
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
     this.expectedDocumentsRevision ??= this.control.documentsRevision;
     const compiled = compileCommerceQuery(query);
-    const result = await this.db.prepare(compiled.sql).bind(...compiled.bindings).all<DocumentRow>();
+    const result = await this.db.prepare(compiled.sql).bind(...compiled.bindings).all<Record<string, unknown>>();
     const documents = result.results.map(parseRow);
     reportInefficientQuery('query', query.kind, result, documents.length);
     for (const document of documents) this.recordRead(document.key.path, document.version, document);
@@ -860,7 +911,7 @@ export class CommerceUnitOfWork {
   private async load(key: CommerceDocumentKey): Promise<StoredDocument | null> {
     if (this.original.has(key.path)) return this.original.get(key.path) || null;
     const row = await this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-      FROM commerce_documents WHERE document_path = ?`).bind(key.path).first<DocumentRow>();
+      FROM commerce_documents WHERE document_path = ?`).bind(key.path).first<Record<string, unknown>>();
     const document = row ? parseRow(row) : null;
     if (document && (document.key.kind !== key.kind || document.key.dropId !== key.dropId || document.key.documentId !== key.documentId)) {
       throw new CommerceRepositoryError('internal', 'Commerce document identity mismatch.');
