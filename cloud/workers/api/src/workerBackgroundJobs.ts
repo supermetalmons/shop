@@ -21,6 +21,13 @@ export type BackgroundJobProcessors = {
   error: (entry: Record<string, unknown>) => void;
 };
 
+type BackgroundJobProcessor = (message: Message<unknown>, env: Env) => Promise<void>;
+
+type BackgroundJobRoute = Readonly<{
+  processor: BackgroundJobProcessor;
+  requiresCommerce: boolean;
+}>;
+
 export async function processStripeFulfillmentMessage(
   message: Message<unknown>,
   env: Env,
@@ -87,27 +94,30 @@ const defaultBackgroundJobProcessors: BackgroundJobProcessors = {
   error: (entry) => console.error(entry),
 };
 
+function backgroundJobRoute(
+  queue: string,
+  processors: BackgroundJobProcessors,
+): BackgroundJobRoute | null {
+  if (queue === NOTIFICATION_EMAIL_QUEUE_NAME) {
+    return { processor: processors.notification, requiresCommerce: false };
+  }
+  if (queue === REVEAL_BACKGROUND_QUEUE_NAME) {
+    return { processor: processors.reveal, requiresCommerce: true };
+  }
+  if (queue === STRIPE_FULFILLMENT_QUEUE_NAME) {
+    return { processor: processors.fulfillment, requiresCommerce: true };
+  }
+  return null;
+}
+
 export async function processBackgroundJobBatch(
   batch: MessageBatch<unknown>,
   env: Env,
   overrides: Partial<BackgroundJobProcessors> = {},
 ): Promise<void> {
   const processors = { ...defaultBackgroundJobProcessors, ...overrides };
-  if (env.COMMERCE_DB && (await loadCommerceAuthorityControl(env.COMMERCE_DB)).state === 'paused') {
-    processors.log({
-      event: 'background_job_commerce_maintenance',
-      queue: batch.queue,
-      messageCount: batch.messages.length,
-    });
-    for (const message of batch.messages) message.retry();
-    return;
-  }
-  const processor = batch.queue === NOTIFICATION_EMAIL_QUEUE_NAME
-    ? processors.notification
-    : batch.queue === REVEAL_BACKGROUND_QUEUE_NAME
-      ? processors.reveal
-      : batch.queue === STRIPE_FULFILLMENT_QUEUE_NAME ? processors.fulfillment : null;
-  if (!processor) {
+  const route = backgroundJobRoute(batch.queue, processors);
+  if (!route) {
     processors.error({
       event: 'background_job_unknown_queue',
       queue: batch.queue,
@@ -116,9 +126,22 @@ export async function processBackgroundJobBatch(
     for (const message of batch.messages) message.retry();
     return;
   }
+  if (
+    route.requiresCommerce &&
+    env.COMMERCE_DB &&
+    (await loadCommerceAuthorityControl(env.COMMERCE_DB)).state === 'paused'
+  ) {
+    processors.log({
+      event: 'background_job_commerce_maintenance',
+      queue: batch.queue,
+      messageCount: batch.messages.length,
+    });
+    for (const message of batch.messages) message.retry();
+    return;
+  }
   for (const message of batch.messages) {
     try {
-      await processor(message, env);
+      await route.processor(message, env);
     } catch (error) {
       processors.error({
         event: 'background_job_unhandled_error',

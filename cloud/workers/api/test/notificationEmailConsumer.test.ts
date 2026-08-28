@@ -64,6 +64,31 @@ function env(apiKey = 'resend-test-key'): Pick<Env, 'RESEND_API_KEY'> {
   return { RESEND_API_KEY: apiKey };
 }
 
+function commerceAuthorityDb(
+  state: 'paused' | 'd1',
+  onRead: () => void,
+): D1Database {
+  const database = {} as D1Database;
+  database.prepare = () => {
+    onRead();
+    return {
+      first: async () => ({
+        authority_state: state,
+        revision: 1,
+        documents_revision: 0,
+      }),
+    } as D1PreparedStatement;
+  };
+  return database;
+}
+
+function backgroundEnv(commerceDb: D1Database): Env {
+  return {
+    ...env(),
+    COMMERCE_DB: commerceDb,
+  } as Env;
+}
+
 test('notification consumer acknowledges successful sends with the exact job and key', async () => {
   const queued = queueMessage(JOB);
   const sent: unknown[] = [];
@@ -333,6 +358,82 @@ test('queue batches route by exact queue name and isolate individual failures', 
     'background_job_unknown_queue',
     'background_job_unhandled_error',
   ]);
+});
+
+test('commerce maintenance gates only commerce-dependent queue batches', async () => {
+  const notification = queueMessage(JOB);
+  const reveal = queueMessage(JOB);
+  const fulfillment = queueMessage(JOB);
+  const unknown = queueMessage(JOB);
+  const routes: string[] = [];
+  const logs: Record<string, unknown>[] = [];
+  const errors: Record<string, unknown>[] = [];
+  let authorityReads = 0;
+  const unavailableCommerceDb = commerceAuthorityDb('paused', () => {
+    assert.fail('commerce authority must not be read for this queue');
+  });
+  const pausedCommerceDb = commerceAuthorityDb('paused', () => {
+    authorityReads += 1;
+  });
+  const overrides: NonNullable<Parameters<typeof processBackgroundJobBatch>[2]> = {
+    notification: async (message) => {
+      routes.push('notification');
+      message.ack();
+    },
+    reveal: async () => assert.fail('reveal processing must pause during commerce maintenance'),
+    fulfillment: async () => assert.fail('fulfillment processing must pause during commerce maintenance'),
+    log: (entry) => logs.push(entry),
+    error: (entry) => errors.push(entry),
+  };
+
+  await processBackgroundJobBatch(
+    batch('mons-shop-notification-emails', notification.message),
+    backgroundEnv(unavailableCommerceDb),
+    overrides,
+  );
+  await processBackgroundJobBatch(
+    batch('mons-shop-reveal-reconciliation', reveal.message),
+    backgroundEnv(pausedCommerceDb),
+    overrides,
+  );
+  await processBackgroundJobBatch(
+    batch('mons-shop-stripe-fulfillment', fulfillment.message),
+    backgroundEnv(pausedCommerceDb),
+    overrides,
+  );
+  await processBackgroundJobBatch(
+    batch('unexpected-queue', unknown.message),
+    backgroundEnv(unavailableCommerceDb),
+    overrides,
+  );
+
+  assert.deepEqual(routes, ['notification']);
+  assert.equal(notification.actions.acks, 1);
+  assert.deepEqual(notification.actions.retries, []);
+  assert.equal(reveal.actions.acks, 0);
+  assert.deepEqual(reveal.actions.retries, [undefined]);
+  assert.equal(fulfillment.actions.acks, 0);
+  assert.deepEqual(fulfillment.actions.retries, [undefined]);
+  assert.equal(unknown.actions.acks, 0);
+  assert.deepEqual(unknown.actions.retries, [undefined]);
+  assert.equal(authorityReads, 2);
+  assert.deepEqual(logs, [
+    {
+      event: 'background_job_commerce_maintenance',
+      queue: 'mons-shop-reveal-reconciliation',
+      messageCount: 1,
+    },
+    {
+      event: 'background_job_commerce_maintenance',
+      queue: 'mons-shop-stripe-fulfillment',
+      messageCount: 1,
+    },
+  ]);
+  assert.deepEqual(errors, [{
+    event: 'background_job_unknown_queue',
+    queue: 'unexpected-queue',
+    messageCount: 1,
+  }]);
 });
 
 test('Stripe fulfillment queue processing validates jobs and records terminal outcomes', async () => {
