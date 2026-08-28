@@ -8,7 +8,110 @@ import {
   commerceKeys,
   d1RetryCount,
 } from '../src/commerceRepository.ts';
-import { createCommerceD1Harness } from './commerceD1Harness.ts';
+import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
+
+function pauseCommerce(harness: ReturnType<typeof createCommerceD1Harness>): void {
+  const nowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
+  harness.database.exec(`INSERT INTO commerce_authority_control_lease (
+    singleton, lease_token, acquired_at_ms, expires_at_ms
+  ) VALUES (
+    1, '123e4567-e89b-42d3-a456-426614174000',
+    ${nowMsSql}, ${nowMsSql} + 60000
+  )`);
+  harness.database.exec(`UPDATE commerce_authority_control SET
+    authority_state = 'paused', revision = revision + 1, paused_at_ms = NULL,
+    updated_at_ms = ${nowMsSql}
+    WHERE singleton = 1`);
+  harness.database.exec('DELETE FROM commerce_authority_control_lease');
+}
+
+function isUnavailableCommerceError(error: unknown): boolean {
+  assert.ok(error instanceof CommerceRepositoryError);
+  assert.equal(error.code, 'unavailable');
+  return true;
+}
+
+function createPausingDocumentReadHarness(): ReturnType<typeof createCommerceD1Harness> {
+  let harness: ReturnType<typeof createCommerceD1Harness>;
+  let armed = true;
+  harness = createCommerceD1Harness({
+    observeStatement: ({ method, sql }) => {
+      const normalized = sql.replace(/\s+/g, ' ');
+      if (
+        armed &&
+        (method === 'first' || method === 'all') &&
+        normalized.includes('FROM commerce_documents')
+      ) {
+        armed = false;
+        pauseCommerce(harness);
+      }
+    },
+  });
+  return harness;
+}
+
+function createChangingQueryHarness(
+  seed: (harness: ReturnType<typeof createCommerceD1Harness>) => void,
+): {
+  authorityReads: () => number;
+  harness: ReturnType<typeof createCommerceD1Harness>;
+  queryReads: () => number;
+} {
+  let harness: ReturnType<typeof createCommerceD1Harness>;
+  let authorityReads = 0;
+  let queryReads = 0;
+  harness = createCommerceD1Harness({
+    observeStatement: ({ method, sql }) => {
+      const normalized = sql.replace(/\s+/g, ' ');
+      if (method === 'first' && normalized.includes(
+        'FROM commerce_authority_control WHERE singleton = 1',
+      )) authorityReads += 1;
+      if (method !== 'all' || !normalized.includes('FROM commerce_documents')) return;
+      queryReads += 1;
+      if (queryReads !== 1) return;
+      harness.database.exec('BEGIN');
+      try {
+        seed(harness);
+        harness.database.exec(`UPDATE commerce_authority_control
+          SET documents_revision = documents_revision + 1 WHERE singleton = 1`);
+        harness.database.exec('COMMIT');
+      } catch (error) {
+        harness.database.exec('ROLLBACK');
+        throw error;
+      }
+    },
+  });
+  return {
+    authorityReads: () => authorityReads,
+    harness,
+    queryReads: () => queryReads,
+  };
+}
+
+function createContinuousRevisionRacingHarness(): {
+  authorityReads: () => number;
+  harness: ReturnType<typeof createCommerceD1Harness>;
+} {
+  let harness: ReturnType<typeof createCommerceD1Harness>;
+  let authorityReads = 0;
+  harness = createCommerceD1Harness({
+    observeStatement: ({ method, sql }) => {
+      if (
+        method === 'first' &&
+        sql.replace(/\s+/g, ' ').includes(
+          'FROM commerce_authority_control WHERE singleton = 1',
+        )
+      ) {
+        authorityReads += 1;
+        if (authorityReads % 2 === 1) {
+          harness.database.exec(`UPDATE commerce_authority_control
+            SET documents_revision = documents_revision + 1 WHERE singleton = 1`);
+        }
+      }
+    },
+  });
+  return { authorityReads: () => authorityReads, harness };
+}
 
 test('native repository keys cover every commerce document kind', () => {
   assert.equal(commerceKeys.claimCode('ABC').path, 'claimCodes/ABC');
@@ -299,6 +402,18 @@ test('point reads and queries conflict on stale versions and collection revision
     return true;
   });
   assert.equal(await repository.get(second), null);
+
+  const readOnlyQueryUnit = await repository.begin(15);
+  await readOnlyQueryUnit.query({
+    kind: 'stripe_checkout',
+    filters: [{ field: 'status', op: 'equal', value: 'paid' }],
+  });
+  await repository.run(16, async (unit) => unit.create(commerceKeys.claimCode('LATEST'), { status: 'unused' }));
+  await assert.rejects(readOnlyQueryUnit.commit(), (error: unknown) => {
+    assert.ok(error instanceof CommerceWriteConflict);
+    assert.equal(error.code, 'aborted');
+    return true;
+  });
 });
 
 test('native preconditions distinguish create, existence, and version conflicts atomically', async () => {
@@ -329,24 +444,139 @@ test('native preconditions distinguish create, existence, and version conflicts 
   assert.equal(await repository.get(replacement), null);
 });
 
+test('units revalidate cached authority when committing after a pause', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.claimCode('ABC');
+  await repository.run(10, async (unit) => unit.create(key, { status: 'unused' }));
+  const storedBefore = {
+    ...harness.database.prepare(`SELECT document_json, version FROM commerce_documents
+      WHERE document_path = ?`).get(key.path),
+  };
+  const revisionBefore = Number(harness.database.prepare(`SELECT documents_revision
+    FROM commerce_authority_control WHERE singleton = 1`).get()!.documents_revision);
+  const readOnlyUnit = await repository.begin(11);
+  await readOnlyUnit.get(key);
+  const writeUnit = await repository.begin(12);
+  await writeUnit.get(key);
+
+  pauseCommerce(harness);
+  await writeUnit.update(key, { status: 'used' });
+
+  await assert.rejects(readOnlyUnit.commit(), isUnavailableCommerceError);
+  await assert.rejects(writeUnit.commit(), isUnavailableCommerceError);
+  assert.deepEqual({
+    ...harness.database.prepare(`SELECT document_json, version FROM commerce_documents
+      WHERE document_path = ?`).get(key.path),
+  }, storedBefore);
+  assert.equal(
+    Number(harness.database.prepare(`SELECT documents_revision
+      FROM commerce_authority_control WHERE singleton = 1`).get()!.documents_revision),
+    revisionBefore,
+  );
+  assert.equal(
+    harness.database.prepare('SELECT COUNT(*) AS count FROM commerce_commit_guards').get()!.count,
+    0,
+  );
+});
+
 test('native repository fails closed while commerce is paused', async () => {
   const harness = createCommerceD1Harness();
-  const nowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
-  harness.database.exec(`INSERT INTO commerce_authority_control_lease (
-    singleton, lease_token, acquired_at_ms, expires_at_ms
-  ) VALUES (
-    1, '123e4567-e89b-42d3-a456-426614174000',
-    ${nowMsSql}, ${nowMsSql} + 60000
-  )`);
-  harness.database.exec(`UPDATE commerce_authority_control SET
-    authority_state = 'paused', revision = revision + 1, paused_at_ms = NULL,
-    updated_at_ms = ${nowMsSql}
-    WHERE singleton = 1`);
-  harness.database.exec('DELETE FROM commerce_authority_control_lease');
+  pauseCommerce(harness);
   const repository = new D1CommerceRepository(harness.db);
-  await assert.rejects(repository.get(commerceKeys.claimCode('ABC')), (error: unknown) => {
-    assert.ok(error instanceof CommerceRepositoryError);
-    assert.equal(error.code, 'unavailable');
-    return true;
+  await assert.rejects(repository.get(commerceKeys.claimCode('ABC')), isUnavailableCommerceError);
+});
+
+test('repository read helpers revalidate authority after reading', async () => {
+  const getHarness = createPausingDocumentReadHarness();
+  await assert.rejects(
+    new D1CommerceRepository(getHarness.db).get(commerceKeys.claimCode('ABC')),
+    isUnavailableCommerceError,
+  );
+
+  const queryHarness = createPausingDocumentReadHarness();
+  await assert.rejects(
+    new D1CommerceRepository(queryHarness.db).query({ kind: 'claim_code' }),
+    isUnavailableCommerceError,
+  );
+
+  const pendingHarness = createPausingDocumentReadHarness();
+  await assert.rejects(
+    new D1CommerceRepository(pendingHarness.db).queryPendingReadyNotifications({ limit: 1 }),
+    isUnavailableCommerceError,
+  );
+
+  const projectionHarness = createPausingDocumentReadHarness();
+  await assert.rejects(
+    new D1CommerceRepository(projectionHarness.db).queryDuePackStatusProjections({
+      dropId: 'drop',
+      dueAtMs: 1,
+      limit: 1,
+    }),
+    isUnavailableCommerceError,
+  );
+
+  const fulfillmentHarness = createPausingDocumentReadHarness();
+  await assert.rejects(
+    new D1CommerceRepository(fulfillmentHarness.db).queryStaleStripeFulfillments(1),
+    isUnavailableCommerceError,
+  );
+});
+
+test('point reads perform only begin and final authority checks', async () => {
+  let authorityReads = 0;
+  const harness = createCommerceD1Harness({
+    observeStatement: ({ method, sql }) => {
+      if (method === 'first' && sql.includes('FROM commerce_authority_control')) authorityReads += 1;
+    },
   });
+  await new D1CommerceRepository(harness.db).get(commerceKeys.claimCode('MISSING'));
+  assert.equal(authorityReads, 2);
+});
+
+test('public queries retry one collection revision conflict', async () => {
+  const racing = createChangingQueryHarness((harness) => seedCommerceDocument(harness, {
+    key: commerceKeys.claimCode('NEW'),
+    data: { status: 'unused' },
+  }));
+  const records = await new D1CommerceRepository(racing.harness.db).query({ kind: 'claim_code' });
+  assert.deepEqual(records.map((record) => record.key.documentId), ['NEW']);
+  assert.equal(racing.authorityReads(), 4);
+  assert.equal(racing.queryReads(), 2);
+
+  const specialized = createChangingQueryHarness((harness) => seedCommerceDocument(harness, {
+    key: commerceKeys.deliveryOrder('drop', '1'),
+    data: {
+      packStatusProjectionNextAttemptAtMs: 0,
+      packStatusProjectionState: 'pending',
+    },
+  }));
+  const due = await new D1CommerceRepository(specialized.harness.db).queryDuePackStatusProjections({
+    dropId: 'drop',
+    dueAtMs: 1,
+    limit: 1,
+  });
+  assert.deepEqual(due.map((record) => record.key.documentId), ['1']);
+  assert.equal(specialized.authorityReads(), 4);
+  assert.equal(specialized.queryReads(), 2);
+});
+
+test('public queries map continuous collection revision conflicts to unavailable', async () => {
+  const racing = createContinuousRevisionRacingHarness();
+  await assert.rejects(
+    new D1CommerceRepository(racing.harness.db).query({ kind: 'claim_code' }),
+    isUnavailableCommerceError,
+  );
+  assert.equal(racing.authorityReads(), 6);
+
+  const specialized = createContinuousRevisionRacingHarness();
+  await assert.rejects(
+    new D1CommerceRepository(specialized.harness.db).queryDuePackStatusProjections({
+      dropId: 'drop',
+      dueAtMs: 1,
+      limit: 1,
+    }),
+    isUnavailableCommerceError,
+  );
+  assert.equal(specialized.authorityReads(), 6);
 });

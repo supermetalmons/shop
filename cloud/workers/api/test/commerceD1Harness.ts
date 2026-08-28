@@ -12,36 +12,43 @@ class PreparedStatement {
   constructor(
     private readonly database: DatabaseSync,
     private readonly sql: string,
+    private readonly observeStatement?: CommerceD1StatementObserver,
   ) {}
 
   bind(...values: unknown[]): D1PreparedStatement {
-    const statement = new PreparedStatement(this.database, this.sql);
+    const statement = new PreparedStatement(this.database, this.sql, this.observeStatement);
     statement.values = values as SQLInputValue[];
     return statement as unknown as D1PreparedStatement;
   }
 
   async first<T>(): Promise<T | null> {
-    return (this.statement().get(...this.values) as T | undefined) ?? null;
+    const result = (this.statement().get(...this.values) as T | undefined) ?? null;
+    this.observeStatement?.({ method: 'first', sql: this.sql });
+    return result;
   }
 
   async all<T>(): Promise<D1Result<T>> {
-    return {
+    const result: D1Result<T> = {
       success: true,
       results: this.statement().all(...this.values) as T[],
       meta: {} as D1Meta & Record<string, unknown>,
     };
+    this.observeStatement?.({ method: 'all', sql: this.sql });
+    return result;
   }
 
   async run<T>(): Promise<D1Result<T>> {
-    const result = this.statement().run(...this.values);
-    return {
+    const execution = this.statement().run(...this.values);
+    const result: D1Result<T> = {
       success: true,
       results: [],
       meta: {
-        changes: Number(result.changes),
-        last_row_id: Number(result.lastInsertRowid),
+        changes: Number(execution.changes),
+        last_row_id: Number(execution.lastInsertRowid),
       } as D1Meta & Record<string, unknown>,
     };
+    this.observeStatement?.({ method: 'run', sql: this.sql });
+    return result;
   }
 
   private statement(): StatementSync {
@@ -49,14 +56,28 @@ class PreparedStatement {
   }
 }
 
+export type CommerceD1StatementObservation = Readonly<{
+  method: 'all' | 'first' | 'run';
+  sql: string;
+}>;
+
+export type CommerceD1StatementObserver = (observation: CommerceD1StatementObservation) => void;
+
 export type CommerceD1Harness = {
   database: DatabaseSync;
   db: D1Database;
 };
 
-export function d1Database(database: DatabaseSync): D1Database {
+export function d1Database(
+  database: DatabaseSync,
+  observeStatement?: CommerceD1StatementObserver,
+): D1Database {
   return {
-    prepare: (sql: string) => new PreparedStatement(database, sql) as unknown as D1PreparedStatement,
+    prepare: (sql: string) => new PreparedStatement(
+      database,
+      sql,
+      observeStatement,
+    ) as unknown as D1PreparedStatement,
     async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
       database.exec('BEGIN');
       try {
@@ -72,13 +93,15 @@ export function d1Database(database: DatabaseSync): D1Database {
   } as unknown as D1Database;
 }
 
-export function createCommerceD1Harness(): CommerceD1Harness {
+export function createCommerceD1Harness(
+  options: Readonly<{ observeStatement?: CommerceD1StatementObserver }> = {},
+): CommerceD1Harness {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys = ON');
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0001_current_schema.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
-  return { database, db: d1Database(database) };
+  return { database, db: d1Database(database, options.observeStatement) };
 }
 
 export function createCommerceD1(): D1Database {

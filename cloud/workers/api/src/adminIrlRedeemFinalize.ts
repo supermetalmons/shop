@@ -469,8 +469,7 @@ async function runTransaction<T>(
     try {
       transaction = await deliveryReceiptRuntime.beginTransaction(context);
       const { result, writes } = await operation(transaction);
-      if (writes?.length) await deliveryReceiptRuntime.commitWrites(context, writes, transaction);
-      else await deliveryReceiptRuntime.rollbackTransactionBestEffort(context, transaction);
+      await deliveryReceiptRuntime.commitWrites(context, writes || [], transaction);
       transaction = undefined;
       return result;
     } catch (error) {

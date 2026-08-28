@@ -553,7 +553,16 @@ test('anonymous principals cannot bind an allowlisted staff wallet', async () =>
 
 test('profile reconciliation merges multiple session-validated batches and is idempotent', async () => {
   const identityHarness = new LegacyFirestoreCommerceHarness();
-  const commerceHarness = createCommerceD1Harness();
+  let authorityReads = 0;
+  const commerceHarness = createCommerceD1Harness({
+    observeStatement: ({ method, sql }) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim();
+      if (
+        method === 'first' &&
+        normalized.includes('FROM commerce_authority_control')
+      ) authorityReads += 1;
+    },
+  });
   for (let index = 1; index <= 451; index += 1) {
     seedCommerceDocument(commerceHarness, {
       key: commerceKeys.deliveryOrder('drop', String(index)),
@@ -586,12 +595,14 @@ test('profile reconciliation merges multiple session-validated batches and is id
   );
   assert.equal(first.response.status, 200);
   assert.deepEqual(await first.response.json(), { mergedStripeDeliveryOrders: 451 });
+  assert.equal(authorityReads, 2);
   assert.equal(releases, 1);
   assert.equal(
     commerceHarness.database.prepare('SELECT COUNT(*) AS count FROM commerce_documents WHERE owner = ?').get(OWNER)!.count,
     451,
   );
   assert.equal((await new D1CommerceRepository(commerceHarness.db).get(otherKey))?.data.owner, 'anonymous:another-user');
+  authorityReads = 0;
   const second = await handleProfileLifecycleRequest(
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
     d1Env,
@@ -599,6 +610,7 @@ test('profile reconciliation merges multiple session-validated batches and is id
     d1Dependencies,
   );
   assert.deepEqual(await second.response.json(), { mergedStripeDeliveryOrders: 0 });
+  assert.equal(authorityReads, 2);
   assert.equal(releases, 2);
 });
 

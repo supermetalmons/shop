@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, createCommerceD1Harness } from './commerceD1Harness.ts';
+import {
+  createCommerceD1,
+  createCommerceD1Harness,
+  seedCommerceDocument,
+} from './commerceD1Harness.ts';
 import { failOnDeferredWork, isDeferredWorkRegistrationError } from './deferredWork.ts';
 import bs58 from 'bs58';
 import { Keypair, PublicKey } from '@solana/web3.js';
@@ -767,14 +771,66 @@ test('malformed 64-byte cosigner secrets remain availability failures', () => {
 });
 
 test('read-only commerce rollback is best effort', async () => {
+  let authorityReads = 0;
+  const harness = createCommerceD1Harness({
+    observeStatement: ({ method, sql }) => {
+      if (method === 'first' && sql.includes('FROM commerce_authority_control')) authorityReads += 1;
+    },
+  });
   const context = {
-    commerceDb: createCommerceD1(),
+    commerceDb: harness.db,
     nowMs: Date.now(),
     providerFetch: async () => Response.json({}),
     signal: new AbortController().signal,
   };
   const transaction = await deliveryReceiptRuntime.beginTransaction(context);
+  authorityReads = 0;
   await assert.doesNotReject(deliveryReceiptTestHooks.rollbackTransactionBestEffort(context, transaction));
+  assert.equal(authorityReads, 0);
+});
+
+test('existing assignment revalidates paused authority before returning', async () => {
+  let harness: ReturnType<typeof createCommerceD1Harness>;
+  let armed = false;
+  harness = createCommerceD1Harness({
+    observeStatement: ({ method, sql }) => {
+      if (armed && method === 'first' && sql.includes('FROM commerce_documents')) {
+        armed = false;
+        const nowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
+        harness.database.exec(`INSERT INTO commerce_authority_control_lease VALUES (
+          1, '123e4567-e89b-42d3-a456-426614174000', ${nowMsSql}, ${nowMsSql} + 60000
+        )`);
+        harness.database.exec(`UPDATE commerce_authority_control SET
+          authority_state = 'paused', revision = revision + 1, paused_at_ms = NULL,
+          updated_at_ms = ${nowMsSql} WHERE singleton = 1`);
+        harness.database.exec('DELETE FROM commerce_authority_control_lease');
+      }
+    },
+  });
+  seedCommerceDocument(harness, {
+    key: commerceKeys.boxAssignment('drop', 'box'),
+    data: { dudeIds: [1] },
+  });
+  armed = true;
+  const assign = deliveryReceiptRuntime.assignDudesForBox;
+  const context = {
+    commerceDb: harness.db,
+    repository: new D1CommerceRepository(harness.db),
+    nowMs: 1_700_000_000_000,
+    providerFetch: fetch,
+    signal: new AbortController().signal,
+  } as Parameters<typeof assign>[0];
+  const runtime = {
+    config: { dropFamily: 'poncho_drifella' },
+    dropId: 'drop',
+    itemsPerBox: 1,
+    maxDudeId: 2,
+  } as Parameters<typeof assign>[1];
+  await assert.rejects(
+    assign(context, runtime, 'box', () => 0),
+    (error: unknown) =>
+      error instanceof deliveryReceiptTestHooks.DeliveryReceiptError && error.code === 'unavailable',
+  );
 });
 
 test('pending ready recovery queries all outbox marker states', async () => {

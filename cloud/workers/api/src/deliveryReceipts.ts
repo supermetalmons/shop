@@ -907,7 +907,7 @@ async function acquireDeliveryRecoveryLease(
       const fallbackDropId = fallback.length === 4 ? fallback[1] : '';
       const fallbackDeliveryId = Number(fallback.at(-1)) || 0;
       if (!document) {
-        await rollbackTransactionBestEffort(context, transaction);
+        await commitWrites(context, [], transaction);
         transaction = undefined;
         return {
           acquired: false,
@@ -923,7 +923,7 @@ async function acquireDeliveryRecoveryLease(
       }
       const base = orderResultBase(document);
       if (!base) {
-        await rollbackTransactionBestEffort(context, transaction);
+        await commitWrites(context, [], transaction);
         transaction = undefined;
         return {
           acquired: false,
@@ -938,7 +938,7 @@ async function acquireDeliveryRecoveryLease(
         };
       }
       if (document.fields.owner && document.fields.owner !== ownerWallet) {
-        await rollbackTransactionBestEffort(context, transaction);
+        await commitWrites(context, [], transaction);
         transaction = undefined;
         return {
           acquired: false,
@@ -953,7 +953,7 @@ async function acquireDeliveryRecoveryLease(
       }
       const eligibility = deliveryRecoveryEligibility(document.fields, nowMs, force);
       if (!eligibility.eligible) {
-        await rollbackTransactionBestEffort(context, transaction);
+        await commitWrites(context, [], transaction);
         transaction = undefined;
         return {
           acquired: false,
@@ -968,7 +968,7 @@ async function acquireDeliveryRecoveryLease(
       const recovery = isRecord(document.fields.receiptRecovery) ? document.fields.receiptRecovery : {};
       const leaseExpiresAt = toMillisMaybe(recovery.leaseExpiresAt) ?? 0;
       if (leaseExpiresAt > nowMs) {
-        await rollbackTransactionBestEffort(context, transaction);
+        await commitWrites(context, [], transaction);
         transaction = undefined;
         return {
           acquired: false,
@@ -1198,7 +1198,7 @@ async function assignDudesForBox(
       transaction = await beginTransaction(context);
       const existing = await readDocument(context, assignmentPath, transaction);
       if (existing) {
-        await rollbackTransactionBestEffort(context, transaction);
+        await commitWrites(context, [], transaction);
         transaction = undefined;
         return normalizeAssignedDudeIds(existing.fields.dudeIds, runtime, boxAssetId);
       }
@@ -1432,8 +1432,7 @@ async function ensureIrlClaimCodeForBox(
             mustExist: true,
           }));
         }
-        if (writes.length) await commitWrites(context, writes, transaction);
-        else await rollbackTransactionBestEffort(context, transaction);
+        await commitWrites(context, writes, transaction);
         transaction = undefined;
         return existingCode;
       }
