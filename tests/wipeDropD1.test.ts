@@ -82,6 +82,7 @@ function database(): DatabaseSync {
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', 'utf8'));
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0004_ready_notification_owner_indexes.sql', 'utf8'));
+  db.exec(readFileSync('cloud/workers/api/commerce-migrations/0005_delivery_owner_query_revisions.sql', 'utf8'));
   return db;
 }
 
@@ -150,6 +151,21 @@ function insertDocument(db: DatabaseSync, value: CommerceD1Document): void {
     value.createTime,
     value.updateTime,
   );
+}
+
+function insertDocumentEpoch(db: DatabaseSync, values: readonly CommerceD1Document[]): void {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const value of values) insertDocument(db, value);
+    db.exec(`UPDATE commerce_authority_control SET
+      documents_revision = documents_revision + 1,
+      updated_at_ms = updated_at_ms + 1
+      WHERE singleton = 1`);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 function executeTransaction(db: DatabaseSync, sql: string): void {
@@ -296,28 +312,41 @@ test('wipe-drop blocks immutable DATA_DB and OPS_DB history', () => {
 });
 
 test('Commerce D1 wipe SQL deletes exact documents and advances revision once', (t) => {
-  const wipePlan = plan();
+  const initialPlan = plan();
+  const wipePlan = {
+    ...initialPlan,
+    authority: { ...initialPlan.authority, documentsRevision: 1 },
+  };
   const db = database();
   t.after(() => db.close());
-  for (const entry of wipePlan.documentsToDelete) {
+  const documents = wipePlan.documentsToDelete.map((entry) => {
     const [claim] = entry.path.startsWith('claimCodes/')
       ? [document('claim_code', null, entry.path.split('/').at(-1)!, { dropId: 'target' })]
       : [entry.path.includes('/boxAssignments/')
           ? document('box_assignment', 'target', 'box-a', { irlClaimCode: '1111111111' })
-          : document('delivery_order', 'target', '7', { irlClaims: [{ code: '2222222222' }] })];
-    insertDocument(db, claim);
-  }
-  insertDocument(db, document('delivery_order', 'other', '9', {}));
+          : document('delivery_order', 'target', '7', {
+              irlClaims: [{ code: '2222222222' }],
+              owner: 'target-owner',
+            })];
+    return claim;
+  });
+  insertDocumentEpoch(db, [...documents, document('delivery_order', 'other', '9', {})]);
   pauseCommerce(db);
   executeTransaction(db, buildCommerceD1WipeSql(wipePlan, 'guard', 100_000));
   assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM commerce_documents WHERE drop_id = 'target'`).get()!.count, 0);
   assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM commerce_documents WHERE drop_id = 'other'`).get()!.count, 1);
   assert.deepEqual({ ...db.prepare(`SELECT documents_revision, revision, authority_state
     FROM commerce_authority_control`).get() }, {
-    documents_revision: 1,
+    documents_revision: 2,
     revision: 2,
     authority_state: 'paused',
   });
+  assert.equal(
+    db.prepare(`SELECT revision FROM commerce_delivery_owner_revisions
+      WHERE owner = 'target-owner'`).get()!.revision,
+    db.prepare(`SELECT documents_revision FROM commerce_authority_control
+      WHERE singleton = 1`).get()!.documents_revision,
+  );
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_wipe_guards').get()!.count, 1);
   assert.equal(db.prepare('SELECT expectations_json FROM commerce_wipe_guards').get()!.expectations_json, '[]');
 });

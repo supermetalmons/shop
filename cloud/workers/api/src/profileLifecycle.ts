@@ -248,9 +248,8 @@ async function mergeStripeOwnerBatch(params: {
   for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
     try {
       return await params.common.repository.run(params.common.nowMs, async (unit) => {
-        const documents = await unit.query({
-          filters: [{ field: 'owner', op: 'equal', value: params.sourceOwner }],
-          kind: 'delivery_order',
+        const documents = await unit.queryDeliveryOrdersByOwner({
+          owner: params.sourceOwner,
           limit: STRIPE_OWNER_MERGE_BATCH_SIZE,
         });
         if (documents.length > STRIPE_OWNER_MERGE_BATCH_SIZE) {

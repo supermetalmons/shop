@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  applyCommerceDocumentFixtureEpoch,
   createCommerceD1,
   createCommerceD1Harness,
   decodeLegacyFirestoreFixtureFields,
   seedCommerceDocument,
+  seedCommerceDocuments,
 } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
@@ -214,8 +216,8 @@ function legacyFirestoreFixtureRepository(harness: LegacyFirestoreCommerceHarnes
     run: async <T>(_nowMs: number, operation: (unit: unknown) => Promise<T>) => {
       const staged = new Map<string, Record<string, CommerceUpdateValue>>();
       const unit = {
-        query: async (query: CommerceQuery) => harness.orders.map(record)
-          .filter((entry) => matches(entry, query)).slice(0, query.limit),
+        queryDeliveryOrdersByOwner: async (args: { owner: string; limit: number }) => harness.orders.map(record)
+          .filter((entry) => entry.data.owner === args.owner).slice(0, args.limit),
         update: async (key: { path: string }, updates: Record<string, CommerceUpdateValue>) => {
           staged.set(key.path, updates);
         },
@@ -616,7 +618,11 @@ test('anonymous principals cannot bind an allowlisted staff wallet', async () =>
 test('profile reconciliation merges multiple session-validated batches and is idempotent', async () => {
   const identityHarness = new LegacyFirestoreCommerceHarness();
   let authorityReads = 0;
-  const commerceHarness = createCommerceD1Harness({
+  let ownerQueryBatches = 0;
+  let unrelatedInjected = false;
+  let phantomInjected = false;
+  let commerceHarness: ReturnType<typeof createCommerceD1Harness>;
+  commerceHarness = createCommerceD1Harness({
     observeStatement: ({ method, sql }) => {
       const normalized = sql.replace(/\s+/g, ' ').trim();
       if (
@@ -624,18 +630,53 @@ test('profile reconciliation merges multiple session-validated batches and is id
         normalized.includes('FROM commerce_authority_control')
       ) authorityReads += 1;
     },
+    observeBatchAfterCommit: ({ statements }) => {
+      if (
+        statements.length !== 2 ||
+        !statements[0].sql.includes('commerce_delivery_owner_revisions') ||
+        !statements[1].sql.includes('commerce_documents_delivery_owner_path')
+      ) return;
+      ownerQueryBatches += 1;
+      if (ownerQueryBatches === 1) {
+        seedCommerceDocument(commerceHarness, {
+          key: commerceKeys.claimCode('PROFILE-UNRELATED'),
+          data: { status: 'unused' },
+        });
+        unrelatedInjected = true;
+        return;
+      }
+      if (ownerQueryBatches === 2) {
+        assert.equal(
+          commerceHarness.database.prepare(`SELECT COUNT(*) AS count
+            FROM commerce_documents WHERE owner = ?`).get(`anonymous:${UID}`)!.count,
+          1,
+        );
+        const phantom = commerceKeys.deliveryOrder('drop', 'phantom');
+        applyCommerceDocumentFixtureEpoch(commerceHarness, [
+          {
+            type: 'upsert',
+            seed: {
+              key: phantom,
+              data: { owner: `anonymous:${UID}`, status: 'processing' },
+            },
+          },
+          { type: 'delete', key: phantom },
+        ]);
+        phantomInjected = true;
+      }
+    },
   });
-  for (let index = 1; index <= 451; index += 1) {
-    seedCommerceDocument(commerceHarness, {
-      key: commerceKeys.deliveryOrder('drop', String(index)),
-      data: { owner: `anonymous:${UID}`, status: 'ready_to_ship' },
-    });
-  }
   const otherKey = commerceKeys.deliveryOrder('drop', '999');
-  seedCommerceDocument(commerceHarness, {
-    key: otherKey,
-    data: { owner: 'anonymous:another-user', status: 'ready_to_ship' },
-  });
+  seedCommerceDocuments(commerceHarness, [
+    ...Array.from({ length: 451 }, (_, index) => ({
+      key: commerceKeys.deliveryOrder('drop', String(index + 1)),
+      data: { owner: `anonymous:${UID}`, status: 'ready_to_ship' },
+    })),
+    {
+      key: otherKey,
+      data: { owner: 'anonymous:another-user', status: 'ready_to_ship' },
+    },
+  ]);
   let releases = 0;
   const d1Dependencies = dependencies(identityHarness, 2_000, {
     acquireAuthWalletBindingReconcileLease: async () => ({
@@ -657,13 +698,33 @@ test('profile reconciliation merges multiple session-validated batches and is id
   );
   assert.equal(first.response.status, 200);
   assert.deepEqual(await first.response.json(), { mergedStripeDeliveryOrders: 451 });
-  assert.equal(authorityReads, 2);
+  assert.equal(authorityReads, 3);
+  assert.equal(ownerQueryBatches, 3);
+  assert.equal(unrelatedInjected, true);
+  assert.equal(phantomInjected, true);
   assert.equal(releases, 1);
   assert.equal(
     commerceHarness.database.prepare('SELECT COUNT(*) AS count FROM commerce_documents WHERE owner = ?').get(OWNER)!.count,
     451,
   );
   assert.equal((await new D1CommerceRepository(commerceHarness.db).get(otherKey))?.data.owner, 'anonymous:another-user');
+  const ownerRevisions = new Map(
+    commerceHarness.database.prepare(`SELECT owner, revision FROM commerce_delivery_owner_revisions
+      WHERE owner IN (?, ?, ?)`).all(
+        `anonymous:${UID}`,
+        'anonymous:another-user',
+        OWNER,
+      ).map((row) => [String(row.owner), Number(row.revision)]),
+  );
+  assert.equal(ownerRevisions.size, 3);
+  assert.equal(ownerRevisions.get(`anonymous:${UID}`), 5);
+  assert.equal(ownerRevisions.get(OWNER), 5);
+  assert.equal(ownerRevisions.get('anonymous:another-user'), 1);
+  assert.equal(
+    commerceHarness.database.prepare(`SELECT documents_revision FROM commerce_authority_control
+      WHERE singleton = 1`).get()!.documents_revision,
+    5,
+  );
   authorityReads = 0;
   const second = await handleProfileLifecycleRequest(
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
@@ -672,8 +733,14 @@ test('profile reconciliation merges multiple session-validated batches and is id
     d1Dependencies,
   );
   assert.deepEqual(await second.response.json(), { mergedStripeDeliveryOrders: 0 });
-  assert.equal(authorityReads, 2);
+  assert.equal(authorityReads, 1);
+  assert.equal(ownerQueryBatches, 4);
   assert.equal(releases, 2);
+  assert.equal(
+    commerceHarness.database.prepare(`SELECT revision FROM commerce_delivery_owner_revisions
+      WHERE owner = ?`).get(`anonymous:${UID}`)!.revision,
+    5,
+  );
 });
 
 test('profile reconciliation retries transaction conflicts', async () => {

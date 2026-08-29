@@ -60,6 +60,7 @@ test('commerce repository batched reads return rows through the real D1 runtime'
       '0002_authority_control_lease.sql',
       '0003_wipe_readiness_guard.sql',
       '0004_ready_notification_owner_indexes.sql',
+      '0005_delivery_owner_query_revisions.sql',
     ]);
 
     const claimKey = commerceKeys.claimCode('RUNTIME');
@@ -81,6 +82,10 @@ test('commerce repository batched reads return rows through the real D1 runtime'
         status: 'fulfillment_pending',
         updatedAt: 10,
       }),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+        SET documents_revision = documents_revision + 1,
+          updated_at_ms = updated_at_ms + 1
+        WHERE singleton = 1`),
     ]);
     const repository = new D1CommerceRepository(env.COMMERCE_DB);
     assert.deepEqual((await repository.get(claimKey))?.data, { status: 'unused' });
@@ -111,17 +116,43 @@ test('commerce repository batched reads return rows through the real D1 runtime'
       ['cs_runtime'],
     );
 
+    const ownerUnit = await repository.begin(Date.parse('2026-01-01T00:00:01.000Z'));
+    assert.deepEqual(
+      (await ownerUnit.queryDeliveryOrdersByOwner({ owner: 'runtime-owner', limit: 5 }))
+        .map((record) => record.key.documentId),
+      ['1'],
+    );
+    await ownerUnit.update(deliveryKey, { owner: 'runtime-wallet' });
+    await ownerUnit.commit();
+    assert.equal((await repository.get(deliveryKey))?.data.owner, 'runtime-wallet');
+    const ownerRevisions = await env.COMMERCE_DB.prepare(`SELECT owner, revision
+      FROM commerce_delivery_owner_revisions WHERE owner IN (?, ?) ORDER BY owner`)
+      .bind('runtime-owner', 'runtime-wallet')
+      .all<{ owner: string; revision: number }>();
+    assert.deepEqual(ownerRevisions.results, [
+      { owner: 'runtime-owner', revision: 2 },
+      { owner: 'runtime-wallet', revision: 2 },
+    ]);
+    assert.equal(await env.COMMERCE_DB.prepare(`SELECT documents_revision
+      FROM commerce_authority_control WHERE singleton = 1`).first<number>('documents_revision'), 2);
+
     for (let offset = 0; offset < 128; offset += 32) {
-      await env.COMMERCE_DB.batch(Array.from({ length: 32 }, (_, index) => insertDocument(
-        env.COMMERCE_DB,
-        commerceKeys.deliveryOrder('runtime', `paused-${offset + index}`),
-        {
-          buyerOrderReceivedEmailState: 'pending',
-          owner: 'paused-owner',
-          shipperReadyToShipEmailState: 'queued',
-          status: 'ready_to_ship',
-        },
-      )));
+      await env.COMMERCE_DB.batch([
+        ...Array.from({ length: 32 }, (_, index) => insertDocument(
+          env.COMMERCE_DB,
+          commerceKeys.deliveryOrder('runtime', `paused-${offset + index}`),
+          {
+            buyerOrderReceivedEmailState: 'pending',
+            owner: 'paused-owner',
+            shipperReadyToShipEmailState: 'queued',
+            status: 'ready_to_ship',
+          },
+        )),
+        env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+          SET documents_revision = documents_revision + 1,
+            updated_at_ms = updated_at_ms + 1
+          WHERE singleton = 1`),
+      ]);
     }
     let observedBatchResults: D1Result<Record<string, unknown>>[] | undefined;
     const latestObservedBatchResults = (): D1Result<Record<string, unknown>>[] | undefined =>

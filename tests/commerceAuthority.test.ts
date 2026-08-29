@@ -212,6 +212,7 @@ test('commerce authority lease and guarded transition execute against the curren
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', 'utf8'));
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0004_ready_notification_owner_indexes.sql', 'utf8'));
+    database.exec(readFileSync('cloud/workers/api/commerce-migrations/0005_delivery_owner_query_revisions.sql', 'utf8'));
     const events: string[] = [];
     const result = await runCommerceAuthorityControl(
       parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '1', '--write']),

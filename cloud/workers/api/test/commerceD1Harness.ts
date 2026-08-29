@@ -164,6 +164,7 @@ export function createCommerceD1Harness(
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0002_authority_control_lease.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0004_ready_notification_owner_indexes.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0005_delivery_owner_query_revisions.sql', 'utf8'));
   return {
     database,
     db: d1Database(
@@ -239,7 +240,11 @@ export type CommerceDocumentSeed = {
   processedAt?: CommerceTimestamp | null;
 };
 
-export function seedCommerceDocument(
+export type CommerceDocumentFixtureMutation =
+  | Readonly<{ type: 'upsert'; seed: CommerceDocumentSeed }>
+  | Readonly<{ type: 'delete'; key: CommerceDocumentKey }>;
+
+function writeCommerceDocument(
   harness: CommerceD1Harness,
   seed: CommerceDocumentSeed,
 ): void {
@@ -271,4 +276,50 @@ export function seedCommerceDocument(
     seed.processedAt?.seconds ?? null,
     seed.processedAt?.nanos ?? null,
   );
+}
+
+export function applyCommerceDocumentFixtureEpoch(
+  harness: CommerceD1Harness,
+  mutations: readonly CommerceDocumentFixtureMutation[],
+): void {
+  if (!mutations.length) throw new TypeError('A commerce fixture epoch requires at least one mutation.');
+  harness.database.exec('BEGIN');
+  try {
+    for (const mutation of mutations) {
+      if (mutation.type === 'upsert') writeCommerceDocument(harness, mutation.seed);
+      else harness.database.prepare('DELETE FROM commerce_documents WHERE document_path = ?').run(mutation.key.path);
+    }
+    harness.database.exec(`UPDATE commerce_authority_control
+      SET documents_revision = documents_revision + 1,
+        updated_at_ms = updated_at_ms + 1
+      WHERE singleton = 1`);
+    const invalid = harness.database.prepare(`SELECT EXISTS (
+      SELECT 1
+      FROM commerce_delivery_owner_revisions AS owner_revision
+      JOIN commerce_authority_control AS control ON control.singleton = 1
+      WHERE owner_revision.revision > control.documents_revision
+    ) AS invalid`).get()!.invalid;
+    if (invalid) throw new Error('Commerce fixture owner revision exceeds the global revision.');
+    harness.database.exec('COMMIT');
+  } catch (error) {
+    harness.database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+export function seedCommerceDocuments(
+  harness: CommerceD1Harness,
+  seeds: readonly CommerceDocumentSeed[],
+): void {
+  applyCommerceDocumentFixtureEpoch(
+    harness,
+    seeds.map((seed) => ({ type: 'upsert', seed })),
+  );
+}
+
+export function seedCommerceDocument(
+  harness: CommerceD1Harness,
+  seed: CommerceDocumentSeed,
+): void {
+  seedCommerceDocuments(harness, [seed]);
 }

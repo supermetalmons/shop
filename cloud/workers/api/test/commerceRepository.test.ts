@@ -13,6 +13,7 @@ import {
   type CommerceD1CallObservation,
   createCommerceD1Harness,
   seedCommerceDocument,
+  seedCommerceDocuments,
 } from './commerceD1Harness.ts';
 
 function pauseCommerce(harness: ReturnType<typeof createCommerceD1Harness>): void {
@@ -48,6 +49,31 @@ function assertAuthoritativeReadBatch(observation: CommerceD1BatchObservation): 
   assert.match(dataSql, /FROM commerce_authority_control AS authority CROSS JOIN/);
   assert.match(dataSql, /authority\.singleton\s*=\s*1/);
   assert.match(dataSql, /authority_state\s*=\s*'d1'/);
+}
+
+function assertDeliveryOwnerReadBatch(observation: CommerceD1BatchObservation): void {
+  assert.equal(observation.statements.length, 2);
+  const revisionSql = observation.statements[0].sql.replace(/\s+/g, ' ');
+  const dataSql = observation.statements[1].sql.replace(/\s+/g, ' ');
+  assert.match(
+    revisionSql,
+    /SELECT COALESCE\(\( SELECT revision FROM commerce_delivery_owner_revisions WHERE owner = \? \), 0\) AS revision/,
+  );
+  assert.match(dataSql, /INDEXED BY commerce_documents_delivery_owner_path/);
+  assert.match(dataSql, /document_kind = 'delivery_order' AND owner = \?/);
+  assert.match(dataSql, /ORDER BY document_path ASC\s+LIMIT \?/);
+}
+
+function assertReadOnlyRevalidationBatch(observation: CommerceD1BatchObservation): void {
+  assert.equal(observation.statements.length, 3);
+  assert.match(
+    observation.statements[0].sql.replace(/\s+/g, ' '),
+    /FROM commerce_authority_control WHERE singleton = 1/,
+  );
+  assert.match(observation.statements[1].sql, /json_each\(\?\)/);
+  assert.match(observation.statements[1].sql, /commerce_delivery_owner_revisions/);
+  assert.match(observation.statements[2].sql, /json_each\(\?\)/);
+  assert.match(observation.statements[2].sql, /commerce_documents/);
 }
 
 async function readWithSingleBatch<T>(
@@ -326,45 +352,437 @@ test('native timestamps remain monotonic and path ordering is binary', async () 
   assert.deepEqual(ordered.map((record) => record.key.documentId), ['A', '_', 'a', 'existing']);
 });
 
-test('point reads and queries conflict on stale versions and collection revisions', async () => {
+test('transactional delivery-owner queries use atomic scope snapshots and sorted unique guards', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const repository = new D1CommerceRepository(harness.db);
+  seedCommerceDocuments(harness, [
+    {
+      key: commerceKeys.deliveryOrder('drop', 'a'),
+      data: { owner: 'owner-a', status: 'ready_to_ship' },
+    },
+    {
+      key: commerceKeys.deliveryOrder('drop', 'z'),
+      data: { owner: 'owner-z', status: 'ready_to_ship' },
+    },
+  ]);
+  harness.database.exec(`CREATE TABLE guard_audit (
+    expectations_json TEXT NOT NULL,
+    delivery_owner_expectations_json TEXT NOT NULL,
+    expected_documents_revision INTEGER
+  ) STRICT`);
+  harness.database.exec(`CREATE TRIGGER guard_audit_capture
+    AFTER INSERT ON commerce_commit_guards
+    BEGIN
+      INSERT INTO guard_audit (
+        expectations_json, delivery_owner_expectations_json, expected_documents_revision
+      ) VALUES (
+        NEW.expectations_json, NEW.delivery_owner_expectations_json, NEW.expected_documents_revision
+      );
+    END`);
+
+  const unit = await repository.begin(10);
+  calls.length = 0;
+  assert.deepEqual(
+    (await unit.queryDeliveryOrdersByOwner({ owner: 'owner-z', limit: 10 })).map((record) => record.key.documentId),
+    ['z'],
+  );
+  assert.deepEqual(
+    (await unit.queryDeliveryOrdersByOwner({ owner: 'owner-a', limit: 10 })).map((record) => record.key.documentId),
+    ['a'],
+  );
+  assert.deepEqual(
+    (await unit.queryDeliveryOrdersByOwner({ owner: 'owner-z', limit: 10 })).map((record) => record.key.documentId),
+    ['z'],
+  );
+  for (const call of calls) {
+    assert.equal(call.method, 'batch');
+    if (call.method !== 'batch') assert.fail('Expected one D1 batch per owner query.');
+    assertDeliveryOwnerReadBatch(call);
+  }
+  await unit.create(commerceKeys.claimCode('OWNER-SCOPE-AUDIT'), { status: 'unused' });
+  await unit.commit();
+
+  const audit = harness.database.prepare('SELECT * FROM guard_audit').get()!;
+  assert.deepEqual(JSON.parse(String(audit.delivery_owner_expectations_json)), [
+    { owner: 'owner-a', revision: 1 },
+    { owner: 'owner-z', revision: 1 },
+  ]);
+  assert.deepEqual(
+    JSON.parse(String(audit.expectations_json)).map((entry: { path: string }) => entry.path).sort(),
+    [
+      commerceKeys.deliveryOrder('drop', 'a').path,
+      commerceKeys.deliveryOrder('drop', 'z').path,
+      commerceKeys.claimCode('OWNER-SCOPE-AUDIT').path,
+    ].sort(),
+  );
+  assert.equal(audit.expected_documents_revision, null);
+
+  const invalid = await repository.begin(11);
+  await assert.rejects(
+    invalid.queryDeliveryOrdersByOwner({ owner: '', limit: 10 }),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
+  );
+  await assert.rejects(
+    invalid.queryDeliveryOrdersByOwner({ owner: 'owner-a', limit: 0 }),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
+  );
+  invalid.rollback();
+});
+
+test('point-read writes retain per-document version conflicts', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
-  const first = commerceKeys.stripeCheckout('poncho', 'first');
-  const second = commerceKeys.stripeCheckout('poncho', 'second');
-  await repository.run(10, async (unit) => unit.create(first, { status: 'open' }));
+  const key = commerceKeys.stripeCheckout('drop', 'checkout');
+  await repository.run(10, async (unit) => unit.create(key, { status: 'open' }));
 
-  const pointUnit = await repository.begin(11);
-  await pointUnit.get(first);
-  await pointUnit.update(first, { status: 'complete' });
-  await repository.run(12, async (unit) => unit.update(first, { status: 'paid' }));
-  await assert.rejects(pointUnit.commit(), (error: unknown) => {
-    assert.ok(error instanceof CommerceWriteConflict);
-    assert.equal(error.code, 'aborted');
-    return true;
+  const stale = await repository.begin(11);
+  await stale.get(key);
+  await stale.update(key, { status: 'complete' });
+  await repository.run(12, async (unit) => unit.update(key, { status: 'paid' }));
+
+  await assert.rejects(
+    stale.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+});
+
+test('point-read writes reject cross-transaction delete and recreate ABA', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.claimCode('ABA');
+  await repository.run(10, async (unit) => unit.create(key, { value: 'original' }));
+
+  const stale = await repository.begin(11);
+  await stale.get(key);
+  await stale.update(key, { value: 'stale' });
+  await repository.run(12, async (unit) => unit.delete(key, { mustExist: true }));
+  await repository.run(13, async (unit) => unit.create(key, { value: 'replacement' }));
+
+  await assert.rejects(
+    stale.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+  const replacement = await repository.get(key);
+  assert.deepEqual(replacement?.data, { value: 'replacement' });
+  assert.equal(replacement?.version, 1);
+});
+
+test('staged replacements preserve versions and invalidate stale owner and point transactions', async () => {
+  for (const replacement of ['create', 'set', 'merge'] as const) {
+    const harness = createCommerceD1Harness();
+    const repository = new D1CommerceRepository(harness.db);
+    const key = commerceKeys.deliveryOrder('drop', replacement);
+    const staleClaim = commerceKeys.claimCode(`STALE-${replacement.toUpperCase()}`);
+    await repository.run(10, async (unit) => unit.create(key, {
+      owner: 'source-owner',
+      status: 'processing',
+    }));
+
+    const stale = await repository.begin(11);
+    if (replacement === 'merge') await stale.get(key);
+    else await stale.queryDeliveryOrdersByOwner({ owner: 'source-owner', limit: 10 });
+    if (replacement !== 'set') await stale.create(staleClaim, { status: 'unused' });
+
+    await repository.run(12, async (unit) => {
+      await unit.delete(key, { mustExist: true });
+      if (replacement === 'create') {
+        await unit.create(key, { owner: 'source-owner', status: 'recreated' });
+      } else if (replacement === 'set') {
+        await unit.set(key, { owner: 'source-owner', status: 'replaced' });
+      } else {
+        await unit.set(key, { owner: 'source-owner', status: 'merged' }, { merge: true });
+      }
+    });
+
+    const stored = await repository.get(key);
+    assert.equal(stored?.version, 2, replacement);
+    assert.equal(stored?.data.status, replacement === 'create' ? 'recreated' : replacement === 'set' ? 'replaced' : 'merged');
+    assert.equal(
+      harness.database.prepare(`SELECT revision FROM commerce_delivery_owner_revisions
+        WHERE owner = 'source-owner'`).get()!.revision,
+      1,
+      replacement,
+    );
+    await assert.rejects(
+      stale.commit(),
+      (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+      replacement,
+    );
+    if (replacement !== 'set') assert.equal(await repository.get(staleClaim), null, replacement);
+  }
+});
+
+test('delivery-owner guards isolate membership and returned-document conflicts', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const first = commerceKeys.deliveryOrder('drop', '1');
+  const second = commerceKeys.deliveryOrder('drop', '2');
+  await repository.run(10, async (unit) => {
+    await unit.create(first, { owner: 'source-owner', status: 'processing' });
+    await unit.create(second, { owner: 'source-owner', status: 'processing' });
   });
 
-  const queryUnit = await repository.begin(13);
-  await queryUnit.query({ kind: 'stripe_checkout', filters: [{ field: 'status', op: 'equal', value: 'paid' }] });
-  await queryUnit.create(second, { status: 'open' });
-  await repository.run(14, async (unit) => unit.create(commerceKeys.claimCode('NEW'), { status: 'unused' }));
-  await assert.rejects(queryUnit.commit(), (error: unknown) => {
-    assert.ok(error instanceof CommerceWriteConflict);
-    assert.equal(error.code, 'aborted');
-    return true;
-  });
-  assert.equal(await repository.get(second), null);
+  const membership = await repository.begin(11);
+  await membership.queryDeliveryOrdersByOwner({ owner: 'source-owner', limit: 10 });
+  await membership.create(commerceKeys.claimCode('MEMBERSHIP'), { status: 'unused' });
+  await repository.run(12, async (unit) => unit.create(
+    commerceKeys.deliveryOrder('drop', '3'),
+    { owner: 'source-owner', status: 'processing' },
+  ));
+  await assert.rejects(
+    membership.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
 
-  const readOnlyQueryUnit = await repository.begin(15);
-  await readOnlyQueryUnit.query({
-    kind: 'stripe_checkout',
-    filters: [{ field: 'status', op: 'equal', value: 'paid' }],
+  const returnedContent = await repository.begin(13);
+  await returnedContent.queryDeliveryOrdersByOwner({ owner: 'source-owner', limit: 10 });
+  await returnedContent.create(commerceKeys.claimCode('RETURNED-CONTENT'), { status: 'unused' });
+  await repository.run(14, async (unit) => unit.update(first, { status: 'ready_to_ship' }));
+  await assert.rejects(
+    returnedContent.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+
+  const unrelated = await repository.begin(15);
+  await unrelated.queryDeliveryOrdersByOwner({ owner: 'source-owner', limit: 1 });
+  await unrelated.create(commerceKeys.claimCode('UNRELATED'), { status: 'unused' });
+  await repository.run(16, async (unit) => {
+    await unit.update(second, { status: 'ready_to_ship' });
+    await unit.create(commerceKeys.deliveryOrder('drop', 'other'), {
+      owner: 'destination-owner',
+      status: 'processing',
+    });
+    await unit.create(commerceKeys.claimCode('CONCURRENT'), { status: 'unused' });
   });
-  await repository.run(16, async (unit) => unit.create(commerceKeys.claimCode('LATEST'), { status: 'unused' }));
-  await assert.rejects(readOnlyQueryUnit.commit(), (error: unknown) => {
-    assert.ok(error instanceof CommerceWriteConflict);
-    assert.equal(error.code, 'aborted');
-    return true;
+  await unrelated.commit();
+  assert.deepEqual((await repository.get(commerceKeys.claimCode('UNRELATED')))?.data, { status: 'unused' });
+
+  const ownerDeparture = await repository.begin(17);
+  await ownerDeparture.queryDeliveryOrdersByOwner({ owner: 'source-owner', limit: 10 });
+  await ownerDeparture.create(commerceKeys.claimCode('OWNER-DEPARTURE'), { status: 'unused' });
+  await repository.run(18, async (unit) => unit.update(first, { owner: 'destination-owner' }));
+  await assert.rejects(
+    ownerDeparture.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+});
+
+test('delivery-owner guards reject every scoped membership and path change', async () => {
+  const scenarios: readonly Readonly<{
+    name: string;
+    seed: (
+      repository: D1CommerceRepository,
+    ) => Promise<void>;
+    mutate: (
+      repository: D1CommerceRepository,
+      harness: ReturnType<typeof createCommerceD1Harness>,
+    ) => Promise<void>;
+  }>[] = [
+    {
+      name: 'initially absent owner insertion',
+      seed: async () => undefined,
+      mutate: async (repository) => {
+        await repository.run(12, async (unit) => unit.create(
+          commerceKeys.deliveryOrder('drop', 'inserted'),
+          { owner: 'scope-owner', status: 'processing' },
+        ));
+      },
+    },
+    {
+      name: 'matching deletion',
+      seed: async (repository) => {
+        await repository.run(10, async (unit) => unit.create(
+          commerceKeys.deliveryOrder('drop', 'deleted'),
+          { owner: 'scope-owner', status: 'processing' },
+        ));
+      },
+      mutate: async (repository) => {
+        await repository.run(12, async (unit) => unit.delete(
+          commerceKeys.deliveryOrder('drop', 'deleted'),
+          { mustExist: true },
+        ));
+      },
+    },
+    {
+      name: 'move into owner',
+      seed: async (repository) => {
+        await repository.run(10, async (unit) => unit.create(
+          commerceKeys.deliveryOrder('drop', 'arriving'),
+          { owner: 'other-owner', status: 'processing' },
+        ));
+      },
+      mutate: async (repository) => {
+        await repository.run(12, async (unit) => unit.update(
+          commerceKeys.deliveryOrder('drop', 'arriving'),
+          { owner: 'scope-owner' },
+        ));
+      },
+    },
+    {
+      name: 'matching path change',
+      seed: async (repository) => {
+        await repository.run(10, async (unit) => unit.create(
+          commerceKeys.deliveryOrder('drop', 'before'),
+          { owner: 'scope-owner', status: 'processing' },
+        ));
+      },
+      mutate: async (_repository, harness) => {
+        harness.database.exec('BEGIN');
+        try {
+          harness.database.prepare(`UPDATE commerce_documents
+            SET document_path = ?, document_id = ?, version = version + 1
+            WHERE document_path = ?`).run(
+              commerceKeys.deliveryOrder('drop', 'after').path,
+              'after',
+              commerceKeys.deliveryOrder('drop', 'before').path,
+            );
+          harness.database.exec(`UPDATE commerce_authority_control
+            SET documents_revision = documents_revision + 1 WHERE singleton = 1`);
+          harness.database.exec('COMMIT');
+        } catch (error) {
+          harness.database.exec('ROLLBACK');
+          throw error;
+        }
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const harness = createCommerceD1Harness();
+    const repository = new D1CommerceRepository(harness.db);
+    await scenario.seed(repository);
+    const unit = await repository.begin(11);
+    await unit.queryDeliveryOrdersByOwner({ owner: 'scope-owner', limit: 10 });
+    await unit.create(commerceKeys.claimCode('SCOPED-GUARD'), { status: 'unused' });
+    await scenario.mutate(repository, harness);
+    await assert.rejects(
+      unit.commit(),
+      (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+      scenario.name,
+    );
+  }
+});
+
+test('read-only owner queries revalidate authority, scope epochs, and returned versions in one batch', async () => {
+  const membershipCalls: CommerceD1CallObservation[] = [];
+  const membershipHarness = createCommerceD1Harness({
+    observeCall: (call) => membershipCalls.push(call),
   });
+  const membershipRepository = new D1CommerceRepository(membershipHarness.db);
+  await membershipRepository.run(10, async (unit) => unit.create(
+    commerceKeys.deliveryOrder('drop', '1'),
+    { owner: 'owner', status: 'processing' },
+  ));
+  const membership = await membershipRepository.begin(11);
+  await membership.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
+  await membershipRepository.run(12, async (unit) => unit.create(
+    commerceKeys.deliveryOrder('drop', '2'),
+    { owner: 'owner', status: 'processing' },
+  ));
+  membershipCalls.length = 0;
+  await assert.rejects(
+    membership.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+  assert.equal(membershipCalls.length, 1);
+  assert.equal(membershipCalls[0].method, 'batch');
+  if (membershipCalls[0].method !== 'batch') assert.fail('Expected one read-only revalidation batch.');
+  assertReadOnlyRevalidationBatch(membershipCalls[0]);
+
+  const contentHarness = createCommerceD1Harness();
+  const contentRepository = new D1CommerceRepository(contentHarness.db);
+  const contentKey = commerceKeys.deliveryOrder('drop', '1');
+  await contentRepository.run(20, async (unit) => unit.create(
+    contentKey,
+    { owner: 'owner', status: 'processing' },
+  ));
+  const content = await contentRepository.begin(21);
+  await content.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
+  await contentRepository.run(22, async (unit) => unit.update(contentKey, { status: 'ready_to_ship' }));
+  await assert.rejects(
+    content.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+
+  const unrelatedHarness = createCommerceD1Harness();
+  const unrelatedRepository = new D1CommerceRepository(unrelatedHarness.db);
+  await unrelatedRepository.run(30, async (unit) => unit.create(
+    commerceKeys.deliveryOrder('drop', '1'),
+    { owner: 'owner', status: 'processing' },
+  ));
+  const unrelated = await unrelatedRepository.begin(31);
+  await unrelated.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
+  await unrelatedRepository.run(32, async (unit) => {
+    await unit.create(commerceKeys.deliveryOrder('drop', 'other'), {
+      owner: 'other-owner',
+      status: 'processing',
+    });
+    await unit.create(commerceKeys.claimCode('UNRELATED-READ'), { status: 'unused' });
+  });
+  await unrelated.commit();
+
+  const pointCalls: CommerceD1CallObservation[] = [];
+  const pointHarness = createCommerceD1Harness({ observeCall: (call) => pointCalls.push(call) });
+  const pointRepository = new D1CommerceRepository(pointHarness.db);
+  const pointKey = commerceKeys.claimCode('POINT-READ');
+  await pointRepository.run(40, async (unit) => unit.create(pointKey, { status: 'unused' }));
+  const point = await pointRepository.begin(41);
+  await point.get(pointKey);
+  await pointRepository.run(42, async (unit) => unit.create(
+    commerceKeys.claimCode('POINT-UNRELATED'),
+    { status: 'unused' },
+  ));
+  pointCalls.length = 0;
+  await assert.rejects(
+    point.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+  assert.equal(pointCalls.length, 1);
+  assert.equal(pointCalls[0].method, 'batch');
+  if (pointCalls[0].method !== 'batch') assert.fail('Expected one read-only revalidation batch.');
+  assertReadOnlyRevalidationBatch(pointCalls[0]);
+});
+
+test('empty read-only owner queries reject concurrent same-owner inserts in one batch', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const repository = new D1CommerceRepository(harness.db);
+  const unit = await repository.begin(10);
+  assert.deepEqual(await unit.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 }), []);
+  await repository.run(11, async (concurrent) => concurrent.create(
+    commerceKeys.deliveryOrder('drop', '1'),
+    { owner: 'owner', status: 'processing' },
+  ));
+
+  calls.length = 0;
+  await assert.rejects(
+    unit.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'batch');
+  if (calls[0].method !== 'batch') assert.fail('Expected one read-only revalidation batch.');
+  assertReadOnlyRevalidationBatch(calls[0]);
+});
+
+test('missing point reads tolerate unrelated writes and revalidate in one batch', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const repository = new D1CommerceRepository(harness.db);
+  const unit = await repository.begin(10);
+  assert.equal(await unit.get(commerceKeys.claimCode('MISSING')), null);
+  await repository.run(11, async (concurrent) => concurrent.create(
+    commerceKeys.claimCode('UNRELATED'),
+    { status: 'unused' },
+  ));
+
+  calls.length = 0;
+  await unit.commit();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'batch');
+  if (calls[0].method !== 'batch') assert.fail('Expected one read-only revalidation batch.');
+  assertReadOnlyRevalidationBatch(calls[0]);
 });
 
 test('native preconditions distinguish create, existence, and version conflicts atomically', async () => {
@@ -609,19 +1027,10 @@ test('a revision committed after a query batch does not retry that snapshot', as
     observeBatchAfterCommit: () => {
       batchCount += 1;
       if (batchCount !== 1) return;
-      harness.database.exec('BEGIN');
-      try {
-        seedCommerceDocument(harness, {
-          key: commerceKeys.claimCode('NEW'),
-          data: { status: 'unused' },
-        });
-        harness.database.exec(`UPDATE commerce_authority_control
-          SET documents_revision = documents_revision + 1 WHERE singleton = 1`);
-        harness.database.exec('COMMIT');
-      } catch (error) {
-        harness.database.exec('ROLLBACK');
-        throw error;
-      }
+      seedCommerceDocument(harness, {
+        key: commerceKeys.claimCode('NEW'),
+        data: { status: 'unused' },
+      });
     },
   });
   seedCommerceDocument(harness, {

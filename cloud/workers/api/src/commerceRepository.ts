@@ -41,6 +41,11 @@ type StoredDocument = {
 
 type PendingDocument = StoredDocument | null;
 
+type DeliveryOwnerExpectation = Readonly<{
+  owner: string;
+  revision: number;
+}>;
+
 const DOCUMENT_COLUMN_NAMES = [
   'document_path',
   'document_kind',
@@ -538,6 +543,45 @@ function positiveQueryLimit(value: number): number {
   return value;
 }
 
+function deliveryOwner(value: string): string {
+  if (typeof value !== 'string' || value.length < 1) {
+    throw new CommerceRepositoryError('invalid-argument', 'Invalid delivery owner.');
+  }
+  return value;
+}
+
+function deliveryOwnerRevisionStatement(db: D1Database, owner: string): D1PreparedStatement {
+  return db.prepare(`SELECT COALESCE((
+    SELECT revision FROM commerce_delivery_owner_revisions WHERE owner = ?
+  ), 0) AS revision`).bind(owner);
+}
+
+function parseDeliveryOwnerRevision(result: D1Result<Record<string, unknown>>): number {
+  const row = result.results[0];
+  const revision = isObject(row) ? row.revision : undefined;
+  if (
+    result.success !== true ||
+    result.results.length !== 1 ||
+    !isObject(result.meta) ||
+    typeof revision !== 'number' ||
+    !Number.isSafeInteger(revision) ||
+    revision < 0
+  ) throw unavailableCommerceData();
+  return revision;
+}
+
+function parseConflictResult(result: D1Result<Record<string, unknown>>): boolean {
+  const row = result.results[0];
+  const conflict = isObject(row) ? row.conflict : undefined;
+  if (
+    result.success !== true ||
+    result.results.length !== 1 ||
+    !isObject(result.meta) ||
+    (conflict !== 0 && conflict !== 1)
+  ) throw unavailableCommerceData();
+  return conflict === 1;
+}
+
 function authorityStatement(db: D1Database): D1PreparedStatement {
   return db.prepare(COMMERCE_AUTHORITY_SELECT);
 }
@@ -748,6 +792,7 @@ export class D1CommerceRepository {
 
 export class CommerceUnitOfWork {
   private closed = false;
+  private readonly deliveryOwnerExpectations = new Map<string, number>();
   private expectedDocumentsRevision: number | null = null;
   private readonly expectations = new Map<string, number>();
   private readonly original = new Map<string, StoredDocument | null>();
@@ -774,14 +819,34 @@ export class CommerceUnitOfWork {
     return document ? publicRecord<T>(document) : null;
   }
 
-  async query<T extends CommerceDocumentData>(query: CommerceQuery): Promise<CommerceDocumentRecord<T>[]> {
+  async queryDeliveryOrdersByOwner<T extends CommerceDocumentData>(
+    args: Readonly<{ owner: string; limit: number }>,
+  ): Promise<CommerceDocumentRecord<T>[]> {
     this.assertOpen();
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
-    this.expectedDocumentsRevision ??= this.control.documentsRevision;
-    const compiled = compileCommerceQuery(query);
-    const result = await this.db.prepare(compiled.sql).bind(...compiled.bindings).all<Record<string, unknown>>();
-    const documents = result.results.map(parseRow);
-    reportInefficientQuery('query', query.kind, result, documents.length);
+    const scopedOwner = deliveryOwner(args.owner);
+    const boundedLimit = positiveQueryLimit(args.limit);
+    const results = await this.db.batch<Record<string, unknown>>([
+      deliveryOwnerRevisionStatement(this.db, scopedOwner),
+      this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+        FROM commerce_documents INDEXED BY commerce_documents_delivery_owner_path
+        WHERE document_kind = 'delivery_order' AND owner = ?
+        ORDER BY document_path ASC
+        LIMIT ?`).bind(scopedOwner, boundedLimit),
+    ]);
+    if (results.length !== 2) throw unavailableCommerceData();
+    const [revisionResult, dataResult] = results;
+    const revision = parseDeliveryOwnerRevision(revisionResult);
+    if (
+      dataResult.success !== true ||
+      !Array.isArray(dataResult.results) ||
+      !isObject(dataResult.meta)
+    ) throw unavailableCommerceData();
+    const expectedRevision = this.deliveryOwnerExpectations.get(scopedOwner);
+    if (expectedRevision !== undefined && expectedRevision !== revision) throw new CommerceWriteConflict();
+    this.deliveryOwnerExpectations.set(scopedOwner, revision);
+    const documents = dataResult.results.map(parseRow);
+    reportInefficientQuery('delivery-orders-by-owner', 'delivery_order', dataResult, documents.length);
     for (const document of documents) this.recordRead(document.key.path, document.version, document);
     return documents.map((document) => publicRecord<T>(document));
   }
@@ -833,21 +898,31 @@ export class CommerceUnitOfWork {
   async commit(): Promise<void> {
     this.assertOpen();
     this.closed = true;
+    const documentExpectationsJson = JSON.stringify(
+      Array.from(this.expectations, ([path, version]) => ({ path, version })),
+    );
+    const deliveryOwnerExpectationsJson = JSON.stringify(this.serializedDeliveryOwnerExpectations());
     if (!this.pending.size) {
-      const control = await authority(this.db);
       if (
-        this.expectedDocumentsRevision !== null &&
-        this.expectedDocumentsRevision !== control.documentsRevision
-      ) throw new CommerceWriteConflict();
+        this.expectedDocumentsRevision === null &&
+        !this.deliveryOwnerExpectations.size &&
+        !this.expectations.size
+      ) {
+        await authority(this.db);
+        return;
+      }
+      await this.revalidateReadOnly(documentExpectationsJson, deliveryOwnerExpectationsJson);
       return;
     }
     const guardId = crypto.randomUUID();
     const statements: D1PreparedStatement[] = [
       this.db.prepare(`INSERT INTO commerce_commit_guards (
-        guard_id, expectations_json, expected_documents_revision, created_at_ms
-      ) VALUES (?, ?, ?, ?)`).bind(
+        guard_id, expectations_json, delivery_owner_expectations_json,
+        expected_documents_revision, created_at_ms
+      ) VALUES (?, ?, ?, ?, ?)`).bind(
         guardId,
-        JSON.stringify(Array.from(this.expectations, ([path, version]) => ({ path, version }))),
+        documentExpectationsJson,
+        deliveryOwnerExpectationsJson,
         this.expectedDocumentsRevision,
         timestampMilliseconds(this.commitTimestamp),
       ),
@@ -916,6 +991,58 @@ export class CommerceUnitOfWork {
     if (this.closed) throw new CommerceRepositoryError('invalid-argument', 'Commerce unit of work is closed.');
   }
 
+  private serializedDeliveryOwnerExpectations(): DeliveryOwnerExpectation[] {
+    return Array.from(this.deliveryOwnerExpectations, ([owner, revision]) => ({ owner, revision }))
+      .sort((left, right) => left.owner < right.owner ? -1 : left.owner > right.owner ? 1 : 0);
+  }
+
+  private async revalidateReadOnly(
+    documentExpectationsJson: string,
+    deliveryOwnerExpectationsJson: string,
+  ): Promise<void> {
+    let results: D1Result<Record<string, unknown>>[];
+    try {
+      results = await this.db.batch<Record<string, unknown>>([
+        authorityStatement(this.db),
+        this.db.prepare(`SELECT EXISTS (
+          SELECT 1
+          FROM json_each(?) AS expectation
+          LEFT JOIN commerce_delivery_owner_revisions AS owner_revision
+            ON owner_revision.owner = json_extract(expectation.value, '$.owner')
+          WHERE COALESCE(owner_revision.revision, 0) <>
+            CAST(json_extract(expectation.value, '$.revision') AS INTEGER)
+        ) AS conflict`).bind(deliveryOwnerExpectationsJson),
+        this.db.prepare(`SELECT EXISTS (
+          SELECT 1
+          FROM json_each(?) AS expectation
+          LEFT JOIN commerce_documents AS document
+            ON document.document_path = json_extract(expectation.value, '$.path')
+          WHERE COALESCE(document.version, -1) <>
+            CAST(json_extract(expectation.value, '$.version') AS INTEGER)
+        ) AS conflict`).bind(documentExpectationsJson),
+      ]);
+    } catch (error) {
+      throw unavailableCommerce(error);
+    }
+    if (results.length !== 3) throw unavailableCommerce();
+    const [authorityResult, ownerResult, documentResult] = results;
+    if (
+      authorityResult.success !== true ||
+      authorityResult.results.length !== 1 ||
+      !isObject(authorityResult.meta)
+    ) throw unavailableCommerce();
+    const control = parseAuthorityControl(authorityResult.results[0]);
+    if (control.state !== 'd1') throw unavailableCommerce();
+    if (
+      (this.expectedDocumentsRevision !== null &&
+        control.documentsRevision !== this.expectedDocumentsRevision) ||
+      parseConflictResult(ownerResult) ||
+      parseConflictResult(documentResult)
+    ) {
+      throw new CommerceWriteConflict();
+    }
+  }
+
   private async documentExists(path: string): Promise<boolean> {
     return Boolean(await this.db.prepare(`SELECT document_path FROM commerce_documents
       WHERE document_path = ?`).bind(path).first());
@@ -929,6 +1056,7 @@ export class CommerceUnitOfWork {
     if (document && (document.key.kind !== key.kind || document.key.dropId !== key.dropId || document.key.documentId !== key.documentId)) {
       throw new CommerceRepositoryError('internal', 'Commerce document identity mismatch.');
     }
+    if (document) this.expectedDocumentsRevision ??= this.control.documentsRevision;
     this.recordRead(key.path, document?.version ?? -1, document);
     return document;
   }
@@ -960,7 +1088,7 @@ export class CommerceUnitOfWork {
       key,
       processedAt: materialized.processedAt,
       updateTime: commitTime,
-      version: 1,
+      version: this.nextDocumentVersion(key, null),
     };
   }
 
@@ -971,7 +1099,7 @@ export class CommerceUnitOfWork {
   ): StoredDocument {
     const now = this.commitTimestamp;
     const materialized = this.materializeDocument(data, now);
-    const version = (current?.version || 0) + 1;
+    const version = this.nextDocumentVersion(key, current);
     const commitTime = timestampString(now);
     return {
       createTime: current?.createTime || commitTime,
@@ -1004,7 +1132,7 @@ export class CommerceUnitOfWork {
         processedAt = processedTimestampForUpdate(processedAt, currentValue, update, value, now);
       }
     }
-    const version = (current?.version || 0) + 1;
+    const version = this.nextDocumentVersion(key, current);
     const commitTime = timestampString(now);
     return {
       createTime: current?.createTime || commitTime,
@@ -1014,6 +1142,11 @@ export class CommerceUnitOfWork {
       updateTime: commitTime,
       version,
     };
+  }
+
+  private nextDocumentVersion(key: CommerceDocumentKey, current: StoredDocument | null): number {
+    const original = this.original.get(key.path);
+    return Math.max(current?.version || 0, original?.version || 0) + 1;
   }
 
   private materializeDocument(

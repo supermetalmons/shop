@@ -299,10 +299,13 @@ schema starts at
 `cloud/workers/api/commerce-migrations/0001_current_schema.sql`; migration
 `0002_authority_control_lease.sql` adds operational serialization and
 `0003_wipe_readiness_guard.sql` makes destructive maintenance readiness atomic,
-and `0004_ready_notification_owner_indexes.sql` adds owner-targeted
-ready-notification indexes. Append
-`0005_<description>.sql` for the next change. The Worker preserves the existing
-commerce API and transaction behavior through the D1 document-store adapter.
+`0004_ready_notification_owner_indexes.sql` adds owner-targeted
+ready-notification indexes, and `0005_delivery_owner_query_revisions.sql` adds
+owner-scoped delivery-order query guards without replacing the global revision
+used by maintenance. Owner-revision rows are retained as tombstones so an empty
+owner scope cannot return to revision zero. Append `0006_<description>.sql` for
+the next change. The Worker preserves the existing commerce API and transaction
+behavior through the D1 document-store adapter.
 
 Inspect or pause the authoritative database with:
 
