@@ -56,6 +56,16 @@ const DOCUMENT_COLUMN_NAMES = [
 const DOCUMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.join(', ');
 const COMMERCE_AUTHORITY_SELECT = `SELECT authority_state, revision, documents_revision
   FROM commerce_authority_control WHERE singleton = 1`;
+const PENDING_READY_NOTIFICATION_INDEXES = Object.freeze({
+  buyer: Object.freeze({
+    owner: 'commerce_delivery_orders_buyer_notifications_pending_owner_path',
+    ownerless: 'commerce_delivery_orders_buyer_notifications_pending',
+  }),
+  shipper: Object.freeze({
+    owner: 'commerce_delivery_orders_shipper_notifications_pending_owner_path',
+    ownerless: 'commerce_delivery_orders_shipper_notifications_pending',
+  }),
+});
 
 function qualifiedDocumentColumns(alias: string): string {
   return DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
@@ -599,6 +609,9 @@ export class D1CommerceRepository {
     startAfterPath?: string;
   }): Promise<CommerceDocumentRecord[]> {
     const limit = positiveQueryLimit(args.limit);
+    const indexVariant = args.owner === undefined ? 'ownerless' : 'owner';
+    const buyerIndex = PENDING_READY_NOTIFICATION_INDEXES.buyer[indexVariant];
+    const shipperIndex = PENDING_READY_NOTIFICATION_INDEXES.shipper[indexVariant];
     const ownerPredicate = args.owner === undefined ? '' : ' AND document.owner = ?';
     const cursorPredicate = args.startAfterPath === undefined ? '' : ' AND document.document_path > ?';
     const armBindings = () => [
@@ -610,7 +623,7 @@ export class D1CommerceRepository {
       SELECT document.document_path
       FROM commerce_authority_control AS authority
       CROSS JOIN commerce_documents AS document
-        INDEXED BY commerce_delivery_orders_buyer_notifications_pending
+        INDEXED BY ${buyerIndex}
       WHERE
         authority.singleton = 1 AND
         authority.authority_state = 'd1' AND
@@ -621,7 +634,7 @@ export class D1CommerceRepository {
       SELECT document.document_path
       FROM commerce_authority_control AS authority
       CROSS JOIN commerce_documents AS document
-        INDEXED BY commerce_delivery_orders_shipper_notifications_pending
+        INDEXED BY ${shipperIndex}
       WHERE
         authority.singleton = 1 AND
         authority.authority_state = 'd1' AND

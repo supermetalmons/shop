@@ -464,6 +464,36 @@ test('standalone reads use one authoritative two-statement batch', async () => {
     await readWithSingleBatch(calls, () => repository.queryPendingReadyNotifications({ limit: 1 })),
     [],
   );
+  const ownerlessNotificationCall = calls.at(-1);
+  assert.equal(ownerlessNotificationCall?.method, 'batch');
+  if (ownerlessNotificationCall?.method !== 'batch') assert.fail('Expected one D1 batch call.');
+  assert.match(
+    ownerlessNotificationCall.statements[1].sql,
+    /INDEXED BY commerce_delivery_orders_buyer_notifications_pending\s/,
+  );
+  assert.match(
+    ownerlessNotificationCall.statements[1].sql,
+    /INDEXED BY commerce_delivery_orders_shipper_notifications_pending\s/,
+  );
+  assert.doesNotMatch(ownerlessNotificationCall.statements[1].sql, /notifications_pending_owner_path/);
+  assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.queryPendingReadyNotifications({
+      limit: 1,
+      owner: 'owner',
+    })),
+    [],
+  );
+  const ownerNotificationCall = calls.at(-1);
+  assert.equal(ownerNotificationCall?.method, 'batch');
+  if (ownerNotificationCall?.method !== 'batch') assert.fail('Expected one D1 batch call.');
+  assert.match(
+    ownerNotificationCall.statements[1].sql,
+    /INDEXED BY commerce_delivery_orders_buyer_notifications_pending_owner_path\s/,
+  );
+  assert.match(
+    ownerNotificationCall.statements[1].sql,
+    /INDEXED BY commerce_delivery_orders_shipper_notifications_pending_owner_path\s/,
+  );
   assert.deepEqual(
     await readWithSingleBatch(calls, () => repository.queryDuePackStatusProjections({
       dropId: 'drop',
@@ -480,7 +510,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   assert.equal(staleCall?.method, 'batch');
   if (staleCall?.method !== 'batch') assert.fail('Expected one D1 batch call.');
   assert.match(staleCall.statements[1].sql, /INDEXED BY commerce_stripe_checkouts_reconciliation_due/);
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 8);
 });
 
 test('all standalone reads fail closed when commerce is paused', async () => {

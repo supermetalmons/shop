@@ -10,6 +10,7 @@ const OPS_D1_MIGRATIONS = [
   '0002_reveal_submission_write_fence.sql',
   '0003_remove_ready_notification_pause.sql',
   '0004_repair_ready_notification_cursor.sql',
+  '0005_remove_redundant_anonymous_auth_subject_index.sql',
 ] as const;
 
 export type OpsD1Row = Record<string, unknown>;
@@ -33,7 +34,6 @@ export type OpsD1IntegrityInput = {
   anonymousAuthSessionColumns: OpsD1Row[];
   anonymousAuthSessionCounts: OpsD1Row[];
   anonymousAuthSessionExpiryIndexColumns: OpsD1Row[];
-  anonymousAuthSessionSubjectIndexColumns: OpsD1Row[];
   controls: OpsD1Row[];
   expiryIndexColumns: OpsD1Row[];
   foreignKeyCheck: OpsD1Row[];
@@ -91,14 +91,6 @@ const expectedSchema = new Map<
     {
       fingerprint: 'c120faba7aa7aae86de7de4413d91d79278b51f4289495d0d2b7b14042a12304',
       type: 'table',
-      tableName: 'anonymous_auth_sessions',
-    },
-  ],
-  [
-    'anonymous_auth_sessions_auth_subject',
-    {
-      fingerprint: 'e56b0fe36d7e8768244454f81a9e908b0a4a1ba7512f8ea988827bcd44c14f9f',
-      type: 'index',
       tableName: 'anonymous_auth_sessions',
     },
   ],
@@ -597,12 +589,6 @@ export function assertOpsD1Integrity(
     6,
     'Ops D1 anonymous-auth expiry index',
   );
-  assertSingleColumnIndex(
-    input.anonymousAuthSessionSubjectIndexColumns,
-    'auth_subject',
-    2,
-    'Ops D1 anonymous-auth subject index',
-  );
   assertExactColumns(
     input.profileColumns,
     expectedProfileColumns,
@@ -786,9 +772,6 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
     ),
     anonymousAuthSessionExpiryIndexColumns: queryRemoteOpsD1(
       'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)',
-    ),
-    anonymousAuthSessionSubjectIndexColumns: queryRemoteOpsD1(
-      'PRAGMA index_info(anonymous_auth_sessions_auth_subject)',
     ),
     controls: queryRemoteOpsD1(`${controlSelect} ORDER BY control_key`),
     expiryIndexColumns: queryRemoteOpsD1(

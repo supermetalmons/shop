@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import test from 'node:test';
 import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
 
@@ -16,6 +16,10 @@ const wipeReadinessMigrationSql = readFileSync(
   new URL('../cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', import.meta.url),
   'utf8',
 );
+const readyNotificationOwnerIndexesMigrationSql = readFileSync(
+  new URL('../cloud/workers/api/commerce-migrations/0004_ready_notification_owner_indexes.sql', import.meta.url),
+  'utf8',
+);
 const authorityLeaseToken = '123e4567-e89b-42d3-a456-426614174000';
 const d1NowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
 
@@ -24,6 +28,7 @@ function database(): DatabaseSync {
   db.exec(schemaSql);
   db.exec(leaseMigrationSql);
   db.exec(wipeReadinessMigrationSql);
+  db.exec(readyNotificationOwnerIndexesMigrationSql);
   return db;
 }
 
@@ -31,8 +36,8 @@ function indexColumns(db: DatabaseSync, name: string): string[] {
   return db.prepare(`PRAGMA index_info(${name})`).all().map((row) => String(row.name));
 }
 
-function planDetails(db: DatabaseSync, sql: string): string {
-  return db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((row) => String(row.detail)).join('\n');
+function planDetails(db: DatabaseSync, sql: string, ...bindings: SQLInputValue[]): string {
+  return db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...bindings).map((row) => String(row.detail)).join('\n');
 }
 
 test('Commerce migrations create the exact current authority and guard schema', () => {
@@ -319,23 +324,76 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     ]);
     assert.deepEqual(indexColumns(db, 'commerce_delivery_orders_buyer_notifications_pending'), ['document_path']);
     assert.deepEqual(indexColumns(db, 'commerce_delivery_orders_shipper_notifications_pending'), ['document_path']);
+    assert.deepEqual(indexColumns(db, 'commerce_delivery_orders_buyer_notifications_pending_owner_path'), [
+      'owner',
+      'document_path',
+    ]);
+    assert.deepEqual(indexColumns(db, 'commerce_delivery_orders_shipper_notifications_pending_owner_path'), [
+      'owner',
+      'document_path',
+    ]);
+    assert.equal(
+      String(db.prepare(`SELECT sql FROM sqlite_schema
+        WHERE type = 'index' AND name = 'commerce_delivery_orders_buyer_notifications_pending_owner_path'`)
+        .get()!.sql).replace(/\s+/g, ' ').trim(),
+      `CREATE INDEX commerce_delivery_orders_buyer_notifications_pending_owner_path
+        ON commerce_documents (owner, document_path)
+        WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
+          buyer_notification_state = 'pending'`.replace(/\s+/g, ' ').trim(),
+    );
+    assert.equal(
+      String(db.prepare(`SELECT sql FROM sqlite_schema
+        WHERE type = 'index' AND name = 'commerce_delivery_orders_shipper_notifications_pending_owner_path'`)
+        .get()!.sql).replace(/\s+/g, ' ').trim(),
+      `CREATE INDEX commerce_delivery_orders_shipper_notifications_pending_owner_path
+        ON commerce_documents (owner, document_path)
+        WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
+          shipper_notification_state = 'pending'`.replace(/\s+/g, ' ').trim(),
+    );
     assert.deepEqual(indexColumns(db, 'commerce_stripe_checkouts_reconciliation_due'), ['null', 'document_path']);
     assert.match(planDetails(db, `SELECT document_path FROM commerce_documents
       WHERE document_kind = 'delivery_order' AND owner = 'owner'
       ORDER BY document_path LIMIT 450`), /commerce_documents_delivery_owner_path/);
-    const notificationPlan = planDetails(db, `WITH candidate_paths AS (
+    const ownerNotificationPlan = planDetails(db, `WITH candidate_paths AS (
+      SELECT document_path FROM commerce_documents
+        INDEXED BY commerce_delivery_orders_buyer_notifications_pending_owner_path
+      WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
+        AND buyer_notification_state = 'pending' AND owner = ? AND document_path > ?
+      UNION
+      SELECT document_path FROM commerce_documents
+        INDEXED BY commerce_delivery_orders_shipper_notifications_pending_owner_path
+      WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
+        AND shipper_notification_state = 'pending' AND owner = ? AND document_path > ?
+    ) SELECT document_path FROM candidate_paths ORDER BY document_path LIMIT 8`,
+    'owner', 'drops/a/deliveryOrders/1', 'owner', 'drops/a/deliveryOrders/1');
+    assert.match(
+      ownerNotificationPlan,
+      /commerce_delivery_orders_buyer_notifications_pending_owner_path \(owner=\? AND document_path>\?\)/,
+    );
+    assert.match(
+      ownerNotificationPlan,
+      /commerce_delivery_orders_shipper_notifications_pending_owner_path \(owner=\? AND document_path>\?\)/,
+    );
+    const ownerlessNotificationPlan = planDetails(db, `WITH candidate_paths AS (
       SELECT document_path FROM commerce_documents
         INDEXED BY commerce_delivery_orders_buyer_notifications_pending
       WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
-        AND buyer_notification_state = 'pending' AND document_path > 'drops/a/deliveryOrders/1'
+        AND buyer_notification_state = 'pending' AND document_path > ?
       UNION
       SELECT document_path FROM commerce_documents
         INDEXED BY commerce_delivery_orders_shipper_notifications_pending
       WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
-        AND shipper_notification_state = 'pending' AND document_path > 'drops/a/deliveryOrders/1'
-    ) SELECT document_path FROM candidate_paths ORDER BY document_path LIMIT 8`);
-    assert.match(notificationPlan, /commerce_delivery_orders_buyer_notifications_pending/);
-    assert.match(notificationPlan, /commerce_delivery_orders_shipper_notifications_pending/);
+        AND shipper_notification_state = 'pending' AND document_path > ?
+    ) SELECT document_path FROM candidate_paths ORDER BY document_path LIMIT 8`,
+    'drops/a/deliveryOrders/1', 'drops/a/deliveryOrders/1');
+    assert.match(
+      ownerlessNotificationPlan,
+      /commerce_delivery_orders_buyer_notifications_pending \(document_path>\?\)/,
+    );
+    assert.match(
+      ownerlessNotificationPlan,
+      /commerce_delivery_orders_shipper_notifications_pending \(document_path>\?\)/,
+    );
     assert.match(planDetails(db, `SELECT document_path FROM commerce_documents
       WHERE document_kind = 'delivery_order' AND drop_id = 'drop'
         AND pack_projection_state = 'pending' AND pack_projection_next_attempt_ms <= 1

@@ -59,6 +59,7 @@ test('commerce repository batched reads return rows through the real D1 runtime'
       '0001_current_schema.sql',
       '0002_authority_control_lease.sql',
       '0003_wipe_readiness_guard.sql',
+      '0004_ready_notification_owner_indexes.sql',
     ]);
 
     const claimKey = commerceKeys.claimCode('RUNTIME');
@@ -122,6 +123,26 @@ test('commerce repository batched reads return rows through the real D1 runtime'
         },
       )));
     }
+    let observedBatchResults: D1Result<Record<string, unknown>>[] | undefined;
+    const latestObservedBatchResults = (): D1Result<Record<string, unknown>>[] | undefined =>
+      observedBatchResults;
+    const observedDb = {
+      prepare: (sql: string) => env.COMMERCE_DB.prepare(sql),
+      async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+        const results = await env.COMMERCE_DB.batch<T>(statements);
+        observedBatchResults = results as D1Result<Record<string, unknown>>[];
+        return results;
+      },
+    } as D1Database;
+    const observedRepository = new D1CommerceRepository(observedDb);
+    assert.deepEqual(await observedRepository.queryPendingReadyNotifications({
+      limit: 5,
+      owner: 'missing-owner',
+    }), []);
+    const missingOwnerRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.equal(Number.isSafeInteger(missingOwnerRowsRead), true);
+    assert.equal(missingOwnerRowsRead <= 4, true);
+
     await env.COMMERCE_DB.batch([
       env.COMMERCE_DB.prepare(`INSERT INTO commerce_authority_control_lease (
         singleton, lease_token, acquired_at_ms, expires_at_ms
@@ -139,23 +160,15 @@ test('commerce repository batched reads return rows through the real D1 runtime'
       WHERE singleton = 1`),
       env.COMMERCE_DB.prepare('DELETE FROM commerce_authority_control_lease WHERE singleton = 1'),
     ]);
-    let pausedBatchResults: D1Result<Record<string, unknown>>[] | undefined;
-    const observedDb = {
-      prepare: (sql: string) => env.COMMERCE_DB.prepare(sql),
-      async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
-        const results = await env.COMMERCE_DB.batch<T>(statements);
-        pausedBatchResults = results as D1Result<Record<string, unknown>>[];
-        return results;
-      },
-    } as D1Database;
+    observedBatchResults = undefined;
     await assert.rejects(
-      new D1CommerceRepository(observedDb).queryPendingReadyNotifications({
+      observedRepository.queryPendingReadyNotifications({
         limit: 5,
         owner: 'paused-owner',
       }),
       (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable',
     );
-    const pausedRowsRead = Number(pausedBatchResults?.[1]?.meta.rows_read);
+    const pausedRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(pausedRowsRead), true);
     assert.equal(pausedRowsRead <= 4, true);
   } finally {

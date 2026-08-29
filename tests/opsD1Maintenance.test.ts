@@ -20,6 +20,7 @@ const schemaSql = [
   '0002_reveal_submission_write_fence.sql',
   '0003_remove_ready_notification_pause.sql',
   '0004_repair_ready_notification_cursor.sql',
+  '0005_remove_redundant_anonymous_auth_subject_index.sql',
 ].map((name) => readFileSync(
   new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
   'utf8',
@@ -113,7 +114,6 @@ function integrityInput(
       anonymousAuthSessionColumns: queryRows(db, 'PRAGMA table_info(anonymous_auth_sessions)'),
       anonymousAuthSessionCounts: queryRows(db, 'SELECT COUNT(*) AS anonymous_auth_session_count FROM anonymous_auth_sessions'),
       anonymousAuthSessionExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)'),
-      anonymousAuthSessionSubjectIndexColumns: queryRows(db, 'PRAGMA index_info(anonymous_auth_sessions_auth_subject)'),
       controls: queryRows(db, 'SELECT * FROM worker_controls ORDER BY control_key'),
       expiryIndexColumns: queryRows(db, 'PRAGMA index_info(rate_limit_buckets_expires_at_ms)'),
       foreignKeyCheck: queryRows(db, 'PRAGMA foreign_key_check'),
@@ -122,6 +122,7 @@ function integrityInput(
         { name: '0002_reveal_submission_write_fence.sql' },
         { name: '0003_remove_ready_notification_pause.sql' },
         { name: '0004_repair_ready_notification_cursor.sql' },
+        { name: '0005_remove_redundant_anonymous_auth_subject_index.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
@@ -182,6 +183,38 @@ test('Ops baseline creates the exact current schema and active controls', () => 
       updated_at_ms: 0,
     }]);
     assert.doesNotThrow(() => assertOpsD1Integrity(integrityInput()));
+  } finally {
+    db.close();
+  }
+});
+
+test('anonymous-auth subject lookup uses the UNIQUE auto-index', () => {
+  const db = database();
+  try {
+    assert.deepEqual(queryRows(db, `SELECT name
+      FROM sqlite_schema
+      WHERE name = 'anonymous_auth_sessions_auth_subject'`), []);
+    const subjectIndexes = queryRows(db, `SELECT
+      index_list.name,
+      index_list.[unique],
+      index_list.origin,
+      index_info.seqno,
+      index_info.name AS column_name
+      FROM pragma_index_list('anonymous_auth_sessions') AS index_list
+      JOIN pragma_index_info(index_list.name) AS index_info
+      WHERE index_info.name = 'auth_subject'`);
+    assert.equal(subjectIndexes.length, 1);
+    assert.match(String(subjectIndexes[0].name), /^sqlite_autoindex_anonymous_auth_sessions_/);
+    assert.equal(subjectIndexes[0].unique, 1);
+    assert.equal(subjectIndexes[0].origin, 'u');
+    assert.equal(subjectIndexes[0].seqno, 0);
+    assert.equal(subjectIndexes[0].column_name, 'auth_subject');
+    const plan = queryRows(db, `EXPLAIN QUERY PLAN
+      SELECT session_id
+      FROM anonymous_auth_sessions
+      WHERE auth_subject = 'anon:10000000-0000-4000-8000-000000000001'`);
+    assert.ok(plan.some((row) =>
+      /^SEARCH anonymous_auth_sessions USING INDEX sqlite_autoindex_anonymous_auth_sessions_\d+ \(auth_subject=\?\)$/.test(String(row.detail))));
   } finally {
     db.close();
   }

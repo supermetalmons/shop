@@ -107,7 +107,19 @@ test('ops D1 migrations preserve the notification cursor and receipt-transfer li
       '0002_reveal_submission_write_fence.sql',
       '0003_remove_ready_notification_pause.sql',
       '0004_repair_ready_notification_cursor.sql',
+      '0005_remove_redundant_anonymous_auth_subject_index.sql',
     ]);
+    assert.equal((await env.OPS_DB.prepare(`SELECT COUNT(*) AS count
+      FROM sqlite_schema
+      WHERE name = 'anonymous_auth_sessions_auth_subject'`).first<{ count: number }>())?.count, 0);
+    const anonymousAuthSubjectPlan = await env.OPS_DB.prepare(`EXPLAIN QUERY PLAN
+      SELECT session_id
+      FROM anonymous_auth_sessions
+      WHERE auth_subject = ?`)
+      .bind('anon:10000000-0000-4000-8000-000000000001')
+      .all<{ detail: string }>();
+    assert.ok(anonymousAuthSubjectPlan.results.some((row) =>
+      /^SEARCH anonymous_auth_sessions USING INDEX sqlite_autoindex_anonymous_auth_sessions_\d+ \(auth_subject=\?\)$/.test(row.detail)));
     const anonymousExpiry = 30 * 24 * 60 * 60 * 1000;
     await env.OPS_DB.batch([
       env.OPS_DB.prepare(`INSERT INTO anonymous_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?)`)

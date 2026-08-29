@@ -231,9 +231,11 @@ The API Worker binds `mons-shop-ops` as `OPS_DB`. Its schema is separate from
 pack status and starts at
 `cloud/workers/api/ops-migrations/0001_current_schema.sql`. Migration
 `0003_remove_ready_notification_pause.sql` removes the legacy notification pause
-column while preserving the reconciliation cursor, and migration 0004 repairs a
-missing cursor singleton. Append `0005_<description>.sql`
-for the next change and never edit an applied file.
+column while preserving the reconciliation cursor,
+`0004_repair_ready_notification_cursor.sql` repairs a missing cursor singleton,
+and `0005_remove_redundant_anonymous_auth_subject_index.sql` removes the redundant
+named index while preserving the table's unique index. Append
+`0006_<description>.sql` for the next change and never edit an applied file.
 
 Apply and verify this database independently with:
 
@@ -297,7 +299,9 @@ schema starts at
 `cloud/workers/api/commerce-migrations/0001_current_schema.sql`; migration
 `0002_authority_control_lease.sql` adds operational serialization and
 `0003_wipe_readiness_guard.sql` makes destructive maintenance readiness atomic,
-so append `0004_<description>.sql` for the next change. The Worker preserves the existing
+and `0004_ready_notification_owner_indexes.sql` adds owner-targeted
+ready-notification indexes. Append
+`0005_<description>.sql` for the next change. The Worker preserves the existing
 commerce API and transaction behavior through the D1 document-store adapter.
 
 Inspect or pause the authoritative database with:

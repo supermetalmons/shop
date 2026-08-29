@@ -15,11 +15,40 @@ const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}
 const AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT = '0564c72e0abee388a0138b0dc80e5ce4a8ab93801c85a3b109106e1b81171c73';
 const LEASE_SCHEMA_FINGERPRINT = 'a243cba949108449376cf4df9b99eadb75d80e118120dd367f093636e57eb752';
 const WIPE_GUARD_SCHEMA_FINGERPRINT = 'b6aca59498285edd6d66adb915170774a8fb17903802bcce4c783b81317cb40a';
+const PENDING_READY_NOTIFICATION_INDEX_SQL: Readonly<Record<string, string>> = Object.freeze({
+  commerce_delivery_orders_buyer_notifications_pending: `CREATE INDEX
+    commerce_delivery_orders_buyer_notifications_pending ON commerce_documents (document_path)
+    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
+      buyer_notification_state = 'pending'`,
+  commerce_delivery_orders_buyer_notifications_pending_owner_path: `CREATE INDEX
+    commerce_delivery_orders_buyer_notifications_pending_owner_path ON commerce_documents (owner, document_path)
+    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
+      buyer_notification_state = 'pending'`,
+  commerce_delivery_orders_shipper_notifications_pending: `CREATE INDEX
+    commerce_delivery_orders_shipper_notifications_pending ON commerce_documents (document_path)
+    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
+      shipper_notification_state = 'pending'`,
+  commerce_delivery_orders_shipper_notifications_pending_owner_path: `CREATE INDEX
+    commerce_delivery_orders_shipper_notifications_pending_owner_path ON commerce_documents (owner, document_path)
+    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
+      shipper_notification_state = 'pending'`,
+});
+
+function normalizedSql(value: unknown): string {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
 
 function requireIndex(plan: Record<string, unknown>[], indexName: string): void {
   if (!plan.some((row) => String(row.detail || '').includes(indexName))) {
     fail(`Commerce D1 query plan does not use ${indexName}.`);
   }
+}
+
+function requireSearchIndex(plan: Record<string, unknown>[], indexName: string): void {
+  if (!plan.some((row) => {
+    const detail = String(row.detail || '');
+    return detail.includes('SEARCH ') && detail.includes(indexName);
+  })) fail(`Commerce D1 query plan does not search ${indexName}.`);
 }
 
 export function checkCommerceD1(): Record<string, unknown> {
@@ -29,10 +58,11 @@ export function checkCommerceD1(): Record<string, unknown> {
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 3 ||
+    migrations.length !== 4 ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
-    migrations[2].name !== '0003_wipe_readiness_guard.sql'
+    migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
+    migrations[3].name !== '0004_ready_notification_owner_indexes.sql'
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -163,6 +193,15 @@ export function checkCommerceD1(): Record<string, unknown> {
       WHERE document_kind = 'delivery_order'`.replace(/\s+/g, ' ').trim()
   ) fail('Commerce D1 delivery-owner partial index is invalid.');
 
+  const pendingReadyNotificationIndexes = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
+    WHERE type = 'index' AND name GLOB 'commerce_delivery_orders_*_notifications_pending*'
+    ORDER BY name`);
+  if (
+    pendingReadyNotificationIndexes.length !== Object.keys(PENDING_READY_NOTIFICATION_INDEX_SQL).length ||
+    pendingReadyNotificationIndexes.some((row) =>
+      normalizedSql(row.sql) !== normalizedSql(PENDING_READY_NOTIFICATION_INDEX_SQL[String(row.name)]))
+  ) fail('Commerce D1 pending ready-notification indexes are invalid.');
+
   requireIndex(
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
       FROM commerce_documents
@@ -190,7 +229,22 @@ export function checkCommerceD1(): Record<string, unknown> {
       ORDER BY processed_at_seconds DESC, processed_at_nanos DESC, document_path DESC`),
     'commerce_documents_drop_processed_cursor',
   );
-  const notificationPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN WITH candidate_paths AS (
+  const ownerNotificationPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN WITH candidate_paths AS (
+    SELECT document_path FROM commerce_documents
+      INDEXED BY commerce_delivery_orders_buyer_notifications_pending_owner_path
+    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
+      AND buyer_notification_state = 'pending' AND owner = 'owner'
+      AND document_path > 'drops/a/deliveryOrders/1'
+    UNION
+    SELECT document_path FROM commerce_documents
+      INDEXED BY commerce_delivery_orders_shipper_notifications_pending_owner_path
+    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
+      AND shipper_notification_state = 'pending' AND owner = 'owner'
+      AND document_path > 'drops/a/deliveryOrders/1'
+  ) SELECT document_path FROM candidate_paths ORDER BY document_path LIMIT 8`);
+  requireSearchIndex(ownerNotificationPlan, 'commerce_delivery_orders_buyer_notifications_pending_owner_path');
+  requireSearchIndex(ownerNotificationPlan, 'commerce_delivery_orders_shipper_notifications_pending_owner_path');
+  const ownerlessNotificationPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN WITH candidate_paths AS (
     SELECT document_path FROM commerce_documents
       INDEXED BY commerce_delivery_orders_buyer_notifications_pending
     WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
@@ -201,8 +255,8 @@ export function checkCommerceD1(): Record<string, unknown> {
     WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
       AND shipper_notification_state = 'pending' AND document_path > 'drops/a/deliveryOrders/1'
   ) SELECT document_path FROM candidate_paths ORDER BY document_path LIMIT 8`);
-  requireIndex(notificationPlan, 'commerce_delivery_orders_buyer_notifications_pending');
-  requireIndex(notificationPlan, 'commerce_delivery_orders_shipper_notifications_pending');
+  requireSearchIndex(ownerlessNotificationPlan, 'commerce_delivery_orders_buyer_notifications_pending');
+  requireSearchIndex(ownerlessNotificationPlan, 'commerce_delivery_orders_shipper_notifications_pending');
   requireIndex(
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents
       WHERE document_kind = 'delivery_order' AND drop_id = 'drop'
