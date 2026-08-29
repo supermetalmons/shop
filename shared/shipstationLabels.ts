@@ -322,6 +322,7 @@ async function shipStationLabelFetch(
     return { status: response.status, json };
   } catch (error) {
     if (error instanceof ShipStationLabelProviderError) throw error;
+    if (options.signal?.aborted && error === options.signal.reason) throw error;
     throw new ShipStationLabelProviderError(
       controller.signal.aborted ? 'deadline-exceeded' : 'unavailable',
       controller.signal.aborted ? 'ShipStation request timed out' : 'Could not reach ShipStation',

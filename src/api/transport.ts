@@ -1,4 +1,8 @@
 import { summarizePayloadShape } from '../../shared/logSummaries.ts';
+import {
+  STRIPE_CHECKOUT_RETRY_HEADER,
+  STRIPE_CHECKOUT_RETRY_SAME_OPERATION,
+} from '../../shared/contracts.ts';
 import { ensureAnonymousSession } from '../lib/anonymousSession';
 import { AUTHENTICATED_API_ORIGIN } from '../lib/authenticatedApiOrigin';
 import { ensureStaffWalletSession } from '../lib/staffWalletSession';
@@ -28,21 +32,45 @@ type ProfileApiErrorPayload = {
   code: string;
   message: string;
   details?: unknown;
+  status?: number;
+  retrySameOperation?: boolean;
 };
 
 export class ProfileApiError extends Error {
   readonly code: string;
   readonly details?: unknown;
+  readonly status?: number;
+  readonly retrySameOperation: boolean;
 
   constructor(payload: ProfileApiErrorPayload) {
     super(payload.message);
     this.name = 'ProfileApiError';
     this.code = payload.code;
     this.details = payload.details;
+    this.status = payload.status;
+    this.retrySameOperation = payload.retrySameOperation === true;
   }
 }
 
-function profileApiErrorPayload(value: unknown, status: number): ProfileApiErrorPayload {
+function retrySameOperation(response: Response): boolean {
+  return response.status === 499 ||
+    response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER) === STRIPE_CHECKOUT_RETRY_SAME_OPERATION;
+}
+
+function unrecognizedResponseRetrySameOperation(
+  pathname: AuthenticatedApiPath,
+  response: Response,
+): boolean {
+  return pathname === '/checkout/session' && response.status >= 500;
+}
+
+function profileApiErrorPayload(
+  value: unknown,
+  response: Response,
+  pathname: AuthenticatedApiPath,
+): ProfileApiErrorPayload {
+  const status = response.status;
+  const responseMetadata = { status, retrySameOperation: retrySameOperation(response) };
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const error = (value as Record<string, unknown>).error;
     if (error && typeof error === 'object' && !Array.isArray(error)) {
@@ -50,11 +78,17 @@ function profileApiErrorPayload(value: unknown, status: number): ProfileApiError
       const message = (error as Record<string, unknown>).message;
       const details = (error as Record<string, unknown>).details;
       if (typeof code === 'string' && code && typeof message === 'string' && message) {
-        return { code, message, ...(details === undefined ? {} : { details }) };
+        return { code, message, ...(details === undefined ? {} : { details }), ...responseMetadata };
       }
     }
   }
-  return { code: status >= 500 ? 'unavailable' : `http-${status}`, message: 'Profile API request failed.' };
+  return {
+    code: status >= 500 ? 'unavailable' : `http-${status}`,
+    message: 'Profile API request failed.',
+    ...responseMetadata,
+    retrySameOperation: responseMetadata.retrySameOperation ||
+      unrecognizedResponseRetrySameOperation(pathname, response),
+  };
 }
 
 type AuthenticatedUserCredential = {
@@ -109,7 +143,13 @@ export type AuthenticatedApiCall = <Req>(
   pathname: AuthenticatedApiPath,
   data: Req,
   credentialCapture?: { authSubject?: string },
+  options?: AuthenticatedApiCallOptions,
 ) => Promise<unknown>;
+
+export type AuthenticatedApiCallOptions = {
+  headers?: Readonly<Record<string, string>>;
+  onCredential?: (authSubject: string) => void;
+};
 
 const defaultProfileApiDependencies: ProfileApiClientDependencies = {
   fetch: (input, init) => fetch(input, init),
@@ -157,8 +197,12 @@ export function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   return defaultProfileApiDependencies.timeoutMs;
 }
 
-function profileApiDeadlineError(): ProfileApiError {
-  return new ProfileApiError({ code: 'deadline-exceeded', message: 'Profile API request timed out.' });
+function profileApiDeadlineError(retrySameOperation = true): ProfileApiError {
+  return new ProfileApiError({
+    code: 'deadline-exceeded',
+    message: 'Profile API request timed out.',
+    retrySameOperation,
+  });
 }
 
 async function waitForProfileApiValue<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -187,6 +231,7 @@ export async function requestProfileApi<Req>(
   data: Req,
   dependencies: ProfileApiClientDependencies,
   credentialCapture?: { authSubject?: string },
+  options?: AuthenticatedApiCallOptions,
 ): Promise<unknown> {
   const startedAt = Date.now();
   const callId = DEBUG_API ? makeCallId() : undefined;
@@ -196,8 +241,10 @@ export async function requestProfileApi<Req>(
     dependencies.timeoutMs,
   );
   let initialAuthSubject: string | undefined;
+  let deadlineRetrySameOperation = true;
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      deadlineRetrySameOperation = true;
       try {
         const credential = await waitForProfileApiValue(dependencies.getCredential(attempt > 0), controller.signal);
         const token = credential.token;
@@ -209,12 +256,14 @@ export async function requestProfileApi<Req>(
           });
         }
         if (credentialCapture) credentialCapture.authSubject = credential.authSubject;
+        options?.onCredential?.(credential.authSubject);
         if (DEBUG_API) {
           console.info(`[mons/api] → ${pathname}`, { callId, payload: summarizePayloadShape(data) });
         }
         const response = await dependencies.fetch(`${dependencies.origin()}${pathname}`, {
           method: 'POST',
           headers: {
+            ...options?.headers,
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
             'Content-Type': 'application/json',
             'X-Mons-CSRF': '1',
@@ -224,15 +273,26 @@ export async function requestProfileApi<Req>(
           credentials: 'same-origin',
           signal: controller.signal,
         });
+        deadlineRetrySameOperation = response.ok ||
+          retrySameOperation(response) ||
+          unrecognizedResponseRetrySameOperation(pathname, response);
         let payload: unknown;
         try {
           payload = await waitForProfileApiValue(response.json(), controller.signal);
         } catch (error) {
           if (controller.signal.aborted) throw controller.signal.reason;
-          throw new ProfileApiError({ code: 'unavailable', message: 'Profile API returned malformed JSON.', details: error });
+          throw new ProfileApiError({
+            code: 'unavailable',
+            message: 'Profile API returned malformed JSON.',
+            details: error,
+            status: response.status,
+            retrySameOperation: response.ok ||
+              retrySameOperation(response) ||
+              unrecognizedResponseRetrySameOperation(pathname, response),
+          });
         }
         if (response.status === 401 && attempt === 0) continue;
-        if (!response.ok) throw new ProfileApiError(profileApiErrorPayload(payload, response.status));
+        if (!response.ok) throw new ProfileApiError(profileApiErrorPayload(payload, response, pathname));
         if (DEBUG_API) {
           console.info(`[mons/api] ← ${pathname}`, {
             callId,
@@ -242,7 +302,9 @@ export async function requestProfileApi<Req>(
         }
         return payload;
       } catch (error) {
-        const normalizedError = controller.signal.aborted ? profileApiDeadlineError() : error;
+        const normalizedError = controller.signal.aborted
+          ? profileApiDeadlineError(deadlineRetrySameOperation)
+          : error;
         if (attempt === 0 && normalizedError instanceof ProfileApiError && normalizedError.code === 'unauthenticated') {
           continue;
         }
@@ -264,9 +326,10 @@ export async function callProfileApi<Req>(
   pathname: AuthenticatedApiPath,
   data: Req,
   credentialCapture?: { authSubject?: string },
+  options?: AuthenticatedApiCallOptions,
 ): Promise<unknown> {
   return requestProfileApi(pathname, data, {
     ...defaultProfileApiDependencies,
     timeoutMs: profileApiTimeoutMs(pathname),
-  }, credentialCapture);
+  }, credentialCapture, options);
 }

@@ -1127,6 +1127,7 @@ async function shipStationFetch(
     return { status: response.status, json, validJson };
   } catch (error) {
     if (error instanceof ShipStationRatesProviderError) throw error;
+    if (options.signal?.aborted && error === options.signal.reason) throw error;
     throw new ShipStationRatesProviderError(
       controller.signal.aborted ? 'deadline-exceeded' : 'unavailable',
       controller.signal.aborted ? 'ShipStation request timed out' : 'Could not reach ShipStation',

@@ -70,6 +70,13 @@ import {
   publicCorsHeaders,
   publicRequestOrigin,
 } from './publicRequestPolicy.js';
+import {
+  createRequestDeadline,
+  isRequestCancellationError,
+  raceWithSignal,
+  readBoundedRequestJson,
+} from './boundedRequest.js';
+import { cancelResponseBody } from './boundedResponse.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -130,31 +137,7 @@ class ProviderReadGate {
       return operation();
     });
     this.tail = queued.then(() => undefined, () => undefined);
-    if (signal.aborted) throw signal.reason;
-    return new Promise<T>((resolve, reject) => {
-      let settled = false;
-      const onAbort = () => {
-        if (settled) return;
-        settled = true;
-        reject(signal.reason);
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-      if (signal.aborted) onAbort();
-      void queued.then(
-        (value) => {
-          if (settled) return;
-          settled = true;
-          resolve(value);
-        },
-        (error) => {
-          if (settled) return;
-          settled = true;
-          reject(error);
-        },
-      ).finally(() => {
-        signal.removeEventListener('abort', onAbort);
-      });
-    });
+    return raceWithSignal(queued, signal);
   }
 }
 
@@ -373,26 +356,15 @@ async function readBoundedText(
   }
 }
 
-async function readBoundedRequestBody(request: Request): Promise<string> {
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) throw new Error('invalid-request');
-  if (!request.body) throw new Error('invalid-request');
-  return readBoundedText(request.body, MAX_REQUEST_BODY_BYTES, () => new Error('invalid-request'));
-}
-
 async function parseJsonRequestBody<T>(
   request: Request,
   validate: (value: unknown) => value is T,
 ): Promise<T> {
-  if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
-    throw new Error('invalid-request');
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(await readBoundedRequestBody(request));
-  } catch {
-    throw new Error('invalid-request');
-  }
+  const value = await readBoundedRequestJson(request, {
+    maxBytes: MAX_REQUEST_BODY_BYTES,
+    signal: request.signal,
+    createError: () => new Error('invalid-request'),
+  });
   if (!validate(value)) throw new Error('invalid-request');
   return value;
 }
@@ -404,12 +376,6 @@ async function parseShopRequestBody<T extends ShopInventoryRequest | ShopPending
   const value = await parseJsonRequestBody(request, validate);
   if (!isBase58Bytes(value.owner, 32)) throw new Error('invalid-request');
   return value;
-}
-
-async function cancelResponseBody(response: Response): Promise<void> {
-  try {
-    void response.body?.cancel().catch(() => undefined);
-  } catch {}
 }
 
 async function readBoundedJsonResponse(
@@ -446,6 +412,7 @@ async function readBoundedJsonResponse(
       signal,
     ));
   } catch (error) {
+    if (signal?.aborted && error === signal.reason) throw error;
     if (error instanceof ProviderFailure) throw error;
     throw new ProviderFailure('unavailable');
   }
@@ -494,7 +461,7 @@ async function heliusRpc<T>(
   const maxAttempts = options.maxAttempts ?? 2;
   const signal = options.signal ?? context.signal;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    if (signal.aborted) throw new ProviderFailure('deadline');
+    if (signal.aborted) throw signal.reason;
     if (options.inventoryCall) {
       if (context.inventoryProviderCalls >= context.dependencies.inventoryMaxProviderCalls) {
         throw new ProviderFailure('limit');
@@ -510,7 +477,7 @@ async function heliusRpc<T>(
     try {
       context.metrics.upstreamCalls += 1;
       const requestId = `${method}-${context.metrics.upstreamCalls}`;
-      response = await context.dependencies.providerFetch(
+      response = await raceWithSignal(context.dependencies.providerFetch(
         `${heliusRpcOrigin(cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
         {
           method: 'POST',
@@ -518,16 +485,17 @@ async function heliusRpc<T>(
           body: JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }),
           signal: attemptScope.signal,
         },
-      );
+      ), attemptScope.signal);
       if (!response.ok) {
         const retryable = TRANSIENT_HTTP_STATUSES.has(response.status);
+        const failure = new ProviderFailure(
+          response.status === 408 || response.status === 504 ? 'timeout' : 'unavailable',
+        );
         await cancelResponseBody(response);
-        if (signal.aborted) throw new ProviderFailure('deadline');
-        if (attempt + 1 < maxAttempts && retryable) {
-          await context.dependencies.sleep(retryDelayMs(context.dependencies, response), attemptScope.signal);
-          continue;
-        }
-        throw new ProviderFailure(response.status === 408 || response.status === 504 ? 'timeout' : 'unavailable');
+        if (!retryable || attempt + 1 >= maxAttempts) throw failure;
+        if (signal.aborted) throw signal.reason;
+        await context.dependencies.sleep(retryDelayMs(context.dependencies, response), attemptScope.signal);
+        continue;
       }
       const successfulResponse = response;
       attemptScope.pauseTimeout();
@@ -558,13 +526,12 @@ async function heliusRpc<T>(
       if (!Object.hasOwn(rpc, 'result')) throw new ProviderFailure('unavailable');
       return rpc.result as T;
     } catch (error) {
-      if (signal.aborted) throw new ProviderFailure('deadline');
-      if (error instanceof ProviderFailure && error.kind === 'page-too-large') throw error;
+      if (signal.aborted && error === signal.reason) throw error;
+      if (error instanceof ProviderFailure) throw error;
       if (attemptScope.timedOut()) {
         if (attempt + 1 < maxAttempts) continue;
         throw new ProviderFailure('timeout');
       }
-      if (error instanceof ProviderFailure) throw error;
       if (attempt + 1 < maxAttempts) {
         await context.dependencies.sleep(retryDelayMs(context.dependencies), attemptScope.signal);
         continue;
@@ -910,7 +877,7 @@ async function fetchExpectedAssetGroup(
       failures: 0,
     };
   } catch (error) {
-    if (context.signal.aborted) throw new ProviderFailure('deadline');
+    if (context.signal.aborted && error === context.signal.reason) throw error;
     if (error instanceof ProviderFailure && error.kind === 'asset-not-found' && ids.length > 1) {
       const midpoint = Math.floor(ids.length / 2);
       const left = await fetchExpectedAssetGroup(context, cluster, ids.slice(0, midpoint), signal);
@@ -941,7 +908,7 @@ async function mergeExpectedInventoryItems(
       }
       return { items, rawAssets: recovery.assetsById.size };
     });
-    if (context.signal.aborted) throw new ProviderFailure('deadline');
+    if (context.signal.aborted) throw context.signal.reason;
     for (const row of rows) {
       if (context.inventoryCandidates + row.rawAssets > context.dependencies.inventoryMaxCandidates) {
         context.metrics.expectedAssetRecoveryFailures += 1;
@@ -1014,7 +981,7 @@ export function sleepWithAbort(milliseconds: number, signal: AbortSignal): Promi
       settled = true;
       if (timeout !== undefined) clearTimeout(timeout);
       signal.removeEventListener('abort', onAbort);
-      reject(new ProviderFailure('deadline'));
+      reject(signal.reason);
     };
     if (signal.aborted) {
       onAbort();
@@ -1148,7 +1115,8 @@ export async function handlePost(
     parsedRequest = pathname === '/inventory'
       ? { kind: 'inventory', body: await parseShopRequestBody(request, isExactShopInventoryRequest) }
       : { kind: 'pending-open-boxes', body: await parseShopRequestBody(request, isExactShopPendingOpenBoxesRequest) };
-  } catch {
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
     return result(jsonResponse({ ok: false, error: 'invalid-request' }, 400), false);
   }
   const requestBody = parsedRequest.body;
@@ -1167,11 +1135,15 @@ export async function handlePost(
       requestBody.includeDevnet === true,
     );
   }
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.providerTimeoutMs,
+    timeoutMessage: 'Shop provider request timed out',
+  });
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), dependencies.providerTimeoutMs);
+  const signal = AbortSignal.any([deadline.signal, controller.signal]);
   const context: ProviderContext = {
     apiKey,
-    signal: controller.signal,
+    signal,
     dependencies,
     metrics,
     providerResponseBodyBytes: 0,
@@ -1199,7 +1171,12 @@ export async function handlePost(
     );
   } catch (error) {
     controller.abort();
-    const kind = error instanceof ProviderFailure ? error.kind : 'unavailable';
+    if (isRequestCancellationError(request, error)) throw error;
+    const kind = deadline.timedOut()
+      ? 'deadline'
+      : error instanceof ProviderFailure
+        ? error.kind
+        : 'unavailable';
     return result(
       jsonResponse(
         { ok: false, error: kind === 'timeout' || kind === 'deadline' ? 'provider-timeout' : 'provider-unavailable' },
@@ -1208,7 +1185,7 @@ export async function handlePost(
       requestBody.includeDevnet === true,
     );
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }
 
@@ -1227,7 +1204,8 @@ export async function handleNotificationSubscription(
       request,
       isExactSubscribeToNotificationsRequest,
     )).email;
-  } catch {
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
     return respond(jsonResponse({ ok: false, error: 'invalid-request' }, 400));
   }
   const email = normalizeNotificationEmailRecipient(rawEmail);
@@ -1247,23 +1225,22 @@ export async function handleNotificationSubscription(
     : '';
   if (!apiKey) return respond(jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
 
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Resend request timed out', 'TimeoutError')),
-    dependencies.resendTimeoutMs,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.resendTimeoutMs,
+    timeoutMessage: 'Resend request timed out',
+  });
   const startedAt = performance.now();
   metrics.upstreamCalls += 1;
   try {
-    const providerResponse = await dependencies.resendFetch(RESEND_CONTACTS_API_URL, {
+    const providerResponse = await raceWithSignal(dependencies.resendFetch(RESEND_CONTACTS_API_URL, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ email, unsubscribed: false }),
-      signal: controller.signal,
-    });
+      signal: deadline.signal,
+    }), deadline.signal);
     if (providerResponse.status === 409) {
       await cancelResponseBody(providerResponse);
       return respond(jsonResponse({ subscribed: true }, 200));
@@ -1279,10 +1256,14 @@ export async function handleNotificationSubscription(
         MAX_RESEND_RESPONSE_BODY_BYTES,
         () => new Error('provider-response-too-large'),
         undefined,
-        controller.signal,
+        deadline.signal,
       ));
-    } catch {
-      return respond(controller.signal.aborted
+    } catch (error) {
+      if (!providerResponse.ok) {
+        return respond(jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
+      }
+      if (isRequestCancellationError(request, error)) throw error;
+      return respond(deadline.timedOut()
         ? jsonResponse({ ok: false, error: 'provider-timeout' }, 504)
         : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
     }
@@ -1301,12 +1282,13 @@ export async function handleNotificationSubscription(
       return respond(jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
     }
     return respond(jsonResponse({ subscribed: true }, 200));
-  } catch {
-    return respond(controller.signal.aborted
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
+    return respond(deadline.timedOut()
       ? jsonResponse({ ok: false, error: 'provider-timeout' }, 504)
       : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
     metrics.providerDurationMs += performance.now() - startedAt;
   }
 }

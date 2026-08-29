@@ -18,6 +18,17 @@ import {
 import {
   type ProfileProviderFetch,
 } from './boundedResponse.js';
+import {
+  createRequestDeadline,
+  isRequestCancellationError,
+  raceWithSignal,
+  readBoundedRequestBytes,
+  runCriticalRequestOperation,
+} from './boundedRequest.js';
+import {
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
   CommerceWriteConflict,
@@ -55,10 +66,12 @@ export type StripeWebhookRequestResult = {
 };
 
 type StripeWebhookDependencies = {
+  defer: DeferredWork;
   getDrop: (dropId: string) => StripeWebhookDrop | undefined;
   log: (entry: Record<string, unknown>) => void;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  timeoutMs: number;
   verifyEvent: (
     payload: Uint8Array,
     signature: string,
@@ -82,6 +95,7 @@ class StripeWebhookRequestError extends Error {
 }
 
 const defaultDependencies: StripeWebhookDependencies = {
+  defer: () => undefined,
   getDrop: (dropId) => {
     const drop = getApiDrop(dropId);
     if (!drop) return undefined;
@@ -96,6 +110,7 @@ const defaultDependencies: StripeWebhookDependencies = {
   log: (entry) => console.log(entry),
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  timeoutMs: STRIPE_WEBHOOK_TIMEOUT_MS,
   verifyEvent: async (payload, signature, secret) => {
     const event = await Stripe.webhooks.constructEventAsync(
       payload,
@@ -197,48 +212,17 @@ async function webhookSecrets(env: StripeWebhookEnv): Promise<WebhookSecret[]> {
 async function readRawBody(request: Request, signal: AbortSignal): Promise<Uint8Array> {
   const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
   if (contentType !== 'application/json') {
-    await request.body?.cancel().catch(() => undefined);
+    void request.body?.cancel().catch(() => undefined);
     throw new StripeWebhookRequestError(400, 'invalid_request');
   }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > STRIPE_WEBHOOK_MAX_BODY_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new StripeWebhookRequestError(400, 'request_too_large');
-  }
-  if (!request.body) throw new StripeWebhookRequestError(400, 'invalid_request');
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (signal.aborted) throw signal.reason;
-      if (done) break;
-      size += value.byteLength;
-      if (size > STRIPE_WEBHOOK_MAX_BODY_BYTES) {
-        throw new StripeWebhookRequestError(400, 'request_too_large');
-      }
-      chunks.push(value);
-    }
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-  }
-  const payload = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    payload.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return payload;
+  return readBoundedRequestBytes(request, {
+    maxBytes: STRIPE_WEBHOOK_MAX_BODY_BYTES,
+    signal,
+    createError: (failure) => new StripeWebhookRequestError(
+      400,
+      failure === 'too-large' ? 'request_too_large' : 'invalid_request',
+    ),
+  });
 }
 
 async function verifyWebhookEvent(
@@ -359,9 +343,14 @@ export async function handleStripeWebhookRequest(
   const startedAt = performance.now();
   let responseStatus = 500;
   let logContext: Omit<StripeWebhookRequestResult, 'response' | 'metrics'> = { outcome: 'rejected' };
+  let requestCancelled = false;
   try {
+    if (request.signal.aborted) {
+      requestCancelled = true;
+      throw request.signal.reason;
+    }
     if (request.method !== 'POST') {
-      await request.body?.cancel().catch(() => undefined);
+      void request.body?.cancel().catch(() => undefined);
       const result: StripeWebhookRequestResult = {
         response: jsonResponse({ received: false, error: 'Method not allowed' }, 405, { Allow: 'POST' }),
         metrics,
@@ -374,14 +363,16 @@ export async function handleStripeWebhookRequest(
     const secrets = await webhookSecrets(env);
     const signature = String(request.headers.get('Stripe-Signature') || '').trim();
     if (!signature) throw new StripeWebhookRequestError(400, 'invalid_signature');
-    const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(new DOMException('Stripe webhook timed out', 'TimeoutError')),
-      STRIPE_WEBHOOK_TIMEOUT_MS,
-    );
+    const deadline = createRequestDeadline(request, {
+      timeoutMs: dependencies.timeoutMs,
+      timeoutMessage: 'Stripe webhook timed out',
+    });
     try {
-      const payload = await readRawBody(request, controller.signal);
-      const verified = await verifyWebhookEvent(payload, signature, secrets, dependencies.verifyEvent);
+      const payload = await readRawBody(request, deadline.signal);
+      const verified = await raceWithSignal(
+        verifyWebhookEvent(payload, signature, secrets, dependencies.verifyEvent),
+        deadline.signal,
+      );
       const action = resolveStripeWebhookAction(verified.event, dependencies.getDrop);
       logContext = {
         outcome: action.kind,
@@ -406,20 +397,26 @@ export async function handleStripeWebhookRequest(
         };
         return result;
       }
-      const transition = await mutateCheckout(action, {
-        commerceDb: env.COMMERCE_DB,
-        nowMs: dependencies.nowMs(),
-        signal: controller.signal,
-      });
+      const transition = await runCriticalRequestOperation(
+        () => mutateCheckout(action, {
+          commerceDb: env.COMMERCE_DB,
+          nowMs: dependencies.nowMs(),
+          signal: deadline.signal,
+        }),
+        { deadline, defer: dependencies.defer },
+      );
       if (transition.outcome !== 'already_fulfilled') {
-        const queueResult = await env.STRIPE_FULFILLMENT_QUEUE.send(
-          createStripeCheckoutFulfillmentJobV1({
-            dropId: action.dropId,
-            sessionId: action.sessionId,
-            stripeEventId: action.eventId,
-            stripeEventType: action.eventType,
-            enqueuedAtMs: dependencies.nowMs(),
-          }),
+        const queueResult = await runCriticalRequestOperation(
+          () => env.STRIPE_FULFILLMENT_QUEUE.send(
+            createStripeCheckoutFulfillmentJobV1({
+              dropId: action.dropId,
+              sessionId: action.sessionId,
+              stripeEventId: action.eventId,
+              stripeEventType: action.eventType,
+              enqueuedAtMs: dependencies.nowMs(),
+            }),
+          ),
+          { deadline, defer: dependencies.defer },
         );
         dependencies.log({
           event: 'stripe_fulfillment_job_enqueued',
@@ -470,9 +467,14 @@ export async function handleStripeWebhookRequest(
       };
       return result;
     } finally {
-      clearTimeout(timeout);
+      deadline.dispose();
     }
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
+    if (isRequestCancellationError(request, error)) {
+      requestCancelled = true;
+      throw error;
+    }
     const requestError = error instanceof StripeWebhookRequestError ? error : null;
     const status = requestError?.status ?? 500;
     const outcome = requestError?.outcome ?? (
@@ -494,13 +496,16 @@ export async function handleStripeWebhookRequest(
       outcome,
     };
   } finally {
-    dependencies.log({
-      event: 'stripe_webhook_request',
-      ...logContext,
-      status: responseStatus,
-      durationMs: Math.round(performance.now() - startedAt),
-      providerDurationMs: Math.round(metrics.providerDurationMs),
-      upstreamCalls: metrics.upstreamCalls,
-    });
+    requestCancelled ||= request.signal.aborted && responseStatus >= 200 && responseStatus < 300;
+    if (!requestCancelled) {
+      dependencies.log({
+        event: 'stripe_webhook_request',
+        ...logContext,
+        status: responseStatus,
+        durationMs: Math.round(performance.now() - startedAt),
+        providerDurationMs: Math.round(metrics.providerDurationMs),
+        upstreamCalls: metrics.upstreamCalls,
+      });
+    }
   }
 }

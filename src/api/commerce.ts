@@ -23,6 +23,7 @@ import {
   normalizeDropId,
 } from '../config/deployment';
 import { isStripeReceiptClaimCode } from '../../shared/stripeReceiptClaims.ts';
+import { STRIPE_CHECKOUT_OPERATION_HEADER } from '../../shared/contracts.ts';
 import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
@@ -121,6 +122,50 @@ function stripeCheckoutSessionPayload(args: StripeCheckoutSessionRequest): Strip
     payload.returnUrl = args.returnUrl.trim();
   }
   return payload;
+}
+
+export type StripeCheckoutOperationState = {
+  authSubject: string | null;
+  key: string;
+  operationId: string;
+};
+
+export function stripeCheckoutOperationState(
+  current: StripeCheckoutOperationState | null,
+  args: StripeCheckoutSessionRequest,
+  authSubject: string | null,
+  createOperationId: () => string = () => crypto.randomUUID(),
+): StripeCheckoutOperationState {
+  const payload = stripeCheckoutSessionPayload(args);
+  const normalizedAuthSubject = authSubject?.trim() || null;
+  const key = JSON.stringify([
+    payload.dropId,
+    payload.variantKey ?? null,
+    payload.quantity ?? null,
+    payload.returnUrl ?? null,
+  ]);
+  if (current?.key === key) {
+    if (current.authSubject === normalizedAuthSubject) return current;
+    if (current.authSubject === null && normalizedAuthSubject !== null) {
+      return { ...current, authSubject: normalizedAuthSubject };
+    }
+  }
+  return { authSubject: normalizedAuthSubject, key, operationId: createOperationId() };
+}
+
+export function stripeCheckoutOperationAfterFailure(
+  current: StripeCheckoutOperationState | null,
+  error: unknown,
+): StripeCheckoutOperationState | null {
+  if (!current) return null;
+  return error instanceof ProfileApiError && !error.retrySameOperation ? null : current;
+}
+
+export function stripeCheckoutOperationWithCredential(
+  current: StripeCheckoutOperationState,
+  authSubject: string,
+): StripeCheckoutOperationState {
+  return { ...current, authSubject: authSubject.trim() || null };
 }
 
 export function parseStripeCheckoutSessionResponse(value: unknown): StripeCheckoutSessionResponse | null {
@@ -466,9 +511,19 @@ export function createCommerceApiClient(
   }
   async function createStripeCheckoutSession(
     args: StripeCheckoutSessionRequest,
+    operationId: string,
+    onCredential?: (authSubject: string) => void,
   ): Promise<StripeCheckoutSessionResponse & { authSubject: string }> {
     const credential: { authSubject?: string } = {};
-    const response = await callProfileApi('/checkout/session', stripeCheckoutSessionPayload(args), credential);
+    const response = await callProfileApi(
+      '/checkout/session',
+      stripeCheckoutSessionPayload(args),
+      credential,
+      {
+        headers: { [STRIPE_CHECKOUT_OPERATION_HEADER]: operationId },
+        ...(onCredential ? { onCredential } : {}),
+      },
+    );
     const session = parseStripeCheckoutSessionResponse(response);
     if (!session || !credential.authSubject) throw new Error('Invalid Stripe checkout session response');
     return { ...session, authSubject: credential.authSubject };

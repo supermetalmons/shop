@@ -219,7 +219,9 @@ async function dispatchNotificationEnqueue(context: WorkerRouteContext): Promise
 }
 
 async function dispatchStripeCheckout(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleStripeCheckoutSession(context.request, context.env);
+  const result = await handleStripeCheckoutSession(context.request, context.env, {
+    defer: context.defer,
+  });
   addMetrics(context.metrics, result);
   return {
     response: result.response,
@@ -235,7 +237,7 @@ async function dispatchStripeWebhook(context: WorkerRouteContext): Promise<Worke
   const result = await handleStripeWebhookRequest(
     context.request,
     context.env,
-    { log: context.dependencies.log },
+    { defer: context.defer, log: context.dependencies.log },
   );
   addMetrics(context.metrics, result);
   return {
@@ -279,7 +281,9 @@ async function dispatchStripeReceiptClaim(context: WorkerRouteContext): Promise<
 }
 
 async function dispatchReceiptTransfer(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleReceiptTransferPrepare(context.request, context.env);
+  const result = await handleReceiptTransferPrepare(context.request, context.env, {
+    defer: context.defer,
+  });
   addMetrics(context.metrics, result);
   return {
     response: result.response,
@@ -291,7 +295,9 @@ async function dispatchReceiptTransfer(context: WorkerRouteContext): Promise<Wor
 }
 
 async function dispatchDeliveryPrepare(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleDeliveryPrepare(context.request, context.env);
+  const result = await handleDeliveryPrepare(context.request, context.env, {
+    defer: context.defer,
+  });
   addMetrics(context.metrics, result);
   return {
     response: result.response,
@@ -327,7 +333,9 @@ async function dispatchDeliveryReceipt(
 }
 
 async function dispatchAdminIrlRedeemPrepare(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleAdminIrlRedeemPrepare(context.request, context.env);
+  const result = await handleAdminIrlRedeemPrepare(context.request, context.env, {
+    defer: context.defer,
+  });
   addMetrics(context.metrics, result);
   return {
     response: result.response,
@@ -382,7 +390,9 @@ async function dispatchProfileLifecycle(
   context: WorkerRouteContext,
   path: ProfileLifecyclePath,
 ): Promise<WorkerRouteResult> {
-  const result = await handleProfileLifecycleRequest(context.request, context.env, path);
+  const result = await handleProfileLifecycleRequest(context.request, context.env, path, {
+    defer: context.defer,
+  });
   addMetrics(context.metrics, result);
   return {
     response: result.response,
@@ -414,7 +424,9 @@ async function dispatchProfileWrite(
   context: WorkerRouteContext,
   path: ProfileWritePath,
 ): Promise<WorkerRouteResult> {
-  const result = await handleProfileWriteRequest(context.request, context.env, path);
+  const result = await handleProfileWriteRequest(context.request, context.env, path, {
+    defer: context.defer,
+  });
   addMetrics(context.metrics, result);
   return {
     response: result.response,

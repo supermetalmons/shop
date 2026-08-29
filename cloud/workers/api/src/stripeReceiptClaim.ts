@@ -71,6 +71,13 @@ import { RequestIdentityError, verifyRequestIdentity, type RequestIdentity } fro
 import {
   type ProfileProviderFetch,
 } from './boundedResponse.js';
+import {
+  createRequestDeadline,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  readBoundedRequestJson,
+  runCriticalRequestOperation,
+} from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
   CommerceWriteConflict,
@@ -92,10 +99,14 @@ import {
   createConnection as createDeliveryConnection,
   decodeCosigner,
   fetchOnchainConfig as fetchDeliveryOnchainConfig,
+  hasConfirmedSignatureCommitment,
   mintReceiptsInstruction,
   sendAndConfirmSignedTransaction,
 } from './deliveryReceiptOnchain.js';
-import { registerDeferredWork, type DeferredWork } from './deferredWork.js';
+import {
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 
 export const STRIPE_RECEIPT_CLAIM_PATH = '/receipts/stripe/claim';
 
@@ -187,9 +198,11 @@ export class StripeReceiptClaimError extends Error {
     readonly code: ClaimErrorCode,
     message: string,
     readonly details?: unknown,
+    cause?: unknown,
   ) {
     super(message);
     this.name = 'StripeReceiptClaimError';
+    if (cause !== undefined) Object.defineProperty(this, 'cause', { value: cause });
   }
 }
 
@@ -239,10 +252,10 @@ function errorResponse(error: StripeReceiptClaimError): Response {
 function normalizedError(error: unknown, fallback: string): StripeReceiptClaimError {
   if (error instanceof StripeReceiptClaimError) return error;
   if (error instanceof DeliveryReceiptError) {
-    return new StripeReceiptClaimError(error.code, error.message, error.details);
+    return new StripeReceiptClaimError(error.code, error.message, error.details, error.cause);
   }
   if (error instanceof ProfileReadError) {
-    return new StripeReceiptClaimError(error.code, error.message, error.details);
+    return new StripeReceiptClaimError(error.code, error.message, error.details, error.cause);
   }
   if (isRecord(error) && typeof error.code === 'string') {
     const code = error.code as ClaimErrorCode;
@@ -254,10 +267,11 @@ function normalizedError(error: unknown, fallback: string): StripeReceiptClaimEr
         code,
         typeof error.message === 'string' ? error.message : fallback,
         error.details,
+        error instanceof Error ? error.cause : undefined,
       );
     }
   }
-  return new StripeReceiptClaimError('internal', fallback);
+  return new StripeReceiptClaimError('internal', fallback, undefined, error);
 }
 
 function summarizeError(error: unknown): Record<string, unknown> {
@@ -266,47 +280,23 @@ function summarizeError(error: unknown): Record<string, unknown> {
 }
 
 export async function readRequestBody(request: Request, signal: AbortSignal): Promise<StripeReceiptClaimRequest> {
-  const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
-  if (contentType !== 'application/json') {
-    await request.body?.cancel().catch(() => undefined);
-    throw new StripeReceiptClaimError('invalid-argument', 'Content-Type must be application/json.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > REQUEST_MAX_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new StripeReceiptClaimError('invalid-argument', 'Receipt claim request is too large.');
-  }
-  if (!request.body) throw new StripeReceiptClaimError('invalid-argument', 'Invalid receipt claim request.');
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => { void reader.cancel(signal.reason).catch(() => undefined); };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > REQUEST_MAX_BYTES) {
-        throw new StripeReceiptClaimError('invalid-argument', 'Receipt claim request is too large.');
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    const parsed = requestSchema.safeParse(JSON.parse(chunks.join('')) as unknown);
-    if (!parsed.success) throw new StripeReceiptClaimError('invalid-argument', 'Invalid receipt claim request.');
-    return parsed.data;
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    if (error instanceof StripeReceiptClaimError) throw error;
-    if (signal.aborted) throw signal.reason;
+  const value = await readBoundedRequestJson(request, {
+    maxBytes: REQUEST_MAX_BYTES,
+    signal,
+    createError: (failure) => new StripeReceiptClaimError(
+      'invalid-argument',
+      failure === 'unsupported-media-type'
+        ? 'Content-Type must be application/json.'
+        : failure === 'too-large'
+          ? 'Receipt claim request is too large.'
+          : 'Invalid receipt claim request.',
+    ),
+  });
+  const parsed = requestSchema.safeParse(value);
+  if (!parsed.success) {
     throw new StripeReceiptClaimError('invalid-argument', 'Invalid receipt claim request.');
-  } finally {
-    signal.removeEventListener('abort', onAbort);
   }
+  return parsed.data;
 }
 
 function canonicalRecipient(value: string): { wallet: string; key: PublicKey } {
@@ -523,119 +513,97 @@ export async function startClaim(
   nowMs: number,
 ): Promise<ClaimStart> {
   const claimPath = `claimCodes/${code}`;
-  return runTransaction<ClaimStart>(context, async (transaction) => {
-    const claimDocument = await deliveryReceiptRuntime.readDocument(context, claimPath, transaction);
-    if (!claimDocument) throw new StripeReceiptClaimError('not-found', 'Invalid receipt claim code.');
-    const claim = claimDocument.fields;
-    if (claim.namespace !== STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE) {
-      throw new StripeReceiptClaimError('not-found', 'Invalid receipt claim code.');
-    }
-    if (typeof claim.code === 'string' && normalizeStripeReceiptClaimCode(claim.code) !== code) {
-      throw new StripeReceiptClaimError('failed-precondition', 'Claim code record is inconsistent.');
-    }
-    const rawDropId = typeof claim.dropId === 'string' ? claim.dropId : '';
-    const dropId = normalizeDropId(rawDropId);
-    if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId) || !getApiDrop(dropId)) {
-      throw new StripeReceiptClaimError('failed-precondition', 'Claim code has an invalid drop id.');
-    }
-    const deliveryId = positiveInteger(claim.deliveryId, 'delivery id');
-    const boxId = positiveInteger(claim.boxId, 'box id');
-    const directAssetId = directReceiptAssetId(claim);
-    const directFigureId = Math.floor(Number(claim.figureId));
-    const directFigureReceipt = directAssetId ? { receiptAssetId: directAssetId, figureId: directFigureId } : undefined;
-    if (directFigureReceipt && (!Number.isSafeInteger(directFigureId) || directFigureId < 1 || directFigureId !== boxId)) {
-      throw new StripeReceiptClaimError('failed-precondition', 'Direct card receipt claim target is invalid.');
-    }
-    const status = typeof claim.status === 'string' ? claim.status : 'unclaimed';
-    const claimedRecipient = typeof claim.recipient === 'string' ? claim.recipient : '';
-    const receiptTxSubmissions = normalizeSubmissions(claim.receiptTxSubmissions);
-    const storedReceiptTxs = normalizeReceiptTxs(claim.receiptTxs);
-    const receiptTxs = directFigureReceipt
-      ? activeDirectCardReceiptClaimSignatures({ receiptTxs: storedReceiptTxs, submissions: receiptTxSubmissions })
-      : storedReceiptTxs;
-    const storedResult = normalizeStoredResult(claim);
-    const directRecipientLock = Boolean(directFigureReceipt && directCardReceiptClaimHasRecipientLock({
-      hasRecipient: Boolean(claimedRecipient),
-      receiptTxCount: receiptTxs.length,
-    }));
-    const recipientLock = directFigureReceipt ? directRecipientLock : status === 'processing';
-    if (status === 'claimed') {
-      if (claimedRecipient === recipientWallet) {
-        return { result: { status: 'already_claimed' as const, dropId, deliveryId, boxId, receiptTxs, ...storedResult } };
+  let attemptedStart: StartedClaim | undefined;
+  try {
+    return await runTransaction<ClaimStart>(context, async (transaction) => {
+      const claimDocument = await deliveryReceiptRuntime.readDocument(context, claimPath, transaction);
+      if (!claimDocument) throw new StripeReceiptClaimError('not-found', 'Invalid receipt claim code.');
+      const claim = claimDocument.fields;
+      if (claim.namespace !== STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE) {
+        throw new StripeReceiptClaimError('not-found', 'Invalid receipt claim code.');
       }
-      throw new StripeReceiptClaimError('failed-precondition', 'This receipt claim code has already been used.');
-    }
-    const leaseExpiresAt = Number(claim.processingLeaseExpiresAt || 0);
-    if (status === 'processing' && Number.isFinite(leaseExpiresAt) && leaseExpiresAt > nowMs) {
-      throw new StripeReceiptClaimError('aborted', 'This receipt claim code is already being processed.');
-    }
-    if (recipientLock && claimedRecipient && claimedRecipient !== recipientWallet) {
-      throw new StripeReceiptClaimError(
-        'failed-precondition',
-        'This receipt claim code is locked to the receiver address from the previous attempt. Retry with that same address.',
-      );
-    }
-    const orderPath = dropDeliveryOrderPath(dropId, deliveryId);
-    const orderDocument = await deliveryReceiptRuntime.readDocument(context, orderPath, transaction);
-    if (!orderDocument) throw new StripeReceiptClaimError('not-found', 'Receipt claim order not found.');
-    const order = orderDocument.fields;
-    if (!isReceiptClaimDeliveryOrderSource(order.source)) {
-      throw new StripeReceiptClaimError('failed-precondition', 'Claim code is not for a receipt claim order.');
-    }
-    if (directFigureReceipt) {
-      const storedOrderClaim = isRecord(order.stripeReceiptClaim) ? order.stripeReceiptClaim : {};
-      if (
-        storedOrderClaim.receiptKind !== 'figure' ||
-        storedOrderClaim.receiptAssetId !== directFigureReceipt.receiptAssetId ||
-        Math.floor(Number(storedOrderClaim.figureId)) !== directFigureReceipt.figureId
-      ) {
-        throw new StripeReceiptClaimError('failed-precondition', 'Direct card receipt order target mismatch.');
+      if (typeof claim.code === 'string' && normalizeStripeReceiptClaimCode(claim.code) !== code) {
+        throw new StripeReceiptClaimError('failed-precondition', 'Claim code record is inconsistent.');
       }
-    }
-    const target = orderTarget(order, code, boxId);
-    const orderFields = {
-      dropId,
-      ...orderClaimFields({
-        code,
-        boxId,
-        status: 'processing',
-        fields: {
-          recipient: recipientWallet,
-          processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
-        },
-        ...target,
-      }),
-    };
-    const processingPrefixes = [
-      ...(target.updatePluralOrderClaim ? [`stripeReceiptClaimsByBoxId.${stripeReceiptClaimBoxMapKey(boxId)}`] : []),
-      ...(target.updateSingularOrderClaim ? ['stripeReceiptClaim'] : []),
-    ];
-    const writes = [
-      updateWrite({
-        path: claimPath,
-        fields: {
+      const rawDropId = typeof claim.dropId === 'string' ? claim.dropId : '';
+      const dropId = normalizeDropId(rawDropId);
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(dropId) || !getApiDrop(dropId)) {
+        throw new StripeReceiptClaimError('failed-precondition', 'Claim code has an invalid drop id.');
+      }
+      const deliveryId = positiveInteger(claim.deliveryId, 'delivery id');
+      const boxId = positiveInteger(claim.boxId, 'box id');
+      const directAssetId = directReceiptAssetId(claim);
+      const directFigureId = Math.floor(Number(claim.figureId));
+      const directFigureReceipt = directAssetId ? { receiptAssetId: directAssetId, figureId: directFigureId } : undefined;
+      if (directFigureReceipt && (!Number.isSafeInteger(directFigureId) || directFigureId < 1 || directFigureId !== boxId)) {
+        throw new StripeReceiptClaimError('failed-precondition', 'Direct card receipt claim target is invalid.');
+      }
+      const status = typeof claim.status === 'string' ? claim.status : 'unclaimed';
+      const claimedRecipient = typeof claim.recipient === 'string' ? claim.recipient : '';
+      const receiptTxSubmissions = normalizeSubmissions(claim.receiptTxSubmissions);
+      const storedReceiptTxs = normalizeReceiptTxs(claim.receiptTxs);
+      const receiptTxs = directFigureReceipt
+        ? activeDirectCardReceiptClaimSignatures({ receiptTxs: storedReceiptTxs, submissions: receiptTxSubmissions })
+        : storedReceiptTxs;
+      const storedResult = normalizeStoredResult(claim);
+      const directRecipientLock = Boolean(directFigureReceipt && directCardReceiptClaimHasRecipientLock({
+        hasRecipient: Boolean(claimedRecipient),
+        receiptTxCount: receiptTxs.length,
+      }));
+      const recipientLock = directFigureReceipt ? directRecipientLock : status === 'processing';
+      if (status === 'claimed') {
+        if (claimedRecipient === recipientWallet) {
+          return { result: { status: 'already_claimed' as const, dropId, deliveryId, boxId, receiptTxs, ...storedResult } };
+        }
+        throw new StripeReceiptClaimError('failed-precondition', 'This receipt claim code has already been used.');
+      }
+      const leaseExpiresAt = Number(claim.processingLeaseExpiresAt || 0);
+      if (status === 'processing' && Number.isFinite(leaseExpiresAt) && leaseExpiresAt > nowMs) {
+        throw new StripeReceiptClaimError('aborted', 'This receipt claim code is already being processed.');
+      }
+      if (recipientLock && claimedRecipient && claimedRecipient !== recipientWallet) {
+        throw new StripeReceiptClaimError(
+          'failed-precondition',
+          'This receipt claim code is locked to the receiver address from the previous attempt. Retry with that same address.',
+        );
+      }
+      const orderPath = dropDeliveryOrderPath(dropId, deliveryId);
+      const orderDocument = await deliveryReceiptRuntime.readDocument(context, orderPath, transaction);
+      if (!orderDocument) throw new StripeReceiptClaimError('not-found', 'Receipt claim order not found.');
+      const order = orderDocument.fields;
+      if (!isReceiptClaimDeliveryOrderSource(order.source)) {
+        throw new StripeReceiptClaimError('failed-precondition', 'Claim code is not for a receipt claim order.');
+      }
+      if (directFigureReceipt) {
+        const storedOrderClaim = isRecord(order.stripeReceiptClaim) ? order.stripeReceiptClaim : {};
+        if (
+          storedOrderClaim.receiptKind !== 'figure' ||
+          storedOrderClaim.receiptAssetId !== directFigureReceipt.receiptAssetId ||
+          Math.floor(Number(storedOrderClaim.figureId)) !== directFigureReceipt.figureId
+        ) {
+          throw new StripeReceiptClaimError('failed-precondition', 'Direct card receipt order target mismatch.');
+        }
+      }
+      const target = orderTarget(order, code, boxId);
+      const orderFields = {
+        dropId,
+        ...orderClaimFields({
+          code,
+          boxId,
           status: 'processing',
-          recipient: recipientWallet,
-          processingAttemptId: attemptId,
-          processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
-        },
-        transforms: [
-          { fieldPath: 'processingStartedAt', value: commerceFieldValue.serverTimestamp() },
-          { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
-        ],
-      }),
-      updateWrite({
-        path: orderPath,
-        fields: orderFields,
-        transforms: processingPrefixes.map((prefix) => ({
-          fieldPath: `${prefix}.processingStartedAt`,
-          value: commerceFieldValue.serverTimestamp(),
-        })),
-      }),
-    ];
-    return {
-      result: {
-        status: 'started' as const,
+          fields: {
+            recipient: recipientWallet,
+            processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
+          },
+          ...target,
+        }),
+      };
+      const processingPrefixes = [
+        ...(target.updatePluralOrderClaim ? [`stripeReceiptClaimsByBoxId.${stripeReceiptClaimBoxMapKey(boxId)}`] : []),
+        ...(target.updateSingularOrderClaim ? ['stripeReceiptClaim'] : []),
+      ];
+      attemptedStart = {
+        status: 'started',
         dropId,
         deliveryId,
         boxId,
@@ -648,10 +616,76 @@ export async function startClaim(
         hasPreviousClaimFailure: Boolean(claim.lastClaimError || claim.lastClaimErrorAt),
         ...(directFigureReceipt ? { directFigureReceipt } : {}),
         ...target,
-      },
-      writes,
-    };
-  });
+      };
+      return {
+        result: attemptedStart,
+        writes: [
+          updateWrite({
+            path: claimPath,
+            fields: {
+              status: 'processing',
+              recipient: recipientWallet,
+              processingAttemptId: attemptId,
+              processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
+            },
+            transforms: [
+              { fieldPath: 'processingStartedAt', value: commerceFieldValue.serverTimestamp() },
+              { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
+            ],
+          }),
+          updateWrite({
+            path: orderPath,
+            fields: orderFields,
+            transforms: processingPrefixes.map((prefix) => ({
+              fieldPath: `${prefix}.processingStartedAt`,
+              value: commerceFieldValue.serverTimestamp(),
+            })),
+          }),
+        ],
+      };
+    });
+  } catch (error) {
+    const cancellation = isSignalCancellationError(context.signal, error);
+    if (!attemptedStart || (error instanceof StripeReceiptClaimError && !cancellation)) {
+      if (cancellation) throw context.signal.reason;
+      throw error;
+    }
+    try {
+      const cleanup = cleanupContext(context);
+      const claim = await deliveryReceiptRuntime.readDocument(cleanup, claimPath);
+      if (
+        claim?.fields.status === 'processing' &&
+        claim.fields.processingAttemptId === attemptId &&
+        claim.fields.recipient === recipientWallet
+      ) {
+        const order = await deliveryReceiptRuntime.readDocument(cleanup, attemptedStart.orderPath);
+        const orderClaims = order ? [
+          ...(attemptedStart.updatePluralOrderClaim
+            ? [orderStripeReceiptClaimByBoxId(order.fields, attemptedStart.boxId)]
+            : []),
+          ...(attemptedStart.updateSingularOrderClaim
+            ? [isRecord(order.fields.stripeReceiptClaim) ? order.fields.stripeReceiptClaim : null]
+            : []),
+        ] : [];
+        if (
+          orderClaims.length > 0 &&
+          orderClaims.every((stored) => (
+            stored?.status === 'processing' &&
+            stored.recipient === recipientWallet &&
+            stripeReceiptClaimCodeMaybe(stored) === code
+          ))
+        ) {
+          if (cancellation) {
+            await clearProcessing(context, attemptedStart, code, context.signal.reason);
+          } else {
+            return attemptedStart;
+          }
+        }
+      }
+    } catch {}
+    if (cancellation) throw context.signal.reason;
+    throw error;
+  }
 }
 
 function cleanupContext(context: CommerceContext): CommerceContext {
@@ -1347,18 +1381,23 @@ async function sendSigned(
   signal: AbortSignal,
   label: string,
 ): Promise<string> {
+  if (signal.aborted) throw signal.reason;
   const signature = signedTransactionSignature(transaction);
   try {
     return await sendAndConfirmSignedTransaction(connection, transaction, signal, label);
   } catch (error) {
     const normalized = normalizedError(error, `${label} transaction failed.`);
     const details = isRecord(normalized.details) ? normalized.details : {};
-    if (details.maybeSubmitted === true || normalized.code === 'deadline-exceeded') {
+    if (
+      (signal.aborted && error === signal.reason) ||
+      details.maybeSubmitted === true ||
+      normalized.code === 'deadline-exceeded'
+    ) {
       throw new StripeReceiptClaimError(normalized.code, normalized.message, {
         ...details,
         signature,
         maybeSubmitted: true,
-      });
+      }, normalized.cause);
     }
     throw normalized;
   }
@@ -1446,7 +1485,7 @@ async function resolveAmbiguousDirectSubmission(args: {
       const statuses = await args.connection.getSignatureStatuses([args.signature], { searchTransactionHistory: true });
       const status = statuses.value[0];
       if (status?.err) return 'not_landed';
-      if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized' || status?.confirmations === null) {
+      if (hasConfirmedSignatureCommitment(status)) {
         return 'landed';
       }
       if (!status) {
@@ -1529,12 +1568,22 @@ async function sendDirectFigureTransfer(args: {
           lastValidBlockHeight,
           submittedAtMs,
           persistError: summarizeError(persistError),
-        });
+        }, normalized.cause);
       }
       throw new StripeReceiptClaimError(normalized.code, normalized.message, {
         ...details,
         directCardReceiptSubmissionStatus: 'not_landed',
-      });
+      }, normalized.cause);
+    }
+    if (args.provider.signal.aborted) {
+      throw new StripeReceiptClaimError(normalized.code, normalized.message, {
+        ...details,
+        signature: ambiguousSignature,
+        lastValidBlockHeight,
+        submittedAtMs,
+        maybeSubmitted: true,
+        keepReceiptClaimProcessing: true,
+      }, normalized.cause ?? args.provider.signal.reason);
     }
     const resolution = await resolveAmbiguousDirectSubmission({
       connection: args.connection,
@@ -1557,7 +1606,7 @@ async function sendDirectFigureTransfer(args: {
       lastValidBlockHeight,
       submittedAtMs,
       keepReceiptClaimProcessing: true,
-    });
+    }, normalized.cause);
   }
 }
 
@@ -1944,6 +1993,7 @@ export async function claimStripeReceipt(
     sentReceiptTx = receiptTx;
     return finalizeBox(receiptTx);
   } catch (error) {
+    const cancellation = isSignalCancellationError(provider.signal, error);
     const normalized = normalizedError(error, 'Receipt claim failed.');
     const directDefinitelyNotLanded = isRecord(normalized.details) && normalized.details.directCardReceiptSubmissionStatus === 'not_landed';
     const maybeSent = directDefinitelyNotLanded ? null : sentReceiptTx || maybeSubmittedSignature(normalized);
@@ -1978,6 +2028,7 @@ export async function claimStripeReceipt(
     } else if (started) {
       await clearProcessing(commerce, started, code, normalized);
     }
+    if (cancellation) throw provider.signal.reason;
     throw normalized;
   }
 }
@@ -1989,27 +2040,6 @@ const defaultDependencies: ClaimDependencies = {
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
 };
-
-async function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) throw signal.reason;
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      },
-    );
-  });
-}
 
 export async function handleStripeReceiptClaim(
   request: Request,
@@ -2036,20 +2066,18 @@ export async function handleStripeReceiptClaim(
       outcome: 'method_not_allowed',
     };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Stripe receipt claim timed out', 'TimeoutError')),
-    dependencies.timeoutMs,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Stripe receipt claim timed out',
+  });
   let identity: RequestIdentity | undefined;
-  let execution: Promise<ClaimExecution> | undefined;
   let claimContext: ClaimLogContext | undefined;
   try {
-    const body = await readRequestBody(request, controller.signal);
+    const body = await readRequestBody(request, deadline.signal);
     identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
-      controller.signal,
+      deadline.signal,
       dependencies.nowMs(),
     );
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
@@ -2058,20 +2086,22 @@ export async function handleStripeReceiptClaim(
       throw new StripeReceiptClaimError('unavailable', 'Receipt claiming is temporarily unavailable.');
     }
     const nowMs = dependencies.nowMs();
-    execution = dependencies.claim(
-      body,
-      { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
-      {
-        commerceDb: env.COMMERCE_DB,
-        repository: new D1CommerceRepository(env.COMMERCE_DB),
-        nowMs,
-        providerFetch: trackedFetch,
-        signal: controller.signal,
-      },
-      { apiKey, providerFetch: trackedFetch, signal: controller.signal },
-      (context) => { claimContext = context; },
+    const result = await runCriticalRequestOperation(
+      () => dependencies.claim(
+        body,
+        { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
+        {
+          commerceDb: env.COMMERCE_DB,
+          repository: new D1CommerceRepository(env.COMMERCE_DB),
+          nowMs,
+          providerFetch: trackedFetch,
+          signal: deadline.signal,
+        },
+        { apiKey, providerFetch: trackedFetch, signal: deadline.signal },
+        (context) => { claimContext = context; },
+      ),
+      { deadline, defer, ignoreDeferredErrors: true },
     );
-    const result = await waitForSignal(execution, controller.signal);
     return {
       response: jsonResponse(result.response),
       metrics,
@@ -2081,12 +2111,11 @@ export async function handleStripeReceiptClaim(
       outcome: result.outcome,
     };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
     let normalized: StripeReceiptClaimError;
-    if (controller.signal.aborted) {
-      if (execution) {
-        const cleanup = execution.then(() => undefined, () => undefined);
-        registerDeferredWork(defer, cleanup);
-      }
+    if (isSignalCancellationError(request.signal, error)) throw request.signal.reason;
+    if (isRequestCancellationError(request, error)) throw error;
+    if (deadline.timedOut()) {
       normalized = new StripeReceiptClaimError('deadline-exceeded', 'Receipt claim request timed out.');
     } else if (error instanceof RequestIdentityError) {
       normalized = new StripeReceiptClaimError(
@@ -2108,6 +2137,6 @@ export async function handleStripeReceiptClaim(
       outcome: normalized.code,
     };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }

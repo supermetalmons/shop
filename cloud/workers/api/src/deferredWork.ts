@@ -19,5 +19,10 @@ export function registerDeferredWork(defer: DeferredWork, promise: Promise<unkno
 }
 
 export function rethrowDeferredWorkRegistrationError(error: unknown): void {
-  if (error instanceof DeferredWorkRegistrationError) throw error;
+  let current = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (current instanceof DeferredWorkRegistrationError) throw current;
+    if (!(current instanceof Error) || current.cause === undefined) return;
+    current = current.cause;
+  }
 }

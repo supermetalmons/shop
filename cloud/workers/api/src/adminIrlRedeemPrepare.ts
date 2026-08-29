@@ -87,6 +87,20 @@ import {
   readBoundedJson,
   type ProfileProviderFetch,
 } from './boundedResponse.js';
+import {
+  createRequestDeadline,
+  createTimedAbortScope,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  raceReadWithSignal,
+  raceWithSignal,
+  readBoundedRequestJson,
+  runCriticalRequestOperation,
+} from './boundedRequest.js';
+import {
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { requestSolanaRpc } from './solanaProvider.js';
 import {
@@ -104,6 +118,7 @@ export { ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER };
 const REQUEST_MAX_BYTES = 4096;
 const PROVIDER_MAX_BYTES = HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES;
 const HANDLER_TIMEOUT_MS = 55_000;
+const CLEANUP_TIMEOUT_MS = 5_000;
 const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
 const MAX_ITEMS = 32;
 const ASSET_FETCH_CONCURRENCY = 4;
@@ -238,6 +253,7 @@ type CreateRequestInput = {
 type AdminIrlRedeemPrepareDependencies = {
   autoId: () => string;
   createCommerceRepository: (db: D1Database) => D1CommerceRepository;
+  defer: DeferredWork;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
@@ -249,7 +265,8 @@ type AdminIrlRedeemPrepareDependencies = {
     uid: string,
   ) => Promise<string>;
   loadReceiptMarker: (context: CommerceContext, dropId: string, assetId: string) => Promise<boolean>;
-  createRequest: (context: CommerceContext, input: CreateRequestInput) => Promise<void>;
+  createRequest: (context: CommerceContext, input: CreateRequestInput) => Promise<string>;
+  deleteRequest: (context: CommerceContext, path: string, updateTime: string) => Promise<void>;
   fetchAsset: (context: ProviderContext, runtime: AdminIrlRedeemRuntime, assetId: string) => Promise<DasAsset>;
   fetchAssetProof: (context: ProviderContext, runtime: AdminIrlRedeemRuntime, assetId: string) => Promise<Record<string, unknown>>;
   loadOnchainState: (context: ProviderContext, runtime: AdminIrlRedeemRuntime) => Promise<OnchainState>;
@@ -307,54 +324,21 @@ function errorResponse(error: AdminIrlRedeemPrepareError): Response {
 }
 
 async function readRequestBody(request: Request, signal: AbortSignal): Promise<AdminIrlRedeemPrepareRequest> {
-  const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
-  if (contentType !== 'application/json') {
-    await request.body?.cancel().catch(() => undefined);
-    throw new AdminIrlRedeemPrepareError('invalid-argument', 'Content-Type must be application/json.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > REQUEST_MAX_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new AdminIrlRedeemPrepareError('invalid-argument', 'Admin IRL redeem request is too large.');
-  }
-  if (!request.body) throw new AdminIrlRedeemPrepareError('invalid-argument', 'Invalid Admin IRL redeem request.');
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > REQUEST_MAX_BYTES) {
-        throw new AdminIrlRedeemPrepareError('invalid-argument', 'Admin IRL redeem request is too large.');
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    let value: unknown;
-    try {
-      value = JSON.parse(chunks.join(''));
-    } catch {
-      throw new AdminIrlRedeemPrepareError('invalid-argument', 'Invalid Admin IRL redeem request.');
-    }
-    const parsed = requestSchema.safeParse(value);
-    if (!parsed.success) throw new AdminIrlRedeemPrepareError('invalid-argument', 'Invalid Admin IRL redeem request.');
-    return parsed.data;
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    if (error instanceof AdminIrlRedeemPrepareError) throw error;
-    throw new AdminIrlRedeemPrepareError('invalid-argument', 'Invalid Admin IRL redeem request.');
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-  }
+  const value = await readBoundedRequestJson(request, {
+    maxBytes: REQUEST_MAX_BYTES,
+    signal,
+    createError: (failure) => new AdminIrlRedeemPrepareError(
+      'invalid-argument',
+      failure === 'unsupported-media-type'
+        ? 'Content-Type must be application/json.'
+        : failure === 'too-large'
+          ? 'Admin IRL redeem request is too large.'
+          : 'Invalid Admin IRL redeem request.',
+    ),
+  });
+  const parsed = requestSchema.safeParse(value);
+  if (!parsed.success) throw new AdminIrlRedeemPrepareError('invalid-argument', 'Invalid Admin IRL redeem request.');
+  return parsed.data;
 }
 
 function canonicalPublicKey(value: string, label: string): PublicKey {
@@ -462,28 +446,6 @@ async function pause(signal: AbortSignal, delay = 100): Promise<void> {
   });
 }
 
-function createProviderAttemptScope(overallSignal: AbortSignal, timeoutMs: number) {
-  const controller = new AbortController();
-  let timedOut = false;
-  const onAbort = () => {
-    if (!controller.signal.aborted) controller.abort(overallSignal.reason);
-  };
-  if (overallSignal.aborted) onAbort();
-  else overallSignal.addEventListener('abort', onAbort, { once: true });
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new DOMException('Admin IRL redeem provider request timed out', 'TimeoutError'));
-  }, timeoutMs);
-  return {
-    signal: controller.signal,
-    timedOut: () => timedOut,
-    dispose: () => {
-      clearTimeout(timeout);
-      overallSignal.removeEventListener('abort', onAbort);
-    },
-  };
-}
-
 export async function rpcCall(
   context: ProviderContext,
   runtime: AdminIrlRedeemRuntime,
@@ -492,13 +454,16 @@ export async function rpcCall(
 ): Promise<unknown> {
   const id = `admin-irl-redeem-${method}`;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createProviderAttemptScope(
-      context.signal,
-      context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    );
+    const attemptScope = createTimedAbortScope(context.signal, {
+      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+      timeoutMessage: 'Admin IRL redeem provider request timed out',
+    });
     try {
       const transport = await requestSolanaRpc({
-        fetch: context.providerFetch,
+        fetch: (input, init) => raceWithSignal(
+          context.providerFetch(input, init),
+          attemptScope.signal,
+        ),
         url: `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
         id,
         method,
@@ -525,13 +490,17 @@ export async function rpcCall(
       }
       return transport.value;
     } catch (error) {
-      if (context.signal.aborted) throw context.signal.reason;
+      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
       if (attemptScope.timedOut()) {
-        if (attempt === 0) {
+        if (attempt === 0 && !context.signal.aborted) {
           await pause(context.signal);
           continue;
         }
         throw new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem provider request timed out.');
+      }
+      if (context.signal.aborted) {
+        if (error instanceof AdminIrlRedeemPrepareError) throw error;
+        throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
       }
       if (error instanceof AdminIrlRedeemPrepareError) throw error;
       if (attempt === 0) {
@@ -548,16 +517,16 @@ export async function rpcCall(
 
 async function restJson(context: ProviderContext, url: string, missingMessage: string): Promise<unknown> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createProviderAttemptScope(
-      context.signal,
-      context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    );
+    const attemptScope = createTimedAbortScope(context.signal, {
+      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+      timeoutMessage: 'Admin IRL redeem provider request timed out',
+    });
     try {
-      const response = await context.providerFetch(url, {
+      const response = await raceWithSignal(context.providerFetch(url, {
         headers: { Accept: 'application/json' },
         redirect: 'manual',
         signal: attemptScope.signal,
-      });
+      }), attemptScope.signal);
       if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt === 0) {
         await cancelResponseBody(response);
         await pause(context.signal);
@@ -572,13 +541,17 @@ async function restJson(context: ProviderContext, url: string, missingMessage: s
       }
       return await readBoundedJson(response, PROVIDER_MAX_BYTES, attemptScope.signal);
     } catch (error) {
-      if (context.signal.aborted) throw context.signal.reason;
+      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
       if (attemptScope.timedOut()) {
-        if (attempt === 0) {
+        if (attempt === 0 && !context.signal.aborted) {
           await pause(context.signal);
           continue;
         }
         throw new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem provider request timed out.');
+      }
+      if (context.signal.aborted) {
+        if (error instanceof AdminIrlRedeemPrepareError) throw error;
+        throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid response.');
       }
       if (error instanceof AdminIrlRedeemPrepareError) throw error;
       if (attempt === 0) {
@@ -818,7 +791,11 @@ export async function loadBoundWallet(
     if ('reason' in resolution) throw new AdminIrlRedeemPrepareError('unauthenticated', 'Sign in with your wallet first.');
     return resolution.wallet;
   } catch (error) {
-    if (error instanceof AdminIrlRedeemPrepareError || error instanceof ProfileReadError || context.signal.aborted) throw error;
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    if (
+      error instanceof AdminIrlRedeemPrepareError ||
+      error instanceof ProfileReadError
+    ) throw error;
     throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem preparation is temporarily unavailable.');
   }
 }
@@ -849,7 +826,7 @@ function requestMatches(value: CommerceDocumentRecord | null, input: CreateReque
   );
 }
 
-async function createRequest(context: CommerceContext, input: CreateRequestInput): Promise<void> {
+async function createRequest(context: CommerceContext, input: CreateRequestInput): Promise<string> {
   const path = dropAdminIrlRedeemRequestPath(input.dropId, input.requestId);
   const key = commerceKeys.adminIrlRedeemRequest(input.dropId, input.requestId);
   if (key.path !== path) throw new AdminIrlRedeemPrepareError('internal', 'Admin IRL redeem preparation failed.');
@@ -868,15 +845,31 @@ async function createRequest(context: CommerceContext, input: CreateRequestInput
     ...(input.prepareAttemptId ? { prepareAttemptId: input.prepareAttemptId } : {}),
   };
   try {
-    await commerceRepository(context).run(context.nowMs, async (unit) => unit.create(key, fields));
+    const created = await commerceRepository(context).run(context.nowMs, async (unit) => unit.create(key, fields));
+    return created.updateTime;
   } catch (error) {
     if (error instanceof CommerceWriteConflict) {
       throw new AdminIrlRedeemPrepareError('aborted', 'Admin IRL redeem request collision. Retry.');
     }
     const reconciled = await commerceRepository(context).get(key).catch(() => null);
-    if (requestMatches(reconciled, input)) return;
+    if (requestMatches(reconciled, input)) return reconciled!.updateTime;
     throw error;
   }
+}
+
+async function deleteRequest(
+  context: CommerceContext,
+  path: string,
+  updateTime: string,
+): Promise<void> {
+  const match = /^drops\/([^/]+)\/adminIrlRedeemRequests\/([^/]+)$/.exec(path);
+  if (!match) throw new AdminIrlRedeemPrepareError('internal', 'Admin IRL redeem preparation failed.');
+  const key = commerceKeys.adminIrlRedeemRequest(match[1], match[2]);
+  await commerceRepository(context).run(context.nowMs, async (unit) => {
+    const current = await unit.get(key);
+    if (!current || current.updateTime !== updateTime) throw new CommerceWriteConflict();
+    await unit.delete(key, { mustExist: true });
+  });
 }
 
 function commerceAutoId(): string {
@@ -1093,7 +1086,10 @@ async function serializeCardTransaction(args: {
   ).serialize();
   let lookupsPromise: Promise<AddressLookupTableAccount[]> | undefined;
   const loadLookups = () => {
-    lookupsPromise ??= args.loadLookupTable(args.context, args.runtime).catch(() => []);
+    lookupsPromise ??= args.loadLookupTable(args.context, args.runtime).catch((error) => {
+      if (isSignalCancellationError(args.context.signal, error)) throw args.context.signal.reason;
+      return [];
+    });
     return lookupsPromise;
   };
   let raw: Uint8Array;
@@ -1152,6 +1148,8 @@ async function prepareAdminIrlRedeem(args: {
   commerceContext: CommerceContext;
   providerContext: ProviderContext;
   dependencies: AdminIrlRedeemPrepareDependencies;
+  runCritical: <T>(start: () => Promise<T>) => Promise<T>;
+  runRead: <T>(operation: Promise<T>) => Promise<T>;
   prepareAttemptId?: string;
 }): Promise<AdminIrlRedeemPreparedTxResponse> {
   const dropId = normalizeDropId(args.body.dropId);
@@ -1163,7 +1161,7 @@ async function prepareAdminIrlRedeem(args: {
   const ownerWallet = owner.toBase58();
   const sessionWallet = await resolveRequestWallet(
     args.identity,
-    (uid) => args.dependencies.loadBoundWallet(args.commerceContext, args.db, uid),
+    (uid) => args.runRead(args.dependencies.loadBoundWallet(args.commerceContext, args.db, uid)),
   );
   if (!walletHasAdminIrlRedeemAccess(sessionWallet, ADMIN_IRL_REDEEM_WALLETS)) {
     throw new AdminIrlRedeemPrepareError('permission-denied', 'Admin IRL Redeem access denied.');
@@ -1282,7 +1280,7 @@ async function prepareAdminIrlRedeem(args: {
     raw = serializePackTransaction(instructions, owner, blockhash);
   } else {
     const assetId = itemIds[0];
-    if (await args.dependencies.loadReceiptMarker(args.commerceContext, dropId, assetId)) {
+    if (await args.runRead(args.dependencies.loadReceiptMarker(args.commerceContext, dropId, assetId))) {
       throw new AdminIrlRedeemPrepareError('failed-precondition', 'This card receipt has already been redeemed for an Admin IRL order');
     }
     const proof = await args.dependencies.fetchAssetProof(args.providerContext, runtime, assetId);
@@ -1303,16 +1301,48 @@ async function prepareAdminIrlRedeem(args: {
   }
 
   const requestId = args.dependencies.autoId();
-  await args.dependencies.createRequest(args.commerceContext, {
-    requestId,
-    dropId,
-    owner: ownerWallet,
-    targetKind,
-    adminWallet: onchain.admin.toBase58(),
-    itemIds,
-    items: preparedItems,
-    ...(args.prepareAttemptId ? { prepareAttemptId: args.prepareAttemptId } : {}),
+  const requestPath = dropAdminIrlRedeemRequestPath(dropId, requestId);
+  const cleanupCreatedRequest = async (updateTime: string): Promise<void> => {
+    try {
+      await args.dependencies.deleteRequest({
+        ...args.commerceContext,
+        nowMs: args.dependencies.nowMs(),
+        signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
+      }, requestPath, updateTime);
+    } catch (cleanupError) {
+      rethrowDeferredWorkRegistrationError(cleanupError);
+      console.error({
+        event: 'admin_irl_redeem_prepare_cleanup_failed',
+        dropId,
+        requestId,
+        error: cleanupError instanceof Error
+          ? { name: cleanupError.name, message: cleanupError.message }
+          : { name: 'UnknownError' },
+      });
+    }
+  };
+  args.commerceContext.signal.throwIfAborted();
+  const updateTime = await args.runCritical(async () => {
+    const createdAt = await args.dependencies.createRequest(args.commerceContext, {
+      requestId,
+      dropId,
+      owner: ownerWallet,
+      targetKind,
+      adminWallet: onchain.admin.toBase58(),
+      itemIds,
+      items: preparedItems,
+      ...(args.prepareAttemptId ? { prepareAttemptId: args.prepareAttemptId } : {}),
+    });
+    if (args.commerceContext.signal.aborted) {
+      await cleanupCreatedRequest(createdAt);
+      throw args.commerceContext.signal.reason;
+    }
+    return createdAt;
   });
+  if (args.commerceContext.signal.aborted) {
+    await cleanupCreatedRequest(updateTime);
+    throw args.commerceContext.signal.reason;
+  }
   return {
     encodedTx: Buffer.from(raw).toString('base64'),
     requestId,
@@ -1326,6 +1356,7 @@ async function prepareAdminIrlRedeem(args: {
 const defaultDependencies: AdminIrlRedeemPrepareDependencies = {
   autoId: commerceAutoId,
   createCommerceRepository: (db) => new D1CommerceRepository(db),
+  defer: () => undefined,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
@@ -1334,6 +1365,7 @@ const defaultDependencies: AdminIrlRedeemPrepareDependencies = {
   loadBoundWallet,
   loadReceiptMarker,
   createRequest,
+  deleteRequest,
   fetchAsset,
   fetchAssetProof,
   loadOnchainState,
@@ -1368,23 +1400,22 @@ export async function handleAdminIrlRedeemPrepare(
       authOutcome: 'rejected',
     };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Admin IRL redeem preparation timed out', 'TimeoutError')),
-    dependencies.timeoutMs,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Admin IRL redeem preparation timed out',
+  });
   let identity: RequestIdentity | undefined;
   let dropId: string | undefined;
   let targetKind: AdminIrlRedeemTargetKind | undefined;
   let itemCount: number | undefined;
   try {
-    const body = await readRequestBody(request, controller.signal);
+    const body = await readRequestBody(request, deadline.signal);
     dropId = normalizeDropId(body.dropId);
     itemCount = body.itemIds.length;
     identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
-      controller.signal,
+      deadline.signal,
       dependencies.nowMs(),
     );
     if (!isStaffRequestIdentity(identity)) {
@@ -1404,16 +1435,22 @@ export async function handleAdminIrlRedeemPrepare(
       db: env.OPS_DB,
       identity,
       dependencies,
+      runCritical: (start) => runCriticalRequestOperation(start, {
+        deadline,
+        defer: dependencies.defer,
+        ignoreDeferredErrors: true,
+      }),
+      runRead: (operation) => raceReadWithSignal(operation, deadline.signal),
       ...(prepareAttemptId ? { prepareAttemptId } : {}),
       commerceContext: {
         nowMs,
         repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
-        signal: controller.signal,
+        signal: deadline.signal,
       },
       providerContext: {
         apiKey,
         providerFetch: trackedFetch,
-        signal: controller.signal,
+        signal: deadline.signal,
       },
     });
     targetKind = response.targetKind;
@@ -1426,9 +1463,11 @@ export async function handleAdminIrlRedeemPrepare(
       itemCount: response.itemCount,
     };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
+    if (isRequestCancellationError(request, error)) throw error;
     let prepareError: AdminIrlRedeemPrepareError;
     let authOutcome: AdminIrlRedeemPrepareResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-    if (controller.signal.aborted) {
+    if (deadline.timedOut()) {
       prepareError = new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem preparation timed out.');
     } else if (error instanceof AdminIrlRedeemPrepareError) {
       prepareError = error;
@@ -1463,7 +1502,7 @@ export async function handleAdminIrlRedeemPrepare(
       ...(itemCount === undefined ? {} : { itemCount }),
     };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }
 
@@ -1472,8 +1511,8 @@ export const adminIrlRedeemPrepareTestHooks = {
   buildRuntime,
   cardReceiptTransferInstruction,
   coreTransferInstruction,
-  createProviderAttemptScope,
   createRequest,
+  deleteRequest,
   fetchAsset,
   fetchAssetProof,
   commerceAutoId,

@@ -27,10 +27,19 @@ import {
   verifyRequestIdentity,
   type RequestIdentity,
 } from './requestIdentity.js';
+import type { ProfileProviderFetch } from './boundedResponse.js';
 import {
-  readBoundedText,
-  type ProfileProviderFetch,
-} from './boundedResponse.js';
+  createRequestDeadline,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  raceReadWithSignal,
+  readBoundedRequestJson,
+  runCriticalRequestOperation,
+} from './boundedRequest.js';
+import {
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 import { ProfileReadError } from './dataAccess.js';
 import {
   CommerceWriteConflict,
@@ -96,6 +105,7 @@ export type ProfileLifecycleResult = {
 type ProfileLifecycleDependencies = {
   acquireAuthWalletBindingReconcileLease: typeof acquireAuthWalletBindingReconcileLease;
   createCommerceRepository: (db: D1Database) => ProfileLifecycleRepository;
+  defer: DeferredWork;
   establishD1AuthWalletBinding: typeof establishD1AuthWalletBinding;
   isStaffWallet: typeof isStaffWalletAddress;
   loadD1AuthWalletBinding: typeof loadD1AuthWalletBinding;
@@ -165,28 +175,11 @@ async function parseRequestBody(
   path: ProfileLifecyclePath,
   signal: AbortSignal,
 ): Promise<z.infer<typeof solanaAuthSchema> | ReconcileProfileStateRequest> {
-  if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  }
-  if (!request.body) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  let text: string;
-  try {
-    text = await readBoundedText(new Response(request.body), MAX_REQUEST_BYTES, signal);
-  } catch {
-    if (signal.aborted) throw signal.reason;
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  }
+  const value = await readBoundedRequestJson(request, {
+    maxBytes: MAX_REQUEST_BYTES,
+    signal,
+    createError: () => new ProfileReadError('invalid-argument', 400, 'Invalid request.'),
+  });
   const result = path === SOLANA_AUTH_PATH
     ? solanaAuthSchema.safeParse(value)
     : reconcileSchema.safeParse(value);
@@ -276,8 +269,9 @@ async function mergeStripeOwnerBatch(params: {
         return documents.length;
       });
     } catch (error) {
+      if (isSignalCancellationError(params.common.signal, error)) throw params.common.signal.reason;
       if (!(error instanceof CommerceWriteConflict)) throw error;
-      if (attempt + 1 >= COMMERCE_TRANSACTION_ATTEMPTS) {
+      if (params.common.signal.aborted || attempt + 1 >= COMMERCE_TRANSACTION_ATTEMPTS) {
         throw new ProfileReadError('aborted', 409, 'Stripe order reconciliation changed. Try again.');
       }
       await pauseForConflict(params.common.signal, attempt);
@@ -337,19 +331,39 @@ async function reconcileProfileState(params: {
 }): Promise<ReconcileProfileStateResponse> {
   let wallet: string;
   let mergedStripeDeliveryOrders = 0;
-  if (!params.db) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+  const db = params.db;
+  if (!db) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
   if (params.identity.kind === 'staff-wallet') {
     wallet = params.identity.wallet;
   } else if (params.body.mergeStripeDeliveryOrders === true) {
+    const authSubject = params.identity.authSubject;
+    const leaseId = crypto.randomUUID();
+    const releaseLease = async (id: string) => {
+      try {
+        await params.dependencies.releaseAuthWalletBindingReconcileLease(
+          db,
+          authSubject,
+          id,
+        );
+      } catch (error) {
+        console.error({
+          event: 'auth_wallet_binding_reconcile_lease_release_failed',
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
     let lease;
     try {
       lease = await params.dependencies.acquireAuthWalletBindingReconcileLease({
-        db: params.db,
-        authSubject: params.identity.authSubject,
+        db,
+        authSubject,
+        leaseId,
         nowMs: params.nowMs,
         signal: params.common.signal,
       });
     } catch (error) {
+      await releaseLease(leaseId);
+      if (isSignalCancellationError(params.common.signal, error)) throw params.common.signal.reason;
       if (error instanceof AuthWalletBindingD1BusyError) {
         throw new ProfileReadError('aborted', 409, error.message);
       }
@@ -358,24 +372,18 @@ async function reconcileProfileState(params: {
     if (!lease) throw new ProfileReadError('unauthenticated', 401, 'Sign in with your wallet first.');
     wallet = lease.wallet;
     try {
+      if (params.common.signal.aborted) throw params.common.signal.reason;
       mergedStripeDeliveryOrders = await mergeStripeOrders({
-        authSubject: params.identity.authSubject,
+        authSubject,
         common: params.common,
         wallet,
       });
     } finally {
-      await params.dependencies.releaseAuthWalletBindingReconcileLease(
-        params.db,
-        params.identity.authSubject,
-        lease.id,
-      ).catch((error) => console.error({
-        event: 'auth_wallet_binding_reconcile_lease_release_failed',
-        error: error instanceof Error ? error.message : String(error),
-      }));
+      await releaseLease(lease.id);
     }
   } else {
     const resolution = await params.dependencies.resolveD1AuthWalletBinding(
-      params.db,
+      db,
       params.identity.authSubject,
       params.common.signal,
     );
@@ -384,9 +392,11 @@ async function reconcileProfileState(params: {
     }
     wallet = resolution.wallet;
   }
+  if (params.common.signal.aborted) throw params.common.signal.reason;
   const recovery = params.body.includeDeliveryRecovery === false
     ? null
     : await loadDeliveryRecoveryState(params.common, wallet, params.nowMs);
+  if (params.common.signal.aborted) throw params.common.signal.reason;
   return {
     mergedStripeDeliveryOrders,
     ...(recovery?.nextCheckAt == null ? {} : { deliveryRecovery: { nextCheckAt: recovery.nextCheckAt } }),
@@ -397,6 +407,7 @@ async function reconcileProfileState(params: {
 const defaultDependencies: ProfileLifecycleDependencies = {
   acquireAuthWalletBindingReconcileLease,
   createCommerceRepository: (db) => new D1CommerceRepository(db),
+  defer: () => undefined,
   establishD1AuthWalletBinding,
   isStaffWallet: isStaffWalletAddress,
   loadD1AuthWalletBinding,
@@ -430,32 +441,32 @@ export async function handleProfileLifecycleRequest(
     response.headers.set('Allow', 'POST, OPTIONS');
     return { response, metrics, authOutcome: 'rejected' };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Profile lifecycle request timed out', 'TimeoutError')),
-    dependencies.timeoutMs,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Profile lifecycle request timed out',
+  });
   let identity: RequestIdentity | undefined;
   try {
     const origin = request.headers.get('Origin') || '';
     if (path === SOLANA_AUTH_PATH && (!origin || !isProfileRequestOriginAllowed(request))) {
       throw new ProfileReadError('permission-denied', 403, 'Origin is not allowed.');
     }
-    const body = await parseRequestBody(request, path, controller.signal);
-    identity = await dependencies.verifyIdentity(
+    const body = await parseRequestBody(request, path, deadline.signal);
+    const verifiedIdentity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
-      controller.signal,
+      deadline.signal,
       dependencies.nowMs(),
     );
+    identity = verifiedIdentity;
     const nowMs = dependencies.nowMs();
     const common: CommerceCommon = {
       nowMs,
       repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
-      signal: controller.signal,
+      signal: deadline.signal,
     };
     if (path === SOLANA_AUTH_PATH) {
-      if (isStaffRequestIdentity(identity)) {
+      if (isStaffRequestIdentity(verifiedIdentity)) {
         throw new ProfileReadError('permission-denied', 403, 'Staff wallets use staff authentication.');
       }
       const authBody = body as z.infer<typeof solanaAuthSchema>;
@@ -465,65 +476,82 @@ export async function handleProfileLifecycleRequest(
         throw new ProfileReadError('permission-denied', 403, 'Staff wallets use staff authentication.');
       }
       const originHostname = new URL(origin).hostname;
-      if (!env.OPS_DB) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+      const opsDb = env.OPS_DB;
+      if (!opsDb) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
       try {
-        const baseline = await dependencies.loadD1AuthWalletBinding(
-          env.OPS_DB,
-          identity.authSubject,
-          controller.signal,
+        const baseline = await raceReadWithSignal(
+          dependencies.loadD1AuthWalletBinding(
+            opsDb,
+            verifiedIdentity.authSubject,
+            deadline.signal,
+          ),
+          deadline.signal,
         );
         validateAuthWalletSignature({
-          identity,
+          identity: verifiedIdentity,
           message: authBody.message,
           nowMs,
           originHostname,
           signature: authBody.signature,
           wallet,
         });
-        await dependencies.establishD1AuthWalletBinding({
-          authSubject: identity.authSubject,
-          baseline,
-          db: env.OPS_DB,
-          nowMs,
-          signal: controller.signal,
-          wallet,
-        });
+        await runCriticalRequestOperation(
+          () => dependencies.establishD1AuthWalletBinding({
+            authSubject: verifiedIdentity.authSubject,
+            baseline,
+            db: opsDb,
+            nowMs,
+            signal: deadline.signal,
+            wallet,
+          }),
+          { deadline, defer: dependencies.defer },
+        );
       } catch (error) {
+        rethrowDeferredWorkRegistrationError(error);
+        if (isSignalCancellationError(deadline.signal, error)) throw deadline.signal.reason;
         if (error instanceof AuthWalletBindingD1SupersededError) throw new AuthWalletBindingSupersededError();
         if (error instanceof AuthWalletBindingD1BusyError) {
           throw new ProfileReadError('aborted', 409, error.message);
         }
         if (
           error instanceof ProfileReadError ||
-          error instanceof WalletLifecycleValidationError ||
-          controller.signal.aborted
+          error instanceof WalletLifecycleValidationError
         ) throw error;
         throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
       }
       try {
-        await dependencies.upsertProfile(
-          env.OPS_DB,
-          { wallet, createdAtMs: nowMs, updatedAtMs: nowMs },
-          controller.signal,
+        await runCriticalRequestOperation(
+          () => dependencies.upsertProfile(
+            opsDb,
+            { wallet, createdAtMs: nowMs, updatedAtMs: nowMs },
+            deadline.signal,
+          ),
+          { deadline, defer: dependencies.defer },
         );
       } catch (error) {
-        if (controller.signal.aborted) throw controller.signal.reason;
+        rethrowDeferredWorkRegistrationError(error);
+        if (isSignalCancellationError(deadline.signal, error)) throw deadline.signal.reason;
         throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
       }
       return { response: jsonResponse({ wallet }, 200), metrics, authOutcome: 'accepted' };
     }
     let response: ReconcileProfileStateResponse;
     try {
-      response = await reconcileProfileState({
+      const reconciliation = () => reconcileProfileState({
         body: body as ReconcileProfileStateRequest,
         common,
         db: env.OPS_DB,
         dependencies,
-        identity,
+        identity: verifiedIdentity,
         nowMs,
       });
+      response = (body as ReconcileProfileStateRequest).mergeStripeDeliveryOrders === true
+        ? await runCriticalRequestOperation(reconciliation, { deadline, defer: dependencies.defer })
+        : await raceReadWithSignal(reconciliation(), deadline.signal);
     } catch (error) {
-      if (error instanceof ProfileReadError || controller.signal.aborted) throw error;
+      rethrowDeferredWorkRegistrationError(error);
+      if (isSignalCancellationError(deadline.signal, error)) throw deadline.signal.reason;
+      if (error instanceof ProfileReadError) throw error;
       throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
     }
     return {
@@ -533,6 +561,8 @@ export async function handleProfileLifecycleRequest(
       mergedStripeDeliveryOrders: response.mergedStripeDeliveryOrders,
     };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
+    if (isRequestCancellationError(request, error)) throw error;
     let profileError: ProfileReadError;
     let authOutcome: ProfileLifecycleResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
     if (error instanceof ProfileReadError) {
@@ -558,13 +588,13 @@ export async function handleProfileLifecycleRequest(
       } else {
         profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
       }
-    } else if (controller.signal.aborted) {
+    } else if (deadline.timedOut()) {
       profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
     } else {
       profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
     }
     return { response: errorResponse(profileError), metrics, authOutcome };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }

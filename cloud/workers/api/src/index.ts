@@ -31,7 +31,11 @@ import {
   type MatchedWorkerRoute,
   type WorkerRouteResult,
 } from './workerRoutes.js';
-import type { DeferredWork } from './deferredWork.js';
+import { registerDeferredWork, type DeferredWork } from './deferredWork.js';
+import {
+  isRequestCancellationError,
+  raceWithSignal,
+} from './boundedRequest.js';
 
 export { runScheduledReconciliations } from './workerScheduled.js';
 export {
@@ -72,6 +76,45 @@ function boundaryErrorSummary(error: unknown): Record<string, unknown> {
     name: error.name,
     cause: { name: error.cause.name, message: error.cause.message },
   };
+}
+
+function cancelledRequestResult(
+  logFields: Record<string, unknown> = {},
+): WorkerRouteResult {
+  return {
+    response: new Response(null, {
+      status: 499,
+      headers: { 'Cache-Control': 'no-store' },
+    }),
+    logFields: { ...logFields, requestCancelled: true },
+  };
+}
+
+function trackCancelledDispatch(
+  request: Request,
+  execution: RequestExecution,
+  dispatch: Promise<WorkerRouteResult>,
+): void {
+  const tracked = dispatch.then(
+    () => undefined,
+    (error) => {
+      if (isRequestCancellationError(request, error)) return;
+      reportError({
+        event: 'shop_api_cancelled_dispatch_failed',
+        route: execution.route.logRoute,
+        error: boundaryErrorSummary(error),
+      });
+    },
+  );
+  try {
+    registerDeferredWork(execution.defer, tracked);
+  } catch (error) {
+    reportError({
+      event: 'shop_api_cancelled_dispatch_registration_failed',
+      route: execution.route.logRoute,
+      error: boundaryErrorSummary(error),
+    });
+  }
 }
 
 function requestExecution(
@@ -159,6 +202,7 @@ async function dispatchRequest(
   execution: RequestExecution,
 ): Promise<WorkerRouteResult> {
   const { defer, dependencies, metrics, pathname, route } = execution;
+  if (request.signal.aborted) throw request.signal.reason;
   const strictOriginDenied = strictPublicOriginDeniedResponse(route, request);
   if (strictOriginDenied) return { response: strictOriginDenied };
 
@@ -167,12 +211,17 @@ async function dispatchRequest(
     const authorization = request.headers.get('Authorization');
     if (isStaffSessionAuthorization(authorization)) {
       try {
-        const staffSession = await verifyStaffSession(authorization, env.OPS_DB);
+        const staffSession = await raceWithSignal(
+          verifyStaffSession(authorization, env.OPS_DB),
+          request.signal,
+        );
         staffAuthenticated = true;
         const headers = new Headers(request.headers);
         headers.set('Authorization', internalStaffAuthorization(staffSession.wallet));
-        request = new Request(request, { headers });
+        const authenticatedRequest = new Request(request, { headers });
+        request = authenticatedRequest;
       } catch (error) {
+        if (request.signal.aborted && error === request.signal.reason) throw error;
         if (error instanceof StaffAuthError && error.code === 'unauthenticated') {
           reportInfo({ event: 'staff_auth_request_rejected', route: pathname });
           return {
@@ -202,7 +251,8 @@ async function dispatchRequest(
     } else if (isInternalStaffAuthorization(authorization)) {
       const headers = new Headers(request.headers);
       headers.delete('Authorization');
-      request = new Request(request, { headers });
+      const internalRequest = new Request(request, { headers });
+      request = internalRequest;
     }
   }
 
@@ -217,7 +267,10 @@ async function dispatchRequest(
   }
 
   if (request.method === 'POST' && route.commerceMutation) {
-    const authority = await loadCommerceAuthorityControl(env.COMMERCE_DB);
+    const authority = await raceWithSignal(
+      loadCommerceAuthorityControl(env.COMMERCE_DB),
+      request.signal,
+    );
     if (authority.state === 'paused') {
       return {
         response: applyProfileCors(request, jsonResponse({
@@ -259,16 +312,31 @@ export async function handleRequest(
   dependencyOverrides: Partial<WorkerDependencies> = {},
 ): Promise<Response> {
   const execution = requestExecution(request, defer, dependencyOverrides);
+  const dispatch = dispatchRequest(request, env, execution);
+  let dispatchTracked = false;
+  const onAbort = () => {
+    if (dispatchTracked) return;
+    dispatchTracked = true;
+    trackCancelledDispatch(request, execution, dispatch);
+  };
+  request.signal.addEventListener('abort', onAbort, { once: true });
+  if (request.signal.aborted) onAbort();
   let result: WorkerRouteResult;
   try {
-    result = await dispatchRequest(request, env, execution);
+    result = await raceWithSignal(dispatch, request.signal);
   } catch (error) {
-    reportError({
-      event: 'shop_api_unhandled_error',
-      route: execution.route.logRoute,
-      error: boundaryErrorSummary(error),
-    });
-    result = { response: unexpectedWorkerRouteResponse(execution.route, request) };
+    if (isRequestCancellationError(request, error)) {
+      result = cancelledRequestResult();
+    } else {
+      reportError({
+        event: 'shop_api_unhandled_error',
+        route: execution.route.logRoute,
+        error: boundaryErrorSummary(error),
+      });
+      result = { response: unexpectedWorkerRouteResponse(execution.route, request) };
+    }
+  } finally {
+    request.signal.removeEventListener('abort', onAbort);
   }
   return finalizeRequest(request, execution, result.response, result.logFields);
 }

@@ -20,6 +20,7 @@ import {
   RECEIPT_TRANSFER_PREPARE_PATH,
   receiptTransferTestHooks,
 } from '../src/receiptTransfer.ts';
+import { createDeferredWorkCollector } from './deferredWork.ts';
 
 const OWNER = Keypair.generate().publicKey;
 const DESTINATION = Keypair.generate().publicKey;
@@ -261,6 +262,50 @@ test('receipt transfer handler keeps the overall deadline authoritative', async 
   assert.equal((await stalledRateLimit.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
 });
 
+test('receipt transfer returns its deadline and retains only the started rate-limit write', async () => {
+  const deferred = createDeferredWorkCollector();
+  let finishWrite!: () => void;
+  const write = new Promise<void>((resolve) => { finishWrite = resolve; });
+  let calls = 0;
+  const result = await handleReceiptTransferPrepare(
+    request(requestBody()),
+    env(),
+    dependencies({
+      defer: deferred.defer,
+      enforceRateLimit: () => {
+        calls += 1;
+        return write;
+      },
+      timeoutMs: 5,
+    }),
+  );
+
+  assert.equal(result.response.status, 504);
+  assert.equal(calls, 1);
+  assert.equal(deferred.promises.length, 1);
+  finishWrite();
+  await deferred.drain();
+});
+
+test('receipt transfer does not start its asset rate-limit write after the deadline', async () => {
+  let calls = 0;
+  const result = await handleReceiptTransferPrepare(
+    request(requestBody()),
+    env(),
+    dependencies({
+      enforceRateLimit: async () => { calls += 1; },
+      fetchAsset: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return receiptAsset();
+      },
+      timeoutMs: 1,
+    }),
+  );
+
+  assert.equal(result.response.status, 504);
+  assert.equal(calls, 1);
+});
+
 test('receipt transfer handler preserves asset, owner, metadata, and proof rejection boundaries', async () => {
   for (const [overrides, expectedMessage] of [
     [{ fetchAsset: async () => receiptAsset({ burnt: true }) }, 'no longer transferable'],
@@ -309,6 +354,45 @@ test('receipt transfer provider adapter retries transient JSON-RPC reads and bou
     }, runtime, 'getLatestBlockhash', []),
     (error) => (error as { code?: unknown }).code === 'unavailable',
   );
+});
+
+test('receipt transfer provider preserves abort-first and provider-first outcomes', async () => {
+  const runtime = receiptTransferTestHooks.buildRuntime(DROP);
+  const cancellation = new AbortController();
+  const reason = new Error('client disconnected');
+  await assert.rejects(
+    receiptTransferTestHooks.rpcCall({
+      apiKey: 'helius-key',
+      providerFetch: async () => {
+        cancellation.abort(reason);
+        throw new Error('provider failed after cancellation');
+      },
+      signal: cancellation.signal,
+    }, runtime, 'getLatestBlockhash', []),
+    (error: unknown) => error === reason,
+  );
+
+  const race = new AbortController();
+  const providerError = new Error('provider failed first');
+  let rejectProvider!: (error: unknown) => void;
+  let markProviderStarted!: () => void;
+  const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
+  const providerFirst = assert.rejects(
+    receiptTransferTestHooks.rpcCall({
+      apiKey: 'helius-key',
+      providerFetch: () => new Promise((_resolve, reject) => {
+        rejectProvider = reject;
+        markProviderStarted();
+      }),
+      signal: race.signal,
+    }, runtime, 'getLatestBlockhash', []),
+    (error: unknown) => error !== race.signal.reason &&
+      (error as { code?: unknown }).code === 'unavailable',
+  );
+  await providerStarted;
+  rejectProvider(providerError);
+  queueMicrotask(() => race.abort(new Error('late client disconnect')));
+  await providerFirst;
 });
 
 test('receipt transfer D1 limiter maps atomic batch admissions and denials', async () => {
@@ -450,4 +534,41 @@ test('receipt transfer transaction builder uses a lookup table for oversized pac
   assert.equal(lookupLoads, 1);
   assert.ok(raw.length <= 1232);
   assert.equal(VersionedTransaction.deserialize(raw).message.addressTableLookups.length, 1);
+});
+
+test('receipt transfer lookup fallback preserves cancellation', async () => {
+  const lookupKey = Keypair.generate().publicKey;
+  const addresses = Array.from({ length: 40 }, (_, index) => testPublicKey(index + 200));
+  const runtime = receiptTransferTestHooks.buildRuntime({ ...DROP, deliveryLookupTable: lookupKey.toBase58() });
+  const instruction = new TransactionInstruction({
+    programId: PROGRAM,
+    keys: [
+      { pubkey: OWNER, isSigner: true, isWritable: true },
+      ...addresses.map((pubkey) => ({ pubkey, isSigner: false, isWritable: false })),
+    ],
+    data: Buffer.from([1]),
+  });
+  const controller = new AbortController();
+  const reason = new Error('client disconnected during lookup');
+
+  await assert.rejects(
+    receiptTransferTestHooks.buildPreparedTransaction({
+      context: {
+        apiKey: 'helius-key',
+        signal: controller.signal,
+        providerFetch: async () => {
+          throw new Error('unexpected provider fetch');
+        },
+      },
+      runtime,
+      instruction,
+      owner: OWNER,
+      blockhash: BLOCKHASH,
+      loadLookupTable: async () => {
+        controller.abort(reason);
+        throw new Error('lookup aborted', { cause: reason });
+      },
+    }),
+    (error: unknown) => error === reason,
+  );
 });

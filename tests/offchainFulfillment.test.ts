@@ -89,6 +89,8 @@ function pubkey(seed: number): PublicKey {
   return new PublicKey(Uint8Array.from({ length: 32 }, (_, index) => (seed + index) & 0xff));
 }
 
+const STRIPE_CHECKOUT_OPERATION_ID = '11111111-1111-4111-8111-111111111111';
+
 function u32LE(value: number): Buffer {
   const buf = Buffer.alloc(4);
   buf.writeUInt32LE(value >>> 0, 0);
@@ -2873,6 +2875,7 @@ test('checkout session core rejects bad returnUrl before config fetch', async ()
   await assert.rejects(
     () => createStripeCheckoutSessionCore({
       identity: createStripeCheckoutIdentity('anon_uid_123'),
+      operationId: STRIPE_CHECKOUT_OPERATION_ID,
       body: {
         dropId: 'little_swag_hoodies_devnet',
         variantKey: 'XL',
@@ -2898,7 +2901,12 @@ test('checkout session core rejects disabled drops before config fetch', async (
   await assert.rejects(
     () => createStripeCheckoutSessionCore({
       identity: createStripeCheckoutIdentity('anon_uid_123'),
-      body: { dropId: 'little_swag_hoodies', variantKey: 'XL', returnUrl: 'https://mons.shop/drop' },
+      operationId: STRIPE_CHECKOUT_OPERATION_ID,
+      body: {
+        dropId: 'little_swag_hoodies',
+        variantKey: 'XL',
+        returnUrl: 'https://mons.shop/drop',
+      },
     }, {
       getDrop: (dropId) => ({
         dropId,
@@ -2936,7 +2944,12 @@ test('checkout session core persists the established Stripe checkout document', 
   const result = await createStripeCheckoutSessionCore({
     identity: createStripeCheckoutIdentity('anon_uid_123'),
     requestOrigin: 'https://mons.shop',
-    body: { dropId: 'card_nft_binder_devnet', quantity: 1, returnUrl: 'https://mons.shop/drop' },
+    operationId: STRIPE_CHECKOUT_OPERATION_ID,
+    body: {
+      dropId: 'card_nft_binder_devnet',
+      quantity: 1,
+      returnUrl: 'https://mons.shop/drop',
+    },
   }, {
     getDrop: (dropId) => ({
       dropId,
@@ -2970,6 +2983,11 @@ test('checkout session core persists the established Stripe checkout document', 
     createProviderSession: async (request, mode) => {
       assert.equal(mode, 'test');
       assert.equal(request.quantity, 1);
+      assert.equal(request.operationId, STRIPE_CHECKOUT_OPERATION_ID);
+      assert.equal(
+        request.idempotencyKey,
+        `mons-checkout:${STRIPE_CHECKOUT_OPERATION_ID}:anonymous:anonymous:anon_uid_123`,
+      );
       assert.deepEqual(request.allowedCountries, STRIPE_CHECKOUT_BINDER_SHIPPING_COUNTRIES);
       return { id: 'cs_test_123', url: 'https://checkout.stripe.com/c/pay/test', livemode: false };
     },
@@ -2987,6 +3005,7 @@ test('checkout session core persists the established Stripe checkout document', 
   assert.deepEqual(writes[0]?.document, {
     sessionId: 'cs_test_123',
     dropId: 'card_nft_binder_devnet',
+    operationId: STRIPE_CHECKOUT_OPERATION_ID,
     ...createStripeCheckoutIdentity('anon_uid_123'),
     quantity: 1,
     currency: 'usd',

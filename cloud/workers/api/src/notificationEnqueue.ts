@@ -13,6 +13,7 @@ import {
   signNotificationEnqueueRequest,
   verifyNotificationEnqueueRequest,
 } from '../../../../shared/notificationEnqueueAuth.js';
+import { isRequestCancellationError, readBoundedRequestText } from './boundedRequest.js';
 import { processNotificationEmailMessage } from './notificationEmailConsumer.js';
 
 const RESPONSE_HEADERS = {
@@ -41,33 +42,6 @@ async function cancelBody(request: Request): Promise<void> {
   } catch {}
 }
 
-async function readBoundedBody(request: Request): Promise<string> {
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > NOTIFICATION_EMAIL_MAX_JOB_BYTES) {
-    await cancelBody(request);
-    throw new Error('request-too-large');
-  }
-  if (!request.body) throw new Error('missing-body');
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > NOTIFICATION_EMAIL_MAX_JOB_BYTES) throw new Error('request-too-large');
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    return chunks.join('');
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    throw error;
-  }
-}
-
 export async function handleNotificationEnqueue(
   request: Request,
   env: Pick<Env, 'NOTIFICATION_EMAIL_QUEUE' | 'NOTIFICATION_ENQUEUE_SECRET'>,
@@ -88,8 +62,13 @@ export async function handleNotificationEnqueue(
   }
   let body: string;
   try {
-    body = await readBoundedBody(request);
-  } catch {
+    body = await readBoundedRequestText(request, {
+      maxBytes: NOTIFICATION_EMAIL_MAX_JOB_BYTES,
+      signal: request.signal,
+      createError: (failure) => new Error(failure),
+    });
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
     return response(400, { ok: false, error: 'invalid-request' });
   }
   const dependencies = { ...defaultDependencies, ...overrides };

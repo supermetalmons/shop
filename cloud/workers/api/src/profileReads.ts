@@ -15,16 +15,18 @@ import {
   isManualReviewCheckout,
   manualReviewCheckoutFromRecord,
 } from '../../../../shared/fulfillmentReadModel.js';
-import type {
-  DeliveryOrderSummary,
-  FulfillmentManualReviewCheckout,
-  FulfillmentOrder,
-  FulfillmentOrdersCursor,
-  GetAdminProfileViewResponse,
-  GetProfileStateResponse,
-  GetProfileShipmentsResponse,
-  ProfileStateProfile,
-  ProfileStateSection,
+import {
+  STRIPE_CHECKOUT_OPERATION_HEADER,
+  STRIPE_CHECKOUT_RETRY_HEADER,
+  type DeliveryOrderSummary,
+  type FulfillmentManualReviewCheckout,
+  type FulfillmentOrder,
+  type FulfillmentOrdersCursor,
+  type GetAdminProfileViewResponse,
+  type GetProfileStateResponse,
+  type GetProfileShipmentsResponse,
+  type ProfileStateProfile,
+  type ProfileStateSection,
 } from '../../../../shared/contracts.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
 import { DEPLOYMENT_DROPS } from '../../../../shared/deploymentRegistry.js';
@@ -47,9 +49,15 @@ import {
 import {
   cancelResponseBody,
   readBoundedJson,
-  readBoundedText,
   type ProfileProviderFetch,
 } from './boundedResponse.js';
+import {
+  createRequestDeadline,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  raceReadWithSignal,
+  readBoundedRequestJson,
+} from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
   D1CommerceRepository,
@@ -84,7 +92,7 @@ export const PROFILE_READ_PATHS = new Set([
   FULFILLMENT_MANUAL_REVIEW_PATH,
 ]);
 
-const PROFILE_CORS_ALLOW_HEADERS = 'Content-Type, Authorization, X-Mons-CSRF';
+const PROFILE_CORS_ALLOW_HEADERS = `Content-Type, Authorization, X-Mons-CSRF, ${STRIPE_CHECKOUT_OPERATION_HEADER}`;
 const PROFILE_CORS_ALLOW_METHODS = 'POST, OPTIONS';
 
 const MAX_PROFILE_REQUEST_BYTES = 4096;
@@ -177,6 +185,7 @@ function profileCorsHeaders(origin: string): Record<string, string> {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': PROFILE_CORS_ALLOW_METHODS,
     'Access-Control-Allow-Headers': PROFILE_CORS_ALLOW_HEADERS,
+    'Access-Control-Expose-Headers': STRIPE_CHECKOUT_RETRY_HEADER,
     'Access-Control-Max-Age': '86400',
     'Timing-Allow-Origin': origin,
     Vary: 'Origin',
@@ -336,26 +345,11 @@ async function parseExactRequestBody(
   path: ProfileReadPath,
   signal: AbortSignal,
 ): Promise<ParsedReadRequest> {
-  if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > MAX_PROFILE_REQUEST_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  }
-  if (!request.body) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  const response = new Response(request.body);
-  const text = await readBoundedText(response, MAX_PROFILE_REQUEST_BYTES, signal)
-    .catch(() => {
-      throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-    });
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  }
+  const parsed = await readBoundedRequestJson(request, {
+    maxBytes: MAX_PROFILE_REQUEST_BYTES,
+    signal,
+    createError: () => new ProfileReadError('invalid-argument', 400, 'Invalid request.'),
+  });
   if (!isRecord(parsed)) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
   if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH || path === PROFILE_STATE_PATH) {
     if (Object.keys(parsed).length !== 0) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
@@ -409,7 +403,8 @@ async function loadOptionalSessionWallet(args: {
     }
     return resolution.wallet;
   } catch (error) {
-    if (error instanceof ProfileReadError || args.signal.aborted) throw error;
+    if (isSignalCancellationError(args.signal, error)) throw args.signal.reason;
+    if (error instanceof ProfileReadError) throw error;
     throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
   }
 }
@@ -470,8 +465,8 @@ async function loadProfileEmail(args: {
   let stored;
   try {
     stored = await loadD1Profile(args.db, args.ownerWallet, args.signal);
-  } catch {
-    if (args.signal.aborted) throw args.signal.reason;
+  } catch (error) {
+    if (isSignalCancellationError(args.signal, error)) throw args.signal.reason;
     throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
   }
   return stored?.email;
@@ -694,6 +689,7 @@ async function manualReviewFromDocuments(args: {
   dropId: string;
   env: Partial<Pick<Env, 'STRIPE_SECRET_KEY' | 'STRIPE_RESTRICTED_KEY' | 'STRIPE_SECRET_KEY_LIVE' | 'STRIPE_RESTRICTED_KEY_LIVE'>>;
   providerFetch: ProfileProviderFetch;
+  request: Request;
   signal: AbortSignal;
 }): Promise<{ checkouts: FulfillmentManualReviewCheckout[] }> {
   const mode = DEPLOYMENT_DROPS[args.dropId]?.solanaCluster === 'mainnet-beta' ? 'live' : 'test';
@@ -706,7 +702,9 @@ async function manualReviewFromDocuments(args: {
     let session: unknown = null;
     try {
       session = await fetchStripeSession(sessionId, keys, args.providerFetch, args.signal);
-    } catch {}
+    } catch (error) {
+      if (isRequestCancellationError(args.request, error)) throw error;
+    }
     return manualReviewCheckoutFromRecord({
       canViewSensitiveAddress: args.canViewSensitiveAddress,
       checkout: fields,
@@ -747,15 +745,11 @@ async function loadProfileStateProfile(args: {
 
 function profileStateSection<T>(
   result: PromiseSettledResult<T>,
-  signal: AbortSignal,
+  request: Request,
+  timeoutSignal: AbortSignal,
 ): ProfileStateSection<T> {
   if (result.status === 'fulfilled') return { status: 'ready', value: result.value };
-  if (signal.aborted) {
-    return {
-      status: 'error',
-      error: { code: 'deadline-exceeded', message: 'Profile request timed out.' },
-    };
-  }
+  if (isRequestCancellationError(request, result.reason)) throw result.reason;
   if (
     result.reason instanceof ProfileReadError &&
     (result.reason.code === 'deadline-exceeded' || result.reason.code === 'unavailable')
@@ -763,6 +757,12 @@ function profileStateSection<T>(
     return {
       status: 'error',
       error: { code: result.reason.code, message: result.reason.message },
+    };
+  }
+  if (isSignalCancellationError(timeoutSignal, result.reason)) {
+    return {
+      status: 'error',
+      error: { code: 'deadline-exceeded', message: 'Profile request timed out.' },
     };
   }
   throw result.reason;
@@ -795,18 +795,18 @@ export async function handleProfileReadRequest(
       authOutcome: 'rejected',
     };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Profile request timed out', 'TimeoutError')),
-    dependencies.timeoutMs,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Profile request timed out',
+  });
+  const boundedRead = <T>(operation: Promise<T>) => raceReadWithSignal(operation, deadline.signal);
   let identity: RequestIdentity;
   try {
-    const requestBody = await parseExactRequestBody(request, path, controller.signal);
+    const requestBody = await parseExactRequestBody(request, path, deadline.signal);
     identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
-      controller.signal,
+      deadline.signal,
       dependencies.nowMs(),
     );
     if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
@@ -816,25 +816,25 @@ export async function handleProfileReadRequest(
       repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
       nowMs: dependencies.nowMs(),
       providerFetch: trackedFetch,
-      signal: controller.signal,
+      signal: deadline.signal,
     };
     const sessionCommon = {
       db: env.OPS_DB,
       resolveD1AuthWalletBinding: dependencies.resolveD1AuthWalletBinding,
-      signal: controller.signal,
+      signal: deadline.signal,
     };
     if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
       const owners = identity.kind === 'staff-wallet'
         ? [identity.wallet]
         : [stripeCheckoutAnonymousOwnerId(identity.authSubject)];
-      const orders = await loadDeliveryHistory({ ...common, owners });
+      const orders = await boundedRead(loadDeliveryHistory({ ...common, owners }));
       return { response: jsonResponse({ orders }, 200), metrics, authOutcome: 'accepted' };
     }
     if (path === PROFILE_STATE_PATH) {
-      const wallet = await resolveRequestWallet(
+      const wallet = await boundedRead(resolveRequestWallet(
         identity,
         (uid) => loadOptionalSessionWallet({ ...sessionCommon, uid }),
-      );
+      ));
       if (!wallet) {
         const response: GetProfileStateResponse = {
           responseMode: 'profile-state',
@@ -850,11 +850,14 @@ export async function handleProfileReadRequest(
         };
       }
       const [profileResult, shipmentsResult] = await Promise.allSettled([
-        loadProfileStateProfile({ ...common, db: env.OPS_DB, ownerWallet: wallet }, dependencies.loadProfileEmail),
-        loadDeliveryHistory({ ...common, owners: [wallet] }),
+        boundedRead(loadProfileStateProfile(
+          { ...common, db: env.OPS_DB, ownerWallet: wallet },
+          dependencies.loadProfileEmail,
+        )),
+        boundedRead(loadDeliveryHistory({ ...common, owners: [wallet] })),
       ]);
-      const profile = profileStateSection(profileResult, controller.signal);
-      const shipments = profileStateSection(shipmentsResult, controller.signal);
+      const profile = profileStateSection(profileResult, request, deadline.timeoutSignal);
+      const shipments = profileStateSection(shipmentsResult, request, deadline.timeoutSignal);
       const response: GetProfileStateResponse = {
         responseMode: 'profile-state',
         sessionWallet: wallet,
@@ -869,28 +872,34 @@ export async function handleProfileReadRequest(
       };
     }
     if (path === ADMIN_DELIVERY_ORDER_OWNERS_PATH) {
-      const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({ ...sessionCommon, uid }));
+      const wallet = await boundedRead(resolveRequestWallet(
+        identity,
+        (uid) => loadSessionWallet({ ...sessionCommon, uid }),
+      ));
       if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
         throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
       }
       return {
-        response: jsonResponse(await loadDeliveryOrderOwners({
+        response: jsonResponse(await boundedRead(loadDeliveryOrderOwners({
           ...common,
           cursor: typeof requestBody.cursor === 'string' ? requestBody.cursor : undefined,
           pageSize: requestBody.pageSize,
-        }), 200),
+        })), 200),
         metrics,
         authOutcome: 'accepted',
       };
     }
     if (path === FULFILLMENT_ORDERS_PATH || path === FULFILLMENT_MANUAL_REVIEW_PATH) {
       const dropId = requestBody.dropId!;
-      const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({ ...sessionCommon, uid }));
+      const wallet = await boundedRead(resolveRequestWallet(
+        identity,
+        (uid) => loadSessionWallet({ ...sessionCommon, uid }),
+      ));
       const access = fulfillmentAccess(wallet, dropId);
       if (path === FULFILLMENT_ORDERS_PATH) {
         const addressSecret = typeof env.ADDRESS_DECRYPTION_SECRET === 'string' ? env.ADDRESS_DECRYPTION_SECRET : '';
         return {
-          response: jsonResponse(await loadFulfillmentOrders({
+          response: jsonResponse(await boundedRead(loadFulfillmentOrders({
             ...common,
             addressSecret,
             canViewSensitiveAddress: access.canViewSensitiveAddress,
@@ -899,21 +908,22 @@ export async function handleProfileReadRequest(
               : null,
             dropId,
             limit: requestBody.limit ?? FULFILLMENT_ORDER_LIMIT,
-          }), 200),
+          })), 200),
           metrics,
           authOutcome: 'accepted',
         };
       }
       return {
         response: jsonResponse(await (async () => {
-          const documents = await loadManualReviewDocuments({ ...common, dropId });
+          const documents = await boundedRead(loadManualReviewDocuments({ ...common, dropId }));
           return manualReviewFromDocuments({
             canViewSensitiveAddress: access.canViewSensitiveAddress,
             documents,
             dropId,
             env,
             providerFetch: trackedFetch,
-            signal: controller.signal,
+            request,
+            signal: deadline.signal,
           });
         })(), 200),
         metrics,
@@ -921,10 +931,13 @@ export async function handleProfileReadRequest(
       };
     }
     const ownerWallet = requestBody.ownerWallet!;
-    const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({ ...sessionCommon, uid }));
+    const wallet = await boundedRead(resolveRequestWallet(
+      identity,
+      (uid) => loadSessionWallet({ ...sessionCommon, uid }),
+    ));
     if (path === PROFILE_SHIPMENTS_PATH) {
       if (wallet !== ownerWallet) throw new ProfileReadError('unauthenticated', 401, 'Wallet session changed. Sign in again.');
-      const orders = await loadDeliveryHistory({ ...common, owners: [ownerWallet] });
+      const orders = await boundedRead(loadDeliveryHistory({ ...common, owners: [ownerWallet] }));
       const response: GetProfileShipmentsResponse = { responseMode: 'shipments', wallet, orders };
       return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted' };
     }
@@ -932,15 +945,16 @@ export async function handleProfileReadRequest(
       throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
     }
     return {
-      response: jsonResponse(await loadAdminProfile(
+      response: jsonResponse(await boundedRead(loadAdminProfile(
         { ...common, db: env.OPS_DB, ownerWallet },
         dependencies.loadProfileEmail,
         () => loadDeliveryHistory({ ...common, owners: [ownerWallet] }),
-      ), 200),
+      )), 200),
       metrics,
       authOutcome: 'accepted',
     };
   } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
     let profileError: ProfileReadError;
     let authOutcome: ProfileReadResult['authOutcome'] = identity! ? 'provider-failure' : 'rejected';
     if (error instanceof ProfileReadError) {
@@ -959,7 +973,7 @@ export async function handleProfileReadRequest(
         profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
         authOutcome = 'provider-failure';
       }
-    } else if (controller.signal.aborted) {
+    } else if (deadline.timedOut()) {
       profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
       authOutcome = identity! ? 'provider-failure' : 'rejected';
     } else {
@@ -968,7 +982,7 @@ export async function handleProfileReadRequest(
     }
     return { response: errorResponse(profileError), metrics, authOutcome };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }
 

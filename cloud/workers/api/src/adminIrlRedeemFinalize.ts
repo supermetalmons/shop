@@ -78,6 +78,13 @@ import {
 import {
   type ProfileProviderFetch,
 } from './boundedResponse.js';
+import {
+  createRequestDeadline,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  readBoundedRequestJson,
+  runCriticalRequestOperation,
+} from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
   CommerceWriteConflict,
@@ -105,11 +112,11 @@ import {
   decodeCosigner,
   deriveDeliveryPda,
   fetchOnchainConfig as fetchDeliveryOnchainConfig,
+  hasConfirmedSignatureCommitment,
   mintReceiptsInstruction,
   sendAndConfirmSignedTransaction,
 } from './deliveryReceiptOnchain.js';
 import {
-  registerDeferredWork,
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
 } from './deferredWork.js';
@@ -180,11 +187,34 @@ export class AdminIrlRedeemFinalizeError extends Error {
   }
 }
 
+class PendingFinalizeSubmissionError extends AdminIrlRedeemFinalizeError {
+  constructor(cause?: unknown) {
+    super('aborted', 'A submitted Admin IRL redeem transaction is still being reconciled.');
+    this.name = 'PendingFinalizeSubmissionError';
+    if (cause !== undefined) Object.defineProperty(this, 'cause', { value: cause });
+  }
+}
+
 type RequestItem = {
   assetId: string;
   kind: 'box' | 'card_receipt';
   refId: number;
 };
+
+type PendingFinalizeSubmission =
+  | {
+    kind: 'internal_delivery';
+    signature: string;
+    blockhash: string;
+    deliveryId: number;
+    deliveryPda: string;
+  }
+  | {
+    kind: 'receipt_mint';
+    signature: string;
+    blockhash: string;
+    assetIds: string[];
+  };
 
 type StartedRequest = {
   requestId: string;
@@ -198,6 +228,7 @@ type StartedRequest = {
   internalDeliveryPda?: string;
   internalDeliveryTx?: string;
   closeDeliveryTx?: string;
+  pendingFinalizeSubmission?: PendingFinalizeSubmission;
 };
 
 type InternalDelivery = {
@@ -302,48 +333,28 @@ function normalizedError(error: unknown, fallback: string): AdminIrlRedeemFinali
   return new AdminIrlRedeemFinalizeError('internal', fallback);
 }
 
+function rethrowFinalizeCancellation(signal: AbortSignal, error: unknown): void {
+  if (isSignalCancellationError(signal, error)) throw signal.reason;
+}
+
 async function readRequestBody(request: Request, signal: AbortSignal): Promise<FinalizeRequest> {
-  const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
-  if (contentType !== 'application/json') {
-    await request.body?.cancel().catch(() => undefined);
-    throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Content-Type must be application/json.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > REQUEST_MAX_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Admin IRL redeem finalization request is too large.');
-  }
-  if (!request.body) throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid Admin IRL redeem finalization request.');
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => { void reader.cancel(signal.reason).catch(() => undefined); };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > REQUEST_MAX_BYTES) {
-        throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Admin IRL redeem finalization request is too large.');
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    const parsed = requestSchema.safeParse(JSON.parse(chunks.join('')) as unknown);
-    if (!parsed.success) throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid Admin IRL redeem finalization request.');
-    return parsed.data;
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    if (error instanceof AdminIrlRedeemFinalizeError) throw error;
-    if (signal.aborted) throw signal.reason;
+  const value = await readBoundedRequestJson(request, {
+    maxBytes: REQUEST_MAX_BYTES,
+    signal,
+    createError: (failure) => new AdminIrlRedeemFinalizeError(
+      'invalid-argument',
+      failure === 'unsupported-media-type'
+        ? 'Content-Type must be application/json.'
+        : failure === 'too-large'
+          ? 'Admin IRL redeem finalization request is too large.'
+          : 'Invalid Admin IRL redeem finalization request.',
+    ),
+  });
+  const parsed = requestSchema.safeParse(value);
+  if (!parsed.success) {
     throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid Admin IRL redeem finalization request.');
-  } finally {
-    signal.removeEventListener('abort', onAbort);
   }
+  return parsed.data;
 }
 
 function canonicalWallet(value: unknown): string {
@@ -363,6 +374,63 @@ function normalizeReceiptTxs(value: unknown): string[] {
   return Array.isArray(value)
     ? Array.from(new Set(value.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())).map((entry) => entry.trim())))
     : [];
+}
+
+function canonicalSignature(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const signature = value.trim();
+  try {
+    const decoded = bs58.decode(signature);
+    return decoded.length === 64 && decoded.some((byte) => byte !== 0) ? signature : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function canonicalPublicKey(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    return new PublicKey(value.trim()).toBase58();
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizePendingFinalizeSubmission(value: unknown): PendingFinalizeSubmission | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem submission recovery is invalid.');
+  }
+  const signature = canonicalSignature(value.signature);
+  const blockhash = canonicalPublicKey(value.blockhash);
+  if (!signature || !blockhash) {
+    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem submission recovery is invalid.');
+  }
+  if (value.kind === 'internal_delivery') {
+    const deliveryId = Math.floor(Number(value.deliveryId));
+    const deliveryPda = canonicalPublicKey(value.deliveryPda);
+    if (!Number.isSafeInteger(deliveryId) || deliveryId < 1 || !deliveryPda) {
+      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem submission recovery is invalid.');
+    }
+    return { kind: value.kind, signature, blockhash, deliveryId, deliveryPda };
+  }
+  if (value.kind === 'receipt_mint' && Array.isArray(value.assetIds)) {
+    const assetIds = value.assetIds.map(canonicalPublicKey);
+    if (!assetIds.length || assetIds.length > 3 || assetIds.some((assetId) => !assetId) || new Set(assetIds).size !== assetIds.length) {
+      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem submission recovery is invalid.');
+    }
+    return { kind: value.kind, signature, blockhash, assetIds: assetIds as string[] };
+  }
+  throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem submission recovery is invalid.');
+}
+
+function samePendingFinalizeSubmission(left: PendingFinalizeSubmission, right: PendingFinalizeSubmission): boolean {
+  if (left.kind !== right.kind || left.signature !== right.signature || left.blockhash !== right.blockhash) return false;
+  if (left.kind === 'internal_delivery' && right.kind === 'internal_delivery') {
+    return left.deliveryId === right.deliveryId && left.deliveryPda === right.deliveryPda;
+  }
+  return left.kind === 'receipt_mint' && right.kind === 'receipt_mint' &&
+    left.assetIds.length === right.assetIds.length && left.assetIds.every((assetId, index) => assetId === right.assetIds[index]);
 }
 
 function normalizeItems(request: Record<string, unknown>): {
@@ -484,73 +552,109 @@ async function runTransaction<T>(
   throw new AdminIrlRedeemFinalizeError('unavailable', 'Admin IRL redeem data is temporarily unavailable.');
 }
 
+type StartFinalizeResult =
+  | { status: 'complete'; request: Record<string, unknown> }
+  | { status: 'started'; request: StartedRequest };
+
+function finalizeRequestOwner(request: Record<string, unknown>, wallet: string): string {
+  let owner: string;
+  try {
+    owner = new PublicKey(String(request.owner || '')).toBase58();
+  } catch {
+    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request owner is invalid.');
+  }
+  if (owner !== wallet) {
+    throw new AdminIrlRedeemFinalizeError('permission-denied', 'Only the requesting admin wallet can finalize this Admin IRL redeem.');
+  }
+  return owner;
+}
+
+function startedFinalizeRequest(
+  body: FinalizeRequest,
+  request: Record<string, unknown>,
+  owner: string,
+): StartedRequest {
+  const normalized = normalizeItems(request);
+  const pendingFinalizeSubmission = normalizePendingFinalizeSubmission(request.pendingFinalizeSubmission);
+  const internalDeliveryId = Math.floor(Number(request.internalDeliveryId));
+  return {
+    requestId: body.requestId,
+    dropId: body.dropId,
+    owner,
+    targetKind: normalized.targetKind,
+    itemIds: normalized.itemIds,
+    items: normalized.items,
+    receiptTxs: normalizeReceiptTxs(request.receiptTxs),
+    ...(Number.isSafeInteger(internalDeliveryId) && internalDeliveryId > 0 ? { internalDeliveryId } : {}),
+    ...(typeof request.internalDeliveryPda === 'string' && request.internalDeliveryPda ? { internalDeliveryPda: request.internalDeliveryPda } : {}),
+    ...(typeof request.internalDeliveryTx === 'string' && request.internalDeliveryTx ? { internalDeliveryTx: request.internalDeliveryTx } : {}),
+    ...(typeof request.closeDeliveryTx === 'string' && request.closeDeliveryTx ? { closeDeliveryTx: request.closeDeliveryTx } : {}),
+    ...(pendingFinalizeSubmission ? { pendingFinalizeSubmission } : {}),
+  };
+}
+
 async function startFinalize(
   context: CommerceContext,
   body: FinalizeRequest,
   wallet: string,
   attemptId: string,
   nowMs: number,
-): Promise<{ status: 'complete'; request: Record<string, unknown> } | { status: 'started'; request: StartedRequest }> {
+): Promise<StartFinalizeResult> {
   const path = requestPath(body);
-  return runTransaction<
-    { status: 'complete'; request: Record<string, unknown> } |
-    { status: 'started'; request: StartedRequest }
-  >(context, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(context, path, transaction);
-    if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
-    const request = document.fields;
-    if (request.dropId !== body.dropId) throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request drop mismatch.');
-    let owner: string;
+  try {
+    return await runTransaction<StartFinalizeResult>(context, async (transaction) => {
+      const document = await deliveryReceiptRuntime.readDocument(context, path, transaction);
+      if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
+      const request = document.fields;
+      if (request.dropId !== body.dropId) throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request drop mismatch.');
+      const owner = finalizeRequestOwner(request, wallet);
+      if (request.status === 'complete') return { result: { status: 'complete' as const, request } };
+      const leaseExpiresAt = Number(request.processingLeaseExpiresAt || 0);
+      if (request.status === 'processing' && Number.isFinite(leaseExpiresAt) && leaseExpiresAt > nowMs) {
+        throw new AdminIrlRedeemFinalizeError('aborted', 'This Admin IRL redeem request is already being finalized.');
+      }
+      const started = startedFinalizeRequest(body, request, owner);
+      return {
+        result: { status: 'started' as const, request: started },
+        writes: [deleteFieldsWrite(path, {
+          status: 'processing',
+          transferSignature: body.transferSignature,
+          processingAttemptId: attemptId,
+          processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
+        }, ['preparedExpiresAt'], [
+          { fieldPath: 'processingStartedAt', value: commerceFieldValue.serverTimestamp() },
+          { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
+        ])],
+      };
+    });
+  } catch (error) {
+    if (error instanceof AdminIrlRedeemFinalizeError) throw error;
     try {
-      owner = new PublicKey(String(request.owner || '')).toBase58();
-    } catch {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request owner is invalid.');
-    }
-    if (owner !== wallet) {
-      throw new AdminIrlRedeemFinalizeError('permission-denied', 'Only the requesting admin wallet can finalize this Admin IRL redeem.');
-    }
-    if (request.status === 'complete') return { result: { status: 'complete' as const, request } };
-    const leaseExpiresAt = Number(request.processingLeaseExpiresAt || 0);
-    if (request.status === 'processing' && Number.isFinite(leaseExpiresAt) && leaseExpiresAt > nowMs) {
-      throw new AdminIrlRedeemFinalizeError('aborted', 'This Admin IRL redeem request is already being finalized.');
-    }
-    const normalized = normalizeItems(request);
-    const internalDeliveryId = Math.floor(Number(request.internalDeliveryId));
-    const started: StartedRequest = {
-      requestId: body.requestId,
-      dropId: body.dropId,
-      owner,
-      targetKind: normalized.targetKind,
-      itemIds: normalized.itemIds,
-      items: normalized.items,
-      receiptTxs: normalizeReceiptTxs(request.receiptTxs),
-      ...(Number.isSafeInteger(internalDeliveryId) && internalDeliveryId > 0 ? { internalDeliveryId } : {}),
-      ...(typeof request.internalDeliveryPda === 'string' && request.internalDeliveryPda ? { internalDeliveryPda: request.internalDeliveryPda } : {}),
-      ...(typeof request.internalDeliveryTx === 'string' && request.internalDeliveryTx ? { internalDeliveryTx: request.internalDeliveryTx } : {}),
-      ...(typeof request.closeDeliveryTx === 'string' && request.closeDeliveryTx ? { closeDeliveryTx: request.closeDeliveryTx } : {}),
-    };
-    return {
-      result: { status: 'started' as const, request: started },
-      writes: [deleteFieldsWrite(path, {
-        status: 'processing',
-        transferSignature: body.transferSignature,
-        processingAttemptId: attemptId,
-        processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
-      }, ['preparedExpiresAt'], [
-        { fieldPath: 'processingStartedAt', value: commerceFieldValue.serverTimestamp() },
-        { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
-      ])],
-    };
-  });
+      const cleanup = cleanupContext(context);
+      const document = await deliveryReceiptRuntime.readDocument(cleanup, path);
+      const request = document?.fields;
+      if (
+        request?.status === 'processing' &&
+        request.processingAttemptId === attemptId &&
+        request.transferSignature === body.transferSignature &&
+        request.dropId === body.dropId
+      ) {
+        const owner = finalizeRequestOwner(request, wallet);
+        return { status: 'started', request: startedFinalizeRequest(body, request, owner) };
+      }
+    } catch {}
+    throw error;
+  }
 }
 
 async function clearProcessing(context: CommerceContext, body: FinalizeRequest, attemptId: string, error: unknown): Promise<void> {
-  const cleanup: CommerceContext = { ...context, nowMs: Date.now(), signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS) };
+  const cleanup = cleanupContext(context);
   await runTransaction(cleanup, async (transaction) => {
     const document = await deliveryReceiptRuntime.readDocument(cleanup, requestPath(body), transaction);
     if (!document || document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
       return { result: undefined };
     }
+    if (document.fields.pendingFinalizeSubmission !== undefined) return { result: undefined };
     return {
       result: undefined,
       writes: [deleteFieldsWrite(document.path, {
@@ -565,6 +669,10 @@ async function clearProcessing(context: CommerceContext, body: FinalizeRequest, 
   }).catch((cleanupError) => {
     console.warn({ event: 'admin_irl_redeem_finalize_cleanup_failed', error: summarizeError(cleanupError) });
   });
+}
+
+function cleanupContext(context: CommerceContext): CommerceContext {
+  return { ...context, nowMs: Date.now(), signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS) };
 }
 
 function resolveInstructionAccounts(transaction: Awaited<ReturnType<Connection['getTransaction']>>): PublicKey[] {
@@ -743,14 +851,284 @@ function isTombstone(account: Awaited<ReturnType<Connection['getAccountInfo']>>)
   return !account || account.data.length <= 1;
 }
 
+async function persistPendingFinalizeSubmission(
+  context: CommerceContext,
+  path: string,
+  attemptId: string,
+  pending: PendingFinalizeSubmission,
+): Promise<void> {
+  try {
+    await runTransaction(context, async (transaction) => {
+      const document = await deliveryReceiptRuntime.readDocument(context, path, transaction);
+      if (!document || document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
+        throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
+      }
+      const existing = normalizePendingFinalizeSubmission(document.fields.pendingFinalizeSubmission);
+      if (existing && !samePendingFinalizeSubmission(existing, pending)) {
+        throw new PendingFinalizeSubmissionError();
+      }
+      return {
+        result: undefined,
+        writes: existing ? [] : [deleteFieldsWrite(document.path, {
+          pendingFinalizeSubmission: pending,
+          processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
+        }, [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+      };
+    });
+  } catch (error) {
+    if (error instanceof CommerceWriteConflict) throw error;
+    try {
+      const cleanup = cleanupContext(context);
+      const document = await deliveryReceiptRuntime.readDocument(cleanup, path);
+      const stored = document && normalizePendingFinalizeSubmission(document.fields.pendingFinalizeSubmission);
+      if (
+        document?.fields.status === 'processing' &&
+        document.fields.processingAttemptId === attemptId &&
+        stored && samePendingFinalizeSubmission(stored, pending)
+      ) return;
+    } catch {}
+    throw error;
+  }
+}
+
+function pendingFinalizeSubmissionAlreadySettled(
+  document: Record<string, unknown>,
+  pending: PendingFinalizeSubmission,
+  outcome: 'confirmed' | 'expired',
+): boolean {
+  if (outcome === 'expired') return true;
+  if (pending.kind === 'receipt_mint') {
+    return Array.isArray(document.receiptTxs) && document.receiptTxs.includes(pending.signature);
+  }
+  return document.internalDeliveryId === pending.deliveryId &&
+    document.internalDeliveryPda === pending.deliveryPda &&
+    document.internalDeliveryTx === pending.signature;
+}
+
+async function settlePendingFinalizeSubmission(
+  context: CommerceContext,
+  path: string,
+  attemptId: string,
+  pending: PendingFinalizeSubmission,
+  outcome: 'confirmed' | 'expired',
+): Promise<void> {
+  try {
+    await runTransaction(context, async (transaction) => {
+      const document = await deliveryReceiptRuntime.readDocument(context, path, transaction);
+      if (!document || document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
+        throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
+      }
+      const stored = normalizePendingFinalizeSubmission(document.fields.pendingFinalizeSubmission);
+      if (!stored) {
+        if (pendingFinalizeSubmissionAlreadySettled(document.fields, pending, outcome)) {
+          return { result: undefined };
+        }
+        throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem submission recovery changed.');
+      }
+      if (!samePendingFinalizeSubmission(stored, pending)) {
+        throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem submission recovery changed.');
+      }
+      const fields: Record<string, unknown> = {};
+      if (outcome === 'confirmed') {
+        if (pending.kind === 'internal_delivery') {
+          fields.internalDeliveryId = pending.deliveryId;
+          fields.internalDeliveryPda = pending.deliveryPda;
+          fields.internalDeliveryTx = pending.signature;
+        } else {
+          fields.receiptTxs = Array.from(new Set([...normalizeReceiptTxs(document.fields.receiptTxs), pending.signature]));
+        }
+      }
+      return {
+        result: undefined,
+        writes: [deleteFieldsWrite(document.path, fields, ['pendingFinalizeSubmission'], [
+          { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
+        ])],
+      };
+    });
+  } catch (error) {
+    try {
+      const cleanup = cleanupContext(context);
+      const document = await deliveryReceiptRuntime.readDocument(cleanup, path);
+      const stored = document && normalizePendingFinalizeSubmission(document.fields.pendingFinalizeSubmission);
+      if (
+        document?.fields.status === 'processing' &&
+        document.fields.processingAttemptId === attemptId &&
+        !stored && pendingFinalizeSubmissionAlreadySettled(document.fields, pending, outcome)
+      ) return;
+    } catch {}
+    throw error;
+  }
+}
+
+async function holdPendingFinalizeSubmission(
+  context: CommerceContext,
+  path: string,
+  attemptId: string,
+  pending: PendingFinalizeSubmission,
+): Promise<void> {
+  await runTransaction(context, async (transaction) => {
+    const document = await deliveryReceiptRuntime.readDocument(context, path, transaction);
+    if (!document || document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
+      return { result: undefined };
+    }
+    const stored = normalizePendingFinalizeSubmission(document.fields.pendingFinalizeSubmission);
+    if (!stored || !samePendingFinalizeSubmission(stored, pending)) return { result: undefined };
+    return {
+      result: undefined,
+      writes: [deleteFieldsWrite(document.path, {
+        processingLeaseExpiresAt: timestamp(context.nowMs + PROCESSING_LEASE_MS),
+      }, [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+    };
+  });
+}
+
+async function probePendingFinalizeSubmission(
+  connection: Connection,
+  pending: PendingFinalizeSubmission,
+): Promise<'confirmed' | 'expired' | 'unresolved'> {
+  const status = (await connection.getSignatureStatuses([pending.signature], { searchTransactionHistory: true })).value[0];
+  if (status?.err) return 'expired';
+  if (hasConfirmedSignatureCommitment(status)) return 'confirmed';
+  if (status) return 'unresolved';
+  const landed = pending.kind === 'internal_delivery'
+    ? Boolean(await connection.getAccountInfo(new PublicKey(pending.deliveryPda), {
+      commitment: 'confirmed', dataSlice: { offset: 0, length: 0 },
+    }))
+    : (await connection.getMultipleAccountsInfo(pending.assetIds.map((assetId) => new PublicKey(assetId)), {
+      commitment: 'confirmed', dataSlice: { offset: 0, length: 2 },
+    })).every(isTombstone);
+  if (landed) return 'confirmed';
+  const validity = await connection.isBlockhashValid(pending.blockhash, { commitment: 'confirmed' });
+  return validity.value ? 'unresolved' : 'expired';
+}
+
+async function reconcilePendingFinalizeSubmission(args: {
+  commerce: CommerceContext;
+  provider: ProviderContext;
+  runtime: Runtime;
+  path: string;
+  attemptId: string;
+  pending: PendingFinalizeSubmission;
+}): Promise<'confirmed' | 'expired' | 'unresolved'> {
+  const probeContext = cleanupContext(args.commerce);
+  let outcome: 'confirmed' | 'expired' | 'unresolved' = 'unresolved';
+  try {
+    outcome = await probePendingFinalizeSubmission(
+      createConnection({ ...args.provider, signal: probeContext.signal }, args.runtime),
+      args.pending,
+    );
+  } catch {}
+  const persistence = cleanupContext(args.commerce);
+  if (outcome === 'unresolved') {
+    await holdPendingFinalizeSubmission(persistence, args.path, args.attemptId, args.pending);
+  } else {
+    await settlePendingFinalizeSubmission(
+      persistence,
+      args.path,
+      args.attemptId,
+      args.pending,
+      outcome,
+    );
+  }
+  return outcome;
+}
+
+function pendingFinalizeSubmissionError(error: unknown, signal: AbortSignal): PendingFinalizeSubmissionError {
+  return new PendingFinalizeSubmissionError(signal.aborted ? signal.reason : error);
+}
+
+function isDefinitiveTransactionFailure(error: unknown): boolean {
+  return error instanceof DeliveryReceiptError &&
+    isRecord(error.details) &&
+    error.details.definitiveFailure === true;
+}
+
+async function receiptBatchConfirmedByPostState(
+  error: unknown,
+  connection: Pick<Connection, 'getMultipleAccountsInfo'>,
+  assets: PublicKey[],
+): Promise<boolean> {
+  if (isDefinitiveTransactionFailure(error)) return false;
+  const post = await connection.getMultipleAccountsInfo(assets, {
+    commitment: 'confirmed', dataSlice: { offset: 0, length: 2 },
+  }).catch(() => []);
+  return post.length === assets.length && post.every(isTombstone);
+}
+
+async function clearDefinitiveFinalizeSubmission(args: {
+  commerce: CommerceContext;
+  path: string;
+  attemptId: string;
+  pending: PendingFinalizeSubmission;
+}): Promise<void> {
+  try {
+    await settlePendingFinalizeSubmission(
+      cleanupContext(args.commerce),
+      args.path,
+      args.attemptId,
+      args.pending,
+      'expired',
+    );
+  } catch (error) {
+    throw pendingFinalizeSubmissionError(error, args.commerce.signal);
+  }
+}
+
+async function rethrowUnbroadcastFinalizeCancellation(args: {
+  broadcastStarted: boolean;
+  commerce: CommerceContext;
+  error: unknown;
+  path: string;
+  attemptId: string;
+  pending: PendingFinalizeSubmission;
+}): Promise<void> {
+  if (args.broadcastStarted || !isSignalCancellationError(args.commerce.signal, args.error)) return;
+  await clearDefinitiveFinalizeSubmission(args);
+  throw args.commerce.signal.reason;
+}
+
+async function reconcileStartedRequestSubmission(args: {
+  commerce: CommerceContext;
+  provider: ProviderContext;
+  runtime: Runtime;
+  path: string;
+  attemptId: string;
+  request: StartedRequest;
+}): Promise<void> {
+  const pending = args.request.pendingFinalizeSubmission;
+  if (!pending) return;
+  let outcome: 'confirmed' | 'expired' | 'unresolved';
+  try {
+    outcome = await reconcilePendingFinalizeSubmission({
+      ...args,
+      pending,
+    });
+  } catch (error) {
+    throw pendingFinalizeSubmissionError(error, args.commerce.signal);
+  }
+  if (outcome === 'unresolved') throw pendingFinalizeSubmissionError(undefined, args.commerce.signal);
+  if (outcome === 'confirmed') {
+    if (pending.kind === 'internal_delivery') {
+      args.request.internalDeliveryId = pending.deliveryId;
+      args.request.internalDeliveryPda = pending.deliveryPda;
+      args.request.internalDeliveryTx = pending.signature;
+    } else if (!args.request.receiptTxs.includes(pending.signature)) {
+      args.request.receiptTxs.push(pending.signature);
+    }
+  }
+  delete args.request.pendingFinalizeSubmission;
+}
+
 async function mintPackReceipts(
   connection: Connection,
+  provider: ProviderContext,
   runtime: Runtime,
   signer: Keypair,
   collection: PublicKey,
   items: RequestItem[],
   commerce: CommerceContext,
   path: string,
+  attemptId: string,
   existing: string[],
 ): Promise<string[]> {
   const keys = items.map((item) => new PublicKey(item.assetId));
@@ -782,23 +1160,72 @@ async function mintPackReceipts(
           const { blockhash } = await connection.getLatestBlockhash('confirmed');
           const transaction = buildDeliveryTransaction(instructions, signer.publicKey, blockhash, signer);
           if (transaction.serialize().length > SOLANA_MAX_RAW_TX_BYTES) throw new RangeError('transaction too large');
-          const signature = await sendAndConfirmSignedTransaction(
-            connection,
-            transaction,
-            commerce.signal,
-            'Admin IRL receipt mint',
-          );
+          const signature = bs58.encode(transaction.signatures[0]);
+          const pendingSubmission: PendingFinalizeSubmission = {
+            kind: 'receipt_mint',
+            signature,
+            blockhash,
+            assetIds: batch.map((item) => item.asset.toBase58()),
+          };
+          await persistPendingFinalizeSubmission(commerce, path, attemptId, pendingSubmission);
+          let broadcastStarted = false;
+          try {
+            await sendAndConfirmSignedTransaction(
+              connection,
+              transaction,
+              commerce.signal,
+              'Admin IRL receipt mint',
+              () => { broadcastStarted = true; },
+            );
+            await settlePendingFinalizeSubmission(
+              commerce,
+              path,
+              attemptId,
+              pendingSubmission,
+              'confirmed',
+            );
+          } catch (error) {
+            await rethrowUnbroadcastFinalizeCancellation({
+              broadcastStarted,
+              commerce,
+              error,
+              path,
+              attemptId,
+              pending: pendingSubmission,
+            });
+            if (isDefinitiveTransactionFailure(error)) {
+              await clearDefinitiveFinalizeSubmission({
+                commerce,
+                path,
+                attemptId,
+                pending: pendingSubmission,
+              });
+              throw error;
+            }
+            const outcome = await reconcilePendingFinalizeSubmission({
+              commerce,
+              provider,
+              runtime,
+              path,
+              attemptId,
+              pending: pendingSubmission,
+            }).catch(() => 'unresolved' as const);
+            if (outcome === 'unresolved') throw pendingFinalizeSubmissionError(error, commerce.signal);
+            if (outcome === 'expired') throw error;
+          }
           if (!receiptTxs.includes(signature)) receiptTxs.push(signature);
           pending.splice(0, batchSize);
-          await updateRequest(commerce, path, { receiptTxs });
           completed = true;
           break;
         } catch (error) {
+          if (error instanceof PendingFinalizeSubmissionError) throw error;
+          rethrowFinalizeCancellation(commerce.signal, error);
           lastError = error;
-          const post = await connection.getMultipleAccountsInfo(batch.map((item) => item.asset), {
-            commitment: 'confirmed', dataSlice: { offset: 0, length: 2 },
-          }).catch(() => []);
-          if (post.length === batch.length && post.every(isTombstone)) {
+          if (await receiptBatchConfirmedByPostState(
+            error,
+            connection,
+            batch.map((item) => item.asset),
+          )) {
             pending.splice(0, batchSize);
             completed = true;
             break;
@@ -844,11 +1271,13 @@ async function buildTransactionWithLookupTables(
 
 async function ensureInternalDelivery(
   connection: Connection,
+  provider: ProviderContext,
   runtime: Runtime,
   signer: Keypair,
   onchain: OnchainConfig,
   commerce: CommerceContext,
   path: string,
+  attemptId: string,
   request: StartedRequest,
 ): Promise<InternalDelivery> {
   let lookupTables: AddressLookupTableAccount[] = [];
@@ -884,24 +1313,61 @@ async function ensureInternalDelivery(
     }
     const { blockhash } = await connection.getLatestBlockhash('confirmed');
     const transaction = await buildTransactionWithLookupTables(instructions, signer, blockhash, lookupTables);
-    let signature: string | null = null;
+    const signature = bs58.encode(transaction.signatures[0]);
+    const pendingSubmission: PendingFinalizeSubmission = {
+      kind: 'internal_delivery',
+      signature,
+      blockhash,
+      deliveryId,
+      deliveryPda: deliveryPda.toBase58(),
+    };
+    await persistPendingFinalizeSubmission(commerce, path, attemptId, pendingSubmission);
+    let broadcastStarted = false;
     try {
-      signature = await sendAndConfirmSignedTransaction(
+      await sendAndConfirmSignedTransaction(
         connection,
         transaction,
         commerce.signal,
         'Admin IRL internal delivery',
+        () => { broadcastStarted = true; },
+      );
+      await settlePendingFinalizeSubmission(
+        commerce,
+        path,
+        attemptId,
+        pendingSubmission,
+        'confirmed',
       );
     } catch (error) {
-      const landed = await connection.getAccountInfo(deliveryPda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } }).catch(() => null);
-      if (!landed) throw error;
+      await rethrowUnbroadcastFinalizeCancellation({
+        broadcastStarted,
+        commerce,
+        error,
+        path,
+        attemptId,
+        pending: pendingSubmission,
+      });
+      if (isDefinitiveTransactionFailure(error)) {
+        await clearDefinitiveFinalizeSubmission({
+          commerce,
+          path,
+          attemptId,
+          pending: pendingSubmission,
+        });
+        throw error;
+      }
+      const outcome = await reconcilePendingFinalizeSubmission({
+        commerce,
+        provider,
+        runtime,
+        path,
+        attemptId,
+        pending: pendingSubmission,
+      }).catch(() => 'unresolved' as const);
+      if (outcome === 'unresolved') throw pendingFinalizeSubmissionError(error, commerce.signal);
+      if (outcome === 'expired') throw error;
     }
     const result = { deliveryId, deliveryPda: deliveryPda.toBase58(), deliveryTx: signature };
-    await updateRequest(commerce, path, {
-      internalDeliveryId: deliveryId,
-      internalDeliveryPda: result.deliveryPda,
-      ...(signature ? { internalDeliveryTx: signature } : {}),
-    });
     return result;
   };
   if (request.internalDeliveryId && request.internalDeliveryPda) {
@@ -1046,6 +1512,7 @@ async function findReceiptAssets(
       if (items.every((item) => (direct.get(item.refId) || []).length === 1)) return direct;
     }
   } catch (error) {
+    rethrowFinalizeCancellation(provider.signal, error);
     console.warn({ event: 'admin_irl_redeem_receipt_transaction_lookup_failed', dropId: runtime.dropId, error: summarizeError(error) });
   }
   const startedAt = Date.now();
@@ -1098,6 +1565,7 @@ async function waitForCardReceipt(
       }
       lastTransient = undefined;
     } catch (error) {
+      rethrowFinalizeCancellation(provider.signal, error);
       const disposition = classifyAdminIrlCardReceiptLookupError(error);
       if (disposition === 'fatal') throw normalizedError(error, 'Admin IRL card receipt lookup failed.');
       lastTransient = disposition === 'transient' ? error : undefined;
@@ -1192,7 +1660,7 @@ function completeRequestWrite(path: string, completed: Record<string, unknown>):
     ...(typeof completed.closeDeliveryTx === 'string' ? { closeDeliveryTx: completed.closeDeliveryTx } : {}),
   };
   return deleteFieldsWrite(path, fields, [
-    'processingAttemptId', 'processingStartedAt', 'processingLeaseExpiresAt', 'preparedExpiresAt',
+    'processingAttemptId', 'processingStartedAt', 'processingLeaseExpiresAt', 'preparedExpiresAt', 'pendingFinalizeSubmission',
   ], [
     { fieldPath: 'completedAt', value: commerceFieldValue.serverTimestamp() },
     { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
@@ -1555,6 +2023,14 @@ async function finalizeAdminIrlRedeem(
   }
   try {
     const connection = createConnection(provider, runtime);
+    await reconcileStartedRequestSubmission({
+      commerce,
+      provider,
+      runtime,
+      path: requestPath(body),
+      attemptId,
+      request: started.request,
+    });
     const onchain = await fetchDeliveryOnchainConfig(connection, runtime);
     const signer = decodeCosigner(env.COSIGNER_SECRET);
     if (!signer.publicKey.equals(onchain.admin)) {
@@ -1582,15 +2058,27 @@ async function finalizeAdminIrlRedeem(
       scheduleAdminPackStatusProjection({ commerce, response: existing, runtime, waitUntil });
       return { response: existing, targetKind: 'pack', outcome: 'marker_reuse' };
     }
-    const internal = await ensureInternalDelivery(connection, runtime, signer, onchain, commerce, requestPath(body), started.request);
+    const internal = await ensureInternalDelivery(
+      connection,
+      provider,
+      runtime,
+      signer,
+      onchain,
+      commerce,
+      requestPath(body),
+      attemptId,
+      started.request,
+    );
     const receiptTxs = await mintPackReceipts(
       connection,
+      provider,
       runtime,
       signer,
       onchain.coreCollection,
       started.request.items,
       commerce,
       requestPath(body),
+      attemptId,
       started.request.receiptTxs,
     );
     const assets = await findReceiptAssets(connection, provider, runtime, signer.publicKey.toBase58(), started.request.items, receiptTxs);
@@ -1634,7 +2122,9 @@ async function finalizeAdminIrlRedeem(
     };
   } catch (error) {
     rethrowDeferredWorkRegistrationError(error);
-    await clearProcessing(commerce, body, attemptId, error);
+    if (!(error instanceof PendingFinalizeSubmissionError)) {
+      await clearProcessing(commerce, body, attemptId, error);
+    }
     throw error;
   }
 }
@@ -1646,27 +2136,6 @@ const defaultDependencies: FinalizeDependencies = {
   timeoutMs: HANDLER_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
 };
-
-async function waitForSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) throw signal.reason;
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    promise.then(
-      (value) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener('abort', onAbort);
-        reject(error);
-      },
-    );
-  });
-}
 
 export async function handleAdminIrlRedeemFinalize(
   request: Request,
@@ -1688,14 +2157,15 @@ export async function handleAdminIrlRedeemFinalize(
     response.headers.set('Allow', 'POST, OPTIONS');
     return { response: new Response(response.body, { status: 405, headers: response.headers }), metrics, authOutcome: 'rejected' };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new DOMException('Admin IRL redeem finalization timed out', 'TimeoutError')), dependencies.timeoutMs);
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Admin IRL redeem finalization timed out',
+  });
   let identity: RequestIdentity | undefined;
   let body: FinalizeRequest | undefined;
-  let finalization: ReturnType<FinalizeDependencies['finalize']> | undefined;
   try {
-    body = await readRequestBody(request, controller.signal);
-    identity = await dependencies.verifyIdentity(request, env.OPS_DB, controller.signal, dependencies.nowMs());
+    body = await readRequestBody(request, deadline.signal);
+    identity = await dependencies.verifyIdentity(request, env.OPS_DB, deadline.signal, dependencies.nowMs());
     if (!isStaffRequestIdentity(identity)) {
       throw new AdminIrlRedeemFinalizeError('unauthenticated', 'Staff wallet authentication is required.');
     }
@@ -1705,22 +2175,24 @@ export async function handleAdminIrlRedeemFinalize(
       throw new AdminIrlRedeemFinalizeError('unavailable', 'Admin IRL redeem finalization is temporarily unavailable.');
     }
     const nowMs = dependencies.nowMs();
-    finalization = dependencies.finalize(
-      body,
-      identity,
-      { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
-      {
-        commerceDb: env.COMMERCE_DB,
-        repository: new D1CommerceRepository(env.COMMERCE_DB),
-        nowMs,
-        providerFetch: trackedFetch,
-        signal: controller.signal,
-        dataDb: env.DATA_DB,
-      },
-      { apiKey, providerFetch: trackedFetch, signal: controller.signal },
-      defer,
+    const result = await runCriticalRequestOperation(
+      () => dependencies.finalize(
+        body!,
+        identity!,
+        { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
+        {
+          commerceDb: env.COMMERCE_DB,
+          repository: new D1CommerceRepository(env.COMMERCE_DB),
+          nowMs,
+          providerFetch: trackedFetch,
+          signal: deadline.signal,
+          dataDb: env.DATA_DB,
+        },
+        { apiKey, providerFetch: trackedFetch, signal: deadline.signal },
+        defer,
+      ),
+      { deadline, defer, ignoreDeferredErrors: true },
     );
-    const result = await waitForSignal(finalization, controller.signal);
     return {
       response: jsonResponse(result.response),
       metrics,
@@ -1733,11 +2205,10 @@ export async function handleAdminIrlRedeemFinalize(
   } catch (error) {
     rethrowDeferredWorkRegistrationError(error);
     let normalized: AdminIrlRedeemFinalizeError;
-    if (controller.signal.aborted) {
-      if (finalization) {
-        const cleanup = finalization.then(() => undefined, () => undefined);
-        registerDeferredWork(defer, cleanup);
-      }
+    if (isRequestCancellationError(request, error)) {
+      throw error;
+    }
+    if (deadline.timedOut()) {
       normalized = new AdminIrlRedeemFinalizeError('deadline-exceeded', 'Admin IRL redeem finalization timed out.');
     } else if (error instanceof RequestIdentityError) {
       normalized = new AdminIrlRedeemFinalizeError(
@@ -1759,19 +2230,31 @@ export async function handleAdminIrlRedeemFinalize(
       outcome: normalized.code,
     };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }
 
 export const adminIrlRedeemFinalizeTestHooks = {
+  clearDefinitiveFinalizeSubmission,
   clearProcessing,
   completeResponse,
   finalizeAdminIrlRedeem,
+  findReceiptAssets,
   normalizeItems,
+  normalizePendingFinalizeSubmission,
+  isDefinitiveTransactionFailure,
+  mintPackReceipts,
+  persistPendingFinalizeSubmission,
+  pendingFinalizeSubmissionAlreadySettled,
+  probePendingFinalizeSubmission,
   readRequestBody,
+  receiptBatchConfirmedByPostState,
+  rethrowUnbroadcastFinalizeCancellation,
   runtimeSupportsFinalize,
   scanAssetsByOwner,
+  settlePendingFinalizeSubmission,
   startFinalize,
   verifyCardTransfer,
   verifyPackTransfer,
+  waitForCardReceipt,
 };

@@ -8,7 +8,7 @@ import {
   parseSolanaSignInMessage,
   validateSolanaSignInMessage,
 } from '../../../../shared/walletLifecycle.js';
-import { readBoundedText } from './boundedResponse.js';
+import { isRequestCancellationError, readBoundedRequestJson } from './boundedRequest.js';
 import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
 
 export const STAFF_AUTH_CHALLENGE_PATH = '/staff/auth/challenge';
@@ -153,20 +153,16 @@ function requestOriginHostname(request: Request): string {
 }
 
 async function parseBody(request: Request, schema: z.ZodType): Promise<unknown> {
-  if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
-    throw new StaffAuthError('invalid-argument', 400, 'Invalid request.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > STAFF_AUTH_MAX_REQUEST_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new StaffAuthError('invalid-argument', 400, 'Invalid request.');
-  }
-  if (!request.body) throw new StaffAuthError('invalid-argument', 400, 'Invalid request.');
   let value: unknown;
   try {
-    const text = await readBoundedText(new Response(request.body), STAFF_AUTH_MAX_REQUEST_BYTES, request.signal);
-    value = JSON.parse(text);
-  } catch {
+    value = await readBoundedRequestJson(request, {
+      maxBytes: STAFF_AUTH_MAX_REQUEST_BYTES,
+      signal: request.signal,
+      createError: () => new StaffAuthError('invalid-argument', 400, 'Invalid request.'),
+    });
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
+    if (error instanceof StaffAuthError) throw error;
     throw new StaffAuthError('invalid-argument', 400, 'Invalid request.');
   }
   const result = schema.safeParse(value);
@@ -564,6 +560,7 @@ export async function handleStaffAuthRequest(
     }
     return await logoutSession(request, env.OPS_DB, nowMs, dependencies.isStaffWallet);
   } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
     if (error instanceof StaffAuthError) return errorResponse(error);
     console.error({
       event: 'staff_auth_unhandled_error',

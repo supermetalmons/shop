@@ -28,6 +28,7 @@ import {
   type CommerceQuery,
   type CommerceUpdateValue,
 } from '../src/commerceRepository.ts';
+import { createDeferredWorkCollector } from './deferredWork.ts';
 
 const UID = 'auth-lifecycle-user';
 const NOW_MS = Date.parse('2026-08-20T12:00:00.000Z');
@@ -379,20 +380,23 @@ test('Solana auth keeps its committed session retryable when D1 profile persiste
 });
 
 test('Solana auth applies the request deadline to D1 profile persistence', async () => {
+  const deferred = createDeferredWorkCollector();
+  let release!: () => void;
+  const persistence = new Promise<void>((resolve) => { release = resolve; });
   const result = await handleProfileLifecycleRequest(
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
     dependencies(new LegacyFirestoreCommerceHarness(), 5, {
-      upsertProfile: async (_db, _profile, signal) => new Promise((_resolve, reject) => {
-        const abort = () => reject(signal.reason);
-        signal.addEventListener('abort', abort, { once: true });
-        if (signal.aborted) abort();
-      }),
+      defer: deferred.defer,
+      upsertProfile: async () => persistence,
     }),
   );
   assert.equal(result.response.status, 504);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
+  assert.equal(deferred.promises.length, 1);
+  release();
+  await deferred.drain();
 });
 
 test('D1 wallet-session mode persists without Commerce session access', async () => {
@@ -500,6 +504,64 @@ test('D1 reconciliation holds and releases its lease without reading Commerce se
     previousOwner: `anonymous:${UID}`,
     status: 'ready_to_ship',
   });
+});
+
+test('D1 reconciliation releases a deterministic lease after an abort-caused unknown commit', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected during lease acquisition');
+  let acquiredLeaseId = '';
+  let releasedLeaseId = '';
+  const incoming = new Request(request(
+    PROFILE_RECONCILE_PATH,
+    { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false },
+  ), { signal: controller.signal });
+
+  await assert.rejects(
+    handleProfileLifecycleRequest(
+      incoming,
+      env(),
+      PROFILE_RECONCILE_PATH,
+      dependencies(new LegacyFirestoreCommerceHarness(), 500, {
+        acquireAuthWalletBindingReconcileLease: async (args) => {
+          acquiredLeaseId = args.leaseId || '';
+          controller.abort(reason);
+          throw new Error('lease commit response lost', { cause: reason });
+        },
+        releaseAuthWalletBindingReconcileLease: async (_db, _authSubject, leaseId) => {
+          releasedLeaseId = leaseId;
+        },
+      }),
+    ),
+    (error: unknown) => error === reason,
+  );
+  assert.match(acquiredLeaseId, /^[0-9a-f-]{36}$/);
+  assert.equal(releasedLeaseId, acquiredLeaseId);
+});
+
+test('D1 reconciliation preserves an independent acquisition error after a disconnect', async () => {
+  const controller = new AbortController();
+  const providerError = new Error('lease provider failed first');
+  let releasedLeaseId = '';
+  const incoming = new Request(request(
+    PROFILE_RECONCILE_PATH,
+    { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false },
+  ), { signal: controller.signal });
+  const result = await handleProfileLifecycleRequest(
+    incoming,
+    env(),
+    PROFILE_RECONCILE_PATH,
+    dependencies(new LegacyFirestoreCommerceHarness(), 500, {
+      acquireAuthWalletBindingReconcileLease: async () => {
+        controller.abort(new Error('near-simultaneous disconnect'));
+        throw providerError;
+      },
+      releaseAuthWalletBindingReconcileLease: async (_db, _authSubject, leaseId) => {
+        releasedLeaseId = leaseId;
+      },
+    }),
+  );
+  assert.equal(result.response.status, 503);
+  assert.match(releasedLeaseId, /^[0-9a-f-]{36}$/);
 });
 
 test('staff reconciliation uses its wallet directly and skips legacy Auth order merging', async () => {

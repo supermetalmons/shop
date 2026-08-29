@@ -15,7 +15,15 @@ import {
   parseStripeReceiptClaimResponse,
   revealDudesSubmissionUnknownDetails,
   createCommerceApiClient,
+  stripeCheckoutOperationAfterFailure,
+  stripeCheckoutOperationState,
+  stripeCheckoutOperationWithCredential,
 } from '../src/api/commerce.ts';
+import {
+  STRIPE_CHECKOUT_OPERATION_HEADER,
+  STRIPE_CHECKOUT_RETRY_HEADER,
+  STRIPE_CHECKOUT_RETRY_SAME_OPERATION,
+} from '../shared/contracts.ts';
 import {
   addFulfillmentOrderToShipStationRequestPayload,
   createFulfillmentApiClient,
@@ -37,6 +45,7 @@ import {
 } from '../src/api/profile.ts';
 import {
   profileApiTimeoutMs,
+  ProfileApiError,
   requestProfileApi,
   type AuthenticatedApiCall,
 } from '../src/api/transport.ts';
@@ -47,13 +56,127 @@ const REVEAL_SIGNATURE = bs58.encode(new Uint8Array(64).fill(5));
 const RECENT_BLOCKHASH = bs58.encode(new Uint8Array(32).fill(7));
 const ZERO_SIGNATURE = bs58.encode(new Uint8Array(64));
 const ZERO_BLOCKHASH = bs58.encode(new Uint8Array(32));
+const STRIPE_CHECKOUT_OPERATION_ID = '11111111-1111-4111-8111-111111111111';
+
+test('Stripe checkout operation ids survive one retry and rotate when inputs change', () => {
+  const ids = [
+    STRIPE_CHECKOUT_OPERATION_ID,
+    '22222222-2222-4222-8222-222222222222',
+    '33333333-3333-4333-8333-333333333333',
+  ];
+  const createId = () => ids.shift() || assert.fail('unexpected operation id request');
+  const first = stripeCheckoutOperationState(null, {
+    dropId: 'card_nft_2',
+    quantity: 1,
+    returnUrl: ' https://mons.shop/drop ',
+  }, 'auth-one', createId);
+  const retry = stripeCheckoutOperationState(first, {
+    dropId: 'card_nft_2',
+    quantity: 1,
+    returnUrl: 'https://mons.shop/drop',
+  }, 'auth-one', createId);
+  const distinct = stripeCheckoutOperationState(retry, {
+    dropId: 'card_nft_2',
+    quantity: 2,
+    returnUrl: 'https://mons.shop/drop',
+  }, 'auth-one', createId);
+  const changedIdentity = stripeCheckoutOperationState(distinct, {
+    dropId: 'card_nft_2',
+    quantity: 2,
+    returnUrl: 'https://mons.shop/drop',
+  }, 'auth-two', createId);
+
+  assert.equal(retry.operationId, first.operationId);
+  assert.notEqual(distinct.operationId, first.operationId);
+  assert.notEqual(changedIdentity.operationId, distinct.operationId);
+});
+
+test('Stripe checkout operation ids adopt an initially unresolved identity only once', () => {
+  const ids = [
+    STRIPE_CHECKOUT_OPERATION_ID,
+    '22222222-2222-4222-8222-222222222222',
+  ];
+  const createId = () => ids.shift() || assert.fail('unexpected operation id request');
+  const unresolved = stripeCheckoutOperationState(null, {
+    dropId: 'card_nft_2',
+    quantity: 1,
+  }, null, createId);
+  const resolved = stripeCheckoutOperationState(unresolved, {
+    dropId: 'card_nft_2',
+    quantity: 1,
+  }, 'auth-one', createId);
+  const changed = stripeCheckoutOperationState(resolved, {
+    dropId: 'card_nft_2',
+    quantity: 1,
+  }, 'auth-two', createId);
+
+  assert.equal(resolved.operationId, unresolved.operationId);
+  assert.equal(resolved.authSubject, 'auth-one');
+  assert.notEqual(changed.operationId, resolved.operationId);
+});
+
+test('Stripe checkout operations retain the credential that actually sent the request', () => {
+  const ids = [
+    STRIPE_CHECKOUT_OPERATION_ID,
+    '22222222-2222-4222-8222-222222222222',
+  ];
+  const createId = () => ids.shift() || assert.fail('unexpected operation id request');
+  const unresolved = stripeCheckoutOperationState(null, {
+    dropId: 'card_nft_2',
+    quantity: 1,
+  }, null, createId);
+  const sentByAuthOne = stripeCheckoutOperationWithCredential(unresolved, 'auth-one');
+  const retryAsAuthTwo = stripeCheckoutOperationState(sentByAuthOne, {
+    dropId: 'card_nft_2',
+    quantity: 1,
+  }, 'auth-two', createId);
+
+  assert.equal(sentByAuthOne.operationId, unresolved.operationId);
+  assert.equal(sentByAuthOne.authSubject, 'auth-one');
+  assert.notEqual(retryAsAuthTwo.operationId, sentByAuthOne.operationId);
+});
+
+test('Stripe checkout observes the credential before a failed request returns', async () => {
+  let observed = '';
+  const commerce = createCommerceApiClient(async (_pathname, _data, _credentialCapture, options) => {
+    options?.onCredential?.('auth-one');
+    throw new TypeError('network failed');
+  });
+
+  await assert.rejects(
+    commerce.createStripeCheckoutSession(
+      { dropId: 'card_nft_2', quantity: 1 },
+      STRIPE_CHECKOUT_OPERATION_ID,
+      (authSubject) => { observed = authSubject; },
+    ),
+    /network failed/,
+  );
+  assert.equal(observed, 'auth-one');
+});
+
+test('Stripe checkout operation ids survive only uncertain failures', () => {
+  const current = { authSubject: null, key: 'checkout', operationId: STRIPE_CHECKOUT_OPERATION_ID };
+  const uncertain = new ProfileApiError({
+    code: 'unavailable',
+    message: 'Temporarily unavailable.',
+    retrySameOperation: true,
+  });
+  const definitive = new ProfileApiError({
+    code: 'unavailable',
+    message: 'Temporarily unavailable.',
+  });
+
+  assert.equal(stripeCheckoutOperationAfterFailure(current, uncertain), current);
+  assert.equal(stripeCheckoutOperationAfterFailure(current, new TypeError('network failed')), current);
+  assert.equal(stripeCheckoutOperationAfterFailure(current, definitive), null);
+});
 
 
 test('domain clients select authenticated routes through injected transport', async () => {
-  const calls: Array<{ pathname: string; data: unknown }> = [];
+  const calls: Array<{ pathname: string; data: unknown; headers?: Readonly<Record<string, string>> }> = [];
   const stop = new Error('stop after request capture');
-  const call: AuthenticatedApiCall = async (pathname, data) => {
-    calls.push({ pathname, data });
+  const call: AuthenticatedApiCall = async (pathname, data, _credential, options) => {
+    calls.push({ pathname, data, headers: options?.headers });
     throw stop;
   };
   const profile = createProfileApiClient({
@@ -70,7 +193,10 @@ test('domain clients select authenticated routes through injected transport', as
     () => profile.getAdminProfileView(OWNER),
     () => profile.getAnonymousStripeDeliveryHistory(),
     () => profile.listDeliveryOrderOwners({ cursor: 'next', pageSize: 10 }),
-    () => commerce.createStripeCheckoutSession({ dropId: 'card_nft_2', quantity: 1 }),
+    () => commerce.createStripeCheckoutSession({
+      dropId: 'card_nft_2',
+      quantity: 1,
+    }, STRIPE_CHECKOUT_OPERATION_ID),
     () => commerce.revealDudes(OWNER, DESTINATION, 'card_nft_2'),
     () => commerce.requestDeliveryTx(OWNER, {
       itemIds: [DESTINATION],
@@ -155,6 +281,8 @@ test('domain clients select authenticated routes through injected transport', as
     hint: 'hint',
     email: 'owner@example.com',
   });
+  assert.deepEqual(calls[7]?.data, { dropId: 'card_nft_2', quantity: 1 });
+  assert.equal(calls[7]?.headers?.[STRIPE_CHECKOUT_OPERATION_HEADER], STRIPE_CHECKOUT_OPERATION_ID);
 });
 
 test('domain client factories apply successful response contracts', async () => {
@@ -179,17 +307,27 @@ test('domain client factories apply successful response contracts', async () => 
     url: 'https://checkout.stripe.com/c/pay/factory',
     livemode: false,
   };
-  const commerce = createCommerceApiClient(async (pathname, data, credentialCapture) => {
+  let checkoutCredential = '';
+  const commerce = createCommerceApiClient(async (pathname, data, credentialCapture, options) => {
     assert.equal(pathname, '/checkout/session');
-    assert.deepEqual(data, { dropId: 'card_nft_2', quantity: 1 });
+    assert.deepEqual(data, {
+      dropId: 'card_nft_2',
+      quantity: 1,
+    });
+    assert.equal(options?.headers?.[STRIPE_CHECKOUT_OPERATION_HEADER], STRIPE_CHECKOUT_OPERATION_ID);
+    options?.onCredential?.('anonymous-subject');
     assert.ok(credentialCapture);
     credentialCapture.authSubject = 'anonymous-subject';
     return checkoutSession;
   });
   assert.deepEqual(
-    await commerce.createStripeCheckoutSession({ dropId: 'card_nft_2', quantity: 1 }),
+    await commerce.createStripeCheckoutSession({
+      dropId: 'card_nft_2',
+      quantity: 1,
+    }, STRIPE_CHECKOUT_OPERATION_ID, (authSubject) => { checkoutCredential = authSubject; }),
     { ...checkoutSession, authSubject: 'anonymous-subject' },
   );
+  assert.equal(checkoutCredential, 'anonymous-subject');
 
   const statusUpdate = {
     deliveryId: 17,
@@ -216,6 +354,7 @@ test('profile API client sends bearer JSON without caching and refreshes once af
   const refreshes: boolean[] = [];
   const authorizations: string[] = [];
   const signals: AbortSignal[] = [];
+  const observedCredentials: string[] = [];
   let calls = 0;
   const credentialCapture: { authSubject?: string } = {};
   const payload = await requestProfileApi(
@@ -251,12 +390,14 @@ test('profile API client sends bearer JSON without caching and refreshes once af
       timeoutMs: 1000,
     },
     credentialCapture,
+    { onCredential: (authSubject) => observedCredentials.push(authSubject) },
   );
   assert.deepEqual(payload, { responseMode: 'shipments', wallet: OWNER, orders: [] });
   assert.deepEqual(refreshes, [false, true]);
   assert.deepEqual(authorizations, ['Bearer cached-token', 'Bearer fresh-token']);
   assert.equal(signals[0], signals[1]);
   assert.equal(credentialCapture.authSubject, 'subject-a');
+  assert.deepEqual(observedCredentials, ['subject-a', 'subject-a']);
 });
 
 test('profile API client never replays a request after the auth subject changes', async () => {
@@ -327,6 +468,66 @@ test('profile API client applies its deadline to token retrieval and returns a s
   assert.equal(fetchCalled, false);
 });
 
+test('profile API body deadlines preserve settled checkout retry guidance', async () => {
+  for (const testCase of [
+    { status: 400, retryHeader: false, expected: false },
+    { status: 502, retryHeader: false, expected: true },
+    { status: 502, retryHeader: true, expected: true },
+  ]) {
+    await assert.rejects(
+      requestProfileApi(
+        '/checkout/session',
+        { dropId: 'card_nft_2' },
+        {
+          fetch: async () => new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+            status: testCase.status,
+            headers: testCase.retryHeader
+              ? { [STRIPE_CHECKOUT_RETRY_HEADER]: STRIPE_CHECKOUT_RETRY_SAME_OPERATION }
+              : {},
+          }),
+          getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
+          origin: () => 'https://api.mons.shop',
+          timeoutMs: 10,
+        },
+      ),
+      (error) => error instanceof ProfileApiError &&
+        error.code === 'deadline-exceeded' &&
+        error.retrySameOperation === testCase.expected,
+    );
+  }
+});
+
+test('profile API retains checkout operations only for unrecognized infrastructure failures', async () => {
+  const dependencies = (response: () => Response) => ({
+    fetch: async () => response(),
+    getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
+    origin: () => 'https://api.mons.shop',
+    timeoutMs: 1000,
+  });
+  const cases = [
+    {
+      response: () => Response.json({
+        ok: false,
+        error: { code: 'unavailable', message: 'Stripe checkout is temporarily unavailable.' },
+      }, { status: 502 }),
+      retry: false,
+    },
+    { response: () => new Response('gateway failure', { status: 502 }), retry: true },
+    { response: () => Response.json({ gateway: 'failure' }, { status: 502 }), retry: true },
+  ];
+
+  for (const testCase of cases) {
+    await assert.rejects(
+      requestProfileApi(
+        '/checkout/session',
+        { dropId: 'card_nft_2' },
+        dependencies(testCase.response),
+      ),
+      (error) => error instanceof ProfileApiError && error.retrySameOperation === testCase.retry,
+    );
+  }
+});
+
 test('profile API client preserves stable error codes and rejects malformed JSON', async () => {
   await assert.rejects(
     requestProfileApi(
@@ -361,7 +562,30 @@ test('profile API client preserves stable error codes and rejects malformed JSON
         timeoutMs: 1000,
       },
     ),
-    (error) => (error as { code?: unknown }).code === 'unavailable',
+    (error) => {
+      const value = error as { code?: unknown; retrySameOperation?: unknown };
+      return value.code === 'unavailable' && value.retrySameOperation === true;
+    },
+  );
+
+  await assert.rejects(
+    requestProfileApi(
+      '/checkout/session',
+      { dropId: 'card_nft_2' },
+      {
+        fetch: async () => Response.json({
+          ok: false,
+          error: { code: 'unavailable', message: 'Stripe checkout is temporarily unavailable.' },
+        }, {
+          status: 502,
+          headers: { [STRIPE_CHECKOUT_RETRY_HEADER]: STRIPE_CHECKOUT_RETRY_SAME_OPERATION },
+        }),
+        getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
+        origin: () => 'https://api.mons.shop',
+        timeoutMs: 1000,
+      },
+    ),
+    (error) => error instanceof ProfileApiError && error.retrySameOperation,
   );
 });
 
@@ -463,6 +687,10 @@ test('Stripe checkout uses the authenticated Cloudflare route with an exact resp
         assert.equal(String(input), 'https://api.mons.shop/checkout/session');
         assert.equal(init?.method, 'POST');
         assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer token');
+        assert.equal(
+          new Headers(init?.headers).get(STRIPE_CHECKOUT_OPERATION_HEADER),
+          STRIPE_CHECKOUT_OPERATION_ID,
+        );
         return Response.json({
           id: 'cs_test_123',
           url: 'https://checkout.stripe.com/c/pay/test',
@@ -473,6 +701,8 @@ test('Stripe checkout uses the authenticated Cloudflare route with an exact resp
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1000,
     },
+    undefined,
+    { headers: { [STRIPE_CHECKOUT_OPERATION_HEADER]: STRIPE_CHECKOUT_OPERATION_ID } },
   );
   assert.deepEqual(parseStripeCheckoutSessionResponse(payload), payload);
   assert.equal(parseStripeCheckoutSessionResponse({ ...payload as object, extra: true }), null);

@@ -909,7 +909,8 @@ test('label void rejects malformed, oversized, timed-out, and aborted provider r
     /request timed out/,
   );
   const controller = new AbortController();
-  controller.abort(new DOMException('Stopped', 'AbortError'));
+  const abortReason = new DOMException('Stopped', 'AbortError');
+  controller.abort(abortReason);
   await assert.rejects(
     () => voidShipStationLabel('api-key', 'se-label', {
       fetch: async (_input, init) => {
@@ -917,6 +918,6 @@ test('label void rejects malformed, oversized, timed-out, and aborted provider r
       },
       signal: controller.signal,
     }),
-    /request timed out/,
+    (error) => error === abortReason,
   );
 });

@@ -69,6 +69,21 @@ import {
   readBoundedJson,
   type ProfileProviderFetch,
 } from './boundedResponse.js';
+import {
+  createRequestDeadline,
+  createTimedAbortScope,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  raceReadWithSignal,
+  raceWithSignal,
+  readBoundedRequestJson,
+  runCriticalRequestOperation,
+} from './boundedRequest.js';
+import {
+  registerDeferredWork,
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { requestSolanaRpc } from './solanaProvider.js';
 import {
@@ -198,6 +213,7 @@ type DeliveryOrderItem = {
 type DeliveryPrepareDependencies = {
   attemptId: () => string;
   candidateId: () => number;
+  defer: DeferredWork;
   createDeliveryOrder: (
     context: CommerceContext,
     input: DeliveryOrderCreateInput,
@@ -311,55 +327,21 @@ function errorResponse(error: DeliveryPrepareError): Response {
 }
 
 async function readRequestBody(request: Request, signal: AbortSignal): Promise<PrepareDeliveryRequest> {
-  const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
-  if (contentType !== 'application/json') {
-    await request.body?.cancel().catch(() => undefined);
-    throw new DeliveryPrepareError('invalid-argument', 'Content-Type must be application/json.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > REQUEST_MAX_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new DeliveryPrepareError('invalid-argument', 'Delivery preparation request is too large.');
-  }
-  if (!request.body) throw new DeliveryPrepareError('invalid-argument', 'Invalid delivery preparation request.');
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > REQUEST_MAX_BYTES) {
-        throw new DeliveryPrepareError('invalid-argument', 'Delivery preparation request is too large.');
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    let value: unknown;
-    try {
-      value = JSON.parse(chunks.join(''));
-    } catch {
-      throw new DeliveryPrepareError('invalid-argument', 'Invalid delivery preparation request.');
-    }
-    const parsed = requestSchema.safeParse(value);
-    if (!parsed.success) throw new DeliveryPrepareError('invalid-argument', 'Invalid delivery preparation request.');
-    return parsed.data;
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    if (signal.aborted) throw signal.reason;
-    if (error instanceof DeliveryPrepareError) throw error;
-    throw new DeliveryPrepareError('invalid-argument', 'Invalid delivery preparation request.');
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-  }
+  const value = await readBoundedRequestJson(request, {
+    maxBytes: REQUEST_MAX_BYTES,
+    signal,
+    createError: (failure) => new DeliveryPrepareError(
+      'invalid-argument',
+      failure === 'unsupported-media-type'
+        ? 'Content-Type must be application/json.'
+        : failure === 'too-large'
+          ? 'Delivery preparation request is too large.'
+          : 'Invalid delivery preparation request.',
+    ),
+  });
+  const parsed = requestSchema.safeParse(value);
+  if (!parsed.success) throw new DeliveryPrepareError('invalid-argument', 'Invalid delivery preparation request.');
+  return parsed.data;
 }
 
 function canonicalPublicKey(value: string, label: string): PublicKey {
@@ -448,28 +430,6 @@ async function pause(signal: AbortSignal, delay = 100): Promise<void> {
   });
 }
 
-function createProviderAttemptScope(overallSignal: AbortSignal, timeoutMs: number) {
-  const controller = new AbortController();
-  let timedOut = false;
-  const onAbort = () => {
-    if (!controller.signal.aborted) controller.abort(overallSignal.reason);
-  };
-  if (overallSignal.aborted) onAbort();
-  else overallSignal.addEventListener('abort', onAbort, { once: true });
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new DOMException('Delivery provider request timed out', 'TimeoutError'));
-  }, timeoutMs);
-  return {
-    signal: controller.signal,
-    timedOut: () => timedOut,
-    dispose: () => {
-      clearTimeout(timeout);
-      overallSignal.removeEventListener('abort', onAbort);
-    },
-  };
-}
-
 async function rpcCall(
   context: ProviderContext,
   runtime: DeliveryRuntime,
@@ -478,13 +438,16 @@ async function rpcCall(
 ): Promise<unknown> {
   const id = `delivery-prepare-${method}`;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createProviderAttemptScope(
-      context.signal,
-      context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    );
+    const attemptScope = createTimedAbortScope(context.signal, {
+      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+      timeoutMessage: 'Delivery provider request timed out',
+    });
     try {
       const transport = await requestSolanaRpc({
-        fetch: context.providerFetch,
+        fetch: (input, init) => raceWithSignal(
+          context.providerFetch(input, init),
+          attemptScope.signal,
+        ),
         url: `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
         id,
         method,
@@ -515,13 +478,17 @@ async function rpcCall(
       }
       return transport.value;
     } catch (error) {
-      if (context.signal.aborted) throw context.signal.reason;
+      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
       if (attemptScope.timedOut()) {
-        if (attempt === 0) {
+        if (attempt === 0 && !context.signal.aborted) {
           await pause(context.signal);
           continue;
         }
         throw new DeliveryPrepareError('deadline-exceeded', 'Delivery provider request timed out.');
+      }
+      if (context.signal.aborted) {
+        if (error instanceof DeliveryPrepareError) throw error;
+        throw new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
       }
       if (error instanceof DeliveryPrepareError) throw error;
       if (attempt === 0) {
@@ -538,16 +505,16 @@ async function rpcCall(
 
 async function restJson(context: ProviderContext, url: string): Promise<unknown> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createProviderAttemptScope(
-      context.signal,
-      context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    );
+    const attemptScope = createTimedAbortScope(context.signal, {
+      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+      timeoutMessage: 'Delivery provider request timed out',
+    });
     try {
-      const response = await context.providerFetch(url, {
+      const response = await raceWithSignal(context.providerFetch(url, {
         headers: { Accept: 'application/json' },
         redirect: 'manual',
         signal: attemptScope.signal,
-      });
+      }), attemptScope.signal);
       if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt === 0) {
         await cancelResponseBody(response);
         await pause(context.signal);
@@ -559,13 +526,17 @@ async function restJson(context: ProviderContext, url: string): Promise<unknown>
       }
       return await readBoundedJson(response, PROVIDER_MAX_BYTES, attemptScope.signal);
     } catch (error) {
-      if (context.signal.aborted) throw context.signal.reason;
+      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
       if (attemptScope.timedOut()) {
-        if (attempt === 0) {
+        if (attempt === 0 && !context.signal.aborted) {
           await pause(context.signal);
           continue;
         }
         throw new DeliveryPrepareError('deadline-exceeded', 'Delivery provider request timed out.');
+      }
+      if (context.signal.aborted) {
+        if (error instanceof DeliveryPrepareError) throw error;
+        throw new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid response.');
       }
       if (error instanceof DeliveryPrepareError) throw error;
       if (attempt === 0) {
@@ -816,7 +787,11 @@ async function loadBoundWallet(
     if ('reason' in resolution) throw new DeliveryPrepareError('unauthenticated', 'Sign in with your wallet first.');
     return resolution.wallet;
   } catch (error) {
-    if (error instanceof DeliveryPrepareError || error instanceof ProfileReadError || context.signal.aborted) throw error;
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    if (
+      error instanceof DeliveryPrepareError ||
+      error instanceof ProfileReadError
+    ) throw error;
     throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
   }
 }
@@ -846,8 +821,8 @@ async function loadAddress(
   let stored;
   try {
     stored = await loadD1ProfileAddress(db, wallet, addressId, context.signal);
-  } catch {
-    if (context.signal.aborted) throw context.signal.reason;
+  } catch (error) {
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
     throw new DeliveryPrepareError('unavailable', 'Delivery address is temporarily unavailable.');
   }
   if (stored) return d1AddressDocument(stored);
@@ -1232,11 +1207,14 @@ async function prepareDelivery(args: {
   identity: RequestIdentity;
   env: DeliveryPrepareEnv;
   dependencies: DeliveryPrepareDependencies;
+  defer: DeferredWork;
+  runCritical: <T>(start: () => Promise<T>) => Promise<T>;
+  runRead: <T>(operation: Promise<T>) => Promise<T>;
   prepareAttemptId?: string;
 }): Promise<PrepareDeliveryResponse> {
   const sessionWallet = await resolveRequestWallet(
     args.identity,
-    (uid) => args.dependencies.loadBoundWallet(args.context, args.env.OPS_DB, uid),
+    (uid) => args.runRead(args.dependencies.loadBoundWallet(args.context, args.env.OPS_DB, uid)),
   );
   const owner = canonicalPublicKey(args.body.owner, 'wallet address');
   const ownerWallet = owner.toBase58();
@@ -1249,7 +1227,9 @@ async function prepareDelivery(args: {
   if (new Set(itemIds).size !== itemIds.length) {
     throw new DeliveryPrepareError('invalid-argument', 'Duplicate itemIds are not allowed');
   }
-  const address = await args.dependencies.loadAddress(args.context, args.env.OPS_DB, ownerWallet, args.body.addressId);
+  const address = await args.runRead(
+    args.dependencies.loadAddress(args.context, args.env.OPS_DB, ownerWallet, args.body.addressId),
+  );
   const rawAddressCountry = typeof address.decoded.countryCode === 'string' && address.decoded.countryCode
     ? address.decoded.countryCode
     : typeof address.decoded.country === 'string' ? address.decoded.country : '';
@@ -1307,22 +1287,47 @@ async function prepareDelivery(args: {
       deliveryLamports,
     });
     const path = dropDeliveryOrderPath(dropId, deliveryId);
+    const cleanupCreatedOrder = async (updateTime: string): Promise<void> => {
+      try {
+        await args.dependencies.deleteDeliveryOrder({
+          ...args.context,
+          nowMs: args.dependencies.nowMs(),
+          signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
+        }, path, updateTime);
+      } catch (cleanupError) {
+        rethrowDeferredWorkRegistrationError(cleanupError);
+        console.error({
+          event: 'delivery_prepare_cleanup_failed',
+          dropId,
+          deliveryId,
+          error: cleanupError instanceof Error ? { name: cleanupError.name, message: cleanupError.message } : { name: 'UnknownError' },
+        });
+      }
+    };
     let updateTime: string;
     try {
-      updateTime = await args.dependencies.createDeliveryOrder(args.context, {
-        path,
-        dropId,
-        owner: ownerWallet,
-        addressId: args.body.addressId,
-        address,
-        addressCountry,
-        items,
-        deliveryId,
-        deliveryPda: deliveryPda.toBase58(),
-        ...(runtime.deliveryLookupTable ? { lookupTable: runtime.deliveryLookupTable.toBase58() } : {}),
-        deliveryLamports,
-        nextPreparedProbeAtMs: args.dependencies.nowMs() + DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS[0],
-        prepareAttemptId,
+      args.context.signal.throwIfAborted();
+      updateTime = await args.runCritical(async () => {
+        const createdAt = await args.dependencies.createDeliveryOrder(args.context, {
+          path,
+          dropId,
+          owner: ownerWallet,
+          addressId: args.body.addressId,
+          address,
+          addressCountry,
+          items,
+          deliveryId,
+          deliveryPda: deliveryPda.toBase58(),
+          ...(runtime.deliveryLookupTable ? { lookupTable: runtime.deliveryLookupTable.toBase58() } : {}),
+          deliveryLamports,
+          nextPreparedProbeAtMs: args.dependencies.nowMs() + DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS[0],
+          prepareAttemptId,
+        });
+        if (args.context.signal.aborted) {
+          await cleanupCreatedOrder(createdAt);
+          throw args.context.signal.reason;
+        }
+        return createdAt;
       });
     } catch (error) {
       if (error instanceof CommerceWriteConflict) continue;
@@ -1330,6 +1335,7 @@ async function prepareDelivery(args: {
     }
     try {
       const latestBlockhash = await args.dependencies.loadLatestBlockhash(args.providerContext, runtime);
+      args.context.signal.throwIfAborted();
       const transaction = buildTransaction(
         [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), instruction],
         owner,
@@ -1344,19 +1350,10 @@ async function prepareDelivery(args: {
         deliveryId,
       };
     } catch (error) {
-      try {
-        await args.dependencies.deleteDeliveryOrder({
-          ...args.context,
-          nowMs: args.dependencies.nowMs(),
-          signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
-        }, path, updateTime);
-      } catch (cleanupError) {
-        console.error({
-          event: 'delivery_prepare_cleanup_failed',
-          dropId,
-          deliveryId,
-          error: cleanupError instanceof Error ? { name: cleanupError.name, message: cleanupError.message } : { name: 'UnknownError' },
-        });
+      if (args.context.signal.aborted) {
+        registerDeferredWork(args.defer, cleanupCreatedOrder(updateTime));
+      } else {
+        await args.runCritical(() => cleanupCreatedOrder(updateTime));
       }
       throw error;
     }
@@ -1367,6 +1364,7 @@ async function prepareDelivery(args: {
 const defaultDependencies: DeliveryPrepareDependencies = {
   attemptId: () => crypto.randomUUID(),
   candidateId: secureDeliveryId,
+  defer: () => undefined,
   createCommerceRepository: (db) => new D1CommerceRepository(db),
   createDeliveryOrder,
   deleteDeliveryOrder,
@@ -1410,21 +1408,20 @@ export async function handleDeliveryPrepare(
       authOutcome: 'rejected',
     };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Delivery preparation request timed out', 'TimeoutError')),
-    dependencies.timeoutMs,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Delivery preparation request timed out',
+  });
   let identity: RequestIdentity | undefined;
   let dropId: string | undefined;
   try {
     identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
-      controller.signal,
+      deadline.signal,
       dependencies.nowMs(),
     );
-    const body = await readRequestBody(request, controller.signal);
+    const body = await readRequestBody(request, deadline.signal);
     const requestedDropId = normalizeDropId(body.dropId);
     dropId = dependencies.getDrop(requestedDropId) ? requestedDropId : undefined;
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
@@ -1441,20 +1438,29 @@ export async function handleDeliveryPrepare(
       identity,
       env,
       dependencies,
+      defer: dependencies.defer,
+      runCritical: (start) => runCriticalRequestOperation(start, {
+        deadline,
+        defer: dependencies.defer,
+        ignoreDeferredErrors: true,
+      }),
+      runRead: (operation) => raceReadWithSignal(operation, deadline.signal),
       ...(prepareAttemptId ? { prepareAttemptId } : {}),
       context: {
         nowMs,
         repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
-        signal: controller.signal,
+        signal: deadline.signal,
       },
       providerContext: {
         apiKey,
         providerFetch: trackedFetch,
-        signal: controller.signal,
+        signal: deadline.signal,
       },
     });
     return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted', dropId };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
+    if (isRequestCancellationError(request, error)) throw error;
     let deliveryError: DeliveryPrepareError;
     let authOutcome: DeliveryPrepareResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
     if (error instanceof DeliveryPrepareError) {
@@ -1477,7 +1483,7 @@ export async function handleDeliveryPrepare(
     } else if (error instanceof CommerceWriteConflict) {
       deliveryError = new DeliveryPrepareError('aborted', 'Delivery preparation conflicted. Try again.');
       authOutcome = 'rejected';
-    } else if (controller.signal.aborted) {
+    } else if (deadline.timedOut()) {
       deliveryError = new DeliveryPrepareError('deadline-exceeded', 'Delivery preparation request timed out.');
     } else {
       console.error({
@@ -1489,7 +1495,7 @@ export async function handleDeliveryPrepare(
     if (!identity) await request.body?.cancel().catch(() => undefined);
     return { response: errorResponse(deliveryError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }
 

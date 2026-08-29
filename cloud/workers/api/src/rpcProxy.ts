@@ -13,6 +13,14 @@ import {
   observePublicRateLimit,
   publicCorsHeaders,
 } from './publicRequestPolicy.js';
+import {
+  createRequestDeadline,
+  createTimedAbortScope,
+  isRequestCancellationError,
+  raceWithSignal,
+  readBoundedRequestJson,
+} from './boundedRequest.js';
+import { cancelResponseBody } from './boundedResponse.js';
 
 const MAX_RPC_REQUEST_BODY_BYTES = 32 * 1024;
 const MAX_RPC_RESPONSE_BODY_BYTES = 4 * 1024 * 1024;
@@ -41,35 +49,6 @@ class RpcFailure extends Error {
     super(kind);
     this.name = 'RpcFailure';
   }
-}
-
-type AttemptScope = {
-  signal: AbortSignal;
-  timedOut: () => boolean;
-  dispose: () => void;
-};
-
-function createAttemptScope(overallSignal: AbortSignal, timeoutMs: number): AttemptScope {
-  const controller = new AbortController();
-  let attemptTimedOut = false;
-  const onOverallAbort = () => {
-    if (!controller.signal.aborted) controller.abort(overallSignal.reason);
-  };
-  if (overallSignal.aborted) onOverallAbort();
-  else overallSignal.addEventListener('abort', onOverallAbort, { once: true });
-  const timeout = setTimeout(() => {
-    if (controller.signal.aborted) return;
-    attemptTimedOut = true;
-    controller.abort(new DOMException('Provider attempt timed out', 'TimeoutError'));
-  }, timeoutMs);
-  return {
-    signal: controller.signal,
-    timedOut: () => attemptTimedOut,
-    dispose: () => {
-      clearTimeout(timeout);
-      overallSignal.removeEventListener('abort', onOverallAbort);
-    },
-  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -139,24 +118,12 @@ async function readBoundedText(
   }
 }
 
-async function cancelResponseBody(response: Response): Promise<void> {
-  try {
-    void response.body?.cancel().catch(() => undefined);
-  } catch {}
-}
-
 async function parseRpcRequest(request: Request): Promise<unknown> {
-  if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
-    throw new Error('invalid-request');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > MAX_RPC_REQUEST_BODY_BYTES) throw new Error('invalid-request');
-  if (!request.body) throw new Error('invalid-request');
-  try {
-    return JSON.parse(await readBoundedText(request.body, MAX_RPC_REQUEST_BODY_BYTES));
-  } catch {
-    throw new Error('invalid-request');
-  }
+  return readBoundedRequestJson(request, {
+    maxBytes: MAX_RPC_REQUEST_BODY_BYTES,
+    signal: request.signal,
+    createError: () => new Error('invalid-request'),
+  });
 }
 
 async function readRpcResponse(
@@ -176,6 +143,7 @@ async function readRpcResponse(
     if (!isExactShopRpcResponse(payload, expectedId)) throw new RpcFailure('unavailable');
     return { payload, text };
   } catch (error) {
+    if (signal.aborted && error === signal.reason) throw error;
     if (error instanceof RpcFailure) throw error;
     throw new RpcFailure('unavailable');
   }
@@ -209,32 +177,40 @@ async function fetchRpc(
 ): Promise<string> {
   const attempts = requestBody.method === 'sendTransaction' ? 1 : 2;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    if (signal.aborted) throw new RpcFailure('deadline');
-    const attemptScope = createAttemptScope(signal, dependencies.providerAttemptTimeoutMs);
+    if (signal.aborted) throw signal.reason;
+    const attemptScope = createTimedAbortScope(signal, {
+      timeoutMs: dependencies.providerAttemptTimeoutMs,
+      timeoutMessage: 'Provider attempt timed out',
+    });
     let response: Response | undefined;
     const startedAt = performance.now();
     try {
       metrics.upstreamCalls += 1;
-      response = await dependencies.providerFetch(heliusRpcUrl(cluster, apiKey), {
+      response = await raceWithSignal(dependencies.providerFetch(heliusRpcUrl(cluster, apiKey), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(requestBody),
         signal: attemptScope.signal,
-      });
+      }), attemptScope.signal);
       let parsed: Awaited<ReturnType<typeof readRpcResponse>>;
       try {
         parsed = await readRpcResponse(response, requestBody.id, attemptScope.signal);
       } catch (error) {
-        if (signal.aborted) throw new RpcFailure('deadline');
-        if (
-          !response.ok &&
-          attempt + 1 < attempts &&
-          TRANSIENT_HTTP_STATUSES.has(response.status)
-        ) {
-          await dependencies.sleep(retryDelayMs(dependencies, response), attemptScope.signal);
-          continue;
+        if (!response.ok) {
+          const failure = providerHttpFailure(response.status);
+          if (signal.aborted) throw failure;
+          if (
+            attempt + 1 < attempts &&
+            TRANSIENT_HTTP_STATUSES.has(response.status)
+          ) {
+            if (!attemptScope.signal.aborted) {
+              await dependencies.sleep(retryDelayMs(dependencies, response), attemptScope.signal);
+            }
+            continue;
+          }
+          throw failure;
         }
-        if (!response.ok) throw providerHttpFailure(response.status);
+        if (signal.aborted && error === signal.reason) throw error;
         throw error;
       }
       const encodedApiKey = encodeURIComponent(apiKey);
@@ -263,12 +239,16 @@ async function fetchRpc(
       }
       return parsed.text;
     } catch (error) {
-      if (signal.aborted) throw new RpcFailure('deadline');
+      if (signal.aborted && error === signal.reason) throw error;
+      if (error instanceof RpcFailure) throw error;
       if (attemptScope.timedOut()) {
         if (attempt + 1 < attempts) continue;
         throw new RpcFailure('timeout');
       }
-      if (error instanceof RpcFailure) throw error;
+      if (signal.aborted) {
+        if (error instanceof RpcFailure) throw error;
+        throw new RpcFailure('unavailable');
+      }
       if (attempt + 1 < attempts) {
         await dependencies.sleep(retryDelayMs(dependencies), attemptScope.signal);
         continue;
@@ -318,7 +298,8 @@ export async function handleRpcPost(
   let invalid: { id: ShopRpcId | null; code: number; message: string } | undefined;
   try {
     rawBody = await parseRpcRequest(request);
-  } catch {
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
     invalid = { id: null, code: -32600, message: 'Invalid request' };
   }
   if (!invalid && isRecord(rawBody) && typeof rawBody.method === 'string' && !isExactShopRpcRequest(rawBody)) {
@@ -362,17 +343,20 @@ export async function handleRpcPost(
       rpcMethod: requestBody.method,
     };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), dependencies.providerTimeoutMs);
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.providerTimeoutMs,
+    timeoutMessage: 'RPC provider request timed out',
+  });
   try {
-    const text = await fetchRpc(cluster, apiKey, requestBody, controller.signal, dependencies, metrics);
+    const text = await fetchRpc(cluster, apiKey, requestBody, deadline.signal, dependencies, metrics);
     return {
       response: new Response(text, { status: 200, headers: rpcCorsHeaders(origin) }),
       rpcMethod: requestBody.method,
     };
   } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
     const kind = error instanceof RpcFailure ? error.kind : 'unavailable';
-    const timedOut = kind === 'deadline' || kind === 'timeout';
+    const timedOut = deadline.timedOut() || kind === 'deadline' || kind === 'timeout';
     return {
       response: rpcErrorResponse(
         origin,
@@ -384,7 +368,7 @@ export async function handleRpcPost(
       rpcMethod: requestBody.method,
     };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }
 

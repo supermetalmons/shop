@@ -20,7 +20,9 @@ test('anonymous production cookies are host-only, secure, and strict', () => {
   assert.equal(anonymousAuthTestHooks.tokenPattern.test(`mons_anon_v1.${SESSION_ID}.${SECRET}`), true);
 });
 
-function db(first: (query: string) => Record<string, unknown> | null): D1Database {
+function db(
+  first: (query: string) => Record<string, unknown> | null | Promise<Record<string, unknown> | null>,
+): D1Database {
   return {
     prepare(query: string) {
       return {
@@ -108,6 +110,67 @@ test('request identity maps unavailable and timed-out anonymous session storage'
   controller.abort();
   await assert.rejects(
     verifyRequestIdentity(request, db(() => null), controller.signal, NOW_MS),
+    (error) => error instanceof RequestIdentityError && error.kind === 'provider-timeout',
+  );
+});
+
+test('request identity interrupts a stalled lookup with the exact client reason', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected');
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const database = db(async () => {
+    markStarted();
+    return new Promise<Record<string, unknown>>(() => undefined);
+  });
+  const request = new Request('https://mons.shop/profile/state', {
+    headers: {
+      Cookie: `__Host-mons_anon_v1=mons_anon_v1.${SESSION_ID}.${SECRET}`,
+      Origin: 'https://mons.shop',
+      'X-Mons-CSRF': '1',
+    },
+    signal: controller.signal,
+  });
+  const timeout = new AbortController();
+  const verification = verifyRequestIdentity(
+    request,
+    database,
+    AbortSignal.any([request.signal, timeout.signal]),
+    NOW_MS,
+  );
+  await started;
+  controller.abort(reason);
+  await assert.rejects(verification, (error: unknown) => error === reason);
+});
+
+test('request identity interrupts a stalled lookup with a provider timeout', async () => {
+  const timeout = new AbortController();
+  const timeoutReason = new DOMException('identity timed out', 'TimeoutError');
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const database = db(async () => {
+    markStarted();
+    return new Promise<Record<string, unknown>>(() => undefined);
+  });
+  const request = new Request('https://mons.shop/profile/state', {
+    headers: {
+      Cookie: `__Host-mons_anon_v1=mons_anon_v1.${SESSION_ID}.${SECRET}`,
+      Origin: 'https://mons.shop',
+      'X-Mons-CSRF': '1',
+    },
+  });
+  const verification = verifyRequestIdentity(
+    request,
+    database,
+    AbortSignal.any([request.signal, timeout.signal]),
+    NOW_MS,
+  );
+  await started;
+  timeout.abort(timeoutReason);
+  await assert.rejects(
+    verification,
     (error) => error instanceof RequestIdentityError && error.kind === 'provider-timeout',
   );
 });

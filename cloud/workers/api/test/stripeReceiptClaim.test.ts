@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCommerceD1, createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
-import { createDeferredWorkCollector, failOnDeferredWork } from './deferredWork.ts';
-import { Keypair } from '@solana/web3.js';
+import {
+  createDeferredWorkCollector,
+  failOnDeferredWork,
+  isDeferredWorkRegistrationError,
+} from './deferredWork.ts';
+import bs58 from 'bs58';
+import { Keypair, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
-import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
+import {
+  deliveryReceiptRuntime,
+  deliveryReceiptTestHooks,
+  sendAndConfirmSignedTransaction,
+} from '../src/deliveryReceipts.ts';
 import {
   commerceKeyFromPath,
   type CommerceDocumentData,
@@ -108,9 +117,12 @@ function conflictDatabase(db: D1Database, conflicts: number): D1Database {
 function commerceContext(
   documents: Record<string, Record<string, unknown>>,
   _calls: Array<{ url: string; init?: RequestInit }> = [],
-  options: { commitConflicts?: number } = {},
+  options: {
+    commitConflicts?: number;
+    harness?: Parameters<typeof createCommerceD1Harness>[0];
+  } = {},
 ) {
-  const harness = createCommerceD1Harness();
+  const harness = createCommerceD1Harness(options.harness);
   for (const [path, fields] of Object.entries(documents)) {
     const key = commerceKeyFromPath(path);
     if (!key) throw new Error(`Invalid commerce fixture path: ${path}`);
@@ -317,6 +329,117 @@ test('Stripe receipt claim handler returns its deadline and tracks unfinished cl
   await deferred.drain();
 });
 
+test('Stripe receipt claim rethrows wrapped client cancellation after cleanup without internal logging', async (context) => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected during receipt claim');
+  const logged: unknown[] = [];
+  context.mock.method(console, 'error', (entry: unknown) => { logged.push(entry); });
+  let markStarted!: () => void;
+  let finishCleanup!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const pending = handleStripeReceiptClaim(
+    request(undefined, { signal: controller.signal }),
+    env(),
+    failOnDeferredWork,
+    dependencies({
+      claim: () => new Promise((_resolve, reject) => {
+        finishCleanup = () => reject(new StripeReceiptClaimError(
+          'internal',
+          'wrapped cancellation',
+          undefined,
+          reason,
+        ));
+        markStarted();
+      }),
+    }),
+  );
+
+  await started;
+  controller.abort(reason);
+  finishCleanup();
+
+  await assert.rejects(pending, (error: unknown) => error === reason);
+  assert.equal(logged.some((entry) => (
+    typeof entry === 'object' && entry !== null &&
+    (entry as Record<string, unknown>).event === 'stripe_receipt_claim_unhandled_error'
+  )), false);
+});
+
+test('Stripe receipt claim propagates deferred-work registration failures', async () => {
+  const cause = new Error('waitUntil registration failed');
+  await assert.rejects(
+    handleStripeReceiptClaim(
+      request(),
+      env(),
+      () => { throw cause; },
+      dependencies({
+        timeoutMs: 1,
+        claim: async () => new Promise(() => undefined),
+      }),
+    ),
+    (error) => isDeferredWorkRegistrationError(error, cause),
+  );
+});
+
+test('abort after Solana submission preserves the deterministic signature and recipient lock', async () => {
+  const payer = Keypair.generate();
+  const transaction = new VersionedTransaction(new TransactionMessage({
+    payerKey: payer.publicKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions: [],
+  }).compileToV0Message());
+  transaction.sign([payer]);
+  const signature = bs58.encode(transaction.signatures[0]);
+  const controller = new AbortController();
+  const reason = new Error('client disconnected after send');
+  let sendStarted = false;
+
+  await assert.rejects(
+    sendAndConfirmSignedTransaction({
+      sendTransaction: async () => {
+        sendStarted = true;
+        controller.abort(reason);
+        return signature;
+      },
+    } as unknown as Parameters<typeof sendAndConfirmSignedTransaction>[0], transaction, controller.signal, 'claimStripeReceipt:directFigure'),
+    (error: unknown) => {
+      assert.ok(error instanceof deliveryReceiptTestHooks.DeliveryReceiptError);
+      const details = error.details as Record<string, unknown>;
+      assert.equal(details.signature, signature);
+      assert.equal(details.maybeSubmitted, true);
+      return true;
+    },
+  );
+  assert.equal(sendStarted, true);
+
+  const documents = directDocuments();
+  documents[`claimCodes/${CODE}`] = {
+    ...documents[`claimCodes/${CODE}`],
+    status: 'processing',
+    processingAttemptId: 'attempt',
+    processingLeaseExpiresAt: 0,
+    receiptTxs: [],
+    receiptTxSubmissions: [],
+  };
+  const context = commerceContext(documents);
+  await stripeReceiptClaimTestHooks.rememberSubmittedTransaction(
+    context,
+    CODE,
+    'attempt',
+    signature,
+    { lastValidBlockHeight: 200, submittedAtMs: 1_700_000_000_000, status: 'submitted' },
+  );
+  await assert.rejects(() => stripeReceiptClaimTestHooks.startClaim(
+    context,
+    CODE,
+    OTHER_RECIPIENT,
+    'next-attempt',
+    Date.now() + 10 * 60_000,
+  ), /locked to the receiver/);
+  const stored = await deliveryReceiptRuntime.readDocument(context, `claimCodes/${CODE}`);
+  assert.equal((stored?.fields.receiptTxSubmissions as Array<{ status: string }>)[0].status, 'submitted');
+});
+
 test('Stripe receipt claim start writes compatible claim and order leases', async () => {
   const context = commerceContext(unclaimedDocuments());
   const result = await stripeReceiptClaimTestHooks.startClaim(
@@ -335,6 +458,97 @@ test('Stripe receipt claim start writes compatible claim and order leases', asyn
   assert.equal(claim?.fields.processingAttemptId, 'stripe_receipt:attempt');
   assert.equal(claim?.fields.processingLeaseExpiresAt, 1_700_000_090_000);
   assert.equal(order?.fields.dropId, DROP_ID);
+});
+
+test('Stripe receipt claim start reconciles a processing lease whose acknowledgement is lost', async () => {
+  let loseAcknowledgement = true;
+  const context = commerceContext(unclaimedDocuments(), [], {
+    harness: {
+      observeBatchAfterCommit: ({ statements }) => {
+        if (
+          loseAcknowledgement &&
+          statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))
+        ) {
+          loseAcknowledgement = false;
+          throw new TypeError('claim processing lease acknowledgement lost');
+        }
+      },
+    },
+  });
+
+  const result = await stripeReceiptClaimTestHooks.startClaim(
+    context,
+    CODE,
+    RECIPIENT,
+    'stripe_receipt:lost-ack',
+    1_700_000_000_000,
+  );
+
+  assert.equal(result.status, 'started');
+  assert.equal(result.attemptId, 'stripe_receipt:lost-ack');
+  assert.equal(result.resumingPreviousProcessingClaim, false);
+  assert.equal(loseAcknowledgement, false);
+  const claim = await deliveryReceiptRuntime.readDocument(context, `claimCodes/${CODE}`);
+  const order = await deliveryReceiptRuntime.readDocument(
+    context,
+    `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`,
+  );
+  assert.equal(claim?.fields.processingAttemptId, 'stripe_receipt:lost-ack');
+  assert.equal((order?.fields.stripeReceiptClaim as Record<string, unknown>)?.status, 'processing');
+});
+
+test('Stripe receipt claim cancellation reconciles a lost start acknowledgement and clears the exact lease', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client cancelled after claim lease commit');
+  let loseAcknowledgement = true;
+  let sendCalls = 0;
+  const context = commerceContext(unclaimedDocuments(), [], {
+    harness: {
+      observeBatchAfterCommit: ({ statements }) => {
+        if (
+          loseAcknowledgement &&
+          statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))
+        ) {
+          loseAcknowledgement = false;
+          controller.abort(reason);
+          throw new Error('claim lease acknowledgement lost during cancellation', { cause: reason });
+        }
+      },
+    },
+  });
+  context.signal = controller.signal;
+
+  await assert.rejects(
+    stripeReceiptClaimTestHooks.claimStripeReceipt(
+      { code: CODE, recipient: RECIPIENT },
+      env(),
+      context,
+      {
+        apiKey: 'helius',
+        signal: controller.signal,
+        providerFetch: async (_input, init) => {
+          const body = typeof init?.body === 'string' ? JSON.parse(init.body) as { method?: string } : {};
+          if (body.method === 'sendTransaction') sendCalls += 1;
+          throw reason;
+        },
+      },
+    ),
+    (error) => error === reason,
+  );
+
+  assert.equal(loseAcknowledgement, false);
+  assert.equal(sendCalls, 0);
+  const safeContext = { ...context, signal: new AbortController().signal };
+  const claim = await deliveryReceiptRuntime.readDocument(safeContext, `claimCodes/${CODE}`);
+  const order = await deliveryReceiptRuntime.readDocument(
+    safeContext,
+    `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`,
+  );
+  assert.equal(claim?.fields.status, 'unclaimed');
+  assert.equal(claim?.fields.processingAttemptId, undefined);
+  assert.equal(claim?.fields.processingLeaseExpiresAt, undefined);
+  assert.equal((order?.fields.stripeReceiptClaim as Record<string, unknown>)?.status, 'unclaimed');
+  assert.equal((order?.fields.stripeReceiptClaim as Record<string, unknown>)?.recipient, undefined);
 });
 
 test('Stripe receipt claim start is idempotent and preserves recipient locks', async () => {

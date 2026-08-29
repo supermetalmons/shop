@@ -66,6 +66,16 @@ import {
   type ProfileProviderFetch,
 } from './boundedResponse.js';
 import {
+  createRequestDeadline,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  raceReadWithSignal,
+  raceWithSignal,
+  readBoundedRequestJson,
+  runCriticalRequestOperation,
+  type RequestDeadline,
+} from './boundedRequest.js';
+import {
   CommerceRepositoryError,
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -188,6 +198,7 @@ type RevealDudesDependencies = {
   reserveRevealSubmission: typeof reserveRevealSubmission;
   sendAndConfirmTransaction: typeof sendAndConfirmTransaction;
   sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  timeoutMs: number;
   validateOnchainConfig: typeof validateOnchainConfig;
   verifyIdentity: typeof verifyRequestIdentity;
 };
@@ -275,6 +286,7 @@ const defaultDependencies: RevealDudesDependencies = {
   reserveRevealSubmission,
   sendAndConfirmTransaction,
   sleep: pause,
+  timeoutMs: HANDLER_TIMEOUT_MS,
   validateOnchainConfig,
   verifyIdentity: verifyRequestIdentity,
 };
@@ -335,47 +347,21 @@ function summarizeError(error: unknown): Record<string, unknown> {
 }
 
 async function readRequestBody(request: Request, signal: AbortSignal): Promise<RevealRequest> {
-  const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
-  if (contentType !== 'application/json') {
-    await request.body?.cancel().catch(() => undefined);
-    throw new RevealDudesError('invalid-argument', 'Content-Type must be application/json.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > REQUEST_MAX_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new RevealDudesError('invalid-argument', 'Reveal request is too large.');
-  }
-  if (!request.body) throw new RevealDudesError('invalid-argument', 'Invalid reveal request.');
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > REQUEST_MAX_BYTES) throw new RevealDudesError('invalid-argument', 'Reveal request is too large.');
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    const parsed = requestSchema.safeParse(JSON.parse(chunks.join('')) as unknown);
-    if (!parsed.success) throw new RevealDudesError('invalid-argument', 'Invalid reveal request.');
-    return parsed.data;
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    if (error instanceof RevealDudesError) throw error;
-    if (signal.aborted) throw signal.reason;
-    throw new RevealDudesError('invalid-argument', 'Invalid reveal request.');
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-  }
+  const value = await readBoundedRequestJson(request, {
+    maxBytes: REQUEST_MAX_BYTES,
+    signal,
+    createError: (failure) => new RevealDudesError(
+      'invalid-argument',
+      failure === 'unsupported-media-type'
+        ? 'Content-Type must be application/json.'
+        : failure === 'too-large'
+          ? 'Reveal request is too large.'
+          : 'Invalid reveal request.',
+    ),
+  });
+  const parsed = requestSchema.safeParse(value);
+  if (!parsed.success) throw new RevealDudesError('invalid-argument', 'Invalid reveal request.');
+  return parsed.data;
 }
 
 function canonicalPublicKey(value: string, label: string): PublicKey {
@@ -451,6 +437,7 @@ async function rpcCall(
     const onAbort = () => controller.abort(context.signal.reason);
     context.signal.addEventListener('abort', onAbort, { once: true });
     const timeout = setTimeout(() => {
+      if (controller.signal.aborted) return;
       timedOut = true;
       controller.abort(new DOMException('Provider request timed out', 'TimeoutError'));
     }, options.timeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS);
@@ -458,7 +445,7 @@ async function rpcCall(
     try {
       if (context.signal.aborted) onAbort();
       if (controller.signal.aborted) throw controller.signal.reason;
-      const providerResponse = await context.fetch(
+      const providerResponse = await raceWithSignal(context.fetch(
         `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
         {
           method: 'POST',
@@ -467,7 +454,7 @@ async function rpcCall(
           redirect: 'manual',
           signal: controller.signal,
         },
-      );
+      ), controller.signal);
       if (TRANSIENT_HTTP_STATUSES.has(providerResponse.status) && attempt + 1 < attempts) {
         await cancelResponseBody(providerResponse);
         await pause(100, context.signal);
@@ -491,7 +478,18 @@ async function rpcCall(
       if (context.signal.aborted) throw context.signal.reason;
       return payload.result;
     } catch (error) {
-      if (context.signal.aborted) throw context.signal.reason;
+      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+      if (timedOut) {
+        if (attempt + 1 < attempts && !context.signal.aborted) {
+          await pause(100, context.signal);
+          continue;
+        }
+        throw new RevealDudesError('deadline-exceeded', 'Reveal provider request timed out.');
+      }
+      if (context.signal.aborted) {
+        if (error instanceof RevealDudesError) throw error;
+        throw new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
+      }
       if (
         error instanceof RevealRpcError &&
         !isTransientShopRpcError({ code: error.rpcCode, message: error.message })
@@ -501,7 +499,6 @@ async function rpcCall(
         await pause(100, context.signal);
         continue;
       }
-      if (timedOut) throw new RevealDudesError('deadline-exceeded', 'Reveal provider request timed out.');
       if (error instanceof RevealDudesError) throw error;
       throw new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
     } finally {
@@ -706,7 +703,11 @@ async function loadBoundWallet(
     if ('reason' in resolution) throw new RevealDudesError('unauthenticated', 'Sign in with your wallet first.');
     return resolution.wallet;
   } catch (error) {
-    if (error instanceof RevealDudesError || error instanceof ProfileReadError || context.signal.aborted) throw error;
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    if (
+      error instanceof RevealDudesError ||
+      error instanceof ProfileReadError
+    ) throw error;
     throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
   }
 }
@@ -719,7 +720,8 @@ async function requireRevealSubmissionStorageControl(
   try {
     return await loadRevealSubmissionStorageControl(db, signal);
   } catch (error) {
-    if (error instanceof RevealDudesError || signal.aborted) throw error;
+    if (isSignalCancellationError(signal, error)) throw signal.reason;
+    if (error instanceof RevealDudesError) throw error;
     throw new RevealDudesError('unavailable', 'Reveal data is temporarily unavailable.');
   }
 }
@@ -810,7 +812,8 @@ async function runRevealSubmissionD1Operation<T>(
   try {
     return await operation(context.opsDb);
   } catch (error) {
-    if (error instanceof RevealDudesError || context.signal.aborted) throw error;
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    if (error instanceof RevealDudesError) throw error;
     if (error instanceof RevealSubmissionStoragePausedError) {
       throw new RevealDudesError('unavailable', 'Reveal migration is in progress. Try again.');
     }
@@ -1237,7 +1240,7 @@ async function waitForSignature(
       const parsed = parseSignatureStatusResult(result);
       const outcome = parsed === undefined ? 'pending' : signatureStatusOutcome(parsed.status);
       if (outcome === 'failed') {
-        const transaction = await loadTransaction(context, runtime, signature).catch(() => null);
+        const transaction = await loadTransactionBestEffort(context, runtime, signature);
         const corroborated = confirmedTransactionOutcome(transaction, signature);
         if (corroborated.outcome === 'confirmed') return { ok: true };
         if (corroborated.outcome === 'failed') {
@@ -1245,12 +1248,12 @@ async function waitForSignature(
         }
       }
       if (outcome === 'confirmed') return { ok: true };
-    } catch {
-      if (context.signal.aborted) throw context.signal.reason;
+    } catch (error) {
+      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
     }
     await pause(TX_CONFIRM_POLL_MS, context.signal);
   }
-  const transaction = await loadTransaction(context, runtime, signature).catch(() => null);
+  const transaction = await loadTransactionBestEffort(context, runtime, signature);
   const corroborated = confirmedTransactionOutcome(transaction, signature);
   if (corroborated.outcome === 'confirmed') return { ok: true };
   return {
@@ -1273,12 +1276,25 @@ async function loadTransaction(
   return isRecord(value) ? value : null;
 }
 
+async function loadTransactionBestEffort(
+  context: ProviderContext,
+  runtime: RevealRuntime,
+  signature: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    return await loadTransaction(context, runtime, signature);
+  } catch (error) {
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    return null;
+  }
+}
+
 async function corroborateRevealSubmissionOutcome(
   context: ProviderContext,
   runtime: RevealRuntime,
   signature: string,
 ): Promise<'confirmed' | 'failed' | 'unknown'> {
-  const transaction = await loadTransaction(context, runtime, signature).catch(() => null);
+  const transaction = await loadTransactionBestEffort(context, runtime, signature);
   return confirmedTransactionOutcome(transaction, signature).outcome;
 }
 
@@ -1341,8 +1357,8 @@ async function reconcileRevealSubmission(
     return historicalOutcome === 'absent' && historical.contextSlot >= blockhashValidity.contextSlot
       ? 'expired'
       : 'unknown';
-  } catch {
-    if (context.signal.aborted) throw context.signal.reason;
+  } catch (error) {
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
     return 'unknown';
   }
 }
@@ -1378,9 +1394,10 @@ async function sendAndConfirmTransaction(
     let maybe: Awaited<ReturnType<typeof waitForSignature>>;
     try {
       maybe = await waitForTransaction(context, runtime, signature, TX_SEND_TIMEOUT_MS);
-    } catch {
-      throw new RevealDudesError(
-        context.signal.aborted ? 'deadline-exceeded' : 'unavailable',
+    } catch (error) {
+      const cancelled = isSignalCancellationError(context.signal, error);
+      const unknownSubmission = new RevealDudesError(
+        cancelled ? 'deadline-exceeded' : 'unavailable',
         'Reveal transaction submission status is unknown. Try again.',
         {
           signature,
@@ -1388,6 +1405,8 @@ async function sendAndConfirmTransaction(
           maybeSubmitted: true,
         },
       );
+      if (cancelled) Object.defineProperty(unknownSubmission, 'cause', { value: context.signal.reason });
+      throw unknownSubmission;
     }
     if (maybe.ok) return signature;
     const maybeMessage = transactionErrorMessage(maybe.error);
@@ -1407,12 +1426,15 @@ async function sendAndConfirmTransaction(
   let confirmed: Awaited<ReturnType<typeof waitForSignature>>;
   try {
     confirmed = await waitForTransaction(context, runtime, signature, TX_CONFIRM_TIMEOUT_MS);
-  } catch {
-    throw new RevealDudesError('deadline-exceeded', 'Reveal transaction was not confirmed. Try again.', {
+  } catch (error) {
+    const cancelled = isSignalCancellationError(context.signal, error);
+    const unknownSubmission = new RevealDudesError('deadline-exceeded', 'Reveal transaction was not confirmed. Try again.', {
       signature,
       lastError: 'timeout',
       maybeSubmitted: true,
     });
+    if (cancelled) Object.defineProperty(unknownSubmission, 'cause', { value: context.signal.reason });
+    throw unknownSubmission;
   }
   if (confirmed.ok) return signature;
   const message = transactionErrorMessage(confirmed.error);
@@ -1594,15 +1616,29 @@ async function enqueueRevealBackgroundJob(
 
 async function finalizeConfirmedSubmissionForResponse(
   dependencies: RevealDudesDependencies,
+  deadline: RequestDeadline,
+  defer: DeferredWork,
   context: RevealContext,
   runtime: RevealRuntime,
   boxAssetId: string,
   submission: RevealSubmission,
 ): Promise<void> {
   try {
-    await dependencies.confirmRevealSubmission(context, runtime, boxAssetId, submission);
+    await runCriticalRequestOperation(
+      () => dependencies.confirmRevealSubmission(context, runtime, boxAssetId, submission),
+      { deadline, defer },
+    );
   } catch (error) {
-    const code = context.signal.aborted ||
+    rethrowDeferredWorkRegistrationError(error);
+    if (deadline.timedOut() && isSignalCancellationError(deadline.signal, error)) {
+      throw unknownSubmissionError(
+        submission,
+        'deadline-exceeded',
+        'Reveal transaction is confirmed, but finalization is incomplete. Try again.',
+      );
+    }
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    const code =
       (error instanceof RevealDudesError && error.code === 'deadline-exceeded') ||
       (error instanceof ProfileReadError && error.code === 'deadline-exceeded')
       ? 'deadline-exceeded'
@@ -1803,17 +1839,27 @@ function scheduleFailedSubmission(
 ): void {
   scheduleRevealBackground(
     defer,
-    failRevealSubmissionSafely(
-      dependencies.failRevealSubmission,
-      {
-        ...context,
-        providerFetch: dependencies.providerFetch,
-        signal: AbortSignal.timeout(PROVIDER_ATTEMPT_TIMEOUT_MS),
-      },
-      runtime,
-      boxAssetId,
-      submission,
-    ),
+    failInterruptedRevealSubmission(dependencies, context, runtime, boxAssetId, submission),
+  );
+}
+
+function failInterruptedRevealSubmission(
+  dependencies: RevealDudesDependencies,
+  context: RevealContext,
+  runtime: RevealRuntime,
+  boxAssetId: string,
+  submission: RevealSubmission,
+): Promise<void> {
+  return failRevealSubmissionSafely(
+    dependencies.failRevealSubmission,
+    {
+      ...context,
+      providerFetch: dependencies.providerFetch,
+      signal: AbortSignal.timeout(PROVIDER_ATTEMPT_TIMEOUT_MS),
+    },
+    runtime,
+    boxAssetId,
+    submission,
   );
 }
 
@@ -1838,11 +1884,10 @@ export async function handleRevealDudes(
       authOutcome,
     };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Reveal request timed out', 'TimeoutError')),
-    HANDLER_TIMEOUT_MS,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Reveal request timed out',
+  });
   const meteredFetch: ProfileProviderFetch = async (input, init) => {
     const startedAt = performance.now();
     metrics.upstreamCalls += 1;
@@ -1853,9 +1898,10 @@ export async function handleRevealDudes(
     }
   };
   try {
-    const body = await readRequestBody(request, controller.signal);
+    const body = await readRequestBody(request, deadline.signal);
     const owner = canonicalPublicKey(body.owner, 'wallet address');
-    boxAssetId = canonicalPublicKey(body.boxAssetId, 'boxAssetId').toBase58();
+    const resolvedBoxAssetId = canonicalPublicKey(body.boxAssetId, 'boxAssetId').toBase58();
+    boxAssetId = resolvedBoxAssetId;
     const runtime = runtimeForDrop(body.dropId);
     dropId = runtime.dropId;
     let identity: RequestIdentity;
@@ -1863,7 +1909,7 @@ export async function handleRevealDudes(
       identity = await dependencies.verifyIdentity(
         request,
         env.OPS_DB,
-        controller.signal,
+        deadline.signal,
         dependencies.nowMs(),
       );
     } catch (error) {
@@ -1879,18 +1925,24 @@ export async function handleRevealDudes(
       throw error;
     }
     authOutcome = 'provider-failure';
-    const storageControl = await dependencies.loadStorageControl(env.OPS_DB, controller.signal);
+    const storageControl = await raceReadWithSignal(
+      dependencies.loadStorageControl(env.OPS_DB, deadline.signal),
+      deadline.signal,
+    );
     const revealContext: RevealContext = {
       commerceDb: env.COMMERCE_DB,
       nowMs: dependencies.nowMs(),
       providerFetch: meteredFetch,
-      signal: controller.signal,
+      signal: deadline.signal,
       dataDb: env.DATA_DB,
       opsDb: env.OPS_DB,
     };
-    const sessionWallet = await resolveRequestWallet(
-      identity,
-      (uid) => dependencies.loadBoundWallet(revealContext, env.OPS_DB, uid),
+    const sessionWallet = await raceReadWithSignal(
+      resolveRequestWallet(
+        identity,
+        (uid) => dependencies.loadBoundWallet(revealContext, env.OPS_DB, uid),
+      ),
+      deadline.signal,
     );
     if (sessionWallet !== owner.toBase58()) {
       authOutcome = 'rejected';
@@ -1900,7 +1952,10 @@ export async function handleRevealDudes(
     if (storageControl.paused) {
       throw new RevealDudesError('unavailable', 'Reveal migration is in progress. Try again.');
     }
-    const storedSubmission = await dependencies.loadRevealSubmission(revealContext, runtime, boxAssetId);
+    const storedSubmission = await raceReadWithSignal(
+      dependencies.loadRevealSubmission(revealContext, runtime, resolvedBoxAssetId),
+      deadline.signal,
+    );
     if (storedSubmission && storedSubmission.owner !== owner.toBase58()) {
       authOutcome = 'rejected';
       throw new RevealDudesError('permission-denied', 'Owners only.');
@@ -1926,7 +1981,7 @@ export async function handleRevealDudes(
     }
     const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
     if (!apiKey) throw new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
-    const providerContext: ProviderContext = { apiKey, fetch: meteredFetch, signal: controller.signal };
+    const providerContext: ProviderContext = { apiKey, fetch: meteredFetch, signal: deadline.signal };
     let replaceSubmission: RevealSubmission | undefined;
     if (storedSubmission) {
       const outcome = storedSubmission.status === 'failed'
@@ -1936,9 +1991,11 @@ export async function handleRevealDudes(
         transactionOutcome = 'confirmed';
         await finalizeConfirmedSubmissionForResponse(
           dependencies,
+          deadline,
+          defer,
           revealContext,
           runtime,
-          boxAssetId,
+          resolvedBoxAssetId,
           storedSubmission,
         );
         scheduleConfirmedPackStatusRepair(
@@ -1974,7 +2031,10 @@ export async function handleRevealDudes(
     }
     const boxAsset = new PublicKey(boxAssetId);
     const pending = await dependencies.loadPendingOpen(providerContext, runtime, owner, boxAsset);
-    const assignment = await dependencies.assignDudes(revealContext, runtime, boxAssetId, dependencies);
+    const assignment = await runCriticalRequestOperation(
+      () => dependencies.assignDudes(revealContext, runtime, resolvedBoxAssetId, dependencies),
+      { deadline, defer },
+    );
     assignmentOutcome = assignment.outcome;
     const instruction = new TransactionInstruction({
       programId: runtime.boxMinterProgramId,
@@ -2014,16 +2074,37 @@ export async function handleRevealDudes(
     };
     let reservation: Awaited<ReturnType<typeof reserveRevealSubmission>>;
     try {
-      reservation = await dependencies.reserveRevealSubmission(
-        revealContext,
-        runtime,
-        boxAssetId,
-        candidate,
-        replaceSubmission,
-        dependencies,
+      reservation = await runCriticalRequestOperation(
+        async () => {
+          try {
+            return await dependencies.reserveRevealSubmission(
+              revealContext,
+              runtime,
+              resolvedBoxAssetId,
+              candidate,
+              replaceSubmission,
+              dependencies,
+            );
+          } finally {
+            if (deadline.clientAborted() || deadline.timeoutSignal.aborted) {
+              await failInterruptedRevealSubmission(
+                dependencies,
+                revealContext,
+                runtime,
+                resolvedBoxAssetId,
+                candidate,
+              );
+            }
+          }
+        },
+        { deadline, defer },
       );
     } catch (error) {
-      if (controller.signal.aborted) {
+      if (
+        deadline.signal.aborted &&
+        !deadline.clientAborted() &&
+        !deadline.timeoutSignal.aborted
+      ) {
         scheduleFailedSubmission(
           dependencies,
           defer,
@@ -2070,9 +2151,11 @@ export async function handleRevealDudes(
         transactionOutcome = 'confirmed';
         await finalizeConfirmedSubmissionForResponse(
           dependencies,
+          deadline,
+          defer,
           revealContext,
           runtime,
-          boxAssetId,
+          resolvedBoxAssetId,
           reservation.submission,
         );
         scheduleConfirmedPackStatusRepair(
@@ -2080,7 +2163,7 @@ export async function handleRevealDudes(
           defer,
           revealContext,
           runtime,
-          boxAssetId,
+          resolvedBoxAssetId,
           reservation.submission,
         );
         return {
@@ -2105,32 +2188,57 @@ export async function handleRevealDudes(
     }
     const submission = reservation.submission;
     try {
-      await enqueueRevealBackgroundJob(
-        env.REVEAL_BACKGROUND_QUEUE,
-        runtime,
-        boxAssetId,
-        submission,
-        REVEAL_BACKGROUND_JOB_INITIAL_DELAY_SECONDS,
+      await runCriticalRequestOperation(
+        async () => {
+          try {
+            await enqueueRevealBackgroundJob(
+              env.REVEAL_BACKGROUND_QUEUE,
+              runtime,
+              resolvedBoxAssetId,
+              submission,
+              REVEAL_BACKGROUND_JOB_INITIAL_DELAY_SECONDS,
+            );
+          } finally {
+            if (deadline.clientAborted() || deadline.timeoutSignal.aborted) {
+              await failInterruptedRevealSubmission(
+                dependencies,
+                revealContext,
+                runtime,
+                resolvedBoxAssetId,
+                submission,
+              );
+            }
+          }
+        },
+        { deadline, defer },
       );
-    } catch {
+    } catch (error) {
+      rethrowDeferredWorkRegistrationError(error);
       transactionOutcome = 'failed';
-      scheduleFailedSubmission(
-        dependencies,
-        defer,
-        revealContext,
-        runtime,
-        boxAssetId,
-        submission,
-      );
+      if (!deadline.clientAborted() && !deadline.timeoutSignal.aborted) {
+        scheduleFailedSubmission(
+          dependencies,
+          defer,
+          revealContext,
+          runtime,
+          resolvedBoxAssetId,
+          submission,
+        );
+      }
+      if (deadline.signal.aborted && error === deadline.signal.reason) throw error;
       throw new RevealDudesError('unavailable', 'Reveal processing is temporarily unavailable. Try again.');
     }
+    deadline.signal.throwIfAborted();
     let signature: string;
     try {
       signature = await dependencies.sendAndConfirmTransaction(providerContext, runtime, transaction);
       transactionOutcome = 'confirmed';
     } catch (error) {
-      const submissionUnknown = error instanceof RevealDudesError &&
-        isRecord(error.details) && error.details.maybeSubmitted === true;
+      const cancellationDerived = isSignalCancellationError(deadline.signal, error);
+      const submissionUnknown = cancellationDerived || (
+        error instanceof RevealDudesError &&
+        isRecord(error.details) && error.details.maybeSubmitted === true
+      );
       transactionOutcome = submissionUnknown ? 'unknown' : 'failed';
       if (submissionUnknown) {
         console.warn({
@@ -2140,9 +2248,13 @@ export async function handleRevealDudes(
           signature: submission.signature,
           error: summarizeError(error),
         });
-        throw unknownSubmissionError(submission, error.code, error.message);
+        if (cancellationDerived && deadline.clientAborted()) throw error;
+        if (error instanceof RevealDudesError) {
+          throw unknownSubmissionError(submission, error.code, error.message);
+        }
+        throw error;
       }
-      if (controller.signal.aborted) {
+      if (deadline.signal.aborted) {
         scheduleFailedSubmission(
           dependencies,
           defer,
@@ -2164,9 +2276,11 @@ export async function handleRevealDudes(
     }
     await finalizeConfirmedSubmissionForResponse(
       dependencies,
+      deadline,
+      defer,
       revealContext,
       runtime,
-      boxAssetId,
+      resolvedBoxAssetId,
       submission,
     );
     scheduleConfirmedPackStatusRepair(
@@ -2188,6 +2302,7 @@ export async function handleRevealDudes(
     };
   } catch (error) {
     rethrowDeferredWorkRegistrationError(error);
+    if (isRequestCancellationError(request, error)) throw error;
     let normalized: RevealDudesError;
     if (error instanceof RevealDudesError) normalized = error;
     else if (error instanceof RevealSubmissionStoragePausedError) {
@@ -2195,7 +2310,7 @@ export async function handleRevealDudes(
     }
     else if (error instanceof ProfileReadError) {
       normalized = new RevealDudesError(error.code, error.message, error.details);
-    } else if (controller.signal.aborted) {
+    } else if (deadline.timedOut()) {
       normalized = new RevealDudesError('deadline-exceeded', 'Reveal request timed out.');
     } else {
       normalized = new RevealDudesError('internal', 'Reveal failed.');
@@ -2213,7 +2328,7 @@ export async function handleRevealDudes(
       ...(transactionOutcome ? { transactionOutcome } : {}),
     };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }
 

@@ -311,6 +311,294 @@ test('request boundary preserves the Stripe webhook failure envelope', async () 
   assert.match(response.headers.get('Server-Timing') || '', /total;dur=/);
 });
 
+test('request boundary classifies abort-first dependency results as cancellation', async (context) => {
+  const consoleErrors: Record<string, unknown>[] = [];
+  context.mock.method(console, 'error', (entry: unknown) => {
+    consoleErrors.push(entry as Record<string, unknown>);
+  });
+
+  for (const outcome of ['normalized', 'thrown'] as const) {
+    const controller = new AbortController();
+    const logs: Record<string, unknown>[] = [];
+    let releaseDependency: (() => void) | undefined;
+    let markDependencyStarted: (() => void) | undefined;
+    const dependencyStarted = new Promise<void>((resolve) => {
+      markDependencyStarted = resolve;
+    });
+    const dependencyGate = new Promise<void>((resolve) => {
+      releaseDependency = resolve;
+    });
+    const commerceDb = d1Database(function prepare() {
+      return {
+        async first() {
+          markDependencyStarted?.();
+          await dependencyGate;
+          if (outcome === 'thrown') throw new Error('dependency failed after disconnect');
+          return { authority_state: 'paused', revision: 1, documents_revision: 0 };
+        },
+      } as D1PreparedStatement;
+    });
+    const incoming = new Request('https://api.mons.shop/checkout/session', {
+      method: 'POST',
+      signal: controller.signal,
+    });
+    const responsePromise = handleRequest(
+      incoming,
+      env({ commerceDb }),
+      { ...quietDependencies(fetch), log: (entry) => logs.push(entry) },
+    );
+    await dependencyStarted;
+    controller.abort(new Error('client disconnected'));
+    releaseDependency?.();
+    const response = await responsePromise;
+
+    assert.equal(response.status, 499);
+    assert.equal(await response.text(), '');
+    assert.match(response.headers.get('server-timing') || '', /total;dur=/);
+    const requestLog = logs.find((entry) => entry.event === 'shop_api_request');
+    assert.equal(requestLog?.status, 499);
+    assert.equal(requestLog?.requestCancelled, true);
+  }
+
+  assert.equal(
+    consoleErrors.filter((entry) => entry.event === 'shop_api_unhandled_error').length,
+    0,
+  );
+});
+
+test('request boundary races the complete route and preserves its winner', async (context) => {
+  const consoleErrors: Record<string, unknown>[] = [];
+  context.mock.method(console, 'error', (entry: unknown) => {
+    consoleErrors.push(entry as Record<string, unknown>);
+  });
+
+  const abortFirst = new AbortController();
+  const abortReason = new Error('client disconnected before route completion');
+  let markProviderStarted!: () => void;
+  const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
+  let releaseProvider!: () => void;
+  const abortedResponse = handleRequest(
+    new Request(request('/notifications/subscribe', { email: 'buyer@example.com' }), {
+      signal: abortFirst.signal,
+    }),
+    env(),
+    {
+      ...quietDependencies(fetch),
+      resendFetch: async () => new Promise<Response>((resolve) => {
+        releaseProvider = () => resolve(Response.json({ error: 'late provider failure' }, { status: 422 }));
+        markProviderStarted();
+      }),
+    },
+  );
+  await providerStarted;
+  abortFirst.abort(abortReason);
+  releaseProvider();
+  const cancelled = await abortedResponse;
+  assert.equal(cancelled.status, 499);
+  assert.equal(await cancelled.text(), '');
+  assert.equal(
+    consoleErrors.some((entry) => entry.event === 'shop_api_unhandled_error'),
+    false,
+  );
+
+  const dispatchFirst = new AbortController();
+  const preserved = await handleRequest(
+    new Request(request('/notifications/subscribe', { email: 'buyer@example.com' }), {
+      signal: dispatchFirst.signal,
+    }),
+    env(),
+    {
+      ...quietDependencies(fetch),
+      resendFetch: async () => {
+        setTimeout(() => dispatchFirst.abort(new Error('late client disconnect')), 0);
+        return Response.json({ error: 'provider failure' }, { status: 422 });
+      },
+    },
+  );
+  assert.equal(preserved.status, 502);
+  assert.deepEqual(await preserved.json(), { ok: false, error: 'provider-unavailable' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(dispatchFirst.signal.aborted, true);
+});
+
+test('request boundary keeps an aborted route alive for its cleanup', async () => {
+  const controller = new AbortController();
+  const deferred = createDeferredWorkCollector();
+  let markProviderStarted!: () => void;
+  const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
+  let releaseProvider!: () => void;
+  const responsePromise = rawHandleRequest(
+    new Request(request('/notifications/subscribe', { email: 'buyer@example.com' }), {
+      signal: controller.signal,
+    }),
+    env(),
+    deferred.defer,
+    {
+      ...quietDependencies(fetch),
+      resendFetch: async () => new Promise<Response>((resolve) => {
+        releaseProvider = () => resolve(Response.json({ id: 'contact-1' }));
+        markProviderStarted();
+      }),
+    },
+  );
+
+  await providerStarted;
+  controller.abort(new Error('client disconnected'));
+  const response = await responsePromise;
+  assert.equal(response.status, 499);
+  assert.equal(deferred.promises.length, 1);
+
+  releaseProvider();
+  await deferred.drain();
+});
+
+test('request boundary converts a successful resolved result after disconnect to 499', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected');
+  const logs: Record<string, unknown>[] = [];
+  controller.abort(reason);
+  const response = await handleRequest(
+    new Request('https://api.mons.shop/health', { signal: controller.signal }),
+    env(),
+    { ...quietDependencies(fetch), log: (entry) => logs.push(entry) },
+  );
+
+  assert.equal(response.status, 499);
+  assert.equal(await response.text(), '');
+  assert.match(response.headers.get('cache-control') || '', /no-store/);
+  const requestLog = logs.find((entry) => entry.event === 'shop_api_request');
+  assert.equal(requestLog?.status, 499);
+  assert.equal(requestLog?.requestCancelled, true);
+});
+
+test('client cancellation aborts stalled inventory providers and returns 499', async (context) => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected');
+  const logs: Record<string, unknown>[] = [];
+  const consoleErrors: Record<string, unknown>[] = [];
+  const providerSignals: AbortSignal[] = [];
+  let markProviderStarted: (() => void) | undefined;
+  const providerStarted = new Promise<void>((resolve) => {
+    markProviderStarted = resolve;
+  });
+  context.mock.method(console, 'error', (entry: unknown) => {
+    consoleErrors.push(entry as Record<string, unknown>);
+  });
+  const stalledProvider: ProviderFetch = async (_input, init) => {
+    const signal = init?.signal;
+    assert.ok(signal);
+    providerSignals.push(signal);
+    markProviderStarted?.();
+    return new Promise<Response>((_resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+  };
+  const incoming = new Request(request('/inventory'), { signal: controller.signal });
+  const responsePromise = handleRequest(incoming, env(), {
+    ...quietDependencies(stalledProvider),
+    log: (entry) => logs.push(entry),
+    providerAttemptTimeoutMs: 250,
+    providerTimeoutMs: 250,
+  });
+
+  await providerStarted;
+  controller.abort(reason);
+  const response = await responsePromise;
+
+  assert.ok(providerSignals.length > 0);
+  assert.equal(providerSignals.every((signal) => signal.aborted), true);
+  assert.equal(providerSignals.every((signal) => signal.reason === reason), true);
+  assert.equal(response.status, 499);
+  assert.equal(await response.text(), '');
+  assert.match(response.headers.get('cache-control') || '', /no-store/);
+  const requestLog = logs.find((entry) => entry.event === 'shop_api_request');
+  assert.equal(requestLog?.status, 499);
+  assert.equal(requestLog?.requestCancelled, true);
+  assert.equal(
+    consoleErrors.some((entry) => entry.event === 'shop_api_unhandled_error'),
+    false,
+  );
+});
+
+test('client abort wins when it precedes an RPC transport failure', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected');
+  const providerFailure = new Error('provider failed first');
+  const provider: ProviderFetch = async () => {
+    controller.abort(reason);
+    throw providerFailure;
+  };
+  const response = await handleRequest(
+    new Request(rpcRequest(
+      '/rpc/mainnet-beta',
+      rpcBody('sendTransaction', [TRANSACTION, {
+        encoding: 'base64',
+        preflightCommitment: 'confirmed',
+        maxRetries: 3,
+      }], 'race'),
+    ), { signal: controller.signal }),
+    env(),
+    quietDependencies(provider),
+  );
+
+  assert.equal(response.status, 499);
+  assert.equal(await response.text(), '');
+});
+
+test('a settled Helius HTTP failure remains definitive after a later client abort', async () => {
+  const controller = new AbortController();
+  const reason = new Error('late client disconnect');
+  let cancelledBodies = 0;
+  const provider: ProviderFetch = async () => new Response(new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelledBodies += 1;
+    },
+  }), { status: 400 });
+  const response = await handleRequest(
+    new Request(request('/inventory'), { signal: controller.signal }),
+    env(),
+    quietDependencies(provider),
+  );
+
+  assert.ok(cancelledBodies > 0);
+  controller.abort(reason);
+  assert.equal(controller.signal.reason, reason);
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), { ok: false, error: 'provider-unavailable' });
+});
+
+test('a server deadline that wins before a client abort remains 504', async () => {
+  const controller = new AbortController();
+  const provider: ProviderFetch = async (_input, init) => {
+    const signal = init?.signal;
+    assert.ok(signal);
+    return new Promise<Response>((_resolve, reject) => {
+      const onAbort = () => {
+        const reason = signal.reason;
+        reject(reason);
+        setTimeout(() => controller.abort(new Error('late client disconnect')), 0);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+  };
+  const response = await handleRequest(
+    new Request(request('/inventory'), { signal: controller.signal }),
+    env(),
+    {
+      ...quietDependencies(provider),
+      providerAttemptTimeoutMs: 250,
+      providerTimeoutMs: 5,
+    },
+  );
+  assert.equal(response.status, 504);
+  assert.deepEqual(await response.json(), { ok: false, error: 'provider-timeout' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(controller.signal.aborted, true);
+});
+
 const NOTIFICATION_JOB = createNotificationEmailJobV1({
   jobId: '123e4567-e89b-42d3-a456-426614174000',
   kind: 'buyer_order_received',
@@ -503,7 +791,8 @@ test('profile routes enforce restricted CORS, bearer authentication, and stable 
   }), env(), quietDependencies(fetch));
   assert.equal(allowedPreflight.status, 204);
   assert.equal(allowedPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+  assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
+  assert.equal(allowedPreflight.headers.get('access-control-expose-headers'), 'X-Mons-Checkout-Retry');
   assert.equal(allowedPreflight.headers.get('vary'), 'Origin');
 
   const deniedPreflight = await handleRequest(new Request('https://api.mons.shop/admin/profile', {
@@ -618,7 +907,8 @@ test('checkout route enforces restricted CORS, bearer authentication, methods, a
   });
   assert.equal(allowedPreflight.status, 204);
   assert.equal(allowedPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+  assert.equal(allowedPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
+  assert.equal(allowedPreflight.headers.get('access-control-expose-headers'), 'X-Mons-Checkout-Retry');
 
   const deniedPreflight = await handleRequest(new Request('https://api.mons.shop/checkout/session', {
     method: 'OPTIONS',
@@ -657,7 +947,7 @@ test('IRL claim route enforces restricted CORS, bearer authentication, methods, 
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request('/claims/irl/prepare', {
@@ -696,7 +986,7 @@ test('Stripe receipt claim route enforces restricted CORS, bearer authentication
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request(pathname, {
@@ -735,7 +1025,7 @@ test('receipt transfer route enforces restricted CORS, bearer authentication, me
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request('/receipts/transfer/prepare', {
@@ -783,7 +1073,7 @@ test('delivery preparation route enforces restricted CORS, bearer authentication
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request(pathname, body, {
@@ -825,7 +1115,7 @@ test('Admin IRL preparation route enforces restricted CORS, bearer authenticatio
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request(pathname, body, {
@@ -869,7 +1159,7 @@ test('Admin IRL finalization route enforces restricted CORS, bearer authenticati
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request(pathname, body, {
@@ -913,7 +1203,7 @@ test('reveal route enforces restricted CORS, bearer authentication, methods, and
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request(pathname, body, {
@@ -950,7 +1240,7 @@ test('profile write routes use restricted CORS, bearer authentication, and stabl
   }), env(), quietDependencies(fetch));
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+  assert.equal(preflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
   const logs: Record<string, unknown>[] = [];
   const unauthenticated = await handleRequest(request('/profile/addresses', {
@@ -1505,6 +1795,26 @@ test('notification subscription hides missing configuration and provider failure
   );
   assert.equal(transportFailure.status, 502);
   assert.deepEqual(await transportFailure.json(), { ok: false, error: 'provider-unavailable' });
+});
+
+test('a settled Resend failure remains definitive after a later client abort', async () => {
+  const controller = new AbortController();
+  const reason = new Error('late client disconnect');
+  const response = await handleRequest(
+    new Request(request('/notifications/subscribe', { email: 'buyer@example.com' }), {
+      signal: controller.signal,
+    }),
+    env(),
+    {
+      ...quietDependencies(fetch),
+      resendFetch: async () => Response.json({ error: 'provider failure' }, { status: 500 }),
+    },
+  );
+
+  controller.abort(reason);
+  assert.equal(controller.signal.reason, reason);
+  assert.equal(response.status, 502);
+  assert.deepEqual(await response.json(), { ok: false, error: 'provider-unavailable' });
 });
 
 test('notification subscription converts a bounded provider deadline into a generic timeout', async () => {
@@ -2135,13 +2445,18 @@ test('RPC reads retry once, submissions never retry, and deterministic JSON-RPC 
 
 test('retry sleep rejects both already-aborted and subsequently aborted signals', async () => {
   const alreadyAborted = new AbortController();
-  alreadyAborted.abort();
-  await assert.rejects(sleepWithAbort(10_000, alreadyAborted.signal), /deadline/);
+  const earlyReason = new Error('early abort');
+  alreadyAborted.abort(earlyReason);
+  await assert.rejects(
+    sleepWithAbort(10_000, alreadyAborted.signal),
+    (error: unknown) => error === earlyReason,
+  );
 
   const laterAborted = new AbortController();
+  const laterReason = new Error('later abort');
   const sleeping = sleepWithAbort(10_000, laterAborted.signal);
-  laterAborted.abort();
-  await assert.rejects(sleeping, /deadline/);
+  laterAborted.abort(laterReason);
+  await assert.rejects(sleeping, (error: unknown) => error === laterReason);
 });
 
 test('RPC deadlines, response bounds, and response IDs fail with stable provider errors', async () => {
@@ -2219,6 +2534,32 @@ test('RPC deadlines, response bounds, and response IDs fail with stable provider
   assert.equal((await echoedCredential.text()).includes('credential-that-must-not-escape'), false);
 });
 
+test('RPC preserves a received non-OK status when its body stalls until cancellation', async () => {
+  const sendBody = rpcBody('sendTransaction', [TRANSACTION, {
+    encoding: 'base64',
+    preflightCommitment: 'confirmed',
+  }], 'stalled-error-body');
+  let bodyCancelled = false;
+  const response = await handleRequest(
+    rpcRequest('/rpc/mainnet-beta', sendBody),
+    env(),
+    {
+      ...quietDependencies(async () => new Response(new ReadableStream<Uint8Array>({
+        start() {},
+        cancel() {
+          bodyCancelled = true;
+        },
+      }), { status: 400 })),
+      providerAttemptTimeoutMs: 5,
+      providerTimeoutMs: 100,
+    },
+  );
+
+  assert.equal(bodyCancelled, true);
+  assert.equal(response.status, 502);
+  assert.equal((await response.json() as any).error.code, -32099);
+});
+
 test('fresh provider attempt deadlines retry idempotent RPCs but never submissions', async () => {
   const readBody = rpcBody('getLatestBlockhash', [{ commitment: 'confirmed' }], 'attempt-timeout');
   let recoveringCalls = 0;
@@ -2262,6 +2603,28 @@ test('fresh provider attempt deadlines retry idempotent RPCs but never submissio
   });
   assert.equal(send.status, 504);
   assert.equal(exhaustedCalls, 1);
+
+  const lateClient = new AbortController();
+  const timeoutThenDisconnect: ProviderFetch = async (_input, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => {
+      const attemptReason = init?.signal?.reason;
+      reject(attemptReason);
+      setTimeout(() => lateClient.abort(new Error('late client disconnect')), 0);
+    }, { once: true });
+  });
+  const timeoutFirst = await handleRequest(
+    new Request(rpcRequest('/rpc/mainnet-beta', sendBody), { signal: lateClient.signal }),
+    env(),
+    {
+      ...quietDependencies(timeoutThenDisconnect),
+      providerTimeoutMs: 100,
+      providerAttemptTimeoutMs: 5,
+    },
+  );
+  assert.equal(timeoutFirst.status, 504);
+  assert.equal((await timeoutFirst.json() as any).error.code, -32098);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(lateClient.signal.aborted, true);
 });
 
 test('requests reject extra keys, invalid addresses, and bodies over 1 KiB', async () => {

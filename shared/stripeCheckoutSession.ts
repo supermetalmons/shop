@@ -74,6 +74,14 @@ export class StripeCheckoutSessionError extends Error {
   }
 }
 
+export class StripeCheckoutOperationUncertainError extends StripeCheckoutSessionError {
+  constructor(message: string, cause?: unknown) {
+    super('unavailable', message);
+    this.name = 'StripeCheckoutOperationUncertainError';
+    if (cause !== undefined) Object.defineProperty(this, 'cause', { value: cause });
+  }
+}
+
 export type StripeCheckoutSessionDrop = {
   dropId: string;
   solanaCluster: SolanaCluster;
@@ -109,6 +117,7 @@ export type StripeCheckoutOnchainConfig = {
 
 export type StripeCheckoutDocumentInput = StripeCheckoutIdentity & {
   dropId: string;
+  operationId?: string;
   sessionId: string;
   variantKey?: string;
   unitAmountCents: number;
@@ -120,6 +129,7 @@ export type StripeCheckoutDocumentInput = StripeCheckoutIdentity & {
 
 type StripeCheckoutSessionRequestData = {
   dropId: string;
+  operationId: string;
   variantKey?: string;
   quantity?: number;
   returnUrl?: string;
@@ -132,6 +142,8 @@ export type StripeCheckoutProviderRequest = {
   successUrl: string;
   cancelUrl: string;
   clientReferenceId: string;
+  idempotencyKey: string;
+  operationId: string;
   quantity: number;
   currency: typeof STRIPE_OFFCHAIN_CURRENCY;
   unitAmountCents: number;
@@ -184,7 +196,16 @@ function parseOptionalString(value: unknown, label: string, maxLength: number): 
   return normalized;
 }
 
-function parseStripeCheckoutSessionRequest(value: unknown): StripeCheckoutSessionRequestData {
+function parseStripeCheckoutOperationId(value: unknown): string {
+  if (value === undefined || value === null || value === '') return crypto.randomUUID();
+  const operationId = parseOptionalString(value, 'operationId', 36);
+  if (!operationId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(operationId)) {
+    throw new StripeCheckoutSessionError('invalid-argument', 'operationId is invalid.');
+  }
+  return operationId.toLowerCase();
+}
+
+function parseStripeCheckoutSessionRequest(value: unknown, rawOperationId?: unknown): StripeCheckoutSessionRequestData {
   if (!isRecord(value)) throw new StripeCheckoutSessionError('invalid-argument', 'Invalid checkout request.');
   const allowedKeys = new Set(['dropId', 'variantKey', 'quantity', 'returnUrl']);
   if (Object.keys(value).some((key) => !allowedKeys.has(key))) {
@@ -192,13 +213,20 @@ function parseStripeCheckoutSessionRequest(value: unknown): StripeCheckoutSessio
   }
   const dropId = parseOptionalString(value.dropId, 'dropId', 64);
   if (!dropId) throw new StripeCheckoutSessionError('invalid-argument', 'dropId is required.');
+  const operationId = parseStripeCheckoutOperationId(rawOperationId);
   const variantKey = parseOptionalString(value.variantKey, 'variantKey', 64);
   const returnUrl = parseOptionalString(value.returnUrl, 'returnUrl', 2048);
   let quantity: number | undefined;
   if (value.quantity !== undefined) {
     quantity = normalizeStripeCheckoutQuantity(value.quantity);
   }
-  return { dropId, ...(variantKey ? { variantKey } : {}), ...(quantity ? { quantity } : {}), ...(returnUrl ? { returnUrl } : {}) };
+  return {
+    dropId,
+    operationId,
+    ...(variantKey ? { variantKey } : {}),
+    ...(quantity ? { quantity } : {}),
+    ...(returnUrl ? { returnUrl } : {}),
+  };
 }
 
 function normalizedHttpOrigin(value: unknown): string {
@@ -455,6 +483,7 @@ export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): 
   return {
     sessionId: args.sessionId,
     dropId: args.dropId,
+    ...(args.operationId ? { operationId: args.operationId } : {}),
     ...identity,
     ...(variantKey ? { variantKey } : {}),
     quantity,
@@ -474,10 +503,11 @@ export async function createStripeCheckoutSessionCore(
     requestOrigin?: string;
     allowedOrigins?: readonly string[];
     body: unknown;
+    operationId?: unknown;
   },
   dependencies: StripeCheckoutSessionCoreDependencies,
 ): Promise<StripeCheckoutSessionCoreResult> {
-  const request = parseStripeCheckoutSessionRequest(input.body);
+  const request = parseStripeCheckoutSessionRequest(input.body, input.operationId);
   const identity = normalizeStripeCheckoutIdentity(input.identity);
   let successUrl: string;
   let cancelUrl: string;
@@ -524,14 +554,15 @@ export async function createStripeCheckoutSessionCore(
     });
   }
   dependencies.requireFulfillmentPrerequisites(config);
-  const nowMs = dependencies.nowMs?.() ?? Date.now();
   const providerRequest: StripeCheckoutProviderRequest = {
     mode: 'payment',
     automaticTax: true,
     billingAddressCollection: 'auto',
     successUrl,
     cancelUrl,
-    clientReferenceId: `${identity.owner}:${drop.dropId}:${nowMs}`.slice(0, 200),
+    clientReferenceId: `${request.operationId}:${identity.owner}:${drop.dropId}`.slice(0, 200),
+    idempotencyKey: `mons-checkout:${request.operationId}:${identity.ownerKind}:${identity.owner}`,
+    operationId: request.operationId,
     quantity,
     currency: STRIPE_OFFCHAIN_CURRENCY,
     unitAmountCents,
@@ -556,6 +587,7 @@ export async function createStripeCheckoutSessionCore(
   const serverTimestamp = { serverTimestamp: true };
   const document = buildStripeCheckoutDocument({
     dropId: drop.dropId,
+    operationId: request.operationId,
     sessionId: session.id,
     ...identity,
     ...(variantKey ? { variantKey } : {}),
@@ -565,6 +597,11 @@ export async function createStripeCheckoutSessionCore(
     createdAt: serverTimestamp,
     updatedAt: serverTimestamp,
   });
-  await dependencies.persistCheckout(`drops/${drop.dropId}/stripeCheckouts/${session.id}`, document);
+  try {
+    await dependencies.persistCheckout(`drops/${drop.dropId}/stripeCheckouts/${session.id}`, document);
+  } catch (error) {
+    if (error instanceof StripeCheckoutSessionError) throw error;
+    throw new StripeCheckoutOperationUncertainError('Stripe checkout is temporarily unavailable.', error);
+  }
   return { session, dropId: drop.dropId, mode };
 }

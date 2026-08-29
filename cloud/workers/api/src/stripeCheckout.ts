@@ -10,6 +10,7 @@ import {
   decodeBoxMinterConfigData,
 } from '../../../../shared/boxMinterConfigCodec.js';
 import {
+  StripeCheckoutOperationUncertainError,
   StripeCheckoutSessionError,
   createStripeCheckoutIdentity,
   createStripeCheckoutSessionCore,
@@ -18,6 +19,11 @@ import {
   type StripeCheckoutProviderResponse,
   type StripeCheckoutSessionDrop,
 } from '../../../../shared/stripeCheckoutSession.js';
+import {
+  STRIPE_CHECKOUT_OPERATION_HEADER,
+  STRIPE_CHECKOUT_RETRY_HEADER,
+  STRIPE_CHECKOUT_RETRY_SAME_OPERATION,
+} from '../../../../shared/contracts.js';
 import type { StripeCheckoutMode } from '../../../../shared/stripeCheckoutCore.js';
 import {
   RequestIdentityError,
@@ -30,8 +36,20 @@ import {
   readBoundedJson,
   type ProfileProviderFetch,
 } from './boundedResponse.js';
+import {
+  createRequestDeadline,
+  isRequestCancellationError,
+  raceReadWithSignal,
+  raceWithSignal,
+  readBoundedRequestJson,
+  runCriticalRequestOperation,
+} from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { createStripeCheckoutStore, stripeCheckoutFieldValue } from './stripeCheckout/store.js';
+import {
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 
 export const STRIPE_CHECKOUT_SESSION_PATH = '/checkout/session';
 
@@ -64,8 +82,10 @@ export type StripeCheckoutResult = {
 };
 
 type CheckoutDependencies = {
+  defer: DeferredWork;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  timeoutMs: number;
   verifyIdentity: typeof verifyRequestIdentity;
   createProviderSession?: (
     request: StripeCheckoutProviderRequest,
@@ -82,9 +102,11 @@ type CheckoutDependencies = {
 };
 
 const defaultDependencies: CheckoutDependencies = {
+  defer: () => undefined,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   resolveAuthWalletBinding: resolveD1AuthWalletBinding,
+  timeoutMs: CHECKOUT_TIMEOUT_MS,
   verifyIdentity: verifyRequestIdentity,
 };
 
@@ -99,7 +121,7 @@ function jsonResponse(body: unknown, status: number): Response {
   });
 }
 
-function checkoutErrorResponse(error: StripeCheckoutSessionError): Response {
+function checkoutErrorResponse(error: StripeCheckoutSessionError, retrySameOperation = false): Response {
   const status = error.code === 'invalid-argument'
     ? 400
     : error.code === 'failed-precondition'
@@ -109,7 +131,7 @@ function checkoutErrorResponse(error: StripeCheckoutSessionError): Response {
         : error.code === 'unavailable'
           ? 502
           : 500;
-  return jsonResponse({
+  const response = jsonResponse({
     ok: false,
     error: {
       code: error.code,
@@ -117,48 +139,29 @@ function checkoutErrorResponse(error: StripeCheckoutSessionError): Response {
       ...(error.details === undefined ? {} : { details: error.details }),
     },
   }, status);
+  if (retrySameOperation) {
+    response.headers.set(STRIPE_CHECKOUT_RETRY_HEADER, STRIPE_CHECKOUT_RETRY_SAME_OPERATION);
+  }
+  return response;
 }
 
-async function readBoundedRequestJson(request: Request, signal: AbortSignal): Promise<unknown> {
-  const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
-  if (contentType !== 'application/json') {
-    await request.body?.cancel().catch(() => undefined);
-    throw new StripeCheckoutSessionError('invalid-argument', 'Content-Type must be application/json.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > CHECKOUT_REQUEST_MAX_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new StripeCheckoutSessionError('invalid-argument', 'Checkout request is too large.');
-  }
-  if (!request.body) throw new StripeCheckoutSessionError('invalid-argument', 'Invalid checkout request.');
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > CHECKOUT_REQUEST_MAX_BYTES) throw new StripeCheckoutSessionError('invalid-argument', 'Checkout request is too large.');
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    return JSON.parse(chunks.join(''));
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    if (error instanceof StripeCheckoutSessionError) throw error;
-    if (signal.aborted) throw signal.reason;
-    throw new StripeCheckoutSessionError('invalid-argument', 'Invalid checkout request.');
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-  }
+function errorContainsCause(
+  error: unknown,
+  cause: unknown,
+  seen = new Set<object>(),
+  depth = 0,
+): boolean {
+  if (error === cause) return true;
+  if (depth >= 5 || typeof error !== 'object' || error === null || seen.has(error)) return false;
+  seen.add(error);
+  const record = error as Record<string, unknown>;
+  return ['cause', 'detail', 'exception', 'raw'].some((key) => (
+    errorContainsCause(record[key], cause, seen, depth + 1)
+  ));
+}
+
+function isNestedSignalCancellationError(error: unknown, signal: AbortSignal): boolean {
+  return signal.aborted && errorContainsCause(error, signal.reason);
 }
 
 function checkoutDrop(dropId: string): StripeCheckoutSessionDrop | undefined {
@@ -225,14 +228,17 @@ async function fetchOnchainConfig(
   let response: Response | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      response = await providerFetch(`${heliusRpcOrigin(drop.solanaCluster)}?api-key=${encodeURIComponent(apiKey)}`, {
+      response = await raceWithSignal(providerFetch(`${heliusRpcOrigin(drop.solanaCluster)}?api-key=${encodeURIComponent(apiKey)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: requestBody,
         signal,
-      });
-    } catch {
-      if (signal.aborted) throw signal.reason;
+      }), signal);
+    } catch (error) {
+      if (isNestedSignalCancellationError(error, signal)) throw signal.reason;
+      if (signal.aborted) {
+        throw new StripeCheckoutSessionError('unavailable', 'On-chain checkout configuration is temporarily unavailable.');
+      }
       if (attempt === 0) {
         await pause(signal);
         continue;
@@ -342,21 +348,62 @@ function stripeCredentialError(error: unknown): boolean {
   return type === 'StripeAuthenticationError' || type === 'StripePermissionError' || statusCode === 401 || statusCode === 403;
 }
 
+function stripeSuccessBodyUncertain(error: unknown, status: number | undefined): boolean {
+  const raw = error instanceof Stripe.errors.StripeAPIError && isRecord(error.raw)
+    ? error.raw
+    : null;
+  return status !== undefined &&
+    status >= 200 &&
+    status < 300 &&
+    raw !== null &&
+    Object.hasOwn(raw, 'exception');
+}
+
 async function createStripeProviderSession(
   request: StripeCheckoutProviderRequest,
   mode: StripeCheckoutMode,
   env: CheckoutEnv,
-  _providerFetch: ProfileProviderFetch,
+  providerFetch: ProfileProviderFetch,
   signal: AbortSignal,
 ): Promise<StripeCheckoutProviderResponse> {
   const keys = stripeKeys(env, mode);
   if (!keys.length) throw new StripeCheckoutSessionError('failed-precondition', `Stripe ${mode} key is not configured.`);
+  let providerFailureRacingAbort: unknown;
+  let settledProviderStatus: number | undefined;
+  const stripeFetch: typeof fetch = async (input, init) => {
+    settledProviderStatus = undefined;
+    const stripeSignal = init?.signal;
+    const combinedSignal = stripeSignal
+      ? AbortSignal.any([signal, stripeSignal])
+      : signal;
+    try {
+      combinedSignal.throwIfAborted();
+      const response = await raceWithSignal(
+        providerFetch(input, { ...init, signal: combinedSignal }),
+        combinedSignal,
+      );
+      settledProviderStatus = response.status;
+      return response;
+    } catch (error) {
+      if (isNestedSignalCancellationError(error, signal)) {
+        const cancellation = new Error('Stripe request cancelled');
+        Object.defineProperty(cancellation, 'cause', { value: signal.reason });
+        throw cancellation;
+      }
+      if (signal.aborted && providerFailureRacingAbort === undefined) {
+        providerFailureRacingAbort = error;
+      }
+      throw error;
+    }
+  };
   let lastCredentialError: unknown;
   for (const key of keys) {
+    providerFailureRacingAbort = undefined;
+    settledProviderStatus = undefined;
     try {
       if (signal.aborted) throw signal.reason;
       const stripe = new Stripe(key, {
-        httpClient: Stripe.createFetchHttpClient(),
+        httpClient: Stripe.createFetchHttpClient(stripeFetch),
         maxNetworkRetries: 1,
         timeout: 20_000,
       });
@@ -379,7 +426,7 @@ async function createStripeProviderSession(
         }],
         metadata: request.metadata,
         shipping_address_collection: { allowed_countries: [...request.allowedCountries] },
-      });
+      }, { idempotencyKey: request.idempotencyKey });
       const id = typeof session.id === 'string' ? session.id : '';
       const url = typeof session.url === 'string' ? session.url : '';
       if (!/^cs_(?:test|live)_[A-Za-z0-9_]+$/.test(id) || !url) {
@@ -387,9 +434,17 @@ async function createStripeProviderSession(
       }
       return { id, url, livemode: Boolean(session.livemode) };
     } catch (error) {
+      const settledProviderFailure = settledProviderStatus !== undefined &&
+        (settledProviderStatus < 200 || settledProviderStatus >= 300);
+      if (
+        providerFailureRacingAbort === undefined &&
+        !settledProviderFailure &&
+        isNestedSignalCancellationError(error, signal)
+      ) {
+        throw signal.reason;
+      }
       if (error instanceof StripeCheckoutSessionError) throw error;
       if (!stripeCredentialError(error)) {
-        if (signal.aborted) throw signal.reason;
         const record = isRecord(error) ? error : {};
         const raw = isRecord(record.raw) ? record.raw : {};
         console.warn({
@@ -399,6 +454,15 @@ async function createStripeProviderSession(
           statusCode: Number(record.statusCode ?? raw.statusCode) || undefined,
           code: typeof record.code === 'string' ? record.code : undefined,
         });
+        if (settledProviderStatus === 500) {
+          throw new StripeCheckoutOperationUncertainError('Stripe checkout is temporarily unavailable.', error);
+        }
+        if (stripeSuccessBodyUncertain(error, settledProviderStatus)) {
+          throw new StripeCheckoutOperationUncertainError('Stripe checkout is temporarily unavailable.', error);
+        }
+        if (error instanceof Stripe.errors.StripeConnectionError) {
+          throw new StripeCheckoutOperationUncertainError('Stripe checkout is temporarily unavailable.', error);
+        }
         throw new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.');
       }
       lastCredentialError = error;
@@ -425,7 +489,16 @@ async function persistCheckoutDocument(
   const store = createStripeCheckoutStore({ commerceDb, nowMs: () => nowMs });
   const reference = store.doc(path);
   await store.runTransaction(async (transaction) => {
-    transaction.set(reference, {
+    const existing = await transaction.get(reference);
+    if (existing.exists) {
+      if (
+        existing.get('operationId') === document.operationId &&
+        existing.get('sessionId') === document.sessionId &&
+        existing.get('dropId') === document.dropId
+      ) return;
+      throw new StripeCheckoutSessionError('failed-precondition', 'Stripe checkout operation conflicts with an existing session.');
+    }
+    transaction.create(reference, {
       ...document,
       createdAt: stripeCheckoutFieldValue.serverTimestamp(),
       updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
@@ -455,18 +528,28 @@ export async function handleStripeCheckoutSession(
     response.headers.set('Allow', 'POST, OPTIONS');
     return { response: new Response(response.body, { headers: response.headers, status: 405 }), metrics, authOutcome: 'rejected' };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Checkout request timed out', 'TimeoutError')),
-    CHECKOUT_TIMEOUT_MS,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Checkout request timed out',
+  });
   let identity: RequestIdentity | undefined;
   try {
-    const body = await readBoundedRequestJson(request, controller.signal);
+    const body = await readBoundedRequestJson(request, {
+      maxBytes: CHECKOUT_REQUEST_MAX_BYTES,
+      signal: deadline.signal,
+      createError: (failure) => new StripeCheckoutSessionError(
+        'invalid-argument',
+        failure === 'unsupported-media-type'
+          ? 'Content-Type must be application/json.'
+          : failure === 'too-large'
+            ? 'Checkout request is too large.'
+            : 'Invalid checkout request.',
+      ),
+    });
     identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
-      controller.signal,
+      deadline.signal,
       dependencies.nowMs(),
     );
     const heliusApiKey = String(env.HELIUS_API_KEY || '').trim();
@@ -476,10 +559,13 @@ export async function handleStripeCheckoutSession(
     const resolvedWallet = identity.kind === 'staff-wallet'
       ? identity.wallet
       : env.OPS_DB
-        ? (await dependencies.resolveAuthWalletBinding(
-            env.OPS_DB,
-            identity.authSubject,
-            controller.signal,
+        ? (await raceReadWithSignal(
+            dependencies.resolveAuthWalletBinding(
+              env.OPS_DB,
+              identity.authSubject,
+              deadline.signal,
+            ),
+            deadline.signal,
           )).wallet
         : null;
     const result = await createStripeCheckoutSessionCore({
@@ -490,35 +576,34 @@ export async function handleStripeCheckoutSession(
       requestOrigin: request.headers.get('Origin') || undefined,
       allowedOrigins: request.headers.get('Origin') ? [request.headers.get('Origin')!] : [],
       body,
+      operationId: request.headers.get(STRIPE_CHECKOUT_OPERATION_HEADER) || undefined,
     }, {
       getDrop: dependencies.getDrop || checkoutDrop,
       loadOnchainConfig: dependencies.loadOnchainConfig ||
-        ((drop) => fetchOnchainConfig(drop, heliusApiKey, trackedFetch, controller.signal)),
+        ((drop) => fetchOnchainConfig(drop, heliusApiKey, trackedFetch, deadline.signal)),
       requireFulfillmentPrerequisites: dependencies.requireFulfillmentPrerequisites ||
         ((config) => requireFulfillmentPrerequisites(env, config)),
       createProviderSession: (providerRequest, mode) =>
-        (async () => {
-          const startedAt = performance.now();
-          metrics.upstreamCalls += 1;
-          try {
-            return await (dependencies.createProviderSession || createStripeProviderSession)(
-              providerRequest,
-              mode,
-              env,
-              trackedFetch,
-              controller.signal,
-            );
-          } finally {
-            metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-          }
-        })(),
-      persistCheckout: dependencies.persistCheckout ||
-        ((path, document) => persistCheckoutDocument(
-          path,
-          document,
-          dependencies.nowMs(),
-          env.COMMERCE_DB,
-        )),
+        (dependencies.createProviderSession || createStripeProviderSession)(
+          providerRequest,
+          mode,
+          env,
+          trackedFetch,
+          deadline.signal,
+        ),
+      persistCheckout: (path, document) => {
+        return runCriticalRequestOperation(
+          () => dependencies.persistCheckout
+            ? dependencies.persistCheckout(path, document)
+            : persistCheckoutDocument(
+                path,
+                document,
+                dependencies.nowMs(),
+                env.COMMERCE_DB,
+              ),
+          { deadline, defer: dependencies.defer },
+        );
+      },
       nowMs: dependencies.nowMs,
     });
     return {
@@ -529,6 +614,8 @@ export async function handleStripeCheckoutSession(
       mode: result.mode,
     };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
+    if (isRequestCancellationError(request, error)) throw error;
     if (error instanceof RequestIdentityError) {
       if (error.kind === 'invalid-token') {
         return {
@@ -542,11 +629,21 @@ export async function handleStripeCheckoutSession(
         : new StripeCheckoutSessionError('unavailable', 'Authentication is temporarily unavailable.');
       return { response: checkoutErrorResponse(checkoutError), metrics, authOutcome: 'provider-failure' };
     }
-    if (controller.signal.aborted) {
+    if (deadline.timedOut()) {
       return {
-        response: checkoutErrorResponse(new StripeCheckoutSessionError('deadline-exceeded', 'Checkout request timed out.')),
+        response: checkoutErrorResponse(
+          new StripeCheckoutSessionError('deadline-exceeded', 'Checkout request timed out.'),
+          true,
+        ),
         metrics,
         authOutcome: identity ? 'provider-failure' : 'rejected',
+      };
+    }
+    if (error instanceof StripeCheckoutOperationUncertainError) {
+      return {
+        response: checkoutErrorResponse(error, true),
+        metrics,
+        authOutcome: 'provider-failure',
       };
     }
     if (error instanceof StripeCheckoutSessionError) {
@@ -571,6 +668,6 @@ export async function handleStripeCheckoutSession(
       authOutcome: 'provider-failure',
     };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }

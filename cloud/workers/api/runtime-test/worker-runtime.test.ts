@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { resolve } from 'node:path';
+import { createConnection, type Socket } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import Stripe from 'stripe';
 import { createTestHarness } from 'wrangler';
 
@@ -22,7 +25,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
   assert.equal(wranglerWorkerdPackage.version, wranglerPackage.dependencies.workerd);
   assert.equal(miniflareWorkerdPackage.version, miniflarePackage.dependencies.workerd);
   assert.equal(productionConfig.compatibility_date, '2026-08-08');
-  assert.deepEqual(productionConfig.compatibility_flags, ['nodejs_compat']);
+  assert.deepEqual(productionConfig.compatibility_flags, ['nodejs_compat', 'enable_request_signal']);
   const runtimeConfig = {
     ...productionConfig,
     main: resolve('cloud/workers/api/src/index.ts'),
@@ -84,7 +87,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     });
     assert.equal(profilePreflight.status, 204);
     assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-    assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+    assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
     for (const pathname of ['/auth/anonymous/session', '/auth/anonymous/logout', '/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/boxes/reveal', '/staff/auth/challenge', '/staff/auth/session', '/staff/auth/refresh', '/staff/auth/logout']) {
       const lifecyclePreflight = await worker.fetch(`https://api.mons.shop${pathname}`, {
@@ -93,7 +96,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
       });
       assert.equal(lifecyclePreflight.status, 204);
       assert.equal(lifecyclePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-      assert.equal(lifecyclePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+      assert.equal(lifecyclePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
     }
 
     const anonymousHeaders = {
@@ -225,7 +228,8 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     });
     assert.equal(checkoutPreflight.status, 204);
     assert.equal(checkoutPreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
-    assert.equal(checkoutPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF');
+    assert.equal(checkoutPreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
+    assert.equal(checkoutPreflight.headers.get('access-control-expose-headers'), 'X-Mons-Checkout-Retry');
 
     const unauthenticatedCheckout = await worker.fetch('https://api.mons.shop/checkout/session', {
       method: 'POST',
@@ -404,6 +408,173 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(deniedRpcPreflight.status, 403);
     assert.equal((await deniedRpcPreflight.json() as any).error.code, -32096);
   } finally {
+    await server.close();
+  }
+});
+
+test('client socket disconnect reaches the API Worker through the frontend service binding', async () => {
+  const frontendConfig = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
+  assert.deepEqual(frontendConfig.compatibility_flags, [
+    'nodejs_compat',
+    'enable_request_signal',
+    'request_signal_passthrough',
+  ]);
+  const fixtureDirectory = await mkdtemp(join(tmpdir(), 'mons-request-signal-'));
+  const fixturePath = join(fixtureDirectory, 'signal-api.mjs');
+  await writeFile(fixturePath, `
+let clientAborted = false;
+
+export default {
+  fetch(request) {
+    if (new URL(request.url).pathname === '/status') {
+      return Response.json({ clientAborted });
+    }
+
+    const { readable, writable } = new IdentityTransformStream();
+    const writer = writable.getWriter();
+    request.signal.addEventListener('abort', () => {
+      clientAborted = true;
+      void writer.abort(request.signal.reason).catch(() => undefined);
+    }, { once: true });
+    void (async () => {
+      try {
+        const bytes = new TextEncoder().encode('ready\\n');
+        for (;;) {
+          await writer.write(bytes);
+          await scheduler.wait(10);
+        }
+      } catch {}
+    })();
+    return new Response(readable, {
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
+  },
+};
+`, 'utf8');
+
+  const server = createTestHarness({
+    root: resolve('.'),
+    workers: [
+      {
+        config: {
+          name: 'signal-gateway',
+          main: resolve('cloud/workers/frontend/src/index.ts'),
+          compatibility_date: frontendConfig.compatibility_date,
+          compatibility_flags: frontendConfig.compatibility_flags,
+          services: [{ binding: 'MONS_API', service: 'signal-api' }],
+        },
+      },
+      {
+        config: {
+          name: 'signal-api',
+          main: fixturePath,
+          compatibility_date: '2026-08-08',
+          compatibility_flags: ['nodejs_compat', 'enable_request_signal'],
+        },
+      },
+    ],
+  });
+  let socket: Socket | undefined;
+  try {
+    const { url } = await server.listen();
+    socket = createConnection({ host: url.hostname, port: Number(url.port) });
+    await new Promise<void>((resolveReady, reject) => {
+      let received = '';
+      const timeout = setTimeout(() => reject(new Error('Timed out waiting for streaming response')), 2_000);
+      const cleanup = () => {
+        clearTimeout(timeout);
+        socket?.off('data', onData);
+        socket?.off('error', onError);
+      };
+      const onError = (error: Error) => {
+        cleanup();
+        reject(error);
+      };
+      const onData = (chunk: Buffer) => {
+        received += chunk.toString('utf8');
+        if (!received.includes('ready')) return;
+        cleanup();
+        resolveReady();
+      };
+      socket?.on('data', onData);
+      socket?.once('error', onError);
+      socket?.once('connect', () => {
+        socket?.write(`GET /api/signal HTTP/1.1\r\nHost: ${url.host}\r\nConnection: keep-alive\r\n\r\n`);
+      });
+    });
+    socket.destroy();
+
+    const api = server.getWorker('signal-api');
+    let clientAborted = false;
+    for (let attempt = 0; attempt < 100 && !clientAborted; attempt += 1) {
+      const status = await api.fetch('https://signal-api/status');
+      clientAborted = ((await status.json()) as { clientAborted: boolean }).clientAborted;
+      if (!clientAborted) await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+    }
+    assert.equal(clientAborted, true);
+  } finally {
+    socket?.destroy();
+    await server.close();
+    await rm(fixtureDirectory, { force: true, recursive: true });
+  }
+});
+
+test('partial upload disconnect is logged as 499 through the frontend and API Workers', async () => {
+  const frontendConfig = JSON.parse(readFileSync('wrangler.jsonc', 'utf8'));
+  const productionApiConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
+  const apiConfig = {
+    ...productionApiConfig,
+    main: resolve('cloud/workers/api/src/index.ts'),
+    routes: undefined,
+    d1_databases: productionApiConfig.d1_databases.map((database: Record<string, unknown>) => ({
+      ...database,
+      migrations_dir: resolve('cloud/workers/api', String(database.migrations_dir)),
+    })),
+  };
+  delete apiConfig.$schema;
+  delete apiConfig.secrets;
+  const server = createTestHarness({
+    root: resolve('.'),
+    workers: [
+      { config: {
+        name: 'mons-shop',
+        main: resolve('cloud/workers/frontend/src/index.ts'),
+        compatibility_date: frontendConfig.compatibility_date,
+        compatibility_flags: frontendConfig.compatibility_flags,
+        services: [{ binding: 'MONS_API', service: 'mons-shop-api' }],
+      } },
+      { config: apiConfig },
+    ],
+  });
+  let socket: Socket | undefined;
+  try {
+    const { url } = await server.listen();
+    server.clearLogs();
+    socket = createConnection({ host: url.hostname, port: Number(url.port) });
+    await new Promise<void>((resolveConnected, reject) => {
+      socket?.once('connect', () => {
+        socket?.write(`POST /api/rpc/devnet HTTP/1.1\r\nHost: ${url.host}\r\nOrigin: https://mons.shop\r\nContent-Type: application/json\r\nContent-Length: 10000\r\nConnection: keep-alive\r\n\r\n{\"jsonrpc\":\"2.0\",\"partial\":`);
+        setTimeout(resolveConnected, 100);
+      });
+      socket?.once('error', reject);
+    });
+    socket.destroy();
+    let requestLog: string | undefined;
+    for (let attempt = 0; attempt < 100 && !requestLog; attempt += 1) {
+      for (const entry of server.getLogs()) {
+        if (
+          entry.message.includes("event: 'shop_api_request'") &&
+          entry.message.includes("route: '/rpc/devnet'")
+        ) requestLog = entry.message;
+      }
+      if (requestLog) break;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+    }
+    assert.ok(requestLog, JSON.stringify(server.getLogs(), null, 2));
+    assert.match(requestLog, /status: 499/);
+    assert.match(requestLog, /requestCancelled: true/);
+  } finally {
+    socket?.destroy();
     await server.close();
   }
 });

@@ -70,6 +70,19 @@ import {
   readBoundedJson,
   type ProfileProviderFetch,
 } from './boundedResponse.js';
+import {
+  createRequestDeadline,
+  createTimedAbortScope,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  raceWithSignal,
+  readBoundedRequestJson,
+  runCriticalRequestOperation,
+} from './boundedRequest.js';
+import {
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { requestSolanaRpc } from './solanaProvider.js';
 
@@ -156,6 +169,7 @@ type OnchainState = {
 };
 
 type ReceiptTransferDependencies = {
+  defer: DeferredWork;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   timeoutMs: number;
@@ -230,52 +244,21 @@ function errorResponse(error: ReceiptTransferError): Response {
 }
 
 async function readRequestBody(request: Request, signal: AbortSignal): Promise<PrepareReceiptTransferRequest> {
-  const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
-  if (contentType !== 'application/json') {
-    await request.body?.cancel().catch(() => undefined);
-    throw new ReceiptTransferError('invalid-argument', 'Content-Type must be application/json.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > REQUEST_MAX_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new ReceiptTransferError('invalid-argument', 'Receipt transfer request is too large.');
-  }
-  if (!request.body) throw new ReceiptTransferError('invalid-argument', 'Invalid receipt transfer request.');
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > REQUEST_MAX_BYTES) throw new ReceiptTransferError('invalid-argument', 'Receipt transfer request is too large.');
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    let value: unknown;
-    try {
-      value = JSON.parse(chunks.join(''));
-    } catch {
-      throw new ReceiptTransferError('invalid-argument', 'Invalid receipt transfer request.');
-    }
-    const parsed = requestSchema.safeParse(value);
-    if (!parsed.success) throw new ReceiptTransferError('invalid-argument', 'Invalid receipt transfer request.');
-    return parsed.data;
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    if (error instanceof ReceiptTransferError) throw error;
-    throw new ReceiptTransferError('invalid-argument', 'Invalid receipt transfer request.');
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-  }
+  const value = await readBoundedRequestJson(request, {
+    maxBytes: REQUEST_MAX_BYTES,
+    signal,
+    createError: (failure) => new ReceiptTransferError(
+      'invalid-argument',
+      failure === 'unsupported-media-type'
+        ? 'Content-Type must be application/json.'
+        : failure === 'too-large'
+          ? 'Receipt transfer request is too large.'
+          : 'Invalid receipt transfer request.',
+    ),
+  });
+  const parsed = requestSchema.safeParse(value);
+  if (!parsed.success) throw new ReceiptTransferError('invalid-argument', 'Invalid receipt transfer request.');
+  return parsed.data;
 }
 
 function canonicalPublicKey(value: string, label: string): PublicKey {
@@ -363,28 +346,6 @@ async function pause(signal: AbortSignal, delay = 100): Promise<void> {
   });
 }
 
-function createProviderAttemptScope(overallSignal: AbortSignal, timeoutMs: number) {
-  const controller = new AbortController();
-  let timedOut = false;
-  const onAbort = () => {
-    if (!controller.signal.aborted) controller.abort(overallSignal.reason);
-  };
-  if (overallSignal.aborted) onAbort();
-  else overallSignal.addEventListener('abort', onAbort, { once: true });
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new DOMException('Receipt transfer provider request timed out', 'TimeoutError'));
-  }, timeoutMs);
-  return {
-    signal: controller.signal,
-    timedOut: () => timedOut,
-    dispose: () => {
-      clearTimeout(timeout);
-      overallSignal.removeEventListener('abort', onAbort);
-    },
-  };
-}
-
 async function rpcCall(
   context: ProviderContext,
   runtime: ReceiptTransferRuntime,
@@ -393,13 +354,16 @@ async function rpcCall(
 ): Promise<unknown> {
   const id = `receipt-transfer-${method}`;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createProviderAttemptScope(
-      context.signal,
-      context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    );
+    const attemptScope = createTimedAbortScope(context.signal, {
+      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+      timeoutMessage: 'Receipt transfer provider request timed out',
+    });
     try {
       const transport = await requestSolanaRpc({
-        fetch: context.providerFetch,
+        fetch: (input, init) => raceWithSignal(
+          context.providerFetch(input, init),
+          attemptScope.signal,
+        ),
         url: `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
         id,
         method,
@@ -426,13 +390,17 @@ async function rpcCall(
       }
       return transport.value;
     } catch (error) {
-      if (context.signal.aborted) throw context.signal.reason;
+      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
       if (attemptScope.timedOut()) {
-        if (attempt === 0) {
+        if (attempt === 0 && !context.signal.aborted) {
           await pause(context.signal);
           continue;
         }
         throw new ReceiptTransferError('deadline-exceeded', 'Receipt transfer provider request timed out.');
+      }
+      if (context.signal.aborted) {
+        if (error instanceof ReceiptTransferError) throw error;
+        throw new ReceiptTransferError('unavailable', 'Receipt transfer provider is temporarily unavailable.');
       }
       if (error instanceof ReceiptTransferError) throw error;
       if (attempt === 0) {
@@ -449,16 +417,16 @@ async function rpcCall(
 
 async function restJson(context: ProviderContext, url: string, missingMessage: string): Promise<unknown> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createProviderAttemptScope(
-      context.signal,
-      context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    );
+    const attemptScope = createTimedAbortScope(context.signal, {
+      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+      timeoutMessage: 'Receipt transfer provider request timed out',
+    });
     try {
-      const response = await context.providerFetch(url, {
+      const response = await raceWithSignal(context.providerFetch(url, {
         headers: { Accept: 'application/json' },
         redirect: 'manual',
         signal: attemptScope.signal,
-      });
+      }), attemptScope.signal);
       if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt === 0) {
         await cancelResponseBody(response);
         await pause(context.signal);
@@ -473,13 +441,17 @@ async function restJson(context: ProviderContext, url: string, missingMessage: s
       }
       return await readBoundedJson(response, PROVIDER_MAX_BYTES, attemptScope.signal);
     } catch (error) {
-      if (context.signal.aborted) throw context.signal.reason;
+      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
       if (attemptScope.timedOut()) {
-        if (attempt === 0) {
+        if (attempt === 0 && !context.signal.aborted) {
           await pause(context.signal);
           continue;
         }
         throw new ReceiptTransferError('deadline-exceeded', 'Receipt transfer provider request timed out.');
+      }
+      if (context.signal.aborted) {
+        if (error instanceof ReceiptTransferError) throw error;
+        throw new ReceiptTransferError('unavailable', 'Receipt transfer provider returned an invalid response.');
       }
       if (error instanceof ReceiptTransferError) throw error;
       if (attempt === 0) {
@@ -673,7 +645,7 @@ async function enforceRateLimit(
   try {
     decision = await consumeReceiptTransferRateLimit(context.database, bucket, context.nowMs);
   } catch (error) {
-    if (context.signal.aborted) throw context.signal.reason;
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
     console.error({
       event: 'receipt_transfer_rate_limit_d1_failed',
       scope: bucket.scope,
@@ -872,7 +844,10 @@ async function buildPreparedTransaction(args: {
   };
   let lookupsPromise: Promise<AddressLookupTableAccount[]> | undefined;
   const loadLookups = () => {
-    lookupsPromise ??= args.loadLookupTable(args.context, args.runtime).catch(() => []);
+    lookupsPromise ??= args.loadLookupTable(args.context, args.runtime).catch((error) => {
+      if (isSignalCancellationError(args.context.signal, error)) throw args.context.signal.reason;
+      return [];
+    });
     return lookupsPromise;
   };
   let raw: Uint8Array;
@@ -924,6 +899,7 @@ async function prepareReceiptTransfer(args: {
   rateLimitContext: RateLimitContext;
   providerContext: ProviderContext;
   dependencies: ReceiptTransferDependencies;
+  runCritical: <T>(start: () => Promise<T>) => Promise<T>;
 }): Promise<PrepareReceiptTransferResponse> {
   const dropId = normalizeDropId(args.body.dropId);
   const config = args.dependencies.getDrop(dropId);
@@ -942,10 +918,11 @@ async function prepareReceiptTransfer(args: {
     throw new ReceiptTransferError('invalid-argument', 'Destination address must be different from the current owner');
   }
 
-  await args.dependencies.enforceRateLimit(
+  args.rateLimitContext.signal.throwIfAborted();
+  await args.runCritical(() => args.dependencies.enforceRateLimit(
     args.rateLimitContext,
     receiptTransferCallerRateLimitBucket(requestIdentitySubject(args.identity)),
-  );
+  ));
 
   const receiptAssetId = receiptAsset.toBase58();
   const ownerWallet = owner.toBase58();
@@ -989,7 +966,8 @@ async function prepareReceiptTransfer(args: {
     throw new ReceiptTransferError('failed-precondition', 'Receipt proof owner does not match the requesting wallet');
   }
 
-  await args.dependencies.enforceRateLimit(
+  args.rateLimitContext.signal.throwIfAborted();
+  await args.runCritical(() => args.dependencies.enforceRateLimit(
     args.rateLimitContext,
     receiptTransferAssetRateLimitBucket({
       uid: requestIdentitySubject(args.identity),
@@ -997,7 +975,7 @@ async function prepareReceiptTransfer(args: {
       ownerWallet,
       receiptAssetId,
     }),
-  );
+  ));
 
   const onchain = await args.dependencies.loadOnchainState(args.providerContext, runtime);
   const instruction = buildTransferInstruction(proofContext, owner, destination, onchain.coreCollection);
@@ -1018,6 +996,7 @@ async function prepareReceiptTransfer(args: {
 }
 
 const defaultDependencies: ReceiptTransferDependencies = {
+  defer: () => undefined,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   timeoutMs: HANDLER_TIMEOUT_MS,
@@ -1057,20 +1036,19 @@ export async function handleReceiptTransferPrepare(
       authOutcome: 'rejected',
     };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Receipt transfer request timed out', 'TimeoutError')),
-    dependencies.timeoutMs,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Receipt transfer request timed out',
+  });
   let identity: RequestIdentity | undefined;
   let dropId: string | undefined;
   try {
-    const body = await readRequestBody(request, controller.signal);
+    const body = await readRequestBody(request, deadline.signal);
     dropId = normalizeDropId(body.dropId);
     identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
-      controller.signal,
+      deadline.signal,
       dependencies.nowMs(),
     );
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
@@ -1082,22 +1060,28 @@ export async function handleReceiptTransferPrepare(
       body,
       identity,
       dependencies,
+      runCritical: (start) => runCriticalRequestOperation(start, {
+        deadline,
+        defer: dependencies.defer,
+      }),
       rateLimitContext: {
         database: env.OPS_DB,
         nowMs,
-        signal: controller.signal,
+        signal: deadline.signal,
       },
       providerContext: {
         apiKey,
         providerFetch: trackedFetch,
-        signal: controller.signal,
+        signal: deadline.signal,
       },
     });
     return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted', dropId: response.dropId };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
+    if (isRequestCancellationError(request, error)) throw error;
     let transferError: ReceiptTransferError;
     let authOutcome: ReceiptTransferResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-    if (controller.signal.aborted) {
+    if (deadline.timedOut()) {
       transferError = new ReceiptTransferError('deadline-exceeded', 'Receipt transfer request timed out.');
     } else if (error instanceof ReceiptTransferError) {
       transferError = error;
@@ -1125,7 +1109,7 @@ export async function handleReceiptTransferPrepare(
     }
     return { response: errorResponse(transferError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }
 
@@ -1133,7 +1117,6 @@ export const receiptTransferTestHooks = {
   buildPreparedTransaction,
   buildRuntime,
   buildTransferInstruction,
-  createProviderAttemptScope,
   enforceRateLimit,
   fetchAsset,
   fetchAssetProof,

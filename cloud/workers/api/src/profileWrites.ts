@@ -98,11 +98,20 @@ import {
   verifyRequestIdentity,
   type RequestIdentity,
 } from './requestIdentity.js';
+import type { ProfileProviderFetch } from './boundedResponse.js';
 import {
-  readBoundedText,
-  type ProfileProviderFetch,
-} from './boundedResponse.js';
+  createRequestDeadline,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  raceReadWithSignal,
+  readBoundedRequestJson,
+  runCriticalRequestOperation,
+} from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
+import {
+  rethrowDeferredWorkRegistrationError,
+  type DeferredWork,
+} from './deferredWork.js';
 import {
   D1CommerceRepository,
   commerceFieldValue,
@@ -178,6 +187,7 @@ type ProfileWriteDependencies = {
   autoId: () => string;
   createCommerceRepository: (db: D1Database) => ProfileWriteCommerceRepository;
   createNotificationJobId: () => string;
+  defer: DeferredWork;
   error: (entry: Record<string, unknown>) => void;
   log: (entry: Record<string, unknown>) => void;
   nowMs: () => number;
@@ -210,6 +220,10 @@ const SHIPSTATION_LABEL_VOID_OPERATION_TIMEOUT_MS = 45_000;
 const SHIPSTATION_LABEL_VOID_CLEANUP_TIMEOUT_MS = 5_000;
 const SHIPSTATION_RATES_OPERATION_TIMEOUT_MS = 55_000;
 const SHIPSTATION_SHIPMENT_OPERATION_TIMEOUT_MS = 55_000;
+
+type ProfileWriteOperationContext = CommerceWriteCommon & {
+  requestSignal: AbortSignal;
+};
 const MAX_SAVE_ADDRESS_BYTES = 10 * 1024;
 const MAX_STATUS_REQUEST_BYTES = 4096;
 const MAX_FULFILLMENT_ADDRESS_REQUEST_BYTES = 16 * 1024;
@@ -313,6 +327,7 @@ const defaultDependencies: ProfileWriteDependencies = {
   autoId: createProfileAddressId,
   createCommerceRepository: (db) => new D1CommerceRepository(db),
   createNotificationJobId: () => crypto.randomUUID(),
+  defer: () => undefined,
   error: (entry) => console.error(entry),
   log: (entry) => console.log(entry),
   nowMs: () => Date.now(),
@@ -355,6 +370,15 @@ function errorResponse(error: ProfileReadError): Response {
   }, error.status);
 }
 
+function clientCancellationReason(
+  error: unknown,
+  common: ProfileWriteOperationContext,
+): unknown | undefined {
+  return isSignalCancellationError(common.requestSignal, error)
+    ? common.requestSignal.reason
+    : undefined;
+}
+
 async function parseExactRequestBody(
   request: Request,
   path: ProfileWritePath,
@@ -369,9 +393,6 @@ async function parseExactRequestBody(
   | z.infer<typeof shipStationRatesSchema>
   | z.infer<typeof shipStationShipmentSchema>
 > {
-  if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  }
   const maxBytes = path === PROFILE_ADDRESSES_PATH
     ? MAX_SAVE_ADDRESS_BYTES
     : path === FULFILLMENT_ORDER_ADDRESS_PATH
@@ -387,21 +408,11 @@ async function parseExactRequestBody(
           : path === FULFILLMENT_SHIPSTATION_SHIPMENT_PATH
             ? MAX_SHIPSTATION_SHIPMENT_REQUEST_BYTES
         : MAX_STATUS_REQUEST_BYTES;
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  }
-  if (!request.body) throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  const text = await readBoundedText(new Response(request.body), maxBytes, signal).catch(() => {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
+  const parsed = await readBoundedRequestJson(request, {
+    maxBytes,
+    signal,
+    createError: () => new ProfileReadError('invalid-argument', 400, 'Invalid request.'),
   });
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new ProfileReadError('invalid-argument', 400, 'Invalid request.');
-  }
   const result = path === PROFILE_ADDRESSES_PATH
     ? saveAddressSchema.safeParse(parsed)
     : path === FULFILLMENT_ORDER_STATUS_PATH
@@ -434,7 +445,8 @@ async function loadSessionWallet(args: {
     }
     return resolution.wallet;
   } catch (error) {
-    if (error instanceof ProfileReadError || args.signal.aborted) throw error;
+    if (isSignalCancellationError(args.signal, error)) throw args.signal.reason;
+    if (error instanceof ProfileReadError) throw error;
     throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
   }
 }
@@ -472,8 +484,8 @@ async function saveAddress(
       createdAtMs: nowMs,
       updatedAtMs: nowMs,
     }, signal);
-  } catch {
-    if (signal.aborted) throw signal.reason;
+  } catch (error) {
+    if (isSignalCancellationError(signal, error)) throw signal.reason;
     throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
   }
 }
@@ -1191,7 +1203,7 @@ function applyShipStationAddressPatch(
 async function addFulfillmentOrderToShipStation(
   body: z.infer<typeof shipStationShipmentSchema>,
   wallet: string,
-  common: CommerceWriteCommon,
+  common: ProfileWriteOperationContext,
   env: ProfileWriteEnv,
 ): Promise<AddFulfillmentOrderToShipStationResponse> {
   const dropId = supportedDropId(body.dropId);
@@ -1317,6 +1329,8 @@ async function addFulfillmentOrderToShipStation(
       shipstationAddedAt: common.nowMs,
     };
   } catch (error) {
+    const signalCancelled = isSignalCancellationError(common.signal, error);
+    const clientCancellation = clientCancellationReason(error, common);
     const failureCode = error instanceof ShipStationRatesProviderError || error instanceof ProfileReadError
       ? error.code
       : 'internal';
@@ -1336,6 +1350,8 @@ async function addFulfillmentOrderToShipStation(
         wallet,
       });
     }
+    if (clientCancellation !== undefined) throw clientCancellation;
+    if (signalCancelled && !mayHaveCreated) throw common.signal.reason;
     if (mayHaveCreated) {
       throw new ShipStationProfileError(
         'aborted',
@@ -1751,7 +1767,7 @@ async function recoverAmbiguousFulfillmentShipStationLabelVoid(args: {
 async function voidFulfillmentShipStationLabel(
   body: z.infer<typeof shipStationLabelVoidSchema>,
   wallet: string,
-  common: CommerceWriteCommon,
+  common: ProfileWriteOperationContext,
   apiKey: string,
 ): Promise<VoidFulfillmentShipStationLabelResponse> {
   const dropId = supportedDropId(body.dropId);
@@ -1777,7 +1793,10 @@ async function voidFulfillmentShipStationLabel(
     throw new ProfileReadError('failed-precondition', 409, 'Only completed ShipStation labels can be voided.');
   }
   let voidAccepted = false;
+  let voidAttempted = false;
   try {
+    if (common.signal.aborted) throw common.signal.reason;
+    voidAttempted = true;
     await voidShipStationLabel(apiKey, body.labelId, {
       fetch: common.providerFetch,
       signal: common.signal,
@@ -1792,10 +1811,16 @@ async function voidFulfillmentShipStationLabel(
     });
     return { deliveryId: body.deliveryId, shipmentId, label };
   } catch (error) {
+    const signalCancelled = isSignalCancellationError(common.signal, error);
+    const clientCancellation = clientCancellationReason(error, common);
     const failure = shipStationLabelVoidFailure(error);
     const ambiguous = voidAccepted || (
-      error instanceof ShipStationLabelProviderError &&
-      ['deadline-exceeded', 'unavailable', 'internal'].includes(error.code)
+      voidAttempted && (
+        signalCancelled || (
+          error instanceof ShipStationLabelProviderError &&
+          ['deadline-exceeded', 'unavailable', 'internal'].includes(error.code)
+        )
+      )
     );
     if (ambiguous) {
       const recovered = await recoverAmbiguousFulfillmentShipStationLabelVoid({
@@ -1806,6 +1831,7 @@ async function voidFulfillmentShipStationLabel(
         shipmentId,
         wallet,
       });
+      if (clientCancellation !== undefined) throw clientCancellation;
       if (recovered) return recovered;
       throw new ProfileReadError(
         'aborted',
@@ -1813,6 +1839,7 @@ async function voidFulfillmentShipStationLabel(
         'ShipStation did not confirm the label void. Check its status before trying again.',
       );
     }
+    if (signalCancelled) throw common.signal.reason;
     if (error instanceof ShipStationLabelProviderError) throw profileErrorForShipStation(error);
     if (error instanceof ProfileReadError) throw error;
     throw new ProfileReadError('internal', 500, failure.message);
@@ -1945,6 +1972,30 @@ async function transitionFulfillmentShipStationLabelPurchase(args: {
   });
 }
 
+async function failFulfillmentShipStationLabelPurchase(args: {
+  body: z.infer<typeof shipStationLabelPurchaseSchema>;
+  common: CommerceWriteCommon;
+  dropId: string;
+  message: string;
+  shipmentId: string;
+  wallet: string;
+}): Promise<{ label?: FulfillmentShipStationLabel; purchaseUnknown: boolean }> {
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException('Label purchase cleanup timed out', 'TimeoutError')),
+    SHIPSTATION_LABEL_PURCHASE_CLEANUP_TIMEOUT_MS,
+  );
+  try {
+    return await transitionFulfillmentShipStationLabelPurchase({
+      ...args,
+      common: { ...args.common, signal: controller.signal },
+      nextStatus: 'failed',
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function recoverAmbiguousFulfillmentShipStationLabelPurchase(args: {
   apiKey: string;
   body: z.infer<typeof shipStationLabelPurchaseSchema>;
@@ -2028,7 +2079,7 @@ async function recoverAmbiguousFulfillmentShipStationLabelPurchase(args: {
 async function purchaseFulfillmentShipStationLabel(
   body: z.infer<typeof shipStationLabelPurchaseSchema>,
   wallet: string,
-  common: CommerceWriteCommon,
+  common: ProfileWriteOperationContext,
   apiKey: string,
 ): Promise<PurchaseFulfillmentShipStationLabelResponse> {
   const dropId = supportedDropId(body.dropId);
@@ -2194,6 +2245,8 @@ async function purchaseFulfillmentShipStationLabel(
     };
   } catch (error) {
     if (!claimAcquired) throw error;
+    const signalCancelled = isSignalCancellationError(common.signal, error);
+    const clientCancellation = clientCancellationReason(error, common);
     const failure = shipStationLabelPurchaseFailure(error);
     const ambiguous = purchaseAccepted || (
       purchaseAttempted
@@ -2209,6 +2262,7 @@ async function purchaseFulfillmentShipStationLabel(
         shipmentId,
         wallet,
       });
+      if (clientCancellation !== undefined) throw clientCancellation;
       if (recovered) return recovered;
       throw new ProfileReadError(
         'aborted',
@@ -2216,15 +2270,23 @@ async function purchaseFulfillmentShipStationLabel(
         'ShipStation did not confirm the label purchase. Check purchase status or open ShipStation before retrying.',
       );
     }
-    const failureState = await transitionFulfillmentShipStationLabelPurchase({
-      body,
-      common,
-      dropId,
-      message: failure.message,
-      nextStatus: 'failed',
-      shipmentId,
-      wallet,
-    });
+    let failureState: Awaited<ReturnType<typeof failFulfillmentShipStationLabelPurchase>>;
+    try {
+      failureState = await failFulfillmentShipStationLabelPurchase({
+        body,
+        common,
+        dropId,
+        message: failure.message,
+        shipmentId,
+        wallet,
+      });
+    } catch (cleanupError) {
+      if (clientCancellation !== undefined) throw clientCancellation;
+      if (signalCancelled) throw common.signal.reason;
+      throw cleanupError;
+    }
+    if (clientCancellation !== undefined) throw clientCancellation;
+    if (signalCancelled) throw common.signal.reason;
     if (failureState.label) {
       return {
         deliveryId: body.deliveryId,
@@ -2833,18 +2895,17 @@ export async function handleProfileWriteRequest(
     response.headers.set('Allow', 'POST, OPTIONS');
     return { response, metrics, authOutcome: 'rejected' };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Profile request timed out', 'TimeoutError')),
-    dependencies.timeoutMs,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Profile request timed out',
+  });
   let identity: RequestIdentity | undefined;
   try {
-    const requestBody = await parseExactRequestBody(request, path, controller.signal);
+    const requestBody = await parseExactRequestBody(request, path, deadline.signal);
     identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
-      controller.signal,
+      deadline.signal,
       dependencies.nowMs(),
     );
     if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
@@ -2855,27 +2916,28 @@ export async function handleProfileWriteRequest(
       pauseForRatePoll: dependencies.pauseForRatePoll,
       providerFetch: trackedFetch,
       repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
-      signal: controller.signal,
+      requestSignal: request.signal,
+      signal: deadline.signal,
     };
-    const wallet = await resolveRequestWallet(identity, (uid) => loadSessionWallet({
+    const wallet = await raceReadWithSignal(resolveRequestWallet(identity, (uid) => loadSessionWallet({
       db: env.OPS_DB,
       resolveD1AuthWalletBinding: dependencies.resolveD1AuthWalletBinding,
-      signal: controller.signal,
+      signal: deadline.signal,
       uid,
-    }));
-    let payload: unknown;
+    })), deadline.signal);
+    let operation: () => Promise<unknown>;
     if (path === PROFILE_ADDRESSES_PATH) {
-      payload = await saveAddress(
+      operation = () => saveAddress(
         requestBody as z.infer<typeof saveAddressSchema>,
         wallet,
         env.OPS_DB,
         dependencies.autoId,
         dependencies.nowMs(),
-        controller.signal,
+        deadline.signal,
         dependencies.saveProfileAddress,
       );
     } else if (path === FULFILLMENT_ORDER_STATUS_PATH) {
-      payload = await updateFulfillmentStatus(
+      operation = () => updateFulfillmentStatus(
         requestBody as z.infer<typeof fulfillmentStatusSchema>,
         wallet,
         common,
@@ -2886,7 +2948,7 @@ export async function handleProfileWriteRequest(
       const addressSecret = typeof env.ADDRESS_DECRYPTION_SECRET === 'string'
         ? env.ADDRESS_DECRYPTION_SECRET
         : '';
-      payload = await updateFulfillmentAddress(
+      operation = () => updateFulfillmentAddress(
         requestBody as z.infer<typeof fulfillmentAddressSchema>,
         wallet,
         common,
@@ -2894,7 +2956,7 @@ export async function handleProfileWriteRequest(
       );
     } else if (path === FULFILLMENT_SHIPSTATION_LABEL_PATH) {
       const apiKey = typeof env.SHIPSTATION_API_KEY === 'string' ? env.SHIPSTATION_API_KEY.trim() : '';
-      payload = await getFulfillmentShipStationLabel(
+      operation = () => getFulfillmentShipStationLabel(
         requestBody as z.infer<typeof shipStationLabelSchema>,
         wallet,
         common,
@@ -2902,7 +2964,7 @@ export async function handleProfileWriteRequest(
       );
     } else if (path === FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH) {
       const apiKey = typeof env.SHIPSTATION_API_KEY === 'string' ? env.SHIPSTATION_API_KEY.trim() : '';
-      payload = await purchaseFulfillmentShipStationLabel(
+      operation = () => purchaseFulfillmentShipStationLabel(
         requestBody as z.infer<typeof shipStationLabelPurchaseSchema>,
         wallet,
         common,
@@ -2910,29 +2972,38 @@ export async function handleProfileWriteRequest(
       );
     } else if (path === FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH) {
       const apiKey = typeof env.SHIPSTATION_API_KEY === 'string' ? env.SHIPSTATION_API_KEY.trim() : '';
-      payload = await voidFulfillmentShipStationLabel(
+      operation = () => voidFulfillmentShipStationLabel(
         requestBody as z.infer<typeof shipStationLabelVoidSchema>,
         wallet,
         common,
         apiKey,
       );
     } else if (path === FULFILLMENT_SHIPSTATION_RATES_PATH) {
-      payload = await getFulfillmentShipStationRates(
+      operation = () => getFulfillmentShipStationRates(
         requestBody as z.infer<typeof shipStationRatesSchema>,
         wallet,
         common,
         env,
       );
     } else {
-      payload = await addFulfillmentOrderToShipStation(
+      operation = () => addFulfillmentOrderToShipStation(
         requestBody as z.infer<typeof shipStationShipmentSchema>,
         wallet,
         common,
         env,
       );
     }
+    const payload = await runCriticalRequestOperation(() => Promise.resolve().then(() => {
+      deadline.signal.throwIfAborted();
+      return operation();
+    }), {
+      deadline,
+      defer: dependencies.defer,
+    });
     return { response: jsonResponse(payload, 200), metrics, authOutcome: 'accepted' };
   } catch (error) {
+    rethrowDeferredWorkRegistrationError(error);
+    if (isRequestCancellationError(request, error)) throw error;
     let profileError: ProfileReadError;
     let authOutcome: ProfileWriteResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
     if (error instanceof ProfileReadError) {
@@ -2958,13 +3029,13 @@ export async function handleProfileWriteRequest(
       } else {
         profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
       }
-    } else if (controller.signal.aborted) {
+    } else if (deadline.timedOut()) {
       profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
     } else {
       profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
     }
     return { response: errorResponse(profileError), metrics, authOutcome };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }

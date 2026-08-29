@@ -10,7 +10,19 @@ export async function handleFrontendRequest(
   env: Pick<Env, 'ASSETS' | 'MONS_API'>,
 ): Promise<Response> {
   const serviceRequest = apiServiceRequest(request);
-  if (serviceRequest) return env.MONS_API.fetch(serviceRequest);
+  if (serviceRequest) {
+    try {
+      return await env.MONS_API.fetch(serviceRequest);
+    } catch (error) {
+      if (serviceRequest.signal.aborted && error === serviceRequest.signal.reason) {
+        return new Response(null, {
+          status: 499,
+          headers: { 'Cache-Control': 'no-store' },
+        });
+      }
+      throw error;
+    }
+  }
   return env.ASSETS.fetch(request);
 }
 

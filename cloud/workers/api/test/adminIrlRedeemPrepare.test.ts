@@ -6,6 +6,7 @@ import {
   ComputeBudgetProgram,
   Keypair,
   PublicKey,
+  TransactionInstruction,
   VersionedTransaction,
 } from '@solana/web3.js';
 import {
@@ -24,6 +25,7 @@ import {
   handleAdminIrlRedeemPrepare,
 } from '../src/adminIrlRedeemPrepare.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
+import { createDeferredWorkCollector, isDeferredWorkRegistrationError } from './deferredWork.ts';
 
 const OWNER = new PublicKey('8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM');
 const ADMIN = Keypair.generate().publicKey;
@@ -39,6 +41,7 @@ const DROP_ID = 'admin_irl_redeem_prepare_test';
 const METADATA_BASE = 'https://cdn.lil.org/nft/admin_irl_redeem_prepare_test/json';
 const REQUEST_ID = 'AbCdEfGhIjKlMnOpQrSt';
 const ATTEMPT_ID = '8dc66f5f-0f2d-46aa-85c3-f8744dc46ad5';
+const REQUEST_UPDATE_TIME = '2026-08-20T00:00:01.000Z';
 
 const DROP: ApiDropConfig = {
   ...API_DROPS.card_nft_2,
@@ -131,7 +134,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     getDrop: (dropId: string) => dropId === DROP_ID ? DROP : undefined,
     loadBoundWallet: async () => OWNER.toBase58(),
     loadReceiptMarker: async () => false,
-    createRequest: async () => undefined,
+    createRequest: async () => REQUEST_UPDATE_TIME,
     fetchAsset: async () => packAsset(),
     fetchAssetProof: async () => proof(),
     loadOnchainState: async () => ({ admin: ADMIN, coreCollection: COLLECTION }),
@@ -159,6 +162,7 @@ test('Admin IRL preparation returns the exact unsigned pack transfer and request
       createRequest: async (_context: unknown, input: Record<string, unknown>) => {
         operations.push('create');
         created = input;
+        return REQUEST_UPDATE_TIME;
       },
       loadPendingOpenAccounts: async () => {
         operations.push('pending');
@@ -230,6 +234,7 @@ test('Admin IRL preparation supports one card receipt and checks its marker and 
       },
       createRequest: async () => {
         operations.push('create');
+        return REQUEST_UPDATE_TIME;
       },
     }),
   );
@@ -342,10 +347,128 @@ test('Admin IRL preparation surfaces provider deadlines and conditional-create c
   );
 });
 
+test('Admin IRL preparation cleans up an in-flight request write that lands after its deadline', async () => {
+  const deferred = createDeferredWorkCollector();
+  let finishWrite!: (updateTime: string) => void;
+  let cleanup: { path: string; signalAborted: boolean; updateTime: string } | undefined;
+  const write = new Promise<string>((resolve) => { finishWrite = resolve; });
+  const result = await handleAdminIrlRedeemPrepare(
+    request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] }),
+    env(),
+    dependencies({
+      createRequest: () => write,
+      defer: deferred.defer,
+      deleteRequest: async (context: { signal: AbortSignal }, path: string, updateTime: string) => {
+        cleanup = { path, signalAborted: context.signal.aborted, updateTime };
+      },
+      timeoutMs: 5,
+    }),
+  );
+
+  assert.equal(result.response.status, 504);
+  assert.equal(deferred.promises.length, 1);
+  finishWrite(REQUEST_UPDATE_TIME);
+  await deferred.drain();
+  assert.deepEqual(cleanup, {
+    path: `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+    signalAborted: false,
+    updateTime: REQUEST_UPDATE_TIME,
+  });
+});
+
+test('Admin IRL preparation cleans up an in-flight request write after client cancellation', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected during Admin IRL request creation');
+  const deferred = createDeferredWorkCollector();
+  let finishWrite!: (updateTime: string) => void;
+  let markStarted!: () => void;
+  let cleanup: { path: string; signalAborted: boolean; updateTime: string } | undefined;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const write = new Promise<string>((resolve) => { finishWrite = resolve; });
+  const pending = handleAdminIrlRedeemPrepare(
+    new Request(request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] }), {
+      signal: controller.signal,
+    }),
+    env(),
+    dependencies({
+      createRequest: () => {
+        markStarted();
+        return write;
+      },
+      defer: deferred.defer,
+      deleteRequest: async (context: { signal: AbortSignal }, path: string, updateTime: string) => {
+        cleanup = { path, signalAborted: context.signal.aborted, updateTime };
+      },
+    }),
+  );
+
+  await started;
+  controller.abort(reason);
+  finishWrite(REQUEST_UPDATE_TIME);
+  await assert.rejects(pending, (error: unknown) => error === reason);
+  assert.equal(deferred.promises.length, 0);
+  assert.deepEqual(cleanup, {
+    path: `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+    signalAborted: false,
+    updateTime: REQUEST_UPDATE_TIME,
+  });
+});
+
+test('Admin IRL preparation propagates late-write deferred registration failures', async () => {
+  const cause = new Error('waitUntil rejected Admin IRL request cleanup');
+  await assert.rejects(
+    handleAdminIrlRedeemPrepare(
+      request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] }),
+      env(),
+      dependencies({
+        createRequest: () => new Promise<string>(() => undefined),
+        defer: () => { throw cause; },
+        timeoutMs: 5,
+      }),
+    ),
+    (error) => isDeferredWorkRegistrationError(error, cause),
+  );
+});
+
+test('Admin IRL preparation does not start its request write after the deadline', async () => {
+  let createCalled = false;
+  const result = await handleAdminIrlRedeemPrepare(
+    request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] }),
+    env(),
+    dependencies({
+      createRequest: async () => {
+        createCalled = true;
+        return REQUEST_UPDATE_TIME;
+      },
+      loadLatestBlockhash: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return BLOCKHASH;
+      },
+      timeoutMs: 1,
+    }),
+  );
+
+  assert.equal(result.response.status, 504);
+  assert.equal(createCalled, false);
+});
+
+test('Admin IRL preparation bounds a non-cooperative receipt-marker read', async () => {
+  const result = await handleAdminIrlRedeemPrepare(
+    request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [RECEIPT.toBase58()] }),
+    env(),
+    dependencies({
+      fetchAsset: async () => receiptAsset(),
+      loadReceiptMarker: () => new Promise<boolean>(() => undefined),
+      timeoutMs: 5,
+    }),
+  );
+  assert.equal(result.response.status, 504);
+});
+
 test('Admin IRL repository conditionally creates the exact prepared request schema', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
-  await adminIrlRedeemPrepareTestHooks.createRequest({
+  const updateTime = await adminIrlRedeemPrepareTestHooks.createRequest({
     nowMs: 1_700_000_000_000,
     repository,
     signal: new AbortController().signal,
@@ -359,6 +482,7 @@ test('Admin IRL repository conditionally creates the exact prepared request sche
     requestId: REQUEST_ID,
     targetKind: 'pack',
   });
+  assert.equal(Date.parse(updateTime), 1_700_000_000_000);
   const record = await repository.get(commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
   assert.deepEqual(record?.data, {
     dropId: DROP_ID,
@@ -373,6 +497,40 @@ test('Admin IRL repository conditionally creates the exact prepared request sche
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_000_000,
   });
+});
+
+test('Admin IRL repository reconciles a prepared request whose commit acknowledgement is lost', async () => {
+  let loseAcknowledgement = true;
+  const harness = createCommerceD1Harness({
+    observeBatchAfterCommit: ({ statements }) => {
+      if (
+        loseAcknowledgement &&
+        statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))
+      ) {
+        loseAcknowledgement = false;
+        throw new TypeError('prepared request commit acknowledgement lost');
+      }
+    },
+  });
+  const repository = new D1CommerceRepository(harness.db);
+  const updateTime = await adminIrlRedeemPrepareTestHooks.createRequest({
+    nowMs: 1_700_000_000_000,
+    repository,
+    signal: new AbortController().signal,
+  }, {
+    adminWallet: ADMIN.toBase58(),
+    dropId: DROP_ID,
+    itemIds: [PACK.toBase58()],
+    items: [{ assetId: PACK.toBase58(), kind: 'box', refId: 7 }],
+    owner: OWNER.toBase58(),
+    prepareAttemptId: ATTEMPT_ID,
+    requestId: REQUEST_ID,
+    targetKind: 'pack',
+  });
+
+  assert.equal(Date.parse(updateTime), 1_700_000_000_000);
+  assert.equal(loseAcknowledgement, false);
+  assert.ok(await repository.get(commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID)));
 });
 
 test('Admin IRL provider retries one transient response and bounds provider JSON', async () => {
@@ -406,6 +564,87 @@ test('Admin IRL provider retries one transient response and bounds provider JSON
       signal: new AbortController().signal,
     }, runtime, 'testMethod', []),
     (error) => (error as { code?: unknown }).code === 'unavailable',
+  );
+});
+
+test('Admin IRL provider preserves abort-first and provider-first outcomes', async () => {
+  const runtime = adminIrlRedeemPrepareTestHooks.buildRuntime(DROP);
+  const cancellation = new AbortController();
+  const reason = new Error('client disconnected');
+  await assert.rejects(
+    adminIrlRedeemPrepareTestHooks.rpcCall({
+      apiKey: 'helius-test-key',
+      attemptTimeoutMs: 1000,
+      providerFetch: async () => {
+        cancellation.abort(reason);
+        throw new Error('provider failed after cancellation');
+      },
+      signal: cancellation.signal,
+    }, runtime, 'testMethod', []),
+    (error: unknown) => error === reason,
+  );
+
+  const race = new AbortController();
+  const providerError = new Error('provider failed first');
+  let rejectProvider!: (error: unknown) => void;
+  let markProviderStarted!: () => void;
+  const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
+  const providerFirst = assert.rejects(
+    adminIrlRedeemPrepareTestHooks.rpcCall({
+      apiKey: 'helius-test-key',
+      attemptTimeoutMs: 1000,
+      providerFetch: () => new Promise((_resolve, reject) => {
+        rejectProvider = reject;
+        markProviderStarted();
+      }),
+      signal: race.signal,
+    }, runtime, 'testMethod', []),
+    (error: unknown) => error !== race.signal.reason &&
+      (error as { code?: unknown }).code === 'unavailable',
+  );
+  await providerStarted;
+  rejectProvider(providerError);
+  queueMicrotask(() => race.abort(new Error('late client disconnect')));
+  await providerFirst;
+});
+
+test('Admin IRL card lookup fallback preserves cancellation', async () => {
+  const lookupKey = Keypair.generate().publicKey;
+  const runtime = adminIrlRedeemPrepareTestHooks.buildRuntime({
+    ...DROP,
+    deliveryLookupTable: lookupKey.toBase58(),
+  });
+  const controller = new AbortController();
+  const reason = new Error('client disconnected during lookup');
+  const instruction = new TransactionInstruction({
+    programId: PROGRAM,
+    keys: Array.from({ length: 40 }, () => ({
+      pubkey: Keypair.generate().publicKey,
+      isSigner: false,
+      isWritable: false,
+    })),
+    data: Buffer.from([1]),
+  });
+
+  await assert.rejects(
+    adminIrlRedeemPrepareTestHooks.serializeCardTransaction({
+      context: {
+        apiKey: 'helius-test-key',
+        providerFetch: async () => {
+          throw new Error('unexpected provider fetch');
+        },
+        signal: controller.signal,
+      },
+      runtime,
+      owner: OWNER,
+      blockhash: BLOCKHASH,
+      instruction,
+      loadLookupTable: async () => {
+        controller.abort(reason);
+        throw new Error('lookup aborted', { cause: reason });
+      },
+    }),
+    (error: unknown) => error === reason,
   );
 });
 

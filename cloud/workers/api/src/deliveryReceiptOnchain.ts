@@ -6,6 +6,7 @@ export {
   decodeCosigner,
   deriveDeliveryPda,
   fetchOnchainConfig,
+  hasConfirmedSignatureCommitment,
   mintReceiptsInstruction,
   sendAndConfirmSignedTransaction,
 } from './deliveryReceipts.js';

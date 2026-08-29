@@ -18,6 +18,8 @@ import {
   type StripeWebhookEvent,
 } from '../../../../shared/stripeWebhook.ts';
 import { handleStripeWebhookRequest } from '../src/stripeWebhook.ts';
+import { isRequestCancellationError } from '../src/boundedRequest.ts';
+import { createDeferredWorkCollector } from './deferredWork.ts';
 import { createStripeCheckoutStore } from '../src/stripeCheckout/store.ts';
 import {
   commerceKeys,
@@ -227,6 +229,178 @@ test('signed devnet webhook atomically queues the existing checkout', async () =
     stripeEventType: 'checkout.session.completed',
     enqueuedAtMs: (jobs[0] as { enqueuedAtMs: number }).enqueuedAtMs,
   }]);
+});
+
+test('client cancellation does not emit a webhook failure log', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected');
+  const logs: Record<string, unknown>[] = [];
+  controller.abort(reason);
+  const pending = handleStripeWebhookRequest(new Request('https://api.mons.shop/webhooks/stripe', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Stripe-Signature': 'cancelled',
+    },
+    body: '{}',
+    signal: controller.signal,
+  }), env(), { log: (entry) => logs.push(entry) });
+
+  await assert.rejects(pending, (error: unknown) => error === reason);
+  assert.deepEqual(logs, []);
+});
+
+test('webhook upload disconnect is left for the top-level cancellation boundary', async () => {
+  const logs: Record<string, unknown>[] = [];
+  const request = new Request('https://api.mons.shop/webhooks/stripe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Stripe-Signature': 'present' },
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error('runtime upload failed'));
+      },
+    }),
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
+  const pending = handleStripeWebhookRequest(request, env(), { log: (entry) => logs.push(entry) });
+
+  await assert.rejects(pending, (error) => isRequestCancellationError(request, error));
+  assert.deepEqual(logs, []);
+});
+
+test('webhook deadline bounds signature verification', { timeout: 1_000 }, async () => {
+  const result = await handleStripeWebhookRequest(new Request('https://api.mons.shop/webhooks/stripe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Stripe-Signature': 'present' },
+    body: '{}',
+  }), env(), {
+    log: () => undefined,
+    timeoutMs: 5,
+    verifyEvent: () => new Promise<StripeWebhookEvent>(() => undefined),
+  });
+
+  assert.equal(result.response.status, 500);
+  assert.equal(result.outcome, 'processing_error');
+});
+
+test('webhook deadline tracks a stalled queue submission', { timeout: 2_000 }, async () => {
+  const deferred = createDeferredWorkCollector();
+  let markQueueStarted!: () => void;
+  let releaseQueue!: () => void;
+  const queueStarted = new Promise<void>((resolve) => { markQueueStarted = resolve; });
+  const queueResult = new Promise<Awaited<ReturnType<Queue['send']>>>((resolve) => {
+    releaseQueue = () => resolve({ metadata: { metrics: { backlogCount: 1, backlogBytes: 128 } } });
+  });
+  const context = checkoutEnvironment(checkoutDocument(), {
+    STRIPE_FULFILLMENT_QUEUE: queue(async () => {
+      markQueueStarted();
+      return queueResult;
+    }),
+  });
+  const pending = handleStripeWebhookRequest(new Request('https://api.mons.shop/webhooks/stripe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Stripe-Signature': 'present' },
+    body: '{}',
+  }), context.env, {
+    defer: deferred.defer,
+    log: () => undefined,
+    timeoutMs: 50,
+    verifyEvent: async () => stripeEvent() as StripeWebhookEvent,
+  });
+
+  await queueStarted;
+  const result = await pending;
+  assert.equal(result.response.status, 500);
+  assert.equal(result.outcome, 'processing_error');
+  assert.equal(deferred.promises.length, 1);
+  releaseQueue();
+  await deferred.drain();
+});
+
+test('webhook verification racing client cancellation preserves the cancellation', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected after verification');
+  const logs: Record<string, unknown>[] = [];
+  const pending = handleStripeWebhookRequest(new Request('https://api.mons.shop/webhooks/stripe', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Stripe-Signature': 'verified-by-test',
+    },
+    body: JSON.stringify(stripeEvent({ eventType: 'customer.created' })),
+    signal: controller.signal,
+  }), env(), {
+    log: (entry) => logs.push(entry),
+    verifyEvent: async () => {
+      controller.abort(reason);
+      return stripeEvent({ eventType: 'customer.created' }) as StripeWebhookEvent;
+    },
+  });
+
+  await assert.rejects(pending, (error) => error === reason);
+  assert.deepEqual(logs, []);
+});
+
+test('webhook client cancellation keeps the original deadline on a stalled Queue send', { timeout: 2_000 }, async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected during Queue send');
+  const deferred = createDeferredWorkCollector();
+  let markQueueStarted!: () => void;
+  let releaseQueue!: () => void;
+  const queueStarted = new Promise<void>((resolve) => { markQueueStarted = resolve; });
+  const queueResult = new Promise<Awaited<ReturnType<Queue['send']>>>((resolve) => {
+    releaseQueue = () => resolve({ metadata: { metrics: { backlogCount: 1, backlogBytes: 128 } } });
+  });
+  const context = checkoutEnvironment(checkoutDocument(), {
+    STRIPE_FULFILLMENT_QUEUE: queue(async () => {
+      markQueueStarted();
+      return queueResult;
+    }),
+  });
+  const pending = handleStripeWebhookRequest(new Request('https://api.mons.shop/webhooks/stripe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Stripe-Signature': 'present' },
+    body: '{}',
+    signal: controller.signal,
+  }), context.env, {
+    defer: deferred.defer,
+    log: () => undefined,
+    timeoutMs: 50,
+    verifyEvent: async () => stripeEvent() as StripeWebhookEvent,
+  });
+
+  await queueStarted;
+  controller.abort(reason);
+  await assert.rejects(pending, (error) => error === reason);
+  assert.equal(deferred.promises.length, 1);
+  releaseQueue();
+  await deferred.drain();
+});
+
+test('webhook failure remains logged after a late client cancellation', async () => {
+  const controller = new AbortController();
+  const logs: Record<string, unknown>[] = [];
+  const queueFailure = new Error('queue failed first');
+  const context = checkoutEnvironment(checkoutDocument(), {
+    STRIPE_FULFILLMENT_QUEUE: queue(() => new Promise((_resolve, reject) => {
+      reject(queueFailure);
+      controller.abort(new Error('late client disconnect'));
+    })),
+  });
+  const signed = await signedRequest(stripeEvent());
+  const result = await handleStripeWebhookRequest(
+    new Request(signed, { signal: controller.signal }),
+    context.env,
+    { log: (entry) => logs.push(entry) },
+  );
+
+  assert.equal(result.response.status, 500);
+  assert.equal(result.outcome, 'processing_error');
+  assert.equal(logs.some((entry) => (
+    entry.event === 'stripe_webhook_request' &&
+    entry.status === 500 &&
+    entry.outcome === 'processing_error'
+  )), true);
 });
 
 test('webhook rejects invalid signatures, cross-scope signatures, and invalid secret configuration', async () => {

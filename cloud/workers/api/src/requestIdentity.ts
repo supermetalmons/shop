@@ -4,6 +4,7 @@ import {
 } from './anonymousAuth.js';
 import { isStaffWalletAddress } from '../../../../shared/fulfillmentAccess.js';
 import { canonicalWalletAddress } from '../../../../shared/walletLifecycle.js';
+import { raceWithSignal } from './boundedRequest.js';
 
 const INTERNAL_STAFF_AUTHORIZATION_PREFIX = 'Mons-Internal-Staff ';
 
@@ -57,6 +58,16 @@ export async function resolveRequestWallet(
     : resolveAnonymousWallet(identity.authSubject);
 }
 
+function requestAbortWon(request: Request, signal: AbortSignal): boolean {
+  return request.signal.aborted && signal.reason === request.signal.reason;
+}
+
+function throwIfIdentitySignalAborted(request: Request, signal: AbortSignal): void {
+  if (!signal.aborted) return;
+  if (requestAbortWon(request, signal)) throw signal.reason;
+  throw new RequestIdentityError('provider-timeout');
+}
+
 export async function verifyRequestIdentity(
   request: Request,
   db: D1Database | undefined,
@@ -70,13 +81,22 @@ export async function verifyRequestIdentity(
     return { kind: 'staff-wallet', wallet };
   }
   if (normalized) throw new RequestIdentityError('invalid-token');
-  if (signal.aborted) throw new RequestIdentityError('provider-timeout');
+  throwIfIdentitySignalAborted(request, signal);
   try {
-    const session = await verifyAnonymousSession(request, db, nowMs);
-    if (signal.aborted) throw new RequestIdentityError('provider-timeout');
+    const session = await raceWithSignal(
+      verifyAnonymousSession(request, db, nowMs),
+      signal,
+    );
+    throwIfIdentitySignalAborted(request, signal);
     return { kind: 'anonymous', authSubject: session.authSubject };
   } catch (error) {
-    if (signal.aborted) throw new RequestIdentityError('provider-timeout');
+    if (signal.aborted && error === signal.reason) {
+      if (requestAbortWon(request, signal)) throw error;
+      throw new RequestIdentityError('provider-timeout');
+    }
+    if (signal.aborted && !requestAbortWon(request, signal)) {
+      throw new RequestIdentityError('provider-timeout');
+    }
     if (error instanceof RequestIdentityError) throw error;
     if (error instanceof AnonymousAuthError) throw new RequestIdentityError(error.kind);
     throw error;

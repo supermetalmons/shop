@@ -39,6 +39,10 @@ export type StripeCheckoutSessionRequest = {
   returnUrl?: string;
 };
 
+export const STRIPE_CHECKOUT_OPERATION_HEADER = 'X-Mons-Checkout-Operation-Id';
+export const STRIPE_CHECKOUT_RETRY_HEADER = 'X-Mons-Checkout-Retry';
+export const STRIPE_CHECKOUT_RETRY_SAME_OPERATION = 'same-operation';
+
 export type StripeCheckoutSessionResponse = {
   id: string;
   url: string;

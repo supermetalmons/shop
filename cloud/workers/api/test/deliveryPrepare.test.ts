@@ -25,6 +25,7 @@ import {
   handleDeliveryPrepare,
 } from '../src/deliveryPrepare.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { createDeferredWorkCollector } from './deferredWork.ts';
 
 const OWNER = Keypair.generate();
 const COSIGNER = Keypair.generate();
@@ -354,6 +355,146 @@ test('delivery preparation uses a fresh signal to clean up after the overall dea
   assert.equal(cleanupSignalAborted, false);
 });
 
+test('delivery preparation returns its deadline and retains an in-flight order write', async () => {
+  const deferred = createDeferredWorkCollector();
+  let cleanup: { path: string; signalAborted: boolean; updateTime: string } | undefined;
+  let finishWrite!: (updateTime: string) => void;
+  const write = new Promise<string>((resolve) => { finishWrite = resolve; });
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+    createDeliveryOrder: () => write,
+    defer: deferred.defer,
+    deleteDeliveryOrder: async (context: { signal: AbortSignal }, path: string, updateTime: string) => {
+      cleanup = { path, signalAborted: context.signal.aborted, updateTime };
+    },
+    timeoutMs: 5,
+  }));
+
+  assert.equal(result.response.status, 504);
+  assert.equal(deferred.promises.length, 1);
+  finishWrite('2026-08-20T00:00:01.000Z');
+  await deferred.drain();
+  assert.deepEqual(cleanup, {
+    path: `drops/${DROP_ID}/deliveryOrders/7`,
+    signalAborted: false,
+    updateTime: '2026-08-20T00:00:01.000Z',
+  });
+});
+
+test('delivery preparation deletes an order that resolves after client cancellation', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected during order create');
+  const deferred = createDeferredWorkCollector();
+  let cleanup: { path: string; signalAborted: boolean; updateTime: string } | undefined;
+  let finishWrite!: (updateTime: string) => void;
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const write = new Promise<string>((resolve) => { finishWrite = resolve; });
+  const pending = handleDeliveryPrepare(
+    new Request(request(requestBody()), { signal: controller.signal }),
+    env(),
+    dependencies({
+      createDeliveryOrder: () => {
+        markStarted();
+        return write;
+      },
+      defer: deferred.defer,
+      deleteDeliveryOrder: async (context: { signal: AbortSignal }, path: string, updateTime: string) => {
+        cleanup = { path, signalAborted: context.signal.aborted, updateTime };
+      },
+      timeoutMs: 100,
+    }),
+  );
+
+  await started;
+  controller.abort(reason);
+  finishWrite('2026-08-20T00:00:01.000Z');
+  await assert.rejects(pending, (error: unknown) => error === reason);
+  assert.equal(deferred.promises.length, 0);
+  assert.deepEqual(cleanup, {
+    path: `drops/${DROP_ID}/deliveryOrders/7`,
+    signalAborted: false,
+    updateTime: '2026-08-20T00:00:01.000Z',
+  });
+});
+
+test('delivery preparation deletes its order when blockhash loading settles after cancellation', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected during blockhash loading');
+  const deferred = createDeferredWorkCollector();
+  let cleanup: { path: string; signalAborted: boolean; updateTime: string } | undefined;
+  const pending = handleDeliveryPrepare(
+    new Request(request(requestBody()), { signal: controller.signal }),
+    env(),
+    dependencies({
+      defer: deferred.defer,
+      loadLatestBlockhash: async () => {
+        controller.abort(reason);
+        return { blockhash: BLOCKHASH, blockhashContextSlot: 123 };
+      },
+      deleteDeliveryOrder: async (context: { signal: AbortSignal }, path: string, updateTime: string) => {
+        cleanup = { path, signalAborted: context.signal.aborted, updateTime };
+      },
+    }),
+  );
+
+  await assert.rejects(pending, (error: unknown) => error === reason);
+  await deferred.drain();
+  assert.deepEqual(cleanup, {
+    path: `drops/${DROP_ID}/deliveryOrders/7`,
+    signalAborted: false,
+    updateTime: '2026-08-20T00:00:01.000Z',
+  });
+});
+
+test('delivery preparation retains cleanup that crosses its deadline', async () => {
+  const deferred = createDeferredWorkCollector();
+  let finishCleanup!: () => void;
+  const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+    defer: deferred.defer,
+    timeoutMs: 5,
+    loadLatestBlockhash: async () => { throw new Error('provider failed'); },
+    deleteDeliveryOrder: () => cleanup,
+  }));
+
+  assert.equal(result.response.status, 504);
+  assert.equal(deferred.promises.length, 1);
+  finishCleanup();
+  await deferred.drain();
+});
+
+test('delivery preparation does not reserve an order after the deadline', async () => {
+  let createCalled = false;
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+    createDeliveryOrder: async () => {
+      createCalled = true;
+      return '2026-08-20T00:00:01.000Z';
+    },
+    deliveryPdaExists: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return false;
+    },
+    timeoutMs: 1,
+  }));
+
+  assert.equal(result.response.status, 504);
+  assert.equal(createCalled, false);
+});
+
+test('delivery preparation bounds non-cooperative wallet and address reads', async () => {
+  for (const overrides of [
+    { loadBoundWallet: () => new Promise<string>(() => undefined) },
+    { loadAddress: () => new Promise<never>(() => undefined) },
+  ]) {
+    const result = await handleDeliveryPrepare(
+      request(requestBody()),
+      env(),
+      dependencies({ ...overrides, timeoutMs: 5 }),
+    );
+    assert.equal(result.response.status, 504);
+  }
+});
+
 test('delivery preparation reports an oversized transaction before reserving an order', async () => {
   const itemIds = Array.from({ length: 32 }, () => Keypair.generate().publicKey.toBase58());
   let createCalled = false;
@@ -548,6 +689,45 @@ test('delivery on-chain validation accepts the committed config and rejects coll
     }, runtime),
     /not an MPL Core collection/,
   );
+});
+
+test('delivery provider preserves abort-first and provider-first outcomes', async () => {
+  const runtime = deliveryPrepareTestHooks.buildRuntime(DROP);
+  const cancellation = new AbortController();
+  const reason = new Error('client disconnected');
+  await assert.rejects(
+    deliveryPrepareTestHooks.loadOnchainState({
+      apiKey: 'helius-test-key',
+      providerFetch: async () => {
+        cancellation.abort(reason);
+        throw new Error('provider failed after cancellation');
+      },
+      signal: cancellation.signal,
+    }, runtime),
+    (error: unknown) => error === reason,
+  );
+
+  const race = new AbortController();
+  const providerError = new Error('provider failed first');
+  let rejectProvider!: (error: unknown) => void;
+  let markProviderStarted!: () => void;
+  const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
+  const providerFirst = assert.rejects(
+    deliveryPrepareTestHooks.loadOnchainState({
+      apiKey: 'helius-test-key',
+      providerFetch: () => new Promise((_resolve, reject) => {
+        rejectProvider = reject;
+        markProviderStarted();
+      }),
+      signal: race.signal,
+    }, runtime),
+    (error: unknown) => error !== race.signal.reason &&
+      (error as { code?: unknown }).code === 'unavailable',
+  );
+  await providerStarted;
+  rejectProvider(providerError);
+  queueMicrotask(() => race.abort(new Error('late client disconnect')));
+  await providerFirst;
 });
 
 test('delivery latest blockhash preserves the RPC context slot', async () => {

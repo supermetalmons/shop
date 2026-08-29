@@ -46,3 +46,57 @@ test('gateway returns API responses and leaves assets on the asset binding', asy
   assert.equal(await asset.text(), 'asset');
   assert.deepEqual(calls, ['api:/auth/anonymous/session', 'asset:/assets/app.js']);
 });
+
+test('gateway preserves client cancellation through the API service request', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected');
+  let forwardedSignal: AbortSignal | undefined;
+  let markStarted: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const env = {
+    MONS_API: fetcher(async (input) => {
+      assert.ok(input instanceof Request);
+      forwardedSignal = input.signal;
+      markStarted?.();
+      return new Promise<Response>((_resolve, reject) => {
+        input.signal.addEventListener('abort', () => reject(input.signal.reason), { once: true });
+      });
+    }),
+    ASSETS: fetcher(async () => {
+      assert.fail('API requests must not reach the asset binding');
+    }),
+  };
+  const incoming = new Request('https://mons.shop/api/inventory', {
+    signal: controller.signal,
+  });
+  const response = handleFrontendRequest(incoming, env);
+  await started;
+  assert.ok(forwardedSignal);
+  assert.notEqual(forwardedSignal, incoming.signal);
+  assert.equal(forwardedSignal.aborted, false);
+  controller.abort(reason);
+  const cancelled = await response;
+  assert.equal(cancelled.status, 499);
+  assert.equal(await cancelled.text(), '');
+  assert.match(cancelled.headers.get('cache-control') || '', /no-store/);
+  assert.equal(forwardedSignal.aborted, true);
+  assert.equal(forwardedSignal.reason, reason);
+});
+
+test('gateway preserves non-cancellation service failures', async () => {
+  const failure = new Error('service unavailable');
+  const env = {
+    MONS_API: fetcher(async () => {
+      throw failure;
+    }),
+    ASSETS: fetcher(async () => {
+      assert.fail('API requests must not reach the asset binding');
+    }),
+  };
+  await assert.rejects(
+    handleFrontendRequest(new Request('https://mons.shop/api/inventory'), env),
+    (error: unknown) => error === failure,
+  );
+});

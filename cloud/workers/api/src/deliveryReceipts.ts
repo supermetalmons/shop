@@ -102,6 +102,13 @@ import {
   cancelResponseBody,
   type ProfileProviderFetch,
 } from './boundedResponse.js';
+import {
+  createRequestDeadline,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  readBoundedRequestJson,
+  runCriticalRequestOperation,
+} from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
   CommerceWriteConflict,
@@ -171,6 +178,8 @@ const TX_CONFIRM_TIMEOUT_MS = 25_000;
 const TX_CONFIRM_POLL_MS = 800;
 const TX_MAX_SEND_ATTEMPTS = 3;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
+const DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS = 4 * 60_000;
+const RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD = 'receiptRecovery.pendingSubmission';
 const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
 const MAX_PREPARED_DELIVERY_RECOVERY_CHECKS = DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS.length;
 const COMMERCE_TRANSACTION_ATTEMPTS = 6;
@@ -337,6 +346,21 @@ type ReceiptIssueResult = {
   closeDeliveryTx: string | null;
 };
 
+type PendingReceiptSubmission = {
+  signature: string;
+  blockhash: string;
+  lastValidBlockHeight: number;
+  assetIds: string[];
+};
+
+type ReceiptSubmissionOutcome = 'confirmed' | 'expired' | 'unresolved';
+
+type ReceiptSubmissionLifecycle = {
+  prepare(pending: PendingReceiptSubmission): Promise<void>;
+  reconcile(pending: PendingReceiptSubmission): Promise<ReceiptSubmissionOutcome>;
+  settle(pending: PendingReceiptSubmission, outcome: Exclude<ReceiptSubmissionOutcome, 'unresolved'>): Promise<void>;
+};
+
 type DeliveryRequestMetrics = {
   upstreamCalls: number;
   providerDurationMs: number;
@@ -426,50 +450,23 @@ async function readRequestBody(
   signal: AbortSignal,
   kind: 'issue' | 'recover',
 ): Promise<IssueRequest | RecoverRequest> {
-  const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
-  if (contentType !== 'application/json') {
-    await request.body?.cancel().catch(() => undefined);
-    throw new DeliveryReceiptError('invalid-argument', 'Content-Type must be application/json.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > REQUEST_MAX_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new DeliveryReceiptError('invalid-argument', 'Delivery receipt request is too large.');
-  }
-  if (!request.body) throw new DeliveryReceiptError('invalid-argument', 'Invalid delivery receipt request.');
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > REQUEST_MAX_BYTES) {
-        throw new DeliveryReceiptError('invalid-argument', 'Delivery receipt request is too large.');
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    const value: unknown = JSON.parse(chunks.join(''));
-    const parsed = kind === 'issue' ? issueSchema.safeParse(value) : recoverSchema.safeParse(value);
-    if (!parsed.success) throw new DeliveryReceiptError('invalid-argument', 'Invalid delivery receipt request.');
-    return parsed.data;
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    if (error instanceof DeliveryReceiptError) throw error;
-    if (signal.aborted) throw signal.reason;
+  const value = await readBoundedRequestJson(request, {
+    maxBytes: REQUEST_MAX_BYTES,
+    signal,
+    createError: (failure) => new DeliveryReceiptError(
+      'invalid-argument',
+      failure === 'unsupported-media-type'
+        ? 'Content-Type must be application/json.'
+        : failure === 'too-large'
+          ? 'Delivery receipt request is too large.'
+          : 'Invalid delivery receipt request.',
+    ),
+  });
+  const parsed = kind === 'issue' ? issueSchema.safeParse(value) : recoverSchema.safeParse(value);
+  if (!parsed.success) {
     throw new DeliveryReceiptError('invalid-argument', 'Invalid delivery receipt request.');
-  } finally {
-    signal.removeEventListener('abort', onAbort);
   }
+  return parsed.data;
 }
 
 function canonicalPublicKey(value: string, label: string): PublicKey {
@@ -705,7 +702,8 @@ async function loadBoundWallet(
     }
     return resolution.wallet;
   } catch (error) {
-    if (error instanceof DeliveryReceiptError || error instanceof ProfileReadError || context.signal.aborted) throw error;
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    if (error instanceof DeliveryReceiptError || error instanceof ProfileReadError) throw error;
     throw new DeliveryReceiptError('unavailable', 'Receipt data is temporarily unavailable.');
   }
 }
@@ -897,7 +895,17 @@ async function acquireDeliveryRecoveryLease(
   ownerWallet: string,
   nowMs: number,
   force: boolean,
-): Promise<{ acquired: true } | { acquired: false; result: RecoverDeliveryOrdersItemResult }> {
+): Promise<{
+  acquired: true;
+  lease: {
+    attemptCount: number;
+    lastAttemptAtMs: number;
+    leaseExpiresAtMs: number;
+    previousAttemptCount: unknown;
+    previousLastAttemptAt: unknown;
+  };
+} | { acquired: false; result: RecoverDeliveryOrdersItemResult }> {
+  if (context.signal.aborted) throw context.signal.reason;
   for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
     let transaction: CommerceUnitOfWork | undefined;
     try {
@@ -984,10 +992,11 @@ async function acquireDeliveryRecoveryLease(
       const attemptCount = Number.isFinite(rawAttemptCount) && rawAttemptCount > 0
         ? Math.floor(rawAttemptCount) + 1
         : 1;
+      const leaseExpiresAtMs = nowMs + DELIVERY_RECOVERY_LEASE_MS;
       await commitWrites(context, [updateWrite({
         path,
         fields: {
-          'receiptRecovery.leaseExpiresAt': commerceTimestamp(nowMs + DELIVERY_RECOVERY_LEASE_MS),
+          'receiptRecovery.leaseExpiresAt': commerceTimestamp(leaseExpiresAtMs),
           'receiptRecovery.lastAttemptAt': commerceTimestamp(nowMs),
           'receiptRecovery.attemptCount': attemptCount,
         },
@@ -999,9 +1008,19 @@ async function acquireDeliveryRecoveryLease(
         mustExist: true,
       })], transaction);
       transaction = undefined;
-      return { acquired: true };
+      return {
+        acquired: true,
+        lease: {
+          attemptCount,
+          lastAttemptAtMs: nowMs,
+          leaseExpiresAtMs,
+          previousAttemptCount: recovery.attemptCount,
+          previousLastAttemptAt: recovery.lastAttemptAt,
+        },
+      };
     } catch (error) {
       if (transaction) await rollbackTransactionBestEffort(context, transaction);
+      if (isDeliveryRecoveryCancellation(error, context.signal)) throw context.signal.reason;
       if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
         await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
         continue;
@@ -1010,6 +1029,56 @@ async function acquireDeliveryRecoveryLease(
     }
   }
   throw new DeliveryReceiptError('unavailable', 'Delivery recovery data is temporarily unavailable.');
+}
+
+async function cancelDeliveryRecoveryAttempt(
+  context: CommerceContext,
+  path: string,
+  lease: {
+    attemptCount: number;
+    lastAttemptAtMs: number;
+    leaseExpiresAtMs: number;
+    previousAttemptCount: unknown;
+    previousLastAttemptAt: unknown;
+  },
+): Promise<void> {
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    const document = await readDocument(context, path);
+    if (!document) return;
+    const recovery = isRecord(document.fields.receiptRecovery) ? document.fields.receiptRecovery : {};
+    const leaseExpiresAt = toMillisMaybe(recovery.leaseExpiresAt);
+    if (
+      leaseExpiresAt === null || leaseExpiresAt < lease.leaseExpiresAtMs ||
+      toMillisMaybe(recovery.lastAttemptAt) !== lease.lastAttemptAtMs ||
+      Number(recovery.attemptCount) !== lease.attemptCount
+    ) return;
+    try {
+      await commitWrites(context, [updateWrite({
+        path,
+        fields: {
+          ...(lease.previousLastAttemptAt === undefined
+            ? {}
+            : { 'receiptRecovery.lastAttemptAt': lease.previousLastAttemptAt }),
+          ...(lease.previousAttemptCount === undefined
+            ? {}
+            : { 'receiptRecovery.attemptCount': lease.previousAttemptCount }),
+        },
+        fieldPaths: [
+          'receiptRecovery.leaseExpiresAt',
+          'receiptRecovery.lastAttemptAt',
+          'receiptRecovery.attemptCount',
+        ],
+        expectedUpdateTime: document.updateTime,
+      })]);
+      return;
+    } catch (error) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      throw error;
+    }
+  }
 }
 
 async function finalizeDeliveryRecoveryAttempt(
@@ -1953,7 +2022,10 @@ export function scheduleDeliveryPackStatusProjection(args: {
   dropId: string;
   waitUntil: DeferredWork;
 }): void {
-  const task = projectPendingDeliveryPackStatus(args).catch((error) => {
+  const task = projectPendingDeliveryPackStatus({
+    ...args,
+    context: { ...args.context, signal: new AbortController().signal },
+  }).catch((error) => {
     console.error({
       event: 'delivery_pack_status_projection_background_failed',
       dropId: args.dropId,
@@ -1983,6 +2055,7 @@ async function readBoundedProviderResponse(response: Response, signal: AbortSign
     while (true) {
       if (signal.aborted) throw signal.reason;
       const { done, value } = await reader.read();
+      if (signal.aborted) throw signal.reason;
       if (done) break;
       size += value.byteLength;
       if (size > PROVIDER_MAX_BYTES) {
@@ -2036,7 +2109,8 @@ export function createConnection(context: ProviderContext, runtime: DeliveryRunt
         headers: response.headers,
       });
     } catch (error) {
-      if (context.signal.aborted || controller.signal.reason?.name === 'TimeoutError') {
+      if (context.signal.aborted && error === context.signal.reason) throw error;
+      if (controller.signal.reason?.name === 'TimeoutError' && error === controller.signal.reason) {
         throw new DeliveryReceiptError('deadline-exceeded', 'Receipt provider request timed out.');
       }
       throw mapProviderError(error, 'Receipt provider is temporarily unavailable.');
@@ -2536,6 +2610,23 @@ function transactionErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function unknownTransactionSubmissionError(args: {
+  label: string;
+  signal: AbortSignal;
+  signature: string;
+  details?: Record<string, unknown>;
+}): DeliveryReceiptError {
+  const error = new DeliveryReceiptError(
+    args.signal.reason instanceof DOMException && args.signal.reason.name === 'TimeoutError'
+      ? 'deadline-exceeded'
+      : 'aborted',
+    `${args.label} transaction submission status is unknown. Try again.`,
+    { ...args.details, signature: args.signature, maybeSubmitted: true },
+  );
+  Object.defineProperty(error, 'cause', { value: args.signal.reason });
+  return error;
+}
+
 function transactionErrorLogs(error: unknown): string[] {
   if (!isRecord(error) || !Array.isArray(error.logs)) return [];
   return error.logs.map(String);
@@ -2579,12 +2670,25 @@ function looksLikeRateLimitOrRpcError(message: string): boolean {
     (value.includes('rpc') && value.includes('error'));
 }
 
+export function hasConfirmedSignatureCommitment(status: {
+  confirmationStatus?: string | null;
+  confirmations: number | null;
+} | null | undefined): boolean {
+  if (!status) return false;
+  if (status.confirmationStatus != null) {
+    return status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized';
+  }
+  return status.confirmations === null || (
+    Number.isSafeInteger(status.confirmations) && Number(status.confirmations) > 0
+  );
+}
+
 async function waitForSignature(
   connection: Connection,
   signature: string,
   signal: AbortSignal,
   timeoutMs: number,
-): Promise<{ ok: true } | { ok: false; error: unknown; logs: string[] }> {
+): Promise<{ ok: true } | { ok: false; definitive: boolean; error: unknown; logs: string[] }> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (signal.aborted) throw signal.reason;
@@ -2601,13 +2705,13 @@ async function waitForSignature(
             ? transaction.meta.logMessages.filter((entry): entry is string => typeof entry === 'string')
             : [];
         } catch {}
-        return { ok: false, error: status.err, logs };
+        return { ok: false, definitive: true, error: status.err, logs };
       }
-      if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') {
+      if (hasConfirmedSignatureCommitment(status)) {
         return { ok: true };
       }
-    } catch {
-      if (signal.aborted) throw signal.reason;
+    } catch (error) {
+      if (isSignalCancellationError(signal, error)) throw error;
     }
     await pause(TX_CONFIRM_POLL_MS, signal);
   }
@@ -2616,13 +2720,15 @@ async function waitForSignature(
     if (transaction?.meta && !transaction.meta.err) return { ok: true };
     return {
       ok: false,
+      definitive: Boolean(transaction?.meta?.err),
       error: transaction?.meta?.err || 'timeout',
       logs: Array.isArray(transaction?.meta?.logMessages)
         ? transaction.meta.logMessages.filter((entry): entry is string => typeof entry === 'string')
         : [],
     };
-  } catch {
-    return { ok: false, error: 'timeout', logs: [] };
+  } catch (error) {
+    if (isSignalCancellationError(signal, error)) throw error;
+    return { ok: false, definitive: false, error: 'timeout', logs: [] };
   }
 }
 
@@ -2631,41 +2737,56 @@ export async function sendAndConfirmSignedTransaction(
   transaction: VersionedTransaction,
   signal: AbortSignal,
   label: string,
+  onBroadcastStart?: () => void,
 ): Promise<string> {
+  if (signal.aborted) throw signal.reason;
   const signature = bs58.encode(transaction.signatures[0]);
-  let sendError: unknown;
   try {
-    await connection.sendTransaction(transaction, { maxRetries: 2 });
-  } catch (error) {
-    sendError = error;
-  }
-  if (sendError) {
-    const logs = transactionErrorLogs(sendError);
-    if (logs.length) {
-      const message = transactionErrorMessage(sendError);
-      const code = looksLikeBlockhashError(message) || looksLikeAccountInUseError(message, logs)
-        ? 'aborted'
-        : looksLikeRateLimitOrRpcError(message) ? 'unavailable' : 'failed-precondition';
-      throw new DeliveryReceiptError(code, `${label} transaction preflight failed.`, {
-        lastError: message,
-        lastLogs: logs.slice(0, 80),
+    let sendError: unknown;
+    try {
+      onBroadcastStart?.();
+      await connection.sendTransaction(transaction, { maxRetries: 2 });
+    } catch (error) {
+      sendError = error;
+    }
+    if (sendError) {
+      const logs = transactionErrorLogs(sendError);
+      if (logs.length) {
+        const message = transactionErrorMessage(sendError);
+        const code = looksLikeBlockhashError(message) || looksLikeAccountInUseError(message, logs)
+          ? 'aborted'
+          : looksLikeRateLimitOrRpcError(message) ? 'unavailable' : 'failed-precondition';
+        throw new DeliveryReceiptError(code, `${label} transaction preflight failed.`, {
+          definitiveFailure: true,
+          lastError: message,
+          lastLogs: logs.slice(0, 80),
+        });
+      }
+      const maybe = await waitForSignature(connection, signature, signal, TX_SEND_TIMEOUT_MS);
+      if (maybe.ok) return signature;
+      throw new DeliveryReceiptError('unavailable', `${label} transaction submission status is unknown. Try again.`, {
+        maybeSubmitted: true,
+        lastError: transactionErrorMessage(sendError),
       });
     }
-    const maybe = await waitForSignature(connection, signature, signal, TX_SEND_TIMEOUT_MS);
-    if (maybe.ok) return signature;
-    throw new DeliveryReceiptError('unavailable', `${label} transaction submission status is unknown. Try again.`, {
-      maybeSubmitted: true,
-      lastError: transactionErrorMessage(sendError),
-    });
+    const confirmed = await waitForSignature(connection, signature, signal, TX_CONFIRM_TIMEOUT_MS);
+    if (confirmed.ok) return signature;
+    const message = transactionErrorMessage(confirmed.error);
+    throw new DeliveryReceiptError(
+      /timeout/i.test(message) ? 'deadline-exceeded' : 'failed-precondition',
+      `${label} transaction was not confirmed. Try again.`,
+      {
+        ...(confirmed.definitive ? { definitiveFailure: true } : {}),
+        lastError: message,
+        lastLogs: confirmed.logs.slice(0, 80),
+      },
+    );
+  } catch (error) {
+    if (isSignalCancellationError(signal, error)) {
+      throw unknownTransactionSubmissionError({ label, signal, signature });
+    }
+    throw error;
   }
-  const confirmed = await waitForSignature(connection, signature, signal, TX_CONFIRM_TIMEOUT_MS);
-  if (confirmed.ok) return signature;
-  const message = transactionErrorMessage(confirmed.error);
-  throw new DeliveryReceiptError(
-    /timeout/i.test(message) ? 'deadline-exceeded' : 'failed-precondition',
-    `${label} transaction was not confirmed. Try again.`,
-    { lastError: message, lastLogs: confirmed.logs.slice(0, 80) },
-  );
 }
 
 async function markDeliveryProcessing(
@@ -3336,6 +3457,7 @@ async function sendReceiptBatch(args: {
   coreCollection: PublicKey;
   batch: readonly { asset: PublicKey; kind: 'box' | 'dude'; refId: number }[];
   signal: AbortSignal;
+  lifecycle: ReceiptSubmissionLifecycle;
 }): Promise<string> {
   const burnInstructions = args.batch.map((item) => mplCoreBurnInstruction({
     asset: item.asset,
@@ -3359,7 +3481,7 @@ async function sendReceiptBatch(args: {
   let lastError: unknown;
   for (let attempt = 0; attempt < TX_MAX_SEND_ATTEMPTS; attempt += 1) {
     if (args.signal.aborted) throw args.signal.reason;
-    const { blockhash } = await args.connection.getLatestBlockhash('confirmed');
+    const { blockhash, lastValidBlockHeight } = await args.connection.getLatestBlockhash('confirmed');
     let transaction: VersionedTransaction;
     try {
       transaction = buildTransaction(instructions, args.signer.publicKey, blockhash, args.signer);
@@ -3370,57 +3492,126 @@ async function sendReceiptBatch(args: {
       throw error;
     }
     const signature = bs58.encode(transaction.signatures[0]);
-    let sendError: unknown;
+    const pendingSubmission: PendingReceiptSubmission = {
+      signature,
+      blockhash,
+      lastValidBlockHeight,
+      assetIds: args.batch.map((item) => item.asset.toBase58()),
+    };
+    const submittedAtMs = Date.now();
+    let submissionMayHaveLanded = false;
     try {
-      await args.connection.sendTransaction(transaction, { maxRetries: 2 });
-    } catch (error) {
-      sendError = error;
-      lastError = error;
-    }
-    if (sendError) {
-      const message = transactionErrorMessage(sendError);
-      const logs = transactionErrorLogs(sendError);
-      if (logs.length) {
-        if (
-          looksLikeAccountInUseError(message, logs) ||
-          looksLikeRateLimitOrRpcError(message) ||
-          looksLikeBlockhashError(message)
-        ) {
+      await args.lifecycle.prepare(pendingSubmission);
+      if (args.signal.aborted) {
+        await args.lifecycle.settle(pendingSubmission, 'expired');
+        throw args.signal.reason;
+      }
+      submissionMayHaveLanded = true;
+      let sendError: unknown;
+      try {
+        await args.connection.sendTransaction(transaction, { maxRetries: 2 });
+      } catch (error) {
+        sendError = error;
+        lastError = error;
+      }
+      if (sendError) {
+        const message = transactionErrorMessage(sendError);
+        const logs = transactionErrorLogs(sendError);
+        if (logs.length) {
+          submissionMayHaveLanded = false;
+          await args.lifecycle.settle(pendingSubmission, 'expired');
+          if (
+            looksLikeAccountInUseError(message, logs) ||
+            looksLikeRateLimitOrRpcError(message) ||
+            looksLikeBlockhashError(message)
+          ) {
+            await pause(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000), args.signal);
+            continue;
+          }
+          throw new DeliveryReceiptError(
+            looksLikeComputeLimitError(message, logs) ? 'resource-exhausted' : 'failed-precondition',
+            'Unable to issue receipts. Try fewer items or retry later.',
+            { lastError: message, lastLogs: logs.slice(0, 80) },
+          );
+        }
+        const maybe = await waitForSignature(args.connection, signature, args.signal, TX_SEND_TIMEOUT_MS);
+        if (maybe.ok) {
+          await args.lifecycle.settle(pendingSubmission, 'confirmed');
+          return signature;
+        }
+        if (maybe.definitive) {
+          submissionMayHaveLanded = false;
+          await args.lifecycle.settle(pendingSubmission, 'expired');
           await pause(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000), args.signal);
           continue;
         }
-        throw new DeliveryReceiptError(
-          looksLikeComputeLimitError(message, logs) ? 'resource-exhausted' : 'failed-precondition',
-          'Unable to issue receipts. Try fewer items or retry later.',
-          { lastError: message, lastLogs: logs.slice(0, 80) },
+        const postInfos = await args.connection.getMultipleAccountsInfo(
+          args.batch.map((item) => item.asset),
+          { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
         );
+        if (postInfos.every((info) => !info)) {
+          await args.lifecycle.settle(pendingSubmission, 'confirmed');
+          return signature;
+        }
+        const outcome = await args.lifecycle.reconcile(pendingSubmission);
+        if (outcome === 'confirmed') return signature;
+        if (outcome === 'unresolved') {
+          throw new DeliveryReceiptError('unavailable', 'Receipt issuance transaction submission status is unknown. Try again.', {
+            signature,
+            maybeSubmitted: true,
+          });
+        }
+        submissionMayHaveLanded = false;
+        await pause(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000), args.signal);
+        continue;
       }
-      const maybe = await waitForSignature(args.connection, signature, args.signal, TX_SEND_TIMEOUT_MS);
-      if (maybe.ok) return signature;
-      const postInfos = await args.connection.getMultipleAccountsInfo(
-        args.batch.map((item) => item.asset),
-        { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
-      );
-      if (postInfos.every((info) => !info)) return signature;
+      const confirmed = await waitForSignature(args.connection, signature, args.signal, TX_CONFIRM_TIMEOUT_MS);
+      if (confirmed.ok) {
+        await args.lifecycle.settle(pendingSubmission, 'confirmed');
+        return signature;
+      }
+      lastError = confirmed.error;
+      const message = transactionErrorMessage(confirmed.error);
+      if (confirmed.definitive) {
+        submissionMayHaveLanded = false;
+        await args.lifecycle.settle(pendingSubmission, 'expired');
+      } else {
+        const postInfos = await args.connection.getMultipleAccountsInfo(
+          args.batch.map((item) => item.asset),
+          { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
+        );
+        if (postInfos.every((info) => !info)) {
+          await args.lifecycle.settle(pendingSubmission, 'confirmed');
+          return signature;
+        }
+        const outcome = await args.lifecycle.reconcile(pendingSubmission);
+        if (outcome === 'confirmed') return signature;
+        if (outcome === 'unresolved') {
+          throw new DeliveryReceiptError('unavailable', 'Receipt issuance transaction submission status is unknown. Try again.', {
+            signature,
+            maybeSubmitted: true,
+          });
+        }
+        submissionMayHaveLanded = false;
+      }
+      if (looksLikeComputeLimitError(message, confirmed.logs)) {
+        throw new DeliveryReceiptError('resource-exhausted', 'Receipt issuance batch exceeded compute limits.', {
+          lastError: message,
+          lastLogs: confirmed.logs.slice(0, 80),
+        });
+      }
       await pause(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000), args.signal);
-      continue;
+    } catch (error) {
+      if (submissionMayHaveLanded && isSignalCancellationError(args.signal, error)) {
+        throw unknownTransactionSubmissionError({
+          label: 'Receipt issuance',
+          signal: args.signal,
+          signature,
+          details: { lastValidBlockHeight, submittedAtMs },
+        });
+      }
+      throw error;
     }
-    const confirmed = await waitForSignature(args.connection, signature, args.signal, TX_CONFIRM_TIMEOUT_MS);
-    if (confirmed.ok) return signature;
-    const postInfos = await args.connection.getMultipleAccountsInfo(
-      args.batch.map((item) => item.asset),
-      { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
-    );
-    if (postInfos.every((info) => !info)) return signature;
-    lastError = confirmed.error;
-    const message = transactionErrorMessage(confirmed.error);
-    if (looksLikeComputeLimitError(message, confirmed.logs)) {
-      throw new DeliveryReceiptError('resource-exhausted', 'Receipt issuance batch exceeded compute limits.', {
-        lastError: message,
-        lastLogs: confirmed.logs.slice(0, 80),
-      });
-    }
-    await pause(Math.min(600 * 2 ** Math.min(attempt, 4), 4_000), args.signal);
   }
   throw new ReceiptBatchRetryExhaustedError(lastError);
 }
@@ -3471,7 +3662,7 @@ async function retryIssueReceipts(args: {
   const deliveryId = Math.floor(args.request.deliveryId);
   const runtime = runtimeForDrop(args.request.dropId);
   const path = dropDeliveryOrderPath(runtime.dropId, deliveryId);
-  const document = await readDocument(args.commerce, path);
+  let document = await readDocument(args.commerce, path);
   if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
   if (document.fields.owner && document.fields.owner !== owner.toBase58()) {
     throw new DeliveryReceiptError('permission-denied', 'Order belongs to a different wallet.');
@@ -3550,6 +3741,42 @@ async function retryIssueReceipts(args: {
         runtime,
       });
   await markDeliveryProcessing(args.commerce, document, runtime, verified.signature);
+  const storedPendingSubmission = pendingReceiptSubmission(document.fields);
+  if (storedPendingSubmission) {
+    const outcome = await reconcilePendingReceiptSubmission({
+      commerce: args.commerce,
+      provider: args.provider,
+      runtime,
+      path: document.path,
+      pending: storedPendingSubmission,
+    });
+    if (outcome === 'unresolved') {
+      throw new DeliveryReceiptError('aborted', 'A receipt transaction is still being reconciled.');
+    }
+    const reconciled = await readDocument(args.commerce, path);
+    if (!reconciled) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
+    document = reconciled;
+  }
+  const lifecycle: ReceiptSubmissionLifecycle = {
+    prepare: (pendingSubmission) => persistPendingReceiptSubmission(
+      args.commerce,
+      document.path,
+      pendingSubmission,
+    ),
+    reconcile: (pendingSubmission) => reconcilePendingReceiptSubmission({
+      commerce: args.commerce,
+      provider: args.provider,
+      runtime,
+      path: document.path,
+      pending: pendingSubmission,
+    }),
+    settle: (pendingSubmission, outcome) => settlePendingReceiptSubmission(
+      cleanupContext(args.commerce),
+      document.path,
+      pendingSubmission,
+      outcome,
+    ),
+  };
   const assetKeys = verified.targetAssetIds.map((assetId) => canonicalPublicKey(assetId, 'delivery asset id'));
   const infos = await connection.getMultipleAccountsInfo(assetKeys, {
     commitment: 'confirmed',
@@ -3557,7 +3784,7 @@ async function retryIssueReceipts(args: {
   });
   const pending = pendingReceiptItems(document.fields, verified.targetAssetIds, infos, runtime);
   const alreadyProcessed = verified.targetAssetIds.length - pending.length;
-  const receiptTxs: string[] = [];
+  const receiptTxs = confirmedReceiptTransactions(document.fields);
   let totalProcessed = 0;
   while (pending.length) {
     if (args.provider.signal.aborted) throw args.provider.signal.reason;
@@ -3573,8 +3800,9 @@ async function retryIssueReceipts(args: {
           coreCollection: onchain.coreCollection,
           batch: pending.slice(0, batchSize),
           signal: args.provider.signal,
+          lifecycle,
         });
-        receiptTxs.push(signature);
+        if (!receiptTxs.includes(signature)) receiptTxs.push(signature);
         totalProcessed += batchSize;
         pending.splice(0, batchSize);
         break;
@@ -3671,6 +3899,206 @@ function cleanupContext(context: CommerceContext): CommerceContext {
   };
 }
 
+function isDeliveryRecoveryCancellation(error: unknown, signal: AbortSignal): boolean {
+  return isSignalCancellationError(signal, error);
+}
+
+function confirmedReceiptTransactions(order: Record<string, unknown>): string[] {
+  if (!Array.isArray(order.receiptTxs)) return [];
+  return Array.from(new Set(order.receiptTxs.filter((value): value is string =>
+    typeof value === 'string' && isNonZeroBase58Bytes(value, 64))));
+}
+
+function pendingReceiptSubmission(order: Record<string, unknown>): PendingReceiptSubmission | undefined {
+  const recovery = isRecord(order.receiptRecovery) ? order.receiptRecovery : {};
+  const value = recovery.pendingSubmission;
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) {
+    throw new DeliveryReceiptError('failed-precondition', 'Stored receipt submission recovery is invalid.');
+  }
+  const signature = typeof value.signature === 'string' ? value.signature.trim() : '';
+  const blockhash = typeof value.blockhash === 'string' ? value.blockhash.trim() : '';
+  const lastValidBlockHeight = Math.floor(Number(value.lastValidBlockHeight));
+  const assetIds = Array.isArray(value.assetIds)
+    ? value.assetIds.map((assetId) => typeof assetId === 'string' ? assetId.trim() : '')
+    : [];
+  if (
+    !isNonZeroBase58Bytes(signature, 64) || !isNonZeroBase58Bytes(blockhash, 32) ||
+    !Number.isSafeInteger(lastValidBlockHeight) || lastValidBlockHeight < 1 ||
+    assetIds.length < 1 || assetIds.length > 3 || new Set(assetIds).size !== assetIds.length ||
+    assetIds.some((assetId) => !isNonZeroBase58Bytes(assetId, 32))
+  ) {
+    throw new DeliveryReceiptError('failed-precondition', 'Stored receipt submission recovery is invalid.');
+  }
+  return { signature, blockhash, lastValidBlockHeight, assetIds };
+}
+
+async function hasPendingReceiptSubmission(context: CommerceContext, path: string): Promise<boolean> {
+  try {
+    const document = await readDocument(context, path);
+    return Boolean(document && pendingReceiptSubmission(document.fields));
+  } catch {
+    return true;
+  }
+}
+
+function samePendingReceiptSubmission(left: PendingReceiptSubmission, right: PendingReceiptSubmission): boolean {
+  return left.signature === right.signature &&
+    left.blockhash === right.blockhash &&
+    left.lastValidBlockHeight === right.lastValidBlockHeight &&
+    left.assetIds.length === right.assetIds.length &&
+    left.assetIds.every((assetId, index) => assetId === right.assetIds[index]);
+}
+
+function pendingReceiptSubmissionAlreadySettled(
+  document: Record<string, unknown>,
+  pending: PendingReceiptSubmission,
+  outcome: Exclude<ReceiptSubmissionOutcome, 'unresolved'>,
+): boolean {
+  return outcome === 'expired' || confirmedReceiptTransactions(document).includes(pending.signature);
+}
+
+async function persistPendingReceiptSubmission(
+  context: CommerceContext,
+  path: string,
+  pending: PendingReceiptSubmission,
+): Promise<void> {
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    const document = await readDocument(context, path);
+    if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
+    const existing = pendingReceiptSubmission(document.fields);
+    if (existing && !samePendingReceiptSubmission(existing, pending)) {
+      throw new DeliveryReceiptError('aborted', 'A receipt transaction is still being reconciled.');
+    }
+    try {
+      await commitWrites(context, [updateWrite({
+        path,
+        fields: {
+          [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: pending,
+          'receiptRecovery.leaseExpiresAt': commerceTimestamp(
+            context.nowMs + DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS,
+          ),
+        },
+        fieldPaths: [
+          RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD,
+          'receiptRecovery.leaseExpiresAt',
+        ],
+        expectedUpdateTime: document.updateTime,
+      })]);
+      return;
+    } catch (error) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      if (!(error instanceof CommerceWriteConflict)) {
+        try {
+          const cleanup = cleanupContext(context);
+          const document = await readDocument(cleanup, path);
+          const stored = document && pendingReceiptSubmission(document.fields);
+          if (stored && samePendingReceiptSubmission(stored, pending)) return;
+        } catch {}
+      }
+      throw error;
+    }
+  }
+}
+
+async function settlePendingReceiptSubmission(
+  context: CommerceContext,
+  path: string,
+  pending: PendingReceiptSubmission,
+  outcome: Exclude<ReceiptSubmissionOutcome, 'unresolved'>,
+): Promise<void> {
+  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+    const document = await readDocument(context, path);
+    if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
+    const existing = pendingReceiptSubmission(document.fields);
+    if (!existing) {
+      if (pendingReceiptSubmissionAlreadySettled(document.fields, pending, outcome)) return;
+      throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
+    }
+    if (!samePendingReceiptSubmission(existing, pending)) {
+      throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
+    }
+    try {
+      await commitWrites(context, [updateWrite({
+        path,
+        fields: outcome === 'confirmed'
+          ? { receiptTxs: commerceFieldValue.arrayUnion(pending.signature) }
+          : {},
+        fieldPaths: [
+          ...(outcome === 'confirmed' ? ['receiptTxs'] : []),
+          RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD,
+        ],
+        expectedUpdateTime: document.updateTime,
+      })]);
+      return;
+    } catch (error) {
+      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
+        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
+        continue;
+      }
+      try {
+        const cleanup = cleanupContext(context);
+        const document = await readDocument(cleanup, path);
+        const stored = document && pendingReceiptSubmission(document.fields);
+        if (
+          document && !stored &&
+          pendingReceiptSubmissionAlreadySettled(document.fields, pending, outcome)
+        ) return;
+      } catch {}
+      throw error;
+    }
+  }
+}
+
+async function probePendingReceiptSubmission(
+  connection: Connection,
+  pending: PendingReceiptSubmission,
+): Promise<ReceiptSubmissionOutcome> {
+  const status = (await connection.getSignatureStatuses(
+    [pending.signature],
+    { searchTransactionHistory: true },
+  )).value[0];
+  if (status?.err) return 'expired';
+  if (hasConfirmedSignatureCommitment(status)) {
+    return 'confirmed';
+  }
+  if (status) return 'unresolved';
+  const infos = await connection.getMultipleAccountsInfo(
+    pending.assetIds.map((assetId) => new PublicKey(assetId)),
+    { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
+  );
+  if (infos.every((info) => !info)) return 'confirmed';
+  const validity = await connection.isBlockhashValid(pending.blockhash, { commitment: 'confirmed' });
+  return validity.value ? 'unresolved' : 'expired';
+}
+
+async function reconcilePendingReceiptSubmission(args: {
+  commerce: CommerceContext;
+  provider: ProviderContext;
+  runtime: DeliveryRuntime;
+  path: string;
+  pending: PendingReceiptSubmission;
+}): Promise<ReceiptSubmissionOutcome> {
+  const probeContext = cleanupContext(args.commerce);
+  let outcome: ReceiptSubmissionOutcome = 'unresolved';
+  try {
+    outcome = await probePendingReceiptSubmission(
+      createConnection({ ...args.provider, signal: probeContext.signal }, args.runtime),
+      args.pending,
+    );
+  } catch {}
+  const persistence = cleanupContext(args.commerce);
+  if (outcome === 'unresolved') {
+    await persistPendingReceiptSubmission(persistence, args.path, args.pending);
+  } else {
+    await settlePendingReceiptSubmission(persistence, args.path, args.pending, outcome);
+  }
+  return outcome;
+}
+
 function normalizeRecoveryErrorCode(error: unknown): string | undefined {
   if (error instanceof DeliveryReceiptError) return error.code;
   if (error instanceof DOMException && error.name === 'TimeoutError') return 'deadline-exceeded';
@@ -3731,6 +4159,7 @@ async function issueReceiptsRequest(
   commerce: CommerceContext,
   provider: ProviderContext,
   waitUntil: DeferredWork,
+  overrides: Partial<{ retryIssueReceipts: typeof retryIssueReceipts }> = {},
 ): Promise<ReceiptIssueResult> {
   const wallet = await resolveRequestWallet(identity, (uid) => loadBoundWallet(commerce, env.OPS_DB, uid));
   const ownerWallet = canonicalPublicKey(body.owner, 'wallet address').toBase58();
@@ -3742,7 +4171,7 @@ async function issueReceiptsRequest(
   const path = dropDeliveryOrderPath(runtime.dropId, body.deliveryId);
   const order = await readDocument(commerce, path);
   if (!order) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
-  let leaseAcquired = false;
+  let acquiredLease: Extract<Awaited<ReturnType<typeof acquireDeliveryRecoveryLease>>, { acquired: true }>['lease'] | undefined;
   if (order.fields.status !== 'ready_to_ship') {
     const lease = await acquireDeliveryRecoveryLease(commerce, path, ownerWallet, Date.now(), true);
     if (!lease.acquired) {
@@ -3759,11 +4188,12 @@ async function issueReceiptsRequest(
         throw new DeliveryReceiptError('failed-precondition', lease.result.message || 'Unable to start receipt issuance.');
       }
     } else {
-      leaseAcquired = true;
+      acquiredLease = lease.lease;
     }
   }
   try {
-    const result = await retryIssueReceipts({
+    if (commerce.signal.aborted) throw commerce.signal.reason;
+    const result = await (overrides.retryIssueReceipts || retryIssueReceipts)({
       request: {
         ownerWallet,
         deliveryId: body.deliveryId,
@@ -3777,16 +4207,27 @@ async function issueReceiptsRequest(
       waitUntil,
       randomInt: secureRandomInt,
     });
-    if (leaseAcquired) {
+    if (acquiredLease) {
       await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), path, {}).catch(() => undefined);
     }
     return result;
   } catch (error) {
-    if (leaseAcquired) {
-      await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), path, {
-        errorCode: normalizeRecoveryErrorCode(error),
-        message: normalizeRecoveryMessage(error),
-      }).catch(() => undefined);
+    if (acquiredLease && isDeliveryRecoveryCancellation(error, commerce.signal)) {
+      const reason = commerce.signal.reason;
+      const cleanup = cleanupContext(commerce);
+      if (!await hasPendingReceiptSubmission(cleanup, path)) {
+        await cancelDeliveryRecoveryAttempt(cleanup, path, acquiredLease).catch(() => undefined);
+      }
+      throw reason;
+    }
+    if (acquiredLease) {
+      const cleanup = cleanupContext(commerce);
+      if (!await hasPendingReceiptSubmission(cleanup, path)) {
+        await finalizeDeliveryRecoveryAttempt(cleanup, path, {
+          errorCode: normalizeRecoveryErrorCode(error),
+          message: normalizeRecoveryMessage(error),
+        }).catch(() => undefined);
+      }
     }
     throw error;
   }
@@ -3811,7 +4252,18 @@ async function recoverReceiptsRequest(
   commerce: CommerceContext,
   provider: ProviderContext,
   waitUntil: DeferredWork,
+  overrides: Partial<{
+    hasConfirmedDeliveryRecord: typeof hasConfirmedDeliveryRecord;
+    recordPreparedDeliveryRecoveryMiss: typeof recordPreparedDeliveryRecoveryMiss;
+    retryIssueReceipts: typeof retryIssueReceipts;
+  }> = {},
 ): Promise<RecoverDeliveryOrdersResult> {
+  const recoveryDependencies = {
+    hasConfirmedDeliveryRecord,
+    recordPreparedDeliveryRecoveryMiss,
+    retryIssueReceipts,
+    ...overrides,
+  };
   const wallet = await resolveRequestWallet(identity, (uid) => loadBoundWallet(commerce, env.OPS_DB, uid));
   if (body.deliveryId !== undefined && body.dropId === undefined) {
     throw new DeliveryReceiptError('invalid-argument', 'deliveryId requires dropId.');
@@ -3848,6 +4300,7 @@ async function recoverReceiptsRequest(
   }
   candidates.sort(compareDeliveryRecoveryCandidates);
   for (const document of candidates) {
+    if (commerce.signal.aborted) throw commerce.signal.reason;
     const base = orderResultBase(document);
     if (!base) continue;
     if (document.fields.owner && document.fields.owner !== wallet) {
@@ -3861,7 +4314,7 @@ async function recoverReceiptsRequest(
       continue;
     }
     if (base.statusBefore === 'ready_to_ship') {
-      const result = await retryIssueReceipts({
+      const result = await recoveryDependencies.retryIssueReceipts({
         request: {
           ownerWallet: wallet,
           deliveryId: base.deliveryId,
@@ -3887,8 +4340,14 @@ async function recoverReceiptsRequest(
     if (base.statusBefore === 'prepared' && !force) {
       let exists: boolean | null = null;
       try {
-        exists = await hasConfirmedDeliveryRecord(provider, runtime, base.deliveryId, document.fields);
+        exists = await recoveryDependencies.hasConfirmedDeliveryRecord(
+          provider,
+          runtime,
+          base.deliveryId,
+          document.fields,
+        );
       } catch (error) {
+        if (isDeliveryRecoveryCancellation(error, commerce.signal)) throw commerce.signal.reason;
         console.warn({
           event: 'delivery_receipt_recovery_eligibility_failed',
           dropId: base.dropId,
@@ -3896,12 +4355,14 @@ async function recoverReceiptsRequest(
           error: summarizeError(error),
         });
       }
+      if (commerce.signal.aborted) throw commerce.signal.reason;
       if (exists === false) {
-        const nextCheckAt = await recordPreparedDeliveryRecoveryMiss(
+        const nextCheckAt = await recoveryDependencies.recordPreparedDeliveryRecoveryMiss(
           commerce,
           document,
           nowMs,
         ).catch((error) => {
+          if (isDeliveryRecoveryCancellation(error, commerce.signal)) throw commerce.signal.reason;
           console.warn({
             event: 'delivery_receipt_recovery_probe_failed',
             dropId: base.dropId,
@@ -3937,7 +4398,8 @@ async function recoverReceiptsRequest(
     }
     attempted += 1;
     try {
-      const result = await retryIssueReceipts({
+      if (commerce.signal.aborted) throw commerce.signal.reason;
+      const result = await recoveryDependencies.retryIssueReceipts({
         request: {
           ownerWallet: wallet,
           deliveryId: base.deliveryId,
@@ -3959,6 +4421,19 @@ async function recoverReceiptsRequest(
       });
       await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), document.path, {}).catch(() => undefined);
     } catch (error) {
+      rethrowDeferredWorkRegistrationError(error);
+      if (isDeliveryRecoveryCancellation(error, commerce.signal)) {
+        const reason = commerce.signal.reason;
+        const cleanup = cleanupContext(commerce);
+        if (!await hasPendingReceiptSubmission(cleanup, document.path)) {
+          await cancelDeliveryRecoveryAttempt(
+            cleanup,
+            document.path,
+            lease.lease,
+          ).catch(() => undefined);
+        }
+        throw reason;
+      }
       const { errorCode, message, outcome } = deliveryRecoveryFailure(error);
       const cleanup = cleanupContext(commerce);
       if (base.statusBefore === 'prepared') {
@@ -3969,10 +4444,12 @@ async function recoverReceiptsRequest(
           errorCode,
         ).catch(() => undefined);
       }
-      await finalizeDeliveryRecoveryAttempt(cleanup, document.path, {
-        errorCode,
-        message,
-      }).catch(() => undefined);
+      if (!await hasPendingReceiptSubmission(cleanup, document.path)) {
+        await finalizeDeliveryRecoveryAttempt(cleanup, document.path, {
+          errorCode,
+          message,
+        }).catch(() => undefined);
+      }
       if (error instanceof ReadyToShipNotificationEnqueueError) throw error;
       results.push({
         ...base,
@@ -3989,6 +4466,7 @@ async function recoverReceiptsRequest(
       });
     }
   }
+  if (commerce.signal.aborted) throw commerce.signal.reason;
   const walletRecovery = await fetchDeliveryRecoveryState(commerce, wallet, Date.now());
   return buildRecoverDeliveryOrdersResult({ attempted, recovered, walletRecovery, results });
 }
@@ -4021,11 +4499,10 @@ export async function handleDeliveryReceiptRequest(
       authOutcome: 'rejected',
     };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Delivery receipt request timed out', 'TimeoutError')),
-    dependencies.timeoutMs,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'Delivery receipt request timed out',
+  });
   const trackedFetch: ProfileProviderFetch = async (input, init) => {
     const startedAt = performance.now();
     metrics.upstreamCalls += 1;
@@ -4039,15 +4516,16 @@ export async function handleDeliveryReceiptRequest(
   let dropId: string | undefined;
   let deliveryId: number | undefined;
   try {
-    identity = await dependencies.verifyIdentity(
+    const verifiedIdentity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
-      controller.signal,
+      deadline.signal,
       dependencies.nowMs(),
     );
+    identity = verifiedIdentity;
     const rawBody = await readRequestBody(
       request,
-      controller.signal,
+      deadline.signal,
       path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'issue' : 'recover',
     );
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
@@ -4060,21 +4538,24 @@ export async function handleDeliveryReceiptRequest(
       repository: new D1CommerceRepository(env.COMMERCE_DB),
       nowMs: dependencies.nowMs(),
       providerFetch: trackedFetch,
-      signal: controller.signal,
+      signal: deadline.signal,
       dataDb: env.DATA_DB,
     };
-    const provider: ProviderContext = { apiKey, fetch: trackedFetch, signal: controller.signal };
+    const provider: ProviderContext = { apiKey, fetch: trackedFetch, signal: deadline.signal };
     if (path === DELIVERY_RECEIPTS_ISSUE_PATH) {
       const body = rawBody as IssueRequest;
       dropId = normalizeDropId(body.dropId);
       deliveryId = body.deliveryId;
-      const result: IssueReceiptsResult = await dependencies.issue(
-        body,
-        identity,
-        env,
-        common,
-        provider,
-        defer,
+      const result: IssueReceiptsResult = await runCriticalRequestOperation(
+        () => dependencies.issue(
+          body,
+          verifiedIdentity,
+          env,
+          common,
+          provider,
+          defer,
+        ),
+        { deadline, defer },
       );
       return {
         response: jsonResponse(result),
@@ -4088,13 +4569,16 @@ export async function handleDeliveryReceiptRequest(
     const body = rawBody as RecoverRequest;
     dropId = body.dropId ? normalizeDropId(body.dropId) : undefined;
     deliveryId = body.deliveryId;
-    const result = await dependencies.recover(
-      body,
-      identity,
-      env,
-      common,
-      provider,
-      defer,
+    const result = await runCriticalRequestOperation(
+      () => dependencies.recover(
+        body,
+        verifiedIdentity,
+        env,
+        common,
+        provider,
+        defer,
+      ),
+      { deadline, defer },
     );
     return {
       response: jsonResponse(result),
@@ -4109,7 +4593,8 @@ export async function handleDeliveryReceiptRequest(
   } catch (error) {
     rethrowDeferredWorkRegistrationError(error);
     let receiptError: DeliveryReceiptError;
-    if (controller.signal.aborted) {
+    if (isRequestCancellationError(request, error)) throw error;
+    if (deadline.timedOut()) {
       receiptError = new DeliveryReceiptError('deadline-exceeded', 'Delivery receipt request timed out.');
     } else if (error instanceof RequestIdentityError) {
       receiptError = new DeliveryReceiptError(
@@ -4146,7 +4631,7 @@ export async function handleDeliveryReceiptRequest(
       verification: path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'signature' : 'delivery_pda',
     };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }
 
@@ -4156,7 +4641,9 @@ export const deliveryReceiptTestHooks = {
   assertDeliverArgsMatchOrder,
   assertOnchainConfigMatchesRuntime,
   acquireDeliveryRecoveryLease,
+  cancelDeliveryRecoveryAttempt,
   compareDeliveryRecoveryCandidates,
+  confirmedReceiptTransactions,
   decodeDeliveryRecord,
   decodeCosigner,
   deliveryRecoveryEligibility,
@@ -4165,11 +4652,17 @@ export const deliveryReceiptTestHooks = {
   DeliveryReceiptError,
   handlePreparedRecoveryFailure,
   issueReceiptsRequest,
+  pendingReceiptSubmission,
+  persistPendingReceiptSubmission,
+  probePendingReceiptSubmission,
+  reconcilePendingReceiptSubmission,
+  settlePendingReceiptSubmission,
   loadBoundWallet,
   markDeliveryReady,
   markReadyToShipNotificationsQueued,
   normalizeAssignedDudeIds,
   projectPendingDeliveryPackStatus,
+  readBoundedProviderResponse,
   recordDeliveryPackStatusProjectionTransientFailure,
   pendingReceiptItems,
   ReceiptBatchRetryExhaustedError,
@@ -4181,8 +4674,10 @@ export const deliveryReceiptTestHooks = {
   runDeliveryRecoveryStateQuery,
   runPendingReadyNotificationQuery,
   secureRandomInt,
+  sendReceiptBatch,
   shouldShrinkReceiptBatch,
   storedDeliveryItemIds,
+  waitForSignature,
 };
 
 export const deliveryReceiptRuntime = {

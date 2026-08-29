@@ -251,6 +251,63 @@ test('paused reveal storage rejects requests before reveal reads or mutations', 
   assert.equal(assignments, 0);
 });
 
+test('stalled pre-mutation reads respect the deadline and late success starts no mutation', async () => {
+  for (const stage of ['storage', 'wallet', 'submission'] as const) {
+    let markStarted!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let assignments = 0;
+    let reservations = 0;
+    let sends = 0;
+    const overrides: Record<string, unknown> = {
+      timeoutMs: 5,
+      assignDudes: async () => {
+        assignments += 1;
+        return { dudeIds: [9], outcome: 'created' as const };
+      },
+      reserveRevealSubmission: async () => {
+        reservations += 1;
+        throw new Error('unexpected reservation');
+      },
+      sendAndConfirmTransaction: async () => {
+        sends += 1;
+        throw new Error('unexpected send');
+      },
+    };
+    if (stage === 'storage') {
+      overrides.loadStorageControl = async () => new Promise((resolve) => {
+        release = () => resolve({ paused: false, source: 'd1' as const, revision: 1, updatedAtMs: 0 });
+        markStarted();
+      });
+    } else if (stage === 'wallet') {
+      overrides.loadBoundWallet = async () => new Promise((resolve) => {
+        release = () => resolve(OWNER.toBase58());
+        markStarted();
+      });
+    } else {
+      overrides.loadRevealSubmission = async () => new Promise((resolve) => {
+        release = () => resolve(null);
+        markStarted();
+      });
+    }
+
+    const pending = handleRevealDudes(
+      request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+      env(),
+      failOnDeferredWork,
+      dependencies(overrides),
+    );
+    await started;
+    const result = await pending;
+    assert.equal(result.response.status, 504, stage);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(assignments, 0, stage);
+    assert.equal(reservations, 0, stage);
+    assert.equal(sends, 0, stage);
+  }
+});
+
 test('reveal handler maps a reservation pause race to the maintenance response', async () => {
   const result = await handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
@@ -351,6 +408,53 @@ test('reveal handler queues before send and returns stable recovery details for 
   assert.equal(queued.length, 1);
   assert.equal(isRevealBackgroundJob(queued[0]), true);
   assert.equal(deferred.promises.length, 0);
+});
+
+test('server deadline after broadcast returns frontend-parsable recovery details', async () => {
+  let markSendStarted!: () => void;
+  let submittedSignature = '';
+  const sendStarted = new Promise<void>((resolve) => { markSendStarted = resolve; });
+  const pending = handleRevealDudes(
+    request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+    env(),
+    failOnDeferredWork,
+    dependencies({
+      timeoutMs: 50,
+      sendAndConfirmTransaction: async (
+        context: { signal: AbortSignal },
+        _runtime: unknown,
+        transaction: VersionedTransaction,
+      ) => new Promise<string>((_resolve, reject) => {
+        const signature = bs58.encode(transaction.signatures[0]);
+        submittedSignature = signature;
+        const onAbort = () => {
+          const error = new RevealDudesError(
+            'deadline-exceeded',
+            'Reveal transaction was not confirmed. Try again.',
+            { signature, lastError: 'timeout', maybeSubmitted: true },
+          );
+          Object.defineProperty(error, 'cause', { value: context.signal.reason });
+          reject(error);
+        };
+        context.signal.addEventListener('abort', onAbort, { once: true });
+        if (context.signal.aborted) onAbort();
+        markSendStarted();
+      }),
+    }),
+  );
+
+  await sendStarted;
+  const result = await pending;
+  assert.equal(result.response.status, 504);
+  assert.equal(result.transactionOutcome, 'unknown');
+  assert.deepEqual((await result.response.json() as { error: { details: unknown } }).error.details, {
+    kind: 'reveal-submission-unknown',
+    submission: {
+      signature: submittedSignature,
+      recentBlockhash: BLOCKHASH,
+      dudeIds: [9],
+    },
+  });
 });
 
 test('durably confirmed stored submission recovers without a provider secret or RPC reads', async () => {
@@ -733,36 +837,27 @@ test('queue failure schedules fresh cleanup and prevents broadcast', async () =>
   assert.equal(failureSignal.aborted, false);
 });
 
-test('pre-send abort after reservation schedules one fresh failure transition without sending', async () => {
-  let requestSignal: AbortSignal | undefined;
+test('queue deadline retains one enqueue and conditionally fails the reservation without sending', async () => {
   let failureSignal: AbortSignal | undefined;
   let failureCalls = 0;
-  let providerCalls = 0;
+  let sendCalls = 0;
+  let markQueueStarted!: () => void;
+  let releaseQueue!: () => void;
+  const queueStarted = new Promise<void>((resolve) => { markQueueStarted = resolve; });
   const deferred = createDeferredWorkCollector();
-  const result = await handleRevealDudes(
+  const pending = handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
-    env(),
+    env(COSIGNER, queue(async () => new Promise((resolve) => {
+      releaseQueue = () => resolve({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } });
+      markQueueStarted();
+    }))),
     deferred.defer,
     dependencies({
-      providerFetch: async () => {
-        providerCalls += 1;
-        throw new Error('unexpected provider fetch');
+      timeoutMs: 5,
+      sendAndConfirmTransaction: async () => {
+        sendCalls += 1;
+        throw new Error('unexpected send');
       },
-      reserveRevealSubmission: async (
-        context: Parameters<typeof revealDudesTestHooks.reserveRevealSubmission>[0],
-        _runtime: unknown,
-        _boxAssetId: string,
-        candidate: Parameters<typeof revealDudesTestHooks.reserveRevealSubmission>[3],
-      ) => {
-        requestSignal = context.signal;
-        Object.defineProperty(context.signal, 'aborted', { configurable: true, value: true });
-        Object.defineProperty(context.signal, 'reason', {
-          configurable: true,
-          value: new DOMException('request expired', 'AbortError'),
-        });
-        return { submission: candidate, owned: true };
-      },
-      sendAndConfirmTransaction: revealDudesTestHooks.sendAndConfirmTransaction,
       failRevealSubmission: async (
         context: Parameters<typeof revealDudesTestHooks.failRevealSubmission>[0],
       ) => {
@@ -773,39 +868,70 @@ test('pre-send abort after reservation schedules one fresh failure transition wi
     }),
   );
 
+  await queueStarted;
+  const result = await pending;
   assert.equal(result.response.status, 504);
   assert.equal(result.transactionOutcome, 'failed');
-  assert.equal(providerCalls, 0);
+  assert.equal(sendCalls, 0);
   assert.equal(deferred.promises.length, 1);
+  releaseQueue();
   await deferred.drain();
   assert.equal(failureCalls, 1);
-  assert.ok(requestSignal);
   assert.ok(failureSignal);
-  assert.equal(requestSignal.aborted, true);
   assert.equal(failureSignal.aborted, false);
-  assert.notEqual(failureSignal, requestSignal);
+  assert.equal(deferred.promises.length, 1);
 });
 
-test('aborted reservation commit recovery schedules a fresh conditional failure transition', async () => {
-  let requestSignal: AbortSignal | undefined;
+test('queue deadline propagates deferred-work registration failures', async () => {
+  const cause = new Error('waitUntil rejected stalled queue work');
+  let markQueueStarted!: () => void;
+  const queueStarted = new Promise<void>((resolve) => { markQueueStarted = resolve; });
+  const pending = handleRevealDudes(
+    request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+    env(COSIGNER, queue(async () => {
+      markQueueStarted();
+      return new Promise(() => undefined);
+    })),
+    () => { throw cause; },
+    dependencies({ timeoutMs: 5 }),
+  );
+
+  await queueStarted;
+  await assert.rejects(
+    pending,
+    (error) => isDeferredWorkRegistrationError(error, cause),
+  );
+});
+
+test('reservation deadline retains one commit and performs one fresh conditional failure transition', async () => {
   let failureSignal: AbortSignal | undefined;
   let failedSignature = '';
+  let queueCalls = 0;
+  let sendCalls = 0;
+  let markReservationStarted!: () => void;
+  let releaseReservation!: () => void;
+  const reservationStarted = new Promise<void>((resolve) => { markReservationStarted = resolve; });
   const deferred = createDeferredWorkCollector();
-  const result = await handleRevealDudes(
+  const pending = handleRevealDudes(
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
-    env(),
+    env(COSIGNER, queue(async () => {
+      queueCalls += 1;
+      return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+    })),
     deferred.defer,
     dependencies({
+      timeoutMs: 5,
       reserveRevealSubmission: async (
-        context: Parameters<typeof revealDudesTestHooks.reserveRevealSubmission>[0],
-      ) => {
-        requestSignal = context.signal;
-        const reason = new DOMException('reservation response lost at deadline', 'AbortError');
-        Object.defineProperty(context.signal, 'aborted', { configurable: true, value: true });
-        Object.defineProperty(context.signal, 'reason', { configurable: true, value: reason });
-        throw reason;
-      },
+        _context: unknown,
+        _runtime: unknown,
+        _boxAssetId: string,
+        candidate: Parameters<typeof revealDudesTestHooks.reserveRevealSubmission>[3],
+      ) => new Promise((resolve) => {
+        releaseReservation = () => resolve({ submission: candidate, owned: true });
+        markReservationStarted();
+      }),
       sendAndConfirmTransaction: async () => {
+        sendCalls += 1;
         throw new Error('unexpected send');
       },
       failRevealSubmission: async (
@@ -821,15 +947,111 @@ test('aborted reservation commit recovery schedules a fresh conditional failure 
     }),
   );
 
+  await reservationStarted;
+  const result = await pending;
   assert.equal(result.response.status, 504);
   assert.equal(deferred.promises.length, 1);
+  releaseReservation();
   await deferred.drain();
-  assert.ok(requestSignal);
   assert.ok(failureSignal);
-  assert.equal(requestSignal.aborted, true);
   assert.equal(failureSignal.aborted, false);
-  assert.notEqual(failureSignal, requestSignal);
   assert.equal(bs58.decode(failedSignature).length, 64);
+  assert.equal(queueCalls, 0);
+  assert.equal(sendCalls, 0);
+  assert.equal(deferred.promises.length, 1);
+});
+
+test('assignment deadline retains one assignment and starts no later mutation', async () => {
+  let markAssignmentStarted!: () => void;
+  let releaseAssignment!: () => void;
+  const assignmentStarted = new Promise<void>((resolve) => { markAssignmentStarted = resolve; });
+  let reservationCalls = 0;
+  let queueCalls = 0;
+  let sendCalls = 0;
+  const deferred = createDeferredWorkCollector();
+  const pending = handleRevealDudes(
+    request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+    env(COSIGNER, queue(async () => {
+      queueCalls += 1;
+      return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+    })),
+    deferred.defer,
+    dependencies({
+      timeoutMs: 5,
+      assignDudes: async () => new Promise((resolve) => {
+        releaseAssignment = () => resolve({ dudeIds: [9], outcome: 'created' as const });
+        markAssignmentStarted();
+      }),
+      reserveRevealSubmission: async () => {
+        reservationCalls += 1;
+        throw new Error('unexpected reservation');
+      },
+      sendAndConfirmTransaction: async () => {
+        sendCalls += 1;
+        throw new Error('unexpected send');
+      },
+    }),
+  );
+
+  await assignmentStarted;
+  const result = await pending;
+  assert.equal(result.response.status, 504);
+  assert.equal(deferred.promises.length, 1);
+  releaseAssignment();
+  await deferred.drain();
+  assert.equal(reservationCalls, 0);
+  assert.equal(queueCalls, 0);
+  assert.equal(sendCalls, 0);
+  assert.equal(deferred.promises.length, 1);
+});
+
+test('final persistence deadline retains exactly the confirmed journal write', async () => {
+  let markConfirmationStarted!: () => void;
+  let releaseConfirmation!: () => void;
+  const confirmationStarted = new Promise<void>((resolve) => { markConfirmationStarted = resolve; });
+  let confirmationCalls = 0;
+  let packStatusCalls = 0;
+  let submittedSignature = '';
+  const deferred = createDeferredWorkCollector();
+  const pending = handleRevealDudes(
+    request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+    env(),
+    deferred.defer,
+    dependencies({
+      timeoutMs: 5,
+      sendAndConfirmTransaction: async (_context: unknown, _runtime: unknown, transaction: VersionedTransaction) => {
+        submittedSignature = bs58.encode(transaction.signatures[0]);
+        return submittedSignature;
+      },
+      confirmRevealSubmission: async () => new Promise<void>((resolve) => {
+        confirmationCalls += 1;
+        releaseConfirmation = resolve;
+        markConfirmationStarted();
+      }),
+      countOnlineRevealPackStatus: async () => {
+        packStatusCalls += 1;
+      },
+    }),
+  );
+
+  await confirmationStarted;
+  const result = await pending;
+  assert.equal(result.response.status, 504);
+  assert.equal(result.transactionOutcome, 'confirmed');
+  assert.deepEqual((await result.response.json() as { error: { details: unknown } }).error.details, {
+    kind: 'reveal-submission-unknown',
+    submission: {
+      signature: submittedSignature,
+      recentBlockhash: BLOCKHASH,
+      dudeIds: [9],
+    },
+  });
+  assert.equal(deferred.promises.length, 1);
+  releaseConfirmation();
+  await deferred.drain();
+  assert.equal(confirmationCalls, 1);
+  assert.equal(packStatusCalls, 0);
+  assert.equal(deferred.promises.length, 1);
 });
 
 test('confirmed reveal status-write failures return recovery details and leave repair to the pre-enqueued job', async () => {
@@ -1124,6 +1346,49 @@ test('RPC calls reject an already-aborted context without fetching', async () =>
     (error: unknown) => error === reason,
   );
   assert.equal(fetches, 0);
+});
+
+test('RPC calls preserve abort-first and provider-first outcomes', async () => {
+  const runtime = revealDudesTestHooks.runtimeForDrop(DROP_ID);
+  const cancellation = new AbortController();
+  const reason = new Error('client disconnected');
+  await assert.rejects(
+    revealDudesTestHooks.rpcCall(
+      providerContext(async () => {
+        cancellation.abort(reason);
+        throw new Error('provider failed after cancellation');
+      }, cancellation.signal),
+      runtime,
+      'getAccountInfo',
+      [],
+      { attempts: 1 },
+    ),
+    (error: unknown) => error === reason,
+  );
+
+  const race = new AbortController();
+  const providerError = new Error('provider failed first');
+  let rejectProvider!: (error: unknown) => void;
+  let markProviderStarted!: () => void;
+  const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
+  const providerFirst = assert.rejects(
+    revealDudesTestHooks.rpcCall(
+      providerContext(() => new Promise((_resolve, reject) => {
+        rejectProvider = reject;
+        markProviderStarted();
+      }), race.signal),
+      runtime,
+      'getAccountInfo',
+      [],
+      { attempts: 1 },
+    ),
+    (error: unknown) => error !== race.signal.reason &&
+      error instanceof RevealDudesError && error.code === 'unavailable',
+  );
+  await providerStarted;
+  rejectProvider(providerError);
+  queueMicrotask(() => race.abort(new Error('late client disconnect')));
+  await providerFirst;
 });
 
 test('RPC calls reject malformed result and error envelopes', async () => {
@@ -1586,6 +1851,23 @@ test('transaction metadata without an explicit null error never confirms', async
   assert.deepEqual(methods, ['getTransaction']);
 });
 
+test('final confirmation lookup rethrows cancellation', async () => {
+  const controller = new AbortController();
+  const reason = new Error('client disconnected during final lookup');
+  await assert.rejects(
+    revealDudesTestHooks.waitForSignature(
+      providerContext(async () => {
+        controller.abort(reason);
+        throw new Error('lookup aborted', { cause: reason });
+      }, controller.signal),
+      revealDudesTestHooks.runtimeForDrop(DROP_ID),
+      SIGNATURE,
+      0,
+    ),
+    (error: unknown) => error === reason,
+  );
+});
+
 test('transaction submission confirms the exact signed transaction signature', async () => {
   const transaction = signedTransaction();
   const expectedSignature = bs58.encode(transaction.signatures[0]);
@@ -1643,6 +1925,41 @@ test('accepted transaction with unresolved confirmation is maybe submitted', asy
     },
   );
   assert.deepEqual(methods, ['sendTransaction']);
+});
+
+test('accepted transaction preserves cancellation cause and deterministic signature', async () => {
+  const transaction = signedTransaction();
+  const expectedSignature = bs58.encode(transaction.signatures[0]);
+  const controller = new AbortController();
+  const reason = new Error('client disconnected during confirmation');
+  await assert.rejects(
+    revealDudesTestHooks.sendAndConfirmTransaction(
+      providerContext(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown> & { method: string };
+        if (body.method === 'sendTransaction') return rpcResponse(body, expectedSignature);
+        throw new Error(`Unexpected RPC method: ${body.method}`);
+      }, controller.signal),
+      revealDudesTestHooks.runtimeForDrop(DROP_ID),
+      transaction,
+      {
+        waitForSignature: async () => {
+          controller.abort(reason);
+          throw new Error('confirmation aborted', { cause: reason });
+        },
+      },
+    ),
+    (error: unknown) => {
+      if (!(error instanceof RevealDudesError)) return false;
+      assert.equal(error.cause, reason);
+      assert.equal(error.code, 'deadline-exceeded');
+      assert.deepEqual(error.details, {
+        signature: expectedSignature,
+        lastError: 'timeout',
+        maybeSubmitted: true,
+      });
+      return true;
+    },
+  );
 });
 
 test('explicit on-chain transaction errors remain final failures', async () => {

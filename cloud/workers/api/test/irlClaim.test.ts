@@ -19,6 +19,7 @@ import {
   BUBBLEGUM_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { createTimedAbortScope } from '../src/boundedRequest.ts';
 import { commerceKeys } from '../src/commerceRepository.ts';
 import {
   handleIrlClaimPrepare,
@@ -302,13 +303,101 @@ test('IRL claim provider adapters bound responses and retry transient reads once
 
 test('IRL claim provider attempt scope aborts independently of the overall request', async () => {
   const overall = new AbortController();
-  const scope = irlClaimTestHooks.createProviderAttemptScope(overall.signal, 5);
+  const scope = createTimedAbortScope(overall.signal, {
+    timeoutMs: 5,
+    timeoutMessage: 'Claim provider request timed out',
+  });
   await new Promise<void>((resolve) => {
     scope.signal.addEventListener('abort', () => resolve(), { once: true });
   });
   assert.equal(scope.timedOut(), true);
   assert.equal(overall.signal.aborted, false);
   scope.dispose();
+});
+
+test('IRL claim enforces deadlines when D1 claim reads ignore the signal', async () => {
+  for (const mode of ['stalled', 'late-success'] as const) {
+    const result = await handleIrlClaimPrepare(
+      request({ owner: OWNER.toBase58(), code: '1234567890' }),
+      env(),
+      dependencies({
+        loadClaim: async () => mode === 'stalled'
+          ? new Promise<Record<string, unknown>>(() => undefined)
+          : new Promise<Record<string, unknown>>((resolve) => setTimeout(() => resolve({
+              dropId: DROP_ID,
+              boxId: 7,
+              dudeIds: [1, 2, 3],
+            }), 20)),
+        timeoutMs: 5,
+      }),
+    );
+    assert.equal(result.response.status, 504, mode);
+    assert.equal(
+      (await result.response.json() as { error: { code: string } }).error.code,
+      'deadline-exceeded',
+      mode,
+    );
+  }
+});
+
+test('IRL claim provider preserves abort-first and provider-first outcomes', async () => {
+  const runtime = irlClaimTestHooks.buildRuntime(DROP);
+  const cancellation = new AbortController();
+  const reason = new Error('client disconnected');
+  await assert.rejects(
+    irlClaimTestHooks.rpcCall({
+      apiKey: 'helius-key',
+      providerFetch: async () => {
+        cancellation.abort(reason);
+        throw new Error('provider failed after cancellation');
+      },
+      signal: cancellation.signal,
+    }, runtime, 'getLatestBlockhash', []),
+    (error: unknown) => error === reason,
+  );
+
+  const race = new AbortController();
+  const providerError = new Error('provider failed first');
+  let rejectProvider!: (error: unknown) => void;
+  let markProviderStarted!: () => void;
+  const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
+  const providerFirst = assert.rejects(
+    irlClaimTestHooks.rpcCall({
+      apiKey: 'helius-key',
+      providerFetch: () => new Promise((_resolve, reject) => {
+        rejectProvider = reject;
+        markProviderStarted();
+      }),
+      signal: race.signal,
+    }, runtime, 'getLatestBlockhash', []),
+    (error: unknown) => error !== race.signal.reason &&
+      (error as { code?: unknown }).code === 'unavailable',
+  );
+  await providerStarted;
+  rejectProvider(providerError);
+  queueMicrotask(() => race.abort(new Error('late client disconnect')));
+  await providerFirst;
+
+  const timeoutFirst = new AbortController();
+  await assert.rejects(
+    irlClaimTestHooks.rpcCall({
+      apiKey: 'helius-key',
+      attemptTimeoutMs: 5,
+      providerFetch: async (_input, init) => new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        assert.ok(signal);
+        const onAbort = () => {
+          const timeoutReason = signal.reason;
+          timeoutFirst.abort(new Error('late client disconnect'));
+          reject(timeoutReason);
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        if (signal.aborted) onAbort();
+      }),
+      signal: timeoutFirst.signal,
+    }, runtime, 'getLatestBlockhash', []),
+    (error: unknown) => (error as { code?: unknown }).code === 'deadline-exceeded',
+  );
 });
 
 test('IRL claim asset search cursor-paginates within the candidate budget', async () => {

@@ -49,6 +49,10 @@ import {
   revealDudes,
   revealDudesSubmissionUnknownDetails,
   issueReceipts,
+  stripeCheckoutOperationAfterFailure,
+  stripeCheckoutOperationState,
+  stripeCheckoutOperationWithCredential,
+  type StripeCheckoutOperationState,
 } from './api/commerce';
 import {
   getAdminProfileView,
@@ -1757,6 +1761,7 @@ function App({
   const pendingPreparedTransactionRef = useRef(pendingPreparedTransaction);
   pendingPreparedTransactionRef.current = pendingPreparedTransaction;
   const pendingPreparedSubmissionKeysRef = useRef<Set<string>>(new Set());
+  const stripeCheckoutOperationRef = useRef<StripeCheckoutOperationState | null>(null);
   const pendingPreparedReconciliationsRef = useRef<Map<string, Promise<PendingPreparedResolution>>>(new Map());
   const pendingPreparedRetryTimersRef = useRef<Map<string, number>>(new Map());
   const shipmentRefreshStopsRef = useRef<Set<() => void>>(new Set());
@@ -4835,12 +4840,30 @@ function App({
     try {
       const returnUrl = typeof window !== 'undefined' ? window.location.href : undefined;
       const checkoutQuantity = stripeCheckoutKind === 'size_variant' ? 1 : quantity;
-      const { id, url, authSubject: checkoutAuthSubject } = await createStripeCheckoutSession({
+      const checkoutRequest = {
         dropId: mintDrop.dropId,
         quantity: checkoutQuantity,
         variantKey,
         returnUrl,
-      });
+      };
+      const operation = stripeCheckoutOperationState(
+        stripeCheckoutOperationRef.current,
+        checkoutRequest,
+        authSubject,
+      );
+      stripeCheckoutOperationRef.current = operation;
+      const { id, url, authSubject: checkoutAuthSubject } = await createStripeCheckoutSession(
+        checkoutRequest,
+        operation.operationId,
+        (credentialSubject) => {
+          const current = stripeCheckoutOperationRef.current;
+          if (current?.operationId !== operation.operationId) return;
+          stripeCheckoutOperationRef.current = stripeCheckoutOperationWithCredential(
+            current,
+            credentialSubject,
+          );
+        },
+      );
       setStripeCheckoutMarkers(
         rememberStripeCheckoutStarted({
           sessionId: id,
@@ -4856,7 +4879,12 @@ function App({
         }),
       );
       window.location.assign(url);
+      stripeCheckoutOperationRef.current = null;
     } catch (err) {
+      stripeCheckoutOperationRef.current = stripeCheckoutOperationAfterFailure(
+        stripeCheckoutOperationRef.current,
+        err,
+      );
       showToast(err instanceof Error ? err.message : 'Failed to start Stripe payment');
     } finally {
       setStripePaymentLoading(false);

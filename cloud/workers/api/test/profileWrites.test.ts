@@ -434,6 +434,102 @@ test('address route maps D1 failures to a generic unavailable response with one 
     error: { code: 'unavailable', message: 'Profile data is temporarily unavailable.' },
   });
   assert.equal(autoIds, 1);
+
+  const controller = new AbortController();
+  const d1Failure = new Error('D1 write failed first');
+  const clientReason = new Error('late client disconnect');
+  const raced = await handleProfileWriteRequest(
+    new Request(request(PROFILE_ADDRESSES_PATH, {
+      encrypted: 'cipher-text',
+      country: 'US',
+      countryCode: 'US',
+      hint: 'hint',
+    }), { signal: controller.signal }),
+    env,
+    PROFILE_ADDRESSES_PATH,
+    d1Dependencies(providerFetch, {
+      saveProfileAddress: () => new Promise((_resolve, reject) => {
+        reject(d1Failure);
+        controller.abort(clientReason);
+      }),
+    }),
+  );
+  assert.equal(raced.response.status, 502);
+  assert.equal((await raced.response.json() as { error: { code: string } }).error.code, 'unavailable');
+});
+
+test('profile write wallet binding distinguishes cancellation from an earlier D1 failure', async () => {
+  const providerFetch: ProfileProviderFetch = async () => Response.json({ error: 'unexpected' }, { status: 500 });
+  const body = {
+    encrypted: 'cipher-text',
+    country: 'US',
+    countryCode: 'US',
+    hint: 'hint',
+  };
+  const racedController = new AbortController();
+  const d1Failure = new Error('D1 wallet binding failed first');
+  const lateReason = new Error('late client disconnect');
+  const raced = await handleProfileWriteRequest(
+    new Request(request(PROFILE_ADDRESSES_PATH, body), { signal: racedController.signal }),
+    env,
+    PROFILE_ADDRESSES_PATH,
+    d1Dependencies(providerFetch, {
+      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-user' }),
+      resolveD1AuthWalletBinding: () => new Promise<never>((_resolve, reject) => {
+        reject(d1Failure);
+        setTimeout(() => racedController.abort(lateReason), 0);
+      }),
+    }),
+  );
+  assert.equal(raced.response.status, 503);
+  assert.equal((await raced.response.json() as { error: { code: string } }).error.code, 'unavailable');
+
+  const cancelledController = new AbortController();
+  const cancellation = new Error('client disconnected during wallet binding');
+  await assert.rejects(
+    handleProfileWriteRequest(
+      new Request(request(PROFILE_ADDRESSES_PATH, body), { signal: cancelledController.signal }),
+      env,
+      PROFILE_ADDRESSES_PATH,
+      d1Dependencies(providerFetch, {
+        verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-user' }),
+        resolveD1AuthWalletBinding: async () => {
+          cancelledController.abort(cancellation);
+          throw cancellation;
+        },
+      }),
+    ),
+    (error: unknown) => error === cancellation,
+  );
+});
+
+test('profile write wallet binding enforces the deadline before starting a mutation', async () => {
+  let mutationStarts = 0;
+  let deferred = 0;
+  const result = await handleProfileWriteRequest(
+    request(PROFILE_ADDRESSES_PATH, {
+      encrypted: 'cipher-text',
+      country: 'US',
+      hint: 'hint',
+    }),
+    env,
+    PROFILE_ADDRESSES_PATH,
+    d1Dependencies(async () => assert.fail('wallet binding deadline reached provider fetch'), {
+      defer: () => { deferred += 1; },
+      resolveD1AuthWalletBinding: async () => new Promise<never>(() => undefined),
+      saveProfileAddress: async () => {
+        mutationStarts += 1;
+        assert.fail('mutation started after wallet binding deadline');
+      },
+      timeoutMs: 5,
+      verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-user' }),
+    }),
+  );
+
+  assert.equal(result.response.status, 504);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
+  assert.equal(mutationStarts, 0);
+  assert.equal(deferred, 0);
 });
 
 test('address route uses D1 wallet sessions without requesting Commerce authSessions', async () => {
@@ -482,6 +578,62 @@ test('address route applies the request deadline to D1 persistence', async () =>
   );
   assert.equal(result.response.status, 504);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
+});
+
+test('address deadline defers one non-cooperative write and preserves its late completion', async () => {
+  let resolveWrite!: (address: {
+    id: string;
+    country: string;
+    encrypted: string;
+    hint: string;
+  }) => void;
+  let starts = 0;
+  let completed = false;
+  const write = new Promise<{
+    id: string;
+    country: string;
+    encrypted: string;
+    hint: string;
+  }>((resolve) => {
+    resolveWrite = resolve;
+  });
+  void write.then(() => { completed = true; });
+  const deferred: Promise<unknown>[] = [];
+
+  const result = await handleProfileWriteRequest(
+    request(PROFILE_ADDRESSES_PATH, {
+      encrypted: 'cipher-text',
+      country: 'US',
+      hint: 'hint',
+    }),
+    env,
+    PROFILE_ADDRESSES_PATH,
+    d1Dependencies(async () => assert.fail('address write reached provider fetch'), {
+      defer: (promise) => { deferred.push(promise); },
+      saveProfileAddress: async () => {
+        starts += 1;
+        return write;
+      },
+      timeoutMs: 5,
+    }),
+  );
+
+  assert.equal(result.response.status, 504);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'deadline-exceeded');
+  assert.equal(starts, 1);
+  assert.equal(deferred.length, 1);
+  assert.equal(completed, false);
+
+  resolveWrite({
+    id: ADDRESS_ID,
+    country: 'US',
+    encrypted: 'cipher-text',
+    hint: 'hint',
+  });
+  await deferred[0];
+  assert.equal(completed, true);
+  assert.equal(starts, 1);
+  assert.equal(deferred.length, 1);
 });
 
 test('legacy Firestore fixtures preserve status update-mask compatibility', async () => {
@@ -1850,6 +2002,73 @@ test('ShipStation shipment route retains only its own claim after an ambiguous c
   }
 });
 
+test('ShipStation shipment disconnect retains its ambiguity claim before rethrowing cancellation', async () => {
+  const client = new AbortController();
+  const reason = new DOMException('Client disconnected', 'AbortError');
+  let claimId = '';
+  let retained = false;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname.includes('/external_shipment_id/')) return Response.json({}, { status: 404 });
+      client.abort(reason);
+      throw init?.signal?.reason ?? reason;
+    }
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        addressSnapshot: {
+          encrypted: encryptedAddress('Ivan\n100 Main St\nIstanbul, 34000\nTurkey'),
+          countryCode: 'TR',
+        },
+        items: [{ kind: 'box', refId: 1 }],
+        shipstation: claimId ? { claimId, claimedAt: NOW_MS, claimedBy: OWNER } : {},
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as {
+        writes: Array<{
+          update?: {
+            fields?: {
+              shipstation?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
+            };
+          };
+          updateTransforms?: Array<{ fieldPath: string }>;
+        }>;
+      };
+      const write = commit.writes[0];
+      const fields = write.update?.fields?.shipstation?.mapValue?.fields ?? {};
+      if (fields.lastError) {
+        retained = fields.claimId?.stringValue === claimId &&
+          Boolean(write.updateTransforms?.some((entry) => entry.fieldPath === 'shipstation.claimedAt'));
+      } else {
+        claimId = fields.claimId?.stringValue ?? claimId;
+      }
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const disconnectedRequest = new Request(
+    `https://api.mons.shop${FULFILLMENT_SHIPSTATION_SHIPMENT_PATH}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+      body: JSON.stringify({ dropId: 'card_nft_2', deliveryId: 7 }),
+      signal: client.signal,
+    },
+  );
+
+  await assert.rejects(
+    handleProfileWriteRequest(
+      disconnectedRequest,
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
+      legacyFirestoreDependencies(providerFetch),
+    ),
+    (error) => error === reason,
+  );
+  assert.equal(retained, true);
+});
+
 test('ShipStation shipment route releases its claim after a definitive provider rejection', async () => {
   let claimId = '';
   const commits: Array<{ writes: Array<Record<string, unknown>> }> = [];
@@ -2794,6 +3013,70 @@ test('ShipStation label void route reconciles an ambiguous provider result with 
   assert.ok(commit);
 });
 
+test('ShipStation label void disconnect reconciles the provider mutation before rethrowing cancellation', async () => {
+  const client = new AbortController();
+  const reason = new DOMException('Client disconnected', 'AbortError');
+  let cleanupUsedFreshSignal = false;
+  let commits = 0;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname.endsWith('/void')) {
+        client.abort(reason);
+        throw init?.signal?.reason ?? reason;
+      }
+      cleanupUsedFreshSignal = init?.signal?.aborted === false;
+      return Response.json({
+        label: {
+          label_id: 'label-1',
+          shipment_id: 'shipment-1',
+          status: 'voided',
+          created_at: '2026-08-18T11:59:00.000Z',
+        },
+      });
+    }
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          label: {
+            labelId: 'label-1',
+            shipmentId: 'shipment-1',
+            status: 'completed',
+            purchasedAt: NOW_MS - 1000,
+          },
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      commits += 1;
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const disconnectedRequest = new Request(
+    `https://api.mons.shop${FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+      body: JSON.stringify(LABEL_VOID_BODY),
+      signal: client.signal,
+    },
+  );
+
+  await assert.rejects(
+    handleProfileWriteRequest(
+      disconnectedRequest,
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
+      legacyFirestoreDependencies(providerFetch),
+    ),
+    (error) => error === reason,
+  );
+  assert.equal(cleanupUsedFreshSignal, true);
+  assert.equal(commits, 1);
+});
+
 test('ShipStation label void route does not overwrite a replacement label after provider approval', async () => {
   let orderReads = 0;
   let commits = 0;
@@ -3200,6 +3483,7 @@ test('ShipStation label purchase timeout uses a fresh cleanup signal and stores 
   let chargedPostStarted = false;
   let chargedPostAborted = false;
   let cleanupUsedFreshSignal = false;
+  const deferred: Promise<unknown>[] = [];
   const providerFetch: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     if (url.hostname === 'api.shipstation.com') {
@@ -3256,18 +3540,189 @@ test('ShipStation label purchase timeout uses a fresh cleanup signal and stores 
     request(FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH, LABEL_PURCHASE_BODY),
     fulfillmentEnv,
     FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-    legacyFirestoreDependencies(providerFetch, { timeoutMs: 75 }),
+    legacyFirestoreDependencies(providerFetch, {
+      defer: (promise) => { deferred.push(promise); },
+      timeoutMs: 75,
+    }),
   );
   assert.equal(chargedPostStarted, true);
   assert.equal(chargedPostAborted, true);
   assert.equal(cleanupUsedFreshSignal, false);
-  assert.equal(result.response.status, 409);
-  const payload = await result.response.json() as { error: { code: string; message: string } };
-  assert.equal(payload.error.code, 'aborted');
+  assert.equal(result.response.status, 504);
   assert.equal(
-    payload.error.message,
-    'ShipStation did not confirm the label purchase. Check purchase status or open ShipStation before retrying.',
+    (await result.response.json() as { error: { code: string } }).error.code,
+    'deadline-exceeded',
   );
+  assert.equal(deferred.length, 1);
+  await assert.rejects(
+    deferred[0],
+    (error: unknown) => error instanceof ProfileReadError && error.code === 'aborted',
+  );
+  assert.equal(purchaseState?.status, 'unknown');
+});
+
+test('ShipStation label purchase disconnect releases its claim after a cleanup conflict', async () => {
+  const client = new AbortController();
+  const abortReason = new DOMException('Client disconnected', 'AbortError');
+  let purchaseState: Record<string, unknown> | undefined;
+  let cleanupCommitAttempts = 0;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname === '/v2/labels') return Response.json({ labels: [] });
+      if (url.pathname === '/v2/rates/rate-1') {
+        client.abort(abortReason);
+        throw init?.signal?.reason ?? abortReason;
+      }
+      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+    }
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          rateQuotes: [{
+            rateId: 'rate-1',
+            shipmentId: 'shipment-1',
+            totalAmount: { currency: 'usd', amount: 10 },
+          }],
+          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
+      const purchaseFields = (commit.writes[0] as {
+        update?: {
+          fields?: {
+            shipstation?: {
+              mapValue?: {
+                fields?: {
+                  labelPurchase?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
+                };
+              };
+            };
+          };
+        };
+      }).update?.fields?.shipstation?.mapValue?.fields?.labelPurchase?.mapValue?.fields;
+      const status = purchaseFields?.status?.stringValue;
+      if (status === 'failed') {
+        cleanupCommitAttempts += 1;
+        if (cleanupCommitAttempts === 1) {
+          return Response.json({ error: { status: 'ABORTED' } }, { status: 409 });
+        }
+      }
+      if (status) {
+        purchaseState = {
+          status,
+          requestId: purchaseFields?.requestId?.stringValue ?? LABEL_PURCHASE_BODY.requestId,
+          rateId: purchaseFields?.rateId?.stringValue ?? LABEL_PURCHASE_BODY.rateId,
+        };
+      }
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const disconnectedRequest = new Request(
+    `https://api.mons.shop${FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+      body: JSON.stringify(LABEL_PURCHASE_BODY),
+      signal: client.signal,
+    },
+  );
+  await assert.rejects(
+    handleProfileWriteRequest(
+      disconnectedRequest,
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
+      legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
+    ),
+    (error) => error === abortReason,
+  );
+  assert.equal(cleanupCommitAttempts, 2);
+  assert.equal(purchaseState?.status, 'failed');
+});
+
+test('ShipStation label purchase disconnect reconciles an ambiguous charge before rethrowing cancellation', async () => {
+  const client = new AbortController();
+  const reason = new DOMException('Client disconnected', 'AbortError');
+  let purchaseState: Record<string, unknown> | undefined;
+  let cleanupUsedFreshSignal = false;
+  const providerFetch: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.hostname === 'api.shipstation.com') {
+      if (url.pathname === '/v2/labels') {
+        cleanupUsedFreshSignal ||= client.signal.aborted && init?.signal?.aborted === false;
+        return Response.json({ labels: [] });
+      }
+      if (url.pathname === '/v2/rates/rate-1') return Response.json(SHIPSTATION_RATE);
+      if (url.pathname === '/v2/labels/rates/rate-1') {
+        client.abort(reason);
+        throw init?.signal?.reason ?? reason;
+      }
+      return Response.json({ error: 'unexpected ShipStation request' }, { status: 500 });
+    }
+    if (url.pathname.endsWith('/deliveryOrders/7')) {
+      return Response.json(orderDocument({
+        shipstation: {
+          shipmentId: 'shipment-1',
+          rateQuotes: [{
+            rateId: 'rate-1',
+            shipmentId: 'shipment-1',
+            totalAmount: { currency: 'usd', amount: 10 },
+          }],
+          ...(purchaseState ? { labelPurchase: purchaseState } : {}),
+        },
+      }));
+    }
+    if (url.pathname.endsWith('/documents:commit')) {
+      const commit = JSON.parse(String(init?.body)) as { writes: Array<Record<string, unknown>> };
+      const purchaseFields = (commit.writes[0] as {
+        update?: {
+          fields?: {
+            shipstation?: {
+              mapValue?: {
+                fields?: {
+                  labelPurchase?: { mapValue?: { fields?: Record<string, { stringValue?: string }> } };
+                };
+              };
+            };
+          };
+        };
+      }).update?.fields?.shipstation?.mapValue?.fields?.labelPurchase?.mapValue?.fields;
+      const status = purchaseFields?.status?.stringValue;
+      if (status) {
+        purchaseState = {
+          status,
+          requestId: purchaseFields?.requestId?.stringValue ?? LABEL_PURCHASE_BODY.requestId,
+          rateId: purchaseFields?.rateId?.stringValue ?? LABEL_PURCHASE_BODY.rateId,
+        };
+      }
+      return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
+    }
+    return Response.json({ error: 'unexpected' }, { status: 500 });
+  };
+  const disconnectedRequest = new Request(
+    `https://api.mons.shop${FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
+      body: JSON.stringify(LABEL_PURCHASE_BODY),
+      signal: client.signal,
+    },
+  );
+
+  await assert.rejects(
+    handleProfileWriteRequest(
+      disconnectedRequest,
+      fulfillmentEnv,
+      FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
+      legacyFirestoreDependencies(providerFetch, { timeoutMs: 2_000 }),
+    ),
+    (error) => error === reason,
+  );
+  assert.equal(cleanupUsedFreshSignal, true);
   assert.equal(purchaseState?.status, 'unknown');
 });
 

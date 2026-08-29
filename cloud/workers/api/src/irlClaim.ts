@@ -74,6 +74,15 @@ import {
   readBoundedJson,
   type ProfileProviderFetch,
 } from './boundedResponse.js';
+import {
+  createRequestDeadline,
+  createTimedAbortScope,
+  isRequestCancellationError,
+  isSignalCancellationError,
+  raceReadWithSignal,
+  raceWithSignal,
+  readBoundedRequestJson,
+} from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { requestSolanaRpc } from './solanaProvider.js';
 import { D1CommerceRepository, commerceKeys } from './commerceRepository.js';
@@ -233,55 +242,28 @@ function errorResponse(error: IrlClaimError): Response {
 }
 
 async function readRequestBody(request: Request, signal: AbortSignal): Promise<PrepareIrlClaimRequest> {
-  const contentType = String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase();
-  if (contentType !== 'application/json') {
-    await request.body?.cancel().catch(() => undefined);
-    throw new IrlClaimError('invalid-argument', 'Content-Type must be application/json.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > REQUEST_MAX_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new IrlClaimError('invalid-argument', 'Claim request is too large.');
-  }
-  if (!request.body) throw new IrlClaimError('invalid-argument', 'Invalid claim request.');
-  const reader = request.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > REQUEST_MAX_BYTES) throw new IrlClaimError('invalid-argument', 'Claim request is too large.');
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    const value: unknown = JSON.parse(chunks.join(''));
-    if (!isRecord(value) || Object.keys(value).sort().join(',') !== 'code,owner') {
-      throw new IrlClaimError('invalid-argument', 'Invalid claim request.');
-    }
-    if (
-      typeof value.owner !== 'string' || value.owner.length < 1 || value.owner.length > 64 ||
-      typeof value.code !== 'string' || value.code.length < 1 || value.code.length > 64
-    ) {
-      throw new IrlClaimError('invalid-argument', 'Invalid claim request.');
-    }
-    return { owner: value.owner, code: value.code };
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    if (error instanceof IrlClaimError) throw error;
-    if (signal.aborted) throw signal.reason;
+  const value = await readBoundedRequestJson(request, {
+    maxBytes: REQUEST_MAX_BYTES,
+    signal,
+    createError: (failure) => new IrlClaimError(
+      'invalid-argument',
+      failure === 'unsupported-media-type'
+        ? 'Content-Type must be application/json.'
+        : failure === 'too-large'
+          ? 'Claim request is too large.'
+          : 'Invalid claim request.',
+    ),
+  });
+  if (!isRecord(value) || Object.keys(value).sort().join(',') !== 'code,owner') {
     throw new IrlClaimError('invalid-argument', 'Invalid claim request.');
-  } finally {
-    signal.removeEventListener('abort', onAbort);
   }
+  if (
+    typeof value.owner !== 'string' || value.owner.length < 1 || value.owner.length > 64 ||
+    typeof value.code !== 'string' || value.code.length < 1 || value.code.length > 64
+  ) {
+    throw new IrlClaimError('invalid-argument', 'Invalid claim request.');
+  }
+  return { owner: value.owner, code: value.code };
 }
 
 function canonicalWallet(value: string): string {
@@ -372,28 +354,6 @@ async function pause(signal: AbortSignal): Promise<void> {
   });
 }
 
-function createProviderAttemptScope(overallSignal: AbortSignal, timeoutMs: number) {
-  const controller = new AbortController();
-  let timedOut = false;
-  const onAbort = () => {
-    if (!controller.signal.aborted) controller.abort(overallSignal.reason);
-  };
-  if (overallSignal.aborted) onAbort();
-  else overallSignal.addEventListener('abort', onAbort, { once: true });
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new DOMException('Claim provider request timed out', 'TimeoutError'));
-  }, timeoutMs);
-  return {
-    signal: controller.signal,
-    timedOut: () => timedOut,
-    dispose: () => {
-      clearTimeout(timeout);
-      overallSignal.removeEventListener('abort', onAbort);
-    },
-  };
-}
-
 async function rpcCall(
   context: ProviderContext,
   runtime: IrlClaimRuntime,
@@ -402,13 +362,16 @@ async function rpcCall(
 ): Promise<unknown> {
   const id = `irl-claim-${method}`;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createProviderAttemptScope(
-      context.signal,
-      context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    );
+    const attemptScope = createTimedAbortScope(context.signal, {
+      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+      timeoutMessage: 'Claim provider request timed out',
+    });
     try {
       const transport = await requestSolanaRpc({
-        fetch: context.providerFetch,
+        fetch: (input, init) => raceWithSignal(
+          context.providerFetch(input, init),
+          attemptScope.signal,
+        ),
         url: `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
         id,
         method,
@@ -435,13 +398,17 @@ async function rpcCall(
       }
       return transport.value;
     } catch (error) {
-      if (context.signal.aborted) throw context.signal.reason;
+      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
       if (attemptScope.timedOut()) {
-        if (attempt === 0) {
+        if (attempt === 0 && !context.signal.aborted) {
           await pause(context.signal);
           continue;
         }
         throw new IrlClaimError('deadline-exceeded', 'Claim provider request timed out.');
+      }
+      if (context.signal.aborted) {
+        if (error instanceof IrlClaimError) throw error;
+        throw new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.');
       }
       if (error instanceof IrlClaimError) throw error;
       if (attempt === 0) {
@@ -457,16 +424,16 @@ async function rpcCall(
 }
 
 async function restJson(context: ProviderContext, url: string): Promise<unknown> {
-  const attemptScope = createProviderAttemptScope(
-    context.signal,
-    context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-  );
+  const attemptScope = createTimedAbortScope(context.signal, {
+    timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+    timeoutMessage: 'Claim provider request timed out',
+  });
   try {
-    const response = await context.providerFetch(url, {
+    const response = await raceWithSignal(context.providerFetch(url, {
       headers: { Accept: 'application/json' },
       redirect: 'manual',
       signal: attemptScope.signal,
-    });
+    }), attemptScope.signal);
     if (!response.ok) {
       await cancelResponseBody(response);
       throw new IrlClaimError(response.status === 404 ? 'not-found' : 'unavailable',
@@ -474,9 +441,13 @@ async function restJson(context: ProviderContext, url: string): Promise<unknown>
     }
     return await readBoundedJson(response, PROVIDER_MAX_BYTES, attemptScope.signal);
   } catch (error) {
-    if (context.signal.aborted) throw context.signal.reason;
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
     if (attemptScope.timedOut()) {
       throw new IrlClaimError('deadline-exceeded', 'Claim provider request timed out.');
+    }
+    if (context.signal.aborted) {
+      if (error instanceof IrlClaimError) throw error;
+      throw new IrlClaimError('unavailable', 'Claim provider returned an invalid response.');
     }
     if (error instanceof IrlClaimError) throw error;
     throw new IrlClaimError('unavailable', 'Claim provider returned an invalid response.');
@@ -722,7 +693,11 @@ async function loadBoundWallet(
     if ('reason' in resolution) throw new IrlClaimError('unauthenticated', 'Sign in with your wallet first.');
     return resolution.wallet;
   } catch (error) {
-    if (error instanceof IrlClaimError || error instanceof ProfileReadError || context.signal.aborted) throw error;
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    if (
+      error instanceof IrlClaimError ||
+      error instanceof ProfileReadError
+    ) throw error;
     throw new IrlClaimError('unavailable', 'IRL claims are temporarily unavailable.');
   }
 }
@@ -1189,26 +1164,26 @@ export async function handleIrlClaimPrepare(
     response.headers.set('Allow', 'POST, OPTIONS');
     return { response: new Response(response.body, { headers: response.headers, status: 405 }), metrics, authOutcome: 'rejected' };
   }
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('IRL claim request timed out', 'TimeoutError')),
-    dependencies.timeoutMs,
-  );
+  const deadline = createRequestDeadline(request, {
+    timeoutMs: dependencies.timeoutMs,
+    timeoutMessage: 'IRL claim request timed out',
+  });
+  const boundedRead = <T>(operation: Promise<T>) => raceReadWithSignal(operation, deadline.signal);
   let identity: RequestIdentity | undefined;
   let dropId: string | undefined;
   try {
-    const body = await readRequestBody(request, controller.signal);
+    const body = await readRequestBody(request, deadline.signal);
     identity = await dependencies.verifyIdentity(
       request,
       env.OPS_DB,
-      controller.signal,
+      deadline.signal,
       dependencies.nowMs(),
     );
     const apiKey = String(env.HELIUS_API_KEY || '').trim();
     if (!apiKey) {
       throw new IrlClaimError('unavailable', 'IRL claims are temporarily unavailable.');
     }
-    const response = await prepareClaim({
+    const response = await boundedRead(prepareClaim({
       body,
       identity,
       env,
@@ -1218,17 +1193,18 @@ export async function handleIrlClaimPrepare(
         repository: new D1CommerceRepository(env.COMMERCE_DB),
         nowMs: dependencies.nowMs(),
         providerFetch: trackedFetch,
-        signal: controller.signal,
+        signal: deadline.signal,
       },
       providerContext: {
         apiKey,
         providerFetch: trackedFetch,
-        signal: controller.signal,
+        signal: deadline.signal,
       },
-    });
+    }));
     dropId = response.dropId;
     return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted', dropId };
   } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
     let claimError: IrlClaimError;
     let authOutcome: IrlClaimResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
     if (error instanceof IrlClaimError) {
@@ -1248,7 +1224,7 @@ export async function handleIrlClaimPrepare(
       if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
         authOutcome = 'rejected';
       }
-    } else if (controller.signal.aborted) {
+    } else if (deadline.timedOut()) {
       claimError = new IrlClaimError('deadline-exceeded', 'IRL claim request timed out.');
     } else {
       console.error({
@@ -1259,7 +1235,7 @@ export async function handleIrlClaimPrepare(
     }
     return { response: errorResponse(claimError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
   }
 }
 
@@ -1267,7 +1243,6 @@ export const irlClaimTestHooks = {
   buildPreparedTransaction,
   buildRuntime,
   burnInstruction,
-  createProviderAttemptScope,
   fetchAssetProof,
   fetchOwnedAssets,
   loadClaim,

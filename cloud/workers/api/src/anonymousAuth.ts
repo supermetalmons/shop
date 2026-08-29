@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { readBoundedText } from './boundedResponse.js';
+import { isRequestCancellationError, readBoundedRequestJson } from './boundedRequest.js';
 import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
 
 const ANONYMOUS_AUTH_SESSION_PATH = '/auth/anonymous/session';
@@ -142,19 +142,18 @@ function jsonResponse(body: unknown, status: number, cookie?: string): Response 
 }
 
 async function parseEmptyBody(request: Request): Promise<void> {
-  if (String(request.headers.get('Content-Type') || '').split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
-    throw new AnonymousAuthError('invalid-token', 'Invalid request.');
-  }
-  const contentLength = Number(request.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > ANONYMOUS_AUTH_MAX_REQUEST_BYTES) {
-    await request.body?.cancel().catch(() => undefined);
-    throw new AnonymousAuthError('invalid-token', 'Invalid request.');
-  }
-  if (!request.body) throw new AnonymousAuthError('invalid-token', 'Invalid request.');
   try {
-    const text = await readBoundedText(new Response(request.body), ANONYMOUS_AUTH_MAX_REQUEST_BYTES, request.signal);
-    if (!emptySchema.safeParse(JSON.parse(text)).success) throw new Error('invalid');
-  } catch {
+    const value = await readBoundedRequestJson(request, {
+      maxBytes: ANONYMOUS_AUTH_MAX_REQUEST_BYTES,
+      signal: request.signal,
+      createError: () => new AnonymousAuthError('invalid-token', 'Invalid request.'),
+    });
+    if (!emptySchema.safeParse(value).success) {
+      throw new AnonymousAuthError('invalid-token', 'Invalid request.');
+    }
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
+    if (error instanceof AnonymousAuthError) throw error;
     throw new AnonymousAuthError('invalid-token', 'Invalid request.');
   }
 }
@@ -371,6 +370,7 @@ export async function handleAnonymousAuthRequest(
     failureCookie = sessionCookie(requestOrigin, '', 0);
     return await logoutSession(request, env, requestOrigin, nowMs);
   } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
     if (error instanceof AnonymousAuthError) {
       const status = error.kind === 'invalid-token' ? 400 : 503;
       return jsonResponse({
