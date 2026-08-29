@@ -104,6 +104,9 @@ const SHIPPER_DROP_IDS_BY_WALLET = new Map(
 const FULFILLMENT_ORDER_LIMIT = 1000;
 const DELIVERY_ORDER_OWNER_PAGE_SIZE = 200;
 const MAX_DELIVERY_ORDER_OWNER_PAGE_SIZE = 500;
+const DELIVERY_ORDER_OWNER_SCAN_BATCH_LIMIT = 4;
+const MIN_DELIVERY_ORDER_OWNER_SCAN_CANDIDATES = 2048;
+const DELIVERY_ORDER_OWNER_SCAN_MULTIPLIER = 4;
 const MAX_STRIPE_RESPONSE_BYTES = 512 * 1024;
 const STRIPE_API_BASE_URL = 'https://api.stripe.com/v1';
 const STRIPE_API_VERSION = '2026-07-29.dahlia';
@@ -234,7 +237,9 @@ function errorResponse(error: ProfileReadError): Response {
 
 
 type ProfileReadDependencies = {
-  createCommerceRepository: (db: D1Database) => Pick<D1CommerceRepository, 'query'>;
+  createCommerceRepository: (
+    db: D1Database,
+  ) => Pick<D1CommerceRepository, 'query' | 'queryDeliveryOrderOwners'>;
   loadProfileEmail: typeof loadProfileEmail;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
@@ -472,21 +477,26 @@ async function loadProfileEmail(args: {
   return stored?.email;
 }
 
-function encodeOwnersCursor(path: string): string {
-  return btoa(JSON.stringify({ path })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+function encodeOwnersCursor(afterOwner: string): string {
+  return btoa(JSON.stringify({ v: 1, afterOwner })).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function decodeOwnersCursor(value: unknown): string | null {
   if (value === undefined) return null;
-  if (typeof value !== 'string' || !value || value.length > 2000) {
+  if (typeof value !== 'string' || !value || value.length > 2000 || !/^[A-Za-z0-9_-]+$/.test(value)) {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid cursor.');
   }
   try {
     const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
     const parsed = JSON.parse(atob(padded)) as unknown;
-    const path = typeof parsed === 'string' ? parsed : isRecord(parsed) ? parsed.path : undefined;
-    if (typeof path !== 'string' || !/^drops\/[^/]+\/deliveryOrders\/[1-9]\d*$/.test(path)) throw new Error('path');
-    return path;
+    if (
+      !isRecord(parsed) ||
+      !exactKeys(parsed, ['v', 'afterOwner']) ||
+      parsed.v !== 1 ||
+      typeof parsed.afterOwner !== 'string' ||
+      !isBase58Bytes(parsed.afterOwner, 32)
+    ) throw new Error('cursor');
+    return parsed.afterOwner;
   } catch {
     throw new ProfileReadError('invalid-argument', 400, 'Invalid cursor.');
   }
@@ -495,57 +505,48 @@ function decodeOwnersCursor(value: unknown): string | null {
 async function loadDeliveryOrderOwners(args: {
   cursor?: string;
   pageSize?: number;
-  repository: Pick<D1CommerceRepository, 'query'>;
+  repository: Pick<D1CommerceRepository, 'queryDeliveryOrderOwners'>;
+  signal: AbortSignal;
 }): Promise<{ owners: string[]; nextCursor: string | null; hasMore: boolean }> {
-  const owners: string[] = [];
-  const seen = new Set<string>();
-  let cursorPath = decodeOwnersCursor(args.cursor);
   const pageSize = args.pageSize ?? DELIVERY_ORDER_OWNER_PAGE_SIZE;
-  const fetchLimit = Math.min(Math.max(pageSize * 3, pageSize + 1), MAX_DELIVERY_ORDER_OWNER_PAGE_SIZE);
-  let hasMore = false;
-  while (owners.length < pageSize) {
-    const documents = await args.repository.query({
-      kind: 'delivery_order',
-      limit: fetchLimit,
-      orderBy: [{ field: 'documentPath', direction: 'asc' }],
-      ...(cursorPath ? { startAfter: [cursorPath] } : {}),
+  const targetCount = pageSize + 1;
+  const candidateLimit = Math.max(
+    MIN_DELIVERY_ORDER_OWNER_SCAN_CANDIDATES,
+    targetCount * DELIVERY_ORDER_OWNER_SCAN_MULTIPLIER,
+  );
+  const batchCandidateLimit = Math.ceil(candidateLimit / DELIVERY_ORDER_OWNER_SCAN_BATCH_LIMIT);
+  const owners: string[] = [];
+  let startAfterOwner = decodeOwnersCursor(args.cursor);
+  let batchCount = 0;
+  let candidateCount = 0;
+  while (owners.length < targetCount) {
+    if (args.signal.aborted) throw args.signal.reason;
+    if (
+      batchCount >= DELIVERY_ORDER_OWNER_SCAN_BATCH_LIMIT ||
+      candidateCount >= candidateLimit
+    ) {
+      throw new ProfileReadError('unavailable', 503, 'Delivery-order owners are temporarily unavailable.');
+    }
+    const queryLimit = Math.min(batchCandidateLimit, candidateLimit - candidateCount);
+    batchCount += 1;
+    const candidates = await args.repository.queryDeliveryOrderOwners({
+      limit: queryLimit,
+      ...(startAfterOwner ? { startAfterOwner } : {}),
     });
-    if (!documents.length) {
-      cursorPath = null;
-      hasMore = false;
-      break;
+    if (args.signal.aborted) throw args.signal.reason;
+    candidateCount += candidates.length;
+    if (!candidates.length) break;
+    for (const owner of candidates) {
+      if (isBase58Bytes(owner, 32)) owners.push(owner);
+      if (owners.length >= targetCount) break;
     }
-    let processed = -1;
-    for (let index = 0; index < documents.length; index += 1) {
-      const document = documents[index];
-      const path = document.key.path;
-      cursorPath = path;
-      processed = index;
-      const owner = typeof document.data.owner === 'string' ? document.data.owner.trim() : '';
-      if (!isBase58Bytes(owner, 32) || seen.has(owner)) continue;
-      seen.add(owner);
-      owners.push(owner);
-      if (owners.length >= pageSize) break;
-    }
-    if (processed < 0 || !cursorPath) {
-      cursorPath = null;
-      hasMore = false;
-      break;
-    }
-    const endedEarly = processed < documents.length - 1;
-    if (owners.length >= pageSize) {
-      hasMore = endedEarly || documents.length === fetchLimit;
-      break;
-    }
-    if (documents.length < fetchLimit) {
-      cursorPath = null;
-      hasMore = false;
-      break;
-    }
-    hasMore = true;
+    if (candidates.length < queryLimit) break;
+    startAfterOwner = candidates[candidates.length - 1]!;
   }
-  const nextCursor = hasMore && cursorPath ? encodeOwnersCursor(cursorPath) : null;
-  return { owners, nextCursor, hasMore: Boolean(nextCursor) };
+  const hasMore = owners.length > pageSize;
+  const page = hasMore ? owners.slice(0, pageSize) : owners;
+  const nextCursor = hasMore ? encodeOwnersCursor(page[page.length - 1]!) : null;
+  return { owners: page, nextCursor, hasMore };
 }
 
 function fulfillmentAccess(wallet: string, dropId: string): { canViewSensitiveAddress: boolean } {
@@ -987,5 +988,6 @@ export async function handleProfileReadRequest(
 }
 
 export const profileReadTestHooks = {
+  loadDeliveryOrderOwners,
   loadProfileEmail,
 };

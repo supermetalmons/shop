@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../shared/opsExpiryCleanupSql.ts';
 import { isCanonicalReadyNotificationCursorPath } from '../../shared/readyToShipNotificationReconciliation.ts';
 import { sqlSchemaFingerprint } from './sqlSchemaFingerprint.ts';
 
@@ -11,9 +12,63 @@ const OPS_D1_MIGRATIONS = [
   '0003_remove_ready_notification_pause.sql',
   '0004_repair_ready_notification_cursor.sql',
   '0005_remove_redundant_anonymous_auth_subject_index.sql',
+  '0006_cover_expiry_cleanup_indexes.sql',
 ] as const;
 
 export type OpsD1Row = Record<string, unknown>;
+
+function expiryCleanupExplainSql(
+  statement: (typeof OPS_EXPIRY_CLEANUP_STATEMENTS)[keyof typeof OPS_EXPIRY_CLEANUP_STATEMENTS],
+): string {
+  const parameters = [0, statement.limit];
+  let parameterIndex = 0;
+  const sql = statement.sql.replace(/\?/g, () => {
+    const value = parameters[parameterIndex];
+    parameterIndex += 1;
+    if (value === undefined) {
+      throw new Error('Ops expiry cleanup SQL has unexpected parameters.');
+    }
+    return String(value);
+  });
+  if (parameterIndex !== parameters.length) {
+    throw new Error('Ops expiry cleanup SQL has unexpected parameters.');
+  }
+  return `EXPLAIN QUERY PLAN ${sql}`;
+}
+
+function expiryCleanupQueryPlanSpec(
+  statement: (typeof OPS_EXPIRY_CLEANUP_STATEMENTS)[keyof typeof OPS_EXPIRY_CLEANUP_STATEMENTS],
+  label: string,
+) {
+  return {
+    indexName: statement.indexName,
+    label,
+    sql: expiryCleanupExplainSql(statement),
+  };
+}
+
+export const OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS = {
+  anonymousAuthSessions: expiryCleanupQueryPlanSpec(
+    OPS_EXPIRY_CLEANUP_STATEMENTS.anonymousAuthSessions,
+    'anonymous-auth session cleanup',
+  ),
+  staffAuthSessions: expiryCleanupQueryPlanSpec(
+    OPS_EXPIRY_CLEANUP_STATEMENTS.staffAuthSessions,
+    'staff-auth session cleanup',
+  ),
+  staffAuthChallenges: expiryCleanupQueryPlanSpec(
+    OPS_EXPIRY_CLEANUP_STATEMENTS.staffAuthChallenges,
+    'staff-auth challenge cleanup',
+  ),
+  rateLimitBuckets: expiryCleanupQueryPlanSpec(
+    OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets,
+    'rate-limit bucket cleanup',
+  ),
+} as const;
+
+type OpsD1ExpiryCleanupQueryPlans = {
+  [Key in keyof typeof OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS]: OpsD1Row[];
+};
 
 export type ReadyNotificationCursorState = {
   controlKey: typeof READY_NOTIFICATION_CURSOR_KEY;
@@ -35,7 +90,7 @@ export type OpsD1IntegrityInput = {
   anonymousAuthSessionCounts: OpsD1Row[];
   anonymousAuthSessionExpiryIndexColumns: OpsD1Row[];
   controls: OpsD1Row[];
-  expiryIndexColumns: OpsD1Row[];
+  expiryCleanupQueryPlans: OpsD1ExpiryCleanupQueryPlans;
   foreignKeyCheck: OpsD1Row[];
   migrations: OpsD1Row[];
   profileAddressColumns: OpsD1Row[];
@@ -43,12 +98,15 @@ export type OpsD1IntegrityInput = {
   profileColumns: OpsD1Row[];
   quickCheck: OpsD1Row[];
   rateLimitBucketColumns: OpsD1Row[];
+  rateLimitBucketExpiryIndexColumns: OpsD1Row[];
   revealSubmissionColumns: OpsD1Row[];
   revealSubmissionStatusIndexColumns: OpsD1Row[];
   revealSubmissionCounts: OpsD1Row[];
   revealSubmissionStorageControl: OpsD1Row[];
   revealSubmissionStorageControlColumns: OpsD1Row[];
   schema: OpsD1Row[];
+  staffAuthChallengeExpiryIndexColumns: OpsD1Row[];
+  staffAuthSessionExpiryIndexColumns: OpsD1Row[];
   tableList: OpsD1Row[];
   authWalletBindingColumns: OpsD1Row[];
   authWalletBindingCounts: OpsD1Row[];
@@ -97,7 +155,7 @@ const expectedSchema = new Map<
   [
     'anonymous_auth_sessions_expires_at_ms',
     {
-      fingerprint: 'dabe2ee9d495cd9f7901a8b16145d6986efe885fe6bbd4356e0589669b4aed83',
+      fingerprint: 'b589d1100d64743d309a45b3fd45c2bc64153190b0437fa84889f417ceb0b559',
       type: 'index',
       tableName: 'anonymous_auth_sessions',
     },
@@ -113,7 +171,7 @@ const expectedSchema = new Map<
   [
     'staff_auth_challenges_expires_at_ms',
     {
-      fingerprint: 'a5d6fff7130b51a8402033b0567044b34b1c93890d8c977e13dd4ba0309bb8a1',
+      fingerprint: '403b76ba6880533513b8fcb3c10f441b72dd6de92b64b345106de51689a38864',
       type: 'index',
       tableName: 'staff_auth_challenges',
     },
@@ -129,7 +187,7 @@ const expectedSchema = new Map<
   [
     'staff_auth_sessions_expires_at_ms',
     {
-      fingerprint: '8c2b017cdff5784d201488410419c15c601a983814ee654333aa4d5d48f5ff0d',
+      fingerprint: '37f48b6cd0e70162cd0134a7463ceb82dfae877a02cc195ec9371a703c76aa4e',
       type: 'index',
       tableName: 'staff_auth_sessions',
     },
@@ -225,7 +283,7 @@ const expectedSchema = new Map<
   [
     'rate_limit_buckets_expires_at_ms',
     {
-      fingerprint: '0f23fc84abcf76475c691f58fee9c23737b7c9d304aeea0c7a2031e3055d2aa9',
+      fingerprint: '7b860409cb1ec4ed77f9c39fd352de9d0f904a70cf327d27f8b0275393337cf2',
       type: 'index',
       tableName: 'rate_limit_buckets',
     },
@@ -459,14 +517,6 @@ function assertExactColumns(
   });
 }
 
-function assertExpiryIndexColumns(rows: OpsD1Row[]): void {
-  if (rows.length !== 1 || rows[0].name !== 'expires_at_ms') {
-    fail('Ops D1 expiry index columns are not exact.');
-  }
-  assertExactInteger(rows[0].seqno, 0, 'Ops D1 expiry index sequence');
-  assertExactInteger(rows[0].cid, 7, 'Ops D1 expiry index column id');
-}
-
 function assertRevealSubmissionStatusIndexColumns(rows: OpsD1Row[]): void {
   if (
     rows.length !== 2 ||
@@ -477,10 +527,37 @@ function assertRevealSubmissionStatusIndexColumns(rows: OpsD1Row[]): void {
   ) fail('Ops D1 reveal-submission status index columns are not exact.');
 }
 
-function assertSingleColumnIndex(rows: OpsD1Row[], name: string, cid: number, label: string): void {
-  if (rows.length !== 1 || rows[0].name !== name) fail(`${label} columns are not exact.`);
-  assertExactInteger(rows[0].seqno, 0, `${label} sequence`);
-  assertExactInteger(rows[0].cid, cid, `${label} column id`);
+function assertExactIndexColumns(
+  rows: OpsD1Row[],
+  expected: ReadonlyArray<readonly [name: string, cid: number]>,
+  label: string,
+): void {
+  if (rows.length !== expected.length) fail(`${label} columns are not exact.`);
+  rows.forEach((row, seqno) => {
+    const [name, cid] = expected[seqno];
+    if (row.name !== name) fail(`${label} columns are not exact.`);
+    assertExactInteger(row.seqno, seqno, `${label} sequence`);
+    assertExactInteger(row.cid, cid, `${label} column id`);
+  });
+}
+
+function assertExpiryCleanupQueryPlans(
+  plans: OpsD1ExpiryCleanupQueryPlans,
+): void {
+  for (const key of Object.keys(OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS) as Array<
+    keyof typeof OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS
+  >) {
+    const { indexName, label } = OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS[key];
+    const details = plans[key].map((row) =>
+      requiredString(row.detail, `Ops D1 ${label} query-plan detail`));
+    if (details.some((detail) => detail.includes('USE TEMP B-TREE'))) {
+      fail(`Ops D1 ${label} query plan uses a temporary B-tree.`);
+    }
+    if (!details.some((detail) =>
+      detail.includes(`USING COVERING INDEX ${indexName}`))) {
+      fail(`Ops D1 ${label} query plan does not use ${indexName}.`);
+    }
+  }
 }
 
 export function validateReadyNotificationCursorPath(value: unknown): string {
@@ -583,11 +660,20 @@ export function assertOpsD1Integrity(
     'worker_controls',
   );
   assertRevealSubmissionStatusIndexColumns(input.revealSubmissionStatusIndexColumns);
-  assertSingleColumnIndex(
+  assertExactIndexColumns(
     input.anonymousAuthSessionExpiryIndexColumns,
-    'expires_at_ms',
-    6,
+    [['expires_at_ms', 6], ['session_id', 0]],
     'Ops D1 anonymous-auth expiry index',
+  );
+  assertExactIndexColumns(
+    input.staffAuthSessionExpiryIndexColumns,
+    [['expires_at_ms', 6], ['session_id', 0]],
+    'Ops D1 staff-auth session expiry index',
+  );
+  assertExactIndexColumns(
+    input.staffAuthChallengeExpiryIndexColumns,
+    [['expires_at_ms', 4], ['challenge_id', 0]],
+    'Ops D1 staff-auth challenge expiry index',
   );
   assertExactColumns(
     input.profileColumns,
@@ -619,7 +705,12 @@ export function assertOpsD1Integrity(
     expectedRevealSubmissionStorageControlColumns,
     'reveal_submission_storage_control',
   );
-  assertExpiryIndexColumns(input.expiryIndexColumns);
+  assertExactIndexColumns(
+    input.rateLimitBucketExpiryIndexColumns,
+    [['expires_at_ms', 7], ['scope', 0], ['subject_hash', 1]],
+    'Ops D1 rate-limit bucket expiry index',
+  );
+  assertExpiryCleanupQueryPlans(input.expiryCleanupQueryPlans);
   if (input.controls.length !== 1) {
     return fail('Ops D1 must contain exactly one worker control.');
   }
@@ -774,7 +865,21 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
       'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)',
     ),
     controls: queryRemoteOpsD1(`${controlSelect} ORDER BY control_key`),
-    expiryIndexColumns: queryRemoteOpsD1(
+    expiryCleanupQueryPlans: {
+      anonymousAuthSessions: queryRemoteOpsD1(
+        OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.anonymousAuthSessions.sql,
+      ),
+      staffAuthSessions: queryRemoteOpsD1(
+        OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.staffAuthSessions.sql,
+      ),
+      staffAuthChallenges: queryRemoteOpsD1(
+        OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.staffAuthChallenges.sql,
+      ),
+      rateLimitBuckets: queryRemoteOpsD1(
+        OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.rateLimitBuckets.sql,
+      ),
+    },
+    rateLimitBucketExpiryIndexColumns: queryRemoteOpsD1(
       'PRAGMA index_info(rate_limit_buckets_expires_at_ms)',
     ),
     foreignKeyCheck: queryRemoteOpsD1('PRAGMA foreign_key_check'),
@@ -819,6 +924,12 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
         name NOT GLOB '_cf_*' AND
         name <> 'd1_migrations'
       ORDER BY name`),
+    staffAuthChallengeExpiryIndexColumns: queryRemoteOpsD1(
+      'PRAGMA index_info(staff_auth_challenges_expires_at_ms)',
+    ),
+    staffAuthSessionExpiryIndexColumns: queryRemoteOpsD1(
+      'PRAGMA index_info(staff_auth_sessions_expires_at_ms)',
+    ),
     tableList: queryRemoteOpsD1(`SELECT name, type, strict
       FROM pragma_table_list
       WHERE

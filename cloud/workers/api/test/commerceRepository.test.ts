@@ -325,6 +325,90 @@ test('native reconciliation queries are bounded, ordered, and duplicate-free', a
   assert.deepEqual(stale.map((record) => record.key.documentId), ['old']);
 });
 
+test('delivery-order owner pagination uses a distinct indexed keyset query', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const ownerA = '11111111111111111111111111111111';
+  const ownerB = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
+  const ownerC = 'So11111111111111111111111111111111111111112';
+  seedCommerceDocuments(harness, [
+    { key: commerceKeys.deliveryOrder('drop', '1'), data: { owner: ownerC } },
+    { key: commerceKeys.deliveryOrder('drop', '2'), data: { owner: ownerA } },
+    { key: commerceKeys.deliveryOrder('drop', '3'), data: { owner: ownerB } },
+    { key: commerceKeys.deliveryOrder('other', '4'), data: { owner: ownerA } },
+    { key: commerceKeys.deliveryOrder('drop', '5'), data: {} },
+    { key: commerceKeys.deliveryOrder('drop', '6'), data: { owner: 'anonymous:subject' } },
+    { key: commerceKeys.stripeCheckout('drop', 'checkout'), data: { owner: ownerA } },
+  ]);
+  const repository = new D1CommerceRepository(harness.db);
+
+  const first = await repository.queryDeliveryOrderOwners({ limit: 2 });
+  assert.deepEqual(first, [ownerA, ownerB]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'batch');
+  if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch call.');
+  assertAuthoritativeReadBatch(calls[0]);
+  const firstSql = calls[0].statements[1].sql.replace(/\s+/g, ' ');
+  assert.match(firstSql, /SELECT DISTINCT document\.owner AS owner/);
+  assert.match(firstSql, /INDEXED BY commerce_documents_delivery_owner_path/);
+  assert.match(firstSql, /document\.document_kind = 'delivery_order'/);
+  assert.match(firstSql, /document\.owner IS NOT NULL/);
+  assert.match(firstSql, /typeof\(document\.owner\) = 'text'/);
+  assert.match(firstSql, /length\(document\.owner\) BETWEEN 32 AND 44/);
+  assert.match(firstSql, /document\.owner NOT GLOB '\*\[\^0-9A-Za-z\]\*'/);
+  assert.match(firstSql, /document\.owner NOT GLOB '\*\[0OIl\]\*'/);
+  assert.doesNotMatch(firstSql, /document_json|document_path AS/);
+  assert.doesNotMatch(firstSql, /document\.owner > \?/);
+  assert.match(firstSql, /ORDER BY document\.owner ASC LIMIT \?/);
+
+  calls.length = 0;
+  const second = await repository.queryDeliveryOrderOwners({ startAfterOwner: ownerB, limit: 2 });
+  assert.deepEqual(second, [ownerC]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'batch');
+  if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch call.');
+  assertAuthoritativeReadBatch(calls[0]);
+  assert.match(calls[0].statements[1].sql.replace(/\s+/g, ' '), /document\.owner > \?/);
+
+  const plan = harness.database.prepare(`EXPLAIN QUERY PLAN SELECT DISTINCT document.owner AS owner
+    FROM commerce_authority_control AS authority
+    CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
+    WHERE
+      authority.singleton = 1 AND
+      authority.authority_state = 'd1' AND
+      document.document_kind = 'delivery_order' AND
+      document.owner IS NOT NULL AND
+      typeof(document.owner) = 'text' AND
+      length(document.owner) BETWEEN 32 AND 44 AND
+      document.owner NOT GLOB '*[^0-9A-Za-z]*' AND
+      document.owner NOT GLOB '*[0OIl]*' AND
+      document.owner > '${ownerB}'
+    ORDER BY document.owner ASC
+    LIMIT 2`).all().map((row) => String(row.detail || ''));
+  assert.equal(
+    plan.some((detail) => detail.includes('SEARCH document USING INDEX commerce_documents_delivery_owner_path')),
+    true,
+  );
+  assert.equal(plan.some((detail) => detail.includes('USE TEMP B-TREE')), false);
+
+  await assert.rejects(
+    repository.queryDeliveryOrderOwners({ limit: 0 }),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
+  );
+  await assert.rejects(
+    repository.queryDeliveryOrderOwners({ limit: -1 }),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
+  );
+  await assert.rejects(
+    repository.queryDeliveryOrderOwners({ limit: Number.MAX_SAFE_INTEGER + 1 }),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
+  );
+  await assert.rejects(
+    repository.queryDeliveryOrderOwners({ startAfterOwner: '', limit: 1 }),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
+  );
+});
+
 test('native timestamps remain monotonic and path ordering is binary', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
@@ -879,6 +963,10 @@ test('standalone reads use one authoritative two-statement batch', async () => {
     [],
   );
   assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.queryDeliveryOrderOwners({ limit: 1 })),
+    [],
+  );
+  assert.deepEqual(
     await readWithSingleBatch(calls, () => repository.queryPendingReadyNotifications({ limit: 1 })),
     [],
   );
@@ -928,7 +1016,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   assert.equal(staleCall?.method, 'batch');
   if (staleCall?.method !== 'batch') assert.fail('Expected one D1 batch call.');
   assert.match(staleCall.statements[1].sql, /INDEXED BY commerce_stripe_checkouts_reconciliation_due/);
-  assert.equal(calls.length, 8);
+  assert.equal(calls.length, 9);
 });
 
 test('all standalone reads fail closed when commerce is paused', async () => {
@@ -944,6 +1032,10 @@ test('all standalone reads fail closed when commerce is paused', async () => {
   }[] = [
     { name: 'get', read: (value) => value.get(commerceKeys.claimCode('MISSING')) },
     { name: 'query', read: (value) => value.query({ kind: 'claim_code' }) },
+    {
+      name: 'queryDeliveryOrderOwners',
+      read: (value) => value.queryDeliveryOrderOwners({ limit: 1 }),
+    },
     {
       name: 'queryPendingReadyNotifications',
       read: (value) => value.queryPendingReadyNotifications({ limit: 1 }),

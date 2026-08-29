@@ -647,6 +647,38 @@ export class D1CommerceRepository {
     return documents.map((document) => publicRecord<T>(document));
   }
 
+  async queryDeliveryOrderOwners(args: Readonly<{
+    startAfterOwner?: string;
+    limit: number;
+  }>): Promise<string[]> {
+    const limit = positiveQueryLimit(args.limit);
+    const startAfterOwner = args.startAfterOwner === undefined
+      ? undefined
+      : deliveryOwner(args.startAfterOwner);
+    const cursorPredicate = startAfterOwner === undefined ? '' : ' AND\n        document.owner > ?';
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT DISTINCT document.owner AS owner
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
+      WHERE
+        authority.singleton = 1 AND
+        authority.authority_state = 'd1' AND
+        document.document_kind = 'delivery_order' AND
+        document.owner IS NOT NULL AND
+        typeof(document.owner) = 'text' AND
+        length(document.owner) BETWEEN 32 AND 44 AND
+        document.owner NOT GLOB '*[^0-9A-Za-z]*' AND
+        document.owner NOT GLOB '*[0OIl]*'${cursorPredicate}
+      ORDER BY document.owner ASC
+      LIMIT ?`).bind(...(startAfterOwner === undefined ? [limit] : [startAfterOwner, limit])));
+    if (result.results.length > limit) throw unavailableCommerceData();
+    const owners = result.results.map((row) => {
+      if (!isObject(row) || typeof row.owner !== 'string') throw unavailableCommerceData();
+      return row.owner;
+    });
+    reportInefficientQuery('delivery-order-owners', 'delivery_order', result, owners.length);
+    return owners;
+  }
+
   async queryPendingReadyNotifications(args: {
     limit: number;
     owner?: string;

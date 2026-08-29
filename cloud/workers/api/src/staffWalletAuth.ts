@@ -2,6 +2,7 @@ import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import { z } from 'zod';
 import { isStaffWalletAddress } from '../../../../shared/fulfillmentAccess.js';
+import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.js';
 import {
   WalletLifecycleValidationError,
   canonicalWalletAddress,
@@ -25,7 +26,7 @@ export const STAFF_AUTH_PATHS = new Set([
 const STAFF_AUTH_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const STAFF_AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const STAFF_AUTH_MAX_REQUEST_BYTES = 2048;
-const STAFF_AUTH_CLEANUP_LIMIT = 500;
+const STAFF_AUTH_CLEANUP_LIMIT = OPS_EXPIRY_CLEANUP_STATEMENTS.staffAuthSessions.limit;
 const STAFF_AUTH_RATE_LIMIT_RETRY_MS = 60_000;
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STAFF_SESSION_TOKEN_PATTERN = /^mons_staff_v1\.([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.([A-Za-z0-9_-]{43})$/;
@@ -581,22 +582,10 @@ export async function cleanupExpiredStaffAuthState(
   hasMore: boolean;
 }> {
   const results = await db.batch([
-    db.prepare(`DELETE FROM staff_auth_sessions
-      WHERE session_id IN (
-        SELECT session_id
-        FROM staff_auth_sessions
-        WHERE expires_at_ms <= ?
-        ORDER BY expires_at_ms, session_id
-        LIMIT ?
-      )`).bind(nowMs, STAFF_AUTH_CLEANUP_LIMIT),
-    db.prepare(`DELETE FROM staff_auth_challenges
-      WHERE challenge_id IN (
-        SELECT challenge.challenge_id
-        FROM staff_auth_challenges AS challenge
-        WHERE challenge.expires_at_ms <= ?
-        ORDER BY challenge.expires_at_ms, challenge.challenge_id
-        LIMIT ?
-      )`).bind(nowMs, STAFF_AUTH_CLEANUP_LIMIT),
+    db.prepare(OPS_EXPIRY_CLEANUP_STATEMENTS.staffAuthSessions.sql)
+      .bind(nowMs, STAFF_AUTH_CLEANUP_LIMIT),
+    db.prepare(OPS_EXPIRY_CLEANUP_STATEMENTS.staffAuthChallenges.sql)
+      .bind(nowMs, OPS_EXPIRY_CLEANUP_STATEMENTS.staffAuthChallenges.limit),
     db.prepare(`SELECT (
       EXISTS(SELECT 1 FROM staff_auth_sessions WHERE expires_at_ms <= ?) OR
       EXISTS(SELECT 1 FROM staff_auth_challenges WHERE expires_at_ms <= ?)

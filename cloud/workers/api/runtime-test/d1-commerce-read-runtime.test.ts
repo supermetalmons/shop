@@ -65,6 +65,8 @@ test('commerce repository batched reads return rows through the real D1 runtime'
 
     const claimKey = commerceKeys.claimCode('RUNTIME');
     const deliveryKey = commerceKeys.deliveryOrder('runtime', '1');
+    const validOwnerA = '11111111111111111111111111111111';
+    const validOwnerB = 'So11111111111111111111111111111111111111112';
     const checkoutKey = commerceKeys.stripeCheckout('runtime', 'cs_runtime');
     await env.COMMERCE_DB.batch([
       insertDocument(env.COMMERCE_DB, claimKey, { status: 'unused' }),
@@ -75,6 +77,24 @@ test('commerce repository batched reads return rows through the real D1 runtime'
         packStatusProjectionState: 'pending',
         shipperReadyToShipEmailState: 'queued',
         status: 'ready_to_ship',
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'owner-a'), {
+        owner: validOwnerA,
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'owner-b'), {
+        owner: validOwnerB,
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'owner-duplicate'), {
+        owner: validOwnerA,
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'owner-invalid-base58'), {
+        owner: '0'.repeat(32),
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'owner-invalid-character'), {
+        owner: `${'1'.repeat(31)}-`,
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'owner-invalid-bytes'), {
+        owner: '2'.repeat(32),
       }),
       insertDocument(env.COMMERCE_DB, checkoutKey, {
         fulfillmentProcessor: 'cloudflare_queue_v1',
@@ -96,6 +116,18 @@ test('commerce repository batched reads return rows through the real D1 runtime'
     );
     assert.deepEqual(await repository.query({ kind: 'box_assignment' }), []);
     assert.deepEqual(await repository.query({ kind: 'claim_code', limit: 0 }), []);
+    assert.deepEqual(await repository.queryDeliveryOrderOwners({ limit: 10 }), [
+      validOwnerA,
+      '2'.repeat(32),
+      validOwnerB,
+    ]);
+    assert.deepEqual(await repository.queryDeliveryOrderOwners({
+      startAfterOwner: validOwnerA,
+      limit: 10,
+    }), [
+      '2'.repeat(32),
+      validOwnerB,
+    ]);
     assert.deepEqual(
       (await repository.queryPendingReadyNotifications({
         limit: 5,

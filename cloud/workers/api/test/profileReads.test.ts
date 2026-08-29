@@ -5,6 +5,7 @@ import {
   createCommerceD1Harness,
   decodeLegacyFirestoreFixtureFields,
   seedCommerceDocument,
+  seedCommerceDocuments,
 } from './commerceD1Harness.ts';
 import {
   ADMIN_PROFILE_PATH,
@@ -38,6 +39,7 @@ import {
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const ADMIN = 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz';
 const OTHER = 'So11111111111111111111111111111111111111112';
+const SYSTEM_OWNER = '11111111111111111111111111111111';
 const UID = 'auth-user-one';
 const NOW_MS = Date.parse('2026-08-18T12:00:00.000Z');
 
@@ -75,6 +77,10 @@ function stringValue(value: string) {
 
 function integerValue(value: number) {
   return { integerValue: String(value) };
+}
+
+function base64UrlJson(value: unknown): string {
+  return btoa(JSON.stringify(value)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 function orderDocument(owner = OWNER, deliveryId = 7) {
@@ -139,11 +145,11 @@ function legacyFirestoreProfileDependencies(
   providerFetch: ProfileProviderFetch,
   overrides: Partial<Parameters<typeof handleProfileReadRequest>[3]> = {},
 ): Parameters<typeof handleProfileReadRequest>[3] {
-  const createCommerceRepository = () => ({
-    query: async <T extends CommerceDocumentData>(query: CommerceQuery) => {
+  const createCommerceRepository = () => {
+    const query = async <T extends CommerceDocumentData>(commerceQuery: CommerceQuery) => {
       const response = await providerFetch('https://commerce.test/documents:runQuery', {
         method: 'POST',
-        body: JSON.stringify(query),
+        body: JSON.stringify(commerceQuery),
       });
       const payload = await response.json() as unknown;
       if (!Array.isArray(payload)) throw new Error('Invalid repository fixture');
@@ -176,8 +182,19 @@ function legacyFirestoreProfileDependencies(
           version: 1,
         }];
       });
-    },
-  } as Pick<D1CommerceRepository, 'query'>);
+    };
+    return {
+      query,
+      queryDeliveryOrderOwners: async (args: Readonly<{ startAfterOwner?: string; limit: number }>) => {
+        const documents = await query({ kind: 'delivery_order' });
+        return [...new Set(documents.flatMap((document) =>
+          typeof document.data.owner === 'string' ? [document.data.owner] : []))]
+          .filter((owner) => args.startAfterOwner === undefined || owner > args.startAfterOwner)
+          .sort()
+          .slice(0, args.limit);
+      },
+    };
+  };
   return profileDependencies(providerFetch, createCommerceRepository, overrides);
 }
 
@@ -543,8 +560,10 @@ test('profile state preserves an earlier unavailable section when its sibling ti
     profileDependencies(
       async () => assert.fail('profile state deadline reached provider fetch'),
       () => ({
-        query: async () => new Promise<CommerceDocumentRecord[]>(() => undefined),
-      } as Pick<D1CommerceRepository, 'query'>),
+        query: async <T extends CommerceDocumentData>() =>
+          new Promise<CommerceDocumentRecord<T>[]>(() => undefined),
+        queryDeliveryOrderOwners: async () => new Promise<string[]>(() => undefined),
+      }),
       {
         loadProfileEmail: async () => {
           throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
@@ -575,10 +594,11 @@ test('profile reads enforce deadlines when D1 ignores the signal', async () => {
       profileDependencies(
         async () => assert.fail('D1 deadline reached provider fetch'),
         () => ({
-          query: async () => mode === 'stalled'
-            ? new Promise<CommerceDocumentRecord[]>(() => undefined)
-            : new Promise<CommerceDocumentRecord[]>((resolve) => setTimeout(() => resolve([]), 20)),
-        } as Pick<D1CommerceRepository, 'query'>),
+          query: async <T extends CommerceDocumentData>() => mode === 'stalled'
+            ? new Promise<CommerceDocumentRecord<T>[]>(() => undefined)
+            : new Promise<CommerceDocumentRecord<T>[]>((resolve) => setTimeout(() => resolve([]), 20)),
+          queryDeliveryOrderOwners: async () => [],
+        }),
         { timeoutMs: 5 },
       ),
     );
@@ -622,8 +642,10 @@ test('profile state preserves independently completed sections when D1 ignores t
     profileDependencies(
       async () => assert.fail('profile state D1 deadline reached provider fetch'),
       () => ({
-        query: async () => new Promise<CommerceDocumentRecord[]>(() => undefined),
-      } as Pick<D1CommerceRepository, 'query'>),
+        query: async <T extends CommerceDocumentData>() =>
+          new Promise<CommerceDocumentRecord<T>[]>(() => undefined),
+        queryDeliveryOrderOwners: async () => new Promise<string[]>(() => undefined),
+      }),
       {
         loadProfileEmail: profileStalls
           ? async () => new Promise<string | undefined>(() => undefined)
@@ -902,7 +924,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
     }),
   );
-  assert.deepEqual(await owners.response.json(), { owners: [OWNER, OTHER], nextCursor: null, hasMore: false });
+  assert.deepEqual(await owners.response.json(), { owners: [OTHER, OWNER], nextCursor: null, hasMore: false });
 
   const fulfillment = await handleProfileReadRequest(
     tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 2, cursor: null }),
@@ -981,6 +1003,180 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
       address: { full: null },
     }],
   });
+});
+
+test('delivery-order owner pages are unique, ordered, valid, and cursor-stable', async () => {
+  const harness = createCommerceD1Harness();
+  seedCommerceDocuments(harness, [
+    { key: commerceKeys.deliveryOrder('drop', '1'), data: { owner: OWNER } },
+    { key: commerceKeys.deliveryOrder('drop', '2'), data: { owner: OTHER } },
+    { key: commerceKeys.deliveryOrder('drop', '3'), data: { owner: ADMIN } },
+    { key: commerceKeys.deliveryOrder('drop', '4'), data: { owner: SYSTEM_OWNER } },
+    { key: commerceKeys.deliveryOrder('other', '5'), data: { owner: OWNER } },
+    { key: commerceKeys.deliveryOrder('drop', '6'), data: { owner: 'anonymous:subject' } },
+    { key: commerceKeys.deliveryOrder('drop', '7'), data: { owner: '2'.repeat(32) } },
+    { key: commerceKeys.deliveryOrder('drop', '8'), data: { owner: `${OTHER} ` } },
+    { key: commerceKeys.deliveryOrder('drop', '9'), data: {} },
+  ]);
+  const dependencies = d1ProfileDependencies(async () => Response.json({}), {
+    resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
+    verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+  });
+  const env = { COMMERCE_DB: harness.db, OPS_DB: {} as D1Database };
+
+  const first = await handleProfileReadRequest(
+    tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize: 2 }),
+    env,
+    ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+    dependencies,
+  );
+  assert.equal(first.response.status, 200);
+  const firstPage = await first.response.json() as {
+    owners: string[];
+    nextCursor: string | null;
+    hasMore: boolean;
+  };
+  assert.deepEqual(firstPage.owners, [SYSTEM_OWNER, ADMIN]);
+  assert.equal(firstPage.hasMore, true);
+  assert.ok(firstPage.nextCursor);
+  assert.deepEqual(
+    JSON.parse(Buffer.from(firstPage.nextCursor, 'base64url').toString('utf8')),
+    { v: 1, afterOwner: ADMIN },
+  );
+
+  const second = await handleProfileReadRequest(
+    tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize: 2, cursor: firstPage.nextCursor }),
+    env,
+    ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+    dependencies,
+  );
+  assert.equal(second.response.status, 200);
+  const secondPage = await second.response.json() as {
+    owners: string[];
+    nextCursor: string | null;
+    hasMore: boolean;
+  };
+  assert.deepEqual(secondPage, { owners: [OTHER, OWNER], nextCursor: null, hasMore: false });
+  assert.deepEqual([...firstPage.owners, ...secondPage.owners], [SYSTEM_OWNER, ADMIN, OTHER, OWNER]);
+});
+
+test('delivery-order owner pagination enforces v1 cursors and page-size bounds', async () => {
+  const queryLimits: number[] = [];
+  const dependencies = profileDependencies(
+    async () => Response.json({}),
+    () => ({
+      query: async () => [],
+      queryDeliveryOrderOwners: async ({ limit }) => {
+        queryLimits.push(limit);
+        return [];
+      },
+    }),
+    {
+      resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+    },
+  );
+  const env = { COMMERCE_DB: createCommerceD1(), OPS_DB: {} as D1Database };
+
+  for (const body of [{}, { pageSize: 500 }]) {
+    const result = await handleProfileReadRequest(
+      tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, body),
+      env,
+      ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+      dependencies,
+    );
+    assert.equal(result.response.status, 200);
+    assert.deepEqual(await result.response.json(), { owners: [], nextCursor: null, hasMore: false });
+  }
+  assert.deepEqual(queryLimits, [512, 512]);
+
+  for (const pageSize of [0, 501]) {
+    const result = await handleProfileReadRequest(
+      tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize }),
+      env,
+      ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+      dependencies,
+    );
+    assert.equal(result.response.status, 400);
+  }
+  assert.deepEqual(queryLimits, [512, 512]);
+
+  const cursors = [
+    base64UrlJson({ path: 'drops/drop/deliveryOrders/1' }),
+    base64UrlJson({ v: 2, afterOwner: OWNER }),
+    base64UrlJson({ v: 1, afterOwner: OWNER, extra: true }),
+    base64UrlJson({ v: 1, afterOwner: 'invalid' }),
+    'not+base64url',
+  ];
+  for (const cursor of cursors) {
+    const result = await handleProfileReadRequest(
+      tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { cursor }),
+      env,
+      ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+      dependencies,
+    );
+    assert.equal(result.response.status, 400, cursor);
+    assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'invalid-argument');
+  }
+  assert.deepEqual(queryLimits, [512, 512]);
+});
+
+test('delivery-order owner pagination bounds malformed candidates and stops after cancellation', async () => {
+  const malformedOwner = (index: number) => {
+    const suffix = (index + 1).toString(9).replace(/[0-8]/g, (digit) => String(Number(digit) + 1));
+    return `${'2'.repeat(28)}${suffix.padStart(4, 'A')}`;
+  };
+  const invalidOwners = Array.from({ length: 8 }, (_, index) => malformedOwner(index));
+  const queryLimits: number[] = [];
+  const page = await profileReadTestHooks.loadDeliveryOrderOwners({
+    pageSize: 1,
+    repository: {
+      queryDeliveryOrderOwners: async ({ limit }) => {
+        queryLimits.push(limit);
+        return [...invalidOwners, OWNER];
+      },
+    },
+    signal: new AbortController().signal,
+  });
+  assert.deepEqual(page, { owners: [OWNER], nextCursor: null, hasMore: false });
+  assert.deepEqual(queryLimits, [512]);
+
+  let queryCount = 0;
+  let candidateIndex = 0;
+  await assert.rejects(
+    profileReadTestHooks.loadDeliveryOrderOwners({
+      pageSize: 1,
+      repository: {
+        queryDeliveryOrderOwners: async ({ limit }) => {
+          queryCount += 1;
+          return Array.from({ length: limit }, () => malformedOwner(candidateIndex++));
+        },
+      },
+      signal: new AbortController().signal,
+    }),
+    (error: unknown) => error instanceof ProfileReadError && error.code === 'unavailable',
+  );
+  assert.equal(queryCount, 4);
+  assert.equal(candidateIndex, 2048);
+
+  const controller = new AbortController();
+  const reason = new Error('owner scan cancelled');
+  let cancelledQueryCount = 0;
+  await assert.rejects(
+    profileReadTestHooks.loadDeliveryOrderOwners({
+      pageSize: 1,
+      repository: {
+        queryDeliveryOrderOwners: async () => {
+          cancelledQueryCount += 1;
+          controller.abort(reason);
+          return invalidOwners;
+        },
+      },
+      signal: controller.signal,
+    }),
+    (error: unknown) => error === reason,
+  );
+  assert.equal(cancelledQueryCount, 1);
 });
 
 test('manual review rethrows client cancellation and retains server-timeout Stripe fallback', async () => {

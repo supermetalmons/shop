@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { createCommerceD1 } from '../test/commerceD1Harness.ts';
 import { createTestHarness } from 'wrangler';
+import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.ts';
 import {
   compareAndSetReadyNotificationCursor,
   loadReadyNotificationCursor,
@@ -108,6 +109,7 @@ test('ops D1 migrations preserve the notification cursor and receipt-transfer li
       '0003_remove_ready_notification_pause.sql',
       '0004_repair_ready_notification_cursor.sql',
       '0005_remove_redundant_anonymous_auth_subject_index.sql',
+      '0006_cover_expiry_cleanup_indexes.sql',
     ]);
     assert.equal((await env.OPS_DB.prepare(`SELECT COUNT(*) AS count
       FROM sqlite_schema
@@ -120,6 +122,14 @@ test('ops D1 migrations preserve the notification cursor and receipt-transfer li
       .all<{ detail: string }>();
     assert.ok(anonymousAuthSubjectPlan.results.some((row) =>
       /^SEARCH anonymous_auth_sessions USING INDEX sqlite_autoindex_anonymous_auth_sessions_\d+ \(auth_subject=\?\)$/.test(row.detail)));
+    for (const query of Object.values(OPS_EXPIRY_CLEANUP_STATEMENTS)) {
+      const plan = await env.OPS_DB.prepare(`EXPLAIN QUERY PLAN ${query.sql}`)
+        .bind(1_000, query.limit)
+        .all<{ detail: string }>();
+      assert.ok(plan.results.some((row) =>
+        row.detail.includes(`USING COVERING INDEX ${query.indexName}`)));
+      assert.ok(plan.results.every((row) => !row.detail.includes('USE TEMP B-TREE')));
+    }
     const anonymousExpiry = 30 * 24 * 60 * 60 * 1000;
     await env.OPS_DB.batch([
       env.OPS_DB.prepare(`INSERT INTO anonymous_auth_sessions VALUES (?, ?, ?, ?, ?, ?, ?)`)

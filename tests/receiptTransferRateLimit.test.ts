@@ -204,9 +204,12 @@ test('receipt transfer D1 cleanup is bounded and reports remaining backlog', asy
       hasMore: true,
     },
   );
-  assert.equal(scripted.calls[0][0].values[0], nowMs - 2 * 60 * 1_000);
+  assert.deepEqual(scripted.calls[0][0].values, [
+    nowMs - 2 * 60 * 1_000,
+    RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT,
+  ]);
   assert.equal(scripted.calls[0][1].values[0], nowMs - 2 * 60 * 1_000);
-  assert.match(scripted.calls[0][0].query, /LIMIT 1000[\s\S]*RETURNING subject_hash/);
+  assert.match(scripted.calls[0][0].query, /LIMIT \?[\s\S]*RETURNING subject_hash/);
 });
 
 test('receipt transfer evaluator rejects invalid limits and times', () => {

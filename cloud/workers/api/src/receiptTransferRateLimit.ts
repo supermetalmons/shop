@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
+import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.js';
 
 export const RECEIPT_TRANSFER_CALLER_RATE_LIMIT = 60;
 export const RECEIPT_TRANSFER_ASSET_RATE_LIMIT = 20;
 export const RECEIPT_TRANSFER_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 export const RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION = 2;
 const RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_GRACE_MS = 2 * 60 * 1000;
-export const RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT = 1_000;
+export const RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT =
+  OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.limit;
 
 const RECEIPT_TRANSFER_CALLER_HASH_DOMAIN = 'receipt-transfer-rate-limit:v2:caller';
 const RECEIPT_TRANSFER_ASSET_HASH_DOMAIN = 'receipt-transfer-rate-limit:v2:asset';
@@ -149,18 +151,6 @@ const SELECT_BUCKET_SQL = `
     request_count
   FROM rate_limit_buckets
   WHERE scope = ? AND subject_hash = ?
-`;
-
-const CLEANUP_BUCKETS_SQL = `
-  DELETE FROM rate_limit_buckets
-  WHERE (scope, subject_hash) IN (
-    SELECT scope, subject_hash
-    FROM rate_limit_buckets
-    WHERE expires_at_ms <= ?
-    ORDER BY expires_at_ms, scope, subject_hash
-    LIMIT ${RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT}
-  )
-  RETURNING subject_hash
 `;
 
 const SELECT_CLEANUP_BACKLOG_SQL = `
@@ -420,7 +410,8 @@ export async function cleanupExpiredReceiptTransferRateLimitBuckets(
   const normalizedNowMs = normalizedNow(nowMs);
   const cutoffMs = Math.max(0, normalizedNowMs - RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_GRACE_MS);
   const [deleteResult, backlogResult] = await database.batch<{ subject_hash?: unknown; has_more?: unknown }>([
-    database.prepare(CLEANUP_BUCKETS_SQL).bind(cutoffMs),
+    database.prepare(OPS_EXPIRY_CLEANUP_STATEMENTS.rateLimitBuckets.sql)
+      .bind(cutoffMs, RECEIPT_TRANSFER_RATE_LIMIT_CLEANUP_LIMIT),
     database.prepare(SELECT_CLEANUP_BACKLOG_SQL).bind(cutoffMs),
   ]);
   if (

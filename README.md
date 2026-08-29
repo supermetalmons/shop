@@ -233,9 +233,11 @@ pack status and starts at
 `0003_remove_ready_notification_pause.sql` removes the legacy notification pause
 column while preserving the reconciliation cursor,
 `0004_repair_ready_notification_cursor.sql` repairs a missing cursor singleton,
-and `0005_remove_redundant_anonymous_auth_subject_index.sql` removes the redundant
-named index while preserving the table's unique index. Append
-`0006_<description>.sql` for the next change and never edit an applied file.
+`0005_remove_redundant_anonymous_auth_subject_index.sql` removes the redundant
+named index while preserving the table's unique index, and
+`0006_cover_expiry_cleanup_indexes.sql` covers the complete ordering used by
+bounded expiry cleanup queries. Append `0007_<description>.sql` for the next
+change and never edit an applied file.
 
 Apply and verify this database independently with:
 

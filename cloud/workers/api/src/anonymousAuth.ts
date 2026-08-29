@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.js';
 import { isRequestCancellationError, readBoundedRequestJson } from './boundedRequest.js';
 import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
 
@@ -12,7 +13,7 @@ export const ANONYMOUS_AUTH_PATHS = new Set([
 const ANONYMOUS_AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const ANONYMOUS_AUTH_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ANONYMOUS_AUTH_MAX_REQUEST_BYTES = 256;
-const ANONYMOUS_AUTH_CLEANUP_LIMIT = 500;
+const ANONYMOUS_AUTH_CLEANUP_LIMIT = OPS_EXPIRY_CLEANUP_STATEMENTS.anonymousAuthSessions.limit;
 const ANONYMOUS_AUTH_RATE_LIMIT_RETRY_MS = 60_000;
 const PRODUCTION_COOKIE_NAME = '__Host-mons_anon_v1';
 const DEVELOPMENT_COOKIE_NAME = 'mons_anon_dev_v1';
@@ -399,14 +400,8 @@ export async function cleanupExpiredAnonymousAuthSessions(
   nowMs: number,
 ): Promise<{ deletedCount: number; limitReached: boolean; hasMore: boolean }> {
   const results = await db.batch([
-    db.prepare(`DELETE FROM anonymous_auth_sessions
-      WHERE session_id IN (
-        SELECT session_id
-        FROM anonymous_auth_sessions
-        WHERE expires_at_ms <= ?
-        ORDER BY expires_at_ms, session_id
-        LIMIT ?
-      )`).bind(nowMs, ANONYMOUS_AUTH_CLEANUP_LIMIT),
+    db.prepare(OPS_EXPIRY_CLEANUP_STATEMENTS.anonymousAuthSessions.sql)
+      .bind(nowMs, ANONYMOUS_AUTH_CLEANUP_LIMIT),
     db.prepare(`SELECT EXISTS(
       SELECT 1 FROM anonymous_auth_sessions WHERE expires_at_ms <= ?
     ) AS has_more`).bind(nowMs),

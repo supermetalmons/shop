@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import {
   assertOpsD1Integrity,
+  OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS,
   parseReadyNotificationCursor,
   validateReadyNotificationCursorPath,
   type OpsD1IntegrityInput,
@@ -21,6 +22,7 @@ const schemaSql = [
   '0003_remove_ready_notification_pause.sql',
   '0004_repair_ready_notification_cursor.sql',
   '0005_remove_redundant_anonymous_auth_subject_index.sql',
+  '0006_cover_expiry_cleanup_indexes.sql',
 ].map((name) => readFileSync(
   new URL(`../cloud/workers/api/ops-migrations/${name}`, import.meta.url),
   'utf8',
@@ -105,6 +107,29 @@ function controlRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function expiryCleanupQueryPlans(
+  db: DatabaseSync,
+): OpsD1IntegrityInput['expiryCleanupQueryPlans'] {
+  return {
+    anonymousAuthSessions: queryRows(
+      db,
+      OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.anonymousAuthSessions.sql,
+    ),
+    staffAuthSessions: queryRows(
+      db,
+      OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.staffAuthSessions.sql,
+    ),
+    staffAuthChallenges: queryRows(
+      db,
+      OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.staffAuthChallenges.sql,
+    ),
+    rateLimitBuckets: queryRows(
+      db,
+      OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.rateLimitBuckets.sql,
+    ),
+  };
+}
+
 function integrityInput(
   overrides: Partial<OpsD1IntegrityInput> = {},
 ): OpsD1IntegrityInput {
@@ -115,7 +140,8 @@ function integrityInput(
       anonymousAuthSessionCounts: queryRows(db, 'SELECT COUNT(*) AS anonymous_auth_session_count FROM anonymous_auth_sessions'),
       anonymousAuthSessionExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)'),
       controls: queryRows(db, 'SELECT * FROM worker_controls ORDER BY control_key'),
-      expiryIndexColumns: queryRows(db, 'PRAGMA index_info(rate_limit_buckets_expires_at_ms)'),
+      expiryCleanupQueryPlans: expiryCleanupQueryPlans(db),
+      rateLimitBucketExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(rate_limit_buckets_expires_at_ms)'),
       foreignKeyCheck: queryRows(db, 'PRAGMA foreign_key_check'),
       migrations: [
         { name: '0001_current_schema.sql' },
@@ -123,6 +149,7 @@ function integrityInput(
         { name: '0003_remove_ready_notification_pause.sql' },
         { name: '0004_repair_ready_notification_cursor.sql' },
         { name: '0005_remove_redundant_anonymous_auth_subject_index.sql' },
+        { name: '0006_cover_expiry_cleanup_indexes.sql' },
       ],
       profileAddressColumns: queryRows(db, 'PRAGMA table_info(profile_addresses)'),
       profileCounts: queryRows(db, `SELECT
@@ -146,6 +173,14 @@ function integrityInput(
         FROM sqlite_schema
         WHERE name NOT LIKE 'sqlite_%' AND name NOT GLOB '_cf_*'
         ORDER BY name`),
+      staffAuthChallengeExpiryIndexColumns: queryRows(
+        db,
+        'PRAGMA index_info(staff_auth_challenges_expires_at_ms)',
+      ),
+      staffAuthSessionExpiryIndexColumns: queryRows(
+        db,
+        'PRAGMA index_info(staff_auth_sessions_expires_at_ms)',
+      ),
       tableList: queryRows(db, `SELECT name, type, strict
         FROM pragma_table_list
         WHERE schema = 'main' AND name IN (
@@ -215,6 +250,28 @@ test('anonymous-auth subject lookup uses the UNIQUE auto-index', () => {
       WHERE auth_subject = 'anon:10000000-0000-4000-8000-000000000001'`);
     assert.ok(plan.some((row) =>
       /^SEARCH anonymous_auth_sessions USING INDEX sqlite_autoindex_anonymous_auth_sessions_\d+ \(auth_subject=\?\)$/.test(String(row.detail))));
+  } finally {
+    db.close();
+  }
+});
+
+test('expiry cleanup scans use covering indexes without temporary sorting', () => {
+  const db = database();
+  try {
+    const plans = expiryCleanupQueryPlans(db);
+    for (const key of Object.keys(OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS) as Array<
+      keyof typeof OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS
+    >) {
+      const { indexName } = OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS[key];
+      const plan = plans[key];
+      assert.match(
+        OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS[key].sql,
+        /^EXPLAIN QUERY PLAN DELETE FROM /,
+      );
+      assert.ok(plan.some((row) =>
+        String(row.detail).includes(`USING COVERING INDEX ${indexName}`)));
+      assert.ok(plan.every((row) => !String(row.detail).includes('USE TEMP B-TREE')));
+    }
   } finally {
     db.close();
   }
@@ -317,8 +374,40 @@ test('Ops integrity rejects ledger, schema, and foreign-key drift', () => {
       row.name === 'subject_hash' ? { ...row, pk: 1 } : row),
   })), /primary-key position/);
   assert.throws(() => assertOpsD1Integrity(integrityInput({
-    expiryIndexColumns: [{ seqno: 0, cid: 9, name: 'updated_at_ms' }],
-  })), /expiry index columns/);
+    anonymousAuthSessionExpiryIndexColumns: [
+      { seqno: 0, cid: 6, name: 'expires_at_ms' },
+    ],
+  })), /anonymous-auth expiry index columns/);
+  assert.throws(() => assertOpsD1Integrity(integrityInput({
+    staffAuthSessionExpiryIndexColumns: [
+      { seqno: 0, cid: 6, name: 'expires_at_ms' },
+      { seqno: 1, cid: 1, name: 'secret_hash' },
+    ],
+  })), /staff-auth session expiry index columns/);
+  assert.throws(() => assertOpsD1Integrity(integrityInput({
+    staffAuthChallengeExpiryIndexColumns: [
+      { seqno: 0, cid: 4, name: 'expires_at_ms' },
+      { seqno: 1, cid: 1, name: 'wallet' },
+    ],
+  })), /staff-auth challenge expiry index columns/);
+  assert.throws(() => assertOpsD1Integrity(integrityInput({
+    rateLimitBucketExpiryIndexColumns: [{ seqno: 0, cid: 9, name: 'updated_at_ms' }],
+  })), /rate-limit bucket expiry index columns/);
+  assert.throws(() => assertOpsD1Integrity(integrityInput({
+    expiryCleanupQueryPlans: {
+      ...healthy.expiryCleanupQueryPlans,
+      anonymousAuthSessions: [{ detail: 'SCAN anonymous_auth_sessions' }],
+    },
+  })), /does not use anonymous_auth_sessions_expires_at_ms/);
+  assert.throws(() => assertOpsD1Integrity(integrityInput({
+    expiryCleanupQueryPlans: {
+      ...healthy.expiryCleanupQueryPlans,
+      rateLimitBuckets: [
+        ...healthy.expiryCleanupQueryPlans.rateLimitBuckets,
+        { detail: 'USE TEMP B-TREE FOR ORDER BY' },
+      ],
+    },
+  })), /uses a temporary B-tree/);
   assert.throws(() => assertOpsD1Integrity(integrityInput({ quickCheck: [] })), /quick_check/);
   assert.throws(() => assertOpsD1Integrity(integrityInput({ controls: [] })), /exactly one worker control/);
 });

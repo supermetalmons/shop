@@ -65,6 +65,12 @@ function requireSearchIndex(plan: Record<string, unknown>[], indexName: string):
   })) fail(`Commerce D1 query plan does not search ${indexName}.`);
 }
 
+function requireNoTemporaryBTree(plan: Record<string, unknown>[], operation: string): void {
+  if (plan.some((row) => String(row.detail || '').includes('USE TEMP B-TREE'))) {
+    fail(`Commerce D1 ${operation} query plan uses a temporary B-tree.`);
+  }
+}
+
 export function checkCommerceD1(): Record<string, unknown> {
   const quick = queryRemoteCommerceD1('PRAGMA quick_check');
   if (quick.length !== 1 || quick[0].quick_check !== 'ok') fail('Commerce D1 quick check failed.');
@@ -278,13 +284,55 @@ export function checkCommerceD1(): Record<string, unknown> {
       normalizedSql(row.sql) !== normalizedSql(PENDING_READY_NOTIFICATION_INDEX_SQL[String(row.name)]))
   ) fail('Commerce D1 pending ready-notification indexes are invalid.');
 
-  requireIndex(
-    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
-      FROM commerce_documents
-      WHERE document_kind = 'delivery_order' AND owner = 'owner'
-      ORDER BY document_path LIMIT 450`),
-    'commerce_documents_delivery_owner_path',
-  );
+  const initialDeliveryOwnerPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN
+    SELECT DISTINCT document.owner AS owner
+    FROM commerce_authority_control AS authority
+    CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
+    WHERE
+      authority.singleton = 1 AND
+      authority.authority_state = 'd1' AND
+      document.document_kind = 'delivery_order' AND
+      document.owner IS NOT NULL AND
+      typeof(document.owner) = 'text' AND
+      length(document.owner) BETWEEN 32 AND 44 AND
+      document.owner NOT GLOB '*[^0-9A-Za-z]*' AND
+      document.owner NOT GLOB '*[0OIl]*'
+    ORDER BY document.owner ASC
+    LIMIT 501`);
+  requireSearchIndex(initialDeliveryOwnerPlan, 'commerce_documents_delivery_owner_path');
+  requireNoTemporaryBTree(initialDeliveryOwnerPlan, 'initial delivery-owner');
+  const keysetDeliveryOwnerPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN
+    SELECT DISTINCT document.owner AS owner
+    FROM commerce_authority_control AS authority
+    CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
+    WHERE
+      authority.singleton = 1 AND
+      authority.authority_state = 'd1' AND
+      document.document_kind = 'delivery_order' AND
+      document.owner IS NOT NULL AND
+      typeof(document.owner) = 'text' AND
+      length(document.owner) BETWEEN 32 AND 44 AND
+      document.owner NOT GLOB '*[^0-9A-Za-z]*' AND
+      document.owner NOT GLOB '*[0OIl]*' AND
+      document.owner > '11111111111111111111111111111111'
+    ORDER BY document.owner ASC
+    LIMIT 501`);
+  requireSearchIndex(keysetDeliveryOwnerPlan, 'commerce_documents_delivery_owner_path');
+  requireNoTemporaryBTree(keysetDeliveryOwnerPlan, 'keyset delivery-owner');
+  queryRemoteCommerceD1(`SELECT DISTINCT document.owner AS owner
+    FROM commerce_authority_control AS authority
+    CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
+    WHERE
+      authority.singleton = 1 AND
+      authority.authority_state = 'd1' AND
+      document.document_kind = 'delivery_order' AND
+      document.owner IS NOT NULL AND
+      typeof(document.owner) = 'text' AND
+      length(document.owner) BETWEEN 32 AND 44 AND
+      document.owner NOT GLOB '*[^0-9A-Za-z]*' AND
+      document.owner NOT GLOB '*[0OIl]*'
+    ORDER BY document.owner ASC
+    LIMIT 1`);
   requireIndex(
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
       FROM commerce_documents
