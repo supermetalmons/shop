@@ -1078,7 +1078,7 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
   );
   const env = { COMMERCE_DB: createCommerceD1(), OPS_DB: {} as D1Database };
 
-  for (const body of [{}, { pageSize: 500 }]) {
+  for (const body of [{}, { pageSize: 1 }, { pageSize: 500 }]) {
     const result = await handleProfileReadRequest(
       tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, body),
       env,
@@ -1088,7 +1088,7 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
     assert.equal(result.response.status, 200);
     assert.deepEqual(await result.response.json(), { owners: [], nextCursor: null, hasMore: false });
   }
-  assert.deepEqual(queryLimits, [512, 512]);
+  assert.deepEqual(queryLimits, [201, 2, 501]);
 
   for (const pageSize of [0, 501]) {
     const result = await handleProfileReadRequest(
@@ -1099,7 +1099,7 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
     );
     assert.equal(result.response.status, 400);
   }
-  assert.deepEqual(queryLimits, [512, 512]);
+  assert.deepEqual(queryLimits, [201, 2, 501]);
 
   const cursors = [
     base64UrlJson({ path: 'drops/drop/deliveryOrders/1' }),
@@ -1118,7 +1118,7 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
     assert.equal(result.response.status, 400, cursor);
     assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'invalid-argument');
   }
-  assert.deepEqual(queryLimits, [512, 512]);
+  assert.deepEqual(queryLimits, [201, 2, 501]);
 });
 
 test('delivery-order owner pagination bounds malformed candidates and stops after cancellation', async () => {
@@ -1126,38 +1126,46 @@ test('delivery-order owner pagination bounds malformed candidates and stops afte
     const suffix = (index + 1).toString(9).replace(/[0-8]/g, (digit) => String(Number(digit) + 1));
     return `${'2'.repeat(28)}${suffix.padStart(4, 'A')}`;
   };
-  const invalidOwners = Array.from({ length: 8 }, (_, index) => malformedOwner(index));
+  const invalidOwners = Array.from({ length: 8 }, (_, index) => malformedOwner(index)).sort();
+  const candidates = [...invalidOwners, OWNER].sort();
   const queryLimits: number[] = [];
   const page = await profileReadTestHooks.loadDeliveryOrderOwners({
     pageSize: 1,
     repository: {
-      queryDeliveryOrderOwners: async ({ limit }) => {
+      queryDeliveryOrderOwners: async ({ limit, startAfterOwner }) => {
         queryLimits.push(limit);
-        return [...invalidOwners, OWNER];
+        return candidates
+          .filter((owner) => startAfterOwner === undefined || owner > startAfterOwner)
+          .slice(0, limit);
       },
     },
     signal: new AbortController().signal,
   });
   assert.deepEqual(page, { owners: [OWNER], nextCursor: null, hasMore: false });
-  assert.deepEqual(queryLimits, [512]);
+  assert.deepEqual(queryLimits, [2, 682]);
 
-  let queryCount = 0;
-  let candidateIndex = 0;
+  const malformedCandidates = Array.from({ length: 2048 }, (_, index) => malformedOwner(index)).sort();
+  const malformedQueryLimits: number[] = [];
+  let fetchedCandidateCount = 0;
   await assert.rejects(
     profileReadTestHooks.loadDeliveryOrderOwners({
       pageSize: 1,
       repository: {
-        queryDeliveryOrderOwners: async ({ limit }) => {
-          queryCount += 1;
-          return Array.from({ length: limit }, () => malformedOwner(candidateIndex++));
+        queryDeliveryOrderOwners: async ({ limit, startAfterOwner }) => {
+          malformedQueryLimits.push(limit);
+          const result = malformedCandidates
+            .filter((owner) => startAfterOwner === undefined || owner > startAfterOwner)
+            .slice(0, limit);
+          fetchedCandidateCount += result.length;
+          return result;
         },
       },
       signal: new AbortController().signal,
     }),
     (error: unknown) => error instanceof ProfileReadError && error.code === 'unavailable',
   );
-  assert.equal(queryCount, 4);
-  assert.equal(candidateIndex, 2048);
+  assert.deepEqual(malformedQueryLimits, [2, 682, 682, 682]);
+  assert.equal(fetchedCandidateCount, 2048);
 
   const controller = new AbortController();
   const reason = new Error('owner scan cancelled');

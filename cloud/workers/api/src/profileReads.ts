@@ -514,11 +514,11 @@ async function loadDeliveryOrderOwners(args: {
     MIN_DELIVERY_ORDER_OWNER_SCAN_CANDIDATES,
     targetCount * DELIVERY_ORDER_OWNER_SCAN_MULTIPLIER,
   );
-  const batchCandidateLimit = Math.ceil(candidateLimit / DELIVERY_ORDER_OWNER_SCAN_BATCH_LIMIT);
   const owners: string[] = [];
   let startAfterOwner = decodeOwnersCursor(args.cursor);
   let batchCount = 0;
   let candidateCount = 0;
+  let queryLimit = targetCount;
   while (owners.length < targetCount) {
     if (args.signal.aborted) throw args.signal.reason;
     if (
@@ -527,7 +527,7 @@ async function loadDeliveryOrderOwners(args: {
     ) {
       throw new ProfileReadError('unavailable', 503, 'Delivery-order owners are temporarily unavailable.');
     }
-    const queryLimit = Math.min(batchCandidateLimit, candidateLimit - candidateCount);
+    queryLimit = Math.min(queryLimit, candidateLimit - candidateCount);
     batchCount += 1;
     const candidates = await args.repository.queryDeliveryOrderOwners({
       limit: queryLimit,
@@ -540,8 +540,12 @@ async function loadDeliveryOrderOwners(args: {
       if (isBase58Bytes(owner, 32)) owners.push(owner);
       if (owners.length >= targetCount) break;
     }
-    if (candidates.length < queryLimit) break;
+    if (candidates.length < queryLimit || owners.length >= targetCount) break;
     startAfterOwner = candidates[candidates.length - 1]!;
+    const remainingBatchCount = DELIVERY_ORDER_OWNER_SCAN_BATCH_LIMIT - batchCount;
+    if (remainingBatchCount > 0) {
+      queryLimit = Math.ceil((candidateLimit - candidateCount) / remainingBatchCount);
+    }
   }
   const hasMore = owners.length > pageSize;
   const page = hasMore ? owners.slice(0, pageSize) : owners;
