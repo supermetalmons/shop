@@ -910,7 +910,7 @@ test('Admin IRL finalization uses the authenticated Cloudflare route with an exa
   assert.equal(parseAdminIrlRedeemFinalizeResult({ ...response, extra: true }), null);
   assert.equal(parseAdminIrlRedeemFinalizeResult({ ...response, processed: false }), null);
   assert.equal(parseAdminIrlRedeemFinalizeResult({ ...response, claimCodes: ['invalid'] }), null);
-  assert.equal(profileApiTimeoutMs('/admin/irl-redeem/finalize'), ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS);
+  assert.equal(profileApiTimeoutMs('/admin/irl-redeem/finalize'), ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS);
   assert.equal(profileApiTimeoutMs(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH), ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS);
 
 });
@@ -930,7 +930,7 @@ test('Admin IRL finalization accepts legacy success without polling', async () =
   );
   assert.deepEqual(calls, [{
     pathname: '/admin/irl-redeem/finalize',
-    timeoutMs: ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
+    timeoutMs: ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
   }]);
 });
 
@@ -999,7 +999,7 @@ test('Admin IRL finalization polls exact pending responses with one stable opera
     {
       pathname: '/admin/irl-redeem/finalize',
       data: ADMIN_IRL_REDEEM_FINALIZE_REQUEST,
-      timeoutMs: ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
+      timeoutMs: ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
     },
     {
       pathname: ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,

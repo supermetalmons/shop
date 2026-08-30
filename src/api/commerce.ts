@@ -667,13 +667,13 @@ export function createCommerceApiClient(
       let response: unknown;
       let responseStatus: number | undefined;
       try {
-        const remainingMs = adminIrlRedeemFinalizeRemainingMs(deadlineAt, adminIrlRedeemFinalizePolling);
         response = await callProfileApi(pathname, request, undefined, {
           onCredential,
           onResponseStatus: (status) => { responseStatus = status; },
-          timeoutMs: pathname === '/admin/irl-redeem/finalize'
-            ? remainingMs
-            : Math.min(ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS, remainingMs),
+          timeoutMs: Math.min(
+            ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
+            adminIrlRedeemFinalizeRemainingMs(deadlineAt, adminIrlRedeemFinalizePolling),
+          ),
         });
       } catch (error) {
         if (!isRawAdminIrlRedeemFinalizeTransportError(error)) throw error;

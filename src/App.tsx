@@ -1059,31 +1059,6 @@ function isUserRejectedError(err: unknown): boolean {
   );
 }
 
-function shouldRetryAdminIrlRedeemFinalizeError(err: unknown): boolean {
-  if (isRetryableApiError(err)) return true;
-  if (!err || typeof err !== 'object') return false;
-  const details = (err as { details?: unknown }).details;
-  if (!details || typeof details !== 'object' || Array.isArray(details)) return false;
-  const receiptIndexing = details as { expected?: unknown; got?: unknown };
-  return receiptIndexing.expected === 1 && receiptIndexing.got === 0;
-}
-
-async function finalizeAdminIrlRedeemWithRetry(args: {
-  dropId: string;
-  requestId: string;
-  transferSignature: string;
-}) {
-  return retryWithBackoff(
-    () => finalizeAdminIrlRedeem(args),
-    {
-      maxAttempts: 5,
-      baseDelayMs: 1_000,
-      maxDelayMs: 5_000,
-      shouldRetry: shouldRetryAdminIrlRedeemFinalizeError,
-    },
-  );
-}
-
 function pendingRevealListEqual(left: LocalPendingReveal[], right: LocalPendingReveal[]): boolean {
   if (left.length !== right.length) return false;
   for (let i = 0; i < left.length; i += 1) {
@@ -6604,7 +6579,7 @@ function App({
         else setSelected(new Set());
         showToast(`Admin IRL transfer confirmed · finalizing…`);
       }
-      const finalized = await finalizeAdminIrlRedeemWithRetry({
+      const finalized = await finalizeAdminIrlRedeem({
         dropId: adminIrlDrop.dropId,
         requestId: resp.requestId,
         transferSignature: sig,

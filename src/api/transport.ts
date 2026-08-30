@@ -1,7 +1,6 @@
 import { summarizePayloadShape } from '../../shared/logSummaries.ts';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
-  ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
   ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
   STRIPE_CHECKOUT_RETRY_HEADER,
   STRIPE_CHECKOUT_RETRY_SAME_OPERATION,
@@ -185,8 +184,10 @@ export function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
   if (pathname === '/claims/irl/prepare') return IRL_CLAIM_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/admin/irl-redeem/prepare') return ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS;
-  if (pathname === '/admin/irl-redeem/finalize') return ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS;
-  if (pathname === ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH) return ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS;
+  if (
+    pathname === '/admin/irl-redeem/finalize' ||
+    pathname === ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH
+  ) return ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS;
   if (pathname === '/boxes/reveal') return REVEAL_DUDES_API_TIMEOUT_MS;
   if (pathname === '/delivery/prepare') return DELIVERY_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/delivery/receipts/issue' || pathname === '/delivery/receipts/recover') {
