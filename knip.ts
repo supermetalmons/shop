@@ -31,7 +31,7 @@ const config = {
         'scripts/**/*.{ts,mjs}',
         'tests/**/*.ts',
       ],
-      ignoreDependencies: ['buffer'],
+      ignoreDependencies: ['buffer', 'cloudflare'],
       ignoreBinaries: ['anchor', 'mkfifo', 'solana'],
       ignoreExportsUsedInFile: { type: true },
     },

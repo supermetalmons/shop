@@ -1996,7 +1996,7 @@ export async function reconcilePendingDeliveryPackStatusProjections(
   return candidates.length;
 }
 
-export function scheduleDeliveryPackStatusProjection(args: {
+function scheduleDeliveryPackStatusProjection(args: {
   context: CommerceContext;
   deliveryId: number;
   dropId: string;
@@ -4652,6 +4652,7 @@ export const deliveryReceiptTestHooks = {
   rollbackTransactionBestEffort,
   runDeliveryRecoveryOrderQuery,
   runPendingReadyNotificationQuery,
+  scheduleDeliveryPackStatusProjection,
   secureRandomInt,
   sendReceiptBatch,
   shouldShrinkReceiptBatch,

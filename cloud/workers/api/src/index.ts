@@ -38,6 +38,7 @@ import {
 } from './boundedRequest.js';
 
 export { runScheduledReconciliations } from './workerScheduled.js';
+export { AdminIrlRedeemFinalizeWorkflowV1 } from './adminIrlRedeemFinalizeWorkflow.js';
 export {
   processBackgroundJobBatch,
   processStripeFulfillmentMessage,

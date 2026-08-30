@@ -23,14 +23,16 @@ import {
   notificationEnqueueTimestamp,
   signNotificationEnqueueRequest,
 } from '../../../../shared/notificationEnqueueAuth.ts';
-import {
-  handleRequest as rawHandleRequest,
+import type { ProviderFetch } from '../src/workerPublicRoutes.ts';
+import { isStaffOnlyApiPath } from '../src/requestIdentity.ts';
+import { loadApiWorkerIndex } from './cloudflareWorkersTestLoader.ts';
+import { createDeferredWorkCollector } from './deferredWork.ts';
+
+const {
+  handleRequest: rawHandleRequest,
   runScheduledReconciliations,
   sleepWithAbort,
-  type ProviderFetch,
-} from '../src/index.ts';
-import { isStaffOnlyApiPath } from '../src/requestIdentity.ts';
-import { createDeferredWorkCollector } from './deferredWork.ts';
+} = await loadApiWorkerIndex();
 
 type RequestDependencies = Parameters<typeof rawHandleRequest>[3];
 
@@ -50,6 +52,7 @@ const CARD_COLLECTION = 'EAzEpagtyeRAx9npnpVMpygoA8ouX7DRpLTghhPvYTiu';
 const SIGNATURE = bs58.encode(new Uint8Array(64).fill(1));
 const TRANSACTION = Buffer.from([1, 2, 3]).toString('base64');
 const allowRateLimit = { limit: async () => ({ success: true }) } satisfies RateLimit;
+const workflow = {} as Env['ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW'];
 
 function rateLimiter(limit: RateLimit['limit']): RateLimit {
   return { limit };
@@ -74,6 +77,7 @@ function env(options: {
   publicRpcReadRateLimiter?: RateLimit;
   publicRpcWriteRateLimiter?: RateLimit;
   publicShopRateLimiter?: RateLimit;
+  workflow?: Env['ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW'];
 } = {}): Env {
   const notificationQueue: Queue = options.notificationQueue || {
     send: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
@@ -92,6 +96,7 @@ function env(options: {
         }),
       } as D1PreparedStatement;
     }),
+    ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW: options.workflow || workflow,
     STAFF_AUTH_CHALLENGE_RATE_LIMITER: allowRateLimit,
     STAFF_AUTH_SESSION_RATE_LIMITER: allowRateLimit,
     ANONYMOUS_AUTH_SESSION_RATE_LIMITER: allowRateLimit,

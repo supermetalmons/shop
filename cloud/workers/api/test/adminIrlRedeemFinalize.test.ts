@@ -1,12 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
-import {
-  createDeferredWorkCollector,
-  failOnDeferredWork,
-  isDeferredWorkRegistrationError,
-} from './deferredWork.ts';
+import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import bs58 from 'bs58';
+import { createAdminIrlRedeemFinalizeOperationId } from '../../../../shared/contracts.ts';
 import {
   Keypair,
   PublicKey,
@@ -23,35 +19,52 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
   MPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
-import { RequestIdentityError } from '../src/requestIdentity.ts';
-import { registerDeferredWork } from '../src/deferredWork.ts';
 import { API_DROPS } from '../src/dropConfig.ts';
-import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
+import { deliveryReceiptRuntime, deriveDeliveryPda } from '../src/deliveryReceipts.ts';
 import { sendAndConfirmSignedTransaction } from '../src/deliveryReceiptOnchain.ts';
 import { adminIrlRedeemPrepareTestHooks } from '../src/adminIrlRedeemPrepare.ts';
-import { commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import {
-  ADMIN_IRL_REDEEM_FINALIZE_PATH,
+  buildAdminIrlRedeemDeliveryOrderDocument,
+  buildAdminIrlRedeemMarkerDocument,
+  buildAdminIrlRedeemSelectionKey,
+} from '../src/adminIrlRedeem.ts';
+import { dropAdminIrlRedeemPackMarkerPath } from '../src/dropPaths.ts';
+import {
+  commerceKeyFromPath,
+  commerceKeys,
+  D1CommerceRepository,
+  type CommerceDocumentData,
+} from '../src/commerceRepository.ts';
+import {
   AdminIrlRedeemFinalizeError,
+  adminIrlRedeemFinalizeWorkflowError,
   adminIrlRedeemFinalizeTestHooks,
-  handleAdminIrlRedeemFinalize,
-  type AdminIrlRedeemFinalizeResponse,
+  cleanupAdminIrlRedeemFinalizeWorkflow,
+  loadAdminIrlRedeemFinalizeWorkflowResult,
+  prepareAdminIrlRedeemFinalizeWorkflowDraft,
+  publishAdminIrlRedeemFinalizeWorkflow,
+  parseAdminIrlRedeemFinalizeWorkflowOutput,
+  reserveAdminIrlRedeemFinalizeWorkflow,
+  resumeAndReconcileAdminIrlRedeemFinalizeWorkflow,
+  validateAdminIrlRedeemFinalizeWorkflow,
 } from '../src/adminIrlRedeemFinalize.ts';
 
 const OWNER = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
 const DROP_ID = 'card_nft_2';
 const REQUEST_ID = 'AbCdEfGhIjKlMnOpQrSt';
-const SIGNATURE = Keypair.generate().publicKey.toBase58().repeat(2).slice(0, 88);
-const RESPONSE: AdminIrlRedeemFinalizeResponse = {
-  processed: true,
-  dropId: DROP_ID,
-  requestId: REQUEST_ID,
-  deliveryId: 7,
-  receiptTxs: [],
-  claimCodes: [],
-  boxes: [],
-  cards: [],
-};
+const SIGNATURE = bs58.encode(Keypair.generate().secretKey);
+
+function adminIrlRedeemFinalizeOperationId(
+  body: { dropId: string; requestId: string; transferSignature: string },
+  staffWallet: string,
+) {
+  return createAdminIrlRedeemFinalizeOperationId([
+    body.dropId,
+    body.requestId,
+    body.transferSignature,
+    staffWallet,
+  ]);
+}
 
 function confirmedTransaction(
   payer: PublicKey,
@@ -87,48 +100,6 @@ function confirmedTransaction(
   };
 }
 
-function request(body: unknown = {
-  requestId: REQUEST_ID,
-  dropId: DROP_ID,
-  transferSignature: SIGNATURE,
-}, init: RequestInit = {}): Request {
-  return new Request(`https://api.mons.shop${ADMIN_IRL_REDEEM_FINALIZE_PATH}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Origin: 'https://mons.shop',
-      ...init.headers,
-    },
-    body: JSON.stringify(body),
-    ...init,
-  });
-}
-
-function env(commerceDb = createCommerceD1()) {
-  const metrics = { backlogCount: 0, backlogBytes: 0 };
-  return {
-    COMMERCE_DB: commerceDb,
-    COSIGNER_SECRET: 'cosigner',
-    HELIUS_API_KEY: 'helius',
-    REVEAL_BACKGROUND_QUEUE: {
-      send: async () => ({ metadata: { metrics } }),
-      sendBatch: async () => ({ metadata: { metrics } }),
-      metrics: async () => metrics,
-    } satisfies Queue,
-  };
-}
-
-function dependencies(overrides: Record<string, unknown> = {}) {
-  return {
-    verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
-    providerFetch: async () => { throw new Error('unexpected provider fetch'); },
-    nowMs: () => 1_700_000_000_000,
-    timeoutMs: 1_000,
-    finalize: async () => ({ response: RESPONSE, targetKind: 'pack' as const, outcome: 'completed' }),
-    ...overrides,
-  };
-}
-
 function commerceContext(
   fields: Record<string, unknown>,
   options: Parameters<typeof createCommerceD1Harness>[0] = {},
@@ -147,160 +118,572 @@ function commerceContext(
   };
 }
 
-test('Admin IRL finalization returns the exact synchronous response and metrics', async () => {
-  const deferred = createDeferredWorkCollector();
-  const result = await handleAdminIrlRedeemFinalize(
-    request(),
-    env(),
-    deferred.defer,
-    dependencies(),
+test('Admin IRL Workflow errors use fixed public projections and strict parsing', () => {
+  const unavailable = adminIrlRedeemFinalizeWorkflowError(
+    new AdminIrlRedeemFinalizeError('unavailable', 'provider response containing sensitive text'),
   );
-  assert.equal(result.response.status, 200);
-  assert.deepEqual(await result.response.json(), RESPONSE);
-  assert.equal(result.authOutcome, 'accepted');
-  assert.equal(result.dropId, DROP_ID);
-  assert.equal(result.targetKind, 'pack');
-  assert.equal(result.deliveryId, 7);
-  assert.equal(result.outcome, 'completed');
-  assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
-  assert.deepEqual(deferred.promises, []);
+  assert.deepEqual(unavailable, {
+    code: 'unavailable',
+    message: 'Admin IRL redeem finalization is temporarily unavailable.',
+    retryable: true,
+  });
+  assert.deepEqual(adminIrlRedeemFinalizeWorkflowError({
+    code: 'failed-precondition',
+    message: 'duck-typed provider response',
+  }), {
+    code: 'internal',
+    message: 'Admin IRL redeem finalization failed unexpectedly.',
+    retryable: true,
+  });
+
+  const valid = { version: 1, ok: false, error: unavailable };
+  assert.deepEqual(parseAdminIrlRedeemFinalizeWorkflowOutput(valid), valid);
+  assert.equal(parseAdminIrlRedeemFinalizeWorkflowOutput({
+    ...valid,
+    error: { ...unavailable, message: 'Retry shortly.' },
+  }), null);
+  assert.equal(parseAdminIrlRedeemFinalizeWorkflowOutput({
+    ...valid,
+    error: { ...unavailable, retryable: false },
+  }), null);
 });
 
-test('Admin IRL finalization propagates deferred-work registration failures', async () => {
-  const cause = new Error('waitUntil rejected finalization work');
-  await assert.rejects(
-    handleAdminIrlRedeemFinalize(
-      request(),
-      env(),
-      () => { throw cause; },
-      dependencies({
-        finalize: async (...args: Parameters<typeof adminIrlRedeemFinalizeTestHooks.finalizeAdminIrlRedeem>) => {
-          registerDeferredWork(args[5], Promise.resolve());
-          assert.fail('registration failure must stop finalization');
+test('Admin IRL Workflow reserves a deterministic exact-owner lease without a migration', async () => {
+  const harness = createCommerceD1Harness();
+  seedCommerceDocument(harness, {
+    key: commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
+    data: {
+      adminWallet: OWNER,
+      dropId: DROP_ID,
+      owner: OWNER,
+      status: 'prepared',
+      targetKind: 'pack',
+      itemIds: [OWNER],
+      items: [{ assetId: OWNER, kind: 'box', refId: 7 }],
+      receiptTxs: [],
+    },
+  });
+  const body = { requestId: REQUEST_ID, dropId: DROP_ID, transferSignature: SIGNATURE };
+  const expectedDigest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(JSON.stringify([DROP_ID, REQUEST_ID, SIGNATURE, OWNER])),
+  );
+  const expectedOperationId = `airf-v1-${Array.from(
+    new Uint8Array(expectedDigest),
+    (byte) => byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
+  assert.equal(await adminIrlRedeemFinalizeOperationId(body, OWNER), expectedOperationId);
+
+  const reserved = await reserveAdminIrlRedeemFinalizeWorkflow({
+    body,
+    env: { COMMERCE_DB: harness.db },
+    operationId: expectedOperationId,
+    signal: new AbortController().signal,
+    staffWallet: OWNER,
+    nowMs: 1_700_000_000_000,
+  });
+  assert.deepEqual(reserved, {
+    status: 'reserved',
+    payload: { version: 1, dropId: DROP_ID, requestId: REQUEST_ID },
+  });
+  let document = await deliveryReceiptRuntime.readDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_000_000, providerFetch: fetch, signal: new AbortController().signal },
+    `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+  );
+  assert.equal(document?.fields.processingAttemptId, expectedOperationId);
+  assert.equal(document?.fields.processingLeaseExpiresAt, 1_700_001_800_000);
+  assert.equal((document?.fields.workflowFinalizeV1 as { version?: unknown }).version, 1);
+
+  const requestKey = commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID);
+  const repository = new D1CommerceRepository(harness.db);
+  let stored = await repository.get(requestKey);
+  assert.ok(stored);
+  const initialExecution = stored.data.workflowFinalizeV1 as CommerceDocumentData;
+  const pinnedOnchain = {
+    adminWallet: OWNER,
+    coreCollection: Keypair.generate().publicKey.toBase58(),
+    treasury: Keypair.generate().publicKey.toBase58(),
+  };
+  seedCommerceDocument(harness, {
+    key: requestKey,
+    data: {
+      ...stored.data,
+      workflowFinalizeV1: {
+        ...initialExecution,
+        onchain: pinnedOnchain,
+        failure: {
+          code: 'unavailable',
+          message: 'Admin IRL redeem finalization is temporarily unavailable.',
+          retryable: true,
         },
-      }),
-    ),
-    (error: unknown) =>
-      isDeferredWorkRegistrationError(error, cause),
-  );
-});
-
-test('Admin IRL finalization enforces method, content type, and exact bounded input', async () => {
-  const wrongMethod = await handleAdminIrlRedeemFinalize(
-    new Request(`https://api.mons.shop${ADMIN_IRL_REDEEM_FINALIZE_PATH}`),
-    env(),
-    failOnDeferredWork,
-    dependencies(),
-  );
-  assert.equal(wrongMethod.response.status, 405);
-  assert.equal(wrongMethod.response.headers.get('allow'), 'POST, OPTIONS');
-
-  const wrongType = await handleAdminIrlRedeemFinalize(
-    request(undefined, { headers: { 'Content-Type': 'text/plain' } }),
-    env(),
-    failOnDeferredWork,
-    dependencies(),
-  );
-  assert.equal(wrongType.response.status, 400);
-
-  const extra = await handleAdminIrlRedeemFinalize(
-    request({ requestId: REQUEST_ID, dropId: DROP_ID, transferSignature: SIGNATURE, extra: true }),
-    env(),
-    failOnDeferredWork,
-    dependencies(),
-  );
-  assert.equal(extra.response.status, 400);
-
-  const oversized = new Request(`https://api.mons.shop${ADMIN_IRL_REDEEM_FINALIZE_PATH}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Content-Length': '5000' },
-    body: '{}',
-  });
-  const tooLarge = await handleAdminIrlRedeemFinalize(oversized, env(), failOnDeferredWork, dependencies());
-  assert.equal(tooLarge.response.status, 400);
-});
-
-test('Admin IRL finalization maps authentication, business, provider, and deadline failures', async () => {
-  const unauthenticated = await handleAdminIrlRedeemFinalize(
-    request(),
-    env(),
-    failOnDeferredWork,
-    dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); } }),
-  );
-  assert.equal(unauthenticated.response.status, 401);
-  assert.deepEqual(await unauthenticated.response.json(), {
-    ok: false,
-    error: { code: 'unauthenticated', message: 'Authentication is required.' },
-  });
-
-  const anonymousOnly = await handleAdminIrlRedeemFinalize(
-    request(),
-    env(),
-    failOnDeferredWork,
-    dependencies({ verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }) }),
-  );
-  assert.equal(anonymousOnly.response.status, 401);
-
-  const conflict = await handleAdminIrlRedeemFinalize(
-    request(),
-    env(),
-    failOnDeferredWork,
-    dependencies({
-      finalize: async () => { throw new AdminIrlRedeemFinalizeError('aborted', 'Already processing.'); },
-    }),
-  );
-  assert.equal(conflict.response.status, 409);
-  assert.equal(conflict.outcome, 'aborted');
-
-  const unavailable = await handleAdminIrlRedeemFinalize(
-    request(),
-    env(),
-    failOnDeferredWork,
-    dependencies({
-      finalize: async () => { throw new AdminIrlRedeemFinalizeError('unavailable', 'Provider unavailable.'); },
-    }),
-  );
-  assert.equal(unavailable.response.status, 502);
-  assert.equal(unavailable.authOutcome, 'provider-failure');
-
-  const deferred = createDeferredWorkCollector();
-  let finalizeAborted = false;
-  let cleanupSettled = false;
-  let releaseCleanup: (() => void) | undefined;
-  const cleanupGate = new Promise<void>((resolve) => {
-    releaseCleanup = resolve;
-  });
-  const deadline = await handleAdminIrlRedeemFinalize(
-    request(),
-    env(),
-    deferred.defer,
-    dependencies({
-      timeoutMs: 1,
-      finalize: async (...args: Parameters<typeof adminIrlRedeemFinalizeTestHooks.finalizeAdminIrlRedeem>) => {
-        const commerce = args[3];
-        await new Promise<void>((resolve) => {
-          const onAbort = () => {
-            finalizeAborted = true;
-            resolve();
-          };
-          commerce.signal.addEventListener('abort', onAbort, { once: true });
-          if (commerce.signal.aborted) onAbort();
-        });
-        await cleanupGate;
-        cleanupSettled = true;
-        throw new AdminIrlRedeemFinalizeError('deadline-exceeded', 'Timed out.');
       },
-    }),
+    },
+    version: stored.version + 1,
+    createTime: stored.createTime,
+  });
+
+  await reserveAdminIrlRedeemFinalizeWorkflow({
+    body,
+    env: { COMMERCE_DB: harness.db },
+    operationId: expectedOperationId,
+    signal: new AbortController().signal,
+    staffWallet: OWNER,
+    nowMs: 1_700_000_010_000,
+  });
+  document = await deliveryReceiptRuntime.readDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_010_000, providerFetch: fetch, signal: new AbortController().signal },
+    `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
-  assert.equal(deadline.response.status, 504);
-  assert.equal(deadline.outcome, 'deadline-exceeded');
-  assert.equal(finalizeAborted, true);
-  assert.equal(deferred.promises.length, 1);
-  assert.equal(cleanupSettled, false);
-  assert.ok(releaseCleanup);
-  releaseCleanup();
-  await deferred.drain();
-  assert.equal(cleanupSettled, true);
+  assert.equal(document?.fields.processingLeaseExpiresAt, 1_700_001_810_000);
+  let replayExecution = document?.fields.workflowFinalizeV1 as Record<string, unknown>;
+  assert.deepEqual(replayExecution.config, initialExecution.config);
+  assert.deepEqual(replayExecution.onchain, pinnedOnchain);
+  assert.equal(replayExecution.failure, undefined);
+
+  stored = await repository.get(requestKey);
+  assert.ok(stored);
+  seedCommerceDocument(harness, {
+    key: requestKey,
+    data: {
+      ...stored.data,
+      processingLeaseExpiresAt: 1_700_000_019_999,
+      workflowFinalizeV1: {
+        ...(stored.data.workflowFinalizeV1 as CommerceDocumentData),
+        failure: {
+          code: 'deadline-exceeded',
+          message: 'Admin IRL redeem finalization timed out.',
+          retryable: true,
+        },
+      },
+    },
+    version: stored.version + 1,
+    createTime: stored.createTime,
+  });
+  await reserveAdminIrlRedeemFinalizeWorkflow({
+    body,
+    env: { COMMERCE_DB: harness.db },
+    operationId: expectedOperationId,
+    signal: new AbortController().signal,
+    staffWallet: OWNER,
+    nowMs: 1_700_000_020_000,
+  });
+  document = await deliveryReceiptRuntime.readDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_020_000, providerFetch: fetch, signal: new AbortController().signal },
+    `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+  );
+  assert.equal(document?.fields.processingLeaseExpiresAt, 1_700_001_820_000);
+  replayExecution = document?.fields.workflowFinalizeV1 as Record<string, unknown>;
+  assert.deepEqual(replayExecution.config, initialExecution.config);
+  assert.deepEqual(replayExecution.onchain, pinnedOnchain);
+  assert.equal(replayExecution.failure, undefined);
+
+  const changedBody = { ...body, transferSignature: bs58.encode(Keypair.generate().secretKey) };
+  const changedOperationId = await adminIrlRedeemFinalizeOperationId(changedBody, OWNER);
+  await assert.rejects(() => reserveAdminIrlRedeemFinalizeWorkflow({
+    body: changedBody,
+    env: { COMMERCE_DB: harness.db },
+    operationId: changedOperationId,
+    signal: new AbortController().signal,
+    staffWallet: OWNER,
+    nowMs: 1_700_001_900_000,
+  }), /transfer signature changed/i);
+  const otherStaffWallet = 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq';
+  const otherOperationId = await adminIrlRedeemFinalizeOperationId(body, otherStaffWallet);
+  await assert.rejects(() => reserveAdminIrlRedeemFinalizeWorkflow({
+    body,
+    env: { COMMERCE_DB: harness.db },
+    operationId: otherOperationId,
+    signal: new AbortController().signal,
+    staffWallet: otherStaffWallet,
+    nowMs: 1_700_001_900_000,
+  }), /Only the requesting admin wallet/);
+
+  const cleaned = await cleanupAdminIrlRedeemFinalizeWorkflow({
+    env: { COMMERCE_DB: harness.db },
+    error: { code: 'failed-precondition', message: 'Invalid transfer.', retryable: false },
+    operationId: expectedOperationId,
+    payload: { version: 1, dropId: DROP_ID, requestId: REQUEST_ID },
+    signal: new AbortController().signal,
+  });
+  assert.deepEqual(cleaned, { cleared: true });
+  document = await deliveryReceiptRuntime.readDocument(
+    { commerceDb: harness.db, nowMs: Date.now(), providerFetch: fetch, signal: new AbortController().signal },
+    `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+  );
+  assert.equal(document?.fields.status, 'prepared');
+  assert.equal(document?.fields.processingAttemptId, undefined);
+  assert.equal((document?.fields.workflowFinalizeV1 as { operationId?: unknown }).operationId, expectedOperationId);
+  assert.deepEqual((document?.fields.workflowFinalizeV1 as { failure?: unknown }).failure, {
+    code: 'failed-precondition',
+    message: 'Admin IRL redeem finalization requirements are not satisfied.',
+    retryable: false,
+  });
+});
+
+test('Admin IRL marker reuse is drafted before its D1-only publication step', async () => {
+  const harness = createCommerceD1Harness();
+  seedCommerceDocument(harness, {
+    key: commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
+    data: {
+      adminWallet: OWNER,
+      dropId: DROP_ID,
+      owner: OWNER,
+      status: 'prepared',
+      targetKind: 'pack',
+      itemIds: [OWNER],
+      items: [{ assetId: OWNER, kind: 'box', refId: 7 }],
+      receiptTxs: [],
+    },
+  });
+  const body = { requestId: REQUEST_ID, dropId: DROP_ID, transferSignature: SIGNATURE };
+  const operationId = await adminIrlRedeemFinalizeOperationId(body, OWNER);
+  const reserved = await reserveAdminIrlRedeemFinalizeWorkflow({
+    body,
+    env: { COMMERCE_DB: harness.db },
+    operationId,
+    signal: new AbortController().signal,
+    staffWallet: OWNER,
+  });
+  assert.equal(reserved.status, 'reserved');
+  if (reserved.status !== 'reserved') return;
+
+  const deliveryId = 77;
+  const sourceRequestId = 'ExistingRequest123';
+  const receiptAssetId = Keypair.generate().publicKey.toBase58();
+  const receiptClaimCode = 'ABCDEF-1234567890';
+  const box = {
+    boxId: 7,
+    originalAssetId: OWNER,
+    receiptAssetId,
+    receiptClaimCode,
+    dudeIds: [1, 2, 3],
+  };
+  const selectionKey = buildAdminIrlRedeemSelectionKey({ dropId: DROP_ID, originalAssetIds: [OWNER] });
+  seedCommerceDocument(harness, {
+    key: commerceKeys.deliveryOrder(DROP_ID, String(deliveryId)),
+    data: buildAdminIrlRedeemDeliveryOrderDocument({
+      dropId: DROP_ID,
+      deliveryId,
+      requestId: sourceRequestId,
+      owner: OWNER,
+      receiptOwner: OWNER,
+      transferSignature: SIGNATURE,
+      receiptTxs: [SIGNATURE],
+      boxes: [box],
+    }) as CommerceDocumentData,
+  });
+  const markerKey = commerceKeyFromPath(dropAdminIrlRedeemPackMarkerPath(DROP_ID, OWNER));
+  assert.ok(markerKey);
+  const markerDocument = buildAdminIrlRedeemMarkerDocument({
+    dropId: DROP_ID,
+    deliveryId,
+    requestId: sourceRequestId,
+    owner: OWNER,
+    transferSignature: SIGNATURE,
+    selectionKey,
+    box,
+  }) as CommerceDocumentData;
+  seedCommerceDocument(harness, {
+    key: markerKey,
+    data: markerDocument,
+  });
+
+  const args = {
+    env: { COMMERCE_DB: harness.db } as Env,
+    operationId,
+    payload: reserved.payload,
+    signal: new AbortController().signal,
+  };
+  assert.deepEqual(await prepareAdminIrlRedeemFinalizeWorkflowDraft(args), { status: 'drafted' });
+  let request = await new D1CommerceRepository(harness.db).get(
+    commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
+  );
+  assert.equal(request?.data.status, 'processing');
+  const draft = request?.data.workflowPublicationDraftV1 as Record<string, unknown>;
+  assert.equal(draft.mode, 'marker_reuse');
+  assert.equal(draft.deliveryId, deliveryId);
+  assert.equal(JSON.stringify(draft).includes(receiptClaimCode), false);
+
+  const storedMarker = await new D1CommerceRepository(harness.db).get(markerKey);
+  assert.ok(storedMarker);
+  seedCommerceDocument(harness, {
+    key: markerKey,
+    data: buildAdminIrlRedeemMarkerDocument({
+      dropId: DROP_ID,
+      deliveryId,
+      requestId: sourceRequestId,
+      owner: OWNER,
+      transferSignature: SIGNATURE,
+      selectionKey,
+      box: { ...box, receiptClaimCode: 'FEDCBA-0987654321' },
+    }) as CommerceDocumentData,
+    version: storedMarker.version + 1,
+    createTime: storedMarker.createTime,
+  });
+  await assert.rejects(
+    publishAdminIrlRedeemFinalizeWorkflow(args),
+    (error) => {
+      const details = (error as { details?: unknown }).details;
+      return Boolean(details && typeof details === 'object' &&
+        (details as { reason?: unknown }).reason === 'marker reuse state changed after draft');
+    },
+  );
+  seedCommerceDocument(harness, {
+    key: markerKey,
+    data: markerDocument,
+    version: storedMarker.version + 2,
+    createTime: storedMarker.createTime,
+  });
+
+  assert.deepEqual(await publishAdminIrlRedeemFinalizeWorkflow(args), {
+    kind: 'admin-irl-redeem-finalize-v1',
+    dropId: DROP_ID,
+    requestId: REQUEST_ID,
+  });
+  request = await new D1CommerceRepository(harness.db).get(
+    commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID),
+  );
+  assert.equal(request?.data.status, 'complete');
+  assert.equal(request?.data.deliveryId, deliveryId);
+  assert.equal(request?.data.workflowPublicationDraftV1, undefined);
+  assert.deepEqual(await resumeAndReconcileAdminIrlRedeemFinalizeWorkflow(args), { status: 'complete' });
+  assert.deepEqual(await validateAdminIrlRedeemFinalizeWorkflow(args), { status: 'complete' });
+  assert.deepEqual(await prepareAdminIrlRedeemFinalizeWorkflowDraft(args), { status: 'complete' });
+  assert.deepEqual(await publishAdminIrlRedeemFinalizeWorkflow(args), {
+    kind: 'admin-irl-redeem-finalize-v1',
+    dropId: DROP_ID,
+    requestId: REQUEST_ID,
+  });
+});
+
+test('Admin IRL marker reuse reconciles a pending WAL submission before drafting', async () => {
+  const harness = createCommerceD1Harness();
+  const requestKey = commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID);
+  seedCommerceDocument(harness, {
+    key: requestKey,
+    data: {
+      adminWallet: OWNER,
+      dropId: DROP_ID,
+      owner: OWNER,
+      status: 'prepared',
+      targetKind: 'pack',
+      itemIds: [OWNER],
+      items: [{ assetId: OWNER, kind: 'box', refId: 7 }],
+      receiptTxs: [],
+    },
+  });
+  const body = { requestId: REQUEST_ID, dropId: DROP_ID, transferSignature: SIGNATURE };
+  const operationId = await adminIrlRedeemFinalizeOperationId(body, OWNER);
+  const reserved = await reserveAdminIrlRedeemFinalizeWorkflow({
+    body,
+    env: { COMMERCE_DB: harness.db },
+    operationId,
+    signal: new AbortController().signal,
+    staffWallet: OWNER,
+  });
+  assert.equal(reserved.status, 'reserved');
+  if (reserved.status !== 'reserved') return;
+
+  const deliveryId = 81;
+  const sourceRequestId = 'ExistingRequest456';
+  const box = {
+    boxId: 7,
+    originalAssetId: OWNER,
+    receiptAssetId: Keypair.generate().publicKey.toBase58(),
+    receiptClaimCode: 'ABCDEF-1234567890',
+    dudeIds: [1, 2, 3],
+  };
+  seedCommerceDocument(harness, {
+    key: commerceKeys.deliveryOrder(DROP_ID, String(deliveryId)),
+    data: buildAdminIrlRedeemDeliveryOrderDocument({
+      dropId: DROP_ID,
+      deliveryId,
+      requestId: sourceRequestId,
+      owner: OWNER,
+      receiptOwner: OWNER,
+      transferSignature: SIGNATURE,
+      receiptTxs: [SIGNATURE],
+      boxes: [box],
+    }) as CommerceDocumentData,
+  });
+  const markerKey = commerceKeyFromPath(dropAdminIrlRedeemPackMarkerPath(DROP_ID, OWNER));
+  assert.ok(markerKey);
+  seedCommerceDocument(harness, {
+    key: markerKey,
+    data: buildAdminIrlRedeemMarkerDocument({
+      dropId: DROP_ID,
+      deliveryId,
+      requestId: sourceRequestId,
+      owner: OWNER,
+      transferSignature: SIGNATURE,
+      selectionKey: buildAdminIrlRedeemSelectionKey({ dropId: DROP_ID, originalAssetIds: [OWNER] }),
+      box,
+    }) as CommerceDocumentData,
+  });
+
+  const pending = {
+    kind: 'internal_delivery' as const,
+    signature: bs58.encode(Keypair.generate().secretKey),
+    blockhash: Keypair.generate().publicKey.toBase58(),
+    deliveryId: 91,
+    deliveryPda: Keypair.generate().publicKey.toBase58(),
+  };
+  const repository = new D1CommerceRepository(harness.db);
+  const stored = await repository.get(requestKey);
+  assert.ok(stored);
+  seedCommerceDocument(harness, {
+    key: requestKey,
+    data: { ...stored.data, pendingFinalizeSubmission: pending },
+    version: stored.version + 1,
+    createTime: stored.createTime,
+  });
+
+  const rpcMethods: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const request = JSON.parse(String(init?.body)) as { id: string; method: string };
+    rpcMethods.push(request.method);
+    assert.equal(request.method, 'getSignatureStatuses');
+    return Response.json({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        context: { slot: 1 },
+        value: [{ slot: 1, confirmations: 1, err: null, confirmationStatus: 'confirmed' }],
+      },
+    });
+  };
+  try {
+    assert.deepEqual(await prepareAdminIrlRedeemFinalizeWorkflowDraft({
+      env: { COMMERCE_DB: harness.db, HELIUS_API_KEY: 'test' } as Env,
+      operationId,
+      payload: reserved.payload,
+      signal: new AbortController().signal,
+    }), { status: 'drafted' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(rpcMethods, ['getSignatureStatuses']);
+  const request = await repository.get(requestKey);
+  assert.equal(request?.data.pendingFinalizeSubmission, undefined);
+  assert.equal(request?.data.internalDeliveryId, pending.deliveryId);
+  assert.equal(request?.data.internalDeliveryPda, pending.deliveryPda);
+  assert.equal(request?.data.internalDeliveryTx, pending.signature);
+  assert.equal((request?.data.workflowPublicationDraftV1 as { mode?: unknown }).mode, 'marker_reuse');
+});
+
+test('Admin IRL D1-only publication is idempotent for card and prepared-pack drafts', async () => {
+  const cases = [
+    { requestId: 'CardPublishRequest1', targetKind: 'card_receipt' as const, refId: 9 },
+    { requestId: 'PackPublishRequest1', targetKind: 'pack' as const, refId: 7 },
+  ];
+  for (const testCase of cases) {
+    const harness = createCommerceD1Harness();
+    const originalAssetId = Keypair.generate().publicKey.toBase58();
+    const receiptAssetId = testCase.targetKind === 'card_receipt'
+      ? originalAssetId
+      : Keypair.generate().publicKey.toBase58();
+    const body = {
+      requestId: testCase.requestId,
+      dropId: DROP_ID,
+      transferSignature: SIGNATURE,
+    };
+    const requestKey = commerceKeys.adminIrlRedeemRequest(DROP_ID, testCase.requestId);
+    seedCommerceDocument(harness, {
+      key: requestKey,
+      data: {
+        adminWallet: OWNER,
+        dropId: DROP_ID,
+        owner: OWNER,
+        status: 'prepared',
+        targetKind: testCase.targetKind,
+        itemIds: [originalAssetId],
+        items: [{ assetId: originalAssetId, kind: testCase.targetKind === 'pack' ? 'box' : 'card_receipt', refId: testCase.refId }],
+        receiptTxs: [],
+      },
+    });
+    const operationId = await adminIrlRedeemFinalizeOperationId(body, OWNER);
+    const reserved = await reserveAdminIrlRedeemFinalizeWorkflow({
+      body,
+      env: { COMMERCE_DB: harness.db },
+      operationId,
+      signal: new AbortController().signal,
+      staffWallet: OWNER,
+    });
+    assert.equal(reserved.status, 'reserved');
+    if (reserved.status !== 'reserved') continue;
+    const stored = await new D1CommerceRepository(harness.db).get(requestKey);
+    assert.ok(stored);
+    const runtime = adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]);
+    const internalDeliveryId = 55;
+    const [internalDeliveryPda] = deriveDeliveryPda(runtime, internalDeliveryId);
+    let workflowPublicationDraftV1: CommerceDocumentData;
+    if (testCase.targetKind === 'card_receipt') {
+      workflowPublicationDraftV1 = {
+        version: 1,
+        targetKind: 'card_receipt',
+        receiptOwner: OWNER,
+        card: { figureId: testCase.refId, receiptAssetId },
+      };
+    } else {
+      workflowPublicationDraftV1 = {
+        version: 1,
+        targetKind: 'pack',
+        mode: 'prepared',
+        receiptOwner: OWNER,
+        internalDelivery: {
+          deliveryId: internalDeliveryId,
+          deliveryPda: internalDeliveryPda.toBase58(),
+          deliveryTx: null,
+        },
+        closeDeliveryTx: null,
+        receiptTxs: [SIGNATURE],
+        boxes: [{
+          boxId: testCase.refId,
+          originalAssetId,
+          receiptAssetId,
+          dudeIds: [1, 2, 3],
+        }],
+      };
+    }
+    seedCommerceDocument(harness, {
+      key: requestKey,
+      data: {
+        ...stored.data,
+        ...(testCase.targetKind === 'pack' ? {
+          internalDeliveryId,
+          internalDeliveryPda: internalDeliveryPda.toBase58(),
+          receiptTxs: [SIGNATURE],
+        } : {}),
+        workflowPublicationDraftV1,
+      },
+      version: stored.version + 1,
+      createTime: stored.createTime,
+    });
+    const args = {
+      env: { COMMERCE_DB: harness.db } as Env,
+      operationId,
+      payload: reserved.payload,
+      signal: new AbortController().signal,
+    };
+    const expectedReference = {
+      kind: 'admin-irl-redeem-finalize-v1' as const,
+      dropId: DROP_ID,
+      requestId: testCase.requestId,
+    };
+    assert.deepEqual(await publishAdminIrlRedeemFinalizeWorkflow(args), expectedReference);
+    assert.deepEqual(await publishAdminIrlRedeemFinalizeWorkflow(args), expectedReference);
+    const result = await loadAdminIrlRedeemFinalizeWorkflowResult({ env: args.env, operationId });
+    assert.equal(result.processed, true);
+    assert.equal(result.cards.length, testCase.targetKind === 'card_receipt' ? 1 : 0);
+    assert.equal(result.boxes.length, testCase.targetKind === 'pack' ? 1 : 0);
+    const orders = await new D1CommerceRepository(harness.db).query({
+      kind: 'delivery_order',
+      dropId: DROP_ID,
+    });
+    assert.equal(orders.length, 1);
+  }
 });
 
 test('Admin IRL receipt owner scans finish pagination before checking uniqueness', async () => {
@@ -396,6 +779,24 @@ test('Admin IRL receipt indexing preserves exact request cancellation', async ()
     ),
     (error) => error === packReason,
   );
+
+  await assert.rejects(
+    adminIrlRedeemFinalizeTestHooks.findReceiptAssets(
+      {
+        getTransactions: async () => [confirmedTransaction(new PublicKey(OWNER), [])],
+      } as unknown as Connection,
+      {
+        apiKey: 'helius',
+        providerFetch: async () => assert.fail('mismatched transaction reached owner scan'),
+        signal: new AbortController().signal,
+      },
+      { dropId: DROP_ID } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.findReceiptAssets>[2],
+      OWNER,
+      [{ assetId: OWNER, kind: 'box', refId: 7 }],
+      [SIGNATURE],
+    ),
+    /transaction assets do not match/,
+  );
 });
 
 test('Admin IRL finalization normalizes prepared pack and card requests strictly', () => {
@@ -428,9 +829,10 @@ test('Admin IRL finalization normalizes prepared pack and card requests strictly
   }), /target kind mismatch/);
 });
 
-test('Admin IRL finalization acquires, rejects, recovers, and clears processing leases', async () => {
+test('Admin IRL finalization acquires, rejects, and recovers processing leases', async () => {
   const body = { requestId: REQUEST_ID, dropId: DROP_ID, transferSignature: SIGNATURE };
   const prepared = {
+    adminWallet: OWNER,
     dropId: DROP_ID,
     owner: OWNER,
     status: 'prepared',
@@ -479,25 +881,12 @@ test('Admin IRL finalization acquires, rejects, recovers, and clears processing 
     1_700_000_000_000,
   );
   assert.equal(recovered.status, 'started');
-
-  const cleanupContext = commerceContext({ ...prepared, status: 'processing', processingAttemptId: 'attempt' });
-  await adminIrlRedeemFinalizeTestHooks.clearProcessing(
-    cleanupContext,
-    body,
-    'attempt',
-    new Error('failed'),
-  );
-  const cleanupDocument = await deliveryReceiptRuntime.readDocument(
-    cleanupContext,
-    `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
-  );
-  assert.equal(cleanupDocument?.fields.status, 'prepared');
-  assert.equal(cleanupDocument?.fields.processingLeaseExpiresAt, undefined);
 });
 
 test('Admin IRL finalization reconciles an applied processing lease whose acknowledgement is lost', async () => {
   let loseAcknowledgement = false;
   const context = commerceContext({
+    adminWallet: OWNER,
     dropId: DROP_ID,
     owner: OWNER,
     status: 'prepared',
@@ -537,7 +926,6 @@ test('Admin IRL finalization reconciles an applied processing lease whose acknow
 });
 
 test('Admin IRL finalization writes submission intent before broadcast and keeps its fence', async () => {
-  const body = { requestId: REQUEST_ID, dropId: DROP_ID, transferSignature: SIGNATURE };
   const context = commerceContext({
     dropId: DROP_ID,
     owner: OWNER,
@@ -558,7 +946,13 @@ test('Admin IRL finalization writes submission intent before broadcast and keeps
     'attempt',
     pending,
   );
-  await adminIrlRedeemFinalizeTestHooks.clearProcessing(context, body, 'attempt', new Error('cancelled'));
+  assert.deepEqual(await cleanupAdminIrlRedeemFinalizeWorkflow({
+    env: { COMMERCE_DB: context.commerceDb },
+    error: { code: 'unavailable', message: 'Retry.', retryable: true },
+    operationId: 'attempt',
+    payload: { version: 1, dropId: DROP_ID, requestId: REQUEST_ID },
+    signal: new AbortController().signal,
+  }), { cleared: false });
   const document = await deliveryReceiptRuntime.readDocument(
     context,
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,

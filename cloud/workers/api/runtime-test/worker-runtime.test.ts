@@ -26,6 +26,11 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
   assert.equal(miniflareWorkerdPackage.version, miniflarePackage.dependencies.workerd);
   assert.equal(productionConfig.compatibility_date, '2026-08-08');
   assert.deepEqual(productionConfig.compatibility_flags, ['nodejs_compat', 'enable_request_signal']);
+  assert.deepEqual(productionConfig.workflows, [{
+    binding: 'ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW',
+    name: 'mons-shop-admin-irl-redeem-finalize-v1',
+    class_name: 'AdminIrlRedeemFinalizeWorkflowV1',
+  }]);
   const runtimeConfig = {
     ...productionConfig,
     main: resolve('cloud/workers/api/src/index.ts'),
@@ -56,6 +61,15 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     await worker.applyD1Migrations('OPS_DB');
     await worker.applyD1Migrations('COMMERCE_DB');
     const runtimeEnv = await worker.getEnv();
+    const missingAdminWorkflowOperationId = `airf-v1-${'a'.repeat(64)}`;
+    await assert.rejects(
+      runtimeEnv.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW.get(missingAdminWorkflowOperationId),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.equal(error.message, 'instance.not_found');
+        return true;
+      },
+    );
     const health = await worker.fetch('https://api.mons.shop/health');
     assert.equal(health.status, 200);
     assert.deepEqual(await health.json(), { ok: true });
@@ -89,7 +103,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(profilePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
     assert.equal(profilePreflight.headers.get('access-control-allow-headers'), 'Content-Type, Authorization, X-Mons-CSRF, X-Mons-Checkout-Operation-Id');
 
-    for (const pathname of ['/auth/anonymous/session', '/auth/anonymous/logout', '/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/boxes/reveal', '/staff/auth/challenge', '/staff/auth/session', '/staff/auth/refresh', '/staff/auth/logout']) {
+    for (const pathname of ['/auth/anonymous/session', '/auth/anonymous/logout', '/auth/solana', '/profile/reconcile', '/claims/irl/prepare', '/receipts/stripe/claim', '/receipts/transfer/prepare', '/delivery/prepare', '/delivery/receipts/issue', '/delivery/receipts/recover', '/admin/irl-redeem/prepare', '/admin/irl-redeem/finalize', '/admin/irl-redeem/finalize/status', '/boxes/reveal', '/staff/auth/challenge', '/staff/auth/session', '/staff/auth/refresh', '/staff/auth/logout']) {
       const lifecyclePreflight = await worker.fetch(`https://api.mons.shop${pathname}`, {
         method: 'OPTIONS',
         headers: { Origin: 'https://mons.shop' },
@@ -196,10 +210,78 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
           seededNowMs + 30 * 24 * 60 * 60 * 1000,
         ),
     ]);
+    const seededAuthorization = `Bearer mons_staff_v1.${seededSessionId}.${seededSecret}`;
+    const missingAdminWorkflowStatus = await worker.fetch('https://api.mons.shop/admin/irl-redeem/finalize/status', {
+      method: 'POST',
+      headers: {
+        Authorization: seededAuthorization,
+        'Content-Type': 'application/json',
+        Origin: 'https://mons.shop',
+      },
+      body: JSON.stringify({ operationId: missingAdminWorkflowOperationId }),
+    });
+    assert.equal(missingAdminWorkflowStatus.status, 404);
+    assert.equal(missingAdminWorkflowStatus.headers.get('access-control-allow-origin'), 'https://mons.shop');
+    assert.match(missingAdminWorkflowStatus.headers.get('cache-control') || '', /no-store/);
+    assert.equal(
+      (await missingAdminWorkflowStatus.json() as { error: { code: string } }).error.code,
+      'not-found',
+    );
+    const adminWorkflowOperationId = `airf-v1-${'b'.repeat(64)}`;
+    const adminWorkflowPayload = {
+      version: 1 as const,
+      dropId: 'card_nft_2',
+      requestId: 'runtime-admin-request',
+    };
+    const adminWorkflowReference = {
+      kind: 'admin-irl-redeem-finalize-v1',
+      dropId: adminWorkflowPayload.dropId,
+      requestId: adminWorkflowPayload.requestId,
+    };
+    const adminWorkflowSteps = [
+      ['resume exact lease and reconcile WAL', { ok: true, value: { status: 'ready' } }],
+      ['validate configuration and transfer', { ok: true, value: { status: 'ready' } }],
+      ['prepare immutable publication draft', { ok: true, value: { status: 'drafted' } }],
+      ['publish durable completion', { ok: true, value: adminWorkflowReference }],
+    ] as const;
+    const adminWorkflow = await worker.introspectWorkflow('ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW');
+    try {
+      await adminWorkflow.modifyAll(async (modifier) => {
+        await modifier.disableRetryDelays();
+        await modifier.disableSleeps();
+        for (const [name, result] of adminWorkflowSteps) {
+          await modifier.mockStepResult({ name }, result);
+        }
+      });
+      const createdAdminWorkflows = await runtimeEnv.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW.createBatch([{
+        id: adminWorkflowOperationId,
+        params: adminWorkflowPayload,
+      }]);
+      assert.equal(createdAdminWorkflows.length, 1);
+      const instances = await adminWorkflow.get();
+      assert.equal(instances.length, 1);
+      const instance = instances[0];
+      assert.ok(instance);
+      await instance.waitForStatus('complete');
+      for (const [name, result] of adminWorkflowSteps) {
+        const observed = JSON.parse(JSON.stringify(await instance.waitForStepResult({ name })));
+        if (name === 'prepare immutable publication draft') assert.equal(observed, '[REDACTED]');
+        else assert.deepEqual(observed, result);
+      }
+      const output = JSON.parse(JSON.stringify(await instance.getOutput()));
+      assert.deepEqual(output, {
+        version: 1,
+        ok: true,
+        result: adminWorkflowReference,
+      });
+      assert.equal(JSON.stringify(output).includes('claimCode'), false);
+    } finally {
+      await adminWorkflow.dispose();
+    }
     const authenticatedStaffRoute = await worker.fetch('https://api.mons.shop/admin/future', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer mons_staff_v1.${seededSessionId}.${seededSecret}`,
+        Authorization: seededAuthorization,
         'Content-Type': 'application/json',
         Origin: 'https://mons.shop',
       },
@@ -209,7 +291,7 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     const authenticatedExistingStaffRoute = await worker.fetch('https://api.mons.shop/admin/delivery-order-owners', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer mons_staff_v1.${seededSessionId}.${seededSecret}`,
+        Authorization: seededAuthorization,
         'Content-Type': 'application/json',
         Origin: 'https://mons.shop',
       },
@@ -290,6 +372,9 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
         requestId: 'AbCdEfGhIjKlMnOpQrSt',
         dropId: 'card_nft_2',
         transferSignature: '1'.repeat(64),
+      }],
+      ['/admin/irl-redeem/finalize/status', {
+        operationId: `airf-v1-${'a'.repeat(64)}`,
       }],
       ['/boxes/reveal', {
         owner: '11111111111111111111111111111111',

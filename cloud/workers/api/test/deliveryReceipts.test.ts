@@ -25,7 +25,6 @@ import {
   deliveryReceiptRuntime,
   deliveryReceiptTestHooks,
   handleDeliveryReceiptRequest,
-  scheduleDeliveryPackStatusProjection,
 } from '../src/deliveryReceipts.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { registerDeferredWork } from '../src/deferredWork.ts';
@@ -788,7 +787,7 @@ test('scheduled pack-status projection survives request cancellation', async () 
   const deferred = createDeferredWorkCollector();
   controller.abort(new Error('client disconnected'));
 
-  scheduleDeliveryPackStatusProjection({
+  deliveryReceiptTestHooks.scheduleDeliveryPackStatusProjection({
     context: native.context,
     deliveryId: 7,
     dropId: 'card_nft_2',

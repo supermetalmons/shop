@@ -42,7 +42,7 @@ code.
 
 ## Local development and validation
 
-Requires Node.js 22 and the npm version pinned in `package.json`.
+Requires Node.js 22.15 or newer and the npm version pinned in `package.json`.
 
 ```bash
 npm install
@@ -182,6 +182,20 @@ to reverse the deployment workflow by hand.
 Ops migration 0003 removed a column required by older API Workers. Never deploy
 or roll back below compatibility version
 `1f782978-64cd-4934-834d-9432ba7a0145`.
+
+### Admin IRL finalization Workflow
+
+Admin IRL finalization runs in the API Worker's
+`ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW`. The existing Admin request document,
+30-minute lease, and on-chain submission records provide recovery; there is no
+Workflow-specific D1 migration. Stripe receipt claims remain synchronous.
+
+Roll out the compatible frontend first, then the API binding and routes, then
+the final frontend timeout cleanup. Cached pre-compatibility tabs must refresh
+before the API cutover. After the final frontend release, roll the frontend back
+to its compatibility version before rolling the API back. Drain active v1 Admin
+instances before changing the signer, drop configuration, or on-chain
+configuration.
 
 ### Pack-status D1
 

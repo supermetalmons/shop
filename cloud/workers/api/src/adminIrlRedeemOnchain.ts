@@ -2,7 +2,6 @@ export {
   buildRuntime,
   fetchAsset,
   fetchAssetProof,
-  loadBoundWallet,
   loadLookupTable,
   parseProof,
   receiptDropIdentity,

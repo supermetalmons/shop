@@ -778,7 +778,7 @@ export async function loadLookupTable(
   }
 }
 
-export async function loadBoundWallet(
+async function loadBoundWallet(
   context: CommerceContext,
   db: D1Database | undefined,
   uid: string,

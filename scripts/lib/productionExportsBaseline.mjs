@@ -1,8 +1,9 @@
 const productionExportBaseline = [
   ["cloud/workers/api/src/adminIrlCardReceipt.ts","exports","DIRECT_CARD_RECEIPT_CLAIM_ABSENCE_PROOF_MAX_AGE_MS"],
   ["cloud/workers/api/src/adminIrlRedeem.ts","exports","ADMIN_IRL_REDEEM_MARKER_VERSION"],
-  ["cloud/workers/api/src/adminIrlRedeemFinalize.ts","exports","AdminIrlRedeemFinalizeError"],
   ["cloud/workers/api/src/adminIrlRedeemFinalize.ts","exports","adminIrlRedeemFinalizeTestHooks"],
+  ["cloud/workers/api/src/adminIrlRedeemFinalizeWorkflow.ts","exports","AdminIrlRedeemFinalizeWorkflowV1"],
+  ["cloud/workers/api/src/adminIrlRedeemFinalizeWorkflow.ts","exports","runAdminIrlRedeemFinalizeWorkflow"],
   ["cloud/workers/api/src/adminIrlRedeemPrepare.ts","exports","ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER"],
   ["cloud/workers/api/src/adminIrlRedeemPrepare.ts","exports","adminIrlRedeemPrepareTestHooks"],
   ["cloud/workers/api/src/anonymousAuth.ts","exports","anonymousAuthTestHooks"],
@@ -17,6 +18,7 @@ const productionExportBaseline = [
   ["cloud/workers/api/src/deliveryReceipts.ts","exports","deliveryReceiptTestHooks"],
   ["cloud/workers/api/src/dropConfig.ts","exports","requireApiDrop"],
   ["cloud/workers/api/src/index.ts","exports","default"],
+  ["cloud/workers/api/src/index.ts","exports","AdminIrlRedeemFinalizeWorkflowV1"],
   ["cloud/workers/api/src/index.ts","exports","handleRequest"],
   ["cloud/workers/api/src/index.ts","exports","processBackgroundJobBatch"],
   ["cloud/workers/api/src/index.ts","exports","processStripeFulfillmentMessage"],

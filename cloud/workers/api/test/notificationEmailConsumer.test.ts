@@ -3,10 +3,6 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { createStripeCheckoutFulfillmentJobV1 } from '../../../../shared/stripeCheckoutFulfillmentJob.ts';
-import worker, {
-  processBackgroundJobBatch,
-  processStripeFulfillmentMessage,
-} from '../src/index.ts';
 import {
   notificationEmailRetryDelaySeconds,
   processNotificationEmailMessage,
@@ -14,6 +10,13 @@ import {
   type NotificationEmailSend,
 } from '../src/notificationEmailConsumer.ts';
 import { processNotificationQueueMessage } from '../src/notificationEnqueue.ts';
+import { loadApiWorkerIndex } from './cloudflareWorkersTestLoader.ts';
+
+const {
+  default: worker,
+  processBackgroundJobBatch,
+  processStripeFulfillmentMessage,
+} = await loadApiWorkerIndex();
 
 const JOB = createNotificationEmailJobV1({
   jobId: '123e4567-e89b-42d3-a456-426614174000',

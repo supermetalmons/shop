@@ -1118,6 +1118,47 @@ test('all standalone reads fail closed when commerce is paused', async () => {
   }
 });
 
+test('Admin IRL Workflow status reads one exact operation while commerce is paused', async () => {
+  const operationId = `airf-v1-${'a'.repeat(64)}`;
+  const harness = createCommerceD1Harness();
+  seedCommerceDocument(harness, {
+    key: commerceKeys.adminIrlRedeemRequest('drop', 'request-one'),
+    data: {
+      status: 'processing',
+      workflowFinalizeV1: { version: 1, operationId },
+    },
+  });
+  pauseCommerce(harness);
+  const repository = new D1CommerceRepository(harness.db);
+
+  await assert.rejects(
+    repository.get(commerceKeys.adminIrlRedeemRequest('drop', 'request-one')),
+    isUnavailableCommerceError,
+  );
+  const found = await repository.getAdminIrlRedeemRequestForWorkflowStatus(operationId);
+  assert.equal(found?.key.path, 'drops/drop/adminIrlRedeemRequests/request-one');
+
+  const duplicateHarness = createCommerceD1Harness();
+  seedCommerceDocuments(duplicateHarness, [{
+    key: commerceKeys.adminIrlRedeemRequest('drop', 'request-one'),
+    data: {
+      status: 'processing',
+      workflowFinalizeV1: { version: 1, operationId },
+    },
+  }, {
+    key: commerceKeys.adminIrlRedeemRequest('drop', 'request-two'),
+    data: {
+      status: 'processing',
+      workflowFinalizeV1: { version: 1, operationId },
+    },
+  }]);
+  pauseCommerce(duplicateHarness);
+  await assert.rejects(
+    new D1CommerceRepository(duplicateHarness.db).getAdminIrlRedeemRequestForWorkflowStatus(operationId),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'internal',
+  );
+});
+
 test('standalone read batch failures log and preserve the D1 cause', async () => {
   const cause = new Error('D1 batch failed');
   const logs: unknown[][] = [];

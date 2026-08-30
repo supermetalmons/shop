@@ -620,6 +620,28 @@ async function authority(db: D1Database): Promise<CommerceAuthorityControl> {
 export class D1CommerceRepository {
   constructor(private readonly db: D1Database) {}
 
+  async getAdminIrlRedeemRequestForWorkflowStatus<T extends CommerceDocumentData>(
+    operationId: string,
+  ): Promise<CommerceDocumentRecord<T> | null> {
+    if (!/^airf-v1-[0-9a-f]{64}$/.test(operationId)) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid Admin IRL redeem Workflow operation id.');
+    }
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
+      WHERE
+        authority.singleton = 1 AND
+        document_kind = 'admin_irl_redeem_request' AND
+        json_type(document_json, '$.workflowFinalizeV1.operationId') = 'text' AND
+        json_extract(document_json, '$.workflowFinalizeV1.operationId') = ?
+      ORDER BY document_path ASC
+      LIMIT 2`).bind(operationId), true);
+    if (result.results.length > 1) {
+      throw new CommerceRepositoryError('internal', 'Duplicate Admin IRL redeem Workflow operation id.');
+    }
+    const document = result.results[0] ? parseRow(result.results[0]) : null;
+    return document ? publicRecord<T>(document) : null;
+  }
+
   async get<T extends CommerceDocumentData>(
     key: CommerceDocumentKey,
   ): Promise<CommerceDocumentRecord<T> | null> {
@@ -811,6 +833,7 @@ export class D1CommerceRepository {
 
   private async readBatchWithAuthority(
     statement: () => D1PreparedStatement,
+    allowPaused = false,
   ): Promise<D1Result<Record<string, unknown>>> {
     let results: D1Result<Record<string, unknown>>[];
     try {
@@ -833,7 +856,7 @@ export class D1CommerceRepository {
       !isObject(dataResult.meta)
     ) throw unavailableCommerce();
     const control = parseAuthorityControl(authorityResult.results[0]);
-    if (control.state !== 'd1') throw unavailableCommerce();
+    if (control.state !== 'd1' && !(allowPaused && control.state === 'paused')) throw unavailableCommerce();
     return dataResult;
   }
 }

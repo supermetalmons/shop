@@ -63,8 +63,12 @@ import {
 } from './adminIrlRedeemPrepare.js';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_PATH,
-  handleAdminIrlRedeemFinalize,
 } from './adminIrlRedeemFinalize.js';
+import {
+  ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
+  handleAdminIrlRedeemFinalizeWorkflowStart,
+  handleAdminIrlRedeemFinalizeWorkflowStatus,
+} from './adminIrlRedeemFinalizeWorkflowRoutes.js';
 import {
   REVEAL_DUDES_PATH,
   handleRevealDudes,
@@ -349,10 +353,9 @@ async function dispatchAdminIrlRedeemPrepare(context: WorkerRouteContext): Promi
 }
 
 async function dispatchAdminIrlRedeemFinalize(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleAdminIrlRedeemFinalize(
+  const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     context.request,
     context.env,
-    context.defer,
   );
   addMetrics(context.metrics, result);
   return {
@@ -362,6 +365,26 @@ async function dispatchAdminIrlRedeemFinalize(context: WorkerRouteContext): Prom
       ...(result.dropId ? { adminIrlRedeemFinalizeDropId: result.dropId } : {}),
       ...(result.targetKind ? { adminIrlRedeemFinalizeTargetKind: result.targetKind } : {}),
       ...(result.deliveryId === undefined ? {} : { adminIrlRedeemFinalizeDeliveryId: result.deliveryId }),
+      ...(result.operationId ? { adminIrlRedeemFinalizeOperationId: result.operationId } : {}),
+      ...(result.outcome ? { adminIrlRedeemFinalizeOutcome: result.outcome } : {}),
+    },
+  };
+}
+
+async function dispatchAdminIrlRedeemFinalizeStatus(context: WorkerRouteContext): Promise<WorkerRouteResult> {
+  const result = await handleAdminIrlRedeemFinalizeWorkflowStatus(
+    context.request,
+    context.env,
+  );
+  addMetrics(context.metrics, result);
+  return {
+    response: result.response,
+    logFields: {
+      profileAuthOutcome: result.authOutcome,
+      ...(result.dropId ? { adminIrlRedeemFinalizeDropId: result.dropId } : {}),
+      ...(result.targetKind ? { adminIrlRedeemFinalizeTargetKind: result.targetKind } : {}),
+      ...(result.deliveryId === undefined ? {} : { adminIrlRedeemFinalizeDeliveryId: result.deliveryId }),
+      ...(result.operationId ? { adminIrlRedeemFinalizeOperationId: result.operationId } : {}),
       ...(result.outcome ? { adminIrlRedeemFinalizeOutcome: result.outcome } : {}),
     },
   };
@@ -551,6 +574,11 @@ const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
     ADMIN_IRL_REDEEM_FINALIZE_PATH,
     profilePolicy({ commerceMutation: true, staff: 'required' }),
     dispatchAdminIrlRedeemFinalize,
+  ),
+  exactRoute(
+    ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
+    profilePolicy({ staff: 'required' }),
+    dispatchAdminIrlRedeemFinalizeStatus,
   ),
   exactRoute(
     REVEAL_DUDES_PATH,

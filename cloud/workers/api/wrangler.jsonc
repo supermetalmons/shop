@@ -102,6 +102,13 @@
 			"*/5 * * * *"
 		]
 	},
+	"workflows": [
+		{
+			"binding": "ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW",
+			"name": "mons-shop-admin-irl-redeem-finalize-v1",
+			"class_name": "AdminIrlRedeemFinalizeWorkflowV1"
+		}
+	],
 	"secrets": {
 		"required": [
 			"HELIUS_API_KEY",

@@ -7,12 +7,12 @@ import {
   HELIUS_SEARCH_ASSETS_PAGE_LIMITS,
 } from '../../../../shared/heliusDas.js';
 import { listShopCollectionQueryRuntimes } from '../../../../shared/shopDomain.js';
-import {
-  handleRequest,
-  type ProviderFetch,
-} from '../src/index.js';
+import type { ProviderFetch } from '../src/workerPublicRoutes.js';
 import { MAX_INVENTORY_RESPONSE_BODY_BYTES } from '../src/inventoryLimits.js';
+import { loadApiWorkerIndex } from '../test/cloudflareWorkersTestLoader.js';
 import { failOnDeferredWork } from '../test/deferredWork.js';
+
+const { handleRequest } = await loadApiWorkerIndex();
 
 const MIB = 1024 * 1024;
 const DATA_PAGE_COUNT = 32;
@@ -166,6 +166,7 @@ const env: Env = {
   DATA_DB: {} as D1Database,
   OPS_DB: {} as D1Database,
   COMMERCE_DB: {} as D1Database,
+  ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW: {} as Env['ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW'],
   STAFF_AUTH_CHALLENGE_RATE_LIMITER: { limit: async () => ({ success: true }) },
   STAFF_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },
   ANONYMOUS_AUTH_SESSION_RATE_LIMITER: { limit: async () => ({ success: true }) },

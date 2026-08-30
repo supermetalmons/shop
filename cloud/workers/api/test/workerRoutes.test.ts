@@ -25,6 +25,7 @@ const EXPECTED_EXACT_ROUTES = [
   ['/delivery/receipts/recover', 'profile', true, 'optional', true, 'profile', '/delivery/receipts/recover'],
   ['/admin/irl-redeem/prepare', 'profile', true, 'required', true, 'profile', '/admin/irl-redeem/prepare'],
   ['/admin/irl-redeem/finalize', 'profile', true, 'required', true, 'profile', '/admin/irl-redeem/finalize'],
+  ['/admin/irl-redeem/finalize/status', 'profile', true, 'required', false, 'profile', '/admin/irl-redeem/finalize/status'],
   ['/boxes/reveal', 'profile', true, 'optional', true, 'profile', '/boxes/reveal'],
   ['/inventory', 'public', false, 'skip', false, 'public', '/inventory'],
   ['/pending-open-boxes', 'public', false, 'skip', false, 'public', '/pending-open-boxes'],
