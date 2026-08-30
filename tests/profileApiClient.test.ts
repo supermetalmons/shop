@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import bs58 from 'bs58';
 import {
@@ -20,9 +21,16 @@ import {
   stripeCheckoutOperationWithCredential,
 } from '../src/api/commerce.ts';
 import {
+  ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
+  createAdminIrlRedeemFinalizeOperationId,
+  parseAdminIrlRedeemFinalizePendingResponse,
   STRIPE_CHECKOUT_OPERATION_HEADER,
   STRIPE_CHECKOUT_RETRY_HEADER,
   STRIPE_CHECKOUT_RETRY_SAME_OPERATION,
+  type AdminIrlRedeemFinalizeOperationId,
 } from '../shared/contracts.ts';
 import {
   addFulfillmentOrderToShipStationRequestPayload,
@@ -57,6 +65,64 @@ const RECENT_BLOCKHASH = bs58.encode(new Uint8Array(32).fill(7));
 const ZERO_SIGNATURE = bs58.encode(new Uint8Array(64));
 const ZERO_BLOCKHASH = bs58.encode(new Uint8Array(32));
 const STRIPE_CHECKOUT_OPERATION_ID = '11111111-1111-4111-8111-111111111111';
+
+const ADMIN_IRL_REDEEM_FINALIZE_RESPONSE = {
+  processed: true,
+  dropId: 'card_nft_2',
+  requestId: 'AbCdEfGhIjKlMnOpQrSt',
+  deliveryId: 7,
+  receiptTxs: [],
+  claimCodes: ['ABCDEF-1234567890'],
+  boxes: [{
+    boxId: 3,
+    receiptAssetId: DESTINATION,
+    claimCode: 'ABCDEF-1234567890',
+    dudeIds: [1, 2, 3],
+  }],
+  cards: [],
+} as const;
+
+const ADMIN_IRL_REDEEM_FINALIZE_REQUEST = {
+  requestId: ADMIN_IRL_REDEEM_FINALIZE_RESPONSE.requestId,
+  dropId: ADMIN_IRL_REDEEM_FINALIZE_RESPONSE.dropId,
+  transferSignature: REVEAL_SIGNATURE,
+} as const;
+
+function expectedAdminIrlRedeemOperationId(staffWallet: string): AdminIrlRedeemFinalizeOperationId {
+  const hash = createHash('sha256')
+    .update(JSON.stringify([
+      ADMIN_IRL_REDEEM_FINALIZE_REQUEST.dropId,
+      ADMIN_IRL_REDEEM_FINALIZE_REQUEST.requestId,
+      ADMIN_IRL_REDEEM_FINALIZE_REQUEST.transferSignature,
+      staffWallet,
+    ]))
+    .digest('hex');
+  return `airf-v1-${hash}`;
+}
+
+const ADMIN_IRL_REDEEM_OPERATION_ID = expectedAdminIrlRedeemOperationId(OWNER);
+const OTHER_ADMIN_IRL_REDEEM_OPERATION_ID = expectedAdminIrlRedeemOperationId(DESTINATION);
+
+function adminIrlRedeemPending(operationId = ADMIN_IRL_REDEEM_OPERATION_ID) {
+  return {
+    accepted: true,
+    operationId,
+    status: 'pending',
+    retryAfterMs: ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+  } as const;
+}
+
+test('Admin IRL finalization operation ids hash the exact canonical tuple', async () => {
+  assert.equal(
+    await createAdminIrlRedeemFinalizeOperationId([
+      ADMIN_IRL_REDEEM_FINALIZE_REQUEST.dropId,
+      ADMIN_IRL_REDEEM_FINALIZE_REQUEST.requestId,
+      ADMIN_IRL_REDEEM_FINALIZE_REQUEST.transferSignature,
+      OWNER,
+    ]),
+    ADMIN_IRL_REDEEM_OPERATION_ID,
+  );
+});
 
 test('Stripe checkout operation ids survive one retry and rotate when inputs change', () => {
   const ids = [
@@ -448,7 +514,7 @@ test('profile API client uses cookie credentials without exposing an anonymous b
   assert.deepEqual(payload, { responseMode: 'profile-state', sessionWallet: null, profile: null, shipments: null });
 });
 
-test('profile API client applies its deadline to token retrieval and returns a stable error', async () => {
+test('profile API client caps timeout overrides and returns a stable deadline error', async () => {
   let fetchCalled = false;
   await assert.rejects(
     requestProfileApi('/fulfillment/shipstation-rates', {}, {
@@ -459,7 +525,7 @@ test('profile API client applies its deadline to token retrieval and returns a s
       getCredential: async () => new Promise<never>(() => undefined),
       origin: () => 'https://api.mons.shop',
       timeoutMs: 10,
-    }),
+    }, undefined, { timeoutMs: 1_000 }),
     (error) => {
       const value = error as { code?: unknown; message?: unknown };
       return value.code === 'deadline-exceeded' && value.message === 'Profile API request timed out.';
@@ -816,21 +882,8 @@ test('Admin IRL preparation uses the authenticated Cloudflare route with an exac
 });
 
 test('Admin IRL finalization uses the authenticated Cloudflare route with an exact response contract', async () => {
-  const response = {
-    processed: true,
-    dropId: 'card_nft_2',
-    requestId: 'AbCdEfGhIjKlMnOpQrSt',
-    deliveryId: 7,
-    receiptTxs: [],
-    claimCodes: ['ABCDEF-1234567890'],
-    boxes: [{
-      boxId: 3,
-      receiptAssetId: DESTINATION,
-      claimCode: 'ABCDEF-1234567890',
-      dudeIds: [1, 2, 3],
-    }],
-    cards: [],
-  } as const;
+  const response = ADMIN_IRL_REDEEM_FINALIZE_RESPONSE;
+  let responseStatus: number | undefined;
   const payload = await requestProfileApi(
     '/admin/irl-redeem/finalize',
     {
@@ -849,13 +902,284 @@ test('Admin IRL finalization uses the authenticated Cloudflare route with an exa
       origin: () => 'https://api.mons.shop',
       timeoutMs: 1_000,
     },
+    undefined,
+    { onResponseStatus: (status) => { responseStatus = status; } },
   );
+  assert.equal(responseStatus, 200);
   assert.deepEqual(parseAdminIrlRedeemFinalizeResult(payload), response);
   assert.equal(parseAdminIrlRedeemFinalizeResult({ ...response, extra: true }), null);
   assert.equal(parseAdminIrlRedeemFinalizeResult({ ...response, processed: false }), null);
   assert.equal(parseAdminIrlRedeemFinalizeResult({ ...response, claimCodes: ['invalid'] }), null);
-  assert.equal(profileApiTimeoutMs('/admin/irl-redeem/finalize'), 550_000);
+  assert.equal(profileApiTimeoutMs('/admin/irl-redeem/finalize'), ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS);
+  assert.equal(profileApiTimeoutMs(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH), ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS);
 
+});
+
+test('Admin IRL finalization accepts legacy success without polling', async () => {
+  const calls: Array<{ pathname: string; timeoutMs: number | undefined }> = [];
+  const commerce = createCommerceApiClient(async (pathname, _data, _credential, options) => {
+    options?.onCredential?.(OWNER);
+    options?.onResponseStatus?.(200);
+    calls.push({ pathname, timeoutMs: options?.timeoutMs });
+    return ADMIN_IRL_REDEEM_FINALIZE_RESPONSE;
+  });
+
+  assert.deepEqual(
+    await commerce.finalizeAdminIrlRedeem(ADMIN_IRL_REDEEM_FINALIZE_REQUEST),
+    ADMIN_IRL_REDEEM_FINALIZE_RESPONSE,
+  );
+  assert.deepEqual(calls, [{
+    pathname: '/admin/irl-redeem/finalize',
+    timeoutMs: ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
+  }]);
+});
+
+test('Admin IRL finalization requires HTTP 200 for success and 202 for pending', async () => {
+  for (const testCase of [
+    { status: 200, payload: adminIrlRedeemPending() },
+    { status: 202, payload: ADMIN_IRL_REDEEM_FINALIZE_RESPONSE },
+  ]) {
+    let requests = 0;
+    const call: AuthenticatedApiCall = (pathname, data, credentialCapture, options) => requestProfileApi(
+      pathname,
+      data,
+      {
+        fetch: async () => {
+          requests += 1;
+          return Response.json(testCase.payload, { status: testCase.status });
+        },
+        getCredential: async () => ({ authSubject: OWNER, token: 'token' }),
+        origin: () => 'https://api.mons.shop',
+        timeoutMs: ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
+      },
+      credentialCapture,
+      options,
+    );
+    const commerce = createCommerceApiClient(call);
+    await assert.rejects(
+      () => commerce.finalizeAdminIrlRedeem(ADMIN_IRL_REDEEM_FINALIZE_REQUEST),
+      /Invalid Admin IRL redeem finalization response/,
+    );
+    assert.equal(requests, 1);
+  }
+});
+
+test('Admin IRL finalization polls exact pending responses with one stable operation id', async () => {
+  let now = 0;
+  const sleeps: number[] = [];
+  const calls: Array<{ pathname: string; data: unknown; timeoutMs: number | undefined }> = [];
+  const responses = [
+    { status: 202, value: adminIrlRedeemPending() },
+    { status: 202, value: adminIrlRedeemPending() },
+    { status: 200, value: ADMIN_IRL_REDEEM_FINALIZE_RESPONSE },
+  ];
+  const commerce = createCommerceApiClient(async (pathname, data, _credential, options) => {
+    options?.onCredential?.(OWNER);
+    calls.push({ pathname, data, timeoutMs: options?.timeoutMs });
+    const response = responses.shift() || assert.fail('Unexpected Admin IRL finalization request');
+    options?.onResponseStatus?.(response.status);
+    return response.value;
+  }, {
+    now: () => now,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+  });
+
+  assert.deepEqual(
+    await commerce.finalizeAdminIrlRedeem(ADMIN_IRL_REDEEM_FINALIZE_REQUEST),
+    ADMIN_IRL_REDEEM_FINALIZE_RESPONSE,
+  );
+  assert.deepEqual(sleeps, [
+    ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+    ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+  ]);
+  assert.deepEqual(calls, [
+    {
+      pathname: '/admin/irl-redeem/finalize',
+      data: ADMIN_IRL_REDEEM_FINALIZE_REQUEST,
+      timeoutMs: ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
+    },
+    {
+      pathname: ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
+      data: { operationId: ADMIN_IRL_REDEEM_OPERATION_ID },
+      timeoutMs: ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
+    },
+    {
+      pathname: ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
+      data: { operationId: ADMIN_IRL_REDEEM_OPERATION_ID },
+      timeoutMs: ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
+    },
+  ]);
+});
+
+test('Admin IRL finalization rejects malformed pending, output, and operation changes', async () => {
+  assert.deepEqual(
+    parseAdminIrlRedeemFinalizePendingResponse(adminIrlRedeemPending()),
+    adminIrlRedeemPending(),
+  );
+  assert.equal(parseAdminIrlRedeemFinalizePendingResponse({
+    ...adminIrlRedeemPending(),
+    extra: true,
+  }), null);
+  assert.equal(parseAdminIrlRedeemFinalizePendingResponse({
+    ...adminIrlRedeemPending(),
+    operationId: 'airf-v1-invalid',
+  }), null);
+  assert.equal(parseAdminIrlRedeemFinalizePendingResponse({
+    ...adminIrlRedeemPending(),
+    retryAfterMs: 1,
+  }), null);
+
+  const cases: Array<Array<{ status: number; value: unknown }>> = [
+    [{ status: 202, value: { ...adminIrlRedeemPending(), extra: true } }],
+    [{ status: 202, value: adminIrlRedeemPending(OTHER_ADMIN_IRL_REDEEM_OPERATION_ID) }],
+    [
+      { status: 202, value: adminIrlRedeemPending() },
+      { status: 200, value: { ...ADMIN_IRL_REDEEM_FINALIZE_RESPONSE, extra: true } },
+    ],
+    [
+      { status: 202, value: adminIrlRedeemPending() },
+      { status: 202, value: adminIrlRedeemPending(OTHER_ADMIN_IRL_REDEEM_OPERATION_ID) },
+    ],
+    [{
+      status: 200,
+      value: {
+        ...ADMIN_IRL_REDEEM_FINALIZE_RESPONSE,
+        requestId: 'DifferentRequestId',
+      },
+    }],
+  ];
+  for (const values of cases) {
+    let now = 0;
+    const commerce = createCommerceApiClient(async (_pathname, _data, _credential, options) => {
+      options?.onCredential?.(OWNER);
+      const response = values.shift() || assert.fail('Unexpected Admin IRL finalization request');
+      options?.onResponseStatus?.(response.status);
+      return response.value;
+    }, {
+      now: () => now,
+      sleep: async (ms) => { now += ms; },
+    });
+    await assert.rejects(
+      () => commerce.finalizeAdminIrlRedeem(ADMIN_IRL_REDEEM_FINALIZE_REQUEST),
+      /Invalid Admin IRL redeem finalization response/,
+    );
+  }
+});
+
+test('Admin IRL finalization retries only raw transport failures', async () => {
+  let now = 0;
+  const sleeps: number[] = [];
+  const paths: string[] = [];
+  let call = 0;
+  const commerce = createCommerceApiClient(async (pathname, _data, _credential, options) => {
+    options?.onCredential?.(OWNER);
+    paths.push(pathname);
+    call += 1;
+    if (call === 1) throw new TypeError('fetch failed');
+    if (call === 2) {
+      options?.onResponseStatus?.(202);
+      return adminIrlRedeemPending();
+    }
+    if (call === 3) {
+      throw new ProfileApiError({
+        code: 'deadline-exceeded',
+        message: 'Profile API request timed out.',
+      });
+    }
+    options?.onResponseStatus?.(200);
+    return ADMIN_IRL_REDEEM_FINALIZE_RESPONSE;
+  }, {
+    now: () => now,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+  });
+
+  assert.deepEqual(
+    await commerce.finalizeAdminIrlRedeem(ADMIN_IRL_REDEEM_FINALIZE_REQUEST),
+    ADMIN_IRL_REDEEM_FINALIZE_RESPONSE,
+  );
+  assert.deepEqual(paths, [
+    '/admin/irl-redeem/finalize',
+    '/admin/irl-redeem/finalize',
+    ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
+    ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
+  ]);
+  assert.deepEqual(sleeps, [
+    ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+    ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+    ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+  ]);
+
+  const structured = new ProfileApiError({
+    code: 'unavailable',
+    message: 'Workflow status is unavailable.',
+    status: 502,
+  });
+  let structuredCalls = 0;
+  const terminalCommerce = createCommerceApiClient(async () => {
+    structuredCalls += 1;
+    throw structured;
+  }, { sleep: async () => assert.fail('structured errors must not retry') });
+  await assert.rejects(
+    () => terminalCommerce.finalizeAdminIrlRedeem(ADMIN_IRL_REDEEM_FINALIZE_REQUEST),
+    (error) => error === structured,
+  );
+  assert.equal(structuredCalls, 1);
+});
+
+test('Admin IRL finalization rejects an authentication subject change', async () => {
+  let now = 0;
+  let calls = 0;
+  const commerce = createCommerceApiClient(async (_pathname, _data, _credential, options) => {
+    calls += 1;
+    options?.onCredential?.(calls === 1 ? OWNER : DESTINATION);
+    options?.onResponseStatus?.(202);
+    return adminIrlRedeemPending();
+  }, {
+    now: () => now,
+    sleep: async (ms) => { now += ms; },
+  });
+
+  await assert.rejects(
+    () => commerce.finalizeAdminIrlRedeem(ADMIN_IRL_REDEEM_FINALIZE_REQUEST),
+    (error) => error instanceof ProfileApiError && error.code === 'auth-subject-changed',
+  );
+  assert.equal(calls, 2);
+});
+
+test('Admin IRL finalization caps calls to the remaining overall deadline', async () => {
+  let now = 0;
+  const sleeps: number[] = [];
+  const timeouts: Array<number | undefined> = [];
+  const commerce = createCommerceApiClient(async (_pathname, _data, _credential, options) => {
+    options?.onCredential?.(OWNER);
+    options?.onResponseStatus?.(202);
+    timeouts.push(options?.timeoutMs);
+    return adminIrlRedeemPending();
+  }, {
+    now: () => now,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+    overallTimeoutMs: 4_500,
+  });
+
+  await assert.rejects(
+    () => commerce.finalizeAdminIrlRedeem(ADMIN_IRL_REDEEM_FINALIZE_REQUEST),
+    (error) => error instanceof ProfileApiError &&
+      error.code === 'deadline-exceeded' &&
+      error.retrySameOperation,
+  );
+  assert.deepEqual(timeouts, [4_500, 2_500, 500]);
+  assert.deepEqual(sleeps, [2_000, 2_000, 500]);
+  assert.equal(now, 4_500);
+  assert.equal(ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS, 550_000);
 });
 
 test('box reveal uses the authenticated Cloudflare route with an exact response contract', async () => {

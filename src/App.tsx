@@ -1060,8 +1060,12 @@ function isUserRejectedError(err: unknown): boolean {
 }
 
 function shouldRetryAdminIrlRedeemFinalizeError(err: unknown): boolean {
-  const message = errorMessage(err);
-  return isRetryableApiError(err) || /not uniquely indexed yet|already being finalized|transfer transaction not found yet/i.test(message);
+  if (isRetryableApiError(err)) return true;
+  if (!err || typeof err !== 'object') return false;
+  const details = (err as { details?: unknown }).details;
+  if (!details || typeof details !== 'object' || Array.isArray(details)) return false;
+  const receiptIndexing = details as { expected?: unknown; got?: unknown };
+  return receiptIndexing.expected === 1 && receiptIndexing.got === 0;
 }
 
 async function finalizeAdminIrlRedeemWithRetry(args: {
@@ -1070,12 +1074,7 @@ async function finalizeAdminIrlRedeemWithRetry(args: {
   transferSignature: string;
 }) {
   return retryWithBackoff(
-    () =>
-      finalizeAdminIrlRedeem({
-        dropId: args.dropId,
-        requestId: args.requestId,
-        transferSignature: args.transferSignature,
-      }),
+    () => finalizeAdminIrlRedeem(args),
     {
       maxAttempts: 5,
       baseDelayMs: 1_000,

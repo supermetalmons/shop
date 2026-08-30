@@ -23,7 +23,18 @@ import {
   normalizeDropId,
 } from '../config/deployment';
 import { isStripeReceiptClaimCode } from '../../shared/stripeReceiptClaims.ts';
-import { STRIPE_CHECKOUT_OPERATION_HEADER } from '../../shared/contracts.ts';
+import {
+  ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
+  createAdminIrlRedeemFinalizeOperationId,
+  parseAdminIrlRedeemFinalizePendingResponse,
+  STRIPE_CHECKOUT_OPERATION_HEADER,
+  type AdminIrlRedeemFinalizeOperationId,
+  type AdminIrlRedeemFinalizeStatusRequest,
+} from '../../shared/contracts.ts';
+import { canonicalWalletAddress } from '../../shared/walletLifecycle.ts';
 import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
@@ -491,9 +502,69 @@ export function parseStripeReceiptClaimResponse(value: unknown): StripeReceiptCl
 }
 
 
+type AdminIrlRedeemFinalizePollingDependencies = {
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  overallTimeoutMs: number;
+};
+
+const defaultAdminIrlRedeemFinalizePollingDependencies: AdminIrlRedeemFinalizePollingDependencies = {
+  now: () => Date.now(),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  overallTimeoutMs: ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
+};
+
+function isRawAdminIrlRedeemFinalizeTransportError(error: unknown): boolean {
+  if (
+    error instanceof ProfileApiError &&
+    error.code === 'deadline-exceeded' &&
+    error.status === undefined
+  ) return true;
+  if (error instanceof TypeError) return true;
+  return error instanceof DOMException && (
+    error.name === 'AbortError' ||
+    error.name === 'NetworkError' ||
+    error.name === 'TimeoutError'
+  );
+}
+
+function adminIrlRedeemFinalizeDeadlineError(): ProfileApiError {
+  return new ProfileApiError({
+    code: 'deadline-exceeded',
+    message: 'Profile API request timed out.',
+    retrySameOperation: true,
+  });
+}
+
+function adminIrlRedeemFinalizeRemainingMs(
+  deadlineAt: number,
+  dependencies: AdminIrlRedeemFinalizePollingDependencies,
+): number {
+  const remainingMs = Math.ceil(deadlineAt - dependencies.now());
+  if (remainingMs <= 0) throw adminIrlRedeemFinalizeDeadlineError();
+  return remainingMs;
+}
+
+async function waitForAdminIrlRedeemFinalizePoll(
+  deadlineAt: number,
+  dependencies: AdminIrlRedeemFinalizePollingDependencies,
+): Promise<void> {
+  const remainingMs = adminIrlRedeemFinalizeRemainingMs(deadlineAt, dependencies);
+  if (remainingMs <= ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS) {
+    await dependencies.sleep(remainingMs);
+    throw adminIrlRedeemFinalizeDeadlineError();
+  }
+  await dependencies.sleep(ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS);
+}
+
 export function createCommerceApiClient(
   callProfileApi: AuthenticatedApiCall = defaultCallProfileApi,
+  adminIrlRedeemFinalizePollingOverrides: Partial<AdminIrlRedeemFinalizePollingDependencies> = {},
 ) {
+  const adminIrlRedeemFinalizePolling = {
+    ...defaultAdminIrlRedeemFinalizePollingDependencies,
+    ...adminIrlRedeemFinalizePollingOverrides,
+  };
   async function revealDudes(
     owner: string,
     boxAssetId: string,
@@ -575,10 +646,81 @@ export function createCommerceApiClient(
     dropId: string;
     transferSignature: string;
   }): Promise<AdminIrlRedeemFinalizeResult> {
-    const response = await callProfileApi('/admin/irl-redeem/finalize', args);
-    const parsed = parseAdminIrlRedeemFinalizeResult(response);
-    if (!parsed) throw new Error('Invalid Admin IRL redeem finalization response');
-    return parsed;
+    const deadlineAt = adminIrlRedeemFinalizePolling.now() + adminIrlRedeemFinalizePolling.overallTimeoutMs;
+    let operationId: AdminIrlRedeemFinalizeOperationId | undefined;
+    let pathname: '/admin/irl-redeem/finalize' | typeof ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH =
+      '/admin/irl-redeem/finalize';
+    let request: typeof args | AdminIrlRedeemFinalizeStatusRequest = args;
+    let authSubject: string | undefined;
+    const onCredential = (nextAuthSubject: string) => {
+      if (authSubject === undefined) {
+        authSubject = nextAuthSubject;
+      } else if (authSubject !== nextAuthSubject) {
+        throw new ProfileApiError({
+          code: 'auth-subject-changed',
+          message: 'Authentication changed. Please retry.',
+        });
+      }
+    };
+
+    for (;;) {
+      let response: unknown;
+      let responseStatus: number | undefined;
+      try {
+        const remainingMs = adminIrlRedeemFinalizeRemainingMs(deadlineAt, adminIrlRedeemFinalizePolling);
+        response = await callProfileApi(pathname, request, undefined, {
+          onCredential,
+          onResponseStatus: (status) => { responseStatus = status; },
+          timeoutMs: pathname === '/admin/irl-redeem/finalize'
+            ? remainingMs
+            : Math.min(ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS, remainingMs),
+        });
+      } catch (error) {
+        if (!isRawAdminIrlRedeemFinalizeTransportError(error)) throw error;
+        await waitForAdminIrlRedeemFinalizePoll(deadlineAt, adminIrlRedeemFinalizePolling);
+        continue;
+      }
+
+      const result = parseAdminIrlRedeemFinalizeResult(response);
+      if (result) {
+        if (
+          responseStatus !== 200 ||
+          result.dropId !== args.dropId ||
+          result.requestId !== args.requestId
+        ) {
+          throw new Error('Invalid Admin IRL redeem finalization response');
+        }
+        return result;
+      }
+
+      const pending = parseAdminIrlRedeemFinalizePendingResponse(response);
+      if (
+        responseStatus !== 202 ||
+        !pending
+      ) {
+        throw new Error('Invalid Admin IRL redeem finalization response');
+      }
+      if (operationId === undefined) {
+        const staffWallet = canonicalWalletAddress(authSubject);
+        const expectedOperationId = staffWallet
+          ? await createAdminIrlRedeemFinalizeOperationId([
+              args.dropId,
+              args.requestId,
+              args.transferSignature,
+              staffWallet,
+            ])
+          : undefined;
+        if (pending.operationId !== expectedOperationId) {
+          throw new Error('Invalid Admin IRL redeem finalization response');
+        }
+      } else if (operationId !== pending.operationId) {
+        throw new Error('Invalid Admin IRL redeem finalization response');
+      }
+      operationId = pending.operationId;
+      pathname = ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH;
+      request = { operationId };
+      await waitForAdminIrlRedeemFinalizePoll(deadlineAt, adminIrlRedeemFinalizePolling);
+    }
   }
 
   async function issueReceipts(

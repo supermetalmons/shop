@@ -542,6 +542,76 @@ export type AdminIrlRedeemFinalizeResult = {
   }>;
 };
 
+export const ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH = '/admin/irl-redeem/finalize/status';
+export const ADMIN_IRL_REDEEM_FINALIZE_OPERATION_PREFIX = 'airf-v1';
+export const ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS = 2_000;
+export const ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS = 20_000;
+export const ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS = 550_000;
+
+export type AdminIrlRedeemFinalizeOperationId = `${typeof ADMIN_IRL_REDEEM_FINALIZE_OPERATION_PREFIX}-${string}`;
+
+export type AdminIrlRedeemFinalizeOperationTuple = readonly [
+  dropId: string,
+  requestId: string,
+  transferSignature: string,
+  canonicalStaffWallet: string,
+];
+
+export async function createAdminIrlRedeemFinalizeOperationId(
+  tuple: AdminIrlRedeemFinalizeOperationTuple,
+): Promise<AdminIrlRedeemFinalizeOperationId> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(JSON.stringify(tuple)),
+  );
+  const hash = Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, '0'),
+  ).join('');
+  return `${ADMIN_IRL_REDEEM_FINALIZE_OPERATION_PREFIX}-${hash}`;
+}
+
+export type AdminIrlRedeemFinalizeStatusRequest = {
+  operationId: AdminIrlRedeemFinalizeOperationId;
+};
+
+export type AdminIrlRedeemFinalizePendingResponse = {
+  accepted: true;
+  operationId: AdminIrlRedeemFinalizeOperationId;
+  status: 'pending';
+  retryAfterMs: typeof ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS;
+};
+
+export function isAdminIrlRedeemFinalizeOperationId(
+  value: unknown,
+): value is AdminIrlRedeemFinalizeOperationId {
+  return typeof value === 'string' &&
+    value.startsWith(`${ADMIN_IRL_REDEEM_FINALIZE_OPERATION_PREFIX}-`) &&
+    /^[a-f0-9]{64}$/.test(value.slice(ADMIN_IRL_REDEEM_FINALIZE_OPERATION_PREFIX.length + 1));
+}
+
+export function parseAdminIrlRedeemFinalizePendingResponse(
+  value: unknown,
+): AdminIrlRedeemFinalizePendingResponse | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (
+    keys.length !== 4 ||
+    !['accepted', 'operationId', 'status', 'retryAfterMs'].every((key) => Object.hasOwn(record, key)) ||
+    record.accepted !== true ||
+    !isAdminIrlRedeemFinalizeOperationId(record.operationId) ||
+    record.status !== 'pending' ||
+    record.retryAfterMs !== ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS
+  ) return null;
+  return {
+    accepted: true,
+    operationId: record.operationId,
+    status: 'pending',
+    retryAfterMs: ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+  };
+}
+
 export type StripeReceiptClaimResult = {
   processed: boolean;
   dropId?: string;

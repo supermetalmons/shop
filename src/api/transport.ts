@@ -1,5 +1,8 @@
 import { summarizePayloadShape } from '../../shared/logSummaries.ts';
 import {
+  ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
   STRIPE_CHECKOUT_RETRY_HEADER,
   STRIPE_CHECKOUT_RETRY_SAME_OPERATION,
 } from '../../shared/contracts.ts';
@@ -113,6 +116,7 @@ export type ProfileApiClientDependencies = {
 export type AuthenticatedApiPath =
   | '/auth/solana'
   | '/admin/irl-redeem/finalize'
+  | typeof ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH
   | '/admin/irl-redeem/prepare'
   | '/boxes/reveal'
   | '/checkout/session'
@@ -149,6 +153,8 @@ export type AuthenticatedApiCall = <Req>(
 export type AuthenticatedApiCallOptions = {
   headers?: Readonly<Record<string, string>>;
   onCredential?: (authSubject: string) => void;
+  onResponseStatus?: (status: number) => void;
+  timeoutMs?: number;
 };
 
 const defaultProfileApiDependencies: ProfileApiClientDependencies = {
@@ -162,7 +168,6 @@ const STRIPE_CHECKOUT_SESSION_API_TIMEOUT_MS = 35_000;
 const PROFILE_RECONCILE_API_TIMEOUT_MS = 65_000;
 const IRL_CLAIM_PREPARE_API_TIMEOUT_MS = 65_000;
 const ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS = 65_000;
-const ADMIN_IRL_REDEEM_FINALIZE_API_TIMEOUT_MS = 550_000;
 const REVEAL_DUDES_API_TIMEOUT_MS = 65_000;
 const DELIVERY_PREPARE_API_TIMEOUT_MS = 65_000;
 const DELIVERY_RECEIPTS_API_TIMEOUT_MS = 65_000;
@@ -180,7 +185,8 @@ export function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   if (pathname === '/profile/reconcile') return PROFILE_RECONCILE_API_TIMEOUT_MS;
   if (pathname === '/claims/irl/prepare') return IRL_CLAIM_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/admin/irl-redeem/prepare') return ADMIN_IRL_REDEEM_PREPARE_API_TIMEOUT_MS;
-  if (pathname === '/admin/irl-redeem/finalize') return ADMIN_IRL_REDEEM_FINALIZE_API_TIMEOUT_MS;
+  if (pathname === '/admin/irl-redeem/finalize') return ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS;
+  if (pathname === ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH) return ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS;
   if (pathname === '/boxes/reveal') return REVEAL_DUDES_API_TIMEOUT_MS;
   if (pathname === '/delivery/prepare') return DELIVERY_PREPARE_API_TIMEOUT_MS;
   if (pathname === '/delivery/receipts/issue' || pathname === '/delivery/receipts/recover') {
@@ -236,9 +242,13 @@ export async function requestProfileApi<Req>(
   const startedAt = Date.now();
   const callId = DEBUG_API ? makeCallId() : undefined;
   const controller = new AbortController();
+  const requestedTimeoutMs = options?.timeoutMs;
+  const timeoutMs = typeof requestedTimeoutMs === 'number' && Number.isFinite(requestedTimeoutMs)
+    ? Math.max(1, Math.min(dependencies.timeoutMs, Math.floor(requestedTimeoutMs)))
+    : dependencies.timeoutMs;
   const timeout = setTimeout(
     () => controller.abort(new DOMException('Timed out', 'TimeoutError')),
-    dependencies.timeoutMs,
+    timeoutMs,
   );
   let initialAuthSubject: string | undefined;
   let deadlineRetrySameOperation = true;
@@ -273,6 +283,7 @@ export async function requestProfileApi<Req>(
           credentials: 'same-origin',
           signal: controller.signal,
         });
+        options?.onResponseStatus?.(response.status);
         deadlineRetrySameOperation = response.ok ||
           retrySameOperation(response) ||
           unrecognizedResponseRetrySameOperation(pathname, response);
