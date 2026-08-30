@@ -213,6 +213,9 @@ function legacyFirestoreFixtureRepository(harness: LegacyFirestoreCommerceHarnes
     });
   return {
     query: async (query: CommerceQuery) => harness.orders.map(record).filter((entry) => matches(entry, query)),
+    queryDeliveryRecoveryOrders: async (owner: string) => harness.orders.map(record).filter((entry) =>
+      entry.data.owner === owner &&
+      (entry.data.status === 'processing' || entry.data.status === 'prepared')),
     run: async <T>(_nowMs: number, operation: (unit: unknown) => Promise<T>) => {
       const staged = new Map<string, Record<string, CommerceUpdateValue>>();
       const unit = {

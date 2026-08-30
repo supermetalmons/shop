@@ -663,6 +663,12 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       'owner',
       'document_path',
     ]);
+    assert.deepEqual(indexColumns(db, 'commerce_documents_delivery_owner_status'), [
+      'document_kind',
+      'owner',
+      'status',
+      'document_path',
+    ]);
     assert.equal(
       String(db.prepare(`SELECT sql FROM sqlite_schema
         WHERE type = 'index' AND name = 'commerce_documents_delivery_owner_path'`).get()!.sql)
@@ -710,6 +716,30 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     assert.match(planDetails(db, `SELECT document_path FROM commerce_documents
       WHERE document_kind = 'delivery_order' AND owner = 'owner'
       ORDER BY document_path LIMIT 450`), /commerce_documents_delivery_owner_path/);
+    const deliveryRecoveryPlan = planDetails(db, `SELECT
+        document.document_path,
+        document.document_kind,
+        document.drop_id,
+        document.document_id,
+        document.document_json,
+        document.version,
+        document.create_time,
+        document.update_time,
+        document.processed_at_seconds,
+        document.processed_at_nanos
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
+      WHERE
+        authority.singleton = 1 AND
+        authority.authority_state = 'd1' AND
+        document.document_kind = 'delivery_order' AND
+        document.owner = ? AND
+        document.status IN ('processing', 'prepared')`, 'owner');
+    assert.match(
+      deliveryRecoveryPlan,
+      /SEARCH document USING INDEX commerce_documents_delivery_owner_status \(document_kind=\? AND owner=\? AND status=\?\)/,
+    );
+    assert.doesNotMatch(deliveryRecoveryPlan, /USE TEMP B-TREE/);
     const ownerNotificationPlan = planDetails(db, `WITH candidate_paths AS (
       SELECT document_path FROM commerce_documents
         INDEXED BY commerce_delivery_orders_buyer_notifications_pending_owner_path

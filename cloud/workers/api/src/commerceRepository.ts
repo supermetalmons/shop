@@ -679,6 +679,22 @@ export class D1CommerceRepository {
     return owners;
   }
 
+  async queryDeliveryRecoveryOrders(owner: string): Promise<CommerceDocumentRecord[]> {
+    const scopedOwner = deliveryOwner(owner);
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${qualifiedDocumentColumns('document')}
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
+      WHERE
+        authority.singleton = 1 AND
+        authority.authority_state = 'd1' AND
+        document.document_kind = 'delivery_order' AND
+        document.owner = ? AND
+        document.status IN ('processing', 'prepared')`).bind(scopedOwner));
+    const documents = result.results.map(parseRow);
+    reportInefficientQuery('delivery-recovery-orders', 'delivery_order', result, documents.length);
+    return documents.map((document) => publicRecord(document));
+  }
+
   async queryPendingReadyNotifications(args: {
     limit: number;
     owner?: string;

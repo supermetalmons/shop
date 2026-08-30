@@ -4,6 +4,7 @@ import {
   createCommerceD1,
   createCommerceD1Harness,
   seedCommerceDocument,
+  seedCommerceDocuments,
 } from './commerceD1Harness.ts';
 import {
   createDeferredWorkCollector,
@@ -567,6 +568,88 @@ async function nativeDeliveryContext(
     },
   };
 }
+
+test('unfiltered recovery uses indexed owner candidates, identity filtering, ordering, and the attempt cap', async () => {
+  const harness = createCommerceD1Harness();
+  let pendingBatch = Promise.resolve();
+  let batchNumber = 0;
+  const database = {
+    prepare: (query: string) => harness.db.prepare(query),
+    async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+      batchNumber += 1;
+      const currentBatch = batchNumber;
+      const result = pendingBatch.then(() => harness.db.batch<T>(statements));
+      pendingBatch = result.then(() => {
+        if (currentBatch === 1) {
+          seedCommerceDocument(harness, {
+            key: commerceKeys.deliveryOrder('card_nft_2', '3'),
+            data: readyNotificationOrderFields(3, true) as never,
+            version: 2,
+          });
+        }
+      }, () => undefined);
+      return result;
+    },
+  } as D1Database;
+  let recoveryQueries = 0;
+  const repository = new class extends D1CommerceRepository {
+    override async queryDeliveryRecoveryOrders(owner: string) {
+      recoveryQueries += 1;
+      return super.queryDeliveryRecoveryOrders(owner);
+    }
+  }(database);
+  const otherOwner = Keypair.generate().publicKey.toBase58();
+  seedCommerceDocuments(harness, [
+    { key: commerceKeys.deliveryOrder('card_nft_2', '1'), data: { deliveryId: 1, owner: OWNER, status: 'processing', createdAt: 10 } },
+    { key: commerceKeys.deliveryOrder('card_nft_2', '2'), data: { deliveryId: 2, owner: OWNER, status: 'processing', createdAt: 20 } },
+    { key: commerceKeys.deliveryOrder('card_nft_2', '3'), data: { deliveryId: 3, owner: OWNER, status: 'processing', createdAt: 30 } },
+    { key: commerceKeys.deliveryOrder('card_nft_2', '4'), data: { deliveryId: 4, owner: OWNER, status: 'prepared', createdAt: 40 } },
+    { key: commerceKeys.deliveryOrder('card_nft_2', '6'), data: { deliveryId: 6, owner: otherOwner, status: 'processing' } },
+    { key: commerceKeys.deliveryOrder('card_nft_2', 'malformed'), data: { owner: OWNER, status: 'processing' } },
+  ]);
+  const signal = new AbortController().signal;
+  const context = {
+    commerceDb: database,
+    repository,
+    nowMs: READY_NOTIFICATION_NOW_MS,
+    providerFetch: async () => assert.fail('unexpected provider fetch'),
+    signal,
+    dataDb: undefined as D1Database | undefined,
+  };
+  const retried: number[] = [];
+  const result = await deliveryReceiptTestHooks.recoverReceiptsRequest(
+    {},
+    { kind: 'staff-wallet', wallet: OWNER },
+    env({ COMMERCE_DB: database }),
+    context,
+    { apiKey: 'helius', fetch: async () => assert.fail('unexpected provider fetch'), signal },
+    failOnDeferredWork,
+    {
+      hasConfirmedDeliveryRecord: async () => true,
+      retryIssueReceipts: async ({ request: retryRequest }) => {
+        retried.push(retryRequest.deliveryId);
+        return {
+          processed: true,
+          deliveryId: retryRequest.deliveryId,
+          receiptsMinted: 1,
+          receiptTxs: [],
+          closeDeliveryTx: null,
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(retried, [1, 2, 3]);
+  assert.equal(result.attempted, 2);
+  assert.equal(result.recovered, 3);
+  assert.deepEqual(result.results.map(({ deliveryId, outcome }) => ({ deliveryId, outcome })), [
+    { deliveryId: 1, outcome: 'recovered' },
+    { deliveryId: 2, outcome: 'recovered' },
+    { deliveryId: 3, outcome: 'recovered' },
+    { deliveryId: 4, outcome: 'attempt_capped' },
+  ]);
+  assert.equal(recoveryQueries, 2);
+});
 
 test('native ready-to-ship persistence includes notification and pack-status outboxes', async () => {
   const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');

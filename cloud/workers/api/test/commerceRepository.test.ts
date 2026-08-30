@@ -409,6 +409,55 @@ test('delivery-order owner pagination uses a distinct indexed keyset query', asy
   );
 });
 
+test('delivery recovery queries use the composite owner-status index without imposing order', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  seedCommerceDocuments(harness, [
+    {
+      key: commerceKeys.deliveryOrder('drop', 'processing'),
+      data: { owner: 'owner-a', status: 'processing' },
+    },
+    {
+      key: commerceKeys.deliveryOrder('other', 'prepared'),
+      data: { owner: 'owner-a', status: 'prepared' },
+    },
+    {
+      key: commerceKeys.deliveryOrder('drop', 'wrong-owner'),
+      data: { owner: 'owner-b', status: 'processing' },
+    },
+    {
+      key: commerceKeys.deliveryOrder('drop', 'wrong-status'),
+      data: { owner: 'owner-a', status: 'ready_to_ship' },
+    },
+    {
+      key: commerceKeys.stripeCheckout('drop', 'wrong-kind'),
+      data: { owner: 'owner-a', status: 'prepared' },
+    },
+  ]);
+  const repository = new D1CommerceRepository(harness.db);
+
+  const records = await repository.queryDeliveryRecoveryOrders('owner-a');
+  const documentIds = records.map((record) => record.key.documentId);
+  assert.equal(new Set(documentIds).size, documentIds.length);
+  assert.deepEqual(documentIds.toSorted(), ['prepared', 'processing']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'batch');
+  if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch call.');
+  assertAuthoritativeReadBatch(calls[0]);
+  const sql = calls[0].statements[1].sql.replace(/\s+/g, ' ');
+  assert.match(sql, /INDEXED BY commerce_documents_delivery_owner_status/);
+  assert.match(sql, /document\.document_kind = 'delivery_order'/);
+  assert.match(sql, /document\.owner = \?/);
+  assert.match(sql, /document\.status IN \('processing', 'prepared'\)/);
+  assert.doesNotMatch(sql, /ORDER BY/);
+
+  await assert.rejects(
+    repository.queryDeliveryRecoveryOrders(''),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
+  );
+  assert.equal(calls.length, 1);
+});
+
 test('native timestamps remain monotonic and path ordering is binary', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
@@ -967,6 +1016,10 @@ test('standalone reads use one authoritative two-statement batch', async () => {
     [],
   );
   assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.queryDeliveryRecoveryOrders('owner')),
+    [],
+  );
+  assert.deepEqual(
     await readWithSingleBatch(calls, () => repository.queryPendingReadyNotifications({ limit: 1 })),
     [],
   );
@@ -1016,7 +1069,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   assert.equal(staleCall?.method, 'batch');
   if (staleCall?.method !== 'batch') assert.fail('Expected one D1 batch call.');
   assert.match(staleCall.statements[1].sql, /INDEXED BY commerce_stripe_checkouts_reconciliation_due/);
-  assert.equal(calls.length, 9);
+  assert.equal(calls.length, 10);
 });
 
 test('all standalone reads fail closed when commerce is paused', async () => {
@@ -1035,6 +1088,10 @@ test('all standalone reads fail closed when commerce is paused', async () => {
     {
       name: 'queryDeliveryOrderOwners',
       read: (value) => value.queryDeliveryOrderOwners({ limit: 1 }),
+    },
+    {
+      name: 'queryDeliveryRecoveryOrders',
+      read: (value) => value.queryDeliveryRecoveryOrders('owner'),
     },
     {
       name: 'queryPendingReadyNotifications',

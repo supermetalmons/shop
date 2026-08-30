@@ -47,6 +47,8 @@ const PENDING_READY_NOTIFICATION_INDEX_SQL: Readonly<Record<string, string>> = O
     WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
       shipper_notification_state = 'pending'`,
 });
+const DELIVERY_RECOVERY_INDEX_SQL = `CREATE INDEX commerce_documents_delivery_owner_status
+  ON commerce_documents (document_kind, owner, status, document_path)`;
 
 function normalizedSql(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -275,6 +277,13 @@ export function checkCommerceD1(): Record<string, unknown> {
       WHERE document_kind = 'delivery_order'`.replace(/\s+/g, ' ').trim()
   ) fail('Commerce D1 delivery-owner partial index is invalid.');
 
+  const deliveryRecoveryIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'index' AND name = 'commerce_documents_delivery_owner_status'`);
+  if (
+    deliveryRecoveryIndex.length !== 1 ||
+    normalizedSql(deliveryRecoveryIndex[0].sql) !== normalizedSql(DELIVERY_RECOVERY_INDEX_SQL)
+  ) fail('Commerce D1 delivery-recovery index is invalid.');
+
   const pendingReadyNotificationIndexes = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
     WHERE type = 'index' AND name GLOB 'commerce_delivery_orders_*_notifications_pending*'
     ORDER BY name`);
@@ -319,6 +328,31 @@ export function checkCommerceD1(): Record<string, unknown> {
     LIMIT 501`);
   requireSearchIndex(keysetDeliveryOwnerPlan, 'commerce_documents_delivery_owner_path');
   requireNoTemporaryBTree(keysetDeliveryOwnerPlan, 'keyset delivery-owner');
+  const deliveryRecoveryPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN
+    SELECT
+      document.document_path,
+      document.document_kind,
+      document.drop_id,
+      document.document_id,
+      document.document_json,
+      document.version,
+      document.create_time,
+      document.update_time,
+      document.processed_at_seconds,
+      document.processed_at_nanos
+    FROM commerce_authority_control AS authority
+    CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
+    WHERE
+      authority.singleton = 1 AND
+      authority.authority_state = 'd1' AND
+      document.document_kind = 'delivery_order' AND
+      document.owner = '11111111111111111111111111111111' AND
+      document.status IN ('processing', 'prepared')`);
+  requireSearchIndex(deliveryRecoveryPlan, 'commerce_documents_delivery_owner_status');
+  if (!deliveryRecoveryPlan.some((row) => normalizedSql(row.detail).includes(
+    'commerce_documents_delivery_owner_status (document_kind=? AND owner=? AND status=?)',
+  ))) fail('Commerce D1 delivery-recovery query plan does not use the full owner-status prefix.');
+  requireNoTemporaryBTree(deliveryRecoveryPlan, 'delivery-recovery');
   queryRemoteCommerceD1(`SELECT DISTINCT document.owner AS owner
     FROM commerce_authority_control AS authority
     CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path

@@ -198,6 +198,38 @@ test('commerce repository batched reads return rows through the real D1 runtime'
       },
     } as D1Database;
     const observedRepository = new D1CommerceRepository(observedDb);
+    assert.deepEqual(await observedRepository.queryDeliveryRecoveryOrders('paused-owner'), []);
+    const emptyRecoveryRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.equal(Number.isSafeInteger(emptyRecoveryRowsRead), true);
+    assert.equal(emptyRecoveryRowsRead >= 0, true);
+    assert.equal(emptyRecoveryRowsRead <= 4, true);
+
+    await env.COMMERCE_DB.batch([
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'recovery-processing'), {
+        owner: 'paused-owner',
+        status: 'processing',
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'recovery-prepared'), {
+        owner: 'paused-owner',
+        status: 'prepared',
+      }),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+        SET documents_revision = documents_revision + 1,
+          updated_at_ms = updated_at_ms + 1
+        WHERE singleton = 1`),
+    ]);
+    observedBatchResults = undefined;
+    assert.deepEqual(
+      (await observedRepository.queryDeliveryRecoveryOrders('paused-owner'))
+        .map((record) => record.key.documentId)
+        .sort(),
+      ['recovery-prepared', 'recovery-processing'],
+    );
+    const matchingRecoveryRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.equal(Number.isSafeInteger(matchingRecoveryRowsRead), true);
+    assert.equal(matchingRecoveryRowsRead >= 2, true);
+    assert.equal(matchingRecoveryRowsRead <= 8, true);
+
     assert.deepEqual(await observedRepository.queryPendingReadyNotifications({
       limit: 5,
       owner: 'missing-owner',
@@ -234,6 +266,16 @@ test('commerce repository batched reads return rows through the real D1 runtime'
     const pausedRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(pausedRowsRead), true);
     assert.equal(pausedRowsRead <= 4, true);
+
+    observedBatchResults = undefined;
+    await assert.rejects(
+      observedRepository.queryDeliveryRecoveryOrders('paused-owner'),
+      (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable',
+    );
+    const pausedRecoveryRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.equal(Number.isSafeInteger(pausedRecoveryRowsRead), true);
+    assert.equal(pausedRecoveryRowsRead >= 0, true);
+    assert.equal(pausedRecoveryRowsRead <= 4, true);
   } finally {
     await server.close();
   }

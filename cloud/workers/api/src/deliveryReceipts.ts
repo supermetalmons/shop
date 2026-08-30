@@ -719,21 +719,6 @@ function mapProviderError(error: unknown, message: string): DeliveryReceiptError
   return new DeliveryReceiptError('unavailable', message);
 }
 
-async function runDeliveryOrderQuery(
-  context: CommerceContext,
-  ownerWallet: string,
-  status: 'prepared' | 'processing',
-): Promise<DeliveryOrderDocument[]> {
-  const value = await repository(context).query({
-    kind: 'delivery_order',
-    filters: [
-      { field: 'owner', op: 'equal', value: ownerWallet },
-      { field: 'status', op: 'equal', value: status },
-    ],
-  });
-  return decodeDeliveryOrderQuery(value, true);
-}
-
 async function runPendingReadyNotificationQuery(
   context: CommerceContext,
   ownerWallet: string,
@@ -783,18 +768,13 @@ function decodeDeliveryOrderQuery(
   return documents;
 }
 
-async function runDeliveryRecoveryStateQuery(
+async function runDeliveryRecoveryOrderQuery(
   context: CommerceContext,
   ownerWallet: string,
+  requireIdentity = false,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await repository(context).query({
-    kind: 'delivery_order',
-    filters: [
-      { field: 'owner', op: 'equal', value: ownerWallet },
-      { field: 'status', op: 'in', value: ['processing', 'prepared'] },
-    ],
-  });
-  return decodeDeliveryOrderQuery(value, false);
+  const value = await repository(context).queryDeliveryRecoveryOrders(ownerWallet);
+  return decodeDeliveryOrderQuery(value, requireIdentity);
 }
 
 function toMillisMaybe(value: unknown): number | null {
@@ -1190,7 +1170,7 @@ async function fetchDeliveryRecoveryState(
   ownerWallet: string,
   nowMs: number,
 ): Promise<WalletDeliveryRecoveryState> {
-  const documents = await runDeliveryRecoveryStateQuery(context, ownerWallet);
+  const documents = await runDeliveryRecoveryOrderQuery(context, ownerWallet);
   const processing = documents.filter((document) => document.fields.status === 'processing');
   const prepared = documents.filter((document) => document.fields.status === 'prepared');
   return buildWalletDeliveryRecoveryState({
@@ -4289,13 +4269,12 @@ async function recoverReceiptsRequest(
       });
     }
   } else {
-    const [processing, prepared, pendingReady] = await Promise.all([
-      runDeliveryOrderQuery(commerce, wallet, 'processing'),
-      runDeliveryOrderQuery(commerce, wallet, 'prepared'),
+    const [recovery, pendingReady] = await Promise.all([
+      runDeliveryRecoveryOrderQuery(commerce, wallet, true),
       runPendingReadyNotificationQuery(commerce, wallet),
     ]);
     candidates = Array.from(
-      new Map([...processing, ...prepared, ...pendingReady].map((document) => [document.path, document])).values(),
+      new Map([...recovery, ...pendingReady].map((document) => [document.path, document])).values(),
     ).filter((document) => !filterDropId || resolveDeliveryOrderDropId(document.fields, document.path) === filterDropId);
   }
   candidates.sort(compareDeliveryRecoveryCandidates);
@@ -4671,7 +4650,7 @@ export const deliveryReceiptTestHooks = {
   publishReadyToShipNotifications,
   runtimeForDrop,
   rollbackTransactionBestEffort,
-  runDeliveryRecoveryStateQuery,
+  runDeliveryRecoveryOrderQuery,
   runPendingReadyNotificationQuery,
   secureRandomInt,
   sendReceiptBatch,

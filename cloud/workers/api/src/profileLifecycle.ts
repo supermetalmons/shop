@@ -82,7 +82,7 @@ const reconcileSchema = z.object({
   includeDeliveryRecovery: z.boolean().optional(),
 }).strict();
 
-type ProfileLifecycleRepository = Pick<D1CommerceRepository, 'query' | 'run'>;
+type ProfileLifecycleRepository = Pick<D1CommerceRepository, 'queryDeliveryRecoveryOrders' | 'run'>;
 
 type CommerceCommon = {
   nowMs: number;
@@ -296,13 +296,7 @@ async function mergeStripeOrders(params: {
 }
 
 async function loadDeliveryRecoveryState(common: CommerceCommon, wallet: string, nowMs: number) {
-  const documents = await common.repository.query({
-    filters: [
-      { field: 'owner', op: 'equal', value: wallet },
-      { field: 'status', op: 'in', value: ['processing', 'prepared'] },
-    ],
-    kind: 'delivery_order',
-  });
+  const documents = await common.repository.queryDeliveryRecoveryOrders(wallet);
   let remainingProcessing = 0;
   const nextCheckCandidates: Array<number | null> = [];
   for (const document of documents) {
