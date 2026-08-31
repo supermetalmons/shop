@@ -272,8 +272,8 @@ test('staff refresh cannot overwrite or clear a replacement session', async () =
     assert.equal(readStaffWalletSession(NOW_MS)?.token, OTHER_TOKEN);
 
     await saveStaffWalletSession({ wallet: WALLET, token: TOKEN, refreshedAt: NOW_MS - 86_400_001, expiresAt: NOW_MS + 100_000 });
-    let reject!: (error: Error) => void;
-    globalThis.fetch = () => new Promise<Response>((_resolve, fail) => { reject = fail; });
+    let releaseFailure!: (response: Response) => void;
+    globalThis.fetch = () => new Promise<Response>((resolve) => { releaseFailure = resolve; });
     const failedRefresh = ensureStaffWalletSession(true);
     await saveStaffWalletSession({
       wallet: OTHER_WALLET,
@@ -281,22 +281,187 @@ test('staff refresh cannot overwrite or clear a replacement session', async () =
       refreshedAt: NOW_MS,
       expiresAt: NOW_MS + 200_000,
     });
-    reject(Object.assign(new Error('expired'), { code: 'unauthenticated' }));
-    await assert.rejects(failedRefresh, /expired/);
+    releaseFailure(new Response('<html>expired</html>', { status: 401 }));
+    await assert.rejects(
+      failedRefresh,
+      (error) => error instanceof Error &&
+        (error as Error & { code?: unknown }).code === 'unauthenticated',
+    );
     assert.equal(readStaffWalletSession(NOW_MS)?.token, OTHER_TOKEN);
   } finally {
     Date.now = originalNow;
   }
 });
 
-test('transient staff refresh failures preserve the current credential', async () => {
+test('staff refresh classifies failures by HTTP status before payload', async (t) => {
   const originalNow = Date.now;
   Date.now = () => NOW_MS;
-  await saveStaffWalletSession({ wallet: WALLET, token: TOKEN, refreshedAt: NOW_MS - 86_400_001, expiresAt: NOW_MS + 100_000 });
-  globalThis.fetch = async () => { throw new TypeError('offline'); };
+  const cases: Array<{
+    name: string;
+    request: () => Promise<Response>;
+    code?: string;
+    retained: boolean;
+  }> = [
+    {
+      name: 'network failure is transient',
+      request: async () => { throw new TypeError('offline'); },
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'timeout is transient',
+      request: async () => { throw new DOMException('Timed out', 'TimeoutError'); },
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'malformed success is transient',
+      request: async () => new Response('{"wallet":', { status: 200 }),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'null success is transient',
+      request: async () => Response.json(null),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'array success is transient',
+      request: async () => Response.json([]),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'non-object success is transient',
+      request: async () => Response.json('invalid'),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'empty success is transient',
+      request: async () => Response.json({}),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'invalid-wallet success is transient',
+      request: async () => Response.json({ wallet: 'invalid', expiresAt: NOW_MS + 300_000 }),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'missing-expiry success is transient',
+      request: async () => Response.json({ wallet: WALLET }),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'string-expiry success is transient',
+      request: async () => Response.json({ wallet: WALLET, expiresAt: String(NOW_MS + 300_000) }),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'unsafe-expiry success is transient',
+      request: async () => Response.json({ wallet: WALLET, expiresAt: Number.MAX_SAFE_INTEGER + 1 }),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'invalid wallet takes precedence over an expired value',
+      request: async () => Response.json({ wallet: 'invalid', expiresAt: NOW_MS }),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'malformed expiry takes precedence over a wrong wallet',
+      request: async () => Response.json({ wallet: OTHER_WALLET, expiresAt: String(NOW_MS + 300_000) }),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'malformed 401 invalidates the credential',
+      request: async () => new Response('<html>unauthorized</html>', { status: 401 }),
+      code: 'unauthenticated',
+      retained: false,
+    },
+    {
+      name: 'malformed 403 invalidates the credential',
+      request: async () => new Response('<html>forbidden</html>', { status: 403 }),
+      code: 'permission-denied',
+      retained: false,
+    },
+    {
+      name: 'malformed 400 is a protocol failure',
+      request: async () => new Response('<html>bad request</html>', { status: 400 }),
+      code: 'http-400',
+      retained: true,
+    },
+    {
+      name: '400 payload cannot invalidate the credential',
+      request: async () => Response.json({
+        error: { code: 'unauthenticated', message: 'Misclassified response.' },
+      }, { status: 400 }),
+      code: 'http-400',
+      retained: true,
+    },
+    {
+      name: '500 payload cannot invalidate the credential',
+      request: async () => Response.json({
+        error: { code: 'unauthenticated', message: 'Upstream failed.' },
+      }, { status: 500 }),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'malformed gateway response is transient',
+      request: async () => new Response('<html>bad gateway</html>', { status: 502 }),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'structured timeout response is transient',
+      request: async () => Response.json({
+        error: { code: 'deadline-exceeded', message: 'Staff authentication timed out.' },
+      }, { status: 504 }),
+      code: 'unavailable',
+      retained: true,
+    },
+    {
+      name: 'wrong-wallet success is a protocol failure',
+      request: async () => Response.json({ wallet: OTHER_WALLET, expiresAt: NOW_MS + 300_000 }),
+      retained: true,
+    },
+    {
+      name: 'expired success is a protocol failure',
+      request: async () => Response.json({ wallet: WALLET, expiresAt: NOW_MS }),
+      retained: true,
+    },
+    {
+      name: 'valid wrong-wallet expired success is a protocol failure',
+      request: async () => Response.json({ wallet: OTHER_WALLET, expiresAt: NOW_MS }),
+      retained: true,
+    },
+  ];
   try {
-    await assert.rejects(ensureStaffWalletSession(true), /offline/);
-    assert.equal(readStaffWalletSession(NOW_MS)?.token, TOKEN);
+    for (const entry of cases) {
+      await t.test(entry.name, async () => {
+        await saveStaffWalletSession({
+          wallet: WALLET,
+          token: TOKEN,
+          refreshedAt: NOW_MS - 86_400_001,
+          expiresAt: NOW_MS + 100_000,
+        });
+        globalThis.fetch = entry.request;
+        await assert.rejects(
+          ensureStaffWalletSession(true),
+          (error) => error instanceof Error &&
+            (error as Error & { code?: unknown }).code === entry.code,
+        );
+        assert.equal(readStaffWalletSession(NOW_MS)?.token, entry.retained ? TOKEN : undefined);
+      });
+    }
   } finally {
     Date.now = originalNow;
   }

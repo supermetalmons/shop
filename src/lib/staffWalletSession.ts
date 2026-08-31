@@ -24,34 +24,58 @@ export type StaffWalletChallenge = {
 
 type StaffAuthErrorPayload = {
   error?: {
-    code?: unknown;
     message?: unknown;
   };
 };
+
+type StaffAuthDisposition = 'invalid-credential' | 'transient' | 'protocol';
+
+class StaffAuthError extends Error {
+  readonly disposition: StaffAuthDisposition;
+  readonly code?: string;
+
+  constructor(disposition: StaffAuthDisposition, message: string, code?: string) {
+    super(message);
+    this.name = 'StaffAuthError';
+    this.disposition = disposition;
+    this.code = code;
+  }
+}
 
 const listeners = new Set<(wallet: string | null) => void>();
 const refreshPromises = new Map<string, Promise<StaffWalletSession | null>>();
 let fallbackMutationTail: Promise<unknown> = Promise.resolve();
 
-function staffAuthError(value: unknown, status: number): Error {
+function staffAuthResponseDisposition(status: number): StaffAuthDisposition {
+  if (status === 401 || status === 403) return 'invalid-credential';
+  if (status >= 500) return 'transient';
+  return 'protocol';
+}
+
+function staffAuthResponseError(
+  value: unknown,
+  status: number,
+  disposition: StaffAuthDisposition,
+): StaffAuthError {
   const payload = value && typeof value === 'object' ? value as StaffAuthErrorPayload : null;
-  const code = typeof payload?.error?.code === 'string' ? payload.error.code : `http-${status}`;
+  const code = disposition === 'transient'
+    ? 'unavailable'
+    : disposition === 'invalid-credential'
+      ? status === 403 ? 'permission-denied' : 'unauthenticated'
+      : `http-${status}`;
   const message = typeof payload?.error?.message === 'string'
     ? payload.error.message
     : 'Staff authentication failed.';
-  const error = new Error(message) as Error & { code?: string };
-  error.code = code;
-  return error;
+  return new StaffAuthError(disposition, message, code);
 }
 
-function errorCode(error: unknown): string {
-  return typeof error === 'object' && error && typeof (error as { code?: unknown }).code === 'string'
-    ? String((error as { code: string }).code)
-    : '';
+function transientStaffAuthError(error: unknown): StaffAuthError {
+  const message = error instanceof Error ? error.message : 'Staff authentication is unavailable.';
+  return new StaffAuthError('transient', message, 'unavailable');
 }
 
-function isDefinitiveStaffAuthError(error: unknown): boolean {
-  return ['unauthenticated', 'permission-denied', 'http-401', 'http-403'].includes(errorCode(error));
+function protocolStaffAuthError(message = 'Invalid staff authentication response'): StaffAuthError {
+  return new StaffAuthError('protocol', message);
 }
 
 function parseSession(value: unknown, nowMs = Date.now()): StaffWalletSession | null {
@@ -215,20 +239,34 @@ async function callStaffAuth(path: string, body: unknown, token?: string): Promi
     STAFF_AUTH_TIMEOUT_MS,
   );
   try {
-    const response = await fetch(`${AUTHENTICATED_API_ORIGIN}${path}`, {
-      method: 'POST',
-      headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        'Content-Type': 'application/json',
-        'X-Mons-CSRF': '1',
-      },
-      body: JSON.stringify(body),
-      cache: 'no-store',
-      credentials: 'same-origin',
-      signal: controller.signal,
-    });
-    const payload = await boundedJson(response);
-    if (!response.ok) throw staffAuthError(payload, response.status);
+    let response: Response;
+    try {
+      response = await fetch(`${AUTHENTICATED_API_ORIGIN}${path}`, {
+        method: 'POST',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          'Content-Type': 'application/json',
+          'X-Mons-CSRF': '1',
+        },
+        body: JSON.stringify(body),
+        cache: 'no-store',
+        credentials: 'same-origin',
+        signal: controller.signal,
+      });
+    } catch (error) {
+      throw transientStaffAuthError(error);
+    }
+    const disposition = response.ok ? null : staffAuthResponseDisposition(response.status);
+    let payload: unknown;
+    try {
+      payload = await boundedJson(response);
+    } catch (error) {
+      if (disposition) throw staffAuthResponseError(null, response.status, disposition);
+      const message = error instanceof Error ? error.message : 'Staff authentication returned an invalid response';
+      if (path === '/staff/auth/refresh') throw new StaffAuthError('transient', message, 'unavailable');
+      throw protocolStaffAuthError(message);
+    }
+    if (disposition) throw staffAuthResponseError(payload, response.status, disposition);
     return payload;
   } finally {
     clearTimeout(timeout);
@@ -240,7 +278,7 @@ export async function createStaffWalletChallenge(walletValue: string): Promise<S
   if (!wallet || !isStaffWalletAddress(wallet)) throw new Error('This wallet is not authorized for staff access.');
   const payload = await callStaffAuth('/staff/auth/challenge', { wallet });
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new Error('Invalid staff authentication response');
+    throw protocolStaffAuthError();
   }
   const raw = payload as Partial<StaffWalletChallenge>;
   const challengeId = typeof raw.challengeId === 'string' ? raw.challengeId : '';
@@ -252,7 +290,7 @@ export async function createStaffWalletChallenge(walletValue: string): Promise<S
     !Number.isSafeInteger(expiresAt) ||
     expiresAt <= Date.now()
   ) {
-    throw new Error('Invalid staff authentication response');
+    throw protocolStaffAuthError();
   }
   return { challengeId, message, expiresAt };
 }
@@ -266,7 +304,7 @@ export async function exchangeStaffWalletChallenge(
     signature: Array.from(signature),
   });
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new Error('Invalid staff authentication response');
+    throw protocolStaffAuthError();
   }
   const raw = payload as { wallet?: unknown; token?: unknown; expiresAt?: unknown };
   const wallet = canonicalWalletAddress(raw.wallet);
@@ -279,21 +317,24 @@ export async function exchangeStaffWalletChallenge(
     !STAFF_SESSION_TOKEN_PATTERN.test(token) ||
     !Number.isSafeInteger(expiresAt) ||
     expiresAt <= refreshedAt
-  ) throw new Error('Invalid staff authentication response');
+  ) throw protocolStaffAuthError();
   return { wallet, token, expiresAt, refreshedAt };
 }
 
 async function refreshStaffWalletSession(session: StaffWalletSession): Promise<StaffWalletSession | null> {
   const payload = await callStaffAuth('/staff/auth/refresh', {}, session.token);
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new Error('Invalid staff authentication response');
+    throw new StaffAuthError('transient', 'Invalid staff authentication response', 'unavailable');
   }
   const raw = payload as { wallet?: unknown; expiresAt?: unknown };
   const wallet = canonicalWalletAddress(raw.wallet);
-  const expiresAt = Number(raw.expiresAt);
+  const expiresAt = raw.expiresAt;
+  if (!wallet || typeof expiresAt !== 'number' || !Number.isSafeInteger(expiresAt)) {
+    throw new StaffAuthError('transient', 'Invalid staff authentication response', 'unavailable');
+  }
   const refreshedAt = Date.now();
-  if (wallet !== session.wallet || !Number.isSafeInteger(expiresAt) || expiresAt <= refreshedAt) {
-    throw new Error('Invalid staff authentication response');
+  if (wallet !== session.wallet || expiresAt <= refreshedAt) {
+    throw protocolStaffAuthError();
   }
   return withStaffSessionLock(() => {
     const current = readStaffWalletSession();
@@ -310,7 +351,9 @@ export async function ensureStaffWalletSession(forceRefresh = false): Promise<St
   if (!refreshPromise) {
     refreshPromise = refreshStaffWalletSession(session)
       .catch(async (error) => {
-        if (isDefinitiveStaffAuthError(error)) await clearStaffWalletSessionIfCurrent(session.token);
+        if (error instanceof StaffAuthError && error.disposition === 'invalid-credential') {
+          await clearStaffWalletSessionIfCurrent(session.token);
+        }
         throw error;
       })
       .finally(() => {
@@ -328,7 +371,7 @@ export async function logoutStaffWalletSession(
   try {
     await callStaffAuth('/staff/auth/logout', {}, session.token);
   } catch (error) {
-    if (!isDefinitiveStaffAuthError(error)) throw error;
+    if (!(error instanceof StaffAuthError) || error.disposition !== 'invalid-credential') throw error;
   }
   await clearStaffWalletSessionIfCurrent(session.token);
 }

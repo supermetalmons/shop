@@ -547,6 +547,9 @@ export const ADMIN_IRL_REDEEM_FINALIZE_OPERATION_PREFIX = 'airf-v1';
 export const ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS = 2_000;
 export const ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS = 20_000;
 export const ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS = 550_000;
+export const ADMIN_IRL_REDEEM_FINALIZE_RECOVERY = 'ensure-running' as const;
+
+export type AdminIrlRedeemFinalizeRecovery = typeof ADMIN_IRL_REDEEM_FINALIZE_RECOVERY;
 
 export type AdminIrlRedeemFinalizeOperationId = `${typeof ADMIN_IRL_REDEEM_FINALIZE_OPERATION_PREFIX}-${string}`;
 

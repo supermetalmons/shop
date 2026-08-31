@@ -17,6 +17,10 @@ import { SHOP_EXPECTED_ASSET_IDS_MAX } from '../../../../shared/shopApi.ts';
 import { isExactShopRpcRequest } from '../../../../shared/solanaRpcProxy.ts';
 import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import {
+  ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
+  ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
+} from '../../../../shared/contracts.ts';
+import {
   NOTIFICATION_ENQUEUE_PATH,
   NOTIFICATION_ENQUEUE_SIGNATURE_HEADER,
   NOTIFICATION_ENQUEUE_TIMESTAMP_HEADER,
@@ -270,6 +274,26 @@ test('request boundary distinguishes staff rejection from authentication infrast
   assert.equal(unavailable.headers.get('access-control-allow-origin'), 'https://mons.shop');
   assert.match(unavailable.headers.get('Server-Timing') || '', /total;dur=/);
   assert.equal(unavailableLogs.filter((entry) => entry.event === 'shop_api_request').length, 1);
+
+  for (const pathname of ['/admin/irl-redeem/finalize', ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH]) {
+    const finalizeUnavailable = await handleRequest(request(pathname, {}, {
+      Authorization: `Bearer ${token}`,
+      Origin: 'https://mons.shop',
+    }), env({
+      opsDb: d1Database(function prepare() {
+        throw new Error('D1 unavailable');
+      }),
+    }), quietDependencies(fetch));
+    assert.equal(finalizeUnavailable.status, 503);
+    assert.deepEqual(await finalizeUnavailable.json(), {
+      ok: false,
+      error: {
+        code: 'unavailable',
+        message: 'Staff authentication is temporarily unavailable.',
+        recovery: ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
+      },
+    });
+  }
 });
 
 test('request boundary sanitizes unexpected failures and survives terminal log failures', async () => {

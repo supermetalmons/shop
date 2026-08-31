@@ -69,6 +69,7 @@ import {
   handleAdminIrlRedeemFinalizeWorkflowStart,
   handleAdminIrlRedeemFinalizeWorkflowStatus,
 } from './adminIrlRedeemFinalizeWorkflowRoutes.js';
+import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY } from '../../../../shared/contracts.js';
 import {
   REVEAL_DUDES_PATH,
   handleRevealDudes,
@@ -862,8 +863,19 @@ export function unexpectedWorkerRouteResponse(
   if (route.unexpectedError === 'profile') {
     return applyProfileCors(request, jsonResponse({
       ok: false,
-      error: { code: 'unavailable', message: 'Service is temporarily unavailable.' },
+      error: {
+        code: 'unavailable',
+        message: 'Service is temporarily unavailable.',
+        ...(isAdminIrlRedeemFinalizeRoute(route.logRoute)
+          ? { recovery: ADMIN_IRL_REDEEM_FINALIZE_RECOVERY }
+          : {}),
+      },
     }, 503));
   }
   return internalJsonResponse({ ok: false, error: 'internal' }, 500);
+}
+
+export function isAdminIrlRedeemFinalizeRoute(pathname: string): boolean {
+  return pathname === ADMIN_IRL_REDEEM_FINALIZE_PATH ||
+    pathname === ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH;
 }

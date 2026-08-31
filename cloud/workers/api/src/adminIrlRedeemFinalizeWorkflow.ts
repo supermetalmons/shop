@@ -33,6 +33,10 @@ const CLEANUP_STEP_CONFIG = {
   retries: { limit: 3, delay: '1 second', backoff: 'exponential' },
   timeout: 30_000,
 } as const satisfies WorkflowStepConfig;
+const REPORT_STEP_CONFIG = {
+  retries: { limit: 0, delay: 0 },
+  timeout: 5_000,
+} as const satisfies WorkflowStepConfig;
 
 type StageResult<T> =
   | Readonly<{ ok: true; value: T }>
@@ -42,6 +46,7 @@ type RetryableWorkflowErrorCode = 'aborted' | 'deadline-exceeded' | 'unavailable
 
 const RETRY_ERROR_NAME = 'AdminIrlRedeemFinalizeWorkflowRetry';
 const RETRY_ERROR_MESSAGE_PREFIX = 'admin-irl-redeem-finalize-retry:';
+const WORKFLOW_ENGINE_ABORT_PREFIX = 'Aborting engine:';
 
 export type AdminIrlRedeemFinalizeWorkflowDependencies = Readonly<{
   cleanup: typeof cleanupAdminIrlRedeemFinalizeWorkflow;
@@ -72,25 +77,38 @@ function logWorkflow(
   fields: Readonly<Record<string, string | number | boolean>>,
   level: WorkflowLogLevel = 'info',
 ): void {
-  const entry = JSON.stringify({
-    event: 'admin_irl_redeem_finalize_workflow',
-    version: 1,
-    ...context,
-    ...fields,
-  });
-  if (level === 'error') {
-    console.error(entry);
-    return;
+  try {
+    const entry = JSON.stringify({
+      event: 'admin_irl_redeem_finalize_workflow',
+      version: 1,
+      ...context,
+      ...fields,
+    });
+    if (level === 'error') {
+      console.error(entry);
+      return;
+    }
+    if (level === 'warning') {
+      console.warn(entry);
+      return;
+    }
+    console.log(entry);
+  } catch {
   }
-  if (level === 'warning') {
-    console.warn(entry);
-    return;
-  }
-  console.log(entry);
 }
 
 function isRetryableWorkflowErrorCode(value: unknown): value is RetryableWorkflowErrorCode {
   return value === 'aborted' || value === 'deadline-exceeded' || value === 'unavailable' || value === 'internal';
+}
+
+function isWorkflowEngineAbort(error: unknown): boolean {
+  if (!error || (typeof error !== 'object' && typeof error !== 'function')) return false;
+  try {
+    return typeof (error as { message?: unknown }).message === 'string' &&
+      (error as { message: string }).message.startsWith(WORKFLOW_ENGINE_ABORT_PREFIX);
+  } catch {
+    return false;
+  }
 }
 
 function retryStageError(code: RetryableWorkflowErrorCode): Error {
@@ -223,10 +241,10 @@ export async function runAdminIrlRedeemFinalizeWorkflow(
       else failure = published.error;
     }
   } catch (error) {
+    if (isWorkflowEngineAbort(error)) throw error;
     failure = workflowFailure(error);
   }
   if (!failure && reference) {
-    logWorkflow(logContext, { step: 'workflow', retryAttempt: 1, durationMs: 0, outcome: 'succeeded' });
     return { version: 1, ok: true, result: reference };
   }
   const projected = failure || {
@@ -249,9 +267,10 @@ export async function runAdminIrlRedeemFinalizeWorkflow(
           step: 'persist terminal failure',
           retryAttempt: context.attempt,
           durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
-          outcome: result.cleared ? 'cleared' : 'retained_recovery',
+          outcome: 'terminal_failure',
           errorCode: projected.code,
-        }, 'warning');
+          cleanupOutcome: result.cleared ? 'cleared' : 'retained_recovery',
+        }, 'error');
         return result;
       } catch (error) {
         const normalized = adminIrlRedeemFinalizeWorkflowError(error);
@@ -265,30 +284,28 @@ export async function runAdminIrlRedeemFinalizeWorkflow(
         throw retryStageError(isRetryableWorkflowErrorCode(normalized.code) ? normalized.code : 'internal');
       }
     });
-  } catch {
+  } catch (error) {
+    if (isWorkflowEngineAbort(error)) throw error;
+    try {
+      await step.do('report cleanup exhaustion', REPORT_STEP_CONFIG, async () => {
+        logWorkflow(logContext, {
+          step: 'persist terminal failure',
+          outcome: 'cleanup_exhausted',
+          errorCode: 'unavailable',
+          retryExhausted: true,
+        }, 'error');
+        return { reported: true } as const;
+      });
+    } catch (reportError) {
+      if (isWorkflowEngineAbort(reportError)) throw reportError;
+    }
     const cleanupFailure = {
       version: 1,
       ok: false,
       error: retryFailure('unavailable'),
     } as const;
-    logWorkflow(logContext, {
-      step: 'workflow',
-      retryAttempt: 1,
-      durationMs: 0,
-      outcome: 'failed',
-      errorCode: cleanupFailure.error.code,
-      cleanupExhausted: true,
-    }, 'error');
     return cleanupFailure;
   }
-  logWorkflow(logContext, {
-    step: 'workflow',
-    retryAttempt: 1,
-    durationMs: 0,
-    outcome: 'failed',
-    errorCode: projected.code,
-    cleanupExhausted: false,
-  }, 'error');
   return { version: 1, ok: false, error: projected };
 }
 

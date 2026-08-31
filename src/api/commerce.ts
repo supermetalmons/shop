@@ -27,6 +27,7 @@ import {
   ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
   ADMIN_IRL_REDEEM_FINALIZE_OVERALL_TIMEOUT_MS,
   ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
   ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
   createAdminIrlRedeemFinalizeOperationId,
   parseAdminIrlRedeemFinalizePendingResponse,
@@ -519,13 +520,27 @@ function isRawAdminIrlRedeemFinalizeTransportError(error: unknown): boolean {
     error instanceof ProfileApiError &&
     error.code === 'deadline-exceeded' &&
     error.status === undefined
-  ) return true;
+  ) return error.retrySameOperation;
   if (error instanceof TypeError) return true;
   return error instanceof DOMException && (
     error.name === 'AbortError' ||
     error.name === 'NetworkError' ||
     error.name === 'TimeoutError'
   );
+}
+
+function adminIrlRedeemFinalizeRetryTarget(
+  error: unknown,
+): 'same-request' | 'start-request' | null {
+  if (
+    error instanceof ProfileApiError &&
+    error.recovery === ADMIN_IRL_REDEEM_FINALIZE_RECOVERY
+  ) return 'start-request';
+  if (isRawAdminIrlRedeemFinalizeTransportError(error)) return 'same-request';
+  if (error instanceof ProfileApiError) return error.retrySameOperation ? 'same-request' : null;
+  return error instanceof Error && (error as Error & { code?: unknown }).code === 'unavailable'
+    ? 'same-request'
+    : null;
 }
 
 function adminIrlRedeemFinalizeDeadlineError(): ProfileApiError {
@@ -548,13 +563,20 @@ function adminIrlRedeemFinalizeRemainingMs(
 async function waitForAdminIrlRedeemFinalizePoll(
   deadlineAt: number,
   dependencies: AdminIrlRedeemFinalizePollingDependencies,
+  retryAfterMs = ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
 ): Promise<void> {
   const remainingMs = adminIrlRedeemFinalizeRemainingMs(deadlineAt, dependencies);
-  if (remainingMs <= ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS) {
+  const delayMs = Number.isFinite(retryAfterMs)
+    ? Math.max(
+        ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+        Math.min(60_000, Math.floor(retryAfterMs)),
+      )
+    : ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS;
+  if (remainingMs <= delayMs) {
     await dependencies.sleep(remainingMs);
     throw adminIrlRedeemFinalizeDeadlineError();
   }
-  await dependencies.sleep(ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS);
+  await dependencies.sleep(delayMs);
 }
 
 export function createCommerceApiClient(
@@ -593,6 +615,7 @@ export function createCommerceApiClient(
       {
         headers: { [STRIPE_CHECKOUT_OPERATION_HEADER]: operationId },
         ...(onCredential ? { onCredential } : {}),
+        replaySafe: true,
       },
     );
     const session = parseStripeCheckoutSessionResponse(response);
@@ -646,11 +669,12 @@ export function createCommerceApiClient(
     dropId: string;
     transferSignature: string;
   }): Promise<AdminIrlRedeemFinalizeResult> {
+    const startRequest = { ...args };
     const deadlineAt = adminIrlRedeemFinalizePolling.now() + adminIrlRedeemFinalizePolling.overallTimeoutMs;
     let operationId: AdminIrlRedeemFinalizeOperationId | undefined;
     let pathname: '/admin/irl-redeem/finalize' | typeof ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH =
       '/admin/irl-redeem/finalize';
-    let request: typeof args | AdminIrlRedeemFinalizeStatusRequest = args;
+    let request: typeof startRequest | AdminIrlRedeemFinalizeStatusRequest = startRequest;
     let authSubject: string | undefined;
     const onCredential = (nextAuthSubject: string) => {
       if (authSubject === undefined) {
@@ -670,14 +694,24 @@ export function createCommerceApiClient(
         response = await callProfileApi(pathname, request, undefined, {
           onCredential,
           onResponseStatus: (status) => { responseStatus = status; },
+          replaySafe: true,
           timeoutMs: Math.min(
             ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
             adminIrlRedeemFinalizeRemainingMs(deadlineAt, adminIrlRedeemFinalizePolling),
           ),
         });
       } catch (error) {
-        if (!isRawAdminIrlRedeemFinalizeTransportError(error)) throw error;
-        await waitForAdminIrlRedeemFinalizePoll(deadlineAt, adminIrlRedeemFinalizePolling);
+        const retryTarget = adminIrlRedeemFinalizeRetryTarget(error);
+        if (!retryTarget) throw error;
+        if (retryTarget === 'start-request') {
+          pathname = '/admin/irl-redeem/finalize';
+          request = startRequest;
+        }
+        await waitForAdminIrlRedeemFinalizePoll(
+          deadlineAt,
+          adminIrlRedeemFinalizePolling,
+          error instanceof ProfileApiError ? error.retryAfterMs : undefined,
+        );
         continue;
       }
 
@@ -685,8 +719,8 @@ export function createCommerceApiClient(
       if (result) {
         if (
           responseStatus !== 200 ||
-          result.dropId !== args.dropId ||
-          result.requestId !== args.requestId
+          result.dropId !== startRequest.dropId ||
+          result.requestId !== startRequest.requestId
         ) {
           throw new Error('Invalid Admin IRL redeem finalization response');
         }
@@ -694,19 +728,23 @@ export function createCommerceApiClient(
       }
 
       const pending = parseAdminIrlRedeemFinalizePendingResponse(response);
-      if (
-        responseStatus !== 202 ||
-        !pending
-      ) {
+      if (!pending) {
+        if (responseStatus === 200 || responseStatus === 202) {
+          await waitForAdminIrlRedeemFinalizePoll(deadlineAt, adminIrlRedeemFinalizePolling);
+          continue;
+        }
+        throw new Error('Invalid Admin IRL redeem finalization response');
+      }
+      if (responseStatus !== 202) {
         throw new Error('Invalid Admin IRL redeem finalization response');
       }
       if (operationId === undefined) {
         const staffWallet = canonicalWalletAddress(authSubject);
         const expectedOperationId = staffWallet
           ? await createAdminIrlRedeemFinalizeOperationId([
-              args.dropId,
-              args.requestId,
-              args.transferSignature,
+              startRequest.dropId,
+              startRequest.requestId,
+              startRequest.transferSignature,
               staffWallet,
             ])
           : undefined;

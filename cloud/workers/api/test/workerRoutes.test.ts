@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { workerRouteRegistry } from '../src/workerRoutes.ts';
+import {
+  unexpectedWorkerRouteResponse,
+  workerRouteRegistry,
+} from '../src/workerRoutes.ts';
+import { ADMIN_IRL_REDEEM_FINALIZE_RECOVERY } from '../../../../shared/contracts.ts';
 
 type ExpectedExactRoute = readonly [
   pathname: string,
@@ -160,4 +164,24 @@ test('generic unknown paths resolve to the internal not-found route', () => {
     staff: 'optional',
     unexpectedError: 'internal',
   });
+});
+
+test('unexpected finalization failures request recovery explicitly', async () => {
+  for (const pathname of ['/admin/irl-redeem/finalize', '/admin/irl-redeem/finalize/status']) {
+    const response = unexpectedWorkerRouteResponse(
+      workerRouteRegistry.resolve(pathname),
+      new Request(`https://api.mons.shop${pathname}`, {
+        headers: { Origin: 'https://mons.shop' },
+      }),
+    );
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {
+      ok: false,
+      error: {
+        code: 'unavailable',
+        message: 'Service is temporarily unavailable.',
+        recovery: ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
+      },
+    });
+  }
 });

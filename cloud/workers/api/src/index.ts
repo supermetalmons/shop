@@ -1,5 +1,8 @@
 import { applyProfileCors } from './profileReads.js';
 import {
+  ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
+} from '../../../../shared/contracts.js';
+import {
   isStaffSessionAuthorization,
   StaffAuthError,
   verifyStaffSession,
@@ -24,6 +27,7 @@ import {
   applyWorkerRouteCors,
   strictPublicOriginDeniedResponse,
   unexpectedWorkerRouteResponse,
+  isAdminIrlRedeemFinalizeRoute,
   workerRouteBaseLogFields,
   workerRouteRegistry,
   workerRouteOriginDeniedResponse,
@@ -66,6 +70,12 @@ function reportInfo(entry: Record<string, unknown>): void {
   try {
     console.log(entry);
   } catch {}
+}
+
+function finalizationRecovery(pathname: string) {
+  return isAdminIrlRedeemFinalizeRoute(pathname)
+    ? { recovery: ADMIN_IRL_REDEEM_FINALIZE_RECOVERY }
+    : {};
 }
 
 function boundaryErrorSummary(error: unknown): Record<string, unknown> {
@@ -244,6 +254,7 @@ async function dispatchRequest(
             error: {
               code: 'unavailable',
               message: 'Staff authentication is temporarily unavailable.',
+              ...finalizationRecovery(pathname),
             },
           }, 503)),
           logFields: { profileAuthOutcome: 'provider-failure' },

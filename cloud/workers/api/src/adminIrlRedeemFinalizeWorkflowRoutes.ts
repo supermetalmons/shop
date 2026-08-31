@@ -1,19 +1,21 @@
 import {
   ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
   ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
   ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
   createAdminIrlRedeemFinalizeOperationId,
   isAdminIrlRedeemFinalizeOperationId,
   type AdminIrlRedeemFinalizeOperationId,
   type AdminIrlRedeemFinalizePendingResponse,
+  type AdminIrlRedeemFinalizeRecovery,
 } from '../../../../shared/contracts.js';
 import {
   AdminIrlRedeemFinalizeError,
   adminIrlRedeemFinalizeWorkflowError,
   cleanupAdminIrlRedeemFinalizeWorkflow,
+  confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation,
   loadAdminIrlRedeemFinalizeWorkflowOperation,
   loadAdminIrlRedeemFinalizeWorkflowResult,
-  parseAdminIrlRedeemFinalizeWorkflowOutput,
   readAdminIrlRedeemFinalizeRequest,
   reserveAdminIrlRedeemFinalizeWorkflow,
   resolveAdminIrlRedeemFinalizeStaffWallet,
@@ -22,6 +24,17 @@ import {
   type AdminIrlRedeemFinalizeWorkflowPayload,
 } from './adminIrlRedeemFinalize.js';
 import {
+  inspectAdminIrlRedeemFinalizeWorkflow,
+  inspectAndReconcileAdminIrlRedeemFinalizeWorkflow,
+  isAdminIrlRedeemFinalizeWorkflowResourceError,
+  loadAdminIrlRedeemFinalizeDurableState,
+  projectAdminIrlRedeemFinalizeStatusDecision,
+  reconcileAdminIrlRedeemFinalizeInspection,
+  type AdminIrlRedeemFinalizeDurableState,
+  type AdminIrlRedeemFinalizeLoadOperation,
+  type AdminIrlRedeemFinalizeWorkflowReconciliation,
+} from './adminIrlRedeemFinalizeWorkflowRecovery.js';
+import {
   createRequestDeadline,
   createTimedAbortScope,
   isRequestCancellationError,
@@ -29,6 +42,7 @@ import {
   readBoundedRequestJson,
   type TimedAbortScope,
 } from './boundedRequest.js';
+import { CommerceRepositoryError } from './commerceRepository.js';
 import { isRecord } from './dataAccess.js';
 import {
   RequestIdentityError,
@@ -42,29 +56,44 @@ const STATUS_MAX_BYTES = 256;
 const CREATE_FAILURE_RECOVERY_TIMEOUT_MS = 10_000;
 const EMPTY_METRICS = Object.freeze({ upstreamCalls: 0, providerDurationMs: 0 });
 
+type LoadOperation = AdminIrlRedeemFinalizeLoadOperation;
+
 type AdminIrlRedeemFinalizeWorkflowStartDependencies = Readonly<{
+  confirmInstanceCreation: typeof confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation;
   createDeadline: typeof createRequestDeadline;
   createRecoveryScope: () => TimedAbortScope;
+  loadOperation: LoadOperation;
+  reserveWorkflow: typeof reserveAdminIrlRedeemFinalizeWorkflow;
+}>;
+
+type AdminIrlRedeemFinalizeWorkflowStatusDependencies = Readonly<{
+  createDeadline: typeof createRequestDeadline;
+  loadOperation: LoadOperation;
 }>;
 
 const defaultStartDependencies: AdminIrlRedeemFinalizeWorkflowStartDependencies = {
+  confirmInstanceCreation: confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation,
   createDeadline: createRequestDeadline,
   createRecoveryScope: () => createTimedAbortScope(new AbortController().signal, {
     timeoutMs: CREATE_FAILURE_RECOVERY_TIMEOUT_MS,
     timeoutMessage: 'Admin IRL redeem Workflow create recovery timed out',
   }),
+  loadOperation: loadAdminIrlRedeemFinalizeWorkflowOperation,
+  reserveWorkflow: reserveAdminIrlRedeemFinalizeWorkflow,
 };
 
-type WorkflowInspection =
-  | Readonly<{ state: 'missing' }>
-  | Readonly<{ state: 'pending'; instance: WorkflowInstance }>
-  | Readonly<{ state: 'terminated'; instance: WorkflowInstance }>
-  | Readonly<{ state: 'errored' | 'invalid'; instance: WorkflowInstance }>
-  | Readonly<{
-      state: 'complete';
-      instance: WorkflowInstance;
-      output: AdminIrlRedeemFinalizeWorkflowOutput;
-    }>;
+const defaultStatusDependencies: AdminIrlRedeemFinalizeWorkflowStatusDependencies = {
+  createDeadline: createRequestDeadline,
+  loadOperation: loadAdminIrlRedeemFinalizeWorkflowOperation,
+};
+
+type RouteError = Readonly<{
+  code: AdminIrlRedeemFinalizeErrorCode;
+  message: string;
+  recovery?: AdminIrlRedeemFinalizeRecovery;
+}>;
+
+class EnsureRunningError extends AdminIrlRedeemFinalizeError {}
 
 export type AdminIrlRedeemFinalizeWorkflowRouteResult = Readonly<{
   response: Response;
@@ -102,10 +131,15 @@ function jsonResponse(value: unknown, status: number, headers?: HeadersInit): Re
   });
 }
 
-function failureResponse(
-  error: Readonly<{ code: AdminIrlRedeemFinalizeErrorCode; message: string }>,
-): Response {
-  return jsonResponse({ ok: false, error: { code: error.code, message: error.message } }, statusForCode(error.code));
+function failureResponse(error: RouteError): Response {
+  return jsonResponse({
+    ok: false,
+    error: {
+      code: error.code,
+      message: error.message,
+      ...(error.recovery === undefined ? {} : { recovery: error.recovery }),
+    },
+  }, statusForCode(error.code));
 }
 
 function pendingResponse(operationId: AdminIrlRedeemFinalizeOperationId): Response {
@@ -136,58 +170,50 @@ function routeResult(
   };
 }
 
-function isAdminIrlRedeemFinalizeWorkflowInstanceMissing(error: unknown): boolean {
-  if (!isRecord(error)) return false;
-  if (error.code === 10200) return false;
-  return error.code === 'instance.not_found' || error.message === 'instance.not_found';
+function authOutcomeForCode(
+  code: AdminIrlRedeemFinalizeErrorCode,
+): AdminIrlRedeemFinalizeWorkflowRouteResult['authOutcome'] {
+  return ['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted']
+    .includes(code) ? 'rejected' : 'provider-failure';
 }
 
-function isDefinitiveAdminIrlRedeemFinalizeWorkflowCreateFailure(error: unknown): boolean {
-  return isRecord(error) && error.code === 10200;
+function projectFailure(
+  operationId: AdminIrlRedeemFinalizeOperationId,
+  error: RouteError,
+): AdminIrlRedeemFinalizeWorkflowRouteResult {
+  return routeResult(failureResponse(error), error.code, {
+    operationId,
+    authOutcome: authOutcomeForCode(error.code),
+  });
 }
 
-async function inspectWorkflow(
-  binding: Workflow<AdminIrlRedeemFinalizeWorkflowPayload>,
-  operationId: string,
-  signal: AbortSignal,
-): Promise<WorkflowInspection> {
-  let instance: WorkflowInstance;
-  try {
-    instance = await raceWithSignal(binding.get(operationId), signal);
-    const status = await raceWithSignal(instance.status(), signal);
-    if (['queued', 'running', 'paused', 'waiting', 'waitingForPause'].includes(status.status)) {
-      return { state: 'pending', instance };
-    }
-    if (status.status === 'terminated') return { state: 'terminated', instance };
-    if (status.status === 'errored') return { state: 'errored', instance };
-    if (status.status !== 'complete') return { state: 'invalid', instance };
-    const output = parseAdminIrlRedeemFinalizeWorkflowOutput(status.output);
-    return output ? { state: 'complete', instance, output } : { state: 'invalid', instance };
-  } catch (error) {
-    if (isAdminIrlRedeemFinalizeWorkflowInstanceMissing(error)) return { state: 'missing' };
-    throw error;
+function workflowUnavailableError(): AdminIrlRedeemFinalizeError {
+  return new AdminIrlRedeemFinalizeError(
+    'unavailable',
+    'Admin IRL redeem Workflow is temporarily unavailable.',
+  );
+}
+
+function ensureRunningError(error: unknown): EnsureRunningError {
+  if (error instanceof AdminIrlRedeemFinalizeError) {
+    return new EnsureRunningError(error.code, error.message, error.details);
   }
+  const normalized = adminIrlRedeemFinalizeWorkflowError(error);
+  return new EnsureRunningError(normalized.code, normalized.message);
 }
 
-async function projectComplete(
+async function projectPersistedCompletion(
   env: Env,
-  operationId: string,
-  output: AdminIrlRedeemFinalizeWorkflowOutput,
+  operationId: AdminIrlRedeemFinalizeOperationId,
+  reference: Extract<AdminIrlRedeemFinalizeWorkflowOutput, { ok: true }>['result'] | undefined,
+  signal: AbortSignal,
 ): Promise<AdminIrlRedeemFinalizeWorkflowRouteResult> {
-  if (!output.ok) {
-    return routeResult(failureResponse(output.error), output.error.code, {
-      operationId,
-      authOutcome: output.error.code === 'invalid-argument' || output.error.code === 'permission-denied' ||
-        output.error.code === 'failed-precondition' || output.error.code === 'resource-exhausted'
-        ? 'rejected'
-        : 'provider-failure',
-    });
-  }
-  const result = await loadAdminIrlRedeemFinalizeWorkflowResult({
+  if (signal.aborted) throw signal.reason;
+  const result = await raceWithSignal(loadAdminIrlRedeemFinalizeWorkflowResult({
     env,
     operationId,
-    reference: output.result,
-  });
+    ...(reference ? { reference } : {}),
+  }), signal);
   return routeResult(jsonResponse(result, 200), 'succeeded', {
     operationId,
     dropId: result.dropId,
@@ -196,37 +222,223 @@ async function projectComplete(
   });
 }
 
-async function projectInspection(
+function recoveryErrorForReconciliation(
+  reconciliation: AdminIrlRedeemFinalizeWorkflowReconciliation,
+): RouteError {
+  const failure = reconciliation.durable.state === 'failed'
+    ? reconciliation.durable.failure
+    : reconciliation.observation.state === 'retryable-failure'
+      ? reconciliation.observation.error
+      : workflowUnavailableError();
+  return {
+    code: failure.code,
+    message: failure.message,
+    recovery: ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
+  };
+}
+
+async function projectReconciliation(
   env: Env,
   operationId: AdminIrlRedeemFinalizeOperationId,
-  inspection: WorkflowInspection,
+  reconciliation: AdminIrlRedeemFinalizeWorkflowReconciliation,
+  signal: AbortSignal,
+  pendingDropId?: string,
 ): Promise<AdminIrlRedeemFinalizeWorkflowRouteResult> {
-  if (inspection.state === 'pending') {
-    return routeResult(pendingResponse(operationId), 'pending', { operationId });
-  }
-  if (inspection.state === 'missing') {
-    return routeResult(failureResponse({ code: 'not-found', message: 'Admin IRL redeem Workflow operation not found.' }), 'not-found', {
+  if (reconciliation.decision === 'pending') {
+    return routeResult(pendingResponse(operationId), 'pending', {
       operationId,
-      authOutcome: 'rejected',
+      ...(pendingDropId ? { dropId: pendingDropId } : {}),
     });
   }
-  if (inspection.state === 'terminated') {
-    return routeResult(failureResponse({ code: 'aborted', message: 'Admin IRL redeem Workflow operation was terminated.' }), 'aborted', {
-      operationId,
-      authOutcome: 'rejected',
+  if (reconciliation.decision === 'not-found') {
+    return projectFailure(operationId, {
+      code: 'not-found',
+      message: 'Admin IRL redeem Workflow operation not found.',
     });
   }
-  if (inspection.state === 'errored' || inspection.state === 'invalid') {
-    return routeResult(failureResponse({ code: 'internal', message: 'Admin IRL redeem finalization failed unexpectedly.' }), 'internal', {
-      operationId,
-      authOutcome: 'provider-failure',
+  if (reconciliation.decision === 'ensure-running') {
+    return projectFailure(operationId, recoveryErrorForReconciliation(reconciliation));
+  }
+  if (reconciliation.decision === 'complete') {
+    const reference = reconciliation.observation.state === 'succeeded'
+      ? reconciliation.observation.output.result
+      : undefined;
+    return projectPersistedCompletion(env, operationId, reference, signal);
+  }
+  if (reconciliation.decision === 'terminal') {
+    if (reconciliation.durable.state === 'failed' && !reconciliation.durable.failure.retryable) {
+      return projectFailure(operationId, reconciliation.durable.failure);
+    }
+    if (
+      reconciliation.observation.state === 'terminal-failure' &&
+      reconciliation.observation.error
+    ) {
+      return projectFailure(operationId, reconciliation.observation.error);
+    }
+    if (reconciliation.observation.state === 'terminated') {
+      return projectFailure(operationId, {
+        code: 'aborted',
+        message: 'Admin IRL redeem Workflow operation was terminated.',
+      });
+    }
+    if (
+      reconciliation.durable.state === 'active-confirmed' &&
+      reconciliation.observation.state === 'missing'
+    ) {
+      return projectFailure(operationId, {
+        code: 'aborted',
+        message: 'Admin IRL redeem Workflow operation is no longer available.',
+      });
+    }
+    return projectFailure(operationId, {
+      code: 'internal',
+      message: 'Admin IRL redeem finalization failed unexpectedly.',
     });
   }
-  if (inspection.state === 'complete') return projectComplete(env, operationId, inspection.output);
-  return routeResult(failureResponse({ code: 'internal', message: 'Admin IRL redeem finalization failed unexpectedly.' }), 'internal', {
-    operationId,
-    authOutcome: 'provider-failure',
-  });
+  return projectFailure(operationId, recoveryErrorForReconciliation(reconciliation));
+}
+
+async function confirmObservedWorkflowInstance(
+  request: Request,
+  env: Env,
+  operationId: AdminIrlRedeemFinalizeOperationId,
+  reconciliation: AdminIrlRedeemFinalizeWorkflowReconciliation,
+  dependencies: AdminIrlRedeemFinalizeWorkflowStartDependencies,
+  signal: AbortSignal,
+): Promise<AdminIrlRedeemFinalizeWorkflowReconciliation> {
+  try {
+    await confirmCreatedWorkflowInstance(
+      request,
+      env,
+      operationId,
+      dependencies,
+      signal,
+    );
+    const durable = await loadAdminIrlRedeemFinalizeDurableState(
+      env,
+      operationId,
+      dependencies.loadOperation,
+      signal,
+    );
+    return reconcileAdminIrlRedeemFinalizeInspection(durable, reconciliation.observation);
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
+    throw ensureRunningError(error);
+  }
+}
+
+async function confirmCreatedWorkflowInstance(
+  request: Request,
+  env: Env,
+  operationId: AdminIrlRedeemFinalizeOperationId,
+  dependencies: AdminIrlRedeemFinalizeWorkflowStartDependencies,
+  deadlineSignal: AbortSignal,
+): Promise<void> {
+  const recovery = dependencies.createRecoveryScope();
+  let confirmationError: unknown;
+  try {
+    await dependencies.confirmInstanceCreation({
+      env,
+      operationId,
+      signal: recovery.signal,
+    });
+  } catch (error) {
+    confirmationError = error;
+  } finally {
+    recovery.dispose();
+  }
+  if (request.signal.aborted) throw request.signal.reason;
+  if (deadlineSignal.aborted) throw deadlineSignal.reason;
+  if (confirmationError !== undefined) throw ensureRunningError(confirmationError);
+}
+
+async function reconcileAfterCreateEffect(
+  request: Request,
+  env: Env,
+  operationId: AdminIrlRedeemFinalizeOperationId,
+  payload: AdminIrlRedeemFinalizeWorkflowPayload,
+  effectError: unknown,
+  dependencies: AdminIrlRedeemFinalizeWorkflowStartDependencies,
+  deadlineSignal: AbortSignal,
+): Promise<AdminIrlRedeemFinalizeWorkflowReconciliation> {
+  if (effectError === undefined) {
+    throw new AdminIrlRedeemFinalizeError('internal', 'Admin IRL redeem finalization failed unexpectedly.');
+  }
+  const recovery = dependencies.createRecoveryScope();
+  try {
+    const observation = await inspectAdminIrlRedeemFinalizeWorkflow(
+      env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW,
+      operationId,
+      recovery.signal,
+    );
+    if (
+      observation.state === 'missing' &&
+      isAdminIrlRedeemFinalizeWorkflowResourceError(effectError)
+    ) {
+      const projected = adminIrlRedeemFinalizeWorkflowError(effectError);
+      await cleanupAdminIrlRedeemFinalizeWorkflow({
+        env,
+        error: projected,
+        operationId,
+        payload,
+        signal: recovery.signal,
+      });
+    }
+    if (observation.state !== 'missing' && observation.state !== 'unavailable') {
+      await dependencies.confirmInstanceCreation({
+        env,
+        operationId,
+        signal: recovery.signal,
+      });
+    }
+    const latest = await loadAdminIrlRedeemFinalizeDurableState(
+      env,
+      operationId,
+      dependencies.loadOperation,
+      recovery.signal,
+    );
+    if (request.signal.aborted) throw request.signal.reason;
+    if (deadlineSignal.aborted) throw ensureRunningError(effectError);
+    return reconcileAdminIrlRedeemFinalizeInspection(latest, observation);
+  } catch (error) {
+    if (request.signal.aborted) throw request.signal.reason;
+    throw error instanceof EnsureRunningError ? error : ensureRunningError(error);
+  } finally {
+    recovery.dispose();
+  }
+}
+
+async function reconcileAfterRestartEffect(
+  request: Request,
+  env: Env,
+  operationId: AdminIrlRedeemFinalizeOperationId,
+  durable: AdminIrlRedeemFinalizeDurableState,
+  instance: WorkflowInstance,
+  loadOperation: LoadOperation,
+  signal: AbortSignal,
+): Promise<AdminIrlRedeemFinalizeWorkflowReconciliation> {
+  let effectError: unknown;
+  try {
+    await raceWithSignal(instance.restart(), signal);
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
+    effectError = error;
+  }
+  try {
+    const reconciliation = await inspectAndReconcileAdminIrlRedeemFinalizeWorkflow(
+      env,
+      operationId,
+      durable,
+      loadOperation,
+      signal,
+      true,
+    );
+    if (request.signal.aborted) throw request.signal.reason;
+    return reconciliation;
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
+    throw ensureRunningError(effectError === undefined ? error : effectError);
+  }
 }
 
 function identityError(error: RequestIdentityError): AdminIrlRedeemFinalizeError {
@@ -251,6 +463,19 @@ function methodNotAllowed(): AdminIrlRedeemFinalizeWorkflowRouteResult {
   );
 }
 
+function completedReservationResult(
+  operationId: AdminIrlRedeemFinalizeOperationId,
+  reservation: Extract<Awaited<ReturnType<typeof reserveAdminIrlRedeemFinalizeWorkflow>>, { status: 'complete' }>,
+): AdminIrlRedeemFinalizeWorkflowRouteResult {
+  const result = reservation.result;
+  return routeResult(jsonResponse(result, 200), 'succeeded', {
+    operationId,
+    dropId: result.dropId,
+    targetKind: result.cards.length ? 'card_receipt' : 'pack',
+    ...(result.deliveryId === undefined ? {} : { deliveryId: result.deliveryId }),
+  });
+}
+
 export async function handleAdminIrlRedeemFinalizeWorkflowStart(
   request: Request,
   env: Env,
@@ -258,9 +483,7 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStart(
 ): Promise<AdminIrlRedeemFinalizeWorkflowRouteResult> {
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
-    const result = methodNotAllowed();
-    result.response.headers.set('Allow', 'POST, OPTIONS');
-    return result;
+    return methodNotAllowed();
   }
   const dependencies = { ...defaultStartDependencies, ...overrides };
   const deadline = dependencies.createDeadline(request, {
@@ -285,144 +508,194 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStart(
       throw new AdminIrlRedeemFinalizeError('internal', 'Admin IRL redeem finalization failed unexpectedly.');
     }
     operationId = computed;
-    const persisted = await loadAdminIrlRedeemFinalizeWorkflowOperation({ env, operationId });
-    if (persisted?.status === 'complete') {
-      const result = await loadAdminIrlRedeemFinalizeWorkflowResult({ env, operationId });
-      return routeResult(jsonResponse(result, 200), 'succeeded', {
+    let markInstanceCreationPending = false;
+    let durable = await loadAdminIrlRedeemFinalizeDurableState(
+      env,
+      operationId,
+      dependencies.loadOperation,
+      deadline.signal,
+    );
+    if (durable.state === 'complete' || (durable.state === 'failed' && !durable.failure.retryable)) {
+      return await projectReconciliation(
+        env,
         operationId,
-        dropId: result.dropId,
-        targetKind: result.cards.length ? 'card_receipt' : 'pack',
-        ...(result.deliveryId === undefined ? {} : { deliveryId: result.deliveryId }),
-      });
+        reconcileAdminIrlRedeemFinalizeInspection(durable, { state: 'missing' }),
+        deadline.signal,
+        body.dropId,
+      );
     }
-    if (persisted?.failure && !persisted.failure.retryable) {
-      return routeResult(failureResponse(persisted.failure), persisted.failure.code, {
+    if (durable.state !== 'absent') {
+      let initial = await inspectAndReconcileAdminIrlRedeemFinalizeWorkflow(
+        env,
         operationId,
-        authOutcome: ['invalid-argument', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted']
-          .includes(persisted.failure.code) ? 'rejected' : 'provider-failure',
-      });
+        durable,
+        dependencies.loadOperation,
+        deadline.signal,
+      );
+      if (initial.decision === 'confirm-instance') {
+        initial = await confirmObservedWorkflowInstance(
+          request,
+          env,
+          operationId,
+          initial,
+          dependencies,
+          deadline.signal,
+        );
+      }
+      if (['complete', 'terminal', 'pending'].includes(initial.decision)) {
+        return await projectReconciliation(env, operationId, initial, deadline.signal, body.dropId);
+      }
+      if (initial.decision === 'ensure-running' && initial.observation.state !== 'missing') {
+        return await projectReconciliation(env, operationId, initial, deadline.signal, body.dropId);
+      }
+      markInstanceCreationPending = initial.decision === 'ensure-running';
+      durable = initial.durable;
     }
-    let inspection = persisted
-      ? await inspectWorkflow(env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW, operationId, deadline.signal)
-      : undefined;
-    if (
-      inspection &&
-      (inspection.state === 'terminated' || inspection.state === 'errored' || inspection.state === 'invalid' ||
-        (inspection.state === 'complete' && (inspection.output.ok || !inspection.output.error.retryable)))
-    ) {
-      return await projectInspection(env, operationId, inspection);
-    }
-    const reservation = await reserveAdminIrlRedeemFinalizeWorkflow({
+    const reservation = await dependencies.reserveWorkflow({
       body,
       env,
+      markInstanceCreationPending,
       operationId,
       signal: deadline.signal,
       staffWallet,
     });
     if (reservation.status === 'complete') {
-      const result = reservation.result;
-      return routeResult(jsonResponse(result, 200), 'succeeded', {
-        operationId,
-        dropId: result.dropId,
-        targetKind: result.cards.length ? 'card_receipt' : 'pack',
-        ...(result.deliveryId === undefined ? {} : { deliveryId: result.deliveryId }),
-      });
+      return completedReservationResult(operationId, reservation);
     }
-    inspection = inspection || await inspectWorkflow(
-      env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW,
+    durable = await loadAdminIrlRedeemFinalizeDurableState(
+      env,
       operationId,
+      dependencies.loadOperation,
       deadline.signal,
     );
-    if (inspection.state === 'missing') {
+    let ready = await inspectAndReconcileAdminIrlRedeemFinalizeWorkflow(
+      env,
+      operationId,
+      durable,
+      dependencies.loadOperation,
+      deadline.signal,
+    );
+    if (ready.decision === 'confirm-instance') {
+      ready = await confirmObservedWorkflowInstance(
+        request,
+        env,
+        operationId,
+        ready,
+        dependencies,
+        deadline.signal,
+      );
+    }
+    if (ready.decision !== 'create' && ready.decision !== 'restart') {
+      return await projectReconciliation(env, operationId, ready, deadline.signal, body.dropId);
+    }
+    let afterEffect: AdminIrlRedeemFinalizeWorkflowReconciliation;
+    if (ready.decision === 'create') {
+      let effectError: unknown;
       try {
         await raceWithSignal(env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW.createBatch([{
           id: operationId,
           params: reservation.payload,
         }]), deadline.signal);
-        return routeResult(pendingResponse(operationId), 'pending', { operationId, dropId: body.dropId });
       } catch (error) {
-        const recovery = dependencies.createRecoveryScope();
-        try {
-          inspection = await inspectWorkflow(
-            env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW,
-            operationId,
-            recovery.signal,
-          );
-          if (inspection.state === 'missing') {
-            if (isDefinitiveAdminIrlRedeemFinalizeWorkflowCreateFailure(error)) {
-              const projected = adminIrlRedeemFinalizeWorkflowError(error);
-              await cleanupAdminIrlRedeemFinalizeWorkflow({
-                env,
-                error: projected,
-                operationId,
-                payload: reservation.payload,
-                signal: recovery.signal,
-              });
-            }
-            throw error;
-          }
-        } finally {
-          recovery.dispose();
-        }
-        if (deadline.signal.aborted) throw error;
+        effectError = error;
       }
-    }
-    if (inspection.state === 'complete' && !inspection.output.ok && inspection.output.error.retryable) {
-      const current = await inspectWorkflow(
-        env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW,
-        operationId,
-        deadline.signal,
-      );
-      if (current.state === 'pending') {
-        return routeResult(pendingResponse(operationId), 'pending', { operationId, dropId: body.dropId });
-      }
-      if (current.state !== 'complete' || current.output.ok || !current.output.error.retryable) {
-        return await projectInspection(env, operationId, current);
-      }
-      try {
-        await raceWithSignal(current.instance.restart(), deadline.signal);
-      } catch (error) {
-        const latest = await inspectWorkflow(
-          env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW,
+      if (effectError === undefined) {
+        await confirmCreatedWorkflowInstance(
+          request,
+          env,
           operationId,
+          dependencies,
           deadline.signal,
         );
-        if (latest.state !== 'pending') throw error;
+        return routeResult(pendingResponse(operationId), 'pending', {
+          operationId,
+          dropId: body.dropId,
+        });
       }
-      return routeResult(pendingResponse(operationId), 'pending', { operationId, dropId: body.dropId });
+      afterEffect = await reconcileAfterCreateEffect(
+        request,
+        env,
+        operationId,
+        reservation.payload,
+        effectError,
+        dependencies,
+        deadline.signal,
+      );
+    } else {
+      if (ready.observation.state !== 'retryable-failure') {
+        throw new AdminIrlRedeemFinalizeError('internal', 'Admin IRL redeem finalization failed unexpectedly.');
+      }
+      afterEffect = await reconcileAfterRestartEffect(
+        request,
+        env,
+        operationId,
+        ready.durable,
+        ready.observation.instance,
+        dependencies.loadOperation,
+        deadline.signal,
+      );
     }
-    return await projectInspection(env, operationId, inspection);
+    const decision = ['create', 'restart', 'confirm-instance'].includes(afterEffect.decision)
+      ? 'ensure-running'
+      : afterEffect.decision;
+    return await projectReconciliation(
+      env,
+      operationId,
+      { ...afterEffect, decision },
+      deadline.signal,
+      body.dropId,
+    );
   } catch (error) {
     if (isRequestCancellationError(request, error)) throw error;
     const normalized = deadline.timedOut()
       ? new AdminIrlRedeemFinalizeError('deadline-exceeded', 'Admin IRL redeem finalization timed out.')
       : error instanceof RequestIdentityError
         ? identityError(error)
-        : new AdminIrlRedeemFinalizeError(
-            adminIrlRedeemFinalizeWorkflowError(error).code,
-            adminIrlRedeemFinalizeWorkflowError(error).message,
-          );
-    return routeResult(failureResponse(normalized), normalized.code, {
+        : error instanceof AdminIrlRedeemFinalizeError
+          ? error
+          : new AdminIrlRedeemFinalizeError(
+              adminIrlRedeemFinalizeWorkflowError(error).code,
+              adminIrlRedeemFinalizeWorkflowError(error).message,
+            );
+    const recovery = error instanceof EnsureRunningError ||
+        (error instanceof CommerceRepositoryError && error.code === 'unavailable') ||
+        deadline.timedOut() ||
+        (error instanceof RequestIdentityError && error.kind !== 'invalid-token')
+      ? ADMIN_IRL_REDEEM_FINALIZE_RECOVERY
+      : undefined;
+    return routeResult(failureResponse({
+      code: normalized.code,
+      message: normalized.message,
+      ...(recovery ? { recovery } : {}),
+    }), normalized.code, {
       ...(operationId ? { operationId } : {}),
-      authOutcome: ['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted']
-        .includes(normalized.code) ? 'rejected' : 'provider-failure',
+      authOutcome: authOutcomeForCode(normalized.code),
     });
   } finally {
     deadline.dispose();
   }
 }
 
-async function readStatusOperationId(request: Request, signal: AbortSignal): Promise<AdminIrlRedeemFinalizeOperationId> {
+async function readStatusOperationId(
+  request: Request,
+  signal: AbortSignal,
+): Promise<AdminIrlRedeemFinalizeOperationId> {
   const value = await readBoundedRequestJson(request, {
     maxBytes: STATUS_MAX_BYTES,
     signal,
-    createError: () => new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid Admin IRL redeem Workflow status request.'),
+    createError: () => new AdminIrlRedeemFinalizeError(
+      'invalid-argument',
+      'Invalid Admin IRL redeem Workflow status request.',
+    ),
   });
   if (
     !isRecord(value) || Object.keys(value).length !== 1 ||
     !isAdminIrlRedeemFinalizeOperationId(value.operationId)
   ) {
-    throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid Admin IRL redeem Workflow status request.');
+    throw new AdminIrlRedeemFinalizeError(
+      'invalid-argument',
+      'Invalid Admin IRL redeem Workflow status request.',
+    );
   }
   return value.operationId;
 }
@@ -430,14 +703,14 @@ async function readStatusOperationId(request: Request, signal: AbortSignal): Pro
 export async function handleAdminIrlRedeemFinalizeWorkflowStatus(
   request: Request,
   env: Env,
+  overrides: Partial<AdminIrlRedeemFinalizeWorkflowStatusDependencies> = {},
 ): Promise<AdminIrlRedeemFinalizeWorkflowRouteResult> {
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
-    const result = methodNotAllowed();
-    result.response.headers.set('Allow', 'POST, OPTIONS');
-    return result;
+    return methodNotAllowed();
   }
-  const deadline = createRequestDeadline(request, {
+  const dependencies = { ...defaultStatusDependencies, ...overrides };
+  const deadline = dependencies.createDeadline(request, {
     timeoutMs: ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
     timeoutMessage: 'Admin IRL redeem Workflow status request timed out',
   });
@@ -449,29 +722,63 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStatus(
       throw new AdminIrlRedeemFinalizeError('unauthenticated', 'Staff wallet authentication is required.');
     }
     resolveAdminIrlRedeemFinalizeStaffWallet(identity);
-    const operation = await loadAdminIrlRedeemFinalizeWorkflowOperation({ env, operationId });
-    if (!operation) {
-      return routeResult(failureResponse({ code: 'not-found', message: 'Admin IRL redeem Workflow operation not found.' }), 'not-found', {
-        operationId,
-        authOutcome: 'rejected',
-      });
-    }
-    const inspection = await inspectWorkflow(env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW, operationId, deadline.signal);
-    return await projectInspection(env, operationId, inspection);
+    const durable = await loadAdminIrlRedeemFinalizeDurableState(
+      env,
+      operationId,
+      dependencies.loadOperation,
+      deadline.signal,
+    );
+    let reconciliation = durable.state === 'absent' || durable.state === 'complete' ||
+        (durable.state === 'failed' && !durable.failure.retryable)
+      ? reconcileAdminIrlRedeemFinalizeInspection(durable, { state: 'missing' })
+      : await inspectAndReconcileAdminIrlRedeemFinalizeWorkflow(
+          env,
+          operationId,
+          durable,
+          dependencies.loadOperation,
+          deadline.signal,
+        );
+    reconciliation = {
+      ...reconciliation,
+      decision: projectAdminIrlRedeemFinalizeStatusDecision(reconciliation.decision),
+    };
+    return await projectReconciliation(env, operationId, reconciliation, deadline.signal);
   } catch (error) {
     if (isRequestCancellationError(request, error)) throw error;
+    if (operationId && (
+      deadline.timedOut() ||
+      (error instanceof CommerceRepositoryError && error.code === 'unavailable') ||
+      (error instanceof RequestIdentityError && error.kind !== 'invalid-token')
+    )) {
+      return routeResult(pendingResponse(operationId), 'pending-unavailable', {
+        operationId,
+        authOutcome: 'provider-failure',
+      });
+    }
     const normalized = deadline.timedOut()
-      ? new AdminIrlRedeemFinalizeError('deadline-exceeded', 'Admin IRL redeem Workflow status request timed out.')
+      ? new AdminIrlRedeemFinalizeError(
+          'deadline-exceeded',
+          'Admin IRL redeem Workflow status request timed out.',
+        )
       : error instanceof RequestIdentityError
         ? identityError(error)
-        : new AdminIrlRedeemFinalizeError(
-            adminIrlRedeemFinalizeWorkflowError(error).code,
+        : error instanceof AdminIrlRedeemFinalizeError
+          ? error
+          : new AdminIrlRedeemFinalizeError(
+              adminIrlRedeemFinalizeWorkflowError(error).code,
             adminIrlRedeemFinalizeWorkflowError(error).message,
           );
-    return routeResult(failureResponse(normalized), normalized.code, {
+    const recovery = deadline.timedOut() ||
+        (error instanceof RequestIdentityError && error.kind !== 'invalid-token')
+      ? ADMIN_IRL_REDEEM_FINALIZE_RECOVERY
+      : undefined;
+    return routeResult(failureResponse({
+      code: normalized.code,
+      message: normalized.message,
+      ...(recovery ? { recovery } : {}),
+    }), normalized.code, {
       ...(operationId ? { operationId } : {}),
-      authOutcome: ['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted']
-        .includes(normalized.code) ? 'rejected' : 'provider-failure',
+      authOutcome: authOutcomeForCode(normalized.code),
     });
   } finally {
     deadline.dispose();

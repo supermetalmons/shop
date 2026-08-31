@@ -40,6 +40,7 @@ import {
   adminIrlRedeemFinalizeWorkflowError,
   adminIrlRedeemFinalizeTestHooks,
   cleanupAdminIrlRedeemFinalizeWorkflow,
+  confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation,
   loadAdminIrlRedeemFinalizeWorkflowResult,
   prepareAdminIrlRedeemFinalizeWorkflowDraft,
   publishAdminIrlRedeemFinalizeWorkflow,
@@ -193,6 +194,23 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
   assert.equal(document?.fields.processingAttemptId, expectedOperationId);
   assert.equal(document?.fields.processingLeaseExpiresAt, 1_700_001_800_000);
   assert.equal((document?.fields.workflowFinalizeV1 as { version?: unknown }).version, 1);
+  assert.equal((document?.fields.workflowFinalizeV1 as { instanceCreationPending?: unknown }).instanceCreationPending, true);
+
+  assert.deepEqual(await confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation({
+    env: { COMMERCE_DB: harness.db },
+    operationId: expectedOperationId,
+    signal: new AbortController().signal,
+  }), { confirmed: true });
+  document = await deliveryReceiptRuntime.readDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_000_000, providerFetch: fetch, signal: new AbortController().signal },
+    `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+  );
+  assert.equal((document?.fields.workflowFinalizeV1 as { instanceCreationPending?: unknown }).instanceCreationPending, undefined);
+  assert.deepEqual(await confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation({
+    env: { COMMERCE_DB: harness.db },
+    operationId: expectedOperationId,
+    signal: new AbortController().signal,
+  }), { confirmed: false });
 
   const requestKey = commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID);
   const repository = new D1CommerceRepository(harness.db);
@@ -239,6 +257,26 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
   assert.deepEqual(replayExecution.config, initialExecution.config);
   assert.deepEqual(replayExecution.onchain, pinnedOnchain);
   assert.equal(replayExecution.failure, undefined);
+  assert.equal(replayExecution.instanceCreationPending, undefined);
+
+  assert.deepEqual(await confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation({
+    env: { COMMERCE_DB: harness.db },
+    operationId: expectedOperationId,
+    signal: new AbortController().signal,
+  }), { confirmed: false });
+  await reserveAdminIrlRedeemFinalizeWorkflow({
+    body,
+    env: { COMMERCE_DB: harness.db },
+    operationId: expectedOperationId,
+    signal: new AbortController().signal,
+    staffWallet: OWNER,
+    nowMs: 1_700_000_015_000,
+  });
+  document = await deliveryReceiptRuntime.readDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_015_000, providerFetch: fetch, signal: new AbortController().signal },
+    `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
+  );
+  assert.equal((document?.fields.workflowFinalizeV1 as { instanceCreationPending?: unknown }).instanceCreationPending, undefined);
 
   stored = await repository.get(requestKey);
   assert.ok(stored);
@@ -262,6 +300,7 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
   await reserveAdminIrlRedeemFinalizeWorkflow({
     body,
     env: { COMMERCE_DB: harness.db },
+    markInstanceCreationPending: true,
     operationId: expectedOperationId,
     signal: new AbortController().signal,
     staffWallet: OWNER,
@@ -276,6 +315,7 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
   assert.deepEqual(replayExecution.config, initialExecution.config);
   assert.deepEqual(replayExecution.onchain, pinnedOnchain);
   assert.equal(replayExecution.failure, undefined);
+  assert.equal(replayExecution.instanceCreationPending, true);
 
   const changedBody = { ...body, transferSignature: bs58.encode(Keypair.generate().secretKey) };
   const changedOperationId = await adminIrlRedeemFinalizeOperationId(changedBody, OWNER);
@@ -318,6 +358,33 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     message: 'Admin IRL redeem finalization requirements are not satisfied.',
     retryable: false,
   });
+});
+
+test('Admin IRL Workflow instance confirmation bounds a non-cooperative operation lookup', async () => {
+  let lookupStarted!: () => void;
+  const started = new Promise<void>((resolve) => { lookupStarted = resolve; });
+  const statement = {
+    bind() { return this; },
+  } as unknown as D1PreparedStatement;
+  const db = {
+    prepare: () => statement,
+    batch: async () => {
+      lookupStarted();
+      return new Promise<never>(() => undefined);
+    },
+  } as unknown as D1Database;
+  const controller = new AbortController();
+  const reason = new DOMException('Confirmation timed out.', 'TimeoutError');
+  const confirmation = confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation({
+    env: { COMMERCE_DB: db },
+    operationId: `airf-v1-${'a'.repeat(64)}`,
+    signal: controller.signal,
+  });
+
+  await started;
+  controller.abort(reason);
+
+  await assert.rejects(confirmation, (error: unknown) => error === reason);
 });
 
 test('Admin IRL marker reuse is drafted before its D1-only publication step', async () => {

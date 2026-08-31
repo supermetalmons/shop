@@ -1,9 +1,11 @@
 import { summarizePayloadShape } from '../../shared/logSummaries.ts';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_HTTP_TIMEOUT_MS,
+  ADMIN_IRL_REDEEM_FINALIZE_RECOVERY,
   ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
   STRIPE_CHECKOUT_RETRY_HEADER,
   STRIPE_CHECKOUT_RETRY_SAME_OPERATION,
+  type AdminIrlRedeemFinalizeRecovery,
 } from '../../shared/contracts.ts';
 import { ensureAnonymousSession } from '../lib/anonymousSession';
 import { AUTHENTICATED_API_ORIGIN } from '../lib/authenticatedApiOrigin';
@@ -34,6 +36,8 @@ type ProfileApiErrorPayload = {
   code: string;
   message: string;
   details?: unknown;
+  recovery?: AdminIrlRedeemFinalizeRecovery;
+  retryAfterMs?: number;
   status?: number;
   retrySameOperation?: boolean;
 };
@@ -41,6 +45,8 @@ type ProfileApiErrorPayload = {
 export class ProfileApiError extends Error {
   readonly code: string;
   readonly details?: unknown;
+  readonly recovery?: AdminIrlRedeemFinalizeRecovery;
+  readonly retryAfterMs?: number;
   readonly status?: number;
   readonly retrySameOperation: boolean;
 
@@ -49,6 +55,8 @@ export class ProfileApiError extends Error {
     this.name = 'ProfileApiError';
     this.code = payload.code;
     this.details = payload.details;
+    this.recovery = payload.recovery;
+    this.retryAfterMs = payload.retryAfterMs;
     this.status = payload.status;
     this.retrySameOperation = payload.retrySameOperation === true;
   }
@@ -59,28 +67,59 @@ function retrySameOperation(response: Response): boolean {
     response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER) === STRIPE_CHECKOUT_RETRY_SAME_OPERATION;
 }
 
-function unrecognizedResponseRetrySameOperation(
-  pathname: AuthenticatedApiPath,
+function replaySafeUnrecognizedResponse(
   response: Response,
+  replaySafe: boolean,
 ): boolean {
-  return pathname === '/checkout/session' && response.status >= 500;
+  return replaySafe && response.status >= 500;
+}
+
+const PROFILE_API_MAX_RETRY_AFTER_MS = 60_000;
+
+function responseRetryAfterMs(response: Response): number | undefined {
+  const value = response.headers.get('Retry-After')?.trim();
+  if (!value || !/^\d+$/.test(value)) return undefined;
+  const milliseconds = Number(value) * 1_000;
+  return Number.isSafeInteger(milliseconds)
+    ? Math.min(milliseconds, PROFILE_API_MAX_RETRY_AFTER_MS)
+    : PROFILE_API_MAX_RETRY_AFTER_MS;
 }
 
 function profileApiErrorPayload(
   value: unknown,
   response: Response,
-  pathname: AuthenticatedApiPath,
+  replaySafe: boolean,
 ): ProfileApiErrorPayload {
   const status = response.status;
-  const responseMetadata = { status, retrySameOperation: retrySameOperation(response) };
+  const retryAfterMs = responseRetryAfterMs(response);
+  const responseMetadata = {
+    status,
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+    retrySameOperation: retrySameOperation(response),
+  };
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const error = (value as Record<string, unknown>).error;
+    if (error === 'commerce-maintenance' && status === 503) {
+      return {
+        code: 'commerce-maintenance',
+        message: 'Commerce is temporarily unavailable.',
+        ...responseMetadata,
+        retrySameOperation: responseMetadata.retrySameOperation || replaySafe,
+      };
+    }
     if (error && typeof error === 'object' && !Array.isArray(error)) {
       const code = (error as Record<string, unknown>).code;
       const message = (error as Record<string, unknown>).message;
       const details = (error as Record<string, unknown>).details;
+      const recovery = (error as Record<string, unknown>).recovery;
       if (typeof code === 'string' && code && typeof message === 'string' && message) {
-        return { code, message, ...(details === undefined ? {} : { details }), ...responseMetadata };
+        return {
+          code,
+          message,
+          ...(details === undefined ? {} : { details }),
+          ...(recovery === ADMIN_IRL_REDEEM_FINALIZE_RECOVERY ? { recovery } : {}),
+          ...responseMetadata,
+        };
       }
     }
   }
@@ -89,7 +128,7 @@ function profileApiErrorPayload(
     message: 'Profile API request failed.',
     ...responseMetadata,
     retrySameOperation: responseMetadata.retrySameOperation ||
-      unrecognizedResponseRetrySameOperation(pathname, response),
+      replaySafeUnrecognizedResponse(response, replaySafe),
   };
 }
 
@@ -153,6 +192,7 @@ export type AuthenticatedApiCallOptions = {
   headers?: Readonly<Record<string, string>>;
   onCredential?: (authSubject: string) => void;
   onResponseStatus?: (status: number) => void;
+  replaySafe?: boolean;
   timeoutMs?: number;
 };
 
@@ -204,10 +244,14 @@ export function profileApiTimeoutMs(pathname: AuthenticatedApiPath): number {
   return defaultProfileApiDependencies.timeoutMs;
 }
 
-function profileApiDeadlineError(retrySameOperation = true): ProfileApiError {
+function profileApiDeadlineError(
+  retrySameOperation = true,
+  retryAfterMs?: number,
+): ProfileApiError {
   return new ProfileApiError({
     code: 'deadline-exceeded',
     message: 'Profile API request timed out.',
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
     retrySameOperation,
   });
 }
@@ -244,6 +288,7 @@ export async function requestProfileApi<Req>(
   const callId = DEBUG_API ? makeCallId() : undefined;
   const controller = new AbortController();
   const requestedTimeoutMs = options?.timeoutMs;
+  const replaySafe = options?.replaySafe === true;
   const timeoutMs = typeof requestedTimeoutMs === 'number' && Number.isFinite(requestedTimeoutMs)
     ? Math.max(1, Math.min(dependencies.timeoutMs, Math.floor(requestedTimeoutMs)))
     : dependencies.timeoutMs;
@@ -252,10 +297,12 @@ export async function requestProfileApi<Req>(
     timeoutMs,
   );
   let initialAuthSubject: string | undefined;
-  let deadlineRetrySameOperation = true;
+  let deadlineRetryAfterMs: number | undefined;
+  let deadlineRetrySameOperation = replaySafe;
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      deadlineRetrySameOperation = true;
+      deadlineRetryAfterMs = undefined;
+      deadlineRetrySameOperation = replaySafe;
       try {
         const credential = await waitForProfileApiValue(dependencies.getCredential(attempt > 0), controller.signal);
         const token = credential.token;
@@ -285,9 +332,10 @@ export async function requestProfileApi<Req>(
           signal: controller.signal,
         });
         options?.onResponseStatus?.(response.status);
-        deadlineRetrySameOperation = response.ok ||
+        deadlineRetryAfterMs = responseRetryAfterMs(response);
+        deadlineRetrySameOperation = (replaySafe && response.ok) ||
           retrySameOperation(response) ||
-          unrecognizedResponseRetrySameOperation(pathname, response);
+          replaySafeUnrecognizedResponse(response, replaySafe);
         let payload: unknown;
         try {
           payload = await waitForProfileApiValue(response.json(), controller.signal);
@@ -297,14 +345,15 @@ export async function requestProfileApi<Req>(
             code: 'unavailable',
             message: 'Profile API returned malformed JSON.',
             details: error,
+            ...(deadlineRetryAfterMs === undefined ? {} : { retryAfterMs: deadlineRetryAfterMs }),
             status: response.status,
-            retrySameOperation: response.ok ||
+            retrySameOperation: (replaySafe && response.ok) ||
               retrySameOperation(response) ||
-              unrecognizedResponseRetrySameOperation(pathname, response),
+              replaySafeUnrecognizedResponse(response, replaySafe),
           });
         }
         if (response.status === 401 && attempt === 0) continue;
-        if (!response.ok) throw new ProfileApiError(profileApiErrorPayload(payload, response, pathname));
+        if (!response.ok) throw new ProfileApiError(profileApiErrorPayload(payload, response, replaySafe));
         if (DEBUG_API) {
           console.info(`[mons/api] ← ${pathname}`, {
             callId,
@@ -315,7 +364,7 @@ export async function requestProfileApi<Req>(
         return payload;
       } catch (error) {
         const normalizedError = controller.signal.aborted
-          ? profileApiDeadlineError(deadlineRetrySameOperation)
+          ? profileApiDeadlineError(deadlineRetrySameOperation, deadlineRetryAfterMs)
           : error;
         if (attempt === 0 && normalizedError instanceof ProfileApiError && normalizedError.code === 'unauthenticated') {
           continue;
