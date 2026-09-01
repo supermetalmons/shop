@@ -14,13 +14,8 @@ import {
   verifyNotificationEnqueueRequest,
 } from '../../../../shared/notificationEnqueueAuth.js';
 import { isRequestCancellationError, readBoundedRequestText } from './boundedRequest.js';
+import { jsonResponse } from './httpResponse.js';
 import { processNotificationEmailMessage } from './notificationEmailConsumer.js';
-
-const RESPONSE_HEADERS = {
-  'Cache-Control': 'no-store',
-  'Content-Type': 'application/json; charset=utf-8',
-  'X-Content-Type-Options': 'nosniff',
-};
 
 type NotificationEnqueueDependencies = {
   nowMs: () => number;
@@ -33,7 +28,7 @@ const defaultDependencies: NotificationEnqueueDependencies = {
 };
 
 function response(status: number, body: Record<string, unknown>): Response {
-  return new Response(JSON.stringify(body), { status, headers: RESPONSE_HEADERS });
+  return jsonResponse(body, status);
 }
 
 async function cancelBody(request: Request): Promise<void> {

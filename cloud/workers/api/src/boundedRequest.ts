@@ -78,6 +78,25 @@ export function createTimedAbortScope(
   };
 }
 
+export async function sleepWithSignal(milliseconds: number, signal: AbortSignal): Promise<void> {
+  validateTimeoutMs(milliseconds);
+  if (signal.aborted) throw signal.reason;
+  await new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const timeout = setTimeout(finish, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+}
+
 export async function raceWithSignal<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) {
     void operation.catch(() => undefined);

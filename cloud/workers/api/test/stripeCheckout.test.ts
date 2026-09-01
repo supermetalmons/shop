@@ -568,6 +568,113 @@ test('checkout provider races preserve abort-first and provider-first outcomes',
   assert.equal(onchainResult.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), null);
 });
 
+test('checkout on-chain config keeps stable bounded two-attempt provider reads', async () => {
+  let retryCalls = 0;
+  const redirects: Array<RequestRedirect | undefined> = [];
+  const requestIds: unknown[] = [];
+  const retried = await handleStripeCheckoutSession(
+    request({ dropId: DROP.dropId }),
+    env(),
+    dependencies({
+      loadOnchainConfig: undefined,
+      providerFetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        retryCalls += 1;
+        redirects.push(init?.redirect);
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        requestIds.push(body.id);
+        if (retryCalls === 1) return new Response('temporary', { status: 503 });
+        return Response.json({ jsonrpc: '2.0', id: body.id, result: { value: null } });
+      },
+    }),
+  );
+  assert.equal(retryCalls, 2);
+  assert.deepEqual(redirects, [undefined, undefined]);
+  assert.deepEqual(requestIds, ['stripe-checkout-config', 'stripe-checkout-config']);
+  assert.equal(retried.response.status, 409);
+  assert.equal((await retried.response.json() as { error: { code: string } }).error.code, 'failed-precondition');
+
+  let oversizedCalls = 0;
+  const oversized = await handleStripeCheckoutSession(
+    request({ dropId: DROP.dropId }),
+    env(),
+    dependencies({
+      loadOnchainConfig: undefined,
+      providerFetch: async () => {
+        oversizedCalls += 1;
+        return new Response('{}', {
+          headers: {
+            'Content-Length': String(256 * 1024 + 1),
+            'Content-Type': 'application/json',
+          },
+        });
+      },
+    }),
+  );
+  assert.equal(oversizedCalls, 1);
+  assert.equal(oversized.response.status, 502);
+  assert.deepEqual(await oversized.response.json(), {
+    ok: false,
+    error: { code: 'unavailable', message: 'Stripe checkout is temporarily unavailable.' },
+  });
+});
+
+test('checkout rejects truthy malformed RPC errors even when a result is present', async () => {
+  let calls = 0;
+  const result = await handleStripeCheckoutSession(
+    request({ dropId: DROP.dropId }),
+    env(),
+    dependencies({
+      loadOnchainConfig: undefined,
+      providerFetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+        calls += 1;
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return Response.json({
+          jsonrpc: '2.0',
+          id: body.id,
+          error: ['malformed'],
+          result: { value: null },
+        });
+      },
+    }),
+  );
+
+  assert.equal(calls, 1);
+  assert.equal(result.response.status, 502);
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: {
+      code: 'unavailable',
+      message: 'On-chain checkout configuration is temporarily unavailable.',
+    },
+  });
+});
+
+test('checkout does not retry response stream failures', async () => {
+  let calls = 0;
+  const result = await handleStripeCheckoutSession(
+    request({ dropId: DROP.dropId }),
+    env(),
+    dependencies({
+      loadOnchainConfig: undefined,
+      providerFetch: async () => {
+        calls += 1;
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(new Error('connection reset'));
+          },
+        }), { headers: { 'Content-Type': 'application/json' } });
+      },
+    }),
+  );
+
+  assert.equal(calls, 1);
+  assert.equal(result.response.status, 502);
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'unavailable', message: 'Stripe checkout is temporarily unavailable.' },
+  });
+});
+
 test('checkout marks post-provider persistence failures as uncertain', async () => {
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),

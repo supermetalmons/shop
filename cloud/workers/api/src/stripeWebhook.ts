@@ -30,6 +30,7 @@ import {
   type DeferredWork,
 } from './deferredWork.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
+import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -124,15 +125,7 @@ const defaultDependencies: StripeWebhookDependencies = {
 };
 
 function jsonResponse(body: unknown, status: number, extraHeaders: HeadersInit = {}): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'X-Content-Type-Options': 'nosniff',
-      ...extraHeaders,
-    },
-  });
+  return sharedJsonResponse(body, status, { headers: extraHeaders });
 }
 
 function normalizeMetadata(value: unknown): Record<string, string> {

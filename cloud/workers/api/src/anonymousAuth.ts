@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.js';
 import { isRequestCancellationError, readBoundedRequestJson } from './boundedRequest.js';
+import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
 import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
 
 const ANONYMOUS_AUTH_SESSION_PATH = '/auth/anonymous/session';
@@ -131,15 +132,10 @@ function sessionCookie(originUrl: URL, token: string, maxAgeSeconds: number): st
 }
 
 function jsonResponse(body: unknown, status: number, cookie?: string): Response {
-  const response = Response.json(body, {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff',
-    },
+  return sharedJsonResponse(body, status, {
+    contentType: 'application/json',
+    ...(cookie ? { headers: { 'Set-Cookie': cookie } } : {}),
   });
-  if (cookie) response.headers.set('Set-Cookie', cookie);
-  return response;
 }
 
 async function parseEmptyBody(request: Request): Promise<void> {

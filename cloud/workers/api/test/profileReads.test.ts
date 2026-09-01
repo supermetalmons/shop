@@ -23,7 +23,7 @@ import {
   type ProfileProviderFetch,
   type ProfileReadPath,
 } from '../src/profileReads.ts';
-import { readBoundedJson } from '../src/boundedResponse.ts';
+import { readBoundedResponseJson } from '../src/boundedResponse.ts';
 import {
   D1CommerceRepository,
   commerceKeys,
@@ -42,6 +42,15 @@ const OTHER = 'So11111111111111111111111111111111111111112';
 const SYSTEM_OWNER = '11111111111111111111111111111111';
 const UID = 'auth-user-one';
 const NOW_MS = Date.parse('2026-08-18T12:00:00.000Z');
+
+function readBoundedJson(response: Response, maxBytes: number, signal: AbortSignal): Promise<unknown> {
+  return readBoundedResponseJson(response, {
+    maxBytes,
+    signal,
+    contentType: 'require-json',
+    createError: () => new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.'),
+  });
+}
 
 test('profile CORS permits checkout operation headers and exposes retry guidance', () => {
   const request = new Request('https://api.mons.shop/checkout/session', {

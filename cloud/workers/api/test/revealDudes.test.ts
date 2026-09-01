@@ -1442,11 +1442,15 @@ test('RPC calls reject malformed result and error envelopes', async () => {
 });
 
 test('RPC calls retry transient JSON-RPC errors for idempotent reads', async () => {
+  const acceptHeaders: Array<string | null> = [];
   let fetches = 0;
+  const requestIds: string[] = [];
   const result = await revealDudesTestHooks.rpcCall(
     providerContext(async (_input, init) => {
       fetches += 1;
+      acceptHeaders.push(new Headers(init?.headers).get('Accept'));
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requestIds.push(String(body.id));
       return fetches === 1
         ? rpcResponse(body, undefined, { code: -32005, message: 'Node is temporarily unhealthy' })
         : rpcResponse(body, { value: 'ok' });
@@ -1458,6 +1462,48 @@ test('RPC calls retry transient JSON-RPC errors for idempotent reads', async () 
 
   assert.deepEqual(result, { value: 'ok' });
   assert.equal(fetches, 2);
+  assert.deepEqual(acceptHeaders, ['application/json', 'application/json']);
+  assert.equal(requestIds.length, 2);
+  assert.notEqual(requestIds[0], requestIds[1]);
+  assert.ok(requestIds.every((id) => (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)
+  )));
+});
+
+test('RPC calls retry every HTTP failure only when attempts remain', async () => {
+  const runtime = revealDudesTestHooks.runtimeForDrop(DROP_ID);
+  let readFetches = 0;
+  const result = await revealDudesTestHooks.rpcCall(
+    providerContext(async (_input, init) => {
+      readFetches += 1;
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return readFetches === 1
+        ? new Response(null, { status: 522 })
+        : rpcResponse(body, { value: 'ok' });
+    }),
+    runtime,
+    'getAccountInfo',
+    [],
+  );
+
+  assert.deepEqual(result, { value: 'ok' });
+  assert.equal(readFetches, 2);
+
+  let submissionFetches = 0;
+  await assert.rejects(
+    revealDudesTestHooks.rpcCall(
+      providerContext(async () => {
+        submissionFetches += 1;
+        return new Response(null, { status: 522 });
+      }),
+      runtime,
+      'sendTransaction',
+      [],
+      { attempts: 1 },
+    ),
+    (error: unknown) => error instanceof RevealDudesError && error.code === 'unavailable',
+  );
+  assert.equal(submissionFetches, 1);
 });
 
 test('latest blockhash parsing preserves its strict RPC context', async () => {

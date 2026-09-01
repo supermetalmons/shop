@@ -62,6 +62,7 @@ import { CommerceWriteConflict } from './commerceRepository.js';
 import { createStripeCheckoutStore } from './stripeCheckout/store.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
+import { heliusRpcUrl } from './solanaProvider.js';
 
 const RPC_TIMEOUT_MS = 8_000;
 const TX_SEND_TIMEOUT_MS = 12_000;
@@ -146,14 +147,10 @@ export function fulfillmentRuntime(rawDropId: unknown): FulfillmentRuntime {
   };
 }
 
-function heliusOrigin(cluster: FulfillmentRuntime['cluster']): string {
-  return cluster === 'mainnet-beta' ? 'https://mainnet.helius-rpc.com' : 'https://devnet.helius-rpc.com';
-}
-
 function connection(runtime: FulfillmentRuntime, apiKey: string, signal: AbortSignal): Connection {
   const normalized = apiKey.trim();
   if (!normalized) throw fulfillmentError('unavailable', 'HELIUS_API_KEY is not configured');
-  return new Connection(`${heliusOrigin(runtime.cluster)}/?api-key=${encodeURIComponent(normalized)}`, {
+  return new Connection(heliusRpcUrl(runtime.cluster, normalized), {
     commitment: 'confirmed',
     disableRetryOnRateLimit: true,
     fetch: ((input, init) => fetch(input, {

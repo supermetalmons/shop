@@ -45,11 +45,13 @@ import {
   isStaffRequestIdentity,
   verifyRequestIdentity,
 } from './requestIdentity.js';
+import { httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
 
 export { ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH };
 
 const STATUS_MAX_BYTES = 256;
 const EMPTY_METRICS = Object.freeze({ upstreamCalls: 0, providerDurationMs: 0 });
+const TIMING_RESPONSE_HEADERS = Object.freeze({ 'Timing-Allow-Origin': '*' });
 
 type LoadOperation = AdminIrlRedeemFinalizeLoadOperation;
 
@@ -100,31 +102,6 @@ export type AdminIrlRedeemFinalizeWorkflowRouteResult = Readonly<{
   outcome: string;
 }>;
 
-function statusForCode(code: AdminIrlRedeemFinalizeErrorCode): number {
-  if (code === 'invalid-argument') return 400;
-  if (code === 'unauthenticated') return 401;
-  if (code === 'permission-denied') return 403;
-  if (code === 'not-found') return 404;
-  if (code === 'aborted' || code === 'failed-precondition') return 409;
-  if (code === 'resource-exhausted') return 429;
-  if (code === 'deadline-exceeded') return 504;
-  if (code === 'unavailable') return 502;
-  return 500;
-}
-
-function jsonResponse(value: unknown, status: number, headers?: HeadersInit): Response {
-  return Response.json(value, {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'Timing-Allow-Origin': '*',
-      'X-Content-Type-Options': 'nosniff',
-      ...headers,
-    },
-  });
-}
-
 function failureResponse(error: RouteError): Response {
   return jsonResponse({
     ok: false,
@@ -133,7 +110,7 @@ function failureResponse(error: RouteError): Response {
       message: error.message,
       ...(error.recovery === undefined ? {} : { recovery: error.recovery }),
     },
-  }, statusForCode(error.code));
+  }, httpStatusForApiErrorCode(error.code, 502), { headers: TIMING_RESPONSE_HEADERS });
 }
 
 function pendingResponse(operationId: AdminIrlRedeemFinalizeOperationId): Response {
@@ -143,7 +120,9 @@ function pendingResponse(operationId: AdminIrlRedeemFinalizeOperationId): Respon
     status: 'pending',
     retryAfterMs: ADMIN_IRL_REDEEM_FINALIZE_POLL_INTERVAL_MS,
   };
-  return jsonResponse(body, 202, { 'Retry-After': '2' });
+  return jsonResponse(body, 202, {
+    headers: { ...TIMING_RESPONSE_HEADERS, 'Retry-After': '2' },
+  });
 }
 
 function routeResult(
@@ -208,7 +187,7 @@ async function projectPersistedCompletion(
     operationId,
     ...(reference ? { reference } : {}),
   }), signal);
-  return routeResult(jsonResponse(result, 200), 'succeeded', {
+  return routeResult(jsonResponse(result, 200, { headers: TIMING_RESPONSE_HEADERS }), 'succeeded', {
     operationId,
     dropId: result.dropId,
     targetKind: result.cards.length ? 'card_receipt' : 'pack',
@@ -341,7 +320,7 @@ function methodNotAllowed(): AdminIrlRedeemFinalizeWorkflowRouteResult {
     jsonResponse(
       { ok: false, error: { code: 'invalid-argument', message: 'Method not allowed.' } },
       405,
-      { Allow: 'POST, OPTIONS' },
+      { headers: { ...TIMING_RESPONSE_HEADERS, Allow: 'POST, OPTIONS' } },
     ),
     'method-not-allowed',
     { authOutcome: 'rejected' },
@@ -353,7 +332,7 @@ function completedReservationResult(
   reservation: Extract<Awaited<ReturnType<typeof reserveAdminIrlRedeemFinalizeWorkflow>>, { status: 'complete' }>,
 ): AdminIrlRedeemFinalizeWorkflowRouteResult {
   const result = reservation.result;
-  return routeResult(jsonResponse(result, 200), 'succeeded', {
+  return routeResult(jsonResponse(result, 200, { headers: TIMING_RESPONSE_HEADERS }), 'succeeded', {
     operationId,
     dropId: result.dropId,
     targetKind: result.cards.length ? 'card_receipt' : 'pack',

@@ -9,6 +9,8 @@ import {
   summarizeResendError,
   type ResendErrorSummary,
 } from '../../../../shared/resendErrors.js';
+import { readBoundedResponseJson } from './boundedResponse.js';
+import { createTimedAbortScope } from './boundedRequest.js';
 
 const RETRY_DELAYS_SECONDS = [30, 2 * 60, 10 * 60, 30 * 60, 2 * 60 * 60] as const;
 const RESEND_EMAILS_API_URL = 'https://api.resend.com/emails';
@@ -54,41 +56,6 @@ function jobLogContext(job: NotificationEmailJobV1): Record<string, unknown> {
   };
 }
 
-async function readBoundedResponseJson(response: Response, signal: AbortSignal): Promise<unknown> {
-  const contentLength = Number(response.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > RESEND_RESPONSE_MAX_BYTES) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new Error('resend_response_too_large');
-  }
-  if (!response.body) throw new Error('resend_response_missing_body');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > RESEND_RESPONSE_MAX_BYTES) throw new Error('resend_response_too_large');
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    return JSON.parse(chunks.join(''));
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-  }
-}
-
 export async function resendSend(
   job: NotificationEmailJobV1,
   apiKey: string,
@@ -102,11 +69,10 @@ export async function resendSend(
     text: job.text,
     html: job.html,
   };
-  const controller = new AbortController();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Resend request timed out', 'TimeoutError')),
+  const scope = createTimedAbortScope(new AbortController().signal, {
     timeoutMs,
-  );
+    timeoutMessage: 'Resend request timed out',
+  });
   try {
     const response = await providerFetch(RESEND_EMAILS_API_URL, {
       method: 'POST',
@@ -116,9 +82,27 @@ export async function resendSend(
         'Idempotency-Key': job.idempotencyKey,
       },
       body: JSON.stringify(payload),
-      signal: controller.signal,
+      signal: scope.signal,
     });
-    const body = await readBoundedResponseJson(response, controller.signal);
+    const body = await readBoundedResponseJson(response, {
+      maxBytes: RESEND_RESPONSE_MAX_BYTES,
+      signal: scope.signal,
+      contentType: 'ignore',
+      createError: (failure, cause) => {
+        if (failure !== 'too-large' && failure !== 'missing-body' && cause instanceof Error) {
+          return cause;
+        }
+        const error = new Error(
+          failure === 'too-large'
+            ? 'resend_response_too_large'
+            : failure === 'missing-body'
+              ? 'resend_response_missing_body'
+              : 'resend_response_invalid',
+        );
+        if (cause !== undefined) Object.defineProperty(error, 'cause', { value: cause });
+        return error;
+      },
+    });
     if (response.ok) {
       const id = typeof body === 'object' && body && !Array.isArray(body)
         ? (body as Record<string, unknown>).id
@@ -137,7 +121,7 @@ export async function resendSend(
       },
     };
   } finally {
-    clearTimeout(timeout);
+    scope.dispose();
   }
 }
 

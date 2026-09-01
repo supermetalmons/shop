@@ -93,17 +93,22 @@ import {
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   cancelResponseBody,
+  readBoundedResponseBytes,
   type ProfileProviderFetch,
 } from './boundedResponse.js';
 import {
   createRequestDeadline,
+  createTimedAbortScope,
   isRequestCancellationError,
   isSignalCancellationError,
   raceWithSignal,
   readBoundedRequestJson,
   runCriticalRequestOperation,
+  sleepWithSignal,
 } from './boundedRequest.js';
-import { isRecord, ProfileReadError } from './dataAccess.js';
+import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
+import { httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import { heliusRpcUrl } from './solanaProvider.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -234,17 +239,7 @@ type DeliveryReceiptsEnv = Pick<
   'COSIGNER_SECRET' | 'HELIUS_API_KEY' | 'NOTIFICATION_EMAIL_QUEUE' | 'OPS_DB'
 > & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>;
 
-type DeliveryReceiptErrorCode =
-  | 'invalid-argument'
-  | 'unauthenticated'
-  | 'permission-denied'
-  | 'not-found'
-  | 'aborted'
-  | 'failed-precondition'
-  | 'resource-exhausted'
-  | 'deadline-exceeded'
-  | 'unavailable'
-  | 'internal';
+type DeliveryReceiptErrorCode = ApiErrorCode;
 
 export class DeliveryReceiptError extends Error {
   constructor(
@@ -399,37 +394,15 @@ type DeliveryReceiptDependencies = {
   verifyIdentity: typeof verifyRequestIdentity;
 };
 
-function statusForCode(code: DeliveryReceiptErrorCode): number {
-  if (code === 'invalid-argument') return 400;
-  if (code === 'unauthenticated') return 401;
-  if (code === 'permission-denied') return 403;
-  if (code === 'not-found') return 404;
-  if (code === 'aborted' || code === 'failed-precondition') return 409;
-  if (code === 'resource-exhausted') return 429;
-  if (code === 'deadline-exceeded') return 504;
-  if (code === 'unavailable') return 503;
-  return 500;
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return Response.json(body, {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'Timing-Allow-Origin': '*',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-}
-
 function errorResponse(error: DeliveryReceiptError): Response {
   return jsonResponse({
     error: {
       code: error.code,
       message: error.message,
     },
-  }, statusForCode(error.code));
+  }, httpStatusForApiErrorCode(error.code, 503), {
+    headers: { 'Timing-Allow-Origin': '*' },
+  });
 }
 
 function summarizeError(error: unknown): Record<string, unknown> {
@@ -1035,23 +1008,7 @@ async function fetchDeliveryRecoveryState(
   });
 }
 
-function pause(milliseconds: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.reject(signal.reason);
-  return new Promise((resolve, reject) => {
-    const finish = () => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    };
-    const timeout = setTimeout(finish, milliseconds);
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
-}
+const pause = sleepWithSignal;
 
 function secureRandomInt(maxExclusive: number): number {
   const maximum = Math.floor(maxExclusive);
@@ -1797,89 +1754,53 @@ function scheduleDeliveryPackStatusProjection(args: {
 }
 
 async function readBoundedProviderResponse(response: Response, signal: AbortSignal): Promise<Uint8Array> {
-  const contentLength = Number(response.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > PROVIDER_MAX_BYTES) {
-    await cancelResponseBody(response);
-    throw new DeliveryReceiptError('unavailable', 'Receipt provider returned too much data.');
-  }
-  if (!response.body) throw new DeliveryReceiptError('unavailable', 'Receipt provider returned an invalid response.');
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal.reason).catch(() => undefined);
-  };
-  signal.addEventListener('abort', onAbort, { once: true });
-  if (signal.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (signal.aborted) throw signal.reason;
-      if (done) break;
-      size += value.byteLength;
-      if (size > PROVIDER_MAX_BYTES) {
-        throw new DeliveryReceiptError('unavailable', 'Receipt provider returned too much data.');
-      }
-      chunks.push(value);
-    }
-    const body = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      body.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return body;
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    signal.removeEventListener('abort', onAbort);
-  }
-}
-
-function heliusOrigin(cluster: SolanaCluster): string {
-  return `https://${cluster === 'mainnet-beta' ? 'mainnet' : cluster}.helius-rpc.com/`;
+  return readBoundedResponseBytes(response, {
+    maxBytes: PROVIDER_MAX_BYTES,
+    signal,
+    createError: (failure) => new DeliveryReceiptError(
+      'unavailable',
+      failure === 'too-large'
+        ? 'Receipt provider returned too much data.'
+        : failure === 'stream-failed'
+          ? 'Receipt provider is temporarily unavailable.'
+          : 'Receipt provider returned an invalid response.',
+    ),
+  });
 }
 
 export function createConnection(context: ProviderContext, runtime: DeliveryRuntime): Connection {
   const boundedFetch: FetchFn = async (input, init) => {
-    const controller = new AbortController();
-    const onAbort = () => controller.abort(context.signal.reason);
-    context.signal.addEventListener('abort', onAbort, { once: true });
-    const timeout = setTimeout(
-      () => controller.abort(new DOMException('Receipt provider request timed out', 'TimeoutError')),
-      RPC_TIMEOUT_MS,
-    );
+    const scope = createTimedAbortScope(context.signal, {
+      timeoutMs: RPC_TIMEOUT_MS,
+      timeoutMessage: 'Receipt provider request timed out',
+    });
     try {
-      if (context.signal.aborted) onAbort();
-      const response = await context.fetch(input, {
+      const response = await raceWithSignal(context.fetch(input, {
         ...init,
         redirect: 'manual',
-        signal: controller.signal,
-      });
+        signal: scope.signal,
+      }), scope.signal);
       if (!response.ok) {
         await cancelResponseBody(response);
         throw new DeliveryReceiptError('unavailable', 'Receipt provider is temporarily unavailable.');
       }
-      const body = await readBoundedProviderResponse(response, controller.signal);
+      const body = await readBoundedProviderResponse(response, scope.signal);
       return new Response(Uint8Array.from(body).buffer, {
         status: response.status,
         statusText: response.statusText,
         headers: response.headers,
       });
     } catch (error) {
-      if (context.signal.aborted && error === context.signal.reason) throw error;
-      if (controller.signal.reason?.name === 'TimeoutError' && error === controller.signal.reason) {
+      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+      if (scope.timedOut() && isSignalCancellationError(scope.signal, error)) {
         throw new DeliveryReceiptError('deadline-exceeded', 'Receipt provider request timed out.');
       }
       throw mapProviderError(error, 'Receipt provider is temporarily unavailable.');
     } finally {
-      clearTimeout(timeout);
-      context.signal.removeEventListener('abort', onAbort);
+      scope.dispose();
     }
   };
-  return new Connection(`${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`, {
+  return new Connection(heliusRpcUrl(runtime.cluster, context.apiKey), {
     commitment: 'confirmed',
     disableRetryOnRateLimit: true,
     fetch: boundedFetch,
@@ -4263,7 +4184,9 @@ export async function handleDeliveryReceiptRequest(
         { deadline, defer },
       );
       return {
-        response: jsonResponse(result),
+        response: jsonResponse(result, 200, {
+          headers: { 'Timing-Allow-Origin': '*' },
+        }),
         metrics,
         authOutcome: 'accepted',
         dropId,
@@ -4286,7 +4209,9 @@ export async function handleDeliveryReceiptRequest(
       { deadline, defer },
     );
     return {
-      response: jsonResponse(result),
+      response: jsonResponse(result, 200, {
+        headers: { 'Timing-Allow-Origin': '*' },
+      }),
       metrics,
       authOutcome: 'accepted',
       ...(dropId ? { dropId } : {}),

@@ -2472,6 +2472,65 @@ test('RPC reads retry once, submissions never retry, and deterministic JSON-RPC 
   });
 });
 
+test('RPC retries provider connection failures only for idempotent reads', async () => {
+  let readCalls = 0;
+  const readResponse = await handleRequest(
+    rpcRequest(
+      '/rpc/mainnet-beta',
+      rpcBody('getLatestBlockhash', [{ commitment: 'confirmed' }], 'connection-retry'),
+    ),
+    env(),
+    quietDependencies(async (_input, init) => {
+      readCalls += 1;
+      if (readCalls === 1) throw new TypeError('fetch failed');
+      return rpcResult(JSON.parse(String(init?.body)).id, {
+        blockhash: OWNER,
+        lastValidBlockHeight: 1,
+      });
+    }),
+  );
+
+  assert.equal(readResponse.status, 200);
+  assert.equal(readCalls, 2);
+
+  let sendCalls = 0;
+  const sendResponse = await handleRequest(
+    rpcRequest('/rpc/mainnet-beta', rpcBody('sendTransaction', [TRANSACTION, {
+      encoding: 'base64',
+      preflightCommitment: 'confirmed',
+    }], 'connection-no-retry')),
+    env(),
+    quietDependencies(async () => {
+      sendCalls += 1;
+      throw new TypeError('fetch failed');
+    }),
+  );
+
+  assert.equal(sendResponse.status, 502);
+  assert.equal(sendCalls, 1);
+});
+
+test('RPC proxy preserves default provider redirect following', async () => {
+  let redirect: RequestRedirect | undefined = 'manual';
+  const response = await handleRequest(
+    rpcRequest(
+      '/rpc/mainnet-beta',
+      rpcBody('getLatestBlockhash', [{ commitment: 'confirmed' }], 'redirect-follow'),
+    ),
+    env(),
+    quietDependencies(async (_input, init) => {
+      redirect = init?.redirect;
+      return rpcResult('redirect-follow', {
+        blockhash: OWNER,
+        lastValidBlockHeight: 1,
+      });
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(redirect, undefined);
+});
+
 test('retry sleep rejects both already-aborted and subsequently aborted signals', async () => {
   const alreadyAborted = new AbortController();
   const earlyReason = new Error('early abort');
@@ -2587,6 +2646,38 @@ test('RPC preserves a received non-OK status when its body stalls until cancella
   assert.equal(bodyCancelled, true);
   assert.equal(response.status, 502);
   assert.equal((await response.json() as any).error.code, -32099);
+});
+
+test('RPC preserves client cancellation while reading a received non-OK body', async () => {
+  const controller = new AbortController();
+  let bodyCancelled = false;
+  let markBodyRead!: () => void;
+  const bodyRead = new Promise<void>((resolve) => {
+    markBodyRead = resolve;
+  });
+  const sendBody = rpcBody('sendTransaction', [TRANSACTION, {
+    encoding: 'base64',
+    preflightCommitment: 'confirmed',
+  }], 'client-aborted-error-body');
+  const pending = handleRequest(
+    new Request(rpcRequest('/rpc/mainnet-beta', sendBody), { signal: controller.signal }),
+    env(),
+    quietDependencies(async () => new Response(new ReadableStream<Uint8Array>({
+      pull() {
+        markBodyRead();
+      },
+      cancel() {
+        bodyCancelled = true;
+      },
+    }, { highWaterMark: 0 }), { status: 400 })),
+  );
+
+  await bodyRead;
+  controller.abort(new Error('client disconnected during provider error body'));
+  const response = await pending;
+
+  assert.equal(bodyCancelled, true);
+  assert.equal(response.status, 499);
 });
 
 test('fresh provider attempt deadlines retry idempotent RPCs but never submissions', async () => {

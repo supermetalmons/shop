@@ -31,11 +31,7 @@ import {
   type RequestIdentity,
 } from './requestIdentity.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
-import {
-  cancelResponseBody,
-  readBoundedJson,
-  type ProfileProviderFetch,
-} from './boundedResponse.js';
+import { type ProfileProviderFetch } from './boundedResponse.js';
 import {
   createRequestDeadline,
   isRequestCancellationError,
@@ -50,6 +46,17 @@ import {
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
 } from './deferredWork.js';
+import {
+  apiErrorBody,
+  httpStatusForApiErrorCode,
+  jsonResponse,
+} from './httpResponse.js';
+import {
+  createSolanaProvider,
+  parseSolanaRpcAccount,
+  SolanaProviderError,
+  type SolanaRetryPolicy,
+} from './solanaProvider.js';
 
 export const STRIPE_CHECKOUT_SESSION_PATH = '/checkout/session';
 
@@ -110,35 +117,11 @@ const defaultDependencies: CheckoutDependencies = {
   verifyIdentity: verifyRequestIdentity,
 };
 
-function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-}
-
 function checkoutErrorResponse(error: StripeCheckoutSessionError, retrySameOperation = false): Response {
-  const status = error.code === 'invalid-argument'
-    ? 400
-    : error.code === 'failed-precondition'
-      ? 409
-      : error.code === 'deadline-exceeded'
-        ? 504
-        : error.code === 'unavailable'
-          ? 502
-          : 500;
-  const response = jsonResponse({
-    ok: false,
-    error: {
-      code: error.code,
-      message: error.message,
-      ...(error.details === undefined ? {} : { details: error.details }),
-    },
-  }, status);
+  const response = jsonResponse(
+    apiErrorBody(error),
+    httpStatusForApiErrorCode(error.code, 502),
+  );
   if (retrySameOperation) {
     response.headers.set(STRIPE_CHECKOUT_RETRY_HEADER, STRIPE_CHECKOUT_RETRY_SAME_OPERATION);
   }
@@ -187,27 +170,13 @@ function checkoutDrop(dropId: string): StripeCheckoutSessionDrop | undefined {
   };
 }
 
-function heliusRpcOrigin(cluster: StripeCheckoutSessionDrop['solanaCluster']): string {
-  return `https://${cluster === 'mainnet-beta' ? 'mainnet' : cluster}.helius-rpc.com/`;
-}
-
-async function pause(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) throw signal.reason;
-  await new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    };
-    const timeout = setTimeout(finish, 100);
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
-}
+const CHECKOUT_CONFIG_RETRY_POLICY: SolanaRetryPolicy = {
+  attempts: 2,
+  delayMs: () => 100,
+  shouldRetry: (error) => (error.kind === 'network' && error.bodyFailure === undefined) || (
+    error.kind === 'http' && error.status !== undefined && TRANSIENT_HTTP_STATUSES.has(error.status)
+  ),
+};
 
 async function fetchOnchainConfig(
   drop: StripeCheckoutSessionDrop,
@@ -219,63 +188,48 @@ async function fetchOnchainConfig(
   if (!configPda) {
     throw new StripeCheckoutSessionError('failed-precondition', 'Box minter config PDA is not configured.');
   }
-  const requestBody = JSON.stringify({
-    jsonrpc: '2.0',
-    id: 'stripe-checkout-config',
-    method: 'getAccountInfo',
-    params: [configPda, { commitment: 'confirmed', encoding: 'base64' }],
+  const provider = createSolanaProvider({
+    apiKey,
+    attemptTimeoutMs: null,
+    cluster: drop.solanaCluster,
+    fetch: providerFetch,
+    maxResponseBytes: CHECKOUT_PROVIDER_MAX_BYTES,
+    requestId: () => 'stripe-checkout-config',
+    retry: CHECKOUT_CONFIG_RETRY_POLICY,
+    signal,
   });
-  let response: Response | undefined;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      response = await raceWithSignal(providerFetch(`${heliusRpcOrigin(drop.solanaCluster)}?api-key=${encodeURIComponent(apiKey)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: requestBody,
-        signal,
-      }), signal);
-    } catch (error) {
-      if (isNestedSignalCancellationError(error, signal)) throw signal.reason;
-      if (signal.aborted) {
-        throw new StripeCheckoutSessionError('unavailable', 'On-chain checkout configuration is temporarily unavailable.');
-      }
-      if (attempt === 0) {
-        await pause(signal);
-        continue;
-      }
-      throw new StripeCheckoutSessionError('unavailable', 'On-chain checkout configuration is temporarily unavailable.');
+  let result: unknown;
+  try {
+    result = await provider.rpc('getAccountInfo', [
+      configPda,
+      { commitment: 'confirmed', encoding: 'base64' },
+    ], { errorMode: 'truthy', redirect: 'follow' });
+  } catch (error) {
+    if (isNestedSignalCancellationError(error, signal)) throw signal.reason;
+    if (error instanceof SolanaProviderError && error.bodyFailure !== undefined) {
+      throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
     }
-    if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt === 0) {
-      await cancelResponseBody(response);
-      await pause(signal);
-      continue;
+    if (error instanceof SolanaProviderError && error.kind === 'invalid-response') {
+      throw new StripeCheckoutSessionError('unavailable', 'On-chain checkout configuration returned an invalid response.');
     }
-    break;
-  }
-  if (!response?.ok) {
-    if (response) await cancelResponseBody(response);
     throw new StripeCheckoutSessionError('unavailable', 'On-chain checkout configuration is temporarily unavailable.');
   }
-  const payload = await readBoundedJson(response, CHECKOUT_PROVIDER_MAX_BYTES, signal);
-  if (!isRecord(payload) || payload.jsonrpc !== '2.0' || payload.id !== 'stripe-checkout-config') {
+  if (!isRecord(result)) {
     throw new StripeCheckoutSessionError('unavailable', 'On-chain checkout configuration returned an invalid response.');
   }
-  if (payload.error) throw new StripeCheckoutSessionError('unavailable', 'On-chain checkout configuration is temporarily unavailable.');
-  if (!isRecord(payload.result)) {
-    throw new StripeCheckoutSessionError('unavailable', 'On-chain checkout configuration returned an invalid response.');
-  }
-  const value = payload.result.value;
+  const value = result.value;
   if (!isRecord(value) || value.owner !== drop.boxMinterProgramId || !Array.isArray(value.data)) {
     throw new StripeCheckoutSessionError('failed-precondition', 'Box minter config PDA is invalid.');
   }
-  const encoded = value.data[0];
-  const encoding = value.data[1];
-  if (typeof encoded !== 'string' || encoding !== 'base64' || encoded.length > CHECKOUT_PROVIDER_MAX_BYTES) {
+  let accountData: Uint8Array;
+  try {
+    accountData = parseSolanaRpcAccount(value, { maxEncodedBytes: CHECKOUT_PROVIDER_MAX_BYTES }).data;
+  } catch {
     throw new StripeCheckoutSessionError('unavailable', 'On-chain checkout configuration returned invalid data.');
   }
   let decoded;
   try {
-    decoded = decodeBoxMinterConfigData(Buffer.from(encoded, 'base64'), { validateDiscriminator: true });
+    decoded = decodeBoxMinterConfigData(Buffer.from(accountData), { validateDiscriminator: true });
   } catch (error) {
     if (error instanceof BoxMinterConfigCodecError) {
       throw new StripeCheckoutSessionError('failed-precondition', error.message, error.details);
@@ -619,7 +573,10 @@ export async function handleStripeCheckoutSession(
     if (error instanceof RequestIdentityError) {
       if (error.kind === 'invalid-token') {
         return {
-          response: jsonResponse({ ok: false, error: { code: 'unauthenticated', message: 'Authentication is required.' } }, 401),
+          response: jsonResponse(apiErrorBody({
+            code: 'unauthenticated',
+            message: 'Authentication is required.',
+          }), 401),
           metrics,
           authOutcome: 'rejected',
         };

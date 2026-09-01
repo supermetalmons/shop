@@ -1157,6 +1157,26 @@ test('receipt provider body cancellation wins a reader cancellation result', asy
   await assert.rejects(reading, (error: unknown) => error === reason);
 });
 
+test('receipt provider stream failures retain the temporary unavailable message', async () => {
+  const streamFailure = new Error('provider stream failed');
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(streamFailure);
+    },
+  }));
+
+  await assert.rejects(
+    deliveryReceiptTestHooks.readBoundedProviderResponse(
+      response,
+      new AbortController().signal,
+    ),
+    (error: unknown) =>
+      error instanceof deliveryReceiptTestHooks.DeliveryReceiptError &&
+      error.code === 'unavailable' &&
+      error.message === 'Receipt provider is temporarily unavailable.',
+  );
+});
+
 test('receipt wallet binding preserves the error that wins an abort race', async () => {
   const controller = new AbortController();
   const d1Failure = new Error('D1 wallet binding failed first');

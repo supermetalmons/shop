@@ -48,7 +48,7 @@ import {
 } from './requestIdentity.js';
 import {
   cancelResponseBody,
-  readBoundedJson,
+  readBoundedResponseJson,
   type ProfileProviderFetch,
 } from './boundedResponse.js';
 import {
@@ -59,6 +59,7 @@ import {
   readBoundedRequestJson,
 } from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
+import { apiErrorBody, jsonResponse } from './httpResponse.js';
 import {
   D1CommerceRepository,
   type CommerceDocumentRecord,
@@ -154,17 +155,6 @@ function selectedFields(data: Record<string, unknown>, fields: readonly string[]
   return Object.fromEntries(fields.flatMap((field) => Object.hasOwn(data, field) ? [[field, data[field]]] : []));
 }
 
-function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-}
-
 function isAllowedProfileOrigin(origin: string): boolean {
   let url: URL;
   try {
@@ -225,14 +215,7 @@ export function applyProfileCors(request: Request, response: Response): Response
 }
 
 function errorResponse(error: ProfileReadError): Response {
-  return jsonResponse({
-    ok: false,
-    error: {
-      code: error.code,
-      message: error.message,
-      ...(error.details === undefined ? {} : { details: error.details }),
-    },
-  }, error.status);
+  return jsonResponse(apiErrorBody(error), error.status);
 }
 
 
@@ -683,7 +666,12 @@ async function fetchStripeSession(
       await cancelResponseBody(response);
       throw new Error('stripe-unavailable');
     }
-    return readBoundedJson(response, MAX_STRIPE_RESPONSE_BYTES, signal);
+    return readBoundedResponseJson(response, {
+      maxBytes: MAX_STRIPE_RESPONSE_BYTES,
+      signal,
+      contentType: 'require-json',
+      createError: () => new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.'),
+    });
   }
   throw new Error(lastCredentialFailure ? 'stripe-credentials' : 'stripe-not-configured');
 }

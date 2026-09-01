@@ -1,7 +1,6 @@
 import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
 import {
   isExactShopRpcRequest,
-  isExactShopRpcResponse,
   isTransientShopRpcError,
   SHOP_RPC_METHODS,
   type ShopRpcId,
@@ -17,10 +16,13 @@ import {
   createRequestDeadline,
   createTimedAbortScope,
   isRequestCancellationError,
-  raceWithSignal,
   readBoundedRequestJson,
 } from './boundedRequest.js';
-import { cancelResponseBody } from './boundedResponse.js';
+import { jsonResponse } from './httpResponse.js';
+import {
+  heliusRpcUrl,
+  requestSolanaRpcRaw,
+} from './solanaProvider.js';
 
 const MAX_RPC_REQUEST_BODY_BYTES = 32 * 1024;
 const MAX_RPC_RESPONSE_BODY_BYTES = 4 * 1024 * 1024;
@@ -78,44 +80,9 @@ function rpcErrorResponse(
   status: number,
   headers?: HeadersInit,
 ): Response {
-  return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }), {
-    status,
+  return jsonResponse({ jsonrpc: '2.0', id, error: { code, message } }, status, {
     headers: { ...rpcCorsHeaders(origin), ...headers },
   });
-}
-
-async function readBoundedText(
-  stream: ReadableStream<Uint8Array>,
-  maxBytes: number,
-  signal?: AbortSignal,
-): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal?.reason).catch(() => undefined);
-  };
-  signal?.addEventListener('abort', onAbort, { once: true });
-  if (signal?.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal?.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (signal?.aborted) throw signal.reason;
-      if (done) break;
-      size += value.byteLength;
-      if (size > maxBytes) throw new RpcFailure('unavailable');
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    return chunks.join('');
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    signal?.removeEventListener('abort', onAbort);
-  }
 }
 
 async function parseRpcRequest(request: Request): Promise<unknown> {
@@ -124,34 +91,6 @@ async function parseRpcRequest(request: Request): Promise<unknown> {
     signal: request.signal,
     createError: () => new Error('invalid-request'),
   });
-}
-
-async function readRpcResponse(
-  response: Response,
-  expectedId: ShopRpcId,
-  signal: AbortSignal,
-): Promise<{ payload: Record<string, unknown>; text: string }> {
-  const contentLength = Number(response.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > MAX_RPC_RESPONSE_BODY_BYTES) {
-    await cancelResponseBody(response);
-    throw new RpcFailure('unavailable');
-  }
-  if (!response.body) throw new RpcFailure('unavailable');
-  try {
-    const text = await readBoundedText(response.body, MAX_RPC_RESPONSE_BODY_BYTES, signal);
-    const payload: unknown = JSON.parse(text);
-    if (!isExactShopRpcResponse(payload, expectedId)) throw new RpcFailure('unavailable');
-    return { payload, text };
-  } catch (error) {
-    if (signal.aborted && error === signal.reason) throw error;
-    if (error instanceof RpcFailure) throw error;
-    throw new RpcFailure('unavailable');
-  }
-}
-
-function heliusRpcUrl(cluster: SolanaCluster, apiKey: string): string {
-  const subdomain = cluster === 'mainnet-beta' ? 'mainnet' : 'devnet';
-  return `https://${subdomain}.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`;
 }
 
 function retryDelayMs(dependencies: RpcProxyDependencies, response?: Response): number {
@@ -186,16 +125,27 @@ async function fetchRpc(
     const startedAt = performance.now();
     try {
       metrics.upstreamCalls += 1;
-      response = await raceWithSignal(dependencies.providerFetch(heliusRpcUrl(cluster, apiKey), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: attemptScope.signal,
-      }), attemptScope.signal);
-      let parsed: Awaited<ReturnType<typeof readRpcResponse>>;
+      let parsed: { payload: Record<string, unknown>; text: string };
       try {
-        parsed = await readRpcResponse(response, requestBody.id, attemptScope.signal);
+        const raw = await requestSolanaRpcRaw({
+          body: requestBody,
+          contentType: 'ignore',
+          envelope: 'strict',
+          fetch: async (input, init) => {
+            const received = await dependencies.providerFetch(input, init);
+            response = received;
+            return received;
+          },
+          maxResponseBytes: MAX_RPC_RESPONSE_BODY_BYTES,
+          redirect: 'follow',
+          signal: attemptScope.signal,
+          url: heliusRpcUrl(cluster, apiKey),
+        });
+        response = raw.response;
+        parsed = { payload: raw.payload, text: raw.text };
       } catch (error) {
+        if (signal.aborted && error === signal.reason) throw error;
+        if (!response) throw error;
         if (!response.ok) {
           const failure = providerHttpFailure(response.status);
           if (signal.aborted) throw failure;
@@ -210,8 +160,8 @@ async function fetchRpc(
           }
           throw failure;
         }
-        if (signal.aborted && error === signal.reason) throw error;
-        throw error;
+        if (attemptScope.timedOut() && error === attemptScope.signal.reason) throw error;
+        throw error instanceof RpcFailure ? error : new RpcFailure('unavailable');
       }
       const encodedApiKey = encodeURIComponent(apiKey);
       if (parsed.text.includes(apiKey) || (encodedApiKey !== apiKey && parsed.text.includes(encodedApiKey))) {

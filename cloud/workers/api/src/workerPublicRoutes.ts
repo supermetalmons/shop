@@ -75,8 +75,14 @@ import {
   isRequestCancellationError,
   raceWithSignal,
   readBoundedRequestJson,
+  sleepWithSignal,
 } from './boundedRequest.js';
-import { cancelResponseBody } from './boundedResponse.js';
+import {
+  cancelResponseBody,
+  readBoundedResponseJson,
+} from './boundedResponse.js';
+import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
+import { heliusRpcUrl } from './solanaProvider.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
 const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
@@ -99,11 +105,14 @@ export const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Max-Age': '86400',
 };
-const BASE_HEADERS = {
+const PUBLIC_JSON_HEADERS = {
   ...CORS_HEADERS,
+  'Timing-Allow-Origin': '*',
+};
+const BASE_HEADERS = {
+  ...PUBLIC_JSON_HEADERS,
   'Cache-Control': 'no-store',
   'Content-Type': 'application/json; charset=utf-8',
-  'Timing-Allow-Origin': '*',
   'X-Content-Type-Options': 'nosniff',
 };
 const PENDING_OPEN_DISCRIMINATOR_BASE58 = bs58.encode(PENDING_OPEN_BOX_DISCRIMINATOR);
@@ -230,21 +239,16 @@ type GroupedInventoryResult = {
   needsFallback: boolean;
 };
 
-export function jsonResponse(body: unknown, status: number, headers?: HeadersInit): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { ...BASE_HEADERS, ...headers },
+export function publicJsonResponse(body: unknown, status: number, headers?: HeadersInit): Response {
+  return sharedJsonResponse(body, status, {
+    headers: { ...PUBLIC_JSON_HEADERS, ...headers },
   });
 }
 
 function publicOriginDeniedResponse(): Response {
-  return new Response(JSON.stringify({ ok: false, error: 'invalid-request' }), {
-    status: 403,
+  return sharedJsonResponse({ ok: false, error: 'invalid-request' }, 403, {
     headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
       'Vary': 'Origin',
-      'X-Content-Type-Options': 'nosniff',
     },
   });
 }
@@ -265,7 +269,7 @@ export function handlePublicMethodNotAllowed(request: Request): Response {
   const origin = publicRequestOrigin(request);
   if (!origin) return publicOriginDeniedResponse();
   return applyPublicCors(
-    jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'POST, OPTIONS' }),
+    publicJsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'POST, OPTIONS' }),
     origin,
     'POST, OPTIONS',
   );
@@ -319,43 +323,6 @@ function compactInventoryItem(item: ShopInventoryItem): ShopInventoryItem {
   throw new ProviderFailure('unavailable');
 }
 
-async function readBoundedText(
-  stream: ReadableStream<Uint8Array>,
-  maxBytes: number,
-  createLimitError: () => Error,
-  consumeBytes?: (bytes: number) => void,
-  signal?: AbortSignal,
-): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const chunks: string[] = [];
-  let size = 0;
-  const onAbort = () => {
-    void reader.cancel(signal?.reason).catch(() => undefined);
-  };
-  signal?.addEventListener('abort', onAbort, { once: true });
-  if (signal?.aborted) onAbort();
-  try {
-    while (true) {
-      if (signal?.aborted) throw signal.reason;
-      const { done, value } = await reader.read();
-      if (signal?.aborted) throw signal.reason;
-      if (done) break;
-      size += value.byteLength;
-      consumeBytes?.(value.byteLength);
-      if (size > maxBytes) throw createLimitError();
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    return chunks.join('');
-  } catch (error) {
-    void reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    signal?.removeEventListener('abort', onAbort);
-  }
-}
-
 async function parseJsonRequestBody<T>(
   request: Request,
   validate: (value: unknown) => value is T,
@@ -382,7 +349,7 @@ async function readBoundedJsonResponse(
   response: Response,
   context: ProviderContext,
   pageOverflowIsRetryable = false,
-  signal?: AbortSignal,
+  signal: AbortSignal = context.signal,
 ): Promise<unknown> {
   const maxBytes = context.dependencies.providerMaxResponseBodyBytes;
   const contentLength = Number(response.headers.get('Content-Length'));
@@ -397,29 +364,28 @@ async function readBoundedJsonResponse(
     await cancelResponseBody(response);
     throw new ProviderFailure('limit');
   }
-  if (!response.body) throw new ProviderFailure('unavailable');
   try {
-    return JSON.parse(await readBoundedText(
-      response.body,
+    return await readBoundedResponseJson(response, {
       maxBytes,
-      () => new ProviderFailure(pageOverflowIsRetryable ? 'page-too-large' : 'unavailable'),
-      (bytes) => {
+      signal,
+      contentType: 'ignore',
+      createError: (failure) => new ProviderFailure(
+        failure === 'too-large' && pageOverflowIsRetryable
+          ? 'page-too-large'
+          : 'unavailable',
+      ),
+      onBytes: (bytes) => {
         context.providerResponseBodyBytes += bytes;
         if (context.providerResponseBodyBytes > context.dependencies.providerMaxTotalResponseBodyBytes) {
           throw new ProviderFailure('limit');
         }
       },
-      signal,
-    ));
+    });
   } catch (error) {
-    if (signal?.aborted && error === signal.reason) throw error;
+    if (signal.aborted && error === signal.reason) throw error;
     if (error instanceof ProviderFailure) throw error;
     throw new ProviderFailure('unavailable');
   }
-}
-
-function heliusRpcOrigin(cluster: SolanaCluster): string {
-  return `https://${cluster === 'mainnet-beta' ? 'mainnet' : cluster}.helius-rpc.com/`;
 }
 
 function isTransientRpcError(error: unknown): boolean {
@@ -478,7 +444,7 @@ async function heliusRpc<T>(
       context.metrics.upstreamCalls += 1;
       const requestId = `${method}-${context.metrics.upstreamCalls}`;
       response = await raceWithSignal(context.dependencies.providerFetch(
-        `${heliusRpcOrigin(cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
+        heliusRpcUrl(cluster, context.apiKey),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -972,31 +938,7 @@ async function fetchPendingOpenBoxes(
   return { ok: true, items };
 }
 
-export function sleepWithAbort(milliseconds: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let settled = false;
-    const onAbort = () => {
-      if (settled) return;
-      settled = true;
-      if (timeout !== undefined) clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    timeout = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, milliseconds);
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
-}
+export const sleepWithAbort = sleepWithSignal;
 
 export const defaultDependencies: WorkerDependencies = {
   cache: typeof caches === 'undefined'
@@ -1056,7 +998,7 @@ export async function handlePackStatus(
         const packStatus = parseD1PackStatusCache(await cached.json(), dropId);
         if (packStatus) {
           return {
-            response: jsonResponse({ ok: true, packStatus }, 200),
+            response: publicJsonResponse({ ok: true, packStatus }, 200),
             cacheStatus: 'D1-HIT',
           };
         }
@@ -1078,7 +1020,7 @@ export async function handlePackStatus(
       });
     }
     result = {
-      response: jsonResponse({ ok: true, packStatus }, 200),
+      response: publicJsonResponse({ ok: true, packStatus }, 200),
       cacheStatus: 'D1-MISS',
     };
   } catch (error) {
@@ -1088,7 +1030,7 @@ export async function handlePackStatus(
       error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
     });
     return {
-      response: jsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
+      response: publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
     };
   }
   if (cacheWrite) registerDeferredWork(defer, cacheWrite);
@@ -1117,7 +1059,7 @@ export async function handlePost(
       : { kind: 'pending-open-boxes', body: await parseShopRequestBody(request, isExactShopPendingOpenBoxesRequest) };
   } catch (error) {
     if (isRequestCancellationError(request, error)) throw error;
-    return result(jsonResponse({ ok: false, error: 'invalid-request' }, 400), false);
+    return result(publicJsonResponse({ ok: false, error: 'invalid-request' }, 400), false);
   }
   const requestBody = parsedRequest.body;
   await observePublicRateLimit({
@@ -1131,7 +1073,7 @@ export async function handlePost(
   const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
   if (!apiKey) {
     return result(
-      jsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
+      publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
       requestBody.includeDevnet === true,
     );
   }
@@ -1178,7 +1120,7 @@ export async function handlePost(
         ? error.kind
         : 'unavailable';
     return result(
-      jsonResponse(
+      publicJsonResponse(
         { ok: false, error: kind === 'timeout' || kind === 'deadline' ? 'provider-timeout' : 'provider-unavailable' },
         kind === 'timeout' || kind === 'deadline' ? 504 : 502,
       ),
@@ -1206,10 +1148,10 @@ export async function handleNotificationSubscription(
     )).email;
   } catch (error) {
     if (isRequestCancellationError(request, error)) throw error;
-    return respond(jsonResponse({ ok: false, error: 'invalid-request' }, 400));
+    return respond(publicJsonResponse({ ok: false, error: 'invalid-request' }, 400));
   }
   const email = normalizeNotificationEmailRecipient(rawEmail);
-  if (!email) return respond(jsonResponse({ ok: false, error: 'invalid-email' }, 400));
+  if (!email) return respond(publicJsonResponse({ ok: false, error: 'invalid-email' }, 400));
 
   await observePublicRateLimit({
     binding: env.PUBLIC_NOTIFICATION_RATE_LIMITER,
@@ -1223,7 +1165,7 @@ export async function handleNotificationSubscription(
   const apiKey = typeof env.RESEND_CONTACTS_API_KEY === 'string'
     ? env.RESEND_CONTACTS_API_KEY.trim()
     : '';
-  if (!apiKey) return respond(jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
+  if (!apiKey) return respond(publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
 
   const deadline = createRequestDeadline(request, {
     timeoutMs: dependencies.resendTimeoutMs,
@@ -1243,34 +1185,37 @@ export async function handleNotificationSubscription(
     }), deadline.signal);
     if (providerResponse.status === 409) {
       await cancelResponseBody(providerResponse);
-      return respond(jsonResponse({ subscribed: true }, 200));
+      return respond(publicJsonResponse({ subscribed: true }, 200));
     }
     if (!providerResponse.body) {
       await cancelResponseBody(providerResponse);
-      return respond(jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
+      return respond(publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
     }
     let payload: unknown;
     try {
-      payload = JSON.parse(await readBoundedText(
-        providerResponse.body,
-        MAX_RESEND_RESPONSE_BODY_BYTES,
-        () => new Error('provider-response-too-large'),
-        undefined,
-        deadline.signal,
-      ));
+      payload = await readBoundedResponseJson(providerResponse, {
+        maxBytes: MAX_RESEND_RESPONSE_BODY_BYTES,
+        signal: deadline.signal,
+        contentType: 'ignore',
+        createError: (failure) => new Error(
+          failure === 'too-large'
+            ? 'provider-response-too-large'
+            : 'provider-response-invalid',
+        ),
+      });
     } catch (error) {
       if (!providerResponse.ok) {
-        return respond(jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
+        return respond(publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
       }
       if (isRequestCancellationError(request, error)) throw error;
       return respond(deadline.timedOut()
-        ? jsonResponse({ ok: false, error: 'provider-timeout' }, 504)
-        : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
+        ? publicJsonResponse({ ok: false, error: 'provider-timeout' }, 504)
+        : publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
     }
     if (!providerResponse.ok) {
       return respond(isExistingResendContactError(payload)
-        ? jsonResponse({ subscribed: true }, 200)
-        : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
+        ? publicJsonResponse({ subscribed: true }, 200)
+        : publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
     }
     if (
       typeof payload !== 'object' ||
@@ -1279,14 +1224,14 @@ export async function handleNotificationSubscription(
       typeof (payload as Record<string, unknown>).id !== 'string' ||
       !(payload as Record<string, unknown>).id
     ) {
-      return respond(jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
+      return respond(publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
     }
-    return respond(jsonResponse({ subscribed: true }, 200));
+    return respond(publicJsonResponse({ subscribed: true }, 200));
   } catch (error) {
     if (isRequestCancellationError(request, error)) throw error;
     return respond(deadline.timedOut()
-      ? jsonResponse({ ok: false, error: 'provider-timeout' }, 504)
-      : jsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
+      ? publicJsonResponse({ ok: false, error: 'provider-timeout' }, 504)
+      : publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
   } finally {
     deadline.dispose();
     metrics.providerDurationMs += performance.now() - startedAt;

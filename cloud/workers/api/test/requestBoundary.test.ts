@@ -9,6 +9,7 @@ import {
   readBoundedRequestJson,
   readBoundedRequestText,
   runCriticalRequestOperation,
+  sleepWithSignal,
   type BoundedRequestOptions,
   type RequestBodyFailure,
 } from '../src/boundedRequest.ts';
@@ -400,4 +401,17 @@ test('an abort beats a read that resolves in a later microtask', async () => {
   queueMicrotask(() => resolveRead('late success'));
 
   await assert.rejects(raced, (error) => error === reason);
+});
+
+test('abortable sleep rejects already-aborted and in-flight signals exactly', async () => {
+  const already = new AbortController();
+  const alreadyReason = new Error('already aborted');
+  already.abort(alreadyReason);
+  await assert.rejects(sleepWithSignal(10, already.signal), (error) => error === alreadyReason);
+
+  const active = new AbortController();
+  const activeReason = new Error('aborted while sleeping');
+  const pending = sleepWithSignal(1_000, active.signal);
+  active.abort(activeReason);
+  await assert.rejects(pending, (error) => error === activeReason);
 });

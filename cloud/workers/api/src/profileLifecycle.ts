@@ -41,6 +41,7 @@ import {
   type DeferredWork,
 } from './deferredWork.js';
 import { ProfileReadError } from './dataAccess.js';
+import { apiErrorBody, jsonResponse } from './httpResponse.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -148,26 +149,8 @@ class StripeOwnerMergeUnexpectedPathError extends ProfileReadError {
   }
 }
 
-function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-}
-
 function errorResponse(error: ProfileReadError): Response {
-  return jsonResponse({
-    ok: false,
-    error: {
-      code: error.code,
-      message: error.message,
-      ...(error.details === undefined ? {} : { details: error.details }),
-    },
-  }, error.status);
+  return jsonResponse(apiErrorBody(error), error.status);
 }
 
 async function parseRequestBody(

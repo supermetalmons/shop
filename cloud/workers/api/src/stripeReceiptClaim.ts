@@ -78,7 +78,7 @@ import {
   readBoundedRequestJson,
   runCriticalRequestOperation,
 } from './boundedRequest.js';
-import { isRecord, ProfileReadError } from './dataAccess.js';
+import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import {
   D1CommerceRepository,
   commerceFieldValue,
@@ -116,6 +116,11 @@ import {
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
 } from './deferredWork.js';
+import {
+  apiErrorBody,
+  httpStatusForApiErrorCode,
+  jsonResponse,
+} from './httpResponse.js';
 
 export const STRIPE_RECEIPT_CLAIM_PATH = '/receipts/stripe/claim';
 
@@ -154,17 +159,7 @@ type ProviderContext = {
   providerFetch: ProfileProviderFetch;
   signal: AbortSignal;
 };
-type ClaimErrorCode =
-  | 'invalid-argument'
-  | 'unauthenticated'
-  | 'permission-denied'
-  | 'not-found'
-  | 'aborted'
-  | 'failed-precondition'
-  | 'resource-exhausted'
-  | 'deadline-exceeded'
-  | 'unavailable'
-  | 'internal';
+type ClaimErrorCode = ApiErrorCode;
 type ReceiptKind = 'box' | 'figure';
 type StoredResult = {
   receiptKind?: ReceiptKind;
@@ -223,39 +218,12 @@ type ClaimDependencies = {
   verifyIdentity: typeof verifyRequestIdentity;
 };
 
-function statusForCode(code: ClaimErrorCode): number {
-  if (code === 'invalid-argument') return 400;
-  if (code === 'unauthenticated') return 401;
-  if (code === 'permission-denied') return 403;
-  if (code === 'not-found') return 404;
-  if (code === 'aborted' || code === 'failed-precondition') return 409;
-  if (code === 'resource-exhausted') return 429;
-  if (code === 'deadline-exceeded') return 504;
-  if (code === 'unavailable') return 502;
-  return 500;
-}
-
-function jsonResponse(body: unknown, status = 200): Response {
-  return Response.json(body, {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'Timing-Allow-Origin': '*',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-}
-
 function errorResponse(error: StripeReceiptClaimError): Response {
-  return jsonResponse({
-    ok: false,
-    error: {
-      code: error.code,
-      message: error.message,
-      ...(error.details === undefined ? {} : { details: error.details }),
-    },
-  }, statusForCode(error.code));
+  return jsonResponse(
+    apiErrorBody(error),
+    httpStatusForApiErrorCode(error.code, 502),
+    { headers: { 'Timing-Allow-Origin': '*' } },
+  );
 }
 
 function normalizedError(error: unknown, fallback: string): StripeReceiptClaimError {
@@ -2095,7 +2063,7 @@ export async function handleStripeReceiptClaim(
       { deadline, defer, ignoreDeferredErrors: true },
     );
     return {
-      response: jsonResponse(result.response),
+      response: jsonResponse(result.response, 200, { headers: { 'Timing-Allow-Origin': '*' } }),
       metrics,
       authOutcome: 'accepted',
       dropId: result.response.dropId,

@@ -69,22 +69,22 @@ import type {
   PrepareIrlClaimResponse,
 } from '../../../../shared/contracts.js';
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
-import {
-  cancelResponseBody,
-  readBoundedJson,
-  type ProfileProviderFetch,
-} from './boundedResponse.js';
+import { type ProfileProviderFetch } from './boundedResponse.js';
 import {
   createRequestDeadline,
-  createTimedAbortScope,
   isRequestCancellationError,
   isSignalCancellationError,
   raceReadWithSignal,
-  raceWithSignal,
   readBoundedRequestJson,
 } from './boundedRequest.js';
-import { isRecord, ProfileReadError } from './dataAccess.js';
-import { requestSolanaRpc } from './solanaProvider.js';
+import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
+import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import {
+  createSolanaProvider,
+  parseSolanaRpcAccount,
+  SolanaProviderError,
+  type SolanaRetryPolicy,
+} from './solanaProvider.js';
 import { D1CommerceRepository, commerceKeys } from './commerceRepository.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 
@@ -112,17 +112,7 @@ type IrlClaimEnv = Pick<
   'COSIGNER_SECRET' | 'HELIUS_API_KEY'
 > & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
-type IrlClaimErrorCode =
-  | 'invalid-argument'
-  | 'unauthenticated'
-  | 'permission-denied'
-  | 'not-found'
-  | 'aborted'
-  | 'failed-precondition'
-  | 'resource-exhausted'
-  | 'deadline-exceeded'
-  | 'unavailable'
-  | 'internal';
+type IrlClaimErrorCode = ApiErrorCode;
 
 class IrlClaimError extends Error {
   constructor(
@@ -206,39 +196,8 @@ export type IrlClaimResult = {
   dropId?: string;
 };
 
-function statusForCode(code: IrlClaimErrorCode): number {
-  if (code === 'invalid-argument') return 400;
-  if (code === 'unauthenticated') return 401;
-  if (code === 'permission-denied') return 403;
-  if (code === 'not-found') return 404;
-  if (code === 'aborted') return 409;
-  if (code === 'failed-precondition') return 409;
-  if (code === 'resource-exhausted') return 429;
-  if (code === 'deadline-exceeded') return 504;
-  if (code === 'unavailable') return 502;
-  return 500;
-}
-
-function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-}
-
 function errorResponse(error: IrlClaimError): Response {
-  return jsonResponse({
-    ok: false,
-    error: {
-      code: error.code,
-      message: error.message,
-      ...(error.details === undefined ? {} : { details: error.details }),
-    },
-  }, statusForCode(error.code));
+  return jsonResponse(apiErrorBody(error), httpStatusForApiErrorCode(error.code, 502));
 }
 
 async function readRequestBody(request: Request, signal: AbortSignal): Promise<PrepareIrlClaimRequest> {
@@ -332,26 +291,67 @@ function clusterSharesCollection(runtime: IrlClaimRuntime): boolean {
   return Object.values(API_DROPS).filter((drop) => collectionScopeKey(drop) === key).length > 1;
 }
 
-function heliusOrigin(cluster: SolanaCluster): string {
-  return `https://${cluster === 'mainnet-beta' ? 'mainnet' : cluster}.helius-rpc.com/`;
+const PROVIDER_RETRY: SolanaRetryPolicy = {
+  attempts: 2,
+  delayMs: () => 100,
+  shouldRetry: (failure) =>
+    failure.kind === 'network' ||
+    failure.kind === 'timeout' ||
+    failure.kind === 'body' ||
+    (failure.kind === 'http' && TRANSIENT_HTTP_STATUSES.has(failure.status || 0)),
+};
+
+const PROVIDER_REST_RETRY: SolanaRetryPolicy = {
+  attempts: 1,
+  delayMs: () => 100,
+  shouldRetry: () => false,
+};
+
+function provider(context: ProviderContext, runtime: IrlClaimRuntime) {
+  return createSolanaProvider({
+    apiKey: context.apiKey,
+    attemptTimeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+    cluster: runtime.cluster,
+    fetch: context.providerFetch,
+    maxResponseBytes: PROVIDER_MAX_BYTES,
+    requestId: (method) => `irl-claim-${method}`,
+    retry: PROVIDER_RETRY,
+    signal: context.signal,
+  });
 }
 
-async function pause(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) throw signal.reason;
-  await new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    };
-    const timeout = setTimeout(finish, 100);
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
+function translateProviderError(
+  context: ProviderContext,
+  error: unknown,
+  assetId?: string,
+): IrlClaimError {
+  if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+  if (!(error instanceof SolanaProviderError)) {
+    return new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.');
+  }
+  if (error.kind === 'timeout') {
+    return new IrlClaimError('deadline-exceeded', 'Claim provider request timed out.');
+  }
+  if ((error.kind === 'network' || error.kind === 'body') && error.method?.endsWith('Rest')) {
+    return new IrlClaimError('unavailable', 'Claim provider returned an invalid response.');
+  }
+  if (error.kind === 'invalid-response') {
+    return new IrlClaimError('unavailable', 'Claim provider returned an invalid response.');
+  }
+  if (error.kind === 'rpc') {
+    return new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.', {
+      method: error.method,
+      ...(Number.isFinite(error.rpcCode) ? { upstreamCode: error.rpcCode } : {}),
+    });
+  }
+  if (error.kind === 'not-found') {
+    return new IrlClaimError(
+      'not-found',
+      'Asset proof not found',
+      error.resource === 'asset-proof' ? { assetId } : undefined,
+    );
+  }
+  return new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.');
 }
 
 async function rpcCall(
@@ -360,99 +360,10 @@ async function rpcCall(
   method: string,
   params: unknown,
 ): Promise<unknown> {
-  const id = `irl-claim-${method}`;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createTimedAbortScope(context.signal, {
-      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-      timeoutMessage: 'Claim provider request timed out',
-    });
-    try {
-      const transport = await requestSolanaRpc({
-        fetch: (input, init) => raceWithSignal(
-          context.providerFetch(input, init),
-          attemptScope.signal,
-        ),
-        url: `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
-        id,
-        method,
-        params,
-        maxResponseBytes: PROVIDER_MAX_BYTES,
-        signal: attemptScope.signal,
-      });
-      if (transport.kind === 'http-error') {
-        if (TRANSIENT_HTTP_STATUSES.has(transport.status) && attempt === 0) {
-          await pause(context.signal);
-          continue;
-        }
-        throw new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.');
-      }
-      if (transport.kind === 'invalid-response') {
-        throw new IrlClaimError('unavailable', 'Claim provider returned an invalid response.');
-      }
-      if (transport.kind === 'rpc-error') {
-        const upstreamCode = Number(transport.error.code);
-        throw new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.', {
-          method,
-          ...(Number.isFinite(upstreamCode) ? { upstreamCode } : {}),
-        });
-      }
-      return transport.value;
-    } catch (error) {
-      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-      if (attemptScope.timedOut()) {
-        if (attempt === 0 && !context.signal.aborted) {
-          await pause(context.signal);
-          continue;
-        }
-        throw new IrlClaimError('deadline-exceeded', 'Claim provider request timed out.');
-      }
-      if (context.signal.aborted) {
-        if (error instanceof IrlClaimError) throw error;
-        throw new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.');
-      }
-      if (error instanceof IrlClaimError) throw error;
-      if (attempt === 0) {
-        await pause(context.signal);
-        continue;
-      }
-      throw new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.');
-    } finally {
-      attemptScope.dispose();
-    }
-  }
-  throw new IrlClaimError('unavailable', 'Claim provider is temporarily unavailable.');
-}
-
-async function restJson(context: ProviderContext, url: string): Promise<unknown> {
-  const attemptScope = createTimedAbortScope(context.signal, {
-    timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-    timeoutMessage: 'Claim provider request timed out',
-  });
   try {
-    const response = await raceWithSignal(context.providerFetch(url, {
-      headers: { Accept: 'application/json' },
-      redirect: 'manual',
-      signal: attemptScope.signal,
-    }), attemptScope.signal);
-    if (!response.ok) {
-      await cancelResponseBody(response);
-      throw new IrlClaimError(response.status === 404 ? 'not-found' : 'unavailable',
-        response.status === 404 ? 'Asset proof not found' : 'Claim provider is temporarily unavailable.');
-    }
-    return await readBoundedJson(response, PROVIDER_MAX_BYTES, attemptScope.signal);
+    return await provider(context, runtime).rpc(method, params);
   } catch (error) {
-    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-    if (attemptScope.timedOut()) {
-      throw new IrlClaimError('deadline-exceeded', 'Claim provider request timed out.');
-    }
-    if (context.signal.aborted) {
-      if (error instanceof IrlClaimError) throw error;
-      throw new IrlClaimError('unavailable', 'Claim provider returned an invalid response.');
-    }
-    if (error instanceof IrlClaimError) throw error;
-    throw new IrlClaimError('unavailable', 'Claim provider returned an invalid response.');
-  } finally {
-    attemptScope.dispose();
+    throw translateProviderError(context, error);
   }
 }
 
@@ -515,41 +426,24 @@ async function fetchAssetProof(
   runtime: IrlClaimRuntime,
   assetId: string,
 ): Promise<Record<string, unknown>> {
-  let value: unknown;
   try {
-    value = await rpcCall(context, runtime, 'getAssetProof', { id: assetId });
+    return await provider(context, runtime).getAssetProof(assetId, {
+      restRetry: PROVIDER_REST_RETRY,
+    });
   } catch (error) {
-    const upstreamCode = error instanceof IrlClaimError && isRecord(error.details)
-      ? Number(error.details.upstreamCode)
-      : Number.NaN;
-    if (upstreamCode !== -32601 && upstreamCode !== -32602) throw error;
-    const cluster = runtime.cluster === 'mainnet-beta' ? '' : `&cluster=${encodeURIComponent(runtime.cluster)}`;
-    value = await restJson(
-      context,
-      `https://api.helius.xyz/v0/assets/${encodeURIComponent(assetId)}/proof?api-key=${encodeURIComponent(context.apiKey)}${cluster}`,
-    );
+    throw translateProviderError(context, error, assetId);
   }
-  if (!isRecord(value)) throw new IrlClaimError('not-found', 'Asset proof not found', { assetId });
-  return value;
 }
 
 function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; data: Uint8Array } {
-  if (!isRecord(value) || typeof value.owner !== 'string' || !Array.isArray(value.data)) {
-    throw new IrlClaimError('failed-precondition', `${label} is invalid.`);
-  }
-  const encoded = value.data[0];
-  if (typeof encoded !== 'string' || value.data[1] !== 'base64' || encoded.length > PROVIDER_MAX_BYTES) {
-    throw new IrlClaimError('unavailable', 'Claim provider returned invalid account data.');
-  }
-  let owner: PublicKey;
-  let data: Uint8Array;
   try {
-    owner = new PublicKey(value.owner);
-    data = Buffer.from(encoded, 'base64');
-  } catch {
+    return parseSolanaRpcAccount(value, { maxEncodedBytes: PROVIDER_MAX_BYTES });
+  } catch (error) {
+    if (error instanceof SolanaProviderError && error.reason === 'account-shape') {
+      throw new IrlClaimError('failed-precondition', `${label} is invalid.`);
+    }
     throw new IrlClaimError('unavailable', 'Claim provider returned invalid account data.');
   }
-  return { owner, data };
 }
 
 function configuredRoutingMatches(runtime: IrlClaimRuntime, decoded: DecodedBoxMinterConfigData): boolean {

@@ -49,7 +49,6 @@ import {
 } from '../../../../shared/contracts.js';
 import {
   assetGroupingCollectionMints,
-  HELIUS_COLLECTION_GROUPING_OPTIONS,
   uniqueAssetGroupingCollectionMint,
 } from '../../../../shared/dasAssetCollections.js';
 import {
@@ -82,18 +81,12 @@ import {
   verifyRequestIdentity,
   type RequestIdentity,
 } from './requestIdentity.js';
-import {
-  cancelResponseBody,
-  readBoundedJson,
-  type ProfileProviderFetch,
-} from './boundedResponse.js';
+import { type ProfileProviderFetch } from './boundedResponse.js';
 import {
   createRequestDeadline,
-  createTimedAbortScope,
   isRequestCancellationError,
   isSignalCancellationError,
   raceReadWithSignal,
-  raceWithSignal,
   readBoundedRequestJson,
   runCriticalRequestOperation,
 } from './boundedRequest.js';
@@ -101,8 +94,14 @@ import {
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
 } from './deferredWork.js';
-import { isRecord, ProfileReadError } from './dataAccess.js';
-import { requestSolanaRpc } from './solanaProvider.js';
+import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
+import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import {
+  createSolanaProvider,
+  parseSolanaRpcAccount,
+  SolanaProviderError,
+  type SolanaRetryPolicy,
+} from './solanaProvider.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -153,17 +152,7 @@ type AdminIrlRedeemPrepareEnv = Pick<
   'HELIUS_API_KEY'
 > & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
-type AdminIrlRedeemPrepareErrorCode =
-  | 'invalid-argument'
-  | 'unauthenticated'
-  | 'permission-denied'
-  | 'not-found'
-  | 'aborted'
-  | 'failed-precondition'
-  | 'resource-exhausted'
-  | 'deadline-exceeded'
-  | 'unavailable'
-  | 'internal';
+type AdminIrlRedeemPrepareErrorCode = ApiErrorCode;
 
 class AdminIrlRedeemPrepareError extends Error {
   constructor(
@@ -289,38 +278,8 @@ export type AdminIrlRedeemPrepareResult = {
   itemCount?: number;
 };
 
-function statusForCode(code: AdminIrlRedeemPrepareErrorCode): number {
-  if (code === 'invalid-argument') return 400;
-  if (code === 'unauthenticated') return 401;
-  if (code === 'permission-denied') return 403;
-  if (code === 'not-found') return 404;
-  if (code === 'aborted' || code === 'failed-precondition') return 409;
-  if (code === 'resource-exhausted') return 429;
-  if (code === 'deadline-exceeded') return 504;
-  if (code === 'unavailable') return 502;
-  return 500;
-}
-
-function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-}
-
 function errorResponse(error: AdminIrlRedeemPrepareError): Response {
-  return jsonResponse({
-    ok: false,
-    error: {
-      code: error.code,
-      message: error.message,
-      ...(error.details === undefined ? {} : { details: error.details }),
-    },
-  }, statusForCode(error.code));
+  return jsonResponse(apiErrorBody(error), httpStatusForApiErrorCode(error.code, 502));
 }
 
 async function readRequestBody(request: Request, signal: AbortSignal): Promise<AdminIrlRedeemPrepareRequest> {
@@ -424,26 +383,75 @@ function assertSupportedRuntime(runtime: AdminIrlRedeemRuntime): void {
   }
 }
 
-function heliusOrigin(cluster: SolanaCluster): string {
-  return `https://${cluster === 'mainnet-beta' ? 'mainnet' : cluster}.helius-rpc.com/`;
+const PROVIDER_RETRY: SolanaRetryPolicy = {
+  attempts: 2,
+  delayMs: () => 100,
+  shouldRetry: (failure) =>
+    failure.kind === 'network' ||
+    failure.kind === 'timeout' ||
+    failure.kind === 'body' ||
+    (failure.kind === 'http' && TRANSIENT_HTTP_STATUSES.has(failure.status || 0)),
+};
+
+const PROVIDER_REST_RETRY: SolanaRetryPolicy = {
+  ...PROVIDER_RETRY,
+  shouldRetry: (failure) =>
+    failure.kind === 'invalid-response' || PROVIDER_RETRY.shouldRetry(failure, 1),
+};
+
+function provider(context: ProviderContext, runtime: AdminIrlRedeemRuntime) {
+  return createSolanaProvider({
+    apiKey: context.apiKey,
+    attemptTimeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+    cluster: runtime.cluster,
+    fetch: context.providerFetch,
+    maxResponseBytes: PROVIDER_MAX_BYTES,
+    requestId: (method) => `admin-irl-redeem-${method}`,
+    retry: PROVIDER_RETRY,
+    signal: context.signal,
+  });
 }
 
-async function pause(signal: AbortSignal, delay = 100): Promise<void> {
-  if (signal.aborted) throw signal.reason;
-  await new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    };
-    const timeout = setTimeout(finish, delay);
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
+function translateProviderError(
+  context: ProviderContext,
+  error: unknown,
+  assetId?: string,
+): AdminIrlRedeemPrepareError {
+  if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+  if (!(error instanceof SolanaProviderError)) {
+    return new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
+  }
+  if (error.kind === 'timeout') {
+    return new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem provider request timed out.');
+  }
+  if ((error.kind === 'network' || error.kind === 'body') && error.method?.endsWith('Rest')) {
+    return new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid response.');
+  }
+  if (error.kind === 'invalid-response') {
+    return new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid response.');
+  }
+  if (error.kind === 'rpc') {
+    return new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.', {
+      method: error.method,
+      ...(Number.isFinite(error.rpcCode) ? { upstreamCode: error.rpcCode } : {}),
+    });
+  }
+  if (error.kind === 'not-found') {
+    if (error.method === 'getAssetRest') {
+      return new AdminIrlRedeemPrepareError('not-found', 'Asset not found.');
+    }
+    if (error.method === 'getAssetProofRest') {
+      return new AdminIrlRedeemPrepareError('not-found', 'Asset proof not found');
+    }
+    if (error.resource === 'asset-proof') {
+      return new AdminIrlRedeemPrepareError('not-found', 'Asset proof not found', { assetId });
+    }
+    return new AdminIrlRedeemPrepareError(
+      'not-found',
+      'Asset not found. If you just transferred or minted it, wait a few seconds and try again.',
+    );
+  }
+  return new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
 }
 
 export async function rpcCall(
@@ -452,148 +460,11 @@ export async function rpcCall(
   method: string,
   params: unknown,
 ): Promise<unknown> {
-  const id = `admin-irl-redeem-${method}`;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createTimedAbortScope(context.signal, {
-      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-      timeoutMessage: 'Admin IRL redeem provider request timed out',
-    });
-    try {
-      const transport = await requestSolanaRpc({
-        fetch: (input, init) => raceWithSignal(
-          context.providerFetch(input, init),
-          attemptScope.signal,
-        ),
-        url: `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
-        id,
-        method,
-        params,
-        maxResponseBytes: PROVIDER_MAX_BYTES,
-        signal: attemptScope.signal,
-      });
-      if (transport.kind === 'http-error') {
-        if (TRANSIENT_HTTP_STATUSES.has(transport.status) && attempt === 0) {
-          await pause(context.signal);
-          continue;
-        }
-        throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
-      }
-      if (transport.kind === 'invalid-response') {
-        throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid response.');
-      }
-      if (transport.kind === 'rpc-error') {
-        const upstreamCode = Number(transport.error.code);
-        throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.', {
-          method,
-          ...(Number.isFinite(upstreamCode) ? { upstreamCode } : {}),
-        });
-      }
-      return transport.value;
-    } catch (error) {
-      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-      if (attemptScope.timedOut()) {
-        if (attempt === 0 && !context.signal.aborted) {
-          await pause(context.signal);
-          continue;
-        }
-        throw new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem provider request timed out.');
-      }
-      if (context.signal.aborted) {
-        if (error instanceof AdminIrlRedeemPrepareError) throw error;
-        throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
-      }
-      if (error instanceof AdminIrlRedeemPrepareError) throw error;
-      if (attempt === 0) {
-        await pause(context.signal);
-        continue;
-      }
-      throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
-    } finally {
-      attemptScope.dispose();
-    }
-  }
-  throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
-}
-
-async function restJson(context: ProviderContext, url: string, missingMessage: string): Promise<unknown> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createTimedAbortScope(context.signal, {
-      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-      timeoutMessage: 'Admin IRL redeem provider request timed out',
-    });
-    try {
-      const response = await raceWithSignal(context.providerFetch(url, {
-        headers: { Accept: 'application/json' },
-        redirect: 'manual',
-        signal: attemptScope.signal,
-      }), attemptScope.signal);
-      if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt === 0) {
-        await cancelResponseBody(response);
-        await pause(context.signal);
-        continue;
-      }
-      if (!response.ok) {
-        await cancelResponseBody(response);
-        throw new AdminIrlRedeemPrepareError(
-          response.status === 404 ? 'not-found' : 'unavailable',
-          response.status === 404 ? missingMessage : 'Admin IRL redeem provider is temporarily unavailable.',
-        );
-      }
-      return await readBoundedJson(response, PROVIDER_MAX_BYTES, attemptScope.signal);
-    } catch (error) {
-      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-      if (attemptScope.timedOut()) {
-        if (attempt === 0 && !context.signal.aborted) {
-          await pause(context.signal);
-          continue;
-        }
-        throw new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem provider request timed out.');
-      }
-      if (context.signal.aborted) {
-        if (error instanceof AdminIrlRedeemPrepareError) throw error;
-        throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid response.');
-      }
-      if (error instanceof AdminIrlRedeemPrepareError) throw error;
-      if (attempt === 0) {
-        await pause(context.signal);
-        continue;
-      }
-      throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned an invalid response.');
-    } finally {
-      attemptScope.dispose();
-    }
-  }
-  throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
-}
-
-async function fetchAssetOnce(
-  context: ProviderContext,
-  runtime: AdminIrlRedeemRuntime,
-  assetId: string,
-): Promise<DasAsset> {
-  let value: unknown;
   try {
-    value = await rpcCall(context, runtime, 'getAsset', {
-      id: assetId,
-      options: HELIUS_COLLECTION_GROUPING_OPTIONS,
-    });
+    return await provider(context, runtime).rpc(method, params);
   } catch (error) {
-    const upstreamCode = error instanceof AdminIrlRedeemPrepareError && isRecord(error.details)
-      ? Number(error.details.upstreamCode)
-      : Number.NaN;
-    if (upstreamCode !== -32601 && upstreamCode !== -32602) throw error;
-    const cluster = runtime.cluster === 'mainnet-beta' ? '' : `&cluster=${encodeURIComponent(runtime.cluster)}`;
-    const payload = await restJson(
-      context,
-      `https://api.helius.xyz/v0/assets?ids[]=${encodeURIComponent(assetId)}&api-key=${encodeURIComponent(context.apiKey)}${cluster}`,
-      'Asset not found.',
-    );
-    value = Array.isArray(payload) ? payload[0] : undefined;
+    throw translateProviderError(context, error);
   }
-  if (!isRecord(value)) {
-    throw new AdminIrlRedeemPrepareError('not-found', 'Asset not found. If you just transferred or minted it, wait a few seconds and try again.');
-  }
-  return value;
 }
 
 export async function fetchAsset(
@@ -601,23 +472,19 @@ export async function fetchAsset(
   runtime: AdminIrlRedeemRuntime,
   assetId: string,
 ): Promise<DasAsset> {
-  const startedAt = Date.now();
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 6 && Date.now() - startedAt < 12_000; attempt += 1) {
-    try {
-      return await fetchAssetOnce(context, runtime, assetId);
-    } catch (error) {
-      lastError = error;
-      if (
-        error instanceof AdminIrlRedeemPrepareError &&
-        !['not-found', 'unavailable', 'resource-exhausted', 'deadline-exceeded'].includes(error.code)
-      ) throw error;
-      if (attempt < 5) await pause(context.signal, 300 * 2 ** attempt);
-    }
+  try {
+    return await provider(context, runtime).getAsset(assetId, {
+      indexingRetry: {
+        attempts: 6,
+        baseDelayMs: 300,
+        capDelayToRemaining: false,
+        maxElapsedMs: 12_000,
+      },
+      restRetry: PROVIDER_REST_RETRY,
+    });
+  } catch (error) {
+    throw translateProviderError(context, error, assetId);
   }
-  throw lastError instanceof Error
-    ? lastError
-    : new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider is temporarily unavailable.');
 }
 
 export async function fetchAssetProof(
@@ -625,36 +492,22 @@ export async function fetchAssetProof(
   runtime: AdminIrlRedeemRuntime,
   assetId: string,
 ): Promise<Record<string, unknown>> {
-  let value: unknown;
   try {
-    value = await rpcCall(context, runtime, 'getAssetProof', { id: assetId });
+    return await provider(context, runtime).getAssetProof(assetId, {
+      restRetry: PROVIDER_REST_RETRY,
+    });
   } catch (error) {
-    const upstreamCode = error instanceof AdminIrlRedeemPrepareError && isRecord(error.details)
-      ? Number(error.details.upstreamCode)
-      : Number.NaN;
-    if (upstreamCode !== -32601 && upstreamCode !== -32602) throw error;
-    const cluster = runtime.cluster === 'mainnet-beta' ? '' : `&cluster=${encodeURIComponent(runtime.cluster)}`;
-    value = await restJson(
-      context,
-      `https://api.helius.xyz/v0/assets/${encodeURIComponent(assetId)}/proof?api-key=${encodeURIComponent(context.apiKey)}${cluster}`,
-      'Asset proof not found',
-    );
+    throw translateProviderError(context, error, assetId);
   }
-  if (!isRecord(value)) throw new AdminIrlRedeemPrepareError('not-found', 'Asset proof not found', { assetId });
-  return value;
 }
 
 function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; data: Uint8Array } {
-  if (!isRecord(value) || typeof value.owner !== 'string' || !Array.isArray(value.data)) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', `${label} is invalid.`);
-  }
-  const encoded = value.data[0];
-  if (typeof encoded !== 'string' || value.data[1] !== 'base64' || encoded.length > PROVIDER_MAX_BYTES) {
-    throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned invalid account data.');
-  }
   try {
-    return { owner: new PublicKey(value.owner), data: Buffer.from(encoded, 'base64') };
-  } catch {
+    return parseSolanaRpcAccount(value, { maxEncodedBytes: PROVIDER_MAX_BYTES });
+  } catch (error) {
+    if (error instanceof SolanaProviderError && error.reason === 'account-shape') {
+      throw new AdminIrlRedeemPrepareError('failed-precondition', `${label} is invalid.`);
+    }
     throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem provider returned invalid account data.');
   }
 }

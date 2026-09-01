@@ -10,6 +10,7 @@ import {
   validateSolanaSignInMessage,
 } from '../../../../shared/walletLifecycle.js';
 import { isRequestCancellationError, readBoundedRequestJson } from './boundedRequest.js';
+import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
 import { matchesSha256Hex, randomSessionSecret, sha256Hex } from './sessionSecrets.js';
 
 export const STAFF_AUTH_CHALLENGE_PATH = '/staff/auth/challenge';
@@ -100,13 +101,7 @@ export class StaffAuthError extends Error {
 }
 
 function jsonResponse(body: unknown, status: number): Response {
-  return Response.json(body, {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
+  return sharedJsonResponse(body, status, { contentType: 'application/json' });
 }
 
 function errorResponse(error: StaffAuthError): Response {

@@ -44,10 +44,7 @@ import {
   dasAssetKind,
   type DasAsset,
 } from '../../../../shared/dasAsset.js';
-import {
-  HELIUS_COLLECTION_GROUPING_OPTIONS,
-  uniqueAssetGroupingCollectionMint,
-} from '../../../../shared/dasAssetCollections.js';
+import { uniqueAssetGroupingCollectionMint } from '../../../../shared/dasAssetCollections.js';
 import { DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS } from '../../../../shared/deliveryRecovery.js';
 import { HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES } from '../../../../shared/heliusDas.js';
 import {
@@ -64,18 +61,12 @@ import {
   normalizeDeliveryUnitsPerBox,
 } from '../../../../shared/shipping.js';
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
-import {
-  cancelResponseBody,
-  readBoundedJson,
-  type ProfileProviderFetch,
-} from './boundedResponse.js';
+import { type ProfileProviderFetch } from './boundedResponse.js';
 import {
   createRequestDeadline,
-  createTimedAbortScope,
   isRequestCancellationError,
   isSignalCancellationError,
   raceReadWithSignal,
-  raceWithSignal,
   readBoundedRequestJson,
   runCriticalRequestOperation,
 } from './boundedRequest.js';
@@ -84,8 +75,14 @@ import {
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
 } from './deferredWork.js';
-import { isRecord, ProfileReadError } from './dataAccess.js';
-import { requestSolanaRpc } from './solanaProvider.js';
+import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
+import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import {
+  createSolanaProvider,
+  parseSolanaRpcAccount,
+  SolanaProviderError,
+  type SolanaRetryPolicy,
+} from './solanaProvider.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -137,17 +134,7 @@ type DeliveryPrepareEnv = Pick<
   'COSIGNER_SECRET' | 'HELIUS_API_KEY'
 > & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
-type DeliveryPrepareErrorCode =
-  | 'invalid-argument'
-  | 'unauthenticated'
-  | 'permission-denied'
-  | 'not-found'
-  | 'aborted'
-  | 'failed-precondition'
-  | 'resource-exhausted'
-  | 'deadline-exceeded'
-  | 'unavailable'
-  | 'internal';
+type DeliveryPrepareErrorCode = ApiErrorCode;
 
 class DeliveryPrepareError extends Error {
   constructor(
@@ -292,38 +279,8 @@ type DeliveryOrderCreateInput = {
   prepareAttemptId: string;
 };
 
-function statusForCode(code: DeliveryPrepareErrorCode): number {
-  if (code === 'invalid-argument') return 400;
-  if (code === 'unauthenticated') return 401;
-  if (code === 'permission-denied') return 403;
-  if (code === 'not-found') return 404;
-  if (code === 'aborted' || code === 'failed-precondition') return 409;
-  if (code === 'resource-exhausted') return 429;
-  if (code === 'deadline-exceeded') return 504;
-  if (code === 'unavailable') return 502;
-  return 500;
-}
-
-function jsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-}
-
 function errorResponse(error: DeliveryPrepareError): Response {
-  return jsonResponse({
-    ok: false,
-    error: {
-      code: error.code,
-      message: error.message,
-      ...(error.details === undefined ? {} : { details: error.details }),
-    },
-  }, statusForCode(error.code));
+  return jsonResponse(apiErrorBody(error), httpStatusForApiErrorCode(error.code, 502));
 }
 
 async function readRequestBody(request: Request, signal: AbortSignal): Promise<PrepareDeliveryRequest> {
@@ -408,26 +365,68 @@ function clusterSharesCollection(runtime: DeliveryRuntime): boolean {
     candidate.collectionMint === runtime.collectionMint.toBase58());
 }
 
-function heliusOrigin(cluster: SolanaCluster): string {
-  return `https://${cluster === 'mainnet-beta' ? 'mainnet' : cluster}.helius-rpc.com/`;
+const PROVIDER_RETRY: SolanaRetryPolicy = {
+  attempts: 2,
+  delayMs: () => 100,
+  shouldRetry: (failure) =>
+    failure.kind === 'network' ||
+    failure.kind === 'timeout' ||
+    failure.kind === 'body' ||
+    (failure.kind === 'http' && TRANSIENT_HTTP_STATUSES.has(failure.status || 0)) ||
+    (failure.kind === 'rpc' && isTransientShopRpcError({
+      code: failure.rpcCode,
+      message: failure.message,
+      ...(failure.rpcData === undefined ? {} : { data: failure.rpcData }),
+    })),
+};
+
+const PROVIDER_REST_RETRY: SolanaRetryPolicy = {
+  ...PROVIDER_RETRY,
+  shouldRetry: (failure, attemptNumber) =>
+    failure.kind === 'invalid-response' ||
+    (failure.kind !== 'rpc' && PROVIDER_RETRY.shouldRetry(failure, attemptNumber)),
+};
+
+function provider(context: ProviderContext, runtime: DeliveryRuntime) {
+  return createSolanaProvider({
+    apiKey: context.apiKey,
+    attemptTimeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+    cluster: runtime.cluster,
+    fetch: context.providerFetch,
+    maxResponseBytes: PROVIDER_MAX_BYTES,
+    requestId: (method) => `delivery-prepare-${method}`,
+    retry: PROVIDER_RETRY,
+    signal: context.signal,
+  });
 }
 
-async function pause(signal: AbortSignal, delay = 100): Promise<void> {
-  if (signal.aborted) throw signal.reason;
-  await new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    };
-    const timeout = setTimeout(finish, delay);
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
+function translateProviderError(
+  context: ProviderContext,
+  error: unknown,
+): DeliveryPrepareError {
+  if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+  if (!(error instanceof SolanaProviderError)) {
+    return new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
+  }
+  if (error.kind === 'timeout') {
+    return new DeliveryPrepareError('deadline-exceeded', 'Delivery provider request timed out.');
+  }
+  if ((error.kind === 'network' || error.kind === 'body') && error.method?.endsWith('Rest')) {
+    return new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid response.');
+  }
+  if (error.kind === 'invalid-response') {
+    return new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid response.');
+  }
+  if (error.kind === 'rpc') {
+    return new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.', {
+      method: error.method,
+      ...(Number.isFinite(error.rpcCode) ? { upstreamCode: error.rpcCode } : {}),
+    });
+  }
+  if (error.kind === 'not-found' && error.resource === 'asset') {
+    return new DeliveryPrepareError('not-found', 'Asset not found.');
+  }
+  return new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
 }
 
 async function rpcCall(
@@ -436,119 +435,11 @@ async function rpcCall(
   method: string,
   params: unknown,
 ): Promise<unknown> {
-  const id = `delivery-prepare-${method}`;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createTimedAbortScope(context.signal, {
-      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-      timeoutMessage: 'Delivery provider request timed out',
-    });
-    try {
-      const transport = await requestSolanaRpc({
-        fetch: (input, init) => raceWithSignal(
-          context.providerFetch(input, init),
-          attemptScope.signal,
-        ),
-        url: `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
-        id,
-        method,
-        params,
-        maxResponseBytes: PROVIDER_MAX_BYTES,
-        signal: attemptScope.signal,
-      });
-      if (transport.kind === 'http-error') {
-        if (TRANSIENT_HTTP_STATUSES.has(transport.status) && attempt === 0) {
-          await pause(context.signal);
-          continue;
-        }
-        throw new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
-      }
-      if (transport.kind === 'invalid-response') {
-        throw new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid response.');
-      }
-      if (transport.kind === 'rpc-error') {
-        const upstreamCode = Number(transport.error.code);
-        if (attempt === 0 && isTransientShopRpcError(transport.error)) {
-          await pause(context.signal);
-          continue;
-        }
-        throw new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.', {
-          method,
-          ...(Number.isFinite(upstreamCode) ? { upstreamCode } : {}),
-        });
-      }
-      return transport.value;
-    } catch (error) {
-      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-      if (attemptScope.timedOut()) {
-        if (attempt === 0 && !context.signal.aborted) {
-          await pause(context.signal);
-          continue;
-        }
-        throw new DeliveryPrepareError('deadline-exceeded', 'Delivery provider request timed out.');
-      }
-      if (context.signal.aborted) {
-        if (error instanceof DeliveryPrepareError) throw error;
-        throw new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
-      }
-      if (error instanceof DeliveryPrepareError) throw error;
-      if (attempt === 0) {
-        await pause(context.signal);
-        continue;
-      }
-      throw new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
-    } finally {
-      attemptScope.dispose();
-    }
+  try {
+    return await provider(context, runtime).rpc(method, params);
+  } catch (error) {
+    throw translateProviderError(context, error);
   }
-  throw new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
-}
-
-async function restJson(context: ProviderContext, url: string): Promise<unknown> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const attemptScope = createTimedAbortScope(context.signal, {
-      timeoutMs: context.attemptTimeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
-      timeoutMessage: 'Delivery provider request timed out',
-    });
-    try {
-      const response = await raceWithSignal(context.providerFetch(url, {
-        headers: { Accept: 'application/json' },
-        redirect: 'manual',
-        signal: attemptScope.signal,
-      }), attemptScope.signal);
-      if (TRANSIENT_HTTP_STATUSES.has(response.status) && attempt === 0) {
-        await cancelResponseBody(response);
-        await pause(context.signal);
-        continue;
-      }
-      if (!response.ok) {
-        await cancelResponseBody(response);
-        throw new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
-      }
-      return await readBoundedJson(response, PROVIDER_MAX_BYTES, attemptScope.signal);
-    } catch (error) {
-      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-      if (attemptScope.timedOut()) {
-        if (attempt === 0 && !context.signal.aborted) {
-          await pause(context.signal);
-          continue;
-        }
-        throw new DeliveryPrepareError('deadline-exceeded', 'Delivery provider request timed out.');
-      }
-      if (context.signal.aborted) {
-        if (error instanceof DeliveryPrepareError) throw error;
-        throw new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid response.');
-      }
-      if (error instanceof DeliveryPrepareError) throw error;
-      if (attempt === 0) {
-        await pause(context.signal);
-        continue;
-      }
-      throw new DeliveryPrepareError('unavailable', 'Delivery provider returned an invalid response.');
-    } finally {
-      attemptScope.dispose();
-    }
-  }
-  throw new DeliveryPrepareError('unavailable', 'Delivery provider is temporarily unavailable.');
 }
 
 async function fetchAsset(
@@ -556,62 +447,28 @@ async function fetchAsset(
   runtime: DeliveryRuntime,
   assetId: string,
 ): Promise<DasAsset> {
-  const startedAt = Date.now();
-  let lastError: DeliveryPrepareError | undefined;
-  for (
-    let attempt = 0;
-    attempt < ASSET_FETCH_MAX_ATTEMPTS && Date.now() - startedAt < ASSET_FETCH_MAX_WAIT_MS;
-    attempt += 1
-  ) {
-    try {
-      let value: unknown;
-      try {
-        value = await rpcCall(context, runtime, 'getAsset', {
-          id: assetId,
-          options: HELIUS_COLLECTION_GROUPING_OPTIONS,
-        });
-      } catch (error) {
-        const upstreamCode = error instanceof DeliveryPrepareError && isRecord(error.details)
-          ? Number(error.details.upstreamCode)
-          : Number.NaN;
-        if (upstreamCode !== -32601 && upstreamCode !== -32602) throw error;
-        const cluster = runtime.cluster === 'mainnet-beta' ? '' : `&cluster=${encodeURIComponent(runtime.cluster)}`;
-        const payload = await restJson(
-          context,
-          `https://api.helius.xyz/v0/assets?ids[]=${encodeURIComponent(assetId)}&api-key=${encodeURIComponent(context.apiKey)}${cluster}`,
-        );
-        value = Array.isArray(payload) ? payload[0] : undefined;
-      }
-      if (isRecord(value)) return value;
-      lastError = new DeliveryPrepareError('not-found', 'Asset not found.');
-    } catch (error) {
-      if (
-        !(error instanceof DeliveryPrepareError) ||
-        !['not-found', 'unavailable', 'deadline-exceeded', 'resource-exhausted'].includes(error.code)
-      ) throw error;
-      lastError = error;
-    }
-    if (attempt < ASSET_FETCH_MAX_ATTEMPTS - 1) {
-      const remainingMs = ASSET_FETCH_MAX_WAIT_MS - (Date.now() - startedAt);
-      if (remainingMs > 0) {
-        await pause(context.signal, Math.min(ASSET_FETCH_RETRY_BASE_DELAY_MS * 2 ** attempt, remainingMs));
-      }
-    }
+  try {
+    return await provider(context, runtime).getAsset(assetId, {
+      indexingRetry: {
+        attempts: ASSET_FETCH_MAX_ATTEMPTS,
+        baseDelayMs: ASSET_FETCH_RETRY_BASE_DELAY_MS,
+        capDelayToRemaining: true,
+        maxElapsedMs: ASSET_FETCH_MAX_WAIT_MS,
+      },
+      restRetry: PROVIDER_REST_RETRY,
+    });
+  } catch (error) {
+    throw translateProviderError(context, error);
   }
-  throw lastError || new DeliveryPrepareError('not-found', 'Asset not found.');
 }
 
 function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; data: Uint8Array } {
-  if (!isRecord(value) || typeof value.owner !== 'string' || !Array.isArray(value.data)) {
-    throw new DeliveryPrepareError('failed-precondition', `${label} is invalid.`);
-  }
-  const encoded = value.data[0];
-  if (typeof encoded !== 'string' || value.data[1] !== 'base64' || encoded.length > PROVIDER_MAX_BYTES) {
-    throw new DeliveryPrepareError('unavailable', 'Delivery provider returned invalid account data.');
-  }
   try {
-    return { owner: new PublicKey(value.owner), data: Buffer.from(encoded, 'base64') };
-  } catch {
+    return parseSolanaRpcAccount(value, { maxEncodedBytes: PROVIDER_MAX_BYTES });
+  } catch (error) {
+    if (error instanceof SolanaProviderError && error.reason === 'account-shape') {
+      throw new DeliveryPrepareError('failed-precondition', `${label} is invalid.`);
+    }
     throw new DeliveryPrepareError('unavailable', 'Delivery provider returned invalid account data.');
   }
 }

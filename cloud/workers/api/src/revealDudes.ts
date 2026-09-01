@@ -49,25 +49,20 @@ import {
 } from '../../../../shared/solanaProgramAddresses.js';
 import {
   isBase58Bytes,
-  isExactShopRpcResponse,
   isNonZeroBase58Bytes,
   isTransientShopRpcError,
 } from '../../../../shared/solanaRpcProxy.js';
 import { transformShopInventoryItem } from '../../../../shared/shopDomain.js';
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
-import {
-  cancelResponseBody,
-  readBoundedJson,
-  type ProfileProviderFetch,
-} from './boundedResponse.js';
+import { type ProfileProviderFetch } from './boundedResponse.js';
 import {
   createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
   raceReadWithSignal,
-  raceWithSignal,
   readBoundedRequestJson,
   runCriticalRequestOperation,
+  sleepWithSignal,
   type RequestDeadline,
 } from './boundedRequest.js';
 import {
@@ -78,7 +73,7 @@ import {
   CommerceDudeAssignmentError,
   assignCommerceDudes,
 } from './commerceDudeAssignments.js';
-import { isRecord, ProfileReadError } from './dataAccess.js';
+import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
   registerDeferredWork,
@@ -86,6 +81,13 @@ import {
   type DeferredWork,
 } from './deferredWork.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
+import { httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import {
+  createSolanaProvider,
+  parseSolanaRpcAccount,
+  SolanaProviderError,
+  type SolanaRetryPolicy,
+} from './solanaProvider.js';
 import {
   RevealSubmissionOwnerMismatchError,
   RevealSubmissionStoragePausedError,
@@ -110,21 +112,10 @@ const REVEAL_BACKGROUND_JOB_TIMEOUT_MS = 60_000;
 const BACKGROUND_PACK_STATUS_TIMEOUT_MS = 10_000;
 const REVEAL_BACKGROUND_JOB_INITIAL_DELAY_SECONDS = 5;
 const REVEAL_BACKGROUND_JOB_RETRY_DELAYS_SECONDS = [5, 15, 30, 60, 120, 300] as const;
-const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
 
-type RevealErrorCode =
-  | 'invalid-argument'
-  | 'unauthenticated'
-  | 'permission-denied'
-  | 'not-found'
-  | 'aborted'
-  | 'failed-precondition'
-  | 'resource-exhausted'
-  | 'deadline-exceeded'
-  | 'unavailable'
-  | 'internal';
+type RevealErrorCode = ApiErrorCode;
 
 export class RevealDudesError extends Error {
   constructor(
@@ -247,23 +238,6 @@ function secureRandomInt(maxExclusive: number): number {
   return values[0] % maximum;
 }
 
-async function pause(milliseconds: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) throw signal.reason;
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    const timeout = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, milliseconds);
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
-}
-
 const defaultDependencies: RevealDudesDependencies = {
   assignDudes,
   confirmRevealSubmission,
@@ -280,7 +254,7 @@ const defaultDependencies: RevealDudesDependencies = {
   reconcileRevealSubmission,
   reserveRevealSubmission,
   sendAndConfirmTransaction,
-  sleep: pause,
+  sleep: sleepWithSignal,
   timeoutMs: HANDLER_TIMEOUT_MS,
   validateOnchainConfig,
   verifyIdentity: verifyRequestIdentity,
@@ -294,38 +268,14 @@ const requestSchema = z.object({
 
 type RevealRequest = z.infer<typeof requestSchema>;
 
-function errorStatus(code: RevealErrorCode): number {
-  if (code === 'invalid-argument') return 400;
-  if (code === 'unauthenticated') return 401;
-  if (code === 'permission-denied') return 403;
-  if (code === 'not-found') return 404;
-  if (code === 'aborted' || code === 'failed-precondition') return 409;
-  if (code === 'resource-exhausted') return 429;
-  if (code === 'deadline-exceeded') return 504;
-  if (code === 'unavailable') return 503;
-  return 500;
-}
-
-function response(body: unknown, status: number, headers: HeadersInit = {}): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'X-Content-Type-Options': 'nosniff',
-      ...headers,
-    },
-  });
-}
-
 function errorResponse(error: RevealDudesError): Response {
-  return response({
+  return jsonResponse({
     error: {
       code: error.code,
       message: error.message,
       ...(error.details === undefined ? {} : { details: error.details }),
     },
-  }, errorStatus(error.code));
+  }, httpStatusForApiErrorCode(error.code, 503));
 }
 
 function summarizeError(error: unknown): Record<string, unknown> {
@@ -414,8 +364,37 @@ function runtimeForDrop(rawDropId: string): RevealRuntime {
   };
 }
 
-function heliusOrigin(cluster: SolanaCluster): string {
-  return `https://${cluster === 'mainnet-beta' ? 'mainnet' : cluster}.helius-rpc.com/`;
+function revealRetryPolicy(attempts: number): SolanaRetryPolicy {
+  return {
+    attempts,
+    delayMs: () => 100,
+    shouldRetry: (error) => {
+      if (error.kind === 'rpc') {
+        return isTransientShopRpcError({ code: error.rpcCode, message: error.message });
+      }
+      if (error.kind === 'http') {
+        return true;
+      }
+      return error.kind === 'network' || error.kind === 'timeout' || error.kind === 'body' ||
+        error.kind === 'invalid-response';
+    },
+  };
+}
+
+function revealProviderError(error: unknown): RevealDudesError {
+  if (!(error instanceof SolanaProviderError)) {
+    return new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
+  }
+  if (error.kind === 'timeout') {
+    return new RevealDudesError('deadline-exceeded', 'Reveal provider request timed out.');
+  }
+  if (error.kind === 'rpc') {
+    return new RevealRpcError(error.message, error.rpcCode, error.rpcData);
+  }
+  if (error.kind === 'invalid-response') {
+    return new RevealDudesError('unavailable', 'Reveal provider returned an invalid response.');
+  }
+  return new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
 }
 
 async function rpcCall(
@@ -426,95 +405,32 @@ async function rpcCall(
   options: { attempts?: number; timeoutMs?: number } = {},
 ): Promise<unknown> {
   const attempts = options.attempts ?? 2;
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const controller = new AbortController();
-    let timedOut = false;
-    const onAbort = () => controller.abort(context.signal.reason);
-    context.signal.addEventListener('abort', onAbort, { once: true });
-    const timeout = setTimeout(() => {
-      if (controller.signal.aborted) return;
-      timedOut = true;
-      controller.abort(new DOMException('Provider request timed out', 'TimeoutError'));
-    }, options.timeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS);
-    const id = crypto.randomUUID();
-    try {
-      if (context.signal.aborted) onAbort();
-      if (controller.signal.aborted) throw controller.signal.reason;
-      const providerResponse = await raceWithSignal(context.fetch(
-        `${heliusOrigin(runtime.cluster)}?api-key=${encodeURIComponent(context.apiKey)}`,
-        {
-          method: 'POST',
-          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-          redirect: 'manual',
-          signal: controller.signal,
-        },
-      ), controller.signal);
-      if (TRANSIENT_HTTP_STATUSES.has(providerResponse.status) && attempt + 1 < attempts) {
-        await cancelResponseBody(providerResponse);
-        await pause(100, context.signal);
-        continue;
-      }
-      if (!providerResponse.ok) {
-        await cancelResponseBody(providerResponse);
-        throw new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
-      }
-      const payload = await readBoundedJson(providerResponse, PROVIDER_MAX_BYTES, controller.signal);
-      if (!isExactShopRpcResponse(payload, id)) {
-        throw new RevealDudesError('unavailable', 'Reveal provider returned an invalid response.');
-      }
-      if (payload.error) {
-        throw new RevealRpcError(
-          payload.error.message,
-          payload.error.code,
-          payload.error.data,
-        );
-      }
-      if (context.signal.aborted) throw context.signal.reason;
-      return payload.result;
-    } catch (error) {
-      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-      if (timedOut) {
-        if (attempt + 1 < attempts && !context.signal.aborted) {
-          await pause(100, context.signal);
-          continue;
-        }
-        throw new RevealDudesError('deadline-exceeded', 'Reveal provider request timed out.');
-      }
-      if (context.signal.aborted) {
-        if (error instanceof RevealDudesError) throw error;
-        throw new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
-      }
-      if (
-        error instanceof RevealRpcError &&
-        !isTransientShopRpcError({ code: error.rpcCode, message: error.message })
-      ) throw error;
-      if (error instanceof RevealDudesError && error.code !== 'unavailable') throw error;
-      if (attempt + 1 < attempts) {
-        await pause(100, context.signal);
-        continue;
-      }
-      if (error instanceof RevealDudesError) throw error;
-      throw new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
-    } finally {
-      clearTimeout(timeout);
-      context.signal.removeEventListener('abort', onAbort);
-    }
+  const provider = createSolanaProvider({
+    apiKey: context.apiKey,
+    attemptTimeoutMs: options.timeoutMs ?? PROVIDER_ATTEMPT_TIMEOUT_MS,
+    cluster: runtime.cluster,
+    envelope: 'strict',
+    fetch: context.fetch,
+    maxResponseBytes: PROVIDER_MAX_BYTES,
+    requestId: () => crypto.randomUUID(),
+    retry: revealRetryPolicy(attempts),
+    signal: context.signal,
+  });
+  try {
+    return await provider.rpc(method, params, { accept: 'application/json' });
+  } catch (error) {
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    throw revealProviderError(error);
   }
-  throw new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
 }
 
 function parseRpcAccount(value: unknown, label: string): { owner: PublicKey; data: Uint8Array } {
-  if (!isRecord(value) || typeof value.owner !== 'string' || !Array.isArray(value.data)) {
-    throw new RevealDudesError('failed-precondition', `${label} is invalid.`);
-  }
-  const encoded = value.data[0];
-  if (typeof encoded !== 'string' || value.data[1] !== 'base64' || encoded.length > PROVIDER_MAX_BYTES) {
-    throw new RevealDudesError('unavailable', 'Reveal provider returned invalid account data.');
-  }
   try {
-    return { owner: new PublicKey(value.owner), data: Buffer.from(encoded, 'base64') };
-  } catch {
+    return parseSolanaRpcAccount(value, { maxEncodedBytes: PROVIDER_MAX_BYTES });
+  } catch (error) {
+    if (error instanceof SolanaProviderError && error.reason === 'account-shape') {
+      throw new RevealDudesError('failed-precondition', `${label} is invalid.`);
+    }
     throw new RevealDudesError('unavailable', 'Reveal provider returned invalid account data.');
   }
 }
@@ -1179,7 +1095,7 @@ async function waitForSignature(
     } catch (error) {
       if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
     }
-    await pause(TX_CONFIRM_POLL_MS, context.signal);
+    await sleepWithSignal(TX_CONFIRM_POLL_MS, context.signal);
   }
   const transaction = await loadTransactionBestEffort(context, runtime, signature);
   const corroborated = confirmedTransactionOutcome(transaction, signature);
@@ -1807,7 +1723,11 @@ export async function handleRevealDudes(
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     return {
-      response: response({ error: { code: 'invalid-argument', message: 'Method not allowed.' } }, 405, { Allow: 'POST, OPTIONS' }),
+      response: jsonResponse(
+        { error: { code: 'invalid-argument', message: 'Method not allowed.' } },
+        405,
+        { headers: { Allow: 'POST, OPTIONS' } },
+      ),
       metrics,
       authOutcome,
     };
@@ -1899,7 +1819,7 @@ export async function handleRevealDudes(
         storedSubmission,
       );
       return {
-        response: response({ signature: storedSubmission.signature, dudeIds: storedSubmission.dudeIds }, 200),
+        response: jsonResponse({ signature: storedSubmission.signature, dudeIds: storedSubmission.dudeIds }, 200),
         metrics,
         authOutcome,
         dropId,
@@ -1935,7 +1855,7 @@ export async function handleRevealDudes(
           storedSubmission,
         );
         return {
-          response: response({ signature: storedSubmission.signature, dudeIds: storedSubmission.dudeIds }, 200),
+          response: jsonResponse({ signature: storedSubmission.signature, dudeIds: storedSubmission.dudeIds }, 200),
           metrics,
           authOutcome,
           dropId,
@@ -2055,7 +1975,7 @@ export async function handleRevealDudes(
         reservation.submission,
       );
       return {
-        response: response({
+        response: jsonResponse({
           signature: reservation.submission.signature,
           dudeIds: reservation.submission.dudeIds,
         }, 200),
@@ -2095,7 +2015,7 @@ export async function handleRevealDudes(
           reservation.submission,
         );
         return {
-          response: response({
+          response: jsonResponse({
             signature: reservation.submission.signature,
             dudeIds: reservation.submission.dudeIds,
           }, 200),
@@ -2220,7 +2140,7 @@ export async function handleRevealDudes(
       submission,
     );
     return {
-      response: response({ signature, dudeIds: submission.dudeIds }, 200),
+      response: jsonResponse({ signature, dudeIds: submission.dudeIds }, 200),
       metrics,
       authOutcome,
       dropId,

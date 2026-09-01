@@ -81,7 +81,7 @@ import {
   raceWithSignal,
   readBoundedRequestJson,
 } from './boundedRequest.js';
-import { isRecord, ProfileReadError } from './dataAccess.js';
+import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
@@ -122,6 +122,7 @@ import {
   mintReceiptsInstruction,
   sendAndConfirmSignedTransaction,
 } from './deliveryReceiptOnchain.js';
+import { heliusRpcUrl } from './solanaProvider.js';
 
 export const ADMIN_IRL_REDEEM_FINALIZE_PATH = '/admin/irl-redeem/finalize';
 
@@ -168,17 +169,7 @@ type CommerceContext = CommerceDocumentContext & {
 type ProviderContext = Parameters<typeof fetchAdminIrlRedeemAsset>[0];
 type Runtime = ReturnType<typeof buildAdminIrlRedeemRuntime>;
 type OnchainConfig = Awaited<ReturnType<typeof fetchDeliveryOnchainConfig>>;
-export type AdminIrlRedeemFinalizeErrorCode =
-  | 'invalid-argument'
-  | 'unauthenticated'
-  | 'permission-denied'
-  | 'not-found'
-  | 'aborted'
-  | 'failed-precondition'
-  | 'resource-exhausted'
-  | 'deadline-exceeded'
-  | 'unavailable'
-  | 'internal';
+export type AdminIrlRedeemFinalizeErrorCode = ApiErrorCode;
 
 export class AdminIrlRedeemFinalizeError extends Error {
   constructor(
@@ -1363,7 +1354,7 @@ function runtimeSupportsFinalize(runtime: Runtime): void {
 
 function createConnection(provider: ProviderContext, runtime: Runtime): Connection {
   return new Connection(
-    `https://${runtime.cluster === 'mainnet-beta' ? 'mainnet' : runtime.cluster}.helius-rpc.com/?api-key=${encodeURIComponent(provider.apiKey)}`,
+    heliusRpcUrl(runtime.cluster, provider.apiKey),
     {
       commitment: 'confirmed',
       fetch: (input, init) => provider.providerFetch(input, { ...init, signal: provider.signal }),

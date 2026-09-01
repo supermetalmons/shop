@@ -92,7 +92,7 @@ import {
   handlePost,
   handlePublicMethodNotAllowed,
   handlePublicPreflight,
-  jsonResponse,
+  publicJsonResponse,
   packStatusDropIdFromPathname,
   type WorkerDependencies,
   type WorkerRequestMetrics,
@@ -102,6 +102,7 @@ import {
   publicRequestOrigin,
 } from './publicRequestPolicy.js';
 import type { DeferredWork } from './deferredWork.js';
+import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
 
 type WorkerRouteCorsPolicy =
   | 'none'
@@ -194,8 +195,8 @@ function addMetrics(
 async function dispatchHealth(context: WorkerRouteContext): Promise<WorkerRouteResult> {
   return {
     response: context.request.method === 'GET'
-      ? jsonResponse({ ok: true }, 200)
-      : jsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET' }),
+      ? publicJsonResponse({ ok: true }, 200)
+      : publicJsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'GET' }),
   };
 }
 
@@ -514,7 +515,7 @@ async function dispatchShopPost(
 }
 
 async function dispatchNotFound(): Promise<WorkerRouteResult> {
-  return { response: jsonResponse({ ok: false, error: 'not-found' }, 404) };
+  return { response: publicJsonResponse({ ok: false, error: 'not-found' }, 404) };
 }
 
 const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
@@ -702,11 +703,11 @@ function packStatusRoute(pathname: string): MatchedWorkerRoute | undefined {
     baseLogFields: () => dropId ? { dropId } : {},
     async dispatch(context) {
       if (dropId === null) {
-        return { response: jsonResponse({ ok: false, error: 'invalid-request' }, 400) };
+        return { response: publicJsonResponse({ ok: false, error: 'invalid-request' }, 400) };
       }
       if (context.request.method !== 'GET') {
         return {
-          response: jsonResponse(
+          response: publicJsonResponse(
             { ok: false, error: 'method-not-allowed' },
             405,
             { Allow: 'GET, OPTIONS' },
@@ -822,17 +823,6 @@ export function applyWorkerRouteCors(
     : response;
 }
 
-function internalJsonResponse(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      'Cache-Control': 'no-store',
-      'Content-Type': 'application/json; charset=utf-8',
-      'X-Content-Type-Options': 'nosniff',
-    },
-  });
-}
-
 export function unexpectedWorkerRouteResponse(
   route: MatchedWorkerRoute,
   request: Request,
@@ -840,28 +830,22 @@ export function unexpectedWorkerRouteResponse(
   if (route.unexpectedError === 'rpc') return handleRpcInternalError(request);
   if (route.unexpectedError === 'public') {
     if (route.cors === 'pack-status') {
-      return jsonResponse({ ok: false, error: 'provider-unavailable' }, 503);
+      return publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 503);
     }
-    const response = new Response(JSON.stringify({ ok: false, error: 'provider-unavailable' }), {
-      status: 503,
-      headers: {
-        'Cache-Control': 'no-store',
-        'Content-Type': 'application/json; charset=utf-8',
-        Vary: 'Origin',
-        'X-Content-Type-Options': 'nosniff',
-      },
+    const response = sharedJsonResponse({ ok: false, error: 'provider-unavailable' }, 503, {
+      headers: { Vary: 'Origin' },
     });
     const origin = publicRequestOrigin(request);
     return origin ? applyPublicCors(response, origin, 'POST, OPTIONS') : response;
   }
   if (route.unexpectedError === 'stripe-webhook') {
-    return internalJsonResponse({
+    return sharedJsonResponse({
       received: true,
       error: 'Stripe webhook processing failed',
     }, 500);
   }
   if (route.unexpectedError === 'profile') {
-    return applyProfileCors(request, jsonResponse({
+    return applyProfileCors(request, publicJsonResponse({
       ok: false,
       error: {
         code: 'unavailable',
@@ -872,7 +856,7 @@ export function unexpectedWorkerRouteResponse(
       },
     }, 503));
   }
-  return internalJsonResponse({ ok: false, error: 'internal' }, 500);
+  return sharedJsonResponse({ ok: false, error: 'internal' }, 500);
 }
 
 export function isAdminIrlRedeemFinalizeRoute(pathname: string): boolean {

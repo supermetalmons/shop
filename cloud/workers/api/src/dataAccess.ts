@@ -1,16 +1,18 @@
+export type ApiErrorCode =
+  | 'invalid-argument'
+  | 'unauthenticated'
+  | 'permission-denied'
+  | 'not-found'
+  | 'aborted'
+  | 'failed-precondition'
+  | 'resource-exhausted'
+  | 'deadline-exceeded'
+  | 'unavailable'
+  | 'internal';
+
 export class ProfileReadError extends Error {
   constructor(
-    readonly code:
-      | 'invalid-argument'
-      | 'unauthenticated'
-      | 'permission-denied'
-      | 'not-found'
-      | 'aborted'
-      | 'failed-precondition'
-      | 'resource-exhausted'
-      | 'deadline-exceeded'
-      | 'unavailable'
-      | 'internal',
+    readonly code: ApiErrorCode,
     readonly status: number,
     message: string,
     readonly details?: unknown,
