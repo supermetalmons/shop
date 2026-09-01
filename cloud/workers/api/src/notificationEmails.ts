@@ -104,10 +104,9 @@ export function summarizeShipperReadyOrderItems(order: any): ShipperReadyOrderSu
   };
 }
 
-export function fulfillmentAppUrlForOrder(dropId: string, deliveryId: number): string {
+export function fulfillmentAppUrlForDrop(dropId: string): string {
   const url = new URL(FULFILLMENT_APP_URL);
   url.searchParams.set('dropId', dropId);
-  url.searchParams.set('deliveryId', String(deliveryId));
   return url.toString();
 }
 

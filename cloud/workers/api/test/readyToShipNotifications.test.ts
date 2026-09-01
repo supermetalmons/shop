@@ -115,7 +115,10 @@ test('ready-to-ship outbox creates exact buyer and shipper jobs', async () => {
     },
   ]);
   assert.match(jobs[0].text, /We received your order\./);
-  assert.match(jobs[1].text, /Open fulfillment: https:\/\/mons\.shop\/fulfillment/);
+  assert.match(
+    jobs[1].text,
+    /Open fulfillment: https:\/\/mons\.shop\/fulfillment\?dropId=card_nft_2/,
+  );
 });
 
 test('ready-to-ship outbox independently plans buyer-only and shipper-only delivery', () => {

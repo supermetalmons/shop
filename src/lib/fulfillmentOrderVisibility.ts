@@ -15,6 +15,14 @@ export type FulfillmentOrderVisibilityFilter = (typeof FULFILLMENT_ORDER_VISIBIL
 
 export const DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER: FulfillmentOrderVisibilityFilter = 'not_shipped';
 
+export function normalizeFulfillmentOrderVisibilityFilter(
+  value: unknown,
+): FulfillmentOrderVisibilityFilter | undefined {
+  return FULFILLMENT_ORDER_VISIBILITY_OPTIONS.some((option) => option.value === value)
+    ? value as FulfillmentOrderVisibilityFilter
+    : undefined;
+}
+
 type FulfillmentOrderVisibilityInput = Pick<FulfillmentOrder, 'source' | 'fulfillmentStatus'>;
 
 export function isRedeemedForIrlFulfillmentOrder(order: Pick<FulfillmentOrder, 'source'>): boolean {

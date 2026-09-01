@@ -1,7 +1,7 @@
 import {
   buildBuyerOrderReceivedEmailContent,
   buildShipperReadyToShipEmailContent,
-  fulfillmentAppUrlForOrder,
+  fulfillmentAppUrlForDrop,
   summarizeShipperReadyOrderItems,
 } from './notificationEmails.js';
 import {
@@ -91,7 +91,7 @@ export async function createStripeReadyToShipNotificationJobs(args: {
       owner: typeof args.order.owner === 'string' ? args.order.owner : '',
       items: summarizeShipperReadyOrderItems(args.order),
       itemPreviews: await buildShipperVisibleOrderEmailItems(args.order, { dropId: args.dropId }),
-      fulfillmentUrl: fulfillmentAppUrlForOrder(args.dropId, deliveryId),
+      fulfillmentUrl: fulfillmentAppUrlForDrop(args.dropId),
     };
     const email = buildShipperReadyToShipEmailContent(message);
     jobs.push(createNotificationEmailJobV1({

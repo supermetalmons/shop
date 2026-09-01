@@ -943,9 +943,16 @@ function renderFulfillmentPackSecretImage(args: {
 type FulfillmentAppProps = {
   selectedDropId: string;
   onSelectedDropIdChange: (dropId: string) => void;
+  orderVisibilityFilter: FulfillmentOrderVisibilityFilter;
+  onOrderVisibilityFilterChange: (filter: FulfillmentOrderVisibilityFilter) => void;
 };
 
-export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange }: FulfillmentAppProps) {
+export default function FulfillmentApp({
+  selectedDropId,
+  onSelectedDropIdChange,
+  orderVisibilityFilter,
+  onOrderVisibilityFilterChange,
+}: FulfillmentAppProps) {
   const allDrops = useMemo(() => listFrontendDrops(), []);
   const walletAdapter = useWallet();
   const { publicKey } = walletAdapter;
@@ -1009,9 +1016,6 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [ordersError, setOrdersError] = useState<string | null>(null);
-  const [orderVisibilityFilter, setOrderVisibilityFilter] = useState<FulfillmentOrderVisibilityFilter>(
-    DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER,
-  );
   const [manualReviewCheckouts, setManualReviewCheckouts] = useState<FulfillmentManualReviewCheckout[]>([]);
   const [manualReviewMenuOpen, setManualReviewMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
@@ -1097,10 +1101,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
   }, [autoConnectPossible, publicKey, walletAdapter.connecting, walletAdapter.wallet]);
 
   useEffect(() => {
-    if (!walletAddress) {
-      if (selectedDropId) onSelectedDropIdChange('');
-      return;
-    }
+    if (!walletAddress) return;
     if (!visibleDrops.length) {
       if (selectedDropId) onSelectedDropIdChange('');
       return;
@@ -2669,7 +2670,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                 aria-label="Drop"
                 value={selectedDropId}
                 onChange={(evt) => {
-                  setOrderVisibilityFilter(DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER);
+                  onOrderVisibilityFilterChange(DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER);
                   onSelectedDropIdChange(evt.target.value);
                 }}
               >
@@ -2687,7 +2688,7 @@ export default function FulfillmentApp({ selectedDropId, onSelectedDropIdChange 
                   aria-label="Order filter"
                   value={orderVisibilityFilter}
                   onChange={(evt) => {
-                    setOrderVisibilityFilter(evt.target.value as FulfillmentOrderVisibilityFilter);
+                    onOrderVisibilityFilterChange(evt.target.value as FulfillmentOrderVisibilityFilter);
                   }}
                 >
                   {FULFILLMENT_ORDER_VISIBILITY_OPTIONS.map((option) => (

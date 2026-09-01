@@ -17,7 +17,7 @@ import {
   buildShipperReadyToShipEmailContent,
   buildStripeCheckoutManualReviewEmailContent,
   type BuyerVisibleOrderEmailItem,
-  fulfillmentAppUrlForOrder,
+  fulfillmentAppUrlForDrop,
   type NotificationEmailItem,
   type ShipperVisibleOrderEmailItem,
   summarizeShipperReadyOrderItems,
@@ -188,7 +188,7 @@ test('shipper ready email builder uses a compact order number and escapes html',
   const items = summarizeShipperReadyOrderItems({
     items: [{ kind: 'box' }, { kind: 'dude' }, { kind: 'dude' }, { kind: 'other' }],
   });
-  const fulfillmentUrl = fulfillmentAppUrlForOrder('card_nft_2', 123);
+  const fulfillmentUrl = fulfillmentAppUrlForDrop('card_nft_2');
   const content = buildShipperReadyToShipEmailContent(
     {
       idempotencyKey: 'test-shipper-ready',
@@ -211,6 +211,7 @@ test('shipper ready email builder uses a compact order number and escapes html',
   );
 
   assert.deepEqual(items, { itemCount: 4, boxCount: 1, dudeCount: 2 });
+  assert.equal(fulfillmentUrl, 'https://mons.shop/fulfillment?dropId=card_nft_2');
   assert.equal(content.subject, '[TEST] New order - Card NFT 2 <Drop>');
   assert.match(content.text, /^New order - 123/);
   assert.doesNotMatch(content.text, /New order received\./);

@@ -42,6 +42,10 @@ test('Stripe ready orders create the exact buyer and shipper jobs', async () => 
       recipients: ['fulfillment@mons.shop'],
     },
   ]);
+  assert.match(
+    jobs[1].text,
+    /Open fulfillment: https:\/\/mons\.shop\/fulfillment\?dropId=card_nft_2/,
+  );
 });
 
 test('non-Stripe and non-ready orders do not create compatibility jobs', async () => {
