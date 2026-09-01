@@ -37,12 +37,12 @@ import {
   commerceKeys,
   type CommerceDocumentWriteData,
 } from './commerceRepository.js';
+import { runCommerceTransaction } from './commerceTransactions.js';
 
 export { STRIPE_WEBHOOK_PATH };
 
 const STRIPE_WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
 const STRIPE_WEBHOOK_TIMEOUT_MS = 15_000;
-const COMMERCE_MUTATION_ATTEMPTS = 3;
 
 type StripeWebhookEnv = Pick<Env,
   | 'STRIPE_FULFILLMENT_QUEUE'
@@ -256,24 +256,6 @@ function transitionUpdate(
   } as CommerceDocumentWriteData;
 }
 
-async function pauseForConflict(signal: AbortSignal, attempt: number): Promise<void> {
-  if (signal.aborted) throw signal.reason;
-  await new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    };
-    const timeout = setTimeout(finish, 25 * (attempt + 1));
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
-}
-
 async function mutateCheckout(
   action: Extract<StripeWebhookAction, { kind: 'enqueue' }>,
   common: {
@@ -284,23 +266,17 @@ async function mutateCheckout(
 ): Promise<StripeWebhookTransition> {
   const repository = new D1CommerceRepository(common.commerceDb);
   const key = commerceKeys.stripeCheckout(action.dropId, action.sessionId);
-  for (let attempt = 0; attempt < COMMERCE_MUTATION_ATTEMPTS; attempt += 1) {
-    const unit = await repository.begin(common.nowMs);
-    try {
-      const document = await unit.get(key);
-      if (!document) throw new Error('Stripe checkout session was not created by this app');
-      const transition = stripeWebhookTransition(document.data, action);
-      await unit.update(key, transitionUpdate(action, transition));
-      await unit.commit();
-      return transition;
-    } catch (error) {
-      unit.rollback();
-      if (!(error instanceof CommerceWriteConflict)) throw error;
-      if (attempt + 1 >= COMMERCE_MUTATION_ATTEMPTS) throw error;
-      await pauseForConflict(common.signal, attempt);
-    }
-  }
-  throw new CommerceWriteConflict();
+  return runCommerceTransaction({
+    nowMs: common.nowMs,
+    repository,
+    signal: common.signal,
+  }, async (unit) => {
+    const document = await unit.get(key);
+    if (!document) throw new Error('Stripe checkout session was not created by this app');
+    const transition = stripeWebhookTransition(document.data, action);
+    await unit.update(key, transitionUpdate(action, transition));
+    return transition;
+  });
 }
 
 function actionResponse(

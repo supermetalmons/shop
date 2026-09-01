@@ -26,8 +26,6 @@ import {
 import {
   dropBoxAssignmentPath,
   dropDeliveryOrderPath,
-  dropDudeAssignmentPath,
-  dropDudePoolPath,
 } from './dropPaths.js';
 import {
   resolveDeliveryOrderDropId,
@@ -47,10 +45,6 @@ import {
   PACK_STATUS_PROJECTION_PENDING,
   PACK_STATUS_PROJECTION_STATE_FIELD,
 } from '../../../../shared/deliveryPackStatusProjectionReconciliation.js';
-import {
-  DudeAssignmentPoolExhaustedError,
-  pickDudeIdsForAssignment,
-} from '../../../../shared/assignDudesPicker.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
@@ -77,7 +71,6 @@ import {
   isAdminIrlRedeemDeliveryOrderSource,
   isStripeOffchainDeliveryOrderSource,
 } from '../../../../shared/fulfillmentSources.js';
-import { sanitizeDudeAssignmentPool } from '../../../../shared/dudeAssignmentPool.js';
 import {
   countDeliveryOrderBoxItems,
   countDeliveryOrderDudeItems,
@@ -115,13 +108,30 @@ import {
   CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
-  commerceKeys,
-  type CommerceDocumentKey,
   type CommerceDocumentRecord,
-  type CommerceDocumentWriteData,
   type CommerceUnitOfWork,
-  type CommerceUpdateValue,
 } from './commerceRepository.js';
+import {
+  CommerceDudeAssignmentError,
+  assignCommerceDudes,
+  normalizeCommerceDudeIds,
+} from './commerceDudeAssignments.js';
+import {
+  beginCommerceTransaction as beginTransaction,
+  commitCommerceWrites as commitWrites,
+  commerceDocument,
+  commerceRepository as repository,
+  commerceTimestamp,
+  createCommerceWrite as createWrite,
+  readCommerceDocument as readDocument,
+  retryCommerceConflicts,
+  rollbackCommerceTransaction as rollbackTransactionBestEffort,
+  runCommerceWriteTransaction,
+  updateCommerceWrite as updateWrite,
+  type CommerceDocument,
+  type CommerceDocumentContext,
+  type CommerceWrite,
+} from './commerceTransactions.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
   BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
@@ -183,7 +193,6 @@ const DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS = 4 * 60_000;
 const RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD = 'receiptRecovery.pendingSubmission';
 const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
 const MAX_PREPARED_DELIVERY_RECOVERY_CHECKS = DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS.length;
-const COMMERCE_TRANSACTION_ATTEMPTS = 6;
 const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const MAX_U32 = 0xffff_ffff;
 const CANONICAL_DROP_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -300,12 +309,8 @@ type DecodedOnchainConfig = {
   decoded: DecodedBoxMinterConfigData;
 };
 
-type CommerceContext = {
-  commerceDb: D1Database;
-  repository?: D1CommerceRepository;
-  nowMs: number;
+type CommerceContext = CommerceDocumentContext & {
   providerFetch: ProfileProviderFetch;
-  signal: AbortSignal;
   dataDb?: D1Database;
   [key: string]: unknown;
 };
@@ -314,13 +319,6 @@ type ProviderContext = {
   apiKey: string;
   fetch: ProfileProviderFetch;
   signal: AbortSignal;
-};
-
-type CommerceDocument = {
-  id: string;
-  path: string;
-  fields: Record<string, unknown>;
-  updateTime: string;
 };
 
 type DeliveryOrderDocument = CommerceDocument;
@@ -559,137 +557,6 @@ function commerceValue<T>(value: T): T {
   return value;
 }
 
-function commerceTimestamp(value: number): CommerceUpdateValue {
-  const seconds = Math.floor(value / 1000);
-  return commerceFieldValue.timestamp(seconds, (value - seconds * 1000) * 1_000_000);
-}
-
-type CommerceTransform = { fieldPath: string; value: CommerceUpdateValue };
-type CommerceWrite = {
-  operation: 'create' | 'update';
-  path: string;
-  values: CommerceDocumentWriteData;
-  expectedUpdateTime?: string;
-  mustExist?: boolean;
-};
-
-function keyForPath(path: string): CommerceDocumentKey {
-  const claim = /^claimCodes\/([^/]+)$/.exec(path);
-  if (claim) return commerceKeys.claimCode(claim[1]);
-  const meta = /^drops\/([^/]+)\/meta\/dudePool$/.exec(path);
-  if (meta) return commerceKeys.dudePool(meta[1]);
-  const match = /^drops\/([^/]+)\/(deliveryOrders|boxAssignments|dudeAssignments|offchainOrders|adminIrlRedeemRequests|adminIrlRedeemPackMarkers|adminIrlRedeemReceiptMarkers)\/([^/]+)$/.exec(path);
-  if (!match) throw new DeliveryReceiptError('internal', 'Invalid commerce document path.');
-  const [, dropId, collection, id] = match;
-  if (collection === 'deliveryOrders') return commerceKeys.deliveryOrder(dropId, id);
-  if (collection === 'boxAssignments') return commerceKeys.boxAssignment(dropId, id);
-  if (collection === 'dudeAssignments') return commerceKeys.dudeAssignment(dropId, id);
-  if (collection === 'offchainOrders') return commerceKeys.offchainOrder(dropId, id);
-  if (collection === 'adminIrlRedeemRequests') return commerceKeys.adminIrlRedeemRequest(dropId, id);
-  if (collection === 'adminIrlRedeemPackMarkers') return commerceKeys.adminIrlRedeemPackMarker(dropId, id);
-  return commerceKeys.adminIrlRedeemReceiptMarker(dropId, id);
-}
-
-function commerceDocument(record: CommerceDocumentRecord | null): CommerceDocument | null {
-  return record ? {
-    id: record.key.documentId,
-    path: record.key.path,
-    fields: record.data,
-    updateTime: record.updateTime,
-  } : null;
-}
-
-function repository(context: CommerceContext): D1CommerceRepository {
-  return context.repository || new D1CommerceRepository(context.commerceDb);
-}
-
-async function readDocument(
-  context: CommerceContext,
-  path: string,
-  transaction?: CommerceUnitOfWork,
-): Promise<CommerceDocument | null> {
-  const record = transaction
-    ? await transaction.get(keyForPath(path))
-    : await repository(context).get(keyForPath(path));
-  return commerceDocument(record);
-}
-
-function beginTransaction(context: CommerceContext): Promise<CommerceUnitOfWork> {
-  return repository(context).begin(context.nowMs);
-}
-
-async function rollbackTransactionBestEffort(
-  _context: CommerceContext,
-  transaction: CommerceUnitOfWork,
-): Promise<void> {
-  transaction.rollback();
-}
-
-async function applyWrite(unit: CommerceUnitOfWork, write: CommerceWrite): Promise<void> {
-  const key = keyForPath(write.path);
-  if (write.expectedUpdateTime) {
-    const current = await unit.get(key);
-    if (!current || current.updateTime !== write.expectedUpdateTime) throw new CommerceWriteConflict();
-  }
-  if (write.operation === 'create') await unit.create(key, write.values);
-  else if (write.mustExist || write.expectedUpdateTime) await unit.update(key, write.values);
-  else await unit.set(key, write.values, { merge: true });
-}
-
-async function commitWrites(
-  context: CommerceContext,
-  writes: readonly CommerceWrite[],
-  transaction?: CommerceUnitOfWork,
-): Promise<void> {
-  const unit = transaction || await repository(context).begin(context.nowMs);
-  try {
-    for (const write of writes) await applyWrite(unit, write);
-    await unit.commit();
-  } catch (error) {
-    unit.rollback();
-    throw error;
-  }
-}
-
-function updateWrite(args: {
-  path: string;
-  fields?: Record<string, unknown>;
-  fieldPaths: readonly string[];
-  transforms?: readonly CommerceTransform[];
-  mustExist?: boolean;
-  expectedUpdateTime?: string;
-}): CommerceWrite {
-  const fields = args.fields || {};
-  return {
-    operation: 'update',
-    path: args.path,
-    values: {
-      ...Object.fromEntries(args.fieldPaths.map((field) => [
-        field,
-        Object.hasOwn(fields, field) ? fields[field] as CommerceUpdateValue : commerceFieldValue.delete(),
-      ])),
-      ...Object.fromEntries((args.transforms || []).map((transform) => [transform.fieldPath, transform.value])),
-    },
-    ...(args.expectedUpdateTime ? { expectedUpdateTime: args.expectedUpdateTime } : {}),
-    ...(args.mustExist ? { mustExist: true } : {}),
-  };
-}
-
-function createWrite(args: {
-  path: string;
-  fields: Record<string, unknown>;
-  transforms?: readonly CommerceTransform[];
-}): CommerceWrite {
-  return {
-    operation: 'create',
-    path: args.path,
-    values: {
-      ...args.fields as CommerceDocumentWriteData,
-      ...Object.fromEntries((args.transforms || []).map((transform) => [transform.fieldPath, transform.value])),
-    },
-  };
-}
-
 async function loadBoundWallet(
   context: CommerceContext,
   db: D1Database | undefined,
@@ -870,13 +737,7 @@ function orderResultBase(document: DeliveryOrderDocument): {
   };
 }
 
-async function acquireDeliveryRecoveryLease(
-  context: CommerceContext,
-  path: string,
-  ownerWallet: string,
-  nowMs: number,
-  force: boolean,
-): Promise<{
+type DeliveryRecoveryLeaseResult = {
   acquired: true;
   lease: {
     attemptCount: number;
@@ -885,87 +746,92 @@ async function acquireDeliveryRecoveryLease(
     previousAttemptCount: unknown;
     previousLastAttemptAt: unknown;
   };
-} | { acquired: false; result: RecoverDeliveryOrdersItemResult }> {
-  if (context.signal.aborted) throw context.signal.reason;
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: CommerceUnitOfWork | undefined;
-    try {
-      transaction = await beginTransaction(context);
+} | { acquired: false; result: RecoverDeliveryOrdersItemResult };
+
+async function acquireDeliveryRecoveryLease(
+  context: CommerceContext,
+  path: string,
+  ownerWallet: string,
+  nowMs: number,
+  force: boolean,
+): Promise<DeliveryRecoveryLeaseResult> {
+  try {
+    return await runCommerceWriteTransaction<DeliveryRecoveryLeaseResult>(context, async (transaction) => {
       const document = await readDocument(context, path, transaction);
       const fallback = path.split('/');
       const fallbackDropId = fallback.length === 4 ? fallback[1] : '';
       const fallbackDeliveryId = Number(fallback.at(-1)) || 0;
       if (!document) {
-        await commitWrites(context, [], transaction);
-        transaction = undefined;
         return {
-          acquired: false,
           result: {
-            dropId: fallbackDropId,
-            deliveryId: fallbackDeliveryId,
-            statusBefore: 'missing',
-            outcome: 'not_found',
-            verification: 'delivery_pda',
-            message: 'delivery order not found',
+            acquired: false as const,
+            result: {
+              dropId: fallbackDropId,
+              deliveryId: fallbackDeliveryId,
+              statusBefore: 'missing',
+              outcome: 'not_found' as const,
+              verification: 'delivery_pda' as const,
+              message: 'delivery order not found',
+            },
           },
         };
       }
       const base = orderResultBase(document);
       if (!base) {
-        await commitWrites(context, [], transaction);
-        transaction = undefined;
         return {
-          acquired: false,
           result: {
-            dropId: '',
-            deliveryId: Number(document.id) || 0,
-            statusBefore: typeof document.fields.status === 'string' ? document.fields.status : 'unknown',
-            outcome: 'failed',
-            verification: 'delivery_pda',
-            message: 'delivery order is missing recovery identifiers',
+            acquired: false as const,
+            result: {
+              dropId: '',
+              deliveryId: Number(document.id) || 0,
+              statusBefore: typeof document.fields.status === 'string' ? document.fields.status : 'unknown',
+              outcome: 'failed' as const,
+              verification: 'delivery_pda' as const,
+              message: 'delivery order is missing recovery identifiers',
+            },
           },
         };
       }
       if (document.fields.owner && document.fields.owner !== ownerWallet) {
-        await commitWrites(context, [], transaction);
-        transaction = undefined;
         return {
-          acquired: false,
           result: {
-            ...base,
-            outcome: 'failed',
-            verification: 'delivery_pda',
-            message: 'order belongs to a different wallet',
-            errorCode: 'permission-denied',
+            acquired: false as const,
+            result: {
+              ...base,
+              outcome: 'failed' as const,
+              verification: 'delivery_pda' as const,
+              message: 'order belongs to a different wallet',
+              errorCode: 'permission-denied',
+            },
           },
         };
       }
       const eligibility = deliveryRecoveryEligibility(document.fields, nowMs, force);
       if (!eligibility.eligible) {
-        await commitWrites(context, [], transaction);
-        transaction = undefined;
         return {
-          acquired: false,
           result: {
-            ...base,
-            outcome: eligibility.outcome || 'not_eligible',
-            verification: 'delivery_pda',
-            ...(eligibility.message ? { message: eligibility.message } : {}),
+            acquired: false as const,
+            result: {
+              ...base,
+              outcome: eligibility.outcome || 'not_eligible',
+              verification: 'delivery_pda' as const,
+              ...(eligibility.message ? { message: eligibility.message } : {}),
+            },
           },
         };
       }
       const recovery = isRecord(document.fields.receiptRecovery) ? document.fields.receiptRecovery : {};
       const leaseExpiresAt = toMillisMaybe(recovery.leaseExpiresAt) ?? 0;
       if (leaseExpiresAt > nowMs) {
-        await commitWrites(context, [], transaction);
-        transaction = undefined;
         return {
-          acquired: false,
           result: {
-            ...base,
-            outcome: 'lease_active',
-            verification: 'delivery_pda',
-            message: 'another client is already retrying this order',
+            acquired: false as const,
+            result: {
+              ...base,
+              outcome: 'lease_active' as const,
+              verification: 'delivery_pda' as const,
+              message: 'another client is already retrying this order',
+            },
           },
         };
       }
@@ -974,42 +840,37 @@ async function acquireDeliveryRecoveryLease(
         ? Math.floor(rawAttemptCount) + 1
         : 1;
       const leaseExpiresAtMs = nowMs + DELIVERY_RECOVERY_LEASE_MS;
-      await commitWrites(context, [updateWrite({
-        path,
-        fields: {
-          'receiptRecovery.leaseExpiresAt': commerceTimestamp(leaseExpiresAtMs),
-          'receiptRecovery.lastAttemptAt': commerceTimestamp(nowMs),
-          'receiptRecovery.attemptCount': attemptCount,
-        },
-        fieldPaths: [
-          'receiptRecovery.leaseExpiresAt',
-          'receiptRecovery.lastAttemptAt',
-          'receiptRecovery.attemptCount',
-        ],
-        mustExist: true,
-      })], transaction);
-      transaction = undefined;
       return {
-        acquired: true,
-        lease: {
-          attemptCount,
-          lastAttemptAtMs: nowMs,
-          leaseExpiresAtMs,
-          previousAttemptCount: recovery.attemptCount,
-          previousLastAttemptAt: recovery.lastAttemptAt,
+        result: {
+          acquired: true as const,
+          lease: {
+            attemptCount,
+            lastAttemptAtMs: nowMs,
+            leaseExpiresAtMs,
+            previousAttemptCount: recovery.attemptCount,
+            previousLastAttemptAt: recovery.lastAttemptAt,
+          },
         },
+        writes: [updateWrite({
+          path,
+          fields: {
+            'receiptRecovery.leaseExpiresAt': commerceTimestamp(leaseExpiresAtMs),
+            'receiptRecovery.lastAttemptAt': commerceTimestamp(nowMs),
+            'receiptRecovery.attemptCount': attemptCount,
+          },
+          fieldPaths: [
+            'receiptRecovery.leaseExpiresAt',
+            'receiptRecovery.lastAttemptAt',
+            'receiptRecovery.attemptCount',
+          ],
+          mustExist: true,
+        })],
       };
-    } catch (error) {
-      if (transaction) await rollbackTransactionBestEffort(context, transaction);
-      if (isDeliveryRecoveryCancellation(error, context.signal)) throw context.signal.reason;
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      throw mapProviderError(error, 'Delivery recovery data is temporarily unavailable.');
-    }
+    });
+  } catch (error) {
+    if (isDeliveryRecoveryCancellation(error, context.signal)) throw context.signal.reason;
+    throw mapProviderError(error, 'Delivery recovery data is temporarily unavailable.');
   }
-  throw new DeliveryReceiptError('unavailable', 'Delivery recovery data is temporarily unavailable.');
 }
 
 async function cancelDeliveryRecoveryAttempt(
@@ -1023,7 +884,7 @@ async function cancelDeliveryRecoveryAttempt(
     previousLastAttemptAt: unknown;
   },
 ): Promise<void> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  return retryCommerceConflicts(async () => {
     const document = await readDocument(context, path);
     if (!document) return;
     const recovery = isRecord(document.fields.receiptRecovery) ? document.fields.receiptRecovery : {};
@@ -1033,33 +894,24 @@ async function cancelDeliveryRecoveryAttempt(
       toMillisMaybe(recovery.lastAttemptAt) !== lease.lastAttemptAtMs ||
       Number(recovery.attemptCount) !== lease.attemptCount
     ) return;
-    try {
-      await commitWrites(context, [updateWrite({
-        path,
-        fields: {
-          ...(lease.previousLastAttemptAt === undefined
-            ? {}
-            : { 'receiptRecovery.lastAttemptAt': lease.previousLastAttemptAt }),
-          ...(lease.previousAttemptCount === undefined
-            ? {}
-            : { 'receiptRecovery.attemptCount': lease.previousAttemptCount }),
-        },
-        fieldPaths: [
-          'receiptRecovery.leaseExpiresAt',
-          'receiptRecovery.lastAttemptAt',
-          'receiptRecovery.attemptCount',
-        ],
-        expectedUpdateTime: document.updateTime,
-      })]);
-      return;
-    } catch (error) {
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      throw error;
-    }
-  }
+    await commitWrites(context, [updateWrite({
+      path,
+      fields: {
+        ...(lease.previousLastAttemptAt === undefined
+          ? {}
+          : { 'receiptRecovery.lastAttemptAt': lease.previousLastAttemptAt }),
+        ...(lease.previousAttemptCount === undefined
+          ? {}
+          : { 'receiptRecovery.attemptCount': lease.previousAttemptCount }),
+      },
+      fieldPaths: [
+        'receiptRecovery.leaseExpiresAt',
+        'receiptRecovery.lastAttemptAt',
+        'receiptRecovery.attemptCount',
+      ],
+      expectedUpdateTime: document.updateTime,
+    })]);
+  }, { signal: context.signal });
 }
 
 async function finalizeDeliveryRecoveryAttempt(
@@ -1223,15 +1075,12 @@ function normalizeAssignedDudeIds(
   runtime: DeliveryRuntime,
   boxAssetId: string,
 ): number[] {
-  const dudeIds = Array.isArray(value) ? value.map((entry) => Math.floor(Number(entry))) : [];
-  if (
-    dudeIds.length !== runtime.itemsPerBox ||
-    dudeIds.some((id) => !Number.isSafeInteger(id) || id < 1 || id > runtime.maxDudeId) ||
-    new Set(dudeIds).size !== dudeIds.length
-  ) {
+  try {
+    return normalizeCommerceDudeIds(value, runtime.itemsPerBox, runtime.maxDudeId, boxAssetId);
+  } catch (error) {
+    if (!(error instanceof CommerceDudeAssignmentError)) throw error;
     throw new DeliveryReceiptError('failed-precondition', 'Stored figure assignment is invalid.', { boxAssetId });
   }
-  return dudeIds;
 }
 
 async function assignDudesForBox(
@@ -1240,84 +1089,31 @@ async function assignDudesForBox(
   boxAssetId: string,
   randomInt: (maxExclusive: number) => number,
 ): Promise<number[]> {
-  const assignmentPath = dropBoxAssignmentPath(runtime.dropId, boxAssetId);
-  const poolPath = dropDudePoolPath(runtime.dropId);
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: CommerceUnitOfWork | undefined;
-    try {
-      transaction = await beginTransaction(context);
-      const existing = await readDocument(context, assignmentPath, transaction);
-      if (existing) {
-        await commitWrites(context, [], transaction);
-        transaction = undefined;
-        return normalizeAssignedDudeIds(existing.fields.dudeIds, runtime, boxAssetId);
-      }
-      const poolDocument = await readDocument(context, poolPath, transaction);
-      const pool = sanitizeDudeAssignmentPool(poolDocument?.fields.available, runtime.maxDudeId).pool;
-      if (pool.length < runtime.itemsPerBox) {
-        throw new DeliveryReceiptError('resource-exhausted', 'No figures remaining to assign.', {
-          boxAssetId,
-          poolLen: pool.length,
-          required: runtime.itemsPerBox,
-        });
-      }
-      let picked;
-      try {
-        picked = await pickDudeIdsForAssignment({
-          dropFamily: runtime.config.dropFamily,
-          itemsPerBox: runtime.itemsPerBox,
-          maxDudeId: runtime.maxDudeId,
-          pool,
-          randomInt,
-          isAssigned: async (dudeId) => Boolean(await readDocument(
-            context,
-            dropDudeAssignmentPath(runtime.dropId, dudeId),
-            transaction,
-          )),
-        });
-      } catch (error) {
-        if (error instanceof DudeAssignmentPoolExhaustedError) {
-          throw new DeliveryReceiptError('resource-exhausted', error.message, {
-            boxAssetId,
-            bucket: error.bucket,
-            chosen: error.chosen,
-            candidatesChecked: error.candidatesChecked,
-            staleAssigned: error.staleAssigned,
-            poolLen: error.poolLen,
-          });
-        }
-        throw error;
-      }
-      const writes = picked.chosen.map((dudeId) => createWrite({
-        path: dropDudeAssignmentPath(runtime.dropId, dudeId),
-        fields: { dudeId, boxAssetId },
-        transforms: [{ fieldPath: 'assignedAt', value: commerceFieldValue.serverTimestamp() }],
-      }));
-      writes.push(updateWrite({
-        path: poolPath,
-        fields: { available: pool },
-        fieldPaths: ['available'],
-        transforms: [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }],
-      }));
-      writes.push(createWrite({
-        path: assignmentPath,
-        fields: { dudeIds: picked.chosen },
-        transforms: [{ fieldPath: 'createdAt', value: commerceFieldValue.serverTimestamp() }],
-      }));
-      await commitWrites(context, writes, transaction);
-      transaction = undefined;
-      return picked.chosen;
-    } catch (error) {
-      if (transaction) await rollbackTransactionBestEffort(context, transaction);
-      if (error instanceof DeliveryReceiptError) throw error;
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(2_500, 150 * 2 ** Math.min(attempt, 4)), context.signal);
-        continue;
-      }
-      throw mapProviderError(error, 'Figure assignment is temporarily unavailable.');
+  try {
+    const result = await assignCommerceDudes({
+      boxAssetId,
+      dropFamily: runtime.config.dropFamily,
+      dropId: runtime.dropId,
+      itemsPerBox: runtime.itemsPerBox,
+      maxDudeId: runtime.maxDudeId,
+      nowMs: context.nowMs,
+      randomInt,
+      repository: repository(context),
+      signal: context.signal,
+      sleep: (milliseconds) => pause(milliseconds, context.signal),
+    });
+    return result.dudeIds;
+  } catch (error) {
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    if (error instanceof CommerceDudeAssignmentError) {
+      throw new DeliveryReceiptError(
+        error.code === 'invalid-stored-assignment' ? 'failed-precondition' : 'resource-exhausted',
+        error.message,
+        error.details,
+      );
     }
+    throw mapProviderError(error, 'Figure assignment is temporarily unavailable.');
   }
-  throw new DeliveryReceiptError('unavailable', 'Figure assignment is temporarily unavailable.');
 }
 
 function sameNumbers(left: readonly number[], right: readonly number[]): boolean {
@@ -1429,10 +1225,8 @@ async function ensureIrlClaimCodeForBox(
   randomInt: (maxExclusive: number) => number,
 ): Promise<string> {
   const assignmentPath = dropBoxAssignmentPath(runtime.dropId, args.boxAssetId);
-  for (let transactionAttempt = 0; transactionAttempt < COMMERCE_TRANSACTION_ATTEMPTS; transactionAttempt += 1) {
-    let transaction: CommerceUnitOfWork | undefined;
-    try {
-      transaction = await beginTransaction(context);
+  try {
+    return await runCommerceWriteTransaction(context, async (transaction) => {
       const assignment = await readDocument(context, assignmentPath, transaction);
       if (!assignment) {
         throw new DeliveryReceiptError('failed-precondition', 'Figure assignment is missing.', {
@@ -1482,9 +1276,7 @@ async function ensureIrlClaimCodeForBox(
             mustExist: true,
           }));
         }
-        await commitWrites(context, writes, transaction);
-        transaction = undefined;
-        return existingCode;
+        return { result: existingCode, writes };
       }
       let expected: ClaimCodeExpected | undefined;
       for (let claimAttempt = 0; claimAttempt < 40; claimAttempt += 1) {
@@ -1497,33 +1289,29 @@ async function ensureIrlClaimCodeForBox(
         throw new DeliveryReceiptError('unavailable', 'Failed to allocate unique IRL claim code (try again)');
       }
       const assignmentFields = assignmentClaimFields(expected, args.ownerWallet);
-      await commitWrites(context, [
-        createWrite({
-          path: `claimCodes/${expected.code}`,
-          fields: claimCodeFields(expected, args.ownerWallet),
-          transforms: [{ fieldPath: 'createdAt', value: commerceFieldValue.serverTimestamp() }],
-        }),
-        updateWrite({
-          path: assignmentPath,
-          fields: assignmentFields,
-          fieldPaths: Object.keys(assignmentFields),
-          transforms: [{ fieldPath: 'irlClaim.createdAt', value: commerceFieldValue.serverTimestamp() }],
-          mustExist: true,
-        }),
-      ], transaction);
-      transaction = undefined;
-      return expected.code;
-    } catch (error) {
-      if (transaction) await rollbackTransactionBestEffort(context, transaction);
-      if (error instanceof DeliveryReceiptError) throw error;
-      if (error instanceof CommerceWriteConflict && transactionAttempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(2_500, 150 * 2 ** Math.min(transactionAttempt, 4)), context.signal);
-        continue;
-      }
-      throw mapProviderError(error, 'IRL claim code is temporarily unavailable.');
-    }
+      return {
+        result: expected.code,
+        writes: [
+          createWrite({
+            path: `claimCodes/${expected.code}`,
+            fields: claimCodeFields(expected, args.ownerWallet),
+            transforms: [{ fieldPath: 'createdAt', value: commerceFieldValue.serverTimestamp() }],
+          }),
+          updateWrite({
+            path: assignmentPath,
+            fields: assignmentFields,
+            fieldPaths: Object.keys(assignmentFields),
+            transforms: [{ fieldPath: 'irlClaim.createdAt', value: commerceFieldValue.serverTimestamp() }],
+            mustExist: true,
+          }),
+        ],
+      };
+    });
+  } catch (error) {
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    if (error instanceof DeliveryReceiptError) throw error;
+    throw mapProviderError(error, 'IRL claim code is temporarily unavailable.');
   }
-  throw new DeliveryReceiptError('unavailable', 'IRL claim code is temporarily unavailable.');
 }
 
 function shouldProjectNormalIrlPackStatus(
@@ -1631,32 +1419,23 @@ async function transitionDeliveryPackStatusProjection(
     timestampField?: string;
   },
 ): Promise<boolean> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  return retryCommerceConflicts(async () => {
     const document = await readDocument(context, documentPath);
     if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== options.requiredState) return false;
-    try {
-      await commitWrites(context, [updateWrite({
-        path: documentPath,
-        fields: options.fields,
-        fieldPaths: [
-          ...Object.keys(options.fields || {}),
-          ...(options.clearFields || []),
-        ],
-        transforms: options.timestampField
-          ? [{ fieldPath: options.timestampField, value: commerceFieldValue.serverTimestamp() }]
-          : undefined,
-        expectedUpdateTime: document.updateTime,
-      })]);
-      return true;
-    } catch (error) {
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      throw error;
-    }
-  }
-  return false;
+    await commitWrites(context, [updateWrite({
+      path: documentPath,
+      fields: options.fields,
+      fieldPaths: [
+        ...Object.keys(options.fields || {}),
+        ...(options.clearFields || []),
+      ],
+      transforms: options.timestampField
+        ? [{ fieldPath: options.timestampField, value: commerceFieldValue.serverTimestamp() }]
+        : undefined,
+      expectedUpdateTime: document.updateTime,
+    })]);
+    return true;
+  }, { signal: context.signal });
 }
 
 async function markDeliveryPackStatusProjectionCompleted(
@@ -1717,7 +1496,7 @@ async function recordDeliveryPackStatusProjectionTransientFailure(args: {
   documentPath: string;
   errorCode: string;
 }): Promise<boolean> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  return retryCommerceConflicts(async () => {
     const document = await readDocument(args.context, args.documentPath);
     if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== PACK_STATUS_PROJECTION_PENDING) {
       return false;
@@ -1733,35 +1512,26 @@ async function recordDeliveryPackStatusProjectionTransientFailure(args: {
     const backoffMs = PACK_STATUS_PROJECTION_BACKOFF_MS[
       Math.min(failureCount, PACK_STATUS_PROJECTION_BACKOFF_MS.length - 1)
     ];
-    try {
-      await commitWrites(args.context, [updateWrite({
-        path: args.documentPath,
-        fields: {
-          [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
-          [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: args.attemptStartedAtMs + backoffMs,
-          [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: Math.min(Number.MAX_SAFE_INTEGER, failureCount + 1),
-          [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: args.errorCode,
-        },
-        fieldPaths: [
-          PACK_STATUS_PROJECTION_STATE_FIELD,
-          PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
-          PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD,
-          PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD,
-          PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
-          PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
-        ],
-        expectedUpdateTime: document.updateTime,
-      })]);
-      return true;
-    } catch (error) {
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), args.context.signal);
-        continue;
-      }
-      throw error;
-    }
-  }
-  return false;
+    await commitWrites(args.context, [updateWrite({
+      path: args.documentPath,
+      fields: {
+        [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
+        [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: args.attemptStartedAtMs + backoffMs,
+        [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: Math.min(Number.MAX_SAFE_INTEGER, failureCount + 1),
+        [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: args.errorCode,
+      },
+      fieldPaths: [
+        PACK_STATUS_PROJECTION_STATE_FIELD,
+        PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
+        PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD,
+        PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD,
+        PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
+        PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
+      ],
+      expectedUpdateTime: document.updateTime,
+    })]);
+    return true;
+  }, { signal: args.context.signal });
 }
 
 type DeliveryPackStatusProjectionOutcome = 'completed' | 'failed' | 'not-due' | 'not-needed' | 'pending';
@@ -2875,7 +2645,7 @@ async function markReadyToShipNotificationsQueued(
   claimId: string,
   pending: readonly PendingReadyToShipNotification[],
 ): Promise<string[]> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  return retryCommerceConflicts(async () => {
     const document = await readDocument(context, documentPath);
     if (
       !document ||
@@ -2901,33 +2671,24 @@ async function markReadyToShipNotificationsQueued(
           READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
           READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
         ];
-    try {
-      await commitWrites(context, [updateWrite({
-        path: documentPath,
-        fields: Object.fromEntries(matching.flatMap((marker) => [
-          [marker.stateField, READY_TO_SHIP_NOTIFICATION_QUEUED],
-          [marker.jobIdField, marker.jobId],
-        ])),
-        fieldPaths: [
-          ...matching.flatMap((marker) => [marker.stateField, marker.jobIdField]),
-          ...clearedClaimFields,
-        ],
-        transforms: matching.map((marker) => ({
-          fieldPath: marker.queuedAtField,
-          value: commerceFieldValue.serverTimestamp(),
-        })),
-        expectedUpdateTime: document.updateTime,
-      })]);
-      return matching.map((marker) => marker.kind);
-    } catch (error) {
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      throw error;
-    }
-  }
-  return [];
+    await commitWrites(context, [updateWrite({
+      path: documentPath,
+      fields: Object.fromEntries(matching.flatMap((marker) => [
+        [marker.stateField, READY_TO_SHIP_NOTIFICATION_QUEUED],
+        [marker.jobIdField, marker.jobId],
+      ])),
+      fieldPaths: [
+        ...matching.flatMap((marker) => [marker.stateField, marker.jobIdField]),
+        ...clearedClaimFields,
+      ],
+      transforms: matching.map((marker) => ({
+        fieldPath: marker.queuedAtField,
+        value: commerceFieldValue.serverTimestamp(),
+      })),
+      expectedUpdateTime: document.updateTime,
+    })]);
+    return matching.map((marker) => marker.kind);
+  }, { signal: context.signal });
 }
 
 type ReadyToShipNotificationClaim = {
@@ -2952,7 +2713,7 @@ async function claimReadyToShipNotifications(args: {
   dropId: string;
 }): Promise<ReadyToShipNotificationClaimResult> {
   const nowMs = Math.max(0, Math.floor(args.context.nowMs));
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  return retryCommerceConflicts(async () => {
     const document = await readDocument(args.context, args.documentPath);
     if (!document) return { outcome: 'none' };
     const inspection = inspectPendingReadyToShipNotifications(document.fields, {
@@ -2980,70 +2741,53 @@ async function claimReadyToShipNotifications(args: {
       (attemptCount > 0 && retryUntilMs <= nowMs)
     ) {
       const stateFields = inspection.pending.map((marker) => marker.stateField);
-      try {
-        await commitWrites(args.context, [updateWrite({
-          path: args.documentPath,
-          fields: {
-            ...Object.fromEntries(stateFields.map((stateField) => [stateField, READY_TO_SHIP_NOTIFICATION_FAILED])),
-            [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: 'manual-review-required',
-          },
-          fieldPaths: [
-            ...stateFields,
-            READY_NOTIFICATION_LAST_ERROR_CODE_FIELD,
-            READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
-            READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
-          ],
-          transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, value: commerceFieldValue.serverTimestamp() }],
-          expectedUpdateTime: document.updateTime,
-        })]);
-        return { outcome: 'manual-review' };
-      } catch (error) {
-        if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-          await pause(Math.min(400, 25 * 2 ** attempt), args.context.signal);
-          continue;
-        }
-        throw error;
-      }
-    }
-    const claimId = crypto.randomUUID();
-    try {
       await commitWrites(args.context, [updateWrite({
         path: args.documentPath,
         fields: {
-          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: claimId,
-          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]:
-            nowMs + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
-          [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: attemptCount + 1,
-          [READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]: attemptCount === 0
-            ? nowMs + READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS
-            : retryUntilMs,
+          ...Object.fromEntries(stateFields.map((stateField) => [stateField, READY_TO_SHIP_NOTIFICATION_FAILED])),
+          [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: 'manual-review-required',
         },
         fieldPaths: [
+          ...stateFields,
+          READY_NOTIFICATION_LAST_ERROR_CODE_FIELD,
           READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
           READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
-          READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
-          READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD,
         ],
+        transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, value: commerceFieldValue.serverTimestamp() }],
         expectedUpdateTime: document.updateTime,
       })]);
-      return {
-        outcome: 'claimed',
-        claim: {
-          claimId,
-          document,
-          pending: inspection.pending,
-          previousAttemptCount: attemptCount,
-        },
-      };
-    } catch (error) {
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), args.context.signal);
-        continue;
-      }
-      throw error;
+      return { outcome: 'manual-review' };
     }
-  }
-  return { outcome: 'busy' };
+    const claimId = crypto.randomUUID();
+    await commitWrites(args.context, [updateWrite({
+      path: args.documentPath,
+      fields: {
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: claimId,
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]:
+          nowMs + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: attemptCount + 1,
+        [READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]: attemptCount === 0
+          ? nowMs + READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS
+          : retryUntilMs,
+      },
+      fieldPaths: [
+        READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
+        READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
+        READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
+        READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD,
+      ],
+      expectedUpdateTime: document.updateTime,
+    })]);
+    return {
+      outcome: 'claimed',
+      claim: {
+        claimId,
+        document,
+        pending: inspection.pending,
+        previousAttemptCount: attemptCount,
+      },
+    };
+  }, { signal: args.context.signal });
 }
 
 async function releaseReadyToShipNotificationClaim(
@@ -3051,35 +2795,26 @@ async function releaseReadyToShipNotificationClaim(
   documentPath: string,
   claim: ReadyToShipNotificationClaim,
 ): Promise<boolean> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  return retryCommerceConflicts(async () => {
     const document = await readDocument(context, documentPath);
     if (
       !document ||
       document.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] !== claim.claimId
     ) return false;
-    try {
-      await commitWrites(context, [updateWrite({
-        path: documentPath,
-        fields: {
-          [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: claim.previousAttemptCount,
-        },
-        fieldPaths: [
-          READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
-          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
-          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
-        ],
-        expectedUpdateTime: document.updateTime,
-      })]);
-      return true;
-    } catch (error) {
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      throw error;
-    }
-  }
-  return false;
+    await commitWrites(context, [updateWrite({
+      path: documentPath,
+      fields: {
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: claim.previousAttemptCount,
+      },
+      fieldPaths: [
+        READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
+        READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
+        READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
+      ],
+      expectedUpdateTime: document.updateTime,
+    })]);
+    return true;
+  }, { signal: context.signal });
 }
 
 async function markPendingReadyToShipNotificationsFailed(
@@ -3088,7 +2823,7 @@ async function markPendingReadyToShipNotificationsFailed(
   errorCode: string,
   targetStateFields?: readonly string[],
 ): Promise<string[]> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
+  return retryCommerceConflicts(async () => {
     const document = await readDocument(context, documentPath);
     if (!document) return [];
     const stateFields = [
@@ -3099,29 +2834,20 @@ async function markPendingReadyToShipNotificationsFailed(
       (!targetStateFields || targetStateFields.includes(fieldPath))
     ));
     if (!stateFields.length) return [];
-    try {
-      await commitWrites(context, [updateWrite({
-        path: documentPath,
-        fields: {
-          ...Object.fromEntries(
-            stateFields.map((fieldPath) => [fieldPath, READY_TO_SHIP_NOTIFICATION_FAILED]),
-          ),
-          [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: errorCode,
-        },
-        fieldPaths: [...stateFields, READY_NOTIFICATION_LAST_ERROR_CODE_FIELD],
-        transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, value: commerceFieldValue.serverTimestamp() }],
-        expectedUpdateTime: document.updateTime,
-      })]);
-      return stateFields;
-    } catch (error) {
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      throw error;
-    }
-  }
-  return [];
+    await commitWrites(context, [updateWrite({
+      path: documentPath,
+      fields: {
+        ...Object.fromEntries(
+          stateFields.map((fieldPath) => [fieldPath, READY_TO_SHIP_NOTIFICATION_FAILED]),
+        ),
+        [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: errorCode,
+      },
+      fieldPaths: [...stateFields, READY_NOTIFICATION_LAST_ERROR_CODE_FIELD],
+      transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, value: commerceFieldValue.serverTimestamp() }],
+      expectedUpdateTime: document.updateTime,
+    })]);
+    return stateFields;
+  }, { signal: context.signal });
 }
 
 async function publishReadyToShipNotifications(args: {
@@ -3953,14 +3679,14 @@ async function persistPendingReceiptSubmission(
   path: string,
   pending: PendingReceiptSubmission,
 ): Promise<void> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    const document = await readDocument(context, path);
-    if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
-    const existing = pendingReceiptSubmission(document.fields);
-    if (existing && !samePendingReceiptSubmission(existing, pending)) {
-      throw new DeliveryReceiptError('aborted', 'A receipt transaction is still being reconciled.');
-    }
-    try {
+  try {
+    await retryCommerceConflicts(async () => {
+      const document = await readDocument(context, path);
+      if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
+      const existing = pendingReceiptSubmission(document.fields);
+      if (existing && !samePendingReceiptSubmission(existing, pending)) {
+        throw new DeliveryReceiptError('aborted', 'A receipt transaction is still being reconciled.');
+      }
       await commitWrites(context, [updateWrite({
         path,
         fields: {
@@ -3975,22 +3701,17 @@ async function persistPendingReceiptSubmission(
         ],
         expectedUpdateTime: document.updateTime,
       })]);
-      return;
-    } catch (error) {
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      if (!(error instanceof CommerceWriteConflict)) {
-        try {
-          const cleanup = cleanupContext(context);
-          const document = await readDocument(cleanup, path);
-          const stored = document && pendingReceiptSubmission(document.fields);
-          if (stored && samePendingReceiptSubmission(stored, pending)) return;
-        } catch {}
-      }
-      throw error;
+    }, { signal: context.signal });
+  } catch (error) {
+    if (!(error instanceof CommerceWriteConflict)) {
+      try {
+        const cleanup = cleanupContext(context);
+        const document = await readDocument(cleanup, path);
+        const stored = document && pendingReceiptSubmission(document.fields);
+        if (stored && samePendingReceiptSubmission(stored, pending)) return;
+      } catch {}
     }
+    throw error;
   }
 }
 
@@ -4000,18 +3721,18 @@ async function settlePendingReceiptSubmission(
   pending: PendingReceiptSubmission,
   outcome: Exclude<ReceiptSubmissionOutcome, 'unresolved'>,
 ): Promise<void> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    const document = await readDocument(context, path);
-    if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
-    const existing = pendingReceiptSubmission(document.fields);
-    if (!existing) {
-      if (pendingReceiptSubmissionAlreadySettled(document.fields, pending, outcome)) return;
-      throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
-    }
-    if (!samePendingReceiptSubmission(existing, pending)) {
-      throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
-    }
-    try {
+  try {
+    await retryCommerceConflicts(async () => {
+      const document = await readDocument(context, path);
+      if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
+      const existing = pendingReceiptSubmission(document.fields);
+      if (!existing) {
+        if (pendingReceiptSubmissionAlreadySettled(document.fields, pending, outcome)) return;
+        throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
+      }
+      if (!samePendingReceiptSubmission(existing, pending)) {
+        throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
+      }
       await commitWrites(context, [updateWrite({
         path,
         fields: outcome === 'confirmed'
@@ -4023,23 +3744,18 @@ async function settlePendingReceiptSubmission(
         ],
         expectedUpdateTime: document.updateTime,
       })]);
-      return;
-    } catch (error) {
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      try {
-        const cleanup = cleanupContext(context);
-        const document = await readDocument(cleanup, path);
-        const stored = document && pendingReceiptSubmission(document.fields);
-        if (
-          document && !stored &&
-          pendingReceiptSubmissionAlreadySettled(document.fields, pending, outcome)
-        ) return;
-      } catch {}
-      throw error;
-    }
+    }, { signal: context.signal });
+  } catch (error) {
+    try {
+      const cleanup = cleanupContext(context);
+      const document = await readDocument(cleanup, path);
+      const stored = document && pendingReceiptSubmission(document.fields);
+      if (
+        document && !stored &&
+        pendingReceiptSubmissionAlreadySettled(document.fields, pending, outcome)
+      ) return;
+    } catch {}
+    throw error;
   }
 }
 
@@ -4672,8 +4388,12 @@ export const deliveryReceiptTestHooks = {
 
 export const deliveryReceiptRuntime = {
   assignDudesForBox,
-  beginTransaction,
-  commitWrites,
+  beginTransaction: (context: CommerceContext) => beginTransaction(context),
+  commitWrites: (
+    context: CommerceContext,
+    writes: readonly CommerceWrite[],
+    transaction?: CommerceUnitOfWork,
+  ) => commitWrites(context, writes, transaction),
   countNormalIrlPackStatus,
   createWrite,
   commerceInteger,
@@ -4681,8 +4401,15 @@ export const deliveryReceiptRuntime = {
   commerceTimestamp,
   commerceValue,
   pause,
-  readDocument,
-  rollbackTransactionBestEffort,
+  readDocument: (
+    context: CommerceContext,
+    path: string,
+    transaction?: CommerceUnitOfWork,
+  ) => readDocument(context, path, transaction),
+  rollbackTransactionBestEffort: (
+    context: CommerceContext,
+    transaction: CommerceUnitOfWork,
+  ) => rollbackTransactionBestEffort(context, transaction),
   runtimeForDrop,
   secureRandomInt,
   updateWrite,

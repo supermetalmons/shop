@@ -1965,6 +1965,30 @@ test('native assignment initializes a missing dude pool', async () => {
   assert.deepEqual((await repository.get(commerceKeys.boxAssignment('drop', 'box')))?.data.dudeIds, [1]);
 });
 
+test('native assignment preserves exact cancellation reasons', async () => {
+  const assign = deliveryReceiptRuntime.assignDudesForBox;
+  const controller = new AbortController();
+  const reason = new Error('assignment cancelled');
+  controller.abort(reason);
+  const context = {
+    commerceDb: {} as D1Database,
+    nowMs: 1_700_000_000_000,
+    providerFetch: fetch,
+    signal: controller.signal,
+  } as Parameters<typeof assign>[0];
+  const runtime = {
+    config: { dropFamily: 'poncho_drifella' },
+    dropId: 'drop',
+    itemsPerBox: 1,
+    maxDudeId: 2,
+  } as Parameters<typeof assign>[1];
+
+  await assert.rejects(
+    assign(context, runtime, 'box', () => 0),
+    (error) => error === reason,
+  );
+});
+
 test('stored assignment validation rejects malformed or duplicate ids', () => {
   const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
   assert.throws(

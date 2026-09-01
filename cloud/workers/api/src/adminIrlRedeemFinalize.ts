@@ -86,7 +86,18 @@ import {
   CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
+  type CommerceUnitOfWork,
 } from './commerceRepository.js';
+import {
+  commerceTimestamp,
+  createCommerceWrite,
+  readCommerceDocument,
+  runCommerceWriteTransaction,
+  updateCommerceWrite,
+  type CommerceDocumentContext,
+  type CommerceTransform,
+  type CommerceWrite,
+} from './commerceTransactions.js';
 import {
   buildRuntime as buildAdminIrlRedeemRuntime,
   fetchAsset as fetchAdminIrlRedeemAsset,
@@ -121,7 +132,6 @@ const PROCESSING_LEASE_MS = 30 * 60 * 1000;
 const WORKFLOW_EFFECT_LEASE_MS = 30_000;
 const RECEIPT_INDEX_MAX_WAIT_MS = 30_000;
 const RECEIPT_INDEX_POLL_MS = 2_000;
-const COMMERCE_TRANSACTION_ATTEMPTS = 6;
 const MAX_ITEMS = 32;
 const MAX_DELIVERY_ALLOCATION_ATTEMPTS = 16;
 const HELIUS_ASSET_PAGE_LIMIT = 1000;
@@ -150,10 +160,11 @@ const requestSchema = z.object({
 
 export type AdminIrlRedeemFinalizeRequest = z.infer<typeof requestSchema>;
 type FinalizeRequest = AdminIrlRedeemFinalizeRequest;
-type CommerceContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
-type CommerceTransaction = Awaited<ReturnType<typeof deliveryReceiptRuntime.beginTransaction>>;
-type CommerceWrite = ReturnType<typeof deliveryReceiptRuntime.updateWrite>;
-type CommerceTransform = NonNullable<Parameters<typeof deliveryReceiptRuntime.updateWrite>[0]['transforms']>[number];
+type CommerceContext = CommerceDocumentContext & {
+  dataDb?: D1Database;
+  providerFetch: typeof fetch;
+  [key: string]: unknown;
+};
 type ProviderContext = Parameters<typeof fetchAdminIrlRedeemAsset>[0];
 type Runtime = ReturnType<typeof buildAdminIrlRedeemRuntime>;
 type OnchainConfig = Awaited<ReturnType<typeof fetchDeliveryOnchainConfig>>;
@@ -1004,11 +1015,11 @@ function requestPath(body: FinalizeRequest): string {
 }
 
 function timestamp(value: number) {
-  return deliveryReceiptRuntime.commerceTimestamp(value);
+  return commerceTimestamp(value);
 }
 
 function deleteFieldsWrite(path: string, fields: Record<string, unknown>, deleted: string[], transforms: CommerceTransform[]): CommerceWrite {
-  return deliveryReceiptRuntime.updateWrite({
+  return updateCommerceWrite({
     path,
     fields,
     fieldPaths: [...Object.keys(fields), ...deleted],
@@ -1019,26 +1030,9 @@ function deleteFieldsWrite(path: string, fields: Record<string, unknown>, delete
 
 async function runTransaction<T>(
   context: CommerceContext,
-  operation: (transaction: CommerceTransaction) => Promise<{ result: T; writes?: CommerceWrite[] }>,
+  operation: (transaction: CommerceUnitOfWork) => Promise<{ result: T; writes?: CommerceWrite[] }>,
 ): Promise<T> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: CommerceTransaction | undefined;
-    try {
-      transaction = await deliveryReceiptRuntime.beginTransaction(context);
-      const { result, writes } = await operation(transaction);
-      await deliveryReceiptRuntime.commitWrites(context, writes || [], transaction);
-      transaction = undefined;
-      return result;
-    } catch (error) {
-      if (transaction) await deliveryReceiptRuntime.rollbackTransactionBestEffort(context, transaction);
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await deliveryReceiptRuntime.pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new AdminIrlRedeemFinalizeError('unavailable', 'Admin IRL redeem data is temporarily unavailable.');
+  return runCommerceWriteTransaction(context, operation);
 }
 
 type StartFinalizeResult =
@@ -1136,7 +1130,7 @@ async function startFinalize(
   const path = requestPath(body);
   try {
     return await runTransaction<StartFinalizeResult>(context, async (transaction) => {
-      const document = await deliveryReceiptRuntime.readDocument(context, path, transaction);
+      const document = await readCommerceDocument(context, path, transaction);
       if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
       const request = document.fields;
       if (request.dropId !== body.dropId) throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request drop mismatch.');
@@ -1211,7 +1205,7 @@ async function startFinalize(
     if (error instanceof AdminIrlRedeemFinalizeError) throw error;
     try {
       const cleanup = cleanupContext(context);
-      const document = await deliveryReceiptRuntime.readDocument(cleanup, path);
+      const document = await readCommerceDocument(cleanup, path);
       const request = document?.fields;
       if (
         request?.status === 'processing' &&
@@ -1400,7 +1394,7 @@ async function updateRequest(
   deleted: string[] = [],
 ): Promise<void> {
   await runTransaction(commerce, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(commerce, path, transaction);
+    const document = await readCommerceDocument(commerce, path, transaction);
     if (!document || document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
       throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
     }
@@ -1426,7 +1420,7 @@ async function persistPendingFinalizeSubmission(
 ): Promise<void> {
   try {
     await runTransaction(context, async (transaction) => {
-      const document = await deliveryReceiptRuntime.readDocument(context, path, transaction);
+      const document = await readCommerceDocument(context, path, transaction);
       if (!document || document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
       }
@@ -1446,7 +1440,7 @@ async function persistPendingFinalizeSubmission(
     if (error instanceof CommerceWriteConflict) throw error;
     try {
       const cleanup = cleanupContext(context);
-      const document = await deliveryReceiptRuntime.readDocument(cleanup, path);
+      const document = await readCommerceDocument(cleanup, path);
       const stored = document && normalizePendingFinalizeSubmission(document.fields.pendingFinalizeSubmission);
       if (
         document?.fields.status === 'processing' &&
@@ -1481,7 +1475,7 @@ async function settlePendingFinalizeSubmission(
 ): Promise<void> {
   try {
     await runTransaction(context, async (transaction) => {
-      const document = await deliveryReceiptRuntime.readDocument(context, path, transaction);
+      const document = await readCommerceDocument(context, path, transaction);
       if (!document || document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
       }
@@ -1522,7 +1516,7 @@ async function settlePendingFinalizeSubmission(
   } catch (error) {
     try {
       const cleanup = cleanupContext(context);
-      const document = await deliveryReceiptRuntime.readDocument(cleanup, path);
+      const document = await readCommerceDocument(cleanup, path);
       const stored = document && normalizePendingFinalizeSubmission(document.fields.pendingFinalizeSubmission);
       if (
         document?.fields.status === 'processing' &&
@@ -1541,7 +1535,7 @@ async function holdPendingFinalizeSubmission(
   pending: PendingFinalizeSubmission,
 ): Promise<void> {
   await runTransaction(context, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(context, path, transaction);
+    const document = await readCommerceDocument(context, path, transaction);
     if (!document || document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
       return { result: undefined };
     }
@@ -2201,13 +2195,13 @@ function markerConflict(reason?: string): AdminIrlRedeemFinalizeError {
 
 async function markerResolution(
   commerce: CommerceContext,
-  transaction: CommerceTransaction,
+  transaction: CommerceUnitOfWork,
   dropId: string,
   selectionKey: string,
   boxes: ReadonlyArray<{ originalAssetId: string; receiptAssetId?: string }>,
 ): Promise<AdminIrlRedeemMarkerReuseResolution> {
   const markers = await Promise.all(markerPaths(dropId, boxes).map((path) =>
-    deliveryReceiptRuntime.readDocument(commerce, path, transaction)));
+    readCommerceDocument(commerce, path, transaction)));
   return resolveAdminIrlRedeemMarkerReuse({
     dropId,
     selectionKey,
@@ -2264,7 +2258,7 @@ async function markerReuseReference(completed: Record<string, unknown>): Promise
 
 async function resolveExistingMarkerCompletion(
   commerce: CommerceContext,
-  transaction: CommerceTransaction,
+  transaction: CommerceUnitOfWork,
   body: FinalizeRequest,
   request: StartedRequest,
   fields: Record<string, unknown>,
@@ -2279,7 +2273,7 @@ async function resolveExistingMarkerCompletion(
   );
   if (resolution.status === 'none') return null;
   if (resolution.status === 'conflict') throw markerConflict(resolution.reason);
-  const order = await deliveryReceiptRuntime.readDocument(
+  const order = await readCommerceDocument(
     commerce,
     dropDeliveryOrderPath(body.dropId, resolution.deliveryId),
     transaction,
@@ -2327,7 +2321,7 @@ async function completeFromExistingMarkers(
     { status: 'none' } |
     { status: 'complete'; request: Record<string, unknown> }
   >(commerce, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(commerce, requestPath(body), transaction);
+    const document = await readCommerceDocument(commerce, requestPath(body), transaction);
     if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
     if (document.fields.status === 'complete') return { result: { status: 'complete' as const, request: document.fields } };
     if (document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
@@ -2363,7 +2357,7 @@ async function reusableExistingMarkerState(
     | { status: 'complete' }
     | ({ status: 'reuse' } & MarkerReuseReference)
   >(commerce, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(commerce, requestPath(body), transaction);
+    const document = await readCommerceDocument(commerce, requestPath(body), transaction);
     if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
     if (document.fields.status === 'complete') return { result: { status: 'complete' as const } };
     if (document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
@@ -2390,7 +2384,7 @@ function newClaimCodes(quantity: number): string[] {
 }
 
 function createWithTimestamps(path: string, fields: Record<string, unknown>, timestamps: string[]): CommerceWrite {
-  return deliveryReceiptRuntime.createWrite({
+  return createCommerceWrite({
     path,
     fields,
     transforms: timestamps.map((fieldPath) => ({ fieldPath, value: commerceFieldValue.serverTimestamp() })),
@@ -2424,7 +2418,7 @@ async function publishPack(
       { status: 'complete'; request: Record<string, unknown> } |
       { status: 'created'; request: Record<string, unknown>; order: Record<string, unknown> }
     >(commerce, async (transaction) => {
-      const document = await deliveryReceiptRuntime.readDocument(commerce, requestPath(body), transaction);
+      const document = await readCommerceDocument(commerce, requestPath(body), transaction);
       if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
       if (document.fields.status === 'complete') return { result: { status: 'complete' as const, request: document.fields } };
       if (document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
@@ -2433,7 +2427,7 @@ async function publishPack(
       const resolution = await markerResolution(commerce, transaction, runtime.dropId, selectionKey, boxesWithCodes);
       if (resolution.status === 'conflict') throw markerConflict(resolution.reason);
       if (resolution.status === 'reuse') {
-        const existingOrder = await deliveryReceiptRuntime.readDocument(
+        const existingOrder = await readCommerceDocument(
           commerce,
           dropDeliveryOrderPath(runtime.dropId, resolution.deliveryId),
           transaction,
@@ -2446,10 +2440,10 @@ async function publishPack(
           writes: [completeRequestWrite(document.path, completed)],
         };
       }
-      if (await deliveryReceiptRuntime.readDocument(commerce, orderPath, transaction)) {
+      if (await readCommerceDocument(commerce, orderPath, transaction)) {
         return { result: { status: 'collision' as const } };
       }
-      const claims = await Promise.all(claimPaths.map((path) => deliveryReceiptRuntime.readDocument(commerce, path, transaction)));
+      const claims = await Promise.all(claimPaths.map((path) => readCommerceDocument(commerce, path, transaction)));
       if (claims.some(Boolean)) return { result: { status: 'collision' as const } };
       const order = buildAdminIrlRedeemDeliveryOrderDocument({
         dropId: runtime.dropId,
@@ -2537,13 +2531,13 @@ async function publishCard(
       { status: 'complete'; request: Record<string, unknown> } |
       { status: 'created'; request: Record<string, unknown> }
     >(commerce, async (transaction) => {
-      const document = await deliveryReceiptRuntime.readDocument(commerce, requestPath(body), transaction);
+      const document = await readCommerceDocument(commerce, requestPath(body), transaction);
       if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
       if (document.fields.status === 'complete') return { result: { status: 'complete' as const, request: document.fields } };
       if (document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
       }
-      const existingMarker = await deliveryReceiptRuntime.readDocument(commerce, markerPath, transaction);
+      const existingMarker = await readCommerceDocument(commerce, markerPath, transaction);
       if (existingMarker) {
         const marker = existingMarker.fields;
         const existingDeliveryId = Math.floor(Number(marker.deliveryId));
@@ -2557,8 +2551,8 @@ async function publishCard(
           !Number.isSafeInteger(existingDeliveryId) || existingDeliveryId < 1 || marker.owner !== request.owner
         ) throw markerConflict('card receipt marker mismatch');
         const [order, claim] = await Promise.all([
-          deliveryReceiptRuntime.readDocument(commerce, dropDeliveryOrderPath(runtime.dropId, existingDeliveryId), transaction),
-          deliveryReceiptRuntime.readDocument(commerce, `claimCodes/${existingClaimCode}`, transaction),
+          readCommerceDocument(commerce, dropDeliveryOrderPath(runtime.dropId, existingDeliveryId), transaction),
+          readCommerceDocument(commerce, `claimCodes/${existingClaimCode}`, transaction),
         ]);
         if (!order || !claim) throw markerConflict('card receipt marker order or claim missing');
         const item = Array.isArray(order.fields.items) && isRecord(order.fields.items[0]) ? order.fields.items[0] : {};
@@ -2587,8 +2581,8 @@ async function publishCard(
         return { result: { status: 'complete' as const, request: completed }, writes: [completeRequestWrite(document.path, completed)] };
       }
       const [orderExists, claimExists] = await Promise.all([
-        deliveryReceiptRuntime.readDocument(commerce, orderPath, transaction),
-        deliveryReceiptRuntime.readDocument(commerce, claimPath, transaction),
+        readCommerceDocument(commerce, orderPath, transaction),
+        readCommerceDocument(commerce, claimPath, transaction),
       ]);
       if (orderExists || claimExists) return { result: { status: 'collision' as const } };
       const order = buildAdminIrlRedeemCardDeliveryOrderDocument({
@@ -2732,7 +2726,7 @@ async function loadWorkflowRequest(
   const commerce = workflowCommerceContext(args.env, args.signal);
   const path = dropAdminIrlRedeemRequestPath(payload.dropId, payload.requestId);
   return runTransaction<LoadedWorkflowRequest>(commerce, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(commerce, path, transaction);
+    const document = await readCommerceDocument(commerce, path, transaction);
     if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
     const fields = document.fields;
     const owner = canonicalPublicKey(fields.owner);
@@ -2843,7 +2837,7 @@ async function persistWorkflowOnchain(
 ): Promise<void> {
   let persisted = onchain;
   await runTransaction(loaded.commerce, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(
+    const document = await readCommerceDocument(
       loaded.commerce,
       requestPath(loaded.body),
       transaction,
@@ -2890,7 +2884,7 @@ async function persistWorkflowDraft(
 ): Promise<void> {
   const runtime = buildAdminIrlRedeemRuntime(loaded.execution.config);
   await runTransaction(loaded.commerce, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(
+    const document = await readCommerceDocument(
       loaded.commerce,
       requestPath(loaded.body),
       transaction,
@@ -2947,7 +2941,7 @@ export async function reserveAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
   const snapshot = JSON.parse(JSON.stringify(config)) as ApiDropConfig;
   runtimeSupportsFinalize(buildAdminIrlRedeemRuntime(snapshot));
   const commerce = workflowCommerceContext(args.env, args.signal, args.nowMs ?? Date.now());
-  const prepared = await deliveryReceiptRuntime.readDocument(commerce, requestPath(parsed.data));
+  const prepared = await readCommerceDocument(commerce, requestPath(parsed.data));
   if (!prepared) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
   const owner = finalizeRequestOwner(prepared.fields, wallet);
   const adminWallet = canonicalPublicKey(prepared.fields.adminWallet);
@@ -3257,7 +3251,7 @@ export async function cleanupAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
   );
   const commerce = workflowCommerceContext(args.env, args.signal);
   return runTransaction<{ cleared: boolean }>(commerce, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(
+    const document = await readCommerceDocument(
       commerce,
       dropAdminIrlRedeemRequestPath(payload.dropId, payload.requestId),
       transaction,
@@ -3390,7 +3384,7 @@ export async function claimAdminIrlRedeemFinalizeWorkflowEffect(
     return await raceWithSignal(runTransaction<{ status: 'claimed' | 'busy' | 'changed' }>(
       commerce,
       async (transaction) => {
-        const document = await deliveryReceiptRuntime.readDocument(
+        const document = await readCommerceDocument(
           commerce,
           dropAdminIrlRedeemRequestPath(located.key.dropId || '', located.key.documentId),
           transaction,
@@ -3497,7 +3491,7 @@ export async function dispatchAdminIrlRedeemFinalizeWorkflowRestart(args: Readon
     return await raceWithSignal(runTransaction<{ status: 'dispatched' | 'changed' }>(
       commerce,
       async (transaction) => {
-        const document = await deliveryReceiptRuntime.readDocument(
+        const document = await readCommerceDocument(
           commerce,
           dropAdminIrlRedeemRequestPath(located.key.dropId || '', located.key.documentId),
           transaction,
@@ -3575,7 +3569,7 @@ export async function retractAdminIrlRedeemFinalizeWorkflowRestartDispatch(args:
     return await raceWithSignal(runTransaction<{ status: 'retracted' | 'changed' }>(
       commerce,
       async (transaction) => {
-        const document = await deliveryReceiptRuntime.readDocument(
+        const document = await readCommerceDocument(
           commerce,
           dropAdminIrlRedeemRequestPath(located.key.dropId || '', located.key.documentId),
           transaction,

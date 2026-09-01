@@ -541,7 +541,7 @@ test('webhook retries optimistic D1 conflicts and surfaces exhausted conflicts',
   const exhaustedContext = checkoutEnvironment(checkoutDocument());
   const exhausted = await handleStripeWebhookRequest(await signedRequest(stripeEvent()), {
     ...exhaustedContext.env,
-    COMMERCE_DB: conflictDatabase(exhaustedContext.harness.db, 3),
+    COMMERCE_DB: conflictDatabase(exhaustedContext.harness.db, 6),
   }, {
     log: () => undefined,
   });

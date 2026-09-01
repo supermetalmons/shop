@@ -1273,19 +1273,46 @@ test('D1 assignment fails closed when the pool is exhausted', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
   await repository.run(1, async (unit) => unit.create(commerceKeys.dudePool(DROP_ID), { available: [] }));
+  const runtime = revealDudesTestHooks.runtimeForDrop(DROP_ID);
   const dependencySubset = {
     randomInt: () => 0,
     sleep: async () => undefined,
   };
 
+  let failure: RevealDudesError | undefined;
   await assert.rejects(
     revealDudesTestHooks.assignDudes(
       revealContext(harness.db),
-      revealDudesTestHooks.runtimeForDrop(DROP_ID),
+      runtime,
       BOX_ASSET.toBase58(),
       dependencySubset,
     ),
-    (error: unknown) => error instanceof RevealDudesError && error.code === 'resource-exhausted',
+    (error: unknown) => {
+      if (!(error instanceof RevealDudesError)) return false;
+      failure = error;
+      return error.code === 'resource-exhausted';
+    },
+  );
+  assert.deepEqual(failure?.details, {
+    boxAssetId: BOX_ASSET.toBase58(),
+    poolLen: 0,
+    required: runtime.itemsPerBox,
+  });
+});
+
+test('D1 assignment preserves exact cancellation reasons', async () => {
+  const controller = new AbortController();
+  const reason = new Error('assignment cancelled');
+  controller.abort(reason);
+
+  await assert.rejects(
+    revealDudesTestHooks.assignDudes(
+      { ...revealContext(createCommerceD1()), signal: controller.signal },
+      revealDudesTestHooks.runtimeForDrop(DROP_ID),
+      BOX_ASSET.toBase58(),
+      { randomInt: () => 0, sleep: async () => undefined },
+    ),
+    (error) => error === reason,
   );
 });
 

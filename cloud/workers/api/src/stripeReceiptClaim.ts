@@ -80,10 +80,19 @@ import {
 } from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
-  CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
+  type CommerceUnitOfWork,
 } from './commerceRepository.js';
+import {
+  commerceTimestamp,
+  readCommerceDocument,
+  runCommerceWriteTransaction,
+  updateCommerceWrite,
+  type CommerceDocumentContext,
+  type CommerceTransform,
+  type CommerceWrite,
+} from './commerceTransactions.js';
 import {
   buildRuntime as buildAdminIrlRedeemRuntime,
   fetchAsset as fetchAdminIrlRedeemAsset,
@@ -117,7 +126,6 @@ const PROCESSING_LEASE_MS = 90_000;
 const DIRECT_SUBMISSION_RESOLUTION_MAX_WAIT_MS = 90_000;
 const DIRECT_SUBMISSION_RESOLUTION_POLL_MS = 2_000;
 const DIRECT_SUBMISSION_PROCESSING_LEASE_MS = 4 * 60_000;
-const COMMERCE_TRANSACTION_ATTEMPTS = 6;
 const HELIUS_ASSETS_PAGE_LIMIT = 1000;
 const HELIUS_ASSETS_MAX_SEARCH_PAGES = 64;
 const SOLANA_MAX_RAW_TX_BYTES = 1232;
@@ -135,10 +143,11 @@ const requestSchema = z.object({
 
 type ClaimEnv = Pick<Env, 'COSIGNER_SECRET' | 'HELIUS_API_KEY'> &
   Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
-type CommerceContext = Parameters<typeof deliveryReceiptRuntime.readDocument>[0];
-type CommerceTransaction = Awaited<ReturnType<typeof deliveryReceiptRuntime.beginTransaction>>;
-type CommerceWrite = ReturnType<typeof deliveryReceiptRuntime.updateWrite>;
-type CommerceTransform = NonNullable<Parameters<typeof deliveryReceiptRuntime.updateWrite>[0]['transforms']>[number];
+type CommerceContext = CommerceDocumentContext & {
+  dataDb?: D1Database;
+  providerFetch: ProfileProviderFetch;
+  [key: string]: unknown;
+};
 type Runtime = ReturnType<typeof buildAdminIrlRedeemRuntime>;
 type ProviderContext = {
   apiKey: string;
@@ -463,31 +472,14 @@ function orderClaimFields(args: {
 }
 
 function timestamp(value: number) {
-  return deliveryReceiptRuntime.commerceTimestamp(value);
+  return commerceTimestamp(value);
 }
 
 async function runTransaction<T>(
   context: CommerceContext,
-  operation: (transaction: CommerceTransaction) => Promise<{ result: T; writes?: CommerceWrite[] }>,
+  operation: (transaction: CommerceUnitOfWork) => Promise<{ result: T; writes?: CommerceWrite[] }>,
 ): Promise<T> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    let transaction: CommerceTransaction | undefined;
-    try {
-      transaction = await deliveryReceiptRuntime.beginTransaction(context);
-      const { result, writes } = await operation(transaction);
-      await deliveryReceiptRuntime.commitWrites(context, writes || [], transaction);
-      transaction = undefined;
-      return result;
-    } catch (error) {
-      if (transaction) await deliveryReceiptRuntime.rollbackTransactionBestEffort(context, transaction);
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await deliveryReceiptRuntime.pause(Math.min(400, 25 * 2 ** attempt), context.signal);
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new StripeReceiptClaimError('unavailable', 'Receipt claim data is temporarily unavailable.');
+  return runCommerceWriteTransaction(context, operation);
 }
 
 function updateWrite(args: {
@@ -496,7 +488,7 @@ function updateWrite(args: {
   deleted?: string[];
   transforms?: CommerceTransform[];
 }): CommerceWrite {
-  return deliveryReceiptRuntime.updateWrite({
+  return updateCommerceWrite({
     path: args.path,
     fields: args.fields,
     fieldPaths: [...Object.keys(args.fields), ...(args.deleted || [])],
@@ -516,7 +508,7 @@ export async function startClaim(
   let attemptedStart: StartedClaim | undefined;
   try {
     return await runTransaction<ClaimStart>(context, async (transaction) => {
-      const claimDocument = await deliveryReceiptRuntime.readDocument(context, claimPath, transaction);
+      const claimDocument = await readCommerceDocument(context, claimPath, transaction);
       if (!claimDocument) throw new StripeReceiptClaimError('not-found', 'Invalid receipt claim code.');
       const claim = claimDocument.fields;
       if (claim.namespace !== STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE) {
@@ -568,7 +560,7 @@ export async function startClaim(
         );
       }
       const orderPath = dropDeliveryOrderPath(dropId, deliveryId);
-      const orderDocument = await deliveryReceiptRuntime.readDocument(context, orderPath, transaction);
+      const orderDocument = await readCommerceDocument(context, orderPath, transaction);
       if (!orderDocument) throw new StripeReceiptClaimError('not-found', 'Receipt claim order not found.');
       const order = orderDocument.fields;
       if (!isReceiptClaimDeliveryOrderSource(order.source)) {
@@ -652,13 +644,13 @@ export async function startClaim(
     }
     try {
       const cleanup = cleanupContext(context);
-      const claim = await deliveryReceiptRuntime.readDocument(cleanup, claimPath);
+      const claim = await readCommerceDocument(cleanup, claimPath);
       if (
         claim?.fields.status === 'processing' &&
         claim.fields.processingAttemptId === attemptId &&
         claim.fields.recipient === recipientWallet
       ) {
-        const order = await deliveryReceiptRuntime.readDocument(cleanup, attemptedStart.orderPath);
+        const order = await readCommerceDocument(cleanup, attemptedStart.orderPath);
         const orderClaims = order ? [
           ...(attemptedStart.updatePluralOrderClaim
             ? [orderStripeReceiptClaimByBoxId(order.fields, attemptedStart.boxId)]
@@ -715,7 +707,7 @@ export async function clearProcessing(
   try {
     await runTransaction(safeContext, async (transaction) => {
       const claimPath = `claimCodes/${code}`;
-      const claim = await deliveryReceiptRuntime.readDocument(safeContext, claimPath, transaction);
+      const claim = await readCommerceDocument(safeContext, claimPath, transaction);
       if (!claim || claim.fields.status !== 'processing' || claim.fields.processingAttemptId !== started.attemptId) {
         return { result: undefined };
       }
@@ -770,7 +762,7 @@ export async function rememberSubmittedTransaction(
   const safeContext = context.signal.aborted ? cleanupContext(context) : context;
   await runTransaction(safeContext, async (transaction) => {
     const path = `claimCodes/${code}`;
-    const claim = await deliveryReceiptRuntime.readDocument(safeContext, path, transaction);
+    const claim = await readCommerceDocument(safeContext, path, transaction);
     if (!claim) throw new StripeReceiptClaimError('not-found', 'Receipt claim code not found.');
     if (claim.fields.status !== 'processing' || claim.fields.processingAttemptId !== attemptId) {
       throw new StripeReceiptClaimError('aborted', 'Receipt claim processing lease changed.');
@@ -819,7 +811,7 @@ export async function finalizeClaim(
   const safeContext = context.signal.aborted ? cleanupContext(context) : context;
   return runTransaction(safeContext, async (transaction) => {
     const claimPath = `claimCodes/${code}`;
-    const claim = await deliveryReceiptRuntime.readDocument(safeContext, claimPath, transaction);
+    const claim = await readCommerceDocument(safeContext, claimPath, transaction);
     if (!claim) throw new StripeReceiptClaimError('not-found', 'Receipt claim code not found.');
     const storedReceiptTxs = normalizeReceiptTxs(claim.fields.receiptTxs);
     const isDirect = Boolean(directReceiptAssetId(claim.fields));
@@ -1732,7 +1724,7 @@ export async function claimStripeReceipt(
       catch {}
       if (runtime && runtime.itemsPerBox >= BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX) {
         try {
-          const order = await deliveryReceiptRuntime.readDocument(commerce, dropDeliveryOrderPath(claim.dropId, claim.deliveryId));
+          const order = await readCommerceDocument(commerce, dropDeliveryOrderPath(claim.dropId, claim.deliveryId));
           const assignment = order
             ? stripeAssignedIrlClaimForBox(order.fields, claim.boxId, {
                 itemsPerBox: runtime.itemsPerBox,

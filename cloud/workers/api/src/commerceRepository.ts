@@ -1040,7 +1040,7 @@ export class CommerceUnitOfWork {
       if (/authority is not d1/i.test(message)) {
         throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable for maintenance.');
       }
-      if (/transaction conflict|UNIQUE constraint/i.test(message)) {
+      if (/transaction conflict|UNIQUE constraint|cannot start a transaction within a transaction/i.test(message)) {
         for (const path of this.createPaths) {
           if (await this.documentExists(path)) throw new CommerceWriteConflict('already-exists');
         }

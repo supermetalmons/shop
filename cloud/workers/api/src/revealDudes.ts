@@ -35,11 +35,6 @@ import {
   BOX_MINTER_PENDING_OPEN_SEED,
 } from '../../../../shared/boxMinterProtocol.js';
 import {
-  DudeAssignmentPoolExhaustedError,
-  pickDudeIdsForAssignment,
-} from '../../../../shared/assignDudesPicker.js';
-import { sanitizeDudeAssignmentPool } from '../../../../shared/dudeAssignmentPool.js';
-import {
   encodeFinalizeOpenBoxArgs,
 } from '../../../../shared/finalizeOpenBoxArgs.js';
 import { decodePendingOpenData } from '../../../../shared/pendingOpenCodec.js';
@@ -77,11 +72,12 @@ import {
 } from './boundedRequest.js';
 import {
   CommerceRepositoryError,
-  CommerceWriteConflict,
   D1CommerceRepository,
-  commerceFieldValue,
-  commerceKeys,
 } from './commerceRepository.js';
+import {
+  CommerceDudeAssignmentError,
+  assignCommerceDudes,
+} from './commerceDudeAssignments.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
@@ -114,7 +110,6 @@ const REVEAL_BACKGROUND_JOB_TIMEOUT_MS = 60_000;
 const BACKGROUND_PACK_STATUS_TIMEOUT_MS = 10_000;
 const REVEAL_BACKGROUND_JOB_INITIAL_DELAY_SECONDS = 5;
 const REVEAL_BACKGROUND_JOB_RETRY_DELAYS_SECONDS = [5, 15, 30, 60, 120, 300] as const;
-const COMMERCE_TRANSACTION_ATTEMPTS = 6;
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
@@ -726,22 +721,6 @@ async function requireRevealSubmissionStorageControl(
   }
 }
 
-function normalizeStoredDudeIds(
-  raw: unknown,
-  runtime: RevealRuntime,
-  boxAssetId: string,
-): number[] {
-  const dudeIds = Array.isArray(raw) ? raw.map((value) => Math.floor(Number(value))) : [];
-  if (
-    dudeIds.length !== runtime.itemsPerBox ||
-    dudeIds.some((id) => !Number.isFinite(id) || id < 1 || id > runtime.maxDudeId) ||
-    new Set(dudeIds).size !== dudeIds.length
-  ) {
-    throw new RevealDudesError('failed-precondition', 'Stored figure assignment is invalid.', { boxAssetId });
-  }
-  return dudeIds;
-}
-
 const REVEAL_SUBMISSION_VERSION = 1;
 const RESERVATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -906,87 +885,36 @@ async function assignDudes(
   dependencies: AssignmentDependencies,
 ): Promise<AssignmentResult> {
   const repository = new D1CommerceRepository(context.commerceDb);
-  const assignmentKey = commerceKeys.boxAssignment(runtime.dropId, boxAssetId);
-  const poolKey = commerceKeys.dudePool(runtime.dropId);
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    try {
-      return await repository.run(context.nowMs, async (unit) => {
-        const existing = await unit.get(assignmentKey);
-        if (existing) {
-          return {
-            dudeIds: normalizeStoredDudeIds(existing.data.dudeIds, runtime, boxAssetId),
-            outcome: 'existing' as const,
-          };
-        }
-        const poolDocument = await unit.get(poolKey);
-        const poolInfo = sanitizeDudeAssignmentPool(poolDocument?.data.available, runtime.maxDudeId);
-        const pool = poolInfo.pool;
-        if (pool.length < runtime.itemsPerBox) {
-          throw new RevealDudesError('resource-exhausted', 'No figures remaining to assign.', {
-            boxAssetId,
-            poolLen: pool.length,
-            required: runtime.itemsPerBox,
-          });
-        }
-        let picked;
-        try {
-          picked = await pickDudeIdsForAssignment({
-            dropFamily: runtime.config.dropFamily,
-            itemsPerBox: runtime.itemsPerBox,
-            maxDudeId: runtime.maxDudeId,
-            pool,
-            randomInt: dependencies.randomInt,
-            isAssigned: async (dudeId) => Boolean(await unit.get(commerceKeys.dudeAssignment(
-              runtime.dropId,
-              String(dudeId),
-            ))),
-          });
-        } catch (error) {
-          if (error instanceof DudeAssignmentPoolExhaustedError) {
-            throw new RevealDudesError('resource-exhausted', error.message, {
-              boxAssetId,
-              bucket: error.bucket,
-              chosen: error.chosen,
-              candidatesChecked: error.candidatesChecked,
-              staleAssigned: error.staleAssigned,
-              poolLen: error.poolLen,
-            });
-          }
-          throw error;
-        }
-        for (const dudeId of picked.chosen) {
-          await unit.create(commerceKeys.dudeAssignment(runtime.dropId, String(dudeId)), {
-            assignedAt: commerceFieldValue.serverTimestamp(),
-            boxAssetId,
-            dudeId,
-          });
-        }
-        await unit.set(poolKey, {
-          available: pool,
-          updatedAt: commerceFieldValue.serverTimestamp(),
-        }, { merge: true });
-        await unit.create(assignmentKey, {
-          createdAt: commerceFieldValue.serverTimestamp(),
-          dudeIds: picked.chosen,
-        });
-        return { dudeIds: picked.chosen, outcome: 'created' as const };
-      });
-    } catch (error) {
-      if (error instanceof RevealDudesError) throw error;
-      if (error instanceof CommerceWriteConflict && attempt + 1 < COMMERCE_TRANSACTION_ATTEMPTS) {
-        await dependencies.sleep(Math.min(2_500, 150 * 2 ** Math.min(attempt, 4)), context.signal);
-        continue;
-      }
-      if (error instanceof ProfileReadError || error instanceof CommerceRepositoryError) {
-        const code = error instanceof ProfileReadError && error.code === 'deadline-exceeded'
-          ? error.code
-          : 'unavailable';
-        throw new RevealDudesError(code, 'Figure assignment is temporarily unavailable.');
-      }
-      throw new RevealDudesError('unavailable', 'Figure assignment is temporarily unavailable.');
+  try {
+    return await assignCommerceDudes({
+      boxAssetId,
+      dropFamily: runtime.config.dropFamily,
+      dropId: runtime.dropId,
+      itemsPerBox: runtime.itemsPerBox,
+      maxDudeId: runtime.maxDudeId,
+      nowMs: context.nowMs,
+      randomInt: dependencies.randomInt,
+      repository,
+      signal: context.signal,
+      sleep: (milliseconds) => dependencies.sleep(milliseconds, context.signal),
+    });
+  } catch (error) {
+    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
+    if (error instanceof CommerceDudeAssignmentError) {
+      throw new RevealDudesError(
+        error.code === 'invalid-stored-assignment' ? 'failed-precondition' : 'resource-exhausted',
+        error.message,
+        error.details,
+      );
     }
+    if (error instanceof ProfileReadError || error instanceof CommerceRepositoryError) {
+      const code = error instanceof ProfileReadError && error.code === 'deadline-exceeded'
+        ? error.code
+        : 'unavailable';
+      throw new RevealDudesError(code, 'Figure assignment is temporarily unavailable.');
+    }
+    throw new RevealDudesError('unavailable', 'Figure assignment is temporarily unavailable.');
   }
-  throw new RevealDudesError('unavailable', 'Figure assignment is temporarily unavailable.');
 }
 
 function transactionErrorMessage(error: unknown): string {

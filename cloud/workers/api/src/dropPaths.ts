@@ -28,14 +28,6 @@ export function dropBoxAssignmentPath(dropId: string, boxAssetId: string): strin
   return `${dropRootPath(dropId)}/boxAssignments/${boxAssetId}`;
 }
 
-export function dropDudeAssignmentPath(dropId: string, dudeId: number): string {
-  return `${dropRootPath(dropId)}/dudeAssignments/${dudeId}`;
-}
-
-export function dropDudePoolPath(dropId: string): string {
-  return `${dropRootPath(dropId)}/meta/dudePool`;
-}
-
 function dropDeliveryOrdersCollectionPath(dropId: string): string {
   return `${dropRootPath(dropId)}/deliveryOrders`;
 }

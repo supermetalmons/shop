@@ -47,6 +47,7 @@ import {
   commerceFieldValue,
   type CommerceDocumentRecord,
 } from './commerceRepository.js';
+import { runCommerceTransaction } from './commerceTransactions.js';
 import { isProfileRequestOriginAllowed } from './profileReads.js';
 import { ensureD1Profile } from './profileD1.js';
 import {
@@ -68,7 +69,6 @@ export type ProfileLifecyclePath = typeof SOLANA_AUTH_PATH | typeof PROFILE_RECO
 const AUTH_TIMEOUT_MS = 15_000;
 const RECONCILE_TIMEOUT_MS = 55_000;
 const MAX_REQUEST_BYTES = 4096;
-const COMMERCE_TRANSACTION_ATTEMPTS = 5;
 const STRIPE_OWNER_MERGE_BATCH_SIZE = 450;
 
 const solanaAuthSchema = z.object({
@@ -187,25 +187,6 @@ async function parseRequestBody(
   return result.data;
 }
 
-async function pauseForConflict(signal: AbortSignal, attempt: number): Promise<void> {
-  if (signal.aborted) throw signal.reason;
-  const delay = Math.min(400, 25 * 2 ** attempt);
-  await new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    };
-    const timeout = setTimeout(finish, delay);
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal.removeEventListener('abort', onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) onAbort();
-  });
-}
-
 function validateAuthWalletSignature(params: {
   identity: Extract<RequestIdentity, { kind: 'anonymous' }>;
   message: string;
@@ -245,38 +226,38 @@ async function mergeStripeOwnerBatch(params: {
   sourceOwner: string;
   wallet: string;
 }): Promise<number> {
-  for (let attempt = 0; attempt < COMMERCE_TRANSACTION_ATTEMPTS; attempt += 1) {
-    try {
-      return await params.common.repository.run(params.common.nowMs, async (unit) => {
-        const documents = await unit.queryDeliveryOrdersByOwner({
-          owner: params.sourceOwner,
-          limit: STRIPE_OWNER_MERGE_BATCH_SIZE,
-        });
-        if (documents.length > STRIPE_OWNER_MERGE_BATCH_SIZE) {
-          throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-        }
-        for (const document of documents) {
-          deliveryOrderPath(document);
-          await unit.update(document.key, {
-            mergedAuthSubject: params.authSubject,
-            owner: params.wallet,
-            ownerKind: 'wallet',
-            ownerMergedAt: commerceFieldValue.serverTimestamp(),
-            previousOwner: stripeCheckoutAnonymousOwnerId(params.authSubject),
-          });
-        }
-        return documents.length;
-      });
-    } catch (error) {
-      if (isSignalCancellationError(params.common.signal, error)) throw params.common.signal.reason;
-      if (!(error instanceof CommerceWriteConflict)) throw error;
-      if (params.common.signal.aborted || attempt + 1 >= COMMERCE_TRANSACTION_ATTEMPTS) {
-        throw new ProfileReadError('aborted', 409, 'Stripe order reconciliation changed. Try again.');
-      }
-      await pauseForConflict(params.common.signal, attempt);
+  try {
+    return await runCommerceTransaction({
+      nowMs: params.common.nowMs,
+    repository: params.common.repository,
+    signal: params.common.signal,
+  }, async (unit) => {
+    const documents = await unit.queryDeliveryOrdersByOwner({
+      owner: params.sourceOwner,
+      limit: STRIPE_OWNER_MERGE_BATCH_SIZE,
+    });
+    if (documents.length > STRIPE_OWNER_MERGE_BATCH_SIZE) {
+      throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
     }
+    for (const document of documents) {
+      deliveryOrderPath(document);
+      await unit.update(document.key, {
+        mergedAuthSubject: params.authSubject,
+        owner: params.wallet,
+        ownerKind: 'wallet',
+        ownerMergedAt: commerceFieldValue.serverTimestamp(),
+        previousOwner: stripeCheckoutAnonymousOwnerId(params.authSubject),
+      });
+    }
+    return documents.length;
+  });
+  } catch (error) {
+    if (isSignalCancellationError(params.common.signal, error)) throw params.common.signal.reason;
+    if (error instanceof CommerceWriteConflict) {
+      throw new ProfileReadError('aborted', 409, 'Stripe order reconciliation changed. Try again.');
+    }
+    throw error;
   }
-  return 0;
 }
 
 async function mergeStripeOrders(params: {

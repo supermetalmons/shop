@@ -1,6 +1,5 @@
 import {
   CommerceRepositoryError,
-  CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
   commerceKeys,
@@ -11,6 +10,7 @@ import {
   type CommerceUnitOfWork,
   type CommerceUpdateValue,
 } from '../commerceRepository.js';
+import { runCommerceTransaction } from '../commerceTransactions.js';
 
 export type StripeCheckoutDocumentData = Record<string, unknown>;
 
@@ -86,8 +86,6 @@ export const stripeCheckoutFieldValue = Object.freeze({
     Object.freeze(new StripeCheckoutTimestampValue(milliseconds)),
 });
 
-const TRANSACTION_ATTEMPTS = 5;
-
 function keyForPath(path: string): CommerceDocumentKey {
   const claim = /^claimCodes\/([^/]+)$/.exec(path);
   if (claim) return commerceKeys.claimCode(claim[1]);
@@ -156,24 +154,6 @@ function writeData(data: StripeCheckoutDocumentData): CommerceDocumentWriteData 
       .filter(([, value]) => value !== undefined)
       .map(([field, value]) => [field, updateValue(value)]),
   );
-}
-
-async function pause(signal: AbortSignal | undefined, attempt: number): Promise<void> {
-  if (signal?.aborted) throw signal.reason;
-  await new Promise<void>((resolve, reject) => {
-    const finish = () => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    };
-    const timeout = setTimeout(finish, Math.min(400, 25 * 2 ** attempt));
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal?.removeEventListener('abort', onAbort);
-      reject(signal?.reason);
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-    if (signal?.aborted) onAbort();
-  });
 }
 
 class D1StripeCheckoutReference implements StripeCheckoutDocumentReference {
@@ -269,23 +249,18 @@ export class D1StripeCheckoutStore implements StripeCheckoutStore {
   }
 
   async runTransaction<T>(operation: (transaction: StripeCheckoutTransaction) => Promise<T>): Promise<T> {
-    for (let attempt = 0; attempt < TRANSACTION_ATTEMPTS; attempt += 1) {
-      this.signal?.throwIfAborted();
-      const unit = await this.repository.begin(this.nowMs());
+    return runCommerceTransaction({
+      nowMs: this.nowMs,
+      repository: this.repository,
+      signal: this.signal,
+    }, async (unit) => {
       const transaction = new D1StripeCheckoutTransaction(unit);
-      try {
-        const result = await operation(transaction);
-        await transaction.flush();
-        await unit.commit();
-        return result;
-      } catch (error) {
-        unit.rollback();
-        if (!(error instanceof CommerceWriteConflict) || error.code !== 'aborted') throw error;
-        if (attempt + 1 >= TRANSACTION_ATTEMPTS) throw error;
-        await pause(this.signal, attempt);
-      }
-    }
-    throw new CommerceWriteConflict();
+      const result = await operation(transaction);
+      await transaction.flush();
+      return result;
+    }, {
+      shouldRetry: (error) => error.code === 'aborted',
+    });
   }
 }
 

@@ -1878,11 +1878,11 @@ test('ShipStation shipment route retains its claim when final persistence confli
         return Response.json({ writeResults: [{}], commitTime: '2026-08-18T12:00:00Z' });
       }
       return Response.json({ error: 'unexpected' }, { status: 500 });
-    }),
+    }, { timeoutMs: 2_000 }),
   );
   assert.equal(result.response.status, 409);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'aborted');
-  assert.equal(finalPersistAttempts, 3);
+  assert.equal(finalPersistAttempts, 6);
   assert.equal(retained, true);
 });
 
@@ -3473,7 +3473,7 @@ test('ShipStation label purchase stays unknown after a successful charge and rep
   assert.equal(payload.error.code, 'aborted');
   assert.match(payload.error.message, /Check purchase status or open ShipStation/);
   assert.equal(purchaseCalls, 1);
-  assert.equal(persistenceConflicts, 3);
+  assert.equal(persistenceConflicts, 6);
   assert.deepEqual(transitionStatuses, ['purchasing', 'unknown']);
   assert.equal(purchaseState?.status, 'unknown');
 });
