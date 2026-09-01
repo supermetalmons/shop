@@ -12,35 +12,31 @@ import {
 import {
   AdminIrlRedeemFinalizeError,
   adminIrlRedeemFinalizeWorkflowError,
-  cleanupAdminIrlRedeemFinalizeWorkflow,
-  confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation,
+  claimAdminIrlRedeemFinalizeWorkflowEffect,
+  dispatchAdminIrlRedeemFinalizeWorkflowRestart,
   loadAdminIrlRedeemFinalizeWorkflowOperation,
   loadAdminIrlRedeemFinalizeWorkflowResult,
   readAdminIrlRedeemFinalizeRequest,
+  retractAdminIrlRedeemFinalizeWorkflowRestartDispatch,
   reserveAdminIrlRedeemFinalizeWorkflow,
   resolveAdminIrlRedeemFinalizeStaffWallet,
   type AdminIrlRedeemFinalizeErrorCode,
   type AdminIrlRedeemFinalizeWorkflowOutput,
-  type AdminIrlRedeemFinalizeWorkflowPayload,
 } from './adminIrlRedeemFinalize.js';
 import {
   inspectAdminIrlRedeemFinalizeWorkflow,
   inspectAndReconcileAdminIrlRedeemFinalizeWorkflow,
-  isAdminIrlRedeemFinalizeWorkflowResourceError,
   loadAdminIrlRedeemFinalizeDurableState,
   projectAdminIrlRedeemFinalizeStatusDecision,
   reconcileAdminIrlRedeemFinalizeInspection,
-  type AdminIrlRedeemFinalizeDurableState,
   type AdminIrlRedeemFinalizeLoadOperation,
   type AdminIrlRedeemFinalizeWorkflowReconciliation,
 } from './adminIrlRedeemFinalizeWorkflowRecovery.js';
 import {
   createRequestDeadline,
-  createTimedAbortScope,
   isRequestCancellationError,
   raceWithSignal,
   readBoundedRequestJson,
-  type TimedAbortScope,
 } from './boundedRequest.js';
 import { CommerceRepositoryError } from './commerceRepository.js';
 import { isRecord } from './dataAccess.js';
@@ -53,16 +49,16 @@ import {
 export { ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH };
 
 const STATUS_MAX_BYTES = 256;
-const CREATE_FAILURE_RECOVERY_TIMEOUT_MS = 10_000;
 const EMPTY_METRICS = Object.freeze({ upstreamCalls: 0, providerDurationMs: 0 });
 
 type LoadOperation = AdminIrlRedeemFinalizeLoadOperation;
 
 type AdminIrlRedeemFinalizeWorkflowStartDependencies = Readonly<{
-  confirmInstanceCreation: typeof confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation;
+  claimEffect: typeof claimAdminIrlRedeemFinalizeWorkflowEffect;
   createDeadline: typeof createRequestDeadline;
-  createRecoveryScope: () => TimedAbortScope;
+  dispatchRestart: typeof dispatchAdminIrlRedeemFinalizeWorkflowRestart;
   loadOperation: LoadOperation;
+  retractRestart: typeof retractAdminIrlRedeemFinalizeWorkflowRestartDispatch;
   reserveWorkflow: typeof reserveAdminIrlRedeemFinalizeWorkflow;
 }>;
 
@@ -72,13 +68,11 @@ type AdminIrlRedeemFinalizeWorkflowStatusDependencies = Readonly<{
 }>;
 
 const defaultStartDependencies: AdminIrlRedeemFinalizeWorkflowStartDependencies = {
-  confirmInstanceCreation: confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation,
+  claimEffect: claimAdminIrlRedeemFinalizeWorkflowEffect,
   createDeadline: createRequestDeadline,
-  createRecoveryScope: () => createTimedAbortScope(new AbortController().signal, {
-    timeoutMs: CREATE_FAILURE_RECOVERY_TIMEOUT_MS,
-    timeoutMessage: 'Admin IRL redeem Workflow create recovery timed out',
-  }),
+  dispatchRestart: dispatchAdminIrlRedeemFinalizeWorkflowRestart,
   loadOperation: loadAdminIrlRedeemFinalizeWorkflowOperation,
+  retractRestart: retractAdminIrlRedeemFinalizeWorkflowRestartDispatch,
   reserveWorkflow: reserveAdminIrlRedeemFinalizeWorkflow,
 };
 
@@ -227,9 +221,11 @@ function recoveryErrorForReconciliation(
 ): RouteError {
   const failure = reconciliation.durable.state === 'failed'
     ? reconciliation.durable.failure
-    : reconciliation.observation.state === 'retryable-failure'
-      ? reconciliation.observation.error
-      : workflowUnavailableError();
+    : reconciliation.durable.state === 'manual-recovery'
+      ? reconciliation.durable.failure
+      : reconciliation.observation.state === 'retryable-failure'
+        ? reconciliation.observation.error
+        : workflowUnavailableError();
   return {
     code: failure.code,
     message: failure.message,
@@ -266,8 +262,14 @@ async function projectReconciliation(
     return projectPersistedCompletion(env, operationId, reference, signal);
   }
   if (reconciliation.decision === 'terminal') {
+    if (reconciliation.durable.state === 'manual-recovery') {
+      return projectFailure(operationId, reconciliation.durable.failure);
+    }
     if (reconciliation.durable.state === 'failed' && !reconciliation.durable.failure.retryable) {
       return projectFailure(operationId, reconciliation.durable.failure);
+    }
+    if (reconciliation.observation.state === 'retryable-failure') {
+      return projectFailure(operationId, reconciliation.observation.error);
     }
     if (
       reconciliation.observation.state === 'terminal-failure' &&
@@ -298,147 +300,30 @@ async function projectReconciliation(
   return projectFailure(operationId, recoveryErrorForReconciliation(reconciliation));
 }
 
-async function confirmObservedWorkflowInstance(
-  request: Request,
-  env: Env,
-  operationId: AdminIrlRedeemFinalizeOperationId,
+function projectStartReconciliation(
   reconciliation: AdminIrlRedeemFinalizeWorkflowReconciliation,
-  dependencies: AdminIrlRedeemFinalizeWorkflowStartDependencies,
-  signal: AbortSignal,
-): Promise<AdminIrlRedeemFinalizeWorkflowReconciliation> {
-  try {
-    await confirmCreatedWorkflowInstance(
-      request,
-      env,
-      operationId,
-      dependencies,
-      signal,
-    );
-    const durable = await loadAdminIrlRedeemFinalizeDurableState(
-      env,
-      operationId,
-      dependencies.loadOperation,
-      signal,
-    );
-    return reconcileAdminIrlRedeemFinalizeInspection(durable, reconciliation.observation);
-  } catch (error) {
-    if (isRequestCancellationError(request, error)) throw error;
-    throw ensureRunningError(error);
-  }
+): AdminIrlRedeemFinalizeWorkflowReconciliation {
+  return ['create', 'restart'].includes(reconciliation.decision)
+    ? { ...reconciliation, decision: 'ensure-running' }
+    : reconciliation;
 }
 
-async function confirmCreatedWorkflowInstance(
-  request: Request,
-  env: Env,
-  operationId: AdminIrlRedeemFinalizeOperationId,
-  dependencies: AdminIrlRedeemFinalizeWorkflowStartDependencies,
-  deadlineSignal: AbortSignal,
-): Promise<void> {
-  const recovery = dependencies.createRecoveryScope();
-  let confirmationError: unknown;
-  try {
-    await dependencies.confirmInstanceCreation({
-      env,
-      operationId,
-      signal: recovery.signal,
-    });
-  } catch (error) {
-    confirmationError = error;
-  } finally {
-    recovery.dispose();
-  }
-  if (request.signal.aborted) throw request.signal.reason;
-  if (deadlineSignal.aborted) throw deadlineSignal.reason;
-  if (confirmationError !== undefined) throw ensureRunningError(confirmationError);
+function preserveRequestedEffect(
+  reconciliation: AdminIrlRedeemFinalizeWorkflowReconciliation,
+  requestedEffect: 'create' | 'restart' | undefined,
+): AdminIrlRedeemFinalizeWorkflowReconciliation {
+  return requestedEffect !== undefined && reconciliation.decision === 'pending' &&
+      reconciliation.durable.state === 'active-confirmed' &&
+      reconciliation.observation.state === 'unavailable'
+    ? { ...reconciliation, decision: 'ensure-running' }
+    : reconciliation;
 }
 
-async function reconcileAfterCreateEffect(
-  request: Request,
-  env: Env,
-  operationId: AdminIrlRedeemFinalizeOperationId,
-  payload: AdminIrlRedeemFinalizeWorkflowPayload,
-  effectError: unknown,
-  dependencies: AdminIrlRedeemFinalizeWorkflowStartDependencies,
-  deadlineSignal: AbortSignal,
-): Promise<AdminIrlRedeemFinalizeWorkflowReconciliation> {
-  if (effectError === undefined) {
-    throw new AdminIrlRedeemFinalizeError('internal', 'Admin IRL redeem finalization failed unexpectedly.');
-  }
-  const recovery = dependencies.createRecoveryScope();
-  try {
-    const observation = await inspectAdminIrlRedeemFinalizeWorkflow(
-      env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW,
-      operationId,
-      recovery.signal,
-    );
-    if (
-      observation.state === 'missing' &&
-      isAdminIrlRedeemFinalizeWorkflowResourceError(effectError)
-    ) {
-      const projected = adminIrlRedeemFinalizeWorkflowError(effectError);
-      await cleanupAdminIrlRedeemFinalizeWorkflow({
-        env,
-        error: projected,
-        operationId,
-        payload,
-        signal: recovery.signal,
-      });
-    }
-    if (observation.state !== 'missing' && observation.state !== 'unavailable') {
-      await dependencies.confirmInstanceCreation({
-        env,
-        operationId,
-        signal: recovery.signal,
-      });
-    }
-    const latest = await loadAdminIrlRedeemFinalizeDurableState(
-      env,
-      operationId,
-      dependencies.loadOperation,
-      recovery.signal,
-    );
-    if (request.signal.aborted) throw request.signal.reason;
-    if (deadlineSignal.aborted) throw ensureRunningError(effectError);
-    return reconcileAdminIrlRedeemFinalizeInspection(latest, observation);
-  } catch (error) {
-    if (request.signal.aborted) throw request.signal.reason;
-    throw error instanceof EnsureRunningError ? error : ensureRunningError(error);
-  } finally {
-    recovery.dispose();
-  }
-}
-
-async function reconcileAfterRestartEffect(
-  request: Request,
-  env: Env,
-  operationId: AdminIrlRedeemFinalizeOperationId,
-  durable: AdminIrlRedeemFinalizeDurableState,
-  instance: WorkflowInstance,
-  loadOperation: LoadOperation,
-  signal: AbortSignal,
-): Promise<AdminIrlRedeemFinalizeWorkflowReconciliation> {
-  let effectError: unknown;
-  try {
-    await raceWithSignal(instance.restart(), signal);
-  } catch (error) {
-    if (isRequestCancellationError(request, error)) throw error;
-    effectError = error;
-  }
-  try {
-    const reconciliation = await inspectAndReconcileAdminIrlRedeemFinalizeWorkflow(
-      env,
-      operationId,
-      durable,
-      loadOperation,
-      signal,
-      true,
-    );
-    if (request.signal.aborted) throw request.signal.reason;
-    return reconciliation;
-  } catch (error) {
-    if (isRequestCancellationError(request, error)) throw error;
-    throw ensureRunningError(effectError === undefined ? error : effectError);
-  }
+function isRestartableObservation(
+  observation: AdminIrlRedeemFinalizeWorkflowReconciliation['observation'],
+): observation is Extract<AdminIrlRedeemFinalizeWorkflowReconciliation['observation'], { instance: WorkflowInstance }> {
+  return observation.state === 'retryable-failure' || observation.state === 'terminal-failure' ||
+    observation.state === 'terminated' || observation.state === 'invalid';
 }
 
 function identityError(error: RequestIdentityError): AdminIrlRedeemFinalizeError {
@@ -476,6 +361,49 @@ function completedReservationResult(
   });
 }
 
+async function reloadStartReconciliation(
+  env: Env,
+  operationId: AdminIrlRedeemFinalizeOperationId,
+  dependencies: AdminIrlRedeemFinalizeWorkflowStartDependencies,
+  signal: AbortSignal,
+): Promise<AdminIrlRedeemFinalizeWorkflowReconciliation> {
+  const durable = await loadAdminIrlRedeemFinalizeDurableState(
+    env,
+    operationId,
+    dependencies.loadOperation,
+    signal,
+  );
+  if (
+    durable.state === 'absent' || durable.state === 'complete' ||
+    durable.state === 'effect-pending' || durable.state === 'restart-claim-pending' ||
+    durable.state === 'restart-dispatch-pending' ||
+    (durable.state === 'failed' && !durable.failure.retryable)
+  ) return reconcileAdminIrlRedeemFinalizeInspection(durable, { state: 'missing' });
+  return inspectAndReconcileAdminIrlRedeemFinalizeWorkflow(
+    env,
+    operationId,
+    durable,
+    dependencies.loadOperation,
+    signal,
+  );
+}
+
+async function reconcileAfterFenceError(
+  request: Request,
+  env: Env,
+  operationId: AdminIrlRedeemFinalizeOperationId,
+  dependencies: AdminIrlRedeemFinalizeWorkflowStartDependencies,
+  signal: AbortSignal,
+  effectError: unknown,
+): Promise<AdminIrlRedeemFinalizeWorkflowReconciliation> {
+  try {
+    return await reloadStartReconciliation(env, operationId, dependencies, signal);
+  } catch (error) {
+    if (isRequestCancellationError(request, error)) throw error;
+    throw ensureRunningError(effectError);
+  }
+}
+
 export async function handleAdminIrlRedeemFinalizeWorkflowStart(
   request: Request,
   env: Env,
@@ -508,14 +436,19 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStart(
       throw new AdminIrlRedeemFinalizeError('internal', 'Admin IRL redeem finalization failed unexpectedly.');
     }
     operationId = computed;
-    let markInstanceCreationPending = false;
+    let requestedEffect: 'create' | 'restart' | undefined;
     let durable = await loadAdminIrlRedeemFinalizeDurableState(
       env,
       operationId,
       dependencies.loadOperation,
       deadline.signal,
     );
-    if (durable.state === 'complete' || (durable.state === 'failed' && !durable.failure.retryable)) {
+    if (
+      durable.state === 'complete' || durable.state === 'effect-pending' ||
+      durable.state === 'restart-claim-pending' ||
+      durable.state === 'restart-dispatch-pending' ||
+      (durable.state === 'failed' && !durable.failure.retryable)
+    ) {
       return await projectReconciliation(
         env,
         operationId,
@@ -525,36 +458,27 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStart(
       );
     }
     if (durable.state !== 'absent') {
-      let initial = await inspectAndReconcileAdminIrlRedeemFinalizeWorkflow(
+      const initial = await inspectAndReconcileAdminIrlRedeemFinalizeWorkflow(
         env,
         operationId,
         durable,
         dependencies.loadOperation,
         deadline.signal,
       );
-      if (initial.decision === 'confirm-instance') {
-        initial = await confirmObservedWorkflowInstance(
-          request,
-          env,
-          operationId,
-          initial,
-          dependencies,
-          deadline.signal,
-        );
-      }
       if (['complete', 'terminal', 'pending'].includes(initial.decision)) {
         return await projectReconciliation(env, operationId, initial, deadline.signal, body.dropId);
       }
       if (initial.decision === 'ensure-running' && initial.observation.state !== 'missing') {
         return await projectReconciliation(env, operationId, initial, deadline.signal, body.dropId);
       }
-      markInstanceCreationPending = initial.decision === 'ensure-running';
+      requestedEffect = initial.decision === 'create' || initial.decision === 'restart'
+        ? initial.decision
+        : undefined;
       durable = initial.durable;
     }
     const reservation = await dependencies.reserveWorkflow({
       body,
       env,
-      markInstanceCreationPending,
       operationId,
       signal: deadline.signal,
       staffWallet,
@@ -575,76 +499,307 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStart(
       dependencies.loadOperation,
       deadline.signal,
     );
-    if (ready.decision === 'confirm-instance') {
-      ready = await confirmObservedWorkflowInstance(
-        request,
-        env,
-        operationId,
-        ready,
-        dependencies,
-        deadline.signal,
-      );
-    }
+    ready = preserveRequestedEffect(ready, requestedEffect);
     if (ready.decision !== 'create' && ready.decision !== 'restart') {
       return await projectReconciliation(env, operationId, ready, deadline.signal, body.dropId);
     }
-    let afterEffect: AdminIrlRedeemFinalizeWorkflowReconciliation;
-    if (ready.decision === 'create') {
-      let effectError: unknown;
+    if (ready.decision === 'restart') {
+      ready = await inspectAndReconcileAdminIrlRedeemFinalizeWorkflow(
+        env,
+        operationId,
+        ready.durable,
+        dependencies.loadOperation,
+        deadline.signal,
+        true,
+      );
+      ready = preserveRequestedEffect(ready, requestedEffect);
+      if (ready.decision !== 'restart') {
+        return await projectReconciliation(env, operationId, ready, deadline.signal, body.dropId);
+      }
+    }
+    if (ready.durable.state === 'absent') {
+      throw new AdminIrlRedeemFinalizeError('internal', 'Admin IRL redeem finalization failed unexpectedly.');
+    }
+    const expectedRevision = ready.durable.revision;
+    const effectKind = ready.decision;
+    const restartClaimId = effectKind === 'restart' ? crypto.randomUUID() : undefined;
+    let claim: Awaited<ReturnType<typeof dependencies.claimEffect>>;
+    try {
+      claim = effectKind === 'create'
+        ? await dependencies.claimEffect({
+            env,
+            expectedRevision,
+            kind: 'create',
+            operationId,
+            signal: deadline.signal,
+          })
+        : await dependencies.claimEffect({
+            claimId: restartClaimId || '',
+            env,
+            expectedRevision,
+            kind: 'restart',
+            operationId,
+            signal: deadline.signal,
+          });
+    } catch (error) {
+      if (isRequestCancellationError(request, error)) throw error;
+      if (restartClaimId !== undefined) {
+        try {
+          claim = await dependencies.claimEffect({
+            claimId: restartClaimId,
+            env,
+            expectedRevision,
+            kind: 'restart',
+            operationId,
+            signal: deadline.signal,
+          });
+        } catch (retryError) {
+          if (isRequestCancellationError(request, retryError)) throw retryError;
+          const reconciled = await reconcileAfterFenceError(
+            request,
+            env,
+            operationId,
+            dependencies,
+            deadline.signal,
+            retryError,
+          );
+          return await projectReconciliation(
+            env,
+            operationId,
+            projectStartReconciliation(reconciled),
+            deadline.signal,
+            body.dropId,
+          );
+        }
+      } else {
+        const reconciled = await reconcileAfterFenceError(
+          request,
+          env,
+          operationId,
+          dependencies,
+          deadline.signal,
+          error,
+        );
+        return await projectReconciliation(
+          env,
+          operationId,
+          projectStartReconciliation(reconciled),
+          deadline.signal,
+          body.dropId,
+        );
+      }
+    }
+    if (claim.status === 'busy') {
+      return routeResult(pendingResponse(operationId), 'pending', {
+        operationId,
+        dropId: body.dropId,
+      });
+    }
+    if (claim.status === 'changed') {
+      const changed = await reloadStartReconciliation(
+        env,
+        operationId,
+        dependencies,
+        deadline.signal,
+      );
+      return await projectReconciliation(
+        env,
+        operationId,
+        projectStartReconciliation(changed),
+        deadline.signal,
+        body.dropId,
+      );
+    }
+    if (effectKind === 'create') {
       try {
         await raceWithSignal(env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW.createBatch([{
           id: operationId,
           params: reservation.payload,
         }]), deadline.signal);
       } catch (error) {
-        effectError = error;
+        if (request.signal.aborted) throw request.signal.reason;
+        if (deadline.signal.aborted) throw deadline.signal.reason;
       }
-      if (effectError === undefined) {
-        await confirmCreatedWorkflowInstance(
+      if (request.signal.aborted) throw request.signal.reason;
+      if (deadline.signal.aborted) throw deadline.signal.reason;
+      return routeResult(pendingResponse(operationId), 'pending', {
+        operationId,
+        dropId: body.dropId,
+      });
+    }
+    if (!restartClaimId) {
+      throw new AdminIrlRedeemFinalizeError('internal', 'Admin IRL redeem finalization failed unexpectedly.');
+    }
+    const claimedObservation = await inspectAdminIrlRedeemFinalizeWorkflow(
+      env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW,
+      operationId,
+      deadline.signal,
+    );
+    if (!isRestartableObservation(claimedObservation)) {
+      if (request.signal.aborted) throw request.signal.reason;
+      if (deadline.signal.aborted) throw deadline.signal.reason;
+      return routeResult(pendingResponse(operationId), 'pending', {
+        operationId,
+        dropId: body.dropId,
+      });
+    }
+    let dispatchConfirmed = false;
+    let dispatch: Awaited<ReturnType<typeof dependencies.dispatchRestart>> | undefined;
+    try {
+      dispatch = await dependencies.dispatchRestart({
+        claimId: restartClaimId,
+        env,
+        operationId,
+        signal: deadline.signal,
+      });
+    } catch (error) {
+      if (isRequestCancellationError(request, error)) throw error;
+      try {
+        dispatch = await dependencies.dispatchRestart({
+          claimId: restartClaimId,
+          env,
+          operationId,
+          signal: deadline.signal,
+        });
+      } catch (retryError) {
+        if (isRequestCancellationError(request, retryError)) throw retryError;
+        const reconciled = await reconcileAfterFenceError(
           request,
           env,
           operationId,
           dependencies,
           deadline.signal,
+          retryError,
         );
+        if (
+          (reconciled.durable.state === 'restart-dispatch-pending' ||
+            reconciled.durable.state === 'restart-dispatched') &&
+          reconciled.durable.claimId === restartClaimId
+        ) {
+          dispatchConfirmed = true;
+        } else {
+          return await projectReconciliation(
+            env,
+            operationId,
+            projectStartReconciliation(reconciled),
+            deadline.signal,
+            body.dropId,
+          );
+        }
+      }
+    }
+    if (dispatch?.status === 'dispatched') {
+      dispatchConfirmed = true;
+    } else if (dispatch?.status === 'changed') {
+      const changed = await reloadStartReconciliation(
+        env,
+        operationId,
+        dependencies,
+        deadline.signal,
+      );
+      if (
+        (changed.durable.state === 'restart-dispatch-pending' ||
+          changed.durable.state === 'restart-dispatched') &&
+        changed.durable.claimId === restartClaimId
+      ) {
+        dispatchConfirmed = true;
+      } else {
+        return await projectReconciliation(
+          env,
+          operationId,
+          projectStartReconciliation(changed),
+          deadline.signal,
+          body.dropId,
+        );
+      }
+    }
+    if (!dispatchConfirmed) {
+      throw new AdminIrlRedeemFinalizeError('internal', 'Admin IRL redeem finalization failed unexpectedly.');
+    }
+    const dispatchedObservation = await inspectAdminIrlRedeemFinalizeWorkflow(
+      env.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW,
+      operationId,
+      deadline.signal,
+    );
+    if (!isRestartableObservation(dispatchedObservation)) {
+      if (request.signal.aborted) throw request.signal.reason;
+      if (deadline.signal.aborted) throw deadline.signal.reason;
+      let retract: Awaited<ReturnType<typeof dependencies.retractRestart>> | undefined;
+      let retractError: unknown;
+      let retractFailed = false;
+      try {
+        retract = await dependencies.retractRestart({
+          claimId: restartClaimId,
+          env,
+          operationId,
+          signal: deadline.signal,
+        });
+      } catch (error) {
+        if (isRequestCancellationError(request, error)) throw error;
+        try {
+          retract = await dependencies.retractRestart({
+            claimId: restartClaimId,
+            env,
+            operationId,
+            signal: deadline.signal,
+          });
+        } catch (retryError) {
+          if (isRequestCancellationError(request, retryError)) throw retryError;
+          retractFailed = true;
+          retractError = retryError;
+        }
+      }
+      if (retract?.status === 'retracted') {
         return routeResult(pendingResponse(operationId), 'pending', {
           operationId,
           dropId: body.dropId,
         });
       }
-      afterEffect = await reconcileAfterCreateEffect(
-        request,
-        env,
-        operationId,
-        reservation.payload,
-        effectError,
-        dependencies,
-        deadline.signal,
-      );
-    } else {
-      if (ready.observation.state !== 'retryable-failure') {
-        throw new AdminIrlRedeemFinalizeError('internal', 'Admin IRL redeem finalization failed unexpectedly.');
+      const reconciled = retractFailed
+        ? await reconcileAfterFenceError(
+            request,
+            env,
+            operationId,
+            dependencies,
+            deadline.signal,
+            retractError,
+          )
+        : await reloadStartReconciliation(
+            env,
+            operationId,
+            dependencies,
+            deadline.signal,
+          );
+      if (
+        (reconciled.durable.state === 'restart-claim-pending' ||
+          reconciled.durable.state === 'restart-claim-expired') &&
+        reconciled.durable.claimId === restartClaimId
+      ) {
+        return routeResult(pendingResponse(operationId), 'pending', {
+          operationId,
+          dropId: body.dropId,
+        });
       }
-      afterEffect = await reconcileAfterRestartEffect(
-        request,
+      return await projectReconciliation(
         env,
         operationId,
-        ready.durable,
-        ready.observation.instance,
-        dependencies.loadOperation,
+        projectStartReconciliation(reconciled),
         deadline.signal,
+        body.dropId,
       );
     }
-    const decision = ['create', 'restart', 'confirm-instance'].includes(afterEffect.decision)
-      ? 'ensure-running'
-      : afterEffect.decision;
-    return await projectReconciliation(
-      env,
+    try {
+      await raceWithSignal(dispatchedObservation.instance.restart(), deadline.signal);
+    } catch (error) {
+      if (request.signal.aborted) throw request.signal.reason;
+      if (deadline.signal.aborted) throw deadline.signal.reason;
+    }
+    if (request.signal.aborted) throw request.signal.reason;
+    if (deadline.signal.aborted) throw deadline.signal.reason;
+    return routeResult(pendingResponse(operationId), 'pending', {
       operationId,
-      { ...afterEffect, decision },
-      deadline.signal,
-      body.dropId,
-    );
+      dropId: body.dropId,
+    });
   } catch (error) {
     if (isRequestCancellationError(request, error)) throw error;
     const normalized = deadline.timedOut()
@@ -729,6 +884,8 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStatus(
       deadline.signal,
     );
     let reconciliation = durable.state === 'absent' || durable.state === 'complete' ||
+        durable.state === 'effect-pending' || durable.state === 'restart-claim-pending' ||
+        durable.state === 'restart-dispatch-pending' ||
         (durable.state === 'failed' && !durable.failure.retryable)
       ? reconcileAdminIrlRedeemFinalizeInspection(durable, { state: 'missing' })
       : await inspectAndReconcileAdminIrlRedeemFinalizeWorkflow(
@@ -740,7 +897,7 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStatus(
         );
     reconciliation = {
       ...reconciliation,
-      decision: projectAdminIrlRedeemFinalizeStatusDecision(reconciliation.decision),
+      decision: projectAdminIrlRedeemFinalizeStatusDecision(reconciliation),
     };
     return await projectReconciliation(env, operationId, reconciliation, deadline.signal);
   } catch (error) {

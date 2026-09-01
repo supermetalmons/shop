@@ -19,6 +19,7 @@ const terminalFailure: AdminIrlRedeemFinalizeWorkflowError = {
   message: 'Admin IRL redeem finalization requirements are not satisfied.',
   retryable: false,
 };
+const revision = '2026-09-01T00:00:00.000Z';
 
 const durableStates: ReadonlyArray<Readonly<{
   durable: AdminIrlRedeemFinalizeDurableState;
@@ -26,36 +27,91 @@ const durableStates: ReadonlyArray<Readonly<{
 }>> = [
   {
     durable: { state: 'absent' },
-    expected: Array<AdminIrlRedeemFinalizeRecoveryDecision>(8).fill('not-found'),
+    expected: Array<AdminIrlRedeemFinalizeRecoveryDecision>(9).fill('not-found'),
   },
   {
-    durable: { state: 'active-confirmed' },
-    expected: ['terminal', 'pending', 'complete', 'restart', 'terminal', 'terminal', 'terminal', 'pending'],
+    durable: { state: 'active-confirmed', revision },
+    expected: ['create', 'pending', 'complete', 'restart', 'restart', 'terminal', 'restart', 'restart', 'pending'],
   },
   {
-    durable: { state: 'active-unconfirmed' },
+    durable: { state: 'effect-pending', revision },
+    expected: Array<AdminIrlRedeemFinalizeRecoveryDecision>(9).fill('pending'),
+  },
+  {
+    durable: { state: 'effect-expired', revision },
     expected: [
       'create',
-      'confirm-instance',
-      'confirm-instance',
-      'confirm-instance',
-      'confirm-instance',
-      'confirm-instance',
-      'confirm-instance',
+      'pending',
+      'complete',
+      'restart',
+      'restart',
+      'restart',
+      'restart',
+      'restart',
+      'ensure-running',
+    ],
+  },
+  {
+    durable: { state: 'restart-claim-pending', claimId: 'claim-1', revision },
+    expected: Array<AdminIrlRedeemFinalizeRecoveryDecision>(9).fill('pending'),
+  },
+  {
+    durable: { state: 'restart-claim-expired', claimId: 'claim-1', revision },
+    expected: [
+      'create',
+      'pending',
+      'complete',
+      'restart',
+      'restart',
+      'restart',
+      'restart',
+      'restart',
+      'ensure-running',
+    ],
+  },
+  {
+    durable: { state: 'restart-dispatch-pending', revision },
+    expected: Array<AdminIrlRedeemFinalizeRecoveryDecision>(9).fill('pending'),
+  },
+  {
+    durable: { state: 'restart-dispatched', revision },
+    expected: [
+      'terminal',
+      'pending',
+      'complete',
+      'terminal',
+      'terminal',
+      'terminal',
+      'terminal',
+      'terminal',
       'pending',
     ],
   },
   {
-    durable: { state: 'complete' },
-    expected: Array<AdminIrlRedeemFinalizeRecoveryDecision>(8).fill('complete'),
+    durable: { state: 'manual-recovery', failure: terminalFailure, revision },
+    expected: [
+      'create',
+      'pending',
+      'complete',
+      'restart',
+      'restart',
+      'restart',
+      'restart',
+      'restart',
+      'ensure-running',
+    ],
   },
   {
-    durable: { state: 'failed', failure: retryableFailure },
-    expected: ['ensure-running', 'pending', 'complete', 'restart', 'terminal', 'terminal', 'terminal', 'ensure-running'],
+    durable: { state: 'complete', revision },
+    expected: Array<AdminIrlRedeemFinalizeRecoveryDecision>(9).fill('complete'),
   },
   {
-    durable: { state: 'failed', failure: terminalFailure },
-    expected: Array<AdminIrlRedeemFinalizeRecoveryDecision>(8).fill('terminal'),
+    durable: { state: 'failed', failure: retryableFailure, revision },
+    expected: ['create', 'pending', 'complete', 'restart', 'restart', 'terminal', 'restart', 'restart', 'ensure-running'],
+  },
+  {
+    durable: { state: 'failed', failure: terminalFailure, revision },
+    expected: Array<AdminIrlRedeemFinalizeRecoveryDecision>(9).fill('terminal'),
   },
 ];
 
@@ -77,6 +133,7 @@ const observations: readonly AdminIrlRedeemFinalizeWorkflowInspection[] = [
     },
   },
   { state: 'retryable-failure', error: retryableFailure, instance },
+  { state: 'terminal-failure', instance },
   { state: 'terminal-failure', error: terminalFailure, instance },
   { state: 'terminated', instance },
   { state: 'invalid', instance },
@@ -95,21 +152,96 @@ test('Admin IRL Workflow recovery reducer covers every durable and Workflow stat
   }
 });
 
-test('Admin IRL Workflow status projects mutation decisions as ensure-running', () => {
-  const expected: Record<AdminIrlRedeemFinalizeRecoveryDecision, AdminIrlRedeemFinalizeRecoveryDecision> = {
-    complete: 'complete',
-    terminal: 'terminal',
-    pending: 'pending',
-    create: 'ensure-running',
-    restart: 'ensure-running',
-    'confirm-instance': 'ensure-running',
-    'ensure-running': 'ensure-running',
-    'not-found': 'not-found',
-  };
-  for (const [decision, projected] of Object.entries(expected)) {
+test('Admin IRL Workflow status projects only safe recovery decisions as ensure-running', () => {
+  const cases: ReadonlyArray<Readonly<{
+    durable: AdminIrlRedeemFinalizeDurableState;
+    observation: AdminIrlRedeemFinalizeWorkflowInspection;
+    expected: AdminIrlRedeemFinalizeRecoveryDecision;
+  }>> = [
+    { durable: { state: 'effect-expired', revision }, observation: { state: 'missing' }, expected: 'ensure-running' },
+    { durable: { state: 'active-confirmed', revision }, observation: { state: 'missing' }, expected: 'terminal' },
+    {
+      durable: { state: 'active-confirmed', revision },
+      observation: { state: 'retryable-failure', error: retryableFailure, instance },
+      expected: 'ensure-running',
+    },
+    {
+      durable: { state: 'active-confirmed', revision },
+      observation: { state: 'terminal-failure', instance },
+      expected: 'ensure-running',
+    },
+    {
+      durable: { state: 'manual-recovery', failure: terminalFailure, revision },
+      observation: { state: 'missing' },
+      expected: 'terminal',
+    },
+    {
+      durable: { state: 'manual-recovery', failure: terminalFailure, revision },
+      observation: { state: 'retryable-failure', error: retryableFailure, instance },
+      expected: 'terminal',
+    },
+    {
+      durable: { state: 'manual-recovery', failure: terminalFailure, revision },
+      observation: { state: 'terminal-failure', error: terminalFailure, instance },
+      expected: 'terminal',
+    },
+    {
+      durable: { state: 'manual-recovery', failure: terminalFailure, revision },
+      observation: { state: 'terminated', instance },
+      expected: 'terminal',
+    },
+    {
+      durable: { state: 'manual-recovery', failure: terminalFailure, revision },
+      observation: { state: 'invalid', instance },
+      expected: 'terminal',
+    },
+    {
+      durable: { state: 'manual-recovery', failure: terminalFailure, revision },
+      observation: { state: 'unavailable', error: new Error('unavailable'), reason: 'inspection' },
+      expected: 'terminal',
+    },
+    {
+      durable: { state: 'effect-pending', revision },
+      observation: { state: 'pending', instance },
+      expected: 'pending',
+    },
+    {
+      durable: { state: 'effect-expired', revision },
+      observation: { state: 'terminal-failure', instance },
+      expected: 'ensure-running',
+    },
+    { durable: { state: 'failed', failure: retryableFailure, revision }, observation: { state: 'missing' }, expected: 'ensure-running' },
+    { durable: { state: 'active-confirmed', revision }, observation: { state: 'pending', instance }, expected: 'pending' },
+    { durable: { state: 'active-confirmed', revision }, observation: { state: 'terminated', instance }, expected: 'terminal' },
+    { durable: { state: 'effect-pending', revision }, observation: { state: 'terminated', instance }, expected: 'pending' },
+    { durable: { state: 'restart-claim-pending', claimId: 'claim-1', revision }, observation: { state: 'terminated', instance }, expected: 'pending' },
+    { durable: { state: 'restart-claim-expired', claimId: 'claim-1', revision }, observation: { state: 'missing' }, expected: 'ensure-running' },
+    { durable: { state: 'restart-dispatch-pending', revision }, observation: { state: 'terminated', instance }, expected: 'pending' },
+    { durable: { state: 'restart-dispatched', revision }, observation: { state: 'missing' }, expected: 'terminal' },
+    { durable: { state: 'restart-dispatched', revision }, observation: { state: 'pending', instance }, expected: 'pending' },
+    { durable: { state: 'effect-expired', revision }, observation: { state: 'missing' }, expected: 'ensure-running' },
+    {
+      durable: { state: 'effect-expired', revision },
+      observation: { state: 'terminal-failure', error: terminalFailure, instance },
+      expected: 'ensure-running',
+    },
+    {
+      durable: { state: 'failed', failure: retryableFailure, revision },
+      observation: { state: 'terminated', instance },
+      expected: 'ensure-running',
+    },
+    {
+      durable: { state: 'active-confirmed', revision },
+      observation: { state: 'terminal-failure', error: terminalFailure, instance },
+      expected: 'terminal',
+    },
+  ];
+  for (const { durable, observation, expected } of cases) {
+    const reconciliation = reconcileAdminIrlRedeemFinalizeInspection(durable, observation);
     assert.equal(
-      projectAdminIrlRedeemFinalizeStatusDecision(decision as AdminIrlRedeemFinalizeRecoveryDecision),
-      projected,
+      projectAdminIrlRedeemFinalizeStatusDecision(reconciliation),
+      expected,
+      `${durable.state} + ${observation.state}`,
     );
   }
 });

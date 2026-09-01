@@ -98,6 +98,7 @@ import {
 import {
   createDeliveryPackStatusProjectionOutbox,
   deliveryReceiptRuntime,
+  projectPendingDeliveryPackStatus,
 } from './deliveryReceipts.js';
 import {
   DeliveryReceiptError,
@@ -117,6 +118,7 @@ const REQUEST_MAX_BYTES = 4096;
 const CLEANUP_TIMEOUT_MS = 10_000;
 const PREPARED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PROCESSING_LEASE_MS = 30 * 60 * 1000;
+const WORKFLOW_EFFECT_LEASE_MS = 30_000;
 const RECEIPT_INDEX_MAX_WAIT_MS = 30_000;
 const RECEIPT_INDEX_POLL_MS = 2_000;
 const COMMERCE_TRANSACTION_ATTEMPTS = 6;
@@ -213,6 +215,11 @@ type AdminIrlRedeemFinalizeWorkflowOnchainV1 = {
   treasury: string;
 };
 
+type AdminIrlRedeemFinalizeWorkflowPendingEffect =
+  | { kind: 'create'; untilMs: number }
+  | { kind: 'restart-claim'; claimId: string; untilMs: number }
+  | { kind: 'restart'; claimId?: string; dispatchedAtMs: number };
+
 type AdminIrlRedeemFinalizeWorkflowExecutionV1 = {
   version: 1;
   operationId: string;
@@ -220,7 +227,7 @@ type AdminIrlRedeemFinalizeWorkflowExecutionV1 = {
   transferSignature: string;
   adminWallet: string;
   config: ApiDropConfig;
-  instanceCreationPending?: true;
+  pendingEffect?: AdminIrlRedeemFinalizeWorkflowPendingEffect;
   onchain?: AdminIrlRedeemFinalizeWorkflowOnchainV1;
   failure?: AdminIrlRedeemFinalizeWorkflowError;
 };
@@ -639,6 +646,52 @@ function normalizeWorkflowOnchain(value: unknown): AdminIrlRedeemFinalizeWorkflo
   return { adminWallet, coreCollection, treasury };
 }
 
+function workflowPendingEffect(
+  value: Record<string, unknown>,
+): { valid: true; effect?: AdminIrlRedeemFinalizeWorkflowPendingEffect } | { valid: false } {
+  const legacy = value.instanceCreationPending;
+  if (legacy !== undefined && legacy !== true) return { valid: false };
+  if (legacy === true && value.pendingEffect !== undefined) return { valid: false };
+  if (legacy === true) return { valid: true, effect: { kind: 'create', untilMs: 0 } };
+  if (value.pendingEffect === undefined) return { valid: true };
+  const pending = value.pendingEffect;
+  if (!isRecord(pending)) return { valid: false };
+  const keys = Object.keys(pending);
+  if (
+    keys.length === 2 && keys.every((key) => key === 'kind' || key === 'untilMs') &&
+    pending.kind === 'create' && typeof pending.untilMs === 'number' &&
+    Number.isSafeInteger(pending.untilMs) && pending.untilMs >= 0
+  ) return { valid: true, effect: { kind: 'create', untilMs: pending.untilMs } };
+  if (
+    keys.length === 3 && keys.every((key) => key === 'kind' || key === 'claimId' || key === 'untilMs') &&
+    pending.kind === 'restart-claim' &&
+    typeof pending.claimId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(pending.claimId) &&
+    typeof pending.untilMs === 'number' && Number.isSafeInteger(pending.untilMs) && pending.untilMs >= 0
+  ) return {
+    valid: true,
+    effect: { kind: 'restart-claim', claimId: pending.claimId, untilMs: pending.untilMs },
+  };
+  if (
+    pending.kind === 'restart' && (
+      (keys.length === 2 && keys.every((key) => key === 'kind' || key === 'dispatchedAtMs')) ||
+      (keys.length === 3 && keys.every((key) => key === 'kind' || key === 'claimId' || key === 'dispatchedAtMs'))
+    ) &&
+    typeof pending.dispatchedAtMs === 'number' &&
+    Number.isSafeInteger(pending.dispatchedAtMs) && pending.dispatchedAtMs >= 0 &&
+    (pending.claimId === undefined || (
+      typeof pending.claimId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(pending.claimId)
+    ))
+  ) return {
+    valid: true,
+    effect: {
+      kind: 'restart',
+      ...(typeof pending.claimId === 'string' ? { claimId: pending.claimId } : {}),
+      dispatchedAtMs: pending.dispatchedAtMs,
+    },
+  };
+  return { valid: false };
+}
+
 function normalizeWorkflowExecution(
   value: unknown,
   body: FinalizeRequest,
@@ -658,9 +711,10 @@ function normalizeWorkflowExecution(
   }
   const onchain = normalizeWorkflowOnchain(value.onchain);
   const failure = value.failure === undefined ? undefined : parseWorkflowError(value.failure);
+  const pending = workflowPendingEffect(value);
   if (
     (value.failure !== undefined && !failure) ||
-    (value.instanceCreationPending !== undefined && value.instanceCreationPending !== true)
+    !pending.valid
   ) {
     throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution is invalid.');
   }
@@ -671,7 +725,7 @@ function normalizeWorkflowExecution(
     transferSignature,
     adminWallet,
     config: workflowConfig(value.config, body.dropId),
-    ...(value.instanceCreationPending === true ? { instanceCreationPending: true as const } : {}),
+    ...(pending.valid && pending.effect ? { pendingEffect: pending.effect } : {}),
     ...(onchain ? { onchain } : {}),
     ...(failure ? { failure } : {}),
   };
@@ -1043,7 +1097,7 @@ function workflowExecutionForReplay(
   value: unknown,
   body: FinalizeRequest,
   requested: AdminIrlRedeemFinalizeWorkflowExecutionV1,
-  markInstanceCreationPending: boolean,
+  allowTerminalFailure: boolean,
 ): AdminIrlRedeemFinalizeWorkflowExecutionV1 {
   if (value === undefined) return requested;
   const existing = normalizeWorkflowExecution(value, body);
@@ -1055,7 +1109,7 @@ function workflowExecutionForReplay(
   ) {
     throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution changed.');
   }
-  if (existing.failure && !existing.failure.retryable) {
+  if (existing.failure && !existing.failure.retryable && !allowTerminalFailure) {
     throw new AdminIrlRedeemFinalizeError(existing.failure.code, existing.failure.message);
   }
   return {
@@ -1065,10 +1119,9 @@ function workflowExecutionForReplay(
     transferSignature: existing.transferSignature,
     adminWallet: existing.adminWallet,
     config: existing.config,
-    ...(existing.instanceCreationPending || (existing.failure?.retryable && markInstanceCreationPending)
-      ? { instanceCreationPending: true as const }
-      : {}),
+    ...(existing.pendingEffect ? { pendingEffect: existing.pendingEffect } : {}),
     ...(existing.onchain ? { onchain: existing.onchain } : {}),
+    ...(existing.failure ? { failure: existing.failure } : {}),
   };
 }
 
@@ -1079,7 +1132,6 @@ async function startFinalize(
   attemptId: string,
   nowMs: number,
   workflowExecution?: AdminIrlRedeemFinalizeWorkflowExecutionV1,
-  markInstanceCreationPending = false,
 ): Promise<StartFinalizeResult> {
   const path = requestPath(body);
   try {
@@ -1117,7 +1169,7 @@ async function startFinalize(
             request[WORKFLOW_EXECUTION_FIELD],
             body,
             workflowExecution,
-            markInstanceCreationPending,
+            request.status === 'processing' && request.processingAttemptId === attemptId,
           )
         : undefined;
       const leaseExpiresAt = Number(request.processingLeaseExpiresAt || 0);
@@ -2255,6 +2307,9 @@ function completeRequestWrite(path: string, completed: Record<string, unknown>):
   return deleteFieldsWrite(path, fields, [
     'processingAttemptId', 'processingStartedAt', 'processingLeaseExpiresAt', 'preparedExpiresAt',
     'pendingFinalizeSubmission', WORKFLOW_DRAFT_FIELD,
+    `${WORKFLOW_EXECUTION_FIELD}.failure`,
+    `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
+    `${WORKFLOW_EXECUTION_FIELD}.pendingEffect`,
   ], [
     { fieldPath: 'completedAt', value: commerceFieldValue.serverTimestamp() },
     { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
@@ -2626,6 +2681,30 @@ function workflowResultReference(
   return { kind: 'admin-irl-redeem-finalize-v1', dropId, requestId };
 }
 
+async function projectWorkflowPackStatus(
+  commerce: CommerceContext,
+  response: AdminIrlRedeemFinalizeResponse,
+): Promise<void> {
+  const deliveryId = response.deliveryId;
+  if (typeof deliveryId !== 'number' || !Number.isSafeInteger(deliveryId) || deliveryId < 1 || response.boxes.length < 1) {
+    return;
+  }
+  try {
+    await projectPendingDeliveryPackStatus({
+      context: commerce,
+      deliveryId,
+      dropId: response.dropId,
+    });
+  } catch (error) {
+    console.error({
+      event: 'admin_irl_redeem_pack_status_projection_failed',
+      dropId: response.dropId,
+      deliveryId,
+      error: summarizeError(error),
+    });
+  }
+}
+
 type LoadedWorkflowRequest =
   | Readonly<{
       status: 'complete';
@@ -2644,6 +2723,7 @@ type LoadedWorkflowRequest =
 
 async function loadWorkflowRequest(
   args: AdminIrlRedeemFinalizeWorkflowStageArgs,
+  confirmEntry = false,
 ): Promise<LoadedWorkflowRequest> {
   const payload = parseAdminIrlRedeemFinalizeWorkflowPayload(args.payload);
   if (!payload || !isAdminIrlRedeemFinalizeOperationId(args.operationId)) {
@@ -2686,6 +2766,13 @@ async function loadWorkflowRequest(
     ) {
       throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution is invalid.');
     }
+    const enteredAtMs = Date.now();
+    const enteredEffect = confirmEntry && execution.pendingEffect?.kind === 'create'
+      ? {
+          ...execution.pendingEffect,
+          untilMs: Math.max(execution.pendingEffect.untilMs, enteredAtMs + WORKFLOW_EFFECT_LEASE_MS),
+        }
+      : undefined;
     return {
       result: {
         status: 'started' as const,
@@ -2696,8 +2783,14 @@ async function loadWorkflowRequest(
         ...(request.workflowPublicationDraftV1 ? { draft: request.workflowPublicationDraftV1 } : {}),
       },
       writes: [deleteFieldsWrite(path, {
-        processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-      }, [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+        processingLeaseExpiresAt: timestamp(enteredAtMs + PROCESSING_LEASE_MS),
+        ...(enteredEffect
+          ? { [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: enteredEffect }
+          : {}),
+      }, confirmEntry ? [
+        `${WORKFLOW_EXECUTION_FIELD}.failure`,
+        `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
+      ] : [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
     };
   });
 }
@@ -2748,21 +2841,47 @@ async function persistWorkflowOnchain(
   loaded: Extract<LoadedWorkflowRequest, { status: 'started' }>,
   onchain: AdminIrlRedeemFinalizeWorkflowOnchainV1,
 ): Promise<void> {
-  const existing = loaded.execution.onchain;
-  if (existing && (
-    existing.adminWallet !== onchain.adminWallet ||
-    existing.coreCollection !== onchain.coreCollection ||
-    existing.treasury !== onchain.treasury
-  )) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem on-chain configuration changed.');
-  }
-  await updateRequest(
-    loaded.commerce,
-    requestPath(loaded.body),
-    loaded.execution.operationId,
-    { [WORKFLOW_EXECUTION_FIELD]: { ...loaded.execution, onchain: existing || onchain } },
-  );
-  loaded.execution.onchain = existing || onchain;
+  let persisted = onchain;
+  await runTransaction(loaded.commerce, async (transaction) => {
+    const document = await deliveryReceiptRuntime.readDocument(
+      loaded.commerce,
+      requestPath(loaded.body),
+      transaction,
+    );
+    if (
+      !document || document.fields.status !== 'processing' ||
+      document.fields.processingAttemptId !== loaded.execution.operationId
+    ) {
+      throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
+    }
+    const current = normalizeWorkflowExecution(document.fields[WORKFLOW_EXECUTION_FIELD], loaded.body);
+    if (
+      current.operationId !== loaded.execution.operationId ||
+      current.owner !== loaded.execution.owner ||
+      current.transferSignature !== loaded.execution.transferSignature ||
+      current.adminWallet !== loaded.execution.adminWallet ||
+      JSON.stringify(current.config) !== JSON.stringify(loaded.execution.config)
+    ) {
+      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution changed.');
+    }
+    const existing = current.onchain;
+    if (existing && (
+      existing.adminWallet !== onchain.adminWallet ||
+      existing.coreCollection !== onchain.coreCollection ||
+      existing.treasury !== onchain.treasury
+    )) {
+      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem on-chain configuration changed.');
+    }
+    persisted = existing || onchain;
+    return {
+      result: undefined,
+      writes: [deleteFieldsWrite(document.path, {
+        [`${WORKFLOW_EXECUTION_FIELD}.onchain`]: persisted,
+        processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
+      }, [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+    };
+  });
+  loaded.execution.onchain = persisted;
 }
 
 async function persistWorkflowDraft(
@@ -2810,7 +2929,6 @@ async function persistWorkflowDraft(
 export async function reserveAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
   body: AdminIrlRedeemFinalizeRequest;
   env: Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>;
-  markInstanceCreationPending?: boolean;
   operationId: string;
   signal: AbortSignal;
   staffWallet: string;
@@ -2843,7 +2961,7 @@ export async function reserveAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
     transferSignature: parsed.data.transferSignature,
     adminWallet,
     config: snapshot,
-    instanceCreationPending: true,
+    pendingEffect: { kind: 'create', untilMs: 0 },
   };
   const started = await startFinalize(
     commerce,
@@ -2852,7 +2970,6 @@ export async function reserveAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
     args.operationId,
     args.nowMs ?? Date.now(),
     execution,
-    args.markInstanceCreationPending === true,
   );
   if (started.status === 'complete') {
     return { status: 'complete', result: completeResponse(parsed.data.dropId, parsed.data.requestId, started.request) };
@@ -2866,7 +2983,7 @@ export async function reserveAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
 export async function resumeAndReconcileAdminIrlRedeemFinalizeWorkflow(
   args: AdminIrlRedeemFinalizeWorkflowStageArgs,
 ): Promise<AdminIrlRedeemFinalizeWorkflowPhaseResult> {
-  const loaded = await loadWorkflowRequest(args);
+  const loaded = await loadWorkflowRequest(args, true);
   if (loaded.status === 'complete') return { status: 'complete' };
   if (loaded.draft) return { status: 'drafted' };
   const runtime = buildAdminIrlRedeemRuntime(loaded.execution.config);
@@ -3073,6 +3190,7 @@ export async function publishAdminIrlRedeemFinalizeWorkflow(
 ): Promise<AdminIrlRedeemFinalizeWorkflowResultReference> {
   const loaded = await loadWorkflowRequest(args);
   if (loaded.status === 'complete') {
+    await projectWorkflowPackStatus(loaded.commerce, loaded.response);
     return workflowResultReference(loaded.body.dropId, loaded.body.requestId);
   }
   const draft = loaded.draft;
@@ -3106,8 +3224,9 @@ export async function publishAdminIrlRedeemFinalizeWorkflow(
     if (!completed) {
       throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem marker reuse state changed.');
     }
+    await projectWorkflowPackStatus(loaded.commerce, completed);
   } else {
-    await publishPack(
+    const completed = await publishPack(
       loaded.commerce,
       runtime,
       loaded.body,
@@ -3119,6 +3238,7 @@ export async function publishAdminIrlRedeemFinalizeWorkflow(
       draft.receiptTxs,
       draft.boxes,
     );
+    await projectWorkflowPackStatus(loaded.commerce, completed);
   }
   return workflowResultReference(loaded.body.dropId, loaded.body.requestId);
 }
@@ -3153,10 +3273,17 @@ export async function cleanupAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
       return {
         result: { cleared: false },
         writes: [deleteFieldsWrite(document.path, {
-          lastFinalizeError: { kind: 'workflow', code: workflowError.code },
+          lastFinalizeError: {
+            kind: 'workflow',
+            code: workflowError.code,
+            recovery: workflowError.retryable ? 'automatic' : 'manual',
+          },
           [`${WORKFLOW_EXECUTION_FIELD}.failure`]: workflowError,
           processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-        }, [], [
+        }, [
+          `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
+          `${WORKFLOW_EXECUTION_FIELD}.pendingEffect`,
+        ], [
           { fieldPath: 'lastFinalizeErrorAt', value: commerceFieldValue.serverTimestamp() },
           { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
         ])],
@@ -3172,6 +3299,8 @@ export async function cleanupAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
       }, [
         'processingAttemptId', 'processingStartedAt', 'processingLeaseExpiresAt',
         WORKFLOW_DRAFT_FIELD,
+        `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
+        `${WORKFLOW_EXECUTION_FIELD}.pendingEffect`,
       ], [
         { fieldPath: 'lastFinalizeErrorAt', value: commerceFieldValue.serverTimestamp() },
         { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
@@ -3213,50 +3342,304 @@ export async function loadAdminIrlRedeemFinalizeWorkflowResult(args: Readonly<{
 export type AdminIrlRedeemFinalizeWorkflowStoredOperation = Readonly<{
   dropId: string;
   failure?: AdminIrlRedeemFinalizeWorkflowError;
-  instanceCreationPending?: true;
+  pendingEffect?: Readonly<AdminIrlRedeemFinalizeWorkflowPendingEffect>;
+  revision: string;
   owner: string;
   requestId: string;
   status: string;
 }>;
 
-export async function confirmAdminIrlRedeemFinalizeWorkflowInstanceCreation(args: Readonly<{
+type AdminIrlRedeemFinalizeWorkflowEffectClaimArgs = Readonly<{
   env: Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>;
+  expectedRevision: string;
   operationId: string;
   signal: AbortSignal;
-}>): Promise<{ confirmed: boolean }> {
+  nowMs?: number;
+}> & (
+  | Readonly<{ kind: 'create'; claimId?: never }>
+  | Readonly<{ kind: 'restart'; claimId: string }>
+);
+
+function validWorkflowEffectClaimId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
+export async function claimAdminIrlRedeemFinalizeWorkflowEffect(
+  args: AdminIrlRedeemFinalizeWorkflowEffectClaimArgs,
+): Promise<{ status: 'claimed' | 'busy' | 'changed' }> {
   if (args.signal.aborted) throw args.signal.reason;
+  const nowMs = args.nowMs ?? Date.now();
+  if (
+    !Number.isSafeInteger(nowMs) || nowMs < 0 ||
+    (args.kind === 'restart' && !validWorkflowEffectClaimId(args.claimId))
+  ) {
+    throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid Admin IRL redeem Workflow effect time.');
+  }
   const located = await raceWithSignal(
     new D1CommerceRepository(args.env.COMMERCE_DB)
       .getAdminIrlRedeemRequestForWorkflowStatus(args.operationId),
     args.signal,
   );
-  if (!located) {
-    throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem Workflow operation changed.');
-  }
-  const commerce = workflowCommerceContext(args.env, args.signal);
-  return raceWithSignal(runTransaction<{ confirmed: boolean }>(commerce, async (transaction) => {
-    const document = await deliveryReceiptRuntime.readDocument(
+  if (!located) return { status: 'changed' };
+  const commerce = workflowCommerceContext(args.env, args.signal, nowMs);
+  const requestedUntilMs = Math.min(Number.MAX_SAFE_INTEGER, nowMs + WORKFLOW_EFFECT_LEASE_MS);
+  const claimedEffect: AdminIrlRedeemFinalizeWorkflowPendingEffect = args.kind === 'create'
+    ? { kind: 'create', untilMs: requestedUntilMs }
+    : { kind: 'restart-claim', claimId: args.claimId, untilMs: requestedUntilMs };
+  try {
+    return await raceWithSignal(runTransaction<{ status: 'claimed' | 'busy' | 'changed' }>(
       commerce,
-      dropAdminIrlRedeemRequestPath(located.key.dropId || '', located.key.documentId),
-      transaction,
-    );
-    const execution = document?.fields[WORKFLOW_EXECUTION_FIELD];
-    if (!document || !isRecord(execution) || execution.version !== 1 || execution.operationId !== args.operationId) {
-      throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem Workflow operation changed.');
+      async (transaction) => {
+        const document = await deliveryReceiptRuntime.readDocument(
+          commerce,
+          dropAdminIrlRedeemRequestPath(located.key.dropId || '', located.key.documentId),
+          transaction,
+        );
+        const execution = document?.fields[WORKFLOW_EXECUTION_FIELD];
+        if (
+          !document || document.fields.status !== 'processing' ||
+          document.fields.processingAttemptId !== args.operationId ||
+          !isRecord(execution) || execution.version !== 1 || execution.operationId !== args.operationId
+        ) {
+          return { result: { status: 'changed' as const } };
+        }
+        const pending = workflowPendingEffect(execution);
+        if (!pending.valid) {
+          throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution is invalid.');
+        }
+        if (
+          args.kind === 'restart' && pending.effect?.kind === 'restart-claim' &&
+          pending.effect.claimId === args.claimId
+        ) {
+          const renewedEffect = {
+            ...pending.effect,
+            untilMs: Math.max(pending.effect.untilMs, requestedUntilMs),
+          };
+          return renewedEffect.untilMs === pending.effect.untilMs
+            ? { result: { status: 'claimed' as const } }
+            : {
+                result: { status: 'claimed' as const },
+                writes: [deleteFieldsWrite(document.path, {
+                  [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: renewedEffect,
+                }, [
+                  `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
+                ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+              };
+        }
+        if (document.updateTime !== args.expectedRevision) {
+          return { result: { status: 'changed' as const } };
+        }
+        if (
+          pending.effect?.kind === 'restart' ||
+          ((pending.effect?.kind === 'create' || pending.effect?.kind === 'restart-claim') &&
+            pending.effect.untilMs > nowMs)
+        ) {
+          return { result: { status: 'busy' as const } };
+        }
+        return {
+          result: { status: 'claimed' as const },
+          writes: [deleteFieldsWrite(document.path, {
+            [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: claimedEffect,
+          }, [
+            `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
+          ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+        };
+      },
+    ), args.signal);
+  } catch (error) {
+    if (args.signal.aborted) throw args.signal.reason;
+    try {
+      const operation = await raceWithSignal(loadAdminIrlRedeemFinalizeWorkflowOperation({
+        env: args.env,
+        operationId: args.operationId,
+      }), args.signal);
+      if (!operation || operation.status !== 'processing') return { status: 'changed' };
+      const pending = operation.pendingEffect;
+      if (
+        args.kind === 'restart' && pending?.kind === 'restart-claim' &&
+        pending.claimId === args.claimId
+      ) return { status: 'claimed' };
+      if (
+        args.kind === 'restart' && pending?.kind === 'restart' &&
+        pending.claimId === args.claimId
+      ) return { status: 'busy' };
+      if (args.kind === 'create' && pending?.kind === 'create' && pending.untilMs === requestedUntilMs) {
+        return { status: 'claimed' };
+      }
+      return { status: 'changed' };
+    } catch {
+      if (args.signal.aborted) throw args.signal.reason;
+      throw error;
     }
-    if (execution.instanceCreationPending === undefined) {
-      return { result: { confirmed: false } };
+  }
+}
+
+export async function dispatchAdminIrlRedeemFinalizeWorkflowRestart(args: Readonly<{
+  env: Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>;
+  operationId: string;
+  claimId: string;
+  signal: AbortSignal;
+  nowMs?: number;
+}>): Promise<{ status: 'dispatched' | 'changed' }> {
+  if (args.signal.aborted) throw args.signal.reason;
+  const nowMs = args.nowMs ?? Date.now();
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0 || !validWorkflowEffectClaimId(args.claimId)) {
+    throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid Admin IRL redeem Workflow dispatch.');
+  }
+  const located = await raceWithSignal(
+    new D1CommerceRepository(args.env.COMMERCE_DB)
+      .getAdminIrlRedeemRequestForWorkflowStatus(args.operationId),
+    args.signal,
+  );
+  if (!located) return { status: 'changed' };
+  const commerce = workflowCommerceContext(args.env, args.signal, nowMs);
+  try {
+    return await raceWithSignal(runTransaction<{ status: 'dispatched' | 'changed' }>(
+      commerce,
+      async (transaction) => {
+        const document = await deliveryReceiptRuntime.readDocument(
+          commerce,
+          dropAdminIrlRedeemRequestPath(located.key.dropId || '', located.key.documentId),
+          transaction,
+        );
+        const execution = document?.fields[WORKFLOW_EXECUTION_FIELD];
+        if (
+          !document || document.fields.status !== 'processing' ||
+          document.fields.processingAttemptId !== args.operationId ||
+          !isRecord(execution) || execution.version !== 1 || execution.operationId !== args.operationId
+        ) return { result: { status: 'changed' as const } };
+        const pending = workflowPendingEffect(execution);
+        if (!pending.valid) {
+          throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution is invalid.');
+        }
+        if (pending.effect?.kind === 'restart' && pending.effect.claimId === args.claimId) {
+          return { result: { status: 'dispatched' as const } };
+        }
+        if (pending.effect?.kind !== 'restart-claim' || pending.effect.claimId !== args.claimId) {
+          return { result: { status: 'changed' as const } };
+        }
+        return {
+          result: { status: 'dispatched' as const },
+          writes: [deleteFieldsWrite(document.path, {
+            [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: {
+              kind: 'restart',
+              claimId: args.claimId,
+              dispatchedAtMs: nowMs,
+            },
+          }, [
+            `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
+          ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+        };
+      },
+    ), args.signal);
+  } catch (error) {
+    if (args.signal.aborted) throw args.signal.reason;
+    try {
+      const operation = await raceWithSignal(loadAdminIrlRedeemFinalizeWorkflowOperation({
+        env: args.env,
+        operationId: args.operationId,
+      }), args.signal);
+      return operation?.status === 'processing' &&
+          operation.pendingEffect?.kind === 'restart' &&
+          operation.pendingEffect.claimId === args.claimId
+        ? { status: 'dispatched' }
+        : { status: 'changed' };
+    } catch {
+      if (args.signal.aborted) throw args.signal.reason;
+      throw error;
     }
-    if (execution.instanceCreationPending !== true) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution is invalid.');
+  }
+}
+
+export async function retractAdminIrlRedeemFinalizeWorkflowRestartDispatch(args: Readonly<{
+  env: Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>;
+  operationId: string;
+  claimId: string;
+  signal: AbortSignal;
+  nowMs?: number;
+}>): Promise<{ status: 'retracted' | 'changed' }> {
+  if (args.signal.aborted) throw args.signal.reason;
+  const nowMs = args.nowMs ?? Date.now();
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0 || !validWorkflowEffectClaimId(args.claimId)) {
+    throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid Admin IRL redeem Workflow retraction.');
+  }
+  const located = await raceWithSignal(
+    new D1CommerceRepository(args.env.COMMERCE_DB)
+      .getAdminIrlRedeemRequestForWorkflowStatus(args.operationId),
+    args.signal,
+  );
+  if (!located) return { status: 'changed' };
+  const commerce = workflowCommerceContext(args.env, args.signal, nowMs);
+  const untilMs = Math.min(Number.MAX_SAFE_INTEGER, nowMs + WORKFLOW_EFFECT_LEASE_MS);
+  try {
+    return await raceWithSignal(runTransaction<{ status: 'retracted' | 'changed' }>(
+      commerce,
+      async (transaction) => {
+        const document = await deliveryReceiptRuntime.readDocument(
+          commerce,
+          dropAdminIrlRedeemRequestPath(located.key.dropId || '', located.key.documentId),
+          transaction,
+        );
+        const execution = document?.fields[WORKFLOW_EXECUTION_FIELD];
+        if (
+          !document || document.fields.status !== 'processing' ||
+          document.fields.processingAttemptId !== args.operationId ||
+          !isRecord(execution) || execution.version !== 1 || execution.operationId !== args.operationId
+        ) return { result: { status: 'changed' as const } };
+        const pending = workflowPendingEffect(execution);
+        if (!pending.valid) {
+          throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution is invalid.');
+        }
+        if (pending.effect?.kind === 'restart-claim' && pending.effect.claimId === args.claimId) {
+          const renewedEffect = {
+            ...pending.effect,
+            untilMs: Math.max(pending.effect.untilMs, untilMs),
+          };
+          return renewedEffect.untilMs === pending.effect.untilMs
+            ? { result: { status: 'retracted' as const } }
+            : {
+                result: { status: 'retracted' as const },
+                writes: [deleteFieldsWrite(document.path, {
+                  [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: renewedEffect,
+                }, [
+                  `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
+                ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+              };
+        }
+        if (pending.effect?.kind !== 'restart' || pending.effect.claimId !== args.claimId) {
+          return { result: { status: 'changed' as const } };
+        }
+        return {
+          result: { status: 'retracted' as const },
+          writes: [deleteFieldsWrite(document.path, {
+            [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: {
+              kind: 'restart-claim',
+              claimId: args.claimId,
+              untilMs,
+            },
+          }, [
+            `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
+          ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+        };
+      },
+    ), args.signal);
+  } catch (error) {
+    if (args.signal.aborted) throw args.signal.reason;
+    try {
+      const operation = await raceWithSignal(loadAdminIrlRedeemFinalizeWorkflowOperation({
+        env: args.env,
+        operationId: args.operationId,
+      }), args.signal);
+      return operation?.status === 'processing' &&
+          operation.pendingEffect?.kind === 'restart-claim' &&
+          operation.pendingEffect.claimId === args.claimId
+        ? { status: 'retracted' }
+        : { status: 'changed' };
+    } catch {
+      if (args.signal.aborted) throw args.signal.reason;
+      throw error;
     }
-    return {
-      result: { confirmed: true },
-      writes: [deleteFieldsWrite(document.path, {}, [
-        `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
-      ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
-    };
-  }), args.signal);
+  }
 }
 
 export async function loadAdminIrlRedeemFinalizeWorkflowOperation(args: Readonly<{
@@ -3273,11 +3656,12 @@ export async function loadAdminIrlRedeemFinalizeWorkflowOperation(args: Readonly
   const owner = canonicalPublicKey(execution.owner);
   const transferSignature = canonicalSignature(execution.transferSignature);
   const failure = execution.failure === undefined ? undefined : parseWorkflowError(execution.failure);
+  const pending = workflowPendingEffect(execution);
   const dropId = document.key.dropId || '';
   const requestId = document.key.documentId;
   if (
     !owner || !transferSignature || (execution.failure !== undefined && !failure) ||
-    (execution.instanceCreationPending !== undefined && execution.instanceCreationPending !== true) ||
+    !pending.valid ||
     args.operationId !== await adminIrlRedeemFinalizeOperationIdForWallet({ dropId, requestId, transferSignature }, owner)
   ) {
     throw new AdminIrlRedeemFinalizeError('internal', 'Stored Admin IRL redeem Workflow operation is invalid.');
@@ -3285,7 +3669,8 @@ export async function loadAdminIrlRedeemFinalizeWorkflowOperation(args: Readonly
   return {
     dropId,
     ...(failure ? { failure } : {}),
-    ...(execution.instanceCreationPending === true ? { instanceCreationPending: true } : {}),
+    ...(pending.valid && pending.effect ? { pendingEffect: pending.effect } : {}),
+    revision: document.updateTime,
     owner,
     requestId,
     status: typeof document.data.status === 'string' ? document.data.status : '',
@@ -3302,6 +3687,7 @@ export const adminIrlRedeemFinalizeTestHooks = {
   mintPackReceipts,
   persistPendingFinalizeSubmission,
   pendingFinalizeSubmissionAlreadySettled,
+  persistWorkflowOnchain,
   probePendingFinalizeSubmission,
   readRequestBody,
   receiptBatchConfirmedByPostState,

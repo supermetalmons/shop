@@ -209,6 +209,56 @@ test('Admin IRL Workflow logging failures do not change success or cleanup outco
   assert.equal(cleanupCalls, 1);
 });
 
+test('Admin IRL Workflow preserves a terminal error when cleanup retains irreversible progress', async () => {
+  const { result: output, captured } = await captureConsole(() =>
+    workflowModule.runAdminIrlRedeemFinalizeWorkflow(
+      {} as Env,
+      event(),
+      new FakeWorkflowStep() as never,
+      dependencies({
+        validate: async () => {
+          throw new AdminIrlRedeemFinalizeError('resource-exhausted', 'No figures remain.');
+        },
+        cleanup: async () => ({ cleared: false }),
+      }),
+    ));
+
+  assert.deepEqual(output, {
+    version: 1,
+    ok: false,
+    error: {
+      code: 'resource-exhausted',
+      message: 'Admin IRL redeem finalization resources are exhausted.',
+      retryable: false,
+    },
+  });
+  assert.equal(
+    logEntries(captured.error).find((entry) => entry.step === 'persist terminal failure')?.cleanupOutcome,
+    'retained_manual',
+  );
+});
+
+test('Admin IRL Workflow labels retained retryable failures for automatic recovery', async () => {
+  const { result: output, captured } = await captureConsole(() =>
+    workflowModule.runAdminIrlRedeemFinalizeWorkflow(
+      {} as Env,
+      event(),
+      new FakeWorkflowStep() as never,
+      dependencies({
+        validate: async () => {
+          throw new AdminIrlRedeemFinalizeError('unavailable', 'Provider unavailable.');
+        },
+        cleanup: async () => ({ cleared: false }),
+      }),
+    ));
+
+  assert.equal(output.ok, false);
+  assert.equal(
+    logEntries(captured.error).find((entry) => entry.step === 'persist terminal failure')?.cleanupOutcome,
+    'retained_automatic',
+  );
+});
+
 const BUSINESS_STAGES = [
   { dependency: 'resumeAndReconcile', name: 'resume exact lease and reconcile WAL' },
   { dependency: 'validate', name: 'validate configuration and transfer' },

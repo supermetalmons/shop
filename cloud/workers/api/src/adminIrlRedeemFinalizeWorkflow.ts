@@ -269,7 +269,9 @@ export async function runAdminIrlRedeemFinalizeWorkflow(
           durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
           outcome: 'terminal_failure',
           errorCode: projected.code,
-          cleanupOutcome: result.cleared ? 'cleared' : 'retained_recovery',
+          cleanupOutcome: result.cleared
+            ? 'cleared'
+            : projected.retryable ? 'retained_automatic' : 'retained_manual',
         }, 'error');
         return result;
       } catch (error) {

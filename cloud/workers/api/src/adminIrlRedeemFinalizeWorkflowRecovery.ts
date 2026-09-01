@@ -11,14 +11,27 @@ import {
 import { raceWithSignal } from './boundedRequest.js';
 import { isRecord } from './dataAccess.js';
 
+const RESTART_DISPATCH_GRACE_MS = 30_000;
+
 export type AdminIrlRedeemFinalizeDurableState =
   | Readonly<{ state: 'absent' }>
-  | Readonly<{ state: 'active-confirmed' }>
-  | Readonly<{ state: 'active-unconfirmed' }>
-  | Readonly<{ state: 'complete' }>
+  | Readonly<{ state: 'active-confirmed'; revision: string }>
+  | Readonly<{ state: 'effect-pending'; revision: string }>
+  | Readonly<{ state: 'effect-expired'; revision: string }>
+  | Readonly<{ state: 'restart-claim-pending'; claimId: string; revision: string }>
+  | Readonly<{ state: 'restart-claim-expired'; claimId: string; revision: string }>
+  | Readonly<{ state: 'restart-dispatch-pending'; claimId?: string; revision: string }>
+  | Readonly<{ state: 'restart-dispatched'; claimId?: string; revision: string }>
+  | Readonly<{
+      state: 'manual-recovery';
+      failure: AdminIrlRedeemFinalizeWorkflowError;
+      revision: string;
+    }>
+  | Readonly<{ state: 'complete'; revision: string }>
   | Readonly<{
       state: 'failed';
       failure: AdminIrlRedeemFinalizeWorkflowError;
+      revision: string;
     }>;
 
 export type AdminIrlRedeemFinalizeWorkflowObservation = Readonly<{
@@ -39,7 +52,6 @@ export type AdminIrlRedeemFinalizeRecoveryDecision =
   | 'pending'
   | 'create'
   | 'restart'
-  | 'confirm-instance'
   | 'ensure-running'
   | 'not-found';
 
@@ -81,7 +93,13 @@ export type AdminIrlRedeemFinalizeLoadOperation =
 type DurableDecisionState =
   | 'absent'
   | 'active-confirmed'
-  | 'active-unconfirmed'
+  | 'effect-pending'
+  | 'effect-expired'
+  | 'restart-claim-pending'
+  | 'restart-claim-expired'
+  | 'restart-dispatch-pending'
+  | 'restart-dispatched'
+  | 'manual-recovery'
   | 'complete'
   | 'retryable-failure'
   | 'terminal-failure';
@@ -96,14 +114,44 @@ const RECOVERY_DECISIONS: Readonly<Record<
     terminated: 'not-found', invalid: 'not-found', unavailable: 'not-found',
   },
   'active-confirmed': {
-    missing: 'terminal', pending: 'pending', succeeded: 'complete',
+    missing: 'create', pending: 'pending', succeeded: 'complete',
     'retryable-failure': 'restart', 'terminal-failure': 'terminal',
+    terminated: 'restart', invalid: 'restart', unavailable: 'pending',
+  },
+  'effect-pending': {
+    missing: 'pending', pending: 'pending', succeeded: 'pending',
+    'retryable-failure': 'pending', 'terminal-failure': 'pending',
+    terminated: 'pending', invalid: 'pending', unavailable: 'pending',
+  },
+  'effect-expired': {
+    missing: 'create', pending: 'pending', succeeded: 'complete',
+    'retryable-failure': 'restart', 'terminal-failure': 'restart',
+    terminated: 'restart', invalid: 'restart', unavailable: 'ensure-running',
+  },
+  'restart-claim-pending': {
+    missing: 'pending', pending: 'pending', succeeded: 'pending',
+    'retryable-failure': 'pending', 'terminal-failure': 'pending',
+    terminated: 'pending', invalid: 'pending', unavailable: 'pending',
+  },
+  'restart-claim-expired': {
+    missing: 'create', pending: 'pending', succeeded: 'complete',
+    'retryable-failure': 'restart', 'terminal-failure': 'restart',
+    terminated: 'restart', invalid: 'restart', unavailable: 'ensure-running',
+  },
+  'restart-dispatch-pending': {
+    missing: 'pending', pending: 'pending', succeeded: 'pending',
+    'retryable-failure': 'pending', 'terminal-failure': 'pending',
+    terminated: 'pending', invalid: 'pending', unavailable: 'pending',
+  },
+  'restart-dispatched': {
+    missing: 'terminal', pending: 'pending', succeeded: 'complete',
+    'retryable-failure': 'terminal', 'terminal-failure': 'terminal',
     terminated: 'terminal', invalid: 'terminal', unavailable: 'pending',
   },
-  'active-unconfirmed': {
-    missing: 'create', pending: 'confirm-instance', succeeded: 'confirm-instance',
-    'retryable-failure': 'confirm-instance', 'terminal-failure': 'confirm-instance',
-    terminated: 'confirm-instance', invalid: 'confirm-instance', unavailable: 'pending',
+  'manual-recovery': {
+    missing: 'create', pending: 'pending', succeeded: 'complete',
+    'retryable-failure': 'restart', 'terminal-failure': 'restart',
+    terminated: 'restart', invalid: 'restart', unavailable: 'ensure-running',
   },
   complete: {
     missing: 'complete', pending: 'complete', succeeded: 'complete',
@@ -111,9 +159,9 @@ const RECOVERY_DECISIONS: Readonly<Record<
     terminated: 'complete', invalid: 'complete', unavailable: 'complete',
   },
   'retryable-failure': {
-    missing: 'ensure-running', pending: 'pending', succeeded: 'complete',
+    missing: 'create', pending: 'pending', succeeded: 'complete',
     'retryable-failure': 'restart', 'terminal-failure': 'terminal',
-    terminated: 'terminal', invalid: 'terminal', unavailable: 'ensure-running',
+    terminated: 'restart', invalid: 'restart', unavailable: 'ensure-running',
   },
   'terminal-failure': {
     missing: 'terminal', pending: 'terminal', succeeded: 'terminal',
@@ -126,38 +174,86 @@ function normalizeAdminIrlRedeemFinalizeDurableState(
   operation: AdminIrlRedeemFinalizeWorkflowStoredOperation | null,
 ): AdminIrlRedeemFinalizeDurableState {
   if (!operation) return { state: 'absent' };
-  if (operation.status === 'complete') return { state: 'complete' };
-  if (operation.failure) return { state: 'failed', failure: operation.failure };
-  return {
-    state: operation.instanceCreationPending === true
-      ? 'active-unconfirmed'
-      : 'active-confirmed',
-  };
+  const revision = operation.revision;
+  if (operation.status === 'complete') return { state: 'complete', revision };
+  if (operation.status === 'processing' && operation.pendingEffect !== undefined) {
+    if (operation.pendingEffect.kind === 'restart-claim') {
+      return {
+        state: operation.pendingEffect.untilMs > Date.now()
+          ? 'restart-claim-pending'
+          : 'restart-claim-expired',
+        claimId: operation.pendingEffect.claimId,
+        revision,
+      };
+    }
+    if (operation.pendingEffect.kind === 'restart') {
+      return {
+        state: operation.pendingEffect.dispatchedAtMs + RESTART_DISPATCH_GRACE_MS > Date.now()
+          ? 'restart-dispatch-pending'
+          : 'restart-dispatched',
+        ...(operation.pendingEffect.claimId ? { claimId: operation.pendingEffect.claimId } : {}),
+        revision,
+      };
+    }
+    return {
+      state: operation.pendingEffect.untilMs > Date.now()
+        ? 'effect-pending'
+        : 'effect-expired',
+      revision,
+    };
+  }
+  if (operation.status === 'processing' && operation.failure && !operation.failure.retryable) {
+    return { state: 'manual-recovery', failure: operation.failure, revision };
+  }
+  if (operation.failure) return { state: 'failed', failure: operation.failure, revision };
+  return { state: 'active-confirmed', revision };
 }
 
 function reconcileAdminIrlRedeemFinalizeWorkflow(
   durable: AdminIrlRedeemFinalizeDurableState,
-  observation: AdminIrlRedeemFinalizeWorkflowObservation,
+  observation: AdminIrlRedeemFinalizeWorkflowInspection,
 ): AdminIrlRedeemFinalizeRecoveryDecision {
   const durableState: DurableDecisionState = durable.state !== 'failed'
     ? durable.state
     : durable.failure.retryable ? 'retryable-failure' : 'terminal-failure';
+  if (
+    observation.state === 'terminal-failure' &&
+    observation.error === undefined &&
+    (durableState === 'active-confirmed' || durableState === 'retryable-failure')
+  ) return 'restart';
   return RECOVERY_DECISIONS[durableState][observation.state];
 }
 
 export function projectAdminIrlRedeemFinalizeStatusDecision(
-  decision: AdminIrlRedeemFinalizeRecoveryDecision,
+  reconciliation: AdminIrlRedeemFinalizeWorkflowReconciliation,
 ): AdminIrlRedeemFinalizeRecoveryDecision {
-  return ({
-    create: 'ensure-running',
-    restart: 'ensure-running',
-    'confirm-instance': 'ensure-running',
-  } as const)[
-    decision as 'create' | 'restart' | 'confirm-instance'
-  ] || decision;
+  if (reconciliation.durable.state === 'manual-recovery') {
+    if (['create', 'restart', 'ensure-running'].includes(reconciliation.decision)) return 'terminal';
+  }
+  if (
+    reconciliation.durable.state === 'effect-expired' ||
+    reconciliation.durable.state === 'restart-claim-expired'
+  ) {
+    if (['create', 'restart', 'ensure-running'].includes(reconciliation.decision)) return 'ensure-running';
+  }
+  if (reconciliation.decision === 'ensure-running') return 'ensure-running';
+  if (reconciliation.decision === 'create') {
+    return reconciliation.durable.state === 'failed' && reconciliation.durable.failure.retryable
+      ? 'ensure-running'
+      : 'terminal';
+  }
+  if (reconciliation.decision === 'restart') {
+    return reconciliation.observation.state === 'retryable-failure' ||
+        (reconciliation.observation.state === 'terminal-failure' &&
+          reconciliation.observation.error === undefined) ||
+        (reconciliation.durable.state === 'failed' && reconciliation.durable.failure.retryable)
+      ? 'ensure-running'
+      : 'terminal';
+  }
+  return reconciliation.decision;
 }
 
-export function isAdminIrlRedeemFinalizeWorkflowResourceError(error: unknown): boolean {
+function isAdminIrlRedeemFinalizeWorkflowResourceError(error: unknown): boolean {
   return isRecord(error) && error.code === 10200;
 }
 

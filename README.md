@@ -189,6 +189,27 @@ Admin IRL finalization runs in the API Worker's
 `ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW`. The existing Admin request document,
 30-minute lease, and on-chain submission records provide recovery; there is no
 Workflow-specific D1 migration. Stripe receipt claims remain synchronous.
+Terminal failures with retained progress are not restarted by status polling.
+After correcting the cause, authenticate as the original requesting Admin and
+replay `POST /admin/irl-redeem/finalize` with its stored `dropId`, `requestId`,
+and `transferSignature`. The API explicitly restarts or recreates the
+deterministic instance, including after Workflow retention or deletion.
+Ambiguously dispatched restarts are never auto-reissued; if one remains terminal
+or missing after the grace window, inspect and resolve the deterministic Workflow
+instance manually before replaying.
+
+From the repository root, restart an existing instance with:
+
+```bash
+npx wrangler workflows instances restart mons-shop-admin-irl-redeem-finalize-v1 '<OPERATION_ID>' --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env
+```
+
+After confirming the instance is missing or past retention, recreate it with its
+stored Workflow payload:
+
+```bash
+npx wrangler workflows trigger mons-shop-admin-irl-redeem-finalize-v1 '{"version":1,"dropId":"<DROP_ID>","requestId":"<REQUEST_ID>"}' --id '<OPERATION_ID>' --config cloud/workers/api/wrangler.jsonc --env-file cloud/workers/api/release.env
+```
 
 Roll out the compatible frontend first, then the API binding and routes, then
 the final frontend timeout cleanup. Cached pre-compatibility tabs must refresh

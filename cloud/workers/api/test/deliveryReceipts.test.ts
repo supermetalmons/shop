@@ -771,6 +771,42 @@ test('native pack-status projection applies once and marks the delivery complete
   assert.equal(completed?.fields.packStatusProjectionState, 'completed');
 });
 
+test('pack-status projection persists retry state when a non-cooperative D1 write is cancelled', async () => {
+  const native = await nativeDeliveryContext({
+    deliveryId: 7,
+    status: 'ready_to_ship',
+    packStatusProjectionState: 'pending',
+    packStatusProjectionNextAttemptAtMs: 0,
+    packStatusProjectionFailureCount: 0,
+    items: [{ kind: 'box', refId: 1 }],
+  });
+  const controller = new AbortController();
+  const cancellation = new DOMException('caller cancelled', 'AbortError');
+  const projection = projectionDataDb({
+    delay: () => new Promise<void>(() => controller.abort(cancellation)),
+  });
+  native.context.dataDb = projection.db;
+  native.context.signal = controller.signal;
+
+  const outcome = await deliveryReceiptTestHooks.projectPendingDeliveryPackStatus({
+    context: native.context,
+    deliveryId: 7,
+    dropId: 'card_nft_2',
+    nowMs: () => READY_NOTIFICATION_NOW_MS,
+  });
+  const pending = await deliveryReceiptRuntime.readDocument(
+    { ...native.context, signal: new AbortController().signal },
+    'drops/card_nft_2/deliveryOrders/7',
+  );
+
+  assert.equal(outcome, 'pending');
+  assert.equal(projection.attempts, 1);
+  assert.equal(pending?.fields.packStatusProjectionState, 'pending');
+  assert.equal(pending?.fields.packStatusProjectionFailureCount, 1);
+  assert.equal(pending?.fields.packStatusProjectionLastErrorCode, 'aborted');
+  assert.equal(pending?.fields.packStatusProjectionNextAttemptAtMs, READY_NOTIFICATION_NOW_MS + 5 * 60_000);
+});
+
 test('scheduled pack-status projection survives request cancellation', async () => {
   const native = await nativeDeliveryContext({
     deliveryId: 7,

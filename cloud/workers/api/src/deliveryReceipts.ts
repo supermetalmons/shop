@@ -106,6 +106,7 @@ import {
   createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
+  raceWithSignal,
   readBoundedRequestJson,
   runCriticalRequestOperation,
 } from './boundedRequest.js';
@@ -1765,7 +1766,7 @@ async function recordDeliveryPackStatusProjectionTransientFailure(args: {
 
 type DeliveryPackStatusProjectionOutcome = 'completed' | 'failed' | 'not-due' | 'not-needed' | 'pending';
 
-async function projectPendingDeliveryPackStatus(args: {
+export async function projectPendingDeliveryPackStatus(args: {
   context: CommerceContext;
   deliveryId: number;
   dropId: string;
@@ -1791,7 +1792,7 @@ async function projectPendingDeliveryPackStatus(args: {
   };
   const documentPath = dropDeliveryOrderPath(args.dropId, args.deliveryId);
   try {
-    const order = await readDocument(context, documentPath);
+    const order = await raceWithSignal(readDocument(context, documentPath), context.signal);
     if (!order) return 'not-needed';
     const state = order.fields[PACK_STATUS_PROJECTION_STATE_FIELD];
     if (state !== PACK_STATUS_PROJECTION_PENDING) return 'not-needed';
@@ -1827,7 +1828,7 @@ async function projectPendingDeliveryPackStatus(args: {
       );
     }
     if (!shouldProjectNormalIrlPackStatus(runtime, order.fields)) {
-      await clearDeliveryPackStatusProjection(context, order.path);
+      await raceWithSignal(clearDeliveryPackStatusProjection(context, order.path), context.signal);
       log({
         event: 'delivery_pack_status_projection_skipped',
         dropId: args.dropId,
@@ -1845,8 +1846,11 @@ async function projectPendingDeliveryPackStatus(args: {
       );
     }
     if (!context.dataDb) throw new Error('pack_status_data_db_not_configured');
-    await countNormalIrlPackStatus(context, runtime, args.deliveryId, order.fields);
-    await markDeliveryPackStatusProjectionCompleted(context, order.path);
+    await raceWithSignal(
+      countNormalIrlPackStatus(context, runtime, args.deliveryId, order.fields),
+      context.signal,
+    );
+    await raceWithSignal(markDeliveryPackStatusProjectionCompleted(context, order.path), context.signal);
     log({
       event: 'delivery_pack_status_projection_completed',
       dropId: args.dropId,
@@ -1857,7 +1861,10 @@ async function projectPendingDeliveryPackStatus(args: {
     const errorCode = deliveryPackStatusProjectionErrorCode(error);
     const persistenceContext = cleanupContext(args.context);
     if (error instanceof DeliveryPackStatusProjectionInvalidError) {
-      await markDeliveryPackStatusProjectionFailed(persistenceContext, documentPath, errorCode);
+      await raceWithSignal(
+        markDeliveryPackStatusProjectionFailed(persistenceContext, documentPath, errorCode),
+        persistenceContext.signal,
+      );
       log({
         event: 'delivery_pack_status_projection_failed',
         dropId: args.dropId,
@@ -1867,12 +1874,15 @@ async function projectPendingDeliveryPackStatus(args: {
       });
       return 'failed';
     }
-    await recordDeliveryPackStatusProjectionTransientFailure({
-      attemptStartedAtMs,
-      context: persistenceContext,
-      documentPath,
-      errorCode,
-    });
+    await raceWithSignal(
+      recordDeliveryPackStatusProjectionTransientFailure({
+        attemptStartedAtMs,
+        context: persistenceContext,
+        documentPath,
+        errorCode,
+      }),
+      persistenceContext.signal,
+    );
     log({
       event: 'delivery_pack_status_projection_retry_scheduled',
       dropId: args.dropId,
