@@ -774,6 +774,28 @@ test('drifella shirt secondary marketplaces use the mainnet collection address',
   );
 });
 
+test('card NFT 2 secondary marketplaces include OpenSea after Magic Eden and Tensor', () => {
+  assert.deepEqual(
+    secondaryMarketplaceLinksForDropId('card_nft_2').map(
+      ({ key, href }) => ({ key, href }),
+    ),
+    [
+      {
+        key: 'magiceden',
+        href: 'https://magiceden.io/marketplace/card_nft_2',
+      },
+      {
+        key: 'tensor',
+        href: 'https://www.tensor.trade/trade/card_nft_2',
+      },
+      {
+        key: 'opensea',
+        href: 'https://opensea.io/collection/cardnft2',
+      },
+    ],
+  );
+});
+
 test('clear cards Tensor marketplace uses the drop slug URL', () => {
   const tensorHref = 'https://www.tensor.trade/trade/clear_cards';
   assert.equal(DEPLOYMENT_DROPS.clear_cards.secondaryMarketHref, undefined);

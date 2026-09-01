@@ -1241,6 +1241,10 @@ header.top--shop.top--spacer {
   grid-column: 3 / -1;
 }
 
+.mint-panel__footer--marketplaces .mint-panel__cta {
+  grid-column: 2 / -1;
+}
+
 .mint-panel__footer--no-slider .mint-panel__info {
   grid-column: 1 / 2;
 }
@@ -1388,6 +1392,28 @@ header.top--shop.top--spacer {
   min-width: 0;
   padding-right: 24px;
   padding-left: 24px;
+}
+
+.mint-panel__terminal-buttons--triple {
+  width: min(100%, 460px);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(6px, 1vw, 14px);
+}
+
+.mint-panel__terminal-buttons--triple .mint-panel__secondary {
+  display: grid;
+  place-items: center;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.mint-panel__terminal-buttons--triple .mint-panel__secondary-text {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  font-size: 16px;
+  text-align: center;
+  white-space: nowrap;
 }
 
 .mint-panel__submit-text {
@@ -1620,6 +1646,16 @@ header.top--shop.top--spacer {
 
   .mint-panel__terminal-buttons--split {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mint-panel__terminal-buttons--triple {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.95fr) minmax(0, 1.1fr);
+    gap: clamp(4px, 2vw, 14px);
+  }
+
+  .mint-panel__terminal-buttons--triple .mint-panel__secondary-text {
+    font-size: clamp(11px, 4vw, 16px);
+    letter-spacing: clamp(0, 0.08vw, 0.3px);
   }
 
   .mint-panel__footer--soldout .mint-panel__info,

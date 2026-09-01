@@ -53,7 +53,7 @@ export type FrontendDropConfig = DeploymentDropProjectionCore & {
 export type FrontendDeploymentConfig = FrontendDropConfig;
 export type FrontendDropsMap = Record<string, FrontendDropConfig>;
 
-type SecondaryMarketplaceKey = 'magiceden' | 'tensor';
+type SecondaryMarketplaceKey = 'magiceden' | 'tensor' | 'opensea';
 
 export type SecondaryMarketplaceLink = {
   key: SecondaryMarketplaceKey;
@@ -87,6 +87,10 @@ const TENSOR_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
   poncho_drifella: 'https://www.tensor.trade/trade/poncho_drifella',
 };
 
+const OPENSEA_MARKETPLACE_HREF_OVERRIDES: Record<string, string> = {
+  card_nft_2: 'https://opensea.io/collection/cardnft2',
+};
+
 function ownMarketplaceOverride(
   overrides: Record<string, string>,
   dropId: string,
@@ -107,6 +111,10 @@ export function secondaryMarketplaceLinksForDropId(dropId: string): SecondaryMar
         DEPLOYMENT_DROPS[normalizedDropId]?.secondaryMarketHref,
       )
     : undefined;
+  const openSeaHref = ownMarketplaceOverride(
+    OPENSEA_MARKETPLACE_HREF_OVERRIDES,
+    normalizedDropId,
+  );
   return [
     {
       key: 'magiceden',
@@ -127,6 +135,9 @@ export function secondaryMarketplaceLinksForDropId(dropId: string): SecondaryMar
           normalizedDropId,
         ) || `https://www.tensor.trade/trade/${normalizedDropId}`,
     },
+    ...(openSeaHref
+      ? [{ key: 'opensea' as const, label: 'OpenSea', href: openSeaHref }]
+      : []),
   ];
 }
 

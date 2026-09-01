@@ -229,3 +229,29 @@ test('sold-out shared receipt-pool drops replace marketplaces with the next-drop
   assert.match(markup, />Notify me</);
   assert.doesNotMatch(markup, /Minted Out|Magic Eden|Tensor|>Checkout</);
 });
+
+test('sold-out card NFT 2 renders three marketplaces in one responsive row', () => {
+  const markup = renderToStaticMarkup(
+    createElement(MintPanel, {
+      stats: {
+        minted: 100,
+        total: 100,
+        remaining: 0,
+        maxPerTx: 1,
+      },
+      onMint: () => undefined,
+      busy: false,
+      title: 'Card NFT 2',
+      dropId: 'card_nft_2',
+      priceSol: 1,
+      discountPriceSol: 1,
+      maxSupply: 100,
+      maxPerTx: 1,
+    }),
+  );
+
+  assert.match(
+    markup,
+    /mint-panel__terminal-buttons--triple[^>]*><a[^>]*>.*Magic Eden.*<\/a><a[^>]*>.*Tensor.*<\/a><a[^>]*href="https:\/\/opensea\.io\/collection\/cardnft2"[^>]*>.*OpenSea.*<\/a>/,
+  );
+});

@@ -1063,6 +1063,11 @@ export function MintPanel({
     ? 'mint-panel__footer mint-panel__footer--soldout mint-panel__footer--marketplaces'
     : 'mint-panel__footer mint-panel__footer--soldout';
   const splitTerminalButtons = terminalButtons.length > 1;
+  const terminalButtonsClassName = splitTerminalButtons
+    ? terminalButtons.length > 2
+      ? 'mint-panel__terminal-buttons mint-panel__terminal-buttons--split mint-panel__terminal-buttons--triple'
+      : 'mint-panel__terminal-buttons mint-panel__terminal-buttons--split'
+    : 'mint-panel__terminal-buttons';
 
   const handleMint = async (evt: FormEvent) => {
     evt.preventDefault();
@@ -1212,11 +1217,7 @@ export function MintPanel({
           {terminalButtons.length ? (
             <div className="mint-panel__cta">
               <div
-                className={
-                  splitTerminalButtons
-                    ? 'mint-panel__terminal-buttons mint-panel__terminal-buttons--split'
-                    : 'mint-panel__terminal-buttons'
-                }
+                className={terminalButtonsClassName}
               >
                 {terminalButtons.map((button, index) => {
                   const key = button.key || `${button.buttonText}-${index}`;
