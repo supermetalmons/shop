@@ -2,7 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { assertCanonicalCommerceIdentity } from '../shared/commerceIdentityValidation.ts';
 import {
   commerceD1DocumentIdentity,
-  queryRemoteCommerceD1,
+  queryRemoteCommerceD1 as defaultQueryRemoteCommerceD1,
   safeInteger,
 } from '../shared/commerceD1Maintenance.ts';
 import { sqlSchemaFingerprint } from '../shared/sqlSchemaFingerprint.ts';
@@ -12,8 +12,8 @@ function fail(message: string): never {
 }
 
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT = '0564c72e0abee388a0138b0dc80e5ce4a8ab93801c85a3b109106e1b81171c73';
-const COMMIT_GUARD_SCHEMA_FINGERPRINT = '7dd30e68a5b3182ce62f732ff56e768456c9e56fe0e9ff3698d9f15a27ad0a9f';
+const AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT = '376e5c3579dd47c8742fb68171df543c2c35fc144a8c2277d66d68fd73c82b07';
+const COMMIT_GUARD_SCHEMA_FINGERPRINT = '13c79bbc939b01898f4a4ebc429d7d83899158f0e65a54d3b9592290d4884f80';
 const COMMIT_GUARD_TABLE_SCHEMA_FINGERPRINT = 'f8195cb0d586aeb91c7e872148f227524a83498a5357e02ae83553a8d888da02';
 const DELIVERY_OWNER_REVISION_SCHEMA_FINGERPRINT = '64fd01604169a0b6c3834a5f88e8dd3b6f08f0d7a9404882ced957aca35225a5';
 const DELIVERY_OWNER_REVISION_TRIGGER_FINGERPRINTS: Readonly<Record<string, string>> = Object.freeze({
@@ -25,6 +25,16 @@ const DELIVERY_OWNER_REVISION_TRIGGER_FINGERPRINTS: Readonly<Record<string, stri
   commerce_delivery_owner_revision_insert_guard: 'd907d773cda243f0aa33d4f91c6974b5d27296f40e21cb20e39c4248fb89f1ff',
   commerce_delivery_owner_revision_path: '87a255cadf25e3783bc9899e46efdeff9a7d66af9c6e28156ec6be246dbbca59',
   commerce_delivery_owner_revision_update_guard: '2dd28173ec6f7db767181fc6cddac53e15fd863e149b59365497eaf51bf5b91f',
+});
+const DOCUMENT_PATH_REVISION_SCHEMA_FINGERPRINT = '42f79a74554f9e4b2972ed201a410831af814ad5c5d83bed2efbcf5f4b245926';
+const DOCUMENT_PATH_REVISION_TRIGGER_FINGERPRINTS: Readonly<Record<string, string>> = Object.freeze({
+  commerce_document_path_revision_delete: '758e743aee5c022d52a902753d53d9b0ce9eec1e28387f049cda87c280c3c2f8',
+  commerce_document_path_revision_delete_guard: 'bd0013872b66a14fcf62ef56ad879820a8db2809e382c39988951a9e576fee01',
+  commerce_document_path_revision_insert: 'aaff9c60e93c89324dd22ff69cf4fc464b23cfb0d31aa566e2785d4bc9a945cd',
+  commerce_document_path_revision_insert_guard: '7cb5d8ad678cb5a9e3a85360da0349beb4708e41a69a2932124d30250a25e5c8',
+  commerce_document_path_revision_path_departure: '4a52b4b3f42e69e3bb1d2d4677337f1cb8271b3e750effa38dd9ee46e5669f1e',
+  commerce_document_path_revision_update: '666f6fe344b6d8a32520ce68483b6a99cce7cbfd58f1448fb7cbb0ab2bf9c54f',
+  commerce_document_path_revision_update_guard: '1c50faac9f28884b0c63a981861a870c4ac24c81aaf79deb4b3c38ae063720cf',
 });
 const DOCUMENT_VERSION_UPDATE_GUARD_SCHEMA_FINGERPRINT = '4d4dbe364e9ffcae153407fd64732d1593adf240d59f06d7b05837f61c5ce106';
 const LEASE_SCHEMA_FINGERPRINT = 'a243cba949108449376cf4df9b99eadb75d80e118120dd367f093636e57eb752';
@@ -49,6 +59,15 @@ const PENDING_READY_NOTIFICATION_INDEX_SQL: Readonly<Record<string, string>> = O
 });
 const DELIVERY_RECOVERY_INDEX_SQL = `CREATE INDEX commerce_documents_delivery_owner_status
   ON commerce_documents (document_kind, owner, status, document_path)`;
+const STRIPE_RECONCILIATION_INDEX_SQL = `CREATE INDEX commerce_stripe_checkouts_reconciliation_due
+  ON commerce_documents (
+    CAST(json_extract(document_json, '$.updatedAt') AS INTEGER),
+    document_path
+  )
+  WHERE
+    document_kind = 'stripe_checkout' AND
+    fulfillment_processor = 'cloudflare_queue_v1' AND
+    status IN ('fulfillment_pending', 'processing')`;
 
 function normalizedSql(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -73,19 +92,24 @@ function requireNoTemporaryBTree(plan: Record<string, unknown>[], operation: str
   }
 }
 
-export function checkCommerceD1(): Record<string, unknown> {
+export type CheckCommerceD1Query = typeof defaultQueryRemoteCommerceD1;
+
+export function checkCommerceD1(
+  queryRemoteCommerceD1: CheckCommerceD1Query = defaultQueryRemoteCommerceD1,
+): Record<string, unknown> {
   const quick = queryRemoteCommerceD1('PRAGMA quick_check');
   if (quick.length !== 1 || quick[0].quick_check !== 'ok') fail('Commerce D1 quick check failed.');
   if (queryRemoteCommerceD1('PRAGMA foreign_key_check').length !== 0) fail('Commerce D1 foreign-key check failed.');
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 5 ||
+    migrations.length !== 6 ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
     migrations[3].name !== '0004_ready_notification_owner_indexes.sql' ||
-    migrations[4].name !== '0005_delivery_owner_query_revisions.sql'
+    migrations[4].name !== '0005_delivery_owner_query_revisions.sql' ||
+    migrations[5].name !== '0006_document_path_revisions.sql'
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -100,6 +124,7 @@ export function checkCommerceD1(): Record<string, unknown> {
     'commerce_authority_control_lease',
     'commerce_commit_guards',
     'commerce_delivery_owner_revisions',
+    'commerce_document_path_revisions',
     'commerce_documents',
     'commerce_wipe_guards',
   ];
@@ -150,6 +175,9 @@ export function checkCommerceD1(): Record<string, unknown> {
   const commitGuardColumns = queryRemoteCommerceD1(
     "SELECT name FROM pragma_table_info('commerce_commit_guards') ORDER BY cid",
   ).map((row) => String(row.name));
+  const documentPathRevisionColumns = queryRemoteCommerceD1(
+    "SELECT name FROM pragma_table_info('commerce_document_path_revisions') ORDER BY cid",
+  ).map((row) => String(row.name));
   const leaseColumns = queryRemoteCommerceD1(
     "SELECT name FROM pragma_table_info('commerce_authority_control_lease') ORDER BY cid",
   ).map((row) => String(row.name));
@@ -186,6 +214,11 @@ export function checkCommerceD1(): Record<string, unknown> {
   const deliveryOwnerRevisionFingerprint = deliveryOwnerRevisionSchema.length === 1
     ? sqlSchemaFingerprint(String(deliveryOwnerRevisionSchema[0].sql || ''))
     : '';
+  const documentPathRevisionSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'table' AND name = 'commerce_document_path_revisions'`);
+  const documentPathRevisionFingerprint = documentPathRevisionSchema.length === 1
+    ? sqlSchemaFingerprint(String(documentPathRevisionSchema[0].sql || ''))
+    : '';
   const documentVersionUpdateGuardSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
     WHERE type = 'trigger' AND name = 'commerce_documents_version_update_guard'`);
   const documentVersionUpdateGuardFingerprint = documentVersionUpdateGuardSchema.length === 1
@@ -207,16 +240,31 @@ export function checkCommerceD1(): Record<string, unknown> {
         SELECT documents_revision FROM commerce_authority_control WHERE singleton = 1
       )), 0) AS future_count
     FROM commerce_delivery_owner_revisions`);
+  const documentPathRevisionState = queryRemoteCommerceD1(`SELECT
+      (SELECT COUNT(*) FROM commerce_document_path_revisions) AS count,
+      (SELECT COUNT(*) FROM commerce_document_path_revisions
+        WHERE revision NOT BETWEEN 1 AND 9007199254740991) AS invalid_count,
+      (SELECT COUNT(*) FROM commerce_document_path_revisions
+        WHERE revision > (
+          SELECT documents_revision FROM commerce_authority_control WHERE singleton = 1
+        )) AS future_count,
+      (SELECT COUNT(*)
+        FROM commerce_documents AS document
+        LEFT JOIN commerce_document_path_revisions AS path_revision
+          ON path_revision.document_path = document.document_path
+        WHERE path_revision.document_path IS NULL) AS missing_live_count`);
   if (
     authorityColumns.join(',') !== 'singleton,authority_state,revision,documents_revision,paused_at_ms,updated_at_ms' ||
     commitGuardColumns.join(',') !==
       'guard_id,expectations_json,expected_documents_revision,created_at_ms,delivery_owner_expectations_json' ||
+    documentPathRevisionColumns.join(',') !== 'document_path,revision' ||
     leaseColumns.join(',') !== 'singleton,lease_token,acquired_at_ms,expires_at_ms' ||
     wipeGuardColumns.join(',') !== 'guard_id,expectations_json,expected_documents_revision,created_at_ms,expected_authority_revision' ||
     authorityUpdateGuardFingerprint !== AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT ||
     commitGuardFingerprint !== COMMIT_GUARD_SCHEMA_FINGERPRINT ||
     commitGuardTableFingerprint !== COMMIT_GUARD_TABLE_SCHEMA_FINGERPRINT ||
     deliveryOwnerRevisionFingerprint !== DELIVERY_OWNER_REVISION_SCHEMA_FINGERPRINT ||
+    documentPathRevisionFingerprint !== DOCUMENT_PATH_REVISION_SCHEMA_FINGERPRINT ||
     documentVersionUpdateGuardFingerprint !== DOCUMENT_VERSION_UPDATE_GUARD_SCHEMA_FINGERPRINT ||
     leaseFingerprint !== LEASE_SCHEMA_FINGERPRINT ||
     wipeGuardFingerprint !== WIPE_GUARD_SCHEMA_FINGERPRINT ||
@@ -226,7 +274,11 @@ export function checkCommerceD1(): Record<string, unknown> {
     safeInteger(commitGuardState[0].count, 'Commerce commit-guard count') !== 0 ||
     deliveryOwnerRevisionState.length !== 1 ||
     safeInteger(deliveryOwnerRevisionState[0].invalid_count, 'Commerce invalid delivery-owner revision count') !== 0 ||
-    safeInteger(deliveryOwnerRevisionState[0].future_count, 'Commerce future delivery-owner revision count') !== 0
+    safeInteger(deliveryOwnerRevisionState[0].future_count, 'Commerce future delivery-owner revision count') !== 0 ||
+    documentPathRevisionState.length !== 1 ||
+    safeInteger(documentPathRevisionState[0].invalid_count, 'Commerce invalid document-path revision count') !== 0 ||
+    safeInteger(documentPathRevisionState[0].future_count, 'Commerce future document-path revision count') !== 0 ||
+    safeInteger(documentPathRevisionState[0].missing_live_count, 'Commerce missing live path-revision count') !== 0
   ) fail('Commerce D1 contains noncanonical schema or identity state.');
 
   const requiredTriggers = new Set([
@@ -242,6 +294,13 @@ export function checkCommerceD1(): Record<string, unknown> {
     'commerce_documents_identity_insert_guard',
     'commerce_documents_identity_update_guard',
     'commerce_documents_version_update_guard',
+    'commerce_document_path_revision_delete',
+    'commerce_document_path_revision_delete_guard',
+    'commerce_document_path_revision_insert',
+    'commerce_document_path_revision_insert_guard',
+    'commerce_document_path_revision_path_departure',
+    'commerce_document_path_revision_update',
+    'commerce_document_path_revision_update_guard',
     'commerce_delivery_owner_revision_arrival',
     'commerce_delivery_owner_revision_delete',
     'commerce_delivery_owner_revision_delete_guard',
@@ -267,6 +326,15 @@ export function checkCommerceD1(): Record<string, unknown> {
       sqlSchemaFingerprint(String(row.sql || '')) !== DELIVERY_OWNER_REVISION_TRIGGER_FINGERPRINTS[String(row.name)])
   ) fail('Commerce D1 delivery-owner revision triggers are invalid.');
 
+  const documentPathRevisionTriggers = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
+    WHERE type = 'trigger' AND name GLOB 'commerce_document_path_revision_*'
+    ORDER BY name`);
+  if (
+    documentPathRevisionTriggers.length !== Object.keys(DOCUMENT_PATH_REVISION_TRIGGER_FINGERPRINTS).length ||
+    documentPathRevisionTriggers.some((row) =>
+      sqlSchemaFingerprint(String(row.sql || '')) !== DOCUMENT_PATH_REVISION_TRIGGER_FINGERPRINTS[String(row.name)])
+  ) fail('Commerce D1 document-path revision triggers are invalid.');
+
   const deliveryOwnerIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
     WHERE type = 'index' AND name = 'commerce_documents_delivery_owner_path'`);
   const deliveryOwnerIndexSql = String(deliveryOwnerIndex[0]?.sql || '').replace(/\s+/g, ' ').trim();
@@ -283,6 +351,13 @@ export function checkCommerceD1(): Record<string, unknown> {
     deliveryRecoveryIndex.length !== 1 ||
     normalizedSql(deliveryRecoveryIndex[0].sql) !== normalizedSql(DELIVERY_RECOVERY_INDEX_SQL)
   ) fail('Commerce D1 delivery-recovery index is invalid.');
+
+  const stripeReconciliationIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'index' AND name = 'commerce_stripe_checkouts_reconciliation_due'`);
+  if (
+    stripeReconciliationIndex.length !== 1 ||
+    normalizedSql(stripeReconciliationIndex[0].sql) !== normalizedSql(STRIPE_RECONCILIATION_INDEX_SQL)
+  ) fail('Commerce D1 Stripe-reconciliation index is invalid.');
 
   const pendingReadyNotificationIndexes = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
     WHERE type = 'index' AND name GLOB 'commerce_delivery_orders_*_notifications_pending*'
@@ -423,7 +498,8 @@ export function checkCommerceD1(): Record<string, unknown> {
     'commerce_documents_pack_projection',
   );
   requireIndex(
-    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents
+    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
+      FROM commerce_documents INDEXED BY commerce_stripe_checkouts_reconciliation_due
       WHERE document_kind = 'stripe_checkout'
         AND fulfillment_processor = 'cloudflare_queue_v1'
         AND status IN ('fulfillment_pending', 'processing')
@@ -456,6 +532,7 @@ export function checkCommerceD1(): Record<string, unknown> {
     authorityRevision: safeInteger(authority.revision, 'Commerce authority revision'),
     authoritativeDocuments: authoritativeDocuments.length,
     deliveryOwnerRevisions: safeInteger(deliveryOwnerRevisionState[0].count, 'Commerce delivery-owner revision count'),
+    documentPathRevisions: safeInteger(documentPathRevisionState[0].count, 'Commerce document-path revision count'),
     kindCounts,
   };
 }

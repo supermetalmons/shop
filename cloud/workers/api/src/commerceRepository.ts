@@ -46,6 +46,12 @@ type DeliveryOwnerExpectation = Readonly<{
   revision: number;
 }>;
 
+type DocumentExpectation = Readonly<{
+  path: string;
+  version: number;
+  pathRevision?: number;
+}>;
+
 const DOCUMENT_COLUMN_NAMES = [
   'document_path',
   'document_kind',
@@ -556,7 +562,27 @@ function deliveryOwnerRevisionStatement(db: D1Database, owner: string): D1Prepar
   ), 0) AS revision`).bind(owner);
 }
 
+function documentPathRevisionStatement(db: D1Database, path: string): D1PreparedStatement {
+  return db.prepare(`SELECT COALESCE((
+    SELECT revision FROM commerce_document_path_revisions WHERE document_path = ?
+  ), 0) AS revision`).bind(path);
+}
+
 function parseDeliveryOwnerRevision(result: D1Result<Record<string, unknown>>): number {
+  const row = result.results[0];
+  const revision = isObject(row) ? row.revision : undefined;
+  if (
+    result.success !== true ||
+    result.results.length !== 1 ||
+    !isObject(result.meta) ||
+    typeof revision !== 'number' ||
+    !Number.isSafeInteger(revision) ||
+    revision < 0
+  ) throw unavailableCommerceData();
+  return revision;
+}
+
+function parseDocumentPathRevision(result: D1Result<Record<string, unknown>>): number {
   const row = result.results[0];
   const revision = isObject(row) ? row.revision : undefined;
   if (
@@ -864,8 +890,7 @@ export class D1CommerceRepository {
 export class CommerceUnitOfWork {
   private closed = false;
   private readonly deliveryOwnerExpectations = new Map<string, number>();
-  private expectedDocumentsRevision: number | null = null;
-  private readonly expectations = new Map<string, number>();
+  private readonly expectations = new Map<string, DocumentExpectation>();
   private readonly original = new Map<string, StoredDocument | null>();
   private readonly pending = new Map<string, PendingDocument>();
   private readonly createPaths = new Set<string>();
@@ -876,7 +901,7 @@ export class CommerceUnitOfWork {
   constructor(
     private readonly db: D1Database,
     nowMs: number,
-    private readonly control: CommerceAuthorityControl,
+    _control: CommerceAuthorityControl,
   ) {
     this.commitTimestamp = timestampFromMilliseconds(nowMs);
   }
@@ -969,16 +994,10 @@ export class CommerceUnitOfWork {
   async commit(): Promise<void> {
     this.assertOpen();
     this.closed = true;
-    const documentExpectationsJson = JSON.stringify(
-      Array.from(this.expectations, ([path, version]) => ({ path, version })),
-    );
+    const documentExpectationsJson = JSON.stringify(this.serializedDocumentExpectations());
     const deliveryOwnerExpectationsJson = JSON.stringify(this.serializedDeliveryOwnerExpectations());
     if (!this.pending.size) {
-      if (
-        this.expectedDocumentsRevision === null &&
-        !this.deliveryOwnerExpectations.size &&
-        !this.expectations.size
-      ) {
+      if (!this.deliveryOwnerExpectations.size && !this.expectations.size) {
         await authority(this.db);
         return;
       }
@@ -994,7 +1013,7 @@ export class CommerceUnitOfWork {
         guardId,
         documentExpectationsJson,
         deliveryOwnerExpectationsJson,
-        this.expectedDocumentsRevision,
+        null,
         timestampMilliseconds(this.commitTimestamp),
       ),
     ];
@@ -1067,6 +1086,11 @@ export class CommerceUnitOfWork {
       .sort((left, right) => left.owner < right.owner ? -1 : left.owner > right.owner ? 1 : 0);
   }
 
+  private serializedDocumentExpectations(): DocumentExpectation[] {
+    return Array.from(this.expectations.values())
+      .sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  }
+
   private async revalidateReadOnly(
     documentExpectationsJson: string,
     deliveryOwnerExpectationsJson: string,
@@ -1088,8 +1112,16 @@ export class CommerceUnitOfWork {
           FROM json_each(?) AS expectation
           LEFT JOIN commerce_documents AS document
             ON document.document_path = json_extract(expectation.value, '$.path')
-          WHERE COALESCE(document.version, -1) <>
-            CAST(json_extract(expectation.value, '$.version') AS INTEGER)
+          LEFT JOIN commerce_document_path_revisions AS path_revision
+            ON path_revision.document_path = json_extract(expectation.value, '$.path')
+          WHERE
+            COALESCE(document.version, -1) <>
+              CAST(json_extract(expectation.value, '$.version') AS INTEGER) OR
+            (
+              json_type(expectation.value, '$.pathRevision') IS NOT NULL AND
+              COALESCE(path_revision.revision, 0) <>
+                CAST(json_extract(expectation.value, '$.pathRevision') AS INTEGER)
+            )
         ) AS conflict`).bind(documentExpectationsJson),
       ]);
     } catch (error) {
@@ -1105,8 +1137,6 @@ export class CommerceUnitOfWork {
     const control = parseAuthorityControl(authorityResult.results[0]);
     if (control.state !== 'd1') throw unavailableCommerce();
     if (
-      (this.expectedDocumentsRevision !== null &&
-        control.documentsRevision !== this.expectedDocumentsRevision) ||
       parseConflictResult(ownerResult) ||
       parseConflictResult(documentResult)
     ) {
@@ -1120,22 +1150,56 @@ export class CommerceUnitOfWork {
   }
 
   private async load(key: CommerceDocumentKey): Promise<StoredDocument | null> {
-    if (this.original.has(key.path)) return this.original.get(key.path) || null;
-    const row = await this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-      FROM commerce_documents WHERE document_path = ?`).bind(key.path).first<Record<string, unknown>>();
+    const cached = this.original.has(key.path);
+    if (cached && this.expectations.get(key.path)?.pathRevision !== undefined) {
+      return this.original.get(key.path) || null;
+    }
+    const results = await this.db.batch<Record<string, unknown>>([
+      documentPathRevisionStatement(this.db, key.path),
+      this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+        FROM commerce_documents WHERE document_path = ?`).bind(key.path),
+    ]);
+    if (results.length !== 2) throw unavailableCommerceData();
+    const [pathRevisionResult, documentResult] = results;
+    const pathRevision = parseDocumentPathRevision(pathRevisionResult);
+    if (
+      documentResult.success !== true ||
+      documentResult.results.length > 1 ||
+      !Array.isArray(documentResult.results) ||
+      !isObject(documentResult.meta)
+    ) throw unavailableCommerceData();
+    const row = documentResult.results[0];
     const document = row ? parseRow(row) : null;
     if (document && (document.key.kind !== key.kind || document.key.dropId !== key.dropId || document.key.documentId !== key.documentId)) {
       throw new CommerceRepositoryError('internal', 'Commerce document identity mismatch.');
     }
-    if (document) this.expectedDocumentsRevision ??= this.control.documentsRevision;
-    this.recordRead(key.path, document?.version ?? -1, document);
-    return document;
+    this.recordRead(key.path, document?.version ?? -1, document, pathRevision);
+    return this.original.get(key.path) || null;
   }
 
-  private recordRead(path: string, version: number, document: StoredDocument | null): void {
+  private recordRead(
+    path: string,
+    version: number,
+    document: StoredDocument | null,
+    pathRevision?: number,
+  ): void {
     const expected = this.expectations.get(path);
-    if (expected !== undefined && expected !== version) throw new CommerceWriteConflict();
-    this.expectations.set(path, version);
+    if (
+      expected &&
+      (
+        expected.version !== version ||
+        (expected.pathRevision !== undefined &&
+          pathRevision !== undefined &&
+          expected.pathRevision !== pathRevision)
+      )
+    ) throw new CommerceWriteConflict();
+    const mergedPathRevision = pathRevision ?? expected?.pathRevision;
+    this.expectations.set(
+      path,
+      mergedPathRevision === undefined
+        ? { path, version }
+        : { path, version, pathRevision: mergedPathRevision },
+    );
     if (!this.original.has(path)) this.original.set(path, document);
     const storedTimestamp = document ? parseTimestampString(document.updateTime) : null;
     if (storedTimestamp && compareTimestamps(storedTimestamp, this.commitTimestamp) >= 0) {

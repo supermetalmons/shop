@@ -952,8 +952,13 @@ test('existing assignment revalidates paused authority before returning', async 
   let harness: ReturnType<typeof createCommerceD1Harness>;
   let armed = false;
   harness = createCommerceD1Harness({
-    observeStatement: ({ method, sql }) => {
-      if (armed && method === 'first' && sql.includes('FROM commerce_documents')) {
+    observeBatchAfterCommit: ({ statements }) => {
+      if (
+        armed &&
+        statements.length === 2 &&
+        statements.some(({ sql }) => sql.includes('commerce_document_path_revisions')) &&
+        statements.some(({ sql }) => sql.includes('FROM commerce_documents'))
+      ) {
         armed = false;
         const nowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
         harness.database.exec(`INSERT INTO commerce_authority_control_lease VALUES (

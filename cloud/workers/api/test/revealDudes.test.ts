@@ -1244,8 +1244,10 @@ test('D1 assignment removes stale markers and retries commit conflicts', async (
   const flakyDb = {
     prepare: harness.db.prepare.bind(harness.db),
     async batch<T>(statements: D1PreparedStatement[]) {
-      batches += 1;
-      if (batches === 1) throw new Error('commerce transaction conflict');
+      if (statements.length >= 4) {
+        batches += 1;
+        if (batches === 1) throw new Error('commerce transaction conflict');
+      }
       return baseBatch<T>(statements);
     },
   } as D1Database;

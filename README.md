@@ -339,10 +339,23 @@ schema starts at
 `0004_ready_notification_owner_indexes.sql` adds owner-targeted
 ready-notification indexes, and `0005_delivery_owner_query_revisions.sql` adds
 owner-scoped delivery-order query guards without replacing the global revision
-used by maintenance. Owner-revision rows are retained as tombstones so an empty
-owner scope cannot return to revision zero. Append `0006_<description>.sql` for
-the next change. The Worker preserves the existing commerce API and transaction
-behavior through the D1 document-store adapter.
+used by maintenance. `0006_document_path_revisions.sql` adds path-scoped
+revision guards for point reads. Owner- and document-path revision rows are
+retained as tombstones so deleted scopes cannot return to an earlier epoch.
+Migration `0006` requires Commerce to be paused with `paused_at_ms` confirming
+the drain. The exact untouched seed state may migrate without a prior pause, but
+the migration atomically leaves it paused and unready so old readers cannot cross
+the cutover. Keep Commerce paused through `npm run deploy:api` and until the
+`0006`-capable Worker is verified. For an automatic seed-state pause, rerun the
+`paused` authority command with the current revision to complete the normal drain
+before resuming; unready authority cannot resume. This is a pause-and-cutover
+migration, not a rolling Worker migration. Never deploy or roll back to a
+pre-`0006` Worker while Commerce is active: pause and fully drain it first, then
+keep it paused until a compatible Worker is restored. Legacy existing-path write
+expectations remain accepted; tombstoned absent-path expectations fail closed.
+Append `0007_<description>.sql` for the next change.
+The Worker preserves the existing commerce API and transaction behavior through
+the D1 document-store adapter.
 
 Inspect or pause the authoritative database with:
 

@@ -64,6 +64,17 @@ function assertDeliveryOwnerReadBatch(observation: CommerceD1BatchObservation): 
   assert.match(dataSql, /ORDER BY document_path ASC\s+LIMIT \?/);
 }
 
+function assertTransactionalPointReadBatch(observation: CommerceD1BatchObservation): void {
+  assert.equal(observation.statements.length, 2);
+  const revisionSql = observation.statements[0].sql.replace(/\s+/g, ' ');
+  const dataSql = observation.statements[1].sql.replace(/\s+/g, ' ');
+  assert.match(
+    revisionSql,
+    /SELECT COALESCE\(\( SELECT revision FROM commerce_document_path_revisions WHERE document_path = \? \), 0\) AS revision/,
+  );
+  assert.match(dataSql, /FROM commerce_documents WHERE document_path = \?/);
+}
+
 function assertReadOnlyRevalidationBatch(observation: CommerceD1BatchObservation): void {
   assert.equal(observation.statements.length, 3);
   assert.match(
@@ -74,6 +85,7 @@ function assertReadOnlyRevalidationBatch(observation: CommerceD1BatchObservation
   assert.match(observation.statements[1].sql, /commerce_delivery_owner_revisions/);
   assert.match(observation.statements[2].sql, /json_each\(\?\)/);
   assert.match(observation.statements[2].sql, /commerce_documents/);
+  assert.match(observation.statements[2].sql, /commerce_document_path_revisions/);
 }
 
 async function readWithSingleBatch<T>(
@@ -533,6 +545,7 @@ test('transactional delivery-owner queries use atomic scope snapshots and sorted
     if (call.method !== 'batch') assert.fail('Expected one D1 batch per owner query.');
     assertDeliveryOwnerReadBatch(call);
   }
+  await unit.get(commerceKeys.deliveryOrder('drop', 'z'));
   await unit.create(commerceKeys.claimCode('OWNER-SCOPE-AUDIT'), { status: 'unused' });
   await unit.commit();
 
@@ -541,13 +554,22 @@ test('transactional delivery-owner queries use atomic scope snapshots and sorted
     { owner: 'owner-a', revision: 1 },
     { owner: 'owner-z', revision: 1 },
   ]);
-  assert.deepEqual(
-    JSON.parse(String(audit.expectations_json)).map((entry: { path: string }) => entry.path).sort(),
-    [
-      commerceKeys.deliveryOrder('drop', 'a').path,
-      commerceKeys.deliveryOrder('drop', 'z').path,
-      commerceKeys.claimCode('OWNER-SCOPE-AUDIT').path,
-    ].sort(),
+  const expectations = JSON.parse(String(audit.expectations_json)) as Array<{
+    path: string;
+    pathRevision?: number;
+    version: number;
+  }>;
+  assert.deepEqual(expectations.map((entry) => entry.path), [
+    commerceKeys.claimCode('OWNER-SCOPE-AUDIT').path,
+    commerceKeys.deliveryOrder('drop', 'a').path,
+    commerceKeys.deliveryOrder('drop', 'z').path,
+  ]);
+  assert.equal(expectations[0].pathRevision, 0);
+  assert.equal(Object.hasOwn(expectations[1], 'pathRevision'), false);
+  assert.equal(
+    expectations[2].pathRevision,
+    harness.database.prepare(`SELECT revision FROM commerce_document_path_revisions
+      WHERE document_path = ?`).get(commerceKeys.deliveryOrder('drop', 'z').path)!.revision,
   );
   assert.equal(audit.expected_documents_revision, null);
 
@@ -561,6 +583,49 @@ test('transactional delivery-owner queries use atomic scope snapshots and sorted
     (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
   );
   invalid.rollback();
+});
+
+test('transactional point reads batch documents with path revisions', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const existing = commerceKeys.claimCode('EXISTING');
+  seedCommerceDocument(harness, { key: existing, data: { status: 'unused' } });
+  const repository = new D1CommerceRepository(harness.db);
+  const unit = await repository.begin(10);
+
+  calls.length = 0;
+  assert.deepEqual((await unit.get(existing))?.data, { status: 'unused' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'batch');
+  if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch per point read.');
+  assertTransactionalPointReadBatch(calls[0]);
+
+  calls.length = 0;
+  assert.equal(await unit.get(commerceKeys.claimCode('MISSING')), null);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'batch');
+  if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch per point read.');
+  assertTransactionalPointReadBatch(calls[0]);
+  unit.rollback();
+});
+
+test('point-read writes allow concurrent changes to unrelated documents', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const first = commerceKeys.claimCode('FIRST');
+  const second = commerceKeys.claimCode('SECOND');
+  await repository.run(10, async (unit) => {
+    await unit.create(first, { value: 'original-first' });
+    await unit.create(second, { value: 'original-second' });
+  });
+
+  const firstUpdate = await repository.begin(11);
+  await firstUpdate.update(first, { value: 'updated-first' });
+  await repository.run(12, async (unit) => unit.update(second, { value: 'updated-second' }));
+  await firstUpdate.commit();
+
+  assert.deepEqual((await repository.get(first))?.data, { value: 'updated-first' });
+  assert.deepEqual((await repository.get(second))?.data, { value: 'updated-second' });
 });
 
 test('point-read writes retain per-document version conflicts', async () => {
@@ -599,6 +664,30 @@ test('point-read writes reject cross-transaction delete and recreate ABA', async
   const replacement = await repository.get(key);
   assert.deepEqual(replacement?.data, { value: 'replacement' });
   assert.equal(replacement?.version, 1);
+});
+
+test('stale absent creators reject cross-transaction create and delete ABA', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.claimCode('ABSENT-ABA');
+  const readOnly = await repository.begin(9);
+  assert.equal(await readOnly.get(key), null);
+  const stale = await repository.begin(10);
+  assert.equal(await stale.get(key), null);
+  await stale.create(key, { value: 'stale' });
+
+  await repository.run(11, async (unit) => unit.create(key, { value: 'temporary' }));
+  await repository.run(12, async (unit) => unit.delete(key, { mustExist: true }));
+
+  await assert.rejects(
+    stale.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+  await assert.rejects(
+    readOnly.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+  assert.equal(await repository.get(key), null);
 });
 
 test('staged replacements preserve versions and invalidate stale owner and point transactions', async () => {
@@ -867,14 +956,39 @@ test('read-only owner queries revalidate authority, scope epochs, and returned v
     { status: 'unused' },
   ));
   pointCalls.length = 0;
-  await assert.rejects(
-    point.commit(),
-    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
-  );
+  await point.commit();
   assert.equal(pointCalls.length, 1);
   assert.equal(pointCalls[0].method, 'batch');
   if (pointCalls[0].method !== 'batch') assert.fail('Expected one read-only revalidation batch.');
   assertReadOnlyRevalidationBatch(pointCalls[0]);
+});
+
+test('read-only point transactions reject same-path changes and ABA', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const changed = commerceKeys.claimCode('CHANGED');
+  const recreated = commerceKeys.claimCode('RECREATED');
+  await repository.run(10, async (unit) => {
+    await unit.create(changed, { value: 'original' });
+    await unit.create(recreated, { value: 'original' });
+  });
+
+  const staleChanged = await repository.begin(11);
+  await staleChanged.get(changed);
+  await repository.run(12, async (unit) => unit.update(changed, { value: 'updated' }));
+  await assert.rejects(
+    staleChanged.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+
+  const staleRecreated = await repository.begin(13);
+  await staleRecreated.get(recreated);
+  await repository.run(14, async (unit) => unit.delete(recreated, { mustExist: true }));
+  await repository.run(15, async (unit) => unit.create(recreated, { value: 'replacement' }));
+  await assert.rejects(
+    staleRecreated.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
 });
 
 test('empty read-only owner queries reject concurrent same-owner inserts in one batch', async () => {

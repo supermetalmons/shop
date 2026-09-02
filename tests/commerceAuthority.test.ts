@@ -50,9 +50,10 @@ function authorityHarness(
     leaseNowMs?: number;
     failLeaseRelease?: boolean;
     initialLease?: { acquired_at_ms: number; expires_at_ms: number; lease_token: string };
+    pausedAtMs?: number | null;
   } = {},
 ) {
-  let current = authorityRow(initialState, initialRevision);
+  let current = authorityRow(initialState, initialRevision, 0, options.pausedAtMs);
   let lease = options.initialLease ? { ...options.initialLease } : null;
   const d1NowMs = options.d1NowMs ?? 100;
   const leaseNowMs = options.leaseNowMs ?? 100;
@@ -124,7 +125,11 @@ function authorityHarness(
       if (!lease || lease.lease_token !== guardToken || lease.expires_at_ms <= leaseNowMs) return [];
       const source = target === 'paused' ? 'd1' : 'paused';
       const expectedRevision = Number(sql.match(/AND revision = (\d+)/)?.[1]);
-      if (current.authority_state !== source || current.revision !== expectedRevision) return [];
+      if (
+        current.authority_state !== source ||
+        current.revision !== expectedRevision ||
+        (target === 'd1' && /paused_at_ms IS NOT NULL/.test(sql) && current.paused_at_ms === null)
+      ) return [];
       current = authorityRow(target, current.revision + 1, d1NowMs, null);
       return [{ ...current }];
     },
@@ -193,6 +198,7 @@ test('commerce authority mutations require explicit write and revision guards', 
   const sql = buildCommerceAuthorityMutationSql('d1', 7, LEASE_TOKEN);
   assert.match(sql, /authority_state = 'paused'/);
   assert.match(sql, /revision = 7/);
+  assert.match(sql, /paused_at_ms IS NOT NULL/);
   assert.match(sql, /paused_at_ms = NULL/);
   assert.match(sql, /updated_at_ms = \(CAST\(strftime\('%s', 'now'\) AS INTEGER\) \* 1000\)/);
   assert.doesNotMatch(sql, /updated_at_ms = 100/);
@@ -213,6 +219,7 @@ test('commerce authority lease and guarded transition execute against the curren
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0004_ready_notification_owner_indexes.sql', 'utf8'));
     database.exec(readFileSync('cloud/workers/api/commerce-migrations/0005_delivery_owner_query_revisions.sql', 'utf8'));
+    database.exec(readFileSync('cloud/workers/api/commerce-migrations/0006_document_path_revisions.sql', 'utf8'));
     const events: string[] = [];
     const result = await runCommerceAuthorityControl(
       parseCommerceAuthorityControlArgs(['paused', '--expected-revision', '1', '--write']),
@@ -876,6 +883,25 @@ test('resume transitions D1 before resuming Queues', async () => {
     queues: QUEUE_NAMES.map((name) => ({ name, deliveryPaused: false })),
     changed: { authorityChanged: true, queuesChanged: true },
   });
+});
+
+test('resume rejects an unready pause before resuming Queues', async () => {
+  const events: string[] = [];
+  const authority = authorityHarness('paused', 7, events, new Set(), { pausedAtMs: null });
+  const queueClient = queueHarness({
+    events,
+    initial: Object.fromEntries(QUEUE_NAMES.map((name) => [name, true])),
+  });
+  await assert.rejects(
+    runCommerceAuthorityControl(
+      parseCommerceAuthorityControlArgs(['d1', '--expected-revision', '7', '--write']),
+      dependencies({ authority, queueClient }),
+    ),
+    CommerceAuthorityCoordinationError,
+  );
+  assert.equal(authority.current.authority_state, 'paused');
+  assert.equal(authority.current.paused_at_ms, null);
+  assert.equal(events.some((event) => event.endsWith(':false')), false);
 });
 
 test('resume normalizes a mixed Queue state before transitioning D1', async () => {

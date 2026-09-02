@@ -50,7 +50,7 @@ class PreparedStatement {
     return this.runInBatch<T>();
   }
 
-  async runInBatch<T>(): Promise<D1Result<T>> {
+  runInBatch<T>(): D1Result<T> {
     const statement = this.statement();
     let result: D1Result<T>;
     if (statement.columns().length) {
@@ -114,6 +114,33 @@ export type CommerceD1Harness = {
   db: D1Database;
 };
 
+function resumeFreshCommerce(database: DatabaseSync): void {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    database.exec(`INSERT INTO commerce_authority_control_lease (
+      singleton, lease_token, acquired_at_ms, expires_at_ms
+    ) VALUES (
+      1, '00000000-0000-4000-8000-000000000106',
+      CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+      CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000
+    );
+    UPDATE commerce_authority_control
+    SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+      updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    WHERE singleton = 1 AND authority_state = 'paused' AND paused_at_ms IS NULL;
+    UPDATE commerce_authority_control
+    SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
+      updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    WHERE singleton = 1 AND authority_state = 'paused';
+    DELETE FROM commerce_authority_control_lease
+    WHERE singleton = 1 AND lease_token = '00000000-0000-4000-8000-000000000106';`);
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 export function d1Database(
   database: DatabaseSync,
   observeStatement?: CommerceD1StatementObserver,
@@ -139,7 +166,7 @@ export function d1Database(
       const results: D1Result<T>[] = [];
       database.exec('BEGIN');
       try {
-        for (const statement of preparedStatements) results.push(await statement.runInBatch<T>());
+        for (const statement of preparedStatements) results.push(statement.runInBatch<T>());
         database.exec('COMMIT');
       } catch (error) {
         database.exec('ROLLBACK');
@@ -165,6 +192,8 @@ export function createCommerceD1Harness(
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0004_ready_notification_owner_indexes.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0005_delivery_owner_query_revisions.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0006_document_path_revisions.sql', 'utf8'));
+  resumeFreshCommerce(database);
   return {
     database,
     db: d1Database(

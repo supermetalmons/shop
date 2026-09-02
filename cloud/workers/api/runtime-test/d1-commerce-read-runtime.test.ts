@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createTestHarness } from 'wrangler';
 import {
   CommerceRepositoryError,
+  CommerceWriteConflict,
   D1CommerceRepository,
   commerceKeys,
   type CommerceDocumentData,
@@ -30,7 +32,101 @@ function insertDocument(
   );
 }
 
-test('commerce repository batched reads return rows through the real D1 runtime', async () => {
+test('document-path migration backfills a populated Commerce D1 in the real runtime', async (context) => {
+  const migrationDirectory = mkdtempSync(join(tmpdir(), 'mons-commerce-d1-migrations-'));
+  context.after(() => rmSync(migrationDirectory, { force: true, recursive: true }));
+  const migrationNames = [
+    '0001_current_schema.sql',
+    '0002_authority_control_lease.sql',
+    '0003_wipe_readiness_guard.sql',
+    '0004_ready_notification_owner_indexes.sql',
+    '0005_delivery_owner_query_revisions.sql',
+  ];
+  for (const migrationName of migrationNames) {
+    copyFileSync(
+      resolve('cloud/workers/api/commerce-migrations', migrationName),
+      join(migrationDirectory, migrationName),
+    );
+  }
+
+  const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
+  const runtimeConfig = {
+    ...productionConfig,
+    main: resolve('cloud/workers/api/src/index.ts'),
+    routes: undefined,
+    d1_databases: productionConfig.d1_databases.map((database: Record<string, unknown>) => ({
+      ...database,
+      migrations_dir: database.binding === 'COMMERCE_DB'
+        ? migrationDirectory
+        : resolve('cloud/workers/api', String(database.migrations_dir)),
+    })),
+  };
+  delete runtimeConfig.$schema;
+  delete runtimeConfig.secrets;
+  const server = createTestHarness({
+    root: resolve('.'),
+    workers: [{ config: runtimeConfig }],
+  });
+  try {
+    await server.listen();
+    const worker = server.getWorker<Env>('mons-shop-api');
+    await worker.applyD1Migrations('COMMERCE_DB');
+    const env = await worker.getEnv();
+    const key = commerceKeys.claimCode('BACKFILL');
+    await env.COMMERCE_DB.batch([
+      insertDocument(env.COMMERCE_DB, key, { status: 'unused' }),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+        SET documents_revision = documents_revision + 1, updated_at_ms = updated_at_ms + 1
+        WHERE singleton = 1`),
+    ]);
+    await env.COMMERCE_DB.batch([
+      env.COMMERCE_DB.prepare(`INSERT INTO commerce_authority_control_lease (
+        singleton, lease_token, acquired_at_ms, expires_at_ms
+      ) VALUES (
+        1, '00000000-0000-4000-8000-000000000406',
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000
+      )`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+        SET authority_state = 'paused', revision = revision + 1, paused_at_ms = NULL,
+          updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+        WHERE singleton = 1 AND authority_state = 'd1'`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+        SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+          updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+        WHERE singleton = 1 AND authority_state = 'paused' AND paused_at_ms IS NULL`),
+      env.COMMERCE_DB.prepare(`DELETE FROM commerce_authority_control_lease
+        WHERE singleton = 1 AND lease_token = '00000000-0000-4000-8000-000000000406'`),
+    ]);
+
+    copyFileSync(
+      resolve('cloud/workers/api/commerce-migrations/0006_document_path_revisions.sql'),
+      join(migrationDirectory, '0006_document_path_revisions.sql'),
+    );
+    await worker.applyD1Migrations('COMMERCE_DB');
+
+    const pathRevisions = await env.COMMERCE_DB.prepare(`SELECT document_path, revision
+      FROM commerce_document_path_revisions ORDER BY document_path`)
+      .all<{ document_path: string; revision: number }>();
+    assert.deepEqual(pathRevisions.results, [{ document_path: key.path, revision: 1 }]);
+    const authority = await env.COMMERCE_DB.prepare(`SELECT
+      authority_state, revision, documents_revision, paused_at_ms
+      FROM commerce_authority_control WHERE singleton = 1`).first<Record<string, unknown>>();
+    assert.equal(authority?.authority_state, 'paused');
+    assert.equal(authority?.revision, 2);
+    assert.equal(authority?.documents_revision, 1);
+    assert.equal(Number.isSafeInteger(authority?.paused_at_ms), true);
+    assert.deepEqual(
+      (await env.COMMERCE_DB.prepare('SELECT name FROM d1_migrations ORDER BY id').all<{ name: string }>())
+        .results.map((row) => row.name),
+      [...migrationNames, '0006_document_path_revisions.sql'],
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('commerce repository reads and transaction guards run through the real D1 runtime', async () => {
   const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   const runtimeConfig = {
     ...productionConfig,
@@ -61,6 +157,40 @@ test('commerce repository batched reads return rows through the real D1 runtime'
       '0003_wipe_readiness_guard.sql',
       '0004_ready_notification_owner_indexes.sql',
       '0005_delivery_owner_query_revisions.sql',
+      '0006_document_path_revisions.sql',
+    ]);
+    assert.deepEqual(
+      await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
+        FROM commerce_authority_control WHERE singleton = 1`).first(),
+      {
+        authority_state: 'paused',
+        revision: 2,
+        documents_revision: 0,
+        paused_at_ms: null,
+      },
+    );
+    await env.COMMERCE_DB.prepare(`INSERT INTO commerce_authority_control_lease (
+      singleton, lease_token, acquired_at_ms, expires_at_ms
+    ) VALUES (
+      1, '00000000-0000-4000-8000-000000000206',
+      CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+      CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000
+    )`).run();
+    await assert.rejects(env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+      SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
+        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+      WHERE singleton = 1 AND authority_state = 'paused'`).run());
+    await env.COMMERCE_DB.batch([
+      env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+        SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+          updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+        WHERE singleton = 1 AND authority_state = 'paused' AND paused_at_ms IS NULL`),
+      env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+        SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
+          updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+        WHERE singleton = 1 AND authority_state = 'paused'`),
+      env.COMMERCE_DB.prepare(`DELETE FROM commerce_authority_control_lease
+        WHERE singleton = 1 AND lease_token = '00000000-0000-4000-8000-000000000206'`),
     ]);
 
     const claimKey = commerceKeys.claimCode('RUNTIME');
@@ -167,6 +297,76 @@ test('commerce repository batched reads return rows through the real D1 runtime'
     ]);
     assert.equal(await env.COMMERCE_DB.prepare(`SELECT documents_revision
       FROM commerce_authority_control WHERE singleton = 1`).first<number>('documents_revision'), 2);
+
+    const firstUnrelatedUnit = await repository.begin(Date.parse('2026-01-01T00:00:02.000Z'));
+    const secondUnrelatedUnit = await repository.begin(Date.parse('2026-01-01T00:00:03.000Z'));
+    await firstUnrelatedUnit.get(claimKey);
+    await secondUnrelatedUnit.get(checkoutKey);
+    await firstUnrelatedUnit.update(claimKey, { runtimeWriter: 'first' });
+    await secondUnrelatedUnit.update(checkoutKey, { runtimeWriter: 'second' });
+    await firstUnrelatedUnit.commit();
+    await secondUnrelatedUnit.commit();
+    assert.equal((await repository.get(claimKey))?.data.runtimeWriter, 'first');
+    assert.equal((await repository.get(checkoutKey))?.data.runtimeWriter, 'second');
+
+    const samePathKey = commerceKeys.claimCode('RUNTIME-CONFLICT');
+    await repository.run(Date.parse('2026-01-01T00:00:04.000Z'), async (unit) => {
+      await unit.create(samePathKey, { status: 'unused' });
+    });
+    const firstSamePathUnit = await repository.begin(Date.parse('2026-01-01T00:00:05.000Z'));
+    const secondSamePathUnit = await repository.begin(Date.parse('2026-01-01T00:00:06.000Z'));
+    await firstSamePathUnit.get(samePathKey);
+    await secondSamePathUnit.get(samePathKey);
+    await firstSamePathUnit.update(samePathKey, { status: 'used-by-first' });
+    await secondSamePathUnit.update(samePathKey, { status: 'used-by-second' });
+    await firstSamePathUnit.commit();
+    await assert.rejects(
+      secondSamePathUnit.commit(),
+      (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+    );
+    assert.equal((await repository.get(samePathKey))?.data.status, 'used-by-first');
+
+    const unrelatedReadOnlyUnit = await repository.begin(Date.parse('2026-01-01T00:00:07.000Z'));
+    await unrelatedReadOnlyUnit.get(claimKey);
+    await repository.run(Date.parse('2026-01-01T00:00:08.000Z'), async (unit) => {
+      await unit.update(checkoutKey, { runtimeReadOnlyProbe: 'unrelated' });
+    });
+    await unrelatedReadOnlyUnit.commit();
+
+    const staleReadOnlyUnit = await repository.begin(Date.parse('2026-01-01T00:00:09.000Z'));
+    await staleReadOnlyUnit.get(claimKey);
+    await repository.run(Date.parse('2026-01-01T00:00:10.000Z'), async (unit) => {
+      await unit.update(claimKey, { runtimeReadOnlyProbe: 'same-path' });
+    });
+    await assert.rejects(
+      staleReadOnlyUnit.commit(),
+      (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+    );
+
+    const abaKey = commerceKeys.claimCode('RUNTIME-ABSENT-ABA');
+    const staleAbsentUnit = await repository.begin(Date.parse('2026-01-01T00:00:11.000Z'));
+    assert.equal(await staleAbsentUnit.get(abaKey), null);
+    await repository.run(Date.parse('2026-01-01T00:00:12.000Z'), async (unit) => {
+      await unit.create(abaKey, { value: 'temporary' });
+    });
+    await repository.run(Date.parse('2026-01-01T00:00:13.000Z'), async (unit) => {
+      await unit.delete(abaKey, { mustExist: true });
+    });
+    await staleAbsentUnit.create(abaKey, { value: 'stale' });
+    await assert.rejects(
+      staleAbsentUnit.commit(),
+      (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+    );
+    assert.equal(await repository.get(abaKey), null);
+    assert.equal(
+      await env.COMMERCE_DB.prepare(`SELECT revision
+        FROM commerce_document_path_revisions WHERE document_path = ?`)
+        .bind(abaKey.path)
+        .first<number>('revision'),
+      await env.COMMERCE_DB.prepare(`SELECT documents_revision
+        FROM commerce_authority_control WHERE singleton = 1`)
+        .first<number>('documents_revision'),
+    );
 
     for (let offset = 0; offset < 128; offset += 32) {
       await env.COMMERCE_DB.batch([

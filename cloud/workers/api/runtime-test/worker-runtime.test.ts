@@ -61,6 +61,25 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     await worker.applyD1Migrations('OPS_DB');
     await worker.applyD1Migrations('COMMERCE_DB');
     const runtimeEnv = await worker.getEnv();
+    await runtimeEnv.COMMERCE_DB.batch([
+      runtimeEnv.COMMERCE_DB.prepare(`INSERT INTO commerce_authority_control_lease (
+        singleton, lease_token, acquired_at_ms, expires_at_ms
+      ) VALUES (
+        1, '00000000-0000-4000-8000-000000000306',
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000
+      )`),
+      runtimeEnv.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+        SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+          updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+        WHERE singleton = 1 AND authority_state = 'paused' AND paused_at_ms IS NULL`),
+      runtimeEnv.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
+        SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
+          updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+        WHERE singleton = 1 AND authority_state = 'paused'`),
+      runtimeEnv.COMMERCE_DB.prepare(`DELETE FROM commerce_authority_control_lease
+        WHERE singleton = 1 AND lease_token = '00000000-0000-4000-8000-000000000306'`),
+    ]);
     const missingAdminWorkflowOperationId = `airf-v1-${'a'.repeat(64)}`;
     await assert.rejects(
       runtimeEnv.ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW.get(missingAdminWorkflowOperationId),

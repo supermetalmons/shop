@@ -79,7 +79,7 @@ function conflictDatabase(db: D1Database, conflicts: number): D1Database {
   return {
     ...db,
     batch: async (statements) => {
-      if (conflicts > 0) {
+      if (statements.length >= 4 && conflicts > 0) {
         conflicts -= 1;
         throw new Error('transaction conflict');
       }

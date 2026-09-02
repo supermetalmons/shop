@@ -21,7 +21,7 @@ import type {
 
 const authority: CommerceD1Authority = {
   state: 'paused',
-  revision: 2,
+  revision: 4,
   documentsRevision: 0,
   pausedAtMs: 1_000,
   databaseNowMs: 67_000,
@@ -83,6 +83,17 @@ function database(): DatabaseSync {
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0003_wipe_readiness_guard.sql', 'utf8'));
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0004_ready_notification_owner_indexes.sql', 'utf8'));
   db.exec(readFileSync('cloud/workers/api/commerce-migrations/0005_delivery_owner_query_revisions.sql', 'utf8'));
+  db.exec(readFileSync('cloud/workers/api/commerce-migrations/0006_document_path_revisions.sql', 'utf8'));
+  insertAuthorityLease(db);
+  db.exec(`UPDATE commerce_authority_control SET
+    paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+    updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    WHERE singleton = 1`);
+  db.exec(`UPDATE commerce_authority_control SET
+    authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
+    updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+    WHERE singleton = 1`);
+  db.exec('DELETE FROM commerce_authority_control_lease');
   return db;
 }
 
@@ -105,7 +116,7 @@ function pauseCommerce(db: DatabaseSync): void {
   setDatabaseNow(db, 1);
   insertAuthorityLease(db);
   db.exec(`UPDATE commerce_authority_control SET
-    authority_state = 'paused', revision = 2, paused_at_ms = NULL,
+    authority_state = 'paused', revision = revision + 1, paused_at_ms = NULL,
     updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
     WHERE singleton = 1`);
   db.exec(`UPDATE commerce_authority_control SET
@@ -333,12 +344,29 @@ test('Commerce D1 wipe SQL deletes exact documents and advances revision once', 
   insertDocumentEpoch(db, [...documents, document('delivery_order', 'other', '9', {})]);
   pauseCommerce(db);
   executeTransaction(db, buildCommerceD1WipeSql(wipePlan, 'guard', 100_000));
+  const deletedPaths = wipePlan.documentsToDelete.map((entry) => entry.path).sort();
   assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM commerce_documents WHERE drop_id = 'target'`).get()!.count, 0);
   assert.equal(db.prepare(`SELECT COUNT(*) AS count FROM commerce_documents WHERE drop_id = 'other'`).get()!.count, 1);
+  assert.deepEqual(
+    db.prepare(`SELECT document_path, revision FROM commerce_document_path_revisions
+      WHERE document_path IN (${deletedPaths.map(() => '?').join(', ')})
+      ORDER BY document_path`).all(...deletedPaths).map((row) => ({ ...row })),
+    deletedPaths.map((documentPath) => ({ document_path: documentPath, revision: 2 })),
+  );
+  assert.deepEqual({ ...db.prepare(`SELECT document_path, revision
+    FROM commerce_document_path_revisions WHERE document_path = ?`)
+    .get('drops/other/deliveryOrders/9') }, {
+    document_path: 'drops/other/deliveryOrders/9',
+    revision: 1,
+  });
+  assert.equal(
+    db.prepare('SELECT COUNT(*) AS count FROM commerce_document_path_revisions').get()!.count,
+    documents.length + 1,
+  );
   assert.deepEqual({ ...db.prepare(`SELECT documents_revision, revision, authority_state
     FROM commerce_authority_control`).get() }, {
     documents_revision: 2,
-    revision: 2,
+    revision: 4,
     authority_state: 'paused',
   });
   assert.equal(
@@ -349,6 +377,13 @@ test('Commerce D1 wipe SQL deletes exact documents and advances revision once', 
   );
   assert.equal(db.prepare('SELECT COUNT(*) AS count FROM commerce_wipe_guards').get()!.count, 1);
   assert.equal(db.prepare('SELECT expectations_json FROM commerce_wipe_guards').get()!.expectations_json, '[]');
+  assert.throws(
+    () => executeTransaction(db, buildCommerceD1WipeSql({
+      ...wipePlan,
+      documentsToDelete: [],
+    }, 'stale-global', 100_000)),
+    /commerce wipe conflict/,
+  );
 });
 
 test('Commerce D1 wipe SQL rolls back on version drift and refuses non-D1 authority', (t) => {

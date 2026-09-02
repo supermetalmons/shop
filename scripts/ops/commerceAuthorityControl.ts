@@ -214,7 +214,8 @@ export function buildCommerceAuthorityMutationSql(
   return `UPDATE commerce_authority_control
     SET authority_state = 'd1', revision = revision + 1,
       paused_at_ms = NULL, updated_at_ms = ${COMMERCE_D1_NOW_MS_SQL}
-    WHERE singleton = 1 AND authority_state = 'paused' AND revision = ${expectedRevision}
+    WHERE singleton = 1 AND authority_state = 'paused' AND paused_at_ms IS NOT NULL
+      AND revision = ${expectedRevision}
       ${leaseGuard}
       RETURNING *`;
 }

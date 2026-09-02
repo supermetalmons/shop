@@ -24,6 +24,10 @@ const deliveryOwnerQueryRevisionsMigrationSql = readFileSync(
   new URL('../cloud/workers/api/commerce-migrations/0005_delivery_owner_query_revisions.sql', import.meta.url),
   'utf8',
 );
+const documentPathRevisionsMigrationSql = readFileSync(
+  new URL('../cloud/workers/api/commerce-migrations/0006_document_path_revisions.sql', import.meta.url),
+  'utf8',
+);
 const authorityLeaseToken = '123e4567-e89b-42d3-a456-426614174000';
 const d1NowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
 const deliveryOwnerRevisionTriggers = [
@@ -36,6 +40,15 @@ const deliveryOwnerRevisionTriggers = [
   'commerce_delivery_owner_revision_path',
   'commerce_delivery_owner_revision_update_guard',
 ] as const;
+const documentPathRevisionTriggers = [
+  'commerce_document_path_revision_delete',
+  'commerce_document_path_revision_delete_guard',
+  'commerce_document_path_revision_insert',
+  'commerce_document_path_revision_insert_guard',
+  'commerce_document_path_revision_path_departure',
+  'commerce_document_path_revision_update',
+  'commerce_document_path_revision_update_guard',
+] as const;
 
 function databaseBeforeDeliveryOwnerRevisions(): DatabaseSync {
   const db = new DatabaseSync(':memory:');
@@ -46,9 +59,16 @@ function databaseBeforeDeliveryOwnerRevisions(): DatabaseSync {
   return db;
 }
 
-function database(): DatabaseSync {
+function databaseBeforeDocumentPathRevisions(): DatabaseSync {
   const db = databaseBeforeDeliveryOwnerRevisions();
   db.exec(deliveryOwnerQueryRevisionsMigrationSql);
+  return db;
+}
+
+function database(): DatabaseSync {
+  const db = databaseBeforeDocumentPathRevisions();
+  db.exec(documentPathRevisionsMigrationSql);
+  resumeCommerceAfterMigration(db);
   return db;
 }
 
@@ -86,12 +106,83 @@ function runDocumentEpoch(db: DatabaseSync, operation: () => void): void {
   }
 }
 
+function runMigration(db: DatabaseSync, migrationSql: string): void {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.exec(migrationSql);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function documentPathMigrationObjects(db: DatabaseSync): string[] {
+  return db.prepare(`SELECT name FROM sqlite_schema
+    WHERE name LIKE 'commerce_document_path_revision%'
+    ORDER BY name`).all().map((row) => String(row.name));
+}
+
+function insertAuthorityLease(db: DatabaseSync): void {
+  db.prepare(`INSERT INTO commerce_authority_control_lease (
+    singleton, lease_token, acquired_at_ms, expires_at_ms
+  ) VALUES (1, ?, ${d1NowMsSql}, ${d1NowMsSql} + 60000)`).run(authorityLeaseToken);
+}
+
+function pauseCommerceForMigration(db: DatabaseSync, ready: boolean): void {
+  insertAuthorityLease(db);
+  db.exec(`UPDATE commerce_authority_control SET
+    authority_state = 'paused', revision = revision + 1, paused_at_ms = NULL,
+    updated_at_ms = ${d1NowMsSql} WHERE singleton = 1`);
+  if (ready) {
+    db.exec(`UPDATE commerce_authority_control SET
+      paused_at_ms = ${d1NowMsSql}, updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`);
+  }
+  db.exec('DELETE FROM commerce_authority_control_lease');
+}
+
+function resumeCommerceAfterMigration(db: DatabaseSync): void {
+  insertAuthorityLease(db);
+  db.exec(`UPDATE commerce_authority_control SET
+    paused_at_ms = ${d1NowMsSql}, updated_at_ms = ${d1NowMsSql}
+    WHERE singleton = 1 AND authority_state = 'paused' AND paused_at_ms IS NULL`);
+  db.exec(`UPDATE commerce_authority_control SET
+    authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
+    updated_at_ms = ${d1NowMsSql} WHERE singleton = 1`);
+  db.exec('DELETE FROM commerce_authority_control_lease');
+}
+
 function deliveryOwnerRevisions(db: DatabaseSync): Array<{ owner: string; revision: number }> {
   return db.prepare(`SELECT owner, revision FROM commerce_delivery_owner_revisions
     ORDER BY owner`).all().map((row) => ({
       owner: String(row.owner),
       revision: Number(row.revision),
     }));
+}
+
+function documentPathRevisions(db: DatabaseSync): Array<{ documentPath: string; revision: number }> {
+  return db.prepare(`SELECT document_path, revision FROM commerce_document_path_revisions
+    ORDER BY document_path`).all().map((row) => ({
+      documentPath: String(row.document_path),
+      revision: Number(row.revision),
+    }));
+}
+
+function documentPathRevisionHealth(db: DatabaseSync): Record<string, unknown> {
+  return { ...db.prepare(`SELECT
+    (SELECT COUNT(*) FROM commerce_document_path_revisions) AS count,
+    (SELECT COUNT(*) FROM commerce_document_path_revisions
+      WHERE revision NOT BETWEEN 1 AND 9007199254740991) AS invalid_count,
+    (SELECT COUNT(*) FROM commerce_document_path_revisions
+      WHERE revision > (
+        SELECT documents_revision FROM commerce_authority_control WHERE singleton = 1
+      )) AS future_count,
+    (SELECT COUNT(*)
+      FROM commerce_documents AS document
+      LEFT JOIN commerce_document_path_revisions AS path_revision
+        ON path_revision.document_path = document.document_path
+      WHERE path_revision.document_path IS NULL) AS missing_live_count`).get()! };
 }
 
 function indexColumns(db: DatabaseSync, name: string): string[] {
@@ -105,14 +196,16 @@ function planDetails(db: DatabaseSync, sql: string, ...bindings: SQLInputValue[]
 test('Commerce migrations create the exact current authority and guard schema', () => {
   const db = database();
   try {
-    assert.deepEqual({ ...db.prepare('SELECT * FROM commerce_authority_control').get()! }, {
+    const authority = { ...db.prepare('SELECT * FROM commerce_authority_control').get()! };
+    const { updated_at_ms: updatedAtMs, ...authorityState } = authority;
+    assert.deepEqual(authorityState, {
       singleton: 1,
       authority_state: 'd1',
-      revision: 1,
+      revision: 3,
       documents_revision: 0,
       paused_at_ms: null,
-      updated_at_ms: 0,
     });
+    assert.equal(Number.isSafeInteger(updatedAtMs), true);
     assert.deepEqual(
       db.prepare(`SELECT name FROM pragma_table_list
         WHERE schema = 'main' AND name NOT LIKE 'sqlite_%'
@@ -122,6 +215,7 @@ test('Commerce migrations create the exact current authority and guard schema', 
         'commerce_authority_control_lease',
         'commerce_commit_guards',
         'commerce_delivery_owner_revisions',
+        'commerce_document_path_revisions',
         'commerce_documents',
         'commerce_wipe_guards',
       ],
@@ -137,6 +231,7 @@ test('Commerce migrations create the exact current authority and guard schema', 
         'commerce_authority_update_guard',
         'commerce_commit_guard_validate',
         ...deliveryOwnerRevisionTriggers,
+        ...documentPathRevisionTriggers,
         'commerce_documents_delete_authority_guard',
         'commerce_documents_identity_insert_guard',
         'commerce_documents_identity_update_guard',
@@ -164,6 +259,13 @@ test('Commerce migrations create the exact current authority and guard schema', 
     );
     assert.equal(db.prepare(`SELECT strict FROM pragma_table_list
       WHERE schema = 'main' AND name = 'commerce_delivery_owner_revisions'`).get()!.strict, 1);
+    assert.deepEqual(
+      db.prepare("SELECT name FROM pragma_table_info('commerce_document_path_revisions') ORDER BY cid")
+        .all().map((row) => String(row.name)),
+      ['document_path', 'revision'],
+    );
+    assert.equal(db.prepare(`SELECT strict FROM pragma_table_list
+      WHERE schema = 'main' AND name = 'commerce_document_path_revisions'`).get()!.strict, 1);
   } finally {
     db.close();
   }
@@ -208,6 +310,361 @@ test('Delivery-owner migration preserves legacy guards and starts existing owner
       ) VALUES ('stale-global', ?, 0, 4)`).run(currentExpectations),
       /commerce transaction conflict/,
     );
+  } finally {
+    db.close();
+  }
+});
+
+test('Document-path migration backfills the current epoch and preserves legacy guards', () => {
+  const db = databaseBeforeDocumentPathRevisions();
+  try {
+    const firstPath = 'claimCodes/FIRST';
+    const secondPath = 'claimCodes/SECOND';
+    runDocumentEpoch(db, () => {
+      insertTestDocument(db, {
+        documentId: 'FIRST',
+        dropId: null,
+        kind: 'claim_code',
+        path: firstPath,
+      });
+      insertTestDocument(db, {
+        documentId: 'SECOND',
+        dropId: null,
+        kind: 'claim_code',
+        path: secondPath,
+      });
+    });
+    runDocumentEpoch(db, () => db.exec(`UPDATE commerce_documents
+      SET document_json = json_set(document_json, '$.status', 'used'), version = version + 1
+      WHERE document_path = 'claimCodes/FIRST'`));
+    const legacyExpectations = JSON.stringify([{ path: firstPath, version: 2 }]);
+    db.prepare(`INSERT INTO commerce_commit_guards (
+      guard_id, expectations_json, expected_documents_revision, created_at_ms
+    ) VALUES ('before-path-migration', ?, 2, 1)`).run(legacyExpectations);
+
+    pauseCommerceForMigration(db, true);
+    db.exec(documentPathRevisionsMigrationSql);
+    resumeCommerceAfterMigration(db);
+
+    assert.deepEqual(documentPathRevisions(db), [
+      { documentPath: firstPath, revision: 2 },
+      { documentPath: secondPath, revision: 2 },
+    ]);
+    assert.equal(db.prepare(`SELECT expectations_json FROM commerce_commit_guards
+      WHERE guard_id = 'before-path-migration'`).get()!.expectations_json, legacyExpectations);
+    assert.doesNotThrow(() => db.prepare(`INSERT INTO commerce_commit_guards (
+      guard_id, expectations_json, expected_documents_revision, created_at_ms
+    ) VALUES ('legacy-path-expectation', ?, NULL, 2)`).run(legacyExpectations));
+    assert.doesNotThrow(() => db.prepare(`INSERT INTO commerce_commit_guards (
+      guard_id, expectations_json, expected_documents_revision, created_at_ms
+    ) VALUES ('current-path-expectation', ?, NULL, 3)`).run(JSON.stringify([
+      { path: firstPath, version: 2, pathRevision: 2 },
+    ])));
+    assert.throws(() => db.prepare(`INSERT INTO commerce_commit_guards (
+      guard_id, expectations_json, expected_documents_revision, created_at_ms
+    ) VALUES ('stale-path-expectation', ?, NULL, 4)`).run(JSON.stringify([
+      { path: firstPath, version: 2, pathRevision: 1 },
+    ])), /commerce transaction conflict/);
+  } finally {
+    db.close();
+  }
+});
+
+test('Document-path migration requires a completed pause and failed attempts can retry cleanly', () => {
+  const fresh = databaseBeforeDocumentPathRevisions();
+  try {
+    assert.doesNotThrow(() => runMigration(fresh, documentPathRevisionsMigrationSql));
+    assert.deepEqual({ ...fresh.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
+      FROM commerce_authority_control WHERE singleton = 1`).get()! }, {
+      authority_state: 'paused',
+      revision: 2,
+      documents_revision: 0,
+      paused_at_ms: null,
+    });
+    assert.equal(fresh.prepare(`SELECT authority_state = 'd1' AS valid
+      FROM commerce_authority_control WHERE singleton = 1`).get()!.valid, 0);
+    insertAuthorityLease(fresh);
+    assert.throws(() => fresh.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
+      updated_at_ms = ${d1NowMsSql} WHERE singleton = 1`),
+    /invalid commerce authority readiness mutation/);
+    fresh.exec(`UPDATE commerce_authority_control SET
+      paused_at_ms = ${d1NowMsSql}, updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`);
+    assert.doesNotThrow(() => fresh.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
+      updated_at_ms = ${d1NowMsSql} WHERE singleton = 1`));
+    fresh.exec('DELETE FROM commerce_authority_control_lease');
+  } finally {
+    fresh.close();
+  }
+
+  const emptyButDraining = databaseBeforeDocumentPathRevisions();
+  try {
+    pauseCommerceForMigration(emptyButDraining, false);
+    assert.throws(
+      () => runMigration(emptyButDraining, documentPathRevisionsMigrationSql),
+      /commerce must be paused and drained before document-path migration/,
+    );
+    assert.deepEqual(documentPathMigrationObjects(emptyButDraining), []);
+    pauseCommerceForMigration(emptyButDraining, true);
+    assert.doesNotThrow(() => runMigration(emptyButDraining, documentPathRevisionsMigrationSql));
+  } finally {
+    emptyButDraining.close();
+  }
+
+  const active = databaseBeforeDocumentPathRevisions();
+  try {
+    runDocumentEpoch(active, () => insertTestDocument(active, {
+      documentId: 'ACTIVE',
+      dropId: null,
+      kind: 'claim_code',
+      path: 'claimCodes/ACTIVE',
+    }));
+    assert.throws(
+      () => runMigration(active, documentPathRevisionsMigrationSql),
+      /commerce must be paused and drained before document-path migration/,
+    );
+    assert.deepEqual(documentPathMigrationObjects(active), []);
+    pauseCommerceForMigration(active, true);
+    assert.doesNotThrow(() => runMigration(active, documentPathRevisionsMigrationSql));
+    assert.deepEqual(documentPathRevisions(active), [{ documentPath: 'claimCodes/ACTIVE', revision: 1 }]);
+  } finally {
+    active.close();
+  }
+
+  const draining = databaseBeforeDocumentPathRevisions();
+  try {
+    runDocumentEpoch(draining, () => insertTestDocument(draining, {
+      documentId: 'DRAINING',
+      dropId: null,
+      kind: 'claim_code',
+      path: 'claimCodes/DRAINING',
+    }));
+    pauseCommerceForMigration(draining, false);
+    assert.throws(
+      () => runMigration(draining, documentPathRevisionsMigrationSql),
+      /commerce must be paused and drained before document-path migration/,
+    );
+    assert.deepEqual(documentPathMigrationObjects(draining), []);
+    pauseCommerceForMigration(draining, true);
+    assert.doesNotThrow(() => runMigration(draining, documentPathRevisionsMigrationSql));
+    assert.deepEqual(documentPathRevisions(draining), [{ documentPath: 'claimCodes/DRAINING', revision: 1 }]);
+  } finally {
+    draining.close();
+  }
+
+  const usedButEmpty = databaseBeforeDocumentPathRevisions();
+  try {
+    runDocumentEpoch(usedButEmpty, () => insertTestDocument(usedButEmpty, {
+      documentId: 'REMOVED',
+      dropId: null,
+      kind: 'claim_code',
+      path: 'claimCodes/REMOVED',
+    }));
+    runDocumentEpoch(usedButEmpty, () => usedButEmpty.exec(
+      "DELETE FROM commerce_documents WHERE document_path = 'claimCodes/REMOVED'",
+    ));
+    assert.throws(
+      () => runMigration(usedButEmpty, documentPathRevisionsMigrationSql),
+      /commerce must be paused and drained before document-path migration/,
+    );
+    assert.deepEqual(documentPathMigrationObjects(usedButEmpty), []);
+    pauseCommerceForMigration(usedButEmpty, true);
+    assert.doesNotThrow(() => runMigration(usedButEmpty, documentPathRevisionsMigrationSql));
+    assert.deepEqual(documentPathRevisions(usedButEmpty), []);
+  } finally {
+    usedButEmpty.close();
+  }
+});
+
+test('Document-path revisions advance for inserts, updates, path moves, deletes, and recreations', () => {
+  const db = database();
+  try {
+    runDocumentEpoch(db, () => insertTestDocument(db, {
+      documentId: 'A',
+      dropId: null,
+      kind: 'claim_code',
+      path: 'claimCodes/A',
+    }));
+    assert.deepEqual(documentPathRevisions(db), [{ documentPath: 'claimCodes/A', revision: 1 }]);
+
+    runDocumentEpoch(db, () => db.exec(`UPDATE commerce_documents
+      SET document_json = json_set(document_json, '$.status', 'used'), version = version + 1
+      WHERE document_path = 'claimCodes/A'`));
+    assert.deepEqual(documentPathRevisions(db), [{ documentPath: 'claimCodes/A', revision: 2 }]);
+
+    runDocumentEpoch(db, () => db.exec(`UPDATE commerce_documents
+      SET document_path = 'claimCodes/B', document_id = 'B', version = version + 1
+      WHERE document_path = 'claimCodes/A'`));
+    assert.deepEqual(documentPathRevisions(db), [
+      { documentPath: 'claimCodes/A', revision: 3 },
+      { documentPath: 'claimCodes/B', revision: 3 },
+    ]);
+
+    runDocumentEpoch(db, () => db.exec("DELETE FROM commerce_documents WHERE document_path = 'claimCodes/B'"));
+    assert.deepEqual(documentPathRevisions(db), [
+      { documentPath: 'claimCodes/A', revision: 3 },
+      { documentPath: 'claimCodes/B', revision: 4 },
+    ]);
+
+    runDocumentEpoch(db, () => insertTestDocument(db, {
+      documentId: 'A',
+      dropId: null,
+      kind: 'claim_code',
+      path: 'claimCodes/A',
+    }));
+    assert.deepEqual(documentPathRevisions(db), [
+      { documentPath: 'claimCodes/A', revision: 5 },
+      { documentPath: 'claimCodes/B', revision: 4 },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
+test('Document-path guards permit unrelated epochs and reject absent and recreated ABA races', () => {
+  const db = database();
+  try {
+    const targetPath = 'claimCodes/TARGET';
+    const absentExpectation = JSON.stringify([{ path: targetPath, version: -1, pathRevision: 0 }]);
+    const insertGuard = db.prepare(`INSERT INTO commerce_commit_guards (
+      guard_id, expectations_json, expected_documents_revision, created_at_ms
+    ) VALUES (?, ?, NULL, 1)`);
+    assert.doesNotThrow(() => insertGuard.run('absent-initial', absentExpectation));
+    assert.doesNotThrow(() => insertGuard.run(
+      'legacy-absent-initial',
+      JSON.stringify([{ path: targetPath, version: -1 }]),
+    ));
+
+    runDocumentEpoch(db, () => insertTestDocument(db, {
+      documentId: 'OTHER',
+      dropId: null,
+      kind: 'claim_code',
+      path: 'claimCodes/OTHER',
+    }));
+    assert.doesNotThrow(() => insertGuard.run('absent-after-unrelated', absentExpectation));
+
+    runDocumentEpoch(db, () => insertTestDocument(db, {
+      documentId: 'TARGET',
+      dropId: null,
+      kind: 'claim_code',
+      path: targetPath,
+    }));
+    const currentExpectation = JSON.stringify([{ path: targetPath, version: 1, pathRevision: 2 }]);
+    runDocumentEpoch(db, () => db.exec(`UPDATE commerce_documents
+      SET document_json = json_set(document_json, '$.status', 'used'), version = version + 1
+      WHERE document_path = 'claimCodes/OTHER'`));
+    assert.doesNotThrow(() => insertGuard.run('current-after-unrelated', currentExpectation));
+
+    runDocumentEpoch(db, () => db.exec("DELETE FROM commerce_documents WHERE document_path = 'claimCodes/TARGET'"));
+    assert.throws(() => insertGuard.run('absent-aba', absentExpectation), /commerce transaction conflict/);
+    assert.throws(() => insertGuard.run(
+      'legacy-absent-fails-closed',
+      JSON.stringify([{ path: targetPath, version: -1 }]),
+    ), /commerce transaction conflict/);
+    assert.doesNotThrow(() => insertGuard.run(
+      'current-absent',
+      JSON.stringify([{ path: targetPath, version: -1, pathRevision: 4 }]),
+    ));
+    runDocumentEpoch(db, () => insertTestDocument(db, {
+      documentId: 'TARGET',
+      dropId: null,
+      kind: 'claim_code',
+      path: targetPath,
+    }));
+    assert.throws(() => insertGuard.run('recreated-aba', currentExpectation), /commerce transaction conflict/);
+    assert.doesNotThrow(() => insertGuard.run(
+      'legacy-current',
+      JSON.stringify([{ path: targetPath, version: 1 }]),
+    ));
+    assert.throws(() => db.prepare(`INSERT INTO commerce_commit_guards (
+      guard_id, expectations_json, expected_documents_revision, created_at_ms
+    ) VALUES ('stale-global-after-path-migration', ?, 4, 2)`).run(
+      JSON.stringify([{ path: targetPath, version: 1 }]),
+    ), /commerce transaction conflict/);
+
+    for (const [guardId, pathRevision] of [
+      ['string-path-revision', '5'],
+      ['null-path-revision', null],
+      ['negative-path-revision', -1],
+      ['unsafe-path-revision', 9_007_199_254_740_992],
+    ] as const) {
+      assert.throws(() => insertGuard.run(guardId, JSON.stringify([
+        { path: targetPath, version: 1, pathRevision },
+      ])), /commerce transaction conflict/);
+    }
+  } finally {
+    db.close();
+  }
+});
+
+test('Document-path revision tombstones reject deletion, rekeying, and non-increasing revisions', () => {
+  const db = database();
+  try {
+    runDocumentEpoch(db, () => insertTestDocument(db, {
+      documentId: 'TOMBSTONE',
+      dropId: null,
+      kind: 'claim_code',
+      path: 'claimCodes/TOMBSTONE',
+    }));
+    runDocumentEpoch(db, () => db.exec(
+      "DELETE FROM commerce_documents WHERE document_path = 'claimCodes/TOMBSTONE'",
+    ));
+    assert.throws(() => db.exec(`DELETE FROM commerce_document_path_revisions
+      WHERE document_path = 'claimCodes/TOMBSTONE'`), /tombstones cannot be deleted/);
+    assert.throws(() => db.exec(`UPDATE commerce_document_path_revisions
+      SET document_path = 'claimCodes/REKEYED', revision = revision + 1
+      WHERE document_path = 'claimCodes/TOMBSTONE'`), /must increase in place/);
+    assert.throws(() => db.exec(`UPDATE commerce_document_path_revisions
+      SET revision = revision
+      WHERE document_path = 'claimCodes/TOMBSTONE'`), /must increase in place/);
+    assert.throws(() => db.exec(`UPDATE commerce_document_path_revisions
+      SET revision = revision - 1
+      WHERE document_path = 'claimCodes/TOMBSTONE'`), /must increase in place/);
+    assert.throws(() => db.exec(`INSERT OR REPLACE INTO commerce_document_path_revisions
+      (document_path, revision) VALUES ('claimCodes/TOMBSTONE', 1)`), /cannot move backward/);
+    assert.deepEqual(documentPathRevisions(db), [
+      { documentPath: 'claimCodes/TOMBSTONE', revision: 2 },
+    ]);
+  } finally {
+    db.close();
+  }
+});
+
+test('Document-path revision health detects future, missing, and invalid rows', () => {
+  const db = database();
+  try {
+    runDocumentEpoch(db, () => insertTestDocument(db, {
+      documentId: 'HEALTH',
+      dropId: null,
+      kind: 'claim_code',
+      path: 'claimCodes/HEALTH',
+    }));
+    assert.deepEqual(documentPathRevisionHealth(db), {
+      count: 1,
+      invalid_count: 0,
+      future_count: 0,
+      missing_live_count: 0,
+    });
+
+    db.exec(`UPDATE commerce_document_path_revisions SET revision = revision + 1
+      WHERE document_path = 'claimCodes/HEALTH'`);
+    assert.equal(documentPathRevisionHealth(db).future_count, 1);
+
+    db.exec('DROP TRIGGER commerce_document_path_revision_delete_guard');
+    db.exec("DELETE FROM commerce_document_path_revisions WHERE document_path = 'claimCodes/HEALTH'");
+    assert.equal(documentPathRevisionHealth(db).missing_live_count, 1);
+
+    db.exec('PRAGMA ignore_check_constraints = ON');
+    db.exec(`INSERT INTO commerce_document_path_revisions (document_path, revision)
+      VALUES ('claimCodes/HEALTH', 0)`);
+    assert.deepEqual(documentPathRevisionHealth(db), {
+      count: 1,
+      invalid_count: 1,
+      future_count: 0,
+      missing_live_count: 0,
+    });
   } finally {
     db.close();
   }
@@ -441,7 +898,7 @@ test('Commerce authority pause and resume remain revision guarded', () => {
       singleton, lease_token, acquired_at_ms, expires_at_ms
     ) VALUES (1, ?, ${d1NowMsSql}, ${d1NowMsSql} + 60000)`).run(authorityLeaseToken);
     db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'paused', revision = 2, paused_at_ms = NULL,
+      authority_state = 'paused', revision = 4, paused_at_ms = NULL,
       updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`);
     assert.throws(() => db.prepare(`INSERT INTO commerce_documents (
@@ -449,15 +906,22 @@ test('Commerce authority pause and resume remain revision guarded', () => {
       version, create_time, update_time
     ) VALUES ('claimCodes/code', 'claim_code', NULL, 'code', '{}', 1, 'created', 'updated')`).run(),
     /commerce authority is not d1/);
+    assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'd1', revision = 5, paused_at_ms = NULL,
+      updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`), /invalid commerce authority readiness mutation/);
     db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'd1', revision = 3, paused_at_ms = NULL,
+      paused_at_ms = ${d1NowMsSql}, updated_at_ms = ${d1NowMsSql}
+      WHERE singleton = 1`);
+    db.exec(`UPDATE commerce_authority_control SET
+      authority_state = 'd1', revision = 5, paused_at_ms = NULL,
       updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`);
     assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
       authority_state = 'paused', paused_at_ms = NULL, updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`), /revision conflict/);
     assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'other', revision = 4, updated_at_ms = ${d1NowMsSql}
+      authority_state = 'other', revision = 6, updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`));
   } finally {
     db.close();
@@ -468,7 +932,7 @@ test('Commerce readiness markers require a leased D1-time update', () => {
   const db = database();
   try {
     assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'paused', revision = 2,
+      authority_state = 'paused', revision = 4,
       paused_at_ms = ${d1NowMsSql}, updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`), /coordination lease is required/);
 
@@ -476,12 +940,12 @@ test('Commerce readiness markers require a leased D1-time update', () => {
       singleton, lease_token, acquired_at_ms, expires_at_ms
     ) VALUES (1, ?, ${d1NowMsSql}, ${d1NowMsSql} + 60000)`).run(authorityLeaseToken);
     assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'paused', revision = 2,
+      authority_state = 'paused', revision = 4,
       paused_at_ms = ${d1NowMsSql}, updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`), /invalid commerce authority readiness mutation/);
 
     db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'paused', revision = 2, paused_at_ms = NULL,
+      authority_state = 'paused', revision = 4, paused_at_ms = NULL,
       updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`);
     for (const offset of [-1000, 1000]) {
@@ -501,7 +965,7 @@ test('Commerce readiness markers require a leased D1-time update', () => {
       paused_at_ms = NULL, updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`), /coordination lease is required/);
     assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'd1', revision = 3, paused_at_ms = NULL,
+      authority_state = 'd1', revision = 5, paused_at_ms = NULL,
       updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`), /coordination lease is required/);
 
@@ -521,7 +985,7 @@ test('Commerce readiness markers require a leased D1-time update', () => {
       WHERE singleton = 1`);
     db.exec('DELETE FROM commerce_authority_control_lease');
     assert.throws(() => db.exec(`UPDATE commerce_authority_control SET
-      authority_state = 'd1', revision = 3, paused_at_ms = NULL,
+      authority_state = 'd1', revision = 5, paused_at_ms = NULL,
       updated_at_ms = ${d1NowMsSql}
       WHERE singleton = 1`), /coordination lease is required/);
   } finally {
