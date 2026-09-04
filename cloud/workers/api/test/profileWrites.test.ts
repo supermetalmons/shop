@@ -7,18 +7,11 @@ import {
 } from './commerceD1Harness.ts';
 import nacl from 'tweetnacl';
 import {
-  FULFILLMENT_ORDER_ADDRESS_PATH,
-  FULFILLMENT_ORDER_STATUS_PATH,
-  FULFILLMENT_SHIPSTATION_LABEL_PATH,
-  FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
-  FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH,
-  FULFILLMENT_SHIPSTATION_RATES_PATH,
-  FULFILLMENT_SHIPSTATION_SHIPMENT_PATH,
   PROFILE_ADDRESSES_PATH,
   handleProfileWriteRequest,
-  shipStationRateInputHash,
   type ProfileWritePath,
 } from '../src/profileWrites.ts';
+import { shipStationRateInputHash } from '../src/shipstation/rates.ts';
 import { createProfileAddressId } from '../../../../shared/profileD1.ts';
 import {
   encryptAddressCipherText,
@@ -43,6 +36,14 @@ import {
   type CommerceUnitOfWork,
   type CommerceUpdateValue,
 } from '../src/commerceRepository.ts';
+
+const FULFILLMENT_ORDER_STATUS_PATH = '/fulfillment/order-status';
+const FULFILLMENT_ORDER_ADDRESS_PATH = '/fulfillment/order-address';
+const FULFILLMENT_SHIPSTATION_LABEL_PATH = '/fulfillment/shipstation-label';
+const FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH = '/fulfillment/shipstation-label-purchase';
+const FULFILLMENT_SHIPSTATION_LABEL_VOID_PATH = '/fulfillment/shipstation-label-void';
+const FULFILLMENT_SHIPSTATION_RATES_PATH = '/fulfillment/shipstation-rates';
+const FULFILLMENT_SHIPSTATION_SHIPMENT_PATH = '/fulfillment/shipstation-shipment';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 const OTHER = 'So11111111111111111111111111111111111111112';
@@ -5235,6 +5236,44 @@ test('ShipStation rates route never releases a replacement claim', async () => {
   assert.equal(commits.length, 1);
   assert.equal(currentClaimId, 'replacement-claim');
   assert.equal(currentClaimedBy, OTHER);
+});
+
+test('ShipStation rejects an oversized valid JSON stream before authentication or side effects', async () => {
+  const body = JSON.stringify(LABEL_PURCHASE_BODY).padEnd(4097, ' ');
+  const chunks = [body.slice(0, 2048), body.slice(2048)];
+  let cancelled = false;
+  const input = new Request(`https://api.mons.shop${FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (chunk) controller.enqueue(new TextEncoder().encode(chunk));
+        else controller.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    }, { highWaterMark: 0 }),
+    duplex: 'half',
+  } as RequestInit & { duplex: 'half' });
+  const result = await handleProfileWriteRequest(
+    input,
+    fulfillmentEnv,
+    FULFILLMENT_SHIPSTATION_LABEL_PURCHASE_PATH,
+    {
+      verifyIdentity: async () => assert.fail('Oversized requests must not authenticate'),
+      createCommerceRepository: () => assert.fail('Oversized requests must not access Commerce'),
+      providerFetch: async () => assert.fail('Oversized requests must not contact ShipStation'),
+    },
+  );
+  assert.equal(result.response.status, 400);
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'invalid-argument', message: 'Invalid request.' },
+  });
+  assert.equal(result.authOutcome, 'rejected');
+  assert.equal(cancelled, true);
 });
 
 test('write routes reject invalid payloads, unauthorized wallets, and missing orders without Commerce configuration', async () => {
