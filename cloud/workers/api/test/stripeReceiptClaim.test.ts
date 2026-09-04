@@ -7,13 +7,15 @@ import {
   isDeferredWorkRegistrationError,
 } from './deferredWork.ts';
 import bs58 from 'bs58';
-import { Keypair, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
-import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { Connection, Keypair, PublicKey, TransactionInstruction, TransactionMessage, VersionedTransaction } from '@solana/web3.js';
 import {
-  deliveryReceiptRuntime,
-  deliveryReceiptTestHooks,
-  sendAndConfirmSignedTransaction,
-} from '../src/deliveryReceipts.ts';
+  BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
+  BOX_MINTER_CONFIG_DISCRIMINATOR,
+} from '../../../../shared/boxMinterConfigCodec.ts';
+import { MPL_CORE_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
+import { DeliveryReceiptError, sendAndConfirmSignedTransaction } from '../src/deliveryReceiptOnchain.ts';
 import {
   commerceKeyFromPath,
   type CommerceDocumentData,
@@ -403,7 +405,9 @@ test('abort after Solana submission preserves the deterministic signature and re
       },
     } as unknown as Parameters<typeof sendAndConfirmSignedTransaction>[0], transaction, controller.signal, 'claimStripeReceipt:directFigure'),
     (error: unknown) => {
-      assert.ok(error instanceof deliveryReceiptTestHooks.DeliveryReceiptError);
+      assert.ok(error instanceof DeliveryReceiptError);
+      assert.equal(error.code, 'aborted');
+      assert.equal(error.cause, reason);
       const details = error.details as Record<string, unknown>;
       assert.equal(details.signature, signature);
       assert.equal(details.maybeSubmitted, true);
@@ -438,6 +442,118 @@ test('abort after Solana submission preserves the deterministic signature and re
   ), /locked to the receiver/);
   const stored = await deliveryReceiptRuntime.readDocument(context, `claimCodes/${CODE}`);
   assert.equal((stored?.fields.receiptTxSubmissions as Array<{ status: string }>)[0].status, 'submitted');
+});
+
+test('Stripe receipt recovery distinguishes rejected transfers from unresolved evidence', async (testContext) => {
+  const signer = Keypair.generate();
+  const runtime = deliveryReceiptRuntime.runtimeForDrop(DROP_ID);
+  const integer = (value: number, bytes: 4 | 8) => {
+    const buffer = Buffer.alloc(bytes);
+    if (bytes === 4) buffer.writeUInt32LE(value);
+    else buffer.writeBigUInt64LE(BigInt(value));
+    return buffer;
+  };
+  const string = (value: string) => Buffer.concat([integer(Buffer.byteLength(value), 4), Buffer.from(value)]);
+  const payload = Buffer.concat([
+    Buffer.from(BOX_MINTER_CONFIG_DISCRIMINATOR),
+    signer.publicKey.toBuffer(),
+    new PublicKey(runtime.config.treasury).toBuffer(),
+    runtime.collectionMint.toBuffer(),
+    integer(1, 8),
+    integer(1, 8),
+    Buffer.alloc(32),
+    integer(runtime.maxSupply, 4),
+    Buffer.from([runtime.config.maxPerTx, runtime.itemsPerBox]),
+    integer(0, 4),
+    string(runtime.config.namePrefix),
+    string(runtime.config.symbol),
+    string(runtime.config.metadataBase),
+    Buffer.from([1, 1, runtime.config.discountMintsPerWallet]),
+    string(runtime.config.figureNamePrefix),
+    Buffer.alloc(37),
+  ]);
+  const configData = Buffer.concat([payload, Buffer.alloc(BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED - payload.length)]);
+  const collectionData = Buffer.alloc(49);
+  collectionData[0] = 5;
+  const noop = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
+  const invalidTransaction = new VersionedTransaction(new TransactionMessage({
+    payerKey: signer.publicKey,
+    recentBlockhash: Keypair.generate().publicKey.toBase58(),
+    instructions: [new TransactionInstruction({ programId: noop, keys: [], data: Buffer.alloc(0) })],
+  }).compileToV0Message());
+  const invalidProof: NonNullable<Awaited<ReturnType<Connection['getTransaction']>>> = {
+    slot: 1,
+    blockTime: null,
+    transaction: { message: invalidTransaction.message, signatures: [SIGNATURE] },
+    meta: {
+      err: null,
+      fee: 0,
+      preBalances: [],
+      postBalances: [],
+      loadedAddresses: { writable: [], readonly: [] },
+      innerInstructions: [{
+        index: 0,
+        instructions: [{
+          programIdIndex: invalidTransaction.message.staticAccountKeys.findIndex((key) => key.equals(noop)),
+          accounts: [],
+          data: '0',
+        }],
+      }],
+    },
+  };
+
+  for (const outcome of ['instruction-mismatch', 'missing', 'rpc-error'] as const) {
+    await testContext.test(outcome, async (context) => {
+      context.mock.method(console, 'warn', () => undefined);
+      context.mock.method(Connection.prototype, 'getMultipleAccountsInfo', async () => [
+        { data: collectionData, owner: new PublicKey(MPL_CORE_PROGRAM_ADDRESS), executable: false, lamports: 1, rentEpoch: 0 },
+        { data: configData, owner: runtime.boxMinterProgramId, executable: false, lamports: 1, rentEpoch: 0 },
+      ]);
+      context.mock.method(Connection.prototype, 'getTransaction', async (signature: string, options: unknown) => {
+        assert.equal(signature, SIGNATURE);
+        assert.deepEqual(options, { maxSupportedTransactionVersion: 0 });
+        if (outcome === 'rpc-error') throw new Error('RPC temporarily unavailable');
+        return outcome === 'missing' ? null : invalidProof;
+      });
+      let signatureChecks = 0;
+      context.mock.method(Connection.prototype, 'getSignatureStatuses', async () => {
+        signatureChecks += 1;
+        return { context: { slot: 1 }, value: [null] };
+      });
+      const commerce = commerceContext(directDocuments());
+      let assetChecks = 0;
+      await assert.rejects(() => claimStripeReceipt(
+        { code: CODE, recipient: RECIPIENT },
+        env({ COSIGNER_SECRET: bs58.encode(signer.secretKey) }),
+        commerce,
+        {
+          apiKey: 'helius',
+          signal: commerce.signal,
+          providerFetch: async (_input, init) => {
+            const request = JSON.parse(String(init?.body)) as { id: string; method: string };
+            if (request.method === 'getBlockHeight') {
+              return Response.json({ jsonrpc: '2.0', id: request.id, result: 100 });
+            }
+            assert.equal(request.method, 'getAsset');
+            assetChecks += 1;
+            return Response.json({ jsonrpc: '2.0', id: request.id, result: { id: RECEIPT_ASSET_ID, burnt: true } });
+          },
+        },
+      ), {
+        code: 'unavailable',
+        message: 'Card receipt ownership is still resolving for the original receiver; retry shortly.',
+        details: { keepReceiptClaimProcessing: true },
+      });
+      const stored = await deliveryReceiptRuntime.readDocument(commerce, `claimCodes/${CODE}`);
+      assert.equal(stored?.fields.status, 'processing');
+      assert.equal(stored?.fields.recipient, RECIPIENT);
+      const submissions = stored?.fields.receiptTxSubmissions as Array<{ signature: string; status: string }>;
+      assert.equal(submissions[0].signature, SIGNATURE);
+      assert.equal(submissions[0].status, outcome === 'instruction-mismatch' ? 'not_landed' : 'submitted');
+      assert.equal(signatureChecks, outcome === 'instruction-mismatch' ? 0 : 1);
+      assert.equal(assetChecks, outcome === 'instruction-mismatch' ? 2 : 1);
+    });
+  }
 });
 
 test('Stripe receipt claim start writes compatible claim and order leases', async () => {

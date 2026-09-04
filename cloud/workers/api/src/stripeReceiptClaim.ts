@@ -8,13 +8,11 @@ import {
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
-  type VersionedTransactionResponse,
 } from '@solana/web3.js';
 import { z } from 'zod';
 import {
   bubblegumBurnV2Ix,
   bubblegumTransferV2Ix,
-  IX_BUBBLEGUM_TRANSFER_V2,
 } from './bubblegum.js';
 import {
   activeDirectCardReceiptClaimSignatures,
@@ -34,6 +32,11 @@ import {
   assetMatchesReceiptMetadataIdentity,
   receiptMetadataReference,
 } from './receiptProof.js';
+import {
+  bubblegumReceiptAssetIds,
+  matchingReceiptTransferCount,
+  transactionAccountKeys,
+} from './receiptTransferVerification.js';
 import { dasAssetLooksBurntOrClosed, type DasAsset } from '../../../../shared/dasAsset.js';
 import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../shared/dasAssetCollections.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
@@ -1105,45 +1108,6 @@ async function ownsAllFigureReceipts(
   return figureIds.every((figureId) => owned.has(figureId));
 }
 
-function instructionAccounts(instruction: { accountKeyIndexes: Uint8Array | number[] }, keys: PublicKey[]): PublicKey[] {
-  return Array.from(instruction.accountKeyIndexes).map((index) => keys[index]).filter((key): key is PublicKey => Boolean(key));
-}
-
-function instructionData(instruction: { data: string | Uint8Array }): Buffer {
-  return typeof instruction.data === 'string'
-    ? Buffer.from(bs58.decode(instruction.data))
-    : Buffer.from(instruction.data);
-}
-
-function transactionAccountKeys(transaction: VersionedTransactionResponse): PublicKey[] {
-  const keys = transaction.transaction.message.getAccountKeys({
-    accountKeysFromLookups: transaction.meta?.loadedAddresses,
-  });
-  return [
-    ...keys.staticAccountKeys,
-    ...(keys.accountKeysFromLookups?.writable || []),
-    ...(keys.accountKeysFromLookups?.readonly || []),
-  ];
-}
-
-function bubblegumLeafAssetIds(transaction: VersionedTransactionResponse): string[] {
-  const keys = transactionAccountKeys(transaction);
-  const assetIds = new Set<string>();
-  for (const group of transaction.meta?.innerInstructions || []) {
-    for (const instruction of group.instructions) {
-      const program = keys[instruction.programIdIndex];
-      if (!program?.equals(MPL_NOOP_PROGRAM_ID)) continue;
-      const data = instructionData(instruction);
-      if (
-        data.length < 41 || data[0] !== 1 || data[1] !== 0 ||
-        data.readUInt32LE(2) !== data.length - 6 || data[6] !== 1 || data[7] !== 1 || data[8] !== 1
-      ) continue;
-      assetIds.add(new PublicKey(data.subarray(9, 41)).toBase58());
-    }
-  }
-  return [...assetIds];
-}
-
 async function verifyDirectTransfer(args: {
   connection: Connection;
   runtime: Runtime;
@@ -1162,23 +1126,16 @@ async function verifyDirectTransfer(args: {
   if (keys[0]?.toBase58() !== args.fromWallet) {
     throw new StripeReceiptClaimError('failed-precondition', 'Card receipt transfer payer does not match sender.');
   }
-  let matches = 0;
-  for (const instruction of transaction.transaction.message.compiledInstructions) {
-    if (!keys[instruction.programIdIndex]?.equals(BUBBLEGUM_PROGRAM_ID)) continue;
-    const data = instructionData(instruction);
-    if (!data.subarray(0, IX_BUBBLEGUM_TRANSFER_V2.length).equals(IX_BUBBLEGUM_TRANSFER_V2)) continue;
-    const accounts = instructionAccounts(instruction, keys);
-    const [, payer, authority, leafOwner, , newOwner, merkleTree, collection] = accounts;
-    if (
-      accounts.length >= 8 && payer?.toBase58() === args.fromWallet && authority?.toBase58() === args.fromWallet &&
-      leafOwner?.toBase58() === args.fromWallet && newOwner?.toBase58() === args.toWallet &&
-      merkleTree?.equals(args.runtime.receiptsMerkleTree) && collection?.equals(args.coreCollection)
-    ) matches += 1;
-  }
+  const matches = matchingReceiptTransferCount(transaction, {
+    sender: args.fromWallet,
+    recipient: args.toWallet,
+    collection: args.coreCollection,
+    merkleTree: args.runtime.receiptsMerkleTree,
+  });
   if (matches !== 1) {
     throw new StripeReceiptClaimError('failed-precondition', 'Card receipt transfer instruction mismatch.', { expected: 1, got: matches });
   }
-  const assetIds = bubblegumLeafAssetIds(transaction);
+  const assetIds = bubblegumReceiptAssetIds(transaction);
   if (assetIds.length !== 1 || assetIds[0] !== args.receiptAssetId) {
     throw new StripeReceiptClaimError('failed-precondition', 'Card receipt transfer asset mismatch.', {
       expected: args.receiptAssetId,

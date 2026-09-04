@@ -12,7 +12,6 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import { API_DROPS, type ApiDropConfig } from './dropConfig.js';
-import { IX_BUBBLEGUM_TRANSFER_V2 } from './bubblegum.js';
 import {
   ADMIN_IRL_REDEEM_CARD_MARKER_VERSION,
   buildAdminIrlRedeemCardClaimCodeDocument,
@@ -43,6 +42,11 @@ import {
   assetMatchesReceiptMetadataIdentity,
 } from './receiptProof.js';
 import {
+  bubblegumReceiptAssetIds,
+  coreTransferAssetIds,
+  matchingReceiptTransferCount,
+} from './receiptTransferVerification.js';
+import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   walletHasAdminIrlRedeemAccess,
@@ -55,9 +59,7 @@ import { dasAssetBoxId } from '../../../../shared/dasAsset.js';
 import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../shared/dasAssetCollections.js';
 import { heliusSearchAssetsHasNextPage, heliusSearchAssetsItems } from '../../../../shared/heliusDas.js';
 import {
-  BUBBLEGUM_PROGRAM_ADDRESS,
   MPL_CORE_PROGRAM_ADDRESS,
-  MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
 import {
@@ -142,8 +144,6 @@ const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
 const WORKFLOW_EXECUTION_FIELD = 'workflowFinalizeV1';
 const WORKFLOW_DRAFT_FIELD = 'workflowPublicationDraftV1';
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
-const BUBBLEGUM_PROGRAM_ID = new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS);
-const MPL_NOOP_PROGRAM_ID = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
 const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
 const NAME_POLICY = { metadataNameMode: 'string-only' } as const;
@@ -1216,46 +1216,6 @@ function cleanupContext(context: CommerceContext): CommerceContext {
   return { ...context, nowMs: Date.now(), signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS) };
 }
 
-function resolveInstructionAccounts(transaction: Awaited<ReturnType<Connection['getTransaction']>>): PublicKey[] {
-  const message = transaction?.transaction.message;
-  if (!message) return [];
-  const keys = message.getAccountKeys({ accountKeysFromLookups: transaction.meta?.loadedAddresses });
-  return [
-    ...keys.staticAccountKeys,
-    ...(keys.accountKeysFromLookups?.writable || []),
-    ...(keys.accountKeysFromLookups?.readonly || []),
-  ];
-}
-
-function instructionAccounts(instruction: { accountKeyIndexes: Uint8Array | number[] }, keys: PublicKey[]): PublicKey[] {
-  return Array.from(instruction.accountKeyIndexes).map((index) => keys[index]).filter((key): key is PublicKey => Boolean(key));
-}
-
-function instructionData(instruction: { data: Uint8Array | string }): Buffer {
-  return typeof instruction.data === 'string'
-    ? Buffer.from(bs58.decode(instruction.data))
-    : Buffer.from(instruction.data);
-}
-
-function bubblegumLeafAssetIds(transaction: Awaited<ReturnType<Connection['getTransaction']>>): string[] {
-  if (!transaction) return [];
-  const keys = resolveInstructionAccounts(transaction);
-  const ids = new Set<string>();
-  for (const group of transaction.meta?.innerInstructions || []) {
-    for (const instruction of group.instructions) {
-      const program = keys[instruction.programIdIndex];
-      if (!program?.equals(MPL_NOOP_PROGRAM_ID)) continue;
-      const data = instructionData(instruction);
-      if (
-        data.length < 41 || data[0] !== 1 || data[1] !== 0 ||
-        data.readUInt32LE(2) !== data.length - 6 || data[6] !== 1 || data[7] !== 1 || data[8] !== 1
-      ) continue;
-      ids.add(new PublicKey(data.subarray(9, 41)).toBase58());
-    }
-  }
-  return Array.from(ids);
-}
-
 async function loadTransaction(
   connection: Pick<Connection, 'getTransaction'>,
   signature: string,
@@ -1284,19 +1244,7 @@ async function verifyPackTransfer(
   if (transaction.transaction.message.staticAccountKeys[0]?.toBase58() !== owner) {
     throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem transfer payer does not match requester.');
   }
-  const keys = resolveInstructionAccounts(transaction);
-  const transferred: string[] = [];
-  for (const instruction of transaction.transaction.message.compiledInstructions) {
-    if (!keys[instruction.programIdIndex]?.equals(MPL_CORE_PROGRAM_ID)) continue;
-    const data = instructionData(instruction);
-    if (data[0] !== 14 || data[1] !== 0) continue;
-    const accounts = instructionAccounts(instruction, keys);
-    if (
-      accounts.length >= 7 && accounts[1]?.equals(collection) &&
-      accounts[2]?.toBase58() === owner && accounts[3]?.toBase58() === owner &&
-      accounts[4]?.toBase58() === admin
-    ) transferred.push(accounts[0].toBase58());
-  }
+  const transferred = coreTransferAssetIds(transaction, { sender: owner, recipient: admin, collection });
   if (transferred.length !== itemIds.length || transferred.some((asset, index) => asset !== itemIds[index])) {
     throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem transfer asset mismatch.', {
       expected: itemIds,
@@ -1318,21 +1266,13 @@ async function verifyCardTransfer(
   if (transaction.transaction.message.staticAccountKeys[0]?.toBase58() !== owner) {
     throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Card receipt transfer payer does not match sender.');
   }
-  const keys = resolveInstructionAccounts(transaction);
-  let matches = 0;
-  for (const instruction of transaction.transaction.message.compiledInstructions) {
-    if (!keys[instruction.programIdIndex]?.equals(BUBBLEGUM_PROGRAM_ID)) continue;
-    const data = instructionData(instruction);
-    if (!data.subarray(0, IX_BUBBLEGUM_TRANSFER_V2.length).equals(IX_BUBBLEGUM_TRANSFER_V2)) continue;
-    const accounts = instructionAccounts(instruction, keys);
-    const [, payer, authority, leafOwner, , newOwner, merkleTree, receiptCollection] = accounts;
-    if (
-      accounts.length >= 8 && payer?.toBase58() === owner && authority?.toBase58() === owner &&
-      leafOwner?.toBase58() === owner && newOwner?.toBase58() === admin &&
-      merkleTree?.equals(runtime.receiptsMerkleTree) && receiptCollection?.equals(collection)
-    ) matches += 1;
-  }
-  const ids = bubblegumLeafAssetIds(transaction);
+  const matches = matchingReceiptTransferCount(transaction, {
+    sender: owner,
+    recipient: admin,
+    collection,
+    merkleTree: runtime.receiptsMerkleTree,
+  });
+  const ids = bubblegumReceiptAssetIds(transaction);
   if (matches !== 1 || ids.length !== 1 || ids[0] !== receiptAssetId) {
     throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Card receipt transfer asset mismatch.', {
       expected: receiptAssetId,
@@ -2067,7 +2007,7 @@ async function findReceiptAssets(
     const signatures = normalizeReceiptTxs(receiptTxs);
     const transactions = await connection.getTransactions(signatures, { maxSupportedTransactionVersion: 0 });
     if (transactions.length === signatures.length && transactions.every(Boolean)) {
-      const ids = transactions.flatMap(bubblegumLeafAssetIds);
+      const ids = transactions.flatMap((transaction) => transaction ? bubblegumReceiptAssetIds(transaction) : []);
       if (ids.length !== items.length || new Set(ids).size !== ids.length) {
         throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem receipt transaction assets do not match the request.');
       }

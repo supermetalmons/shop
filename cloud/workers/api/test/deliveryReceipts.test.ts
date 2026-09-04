@@ -16,7 +16,6 @@ import { Keypair, PublicKey, type Connection } from '@solana/web3.js';
 import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
   BOX_MINTER_CONFIG_DISCRIMINATOR,
-  decodeBoxMinterConfigData,
 } from '../../../../shared/boxMinterConfigCodec.ts';
 import { IRL_CLAIM_CODE_NAMESPACE, IRL_CLAIM_CODE_DIGITS } from '../src/claimCodes.ts';
 import {
@@ -26,6 +25,14 @@ import {
   deliveryReceiptTestHooks,
   handleDeliveryReceiptRequest,
 } from '../src/deliveryReceipts.ts';
+import {
+  DeliveryReceiptError,
+  createConnection,
+  decodeCosigner,
+  fetchOnchainConfig,
+  waitForSignature,
+} from '../src/deliveryReceiptOnchain.ts';
+import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { registerDeferredWork } from '../src/deferredWork.ts';
 import {
@@ -419,7 +426,7 @@ function borshString(value: string): Buffer {
   return Buffer.concat([u32LE(encoded.length), encoded]);
 }
 
-function configData(admin: Keypair, dropId: string): Buffer {
+function configData(admin: Keypair, dropId: string, maxSupply?: number): Buffer {
   const runtime = deliveryReceiptTestHooks.runtimeForDrop(dropId);
   const treasury = new PublicKey(runtime.config.treasury);
   const payload = Buffer.concat([
@@ -430,7 +437,7 @@ function configData(admin: Keypair, dropId: string): Buffer {
     u64LE(1n),
     u64LE(1n),
     Buffer.alloc(32),
-    u32LE(runtime.maxSupply),
+    u32LE(maxSupply ?? runtime.maxSupply),
     Buffer.from([runtime.config.maxPerTx, runtime.itemsPerBox]),
     u32LE(0),
     borshString(runtime.config.namePrefix),
@@ -907,7 +914,7 @@ test('receipt errors omit internal details from the public envelope', async () =
     failOnDeferredWork,
     dependencies({
       issue: async () => {
-        throw new deliveryReceiptTestHooks.DeliveryReceiptError(
+        throw new DeliveryReceiptError(
           'failed-precondition',
           'Receipt validation failed.',
           { assetId: OWNER, lastLogs: ['sensitive'] },
@@ -924,8 +931,8 @@ test('receipt errors omit internal details from the public envelope', async () =
 test('malformed 64-byte cosigner secrets remain availability failures', () => {
   const malformed = bs58.encode(new Uint8Array(64).fill(1));
   assert.throws(
-    () => deliveryReceiptTestHooks.decodeCosigner(malformed),
-    (error: unknown) => error instanceof deliveryReceiptTestHooks.DeliveryReceiptError && error.code === 'unavailable',
+    () => decodeCosigner(malformed),
+    (error: unknown) => error instanceof DeliveryReceiptError && error.code === 'unavailable',
   );
 });
 
@@ -993,7 +1000,7 @@ test('existing assignment revalidates paused authority before returning', async 
   await assert.rejects(
     assign(context, runtime, 'box', () => 0),
     (error: unknown) =>
-      error instanceof deliveryReceiptTestHooks.DeliveryReceiptError && error.code === 'unavailable',
+      error instanceof DeliveryReceiptError && error.code === 'unavailable',
   );
 });
 
@@ -1152,11 +1159,21 @@ test('receipt route deadlines retain exactly one stalled issue or recovery opera
 test('receipt provider body cancellation wins a reader cancellation result', async () => {
   const controller = new AbortController();
   const reason = new Error('client disconnected during provider body');
-  const reading = deliveryReceiptTestHooks.readBoundedProviderResponse(
-    new Response(new ReadableStream<Uint8Array>({ start() {} })),
-    controller.signal,
-  );
+  let markReading!: () => void;
+  const bodyStarted = new Promise<void>((resolve) => { markReading = resolve; });
+  const connection = createConnection({
+    apiKey: 'test-key',
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({
+      pull() {
+        markReading();
+        return new Promise(() => {});
+      },
+    }, { highWaterMark: 0 })),
+    signal: controller.signal,
+  }, deliveryReceiptTestHooks.runtimeForDrop('card_nft_2'));
+  const reading = connection.getSlot();
 
+  await bodyStarted;
   controller.abort(reason);
 
   await assert.rejects(reading, (error: unknown) => error === reason);
@@ -1169,14 +1186,16 @@ test('receipt provider stream failures retain the temporary unavailable message'
       controller.error(streamFailure);
     },
   }));
+  const connection = createConnection({
+    apiKey: 'test-key',
+    fetch: async () => response,
+    signal: new AbortController().signal,
+  }, deliveryReceiptTestHooks.runtimeForDrop('card_nft_2'));
 
   await assert.rejects(
-    deliveryReceiptTestHooks.readBoundedProviderResponse(
-      response,
-      new AbortController().signal,
-    ),
+    connection.getSlot(),
     (error: unknown) =>
-      error instanceof deliveryReceiptTestHooks.DeliveryReceiptError &&
+      error instanceof DeliveryReceiptError &&
       error.code === 'unavailable' &&
       error.message === 'Receipt provider is temporarily unavailable.',
   );
@@ -1211,7 +1230,7 @@ test('receipt wallet binding preserves the error that wins an abort race', async
       'auth-user',
     ),
     (error: unknown) =>
-      error instanceof deliveryReceiptTestHooks.DeliveryReceiptError && error.code === 'unavailable',
+      error instanceof DeliveryReceiptError && error.code === 'unavailable',
   );
 
   const cancelledController = new AbortController();
@@ -1381,7 +1400,7 @@ test('receipt submission retry reconciliation distinguishes confirmed, expired, 
 test('receipt confirmation polling accepts rooted legacy signature statuses', async () => {
   for (const confirmations of [null, 2]) {
     let transactionLookups = 0;
-    const result = await deliveryReceiptTestHooks.waitForSignature({
+    const result = await waitForSignature({
       getSignatureStatuses: async () => ({
         context: { apiVersion: 'test', slot: 1 },
         value: [{ confirmations, err: null, slot: 1 }],
@@ -1631,7 +1650,7 @@ test('receipt batch cancellation after send preserves its deterministic submissi
       },
     }),
     (error: unknown) => {
-      assert.ok(error instanceof deliveryReceiptTestHooks.DeliveryReceiptError);
+      assert.ok(error instanceof DeliveryReceiptError);
       assert.equal(error.cause, reason);
       assert.equal((error.details as Record<string, unknown>).signature, submittedSignature);
       assert.equal((error.details as Record<string, unknown>).maybeSubmitted, true);
@@ -1826,7 +1845,7 @@ test('ambiguous receipt cancellation keeps its lease and unrelated errors win ab
   const ambiguousReason = new Error('receipt submission disconnected');
   ambiguousNative.context.signal = ambiguousController.signal;
   ambiguousNative.context.nowMs = Date.now();
-  const ambiguousError = new deliveryReceiptTestHooks.DeliveryReceiptError(
+  const ambiguousError = new DeliveryReceiptError(
     'aborted',
     'Receipt submission status is unknown.',
     { signature: SIGNATURE, maybeSubmitted: true },
@@ -1878,7 +1897,7 @@ test('ambiguous receipt cancellation keeps its lease and unrelated errors win ab
   });
   const domainController = new AbortController();
   const domainReason = new Error('late disconnect');
-  const domainError = new deliveryReceiptTestHooks.DeliveryReceiptError(
+  const domainError = new DeliveryReceiptError(
     'deadline-exceeded',
     'Provider deadline won.',
   );
@@ -2058,20 +2077,27 @@ test('existing assignment claim metadata is idempotently compatible without a bo
   }, expected, OWNER), true);
 });
 
-test('receipt issuance rejects committed on-chain configuration drift', () => {
+test('receipt issuance rejects committed on-chain configuration drift', async () => {
   const signer = Keypair.generate();
   const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
-  const decoded = decodeBoxMinterConfigData(configData(signer, runtime.dropId));
-  const onchain = {
-    admin: new PublicKey(decoded.admin),
-    coreCollection: new PublicKey(decoded.coreCollection),
-    decoded,
-  };
-  assert.doesNotThrow(() => deliveryReceiptTestHooks.assertOnchainConfigMatchesRuntime(runtime, onchain));
-  assert.throws(() => deliveryReceiptTestHooks.assertOnchainConfigMatchesRuntime(runtime, {
-    ...onchain,
-    decoded: { ...decoded, maxSupply: decoded.maxSupply + 1 },
-  }), /does not match/);
+  let maxSupply = runtime.maxSupply;
+  const connection = {
+    async getMultipleAccountsInfo() {
+      return [
+        {
+          data: Buffer.concat([Buffer.from([5]), Buffer.alloc(48)]),
+          owner: new PublicKey(MPL_CORE_PROGRAM_ADDRESS),
+        },
+        {
+          data: configData(signer, runtime.dropId, maxSupply),
+          owner: runtime.boxMinterProgramId,
+        },
+      ];
+    },
+  } as unknown as Connection;
+  await assert.doesNotReject(fetchOnchainConfig(connection, runtime));
+  maxSupply += 1;
+  await assert.rejects(fetchOnchainConfig(connection, runtime), /does not match/);
 });
 
 test('secure random assignment indices stay within the requested range', () => {

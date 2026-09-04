@@ -20,8 +20,8 @@ import {
   MPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
 import { API_DROPS } from '../src/dropConfig.ts';
-import { deliveryReceiptRuntime, deriveDeliveryPda } from '../src/deliveryReceipts.ts';
-import { sendAndConfirmSignedTransaction } from '../src/deliveryReceiptOnchain.ts';
+import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
+import { deriveDeliveryPda, sendAndConfirmSignedTransaction } from '../src/deliveryReceiptOnchain.ts';
 import { adminIrlRedeemPrepareTestHooks } from '../src/adminIrlRedeemPrepare.ts';
 import {
   buildAdminIrlRedeemDeliveryOrderDocument,
@@ -2178,6 +2178,38 @@ test('Admin IRL finalization verifies the exact ordered Core transfer', async ()
     collection,
     [Keypair.generate().publicKey.toBase58()],
   ), /asset mismatch/);
+
+  const secondAsset = Keypair.generate().publicKey;
+  const secondTransaction = confirmedTransaction(owner, [asset, secondAsset].map((id) => new TransactionInstruction({
+    programId: new PublicKey(MPL_CORE_PROGRAM_ADDRESS),
+    keys: [
+      { pubkey: id, isSigner: false, isWritable: true },
+      { pubkey: collection, isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: true, isWritable: true },
+      { pubkey: owner, isSigner: true, isWritable: false },
+      { pubkey: admin, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([14, 0]),
+  })));
+  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.verifyPackTransfer(
+    { getTransaction: (async () => secondTransaction) as Connection['getTransaction'] },
+    SIGNATURE,
+    owner.toBase58(),
+    admin.toBase58(),
+    collection,
+    [secondAsset.toBase58(), asset.toBase58()],
+  ), (error: unknown) => {
+    assert.ok(error instanceof AdminIrlRedeemFinalizeError);
+    assert.equal(error.code, 'failed-precondition');
+    assert.equal(error.message, 'Admin IRL redeem transfer asset mismatch.');
+    assert.deepEqual(error.details, {
+      expected: [secondAsset.toBase58(), asset.toBase58()],
+      got: [asset.toBase58(), secondAsset.toBase58()],
+    });
+    return true;
+  });
 });
 
 test('Admin IRL finalization verifies the exact Bubblegum receipt leaf transfer', async () => {
@@ -2230,4 +2262,75 @@ test('Admin IRL finalization verifies the exact Bubblegum receipt leaf transfer'
     collection,
     receipt.toBase58(),
   );
+
+  base.transaction.message.compiledInstructions.push(base.transaction.message.compiledInstructions[0]);
+  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.verifyCardTransfer(
+    connection,
+    runtime,
+    SIGNATURE,
+    owner.toBase58(),
+    admin.toBase58(),
+    collection,
+    receipt.toBase58(),
+  ), (error: unknown) => {
+    assert.ok(error instanceof AdminIrlRedeemFinalizeError);
+    assert.equal(error.code, 'failed-precondition');
+    assert.equal(error.message, 'Card receipt transfer asset mismatch.');
+    assert.deepEqual(error.details, { expected: receipt.toBase58(), got: [receipt.toBase58()] });
+    return true;
+  });
+
+  base.meta!.innerInstructions![0].instructions[0].data = '0';
+  await assert.rejects(() => adminIrlRedeemFinalizeTestHooks.verifyCardTransfer(
+    connection,
+    runtime,
+    SIGNATURE,
+    owner.toBase58(),
+    admin.toBase58(),
+    collection,
+    receipt.toBase58(),
+  ), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.ok(!(error instanceof AdminIrlRedeemFinalizeError));
+    assert.match(error.message, /Non-base58 character/);
+    return true;
+  });
+});
+
+test('Admin transfer verification preserves RPC errors and fee-payer errors', async () => {
+  const owner = new PublicKey(OWNER);
+  const admin = Keypair.generate().publicKey;
+  const collection = Keypair.generate().publicKey;
+  const receipt = Keypair.generate().publicKey.toBase58();
+  const runtime = { receiptsMerkleTree: Keypair.generate().publicKey } as Parameters<typeof adminIrlRedeemFinalizeTestHooks.verifyCardTransfer>[1];
+  for (const kind of ['pack', 'card'] as const) {
+    const verify = (connection: Pick<Connection, 'getTransaction'>) => kind === 'pack'
+      ? adminIrlRedeemFinalizeTestHooks.verifyPackTransfer(connection, SIGNATURE, OWNER, admin.toBase58(), collection, [receipt])
+      : adminIrlRedeemFinalizeTestHooks.verifyCardTransfer(connection, runtime, SIGNATURE, OWNER, admin.toBase58(), collection, receipt);
+    await assert.rejects(() => verify({
+      getTransaction: async (signature, config) => {
+        assert.equal(signature, SIGNATURE);
+        assert.deepEqual(config, { maxSupportedTransactionVersion: 0 });
+        return null;
+      },
+    }), {
+      name: 'AdminIrlRedeemFinalizeError',
+      code: 'unavailable',
+      message: 'Admin IRL redeem transfer transaction not found yet; retry shortly.',
+    });
+    const failed = confirmedTransaction(owner, []);
+    const transactionError = { InstructionError: [0, 'Custom'] };
+    failed.meta!.err = transactionError;
+    await assert.rejects(() => verify({ getTransaction: (async () => failed) as Connection['getTransaction'] }), {
+      code: 'failed-precondition',
+      message: 'Admin IRL redeem transfer transaction failed.',
+      details: { err: transactionError },
+    });
+    await assert.rejects(() => verify({ getTransaction: (async () => confirmedTransaction(admin, [])) as Connection['getTransaction'] }), {
+      code: 'failed-precondition',
+      message: kind === 'pack'
+        ? 'Admin IRL redeem transfer payer does not match requester.'
+        : 'Card receipt transfer payer does not match sender.',
+    });
+  }
 });
