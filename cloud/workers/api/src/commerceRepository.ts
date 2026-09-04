@@ -65,6 +65,7 @@ const DOCUMENT_COLUMN_NAMES = [
   'processed_at_nanos',
 ] as const;
 const DOCUMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.join(', ');
+const COMMERCE_READ_BATCH_SIZE = 50;
 const COMMERCE_AUTHORITY_SELECT = `SELECT authority_state, revision, documents_revision
   FROM commerce_authority_control WHERE singleton = 1`;
 const PENDING_READY_NOTIFICATION_INDEXES = Object.freeze({
@@ -390,6 +391,13 @@ function publicRecord<T extends CommerceDocumentData>(document: StoredDocument):
     updateTime: document.updateTime,
     version: document.version,
   });
+}
+
+function assertDocumentIdentity(key: CommerceDocumentKey, expected: CommerceDocumentKey): void {
+  if (
+    key.path !== expected.path || key.kind !== expected.kind ||
+    key.dropId !== expected.dropId || key.documentId !== expected.documentId
+  ) throw new CommerceRepositoryError('internal', 'Commerce document identity mismatch.');
 }
 
 function isTimestampLike(value: unknown): value is CommerceTimestamp {
@@ -915,6 +923,30 @@ export class CommerceUnitOfWork {
     return document ? publicRecord<T>(document) : null;
   }
 
+  async getMany<T extends CommerceDocumentData>(
+    keys: readonly CommerceDocumentKey[],
+  ): Promise<Array<CommerceDocumentRecord<T> | null>> {
+    this.assertOpen();
+    if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
+    const uniqueKeys = new Map<string, CommerceDocumentKey>();
+    for (const key of keys) {
+      const previous = uniqueKeys.get(key.path);
+      if (previous) assertDocumentIdentity(key, previous);
+      uniqueKeys.set(key.path, key);
+    }
+    const uncachedKeys = Array.from(uniqueKeys.values()).filter((key) =>
+      !this.original.has(key.path) || this.expectations.get(key.path)?.pathRevision === undefined);
+    for (let offset = 0; offset < uncachedKeys.length; offset += COMMERCE_READ_BATCH_SIZE) {
+      await this.loadBatch(uncachedKeys.slice(offset, offset + COMMERCE_READ_BATCH_SIZE));
+    }
+    return keys.map((key) => {
+      const document = this.original.get(key.path);
+      if (!document) return null;
+      assertDocumentIdentity(document.key, key);
+      return publicRecord<T>(document);
+    });
+  }
+
   async queryDeliveryOrdersByOwner<T extends CommerceDocumentData>(
     args: Readonly<{ owner: string; limit: number }>,
   ): Promise<CommerceDocumentRecord<T>[]> {
@@ -1170,11 +1202,50 @@ export class CommerceUnitOfWork {
     ) throw unavailableCommerceData();
     const row = documentResult.results[0];
     const document = row ? parseRow(row) : null;
-    if (document && (document.key.kind !== key.kind || document.key.dropId !== key.dropId || document.key.documentId !== key.documentId)) {
-      throw new CommerceRepositoryError('internal', 'Commerce document identity mismatch.');
-    }
+    if (document) assertDocumentIdentity(document.key, key);
     this.recordRead(key.path, document?.version ?? -1, document, pathRevision);
     return this.original.get(key.path) || null;
+  }
+
+  private async loadBatch(keys: readonly CommerceDocumentKey[]): Promise<void> {
+    const keysByPath = new Map(keys.map((key) => [key.path, key]));
+    const paths = Array.from(keysByPath.keys());
+    const placeholders = paths.map(() => '?').join(', ');
+    const results = await this.db.batch<Record<string, unknown>>([
+      this.db.prepare(`SELECT document_path, revision FROM commerce_document_path_revisions
+        WHERE document_path IN (${placeholders})`).bind(...paths),
+      this.db.prepare(`SELECT ${DOCUMENT_COLUMNS} FROM commerce_documents
+        WHERE document_path IN (${placeholders})`).bind(...paths),
+    ]);
+    if (!Array.isArray(results) || results.length !== 2) throw unavailableCommerceData();
+    for (const result of results) {
+      if (
+        !isObject(result) || result.success !== true ||
+        !Array.isArray(result.results) || !isObject(result.meta)
+      ) throw unavailableCommerceData();
+    }
+    const [revisionResult, documentResult] = results;
+    const revisions = new Map<string, number>();
+    for (const row of revisionResult.results) {
+      if (
+        !isObject(row) || typeof row.document_path !== 'string' ||
+        !keysByPath.has(row.document_path) || revisions.has(row.document_path) ||
+        typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0
+      ) throw unavailableCommerceData();
+      revisions.set(row.document_path, row.revision);
+    }
+    const documents = new Map<string, StoredDocument>();
+    for (const row of documentResult.results) {
+      const document = parseRow(row);
+      const key = keysByPath.get(document.key.path);
+      if (!key || documents.has(document.key.path)) throw unavailableCommerceData();
+      assertDocumentIdentity(document.key, key);
+      documents.set(key.path, document);
+    }
+    for (const key of keys) {
+      const document = documents.get(key.path) ?? null;
+      this.recordRead(key.path, document?.version ?? -1, document, revisions.get(key.path) ?? 0);
+    }
   }
 
   private recordRead(

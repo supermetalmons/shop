@@ -368,6 +368,52 @@ test('commerce repository reads and transaction guards run through the real D1 r
         .first<number>('documents_revision'),
     );
 
+    const bulkAbsentKey = commerceKeys.claimCode('RUNTIME-BULK-ABSENT-ABA');
+    const bulkAbsentUnit = await repository.begin(Date.parse('2026-01-01T00:00:14.000Z'));
+    assert.deepEqual(await bulkAbsentUnit.getMany([bulkAbsentKey, bulkAbsentKey]), [null, null]);
+    await repository.run(Date.parse('2026-01-01T00:00:15.000Z'), async (unit) => {
+      await unit.create(bulkAbsentKey, { value: 'temporary' });
+    });
+    await repository.run(Date.parse('2026-01-01T00:00:16.000Z'), async (unit) => {
+      await unit.delete(bulkAbsentKey, { mustExist: true });
+    });
+    await bulkAbsentUnit.create(bulkAbsentKey, { value: 'stale' });
+    await assert.rejects(
+      bulkAbsentUnit.commit(),
+      (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+    );
+    assert.equal(await repository.get(bulkAbsentKey), null);
+
+    const bulkExistingKey = commerceKeys.claimCode('RUNTIME-BULK-EXISTING-ABA');
+    await repository.run(Date.parse('2026-01-01T00:00:17.000Z'), async (unit) => {
+      await unit.create(bulkExistingKey, { value: 'original' });
+    });
+    const bulkExistingUnit = await repository.begin(Date.parse('2026-01-01T00:00:18.000Z'));
+    assert.deepEqual(
+      (await bulkExistingUnit.getMany([bulkExistingKey])).map((record) => record?.data),
+      [{ value: 'original' }],
+    );
+    await repository.run(Date.parse('2026-01-01T00:00:19.000Z'), async (unit) => {
+      await unit.delete(bulkExistingKey, { mustExist: true });
+    });
+    await repository.run(Date.parse('2026-01-01T00:00:20.000Z'), async (unit) => {
+      await unit.create(bulkExistingKey, { value: 'replacement' });
+    });
+    await assert.rejects(
+      bulkExistingUnit.commit(),
+      (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+    );
+    assert.deepEqual((await repository.get(bulkExistingKey))?.data, { value: 'replacement' });
+
+    const bulkUnrelatedUnit = await repository.begin(Date.parse('2026-01-01T00:00:21.000Z'));
+    await bulkUnrelatedUnit.getMany([bulkExistingKey, bulkAbsentKey]);
+    await repository.run(Date.parse('2026-01-01T00:00:22.000Z'), async (unit) => {
+      await unit.update(checkoutKey, { bulkReadProbe: 'unrelated' });
+    });
+    await bulkUnrelatedUnit.update(bulkExistingKey, { value: 'bulk-update' });
+    await bulkUnrelatedUnit.commit();
+    assert.deepEqual((await repository.get(bulkExistingKey))?.data, { value: 'bulk-update' });
+
     for (let offset = 0; offset < 128; offset += 32) {
       await env.COMMERCE_DB.batch([
         ...Array.from({ length: 32 }, (_, index) => insertDocument(
@@ -387,17 +433,64 @@ test('commerce repository reads and transaction guards run through the real D1 r
       ]);
     }
     let observedBatchResults: D1Result<Record<string, unknown>>[] | undefined;
+    const observedBatchSizes: number[] = [];
+    const observedPreparedSql: string[] = [];
     const latestObservedBatchResults = (): D1Result<Record<string, unknown>>[] | undefined =>
       observedBatchResults;
     const observedDb = {
-      prepare: (sql: string) => env.COMMERCE_DB.prepare(sql),
+      prepare: (sql: string) => {
+        observedPreparedSql.push(sql);
+        return env.COMMERCE_DB.prepare(sql);
+      },
       async batch<T>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
+        observedBatchSizes.push(statements.length);
         const results = await env.COMMERCE_DB.batch<T>(statements);
         observedBatchResults = results as D1Result<Record<string, unknown>>[];
         return results;
       },
     } as D1Database;
     const observedRepository = new D1CommerceRepository(observedDb);
+    const bulkUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:23.000Z'));
+    const cachedKey = commerceKeys.deliveryOrder('runtime', 'paused-127');
+    const cachedMissingKey = commerceKeys.deliveryOrder('runtime', 'bulk-cached-missing');
+    await bulkUnit.getMany([cachedKey, cachedMissingKey]);
+    observedBatchSizes.length = 0;
+    observedPreparedSql.length = 0;
+    const bulkMissingKey = commerceKeys.deliveryOrder('runtime', 'bulk-missing');
+    const bulkKeys = Array.from({ length: 101 }, (_, index) => index === 37
+      ? bulkMissingKey
+      : commerceKeys.deliveryOrder('runtime', `paused-${index}`));
+    const requestedKeys = [
+      cachedKey,
+      ...bulkKeys.toReversed(),
+      bulkMissingKey,
+      bulkKeys[20],
+      cachedMissingKey,
+      cachedKey,
+    ];
+    const bulkRecords = await bulkUnit.getMany(requestedKeys);
+    const missingPaths = new Set([cachedMissingKey.path, bulkMissingKey.path]);
+    assert.deepEqual(
+      bulkRecords.map((record) => record?.key.path ?? null),
+      requestedKeys.map((key) => missingPaths.has(key.path) ? null : key.path),
+    );
+    assert.deepEqual(observedBatchSizes, [2, 2, 2]);
+    assert.equal(observedPreparedSql.length, 6);
+    for (const sql of observedPreparedSql) {
+      assert.match(sql, /\bSELECT\b/i);
+      assert.match(sql, /\bdocument_path\s+IN\s*\(/i);
+    }
+    assert.equal(observedPreparedSql.filter((sql) => /FROM commerce_document_path_revisions\b/i.test(sql)).length, 3);
+    assert.equal(observedPreparedSql.filter((sql) => /FROM commerce_documents\b/i.test(sql)).length, 3);
+    assert.deepEqual(observedPreparedSql.map((sql) => sql.match(/\?/g)?.length ?? 0), [50, 50, 50, 50, 1, 1]);
+    observedBatchSizes.length = 0;
+    observedPreparedSql.length = 0;
+    assert.deepEqual(await bulkUnit.getMany(requestedKeys), bulkRecords);
+    assert.deepEqual(await bulkUnit.getMany([]), []);
+    assert.deepEqual(observedBatchSizes, []);
+    assert.deepEqual(observedPreparedSql, []);
+    await bulkUnit.commit();
+
     assert.deepEqual(await observedRepository.queryDeliveryRecoveryOrders('paused-owner'), []);
     const emptyRecoveryRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(emptyRecoveryRowsRead), true);

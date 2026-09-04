@@ -172,6 +172,14 @@ export async function readCommerceDocument(
   return commerceDocument(record);
 }
 
+export async function readCommerceDocuments(
+  transaction: CommerceUnitOfWork,
+  paths: readonly string[],
+): Promise<Array<CommerceDocument | null>> {
+  const records = await transaction.getMany(paths.map(commerceDocumentKey));
+  return records.map(commerceDocument);
+}
+
 async function applyCommerceWrite(
   transaction: CommerceUnitOfWork,
   write: CommerceWrite,

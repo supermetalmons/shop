@@ -609,6 +609,242 @@ test('transactional point reads batch documents with path revisions', async () =
   unit.rollback();
 });
 
+test('getMany preserves order, missing documents, duplicate isolation, and cached mutations', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const first = commerceKeys.claimCode('FIRST');
+  const second = commerceKeys.claimCode('SECOND');
+  const missing = commerceKeys.claimCode('MISSING');
+  seedCommerceDocuments(harness, [
+    { key: first, data: { nested: { value: 'first' } } },
+    { key: second, data: { nested: { value: 'second' } } },
+  ]);
+  const repository = new D1CommerceRepository(harness.db);
+  const unit = await repository.begin(10);
+  calls.length = 0;
+
+  const records = await unit.getMany<{ nested: { value: string } }>([second, missing, first, second, missing]);
+  assert.deepEqual(records.map((record) => record?.key.path ?? null), [second.path, null, first.path, second.path, null]);
+  assert.equal(calls.length, 1);
+  const call = calls[0];
+  if (call.method !== 'batch') assert.fail('Expected one batch for all requested paths.');
+  assert.equal(call.statements.length, 2);
+  assert.match(call.statements[0].sql, /FROM commerce_document_path_revisions\s+WHERE document_path IN/);
+  assert.match(call.statements[1].sql, /FROM commerce_documents\s+WHERE document_path IN/);
+  assert.deepEqual(call.statements.map((statement) => statement.sql.match(/\?/g)?.length), [3, 3]);
+  assert.notEqual(records[0], records[3]);
+  assert.notEqual(records[0]!.data, records[3]!.data);
+  records[0]!.data.nested.value = 'caller mutation';
+  assert.equal(records[3]!.data.nested.value, 'second');
+
+  calls.length = 0;
+  assert.deepEqual(await unit.getMany([]), []);
+  const cached = await unit.getMany<{ nested: { value: string } }>([missing, second, first]);
+  assert.equal(cached[0], null);
+  assert.equal(cached[1]!.data.nested.value, 'second');
+  assert.equal((await unit.get(first))?.key.path, first.path);
+  await unit.update(first, { status: 'used' });
+  await unit.create(missing, { status: 'unused' });
+  assert.equal(calls.length, 0);
+  await unit.commit();
+  assert.equal((await repository.get(first))?.data.status, 'used');
+  assert.equal((await repository.get(missing))?.data.status, 'unused');
+});
+
+test('getMany processes at most 50 unique uncached paths per sequential batch', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const keys = Array.from({ length: 52 }, (_, index) => commerceKeys.claimCode(`CHUNK-${index}`));
+  seedCommerceDocuments(harness, keys.map((key, index) => ({ key, data: { index } })));
+  let activeBatches = 0;
+  let maximumActiveBatches = 0;
+  const db = new Proxy(harness.db, {
+    get(target, property, receiver) {
+      if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+        activeBatches += 1;
+        maximumActiveBatches = Math.max(maximumActiveBatches, activeBatches);
+        try {
+          await Promise.resolve();
+          return await target.batch(statements);
+        } finally {
+          activeBatches -= 1;
+        }
+      };
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const unit = await new D1CommerceRepository(db).begin(10);
+  await unit.get(keys[51]);
+  calls.length = 0;
+  const requested = [keys[51], ...keys.slice(0, 51).reverse(), keys[0], keys[51]];
+  const records = await unit.getMany(requested);
+  assert.deepEqual(records.map((record) => record?.key.path), requested.map((key) => key.path));
+  assert.equal(maximumActiveBatches, 1);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => {
+    if (call.method !== 'batch') assert.fail('Expected bounded read batches.');
+    assert.equal(call.statements.length, 2);
+    return call.statements.map((statement) => statement.sql.match(/\?/g)?.length);
+  }), [[50, 50], [1, 1]]);
+  calls.length = 0;
+  await unit.getMany(requested);
+  assert.equal(calls.length, 0);
+  unit.rollback();
+});
+
+test('getMany enforces lifecycle rules for empty and cached reads', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.claimCode('LIFECYCLE');
+  seedCommerceDocument(harness, { key, data: { status: 'unused' } });
+  for (const action of ['write', 'rollback', 'commit'] as const) {
+    const unit = await repository.begin(10);
+    calls.length = 0;
+    assert.deepEqual(await unit.getMany([]), []);
+    assert.equal(calls.length, 0);
+    await unit.getMany([key]);
+    if (action === 'write') await unit.update(key, { status: 'used' });
+    else if (action === 'rollback') unit.rollback();
+    else await unit.commit();
+    calls.length = 0;
+    for (const requested of [[], [key]]) {
+      await assert.rejects(
+        unit.getMany(requested),
+        (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
+        action,
+      );
+    }
+    assert.equal(calls.length, 0);
+    unit.rollback();
+  }
+});
+
+test('getMany hydrates owner-query cache entries and detects intervening updates', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.deliveryOrder('drop', 'OWNER-CACHE');
+  await repository.run(10, async (unit) => unit.create(key, { owner: 'owner', status: 'prepared' }));
+  const hydrated = await repository.begin(11);
+  await hydrated.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
+  calls.length = 0;
+  assert.equal((await hydrated.getMany([key]))[0]?.data.status, 'prepared');
+  assert.equal(calls.length, 1);
+  const call = calls[0];
+  if (call.method !== 'batch') assert.fail('Expected a path-revision hydration batch.');
+  assert.match(call.statements[0].sql, /commerce_document_path_revisions/);
+  calls.length = 0;
+  await hydrated.getMany([key]);
+  await hydrated.get(key);
+  assert.equal(calls.length, 0);
+  await hydrated.commit();
+
+  const stale = await repository.begin(12);
+  await stale.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
+  await repository.run(13, async (unit) => unit.update(key, { status: 'ready_to_ship' }));
+  await assert.rejects(
+    stale.getMany([key]),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+  stale.rollback();
+});
+
+test('getMany retains owner-query guards when a cached row is deleted and recreated', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.deliveryOrder('drop', 'OWNER-ABA');
+  await repository.run(10, async (unit) => unit.create(key, { owner: 'owner', status: 'prepared' }));
+  const stale = await repository.begin(11);
+  await stale.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
+  await repository.run(12, async (unit) => unit.delete(key));
+  await repository.run(13, async (unit) => unit.create(key, { owner: 'owner', status: 'ready_to_ship' }));
+  assert.equal((await stale.getMany([key]))[0]?.data.status, 'prepared');
+  await assert.rejects(
+    stale.commit(),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+  );
+});
+
+test('getMany preserves point-read conflict guards for writes and read-only commits', async (context) => {
+  for (const readOnly of [false, true]) {
+    for (const change of ['update', 'recreate', 'insert', 'create-delete', 'unrelated'] as const) {
+      await context.test(`${readOnly ? 'read-only' : 'write'}: ${change}`, async () => {
+        const harness = createCommerceD1Harness();
+        const repository = new D1CommerceRepository(harness.db);
+        const key = commerceKeys.claimCode('OBSERVED');
+        const output = commerceKeys.claimCode('TRANSACTION-OUTPUT');
+        const existing = change !== 'insert' && change !== 'create-delete';
+        if (existing) await repository.run(10, async (unit) => unit.create(key, { value: 'original' }));
+        const stale = await repository.begin(11);
+        const [record] = await stale.getMany([key]);
+        assert.equal(record?.data.value ?? null, existing ? 'original' : null);
+        if (!readOnly) await stale.create(output, { status: 'unused' });
+
+        if (change === 'update') {
+          await repository.run(12, async (unit) => unit.update(key, { value: 'changed' }));
+        } else if (change === 'recreate') {
+          await repository.run(12, async (unit) => unit.delete(key));
+          await repository.run(13, async (unit) => unit.create(key, { value: 'replacement' }));
+          assert.equal((await repository.get(key))?.version, record!.version);
+        } else if (change === 'insert' || change === 'create-delete') {
+          await repository.run(12, async (unit) => unit.create(key, { value: 'new' }));
+          if (change === 'create-delete') await repository.run(13, async (unit) => unit.delete(key));
+        } else {
+          await repository.run(12, async (unit) => unit.create(commerceKeys.claimCode('UNRELATED'), { value: 'other' }));
+        }
+
+        if (change === 'unrelated') await stale.commit();
+        else await assert.rejects(
+          stale.commit(),
+          (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
+        );
+        assert.equal(Boolean(await repository.get(output)), !readOnly && change === 'unrelated');
+      });
+    }
+  }
+});
+
+test('getMany fails closed on malformed batch results', async (context) => {
+  const mutations: Record<string, (results: D1Result<Record<string, unknown>>[]) => unknown> = {
+    'missing result': (results) => results.slice(0, 1),
+    'failed revision result': (results) => [{ ...results[0], success: false }, results[1]],
+    'failed document result': (results) => [results[0], { ...results[1], success: false }],
+    'invalid revision metadata': (results) => [{ ...results[0], meta: null }, results[1]],
+    'invalid document rows': (results) => [results[0], { ...results[1], results: null }],
+    'negative revision': (results) => [{ ...results[0], results: [{ ...results[0].results[0], revision: -1 }] }, results[1]],
+    'fractional revision': (results) => [{ ...results[0], results: [{ ...results[0].results[0], revision: 1.5 }] }, results[1]],
+    'unexpected revision path': (results) => [{ ...results[0], results: [{ document_path: 'claimCodes/OTHER', revision: 1 }] }, results[1]],
+    'duplicate revision path': (results) => [{ ...results[0], results: [...results[0].results, ...results[0].results] }, results[1]],
+    'duplicate document path': (results) => [results[0], { ...results[1], results: [...results[1].results, ...results[1].results] }],
+    'unexpected document path': (results) => [results[0], {
+      ...results[1],
+      results: [{ ...results[1].results[0], document_path: 'claimCodes/OTHER', document_id: 'OTHER' }],
+    }],
+    'invalid document JSON': (results) => [results[0], {
+      ...results[1],
+      results: [{ ...results[1].results[0], document_json: '{' }],
+    }],
+  };
+  for (const [name, mutate] of Object.entries(mutations)) {
+    await context.test(name, async () => {
+      const harness = createCommerceD1Harness();
+      const key = commerceKeys.claimCode('EXISTING');
+      seedCommerceDocument(harness, { key, data: { status: 'unused' } });
+      const db = new Proxy(harness.db, {
+        get(target, property, receiver) {
+          if (property === 'batch') return async (statements: D1PreparedStatement[]) =>
+            mutate(await target.batch<Record<string, unknown>>(statements));
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const unit = await new D1CommerceRepository(db).begin(10);
+      await assert.rejects(unit.getMany([key]), isUnavailableCommerceError);
+      unit.rollback();
+    });
+  }
+});
+
 test('point-read writes allow concurrent changes to unrelated documents', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);

@@ -94,6 +94,7 @@ import {
   commerceTimestamp,
   createCommerceWrite,
   readCommerceDocument,
+  readCommerceDocuments,
   runCommerceWriteTransaction,
   updateCommerceWrite,
   type CommerceDocumentContext,
@@ -2125,14 +2126,12 @@ function markerConflict(reason?: string): AdminIrlRedeemFinalizeError {
 }
 
 async function markerResolution(
-  commerce: CommerceContext,
   transaction: CommerceUnitOfWork,
   dropId: string,
   selectionKey: string,
   boxes: ReadonlyArray<{ originalAssetId: string; receiptAssetId?: string }>,
 ): Promise<AdminIrlRedeemMarkerReuseResolution> {
-  const markers = await Promise.all(markerPaths(dropId, boxes).map((path) =>
-    readCommerceDocument(commerce, path, transaction)));
+  const markers = await readCommerceDocuments(transaction, markerPaths(dropId, boxes));
   return resolveAdminIrlRedeemMarkerReuse({
     dropId,
     selectionKey,
@@ -2196,7 +2195,6 @@ async function resolveExistingMarkerCompletion(
 ): Promise<{ completed: Record<string, unknown>; reference: MarkerReuseReference } | null> {
   const selectionKey = buildAdminIrlRedeemSelectionKey({ dropId: body.dropId, originalAssetIds: request.itemIds });
   const resolution = await markerResolution(
-    commerce,
     transaction,
     body.dropId,
     selectionKey,
@@ -2355,7 +2353,7 @@ async function publishPack(
       if (document.fields.status !== 'processing' || document.fields.processingAttemptId !== attemptId) {
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
       }
-      const resolution = await markerResolution(commerce, transaction, runtime.dropId, selectionKey, boxesWithCodes);
+      const resolution = await markerResolution(transaction, runtime.dropId, selectionKey, boxesWithCodes);
       if (resolution.status === 'conflict') throw markerConflict(resolution.reason);
       if (resolution.status === 'reuse') {
         const existingOrder = await readCommerceDocument(
@@ -2374,7 +2372,7 @@ async function publishPack(
       if (await readCommerceDocument(commerce, orderPath, transaction)) {
         return { result: { status: 'collision' as const } };
       }
-      const claims = await Promise.all(claimPaths.map((path) => readCommerceDocument(commerce, path, transaction)));
+      const claims = await readCommerceDocuments(transaction, claimPaths);
       if (claims.some(Boolean)) return { result: { status: 'collision' as const } };
       const order = buildAdminIrlRedeemDeliveryOrderDocument({
         dropId: runtime.dropId,
@@ -2481,9 +2479,9 @@ async function publishCard(
           marker.receiptAssetId !== card.receiptAssetId || Number(marker.figureId) !== card.figureId ||
           !Number.isSafeInteger(existingDeliveryId) || existingDeliveryId < 1 || marker.owner !== request.owner
         ) throw markerConflict('card receipt marker mismatch');
-        const [order, claim] = await Promise.all([
-          readCommerceDocument(commerce, dropDeliveryOrderPath(runtime.dropId, existingDeliveryId), transaction),
-          readCommerceDocument(commerce, `claimCodes/${existingClaimCode}`, transaction),
+        const [order, claim] = await readCommerceDocuments(transaction, [
+          dropDeliveryOrderPath(runtime.dropId, existingDeliveryId),
+          `claimCodes/${existingClaimCode}`,
         ]);
         if (!order || !claim) throw markerConflict('card receipt marker order or claim missing');
         const item = Array.isArray(order.fields.items) && isRecord(order.fields.items[0]) ? order.fields.items[0] : {};
@@ -2511,10 +2509,7 @@ async function publishCard(
         };
         return { result: { status: 'complete' as const, request: completed }, writes: [completeRequestWrite(document.path, completed)] };
       }
-      const [orderExists, claimExists] = await Promise.all([
-        readCommerceDocument(commerce, orderPath, transaction),
-        readCommerceDocument(commerce, claimPath, transaction),
-      ]);
+      const [orderExists, claimExists] = await readCommerceDocuments(transaction, [orderPath, claimPath]);
       if (orderExists || claimExists) return { result: { status: 'collision' as const } };
       const order = buildAdminIrlRedeemCardDeliveryOrderDocument({
         dropId: runtime.dropId,

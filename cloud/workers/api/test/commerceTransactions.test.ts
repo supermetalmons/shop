@@ -6,10 +6,59 @@ import {
   commerceKeys,
 } from '../src/commerceRepository.js';
 import {
+  readCommerceDocuments,
   retryCommerceConflicts,
   runCommerceTransaction,
 } from '../src/commerceTransactions.js';
-import { createCommerceD1Harness } from './commerceD1Harness.js';
+import {
+  createCommerceD1Harness,
+  seedCommerceDocuments,
+  type CommerceD1CallObservation,
+} from './commerceD1Harness.js';
+
+test('commerce document batches preserve caller order, missing documents, and document metadata', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const claimKey = commerceKeys.claimCode('BATCH');
+  const orderKey = commerceKeys.deliveryOrder('poncho', '7');
+  const missingKey = commerceKeys.claimCode('MISSING');
+  const updateTime = '2026-09-05T00:00:00.000Z';
+  seedCommerceDocuments(harness, [
+    { key: claimKey, data: { code: 'BATCH' }, updateTime },
+    { key: orderKey, data: { status: 'prepared' }, updateTime },
+  ]);
+  const transaction = await new D1CommerceRepository(harness.db).begin(100);
+  calls.length = 0;
+
+  const documents = await readCommerceDocuments(transaction, [
+    orderKey.path, missingKey.path, claimKey.path, orderKey.path,
+  ]);
+
+  const order = { fields: { status: 'prepared' }, id: '7', path: orderKey.path, updateTime };
+  assert.deepEqual(documents, [
+    order,
+    null,
+    { fields: { code: 'BATCH' }, id: 'BATCH', path: claimKey.path, updateTime },
+    order,
+  ]);
+  assert.equal(calls.length, 1);
+  transaction.rollback();
+});
+
+test('commerce document batches validate every path before issuing reads', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const transaction = await new D1CommerceRepository(harness.db).begin(100);
+  calls.length = 0;
+
+  await assert.rejects(
+    readCommerceDocuments(transaction, ['claimCodes/VALID', 'not-a-commerce-path']),
+    /Invalid commerce document path/,
+  );
+
+  assert.equal(calls.length, 0);
+  transaction.rollback();
+});
 
 test('commerce conflict retries use the standard schedule', async () => {
   const delays: number[] = [];
