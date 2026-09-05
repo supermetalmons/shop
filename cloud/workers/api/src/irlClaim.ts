@@ -71,12 +71,12 @@ import type {
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
 import {
-  createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
   raceReadWithSignal,
   readBoundedRequestJson,
 } from './boundedRequest.js';
+import { withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
 import {
@@ -1042,95 +1042,84 @@ export async function handleIrlClaimPrepare(
   overrides: Partial<IrlClaimDependencies> = {},
 ): Promise<IrlClaimResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  const metrics: IrlClaimMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
-    try {
-      return await dependencies.providerFetch(input, init);
-    } finally {
-      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = errorResponse(new IrlClaimError('invalid-argument', 'Method not allowed.'));
     response.headers.set('Allow', 'POST, OPTIONS');
-    return { response: new Response(response.body, { headers: response.headers, status: 405 }), metrics, authOutcome: 'rejected' };
+    return {
+      response: new Response(response.body, { headers: response.headers, status: 405 }),
+      metrics: { upstreamCalls: 0, providerDurationMs: 0 },
+      authOutcome: 'rejected',
+    };
   }
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.timeoutMs,
+  return withAuthenticatedRequest<IrlClaimResult>(request, {
+    opsDb: env.OPS_DB,
     timeoutMessage: 'IRL claim request timed out',
+    dependencies,
+  }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
+    const boundedRead = <T>(operation: Promise<T>) => raceReadWithSignal(operation, deadline.signal);
+    let identity: RequestIdentity | undefined;
+    let dropId: string | undefined;
+    try {
+      const body = await readRequestBody(request, deadline.signal);
+      identity = await authenticate();
+      const apiKey = String(env.HELIUS_API_KEY || '').trim();
+      if (!apiKey) {
+        throw new IrlClaimError('unavailable', 'IRL claims are temporarily unavailable.');
+      }
+      const response = await boundedRead(prepareClaim({
+        body,
+        identity,
+        env,
+        dependencies,
+        context: {
+          commerceDb: env.COMMERCE_DB,
+          repository: new D1CommerceRepository(env.COMMERCE_DB),
+          nowMs: dependencies.nowMs(),
+          providerFetch: trackedFetch,
+          signal: deadline.signal,
+        },
+        providerContext: {
+          apiKey,
+          providerFetch: trackedFetch,
+          signal: deadline.signal,
+        },
+      }));
+      dropId = response.dropId;
+      return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted', dropId };
+    } catch (error) {
+      if (isRequestCancellationError(request, error)) throw error;
+      let claimError: IrlClaimError;
+      let authOutcome: IrlClaimResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
+      if (error instanceof IrlClaimError) {
+        claimError = error;
+        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
+          authOutcome = 'rejected';
+        }
+      } else if (error instanceof RequestIdentityError) {
+        claimError = error.kind === 'invalid-token'
+          ? new IrlClaimError('unauthenticated', 'Authentication is required.')
+          : error.kind === 'provider-timeout'
+            ? new IrlClaimError('deadline-exceeded', 'IRL claim request timed out.')
+            : new IrlClaimError('unavailable', 'Authentication is temporarily unavailable.');
+        authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
+      } else if (error instanceof ProfileReadError) {
+        claimError = new IrlClaimError(error.code, error.message, error.details);
+        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
+          authOutcome = 'rejected';
+        }
+      } else if (deadline.timedOut()) {
+        claimError = new IrlClaimError('deadline-exceeded', 'IRL claim request timed out.');
+      } else {
+        console.error({
+          event: 'irl_claim_prepare_failed',
+          error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+        });
+        claimError = new IrlClaimError('internal', 'IRL claim preparation failed.');
+      }
+      return { response: errorResponse(claimError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
+    }
   });
-  const boundedRead = <T>(operation: Promise<T>) => raceReadWithSignal(operation, deadline.signal);
-  let identity: RequestIdentity | undefined;
-  let dropId: string | undefined;
-  try {
-    const body = await readRequestBody(request, deadline.signal);
-    identity = await dependencies.verifyIdentity(
-      request,
-      env.OPS_DB,
-      deadline.signal,
-      dependencies.nowMs(),
-    );
-    const apiKey = String(env.HELIUS_API_KEY || '').trim();
-    if (!apiKey) {
-      throw new IrlClaimError('unavailable', 'IRL claims are temporarily unavailable.');
-    }
-    const response = await boundedRead(prepareClaim({
-      body,
-      identity,
-      env,
-      dependencies,
-      context: {
-        commerceDb: env.COMMERCE_DB,
-        repository: new D1CommerceRepository(env.COMMERCE_DB),
-        nowMs: dependencies.nowMs(),
-        providerFetch: trackedFetch,
-        signal: deadline.signal,
-      },
-      providerContext: {
-        apiKey,
-        providerFetch: trackedFetch,
-        signal: deadline.signal,
-      },
-    }));
-    dropId = response.dropId;
-    return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted', dropId };
-  } catch (error) {
-    if (isRequestCancellationError(request, error)) throw error;
-    let claimError: IrlClaimError;
-    let authOutcome: IrlClaimResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-    if (error instanceof IrlClaimError) {
-      claimError = error;
-      if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-        authOutcome = 'rejected';
-      }
-    } else if (error instanceof RequestIdentityError) {
-      claimError = error.kind === 'invalid-token'
-        ? new IrlClaimError('unauthenticated', 'Authentication is required.')
-        : error.kind === 'provider-timeout'
-          ? new IrlClaimError('deadline-exceeded', 'IRL claim request timed out.')
-          : new IrlClaimError('unavailable', 'Authentication is temporarily unavailable.');
-      authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
-    } else if (error instanceof ProfileReadError) {
-      claimError = new IrlClaimError(error.code, error.message, error.details);
-      if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-        authOutcome = 'rejected';
-      }
-    } else if (deadline.timedOut()) {
-      claimError = new IrlClaimError('deadline-exceeded', 'IRL claim request timed out.');
-    } else {
-      console.error({
-        event: 'irl_claim_prepare_failed',
-        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
-      });
-      claimError = new IrlClaimError('internal', 'IRL claim preparation failed.');
-    }
-    return { response: errorResponse(claimError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
-  } finally {
-    deadline.dispose();
-  }
 }
 
 export const irlClaimTestHooks = {

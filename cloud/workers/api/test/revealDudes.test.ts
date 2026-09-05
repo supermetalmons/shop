@@ -643,6 +643,43 @@ test('reconciled stored submission completes durable bookkeeping before acknowle
   assert.equal(countCalls, 1);
 });
 
+test('reconciled submission persistence failures retain confirmed metrics and recovery details', async () => {
+  for (const source of ['stored', 'reservation'] as const) {
+    const existing = submission();
+    const deferred = createDeferredWorkCollector();
+    const result = await handleRevealDudes(
+      request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+      env(COSIGNER, queue(async () => {
+        assert.fail('existing submissions must not be enqueued again');
+      })),
+      deferred.defer,
+      dependencies({
+        loadRevealSubmission: async () => source === 'stored' ? existing : null,
+        reserveRevealSubmission: async () => ({ submission: existing, owned: false }),
+        reconcileRevealSubmission: async () => 'confirmed',
+        confirmRevealSubmission: async () => {
+          throw new Error('confirmation write unavailable');
+        },
+        countOnlineRevealPackStatus: async () => {
+          assert.fail('pack repair must wait for durable confirmation');
+        },
+        sendAndConfirmTransaction: async () => {
+          assert.fail('existing submissions must not be sent again');
+        },
+      }),
+    );
+
+    assert.equal(result.response.status, 503);
+    assert.equal(result.transactionOutcome, 'confirmed');
+    assert.equal(result.assignmentOutcome, source === 'stored' ? undefined : 'created');
+    assert.deepEqual((await result.response.json() as { error: { details: unknown } }).error.details, {
+      kind: 'reveal-submission-unknown',
+      submission: { signature: SIGNATURE, recentBlockhash: BLOCKHASH, dudeIds: [9] },
+    });
+    assert.equal(deferred.promises.length, 0);
+  }
+});
+
 test('failed or expired stored submissions are conditionally replaced after pending validation', async () => {
   for (const storedOutcome of ['failed', 'expired'] as const) {
     let pendingCalls = 0;
@@ -659,6 +696,9 @@ test('failed or expired stored submissions are conditionally replaced after pend
         reconcileRevealSubmission: async () => {
           if (storedOutcome === 'failed') throw new Error('persisted failures should not be reconciled');
           return storedOutcome;
+        },
+        failRevealSubmission: async () => {
+          assert.fail('stored submission replacement must not add a failure write');
         },
         loadPendingOpen: async () => {
           pendingCalls += 1;
@@ -688,6 +728,39 @@ test('failed or expired stored submissions are conditionally replaced after pend
     assert.deepEqual(await result.response.json(), { signature: replacementSignature, dudeIds: [9] });
     assert.equal(deferred.promises.length, 1);
     await deferred.drain();
+  }
+});
+
+test('reservation loser does not replace or persist a failed or expired winner', async () => {
+  for (const outcome of ['failed', 'expired'] as const) {
+    const winner = submission(outcome === 'failed' ? { status: 'failed' } : {});
+    let reservations = 0;
+    const deferred = createDeferredWorkCollector();
+    const result = await handleRevealDudes(
+      request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+      env(COSIGNER, queue(async () => {
+        assert.fail('the losing request must not enqueue another submission');
+      })),
+      deferred.defer,
+      dependencies({
+        reserveRevealSubmission: async () => {
+          reservations += 1;
+          return { submission: winner, owned: false };
+        },
+        reconcileRevealSubmission: async () => outcome,
+        failRevealSubmission: async () => {
+          assert.fail('the losing request must not persist failure');
+        },
+        sendAndConfirmTransaction: async () => {
+          assert.fail('the losing request must not broadcast');
+        },
+      }),
+    );
+
+    assert.equal(result.response.status, 409);
+    assert.equal(result.transactionOutcome, 'failed');
+    assert.equal(reservations, 1);
+    assert.equal(deferred.promises.length, 0);
   }
 });
 

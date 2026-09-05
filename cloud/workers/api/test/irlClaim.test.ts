@@ -540,21 +540,35 @@ test('IRL claim handler enforces exact bounded requests and method handling', as
   const wrongMethod = await handleIrlClaimPrepare(
     new Request(`https://api.mons.shop${IRL_CLAIM_PREPARE_PATH}`),
     env(),
-    dependencies(),
+    dependencies({
+      verifyIdentity: async () => assert.fail('invalid method reached authentication'),
+      nowMs: () => assert.fail('invalid method read the authentication clock'),
+    }),
   );
   assert.equal(wrongMethod.response.status, 405);
   assert.equal(wrongMethod.response.headers.get('allow'), 'POST, OPTIONS');
+  assert.deepEqual(wrongMethod.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
 
   for (const invalid of [
     new Request(`https://api.mons.shop${IRL_CLAIM_PREPARE_PATH}`, { method: 'POST', body: '{}' }),
     request({ owner: OWNER.toBase58(), code: '1234567890', extra: true }),
-    request({ owner: OWNER.toBase58(), code: 'abc1234567890' }),
     request({ owner: OWNER.toBase58(), code: '1'.repeat(2048) }),
   ]) {
-    const result = await handleIrlClaimPrepare(invalid, env(), dependencies());
+    const result = await handleIrlClaimPrepare(invalid, env(), dependencies({
+      verifyIdentity: async () => assert.fail('invalid request reached authentication'),
+      nowMs: () => assert.fail('invalid request read the authentication clock'),
+    }));
     assert.equal(result.response.status, 400);
     assert.equal(result.authOutcome, 'rejected');
   }
+
+  const invalidCode = await handleIrlClaimPrepare(
+    request({ owner: OWNER.toBase58(), code: 'abc1234567890' }),
+    env(),
+    dependencies(),
+  );
+  assert.equal(invalidCode.response.status, 400);
+  assert.equal(invalidCode.authOutcome, 'rejected');
 });
 
 test('IRL claim handler rejects authentication and wallet-session mismatches', async () => {

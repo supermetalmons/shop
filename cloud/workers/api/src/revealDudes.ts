@@ -98,6 +98,7 @@ import {
   type RevealSubmissionRecord,
   type RevealSubmissionStorageControl,
 } from './revealSubmissionD1.js';
+import { resolveRevealSubmission } from './revealSubmissionLifecycle.js';
 
 export const REVEAL_DUDES_PATH = '/boxes/reveal';
 
@@ -1614,40 +1615,34 @@ export async function processRevealBackgroundJobMessage(
       message.ack();
       return;
     }
-    if (submission.status === 'pending') {
-      const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
-      if (!apiKey) throw new Error('helius_api_key_not_configured');
-      const outcome = await dependencies.reconcileRevealSubmission(
-        { apiKey, fetch: dependencies.providerFetch, signal },
-        runtime,
-        submission,
-      );
-      if (outcome === 'unknown') {
-        retryRevealBackgroundJob(message, dependencies, job, 'transaction_status_unknown');
-        return;
-      }
-      if (outcome === 'failed' || outcome === 'expired') {
-        const status = await dependencies.failRevealSubmission(
-          revealContext,
+    const outcome = await resolveRevealSubmission({
+      submission,
+      reconcile: () => {
+        const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
+        if (!apiKey) throw new Error('helius_api_key_not_configured');
+        return dependencies.reconcileRevealSubmission(
+          { apiKey, fetch: dependencies.providerFetch, signal },
           runtime,
-          job.boxAssetId,
           submission,
         );
-        if (status !== 'confirmed') {
-          dependencies.log({
-            event: 'reveal_background_job_terminal',
-            dropId: job.dropId,
-            boxAssetId: job.boxAssetId,
-            signature: job.signature,
-            outcome: 'failed',
-          });
-          message.ack();
-          return;
-        }
-      }
-      if (outcome === 'confirmed') {
-        await dependencies.confirmRevealSubmission(revealContext, runtime, job.boxAssetId, submission);
-      }
+      },
+      confirm: () => dependencies.confirmRevealSubmission(revealContext, runtime, job.boxAssetId, submission),
+      fail: () => dependencies.failRevealSubmission(revealContext, runtime, job.boxAssetId, submission),
+    });
+    if (outcome === 'unknown') {
+      retryRevealBackgroundJob(message, dependencies, job, 'transaction_status_unknown');
+      return;
+    }
+    if (outcome !== 'confirmed') {
+      dependencies.log({
+        event: 'reveal_background_job_terminal',
+        dropId: job.dropId,
+        boxAssetId: job.boxAssetId,
+        signature: job.signature,
+        outcome: 'failed',
+      });
+      message.ack();
+      return;
     }
     await dependencies.countOnlineRevealPackStatus(
       revealContext,
@@ -1785,6 +1780,30 @@ export async function handleRevealDudes(
       dataDb: env.DATA_DB,
       opsDb: env.OPS_DB,
     };
+    const confirmedResult = (
+      submission: RevealSubmission,
+      signature: string,
+      confirmedAssignmentOutcome?: RevealDudesResult['assignmentOutcome'],
+    ): RevealDudesResult => {
+      transactionOutcome = 'confirmed';
+      scheduleConfirmedPackStatusRepair(
+        dependencies,
+        defer,
+        revealContext,
+        runtime,
+        resolvedBoxAssetId,
+        submission,
+      );
+      return {
+        response: jsonResponse({ signature, dudeIds: submission.dudeIds }, 200),
+        metrics,
+        authOutcome,
+        dropId,
+        boxAssetId,
+        ...(confirmedAssignmentOutcome ? { assignmentOutcome: confirmedAssignmentOutcome } : {}),
+        transactionOutcome,
+      };
+    };
     const sessionWallet = await raceReadWithSignal(
       resolveRequestWallet(
         identity,
@@ -1809,33 +1828,15 @@ export async function handleRevealDudes(
       throw new RevealDudesError('permission-denied', 'Owners only.');
     }
     if (storedSubmission?.status === 'confirmed') {
-      transactionOutcome = 'confirmed';
-      scheduleConfirmedPackStatusRepair(
-        dependencies,
-        defer,
-        revealContext,
-        runtime,
-        boxAssetId,
-        storedSubmission,
-      );
-      return {
-        response: jsonResponse({ signature: storedSubmission.signature, dudeIds: storedSubmission.dudeIds }, 200),
-        metrics,
-        authOutcome,
-        dropId,
-        boxAssetId,
-        transactionOutcome,
-      };
+      return confirmedResult(storedSubmission, storedSubmission.signature);
     }
     const apiKey = typeof env.HELIUS_API_KEY === 'string' ? env.HELIUS_API_KEY.trim() : '';
     if (!apiKey) throw new RevealDudesError('unavailable', 'Reveal provider is temporarily unavailable.');
     const providerContext: ProviderContext = { apiKey, fetch: meteredFetch, signal: deadline.signal };
-    let replaceSubmission: RevealSubmission | undefined;
-    if (storedSubmission) {
-      const outcome = storedSubmission.status === 'failed'
-        ? 'failed'
-        : await dependencies.reconcileRevealSubmission(providerContext, runtime, storedSubmission);
-      if (outcome === 'confirmed') {
+    const resolveExistingSubmission = (submission: RevealSubmission) => resolveRevealSubmission({
+      submission,
+      reconcile: () => dependencies.reconcileRevealSubmission(providerContext, runtime, submission),
+      confirm: async () => {
         transactionOutcome = 'confirmed';
         await finalizeConfirmedSubmissionForResponse(
           dependencies,
@@ -1844,24 +1845,15 @@ export async function handleRevealDudes(
           revealContext,
           runtime,
           resolvedBoxAssetId,
-          storedSubmission,
+          submission,
         );
-        scheduleConfirmedPackStatusRepair(
-          dependencies,
-          defer,
-          revealContext,
-          runtime,
-          boxAssetId,
-          storedSubmission,
-        );
-        return {
-          response: jsonResponse({ signature: storedSubmission.signature, dudeIds: storedSubmission.dudeIds }, 200),
-          metrics,
-          authOutcome,
-          dropId,
-          boxAssetId,
-          transactionOutcome,
-        };
+      },
+    });
+    let replaceSubmission: RevealSubmission | undefined;
+    if (storedSubmission) {
+      const outcome = await resolveExistingSubmission(storedSubmission);
+      if (outcome === 'confirmed') {
+        return confirmedResult(storedSubmission, storedSubmission.signature);
       }
       if (outcome === 'unknown') {
         transactionOutcome = 'unknown';
@@ -1965,67 +1957,16 @@ export async function handleRevealDudes(
       throw error;
     }
     if (reservation.submission.status === 'confirmed') {
-      transactionOutcome = 'confirmed';
-      scheduleConfirmedPackStatusRepair(
-        dependencies,
-        defer,
-        revealContext,
-        runtime,
-        boxAssetId,
-        reservation.submission,
-      );
-      return {
-        response: jsonResponse({
-          signature: reservation.submission.signature,
-          dudeIds: reservation.submission.dudeIds,
-        }, 200),
-        metrics,
-        authOutcome,
-        dropId,
-        boxAssetId,
-        assignmentOutcome,
-        transactionOutcome,
-      };
+      return confirmedResult(reservation.submission, reservation.submission.signature, assignmentOutcome);
     }
     if (!reservation.owned) {
       if (reservation.submission.owner !== owner.toBase58()) {
         authOutcome = 'rejected';
         throw new RevealDudesError('permission-denied', 'Owners only.');
       }
-      const outcome = reservation.submission.status === 'failed'
-        ? 'failed'
-        : await dependencies.reconcileRevealSubmission(providerContext, runtime, reservation.submission);
+      const outcome = await resolveExistingSubmission(reservation.submission);
       if (outcome === 'confirmed') {
-        transactionOutcome = 'confirmed';
-        await finalizeConfirmedSubmissionForResponse(
-          dependencies,
-          deadline,
-          defer,
-          revealContext,
-          runtime,
-          resolvedBoxAssetId,
-          reservation.submission,
-        );
-        scheduleConfirmedPackStatusRepair(
-          dependencies,
-          defer,
-          revealContext,
-          runtime,
-          resolvedBoxAssetId,
-          reservation.submission,
-        );
-        return {
-          response: jsonResponse({
-            signature: reservation.submission.signature,
-            dudeIds: reservation.submission.dudeIds,
-          }, 200),
-          metrics,
-          authOutcome,
-          dropId,
-          boxAssetId,
-          assignmentOutcome,
-          transactionOutcome,
-        };
+        return confirmedResult(reservation.submission, reservation.submission.signature, assignmentOutcome);
       }
       if (outcome === 'unknown') {
         transactionOutcome = 'unknown';
@@ -2131,23 +2072,7 @@ export async function handleRevealDudes(
       resolvedBoxAssetId,
       submission,
     );
-    scheduleConfirmedPackStatusRepair(
-      dependencies,
-      defer,
-      revealContext,
-      runtime,
-      boxAssetId,
-      submission,
-    );
-    return {
-      response: jsonResponse({ signature, dudeIds: submission.dudeIds }, 200),
-      metrics,
-      authOutcome,
-      dropId,
-      boxAssetId,
-      assignmentOutcome,
-      transactionOutcome,
-    };
+    return confirmedResult(submission, signature, assignmentOutcome);
   } catch (error) {
     rethrowDeferredWorkRegistrationError(error);
     if (isRequestCancellationError(request, error)) throw error;

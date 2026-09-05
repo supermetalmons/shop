@@ -30,14 +30,13 @@ import {
   verifyRequestIdentity,
   type RequestIdentity,
 } from './requestIdentity.js';
-import type { ProfileProviderFetch } from './boundedResponse.js';
 import {
-  createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
   raceReadWithSignal,
   runCriticalRequestOperation,
 } from './boundedRequest.js';
+import { withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
   isRecord,
   ProfileReadError,
@@ -577,95 +576,80 @@ export async function handleProfileWriteRequest(
 ): Promise<ProfileWriteResult> {
   const route = profileWriteOperations.get(path)!;
   const dependencies = { ...defaultDependencies, timeoutMs: route.timeoutMs, ...overrides };
-  const metrics: ProfileWriteMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
-    try {
-      return await dependencies.providerFetch(input, init);
-    } finally {
-      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = errorResponse(new ProfileReadError('invalid-argument', 405, 'Method not allowed.'));
     response.headers.set('Allow', 'POST, OPTIONS');
-    return { response, metrics, authOutcome: 'rejected' };
+    return { response, metrics: { upstreamCalls: 0, providerDurationMs: 0 }, authOutcome: 'rejected' };
   }
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.timeoutMs,
+  return withAuthenticatedRequest<ProfileWriteResult>(request, {
+    opsDb: env.OPS_DB,
     timeoutMessage: 'Profile request timed out',
-  });
-  let identity: RequestIdentity | undefined;
-  try {
-    const operation = await route.prepare(request, deadline.signal);
-    identity = await dependencies.verifyIdentity(
-      request,
-      env.OPS_DB,
-      deadline.signal,
-      dependencies.nowMs(),
-    );
-    if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
-      throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
-    }
-    const common = {
-      nowMs: dependencies.nowMs(),
-      pauseForRatePoll: dependencies.pauseForRatePoll,
-      providerFetch: trackedFetch,
-      repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
-      requestSignal: request.signal,
-      signal: deadline.signal,
-    };
-    const wallet = await raceReadWithSignal(resolveRequestWallet(identity, (uid) => loadSessionWallet({
-      db: env.OPS_DB,
-      resolveD1AuthWalletBinding: dependencies.resolveD1AuthWalletBinding,
-      signal: deadline.signal,
-      uid,
-    })), deadline.signal);
-    const payload = await runCriticalRequestOperation(() => Promise.resolve().then(() => {
-      deadline.signal.throwIfAborted();
-      return operation({ wallet, common, env, dependencies });
-    }), {
-      deadline,
-      defer: dependencies.defer,
-    });
-    return { response: jsonResponse(payload, 200), metrics, authOutcome: 'accepted' };
-  } catch (error) {
-    rethrowDeferredWorkRegistrationError(error);
-    if (isRequestCancellationError(request, error)) throw error;
-    let profileError: ProfileReadError;
-    let authOutcome: ProfileWriteResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-    if (error instanceof ProfileReadError) {
-      profileError = error;
-      if (error instanceof ShipStationProfileError) {
-        authOutcome = 'provider-failure';
-      } else if (
-        error.code === 'unauthenticated' ||
-        error.code === 'permission-denied' ||
-        error.code === 'invalid-argument' ||
-        error.code === 'not-found' ||
-        error.code === 'aborted' ||
-        error.code === 'failed-precondition'
-      ) {
-        authOutcome = 'rejected';
+    dependencies,
+  }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
+    let identity: RequestIdentity | undefined;
+    try {
+      const operation = await route.prepare(request, deadline.signal);
+      identity = await authenticate();
+      if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
+        throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
       }
-    } else if (error instanceof RequestIdentityError) {
-      if (error.kind === 'invalid-token') {
-        profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
-        authOutcome = 'rejected';
-      } else if (error.kind === 'provider-timeout') {
+      const common = {
+        nowMs: dependencies.nowMs(),
+        pauseForRatePoll: dependencies.pauseForRatePoll,
+        providerFetch: trackedFetch,
+        repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
+        requestSignal: request.signal,
+        signal: deadline.signal,
+      };
+      const wallet = await raceReadWithSignal(resolveRequestWallet(identity, (uid) => loadSessionWallet({
+        db: env.OPS_DB,
+        resolveD1AuthWalletBinding: dependencies.resolveD1AuthWalletBinding,
+        signal: deadline.signal,
+        uid,
+      })), deadline.signal);
+      const payload = await runCriticalRequestOperation(() => Promise.resolve().then(() => {
+        deadline.signal.throwIfAborted();
+        return operation({ wallet, common, env, dependencies });
+      }), {
+        deadline,
+        defer: dependencies.defer,
+      });
+      return { response: jsonResponse(payload, 200), metrics, authOutcome: 'accepted' };
+    } catch (error) {
+      rethrowDeferredWorkRegistrationError(error);
+      if (isRequestCancellationError(request, error)) throw error;
+      let profileError: ProfileReadError;
+      let authOutcome: ProfileWriteResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
+      if (error instanceof ProfileReadError) {
+        profileError = error;
+        if (error instanceof ShipStationProfileError) {
+          authOutcome = 'provider-failure';
+        } else if (
+          error.code === 'unauthenticated' ||
+          error.code === 'permission-denied' ||
+          error.code === 'invalid-argument' ||
+          error.code === 'not-found' ||
+          error.code === 'aborted' ||
+          error.code === 'failed-precondition'
+        ) {
+          authOutcome = 'rejected';
+        }
+      } else if (error instanceof RequestIdentityError) {
+        if (error.kind === 'invalid-token') {
+          profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
+          authOutcome = 'rejected';
+        } else if (error.kind === 'provider-timeout') {
+          profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
+        } else {
+          profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
+        }
+      } else if (deadline.timedOut()) {
         profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
       } else {
-        profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
+        profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
       }
-    } else if (deadline.timedOut()) {
-      profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
-    } else {
-      profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
+      return { response: errorResponse(profileError), metrics, authOutcome };
     }
-    return { response: errorResponse(profileError), metrics, authOutcome };
-  } finally {
-    deadline.dispose();
-  }
+  });
 }

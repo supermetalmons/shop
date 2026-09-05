@@ -786,7 +786,10 @@ test('shipment route rejects mismatched sessions and malformed requests before s
       tokenRequest(PROFILE_SHIPMENTS_PATH, body),
       { COMMERCE_DB: createCommerceD1() },
       PROFILE_SHIPMENTS_PATH,
-      legacyFirestoreProfileDependencies(async () => assert.fail('invalid request reached provider')),
+      legacyFirestoreProfileDependencies(async () => assert.fail('invalid request reached provider'), {
+        verifyIdentity: async () => assert.fail('invalid request reached authentication'),
+        nowMs: () => assert.fail('invalid request read the authentication clock'),
+      }),
     );
     assert.equal(invalid.response.status, 400);
     assert.equal((await invalid.response.json() as { error: { code: string } }).error.code, 'invalid-argument');

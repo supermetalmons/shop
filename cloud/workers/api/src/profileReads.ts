@@ -52,12 +52,12 @@ import {
   type ProfileProviderFetch,
 } from './boundedResponse.js';
 import {
-  createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
   raceReadWithSignal,
   readBoundedRequestJson,
 } from './boundedRequest.js';
+import { withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { apiErrorBody, jsonResponse } from './httpResponse.js';
 import {
@@ -768,215 +768,200 @@ export async function handleProfileReadRequest(
   overrides: Partial<ProfileReadDependencies> = {},
 ): Promise<ProfileReadResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  const metrics: ProfileReadMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
-    try {
-      return await dependencies.providerFetch(input, init);
-    } finally {
-      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = errorResponse(new ProfileReadError('invalid-argument', 405, 'Method not allowed.'));
     response.headers.set('Allow', PROFILE_CORS_ALLOW_METHODS);
     return {
       response,
-      metrics,
+      metrics: { upstreamCalls: 0, providerDurationMs: 0 },
       authOutcome: 'rejected',
     };
   }
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.timeoutMs,
+  return withAuthenticatedRequest<ProfileReadResult>(request, {
+    opsDb: env.OPS_DB,
     timeoutMessage: 'Profile request timed out',
-  });
-  const boundedRead = <T>(operation: Promise<T>) => raceReadWithSignal(operation, deadline.signal);
-  let identity: RequestIdentity;
-  try {
-    const requestBody = await parseExactRequestBody(request, path, deadline.signal);
-    identity = await dependencies.verifyIdentity(
-      request,
-      env.OPS_DB,
-      deadline.signal,
-      dependencies.nowMs(),
-    );
-    if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
-      throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
-    }
-    const common = {
-      repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
-      nowMs: dependencies.nowMs(),
-      providerFetch: trackedFetch,
-      signal: deadline.signal,
-    };
-    const sessionCommon = {
-      db: env.OPS_DB,
-      resolveD1AuthWalletBinding: dependencies.resolveD1AuthWalletBinding,
-      signal: deadline.signal,
-    };
-    if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
-      const owners = identity.kind === 'staff-wallet'
-        ? [identity.wallet]
-        : [stripeCheckoutAnonymousOwnerId(identity.authSubject)];
-      const orders = await boundedRead(loadDeliveryHistory({ ...common, owners }));
-      return { response: jsonResponse({ orders }, 200), metrics, authOutcome: 'accepted' };
-    }
-    if (path === PROFILE_STATE_PATH) {
-      const wallet = await boundedRead(resolveRequestWallet(
-        identity,
-        (uid) => loadOptionalSessionWallet({ ...sessionCommon, uid }),
-      ));
-      if (!wallet) {
+    dependencies,
+  }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
+    const boundedRead = <T>(operation: Promise<T>) => raceReadWithSignal(operation, deadline.signal);
+    let identity: RequestIdentity;
+    try {
+      const requestBody = await parseExactRequestBody(request, path, deadline.signal);
+      identity = await authenticate();
+      if (isStaffOnlyApiPath(path) && !isStaffRequestIdentity(identity)) {
+        throw new ProfileReadError('unauthenticated', 401, 'Staff wallet authentication is required.');
+      }
+      const common = {
+        repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
+        nowMs: dependencies.nowMs(),
+        providerFetch: trackedFetch,
+        signal: deadline.signal,
+      };
+      const sessionCommon = {
+        db: env.OPS_DB,
+        resolveD1AuthWalletBinding: dependencies.resolveD1AuthWalletBinding,
+        signal: deadline.signal,
+      };
+      if (path === ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH) {
+        const owners = identity.kind === 'staff-wallet'
+          ? [identity.wallet]
+          : [stripeCheckoutAnonymousOwnerId(identity.authSubject)];
+        const orders = await boundedRead(loadDeliveryHistory({ ...common, owners }));
+        return { response: jsonResponse({ orders }, 200), metrics, authOutcome: 'accepted' };
+      }
+      if (path === PROFILE_STATE_PATH) {
+        const wallet = await boundedRead(resolveRequestWallet(
+          identity,
+          (uid) => loadOptionalSessionWallet({ ...sessionCommon, uid }),
+        ));
+        if (!wallet) {
+          const response: GetProfileStateResponse = {
+            responseMode: 'profile-state',
+            sessionWallet: null,
+            profile: null,
+            shipments: null,
+          };
+          return {
+            response: jsonResponse(response, 200),
+            metrics,
+            authOutcome: 'accepted',
+            profileStateSections: { profile: 'not-applicable', shipments: 'not-applicable' },
+          };
+        }
+        const [profileResult, shipmentsResult] = await Promise.allSettled([
+          boundedRead(loadProfileStateProfile(
+            { ...common, db: env.OPS_DB, ownerWallet: wallet },
+            dependencies.loadProfileEmail,
+          )),
+          boundedRead(loadDeliveryHistory({ ...common, owners: [wallet] })),
+        ]);
+        const profile = profileStateSection(profileResult, request, deadline.timeoutSignal);
+        const shipments = profileStateSection(shipmentsResult, request, deadline.timeoutSignal);
         const response: GetProfileStateResponse = {
           responseMode: 'profile-state',
-          sessionWallet: null,
-          profile: null,
-          shipments: null,
+          sessionWallet: wallet,
+          profile,
+          shipments,
         };
         return {
           response: jsonResponse(response, 200),
           metrics,
           authOutcome: 'accepted',
-          profileStateSections: { profile: 'not-applicable', shipments: 'not-applicable' },
+          profileStateSections: { profile: profile.status, shipments: shipments.status },
         };
       }
-      const [profileResult, shipmentsResult] = await Promise.allSettled([
-        boundedRead(loadProfileStateProfile(
-          { ...common, db: env.OPS_DB, ownerWallet: wallet },
-          dependencies.loadProfileEmail,
-        )),
-        boundedRead(loadDeliveryHistory({ ...common, owners: [wallet] })),
-      ]);
-      const profile = profileStateSection(profileResult, request, deadline.timeoutSignal);
-      const shipments = profileStateSection(shipmentsResult, request, deadline.timeoutSignal);
-      const response: GetProfileStateResponse = {
-        responseMode: 'profile-state',
-        sessionWallet: wallet,
-        profile,
-        shipments,
-      };
-      return {
-        response: jsonResponse(response, 200),
-        metrics,
-        authOutcome: 'accepted',
-        profileStateSections: { profile: profile.status, shipments: shipments.status },
-      };
-    }
-    if (path === ADMIN_DELIVERY_ORDER_OWNERS_PATH) {
-      const wallet = await boundedRead(resolveRequestWallet(
-        identity,
-        (uid) => loadSessionWallet({ ...sessionCommon, uid }),
-      ));
-      if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
-        throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
-      }
-      return {
-        response: jsonResponse(await boundedRead(loadDeliveryOrderOwners({
-          ...common,
-          cursor: typeof requestBody.cursor === 'string' ? requestBody.cursor : undefined,
-          pageSize: requestBody.pageSize,
-        })), 200),
-        metrics,
-        authOutcome: 'accepted',
-      };
-    }
-    if (path === FULFILLMENT_ORDERS_PATH || path === FULFILLMENT_MANUAL_REVIEW_PATH) {
-      const dropId = requestBody.dropId!;
-      const wallet = await boundedRead(resolveRequestWallet(
-        identity,
-        (uid) => loadSessionWallet({ ...sessionCommon, uid }),
-      ));
-      const access = fulfillmentAccess(wallet, dropId);
-      if (path === FULFILLMENT_ORDERS_PATH) {
-        const addressSecret = typeof env.ADDRESS_DECRYPTION_SECRET === 'string' ? env.ADDRESS_DECRYPTION_SECRET : '';
+      if (path === ADMIN_DELIVERY_ORDER_OWNERS_PATH) {
+        const wallet = await boundedRead(resolveRequestWallet(
+          identity,
+          (uid) => loadSessionWallet({ ...sessionCommon, uid }),
+        ));
+        if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
+          throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
+        }
         return {
-          response: jsonResponse(await boundedRead(loadFulfillmentOrders({
+          response: jsonResponse(await boundedRead(loadDeliveryOrderOwners({
             ...common,
-            addressSecret,
-            canViewSensitiveAddress: access.canViewSensitiveAddress,
-            cursor: requestBody.cursor && typeof requestBody.cursor === 'object'
-              ? requestBody.cursor as FulfillmentOrdersCursor
-              : null,
-            dropId,
-            limit: requestBody.limit ?? FULFILLMENT_ORDER_LIMIT,
+            cursor: typeof requestBody.cursor === 'string' ? requestBody.cursor : undefined,
+            pageSize: requestBody.pageSize,
           })), 200),
           metrics,
           authOutcome: 'accepted',
         };
       }
+      if (path === FULFILLMENT_ORDERS_PATH || path === FULFILLMENT_MANUAL_REVIEW_PATH) {
+        const dropId = requestBody.dropId!;
+        const wallet = await boundedRead(resolveRequestWallet(
+          identity,
+          (uid) => loadSessionWallet({ ...sessionCommon, uid }),
+        ));
+        const access = fulfillmentAccess(wallet, dropId);
+        if (path === FULFILLMENT_ORDERS_PATH) {
+          const addressSecret = typeof env.ADDRESS_DECRYPTION_SECRET === 'string' ? env.ADDRESS_DECRYPTION_SECRET : '';
+          return {
+            response: jsonResponse(await boundedRead(loadFulfillmentOrders({
+              ...common,
+              addressSecret,
+              canViewSensitiveAddress: access.canViewSensitiveAddress,
+              cursor: requestBody.cursor && typeof requestBody.cursor === 'object'
+                ? requestBody.cursor as FulfillmentOrdersCursor
+                : null,
+              dropId,
+              limit: requestBody.limit ?? FULFILLMENT_ORDER_LIMIT,
+            })), 200),
+            metrics,
+            authOutcome: 'accepted',
+          };
+        }
+        return {
+          response: jsonResponse(await (async () => {
+            const documents = await boundedRead(loadManualReviewDocuments({ ...common, dropId }));
+            return manualReviewFromDocuments({
+              canViewSensitiveAddress: access.canViewSensitiveAddress,
+              documents,
+              dropId,
+              env,
+              providerFetch: trackedFetch,
+              request,
+              signal: deadline.signal,
+            });
+          })(), 200),
+          metrics,
+          authOutcome: 'accepted',
+        };
+      }
+      const ownerWallet = requestBody.ownerWallet!;
+      const wallet = await boundedRead(resolveRequestWallet(
+        identity,
+        (uid) => loadSessionWallet({ ...sessionCommon, uid }),
+      ));
+      if (path === PROFILE_SHIPMENTS_PATH) {
+        if (wallet !== ownerWallet) throw new ProfileReadError('unauthenticated', 401, 'Wallet session changed. Sign in again.');
+        const orders = await boundedRead(loadDeliveryHistory({ ...common, owners: [ownerWallet] }));
+        const response: GetProfileShipmentsResponse = { responseMode: 'shipments', wallet, orders };
+        return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted' };
+      }
+      if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
+        throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
+      }
       return {
-        response: jsonResponse(await (async () => {
-          const documents = await boundedRead(loadManualReviewDocuments({ ...common, dropId }));
-          return manualReviewFromDocuments({
-            canViewSensitiveAddress: access.canViewSensitiveAddress,
-            documents,
-            dropId,
-            env,
-            providerFetch: trackedFetch,
-            request,
-            signal: deadline.signal,
-          });
-        })(), 200),
+        response: jsonResponse(await boundedRead(loadAdminProfile(
+          { ...common, db: env.OPS_DB, ownerWallet },
+          dependencies.loadProfileEmail,
+          () => loadDeliveryHistory({ ...common, owners: [ownerWallet] }),
+        )), 200),
         metrics,
         authOutcome: 'accepted',
       };
-    }
-    const ownerWallet = requestBody.ownerWallet!;
-    const wallet = await boundedRead(resolveRequestWallet(
-      identity,
-      (uid) => loadSessionWallet({ ...sessionCommon, uid }),
-    ));
-    if (path === PROFILE_SHIPMENTS_PATH) {
-      if (wallet !== ownerWallet) throw new ProfileReadError('unauthenticated', 401, 'Wallet session changed. Sign in again.');
-      const orders = await boundedRead(loadDeliveryHistory({ ...common, owners: [ownerWallet] }));
-      const response: GetProfileShipmentsResponse = { responseMode: 'shipments', wallet, orders };
-      return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted' };
-    }
-    if (!walletHasAdminAccess(wallet, ADMIN_WALLETS)) {
-      throw new ProfileReadError('permission-denied', 403, 'Admin access denied.');
-    }
-    return {
-      response: jsonResponse(await boundedRead(loadAdminProfile(
-        { ...common, db: env.OPS_DB, ownerWallet },
-        dependencies.loadProfileEmail,
-        () => loadDeliveryHistory({ ...common, owners: [ownerWallet] }),
-      )), 200),
-      metrics,
-      authOutcome: 'accepted',
-    };
-  } catch (error) {
-    if (isRequestCancellationError(request, error)) throw error;
-    let profileError: ProfileReadError;
-    let authOutcome: ProfileReadResult['authOutcome'] = identity! ? 'provider-failure' : 'rejected';
-    if (error instanceof ProfileReadError) {
-      profileError = error;
-      if (error.code === 'unauthenticated' || error.code === 'permission-denied' || error.code === 'invalid-argument') {
-        authOutcome = 'rejected';
-      }
-    } else if (error instanceof RequestIdentityError) {
-      if (error.kind === 'invalid-token') {
-        profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
-        authOutcome = 'rejected';
-      } else if (error.kind === 'provider-timeout') {
+    } catch (error) {
+      if (isRequestCancellationError(request, error)) throw error;
+      let profileError: ProfileReadError;
+      let authOutcome: ProfileReadResult['authOutcome'] = identity! ? 'provider-failure' : 'rejected';
+      if (error instanceof ProfileReadError) {
+        profileError = error;
+        if (error.code === 'unauthenticated' || error.code === 'permission-denied' || error.code === 'invalid-argument') {
+          authOutcome = 'rejected';
+        }
+      } else if (error instanceof RequestIdentityError) {
+        if (error.kind === 'invalid-token') {
+          profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
+          authOutcome = 'rejected';
+        } else if (error.kind === 'provider-timeout') {
+          profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
+          authOutcome = 'provider-failure';
+        } else {
+          profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
+          authOutcome = 'provider-failure';
+        }
+      } else if (deadline.timedOut()) {
         profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
-        authOutcome = 'provider-failure';
+        authOutcome = identity! ? 'provider-failure' : 'rejected';
       } else {
-        profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
-        authOutcome = 'provider-failure';
+        profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
+        authOutcome = identity! ? 'provider-failure' : 'rejected';
       }
-    } else if (deadline.timedOut()) {
-      profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
-      authOutcome = identity! ? 'provider-failure' : 'rejected';
-    } else {
-      profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
-      authOutcome = identity! ? 'provider-failure' : 'rejected';
+      return { response: errorResponse(profileError), metrics, authOutcome };
     }
-    return { response: errorResponse(profileError), metrics, authOutcome };
-  } finally {
-    deadline.dispose();
-  }
+  });
 }
 
 export const profileReadTestHooks = {
