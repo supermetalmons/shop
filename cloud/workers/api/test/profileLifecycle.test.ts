@@ -221,6 +221,10 @@ function legacyFirestoreFixtureRepository(harness: LegacyFirestoreCommerceHarnes
       const unit = {
         queryDeliveryOrdersByOwner: async (args: { owner: string; limit: number }) => harness.orders.map(record)
           .filter((entry) => entry.data.owner === args.owner).slice(0, args.limit),
+        getMany: async (keys: readonly { path: string }[]) => keys.map((key) => {
+          const entry = harness.orders.find((order) => order.name === `${DOCUMENT_PREFIX}${key.path}`);
+          return entry ? record(entry) : null;
+        }),
         update: async (key: { path: string }, updates: Record<string, CommerceUpdateValue>) => {
           staged.set(key.path, updates);
         },
@@ -620,12 +624,16 @@ test('anonymous principals cannot bind an allowlisted staff wallet', async () =>
 
 test('profile reconciliation merges multiple session-validated batches and is idempotent', async () => {
   const identityHarness = new LegacyFirestoreCommerceHarness();
+  let commerceCalls = 0;
   let authorityReads = 0;
   let ownerQueryBatches = 0;
   let unrelatedInjected = false;
   let phantomInjected = false;
   let commerceHarness: ReturnType<typeof createCommerceD1Harness>;
   commerceHarness = createCommerceD1Harness({
+    observeCall: () => {
+      commerceCalls += 1;
+    },
     observeStatement: ({ method, sql }) => {
       const normalized = sql.replace(/\s+/g, ' ').trim();
       if (
@@ -693,6 +701,7 @@ test('profile reconciliation merges multiple session-validated batches and is id
     },
   });
   const d1Env = { ...env(), COMMERCE_DB: commerceHarness.db, OPS_DB: {} as D1Database };
+  commerceCalls = 0;
   const first = await handleProfileLifecycleRequest(
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
     d1Env,
@@ -701,6 +710,7 @@ test('profile reconciliation merges multiple session-validated batches and is id
   );
   assert.equal(first.response.status, 200);
   assert.deepEqual(await first.response.json(), { mergedStripeDeliveryOrders: 451 });
+  assert.ok(commerceCalls <= 25, `Expected at most 25 D1 calls, received ${commerceCalls}`);
   assert.equal(authorityReads, 3);
   assert.equal(ownerQueryBatches, 3);
   assert.equal(unrelatedInjected, true);
