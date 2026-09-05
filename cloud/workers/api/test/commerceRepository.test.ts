@@ -7,6 +7,7 @@ import {
   commerceFieldValue,
   commerceKeys,
   d1RetryCount,
+  type CommerceDocumentData,
 } from '../src/commerceRepository.ts';
 import {
   type CommerceD1BatchObservation,
@@ -335,6 +336,83 @@ test('native reconciliation queries are bounded, ordered, and duplicate-free', a
   assert.deepEqual(due.map((record) => record.key.documentId), ['2', '3']);
   const stale = await repository.queryStaleStripeFulfillments(20);
   assert.deepEqual(stale.map((record) => record.key.documentId), ['old']);
+});
+
+test('ready-notification recovery selects unclaimed and expired leases in due order', async (context) => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const pending = {
+    status: 'ready_to_ship',
+    buyerOrderReceivedEmailState: 'pending',
+    shipperReadyToShipEmailState: 'pending',
+  };
+  const malformed: CommerceDocumentData[] = [
+    { readyToShipNotificationPublishClaimExpiresAtMs: 100 },
+    { readyToShipNotificationPublishClaimId: '', readyToShipNotificationPublishClaimExpiresAtMs: 100 },
+    { readyToShipNotificationPublishClaimId: 123, readyToShipNotificationPublishClaimExpiresAtMs: 100 },
+    { readyToShipNotificationPublishClaimId: 'claim' },
+    ...[null, '100', true, 10.5, -1, Number.MAX_SAFE_INTEGER + 1, [], {}].map((expiry) => ({
+      readyToShipNotificationPublishClaimId: 'claim',
+      readyToShipNotificationPublishClaimExpiresAtMs: expiry,
+    })),
+  ];
+  seedCommerceDocuments(harness, [
+    ...malformed.map((fields, index) => ({
+      key: commerceKeys.deliveryOrder('drop', `malformed-${String(index).padStart(2, '0')}`),
+      data: { ...pending, ...fields },
+    })),
+    { key: commerceKeys.deliveryOrder('drop', 'unclaimed'), data: pending },
+    ...['a', 'b', 'future'].map((id) => ({
+      key: commerceKeys.deliveryOrder('drop', id),
+      data: {
+        ...pending,
+        readyToShipNotificationPublishClaimId: 'claim',
+        readyToShipNotificationPublishClaimExpiresAtMs: id === 'future' ? 11 : 10,
+      },
+    })),
+    {
+      key: commerceKeys.deliveryOrder('drop', 'older'),
+      data: { ...pending, readyToShipNotificationPublishClaimId: 'claim', readyToShipNotificationPublishClaimExpiresAtMs: 5 },
+    },
+    ...['prepared', 'processing'].map((status) => ({
+      key: commerceKeys.deliveryOrder('drop', status),
+      data: { ...pending, status },
+    })),
+    ...['queued', 'failed'].map((state) => ({
+      key: commerceKeys.deliveryOrder('drop', state),
+      data: { ...pending, buyerOrderReceivedEmailState: state, shipperReadyToShipEmailState: state },
+    })),
+    { key: commerceKeys.stripeCheckout('drop', 'wrong-kind'), data: pending },
+  ]);
+  const immediateIds = [...malformed.map((_, index) => `malformed-${String(index).padStart(2, '0')}`), 'unclaimed'];
+  calls.length = 0;
+  assert.deepEqual(
+    (await repository.queryDueReadyNotifications({ dueAtMs: 0, limit: 30 })).map((record) => record.key.documentId),
+    immediateIds,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'batch');
+  if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch.');
+  assertAuthoritativeReadBatch(calls[0]);
+  assert.match(calls[0].statements[1].sql, /INDEXED BY commerce_ready_notifications_due/);
+  assert.deepEqual(
+    (await repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 30 })).map((record) => record.key.documentId),
+    [...immediateIds, 'older', 'a', 'b'],
+  );
+  assert.deepEqual(
+    (await repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 2 })).map((record) => record.key.documentId),
+    immediateIds.slice(0, 2),
+  );
+  for (const [dueAtMs, limit] of [[-1, 1], [Number.NaN, 1], [1.5, 1], [Number.MAX_SAFE_INTEGER + 1, 1], [1, 0], [1, 1.5]]) {
+    await assert.rejects(
+      repository.queryDueReadyNotifications({ dueAtMs, limit }),
+      (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
+    );
+  }
+  pauseCommerce(harness);
+  await assert.rejects(repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 8 }), isUnavailableCommerceError);
 });
 
 test('Stripe terminal notification recovery selects pending due jobs in a bounded stable order', async () => {

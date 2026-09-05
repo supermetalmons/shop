@@ -21,7 +21,7 @@ control, rate-limit state, and shipment and fulfillment data.
 - The `mons-shop-data` D1 database is authoritative for public pack-status
   summaries and events.
 - The `mons-shop-ops` D1 database stores profiles, encrypted saved addresses,
-  wallet-session bindings, the ready-notification cursor, and receipt-transfer
+  wallet-session bindings, and receipt-transfer
   fixed-window rate-limit buckets.
 - The `mons-shop-commerce` D1 database is the permanent authority for delivery
   orders, assignments, claim codes, Stripe checkouts, and related commerce
@@ -286,8 +286,8 @@ The integrity check validates the schema baseline, every strict table, expiry
 indexes, foreign keys, SQLite quick check, singleton controls, and current
 table shapes. Receipt-transfer caller and asset buckets use exact ten-minute
 fixed windows. Expired buckets are cleaned in bounded batches by the existing
-five-minute Worker schedule. Ready-notification reconciliation stores only its
-cursor and compare-and-set revision in Ops D1.
+five-minute Worker schedule. The historical ready-notification cursor remains
+in Ops D1 for older Workers; active recovery and health checks do not use it.
 
 Reveal submissions live in Ops D1. Inspect or pause that subsystem with:
 
@@ -360,7 +360,13 @@ Workflow operation IDs. Migration `0008` is additive and preserves existing
 documents and authority state. For a database already at `0007`, apply it with
 `npm run db:migrate:commerce`, then run `npm run check:commerce-d1` from the updated
 checkout; no Commerce pause or Worker publication is required for this index.
-Append `0009_<description>.sql` for the next change.
+Migration `0009_ready_notification_due_index.sql` adds an index for pending
+ready-to-ship notifications, ordered by their existing publication lease expiry
+and document path. Apply it before publishing the updated API Worker through
+`npm run deploy:api`. It requires no document backfill or Commerce pause and
+preserves the older notification indexes and Ops cursor storage for compatible
+overlap with the previous Worker. Append `0010_<description>.sql` for the next
+change.
 The Worker preserves the existing commerce API and transaction behavior through
 the D1 document-store adapter.
 
@@ -401,10 +407,17 @@ The shared five-minute scheduled trigger recovers Stripe fulfillment,
 pack-status projections, and ready-to-ship notification work. Do not disable
 the schedule to control one subsystem.
 
-Ready-to-ship email recovery uses the `ready_notifications` reconciliation
-cursor in `mons-shop-ops`. Reconcile stored job IDs with Queue and Resend
-outcomes before replaying work because a Queue publish may have succeeded before
-its D1 marker update.
+Ready-to-ship email publication and recovery live in dedicated notification
+modules. The scheduled recovery query reads up to eight due Commerce D1 orders
+and attempts publication for at most four. Valid active publication claims stay
+out of the query until their ten-minute lease expires. Missing or malformed
+claims are immediately eligible for inspection; unclaimed orders sort before
+expired claims, then by document path. Recovery does not use an Ops D1 cursor.
+The four-attempt cap, six-hour retry window, job IDs, and idempotency keys are
+preserved. Partial publication retains pending markers and their lease; a
+cancellation before enqueue releases the claim and restores its attempt count.
+Reconcile stored job IDs with Queue and Resend outcomes before replaying work
+because a Queue publish may have succeeded before its D1 marker update.
 
 Queue a synthetic notification email through the production API:
 
@@ -448,8 +461,8 @@ The retained tools are intentionally narrow:
 - `npm run rebuild-pack-status` (`scripts/ops/rebuildPackStatus.ts`) compares
   authoritative Commerce D1 history with pack-status summaries and is read-only unless its
   explicit D1 write option is supplied.
-- `npm run check:ops-d1` validates the remote operations database, its
-  ready-notification singleton, and the permanent legacy-auth retirement record.
+- `npm run check:ops-d1` validates the remote operations database and the
+  permanent legacy-auth retirement record.
 - `npm run test-resend-notification-email` sends a synthetic notification
   through the production API queue.
 - `npm run wipe-drop` (`scripts/ops/wipeDrop.ts`) is the guarded repository and

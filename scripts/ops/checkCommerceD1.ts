@@ -6,6 +6,7 @@ import {
   safeInteger,
 } from '../shared/commerceD1Maintenance.ts';
 import { sqlSchemaFingerprint } from '../shared/sqlSchemaFingerprint.ts';
+import { READY_NOTIFICATION_DUE_SQL } from '../../shared/readyNotificationDueSql.ts';
 
 function fail(message: string): never {
   throw new Error(message);
@@ -83,6 +84,12 @@ const ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL = `CREATE INDEX commerce_admin_irl_
     document_path
   )
   WHERE document_kind = 'admin_irl_redeem_request'`;
+const READY_NOTIFICATION_DUE_INDEX_SQL = `CREATE INDEX ${READY_NOTIFICATION_DUE_SQL.indexName}
+  ON commerce_documents (
+    ${READY_NOTIFICATION_DUE_SQL.dueAtExpression},
+    document_path
+  )
+  WHERE ${READY_NOTIFICATION_DUE_SQL.pendingPredicate}`;
 
 function normalizedSql(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -118,7 +125,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 8 ||
+    migrations.length !== 9 ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -126,7 +133,8 @@ export function checkCommerceD1(
     migrations[4].name !== '0005_delivery_owner_query_revisions.sql' ||
     migrations[5].name !== '0006_document_path_revisions.sql' ||
     migrations[6].name !== '0007_stripe_terminal_notifications.sql' ||
-    migrations[7].name !== '0008_admin_irl_redeem_workflow_operation.sql'
+    migrations[7].name !== '0008_admin_irl_redeem_workflow_operation.sql' ||
+    migrations[8].name !== '0009_ready_notification_due_index.sql'
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -390,6 +398,13 @@ export function checkCommerceD1(
     normalizedSql(adminIrlWorkflowOperationIndex[0].sql) !== normalizedSql(ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL)
   ) fail('Commerce D1 Admin IRL Workflow operation index is invalid.');
 
+  const readyNotificationDueIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'index' AND name = '${READY_NOTIFICATION_DUE_SQL.indexName}'`);
+  if (
+    readyNotificationDueIndex.length !== 1 ||
+    normalizedSql(readyNotificationDueIndex[0].sql) !== normalizedSql(READY_NOTIFICATION_DUE_INDEX_SQL)
+  ) fail('Commerce D1 due ready-notification index is invalid.');
+
   const pendingReadyNotificationIndexes = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
     WHERE type = 'index' AND name GLOB 'commerce_delivery_orders_*_notifications_pending*'
     ORDER BY name`);
@@ -540,6 +555,19 @@ export function checkCommerceD1(
       ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER), document_path LIMIT 100`),
     'commerce_stripe_checkouts_reconciliation_due',
   );
+
+  const readyNotificationDuePlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
+    FROM commerce_authority_control AS authority
+    CROSS JOIN commerce_documents INDEXED BY ${READY_NOTIFICATION_DUE_SQL.indexName}
+    WHERE
+      authority.singleton = 1 AND
+      authority.authority_state = 'd1' AND
+      ${READY_NOTIFICATION_DUE_SQL.pendingPredicate} AND
+      (${READY_NOTIFICATION_DUE_SQL.dueAtExpression}) <= 1
+    ORDER BY (${READY_NOTIFICATION_DUE_SQL.dueAtExpression}), document_path
+    LIMIT 8`);
+  requireSearchIndex(readyNotificationDuePlan, READY_NOTIFICATION_DUE_SQL.indexName);
+  requireNoTemporaryBTree(readyNotificationDuePlan, 'due ready-notification');
 
   const stripeTerminalNotificationPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
     FROM commerce_authority_control AS authority

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import test from 'node:test';
 import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
+import { READY_NOTIFICATION_DUE_SQL } from '../shared/readyNotificationDueSql.ts';
 
 const schemaSql = readFileSync(
   new URL('../cloud/workers/api/commerce-migrations/0001_current_schema.sql', import.meta.url),
@@ -34,6 +35,10 @@ const stripeTerminalNotificationsMigrationSql = readFileSync(
 );
 const adminIrlRedeemWorkflowOperationMigrationSql = readFileSync(
   new URL('../cloud/workers/api/commerce-migrations/0008_admin_irl_redeem_workflow_operation.sql', import.meta.url),
+  'utf8',
+);
+const readyNotificationDueIndexMigrationSql = readFileSync(
+  new URL('../cloud/workers/api/commerce-migrations/0009_ready_notification_due_index.sql', import.meta.url),
   'utf8',
 );
 const authorityLeaseToken = '123e4567-e89b-42d3-a456-426614174000';
@@ -83,6 +88,7 @@ function databaseBeforeWorkflowOperationIndex(): DatabaseSync {
 function database(): DatabaseSync {
   const db = databaseBeforeWorkflowOperationIndex();
   db.exec(adminIrlRedeemWorkflowOperationMigrationSql);
+  db.exec(readyNotificationDueIndexMigrationSql);
   resumeCommerceAfterMigration(db);
   return db;
 }
@@ -1409,6 +1415,92 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
         document_path
       LIMIT ?`, 1, 20);
     assert.match(terminalNotificationPlan, /SEARCH commerce_documents USING INDEX commerce_stripe_terminal_notifications_due/);
+  } finally {
+    db.close();
+  }
+});
+
+test('ready-notification due index upgrades populated Commerce without changing documents or old indexes', () => {
+  const db = databaseBeforeWorkflowOperationIndex();
+  try {
+    db.exec(adminIrlRedeemWorkflowOperationMigrationSql);
+    resumeCommerceAfterMigration(db);
+    runDocumentEpoch(db, () => {
+      for (const [id, fields] of [
+        ['unclaimed', {}],
+        ['boundary', { readyToShipNotificationPublishClaimId: 'claim', readyToShipNotificationPublishClaimExpiresAtMs: 10 }],
+        ['future', { readyToShipNotificationPublishClaimId: 'claim', readyToShipNotificationPublishClaimExpiresAtMs: 11 }],
+      ] as const) {
+        insertTestDocument(db, {
+          documentId: id,
+          dropId: 'drop',
+          kind: 'delivery_order',
+          path: `drops/drop/deliveryOrders/${id}`,
+          data: {
+            status: 'ready_to_ship',
+            buyerOrderReceivedEmailState: 'pending',
+            shipperReadyToShipEmailState: 'pending',
+            ...fields,
+          },
+        });
+      }
+    });
+    const before = db.prepare('SELECT * FROM commerce_documents ORDER BY document_path').all();
+    const authorityBefore = db.prepare('SELECT * FROM commerce_authority_control').all();
+    const revisionsBefore = db.prepare('SELECT * FROM commerce_document_path_revisions ORDER BY document_path').all();
+    db.exec('ANALYZE commerce_documents');
+    runMigration(db, readyNotificationDueIndexMigrationSql);
+    assert.deepEqual(db.prepare('SELECT * FROM commerce_documents ORDER BY document_path').all(), before);
+    assert.deepEqual(db.prepare('SELECT * FROM commerce_authority_control').all(), authorityBefore);
+    assert.deepEqual(db.prepare('SELECT * FROM commerce_document_path_revisions ORDER BY document_path').all(), revisionsBefore);
+    const { indexName, dueAtExpression, pendingPredicate } = READY_NOTIFICATION_DUE_SQL;
+    const sql = `SELECT document_path FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents INDEXED BY ${indexName}
+      WHERE authority.singleton = 1 AND authority.authority_state = 'd1' AND
+        ${pendingPredicate} AND (${dueAtExpression}) <= ?
+      ORDER BY (${dueAtExpression}), document_path LIMIT ?`;
+    const plan = planDetails(db, sql, 10, 8);
+    assert.match(plan, /SEARCH commerce_documents USING INDEX commerce_ready_notifications_due/);
+    assert.doesNotMatch(plan, /SCAN commerce_documents|USE TEMP B-TREE/);
+    assert.deepEqual(
+      db.prepare(sql).all(10, 8).map((row) => row.document_path),
+      ['drops/drop/deliveryOrders/unclaimed', 'drops/drop/deliveryOrders/boundary'],
+    );
+    for (const [kind, column] of [['buyer', 'buyer_notification_state'], ['shipper', 'shipper_notification_state']]) {
+      for (const suffix of ['', '_owner_path']) {
+        const legacySql = `SELECT document_path FROM commerce_documents
+          INDEXED BY commerce_delivery_orders_${kind}_notifications_pending${suffix}
+          WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND ${column} = 'pending'`;
+        assert.equal(db.prepare(legacySql).all().length, 3);
+      }
+    }
+  } finally {
+    db.close();
+  }
+});
+
+test('ready-notification due index treats integral real expiries as leases', () => {
+  const db = database();
+  try {
+    runDocumentEpoch(db, () => {
+      insertTestDocument(db, {
+        documentId: 'real-expiry',
+        dropId: 'drop',
+        kind: 'delivery_order',
+        path: 'drops/drop/deliveryOrders/real-expiry',
+        data: { status: 'ready_to_ship', buyerOrderReceivedEmailState: 'pending' },
+      });
+    });
+    runDocumentEpoch(db, () => {
+      db.prepare(`UPDATE commerce_documents SET version = version + 1, document_json = ?
+        WHERE document_path = 'drops/drop/deliveryOrders/real-expiry'`)
+        .run('{"status":"ready_to_ship","buyerOrderReceivedEmailState":"pending","readyToShipNotificationPublishClaimId":"claim","readyToShipNotificationPublishClaimExpiresAtMs":10.0}');
+    });
+    const { indexName, dueAtExpression, pendingPredicate } = READY_NOTIFICATION_DUE_SQL;
+    const statement = db.prepare(`SELECT document_path FROM commerce_documents INDEXED BY ${indexName}
+      WHERE ${pendingPredicate} AND (${dueAtExpression}) <= ? ORDER BY (${dueAtExpression}), document_path LIMIT 8`);
+    assert.deepEqual(statement.all(9), []);
+    assert.equal(statement.all(10).length, 1);
   } finally {
     db.close();
   }

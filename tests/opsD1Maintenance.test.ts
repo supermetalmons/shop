@@ -5,8 +5,6 @@ import test from 'node:test';
 import {
   assertOpsD1Integrity,
   OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS,
-  parseReadyNotificationCursor,
-  validateReadyNotificationCursorPath,
   type OpsD1IntegrityInput,
 } from '../scripts/shared/opsD1Maintenance.ts';
 import {
@@ -132,14 +130,15 @@ function expiryCleanupQueryPlans(
 
 function integrityInput(
   overrides: Partial<OpsD1IntegrityInput> = {},
+  prepareDatabase?: (db: DatabaseSync) => void,
 ): OpsD1IntegrityInput {
   const db = database();
   try {
+    prepareDatabase?.(db);
     return {
       anonymousAuthSessionColumns: queryRows(db, 'PRAGMA table_info(anonymous_auth_sessions)'),
       anonymousAuthSessionCounts: queryRows(db, 'SELECT COUNT(*) AS anonymous_auth_session_count FROM anonymous_auth_sessions'),
       anonymousAuthSessionExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)'),
-      controls: queryRows(db, 'SELECT * FROM worker_controls ORDER BY control_key'),
       expiryCleanupQueryPlans: expiryCleanupQueryPlans(db),
       rateLimitBucketExpiryIndexColumns: queryRows(db, 'PRAGMA index_info(rate_limit_buckets_expires_at_ms)'),
       foreignKeyCheck: queryRows(db, 'PRAGMA foreign_key_check'),
@@ -409,30 +408,13 @@ test('Ops integrity rejects ledger, schema, and foreign-key drift', () => {
     },
   })), /uses a temporary B-tree/);
   assert.throws(() => assertOpsD1Integrity(integrityInput({ quickCheck: [] })), /quick_check/);
-  assert.throws(() => assertOpsD1Integrity(integrityInput({ controls: [] })), /exactly one worker control/);
 });
 
-test('ready-notification cursor validation has no pause state', () => {
-  assert.equal(
-    validateReadyNotificationCursorPath('drops/little_swag_hoodies/deliveryOrders/7'),
-    'drops/little_swag_hoodies/deliveryOrders/7',
-  );
-  assert.throws(
-    () => validateReadyNotificationCursorPath('drops/Card_NFT_2/deliveryOrders/7'),
-    /canonical delivery-order path/,
-  );
-  assert.deepEqual(parseReadyNotificationCursor(controlRow({
-    cursor_path: 'drops/little_swag_hoodies/deliveryOrders/7',
-    updated_at_ms: 1_000,
-    cursor_updated_at_ms: 1_000,
-  })), {
-    controlKey: 'ready_notifications',
-    cursorPath: 'drops/little_swag_hoodies/deliveryOrders/7',
-    revision: 1,
-    createdAtMs: 0,
-    updatedAtMs: 1_000,
-    cursorUpdatedAtMs: 1_000,
-  });
+test('Ops integrity does not depend on the historical notification cursor row', () => {
+  const report = assertOpsD1Integrity(integrityInput({}, (db) => {
+    db.exec('DELETE FROM worker_controls');
+  }));
+  assert.equal(Object.hasOwn(report, 'readyNotificationCursor'), false);
 });
 
 test('reveal-submission controls expose status, pause, and resume only', async () => {

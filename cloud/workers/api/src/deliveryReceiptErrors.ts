@@ -23,3 +23,15 @@ export function mapProviderError(error: unknown, message: string): DeliveryRecei
   }
   return new DeliveryReceiptError('unavailable', message);
 }
+
+export function summarizeDeliveryReceiptError(error: unknown): Record<string, unknown> {
+  if (error instanceof DeliveryReceiptError) {
+    return {
+      kind: error.name,
+      code: error.code,
+      message: error.message,
+    };
+  }
+  if (error instanceof Error) return { kind: error.name, message: error.message };
+  return { kind: typeof error, message: String(error) };
+}

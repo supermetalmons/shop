@@ -21,6 +21,7 @@ import {
 import { isCommerceDocumentSegment } from '../../../../shared/commerceDocumentPath.js';
 import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.js';
 import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
+import { READY_NOTIFICATION_DUE_SQL } from '../../../../shared/readyNotificationDueSql.js';
 
 export * from './commerceRepositoryTypes.js';
 
@@ -796,6 +797,29 @@ export class D1CommerceRepository {
     ORDER BY document.document_path ASC
     LIMIT ?`).bind(...bindings));
     reportInefficientQuery('pending-ready-notifications', 'delivery_order', result, result.results.length);
+    return result.results.map(parseRow).map((document) => publicRecord(document));
+  }
+
+  async queryDueReadyNotifications(args: {
+    dueAtMs: number;
+    limit: number;
+  }): Promise<CommerceDocumentRecord[]> {
+    const limit = positiveQueryLimit(args.limit);
+    if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid ready-notification cutoff.');
+    }
+    const { indexName, dueAtExpression, pendingPredicate } = READY_NOTIFICATION_DUE_SQL;
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents INDEXED BY ${indexName}
+      WHERE
+        authority.singleton = 1 AND
+        authority.authority_state = 'd1' AND
+        ${pendingPredicate} AND
+        (${dueAtExpression}) <= ?
+      ORDER BY (${dueAtExpression}) ASC, document_path ASC
+      LIMIT ?`).bind(args.dueAtMs, limit));
+    reportInefficientQuery('due-ready-notifications', 'delivery_order', result, result.results.length);
     return result.results.map(parseRow).map((document) => publicRecord(document));
   }
 

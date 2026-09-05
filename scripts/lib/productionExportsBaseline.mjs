@@ -166,7 +166,6 @@ const productionExportBaseline = [
   ["shared/packStatus.ts","exports","buildPackStatusCountersFromRebuildInputs"],
   ["shared/packStatus.ts","exports","deliveryOrderBoxAssetIds"],
   ["shared/packStatus.ts","exports","PACK_STATUS_SUPPORTED_DROP_IDS"],
-  ["shared/readyToShipNotificationReconciliation.ts","exports","buildReadyNotificationReconciliationQuery"],
   ["shared/shipping.ts","exports","countDeliveryFigures"],
   ["shared/shipstationCustoms.ts","exports","SHIPSTATION_CUSTOMS_CATALOG"],
   ["shared/shipstationCustoms.ts","exports","shipStationCustomsCatalogEntry"],

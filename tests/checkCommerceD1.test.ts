@@ -16,6 +16,7 @@ const migrationNames = [
   '0006_document_path_revisions.sql',
   '0007_stripe_terminal_notifications.sql',
   '0008_admin_irl_redeem_workflow_operation.sql',
+  '0009_ready_notification_due_index.sql',
 ] as const;
 
 function currentDatabase(seedDocuments = true): DatabaseSync {
@@ -243,6 +244,44 @@ test('Commerce D1 checker rejects a malformed Stripe reconciliation index', () =
       () => checkCommerceD1(localQuery(database)),
       /Commerce D1 Stripe-reconciliation index is invalid/,
     );
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker rejects a missing or malformed due ready-notification index', () => {
+  const database = currentDatabase();
+  try {
+    database.exec('DROP INDEX commerce_ready_notifications_due');
+    assert.throws(
+      () => checkCommerceD1(localQuery(database)),
+      /Commerce D1 due ready-notification index is invalid/,
+    );
+    database.exec('CREATE INDEX commerce_ready_notifications_due ON commerce_documents (document_path)');
+    assert.throws(
+      () => checkCommerceD1(localQuery(database)),
+      /Commerce D1 due ready-notification index is invalid/,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker rejects due ready-notification scans and temporary sorts', () => {
+  const database = currentDatabase();
+  try {
+    const query = localQuery(database);
+    for (const details of [
+      ['SCAN commerce_documents USING INDEX commerce_ready_notifications_due'],
+      ['SEARCH commerce_documents USING INDEX commerce_ready_notifications_due (<expr><?)', 'USE TEMP B-TREE FOR ORDER BY'],
+    ]) {
+      assert.throws(() => checkCommerceD1((sql) => {
+        if (sql.includes('EXPLAIN QUERY PLAN') && sql.includes('INDEXED BY commerce_ready_notifications_due')) {
+          return details.map((detail) => ({ detail }));
+        }
+        return query(sql);
+      }), /does not search commerce_ready_notifications_due|due ready-notification query plan uses a temporary B-tree/);
+    }
   } finally {
     database.close();
   }

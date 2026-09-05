@@ -160,6 +160,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0006_document_path_revisions.sql',
       '0007_stripe_terminal_notifications.sql',
       '0008_admin_irl_redeem_workflow_operation.sql',
+      '0009_ready_notification_due_index.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -232,6 +233,17 @@ test('commerce repository reads and transaction guards run through the real D1 r
       insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('runtime', 'owner-invalid-bytes'), {
         owner: '2'.repeat(32),
       }),
+      ...[10, 11].map((expiry) => insertDocument(
+        env.COMMERCE_DB,
+        commerceKeys.deliveryOrder('runtime', `notification-${expiry}`),
+        {
+          buyerOrderReceivedEmailState: 'pending',
+          shipperReadyToShipEmailState: 'pending',
+          status: 'ready_to_ship',
+          readyToShipNotificationPublishClaimId: 'claim',
+          readyToShipNotificationPublishClaimExpiresAtMs: expiry,
+        },
+      )),
       insertDocument(env.COMMERCE_DB, checkoutKey, {
         fulfillmentProcessor: 'cloudflare_queue_v1',
         lastStripeWebhookEventId: 'evt_runtime',
@@ -295,6 +307,16 @@ test('commerce repository reads and transaction guards run through the real D1 r
         limit: 5,
       })).map((record) => record.key.documentId),
       ['1'],
+    );
+    assert.deepEqual(
+      (await repository.queryDueReadyNotifications({ dueAtMs: 0, limit: 8 }))
+        .map((record) => record.key.documentId),
+      ['1'],
+    );
+    assert.deepEqual(
+      (await repository.queryDueReadyNotifications({ dueAtMs: 10, limit: 8 }))
+        .map((record) => record.key.documentId),
+      ['1', 'notification-10'],
     );
     assert.deepEqual(
       (await repository.queryStaleStripeFulfillments(10)).map((record) => record.key.documentId),
@@ -452,6 +474,8 @@ test('commerce repository reads and transaction guards run through the real D1 r
             owner: 'paused-owner',
             shipperReadyToShipEmailState: 'queued',
             status: 'ready_to_ship',
+            readyToShipNotificationPublishClaimId: 'future-claim',
+            readyToShipNotificationPublishClaimExpiresAtMs: 1_000,
           },
         )),
         env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
@@ -541,6 +565,24 @@ test('commerce repository reads and transaction guards run through the real D1 r
       (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'internal',
     );
 
+    observedPreparedSql.length = 0;
+    assert.deepEqual(
+      (await observedRepository.queryDueReadyNotifications({ dueAtMs: 10, limit: 8 }))
+        .map((record) => record.key.documentId),
+      ['1', 'notification-10'],
+    );
+    const dueReadyRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.equal(Number.isSafeInteger(dueReadyRowsRead), true);
+    assert.equal(dueReadyRowsRead <= 10, true);
+    const readyDueSql = observedPreparedSql.find((sql) => sql.includes('INDEXED BY commerce_ready_notifications_due'));
+    assert.ok(readyDueSql);
+    const readyDuePlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${readyDueSql}`)
+      .bind(10, 8)
+      .all<{ detail: string }>();
+    const readyDuePlanDetails = readyDuePlan.results.map((row) => row.detail).join('\n');
+    assert.match(readyDuePlanDetails, /SEARCH commerce_documents USING INDEX commerce_ready_notifications_due\b/);
+    assert.doesNotMatch(readyDuePlanDetails, /SCAN commerce_documents|USE TEMP B-TREE/i);
+
     assert.deepEqual(await observedRepository.queryDeliveryRecoveryOrders('paused-owner'), []);
     const emptyRecoveryRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(emptyRecoveryRowsRead), true);
@@ -628,6 +670,15 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const pausedTerminalNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(pausedTerminalNotificationRowsRead), true);
     assert.equal(pausedTerminalNotificationRowsRead <= 4, true);
+
+    observedBatchResults = undefined;
+    await assert.rejects(
+      observedRepository.queryDueReadyNotifications({ dueAtMs: 10, limit: 8 }),
+      (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable',
+    );
+    const pausedReadyNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.equal(Number.isSafeInteger(pausedReadyNotificationRowsRead), true);
+    assert.equal(pausedReadyNotificationRowsRead <= 4, true);
 
     assert.equal(
       (await observedRepository.getAdminIrlRedeemRequestForWorkflowStatus(workflowOperationId))?.key.path,

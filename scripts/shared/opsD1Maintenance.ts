@@ -2,10 +2,8 @@ import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../shared/opsExpiryCleanupSql.ts';
-import { isCanonicalReadyNotificationCursorPath } from '../../shared/readyToShipNotificationReconciliation.ts';
 import { sqlSchemaFingerprint } from './sqlSchemaFingerprint.ts';
 
-export const READY_NOTIFICATION_CURSOR_KEY = 'ready_notifications';
 const OPS_D1_MIGRATIONS = [
   '0001_current_schema.sql',
   '0002_reveal_submission_write_fence.sql',
@@ -70,15 +68,6 @@ type OpsD1ExpiryCleanupQueryPlans = {
   [Key in keyof typeof OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS]: OpsD1Row[];
 };
 
-export type ReadyNotificationCursorState = {
-  controlKey: typeof READY_NOTIFICATION_CURSOR_KEY;
-  cursorPath: string | null;
-  revision: number;
-  createdAtMs: number;
-  updatedAtMs: number;
-  cursorUpdatedAtMs: number | null;
-};
-
 export type RevealSubmissionStorageControl = {
   paused: boolean;
   revision: number;
@@ -89,7 +78,6 @@ export type OpsD1IntegrityInput = {
   anonymousAuthSessionColumns: OpsD1Row[];
   anonymousAuthSessionCounts: OpsD1Row[];
   anonymousAuthSessionExpiryIndexColumns: OpsD1Row[];
-  controls: OpsD1Row[];
   expiryCleanupQueryPlans: OpsD1ExpiryCleanupQueryPlans;
   foreignKeyCheck: OpsD1Row[];
   migrations: OpsD1Row[];
@@ -117,7 +105,6 @@ export type OpsD1IntegrityReport = {
   anonymousAuthSessionCount: number;
   profileAddressCount: number;
   profileCount: number;
-  readyNotificationCursor: ReadyNotificationCursorState;
   revealSubmissionCount: number;
   revealSubmissionStorage: RevealSubmissionStorageControl;
   authWalletBindingCount: number;
@@ -560,60 +547,6 @@ function assertExpiryCleanupQueryPlans(
   }
 }
 
-export function validateReadyNotificationCursorPath(value: unknown): string {
-  if (typeof value !== 'string' || !value) {
-    return fail('Ready-notification cursor must be a non-empty string.');
-  }
-  if (!isCanonicalReadyNotificationCursorPath(value)) {
-    return fail('Ready-notification cursor is not a canonical delivery-order path.');
-  }
-  return value;
-}
-
-export function parseReadyNotificationCursor(
-  row: OpsD1Row,
-): ReadyNotificationCursorState {
-  if (row.control_key !== READY_NOTIFICATION_CURSOR_KEY) {
-    return fail('Ready-notification cursor key is invalid.');
-  }
-  const cursorPath = row.cursor_path === null
-    ? null
-    : validateReadyNotificationCursorPath(row.cursor_path);
-  const revision = safeInteger(row.revision, 'Ready-notification revision', 1);
-  const createdAtMs = safeInteger(
-    row.created_at_ms,
-    'Ready-notification creation timestamp',
-  );
-  const updatedAtMs = safeInteger(
-    row.updated_at_ms,
-    'Ready-notification update timestamp',
-  );
-  if (updatedAtMs < createdAtMs) {
-    return fail('Ready-notification update timestamp precedes creation.');
-  }
-  const cursorUpdatedAtMs = row.cursor_updated_at_ms === null
-    ? null
-    : safeInteger(
-        row.cursor_updated_at_ms,
-        'Ready-notification cursor update timestamp',
-      );
-  if (
-    (cursorPath === null) !== (cursorUpdatedAtMs === null) ||
-    (cursorUpdatedAtMs !== null &&
-      (cursorUpdatedAtMs < createdAtMs || cursorUpdatedAtMs > updatedAtMs))
-  ) {
-    return fail('Ready-notification cursor timestamps are inconsistent.');
-  }
-  return {
-    controlKey: READY_NOTIFICATION_CURSOR_KEY,
-    cursorPath,
-    revision,
-    createdAtMs,
-    updatedAtMs,
-    cursorUpdatedAtMs,
-  };
-}
-
 function parseRevealSubmissionStorageControl(
   row: OpsD1Row,
 ): RevealSubmissionStorageControl {
@@ -711,9 +644,6 @@ export function assertOpsD1Integrity(
     'Ops D1 rate-limit bucket expiry index',
   );
   assertExpiryCleanupQueryPlans(input.expiryCleanupQueryPlans);
-  if (input.controls.length !== 1) {
-    return fail('Ops D1 must contain exactly one worker control.');
-  }
   if (input.revealSubmissionStorageControl.length !== 1) {
     return fail('Ops D1 must contain exactly one reveal-submission storage control.');
   }
@@ -750,7 +680,6 @@ export function assertOpsD1Integrity(
     anonymousAuthSessionCount,
     profileAddressCount,
     profileCount,
-    readyNotificationCursor: parseReadyNotificationCursor(input.controls[0]),
     revealSubmissionCount,
     revealSubmissionStorage,
     authWalletBindingCount,
@@ -844,15 +773,6 @@ export function queryRemoteOpsD1(sql: string): OpsD1Row[] {
   return results[0];
 }
 
-const controlSelect = `SELECT
-  control_key,
-  cursor_path,
-  revision,
-  created_at_ms,
-  updated_at_ms,
-  cursor_updated_at_ms
-FROM worker_controls`;
-
 export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
   return assertOpsD1Integrity({
     anonymousAuthSessionColumns: queryRemoteOpsD1(
@@ -864,7 +784,6 @@ export function readRemoteOpsD1Integrity(): OpsD1IntegrityReport {
     anonymousAuthSessionExpiryIndexColumns: queryRemoteOpsD1(
       'PRAGMA index_info(anonymous_auth_sessions_expires_at_ms)',
     ),
-    controls: queryRemoteOpsD1(`${controlSelect} ORDER BY control_key`),
     expiryCleanupQueryPlans: {
       anonymousAuthSessions: queryRemoteOpsD1(
         OPS_D1_EXPIRY_CLEANUP_QUERY_PLAN_SPECS.anonymousAuthSessions.sql,

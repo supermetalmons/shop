@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import {
   createCommerceD1,
   createCommerceD1Harness,
+  d1Database,
   seedCommerceDocument,
   seedCommerceDocuments,
 } from './commerceD1Harness.ts';
@@ -35,10 +38,7 @@ import {
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { registerDeferredWork } from '../src/deferredWork.ts';
-import {
-  compareAndSetReadyNotificationCursor,
-  loadReadyNotificationCursor,
-} from '../src/d1ReadyNotificationCursor.ts';
+import { publishReadyToShipNotifications } from '../src/readyToShipNotificationOutbox.ts';
 import {
   READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
   READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
@@ -122,238 +122,14 @@ function readyNotificationOrderFields(deliveryId: number, includeShipper = false
   };
 }
 
-function readyNotificationD1Result(
-  results: Array<Record<string, unknown>> = [],
-  changes = 0,
-): D1Result<Record<string, unknown>> {
-  return {
-    success: true,
-    results,
-    meta: {
-      changed_db: changes > 0,
-      changes,
-      duration: 0,
-      last_row_id: 0,
-      rows_read: results.length,
-      rows_written: changes,
-      size_after: 0,
-    },
-  };
+function receiptAuthDatabase(): D1Database {
+  const database = new DatabaseSync(':memory:');
+  database.exec(readFileSync('cloud/workers/api/ops-migrations/0001_current_schema.sql', 'utf8'));
+  database.prepare(`INSERT INTO auth_wallet_bindings (
+    auth_subject, wallet, updated_at_ms, revision
+  ) VALUES (?, ?, ?, 1)`).run('auth-uid', OWNER, READY_NOTIFICATION_NOW_MS);
+  return d1Database(database);
 }
-
-type ReadyNotificationD1Execute = (
-  statement: ReadyNotificationTestStatement,
-) => D1Result<Record<string, unknown>> | Promise<D1Result<Record<string, unknown>>>;
-
-class ReadyNotificationTestStatement implements D1PreparedStatement {
-  constructor(
-    readonly query: string,
-    private readonly execute: ReadyNotificationD1Execute,
-    readonly values: unknown[] = [],
-  ) {}
-
-  bind(...values: unknown[]): D1PreparedStatement {
-    return new ReadyNotificationTestStatement(this.query, this.execute, values);
-  }
-
-  first<T = unknown>(colName: string): Promise<T | null>;
-  first<T = Record<string, unknown>>(): Promise<T | null>;
-  async first<T = Record<string, unknown>>(colName?: string): Promise<T | null> {
-    const row = (await this.execute(this)).results[0];
-    if (!row) return null;
-    return (colName === undefined ? row : row[colName]) as T;
-  }
-
-  async run<T = Record<string, unknown>>(): Promise<D1Result<T>> {
-    const result = await this.execute(this);
-    return { ...result, results: result.results as T[] };
-  }
-
-  async all<T = Record<string, unknown>>(): Promise<D1Result<T>> {
-    return this.run<T>();
-  }
-
-  raw<T = unknown[]>(options: { columnNames: true }): Promise<[string[], ...T[]]>;
-  raw<T = unknown[]>(options?: { columnNames?: false }): Promise<T[]>;
-  async raw<T = unknown[]>(options?: { columnNames?: boolean }): Promise<T[] | [string[], ...T[]]> {
-    const rows = (await this.execute(this)).results;
-    const columnNames = Object.keys(rows[0] || {});
-    const values = rows.map((row) => columnNames.map((columnName) => row[columnName]) as T);
-    return options?.columnNames ? [columnNames, ...values] : values;
-  }
-}
-
-class ReadyNotificationTestDatabase implements D1Database {
-  constructor(
-    private readonly execute: ReadyNotificationD1Execute,
-    private readonly batchSizes: number[],
-  ) {}
-
-  prepare(query: string): D1PreparedStatement {
-    return new ReadyNotificationTestStatement(query, this.execute);
-  }
-
-  async batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]> {
-    this.batchSizes.push(statements.length);
-    return Promise.all(statements.map((statement) => statement.run<T>()));
-  }
-
-  exec(): Promise<D1ExecResult> {
-    throw new Error('Unexpected D1 exec');
-  }
-
-  withSession(): D1DatabaseSession {
-    throw new Error('Unexpected D1 session');
-  }
-
-  dump(): Promise<ArrayBuffer> {
-    throw new Error('Unexpected D1 dump');
-  }
-}
-
-function readyNotificationCursorHarness(args: {
-  cursorPath?: string | null;
-  exists?: boolean;
-  failCursorWrites?: number;
-  onCursor?: () => void;
-  paused?: boolean;
-  revision?: number;
-} = {}) {
-  let cursorPath = args.cursorPath || null;
-  let exists = args.exists ?? true;
-  let failCursorWrites = args.failCursorWrites || 0;
-  let paused = args.paused || false;
-  let revision = args.revision || 1;
-  let insertAttempts = 0;
-  const batchSizes: number[] = [];
-  const execute = (statement: ReadyNotificationTestStatement): D1Result<Record<string, unknown>> => {
-    if (statement.query.includes('FROM auth_wallet_bindings')) {
-      return readyNotificationD1Result([{
-        auth_subject: 'auth-uid',
-        wallet: OWNER,
-        updated_at_ms: READY_NOTIFICATION_NOW_MS,
-        revision: 1,
-        reconcile_lease_id: null,
-        reconcile_lease_expires_at_ms: null,
-      }]);
-    }
-    if (statement.query.includes('INSERT INTO worker_controls')) {
-      insertAttempts += 1;
-      if (exists) return readyNotificationD1Result();
-      exists = true;
-      cursorPath = null;
-      revision = 1;
-      return readyNotificationD1Result([], 1);
-    }
-    if (statement.query.includes('SELECT control_key, cursor_path, revision')) {
-      if (!exists) return readyNotificationD1Result();
-      return readyNotificationD1Result([{
-        control_key: 'ready_notifications',
-        cursor_path: cursorPath,
-        paused: paused ? 1 : 0,
-        revision,
-      }]);
-    }
-    if (statement.query.includes('UPDATE worker_controls')) {
-      if (failCursorWrites > 0) {
-        failCursorWrites -= 1;
-        return readyNotificationD1Result();
-      }
-      const [nextCursorPath, , , controlKey, expectedRevision] = statement.values;
-      if (
-        !exists ||
-        controlKey !== 'ready_notifications' ||
-        expectedRevision !== revision ||
-        typeof nextCursorPath !== 'string'
-      ) return readyNotificationD1Result();
-      cursorPath = nextCursorPath;
-      revision += 1;
-      args.onCursor?.();
-      return readyNotificationD1Result([], 1);
-    }
-    throw new Error(`Unexpected D1 query: ${statement.query}`);
-  };
-  const db = new ReadyNotificationTestDatabase(execute, batchSizes);
-  return {
-    batchSizes,
-    db,
-    get cursorPath() { return cursorPath; },
-    get exists() { return exists; },
-    get insertAttempts() { return insertAttempts; },
-    get revision() { return revision; },
-  };
-}
-
-test('D1 notification cursor loads and advances with revision CAS', async () => {
-  const cursor = readyNotificationCursorHarness();
-  assert.deepEqual(await loadReadyNotificationCursor(cursor.db, READY_NOTIFICATION_NOW_MS), {
-    cursorPath: null,
-    revision: 1,
-  });
-  assert.equal(await compareAndSetReadyNotificationCursor(
-    cursor.db,
-    'drops/card_nft_2/deliveryOrders/7',
-    1,
-    READY_NOTIFICATION_NOW_MS + 1,
-  ), true);
-  assert.equal(await compareAndSetReadyNotificationCursor(
-    cursor.db,
-    'drops/card_nft_2/deliveryOrders/8',
-    1,
-    READY_NOTIFICATION_NOW_MS + 2,
-  ), false);
-  assert.deepEqual(await loadReadyNotificationCursor(cursor.db, READY_NOTIFICATION_NOW_MS + 3), {
-    cursorPath: 'drops/card_nft_2/deliveryOrders/7',
-    revision: 2,
-  });
-});
-
-test('D1 notification cursor rejects malformed state and ignores the legacy paused column', async () => {
-  const malformed = readyNotificationCursorHarness({ cursorPath: 'deliveryOrders/7' });
-  await assert.rejects(
-    loadReadyNotificationCursor(malformed.db, READY_NOTIFICATION_NOW_MS),
-    /invalid_ready_notification_cursor/,
-  );
-  const legacyPaused = readyNotificationCursorHarness({ paused: true });
-  assert.equal(await compareAndSetReadyNotificationCursor(
-    legacyPaused.db,
-    'drops/card_nft_2/deliveryOrders/7',
-    1,
-    READY_NOTIFICATION_NOW_MS,
-  ), true);
-  await assert.rejects(
-    compareAndSetReadyNotificationCursor(
-      legacyPaused.db,
-      'deliveryOrders/7',
-      1,
-      READY_NOTIFICATION_NOW_MS,
-    ),
-    /invalid_ready_notification_cursor_path/,
-  );
-  const noncanonical = readyNotificationCursorHarness({
-    cursorPath: 'drops/Card_NFT_2/deliveryOrders/7',
-  });
-  await assert.rejects(
-    loadReadyNotificationCursor(noncanonical.db, READY_NOTIFICATION_NOW_MS),
-    /invalid_ready_notification_cursor/,
-  );
-  await assert.rejects(
-    compareAndSetReadyNotificationCursor(
-      legacyPaused.db,
-      'drops/Card_NFT_2/deliveryOrders/7',
-      2,
-      READY_NOTIFICATION_NOW_MS,
-    ),
-    /invalid_ready_notification_cursor_path/,
-  );
-  const missing = readyNotificationCursorHarness({ exists: false });
-  assert.deepEqual(await loadReadyNotificationCursor(missing.db, READY_NOTIFICATION_NOW_MS), {
-    cursorPath: null,
-    revision: 1,
-  });
-  assert.equal(missing.insertAttempts, 1);
-  assert.deepEqual(missing.batchSizes, [2]);
-});
 
 function request(path: string, body: unknown, init: RequestInit = {}): Request {
   return new Request(`https://api.mons.shop${path}`, {
@@ -376,7 +152,7 @@ function env(overrides: Partial<Pick<Env,
     COSIGNER_SECRET: bs58.encode(Keypair.generate().secretKey),
     HELIUS_API_KEY: 'helius-test-key',
     NOTIFICATION_EMAIL_QUEUE: notificationQueue(),
-    OPS_DB: readyNotificationCursorHarness().db,
+    OPS_DB: receiptAuthDatabase(),
     ...overrides,
   };
 }
@@ -696,7 +472,7 @@ test('native ready-notification publication claims, queues, and finalizes atomic
   );
   assert.ok(document);
   const jobs: unknown[] = [];
-  assert.equal(await deliveryReceiptTestHooks.publishReadyToShipNotifications({
+  assert.equal(await publishReadyToShipNotifications({
     context: native.context,
     deliveryId: 7,
     document,
@@ -730,7 +506,7 @@ test('pre-enqueue cancellation releases the ready-notification claim and attempt
   native.context.signal = controller.signal;
   let queueCalls = 0;
   await assert.rejects(
-    deliveryReceiptTestHooks.publishReadyToShipNotifications({
+    publishReadyToShipNotifications({
       context: native.context,
       deliveryId: 7,
       document,

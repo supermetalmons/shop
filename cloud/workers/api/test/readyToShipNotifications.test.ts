@@ -4,11 +4,6 @@ import { commerceFieldValue, commerceKeys, D1CommerceRepository, type CommerceDo
 import { createCommerceD1Harness, seedCommerceDocuments } from './commerceD1Harness.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
 import {
-  READY_NOTIFICATION_BUYER_STATE_FIELD,
-  READY_NOTIFICATION_SHIPPER_STATE_FIELD,
-  buildReadyNotificationReconciliationQuery,
-} from '../../../../shared/readyToShipNotificationReconciliation.ts';
-import {
   BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD,
   BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD,
   BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD,
@@ -210,23 +205,4 @@ test('semantic marker inspection rejects only the sibling with another valid ord
   }), { deliveryId: 7, dropId: 'card_nft_2' });
   assert.deepEqual(inspection.invalidStateFields, [BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD]);
   assert.deepEqual(inspection.pending.map((marker) => marker.kind), ['shipper_ready_to_ship']);
-});
-
-test('shared reconciliation query uses the full Commerce cursor reference', () => {
-  const referenceValue = 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7';
-  const query = buildReadyNotificationReconciliationQuery({
-    limit: 100,
-    startAfterDocumentPath: referenceValue,
-  }) as Record<string, any>;
-  assert.deepEqual(query.structuredQuery.startAt, {
-    before: false,
-    values: [{ referenceValue }],
-  });
-  assert.equal(query.structuredQuery.limit, 32);
-  assert.deepEqual(
-    query.structuredQuery.where.compositeFilter.filters[1].compositeFilter.filters.map(
-      (entry: Record<string, any>) => entry.fieldFilter.field.fieldPath,
-    ),
-    [READY_NOTIFICATION_BUYER_STATE_FIELD, READY_NOTIFICATION_SHIPPER_STATE_FIELD],
-  );
 });

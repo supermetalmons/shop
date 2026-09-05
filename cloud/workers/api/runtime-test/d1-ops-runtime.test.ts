@@ -6,10 +6,6 @@ import { createCommerceD1 } from '../test/commerceD1Harness.ts';
 import { createTestHarness } from 'wrangler';
 import { OPS_EXPIRY_CLEANUP_STATEMENTS } from '../../../../shared/opsExpiryCleanupSql.ts';
 import {
-  compareAndSetReadyNotificationCursor,
-  loadReadyNotificationCursor,
-} from '../src/d1ReadyNotificationCursor.ts';
-import {
   cleanupExpiredReceiptTransferRateLimitBuckets,
   consumeReceiptTransferRateLimit,
   RECEIPT_TRANSFER_CALLER_RATE_LIMIT,
@@ -78,7 +74,7 @@ function normalizeRuntimeRevealSubmission(
   };
 }
 
-test('ops D1 migrations preserve the notification cursor and receipt-transfer limits', async () => {
+test('ops D1 migrations preserve historical controls and receipt-transfer limits', async () => {
   const productionConfig = JSON.parse(readFileSync('cloud/workers/api/wrangler.jsonc', 'utf8'));
   const runtimeConfig = {
     ...productionConfig,
@@ -710,43 +706,15 @@ test('ops D1 migrations preserve the notification cursor and receipt-transfer li
         hint, email, label, created_at_ms, updated_at_ms
       ) VALUES (?, 'QbCdEfGhIjKlMnOpQrSt', 'cipher', 'US', 'US', 'hint', NULL, NULL, 0, 0)`,
     ).bind('So11111111111111111111111111111111111111112').run());
-    assert.deepEqual(await loadReadyNotificationCursor(env.OPS_DB, 1_000), {
-      cursorPath: null,
+    assert.deepEqual(await env.OPS_DB.prepare(
+      "SELECT * FROM worker_controls WHERE control_key = 'ready_notifications'",
+    ).first(), {
+      control_key: 'ready_notifications',
+      cursor_path: null,
       revision: 1,
-    });
-    await env.OPS_DB.prepare(
-      "DELETE FROM worker_controls WHERE control_key = 'ready_notifications'",
-    ).run();
-    assert.deepEqual(await loadReadyNotificationCursor(env.OPS_DB, 2_000), {
-      cursorPath: null,
-      revision: 1,
-    });
-    assert.equal(await compareAndSetReadyNotificationCursor(
-      env.OPS_DB,
-      'drops/card_nft_2/deliveryOrders/7',
-      1,
-      3_000,
-    ), true);
-    assert.equal(await compareAndSetReadyNotificationCursor(
-      env.OPS_DB,
-      'drops/card_nft_2/deliveryOrders/8',
-      1,
-      4_000,
-    ), false);
-    assert.deepEqual(await loadReadyNotificationCursor(env.OPS_DB, 5_000), {
-      cursorPath: 'drops/card_nft_2/deliveryOrders/7',
-      revision: 2,
-    });
-
-    assert.equal(await compareAndSetReadyNotificationCursor(
-      env.OPS_DB,
-      'drops/card_nft_2/deliveryOrders/8',
-      2,
-      6_000,
-    ), true);
-    assert.deepEqual(await loadReadyNotificationCursor(env.OPS_DB, 7_000), {
-      cursorPath: 'drops/card_nft_2/deliveryOrders/8',
-      revision: 3,
+      created_at_ms: 0,
+      updated_at_ms: 0,
+      cursor_updated_at_ms: null,
     });
     assert.equal(
       (await env.OPS_DB.prepare(`SELECT COUNT(*) AS count

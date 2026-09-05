@@ -7,13 +7,11 @@ export function formatOpsD1Report(): string {
     anonymousAuthSessionCount,
     profileAddressCount,
     profileCount,
-    readyNotificationCursor,
     revealSubmissionCount,
     revealSubmissionStorage,
     authWalletBindingCount,
   } = readRemoteOpsD1Integrity();
-  const cursor = readyNotificationCursor.cursorPath || 'none';
-  return `Ops D1 is healthy: anonymous auth ${anonymousAuthSessionCount} sessions; ready-notification cursor ${cursor}, revision ${readyNotificationCursor.revision}; reveal submissions ${revealSubmissionCount}, ${revealSubmissionStorage.paused ? 'paused' : 'active'}, revision ${revealSubmissionStorage.revision}; profiles ${profileCount}, addresses ${profileAddressCount}; auth-wallet bindings ${authWalletBindingCount}.`;
+  return `Ops D1 is healthy: anonymous auth ${anonymousAuthSessionCount} sessions; reveal submissions ${revealSubmissionCount}, ${revealSubmissionStorage.paused ? 'paused' : 'active'}, revision ${revealSubmissionStorage.revision}; profiles ${profileCount}, addresses ${profileAddressCount}; auth-wallet bindings ${authWalletBindingCount}.`;
 }
 
 function isDirectRun(): boolean {

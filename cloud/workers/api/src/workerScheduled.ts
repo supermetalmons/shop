@@ -1,9 +1,7 @@
 import { cleanupExpiredAnonymousAuthSessions } from './anonymousAuth.js';
 import { loadCommerceAuthorityControl } from './commerceRepository.js';
-import {
-  reconcilePendingDeliveryPackStatusProjections,
-  reconcilePendingReadyToShipNotifications,
-} from './deliveryReceipts.js';
+import { reconcilePendingDeliveryPackStatusProjections } from './deliveryReceipts.js';
+import { reconcilePendingReadyToShipNotifications } from './readyToShipNotificationReconciliation.js';
 import { cleanupExpiredReceiptTransferRateLimitBuckets } from './receiptTransferRateLimit.js';
 import { cleanupExpiredStaffAuthState } from './staffWalletAuth.js';
 import { reconcileStaleStripeFulfillments } from './stripeCheckoutReconciliation.js';
