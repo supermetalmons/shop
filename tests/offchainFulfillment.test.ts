@@ -63,10 +63,12 @@ import {
   stripeTestApiKey,
 } from '../cloud/workers/api/src/stripeCheckout/service.ts';
 import {
+  CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
   commerceKeys,
   type CommerceDocumentData,
+  type CommerceDocumentKey,
 } from '../cloud/workers/api/src/commerceRepository.ts';
 import {
   createCommerceD1Harness,
@@ -141,6 +143,11 @@ function stripeCommerceFixture(
 function commerceDocumentWriteBatches(calls: readonly CommerceD1CallObservation[]) {
   return calls.filter((call) => call.method === 'batch'
     && call.statements.some((statement) => /INSERT INTO commerce_documents/.test(statement.sql)));
+}
+
+function commerceDocumentReadBatches(calls: readonly CommerceD1CallObservation[]) {
+  return calls.filter((call) => call.method === 'batch'
+    && call.statements.some((statement) => /\bFROM commerce_documents\b/.test(statement.sql)));
 }
 
 function u32LE(value: number): Buffer {
@@ -1357,6 +1364,7 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
   });
 
   assert.equal(result.checkoutStatus, 'fulfilled');
+  assert.equal(commerceDocumentReadBatches(calls).length, 2);
   const orders = await repository.query({ kind: 'delivery_order', dropId });
   const markers = await repository.query({ kind: 'offchain_order', dropId });
   const claims = await repository.query({ kind: 'claim_code' });
@@ -1395,9 +1403,11 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
   assert.equal(notification.attemptCount, 0);
 });
 
-test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple claim codes', async (t) => {
+test('createOrGetStripeOffchainDeliveryOrder batches reads for the maximum checkout quantity', async (t) => {
   const dropId = 'little_swag_hoodies_devnet';
   const orderHashHex = 'ef'.repeat(32);
+  const metadataIds = Array.from({ length: STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY }, (_, index) => 16 + index);
+  const boxKeys = metadataIds.map((boxId) => `box_${boxId}`).sort();
   const markerKey = commerceKeys.offchainOrder(dropId, orderHashHex);
   const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
     status: STRIPE_CHECKOUT_STATUS.PROCESSING,
@@ -1416,7 +1426,7 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
       authSubject: 'anon_uid_multi',
       receiptOwner: pubkey(92).toBase58(),
       metadataId: 16,
-      metadataIds: [16, 17, 18],
+      metadataIds,
       variantKey: 'XL',
       stripeSession: { id: 'cs_test_multi' },
       receiptTx: 'txmulti',
@@ -1425,6 +1435,7 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
   });
 
   assert.equal(result.checkoutStatus, 'fulfilled');
+  assert.equal(commerceDocumentReadBatches(calls).length, 2);
   const orders = await repository.query({ kind: 'delivery_order', dropId });
   const markers = await repository.query({ kind: 'offchain_order', dropId });
   const claims = await repository.query({ kind: 'claim_code' });
@@ -1437,28 +1448,106 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
   const claimCreates = claims;
   assert.ok(orderCreate);
   assert.ok(markerCreate);
-  assert.equal(claimCreates.length, 3);
-  assert.deepEqual(claimCreates.map((entry) => entry.data.boxId).sort((a, b) => Number(a) - Number(b)), [16, 17, 18]);
-  assert.equal(new Set(claimCreates.map((entry) => entry.data.code)).size, 3);
-  assert.deepEqual(orderCreate.data.items, [
-    { kind: 'box', refId: 16, variantKey: 'XL' },
-    { kind: 'box', refId: 17, variantKey: 'XL' },
-    { kind: 'box', refId: 18, variantKey: 'XL' },
-  ]);
-  assert.equal(orderCreate.data.receiptsMinted, 3);
+  assert.equal(claimCreates.length, metadataIds.length);
+  assert.deepEqual(claimCreates.map((entry) => entry.data.boxId).sort((a, b) => Number(a) - Number(b)), metadataIds);
+  assert.equal(new Set(claimCreates.map((entry) => entry.data.code)).size, metadataIds.length);
+  assert.deepEqual(orderCreate.data.items, metadataIds.map((refId) => ({ kind: 'box', refId, variantKey: 'XL' })));
+  assert.equal(orderCreate.data.receiptsMinted, metadataIds.length);
   assert.equal('stripeReceiptClaims' in orderCreate.data, false);
-  assert.deepEqual(Object.keys(orderCreate.data.stripeReceiptClaimsByBoxId).sort(), ['box_16', 'box_17', 'box_18']);
-  assert.equal(markerCreate.data.quantity, 3);
-  assert.deepEqual(markerCreate.data.metadataIds, [16, 17, 18]);
-  assert.deepEqual(Object.keys(markerCreate.data.stripeReceiptClaimCodesByBoxId).sort(), ['box_16', 'box_17', 'box_18']);
+  assert.deepEqual(Object.keys(orderCreate.data.stripeReceiptClaimsByBoxId).sort(), boxKeys);
+  assert.equal(markerCreate.data.quantity, metadataIds.length);
+  assert.deepEqual(markerCreate.data.metadataIds, metadataIds);
+  assert.deepEqual(Object.keys(markerCreate.data.stripeReceiptClaimCodesByBoxId).sort(), boxKeys);
   assert.equal('stripeReceiptClaims' in markerCreate.data, false);
   assert.equal(checkout?.version, 2);
   assert.ok(checkout);
   assert.equal('fulfillmentCompletedBy' in checkout.data, false);
   assert.equal('fulfillmentCompletedAt' in checkout.data, false);
-  assert.deepEqual(checkout.data.metadataIds, [16, 17, 18]);
+  assert.deepEqual(checkout.data.metadataIds, metadataIds);
   assert.equal(Object.hasOwn(checkout.data, 'metadataId'), false);
-  assert.equal(checkout.data.quantity, 3);
+  assert.equal(checkout.data.quantity, metadataIds.length);
+});
+
+test('createOrGetStripeOffchainDeliveryOrder retries allocation collisions after preloading', async (t) => {
+  for (const collisionKind of ['delivery_order', 'claim_code'] as const) {
+    await t.test(collisionKind, async (t) => {
+      const dropId = 'little_swag_hoodies_devnet';
+      const orderHashHex = '56'.repeat(32);
+      const { harness, repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+        status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+        processingAttemptId: 'attempt_current',
+      }, { dropId });
+      let attempts = 0;
+      let collisions = 0;
+      let collisionKey: CommerceDocumentKey | undefined;
+      const collisionData = { owner: 'competing-owner', status: 'prepared', retained: true };
+      const competingCommerce: StripeCheckoutCommerceContext = {
+        ...commerce,
+        repository: {
+          get: repository.get.bind(repository),
+          run: (now, operation) => repository.run(now, async (unit) => {
+            attempts += 1;
+            const create = unit.create.bind(unit);
+            unit.create = async (key, data) => {
+              if (!collisionKey && key.kind === collisionKind) {
+                assert.equal(commerceDocumentReadBatches(calls).length, 2);
+                collisionKey = key;
+                seedCommerceDocument(harness, { key, data: collisionData });
+              }
+              return create(key, data);
+            };
+            return operation(unit);
+          }),
+        },
+      };
+
+      const result = await createOrGetStripeOffchainDeliveryOrder({
+        commerce: competingCommerce,
+        checkoutKey,
+        processingAttemptId: 'attempt_current',
+        isAlreadyExistsError: (error) => {
+          assert.ok(error instanceof CommerceWriteConflict);
+          assert.equal(error.code, 'already-exists');
+          collisions += 1;
+          return true;
+        },
+        order: {
+          dropId,
+          orderHashHex,
+          owner: 'anonymous:anon_uid_collision',
+          ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+          authSubject: 'anon_uid_collision',
+          receiptOwner: pubkey(93).toBase58(),
+          metadataIds: [16, 17],
+          variantKey: 'XL',
+          stripeSession: { id: 'cs_test_123' },
+          receiptTx: 'txcollision',
+          addressSnapshot: { encrypted: 'ciphertext', hint: 'Buyer, US' },
+        },
+      });
+
+      assert.equal(result.checkoutStatus, 'fulfilled');
+      assert.equal(attempts, 2);
+      assert.equal(collisions, 1);
+      assert.ok(collisionKey);
+      const collided = await repository.get(collisionKey);
+      assert.equal(collided?.version, 1);
+      assert.deepEqual(collided?.data, collisionData);
+      const orders = await repository.query({ kind: 'delivery_order', dropId });
+      const markers = await repository.query({ kind: 'offchain_order', dropId });
+      const claims = await repository.query({ kind: 'claim_code' });
+      assert.equal(orders.length, collisionKind === 'delivery_order' ? 2 : 1);
+      assert.equal(markers.length, 1);
+      assert.equal(claims.length, collisionKind === 'claim_code' ? 3 : 2);
+      assert.equal(markers[0].data.deliveryId, result.deliveryId);
+      const allocatedClaims = claims.filter((claim) => claim.key.path !== collisionKey.path);
+      assert.deepEqual(allocatedClaims.map((claim) => claim.data.boxId).sort(), [16, 17]);
+      assert.ok(allocatedClaims.every((claim) => claim.data.deliveryId === result.deliveryId));
+      const checkout = await repository.get(checkoutKey);
+      assert.equal(checkout?.version, 2);
+      assert.equal(checkout?.data.deliveryId, result.deliveryId);
+    });
+  }
 });
 
 test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the critical commerce transaction', async (t) => {
@@ -1570,6 +1659,7 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
   });
 
   assert.deepEqual(result, { deliveryId: 789, checkoutStatus: 'fulfilled' });
+  assert.equal(commerceDocumentReadBatches(calls).length, 1);
   assert.equal((await repository.query({ kind: 'delivery_order', dropId })).length, 0);
   assert.equal((await repository.query({ kind: 'claim_code' })).length, 0);
   assert.equal((await repository.get(markerKey))?.version, 1);
@@ -1587,6 +1677,7 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
   assert.equal(packStatusCalls.length, 1);
   assert.equal((packStatusCalls[0] as { deliveryId: number }).deliveryId, 789);
   const originalNotification = structuredClone(checkout.data.stripeTerminalNotification);
+  calls.length = 0;
   await assert.rejects(
     createOrGetStripeOffchainDeliveryOrder({
       commerce,
@@ -1612,6 +1703,8 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
     }),
     StripeCheckoutPackStatusProjectionError,
   );
+  assert.equal(commerceDocumentReadBatches(calls).length, 1);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 0);
   const retried = await repository.get(checkoutKey);
   assert.equal(retried?.data.status, STRIPE_CHECKOUT_STATUS.FULFILLED);
   assert.deepEqual(retried?.data.stripeTerminalNotification, originalNotification);
@@ -2565,10 +2658,46 @@ test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale
   });
 
   assert.deepEqual(result, { checkoutStatus: 'stale_processing_attempt' });
+  assert.equal(commerceDocumentReadBatches(calls).length, 1);
   assert.equal(commerceDocumentWriteBatches(calls).length, 0);
   assert.equal((await repository.query({ kind: 'delivery_order', dropId })).length, 0);
   assert.equal((await repository.query({ kind: 'offchain_order', dropId })).length, 0);
   assert.equal((await repository.query({ kind: 'claim_code' })).length, 0);
+  const checkout = await repository.get(checkoutKey);
+  assert.equal(checkout?.version, 1);
+  assert.deepEqual(checkout?.data, checkoutData);
+});
+
+test('createOrGetStripeOffchainDeliveryOrder skips candidate reads for fulfilled checkouts without a marker', async (t) => {
+  const dropId = 'little_swag_hoodies_devnet';
+  const checkoutData = { status: STRIPE_CHECKOUT_STATUS.FULFILLED, deliveryId: 789 };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData, { dropId });
+  const result = await createOrGetStripeOffchainDeliveryOrder({
+    commerce,
+    checkoutKey,
+    processingAttemptId: 'attempt_current',
+    isAlreadyExistsError: () => false,
+    order: {
+      dropId,
+      orderHashHex: '78'.repeat(32),
+      owner: 'anonymous:anon_uid_fulfilled',
+      ownerKind: STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS,
+      authSubject: 'anon_uid_fulfilled',
+      receiptOwner: pubkey(90).toBase58(),
+      metadataId: 16,
+      variantKey: 'XL',
+      stripeSession: { id: 'cs_test_123' },
+      receiptTx: 'txfulfilled',
+      addressSnapshot: { encrypted: 'ciphertext', hint: 'Buyer, US' },
+    },
+  });
+
+  assert.deepEqual(result, { deliveryId: 789, checkoutStatus: 'already_fulfilled' });
+  assert.equal(commerceDocumentReadBatches(calls).length, 1);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 0);
+  for (const kind of ['delivery_order', 'offchain_order', 'claim_code'] as const) {
+    assert.deepEqual(await repository.query({ kind }), []);
+  }
   const checkout = await repository.get(checkoutKey);
   assert.equal(checkout?.version, 1);
   assert.deepEqual(checkout?.data, checkoutData);

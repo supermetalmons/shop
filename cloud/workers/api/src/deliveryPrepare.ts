@@ -62,8 +62,8 @@ import {
 } from '../../../../shared/shipping.js';
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
+import { withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
-  createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
   raceReadWithSignal,
@@ -1245,115 +1245,100 @@ export async function handleDeliveryPrepare(
   overrides: Partial<DeliveryPrepareDependencies> = {},
 ): Promise<DeliveryPrepareResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  const metrics: DeliveryPrepareMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
-    try {
-      return await dependencies.providerFetch(input, init);
-    } finally {
-      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = errorResponse(new DeliveryPrepareError('invalid-argument', 'Method not allowed.'));
     response.headers.set('Allow', 'POST, OPTIONS');
     return {
       response: new Response(response.body, { headers: response.headers, status: 405 }),
-      metrics,
+      metrics: { upstreamCalls: 0, providerDurationMs: 0 },
       authOutcome: 'rejected',
     };
   }
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.timeoutMs,
+  return withAuthenticatedRequest<DeliveryPrepareResult>(request, {
+    opsDb: env.OPS_DB,
     timeoutMessage: 'Delivery preparation request timed out',
-  });
-  let identity: RequestIdentity | undefined;
-  let dropId: string | undefined;
-  try {
-    identity = await dependencies.verifyIdentity(
-      request,
-      env.OPS_DB,
-      deadline.signal,
-      dependencies.nowMs(),
-    );
-    const body = await readRequestBody(request, deadline.signal);
-    const requestedDropId = normalizeDropId(body.dropId);
-    dropId = dependencies.getDrop(requestedDropId) ? requestedDropId : undefined;
-    const apiKey = String(env.HELIUS_API_KEY || '').trim();
-    if (!apiKey || !String(env.COSIGNER_SECRET || '').trim()) {
-      throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
-    }
-    const nowMs = dependencies.nowMs();
-    const prepareAttemptId = request.headers.get(DELIVERY_PREPARE_ATTEMPT_HEADER)?.trim();
-    if (prepareAttemptId && !ATTEMPT_ID_PATTERN.test(prepareAttemptId)) {
-      throw new DeliveryPrepareError('invalid-argument', 'Invalid delivery preparation attempt.');
-    }
-    const response = await prepareDelivery({
-      body,
-      identity,
-      env,
-      dependencies,
-      defer: dependencies.defer,
-      runCritical: (start) => runCriticalRequestOperation(start, {
-        deadline,
+    dependencies,
+  }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
+    let identity: RequestIdentity | undefined;
+    let dropId: string | undefined;
+    try {
+      identity = await authenticate();
+      const body = await readRequestBody(request, deadline.signal);
+      const requestedDropId = normalizeDropId(body.dropId);
+      dropId = dependencies.getDrop(requestedDropId) ? requestedDropId : undefined;
+      const apiKey = String(env.HELIUS_API_KEY || '').trim();
+      if (!apiKey || !String(env.COSIGNER_SECRET || '').trim()) {
+        throw new DeliveryPrepareError('unavailable', 'Delivery preparation is temporarily unavailable.');
+      }
+      const nowMs = dependencies.nowMs();
+      const prepareAttemptId = request.headers.get(DELIVERY_PREPARE_ATTEMPT_HEADER)?.trim();
+      if (prepareAttemptId && !ATTEMPT_ID_PATTERN.test(prepareAttemptId)) {
+        throw new DeliveryPrepareError('invalid-argument', 'Invalid delivery preparation attempt.');
+      }
+      const response = await prepareDelivery({
+        body,
+        identity,
+        env,
+        dependencies,
         defer: dependencies.defer,
-        ignoreDeferredErrors: true,
-      }),
-      runRead: (operation) => raceReadWithSignal(operation, deadline.signal),
-      ...(prepareAttemptId ? { prepareAttemptId } : {}),
-      context: {
-        nowMs,
-        repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
-        signal: deadline.signal,
-      },
-      providerContext: {
-        apiKey,
-        providerFetch: trackedFetch,
-        signal: deadline.signal,
-      },
-    });
-    return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted', dropId };
-  } catch (error) {
-    rethrowDeferredWorkRegistrationError(error);
-    if (isRequestCancellationError(request, error)) throw error;
-    let deliveryError: DeliveryPrepareError;
-    let authOutcome: DeliveryPrepareResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-    if (error instanceof DeliveryPrepareError) {
-      deliveryError = error;
-      if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-        authOutcome = 'rejected';
-      }
-    } else if (error instanceof RequestIdentityError) {
-      deliveryError = error.kind === 'invalid-token'
-        ? new DeliveryPrepareError('unauthenticated', 'Authentication is required.')
-        : error.kind === 'provider-timeout'
-          ? new DeliveryPrepareError('deadline-exceeded', 'Delivery preparation request timed out.')
-          : new DeliveryPrepareError('unavailable', 'Authentication is temporarily unavailable.');
-      authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
-    } else if (error instanceof ProfileReadError) {
-      deliveryError = new DeliveryPrepareError(error.code, error.message, error.details);
-      if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-        authOutcome = 'rejected';
-      }
-    } else if (error instanceof CommerceWriteConflict) {
-      deliveryError = new DeliveryPrepareError('aborted', 'Delivery preparation conflicted. Try again.');
-      authOutcome = 'rejected';
-    } else if (deadline.timedOut()) {
-      deliveryError = new DeliveryPrepareError('deadline-exceeded', 'Delivery preparation request timed out.');
-    } else {
-      console.error({
-        event: 'delivery_prepare_failed',
-        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+        runCritical: (start) => runCriticalRequestOperation(start, {
+          deadline,
+          defer: dependencies.defer,
+          ignoreDeferredErrors: true,
+        }),
+        runRead: (operation) => raceReadWithSignal(operation, deadline.signal),
+        ...(prepareAttemptId ? { prepareAttemptId } : {}),
+        context: {
+          nowMs,
+          repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
+          signal: deadline.signal,
+        },
+        providerContext: {
+          apiKey,
+          providerFetch: trackedFetch,
+          signal: deadline.signal,
+        },
       });
-      deliveryError = new DeliveryPrepareError('internal', 'Delivery preparation failed.');
+      return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted', dropId };
+    } catch (error) {
+      rethrowDeferredWorkRegistrationError(error);
+      if (isRequestCancellationError(request, error)) throw error;
+      let deliveryError: DeliveryPrepareError;
+      let authOutcome: DeliveryPrepareResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
+      if (error instanceof DeliveryPrepareError) {
+        deliveryError = error;
+        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
+          authOutcome = 'rejected';
+        }
+      } else if (error instanceof RequestIdentityError) {
+        deliveryError = error.kind === 'invalid-token'
+          ? new DeliveryPrepareError('unauthenticated', 'Authentication is required.')
+          : error.kind === 'provider-timeout'
+            ? new DeliveryPrepareError('deadline-exceeded', 'Delivery preparation request timed out.')
+            : new DeliveryPrepareError('unavailable', 'Authentication is temporarily unavailable.');
+        authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
+      } else if (error instanceof ProfileReadError) {
+        deliveryError = new DeliveryPrepareError(error.code, error.message, error.details);
+        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
+          authOutcome = 'rejected';
+        }
+      } else if (error instanceof CommerceWriteConflict) {
+        deliveryError = new DeliveryPrepareError('aborted', 'Delivery preparation conflicted. Try again.');
+        authOutcome = 'rejected';
+      } else if (deadline.timedOut()) {
+        deliveryError = new DeliveryPrepareError('deadline-exceeded', 'Delivery preparation request timed out.');
+      } else {
+        console.error({
+          event: 'delivery_prepare_failed',
+          error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+        });
+        deliveryError = new DeliveryPrepareError('internal', 'Delivery preparation failed.');
+      }
+      if (!identity) await request.body?.cancel().catch(() => undefined);
+      return { response: errorResponse(deliveryError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
     }
-    if (!identity) await request.body?.cancel().catch(() => undefined);
-    return { response: errorResponse(deliveryError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
-  } finally {
-    deadline.dispose();
-  }
+  });
 }
 
 export const deliveryPrepareTestHooks = {

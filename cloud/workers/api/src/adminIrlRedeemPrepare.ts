@@ -82,8 +82,8 @@ import {
   type RequestIdentity,
 } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
+import { withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
-  createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
   raceReadWithSignal,
@@ -1233,130 +1233,115 @@ export async function handleAdminIrlRedeemPrepare(
   overrides: Partial<AdminIrlRedeemPrepareDependencies> = {},
 ): Promise<AdminIrlRedeemPrepareResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  const metrics: AdminIrlRedeemPrepareMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
-    try {
-      return await dependencies.providerFetch(input, init);
-    } finally {
-      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = errorResponse(new AdminIrlRedeemPrepareError('invalid-argument', 'Method not allowed.'));
     response.headers.set('Allow', 'POST, OPTIONS');
     return {
       response: new Response(response.body, { headers: response.headers, status: 405 }),
-      metrics,
+      metrics: { upstreamCalls: 0, providerDurationMs: 0 },
       authOutcome: 'rejected',
     };
   }
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.timeoutMs,
+  return withAuthenticatedRequest<AdminIrlRedeemPrepareResult>(request, {
+    opsDb: env.OPS_DB,
     timeoutMessage: 'Admin IRL redeem preparation timed out',
-  });
-  let identity: RequestIdentity | undefined;
-  let dropId: string | undefined;
-  let targetKind: AdminIrlRedeemTargetKind | undefined;
-  let itemCount: number | undefined;
-  try {
-    const body = await readRequestBody(request, deadline.signal);
-    dropId = normalizeDropId(body.dropId);
-    itemCount = body.itemIds.length;
-    identity = await dependencies.verifyIdentity(
-      request,
-      env.OPS_DB,
-      deadline.signal,
-      dependencies.nowMs(),
-    );
-    if (!isStaffRequestIdentity(identity)) {
-      throw new AdminIrlRedeemPrepareError('unauthenticated', 'Staff wallet authentication is required.');
-    }
-    const apiKey = String(env.HELIUS_API_KEY || '').trim();
-    if (!apiKey) {
-      throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem preparation is temporarily unavailable.');
-    }
-    const prepareAttemptId = request.headers.get(ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER)?.trim();
-    if (prepareAttemptId && !ATTEMPT_ID_PATTERN.test(prepareAttemptId)) {
-      throw new AdminIrlRedeemPrepareError('invalid-argument', 'Invalid Admin IRL redeem preparation attempt.');
-    }
-    const nowMs = dependencies.nowMs();
-    const response = await prepareAdminIrlRedeem({
-      body,
-      db: env.OPS_DB,
-      identity,
-      dependencies,
-      runCritical: (start) => runCriticalRequestOperation(start, {
-        deadline,
-        defer: dependencies.defer,
-        ignoreDeferredErrors: true,
-      }),
-      runRead: (operation) => raceReadWithSignal(operation, deadline.signal),
-      ...(prepareAttemptId ? { prepareAttemptId } : {}),
-      commerceContext: {
-        nowMs,
-        repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
-        signal: deadline.signal,
-      },
-      providerContext: {
-        apiKey,
-        providerFetch: trackedFetch,
-        signal: deadline.signal,
-      },
-    });
-    targetKind = response.targetKind;
-    return {
-      response: jsonResponse(response, 200),
-      metrics,
-      authOutcome: 'accepted',
-      dropId: response.dropId,
-      targetKind,
-      itemCount: response.itemCount,
-    };
-  } catch (error) {
-    rethrowDeferredWorkRegistrationError(error);
-    if (isRequestCancellationError(request, error)) throw error;
-    let prepareError: AdminIrlRedeemPrepareError;
-    let authOutcome: AdminIrlRedeemPrepareResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-    if (deadline.timedOut()) {
-      prepareError = new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem preparation timed out.');
-    } else if (error instanceof AdminIrlRedeemPrepareError) {
-      prepareError = error;
-      if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-        authOutcome = 'rejected';
+    dependencies,
+  }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
+    let identity: RequestIdentity | undefined;
+    let dropId: string | undefined;
+    let targetKind: AdminIrlRedeemTargetKind | undefined;
+    let itemCount: number | undefined;
+    try {
+      const body = await readRequestBody(request, deadline.signal);
+      dropId = normalizeDropId(body.dropId);
+      itemCount = body.itemIds.length;
+      identity = await authenticate();
+      if (!isStaffRequestIdentity(identity)) {
+        throw new AdminIrlRedeemPrepareError('unauthenticated', 'Staff wallet authentication is required.');
       }
-    } else if (error instanceof RequestIdentityError) {
-      prepareError = error.kind === 'invalid-token'
-        ? new AdminIrlRedeemPrepareError('unauthenticated', 'Authentication is required.')
-        : error.kind === 'provider-timeout'
-          ? new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem preparation timed out.')
-          : new AdminIrlRedeemPrepareError('unavailable', 'Authentication is temporarily unavailable.');
-      authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
-    } else if (error instanceof ProfileReadError) {
-      prepareError = new AdminIrlRedeemPrepareError(error.code, error.message, error.details);
-      if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-        authOutcome = 'rejected';
+      const apiKey = String(env.HELIUS_API_KEY || '').trim();
+      if (!apiKey) {
+        throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem preparation is temporarily unavailable.');
       }
-    } else {
-      console.error({
-        event: 'admin_irl_redeem_prepare_failed',
-        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+      const prepareAttemptId = request.headers.get(ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER)?.trim();
+      if (prepareAttemptId && !ATTEMPT_ID_PATTERN.test(prepareAttemptId)) {
+        throw new AdminIrlRedeemPrepareError('invalid-argument', 'Invalid Admin IRL redeem preparation attempt.');
+      }
+      const nowMs = dependencies.nowMs();
+      const response = await prepareAdminIrlRedeem({
+        body,
+        db: env.OPS_DB,
+        identity,
+        dependencies,
+        runCritical: (start) => runCriticalRequestOperation(start, {
+          deadline,
+          defer: dependencies.defer,
+          ignoreDeferredErrors: true,
+        }),
+        runRead: (operation) => raceReadWithSignal(operation, deadline.signal),
+        ...(prepareAttemptId ? { prepareAttemptId } : {}),
+        commerceContext: {
+          nowMs,
+          repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
+          signal: deadline.signal,
+        },
+        providerContext: {
+          apiKey,
+          providerFetch: trackedFetch,
+          signal: deadline.signal,
+        },
       });
-      prepareError = new AdminIrlRedeemPrepareError('internal', 'Admin IRL redeem preparation failed.');
+      targetKind = response.targetKind;
+      return {
+        response: jsonResponse(response, 200),
+        metrics,
+        authOutcome: 'accepted',
+        dropId: response.dropId,
+        targetKind,
+        itemCount: response.itemCount,
+      };
+    } catch (error) {
+      rethrowDeferredWorkRegistrationError(error);
+      if (isRequestCancellationError(request, error)) throw error;
+      let prepareError: AdminIrlRedeemPrepareError;
+      let authOutcome: AdminIrlRedeemPrepareResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
+      if (deadline.timedOut()) {
+        prepareError = new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem preparation timed out.');
+      } else if (error instanceof AdminIrlRedeemPrepareError) {
+        prepareError = error;
+        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
+          authOutcome = 'rejected';
+        }
+      } else if (error instanceof RequestIdentityError) {
+        prepareError = error.kind === 'invalid-token'
+          ? new AdminIrlRedeemPrepareError('unauthenticated', 'Authentication is required.')
+          : error.kind === 'provider-timeout'
+            ? new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem preparation timed out.')
+            : new AdminIrlRedeemPrepareError('unavailable', 'Authentication is temporarily unavailable.');
+        authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
+      } else if (error instanceof ProfileReadError) {
+        prepareError = new AdminIrlRedeemPrepareError(error.code, error.message, error.details);
+        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
+          authOutcome = 'rejected';
+        }
+      } else {
+        console.error({
+          event: 'admin_irl_redeem_prepare_failed',
+          error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+        });
+        prepareError = new AdminIrlRedeemPrepareError('internal', 'Admin IRL redeem preparation failed.');
+      }
+      return {
+        response: errorResponse(prepareError),
+        metrics,
+        authOutcome,
+        ...(dropId ? { dropId } : {}),
+        ...(targetKind ? { targetKind } : {}),
+        ...(itemCount === undefined ? {} : { itemCount }),
+      };
     }
-    return {
-      response: errorResponse(prepareError),
-      metrics,
-      authOutcome,
-      ...(dropId ? { dropId } : {}),
-      ...(targetKind ? { targetKind } : {}),
-      ...(itemCount === undefined ? {} : { itemCount }),
-    };
-  } finally {
-    deadline.dispose();
-  }
+  });
 }
 
 export const adminIrlRedeemPrepareTestHooks = {

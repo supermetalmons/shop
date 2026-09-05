@@ -1568,6 +1568,40 @@ async function rethrowUnbroadcastFinalizeCancellation(args: {
   throw args.commerce.signal.reason;
 }
 
+async function executePendingFinalizeSubmission(args: {
+  commerce: CommerceContext;
+  provider: ProviderContext;
+  runtime: Runtime;
+  path: string;
+  attemptId: string;
+  pending: PendingFinalizeSubmission;
+  connection: Connection;
+  transaction: VersionedTransaction;
+  label: string;
+}): Promise<void> {
+  await persistPendingFinalizeSubmission(args.commerce, args.path, args.attemptId, args.pending);
+  let broadcastStarted = false;
+  try {
+    await sendAndConfirmSignedTransaction(
+      args.connection,
+      args.transaction,
+      args.commerce.signal,
+      args.label,
+      () => { broadcastStarted = true; },
+    );
+    await settlePendingFinalizeSubmission(args.commerce, args.path, args.attemptId, args.pending, 'confirmed');
+  } catch (error) {
+    await rethrowUnbroadcastFinalizeCancellation({ ...args, broadcastStarted, error });
+    if (isDefinitiveTransactionFailure(error)) {
+      await clearDefinitiveFinalizeSubmission(args);
+      throw error;
+    }
+    const outcome = await reconcilePendingFinalizeSubmission(args).catch(() => 'unresolved' as const);
+    if (outcome === 'unresolved') throw pendingFinalizeSubmissionError(error, args.commerce.signal);
+    if (outcome === 'expired') throw error;
+  }
+}
+
 async function reconcileStartedRequestSubmission(args: {
   commerce: CommerceContext;
   provider: ProviderContext;
@@ -1648,52 +1682,17 @@ async function mintPackReceipts(
             blockhash,
             assetIds: batch.map((item) => item.asset.toBase58()),
           };
-          await persistPendingFinalizeSubmission(commerce, path, attemptId, pendingSubmission);
-          let broadcastStarted = false;
-          try {
-            await sendAndConfirmSignedTransaction(
-              connection,
-              transaction,
-              commerce.signal,
-              'Admin IRL receipt mint',
-              () => { broadcastStarted = true; },
-            );
-            await settlePendingFinalizeSubmission(
-              commerce,
-              path,
-              attemptId,
-              pendingSubmission,
-              'confirmed',
-            );
-          } catch (error) {
-            await rethrowUnbroadcastFinalizeCancellation({
-              broadcastStarted,
-              commerce,
-              error,
-              path,
-              attemptId,
-              pending: pendingSubmission,
-            });
-            if (isDefinitiveTransactionFailure(error)) {
-              await clearDefinitiveFinalizeSubmission({
-                commerce,
-                path,
-                attemptId,
-                pending: pendingSubmission,
-              });
-              throw error;
-            }
-            const outcome = await reconcilePendingFinalizeSubmission({
-              commerce,
-              provider,
-              runtime,
-              path,
-              attemptId,
-              pending: pendingSubmission,
-            }).catch(() => 'unresolved' as const);
-            if (outcome === 'unresolved') throw pendingFinalizeSubmissionError(error, commerce.signal);
-            if (outcome === 'expired') throw error;
-          }
+          await executePendingFinalizeSubmission({
+            commerce,
+            provider,
+            runtime,
+            path,
+            attemptId,
+            pending: pendingSubmission,
+            connection,
+            transaction,
+            label: 'Admin IRL receipt mint',
+          });
           if (!receiptTxs.includes(signature)) receiptTxs.push(signature);
           pending.splice(0, batchSize);
           completed = true;
@@ -1802,52 +1801,17 @@ async function ensureInternalDelivery(
       deliveryId,
       deliveryPda: deliveryPda.toBase58(),
     };
-    await persistPendingFinalizeSubmission(commerce, path, attemptId, pendingSubmission);
-    let broadcastStarted = false;
-    try {
-      await sendAndConfirmSignedTransaction(
-        connection,
-        transaction,
-        commerce.signal,
-        'Admin IRL internal delivery',
-        () => { broadcastStarted = true; },
-      );
-      await settlePendingFinalizeSubmission(
-        commerce,
-        path,
-        attemptId,
-        pendingSubmission,
-        'confirmed',
-      );
-    } catch (error) {
-      await rethrowUnbroadcastFinalizeCancellation({
-        broadcastStarted,
-        commerce,
-        error,
-        path,
-        attemptId,
-        pending: pendingSubmission,
-      });
-      if (isDefinitiveTransactionFailure(error)) {
-        await clearDefinitiveFinalizeSubmission({
-          commerce,
-          path,
-          attemptId,
-          pending: pendingSubmission,
-        });
-        throw error;
-      }
-      const outcome = await reconcilePendingFinalizeSubmission({
-        commerce,
-        provider,
-        runtime,
-        path,
-        attemptId,
-        pending: pendingSubmission,
-      }).catch(() => 'unresolved' as const);
-      if (outcome === 'unresolved') throw pendingFinalizeSubmissionError(error, commerce.signal);
-      if (outcome === 'expired') throw error;
-    }
+    await executePendingFinalizeSubmission({
+      commerce,
+      provider,
+      runtime,
+      path,
+      attemptId,
+      pending: pendingSubmission,
+      connection,
+      transaction,
+      label: 'Admin IRL internal delivery',
+    });
     const result = { deliveryId, deliveryPda: deliveryPda.toBase58(), deliveryTx: signature };
     return result;
   };
@@ -3589,6 +3553,7 @@ export async function loadAdminIrlRedeemFinalizeWorkflowOperation(args: Readonly
 export const adminIrlRedeemFinalizeTestHooks = {
   clearDefinitiveFinalizeSubmission,
   completeResponse,
+  ensureInternalDelivery,
   findReceiptAssets,
   normalizeItems,
   normalizePendingFinalizeSubmission,

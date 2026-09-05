@@ -1892,6 +1892,167 @@ test('Admin IRL pre-broadcast cancellation clears only its exact submission inte
   assert.equal(document?.data.pendingFinalizeSubmission, undefined);
 });
 
+for (const kind of ['receipt_mint', 'internal_delivery'] as const) {
+  for (const outcome of ['confirmed', 'definitive_failure', 'cancelled_before_broadcast', 'cancelled_after_broadcast'] as const) {
+    test(`Admin IRL ${kind} preserves submission persistence on ${outcome}`, { timeout: 5_000 }, async () => {
+      const controller = new AbortController();
+      const reason = new Error(`cancelled ${kind}`);
+      let cancelAfterPersist = outcome === 'cancelled_before_broadcast';
+      const context = commerceContext({
+        dropId: DROP_ID,
+        owner: OWNER,
+        status: 'processing',
+        processingAttemptId: 'attempt',
+        receiptTxs: [],
+      }, {
+        observeBatchAfterCommit: ({ statements }) => {
+          if (cancelAfterPersist && statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))) {
+            cancelAfterPersist = false;
+            controller.abort(reason);
+          }
+        },
+      });
+      context.signal = controller.signal;
+      const key = commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID);
+      const readRequest = () => readCommerceRecord({ ...context, signal: new AbortController().signal }, key);
+      const runtime = {
+        ...adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]),
+        deliveryLookupTable: undefined,
+      };
+      const signer = Keypair.generate();
+      const collection = Keypair.generate().publicKey;
+      const asset = Keypair.generate().publicKey;
+      const blockhash = Keypair.generate().publicKey.toBase58();
+      const [deliveryPda] = deriveDeliveryPda(runtime, 7);
+      const onchain: Parameters<typeof adminIrlRedeemFinalizeTestHooks.ensureInternalDelivery>[4] = {
+        admin: signer.publicKey,
+        coreCollection: collection,
+        decoded: {
+          admin: signer.publicKey.toBytes(),
+          treasury: new PublicKey(OWNER).toBytes(),
+          coreCollection: collection.toBytes(),
+          priceLamports: 1n,
+          discountPriceLamports: 1n,
+          discountMerkleRoot: new Uint8Array(32),
+          discountMintsPerWallet: runtime.config.discountMintsPerWallet,
+          maxSupply: runtime.config.maxSupply,
+          maxPerTx: runtime.config.maxPerTx,
+          itemsPerBox: runtime.config.itemsPerBox,
+          started: true,
+          minted: 7,
+          namePrefix: runtime.config.namePrefix,
+          figureNamePrefix: runtime.config.figureNamePrefix,
+          symbol: runtime.config.symbol,
+          uriBase: runtime.config.metadataBase,
+          bump: 1,
+          mintVariantKind: 0,
+          mintVariantStartIds: [0, 0, 0],
+          mintVariantEndIds: [0, 0, 0],
+          mintVariantNextIds: [0, 0, 0],
+        },
+      };
+      let sendCount = 0;
+      let sentSignature: string | undefined;
+      const connection = {
+        getAccountInfo: async () => null,
+        getMultipleAccountsInfo: async () => [{ data: Buffer.alloc(2) }],
+        getLatestBlockhash: async () => ({ blockhash, lastValidBlockHeight: 100 }),
+        sendTransaction: async (transaction: VersionedTransaction) => {
+          sendCount += 1;
+          sentSignature = bs58.encode(transaction.signatures[0]);
+          const document = await readRequest();
+          assert.deepEqual(document?.data.pendingFinalizeSubmission, {
+            kind,
+            signature: sentSignature,
+            blockhash,
+            ...(kind === 'receipt_mint'
+              ? { assetIds: [asset.toBase58()] }
+              : { deliveryId: 7, deliveryPda: deliveryPda.toBase58() }),
+          });
+          assert.deepEqual(document?.data.receiptTxs, []);
+          assert.equal(document?.data.internalDeliveryTx, undefined);
+          if (outcome === 'definitive_failure') {
+            throw Object.assign(new Error('simulation failed'), { logs: ['Program failed'] });
+          }
+          if (outcome === 'cancelled_after_broadcast') controller.abort(reason);
+          return sentSignature;
+        },
+        getSignatureStatuses: async () => ({
+          value: [{ confirmationStatus: 'confirmed', confirmations: 1, err: null, slot: 1 }],
+        }),
+      } as unknown as Connection;
+      const recoveryCalls: string[] = [];
+      const provider = {
+        apiKey: 'helius',
+        signal: controller.signal,
+        providerFetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
+          assert.equal(outcome, 'cancelled_after_broadcast');
+          assert.equal(init?.signal?.aborted, false);
+          const request = JSON.parse(String(init?.body)) as { id: string; method: string };
+          recoveryCalls.push(request.method);
+          assert.equal(request.method, 'getSignatureStatuses');
+          return Response.json({
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+              context: { slot: 1 },
+              value: [{ confirmationStatus: 'processed', confirmations: 0, err: null, slot: 1 }],
+            },
+          });
+        },
+      };
+      const execute = () => kind === 'receipt_mint'
+        ? adminIrlRedeemFinalizeTestHooks.mintPackReceipts(
+          connection, provider, runtime, signer, collection,
+          [{ assetId: asset.toBase58(), kind: 'box', refId: 7 }],
+          context, key.path, 'attempt', [],
+        )
+        : adminIrlRedeemFinalizeTestHooks.ensureInternalDelivery(
+          connection, provider, runtime, signer, onchain,
+          context, key.path, 'attempt', {
+            adminWallet: OWNER,
+            requestId: REQUEST_ID,
+            dropId: DROP_ID,
+            owner: OWNER,
+            targetKind: 'pack',
+            itemIds: [asset.toBase58()],
+            items: [{ assetId: asset.toBase58(), kind: 'box', refId: 7 }],
+            receiptTxs: [],
+            internalDeliveryId: 7,
+            internalDeliveryPda: deliveryPda.toBase58(),
+          },
+        );
+      if (outcome === 'confirmed') {
+        const result = await execute();
+        assert.deepEqual(result, kind === 'receipt_mint'
+          ? [sentSignature]
+          : { deliveryId: 7, deliveryPda: deliveryPda.toBase58(), deliveryTx: sentSignature });
+      } else {
+        await assert.rejects(execute, (error: unknown) => {
+          if (outcome === 'cancelled_before_broadcast') return error === reason;
+          if (outcome === 'cancelled_after_broadcast') {
+            return error instanceof Error && error.name === 'PendingFinalizeSubmissionError' && error.cause === reason;
+          }
+          return error instanceof Error && 'code' in error && error.code === 'failed-precondition';
+        });
+      }
+      const document = await readRequest();
+      assert.equal(document?.data.status, 'processing');
+      assert.equal(document?.data.processingAttemptId, 'attempt');
+      if (outcome === 'cancelled_after_broadcast') {
+        assert.deepEqual(recoveryCalls, ['getSignatureStatuses']);
+        assert.equal((document?.data.pendingFinalizeSubmission as { signature?: string }).signature, sentSignature);
+      } else {
+        assert.deepEqual(recoveryCalls, []);
+        assert.equal(document?.data.pendingFinalizeSubmission, undefined);
+      }
+      assert.deepEqual(document?.data.receiptTxs, outcome === 'confirmed' && kind === 'receipt_mint' ? [sentSignature] : []);
+      assert.equal(document?.data.internalDeliveryTx, outcome === 'confirmed' && kind === 'internal_delivery' ? sentSignature : undefined);
+      assert.equal(sendCount, outcome === 'cancelled_before_broadcast' ? 0 : outcome === 'definitive_failure' && kind === 'receipt_mint' ? 3 : 1);
+    });
+  }
+}
+
 test('Admin IRL receipt mint rethrows cancellation on its final retry', { timeout: 5_000 }, async () => {
   const controller = new AbortController();
   const reason = new Error('cancelled on final receipt mint attempt');

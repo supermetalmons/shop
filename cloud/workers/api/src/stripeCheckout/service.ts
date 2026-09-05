@@ -969,8 +969,7 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
 
     try {
       const operation = () => runCommerceTransaction(commerce, async (tx) => {
-        const marker = await tx.get(markerKey);
-        const checkoutSnap = await tx.get(checkoutKey);
+        const [marker, checkoutSnap] = await tx.getMany([markerKey, checkoutKey]);
         const checkout = checkoutSnap?.data ?? null;
         const checkoutStatus = stripeCheckoutFulfilledWriteStatus(
           params.processingAttemptId ? checkout : null,
@@ -1018,6 +1017,7 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
           metadataIds,
           stripeReceiptClaims,
         };
+        await tx.getMany([orderKey, ...claimKeys]);
         await tx.create(orderKey, stripeCheckoutWriteData({
           ...buildStripeOffchainDeliveryOrderDocument(deliveryOrder),
           processedAt: commerceFieldValue.serverTimestamp(),

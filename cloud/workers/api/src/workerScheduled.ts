@@ -22,42 +22,62 @@ async function cleanupScheduledOpsState(
   signal: AbortSignal,
 ): Promise<void> {
   if (signal.aborted) throw signal.reason;
-  const result = await cleanupExpiredReceiptTransferRateLimitBuckets(env.OPS_DB, Date.now());
-  if (signal.aborted) throw signal.reason;
-  if (result.deletedCount > 0) {
-    console.log({
-      event: 'receipt_transfer_rate_limit_cleanup_completed',
-      deletedCount: result.deletedCount,
-      limitReached: result.limitReached,
-      hasMore: result.hasMore,
-    });
+  const cleanups = [
+    async function cleanupReceiptTransferRateLimits() {
+      const result = await cleanupExpiredReceiptTransferRateLimitBuckets(env.OPS_DB, Date.now());
+      if (result.deletedCount > 0) {
+        console.log({
+          event: 'receipt_transfer_rate_limit_cleanup_completed',
+          deletedCount: result.deletedCount,
+          limitReached: result.limitReached,
+          hasMore: result.hasMore,
+        });
+      }
+      if (result.limitReached && result.hasMore) {
+        console.error({
+          event: 'receipt_transfer_rate_limit_cleanup_backlog',
+          deletedCount: result.deletedCount,
+        });
+      }
+    },
+    async function cleanupStaffAuth() {
+      const staffAuthCleanup = await cleanupExpiredStaffAuthState(env.OPS_DB, Date.now());
+      if (
+        staffAuthCleanup.challengesDeleted > 0 ||
+        staffAuthCleanup.sessionsDeleted > 0
+      ) {
+        console.log({
+          event: 'staff_auth_cleanup_completed',
+          ...staffAuthCleanup,
+        });
+      }
+      if (staffAuthCleanup.limitReached && staffAuthCleanup.hasMore) {
+        console.error({ event: 'staff_auth_cleanup_backlog', ...staffAuthCleanup });
+      }
+    },
+    async function cleanupAnonymousAuth() {
+      const anonymousAuthCleanup = await cleanupExpiredAnonymousAuthSessions(env.OPS_DB, Date.now());
+      if (anonymousAuthCleanup.deletedCount > 0) {
+        console.log({ event: 'anonymous_auth_cleanup_completed', ...anonymousAuthCleanup });
+      }
+      if (anonymousAuthCleanup.limitReached && anonymousAuthCleanup.hasMore) {
+        console.error({ event: 'anonymous_auth_cleanup_backlog', ...anonymousAuthCleanup });
+      }
+    },
+  ];
+  const failures: unknown[] = [];
+  for (const cleanup of cleanups) {
+    try {
+      await cleanup();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (signal.aborted) {
+      if (!failures.includes(signal.reason)) failures.push(signal.reason);
+      break;
+    }
   }
-  if (result.limitReached && result.hasMore) {
-    console.error({
-      event: 'receipt_transfer_rate_limit_cleanup_backlog',
-      deletedCount: result.deletedCount,
-    });
-  }
-  const staffAuthCleanup = await cleanupExpiredStaffAuthState(env.OPS_DB, Date.now());
-  if (
-    staffAuthCleanup.challengesDeleted > 0 ||
-    staffAuthCleanup.sessionsDeleted > 0
-  ) {
-    console.log({
-      event: 'staff_auth_cleanup_completed',
-      ...staffAuthCleanup,
-    });
-  }
-  if (staffAuthCleanup.limitReached && staffAuthCleanup.hasMore) {
-    console.error({ event: 'staff_auth_cleanup_backlog', ...staffAuthCleanup });
-  }
-  const anonymousAuthCleanup = await cleanupExpiredAnonymousAuthSessions(env.OPS_DB, Date.now());
-  if (anonymousAuthCleanup.deletedCount > 0) {
-    console.log({ event: 'anonymous_auth_cleanup_completed', ...anonymousAuthCleanup });
-  }
-  if (anonymousAuthCleanup.limitReached && anonymousAuthCleanup.hasMore) {
-    console.error({ event: 'anonymous_auth_cleanup_backlog', ...anonymousAuthCleanup });
-  }
+  if (failures.length) throw new AggregateError(failures, 'Scheduled OPS cleanup failed');
 }
 
 const defaultScheduledReconcilers: ScheduledReconcilers = {

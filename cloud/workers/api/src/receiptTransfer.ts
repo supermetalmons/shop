@@ -63,8 +63,8 @@ import {
 } from './receiptTransferRateLimit.js';
 import { RequestIdentityError, requestIdentitySubject, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
+import { withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
-  createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
   readBoundedRequestJson,
@@ -885,101 +885,86 @@ export async function handleReceiptTransferPrepare(
   overrides: Partial<ReceiptTransferDependencies> = {},
 ): Promise<ReceiptTransferResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  const metrics: ReceiptTransferMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
-    try {
-      return await dependencies.providerFetch(input, init);
-    } finally {
-      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = errorResponse(new ReceiptTransferError('invalid-argument', 'Method not allowed.'));
     response.headers.set('Allow', 'POST, OPTIONS');
     return {
       response: new Response(response.body, { headers: response.headers, status: 405 }),
-      metrics,
+      metrics: { upstreamCalls: 0, providerDurationMs: 0 },
       authOutcome: 'rejected',
     };
   }
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.timeoutMs,
+  return withAuthenticatedRequest<ReceiptTransferResult>(request, {
+    opsDb: env.OPS_DB,
     timeoutMessage: 'Receipt transfer request timed out',
-  });
-  let identity: RequestIdentity | undefined;
-  let dropId: string | undefined;
-  try {
-    const body = await readRequestBody(request, deadline.signal);
-    dropId = normalizeDropId(body.dropId);
-    identity = await dependencies.verifyIdentity(
-      request,
-      env.OPS_DB,
-      deadline.signal,
-      dependencies.nowMs(),
-    );
-    const apiKey = String(env.HELIUS_API_KEY || '').trim();
-    if (!apiKey || typeof env.OPS_DB?.prepare !== 'function' || typeof env.OPS_DB.batch !== 'function') {
-      throw new ReceiptTransferError('unavailable', 'Receipt transfers are temporarily unavailable.');
-    }
-    const nowMs = dependencies.nowMs();
-    const response = await prepareReceiptTransfer({
-      body,
-      identity,
-      dependencies,
-      runCritical: (start) => runCriticalRequestOperation(start, {
-        deadline,
-        defer: dependencies.defer,
-      }),
-      rateLimitContext: {
-        database: env.OPS_DB,
-        nowMs,
-        signal: deadline.signal,
-      },
-      providerContext: {
-        apiKey,
-        providerFetch: trackedFetch,
-        signal: deadline.signal,
-      },
-    });
-    return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted', dropId: response.dropId };
-  } catch (error) {
-    rethrowDeferredWorkRegistrationError(error);
-    if (isRequestCancellationError(request, error)) throw error;
-    let transferError: ReceiptTransferError;
-    let authOutcome: ReceiptTransferResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-    if (deadline.timedOut()) {
-      transferError = new ReceiptTransferError('deadline-exceeded', 'Receipt transfer request timed out.');
-    } else if (error instanceof ReceiptTransferError) {
-      transferError = error;
-      if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-        authOutcome = 'rejected';
+    dependencies,
+  }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
+    let identity: RequestIdentity | undefined;
+    let dropId: string | undefined;
+    try {
+      const body = await readRequestBody(request, deadline.signal);
+      dropId = normalizeDropId(body.dropId);
+      identity = await authenticate();
+      const apiKey = String(env.HELIUS_API_KEY || '').trim();
+      if (!apiKey || typeof env.OPS_DB?.prepare !== 'function' || typeof env.OPS_DB.batch !== 'function') {
+        throw new ReceiptTransferError('unavailable', 'Receipt transfers are temporarily unavailable.');
       }
-    } else if (error instanceof RequestIdentityError) {
-      transferError = error.kind === 'invalid-token'
-        ? new ReceiptTransferError('unauthenticated', 'Authentication is required.')
-        : error.kind === 'provider-timeout'
-          ? new ReceiptTransferError('deadline-exceeded', 'Receipt transfer request timed out.')
-          : new ReceiptTransferError('unavailable', 'Authentication is temporarily unavailable.');
-      authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
-    } else if (error instanceof ProfileReadError) {
-      transferError = new ReceiptTransferError(error.code, error.message, error.details);
-      if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-        authOutcome = 'rejected';
-      }
-    } else {
-      console.error({
-        event: 'receipt_transfer_prepare_failed',
-        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+      const nowMs = dependencies.nowMs();
+      const response = await prepareReceiptTransfer({
+        body,
+        identity,
+        dependencies,
+        runCritical: (start) => runCriticalRequestOperation(start, {
+          deadline,
+          defer: dependencies.defer,
+        }),
+        rateLimitContext: {
+          database: env.OPS_DB,
+          nowMs,
+          signal: deadline.signal,
+        },
+        providerContext: {
+          apiKey,
+          providerFetch: trackedFetch,
+          signal: deadline.signal,
+        },
       });
-      transferError = new ReceiptTransferError('internal', 'Receipt transfer preparation failed.');
+      return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted', dropId: response.dropId };
+    } catch (error) {
+      rethrowDeferredWorkRegistrationError(error);
+      if (isRequestCancellationError(request, error)) throw error;
+      let transferError: ReceiptTransferError;
+      let authOutcome: ReceiptTransferResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
+      if (deadline.timedOut()) {
+        transferError = new ReceiptTransferError('deadline-exceeded', 'Receipt transfer request timed out.');
+      } else if (error instanceof ReceiptTransferError) {
+        transferError = error;
+        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
+          authOutcome = 'rejected';
+        }
+      } else if (error instanceof RequestIdentityError) {
+        transferError = error.kind === 'invalid-token'
+          ? new ReceiptTransferError('unauthenticated', 'Authentication is required.')
+          : error.kind === 'provider-timeout'
+            ? new ReceiptTransferError('deadline-exceeded', 'Receipt transfer request timed out.')
+            : new ReceiptTransferError('unavailable', 'Authentication is temporarily unavailable.');
+        authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
+      } else if (error instanceof ProfileReadError) {
+        transferError = new ReceiptTransferError(error.code, error.message, error.details);
+        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
+          authOutcome = 'rejected';
+        }
+      } else {
+        console.error({
+          event: 'receipt_transfer_prepare_failed',
+          error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
+        });
+        transferError = new ReceiptTransferError('internal', 'Receipt transfer preparation failed.');
+      }
+      return { response: errorResponse(transferError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
     }
-    return { response: errorResponse(transferError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
-  } finally {
-    deadline.dispose();
-  }
+  });
 }
 
 export const receiptTransferTestHooks = {
