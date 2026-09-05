@@ -19,7 +19,12 @@ export type DeliveryItemKind = 'box' | 'dude' | 'certificate';
 export type DeliveryItem = { kind: DeliveryItemKind };
 export type InvalidDeliveryUnitsPolicy = 'fallback-one' | 'arithmetic';
 
-export function usesCardNft2DeliveryFees(dropFamily: DropFamily | undefined): boolean {
+type DeliveryPricing =
+  | { kind: 'free' }
+  | { kind: 'flat'; baseLamports: number }
+  | { kind: 'per-unit'; baseLamports: number; includedUnits: number; extraUnitLamports: number };
+
+function usesCardNft2DeliveryFees(dropFamily: DropFamily | undefined): boolean {
   return dropFamily === 'card_nft_2' || dropFamily === 'clear_cards';
 }
 
@@ -60,28 +65,58 @@ export function countDeliveryFigures(
   );
 }
 
-function calculateUsDeliveryLamports(
-  figureCount: number,
-  itemsPerBox: number | undefined,
-  dropFamily: DropFamily | undefined,
-  invalidPolicy: InvalidDeliveryUnitsPolicy,
-): number {
-  if (figureCount <= 0) return 0;
-  if (isDirectDeliveryItemsPerBox(itemsPerBox)) return 0;
+export function resolveDeliveryPricing(
+  countryCode?: string,
+  itemsPerBox?: number,
+  dropFamily?: DropFamily,
+  invalidPolicy: InvalidDeliveryUnitsPolicy = 'fallback-one',
+): DeliveryPricing {
+  const isUs = normalizeCountryCode(countryCode) === 'US';
+  if (dropFamily === 'drifella_shirt') {
+    return {
+      kind: 'flat',
+      baseLamports: isUs ? DRIFELLA_SHIRT_US_FLAT_LAMPORTS : DRIFELLA_SHIRT_INTL_FLAT_LAMPORTS,
+    };
+  }
+  if (dropFamily === 'little_swag_hoodies') {
+    if (isUs) return { kind: 'free' };
+    return {
+      kind: 'per-unit',
+      baseLamports: LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS,
+      includedUnits: 1,
+      extraUnitLamports: LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS,
+    };
+  }
   const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox, invalidPolicy);
-  if (dropFamily === 'little_swag_boxes') {
-    const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
-    return LITTLE_SWAG_BOXES_US_BASE_LAMPORTS +
-      extraFigures * LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS;
+  if (isUs) {
+    if (isDirectDeliveryItemsPerBox(itemsPerBox)) return { kind: 'free' };
+    if (dropFamily === 'little_swag_boxes') {
+      return {
+        kind: 'per-unit',
+        baseLamports: LITTLE_SWAG_BOXES_US_BASE_LAMPORTS,
+        includedUnits: deliveryUnitsPerBox,
+        extraUnitLamports: LITTLE_SWAG_BOXES_US_EXTRA_LAMPORTS,
+      };
+    }
+    if (dropFamily === 'poncho_drifella') {
+      return { kind: 'flat', baseLamports: PONCHO_DRIFELLA_US_FLAT_LAMPORTS };
+    }
+    if (!usesCardNft2DeliveryFees(dropFamily)) return { kind: 'free' };
   }
   if (usesCardNft2DeliveryFees(dropFamily)) {
-    const extraFigures = Math.max(0, figureCount - CARD_NFT_2_BASE_DELIVERY_CARD_COUNT);
-    return CARD_NFT_2_US_BASE_LAMPORTS + extraFigures * CARD_NFT_2_EXTRA_LAMPORTS;
+    return {
+      kind: 'per-unit',
+      baseLamports: isUs ? CARD_NFT_2_US_BASE_LAMPORTS : CARD_NFT_2_INTL_BASE_LAMPORTS,
+      includedUnits: CARD_NFT_2_BASE_DELIVERY_CARD_COUNT,
+      extraUnitLamports: CARD_NFT_2_EXTRA_LAMPORTS,
+    };
   }
-  if (dropFamily === 'poncho_drifella') {
-    return PONCHO_DRIFELLA_US_FLAT_LAMPORTS;
-  }
-  return 0;
+  return {
+    kind: 'per-unit',
+    baseLamports: INTL_DELIVERY_BASE_LAMPORTS,
+    includedUnits: deliveryUnitsPerBox,
+    extraUnitLamports: INTL_DELIVERY_EXTRA_LAMPORTS,
+  };
 }
 
 export function calculateDeliveryLamports(
@@ -91,33 +126,11 @@ export function calculateDeliveryLamports(
   dropFamily?: DropFamily,
   invalidPolicy: InvalidDeliveryUnitsPolicy = 'fallback-one',
 ): number {
-  const deliveryUnitsPerBox = normalizeDeliveryUnitsPerBox(itemsPerBox, invalidPolicy);
-  const normalized = normalizeCountryCode(countryCode);
   const figureCount = countDeliveryFigures(items, itemsPerBox, invalidPolicy);
   if (figureCount <= 0) return 0;
-  if (dropFamily === 'drifella_shirt') {
-    return normalized === 'US'
-      ? DRIFELLA_SHIRT_US_FLAT_LAMPORTS
-      : DRIFELLA_SHIRT_INTL_FLAT_LAMPORTS;
-  }
-  if (dropFamily === 'little_swag_hoodies') {
-    if (normalized === 'US') return 0;
-    const extraFigures = Math.max(0, figureCount - 1);
-    return LITTLE_SWAG_HOODIES_INTL_DELIVERY_BASE_LAMPORTS +
-      extraFigures * LITTLE_SWAG_HOODIES_INTL_DELIVERY_EXTRA_LAMPORTS;
-  }
-  if (normalized === 'US') {
-    return calculateUsDeliveryLamports(
-      figureCount,
-      itemsPerBox,
-      dropFamily,
-      invalidPolicy,
-    );
-  }
-  if (usesCardNft2DeliveryFees(dropFamily)) {
-    const extraFigures = Math.max(0, figureCount - CARD_NFT_2_BASE_DELIVERY_CARD_COUNT);
-    return CARD_NFT_2_INTL_BASE_LAMPORTS + extraFigures * CARD_NFT_2_EXTRA_LAMPORTS;
-  }
-  const extraFigures = Math.max(0, figureCount - deliveryUnitsPerBox);
-  return INTL_DELIVERY_BASE_LAMPORTS + extraFigures * INTL_DELIVERY_EXTRA_LAMPORTS;
+  const pricing = resolveDeliveryPricing(countryCode, itemsPerBox, dropFamily, invalidPolicy);
+  if (pricing.kind === 'free') return 0;
+  if (pricing.kind === 'flat') return pricing.baseLamports;
+  const extraFigures = Math.max(0, figureCount - pricing.includedUnits);
+  return pricing.baseLamports + extraFigures * pricing.extraUnitLamports;
 }

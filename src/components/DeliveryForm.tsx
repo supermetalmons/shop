@@ -2,10 +2,10 @@ import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from
 import { type DropFamily } from '../config/deployment';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 import { dropAssetLabel } from '../lib/dropLabels';
+import { normalizeCountryCode } from '../../shared/countryNormalization.ts';
 import {
   isDirectDeliveryItemsPerBox,
-  normalizeDeliveryUnitsPerBox,
-  usesCardNft2DeliveryFees,
+  resolveDeliveryPricing,
 } from '../../shared/shipping.ts';
 
 interface DeliveryFormProps {
@@ -29,6 +29,7 @@ type DeliveryShippingContext = Pick<
 >;
 
 const useCommittedLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
+const LAMPORTS_PER_SOL = 1_000_000_000;
 
 export function DeliveryForm({
   onSubmit,
@@ -79,9 +80,7 @@ export function DeliveryForm({
   const [error, setError] = useState<string | null>(null);
   const selectedCountryCode = countryCode ?? localCountryCode;
   const directDelivery = isDirectDeliveryItemsPerBox(shippingContext.itemsPerBox);
-  const unitsPerBox = normalizeDeliveryUnitsPerBox(shippingContext.itemsPerBox);
-  const cardNft2DeliveryFees = usesCardNft2DeliveryFees(shippingContext.dropFamily);
-  const baseDeliveryUnitCount = cardNft2DeliveryFees ? 3 : unitsPerBox;
+  const pricing = resolveDeliveryPricing(selectedCountryCode, shippingContext.itemsPerBox, shippingContext.dropFamily);
   const countryOption = useMemo(
     () => findCountryByCode(selectedCountryCode) || findCountryByCode('INTL'),
     [selectedCountryCode],
@@ -92,34 +91,18 @@ export function DeliveryForm({
     figureNamePrefix: shippingContext.figureNamePrefix,
   };
   const deliveryUnitKind = directDelivery ? 'box' : 'figure';
-  const deliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, baseDeliveryUnitCount);
-  const singleDeliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, 1);
-  let shippingNote = `International delivery: 0.25 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.05 SOL each additional ${singleDeliveryUnitLabel}.`;
-  if (shippingContext.dropFamily === 'drifella_shirt') {
-    shippingNote =
-      selectedCountryCode === 'US'
-        ? 'US delivery: 0.1 SOL.'
-        : 'International delivery: 0.25 SOL.';
-  } else if (shippingContext.dropFamily === 'little_swag_hoodies') {
-    shippingNote =
-      selectedCountryCode === 'US'
-        ? 'Free US shipping'
-        : `International delivery: 0.6 SOL for the first ${singleDeliveryUnitLabel}. 0.5 SOL each additional ${singleDeliveryUnitLabel}.`;
-  } else if (cardNft2DeliveryFees) {
-    shippingNote =
-      selectedCountryCode === 'US'
-        ? `US delivery: 0.2 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.06 SOL each additional ${singleDeliveryUnitLabel}.`
-        : `International delivery: 0.4 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.06 SOL each additional ${singleDeliveryUnitLabel}.`;
-  } else if (selectedCountryCode === 'US') {
-    if (directDelivery) {
-      shippingNote = 'Free US shipping';
-    } else if (shippingContext.dropFamily === 'little_swag_boxes') {
-      shippingNote = `US delivery: 0.1 SOL up to ${baseDeliveryUnitCount} ${deliveryUnitLabel}. 0.025 SOL each additional ${singleDeliveryUnitLabel}.`;
-    } else if (shippingContext.dropFamily === 'poncho_drifella') {
-      shippingNote = 'US delivery: 0.05 SOL flat.';
-    } else {
-      shippingNote = 'Free US shipping';
-    }
+  const deliveryRegion = normalizeCountryCode(selectedCountryCode) === 'US' ? 'US' : 'International';
+  let shippingNote = `Free ${deliveryRegion === 'US' ? 'US' : 'international'} shipping`;
+  if (pricing.kind === 'flat') {
+    const flatLabel = shippingContext.dropFamily === 'poncho_drifella' ? ' flat' : '';
+    shippingNote = `${deliveryRegion} delivery: ${pricing.baseLamports / LAMPORTS_PER_SOL} SOL${flatLabel}.`;
+  } else if (pricing.kind === 'per-unit') {
+    const deliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, pricing.includedUnits);
+    const singleDeliveryUnitLabel = dropAssetLabel(labelSource, deliveryUnitKind, 1);
+    const baseUnitLabel = shippingContext.dropFamily === 'little_swag_hoodies' && pricing.includedUnits === 1
+      ? `for the first ${singleDeliveryUnitLabel}`
+      : `up to ${pricing.includedUnits} ${deliveryUnitLabel}`;
+    shippingNote = `${deliveryRegion} delivery: ${pricing.baseLamports / LAMPORTS_PER_SOL} SOL ${baseUnitLabel}. ${pricing.extraUnitLamports / LAMPORTS_PER_SOL} SOL each additional ${singleDeliveryUnitLabel}.`;
   }
 
   useEffect(() => {
