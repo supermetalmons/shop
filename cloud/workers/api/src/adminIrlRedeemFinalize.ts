@@ -88,6 +88,9 @@ import {
   CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
+  isCommerceDeleteField,
+  type CommerceDocumentData,
+  type CommerceDocumentWriteData,
   type CommerceUnitOfWork,
 } from './commerceRepository.js';
 import {
@@ -98,7 +101,6 @@ import {
   runCommerceWriteTransaction,
   updateCommerceWrite,
   type CommerceDocumentContext,
-  type CommerceTransform,
   type CommerceWrite,
 } from './commerceTransactions.js';
 import {
@@ -1010,16 +1012,6 @@ function timestamp(value: number) {
   return commerceTimestamp(value);
 }
 
-function deleteFieldsWrite(path: string, fields: Record<string, unknown>, deleted: string[], transforms: CommerceTransform[]): CommerceWrite {
-  return updateCommerceWrite({
-    path,
-    fields,
-    fieldPaths: [...Object.keys(fields), ...deleted],
-    transforms,
-    mustExist: true,
-  });
-}
-
 async function runTransaction<T>(
   context: CommerceContext,
   operation: (transaction: CommerceUnitOfWork) => Promise<{ result: T; writes?: CommerceWrite[] }>,
@@ -1111,6 +1103,20 @@ function workflowExecutionForReplay(
   };
 }
 
+function workflowExecutionData(execution: AdminIrlRedeemFinalizeWorkflowExecutionV1): CommerceDocumentData {
+  const { paymentRouting, ...config } = execution.config;
+  return {
+    ...execution,
+    config: paymentRouting ? {
+      ...execution.config,
+      paymentRouting: {
+        ...paymentRouting,
+        mintProceeds: [...paymentRouting.mintProceeds],
+      },
+    } : config,
+  };
+}
+
 async function startFinalize(
   context: CommerceContext,
   body: FinalizeRequest,
@@ -1167,10 +1173,15 @@ async function startFinalize(
           }, owner);
           return {
             result: { status: 'started' as const, request: started },
-            writes: [deleteFieldsWrite(path, {
-              processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
-              ...(replayExecution ? { [WORKFLOW_EXECUTION_FIELD]: replayExecution } : {}),
-            }, [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+            writes: [updateCommerceWrite({
+              path,
+              values: {
+                processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
+                ...(replayExecution ? { [WORKFLOW_EXECUTION_FIELD]: workflowExecutionData(replayExecution) } : {}),
+                updatedAt: commerceFieldValue.serverTimestamp(),
+              },
+              mustExist: true,
+            })],
           };
         }
         throw new AdminIrlRedeemFinalizeError('aborted', 'This Admin IRL redeem request is already being finalized.');
@@ -1181,16 +1192,20 @@ async function startFinalize(
       const started = startedFinalizeRequest(body, requestWithWorkflow, owner);
       return {
         result: { status: 'started' as const, request: started },
-        writes: [deleteFieldsWrite(path, {
-          status: 'processing',
-          transferSignature: body.transferSignature,
-          processingAttemptId: attemptId,
-          processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
-          ...(replayExecution ? { [WORKFLOW_EXECUTION_FIELD]: replayExecution } : {}),
-        }, ['preparedExpiresAt'], [
-          { fieldPath: 'processingStartedAt', value: commerceFieldValue.serverTimestamp() },
-          { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
-        ])],
+        writes: [updateCommerceWrite({
+          path,
+          values: {
+            status: 'processing',
+            transferSignature: body.transferSignature,
+            processingAttemptId: attemptId,
+            processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
+            ...(replayExecution ? { [WORKFLOW_EXECUTION_FIELD]: workflowExecutionData(replayExecution) } : {}),
+            preparedExpiresAt: commerceFieldValue.delete(),
+            processingStartedAt: commerceFieldValue.serverTimestamp(),
+            updatedAt: commerceFieldValue.serverTimestamp(),
+          },
+          mustExist: true,
+        })],
       };
     });
   } catch (error) {
@@ -1322,8 +1337,7 @@ async function updateRequest(
   commerce: CommerceContext,
   path: string,
   attemptId: string,
-  fields: Record<string, unknown>,
-  deleted: string[] = [],
+  values: CommerceDocumentWriteData,
 ): Promise<void> {
   await runTransaction(commerce, async (transaction) => {
     const document = await readCommerceDocument(commerce, path, transaction);
@@ -1332,10 +1346,15 @@ async function updateRequest(
     }
     return {
       result: undefined,
-      writes: [deleteFieldsWrite(path, {
-        ...fields,
-        processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-      }, deleted, [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+      writes: [updateCommerceWrite({
+        path,
+        values: {
+          ...values,
+          processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
+          updatedAt: commerceFieldValue.serverTimestamp(),
+        },
+        mustExist: true,
+      })],
     };
   });
 }
@@ -1362,10 +1381,15 @@ async function persistPendingFinalizeSubmission(
       }
       return {
         result: undefined,
-        writes: [deleteFieldsWrite(document.path, {
-          ...(existing ? {} : { pendingFinalizeSubmission: pending }),
-          processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-        }, [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+        writes: [updateCommerceWrite({
+          path: document.path,
+          values: {
+            ...(existing ? {} : { pendingFinalizeSubmission: pending }),
+            processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
+            updatedAt: commerceFieldValue.serverTimestamp(),
+          },
+          mustExist: true,
+        })],
       };
     });
   } catch (error) {
@@ -1416,9 +1440,14 @@ async function settlePendingFinalizeSubmission(
         if (pendingFinalizeSubmissionAlreadySettled(document.fields, pending, outcome)) {
           return {
             result: undefined,
-            writes: [deleteFieldsWrite(document.path, {
-              processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-            }, [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+            writes: [updateCommerceWrite({
+              path: document.path,
+              values: {
+                processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
+                updatedAt: commerceFieldValue.serverTimestamp(),
+              },
+              mustExist: true,
+            })],
           };
         }
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem submission recovery changed.');
@@ -1426,23 +1455,27 @@ async function settlePendingFinalizeSubmission(
       if (!samePendingFinalizeSubmission(stored, pending)) {
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem submission recovery changed.');
       }
-      const fields: Record<string, unknown> = {
+      const values: CommerceDocumentWriteData = {
         processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
+        pendingFinalizeSubmission: commerceFieldValue.delete(),
+        updatedAt: commerceFieldValue.serverTimestamp(),
       };
       if (outcome === 'confirmed') {
         if (pending.kind === 'internal_delivery') {
-          fields.internalDeliveryId = pending.deliveryId;
-          fields.internalDeliveryPda = pending.deliveryPda;
-          fields.internalDeliveryTx = pending.signature;
+          values.internalDeliveryId = pending.deliveryId;
+          values.internalDeliveryPda = pending.deliveryPda;
+          values.internalDeliveryTx = pending.signature;
         } else {
-          fields.receiptTxs = Array.from(new Set([...normalizeReceiptTxs(document.fields.receiptTxs), pending.signature]));
+          values.receiptTxs = Array.from(new Set([...normalizeReceiptTxs(document.fields.receiptTxs), pending.signature]));
         }
       }
       return {
         result: undefined,
-        writes: [deleteFieldsWrite(document.path, fields, ['pendingFinalizeSubmission'], [
-          { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
-        ])],
+        writes: [updateCommerceWrite({
+          path: document.path,
+          values,
+          mustExist: true,
+        })],
       };
     });
   } catch (error) {
@@ -1475,9 +1508,14 @@ async function holdPendingFinalizeSubmission(
     if (!stored || !samePendingFinalizeSubmission(stored, pending)) return { result: undefined };
     return {
       result: undefined,
-      writes: [deleteFieldsWrite(document.path, {
-        processingLeaseExpiresAt: timestamp(context.nowMs + PROCESSING_LEASE_MS),
-      }, [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+      writes: [updateCommerceWrite({
+        path: document.path,
+        values: {
+          processingLeaseExpiresAt: timestamp(context.nowMs + PROCESSING_LEASE_MS),
+          updatedAt: commerceFieldValue.serverTimestamp(),
+        },
+        mustExist: true,
+      })],
     };
   });
 }
@@ -2141,10 +2179,10 @@ async function markerResolution(
 }
 
 function completedMarkerReuse(
-  request: Record<string, unknown>,
+  request: CommerceDocumentData,
   order: Record<string, unknown>,
   resolution: Extract<AdminIrlRedeemMarkerReuseResolution, { status: 'reuse' }>,
-): Record<string, unknown> {
+): CommerceDocumentData {
   if (order.source !== ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) throw markerConflict('marker delivery order source mismatch');
   const byBox = dudeIdsByBoxId(order);
   const receiptTxs = Array.from(new Set([...normalizeReceiptTxs(order.receiptTxs), ...normalizeReceiptTxs(request.receiptTxs)]));
@@ -2191,8 +2229,8 @@ async function resolveExistingMarkerCompletion(
   transaction: CommerceUnitOfWork,
   body: FinalizeRequest,
   request: StartedRequest,
-  fields: Record<string, unknown>,
-): Promise<{ completed: Record<string, unknown>; reference: MarkerReuseReference } | null> {
+  fields: CommerceDocumentData,
+): Promise<{ completed: CommerceDocumentData; reference: MarkerReuseReference } | null> {
   const selectionKey = buildAdminIrlRedeemSelectionKey({ dropId: body.dropId, originalAssetIds: request.itemIds });
   const resolution = await markerResolution(
     transaction,
@@ -2213,8 +2251,8 @@ async function resolveExistingMarkerCompletion(
   return { completed, reference: await markerReuseReference(completed) };
 }
 
-function completeRequestWrite(path: string, completed: Record<string, unknown>): CommerceWrite {
-  const fields: Record<string, unknown> = {
+function completeRequestWrite(path: string, completed: CommerceDocumentData): CommerceWrite {
+  const values: CommerceDocumentWriteData = {
     status: 'complete',
     ...(Number.isSafeInteger(completed.deliveryId) ? { deliveryId: completed.deliveryId } : {}),
     receiptTxs: normalizeReceiptTxs(completed.receiptTxs),
@@ -2226,17 +2264,23 @@ function completeRequestWrite(path: string, completed: Record<string, unknown>):
     ...(typeof completed.internalDeliveryPda === 'string' ? { internalDeliveryPda: completed.internalDeliveryPda } : {}),
     ...(typeof completed.internalDeliveryTx === 'string' ? { internalDeliveryTx: completed.internalDeliveryTx } : {}),
     ...(typeof completed.closeDeliveryTx === 'string' ? { closeDeliveryTx: completed.closeDeliveryTx } : {}),
+    processingAttemptId: commerceFieldValue.delete(),
+    processingStartedAt: commerceFieldValue.delete(),
+    processingLeaseExpiresAt: commerceFieldValue.delete(),
+    preparedExpiresAt: commerceFieldValue.delete(),
+    pendingFinalizeSubmission: commerceFieldValue.delete(),
+    [WORKFLOW_DRAFT_FIELD]: commerceFieldValue.delete(),
+    [`${WORKFLOW_EXECUTION_FIELD}.failure`]: commerceFieldValue.delete(),
+    [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
+    [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: commerceFieldValue.delete(),
+    completedAt: commerceFieldValue.serverTimestamp(),
+    updatedAt: commerceFieldValue.serverTimestamp(),
   };
-  return deleteFieldsWrite(path, fields, [
-    'processingAttemptId', 'processingStartedAt', 'processingLeaseExpiresAt', 'preparedExpiresAt',
-    'pendingFinalizeSubmission', WORKFLOW_DRAFT_FIELD,
-    `${WORKFLOW_EXECUTION_FIELD}.failure`,
-    `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
-    `${WORKFLOW_EXECUTION_FIELD}.pendingEffect`,
-  ], [
-    { fieldPath: 'completedAt', value: commerceFieldValue.serverTimestamp() },
-    { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
-  ]);
+  return updateCommerceWrite({
+    path,
+    values,
+    mustExist: true,
+  });
 }
 
 async function completeFromExistingMarkers(
@@ -2312,14 +2356,6 @@ function newClaimCodes(quantity: number): string[] {
   return generateUniqueStripeReceiptClaimCodes(quantity);
 }
 
-function createWithTimestamps(path: string, fields: Record<string, unknown>, timestamps: string[]): CommerceWrite {
-  return createCommerceWrite({
-    path,
-    fields,
-    transforms: timestamps.map((fieldPath) => ({ fieldPath, value: commerceFieldValue.serverTimestamp() })),
-  });
-}
-
 async function publishPack(
   commerce: CommerceContext,
   runtime: Runtime,
@@ -2384,17 +2420,35 @@ async function publishPack(
         receiptTxs,
         boxes: boxesWithCodes,
       });
-      Object.assign(order, createDeliveryPackStatusProjectionOutbox(runtime, order, commerce.nowMs).fields);
-      const writes: CommerceWrite[] = [createWithTimestamps(orderPath, order, ['createdAt', 'processedAt'])];
+      const orderValues: CommerceDocumentWriteData = {
+        ...order,
+        ...Object.fromEntries(Object.entries(createDeliveryPackStatusProjectionOutbox(runtime, order, commerce.nowMs))
+          .filter(([, value]) => !isCommerceDeleteField(value))),
+      };
+      const writes: CommerceWrite[] = [createCommerceWrite({
+        path: orderPath,
+        values: {
+          ...orderValues,
+          createdAt: commerceFieldValue.serverTimestamp(),
+          processedAt: commerceFieldValue.serverTimestamp(),
+        },
+      })];
       boxesWithCodes.forEach((box, index) => {
-        writes.push(createWithTimestamps(claimPaths[index], buildAdminIrlRedeemClaimCodeDocument({
-          dropId: runtime.dropId,
-          deliveryId,
-          owner: request.owner,
-          receiptOwner,
-          requestId: request.requestId,
-          box,
-        }), ['createdAt', 'updatedAt']));
+        writes.push(createCommerceWrite({
+          path: claimPaths[index],
+          values: {
+            ...buildAdminIrlRedeemClaimCodeDocument({
+              dropId: runtime.dropId,
+              deliveryId,
+              owner: request.owner,
+              receiptOwner,
+              requestId: request.requestId,
+              box,
+            }),
+            createdAt: commerceFieldValue.serverTimestamp(),
+            updatedAt: commerceFieldValue.serverTimestamp(),
+          },
+        }));
       });
       const markerWrites = new Map<string, CommerceWrite>();
       boxesWithCodes.forEach((box) => {
@@ -2408,11 +2462,17 @@ async function publishPack(
           box,
         });
         for (const path of markerPaths(runtime.dropId, [box])) {
-          markerWrites.set(path, createWithTimestamps(path, marker, ['createdAt']));
+          markerWrites.set(path, createCommerceWrite({
+            path,
+            values: {
+              ...marker,
+              createdAt: commerceFieldValue.serverTimestamp(),
+            },
+          }));
         }
       });
       writes.push(...markerWrites.values());
-      const completed: Record<string, unknown> = {
+      const completed: CommerceDocumentData = {
         ...document.fields,
         status: 'complete',
         deliveryId,
@@ -2498,7 +2558,7 @@ async function publishCard(
           claim.fields.receiptKind !== 'figure' || claim.fields.receiptAssetId !== card.receiptAssetId || Number(claim.fields.figureId) !== card.figureId ||
           normalizeStripeReceiptClaimCode(claim.fields.code) !== existingClaimCode
         ) throw markerConflict('card receipt marker order or claim mismatch');
-        const completed: Record<string, unknown> = {
+        const completed: CommerceDocumentData = {
           ...document.fields,
           status: 'complete',
           deliveryId: existingDeliveryId,
@@ -2536,7 +2596,7 @@ async function publishCard(
         transferSignature: body.transferSignature,
         card: cardWithCode,
       });
-      const completed: Record<string, unknown> = {
+      const completed: CommerceDocumentData = {
         ...document.fields,
         status: 'complete',
         deliveryId,
@@ -2547,9 +2607,29 @@ async function publishCard(
       return {
         result: { status: 'created' as const, request: completed },
         writes: [
-          createWithTimestamps(orderPath, order, ['createdAt', 'processedAt']),
-          createWithTimestamps(claimPath, claim, ['createdAt', 'updatedAt']),
-          createWithTimestamps(markerPath, marker, ['createdAt']),
+          createCommerceWrite({
+            path: orderPath,
+            values: {
+              ...order,
+              createdAt: commerceFieldValue.serverTimestamp(),
+              processedAt: commerceFieldValue.serverTimestamp(),
+            },
+          }),
+          createCommerceWrite({
+            path: claimPath,
+            values: {
+              ...claim,
+              createdAt: commerceFieldValue.serverTimestamp(),
+              updatedAt: commerceFieldValue.serverTimestamp(),
+            },
+          }),
+          createCommerceWrite({
+            path: markerPath,
+            values: {
+              ...marker,
+              createdAt: commerceFieldValue.serverTimestamp(),
+            },
+          }),
           completeRequestWrite(document.path, completed),
         ],
       };
@@ -2702,15 +2782,21 @@ async function loadWorkflowRequest(
         execution,
         ...(request.workflowPublicationDraftV1 ? { draft: request.workflowPublicationDraftV1 } : {}),
       },
-      writes: [deleteFieldsWrite(path, {
-        processingLeaseExpiresAt: timestamp(enteredAtMs + PROCESSING_LEASE_MS),
-        ...(enteredEffect
-          ? { [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: enteredEffect }
-          : {}),
-      }, confirmEntry ? [
-        `${WORKFLOW_EXECUTION_FIELD}.failure`,
-        `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
-      ] : [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+      writes: [updateCommerceWrite({
+        path,
+        values: {
+          processingLeaseExpiresAt: timestamp(enteredAtMs + PROCESSING_LEASE_MS),
+          ...(enteredEffect
+            ? { [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: enteredEffect }
+            : {}),
+          ...(confirmEntry ? {
+            [`${WORKFLOW_EXECUTION_FIELD}.failure`]: commerceFieldValue.delete(),
+            [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
+          } : {}),
+          updatedAt: commerceFieldValue.serverTimestamp(),
+        },
+        mustExist: true,
+      })],
     };
   });
 }
@@ -2795,10 +2881,15 @@ async function persistWorkflowOnchain(
     persisted = existing || onchain;
     return {
       result: undefined,
-      writes: [deleteFieldsWrite(document.path, {
-        [`${WORKFLOW_EXECUTION_FIELD}.onchain`]: persisted,
-        processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-      }, [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+      writes: [updateCommerceWrite({
+        path: document.path,
+        values: {
+          [`${WORKFLOW_EXECUTION_FIELD}.onchain`]: persisted,
+          processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
+          updatedAt: commerceFieldValue.serverTimestamp(),
+        },
+        mustExist: true,
+      })],
     };
   });
   loaded.execution.onchain = persisted;
@@ -2838,10 +2929,15 @@ async function persistWorkflowDraft(
     }
     return {
       result: undefined,
-      writes: [deleteFieldsWrite(document.path, {
-        [WORKFLOW_DRAFT_FIELD]: candidate,
-        processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-      }, [], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+      writes: [updateCommerceWrite({
+        path: document.path,
+        values: {
+          [WORKFLOW_DRAFT_FIELD]: candidate,
+          processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
+          updatedAt: commerceFieldValue.serverTimestamp(),
+        },
+        mustExist: true,
+      })],
     };
   });
 }
@@ -3192,39 +3288,45 @@ export async function cleanupAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
     if (hasProgress) {
       return {
         result: { cleared: false },
-        writes: [deleteFieldsWrite(document.path, {
-          lastFinalizeError: {
-            kind: 'workflow',
-            code: workflowError.code,
-            recovery: workflowError.retryable ? 'automatic' : 'manual',
+        writes: [updateCommerceWrite({
+          path: document.path,
+          values: {
+            lastFinalizeError: {
+              kind: 'workflow',
+              code: workflowError.code,
+              recovery: workflowError.retryable ? 'automatic' : 'manual',
+            },
+            [`${WORKFLOW_EXECUTION_FIELD}.failure`]: workflowError,
+            processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
+            [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
+            [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: commerceFieldValue.delete(),
+            lastFinalizeErrorAt: commerceFieldValue.serverTimestamp(),
+            updatedAt: commerceFieldValue.serverTimestamp(),
           },
-          [`${WORKFLOW_EXECUTION_FIELD}.failure`]: workflowError,
-          processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-        }, [
-          `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
-          `${WORKFLOW_EXECUTION_FIELD}.pendingEffect`,
-        ], [
-          { fieldPath: 'lastFinalizeErrorAt', value: commerceFieldValue.serverTimestamp() },
-          { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
-        ])],
+          mustExist: true,
+        })],
       };
     }
     return {
       result: { cleared: true },
-      writes: [deleteFieldsWrite(document.path, {
-        status: 'prepared',
-        lastFinalizeError: { kind: 'workflow', code: workflowError.code },
-        [`${WORKFLOW_EXECUTION_FIELD}.failure`]: workflowError,
-        preparedExpiresAt: timestamp(Date.now() + PREPARED_TTL_MS),
-      }, [
-        'processingAttemptId', 'processingStartedAt', 'processingLeaseExpiresAt',
-        WORKFLOW_DRAFT_FIELD,
-        `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
-        `${WORKFLOW_EXECUTION_FIELD}.pendingEffect`,
-      ], [
-        { fieldPath: 'lastFinalizeErrorAt', value: commerceFieldValue.serverTimestamp() },
-        { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
-      ])],
+      writes: [updateCommerceWrite({
+        path: document.path,
+        values: {
+          status: 'prepared',
+          lastFinalizeError: { kind: 'workflow', code: workflowError.code },
+          [`${WORKFLOW_EXECUTION_FIELD}.failure`]: workflowError,
+          preparedExpiresAt: timestamp(Date.now() + PREPARED_TTL_MS),
+          processingAttemptId: commerceFieldValue.delete(),
+          processingStartedAt: commerceFieldValue.delete(),
+          processingLeaseExpiresAt: commerceFieldValue.delete(),
+          [WORKFLOW_DRAFT_FIELD]: commerceFieldValue.delete(),
+          [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
+          [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: commerceFieldValue.delete(),
+          lastFinalizeErrorAt: commerceFieldValue.serverTimestamp(),
+          updatedAt: commerceFieldValue.serverTimestamp(),
+        },
+        mustExist: true,
+      })],
     };
   });
 }
@@ -3339,11 +3441,15 @@ export async function claimAdminIrlRedeemFinalizeWorkflowEffect(
             ? { result: { status: 'claimed' as const } }
             : {
                 result: { status: 'claimed' as const },
-                writes: [deleteFieldsWrite(document.path, {
-                  [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: renewedEffect,
-                }, [
-                  `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
-                ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+                writes: [updateCommerceWrite({
+                  path: document.path,
+                  values: {
+                    [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: renewedEffect,
+                    [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
+                    updatedAt: commerceFieldValue.serverTimestamp(),
+                  },
+                  mustExist: true,
+                })],
               };
         }
         if (document.updateTime !== args.expectedRevision) {
@@ -3358,11 +3464,15 @@ export async function claimAdminIrlRedeemFinalizeWorkflowEffect(
         }
         return {
           result: { status: 'claimed' as const },
-          writes: [deleteFieldsWrite(document.path, {
-            [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: claimedEffect,
-          }, [
-            `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
-          ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+          writes: [updateCommerceWrite({
+            path: document.path,
+            values: {
+              [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: claimedEffect,
+              [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
+              updatedAt: commerceFieldValue.serverTimestamp(),
+            },
+            mustExist: true,
+          })],
         };
       },
     ), args.signal);
@@ -3440,15 +3550,19 @@ export async function dispatchAdminIrlRedeemFinalizeWorkflowRestart(args: Readon
         }
         return {
           result: { status: 'dispatched' as const },
-          writes: [deleteFieldsWrite(document.path, {
-            [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: {
-              kind: 'restart',
-              claimId: args.claimId,
-              dispatchedAtMs: nowMs,
+          writes: [updateCommerceWrite({
+            path: document.path,
+            values: {
+              [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: {
+                kind: 'restart',
+                claimId: args.claimId,
+                dispatchedAtMs: nowMs,
+              },
+              [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
+              updatedAt: commerceFieldValue.serverTimestamp(),
             },
-          }, [
-            `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
-          ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+            mustExist: true,
+          })],
         };
       },
     ), args.signal);
@@ -3519,11 +3633,15 @@ export async function retractAdminIrlRedeemFinalizeWorkflowRestartDispatch(args:
             ? { result: { status: 'retracted' as const } }
             : {
                 result: { status: 'retracted' as const },
-                writes: [deleteFieldsWrite(document.path, {
-                  [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: renewedEffect,
-                }, [
-                  `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
-                ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+                writes: [updateCommerceWrite({
+                  path: document.path,
+                  values: {
+                    [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: renewedEffect,
+                    [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
+                    updatedAt: commerceFieldValue.serverTimestamp(),
+                  },
+                  mustExist: true,
+                })],
               };
         }
         if (pending.effect?.kind !== 'restart' || pending.effect.claimId !== args.claimId) {
@@ -3531,15 +3649,19 @@ export async function retractAdminIrlRedeemFinalizeWorkflowRestartDispatch(args:
         }
         return {
           result: { status: 'retracted' as const },
-          writes: [deleteFieldsWrite(document.path, {
-            [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: {
-              kind: 'restart-claim',
-              claimId: args.claimId,
-              untilMs,
+          writes: [updateCommerceWrite({
+            path: document.path,
+            values: {
+              [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: {
+                kind: 'restart-claim',
+                claimId: args.claimId,
+                untilMs,
+              },
+              [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
+              updatedAt: commerceFieldValue.serverTimestamp(),
             },
-          }, [
-            `${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`,
-          ], [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }])],
+            mustExist: true,
+          })],
         };
       },
     ), args.signal);

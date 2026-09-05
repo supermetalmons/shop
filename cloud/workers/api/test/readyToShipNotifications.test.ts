@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { commerceFieldValue, commerceKeys, D1CommerceRepository, type CommerceDocumentData } from '../src/commerceRepository.ts';
+import { createCommerceD1Harness, seedCommerceDocuments } from './commerceD1Harness.ts';
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
 import {
   READY_NOTIFICATION_BUYER_STATE_FIELD,
@@ -32,7 +34,7 @@ const BUYER_JOB_ID = '123e4567-e89b-42d3-a456-426614174000';
 const SHIPPER_JOB_ID = '123e4567-e89b-42d3-a456-426614174001';
 const NOW_MS = 1_700_000_000_000;
 
-function order(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function order(overrides: CommerceDocumentData = {}): CommerceDocumentData {
   return {
     deliveryId: 7,
     owner: 'owner-wallet',
@@ -49,8 +51,13 @@ function createJobIds(): () => string {
 }
 
 test('ready-to-ship outbox creates exact buyer and shipper jobs', async () => {
-  const before = order();
-  const after = order({ status: 'ready_to_ship' });
+  const before = order({
+    [BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD]: 100,
+    [SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD]: 100,
+    [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: 'old-claim',
+    [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: 100,
+  });
+  const after = { ...before, status: 'ready_to_ship' };
   const outbox = createReadyToShipNotificationOutbox({
     before,
     after,
@@ -59,29 +66,35 @@ test('ready-to-ship outbox creates exact buyer and shipper jobs', async () => {
     createJobId: createJobIds(),
     nowMs: NOW_MS,
   });
-  assert.deepEqual(outbox.fields, {
+  assert.deepEqual(outbox.values, {
     [BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD]: READY_TO_SHIP_NOTIFICATION_PENDING,
     [BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD]: BUYER_JOB_ID,
     [BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD]: 'card_nft_2:7:order_received',
+    [BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD]: commerceFieldValue.delete(),
     [SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD]: READY_TO_SHIP_NOTIFICATION_PENDING,
     [SHIPPER_READY_TO_SHIP_EMAIL_JOB_ID_FIELD]: SHIPPER_JOB_ID,
     [SHIPPER_READY_TO_SHIP_EMAIL_IDEMPOTENCY_KEY_FIELD]: 'card_nft_2:7:ready_to_ship',
+    [SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD]: commerceFieldValue.delete(),
     [READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]: NOW_MS + 6 * 60 * 60_000,
     [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: 0,
+    [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
+    [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
   });
-  assert.deepEqual(outbox.fieldPaths, [
-    BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
-    BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD,
-    BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD,
+  const harness = createCommerceD1Harness();
+  const key = commerceKeys.deliveryOrder('card_nft_2', '7');
+  seedCommerceDocuments(harness, [{ key, data: before }]);
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(NOW_MS, (transaction) => transaction.update(key, {
+    status: 'ready_to_ship',
+    ...outbox.values,
+  }));
+  const readyOrder = (await repository.get(key))!.data;
+  for (const field of [
     BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD,
-    SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD,
-    SHIPPER_READY_TO_SHIP_EMAIL_JOB_ID_FIELD,
-    SHIPPER_READY_TO_SHIP_EMAIL_IDEMPOTENCY_KEY_FIELD,
     SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD,
     READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
     READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
-  ]);
-  const readyOrder = { ...after, ...outbox.fields };
+  ]) assert.equal(Object.hasOwn(readyOrder, field), false);
   const jobs = await createReadyToShipNotificationJobs({
     order: readyOrder,
     deliveryId: 7,
@@ -150,7 +163,7 @@ test('ready-to-ship outbox skips ignored sources and invalid recipients', () => 
     deliveryId: 7,
     dropId: 'card_nft_2',
   });
-  assert.deepEqual(ignored, { fields: {}, fieldPaths: [], pending: [] });
+  assert.deepEqual(ignored, { values: {}, pending: [] });
 
   const noRecipients = createReadyToShipNotificationOutbox({
     before: order(),
@@ -158,7 +171,7 @@ test('ready-to-ship outbox skips ignored sources and invalid recipients', () => 
     deliveryId: 7,
     dropId: 'clear_cards_devnet_v2',
   });
-  assert.deepEqual(noRecipients, { fields: {}, fieldPaths: [], pending: [] });
+  assert.deepEqual(noRecipients, { values: {}, pending: [] });
 });
 
 test('pending markers are reused while queued and legacy markerless orders are skipped', () => {

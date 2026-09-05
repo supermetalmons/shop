@@ -109,7 +109,11 @@ import {
   CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
+  isCommerceDeleteField,
+  type CommerceDocumentData,
   type CommerceDocumentRecord,
+  type CommerceDocumentWriteData,
+  type CommerceJsonValue,
   type CommerceUnitOfWork,
 } from './commerceRepository.js';
 import {
@@ -630,8 +634,8 @@ type DeliveryRecoveryLeaseResult = {
     attemptCount: number;
     lastAttemptAtMs: number;
     leaseExpiresAtMs: number;
-    previousAttemptCount: unknown;
-    previousLastAttemptAt: unknown;
+    previousAttemptCount: CommerceJsonValue | undefined;
+    previousLastAttemptAt: CommerceJsonValue | undefined;
   };
 } | { acquired: false; result: RecoverDeliveryOrdersItemResult };
 
@@ -740,16 +744,11 @@ async function acquireDeliveryRecoveryLease(
         },
         writes: [updateWrite({
           path,
-          fields: {
+          values: {
             'receiptRecovery.leaseExpiresAt': commerceTimestamp(leaseExpiresAtMs),
             'receiptRecovery.lastAttemptAt': commerceTimestamp(nowMs),
             'receiptRecovery.attemptCount': attemptCount,
           },
-          fieldPaths: [
-            'receiptRecovery.leaseExpiresAt',
-            'receiptRecovery.lastAttemptAt',
-            'receiptRecovery.attemptCount',
-          ],
           mustExist: true,
         })],
       };
@@ -767,8 +766,8 @@ async function cancelDeliveryRecoveryAttempt(
     attemptCount: number;
     lastAttemptAtMs: number;
     leaseExpiresAtMs: number;
-    previousAttemptCount: unknown;
-    previousLastAttemptAt: unknown;
+    previousAttemptCount: CommerceJsonValue | undefined;
+    previousLastAttemptAt: CommerceJsonValue | undefined;
   },
 ): Promise<void> {
   return retryCommerceConflicts(async () => {
@@ -783,19 +782,15 @@ async function cancelDeliveryRecoveryAttempt(
     ) return;
     await commitWrites(context, [updateWrite({
       path,
-      fields: {
-        ...(lease.previousLastAttemptAt === undefined
-          ? {}
-          : { 'receiptRecovery.lastAttemptAt': lease.previousLastAttemptAt }),
-        ...(lease.previousAttemptCount === undefined
-          ? {}
-          : { 'receiptRecovery.attemptCount': lease.previousAttemptCount }),
+      values: {
+        'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
+        'receiptRecovery.lastAttemptAt': lease.previousLastAttemptAt === undefined
+          ? commerceFieldValue.delete()
+          : lease.previousLastAttemptAt,
+        'receiptRecovery.attemptCount': lease.previousAttemptCount === undefined
+          ? commerceFieldValue.delete()
+          : lease.previousAttemptCount,
       },
-      fieldPaths: [
-        'receiptRecovery.leaseExpiresAt',
-        'receiptRecovery.lastAttemptAt',
-        'receiptRecovery.attemptCount',
-      ],
       expectedUpdateTime: document.updateTime,
     })]);
   }, { signal: context.signal });
@@ -806,18 +801,13 @@ async function finalizeDeliveryRecoveryAttempt(
   path: string,
   result: { errorCode?: string; message?: string },
 ): Promise<void> {
-  const fieldPaths = [
-    'receiptRecovery.leaseExpiresAt',
-    'receiptRecovery.lastErrorCode',
-    'receiptRecovery.lastErrorMessage',
-  ];
   await commitWrites(context, [updateWrite({
     path,
-    fields: {
-      ...(result.errorCode ? { 'receiptRecovery.lastErrorCode': result.errorCode } : {}),
-      ...(result.message ? { 'receiptRecovery.lastErrorMessage': result.message } : {}),
+    values: {
+      'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
+      'receiptRecovery.lastErrorCode': result.errorCode || commerceFieldValue.delete(),
+      'receiptRecovery.lastErrorMessage': result.message || commerceFieldValue.delete(),
     },
-    fieldPaths,
     mustExist: true,
   })]);
 }
@@ -830,28 +820,22 @@ async function recordPreparedDeliveryRecoveryMiss(
   const probeCount = preparedDeliveryRecoveryCheckCount(document.fields);
   const nextProbeCount = probeCount + 1;
   const nextDelayMs = nextPreparedDeliveryRecoveryDelayMs(nextProbeCount);
-  const fields: Record<string, unknown> = {
+  const values: CommerceDocumentWriteData = {
     'receiptRecovery.preparedProbeCount': nextProbeCount,
     'receiptRecovery.lastPreparedProbeAt': commerceTimestamp(nowMs),
     ...(nextDelayMs === null
       ? {
           status: 'prepared_abandoned',
           preparedRecoveryAbandonedAt: commerceTimestamp(nowMs),
+          'receiptRecovery.nextPreparedProbeAt': commerceFieldValue.delete(),
         }
       : {
           'receiptRecovery.nextPreparedProbeAt': commerceTimestamp(nowMs + nextDelayMs),
         }),
   };
-  const fieldPaths = [
-    'receiptRecovery.preparedProbeCount',
-    'receiptRecovery.lastPreparedProbeAt',
-    'receiptRecovery.nextPreparedProbeAt',
-    ...(nextDelayMs === null ? ['status', 'preparedRecoveryAbandonedAt'] : []),
-  ];
   await commitWrites(context, [updateWrite({
     path: document.path,
-    fields,
-    fieldPaths,
+    values,
     expectedUpdateTime: document.updateTime,
   })]);
   return nextDelayMs === null ? null : nowMs + nextDelayMs;
@@ -868,19 +852,13 @@ async function stopPreparedDeliveryRecoveryChecks(
   );
   await commitWrites(context, [updateWrite({
     path: document.path,
-    fields: {
+    values: {
       status: 'prepared_abandoned',
       preparedRecoveryAbandonedAt: commerceTimestamp(nowMs),
       'receiptRecovery.preparedProbeCount': probeCount,
       'receiptRecovery.lastPreparedProbeAt': commerceTimestamp(nowMs),
+      'receiptRecovery.nextPreparedProbeAt': commerceFieldValue.delete(),
     },
-    fieldPaths: [
-      'status',
-      'preparedRecoveryAbandonedAt',
-      'receiptRecovery.preparedProbeCount',
-      'receiptRecovery.lastPreparedProbeAt',
-      'receiptRecovery.nextPreparedProbeAt',
-    ],
     expectedUpdateTime: document.updateTime,
   })]);
 }
@@ -897,10 +875,9 @@ async function deferPreparedDeliveryRecovery(
   );
   await commitWrites(context, [updateWrite({
     path: document.path,
-    fields: {
+    values: {
       'receiptRecovery.nextPreparedProbeAt': commerceTimestamp(nextCheckAt),
     },
-    fieldPaths: ['receiptRecovery.nextPreparedProbeAt'],
     expectedUpdateTime: document.updateTime,
   })]);
 }
@@ -1054,7 +1031,7 @@ function claimCodeConflictReason(claim: Record<string, unknown>, expected: Claim
   return null;
 }
 
-function claimCodeFields(expected: ClaimCodeExpected, ownerWallet: string): Record<string, unknown> {
+function claimCodeFields(expected: ClaimCodeExpected, ownerWallet: string): CommerceDocumentData {
   return {
     version: 2,
     namespace: IRL_CLAIM_CODE_NAMESPACE,
@@ -1068,7 +1045,7 @@ function claimCodeFields(expected: ClaimCodeExpected, ownerWallet: string): Reco
   };
 }
 
-function assignmentClaimFields(expected: ClaimCodeExpected, ownerWallet: string): Record<string, unknown> {
+function assignmentClaimFields(expected: ClaimCodeExpected, ownerWallet: string): CommerceDocumentData {
   return {
     irlClaimCode: expected.code,
     irlClaim: {
@@ -1116,8 +1093,10 @@ async function ensureIrlClaimCodeForBox(
         if (!claim) {
           writes.push(createWrite({
             path: claimPath,
-            fields: claimCodeFields(expected, args.ownerWallet),
-            transforms: [{ fieldPath: 'createdAt', value: commerceFieldValue.serverTimestamp() }],
+            values: {
+              ...claimCodeFields(expected, args.ownerWallet),
+              createdAt: commerceFieldValue.serverTimestamp(),
+            },
           }));
         } else if (!claimCodeCompatible(claim.fields, expected)) {
           const reason = claimCodeConflictReason(claim.fields, expected);
@@ -1130,9 +1109,10 @@ async function ensureIrlClaimCodeForBox(
           }
           writes.push(updateWrite({
             path: claimPath,
-            fields: claimCodeFields(expected, args.ownerWallet),
-            fieldPaths: Object.keys(claimCodeFields(expected, args.ownerWallet)),
-            transforms: [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }],
+            values: {
+              ...claimCodeFields(expected, args.ownerWallet),
+              updatedAt: commerceFieldValue.serverTimestamp(),
+            },
             mustExist: true,
           }));
         }
@@ -1141,9 +1121,10 @@ async function ensureIrlClaimCodeForBox(
           const assignmentFields = assignmentClaimFields(expected, args.ownerWallet);
           writes.push(updateWrite({
             path: assignmentPath,
-            fields: assignmentFields,
-            fieldPaths: Object.keys(assignmentFields),
-            transforms: [{ fieldPath: 'irlClaim.createdAt', value: commerceFieldValue.serverTimestamp() }],
+            values: {
+              ...assignmentFields,
+              'irlClaim.createdAt': commerceFieldValue.serverTimestamp(),
+            },
             mustExist: true,
           }));
         }
@@ -1165,14 +1146,17 @@ async function ensureIrlClaimCodeForBox(
         writes: [
           createWrite({
             path: `claimCodes/${expected.code}`,
-            fields: claimCodeFields(expected, args.ownerWallet),
-            transforms: [{ fieldPath: 'createdAt', value: commerceFieldValue.serverTimestamp() }],
+            values: {
+              ...claimCodeFields(expected, args.ownerWallet),
+              createdAt: commerceFieldValue.serverTimestamp(),
+            },
           }),
           updateWrite({
             path: assignmentPath,
-            fields: assignmentFields,
-            fieldPaths: Object.keys(assignmentFields),
-            transforms: [{ fieldPath: 'irlClaim.createdAt', value: commerceFieldValue.serverTimestamp() }],
+            values: {
+              ...assignmentFields,
+              'irlClaim.createdAt': commerceFieldValue.serverTimestamp(),
+            },
             mustExist: true,
           }),
         ],
@@ -1208,26 +1192,19 @@ export function createDeliveryPackStatusProjectionOutbox(
   runtime: DeliveryRuntime,
   order: Record<string, unknown>,
   nowMs = Date.now(),
-): { fields: Record<string, unknown>; fieldPaths: string[] } {
-  if (!shouldProjectNormalIrlPackStatus(runtime, order)) return { fields: {}, fieldPaths: [] };
+): CommerceDocumentWriteData {
+  if (!shouldProjectNormalIrlPackStatus(runtime, order)) return {};
   if (countDeliveryOrderBoxItems(order.items) < 1 && countDeliveryOrderDudeItems(order.items) < 1) {
-    return { fields: {}, fieldPaths: [] };
+    return {};
   }
   const nextAttemptAtMs = Number.isSafeInteger(nowMs) && nowMs >= 0 ? nowMs : Date.now();
   return {
-    fields: {
-      [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
-      [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: nextAttemptAtMs,
-      [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: 0,
-    },
-    fieldPaths: [
-      PACK_STATUS_PROJECTION_STATE_FIELD,
-      PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
-      PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD,
-      PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
-      PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
-      PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD,
-    ],
+    [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
+    [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: nextAttemptAtMs,
+    [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: 0,
+    [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
+    [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
+    [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: commerceFieldValue.delete(),
   };
 }
 
@@ -1284,10 +1261,8 @@ async function transitionDeliveryPackStatusProjection(
   context: CommerceContext,
   documentPath: string,
   options: {
-    clearFields?: readonly string[];
-    fields?: Record<string, unknown>;
+    values: CommerceDocumentWriteData;
     requiredState: string;
-    timestampField?: string;
   },
 ): Promise<boolean> {
   return retryCommerceConflicts(async () => {
@@ -1295,14 +1270,7 @@ async function transitionDeliveryPackStatusProjection(
     if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== options.requiredState) return false;
     await commitWrites(context, [updateWrite({
       path: documentPath,
-      fields: options.fields,
-      fieldPaths: [
-        ...Object.keys(options.fields || {}),
-        ...(options.clearFields || []),
-      ],
-      transforms: options.timestampField
-        ? [{ fieldPath: options.timestampField, value: commerceFieldValue.serverTimestamp() }]
-        : undefined,
+      values: options.values,
       expectedUpdateTime: document.updateTime,
     })]);
     return true;
@@ -1314,14 +1282,14 @@ async function markDeliveryPackStatusProjectionCompleted(
   documentPath: string,
 ): Promise<boolean> {
   return transitionDeliveryPackStatusProjection(context, documentPath, {
-    clearFields: [
-      PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
-      PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
-      PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD,
-    ],
-    fields: { [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_COMPLETED },
+    values: {
+      [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_COMPLETED,
+      [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
+    },
     requiredState: PACK_STATUS_PROJECTION_PENDING,
-    timestampField: PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
   });
 }
 
@@ -1331,16 +1299,14 @@ async function markDeliveryPackStatusProjectionFailed(
   errorCode: string,
 ): Promise<boolean> {
   return transitionDeliveryPackStatusProjection(context, documentPath, {
-    clearFields: [
-      PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
-      PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
-    ],
-    fields: {
+    values: {
       [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_FAILED,
       [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: errorCode,
+      [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
     },
     requiredState: PACK_STATUS_PROJECTION_PENDING,
-    timestampField: PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
   });
 }
 
@@ -1349,14 +1315,14 @@ async function clearDeliveryPackStatusProjection(
   documentPath: string,
 ): Promise<boolean> {
   return transitionDeliveryPackStatusProjection(context, documentPath, {
-    clearFields: [
-      PACK_STATUS_PROJECTION_STATE_FIELD,
-      PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
-      PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD,
-      PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
-      PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
-      PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD,
-    ],
+    values: {
+      [PACK_STATUS_PROJECTION_STATE_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: commerceFieldValue.delete(),
+    },
     requiredState: PACK_STATUS_PROJECTION_PENDING,
   });
 }
@@ -1385,20 +1351,14 @@ async function recordDeliveryPackStatusProjectionTransientFailure(args: {
     ];
     await commitWrites(args.context, [updateWrite({
       path: args.documentPath,
-      fields: {
+      values: {
         [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
         [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: args.attemptStartedAtMs + backoffMs,
         [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: Math.min(Number.MAX_SAFE_INTEGER, failureCount + 1),
         [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: args.errorCode,
+        [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
+        [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
       },
-      fieldPaths: [
-        PACK_STATUS_PROJECTION_STATE_FIELD,
-        PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
-        PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD,
-        PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD,
-        PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD,
-        PACK_STATUS_PROJECTION_FAILED_AT_FIELD,
-      ],
       expectedUpdateTime: document.updateTime,
     })]);
     return true;
@@ -1925,27 +1885,20 @@ async function markDeliveryProcessing(
   runtime: DeliveryRuntime,
   signature: string | null,
 ): Promise<void> {
-  const fields: Record<string, unknown> = {
-    dropId: runtime.dropId,
-    status: 'processing',
-    ...(signature ? { deliverySignature: signature } : {}),
-  };
-  const fieldPaths = [
-    'dropId',
-    'status',
-    ...(signature ? ['deliverySignature'] : []),
-    'receiptRecovery.lastPreparedProbeAt',
-    'receiptRecovery.preparedProbeCount',
-    'receiptRecovery.nextPreparedProbeAt',
-    'receiptRecovery.status',
-  ];
   await commitWrites(context, [updateWrite({
     path: document.path,
-    fields,
-    fieldPaths,
-    transforms: document.fields.processingAt === undefined
-      ? [{ fieldPath: 'processingAt', value: commerceFieldValue.serverTimestamp() }]
-      : undefined,
+    values: {
+      dropId: runtime.dropId,
+      status: 'processing',
+      ...(signature ? { deliverySignature: signature } : {}),
+      'receiptRecovery.lastPreparedProbeAt': commerceFieldValue.delete(),
+      'receiptRecovery.preparedProbeCount': commerceFieldValue.delete(),
+      'receiptRecovery.nextPreparedProbeAt': commerceFieldValue.delete(),
+      'receiptRecovery.status': commerceFieldValue.delete(),
+      ...(document.fields.processingAt === undefined
+        ? { processingAt: commerceFieldValue.serverTimestamp() }
+        : {}),
+    },
     mustExist: true,
   })]);
 }
@@ -1961,7 +1914,7 @@ async function markDeliveryReady(
     irlClaims: Array<{ code: string; boxId: number; boxAssetId: string; dudeIds: number[] }>;
   },
 ): Promise<DeliveryOrderDocument> {
-  const fields: Record<string, unknown> = {
+  const fields: CommerceDocumentData = {
     dropId: runtime.dropId,
     status: 'ready_to_ship',
     ...(result.signature ? { deliverySignature: result.signature } : {}),
@@ -1977,33 +1930,31 @@ async function markDeliveryReady(
     dropId: runtime.dropId,
     nowMs: context.nowMs,
   });
-  Object.assign(fields, notificationOutbox.fields);
-  Object.assign(readyOrder, notificationOutbox.fields);
+  Object.assign(readyOrder, Object.fromEntries(
+    Object.entries(notificationOutbox.values).filter(([, value]) => !isCommerceDeleteField(value)),
+  ));
   const packStatusOutbox = createDeliveryPackStatusProjectionOutbox(runtime, readyOrder, context.nowMs);
-  Object.assign(fields, packStatusOutbox.fields);
-  Object.assign(readyOrder, packStatusOutbox.fields);
-  const fieldPaths = [
-    ...Object.keys(fields),
-    ...notificationOutbox.fieldPaths.filter((fieldPath) => !Object.hasOwn(fields, fieldPath)),
-    ...packStatusOutbox.fieldPaths.filter((fieldPath) => !Object.hasOwn(fields, fieldPath)),
-    'receiptRecovery.leaseExpiresAt',
-    'receiptRecovery.lastErrorCode',
-    'receiptRecovery.lastErrorMessage',
-    'receiptRecovery.lastPreparedProbeAt',
-    'receiptRecovery.preparedProbeCount',
-    'receiptRecovery.nextPreparedProbeAt',
-    'receiptRecovery.status',
-  ];
+  Object.assign(readyOrder, Object.fromEntries(
+    Object.entries(packStatusOutbox).filter(([, value]) => !isCommerceDeleteField(value)),
+  ));
   await commitWrites(context, [updateWrite({
     path: document.path,
-    fields,
-    fieldPaths,
-    transforms: [
-      { fieldPath: 'processedAt', value: commerceFieldValue.serverTimestamp() },
+    values: {
+      ...fields,
+      ...notificationOutbox.values,
+      ...packStatusOutbox,
+      'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
+      'receiptRecovery.lastErrorCode': commerceFieldValue.delete(),
+      'receiptRecovery.lastErrorMessage': commerceFieldValue.delete(),
+      'receiptRecovery.lastPreparedProbeAt': commerceFieldValue.delete(),
+      'receiptRecovery.preparedProbeCount': commerceFieldValue.delete(),
+      'receiptRecovery.nextPreparedProbeAt': commerceFieldValue.delete(),
+      'receiptRecovery.status': commerceFieldValue.delete(),
+      processedAt: commerceFieldValue.serverTimestamp(),
       ...(result.irlClaims.length
-        ? [{ fieldPath: 'irlClaimsUpdatedAt', value: commerceFieldValue.serverTimestamp() }]
-        : []),
-    ],
+        ? { irlClaimsUpdatedAt: commerceFieldValue.serverTimestamp() }
+        : {}),
+    },
     mustExist: true,
   })]);
   return { ...document, fields: readyOrder };
@@ -2035,26 +1986,18 @@ async function markReadyToShipNotificationsQueued(
       document.fields[stateField] === READY_TO_SHIP_NOTIFICATION_PENDING &&
       !matchingStateFields.has(stateField)
     ));
-    const clearedClaimFields = hasRemainingPendingMarker
-      ? []
-      : [
-          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
-          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
-        ];
+    const values: CommerceDocumentWriteData = Object.fromEntries(matching.flatMap((marker) => [
+      [marker.stateField, READY_TO_SHIP_NOTIFICATION_QUEUED],
+      [marker.jobIdField, marker.jobId],
+      [marker.queuedAtField, commerceFieldValue.serverTimestamp()],
+    ]));
+    if (!hasRemainingPendingMarker) {
+      values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] = commerceFieldValue.delete();
+      values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD] = commerceFieldValue.delete();
+    }
     await commitWrites(context, [updateWrite({
       path: documentPath,
-      fields: Object.fromEntries(matching.flatMap((marker) => [
-        [marker.stateField, READY_TO_SHIP_NOTIFICATION_QUEUED],
-        [marker.jobIdField, marker.jobId],
-      ])),
-      fieldPaths: [
-        ...matching.flatMap((marker) => [marker.stateField, marker.jobIdField]),
-        ...clearedClaimFields,
-      ],
-      transforms: matching.map((marker) => ({
-        fieldPath: marker.queuedAtField,
-        value: commerceFieldValue.serverTimestamp(),
-      })),
+      values,
       expectedUpdateTime: document.updateTime,
     })]);
     return matching.map((marker) => marker.kind);
@@ -2113,17 +2056,13 @@ async function claimReadyToShipNotifications(args: {
       const stateFields = inspection.pending.map((marker) => marker.stateField);
       await commitWrites(args.context, [updateWrite({
         path: args.documentPath,
-        fields: {
+        values: {
           ...Object.fromEntries(stateFields.map((stateField) => [stateField, READY_TO_SHIP_NOTIFICATION_FAILED])),
           [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: 'manual-review-required',
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
+          [READY_NOTIFICATION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
         },
-        fieldPaths: [
-          ...stateFields,
-          READY_NOTIFICATION_LAST_ERROR_CODE_FIELD,
-          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
-          READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
-        ],
-        transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, value: commerceFieldValue.serverTimestamp() }],
         expectedUpdateTime: document.updateTime,
       })]);
       return { outcome: 'manual-review' };
@@ -2131,7 +2070,7 @@ async function claimReadyToShipNotifications(args: {
     const claimId = crypto.randomUUID();
     await commitWrites(args.context, [updateWrite({
       path: args.documentPath,
-      fields: {
+      values: {
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: claimId,
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]:
           nowMs + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
@@ -2140,12 +2079,6 @@ async function claimReadyToShipNotifications(args: {
           ? nowMs + READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS
           : retryUntilMs,
       },
-      fieldPaths: [
-        READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
-        READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
-        READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
-        READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD,
-      ],
       expectedUpdateTime: document.updateTime,
     })]);
     return {
@@ -2173,14 +2106,11 @@ async function releaseReadyToShipNotificationClaim(
     ) return false;
     await commitWrites(context, [updateWrite({
       path: documentPath,
-      fields: {
+      values: {
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: claim.previousAttemptCount,
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
       },
-      fieldPaths: [
-        READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
-        READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
-        READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
-      ],
       expectedUpdateTime: document.updateTime,
     })]);
     return true;
@@ -2206,14 +2136,13 @@ async function markPendingReadyToShipNotificationsFailed(
     if (!stateFields.length) return [];
     await commitWrites(context, [updateWrite({
       path: documentPath,
-      fields: {
+      values: {
         ...Object.fromEntries(
           stateFields.map((fieldPath) => [fieldPath, READY_TO_SHIP_NOTIFICATION_FAILED]),
         ),
         [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: errorCode,
+        [READY_NOTIFICATION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
       },
-      fieldPaths: [...stateFields, READY_NOTIFICATION_LAST_ERROR_CODE_FIELD],
-      transforms: [{ fieldPath: READY_NOTIFICATION_FAILED_AT_FIELD, value: commerceFieldValue.serverTimestamp() }],
       expectedUpdateTime: document.updateTime,
     })]);
     return stateFields;
@@ -2490,9 +2419,7 @@ async function recordDeliveryClose(
 ): Promise<void> {
   await commitWrites(context, [updateWrite({
     path: documentPath,
-    fields: { dropId, closeDeliveryTx },
-    fieldPaths: ['dropId', 'closeDeliveryTx'],
-    transforms: [{ fieldPath: 'deliveryClosedAt', value: commerceFieldValue.serverTimestamp() }],
+    values: { dropId, closeDeliveryTx, deliveryClosedAt: commerceFieldValue.serverTimestamp() },
     mustExist: true,
   })]);
 }
@@ -2912,7 +2839,9 @@ async function retryIssueReceipts(args: {
   const receiptsMinted = alreadyProcessed + totalProcessed;
   const irlClaims: Array<{ code: string; boxId: number; boxAssetId: string; dudeIds: number[] }> = [];
   if (runtime.itemsPerBox > 0) {
-    const items = Array.isArray(document.fields.items) ? document.fields.items.filter(isRecord) : [];
+    const items = Array.isArray(document.fields.items)
+      ? document.fields.items.filter((item): item is CommerceDocumentData => isRecord(item))
+      : [];
     for (const item of items) {
       if (item.kind !== 'box' || typeof item.assetId !== 'string') continue;
       const boxId = Number(item.refId);
@@ -3059,16 +2988,12 @@ async function persistPendingReceiptSubmission(
       }
       await commitWrites(context, [updateWrite({
         path,
-        fields: {
+        values: {
           [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: pending,
           'receiptRecovery.leaseExpiresAt': commerceTimestamp(
             context.nowMs + DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS,
           ),
         },
-        fieldPaths: [
-          RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD,
-          'receiptRecovery.leaseExpiresAt',
-        ],
         expectedUpdateTime: document.updateTime,
       })]);
     }, { signal: context.signal });
@@ -3105,13 +3030,10 @@ async function settlePendingReceiptSubmission(
       }
       await commitWrites(context, [updateWrite({
         path,
-        fields: outcome === 'confirmed'
-          ? { receiptTxs: commerceFieldValue.arrayUnion(pending.signature) }
-          : {},
-        fieldPaths: [
-          ...(outcome === 'confirmed' ? ['receiptTxs'] : []),
-          RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD,
-        ],
+        values: {
+          ...(outcome === 'confirmed' ? { receiptTxs: commerceFieldValue.arrayUnion(pending.signature) } : {}),
+          [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: commerceFieldValue.delete(),
+        },
         expectedUpdateTime: document.updateTime,
       })]);
     }, { signal: context.signal });

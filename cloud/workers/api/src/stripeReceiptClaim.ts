@@ -85,6 +85,7 @@ import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import {
   D1CommerceRepository,
   commerceFieldValue,
+  type CommerceDocumentWriteData,
   type CommerceUnitOfWork,
 } from './commerceRepository.js';
 import {
@@ -93,7 +94,6 @@ import {
   runCommerceWriteTransaction,
   updateCommerceWrite,
   type CommerceDocumentContext,
-  type CommerceTransform,
   type CommerceWrite,
 } from './commerceTransactions.js';
 import {
@@ -254,7 +254,7 @@ function normalizedError(error: unknown, fallback: string): StripeReceiptClaimEr
   return new StripeReceiptClaimError('internal', fallback, undefined, error);
 }
 
-function summarizeError(error: unknown): Record<string, unknown> {
+function summarizeError(error: unknown) {
   const normalized = normalizedError(error, 'Receipt claim failed.');
   return { kind: normalized.name, code: normalized.code, message: normalized.message };
 }
@@ -418,28 +418,28 @@ export function orderTarget(order: Record<string, unknown>, code: string, boxId:
   return { updatePluralOrderClaim: false, updateSingularOrderClaim: true };
 }
 
-function orderClaimFields(args: {
+function orderClaimValues(args: {
   code: string;
   boxId: number;
   status: 'processing' | 'unclaimed' | 'claimed';
-  fields: Record<string, unknown>;
+  values: CommerceDocumentWriteData;
   updatePluralOrderClaim: boolean;
   updateSingularOrderClaim: boolean;
-}): Record<string, unknown> {
-  const fields: Record<string, unknown> = {};
+}): CommerceDocumentWriteData {
+  const values: CommerceDocumentWriteData = {};
   const claim = {
     namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
     code: args.code,
     boxId: args.boxId,
     status: args.status,
-    ...args.fields,
+    ...args.values,
   };
   const assign = (prefix: string) => {
-    for (const [key, value] of Object.entries(claim)) fields[`${prefix}.${key}`] = value;
+    for (const [key, value] of Object.entries(claim)) values[`${prefix}.${key}`] = value;
   };
   if (args.updatePluralOrderClaim) assign(`stripeReceiptClaimsByBoxId.${stripeReceiptClaimBoxMapKey(args.boxId)}`);
   if (args.updateSingularOrderClaim) assign('stripeReceiptClaim');
-  return fields;
+  return values;
 }
 
 function timestamp(value: number) {
@@ -455,15 +455,10 @@ async function runTransaction<T>(
 
 function updateWrite(args: {
   path: string;
-  fields: Record<string, unknown>;
-  deleted?: string[];
-  transforms?: CommerceTransform[];
+  values: CommerceDocumentWriteData;
 }): CommerceWrite {
   return updateCommerceWrite({
-    path: args.path,
-    fields: args.fields,
-    fieldPaths: [...Object.keys(args.fields), ...(args.deleted || [])],
-    transforms: args.transforms,
+    ...args,
     mustExist: true,
   });
 }
@@ -548,23 +543,20 @@ export async function startClaim(
         }
       }
       const target = orderTarget(order, code, boxId);
-      const orderFields = {
+      const orderValues = {
         dropId,
-        ...orderClaimFields({
+        ...orderClaimValues({
           code,
           boxId,
           status: 'processing',
-          fields: {
+          values: {
             recipient: recipientWallet,
             processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
+            processingStartedAt: commerceFieldValue.serverTimestamp(),
           },
           ...target,
         }),
       };
-      const processingPrefixes = [
-        ...(target.updatePluralOrderClaim ? [`stripeReceiptClaimsByBoxId.${stripeReceiptClaimBoxMapKey(boxId)}`] : []),
-        ...(target.updateSingularOrderClaim ? ['stripeReceiptClaim'] : []),
-      ];
       attemptedStart = {
         status: 'started',
         dropId,
@@ -585,24 +577,18 @@ export async function startClaim(
         writes: [
           updateWrite({
             path: claimPath,
-            fields: {
+            values: {
               status: 'processing',
               recipient: recipientWallet,
               processingAttemptId: attemptId,
               processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
+              processingStartedAt: commerceFieldValue.serverTimestamp(),
+              updatedAt: commerceFieldValue.serverTimestamp(),
             },
-            transforms: [
-              { fieldPath: 'processingStartedAt', value: commerceFieldValue.serverTimestamp() },
-              { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
-            ],
           }),
           updateWrite({
             path: orderPath,
-            fields: orderFields,
-            transforms: processingPrefixes.map((prefix) => ({
-              fieldPath: `${prefix}.processingStartedAt`,
-              value: commerceFieldValue.serverTimestamp(),
-            })),
+            values: orderValues,
           }),
         ],
       };
@@ -659,15 +645,6 @@ function cleanupContext(context: CommerceContext): CommerceContext {
   };
 }
 
-function claimPrefixes(started: Pick<StartedClaim, 'boxId' | 'updatePluralOrderClaim' | 'updateSingularOrderClaim'>): string[] {
-  return [
-    ...(started.updatePluralOrderClaim
-      ? [`stripeReceiptClaimsByBoxId.${stripeReceiptClaimBoxMapKey(started.boxId)}`]
-      : []),
-    ...(started.updateSingularOrderClaim ? ['stripeReceiptClaim'] : []),
-  ];
-}
-
 export async function clearProcessing(
   context: CommerceContext,
   started: StartedClaim,
@@ -683,33 +660,35 @@ export async function clearProcessing(
         return { result: undefined };
       }
       const lastError = summarizeError(error);
-      const prefixes = claimPrefixes(started);
-      const orderFields = orderClaimFields({
+      const orderValues = orderClaimValues({
         code,
         boxId: started.boxId,
         status: 'unclaimed',
-        fields: { lastClaimError: lastError },
+        values: {
+          lastClaimError: lastError,
+          recipient: commerceFieldValue.delete(),
+          processingStartedAt: commerceFieldValue.delete(),
+          processingLeaseExpiresAt: commerceFieldValue.delete(),
+        },
         updatePluralOrderClaim: started.updatePluralOrderClaim,
         updateSingularOrderClaim: started.updateSingularOrderClaim,
       });
-      const orderDeleted = prefixes.flatMap((prefix) => [
-        `${prefix}.recipient`,
-        `${prefix}.processingStartedAt`,
-        `${prefix}.processingLeaseExpiresAt`,
-      ]);
       return {
         result: undefined,
         writes: [
           updateWrite({
             path: claimPath,
-            fields: { status: 'unclaimed', lastClaimError: lastError },
-            deleted: ['processingAttemptId', 'processingStartedAt', 'processingLeaseExpiresAt'],
-            transforms: [
-              { fieldPath: 'lastClaimErrorAt', value: commerceFieldValue.serverTimestamp() },
-              { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
-            ],
+            values: {
+              status: 'unclaimed',
+              lastClaimError: lastError,
+              processingAttemptId: commerceFieldValue.delete(),
+              processingStartedAt: commerceFieldValue.delete(),
+              processingLeaseExpiresAt: commerceFieldValue.delete(),
+              lastClaimErrorAt: commerceFieldValue.serverTimestamp(),
+              updatedAt: commerceFieldValue.serverTimestamp(),
+            },
           }),
-          updateWrite({ path: started.orderPath, fields: orderFields, deleted: orderDeleted }),
+          updateWrite({ path: started.orderPath, values: orderValues }),
         ],
       };
     });
@@ -756,14 +735,14 @@ export async function rememberSubmittedTransaction(
       result: undefined,
       writes: [updateWrite({
         path,
-        fields: {
+        values: {
           receiptTxs,
           ...(normalizedSubmission ? { receiptTxSubmissions: submissions } : {}),
           ...(normalizedSubmission
             ? { processingLeaseExpiresAt: timestamp(Date.now() + DIRECT_SUBMISSION_PROCESSING_LEASE_MS) }
             : {}),
+          updatedAt: commerceFieldValue.serverTimestamp(),
         },
-        transforms: [{ fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() }],
       })],
     };
   });
@@ -800,61 +779,48 @@ export async function finalizeClaim(
       throw new StripeReceiptClaimError('aborted', 'Receipt claim processing lease changed.');
     }
     const receiptTxs = receiptTx ? Array.from(new Set([...existingTxs, receiptTx])) : existingTxs;
-    const prefixes = claimPrefixes(started);
-    const orderFields = {
+    const orderValues = {
       dropId: started.dropId,
-      ...orderClaimFields({
+      ...orderClaimValues({
         code,
         boxId: started.boxId,
         status: 'claimed',
-        fields: {
+        values: {
           recipient: recipientWallet,
           receiptTxs,
           receiptKind,
           receiptsTransferred,
-          ...(figureIds?.length ? { figureIds } : {}),
+          figureIds: figureIds?.length ? figureIds : commerceFieldValue.delete(),
+          processingStartedAt: commerceFieldValue.delete(),
+          processingLeaseExpiresAt: commerceFieldValue.delete(),
+          claimedAt: commerceFieldValue.serverTimestamp(),
         },
         updatePluralOrderClaim: started.updatePluralOrderClaim,
         updateSingularOrderClaim: started.updateSingularOrderClaim,
       }),
     };
-    const orderDeleted = prefixes.flatMap((prefix) => [
-      `${prefix}.processingStartedAt`,
-      `${prefix}.processingLeaseExpiresAt`,
-      ...(figureIds?.length ? [] : [`${prefix}.figureIds`]),
-    ]);
     return {
       result: receiptTxs,
       writes: [
         updateWrite({
           path: claimPath,
-          fields: {
+          values: {
             status: 'claimed',
             recipient: recipientWallet,
             receiptTxs,
             receiptKind,
             receiptsTransferred,
-            ...(figureIds?.length ? { figureIds } : {}),
+            figureIds: figureIds?.length ? figureIds : commerceFieldValue.delete(),
+            processingAttemptId: commerceFieldValue.delete(),
+            processingStartedAt: commerceFieldValue.delete(),
+            processingLeaseExpiresAt: commerceFieldValue.delete(),
+            claimedAt: commerceFieldValue.serverTimestamp(),
+            updatedAt: commerceFieldValue.serverTimestamp(),
           },
-          deleted: [
-            'processingAttemptId',
-            'processingStartedAt',
-            'processingLeaseExpiresAt',
-            ...(figureIds?.length ? [] : ['figureIds']),
-          ],
-          transforms: [
-            { fieldPath: 'claimedAt', value: commerceFieldValue.serverTimestamp() },
-            { fieldPath: 'updatedAt', value: commerceFieldValue.serverTimestamp() },
-          ],
         }),
         updateWrite({
           path: started.orderPath,
-          fields: orderFields,
-          deleted: orderDeleted,
-          transforms: prefixes.map((prefix) => ({
-            fieldPath: `${prefix}.claimedAt`,
-            value: commerceFieldValue.serverTimestamp(),
-          })),
+          values: orderValues,
         }),
       ],
     };

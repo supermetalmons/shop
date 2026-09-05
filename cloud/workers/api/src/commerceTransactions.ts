@@ -3,6 +3,7 @@ import {
   D1CommerceRepository,
   commerceFieldValue,
   commerceKeyFromPath,
+  type CommerceDocumentData,
   type CommerceDocumentKey,
   type CommerceDocumentRecord,
   type CommerceDocumentWriteData,
@@ -38,15 +39,10 @@ export type CommerceDocumentContext = {
 };
 
 export type CommerceDocument = {
-  fields: Record<string, unknown>;
+  fields: CommerceDocumentData;
   id: string;
   path: string;
   updateTime: string;
-};
-
-export type CommerceTransform = {
-  fieldPath: string;
-  value: CommerceUpdateValue;
 };
 
 export type CommerceWrite = {
@@ -238,45 +234,26 @@ export function commerceTimestamp(milliseconds: number): CommerceUpdateValue {
 }
 
 export function createCommerceWrite(args: {
-  fields: Record<string, unknown>;
   path: string;
-  transforms?: readonly CommerceTransform[];
+  values: CommerceDocumentWriteData;
 }): CommerceWrite {
   return {
     operation: 'create',
     path: args.path,
-    values: {
-      ...args.fields as CommerceDocumentWriteData,
-      ...Object.fromEntries(
-        (args.transforms || []).map((transform) => [transform.fieldPath, transform.value]),
-      ),
-    },
+    values: { ...args.values },
   };
 }
 
 export function updateCommerceWrite(args: {
   expectedUpdateTime?: string;
-  fields?: Record<string, unknown>;
-  fieldPaths: readonly string[];
   mustExist?: boolean;
   path: string;
-  transforms?: readonly CommerceTransform[];
+  values: CommerceDocumentWriteData;
 }): CommerceWrite {
-  const fields = args.fields || {};
   return {
     operation: 'update',
     path: args.path,
-    values: {
-      ...Object.fromEntries(args.fieldPaths.map((field) => [
-        field,
-        Object.hasOwn(fields, field)
-          ? fields[field] as CommerceUpdateValue
-          : commerceFieldValue.delete(),
-      ])),
-      ...Object.fromEntries(
-        (args.transforms || []).map((transform) => [transform.fieldPath, transform.value]),
-      ),
-    },
+    values: { ...args.values },
     ...(args.expectedUpdateTime ? { expectedUpdateTime: args.expectedUpdateTime } : {}),
     ...(args.mustExist ? { mustExist: true } : {}),
   };

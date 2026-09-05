@@ -7,6 +7,7 @@ import {
 } from '../../../../shared/stripeReceiptClaims.js';
 import type { DropFamily } from './dropConfig.js';
 import { isAdminIrlRedeemDropFamily } from '../../../../shared/adminIrlEligibility.js';
+import type { CommerceDocumentData } from './commerceRepositoryTypes.js';
 
 const ADMIN_IRL_REDEEM_ADDRESS_SNAPSHOT = {
   label: 'Redeemed for IRL',
@@ -180,7 +181,7 @@ export function buildAdminIrlRedeemSelectionKey(args: {
 
 export function buildAdminIrlRedeemDeliveryOrderDocument(
   input: AdminIrlRedeemDeliveryOrderInput,
-): Record<string, unknown> {
+): CommerceDocumentData {
   const boxes = input.boxes.map(normalizeBox).sort((a, b) => a.boxId - b.boxId);
   if (!boxes.length) throw new Error('Admin IRL redeem order requires at least one box');
   assertUnique(boxes.map((box) => box.boxId), 'box ids');
@@ -240,7 +241,7 @@ export function buildAdminIrlRedeemClaimCodeDocument(args: {
   receiptOwner: string;
   requestId: string;
   box: AdminIrlRedeemBoxInput;
-}): Record<string, unknown> {
+}): CommerceDocumentData {
   const box = normalizeBox(args.box);
   return {
     version: 1,
@@ -262,7 +263,7 @@ export function buildAdminIrlRedeemClaimCodeDocument(args: {
 
 export function buildAdminIrlRedeemCardDeliveryOrderDocument(
   input: AdminIrlRedeemCardDeliveryOrderInput,
-): Record<string, unknown> {
+): CommerceDocumentData {
   const card = normalizeCard(input.card);
   const claim = {
     namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
@@ -306,7 +307,7 @@ export function buildAdminIrlRedeemCardClaimCodeDocument(args: {
   receiptOwner: string;
   requestId: string;
   card: AdminIrlRedeemCardInput;
-}): Record<string, unknown> {
+}): CommerceDocumentData {
   const card = normalizeCard(args.card);
   return {
     version: 1,
@@ -333,7 +334,7 @@ export function buildAdminIrlRedeemCardMarkerDocument(args: {
   owner: string;
   transferSignature: string;
   card: AdminIrlRedeemCardInput;
-}): Record<string, unknown> {
+}): CommerceDocumentData {
   const card = normalizeCard(args.card);
   return {
     version: ADMIN_IRL_REDEEM_CARD_MARKER_VERSION,
@@ -350,7 +351,7 @@ export function buildAdminIrlRedeemCardMarkerDocument(args: {
   };
 }
 
-export function buildAdminIrlRedeemMarkerDocument(input: AdminIrlRedeemMarkerInput): Record<string, unknown> {
+export function buildAdminIrlRedeemMarkerDocument(input: AdminIrlRedeemMarkerInput): CommerceDocumentData {
   const box = normalizeBox(input.box);
   return {
     version: ADMIN_IRL_REDEEM_MARKER_VERSION,

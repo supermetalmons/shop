@@ -30,6 +30,7 @@ import {
   READY_NOTIFICATION_PENDING_STATE,
   READY_NOTIFICATION_SHIPPER_STATE_FIELD,
 } from '../../../../shared/readyToShipNotificationReconciliation.js';
+import { commerceFieldValue, type CommerceDocumentWriteData } from './commerceRepository.js';
 
 export const READY_TO_SHIP_NOTIFICATION_PENDING = READY_NOTIFICATION_PENDING_STATE;
 export const READY_TO_SHIP_NOTIFICATION_QUEUED = 'queued' as const;
@@ -70,8 +71,7 @@ export type PendingReadyToShipNotification = ReadyToShipNotificationMarkerDefini
 };
 
 export type ReadyToShipNotificationOutbox = {
-  fields: Record<string, unknown>;
-  fieldPaths: string[];
+  values: CommerceDocumentWriteData;
   pending: PendingReadyToShipNotification[];
 };
 
@@ -169,7 +169,7 @@ export function createReadyToShipNotificationOutbox(args: {
     after: args.after,
     ignoredSources: [ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE],
   })) {
-    return { fields: {}, fieldPaths: [], pending: [] };
+    return { values: {}, pending: [] };
   }
   const deliveryId = notificationDeliveryId(args.after, args.deliveryId);
   const plan = readyToShipNotificationPlan(args.after, args.dropId);
@@ -182,26 +182,23 @@ export function createReadyToShipNotificationOutbox(args: {
       ? [pendingMarker(markerForKind('shipper_ready_to_ship'), args.dropId, deliveryId, createJobId)]
       : []),
   ];
-  const fields: Record<string, unknown> = {};
-  const fieldPaths: string[] = [];
+  const values: CommerceDocumentWriteData = {};
   for (const marker of pending) {
-    fields[marker.stateField] = READY_TO_SHIP_NOTIFICATION_PENDING;
-    fields[marker.jobIdField] = marker.jobId;
-    fields[marker.idempotencyKeyField] = marker.idempotencyKey;
-    fieldPaths.push(marker.stateField, marker.jobIdField, marker.idempotencyKeyField, marker.queuedAtField);
+    values[marker.stateField] = READY_TO_SHIP_NOTIFICATION_PENDING;
+    values[marker.jobIdField] = marker.jobId;
+    values[marker.idempotencyKeyField] = marker.idempotencyKey;
+    values[marker.queuedAtField] = commerceFieldValue.delete();
   }
   if (pending.length) {
     const nowMs = Number.isSafeInteger(args.nowMs) && Number(args.nowMs) >= 0
       ? Number(args.nowMs)
       : Date.now();
-    fields[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD] = nowMs + READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS;
-    fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD] = 0;
-    fieldPaths.push(
-      READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
-      READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD,
-    );
+    values[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD] = nowMs + READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS;
+    values[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD] = 0;
+    values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] = commerceFieldValue.delete();
+    values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD] = commerceFieldValue.delete();
   }
-  return { fields, fieldPaths, pending };
+  return { values, pending };
 }
 
 export function inspectPendingReadyToShipNotifications(
