@@ -15,6 +15,7 @@ const migrationNames = [
   '0005_delivery_owner_query_revisions.sql',
   '0006_document_path_revisions.sql',
   '0007_stripe_terminal_notifications.sql',
+  '0008_admin_irl_redeem_workflow_operation.sql',
 ] as const;
 
 function currentDatabase(seedDocuments = true): DatabaseSync {
@@ -169,6 +170,36 @@ test('Commerce D1 checker accepts the exact empty post-migration state', () => {
   }
 });
 
+test('Commerce D1 checker accepts the Workflow index after upgrading with existing statistics', () => {
+  const database = currentDatabase();
+  try {
+    database.exec(`DROP INDEX commerce_admin_irl_redeem_workflow_operation;
+      BEGIN IMMEDIATE;
+      INSERT INTO commerce_documents (
+        document_path, document_kind, drop_id, document_id, document_json,
+        version, create_time, update_time
+      ) VALUES (
+        'drops/drop/adminIrlRedeemRequests/workflow', 'admin_irl_redeem_request', 'drop', 'workflow',
+        '{"workflowFinalizeV1":{"operationId":"airf-v1-${'a'.repeat(64)}"}}',
+        1, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+      );
+      UPDATE commerce_authority_control
+      SET documents_revision = documents_revision + 1, updated_at_ms = updated_at_ms + 1
+      WHERE singleton = 1;
+      COMMIT;
+      ANALYZE commerce_documents;`);
+
+    database.exec(readFileSync(
+      new URL('../cloud/workers/api/commerce-migrations/0008_admin_irl_redeem_workflow_operation.sql', import.meta.url),
+      'utf8',
+    ));
+
+    assert.equal(checkCommerceD1(localQuery(database)).authoritativeDocuments, 514);
+  } finally {
+    database.close();
+  }
+});
+
 test('Commerce D1 checker rejects a future document-path revision', () => {
   const database = currentDatabase();
   try {
@@ -226,6 +257,35 @@ test('Commerce D1 checker rejects a malformed Stripe terminal-notification index
     assert.throws(
       () => checkCommerceD1(localQuery(database)),
       /Commerce D1 Stripe terminal-notification index is invalid/,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker rejects a missing Admin IRL Workflow operation index', () => {
+  const database = currentDatabase();
+  try {
+    database.exec('DROP INDEX commerce_admin_irl_redeem_workflow_operation');
+    assert.throws(
+      () => checkCommerceD1(localQuery(database)),
+      /Commerce D1 Admin IRL Workflow operation index is invalid/,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker rejects a malformed Admin IRL Workflow operation index', () => {
+  const database = currentDatabase();
+  try {
+    database.exec(`DROP INDEX commerce_admin_irl_redeem_workflow_operation;
+      CREATE INDEX commerce_admin_irl_redeem_workflow_operation
+      ON commerce_documents (document_path)
+      WHERE document_kind = 'admin_irl_redeem_request'`);
+    assert.throws(
+      () => checkCommerceD1(localQuery(database)),
+      /Commerce D1 Admin IRL Workflow operation index is invalid/,
     );
   } finally {
     database.close();

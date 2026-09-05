@@ -32,6 +32,10 @@ const stripeTerminalNotificationsMigrationSql = readFileSync(
   new URL('../cloud/workers/api/commerce-migrations/0007_stripe_terminal_notifications.sql', import.meta.url),
   'utf8',
 );
+const adminIrlRedeemWorkflowOperationMigrationSql = readFileSync(
+  new URL('../cloud/workers/api/commerce-migrations/0008_admin_irl_redeem_workflow_operation.sql', import.meta.url),
+  'utf8',
+);
 const authorityLeaseToken = '123e4567-e89b-42d3-a456-426614174000';
 const d1NowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
 const deliveryOwnerRevisionTriggers = [
@@ -69,10 +73,16 @@ function databaseBeforeDocumentPathRevisions(): DatabaseSync {
   return db;
 }
 
-function database(): DatabaseSync {
+function databaseBeforeWorkflowOperationIndex(): DatabaseSync {
   const db = databaseBeforeDocumentPathRevisions();
   db.exec(documentPathRevisionsMigrationSql);
   db.exec(stripeTerminalNotificationsMigrationSql);
+  return db;
+}
+
+function database(): DatabaseSync {
+  const db = databaseBeforeWorkflowOperationIndex();
+  db.exec(adminIrlRedeemWorkflowOperationMigrationSql);
   resumeCommerceAfterMigration(db);
   return db;
 }
@@ -81,7 +91,7 @@ function insertTestDocument(db: DatabaseSync, args: {
   data?: Record<string, unknown>;
   documentId: string;
   dropId: string | null;
-  kind: 'claim_code' | 'delivery_order' | 'stripe_checkout';
+  kind: 'admin_irl_redeem_request' | 'claim_code' | 'delivery_order' | 'stripe_checkout';
   path: string;
 }): void {
   db.prepare(`INSERT INTO commerce_documents (
@@ -1122,6 +1132,102 @@ test('Stripe terminal-notification index migration preserves active Commerce sta
     assert.deepEqual(db.prepare('SELECT * FROM commerce_authority_control').all(), before);
     assert.deepEqual(db.prepare('SELECT * FROM commerce_documents').all(), documentsBefore);
     assert.deepEqual(indexColumns(db, 'commerce_stripe_terminal_notifications_due'), ['null', 'document_path']);
+  } finally {
+    db.close();
+  }
+});
+
+test('Admin IRL Workflow operation index migration preserves populated Commerce state', () => {
+  for (const paused of [false, true]) {
+    const db = databaseBeforeWorkflowOperationIndex();
+    try {
+      resumeCommerceAfterMigration(db);
+      runDocumentEpoch(db, () => {
+        for (const documentId of ['request-one', 'request-two']) {
+          insertTestDocument(db, {
+            kind: 'admin_irl_redeem_request',
+            dropId: 'drop',
+            documentId,
+            path: `drops/drop/adminIrlRedeemRequests/${documentId}`,
+            data: { workflowFinalizeV1: { operationId: `airf-v1-${'a'.repeat(64)}` } },
+          });
+        }
+        insertTestDocument(db, {
+          kind: 'delivery_order',
+          dropId: 'drop',
+          documentId: '1',
+          path: 'drops/drop/deliveryOrders/1',
+          data: { owner: 'owner', status: 'processing' },
+        });
+      });
+      if (paused) pauseCommerceForMigration(db, true);
+      const authorityBefore = db.prepare('SELECT * FROM commerce_authority_control').all();
+      const documentsBefore = db.prepare('SELECT * FROM commerce_documents ORDER BY document_path').all();
+      const ownerRevisionsBefore = deliveryOwnerRevisions(db);
+      const pathRevisionsBefore = documentPathRevisions(db);
+
+      runMigration(db, adminIrlRedeemWorkflowOperationMigrationSql);
+
+      assert.deepEqual(db.prepare('SELECT * FROM commerce_authority_control').all(), authorityBefore);
+      assert.deepEqual(db.prepare('SELECT * FROM commerce_documents ORDER BY document_path').all(), documentsBefore);
+      assert.deepEqual(deliveryOwnerRevisions(db), ownerRevisionsBefore);
+      assert.deepEqual(documentPathRevisions(db), pathRevisionsBefore);
+      assert.deepEqual(indexColumns(db, 'commerce_admin_irl_redeem_workflow_operation'), ['null', 'document_path']);
+      const index = db.prepare(`SELECT "unique", partial FROM pragma_index_list('commerce_documents')
+        WHERE name = 'commerce_admin_irl_redeem_workflow_operation'`).get();
+      assert.deepEqual({ ...index }, { unique: 0, partial: 1 });
+    } finally {
+      db.close();
+    }
+  }
+});
+
+test('Admin IRL Workflow status lookup searches its operation index without temporary sorting', () => {
+  const db = database();
+  try {
+    const operationId = `airf-v1-${'a'.repeat(64)}`;
+    runDocumentEpoch(db, () => {
+      for (let index = 0; index < 500; index += 1) {
+        insertTestDocument(db, {
+          kind: 'admin_irl_redeem_request',
+          dropId: 'drop',
+          documentId: String(index),
+          path: `drops/drop/adminIrlRedeemRequests/${index}`,
+          data: {
+            status: index % 2 ? 'processing' : 'completed',
+            workflowFinalizeV1: {
+              operationId: index === 100 || index === 101
+                ? operationId
+                : `airf-v1-${index.toString(16).padStart(64, '0')}`,
+            },
+          },
+        });
+      }
+      insertTestDocument(db, {
+        kind: 'delivery_order',
+        dropId: 'drop',
+        documentId: '1',
+        path: 'drops/drop/deliveryOrders/1',
+        data: { workflowFinalizeV1: { operationId } },
+      });
+    });
+    const sql = `SELECT document_path, document_kind, drop_id, document_id, document_json,
+        version, create_time, update_time, processed_at_seconds, processed_at_nanos
+      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
+      WHERE
+        authority.singleton = 1 AND
+        document_kind = 'admin_irl_redeem_request' AND
+        json_type(document_json, '$.workflowFinalizeV1.operationId') = 'text' AND
+        json_extract(document_json, '$.workflowFinalizeV1.operationId') = ?
+      ORDER BY document_path ASC
+      LIMIT 2`;
+    const plan = planDetails(db, sql, operationId);
+    assert.match(plan, /SEARCH commerce_documents USING INDEX commerce_admin_irl_redeem_workflow_operation \(<expr>=\?\)/);
+    assert.doesNotMatch(plan, /USE TEMP B-TREE/);
+    assert.deepEqual(db.prepare(sql).all(operationId).map((row) => row.document_path), [
+      'drops/drop/adminIrlRedeemRequests/100',
+      'drops/drop/adminIrlRedeemRequests/101',
+    ]);
   } finally {
     db.close();
   }

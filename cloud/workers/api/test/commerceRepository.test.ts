@@ -1535,43 +1535,57 @@ test('all standalone reads fail closed when commerce is paused', async () => {
   }
 });
 
-test('Admin IRL Workflow status reads one exact operation while commerce is paused', async () => {
+test('Admin IRL Workflow status uses an indexed exact lookup and remains available while commerce is paused', async () => {
   const operationId = `airf-v1-${'a'.repeat(64)}`;
-  const harness = createCommerceD1Harness();
-  seedCommerceDocument(harness, {
-    key: commerceKeys.adminIrlRedeemRequest('drop', 'request-one'),
-    data: {
-      status: 'processing',
-      workflowFinalizeV1: { version: 1, operationId },
-    },
-  });
-  pauseCommerce(harness);
-  const repository = new D1CommerceRepository(harness.db);
-
-  await assert.rejects(
-    repository.get(commerceKeys.adminIrlRedeemRequest('drop', 'request-one')),
-    isUnavailableCommerceError,
-  );
-  const found = await repository.getAdminIrlRedeemRequestForWorkflowStatus(operationId);
-  assert.equal(found?.key.path, 'drops/drop/adminIrlRedeemRequests/request-one');
-
-  const duplicateHarness = createCommerceD1Harness();
-  seedCommerceDocuments(duplicateHarness, [{
+  const missingOperationId = `airf-v1-${'b'.repeat(64)}`;
+  const duplicateOperationId = `airf-v1-${'c'.repeat(64)}`;
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (observation) => calls.push(observation) });
+  seedCommerceDocuments(harness, [{
     key: commerceKeys.adminIrlRedeemRequest('drop', 'request-one'),
     data: {
       status: 'processing',
       workflowFinalizeV1: { version: 1, operationId },
     },
   }, {
-    key: commerceKeys.adminIrlRedeemRequest('drop', 'request-two'),
-    data: {
-      status: 'processing',
-      workflowFinalizeV1: { version: 1, operationId },
-    },
+    key: commerceKeys.deliveryOrder('drop', 'unrelated'),
+    data: { workflowFinalizeV1: { version: 1, operationId } },
+  }, {
+    key: commerceKeys.adminIrlRedeemRequest('drop', 'duplicate-one'),
+    data: { workflowFinalizeV1: { version: 1, operationId: duplicateOperationId } },
+  }, {
+    key: commerceKeys.adminIrlRedeemRequest('drop', 'duplicate-two'),
+    data: { workflowFinalizeV1: { version: 1, operationId: duplicateOperationId } },
   }]);
-  pauseCommerce(duplicateHarness);
+  const repository = new D1CommerceRepository(harness.db);
+  assert.equal(await repository.getAdminIrlRedeemRequestForWorkflowStatus(missingOperationId), null);
+  const found = await repository.getAdminIrlRedeemRequestForWorkflowStatus(operationId);
+  assert.equal(found?.key.path, 'drops/drop/adminIrlRedeemRequests/request-one');
+  const call = calls.at(-1);
+  assert.equal(call?.method, 'batch');
+  if (call?.method !== 'batch') assert.fail('Expected one D1 batch call.');
+  const lookupSql = call.statements[1].sql;
+  const plan = harness.database.prepare(`EXPLAIN QUERY PLAN ${lookupSql}`)
+    .all(operationId)
+    .map((row) => String(row.detail))
+    .join('\n');
+  assert.match(plan, /SEARCH commerce_documents USING INDEX commerce_admin_irl_redeem_workflow_operation\b/);
+  assert.doesNotMatch(plan, /SCAN commerce_documents|USE TEMP B-TREE/i);
   await assert.rejects(
-    new D1CommerceRepository(duplicateHarness.db).getAdminIrlRedeemRequestForWorkflowStatus(operationId),
+    repository.getAdminIrlRedeemRequestForWorkflowStatus(duplicateOperationId),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'internal',
+  );
+
+  pauseCommerce(harness);
+  await assert.rejects(
+    repository.get(commerceKeys.adminIrlRedeemRequest('drop', 'request-one')),
+    isUnavailableCommerceError,
+  );
+  assert.deepEqual(await repository.getAdminIrlRedeemRequestForWorkflowStatus(operationId), found);
+  assert.equal(await repository.getAdminIrlRedeemRequestForWorkflowStatus(missingOperationId), null);
+
+  await assert.rejects(
+    repository.getAdminIrlRedeemRequestForWorkflowStatus(duplicateOperationId),
     (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'internal',
   );
 });

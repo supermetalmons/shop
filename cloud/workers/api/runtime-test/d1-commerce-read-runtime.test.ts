@@ -159,6 +159,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0005_delivery_owner_query_revisions.sql',
       '0006_document_path_revisions.sql',
       '0007_stripe_terminal_notifications.sql',
+      '0008_admin_irl_redeem_workflow_operation.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -199,6 +200,10 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const validOwnerA = '11111111111111111111111111111111';
     const validOwnerB = 'So11111111111111111111111111111111111111112';
     const checkoutKey = commerceKeys.stripeCheckout('runtime', 'cs_runtime');
+    const workflowKey = commerceKeys.adminIrlRedeemRequest('runtime', 'workflow');
+    const workflowOperationId = `airf-v1-${'a'.repeat(64)}`;
+    const duplicateWorkflowOperationId = `airf-v1-${'b'.repeat(64)}`;
+    const missingWorkflowOperationId = `airf-v1-${'c'.repeat(64)}`;
     await env.COMMERCE_DB.batch([
       insertDocument(env.COMMERCE_DB, claimKey, { status: 'unused' }),
       insertDocument(env.COMMERCE_DB, deliveryKey, {
@@ -238,6 +243,18 @@ test('commerce repository reads and transaction guards run through the real D1 r
         stripeTerminalNotificationState: 'pending',
         stripeTerminalNotificationNextAttemptAtMs: 10,
       }),
+      insertDocument(env.COMMERCE_DB, workflowKey, {
+        status: 'processing',
+        workflowFinalizeV1: { version: 1, operationId: workflowOperationId },
+      }),
+      ...['workflow-duplicate-one', 'workflow-duplicate-two'].map((requestId) => insertDocument(
+        env.COMMERCE_DB,
+        commerceKeys.adminIrlRedeemRequest('runtime', requestId),
+        {
+          status: 'processing',
+          workflowFinalizeV1: { version: 1, operationId: duplicateWorkflowOperationId },
+        },
+      )),
       env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
         SET documents_revision = documents_revision + 1,
           updated_at_ms = updated_at_ms + 1
@@ -499,8 +516,30 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.deepEqual(await bulkUnit.getMany(requestedKeys), bulkRecords);
     assert.deepEqual(await bulkUnit.getMany([]), []);
     assert.deepEqual(observedBatchSizes, []);
-    assert.deepEqual(observedPreparedSql, []);
+    assert.equal(observedPreparedSql.length, 0);
     await bulkUnit.commit();
+
+    observedPreparedSql.length = 0;
+    assert.equal(
+      (await observedRepository.getAdminIrlRedeemRequestForWorkflowStatus(workflowOperationId))?.key.path,
+      workflowKey.path,
+    );
+    const workflowLookupSql = observedPreparedSql.find((sql) => sql.includes('$.workflowFinalizeV1.operationId'));
+    assert.ok(workflowLookupSql);
+    const workflowPlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${workflowLookupSql}`)
+      .bind(workflowOperationId)
+      .all<{ detail: string }>();
+    const workflowPlanDetails = workflowPlan.results.map((row) => row.detail).join('\n');
+    assert.match(
+      workflowPlanDetails,
+      /SEARCH commerce_documents USING INDEX commerce_admin_irl_redeem_workflow_operation\b/,
+    );
+    assert.doesNotMatch(workflowPlanDetails, /SCAN commerce_documents|USE TEMP B-TREE/i);
+    assert.equal(await observedRepository.getAdminIrlRedeemRequestForWorkflowStatus(missingWorkflowOperationId), null);
+    await assert.rejects(
+      observedRepository.getAdminIrlRedeemRequestForWorkflowStatus(duplicateWorkflowOperationId),
+      (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'internal',
+    );
 
     assert.deepEqual(await observedRepository.queryDeliveryRecoveryOrders('paused-owner'), []);
     const emptyRecoveryRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
@@ -589,6 +628,16 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const pausedTerminalNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(pausedTerminalNotificationRowsRead), true);
     assert.equal(pausedTerminalNotificationRowsRead <= 4, true);
+
+    assert.equal(
+      (await observedRepository.getAdminIrlRedeemRequestForWorkflowStatus(workflowOperationId))?.key.path,
+      workflowKey.path,
+    );
+    assert.equal(await observedRepository.getAdminIrlRedeemRequestForWorkflowStatus(missingWorkflowOperationId), null);
+    await assert.rejects(
+      observedRepository.getAdminIrlRedeemRequestForWorkflowStatus(duplicateWorkflowOperationId),
+      (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'internal',
+    );
   } finally {
     await server.close();
   }

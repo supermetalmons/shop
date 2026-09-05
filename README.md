@@ -187,8 +187,9 @@ or roll back below compatibility version
 
 Admin IRL finalization runs in the API Worker's
 `ADMIN_IRL_REDEEM_FINALIZE_WORKFLOW`. The existing Admin request document,
-30-minute lease, and on-chain submission records provide recovery; there is no
-Workflow-specific D1 migration. Stripe receipt claims remain synchronous.
+30-minute lease, and on-chain submission records provide recovery. Commerce
+migration `0008_admin_irl_redeem_workflow_operation.sql` indexes Workflow operation
+IDs for status and recovery lookups. Stripe receipt claims remain synchronous.
 Terminal failures with retained progress are not restarted by status polling.
 After correcting the cause, authenticate as the original requesting Admin and
 replay `POST /admin/irl-redeem/finalize` with its stored `dropId`, `requestId`,
@@ -353,7 +354,13 @@ migration, not a rolling Worker migration. Never deploy or roll back to a
 pre-`0006` Worker while Commerce is active: pause and fully drain it first, then
 keep it paused until a compatible Worker is restored. Legacy existing-path write
 expectations remain accepted; tombstoned absent-path expectations fail closed.
-Append `0007_<description>.sql` for the next change.
+`0007_stripe_terminal_notifications.sql` indexes pending Stripe terminal
+notifications, and `0008_admin_irl_redeem_workflow_operation.sql` indexes Admin IRL
+Workflow operation IDs. Migration `0008` is additive and preserves existing
+documents and authority state. For a database already at `0007`, apply it with
+`npm run db:migrate:commerce`, then run `npm run check:commerce-d1` from the updated
+checkout; no Commerce pause or Worker publication is required for this index.
+Append `0009_<description>.sql` for the next change.
 The Worker preserves the existing commerce API and transaction behavior through
 the D1 document-store adapter.
 

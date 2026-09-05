@@ -77,6 +77,12 @@ const STRIPE_TERMINAL_NOTIFICATION_INDEX_SQL = `CREATE INDEX commerce_stripe_ter
     document_kind = 'stripe_checkout' AND
     (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
     json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending'`;
+const ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL = `CREATE INDEX commerce_admin_irl_redeem_workflow_operation
+  ON commerce_documents (
+    json_extract(document_json, '$.workflowFinalizeV1.operationId'),
+    document_path
+  )
+  WHERE document_kind = 'admin_irl_redeem_request'`;
 
 function normalizedSql(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -112,14 +118,15 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 7 ||
+    migrations.length !== 8 ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
     migrations[3].name !== '0004_ready_notification_owner_indexes.sql' ||
     migrations[4].name !== '0005_delivery_owner_query_revisions.sql' ||
     migrations[5].name !== '0006_document_path_revisions.sql' ||
-    migrations[6].name !== '0007_stripe_terminal_notifications.sql'
+    migrations[6].name !== '0007_stripe_terminal_notifications.sql' ||
+    migrations[7].name !== '0008_admin_irl_redeem_workflow_operation.sql'
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -376,6 +383,13 @@ export function checkCommerceD1(
     normalizedSql(stripeTerminalNotificationIndex[0].sql) !== normalizedSql(STRIPE_TERMINAL_NOTIFICATION_INDEX_SQL)
   ) fail('Commerce D1 Stripe terminal-notification index is invalid.');
 
+  const adminIrlWorkflowOperationIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'index' AND name = 'commerce_admin_irl_redeem_workflow_operation'`);
+  if (
+    adminIrlWorkflowOperationIndex.length !== 1 ||
+    normalizedSql(adminIrlWorkflowOperationIndex[0].sql) !== normalizedSql(ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL)
+  ) fail('Commerce D1 Admin IRL Workflow operation index is invalid.');
+
   const pendingReadyNotificationIndexes = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
     WHERE type = 'index' AND name GLOB 'commerce_delivery_orders_*_notifications_pending*'
     ORDER BY name`);
@@ -541,6 +555,18 @@ export function checkCommerceD1(
       document_path
     LIMIT 20`);
   requireSearchIndex(stripeTerminalNotificationPlan, 'commerce_stripe_terminal_notifications_due');
+
+  const adminIrlWorkflowStatusPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
+    FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
+    WHERE
+      authority.singleton = 1 AND
+      document_kind = 'admin_irl_redeem_request' AND
+      json_type(document_json, '$.workflowFinalizeV1.operationId') = 'text' AND
+      json_extract(document_json, '$.workflowFinalizeV1.operationId') = 'airf-v1-${'0'.repeat(64)}'
+    ORDER BY document_path ASC
+    LIMIT 2`);
+  requireSearchIndex(adminIrlWorkflowStatusPlan, 'commerce_admin_irl_redeem_workflow_operation');
+  requireNoTemporaryBTree(adminIrlWorkflowStatusPlan, 'Admin IRL Workflow status');
 
   const invalidProcessedTimeRows = queryRemoteCommerceD1(`SELECT COUNT(*) AS count
     FROM commerce_documents
