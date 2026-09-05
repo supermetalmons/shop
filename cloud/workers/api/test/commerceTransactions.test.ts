@@ -12,13 +12,104 @@ import {
   readCommerceDocuments,
   retryCommerceConflicts,
   runCommerceTransaction,
+  runCommerceWriteTransaction,
   updateCommerceWrite,
+  type CommerceDocumentContext,
+  type CommerceWrite,
 } from '../src/commerceTransactions.js';
 import {
   createCommerceD1Harness,
   seedCommerceDocuments,
   type CommerceD1CallObservation,
 } from './commerceD1Harness.js';
+
+const writeBatchRunners = {
+  commitCommerceWrites: async (context: CommerceDocumentContext, writes: readonly CommerceWrite[]) => {
+    await commitCommerceWrites(context, writes);
+  },
+  runCommerceWriteTransaction: async (context: CommerceDocumentContext, writes: readonly CommerceWrite[]) => {
+    const result = await runCommerceWriteTransaction(context, async () => ({ result: 'committed', writes }), {
+      shouldRetry: () => false,
+    });
+    assert.equal(result, 'committed');
+  },
+};
+
+for (const [name, runWrites] of Object.entries(writeBatchRunners)) {
+  test(`${name} commits multiple timestamp-guarded updates`, async () => {
+    const harness = createCommerceD1Harness();
+    const repository = new D1CommerceRepository(harness.db);
+    const keys = [commerceKeys.claimCode('FIRST'), commerceKeys.claimCode('SECOND')];
+    const updateTime = '2026-09-05T00:00:00.000Z';
+    const nowMs = Date.parse(updateTime) + 1000;
+    seedCommerceDocuments(harness, keys.map((key) => ({
+      key, data: { status: 'available' }, updateTime,
+    })));
+
+    await runWrites({ commerceDb: harness.db, repository, nowMs, signal: new AbortController().signal },
+      keys.map((key) => updateCommerceWrite({
+        path: key.path,
+        expectedUpdateTime: updateTime,
+        values: { status: 'claimed' },
+      })));
+
+    for (const key of keys) {
+      const stored = (await repository.get(key))!;
+      assert.deepEqual(stored.data, { status: 'claimed' });
+      assert.equal(Date.parse(stored.updateTime), nowMs);
+      assert.equal(stored.version, 2);
+    }
+  });
+
+  test(`${name} rejects a stale timestamp later in the batch without changing any documents`, async () => {
+    const harness = createCommerceD1Harness();
+    const repository = new D1CommerceRepository(harness.db);
+    const keys = [commerceKeys.claimCode('FIRST'), commerceKeys.claimCode('SECOND')];
+    const updateTime = '2026-09-05T00:00:00.000Z';
+    seedCommerceDocuments(harness, keys.map((key) => ({
+      key, data: { status: 'available' }, updateTime,
+    })));
+
+    await assert.rejects(runWrites({
+      commerceDb: harness.db, repository, nowMs: Date.parse(updateTime) + 1000,
+      signal: new AbortController().signal,
+    }, keys.map((key, index) => updateCommerceWrite({
+      path: key.path,
+      expectedUpdateTime: index === 0 ? updateTime : '2026-09-04T00:00:00.000Z',
+      values: { status: 'claimed' },
+    }))), (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted');
+
+    for (const key of keys) {
+      const stored = (await repository.get(key))!;
+      assert.deepEqual(stored.data, { status: 'available' });
+      assert.equal(stored.updateTime, updateTime);
+      assert.equal(stored.version, 1);
+    }
+  });
+
+  test(`${name} batches uncached reads and preserves ordered writes to the same document`, async () => {
+    const calls: CommerceD1CallObservation[] = [];
+    const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+    const repository = new D1CommerceRepository(harness.db);
+    const existing = commerceKeys.claimCode('EXISTING');
+    const created = commerceKeys.claimCode('CREATED');
+    const merged = commerceKeys.claimCode('MERGED');
+    seedCommerceDocuments(harness, [{ key: existing, data: { status: 'available', count: 1 } }]);
+
+    await runWrites({ commerceDb: harness.db, repository, nowMs: 100, signal: new AbortController().signal }, [
+      updateCommerceWrite({ path: existing.path, values: { count: commerceFieldValue.increment(1) }, mustExist: true }),
+      createCommerceWrite({ path: created.path, values: { status: 'available', count: 0 } }),
+      updateCommerceWrite({ path: merged.path, values: { status: 'available' } }),
+      updateCommerceWrite({ path: created.path, values: { status: 'claimed', count: commerceFieldValue.increment(1) }, mustExist: true }),
+      updateCommerceWrite({ path: existing.path, values: { status: 'claimed', count: commerceFieldValue.increment(1) } }),
+    ]);
+
+    assert.equal(calls.length, 3);
+    assert.deepEqual((await repository.get(existing))?.data, { status: 'claimed', count: 3 });
+    assert.deepEqual((await repository.get(created))?.data, { status: 'claimed', count: 1 });
+    assert.deepEqual((await repository.get(merged))?.data, { status: 'available' });
+  });
+}
 
 test('commerce value maps preserve omitted fields and apply explicit deletes and transforms', async () => {
   const harness = createCommerceD1Harness();

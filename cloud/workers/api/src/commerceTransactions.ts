@@ -176,20 +176,24 @@ export async function readCommerceDocuments(
   return records.map(commerceDocument);
 }
 
-async function applyCommerceWrite(
+async function applyCommerceWrites(
   transaction: CommerceUnitOfWork,
-  write: CommerceWrite,
+  writes: readonly CommerceWrite[],
 ): Promise<void> {
-  const key = commerceDocumentKey(write.path);
-  if (write.expectedUpdateTime) {
-    const current = await transaction.get(key);
-    if (!current || current.updateTime !== write.expectedUpdateTime) {
+  if (!writes.length) return;
+  const keys = writes.map((write) => commerceDocumentKey(write.path));
+  const documents = await transaction.getMany(keys);
+  for (const [index, write] of writes.entries()) {
+    if (write.expectedUpdateTime && documents[index]?.updateTime !== write.expectedUpdateTime) {
       throw new CommerceWriteConflict();
     }
   }
-  if (write.operation === 'create') await transaction.create(key, write.values);
-  else if (write.mustExist || write.expectedUpdateTime) await transaction.update(key, write.values);
-  else await transaction.set(key, write.values, { merge: true });
+  for (const [index, write] of writes.entries()) {
+    const key = keys[index];
+    if (write.operation === 'create') await transaction.create(key, write.values);
+    else if (write.mustExist || write.expectedUpdateTime) await transaction.update(key, write.values);
+    else await transaction.set(key, write.values, { merge: true });
+  }
 }
 
 export async function commitCommerceWrites(
@@ -199,7 +203,7 @@ export async function commitCommerceWrites(
 ): Promise<void> {
   const unit = transaction || await commerceRepository(context).begin(context.nowMs);
   try {
-    for (const write of writes) await applyCommerceWrite(unit, write);
+    await applyCommerceWrites(unit, writes);
     await unit.commit();
   } catch (error) {
     unit.rollback();
@@ -220,7 +224,7 @@ export function runCommerceWriteTransaction<T>(
     signal: context.signal,
   }, async (transaction) => {
     const { result, writes = [] } = await operation(transaction);
-    for (const write of writes) await applyCommerceWrite(transaction, write);
+    await applyCommerceWrites(transaction, writes);
     return result;
   }, options);
 }
