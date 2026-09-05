@@ -710,7 +710,7 @@ test('profile reconciliation merges multiple session-validated batches and is id
   );
   assert.equal(first.response.status, 200);
   assert.deepEqual(await first.response.json(), { mergedStripeDeliveryOrders: 451 });
-  assert.ok(commerceCalls <= 25, `Expected at most 25 D1 calls, received ${commerceCalls}`);
+  assert.ok(commerceCalls <= 10, `Expected at most 10 D1 calls, received ${commerceCalls}`);
   assert.equal(authorityReads, 3);
   assert.equal(ownerQueryBatches, 3);
   assert.equal(unrelatedInjected, true);

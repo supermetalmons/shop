@@ -225,7 +225,6 @@ async function mergeStripeOwnerBatch(params: {
     for (const document of documents) {
       deliveryOrderPath(document);
     }
-    await unit.getMany(documents.map((document) => document.key));
     for (const document of documents) {
       await unit.update(document.key, {
         mergedAuthSubject: params.authSubject,

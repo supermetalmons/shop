@@ -61,8 +61,10 @@ function assertDeliveryOwnerReadBatch(observation: CommerceD1BatchObservation): 
     /SELECT COALESCE\(\( SELECT revision FROM commerce_delivery_owner_revisions WHERE owner = \? \), 0\) AS revision/,
   );
   assert.match(dataSql, /INDEXED BY commerce_documents_delivery_owner_path/);
-  assert.match(dataSql, /document_kind = 'delivery_order' AND owner = \?/);
-  assert.match(dataSql, /ORDER BY document_path ASC\s+LIMIT \?/);
+  assert.match(dataSql, /COALESCE\(path_revision\.revision, 0\) AS path_revision/);
+  assert.match(dataSql, /LEFT JOIN commerce_document_path_revisions AS path_revision ON path_revision\.document_path = document\.document_path/);
+  assert.match(dataSql, /document\.document_kind = 'delivery_order' AND document\.owner = \?/);
+  assert.match(dataSql, /ORDER BY document\.document_path ASC\s+LIMIT \?/);
 }
 
 function assertTransactionalPointReadBatch(observation: CommerceD1BatchObservation): void {
@@ -682,7 +684,9 @@ test('transactional delivery-owner queries use atomic scope snapshots and sorted
     if (call.method !== 'batch') assert.fail('Expected one D1 batch per owner query.');
     assertDeliveryOwnerReadBatch(call);
   }
+  const ownerReadCount = calls.length;
   await unit.get(commerceKeys.deliveryOrder('drop', 'z'));
+  assert.equal(calls.length, ownerReadCount);
   await unit.create(commerceKeys.claimCode('OWNER-SCOPE-AUDIT'), { status: 'unused' });
   await unit.commit();
 
@@ -702,12 +706,13 @@ test('transactional delivery-owner queries use atomic scope snapshots and sorted
     commerceKeys.deliveryOrder('drop', 'z').path,
   ]);
   assert.equal(expectations[0].pathRevision, 0);
-  assert.equal(Object.hasOwn(expectations[1], 'pathRevision'), false);
-  assert.equal(
-    expectations[2].pathRevision,
-    harness.database.prepare(`SELECT revision FROM commerce_document_path_revisions
-      WHERE document_path = ?`).get(commerceKeys.deliveryOrder('drop', 'z').path)!.revision,
-  );
+  for (const expectation of expectations.slice(1)) {
+    assert.equal(
+      expectation.pathRevision,
+      harness.database.prepare(`SELECT revision FROM commerce_document_path_revisions
+        WHERE document_path = ?`).get(expectation.path)!.revision,
+    );
+  }
   assert.equal(audit.expected_documents_revision, null);
 
   const invalid = await repository.begin(11);
@@ -857,38 +862,39 @@ test('getMany enforces lifecycle rules for empty and cached reads', async () => 
   }
 });
 
-test('getMany hydrates owner-query cache entries and detects intervening updates', async () => {
+test('owner queries cache point reads, batch reads, and mutations without additional D1 reads', async () => {
   const calls: CommerceD1CallObservation[] = [];
   const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
   const repository = new D1CommerceRepository(harness.db);
   const key = commerceKeys.deliveryOrder('drop', 'OWNER-CACHE');
   await repository.run(10, async (unit) => unit.create(key, { owner: 'owner', status: 'prepared' }));
-  const hydrated = await repository.begin(11);
-  await hydrated.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
+  const cached = await repository.begin(11);
+  await cached.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
   calls.length = 0;
-  assert.equal((await hydrated.getMany([key]))[0]?.data.status, 'prepared');
-  assert.equal(calls.length, 1);
-  const call = calls[0];
-  if (call.method !== 'batch') assert.fail('Expected a path-revision hydration batch.');
-  assert.match(call.statements[0].sql, /commerce_document_path_revisions/);
-  calls.length = 0;
-  await hydrated.getMany([key]);
-  await hydrated.get(key);
+  assert.equal((await cached.getMany([key]))[0]?.data.status, 'prepared');
+  await cached.getMany([key]);
+  await cached.get(key);
+  await cached.update(key, { status: 'processing' });
   assert.equal(calls.length, 0);
-  await hydrated.commit();
+  await cached.commit();
+  assert.equal((await repository.get(key))?.data.status, 'processing');
 
   const stale = await repository.begin(12);
   await stale.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
   await repository.run(13, async (unit) => unit.update(key, { status: 'ready_to_ship' }));
+  calls.length = 0;
+  assert.equal((await stale.getMany([key]))[0]?.data.status, 'processing');
+  assert.equal((await stale.get(key))?.data.status, 'processing');
+  assert.equal(calls.length, 0);
   await assert.rejects(
-    stale.getMany([key]),
+    stale.commit(),
     (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
   );
-  stale.rollback();
 });
 
 test('getMany retains owner-query guards when a cached row is deleted and recreated', async () => {
-  const harness = createCommerceD1Harness();
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
   const repository = new D1CommerceRepository(harness.db);
   const key = commerceKeys.deliveryOrder('drop', 'OWNER-ABA');
   await repository.run(10, async (unit) => unit.create(key, { owner: 'owner', status: 'prepared' }));
@@ -896,11 +902,44 @@ test('getMany retains owner-query guards when a cached row is deleted and recrea
   await stale.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
   await repository.run(12, async (unit) => unit.delete(key));
   await repository.run(13, async (unit) => unit.create(key, { owner: 'owner', status: 'ready_to_ship' }));
+  calls.length = 0;
   assert.equal((await stale.getMany([key]))[0]?.data.status, 'prepared');
+  await stale.update(key, { status: 'processing' });
+  assert.equal(calls.length, 0);
   await assert.rejects(
     stale.commit(),
     (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted',
   );
+});
+
+test('owner queries reject malformed joined path revisions', async (context) => {
+  for (const revision of [undefined, null, '1', -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    await context.test(String(revision), async () => {
+      const harness = createCommerceD1Harness();
+      seedCommerceDocument(harness, {
+        key: commerceKeys.deliveryOrder('drop', 'OWNER-REVISION'),
+        data: { owner: 'owner', status: 'prepared' },
+      });
+      const db = new Proxy(harness.db, {
+        get(target, property, receiver) {
+          if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+            const results = await target.batch<Record<string, unknown>>(statements);
+            return [results[0], {
+              ...results[1],
+              results: results[1].results.map((row) => ({ ...row, path_revision: revision })),
+            }];
+          };
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      const unit = await new D1CommerceRepository(db).begin(10);
+      await assert.rejects(
+        unit.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 }),
+        isUnavailableCommerceError,
+      );
+      unit.rollback();
+    });
+  }
 });
 
 test('getMany preserves point-read conflict guards for writes and read-only commits', async (context) => {

@@ -1002,10 +1002,13 @@ export class CommerceUnitOfWork {
     const boundedLimit = positiveQueryLimit(args.limit);
     const results = await this.db.batch<Record<string, unknown>>([
       deliveryOwnerRevisionStatement(this.db, scopedOwner),
-      this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-        FROM commerce_documents INDEXED BY commerce_documents_delivery_owner_path
-        WHERE document_kind = 'delivery_order' AND owner = ?
-        ORDER BY document_path ASC
+      this.db.prepare(`SELECT ${qualifiedDocumentColumns('document')},
+          COALESCE(path_revision.revision, 0) AS path_revision
+        FROM commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
+        LEFT JOIN commerce_document_path_revisions AS path_revision
+          ON path_revision.document_path = document.document_path
+        WHERE document.document_kind = 'delivery_order' AND document.owner = ?
+        ORDER BY document.document_path ASC
         LIMIT ?`).bind(scopedOwner, boundedLimit),
     ]);
     if (results.length !== 2) throw unavailableCommerceData();
@@ -1019,10 +1022,21 @@ export class CommerceUnitOfWork {
     const expectedRevision = this.deliveryOwnerExpectations.get(scopedOwner);
     if (expectedRevision !== undefined && expectedRevision !== revision) throw new CommerceWriteConflict();
     this.deliveryOwnerExpectations.set(scopedOwner, revision);
-    const documents = dataResult.results.map(parseRow);
+    const documents = dataResult.results.map((row) => {
+      const document = parseRow(row);
+      const pathRevision = row.path_revision;
+      if (
+        typeof pathRevision !== 'number' ||
+        !Number.isSafeInteger(pathRevision) ||
+        pathRevision < 0
+      ) throw unavailableCommerceData();
+      return { document, pathRevision };
+    });
     reportInefficientQuery('delivery-orders-by-owner', 'delivery_order', dataResult, documents.length);
-    for (const document of documents) this.recordRead(document.key.path, document.version, document);
-    return documents.map((document) => publicRecord<T>(document));
+    for (const { document, pathRevision } of documents) {
+      this.recordRead(document.key.path, document.version, document, pathRevision);
+    }
+    return documents.map(({ document }) => publicRecord<T>(document));
   }
 
   async create(
