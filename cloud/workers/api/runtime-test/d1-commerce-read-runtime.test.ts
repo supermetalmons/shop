@@ -158,6 +158,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0004_ready_notification_owner_indexes.sql',
       '0005_delivery_owner_query_revisions.sql',
       '0006_document_path_revisions.sql',
+      '0007_stripe_terminal_notifications.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -232,6 +233,11 @@ test('commerce repository reads and transaction guards run through the real D1 r
         status: 'fulfillment_pending',
         updatedAt: 10,
       }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.stripeCheckout('runtime', 'cs_terminal'), {
+        status: 'fulfilled',
+        stripeTerminalNotificationState: 'pending',
+        stripeTerminalNotificationNextAttemptAtMs: 10,
+      }),
       env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
         SET documents_revision = documents_revision + 1,
           updated_at_ms = updated_at_ms + 1
@@ -277,6 +283,11 @@ test('commerce repository reads and transaction guards run through the real D1 r
       (await repository.queryStaleStripeFulfillments(10)).map((record) => record.key.documentId),
       ['cs_runtime'],
     );
+    assert.deepEqual(
+      (await repository.queryDueStripeTerminalNotifications(10)).map((record) => record.key.documentId),
+      ['cs_terminal'],
+    );
+    assert.deepEqual(await repository.queryDueStripeTerminalNotifications(9), []);
 
     const ownerUnit = await repository.begin(Date.parse('2026-01-01T00:00:01.000Z'));
     assert.deepEqual(
@@ -569,6 +580,15 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.equal(Number.isSafeInteger(pausedRecoveryRowsRead), true);
     assert.equal(pausedRecoveryRowsRead >= 0, true);
     assert.equal(pausedRecoveryRowsRead <= 4, true);
+
+    observedBatchResults = undefined;
+    await assert.rejects(
+      observedRepository.queryDueStripeTerminalNotifications(10),
+      (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable',
+    );
+    const pausedTerminalNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
+    assert.equal(Number.isSafeInteger(pausedTerminalNotificationRowsRead), true);
+    assert.equal(pausedTerminalNotificationRowsRead <= 4, true);
   } finally {
     await server.close();
   }

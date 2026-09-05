@@ -186,7 +186,7 @@ function memoryPackStatusCache(): Pick<Cache, 'match' | 'put'> {
   };
 }
 
-test('scheduled reconciliation isolates all four subsystems and reports failures after settlement', async () => {
+test('scheduled reconciliation isolates all subsystems and reports failures after settlement', async () => {
   const calls: string[] = [];
   const failure = new Error('ops cleanup failed');
   await assert.rejects(
@@ -207,6 +207,10 @@ test('scheduled reconciliation isolates all four subsystems and reports failures
         calls.push('stripe');
         return { enqueued: 0, failed: 0 };
       },
+      stripeNotifications: async () => {
+        calls.push('stripeNotifications');
+        return 0;
+      },
     }),
     (error: unknown) => {
       assert.ok(error instanceof AggregateError);
@@ -214,7 +218,7 @@ test('scheduled reconciliation isolates all four subsystems and reports failures
       return true;
     },
   );
-  assert.deepEqual(calls.sort(), ['notifications', 'ops', 'packStatus', 'stripe']);
+  assert.deepEqual(calls.sort(), ['notifications', 'ops', 'packStatus', 'stripe', 'stripeNotifications']);
 });
 
 test('commerce maintenance blocks HTTP mutations and skips commerce cron work', async () => {
@@ -236,6 +240,7 @@ test('commerce maintenance blocks HTTP mutations and skips commerce cron work', 
     ops: async () => { calls.push('ops'); },
     packStatus: async () => { calls.push('packStatus'); return 0; },
     stripe: async () => { calls.push('stripe'); return { enqueued: 0, failed: 0 }; },
+    stripeNotifications: async () => { calls.push('stripeNotifications'); return 0; },
   });
   assert.deepEqual(calls, ['ops']);
 });

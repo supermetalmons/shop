@@ -68,6 +68,15 @@ const STRIPE_RECONCILIATION_INDEX_SQL = `CREATE INDEX commerce_stripe_checkouts_
     document_kind = 'stripe_checkout' AND
     fulfillment_processor = 'cloudflare_queue_v1' AND
     status IN ('fulfillment_pending', 'processing')`;
+const STRIPE_TERMINAL_NOTIFICATION_INDEX_SQL = `CREATE INDEX commerce_stripe_terminal_notifications_due
+  ON commerce_documents (
+    CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER),
+    document_path
+  )
+  WHERE
+    document_kind = 'stripe_checkout' AND
+    (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
+    json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending'`;
 
 function normalizedSql(value: unknown): string {
   return String(value || '').replace(/\s+/g, ' ').trim();
@@ -103,13 +112,14 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 6 ||
+    migrations.length !== 7 ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
     migrations[3].name !== '0004_ready_notification_owner_indexes.sql' ||
     migrations[4].name !== '0005_delivery_owner_query_revisions.sql' ||
-    migrations[5].name !== '0006_document_path_revisions.sql'
+    migrations[5].name !== '0006_document_path_revisions.sql' ||
+    migrations[6].name !== '0007_stripe_terminal_notifications.sql'
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -359,6 +369,13 @@ export function checkCommerceD1(
     normalizedSql(stripeReconciliationIndex[0].sql) !== normalizedSql(STRIPE_RECONCILIATION_INDEX_SQL)
   ) fail('Commerce D1 Stripe-reconciliation index is invalid.');
 
+  const stripeTerminalNotificationIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'index' AND name = 'commerce_stripe_terminal_notifications_due'`);
+  if (
+    stripeTerminalNotificationIndex.length !== 1 ||
+    normalizedSql(stripeTerminalNotificationIndex[0].sql) !== normalizedSql(STRIPE_TERMINAL_NOTIFICATION_INDEX_SQL)
+  ) fail('Commerce D1 Stripe terminal-notification index is invalid.');
+
   const pendingReadyNotificationIndexes = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
     WHERE type = 'index' AND name GLOB 'commerce_delivery_orders_*_notifications_pending*'
     ORDER BY name`);
@@ -509,6 +526,21 @@ export function checkCommerceD1(
       ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER), document_path LIMIT 100`),
     'commerce_stripe_checkouts_reconciliation_due',
   );
+
+  const stripeTerminalNotificationPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
+    FROM commerce_authority_control AS authority
+    CROSS JOIN commerce_documents INDEXED BY commerce_stripe_terminal_notifications_due
+    WHERE
+      authority.singleton = 1 AND
+      authority.authority_state = 'd1' AND
+      document_kind = 'stripe_checkout' AND
+      (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
+      json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending' AND
+      CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER) <= 1
+    ORDER BY CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER),
+      document_path
+    LIMIT 20`);
+  requireSearchIndex(stripeTerminalNotificationPlan, 'commerce_stripe_terminal_notifications_due');
 
   const invalidProcessedTimeRows = queryRemoteCommerceD1(`SELECT COUNT(*) AS count
     FROM commerce_documents

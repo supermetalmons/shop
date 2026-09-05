@@ -845,6 +845,28 @@ export class D1CommerceRepository {
     return result.results.map(parseRow).map((document) => publicRecord(document));
   }
 
+  async queryDueStripeTerminalNotifications(dueAtMs: number, limit = 20): Promise<CommerceDocumentRecord[]> {
+    positiveQueryLimit(limit);
+    if (!Number.isSafeInteger(dueAtMs) || dueAtMs < 0) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe notification cutoff.');
+    }
+    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents INDEXED BY commerce_stripe_terminal_notifications_due
+      WHERE
+        authority.singleton = 1 AND
+        authority.authority_state = 'd1' AND
+        document_kind = 'stripe_checkout' AND
+        (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
+        json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending' AND
+        CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER) <= ?
+      ORDER BY CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER) ASC,
+        document_path ASC
+      LIMIT ?`).bind(dueAtMs, limit));
+    reportInefficientQuery('due-stripe-terminal-notifications', 'stripe_checkout', result, result.results.length);
+    return result.results.map(parseRow).map((document) => publicRecord(document));
+  }
+
   async begin(nowMs: number): Promise<CommerceUnitOfWork> {
     if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce operation timestamp.');

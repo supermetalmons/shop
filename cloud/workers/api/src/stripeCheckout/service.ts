@@ -57,6 +57,7 @@ import {
 import { normalizeStripeCheckoutIdentity } from '../../../../../shared/checkoutIdentity.js';
 import { toMillisMaybe } from '../time.js';
 import { StripeCheckoutFulfillmentError } from './errors.js';
+import { createStripeTerminalNotificationOutboxFields } from './notificationOutboxState.js';
 import {
   stripeCheckoutFieldValue,
   type StripeCheckoutDocumentReference,
@@ -803,6 +804,7 @@ export type StripeCheckoutFulfillmentCompletionFields = {
 };
 
 function stripeCheckoutFulfilledUpdate(params: {
+  before: Record<string, unknown> | null;
   deliveryId: number;
   metadataId?: number;
   metadataIds?: number[];
@@ -813,6 +815,7 @@ function stripeCheckoutFulfilledUpdate(params: {
   const metadataId = metadataIds.length === 1 ? metadataIds[0] : undefined;
   return {
     status: STRIPE_CHECKOUT_STATUS.FULFILLED,
+    ...createStripeTerminalNotificationOutboxFields(params.before, 'fulfilled'),
     deliveryId: params.deliveryId,
     ...(metadataId ? { metadataId } : metadataIds.length > 1 ? { metadataId: stripeCheckoutFieldValue.delete() } : {}),
     ...(metadataIds.length ? { metadataIds, quantity: metadataIds.length } : {}),
@@ -861,23 +864,20 @@ export async function markStripeCheckoutFulfillmentFulfilled(
     fulfillmentCompletionFields?: StripeCheckoutFulfillmentCompletionFields;
   },
 ): Promise<StripeCheckoutFulfillmentSuccessMarkResult> {
-  const update = stripeCheckoutFulfilledUpdate(params);
-  if (!params.processingAttemptId) {
-    await checkoutRef.update(update);
-    return { status: 'fulfilled' };
-  }
-
   return checkoutRef.store
     .runTransaction(async (tx) => {
       const checkoutSnap = await tx.get(checkoutRef);
       const checkout = checkoutSnap.exists ? (checkoutSnap.data() as any) : null;
-      const status = stripeCheckoutFulfilledWriteStatus(checkout, params.processingAttemptId);
-      if (status === 'already_fulfilled') return { status: 'already_fulfilled' as const };
-      if (status === 'stale_processing_attempt') return { status: 'stale_processing_attempt' as const };
-      tx.update(checkoutRef, update);
+      if (params.processingAttemptId) {
+        const status = stripeCheckoutFulfilledWriteStatus(checkout, params.processingAttemptId);
+        if (status === 'already_fulfilled') return { status: 'already_fulfilled' as const };
+        if (status === 'stale_processing_attempt') return { status: 'stale_processing_attempt' as const };
+      }
+      tx.update(checkoutRef, stripeCheckoutFulfilledUpdate({ ...params, before: checkout }));
       return { status: 'fulfilled' as const };
     })
     .catch((err) => {
+      if (!params.processingAttemptId) throw err;
       throw new StripeCheckoutProcessingAttemptOwnershipCheckError(err);
     });
 }
@@ -965,9 +965,12 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
     try {
       const operation = () => db.runTransaction(async (tx) => {
         const marker = await tx.get(markerRef);
-        const checkoutSnap = params.processingAttemptId ? await tx.get(checkoutRef) : null;
-        const checkout = checkoutSnap?.exists ? (checkoutSnap.data() as any) : null;
-        const checkoutStatus = stripeCheckoutFulfilledWriteStatus(checkout, params.processingAttemptId);
+        const checkoutSnap = await tx.get(checkoutRef);
+        const checkout = checkoutSnap.exists ? (checkoutSnap.data() as any) : null;
+        const checkoutStatus = stripeCheckoutFulfilledWriteStatus(
+          params.processingAttemptId ? checkout : null,
+          params.processingAttemptId,
+        );
         if (marker.exists) {
           const existingOrder = readStripeOffchainDeliveryOrderMarker(marker);
           if (existingOrder) {
@@ -978,6 +981,7 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
               tx.update(
                 checkoutRef,
                 stripeCheckoutFulfilledUpdate({
+                  before: checkout,
                   deliveryId: existingOrder.deliveryId,
                   metadataId: existingOrder.metadataId,
                   metadataIds: existingOrder.metadataIds,
@@ -1042,6 +1046,7 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
             checkoutRef,
             {
               ...stripeCheckoutFulfilledUpdate({
+                before: checkout,
                 deliveryId: candidate,
                 ...(metadataIds.length === 1 ? { metadataId: metadataIds[0] } : {}),
                 metadataIds,
@@ -1509,6 +1514,7 @@ export async function markStripeCheckoutFulfillmentFailed(
       {
         ...identityUpdate,
         status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
+        ...createStripeTerminalNotificationOutboxFields(checkout, 'manual_review'),
         failedAt: stripeCheckoutFieldValue.serverTimestamp(),
         lastFulfillmentError: error,
         manualRefundReviewRequired: true,

@@ -416,6 +416,18 @@ node_modules/.bin/wrangler tail mons-shop-api --format json
 Queue processing is idempotent. Replay dead-letter jobs only after fixing the
 underlying failure and identifying the affected jobs.
 
+Stripe fulfillment persists a notification outbox with its fulfilled or
+manual-review status. Queue publication saves the email payloads and job IDs
+before sending; retries reuse them. The five-minute cron also recovers pending
+terminal notifications, independently of fulfillment Queue retries. Publication
+uses the delivery notification policy: a ten-minute claim lease, at most four
+attempts, and a six-hour window starting with the first attempt. Exhausted
+publication is retained as `stripeTerminalNotificationState: failed` and logged
+as `stripe_terminal_notifications_failed` for manual review. `queued` means the
+email Queue accepted the jobs; provider delivery still uses its existing retries
+and dead-letter queue. Historical checkouts are not bulk backfilled; explicitly
+replayed fulfillment jobs initialize missing outboxes.
+
 Inventory, pending-box, notification-subscription, and RPC browser requests are
 accepted only from `mons.shop`, `www.mons.shop`, localhost, and `127.0.0.1`.
 Candidate and version-preview frontend origins are intentionally unsupported.

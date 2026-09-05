@@ -1358,6 +1358,9 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
   assert.equal(updates.length, 1);
   assert.equal(updates[0].data.fulfillmentCompletedBy, 'cloudflare_queue_v1');
   assert.equal(updates[0].data.fulfillmentCompletedAt?.kind, 'server_timestamp');
+  assert.equal(updates[0].data.stripeTerminalNotificationState, 'pending');
+  assert.equal(updates[0].data.stripeTerminalNotification.outcome, 'fulfilled');
+  assert.equal(updates[0].data.stripeTerminalNotification.attemptCount, 0);
 });
 
 test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple claim codes', async () => {
@@ -1631,6 +1634,8 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
   assert.equal(updates.length, 1);
   assert.deepEqual(updates[0].data.metadataIds, [1, 2]);
   assert.equal(updates[0].data.quantity, 2);
+  assert.equal(updates[0].data.stripeTerminalNotificationState, 'pending');
+  assert.equal(updates[0].data.stripeTerminalNotification.outcome, 'fulfilled');
   assert.equal('variantKey' in markerData, false);
   assert.equal(packStatusCalls.length, 1);
   assert.equal((packStatusCalls[0] as { deliveryId: number }).deliveryId, 789);
@@ -2405,6 +2410,8 @@ test('final Queue attempts persist retryable fulfillment failures for manual rev
   assert.equal(sets.length, 1);
   assert.equal(sets[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
   assert.equal(sets[0].data.manualRefundReviewRequired, true);
+  assert.equal(sets[0].data.stripeTerminalNotificationState, 'pending');
+  assert.equal(sets[0].data.stripeTerminalNotification.outcome, 'manual_review');
 });
 
 test('already-fulfilled Queue retries repair pack status idempotently', async () => {
@@ -2470,6 +2477,11 @@ test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async (
   assert.equal(sets[0].ref, checkoutRef);
   assert.equal(sets[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
   assert.equal(sets[0].data.manualRefundReviewRequired, true);
+  assert.equal(sets[0].data.stripeTerminalNotificationState, 'pending');
+  assert.equal(sets[0].data.stripeTerminalNotification.version, 1);
+  assert.equal(sets[0].data.stripeTerminalNotification.outcome, 'manual_review');
+  assert.equal(sets[0].data.stripeTerminalNotification.attemptCount, 0);
+  assert.match(sets[0].data.stripeTerminalNotification.jobIds.stripe_checkout_manual_review, /^[0-9a-f-]{36}$/);
   assert.equal(Object.prototype.hasOwnProperty.call(sets[0].data, 'processingAttemptId'), true);
   assert.equal(Object.prototype.hasOwnProperty.call(sets[0].data, 'processingLeaseExpiresAt'), true);
   assert.equal(Object.prototype.hasOwnProperty.call(sets[0].data, 'nextFulfillmentRetryAt'), true);
@@ -2543,6 +2555,78 @@ test('markStripeCheckoutFulfillmentFulfilled writes only the current processing 
   assert.equal(updates[0].data.fulfillmentCompletedBy, 'cloudflare_queue_v1');
   assert.equal(updates[0].data.fulfillmentCompletedAt?.kind, 'server_timestamp');
   assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingAttemptId'), true);
+  assert.equal(updates[0].data.stripeTerminalNotificationState, 'pending');
+  assert.equal(updates[0].data.stripeTerminalNotification.version, 1);
+  assert.equal(updates[0].data.stripeTerminalNotification.outcome, 'fulfilled');
+  assert.equal(updates[0].data.stripeTerminalNotification.attemptCount, 0);
+  assert.match(updates[0].data.stripeTerminalNotification.jobIds.buyer_order_received, /^[0-9a-f-]{36}$/);
+  assert.match(updates[0].data.stripeTerminalNotification.jobIds.shipper_ready_to_ship, /^[0-9a-f-]{36}$/);
+});
+
+test('terminal checkout writes preserve queued notifications on replay without a processing attempt', async () => {
+  for (const outcome of ['fulfilled', 'manual_review'] as const) {
+    let checkout: Record<string, unknown> = { status: STRIPE_CHECKOUT_STATUS.PROCESSING };
+    const writes: Record<string, unknown>[] = [];
+    const checkoutRef = { path: 'checkout' } as any;
+    const persist = (_ref: unknown, data: Record<string, unknown>) => {
+      writes.push(data);
+      checkout = { ...checkout, ...data };
+    };
+    checkoutRef.store = {
+      runTransaction: async (operation: any) => operation({
+        get: async () => ({ exists: true, data: () => ({ ...checkout }) }),
+        update: persist,
+        set: persist,
+      }),
+    };
+    const complete = () => outcome === 'fulfilled'
+      ? markStripeCheckoutFulfillmentFulfilled(checkoutRef, { deliveryId: 123 })
+      : markStripeCheckoutFulfillmentFailed(checkoutRef, new Error('payment requires review'), {
+        summarizeError: () => ({ message: 'payment requires review' }),
+      });
+
+    await complete();
+    assert.equal(checkout.stripeTerminalNotificationState, 'pending');
+    checkout.stripeTerminalNotificationState = 'queued';
+    const notification = structuredClone(checkout.stripeTerminalNotification);
+    await complete();
+
+    assert.equal(writes.length, 2);
+    assert.equal(checkout.stripeTerminalNotificationState, 'queued');
+    assert.deepEqual(checkout.stripeTerminalNotification, notification);
+    assert.equal(Object.hasOwn(writes[1], 'stripeTerminalNotificationState'), false);
+    assert.equal(Object.hasOwn(writes[1], 'stripeTerminalNotification'), false);
+  }
+});
+
+test('terminal checkout writes do not backfill notifications for historical terminal records', async () => {
+  for (const outcome of ['fulfilled', 'manual_review'] as const) {
+    const checkout = outcome === 'fulfilled'
+      ? { status: STRIPE_CHECKOUT_STATUS.FULFILLED }
+      : { status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED, manualRefundReviewRequired: true };
+    const writes: Record<string, unknown>[] = [];
+    const checkoutRef = { path: 'checkout' } as any;
+    const persist = (_ref: unknown, data: Record<string, unknown>) => writes.push(data);
+    checkoutRef.store = {
+      runTransaction: async (operation: any) => operation({
+        get: async () => ({ exists: true, data: () => checkout }),
+        update: persist,
+        set: persist,
+      }),
+    };
+
+    if (outcome === 'fulfilled') {
+      await markStripeCheckoutFulfillmentFulfilled(checkoutRef, { deliveryId: 123 });
+    } else {
+      await markStripeCheckoutFulfillmentFailed(checkoutRef, new Error('payment requires review'), {
+        summarizeError: () => ({ message: 'payment requires review' }),
+      });
+    }
+
+    assert.equal(writes.length, 1);
+    assert.equal(Object.hasOwn(writes[0], 'stripeTerminalNotificationState'), false);
+    assert.equal(Object.hasOwn(writes[0], 'stripeTerminalNotification'), false);
+  }
 });
 
 test('markStripeCheckoutFulfillmentFulfilled clears singular metadataId for multi-item checkout docs', async () => {

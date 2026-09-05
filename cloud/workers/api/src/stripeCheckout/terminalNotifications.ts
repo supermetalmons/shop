@@ -2,6 +2,7 @@ import { buildStripeCheckoutManualReviewEmailContent } from '../notificationEmai
 import { normalizeNotificationEmailRecipient } from '../notifications.js';
 import {
   createNotificationEmailJobV1,
+  isNotificationEmailJobId,
   type NotificationEmailJobContext,
   type NotificationEmailJobV1,
 } from '../../../../../shared/notificationEmailJob.js';
@@ -9,6 +10,7 @@ import { toMillisMaybe } from '../time.js';
 import { createStripeReadyToShipNotificationJobs } from '../stripeReadyNotifications.js';
 import { STRIPE_CHECKOUT_STATUS } from './contract.js';
 import { normalizeStripeCheckoutIdentity } from '../../../../../shared/checkoutIdentity.js';
+import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../../shared/fulfillmentSources.js';
 
 const STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL = 'development@support.mons.shop';
 
@@ -20,14 +22,13 @@ type CheckoutDocument = {
 export type StripeCheckoutTerminalNotificationDependencies = {
   loadCheckout: () => Promise<CheckoutDocument | null>;
   loadDeliveryOrder: (dropId: string, deliveryId: number) => Promise<Record<string, unknown> | null>;
-  enqueueJob: (job: NotificationEmailJobV1) => Promise<void>;
   getDropName: (dropId: string) => string;
   createJobId?: () => string;
 };
 
 export type StripeCheckoutTerminalNotificationResult = {
   outcome: 'fulfilled' | 'manual_review' | 'not_terminal' | 'invalid';
-  queuedJobs: number;
+  jobs: NotificationEmailJobV1[];
   reason?: string;
 };
 
@@ -59,12 +60,13 @@ function positiveDeliveryId(value: unknown): number | undefined {
 }
 
 function invalid(reason: string): StripeCheckoutTerminalNotificationResult {
-  return { outcome: 'invalid', queuedJobs: 0, reason };
+  return { outcome: 'invalid', jobs: [], reason };
 }
 
-export async function publishStripeCheckoutTerminalNotifications(args: {
+export async function prepareStripeCheckoutTerminalNotifications(args: {
   dropId: string;
   sessionId: string;
+  jobIds?: Partial<Record<'buyer_order_received' | 'shipper_ready_to_ship' | 'stripe_checkout_manual_review', string>>;
   dependencies: StripeCheckoutTerminalNotificationDependencies;
 }): Promise<StripeCheckoutTerminalNotificationResult> {
   const { dropId, sessionId, dependencies } = args;
@@ -77,26 +79,29 @@ export async function publishStripeCheckoutTerminalNotifications(args: {
     if (!deliveryId) return invalid('invalid_delivery_id');
     const order = await dependencies.loadDeliveryOrder(dropId, deliveryId);
     if (!order) return invalid('missing_delivery_order');
+    if (order.source !== STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE || order.status !== 'ready_to_ship') {
+      return invalid('invalid_delivery_order');
+    }
     let jobs: NotificationEmailJobV1[];
     try {
       jobs = await createStripeReadyToShipNotificationJobs({
         order,
         dropId,
         deliveryId,
+        ...(args.jobIds ? { jobIds: args.jobIds } : {}),
         ...(dependencies.createJobId ? { createJobId: dependencies.createJobId } : {}),
       });
     } catch {
       return invalid('invalid_delivery_order');
     }
-    await Promise.all(jobs.map(dependencies.enqueueJob));
-    return { outcome: 'fulfilled', queuedJobs: jobs.length };
+    return { outcome: 'fulfilled', jobs };
   }
 
   if (
     checkout.status !== STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED ||
     checkout.manualRefundReviewRequired !== true
   ) {
-    return { outcome: 'not_terminal', queuedJobs: 0 };
+    return { outcome: 'not_terminal', jobs: [] };
   }
 
   const recipient = normalizeNotificationEmailRecipient(STRIPE_CHECKOUT_MANUAL_REVIEW_EMAIL);
@@ -105,6 +110,10 @@ export async function publishStripeCheckoutTerminalNotifications(args: {
   const context: NotificationEmailJobContext = { dropId, sessionId };
   let job: NotificationEmailJobV1;
   try {
+    const jobId = args.jobIds?.stripe_checkout_manual_review;
+    if (jobId !== undefined && !isNotificationEmailJobId(jobId)) {
+      return invalid('invalid_manual_review_notification');
+    }
     const identity = normalizeStripeCheckoutIdentity(checkout);
     const email = buildStripeCheckoutManualReviewEmailContent({
       idempotencyKey,
@@ -125,6 +134,7 @@ export async function publishStripeCheckoutTerminalNotifications(args: {
       failedAt: toMillisMaybe(checkout.failedAt),
     });
     job = createNotificationEmailJobV1({
+      ...(jobId !== undefined ? { jobId } : {}),
       kind: 'stripe_checkout_manual_review',
       idempotencyKey,
       recipients: [recipient],
@@ -136,6 +146,5 @@ export async function publishStripeCheckoutTerminalNotifications(args: {
   } catch {
     return invalid('invalid_manual_review_notification');
   }
-  await dependencies.enqueueJob(job);
-  return { outcome: 'manual_review', queuedJobs: 1 };
+  return { outcome: 'manual_review', jobs: [job] };
 }

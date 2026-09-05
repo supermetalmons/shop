@@ -337,6 +337,65 @@ test('native reconciliation queries are bounded, ordered, and duplicate-free', a
   assert.deepEqual(stale.map((record) => record.key.documentId), ['old']);
 });
 
+test('Stripe terminal notification recovery selects pending due jobs in a bounded stable order', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  const pending = {
+    status: 'fulfilled',
+    stripeTerminalNotificationState: 'pending',
+    stripeTerminalNotificationNextAttemptAtMs: 10,
+  };
+  seedCommerceDocuments(harness, [
+    { key: commerceKeys.stripeCheckout('drop', 'b'), data: pending },
+    { key: commerceKeys.stripeCheckout('drop', 'a'), data: pending },
+    {
+      key: commerceKeys.stripeCheckout('drop', 'review'),
+      data: {
+        ...pending,
+        status: 'fulfillment_failed',
+        manualRefundReviewRequired: true,
+        stripeTerminalNotificationNextAttemptAtMs: 5,
+      },
+    },
+    {
+      key: commerceKeys.stripeCheckout('drop', 'future'),
+      data: { ...pending, stripeTerminalNotificationNextAttemptAtMs: 11 },
+    },
+    {
+      key: commerceKeys.stripeCheckout('drop', 'queued'),
+      data: { ...pending, stripeTerminalNotificationState: 'queued' },
+    },
+    ...['fulfillment_pending', 'processing', 'fulfillment_failed'].map((status) => ({
+      key: commerceKeys.stripeCheckout('drop', status),
+      data: { ...pending, status, stripeTerminalNotificationNextAttemptAtMs: 0 },
+    })),
+    {
+      key: commerceKeys.stripeCheckout('drop', 'missing-due'),
+      data: { stripeTerminalNotificationState: 'pending' },
+    },
+    { key: commerceKeys.deliveryOrder('drop', 'wrong-kind'), data: pending },
+  ]);
+  assert.deepEqual(
+    (await repository.queryDueStripeTerminalNotifications(10, 2)).map((record) => record.key.documentId),
+    ['review', 'a'],
+  );
+  assert.deepEqual(
+    (await repository.queryDueStripeTerminalNotifications(10)).map((record) => record.key.documentId),
+    ['review', 'a', 'b'],
+  );
+  seedCommerceDocuments(harness, Array.from({ length: 21 }, (_, index) => ({
+    key: commerceKeys.stripeCheckout('drop', `more-${String(index).padStart(2, '0')}`),
+    data: pending,
+  })));
+  assert.equal((await repository.queryDueStripeTerminalNotifications(10)).length, 20);
+  for (const [dueAtMs, limit] of [[-1, 1], [Number.NaN, 1], [1, 0], [1, 1.5]]) {
+    await assert.rejects(
+      repository.queryDueStripeTerminalNotifications(dueAtMs, limit),
+      (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'invalid-argument',
+    );
+  }
+});
+
 test('delivery-order owner pagination uses a distinct indexed keyset query', async () => {
   const calls: CommerceD1CallObservation[] = [];
   const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
@@ -1419,7 +1478,11 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   assert.equal(staleCall?.method, 'batch');
   if (staleCall?.method !== 'batch') assert.fail('Expected one D1 batch call.');
   assert.match(staleCall.statements[1].sql, /INDEXED BY commerce_stripe_checkouts_reconciliation_due/);
-  assert.equal(calls.length, 10);
+  assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.queryDueStripeTerminalNotifications(1)),
+    [],
+  );
+  assert.equal(calls.length, 11);
 });
 
 test('all standalone reads fail closed when commerce is paused', async () => {
@@ -1454,6 +1517,10 @@ test('all standalone reads fail closed when commerce is paused', async () => {
     {
       name: 'queryStaleStripeFulfillments',
       read: (value) => value.queryStaleStripeFulfillments(1),
+    },
+    {
+      name: 'queryDueStripeTerminalNotifications',
+      read: (value) => value.queryDueStripeTerminalNotifications(1),
     },
   ];
 

@@ -28,6 +28,10 @@ const documentPathRevisionsMigrationSql = readFileSync(
   new URL('../cloud/workers/api/commerce-migrations/0006_document_path_revisions.sql', import.meta.url),
   'utf8',
 );
+const stripeTerminalNotificationsMigrationSql = readFileSync(
+  new URL('../cloud/workers/api/commerce-migrations/0007_stripe_terminal_notifications.sql', import.meta.url),
+  'utf8',
+);
 const authorityLeaseToken = '123e4567-e89b-42d3-a456-426614174000';
 const d1NowMsSql = "CAST(strftime('%s', 'now') AS INTEGER) * 1000";
 const deliveryOwnerRevisionTriggers = [
@@ -68,6 +72,7 @@ function databaseBeforeDocumentPathRevisions(): DatabaseSync {
 function database(): DatabaseSync {
   const db = databaseBeforeDocumentPathRevisions();
   db.exec(documentPathRevisionsMigrationSql);
+  db.exec(stripeTerminalNotificationsMigrationSql);
   resumeCommerceAfterMigration(db);
   return db;
 }
@@ -1095,6 +1100,33 @@ test('Commerce authority cannot resume while a wipe guard remains', () => {
   }
 });
 
+test('Stripe terminal-notification index migration preserves active Commerce state', () => {
+  const db = databaseBeforeDocumentPathRevisions();
+  try {
+    db.exec(documentPathRevisionsMigrationSql);
+    resumeCommerceAfterMigration(db);
+    runDocumentEpoch(db, () => insertTestDocument(db, {
+      kind: 'stripe_checkout',
+      dropId: 'drop',
+      documentId: 'cs_pending',
+      path: 'drops/drop/stripeCheckouts/cs_pending',
+      data: {
+        status: 'fulfilled',
+        stripeTerminalNotificationState: 'pending',
+        stripeTerminalNotificationNextAttemptAtMs: 10,
+      },
+    }));
+    const before = db.prepare('SELECT * FROM commerce_authority_control').all();
+    const documentsBefore = db.prepare('SELECT * FROM commerce_documents').all();
+    runMigration(db, stripeTerminalNotificationsMigrationSql);
+    assert.deepEqual(db.prepare('SELECT * FROM commerce_authority_control').all(), before);
+    assert.deepEqual(db.prepare('SELECT * FROM commerce_documents').all(), documentsBefore);
+    assert.deepEqual(indexColumns(db, 'commerce_stripe_terminal_notifications_due'), ['null', 'document_path']);
+  } finally {
+    db.close();
+  }
+});
+
 test('Commerce baseline keeps required covering and partial indexes', () => {
   const db = database();
   try {
@@ -1177,6 +1209,7 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
           shipper_notification_state = 'pending'`.replace(/\s+/g, ' ').trim(),
     );
     assert.deepEqual(indexColumns(db, 'commerce_stripe_checkouts_reconciliation_due'), ['null', 'document_path']);
+    assert.deepEqual(indexColumns(db, 'commerce_stripe_terminal_notifications_due'), ['null', 'document_path']);
     assert.match(planDetails(db, `SELECT document_path FROM commerce_documents
       WHERE document_kind = 'delivery_order' AND owner = 'owner'
       ORDER BY document_path LIMIT 450`), /commerce_documents_delivery_owner_path/);
@@ -1257,6 +1290,19 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
         AND CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) <= 1
       ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER), document_path LIMIT 100`),
     /commerce_stripe_checkouts_reconciliation_due/);
+    const terminalNotificationPlan = planDetails(db, `SELECT document_path
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents INDEXED BY commerce_stripe_terminal_notifications_due
+      WHERE
+        authority.singleton = 1 AND authority.authority_state = 'd1' AND
+        document_kind = 'stripe_checkout' AND
+        (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
+        json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending' AND
+        CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER) <= ?
+      ORDER BY CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER),
+        document_path
+      LIMIT ?`, 1, 20);
+    assert.match(terminalNotificationPlan, /SEARCH commerce_documents USING INDEX commerce_stripe_terminal_notifications_due/);
   } finally {
     db.close();
   }

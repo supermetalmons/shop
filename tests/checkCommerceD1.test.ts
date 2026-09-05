@@ -14,6 +14,7 @@ const migrationNames = [
   '0004_ready_notification_owner_indexes.sql',
   '0005_delivery_owner_query_revisions.sql',
   '0006_document_path_revisions.sql',
+  '0007_stripe_terminal_notifications.sql',
 ] as const;
 
 function currentDatabase(seedDocuments = true): DatabaseSync {
@@ -108,6 +109,8 @@ function currentDatabase(seedDocuments = true): DatabaseSync {
           updatedAt: index,
           lastStripeWebhookEventId: `evt_${index}`,
           manualRefundReviewRequired: index % 32 === 0,
+          stripeTerminalNotificationState: index % 32 === 1 ? 'pending' : 'queued',
+          stripeTerminalNotificationNextAttemptAtMs: index,
         }),
         '2026-01-01T00:00:00.000Z',
         '2026-01-01T00:00:00.000Z',
@@ -208,6 +211,21 @@ test('Commerce D1 checker rejects a malformed Stripe reconciliation index', () =
     assert.throws(
       () => checkCommerceD1(localQuery(database)),
       /Commerce D1 Stripe-reconciliation index is invalid/,
+    );
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker rejects a malformed Stripe terminal-notification index', () => {
+  const database = currentDatabase();
+  try {
+    database.exec(`DROP INDEX commerce_stripe_terminal_notifications_due;
+      CREATE INDEX commerce_stripe_terminal_notifications_due
+      ON commerce_documents (document_path)`);
+    assert.throws(
+      () => checkCommerceD1(localQuery(database)),
+      /Commerce D1 Stripe terminal-notification index is invalid/,
     );
   } finally {
     database.close();

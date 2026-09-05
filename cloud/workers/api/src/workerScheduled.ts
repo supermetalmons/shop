@@ -7,6 +7,7 @@ import {
 import { cleanupExpiredReceiptTransferRateLimitBuckets } from './receiptTransferRateLimit.js';
 import { cleanupExpiredStaffAuthState } from './staffWalletAuth.js';
 import { reconcileStaleStripeFulfillments } from './stripeCheckoutReconciliation.js';
+import { reconcilePendingStripeTerminalNotifications } from './stripeCheckout/notificationReconciliation.js';
 
 export const SCHEDULED_RECONCILIATION_TIMEOUT_MS = 60_000;
 
@@ -15,6 +16,7 @@ export type ScheduledReconcilers = {
   ops: (env: Pick<Env, 'OPS_DB'>, signal: AbortSignal) => Promise<void>;
   packStatus: typeof reconcilePendingDeliveryPackStatusProjections;
   stripe: typeof reconcileStaleStripeFulfillments;
+  stripeNotifications: typeof reconcilePendingStripeTerminalNotifications;
 };
 
 async function cleanupScheduledOpsState(
@@ -65,6 +67,7 @@ const defaultScheduledReconcilers: ScheduledReconcilers = {
   ops: cleanupScheduledOpsState,
   packStatus: reconcilePendingDeliveryPackStatusProjections,
   stripe: reconcileStaleStripeFulfillments,
+  stripeNotifications: reconcilePendingStripeTerminalNotifications,
 };
 
 export async function runScheduledReconciliations(
@@ -79,6 +82,7 @@ export async function runScheduledReconciliations(
   }
   const results = await Promise.allSettled([
     reconcilers.stripe(env, signal),
+    reconcilers.stripeNotifications(env, signal),
     reconcilers.packStatus(env, signal),
     reconcilers.notifications(env, signal),
     reconcilers.ops(env, signal),

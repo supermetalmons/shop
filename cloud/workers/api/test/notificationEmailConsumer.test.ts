@@ -459,7 +459,7 @@ test('Stripe fulfillment queue processing validates jobs and records terminal ou
           sessionId: 'cs_test_456',
           reason: 'already_fulfilled',
         },
-        notifications: { outcome: 'fulfilled', queuedJobs: 2 },
+        notifications: { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 },
       };
     },
     log: (entry) => logs.push(entry),
@@ -503,7 +503,7 @@ test('Stripe fulfillment persists retryable failures on the final Queue attempt'
           sessionId: 'cs_test_final_attempt',
           error: { code: 'unavailable' },
         },
-        notifications: { outcome: 'manual_review', queuedJobs: 1 },
+        notifications: { outcome: 'manual_review', publication: 'queued', queuedJobs: 1 },
       };
     },
   });

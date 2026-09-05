@@ -51,9 +51,9 @@ import { StripeCheckoutFulfillmentError } from './stripeCheckout/errors.js';
 import { stripeCheckoutFieldValue } from './stripeCheckout/store.js';
 import { stripeCheckoutSessionOrderHash } from './stripeCheckout/contract.js';
 import {
-  publishStripeCheckoutTerminalNotifications,
-  type StripeCheckoutTerminalNotificationResult,
-} from './stripeCheckout/terminalNotifications.js';
+  publishPendingStripeCheckoutTerminalNotifications,
+  type StripeCheckoutTerminalPublicationResult,
+} from './stripeCheckout/notificationOutbox.js';
 import {
   STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   type StripeCheckoutFulfillmentJobV1,
@@ -94,7 +94,7 @@ type FulfillmentEnv = Pick<Env,
 
 type FulfillmentProcessingResult = {
   fulfillment: StripeCheckoutFulfillmentProcessResult;
-  notifications: StripeCheckoutTerminalNotificationResult;
+  notifications: StripeCheckoutTerminalPublicationResult;
 };
 
 
@@ -618,26 +618,16 @@ export async function processStripeCheckoutFulfillmentJob(
       sessionId: job.sessionId,
     });
   }
-  const notifications = await publishStripeCheckoutTerminalNotifications({
+  const notifications = await publishPendingStripeCheckoutTerminalNotifications({
     dropId: job.dropId,
     sessionId: job.sessionId,
-    dependencies: {
-      loadCheckout: async () => {
-        const checkout = await store.doc(checkoutPath).get();
-        const data = checkout.data();
-        return checkout.exists && data ? { path: checkoutPath, data } : null;
-      },
-      loadDeliveryOrder: async (dropId, deliveryId) => {
-        const order = await store.doc(dropDeliveryOrderPath(dropId, deliveryId)).get();
-        return order.exists ? order.data() || null : null;
-      },
-      enqueueJob: async (notificationJob) => {
-        await env.NOTIFICATION_EMAIL_QUEUE.send(notificationJob);
-      },
-      getDropName: (dropId) => {
-        const config = getApiDrop(dropId);
-        return config?.displayName || config?.collectionName || dropId;
-      },
+    store,
+    signal,
+    queue: env.NOTIFICATION_EMAIL_QUEUE,
+    initializeMissing: true,
+    getDropName: (dropId) => {
+      const config = getApiDrop(dropId);
+      return config?.displayName || config?.collectionName || dropId;
     },
   });
   const terminalExpected = fulfillment.status !== 'ignored' || (

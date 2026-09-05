@@ -2,11 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { STRIPE_CHECKOUT_STATUS } from '../cloud/workers/api/src/stripeCheckout/contract.ts';
 import {
-  publishStripeCheckoutTerminalNotifications,
+  prepareStripeCheckoutTerminalNotifications,
   shouldPublishStripeCheckoutTerminalNotificationsWrite,
 } from '../cloud/workers/api/src/stripeCheckout/terminalNotifications.ts';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../shared/fulfillmentSources.ts';
-import type { NotificationEmailJobV1 } from '../shared/notificationEmailJob.ts';
 
 const DROP_ID = 'card_nft_2';
 const SESSION_ID = 'cs_test_terminal_notifications';
@@ -32,19 +31,13 @@ function readyOrder() {
 function dependencies(args: {
   checkout?: Record<string, unknown> | null;
   order?: Record<string, unknown> | null;
-  jobs?: NotificationEmailJobV1[];
   createJobId?: () => string;
-  enqueueJob?: (job: NotificationEmailJobV1) => Promise<void>;
 } = {}) {
-  const jobs = args.jobs || [];
   return {
     loadCheckout: async () => args.checkout === null
       ? null
       : { path: CHECKOUT_PATH, data: args.checkout || { status: 'processing' } },
     loadDeliveryOrder: async () => args.order === null ? null : args.order || readyOrder(),
-    enqueueJob: args.enqueueJob || (async (job: NotificationEmailJobV1) => {
-      jobs.push(job);
-    }),
     getDropName: () => 'Card NFT 2',
     ...(args.createJobId ? { createJobId: args.createJobId } : {}),
   };
@@ -82,16 +75,15 @@ test('terminal transition detection covers direct fulfillment and manual-review 
   }), false);
 });
 
-test('fulfilled checkout reloads terminal state and queues exact buyer and shipper jobs', async () => {
-  const jobs: NotificationEmailJobV1[] = [];
+test('fulfilled checkout reloads terminal state and prepares exact buyer and shipper jobs', async () => {
   const ids = [...JOB_IDS];
   let checkoutReads = 0;
   let loadedDeliveryId: number | undefined;
-  const result = await publishStripeCheckoutTerminalNotifications({
+  const result = await prepareStripeCheckoutTerminalNotifications({
     dropId: DROP_ID,
     sessionId: SESSION_ID,
     dependencies: {
-      ...dependencies({ jobs, createJobId: () => ids.shift() || '' }),
+      ...dependencies({ createJobId: () => ids.shift() || '' }),
       loadCheckout: async () => {
         checkoutReads += 1;
         return {
@@ -106,20 +98,24 @@ test('fulfilled checkout reloads terminal state and queues exact buyer and shipp
     },
   });
 
-  assert.deepEqual(result, { outcome: 'fulfilled', queuedJobs: 2 });
+  assert.equal(result.outcome, 'fulfilled');
+  assert.equal(result.jobs.length, 2);
   assert.equal(checkoutReads, 1);
   assert.equal(loadedDeliveryId, 7);
-  assert.deepEqual(jobs.map((job) => ({
+  assert.deepEqual(result.jobs.map((job) => ({
+    jobId: job.jobId,
     kind: job.kind,
     idempotencyKey: job.idempotencyKey,
     context: job.context,
   })), [
     {
+      jobId: JOB_IDS[0],
       kind: 'buyer_order_received',
       idempotencyKey: `${DROP_ID}:7:order_received`,
       context: { dropId: DROP_ID, deliveryId: 7 },
     },
     {
+      jobId: JOB_IDS[1],
       kind: 'shipper_ready_to_ship',
       idempotencyKey: `${DROP_ID}:7:ready_to_ship`,
       context: { dropId: DROP_ID, deliveryId: 7 },
@@ -127,14 +123,13 @@ test('fulfilled checkout reloads terminal state and queues exact buyer and shipp
   ]);
 });
 
-test('manual-review checkout queues the existing bounded notification job', async () => {
-  const jobs: NotificationEmailJobV1[] = [];
-  const result = await publishStripeCheckoutTerminalNotifications({
+test('manual-review checkout prepares the existing bounded notification with its durable job ID', async () => {
+  const result = await prepareStripeCheckoutTerminalNotifications({
     dropId: DROP_ID,
     sessionId: SESSION_ID,
+    jobIds: { stripe_checkout_manual_review: JOB_IDS[0] },
     dependencies: dependencies({
-      jobs,
-      createJobId: () => JOB_IDS[0],
+      createJobId: () => { throw new Error('durable job ID should be reused'); },
       checkout: {
         status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
         manualRefundReviewRequired: true,
@@ -151,7 +146,10 @@ test('manual-review checkout queues the existing bounded notification job', asyn
     }),
   });
 
-  assert.deepEqual(result, { outcome: 'manual_review', queuedJobs: 1 });
+  const jobs = result.jobs;
+  assert.equal(result.outcome, 'manual_review');
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0]?.jobId, JOB_IDS[0]);
   assert.equal(jobs[0]?.kind, 'stripe_checkout_manual_review');
   assert.equal(jobs[0]?.idempotencyKey, `${DROP_ID}:${SESSION_ID}:stripe_manual_review`);
   assert.deepEqual(jobs[0]?.context, { dropId: DROP_ID, sessionId: SESSION_ID });
@@ -162,62 +160,62 @@ test('manual-review checkout queues the existing bounded notification job', asyn
   assert.doesNotMatch(jobs[0]?.html || '', /<danger>/);
 });
 
-test('nonterminal and unflagged failed checkouts do not queue notifications', async () => {
+test('nonterminal and unflagged failed checkouts return no notification jobs', async () => {
   for (const checkout of [
     { status: STRIPE_CHECKOUT_STATUS.PROCESSING },
     { status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED, manualRefundReviewRequired: false },
   ]) {
-    const jobs: NotificationEmailJobV1[] = [];
-    const result = await publishStripeCheckoutTerminalNotifications({
+    const result = await prepareStripeCheckoutTerminalNotifications({
       dropId: DROP_ID,
       sessionId: SESSION_ID,
-      dependencies: dependencies({ jobs, checkout }),
+      dependencies: dependencies({ checkout }),
     });
-    assert.deepEqual(result, { outcome: 'not_terminal', queuedJobs: 0 });
-    assert.deepEqual(jobs, []);
+    assert.deepEqual(result, { outcome: 'not_terminal', jobs: [] });
   }
 });
 
-test('retrying an already-terminal checkout preserves logical idempotency keys', async () => {
-  const jobs: NotificationEmailJobV1[] = [];
-  const ids = [...JOB_IDS];
+test('preparing an already-terminal checkout preserves durable IDs and logical idempotency keys', async () => {
   const deps = dependencies({
-    jobs,
     checkout: { status: STRIPE_CHECKOUT_STATUS.FULFILLED, deliveryId: 7 },
-    createJobId: () => ids.shift() || '',
+    createJobId: () => JOB_IDS[3],
+  });
+  const jobIds = { buyer_order_received: JOB_IDS[0], shipper_ready_to_ship: JOB_IDS[1] };
+
+  const first = await prepareStripeCheckoutTerminalNotifications({
+    dropId: DROP_ID, sessionId: SESSION_ID, jobIds, dependencies: deps,
+  });
+  const second = await prepareStripeCheckoutTerminalNotifications({
+    dropId: DROP_ID, sessionId: SESSION_ID, jobIds, dependencies: deps,
   });
 
-  await publishStripeCheckoutTerminalNotifications({ dropId: DROP_ID, sessionId: SESSION_ID, dependencies: deps });
-  await publishStripeCheckoutTerminalNotifications({ dropId: DROP_ID, sessionId: SESSION_ID, dependencies: deps });
-
-  assert.deepEqual(jobs.map((job) => job.idempotencyKey), [
-    `${DROP_ID}:7:order_received`,
-    `${DROP_ID}:7:ready_to_ship`,
+  assert.equal(first.outcome, 'fulfilled');
+  assert.deepEqual(first, second);
+  assert.deepEqual(first.jobs.map((job) => job.idempotencyKey), [
     `${DROP_ID}:7:order_received`,
     `${DROP_ID}:7:ready_to_ship`,
   ]);
-  assert.equal(new Set(jobs.map((job) => job.jobId)).size, 4);
+  assert.deepEqual(first.jobs.map((job) => job.jobId), [JOB_IDS[0], JOB_IDS[1]]);
 });
 
 test('missing checkout, delivery ID, or delivery order returns a permanent invalid outcome', async () => {
   assert.deepEqual(
-    await publishStripeCheckoutTerminalNotifications({
+    await prepareStripeCheckoutTerminalNotifications({
       dropId: DROP_ID,
       sessionId: SESSION_ID,
       dependencies: dependencies({ checkout: null }),
     }),
-    { outcome: 'invalid', queuedJobs: 0, reason: 'missing_checkout' },
+    { outcome: 'invalid', jobs: [], reason: 'missing_checkout' },
   );
   assert.deepEqual(
-    await publishStripeCheckoutTerminalNotifications({
+    await prepareStripeCheckoutTerminalNotifications({
       dropId: DROP_ID,
       sessionId: SESSION_ID,
       dependencies: dependencies({ checkout: { status: STRIPE_CHECKOUT_STATUS.FULFILLED } }),
     }),
-    { outcome: 'invalid', queuedJobs: 0, reason: 'invalid_delivery_id' },
+    { outcome: 'invalid', jobs: [], reason: 'invalid_delivery_id' },
   );
   assert.deepEqual(
-    await publishStripeCheckoutTerminalNotifications({
+    await prepareStripeCheckoutTerminalNotifications({
       dropId: DROP_ID,
       sessionId: SESSION_ID,
       dependencies: dependencies({
@@ -225,15 +223,33 @@ test('missing checkout, delivery ID, or delivery order returns a permanent inval
         order: null,
       }),
     }),
-    { outcome: 'invalid', queuedJobs: 0, reason: 'missing_delivery_order' },
+    { outcome: 'invalid', jobs: [], reason: 'missing_delivery_order' },
   );
 });
 
-test('Cloudflare enqueue failures propagate for Queue retry', async () => {
-  await assert.rejects(
-    publishStripeCheckoutTerminalNotifications({
+test('invalid ready orders are rejected instead of fulfilling with no jobs', async () => {
+  for (const order of [
+    { ...readyOrder(), source: 'other' },
+    { ...readyOrder(), status: 'prepared' },
+    { ...readyOrder(), deliveryId: 8 },
+  ]) {
+    assert.deepEqual(await prepareStripeCheckoutTerminalNotifications({
       dropId: DROP_ID,
       sessionId: SESSION_ID,
+      dependencies: dependencies({
+        checkout: { status: STRIPE_CHECKOUT_STATUS.FULFILLED, deliveryId: 7 },
+        order,
+      }),
+    }), { outcome: 'invalid', jobs: [], reason: 'invalid_delivery_order' });
+  }
+});
+
+test('invalid durable manual-review IDs are rejected instead of generating replacement IDs', async () => {
+  for (const jobId of ['', 'invalid']) {
+    assert.deepEqual(await prepareStripeCheckoutTerminalNotifications({
+      dropId: DROP_ID,
+      sessionId: SESSION_ID,
+      jobIds: { stripe_checkout_manual_review: jobId },
       dependencies: dependencies({
         checkout: {
           status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
@@ -243,18 +259,14 @@ test('Cloudflare enqueue failures propagate for Queue retry', async () => {
           authSubject: 'anonymous-subject',
         },
         createJobId: () => JOB_IDS[0],
-        enqueueJob: async () => {
-          throw new Error('enqueue unavailable');
-        },
       }),
-    }),
-    /enqueue unavailable/,
-  );
+    }), { outcome: 'invalid', jobs: [], reason: 'invalid_manual_review_notification' });
+  }
 });
 
 test('checkout-store read failures propagate for Queue retry', async () => {
   await assert.rejects(
-    publishStripeCheckoutTerminalNotifications({
+    prepareStripeCheckoutTerminalNotifications({
       dropId: DROP_ID,
       sessionId: SESSION_ID,
       dependencies: {

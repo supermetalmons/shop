@@ -78,6 +78,7 @@ export async function processStripeFulfillmentMessage(
       fulfillmentStatus: result.fulfillment.status,
       ...(result.fulfillment.status === 'ignored' ? { fulfillmentReason: result.fulfillment.reason } : {}),
       notificationOutcome: result.notifications.outcome,
+      notificationPublication: result.notifications.publication,
       notificationQueuedJobs: result.notifications.queuedJobs,
     });
   } finally {
