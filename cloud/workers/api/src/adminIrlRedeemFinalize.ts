@@ -119,11 +119,14 @@ import {
   decodeCosigner,
   deriveDeliveryPda,
   fetchOnchainConfig as fetchDeliveryOnchainConfig,
-  hasConfirmedSignatureCommitment,
   mintReceiptsInstruction,
   sendAndConfirmSignedTransaction,
 } from './deliveryReceiptOnchain.js';
 import { heliusRpcUrl } from './solanaProvider.js';
+import {
+  probeTransactionSubmission,
+  type TransactionSubmissionOutcome,
+} from './transactionSubmissionRecovery.js';
 
 export const ADMIN_IRL_REDEEM_FINALIZE_PATH = '/admin/irl-redeem/finalize';
 
@@ -1464,23 +1467,21 @@ async function holdPendingFinalizeSubmission(
 }
 
 async function probePendingFinalizeSubmission(
-  connection: Connection,
+  connection: Pick<Connection, 'getSignatureStatuses' | 'getAccountInfo' | 'getMultipleAccountsInfo' | 'isBlockhashValid'>,
   pending: PendingFinalizeSubmission,
-): Promise<'confirmed' | 'expired' | 'unresolved'> {
-  const status = (await connection.getSignatureStatuses([pending.signature], { searchTransactionHistory: true })).value[0];
-  if (status?.err) return 'expired';
-  if (hasConfirmedSignatureCommitment(status)) return 'confirmed';
-  if (status) return 'unresolved';
-  const landed = pending.kind === 'internal_delivery'
-    ? Boolean(await connection.getAccountInfo(new PublicKey(pending.deliveryPda), {
-      commitment: 'confirmed', dataSlice: { offset: 0, length: 0 },
-    }))
-    : (await connection.getMultipleAccountsInfo(pending.assetIds.map((assetId) => new PublicKey(assetId)), {
-      commitment: 'confirmed', dataSlice: { offset: 0, length: 2 },
-    })).every(isTombstone);
-  if (landed) return 'confirmed';
-  const validity = await connection.isBlockhashValid(pending.blockhash, { commitment: 'confirmed' });
-  return validity.value ? 'unresolved' : 'expired';
+): Promise<TransactionSubmissionOutcome> {
+  return probeTransactionSubmission({
+    connection,
+    signature: pending.signature,
+    blockhash: pending.blockhash,
+    hasLanded: async () => pending.kind === 'internal_delivery'
+      ? Boolean(await connection.getAccountInfo(new PublicKey(pending.deliveryPda), {
+        commitment: 'confirmed', dataSlice: { offset: 0, length: 0 },
+      }))
+      : (await connection.getMultipleAccountsInfo(pending.assetIds.map((assetId) => new PublicKey(assetId)), {
+        commitment: 'confirmed', dataSlice: { offset: 0, length: 2 },
+      })).every(isTombstone),
+  });
 }
 
 async function reconcilePendingFinalizeSubmission(args: {
@@ -1490,9 +1491,9 @@ async function reconcilePendingFinalizeSubmission(args: {
   path: string;
   attemptId: string;
   pending: PendingFinalizeSubmission;
-}): Promise<'confirmed' | 'expired' | 'unresolved'> {
+}): Promise<TransactionSubmissionOutcome> {
   const probeContext = cleanupContext(args.commerce);
-  let outcome: 'confirmed' | 'expired' | 'unresolved' = 'unresolved';
+  let outcome: TransactionSubmissionOutcome = 'unresolved';
   try {
     outcome = await probePendingFinalizeSubmission(
       createConnection({ ...args.provider, signal: probeContext.signal }, args.runtime),
@@ -1612,7 +1613,7 @@ async function reconcileStartedRequestSubmission(args: {
 }): Promise<void> {
   const pending = args.request.pendingFinalizeSubmission;
   if (!pending) return;
-  let outcome: 'confirmed' | 'expired' | 'unresolved';
+  let outcome: TransactionSubmissionOutcome;
   try {
     outcome = await reconcilePendingFinalizeSubmission({
       ...args,

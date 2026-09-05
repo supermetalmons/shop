@@ -2187,7 +2187,7 @@ test('Admin IRL finalization promotes only confirmed pending submissions', async
   assert.equal(document?.data.status, 'processing');
 });
 
-test('Admin IRL finalization distinguishes confirmed, expired, and unresolved submissions', async () => {
+test('Admin IRL internal delivery recovery confirms only when the delivery PDA exists', async () => {
   const pending = {
     kind: 'internal_delivery' as const,
     signature: bs58.encode(Keypair.generate().secretKey),
@@ -2195,58 +2195,50 @@ test('Admin IRL finalization distinguishes confirmed, expired, and unresolved su
     deliveryId: 7,
     deliveryPda: Keypair.generate().publicKey.toBase58(),
   };
-  const connection = (overrides: Partial<Pick<Connection,
-    'getAccountInfo' | 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'
-  >>) => ({
-    getAccountInfo: async () => null,
-    getMultipleAccountsInfo: async () => [{ data: Buffer.alloc(2) } as never],
-    getSignatureStatuses: async () => ({ context: { apiVersion: 'test', slot: 1 }, value: [null] }),
-    isBlockhashValid: async () => ({ context: { apiVersion: 'test', slot: 1 }, value: true }),
-    ...overrides,
-  }) as unknown as Connection;
-  assert.equal(await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(
-    connection({ getAccountInfo: async () => ({ data: Buffer.alloc(0) }) as never }),
-    pending,
-  ), 'confirmed');
-  for (const confirmations of [null, 2]) {
-    let postStateChecks = 0;
-    assert.equal(await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(
-      connection({
-        getAccountInfo: async () => {
-          postStateChecks += 1;
-          return null;
-        },
-        getSignatureStatuses: async () => ({
-          context: { apiVersion: 'test', slot: 1 },
-          value: [{ confirmations, err: null, slot: 1 }],
-        }),
-      }),
-      pending,
-    ), 'confirmed');
-    assert.equal(postStateChecks, 0);
+  for (const account of [null, { owner: PublicKey.default, executable: false, lamports: 1, data: Buffer.alloc(0) }]) {
+    const connection = {
+      getAccountInfo: async (address, config) => {
+        assert.equal(address.toBase58(), pending.deliveryPda);
+        assert.deepEqual(config, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } });
+        return account;
+      },
+      getMultipleAccountsInfo: async () => { throw new Error('unexpected receipt asset lookup'); },
+      getSignatureStatuses: async () => ({ context: { slot: 1 }, value: [null] }),
+      isBlockhashValid: async () => ({ context: { slot: 1 }, value: true }),
+    } satisfies Pick<Connection, 'getAccountInfo' | 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'>;
+    assert.equal(
+      await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(connection, pending),
+      account ? 'confirmed' : 'unresolved',
+    );
   }
-  assert.equal(await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(
-    connection({ isBlockhashValid: async () => ({ context: { apiVersion: 'test', slot: 1 }, value: false }) }),
-    pending,
-  ), 'expired');
-  assert.equal(await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(connection({}), pending), 'unresolved');
+});
 
-  const failedReceipt = {
+test('Admin IRL receipt recovery confirms only when every asset is absent or a tombstone', async () => {
+  const pending = {
     kind: 'receipt_mint' as const,
     signature: bs58.encode(Keypair.generate().secretKey),
     blockhash: Keypair.generate().publicKey.toBase58(),
-    assetIds: [Keypair.generate().publicKey.toBase58()],
+    assetIds: [Keypair.generate().publicKey.toBase58(), Keypair.generate().publicKey.toBase58()],
   };
-  assert.equal(await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(
-    connection({
-      getMultipleAccountsInfo: async () => [null],
-      getSignatureStatuses: async () => ({
-        context: { apiVersion: 'test', slot: 1 },
-        value: [{ confirmations: null, err: { InstructionError: [0, 'Custom'] }, slot: 1 } as never],
-      }),
-    }),
-    failedReceipt,
-  ), 'expired');
+  const account = { owner: PublicKey.default, executable: false, lamports: 1, data: Buffer.alloc(1) };
+  for (const { accounts, expected } of [
+    { accounts: [null, null], expected: 'confirmed' },
+    { accounts: [null, { ...account, data: Buffer.alloc(0) }], expected: 'confirmed' },
+    { accounts: [null, account], expected: 'confirmed' },
+    { accounts: [account, { ...account, data: Buffer.alloc(2) }], expected: 'unresolved' },
+  ]) {
+    const connection = {
+      getAccountInfo: async () => { throw new Error('unexpected delivery PDA lookup'); },
+      getMultipleAccountsInfo: async (addresses, config) => {
+        assert.deepEqual(addresses.map((address) => address.toBase58()), pending.assetIds);
+        assert.deepEqual(config, { commitment: 'confirmed', dataSlice: { offset: 0, length: 2 } });
+        return accounts;
+      },
+      getSignatureStatuses: async () => ({ context: { slot: 1 }, value: [null] }),
+      isBlockhashValid: async () => ({ context: { slot: 1 }, value: true }),
+    } satisfies Pick<Connection, 'getAccountInfo' | 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'>;
+    assert.equal(await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(connection, pending), expected);
+  }
 });
 
 test('Admin IRL finalization rebuilds completed responses idempotently', () => {

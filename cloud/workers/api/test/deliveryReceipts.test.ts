@@ -1116,71 +1116,30 @@ test('receipt submission intent recovers a lost D1 commit acknowledgement', asyn
   );
 });
 
-test('receipt submission retry reconciliation distinguishes confirmed, expired, and unresolved', async () => {
+test('receipt submission recovery confirms only when every asset account is absent', async () => {
   const pending = {
     signature: SIGNATURE,
     blockhash: Keypair.generate().publicKey.toBase58(),
     lastValidBlockHeight: 123,
-    assetIds: [Keypair.generate().publicKey.toBase58()],
+    assetIds: [Keypair.generate().publicKey.toBase58(), Keypair.generate().publicKey.toBase58()],
   };
-  const connection = (overrides: Partial<Pick<Connection,
-    'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'
-  >>) => ({
-    getMultipleAccountsInfo: async () => [{ data: Buffer.alloc(1) }],
-    getSignatureStatuses: async () => ({ context: { apiVersion: 'test', slot: 1 }, value: [null] }),
-    isBlockhashValid: async () => ({ context: { apiVersion: 'test', slot: 1 }, value: true }),
-    ...overrides,
-  }) as unknown as Connection;
-
-  assert.equal(await deliveryReceiptTestHooks.probePendingReceiptSubmission(
-    connection({ getMultipleAccountsInfo: async () => [null] }),
-    pending,
-  ), 'confirmed');
-  for (const confirmations of [null, 2]) {
-    let postStateChecks = 0;
-    assert.equal(await deliveryReceiptTestHooks.probePendingReceiptSubmission(
-      connection({
-        getMultipleAccountsInfo: async () => {
-          postStateChecks += 1;
-          return [null];
-        },
-        getSignatureStatuses: async () => ({
-          context: { apiVersion: 'test', slot: 1 },
-          value: [{ confirmations, err: null, slot: 1 }],
-        }),
-      }),
-      pending,
-    ), 'confirmed');
-    assert.equal(postStateChecks, 0);
+  const account = { owner: PublicKey.default, executable: false, lamports: 1, data: Buffer.alloc(0) };
+  for (const { accounts, expected } of [
+    { accounts: [null, null], expected: 'confirmed' },
+    { accounts: [null, account], expected: 'unresolved' },
+    { accounts: [null, { ...account, data: Buffer.alloc(1) }], expected: 'unresolved' },
+  ]) {
+    const connection = {
+      getMultipleAccountsInfo: async (addresses, config) => {
+        assert.deepEqual(addresses.map((address) => address.toBase58()), pending.assetIds);
+        assert.deepEqual(config, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } });
+        return accounts;
+      },
+      getSignatureStatuses: async () => ({ context: { slot: 1 }, value: [null] }),
+      isBlockhashValid: async () => ({ context: { slot: 1 }, value: true }),
+    } satisfies Pick<Connection, 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'>;
+    assert.equal(await deliveryReceiptTestHooks.probePendingReceiptSubmission(connection, pending), expected);
   }
-  assert.equal(await deliveryReceiptTestHooks.probePendingReceiptSubmission(
-    connection({
-      getMultipleAccountsInfo: async () => { throw new Error('unexpected post-state fallback'); },
-      getSignatureStatuses: async () => ({
-        context: { apiVersion: 'test', slot: 1 },
-        value: [{ confirmationStatus: 'processed', confirmations: null, err: null, slot: 1 }],
-      }),
-    }),
-    pending,
-  ), 'unresolved');
-  assert.equal(await deliveryReceiptTestHooks.probePendingReceiptSubmission(
-    connection({ isBlockhashValid: async () => ({ context: { apiVersion: 'test', slot: 1 }, value: false }) }),
-    pending,
-  ), 'expired');
-  assert.equal(await deliveryReceiptTestHooks.probePendingReceiptSubmission(
-    connection({}),
-    pending,
-  ), 'unresolved');
-  assert.equal(await deliveryReceiptTestHooks.probePendingReceiptSubmission(
-    connection({
-      getMultipleAccountsInfo: async () => [null],
-      getSignatureStatuses: async () => ({
-        context: { apiVersion: 'test', slot: 1 },
-        value: [{ confirmations: null, err: { InstructionError: [0, 'Custom'] }, slot: 1 } as never],
-      }),
-    }),
-    pending,
-  ), 'expired');
 });
 
 test('receipt confirmation polling accepts rooted legacy signature statuses', async () => {

@@ -47,8 +47,10 @@ import {
 import { isRecord } from './dataAccess.js';
 import { DeliveryReceiptError, mapProviderError } from './deliveryReceiptErrors.js';
 import { heliusRpcUrl } from './solanaProvider.js';
+import { hasConfirmedSignatureCommitment } from './transactionSubmissionRecovery.js';
 
 export { DeliveryReceiptError } from './deliveryReceiptErrors.js';
+export { hasConfirmedSignatureCommitment } from './transactionSubmissionRecovery.js';
 
 const PROVIDER_MAX_BYTES = 2 * 1024 * 1024;
 const RPC_TIMEOUT_MS = 8_000;
@@ -492,19 +494,6 @@ export function looksLikeRateLimitOrRpcError(message: string): boolean {
     value.includes('service unavailable') ||
     value.includes('gateway timeout') ||
     (value.includes('rpc') && value.includes('error'));
-}
-
-export function hasConfirmedSignatureCommitment(status: {
-  confirmationStatus?: string | null;
-  confirmations: number | null;
-} | null | undefined): boolean {
-  if (!status) return false;
-  if (status.confirmationStatus != null) {
-    return status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized';
-  }
-  return status.confirmations === null || (
-    Number.isSafeInteger(status.confirmations) && Number(status.confirmations) > 0
-  );
 }
 
 export async function waitForSignature(

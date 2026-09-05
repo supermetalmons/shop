@@ -18,7 +18,6 @@ import {
   decodeCosigner,
   deriveDeliveryPda,
   fetchOnchainConfig,
-  hasConfirmedSignatureCommitment,
   looksLikeAccountInUseError,
   looksLikeBlockhashError,
   looksLikeRateLimitOrRpcError,
@@ -122,6 +121,10 @@ import {
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
 } from './deferredWork.js';
+import {
+  probeTransactionSubmission,
+  type TransactionSubmissionOutcome,
+} from './transactionSubmissionRecovery.js';
 
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
@@ -212,12 +215,10 @@ type PendingReceiptSubmission = {
   assetIds: string[];
 };
 
-type ReceiptSubmissionOutcome = 'confirmed' | 'expired' | 'unresolved';
-
 type ReceiptSubmissionLifecycle = {
   prepare(pending: PendingReceiptSubmission): Promise<void>;
-  reconcile(pending: PendingReceiptSubmission): Promise<ReceiptSubmissionOutcome>;
-  settle(pending: PendingReceiptSubmission, outcome: Exclude<ReceiptSubmissionOutcome, 'unresolved'>): Promise<void>;
+  reconcile(pending: PendingReceiptSubmission): Promise<TransactionSubmissionOutcome>;
+  settle(pending: PendingReceiptSubmission, outcome: Exclude<TransactionSubmissionOutcome, 'unresolved'>): Promise<void>;
 };
 
 type DeliveryRequestMetrics = {
@@ -1798,7 +1799,7 @@ function samePendingReceiptSubmission(left: PendingReceiptSubmission, right: Pen
 function pendingReceiptSubmissionAlreadySettled(
   document: Record<string, unknown>,
   pending: PendingReceiptSubmission,
-  outcome: Exclude<ReceiptSubmissionOutcome, 'unresolved'>,
+  outcome: Exclude<TransactionSubmissionOutcome, 'unresolved'>,
 ): boolean {
   return outcome === 'expired' || confirmedReceiptTransactions(document).includes(pending.signature);
 }
@@ -1840,7 +1841,7 @@ async function settlePendingReceiptSubmission(
   context: CommerceContext,
   path: string,
   pending: PendingReceiptSubmission,
-  outcome: Exclude<ReceiptSubmissionOutcome, 'unresolved'>,
+  outcome: Exclude<TransactionSubmissionOutcome, 'unresolved'>,
 ): Promise<void> {
   try {
     await runCommerceTransaction(context, async (transaction) => {
@@ -1874,25 +1875,21 @@ async function settlePendingReceiptSubmission(
 }
 
 async function probePendingReceiptSubmission(
-  connection: Connection,
+  connection: Pick<Connection, 'getSignatureStatuses' | 'getMultipleAccountsInfo' | 'isBlockhashValid'>,
   pending: PendingReceiptSubmission,
-): Promise<ReceiptSubmissionOutcome> {
-  const status = (await connection.getSignatureStatuses(
-    [pending.signature],
-    { searchTransactionHistory: true },
-  )).value[0];
-  if (status?.err) return 'expired';
-  if (hasConfirmedSignatureCommitment(status)) {
-    return 'confirmed';
-  }
-  if (status) return 'unresolved';
-  const infos = await connection.getMultipleAccountsInfo(
-    pending.assetIds.map((assetId) => new PublicKey(assetId)),
-    { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
-  );
-  if (infos.every((info) => !info)) return 'confirmed';
-  const validity = await connection.isBlockhashValid(pending.blockhash, { commitment: 'confirmed' });
-  return validity.value ? 'unresolved' : 'expired';
+): Promise<TransactionSubmissionOutcome> {
+  return probeTransactionSubmission({
+    connection,
+    signature: pending.signature,
+    blockhash: pending.blockhash,
+    hasLanded: async () => {
+      const infos = await connection.getMultipleAccountsInfo(
+        pending.assetIds.map((assetId) => new PublicKey(assetId)),
+        { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
+      );
+      return infos.every((info) => !info);
+    },
+  });
 }
 
 async function reconcilePendingReceiptSubmission(args: {
@@ -1901,9 +1898,9 @@ async function reconcilePendingReceiptSubmission(args: {
   runtime: DeliveryRuntime;
   path: string;
   pending: PendingReceiptSubmission;
-}): Promise<ReceiptSubmissionOutcome> {
+}): Promise<TransactionSubmissionOutcome> {
   const probeContext = cleanupContext(args.commerce);
-  let outcome: ReceiptSubmissionOutcome = 'unresolved';
+  let outcome: TransactionSubmissionOutcome = 'unresolved';
   try {
     outcome = await probePendingReceiptSubmission(
       createConnection({ ...args.provider, signal: probeContext.signal }, args.runtime),
