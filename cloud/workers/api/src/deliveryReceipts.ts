@@ -45,7 +45,6 @@ import {
   normalizeIrlClaimCode,
 } from './claimCodes.js';
 import {
-  dropBoxAssignmentPath,
   dropDeliveryOrderPath,
 } from './dropPaths.js';
 import {
@@ -76,19 +75,20 @@ import {
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
 import {
-  createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
   readBoundedRequestJson,
   runCriticalRequestOperation,
   sleepWithSignal,
 } from './boundedRequest.js';
+import { withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
+  commerceKeys,
   isCommerceDeleteField,
   type CommerceDocumentData,
   type CommerceDocumentRecord,
@@ -102,18 +102,11 @@ import {
 import { assignDudesForBox } from './deliveryDudeAssignments.js';
 import { secureRandomInt } from './deliveryRandom.js';
 import {
-  commitCommerceWrites as commitWrites,
-  commerceDocument,
-  commerceRepository as repository,
   commerceTimestamp,
-  createCommerceWrite as createWrite,
-  readCommerceDocument as readDocument,
-  rollbackCommerceTransaction as rollbackTransactionBestEffort,
-  runCommerceWriteTransaction,
-  updateCommerceWrite as updateWrite,
-  type CommerceDocument,
-  type CommerceDocumentContext,
-  type CommerceWrite,
+  readCommerceRecord as readDocument,
+  requireCommerceKey,
+  runCommerceTransaction,
+  type CommerceRepositoryContext,
 } from './commerceTransactions.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { createReadyToShipNotificationOutbox } from './readyToShipNotifications.js';
@@ -182,13 +175,13 @@ class ReceiptBatchRetryExhaustedError extends DeliveryReceiptError {
   }
 }
 
-type CommerceContext = CommerceDocumentContext & {
+type CommerceContext = CommerceRepositoryContext & {
   providerFetch: ProfileProviderFetch;
   dataDb?: D1Database;
   [key: string]: unknown;
 };
 
-type DeliveryOrderDocument = CommerceDocument;
+type DeliveryOrderDocument = CommerceDocumentRecord;
 
 type VerifiedReceiptIssuanceTarget = {
   verification: 'signature' | 'delivery_pda';
@@ -337,7 +330,7 @@ async function runPendingReadyNotificationQuery(
   const documents: DeliveryOrderDocument[] = [];
   let startAfterPath: string | undefined;
   while (documents.length < MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL) {
-    const value = await repository(context).queryPendingReadyNotifications({
+    const value = await context.repository.queryPendingReadyNotifications({
       owner: ownerWallet,
       limit: PENDING_READY_NOTIFICATION_QUERY_PAGE_SIZE,
       ...(startAfterPath ? { startAfterPath } : {}),
@@ -356,10 +349,8 @@ function decodeDeliveryOrderQuery(
   requireIdentity: boolean,
 ): DeliveryOrderDocument[] {
   const documents: DeliveryOrderDocument[] = [];
-  for (const result of value) {
-    const document = commerceDocument(result);
-    if (!document) continue;
-    if (requireIdentity && !('identity' in resolveDeliveryOrderIdentity(document.id, document.fields, document.path))) {
+  for (const document of value) {
+    if (requireIdentity && !('identity' in resolveDeliveryOrderIdentity(document.key.documentId, document.data, document.key.path))) {
       continue;
     }
     documents.push(document);
@@ -372,7 +363,7 @@ async function runDeliveryRecoveryOrderQuery(
   ownerWallet: string,
   requireIdentity = false,
 ): Promise<DeliveryOrderDocument[]> {
-  const value = await repository(context).queryDeliveryRecoveryOrders(ownerWallet);
+  const value = await context.repository.queryDeliveryRecoveryOrders(ownerWallet);
   return decodeDeliveryOrderQuery(value, requireIdentity);
 }
 
@@ -405,14 +396,14 @@ function compareDeliveryRecoveryCandidates(
   left: DeliveryOrderDocument,
   right: DeliveryOrderDocument,
 ): number {
-  const leftStatus = typeof left.fields.status === 'string' ? left.fields.status : '';
-  const rightStatus = typeof right.fields.status === 'string' ? right.fields.status : '';
+  const leftStatus = typeof left.data.status === 'string' ? left.data.status : '';
+  const rightStatus = typeof right.data.status === 'string' ? right.data.status : '';
   if (leftStatus !== rightStatus) {
     if (leftStatus === 'processing') return -1;
     if (rightStatus === 'processing') return 1;
   }
-  const priority = deliveryRecoveryPriorityMs(left.fields) - deliveryRecoveryPriorityMs(right.fields);
-  return priority || (left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  const priority = deliveryRecoveryPriorityMs(left.data) - deliveryRecoveryPriorityMs(right.data);
+  return priority || (left.key.path < right.key.path ? -1 : left.key.path > right.key.path ? 1 : 0);
 }
 
 function deliveryRecoveryEligibility(
@@ -458,13 +449,13 @@ function orderResultBase(document: DeliveryOrderDocument): {
   deliveryId: number;
   statusBefore: string;
 } | null {
-  const identity = resolveDeliveryOrderIdentity(document.id, document.fields, document.path);
+  const identity = resolveDeliveryOrderIdentity(document.key.documentId, document.data, document.key.path);
   if (!('identity' in identity)) return null;
-  if (resolveDeliveryOrderDropId(document.fields, document.path) !== identity.identity.dropId) return null;
+  if (resolveDeliveryOrderDropId(document.data, document.key.path) !== identity.identity.dropId) return null;
   return {
     dropId: identity.identity.dropId,
     deliveryId: identity.identity.deliveryId,
-    statusBefore: typeof document.fields.status === 'string' ? document.fields.status : 'unknown',
+    statusBefore: typeof document.data.status === 'string' ? document.data.status : 'unknown',
   };
 }
 
@@ -487,82 +478,72 @@ async function acquireDeliveryRecoveryLease(
   force: boolean,
 ): Promise<DeliveryRecoveryLeaseResult> {
   try {
-    return await runCommerceWriteTransaction<DeliveryRecoveryLeaseResult>(context, async (transaction) => {
-      const document = await readDocument(context, path, transaction);
+    return await runCommerceTransaction<DeliveryRecoveryLeaseResult>(context, async (transaction) => {
+      const document = await readDocument(context, requireCommerceKey(path), transaction);
       const fallback = path.split('/');
       const fallbackDropId = fallback.length === 4 ? fallback[1] : '';
       const fallbackDeliveryId = Number(fallback.at(-1)) || 0;
       if (!document) {
         return {
+          acquired: false as const,
           result: {
-            acquired: false as const,
-            result: {
-              dropId: fallbackDropId,
-              deliveryId: fallbackDeliveryId,
-              statusBefore: 'missing',
-              outcome: 'not_found' as const,
-              verification: 'delivery_pda' as const,
-              message: 'delivery order not found',
-            },
+            dropId: fallbackDropId,
+            deliveryId: fallbackDeliveryId,
+            statusBefore: 'missing',
+            outcome: 'not_found' as const,
+            verification: 'delivery_pda' as const,
+            message: 'delivery order not found',
           },
         };
       }
       const base = orderResultBase(document);
       if (!base) {
         return {
+          acquired: false as const,
           result: {
-            acquired: false as const,
-            result: {
-              dropId: '',
-              deliveryId: Number(document.id) || 0,
-              statusBefore: typeof document.fields.status === 'string' ? document.fields.status : 'unknown',
-              outcome: 'failed' as const,
-              verification: 'delivery_pda' as const,
-              message: 'delivery order is missing recovery identifiers',
-            },
+            dropId: '',
+            deliveryId: Number(document.key.documentId) || 0,
+            statusBefore: typeof document.data.status === 'string' ? document.data.status : 'unknown',
+            outcome: 'failed' as const,
+            verification: 'delivery_pda' as const,
+            message: 'delivery order is missing recovery identifiers',
           },
         };
       }
-      if (document.fields.owner && document.fields.owner !== ownerWallet) {
+      if (document.data.owner && document.data.owner !== ownerWallet) {
         return {
+          acquired: false as const,
           result: {
-            acquired: false as const,
-            result: {
-              ...base,
-              outcome: 'failed' as const,
-              verification: 'delivery_pda' as const,
-              message: 'order belongs to a different wallet',
-              errorCode: 'permission-denied',
-            },
+            ...base,
+            outcome: 'failed' as const,
+            verification: 'delivery_pda' as const,
+            message: 'order belongs to a different wallet',
+            errorCode: 'permission-denied',
           },
         };
       }
-      const eligibility = deliveryRecoveryEligibility(document.fields, nowMs, force);
+      const eligibility = deliveryRecoveryEligibility(document.data, nowMs, force);
       if (!eligibility.eligible) {
         return {
+          acquired: false as const,
           result: {
-            acquired: false as const,
-            result: {
-              ...base,
-              outcome: eligibility.outcome || 'not_eligible',
-              verification: 'delivery_pda' as const,
-              ...(eligibility.message ? { message: eligibility.message } : {}),
-            },
+            ...base,
+            outcome: eligibility.outcome || 'not_eligible',
+            verification: 'delivery_pda' as const,
+            ...(eligibility.message ? { message: eligibility.message } : {}),
           },
         };
       }
-      const recovery = isRecord(document.fields.receiptRecovery) ? document.fields.receiptRecovery : {};
+      const recovery = isRecord(document.data.receiptRecovery) ? document.data.receiptRecovery : {};
       const leaseExpiresAt = toMillisMaybe(recovery.leaseExpiresAt) ?? 0;
       if (leaseExpiresAt > nowMs) {
         return {
+          acquired: false as const,
           result: {
-            acquired: false as const,
-            result: {
-              ...base,
-              outcome: 'lease_active' as const,
-              verification: 'delivery_pda' as const,
-              message: 'another client is already retrying this order',
-            },
+            ...base,
+            outcome: 'lease_active' as const,
+            verification: 'delivery_pda' as const,
+            message: 'another client is already retrying this order',
           },
         };
       }
@@ -571,26 +552,20 @@ async function acquireDeliveryRecoveryLease(
         ? Math.floor(rawAttemptCount) + 1
         : 1;
       const leaseExpiresAtMs = nowMs + DELIVERY_RECOVERY_LEASE_MS;
+      await transaction.update(document.key, {
+        'receiptRecovery.leaseExpiresAt': commerceTimestamp(leaseExpiresAtMs),
+        'receiptRecovery.lastAttemptAt': commerceTimestamp(nowMs),
+        'receiptRecovery.attemptCount': attemptCount,
+      });
       return {
-        result: {
-          acquired: true as const,
-          lease: {
-            attemptCount,
-            lastAttemptAtMs: nowMs,
-            leaseExpiresAtMs,
-            previousAttemptCount: recovery.attemptCount,
-            previousLastAttemptAt: recovery.lastAttemptAt,
-          },
+        acquired: true as const,
+        lease: {
+          attemptCount,
+          lastAttemptAtMs: nowMs,
+          leaseExpiresAtMs,
+          previousAttemptCount: recovery.attemptCount,
+          previousLastAttemptAt: recovery.lastAttemptAt,
         },
-        writes: [updateWrite({
-          path,
-          values: {
-            'receiptRecovery.leaseExpiresAt': commerceTimestamp(leaseExpiresAtMs),
-            'receiptRecovery.lastAttemptAt': commerceTimestamp(nowMs),
-            'receiptRecovery.attemptCount': attemptCount,
-          },
-          mustExist: true,
-        })],
       };
     });
   } catch (error) {
@@ -610,32 +585,25 @@ async function cancelDeliveryRecoveryAttempt(
     previousLastAttemptAt: CommerceJsonValue | undefined;
   },
 ): Promise<void> {
-  return runCommerceWriteTransaction(context, async (transaction) => {
-    const document = await readDocument(context, path, transaction);
-    if (!document) return { result: undefined };
-    const recovery = isRecord(document.fields.receiptRecovery) ? document.fields.receiptRecovery : {};
+  return runCommerceTransaction(context, async (transaction) => {
+    const document = await readDocument(context, requireCommerceKey(path), transaction);
+    if (!document) return;
+    const recovery = isRecord(document.data.receiptRecovery) ? document.data.receiptRecovery : {};
     const leaseExpiresAt = toMillisMaybe(recovery.leaseExpiresAt);
     if (
       leaseExpiresAt === null || leaseExpiresAt < lease.leaseExpiresAtMs ||
       toMillisMaybe(recovery.lastAttemptAt) !== lease.lastAttemptAtMs ||
       Number(recovery.attemptCount) !== lease.attemptCount
-    ) return { result: undefined };
-    return {
-      result: undefined,
-      writes: [updateWrite({
-        path,
-        values: {
-          'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
-          'receiptRecovery.lastAttemptAt': lease.previousLastAttemptAt === undefined
-            ? commerceFieldValue.delete()
-            : lease.previousLastAttemptAt,
-          'receiptRecovery.attemptCount': lease.previousAttemptCount === undefined
-            ? commerceFieldValue.delete()
-            : lease.previousAttemptCount,
-        },
-        mustExist: true,
-      })],
-    };
+    ) return;
+    await transaction.update(document.key, {
+      'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
+      'receiptRecovery.lastAttemptAt': lease.previousLastAttemptAt === undefined
+        ? commerceFieldValue.delete()
+        : lease.previousLastAttemptAt,
+      'receiptRecovery.attemptCount': lease.previousAttemptCount === undefined
+        ? commerceFieldValue.delete()
+        : lease.previousAttemptCount,
+    });
   });
 }
 
@@ -644,15 +612,15 @@ async function finalizeDeliveryRecoveryAttempt(
   path: string,
   result: { errorCode?: string; message?: string },
 ): Promise<void> {
-  await commitWrites(context, [updateWrite({
-    path,
-    values: {
+  await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
+    const key = requireCommerceKey(path);
+    await transaction.getMany([key]);
+    await transaction.update(key, {
       'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
       'receiptRecovery.lastErrorCode': result.errorCode || commerceFieldValue.delete(),
       'receiptRecovery.lastErrorMessage': result.message || commerceFieldValue.delete(),
-    },
-    mustExist: true,
-  })]);
+    });
+  }, { shouldRetry: () => false });
 }
 
 async function recordPreparedDeliveryRecoveryMiss(
@@ -660,7 +628,7 @@ async function recordPreparedDeliveryRecoveryMiss(
   document: DeliveryOrderDocument,
   nowMs: number,
 ): Promise<number | null> {
-  const probeCount = preparedDeliveryRecoveryCheckCount(document.fields);
+  const probeCount = preparedDeliveryRecoveryCheckCount(document.data);
   const nextProbeCount = probeCount + 1;
   const nextDelayMs = nextPreparedDeliveryRecoveryDelayMs(nextProbeCount);
   const values: CommerceDocumentWriteData = {
@@ -676,11 +644,11 @@ async function recordPreparedDeliveryRecoveryMiss(
           'receiptRecovery.nextPreparedProbeAt': commerceTimestamp(nowMs + nextDelayMs),
         }),
   };
-  await commitWrites(context, [updateWrite({
-    path: document.path,
-    values,
-    expectedUpdateTime: document.updateTime,
-  })]);
+  await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
+    const [current] = await transaction.getMany([document.key]);
+    if (current?.updateTime !== document.updateTime) throw new CommerceWriteConflict();
+    await transaction.update(document.key, values);
+  }, { shouldRetry: () => false });
   return nextDelayMs === null ? null : nowMs + nextDelayMs;
 }
 
@@ -690,20 +658,20 @@ async function stopPreparedDeliveryRecoveryChecks(
   nowMs: number,
 ): Promise<void> {
   const probeCount = Math.max(
-    preparedDeliveryRecoveryCheckCount(document.fields),
+    preparedDeliveryRecoveryCheckCount(document.data),
     MAX_PREPARED_DELIVERY_RECOVERY_CHECKS,
   );
-  await commitWrites(context, [updateWrite({
-    path: document.path,
-    values: {
+  await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
+    const [current] = await transaction.getMany([document.key]);
+    if (current?.updateTime !== document.updateTime) throw new CommerceWriteConflict();
+    await transaction.update(document.key, {
       status: 'prepared_abandoned',
       preparedRecoveryAbandonedAt: commerceTimestamp(nowMs),
       'receiptRecovery.preparedProbeCount': probeCount,
       'receiptRecovery.lastPreparedProbeAt': commerceTimestamp(nowMs),
       'receiptRecovery.nextPreparedProbeAt': commerceFieldValue.delete(),
-    },
-    expectedUpdateTime: document.updateTime,
-  })]);
+    });
+  }, { shouldRetry: () => false });
 }
 
 async function deferPreparedDeliveryRecovery(
@@ -711,18 +679,18 @@ async function deferPreparedDeliveryRecovery(
   document: DeliveryOrderDocument,
   nowMs: number,
 ): Promise<void> {
-  const recovery = isRecord(document.fields.receiptRecovery) ? document.fields.receiptRecovery : {};
+  const recovery = isRecord(document.data.receiptRecovery) ? document.data.receiptRecovery : {};
   const nextCheckAt = Math.max(
     nowMs + DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS,
     toMillisMaybe(recovery.leaseExpiresAt) ?? 0,
   );
-  await commitWrites(context, [updateWrite({
-    path: document.path,
-    values: {
+  await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
+    const [current] = await transaction.getMany([document.key]);
+    if (current?.updateTime !== document.updateTime) throw new CommerceWriteConflict();
+    await transaction.update(document.key, {
       'receiptRecovery.nextPreparedProbeAt': commerceTimestamp(nextCheckAt),
-    },
-    expectedUpdateTime: document.updateTime,
-  })]);
+    });
+  }, { shouldRetry: () => false });
 }
 
 async function fetchDeliveryRecoveryState(
@@ -731,13 +699,13 @@ async function fetchDeliveryRecoveryState(
   nowMs: number,
 ): Promise<WalletDeliveryRecoveryState> {
   const documents = await runDeliveryRecoveryOrderQuery(context, ownerWallet);
-  const processing = documents.filter((document) => document.fields.status === 'processing');
-  const prepared = documents.filter((document) => document.fields.status === 'prepared');
+  const processing = documents.filter((document) => document.data.status === 'processing');
+  const prepared = documents.filter((document) => document.data.status === 'prepared');
   return buildWalletDeliveryRecoveryState({
     remainingProcessing: processing.length,
     nextCheckCandidates: [
-      ...processing.map((document) => processingDeliveryRecoveryNextCheckMs(document.fields, nowMs)),
-      ...prepared.map((document) => preparedDeliveryRecoveryNextCheckMs(document.fields)),
+      ...processing.map((document) => processingDeliveryRecoveryNextCheckMs(document.data, nowMs)),
+      ...prepared.map((document) => preparedDeliveryRecoveryNextCheckMs(document.data)),
     ],
   });
 }
@@ -865,34 +833,32 @@ async function ensureIrlClaimCodeForBox(
   },
   randomInt: (maxExclusive: number) => number,
 ): Promise<string> {
-  const assignmentPath = dropBoxAssignmentPath(runtime.dropId, args.boxAssetId);
+  const assignmentKey = commerceKeys.boxAssignment(runtime.dropId, args.boxAssetId);
   try {
-    return await runCommerceWriteTransaction(context, async (transaction) => {
-      const assignment = await readDocument(context, assignmentPath, transaction);
+    return await runCommerceTransaction(context, async (transaction) => {
+      const assignment = await readDocument(context, assignmentKey, transaction);
       if (!assignment) {
         throw new DeliveryReceiptError('failed-precondition', 'Figure assignment is missing.', {
           boxAssetId: args.boxAssetId,
         });
       }
-      const normalizedExisting = typeof assignment.fields.irlClaimCode === 'string'
-        ? normalizeIrlClaimCode(assignment.fields.irlClaimCode)
+      const normalizedExisting = typeof assignment.data.irlClaimCode === 'string'
+        ? normalizeIrlClaimCode(assignment.data.irlClaimCode)
         : '';
       const existingCode = normalizedExisting.length === IRL_CLAIM_CODE_DIGITS ? normalizedExisting : '';
       if (existingCode) {
         const expected: ClaimCodeExpected = { code: existingCode, dropId: runtime.dropId, ...args };
-        const claimPath = `claimCodes/${existingCode}`;
-        const claim = await readDocument(context, claimPath, transaction);
-        const writes: CommerceWrite[] = [];
+        const claimKey = commerceKeys.claimCode(existingCode);
+        const claim = await readDocument(context, claimKey, transaction);
+        let claimChanged = false;
         if (!claim) {
-          writes.push(createWrite({
-            path: claimPath,
-            values: {
-              ...claimCodeFields(expected, args.ownerWallet),
-              createdAt: commerceFieldValue.serverTimestamp(),
-            },
-          }));
-        } else if (!claimCodeCompatible(claim.fields, expected)) {
-          const reason = claimCodeConflictReason(claim.fields, expected);
+          await transaction.create(claimKey, {
+            ...claimCodeFields(expected, args.ownerWallet),
+            createdAt: commerceFieldValue.serverTimestamp(),
+          });
+          claimChanged = true;
+        } else if (!claimCodeCompatible(claim.data, expected)) {
+          const reason = claimCodeConflictReason(claim.data, expected);
           if (reason) {
             throw new DeliveryReceiptError(
               'failed-precondition',
@@ -900,33 +866,26 @@ async function ensureIrlClaimCodeForBox(
               { boxAssetId: args.boxAssetId, boxId: args.boxId, existingCode, conflictReason: reason },
             );
           }
-          writes.push(updateWrite({
-            path: claimPath,
-            values: {
-              ...claimCodeFields(expected, args.ownerWallet),
-              updatedAt: commerceFieldValue.serverTimestamp(),
-            },
-            mustExist: true,
-          }));
+          await transaction.update(claimKey, {
+            ...claimCodeFields(expected, args.ownerWallet),
+            updatedAt: commerceFieldValue.serverTimestamp(),
+          });
+          claimChanged = true;
         }
-        const assignmentClaim = isRecord(assignment.fields.irlClaim) ? assignment.fields.irlClaim : {};
-        if (writes.length || !assignmentClaimCompatible(assignmentClaim, expected, args.ownerWallet)) {
+        const assignmentClaim = isRecord(assignment.data.irlClaim) ? assignment.data.irlClaim : {};
+        if (claimChanged || !assignmentClaimCompatible(assignmentClaim, expected, args.ownerWallet)) {
           const assignmentFields = assignmentClaimFields(expected, args.ownerWallet);
-          writes.push(updateWrite({
-            path: assignmentPath,
-            values: {
-              ...assignmentFields,
-              'irlClaim.createdAt': commerceFieldValue.serverTimestamp(),
-            },
-            mustExist: true,
-          }));
+          await transaction.update(assignmentKey, {
+            ...assignmentFields,
+            'irlClaim.createdAt': commerceFieldValue.serverTimestamp(),
+          });
         }
-        return { result: existingCode, writes };
+        return existingCode;
       }
       let expected: ClaimCodeExpected | undefined;
       for (let claimAttempt = 0; claimAttempt < 40; claimAttempt += 1) {
         const code = String(randomInt(10 ** IRL_CLAIM_CODE_DIGITS)).padStart(IRL_CLAIM_CODE_DIGITS, '0');
-        if (await readDocument(context, `claimCodes/${code}`, transaction)) continue;
+        if (await readDocument(context, commerceKeys.claimCode(code), transaction)) continue;
         expected = { code, dropId: runtime.dropId, ...args };
         break;
       }
@@ -934,26 +893,15 @@ async function ensureIrlClaimCodeForBox(
         throw new DeliveryReceiptError('unavailable', 'Failed to allocate unique IRL claim code (try again)');
       }
       const assignmentFields = assignmentClaimFields(expected, args.ownerWallet);
-      return {
-        result: expected.code,
-        writes: [
-          createWrite({
-            path: `claimCodes/${expected.code}`,
-            values: {
-              ...claimCodeFields(expected, args.ownerWallet),
-              createdAt: commerceFieldValue.serverTimestamp(),
-            },
-          }),
-          updateWrite({
-            path: assignmentPath,
-            values: {
-              ...assignmentFields,
-              'irlClaim.createdAt': commerceFieldValue.serverTimestamp(),
-            },
-            mustExist: true,
-          }),
-        ],
-      };
+      await transaction.create(commerceKeys.claimCode(expected.code), {
+        ...claimCodeFields(expected, args.ownerWallet),
+        createdAt: commerceFieldValue.serverTimestamp(),
+      });
+      await transaction.update(assignmentKey, {
+        ...assignmentFields,
+        'irlClaim.createdAt': commerceFieldValue.serverTimestamp(),
+      });
+      return expected.code;
     });
   } catch (error) {
     if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
@@ -1220,9 +1168,9 @@ async function markDeliveryProcessing(
   runtime: DeliveryRuntime,
   signature: string | null,
 ): Promise<void> {
-  await commitWrites(context, [updateWrite({
-    path: document.path,
-    values: {
+  await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
+    await transaction.getMany([document.key]);
+    await transaction.update(document.key, {
       dropId: runtime.dropId,
       status: 'processing',
       ...(signature ? { deliverySignature: signature } : {}),
@@ -1230,12 +1178,11 @@ async function markDeliveryProcessing(
       'receiptRecovery.preparedProbeCount': commerceFieldValue.delete(),
       'receiptRecovery.nextPreparedProbeAt': commerceFieldValue.delete(),
       'receiptRecovery.status': commerceFieldValue.delete(),
-      ...(document.fields.processingAt === undefined
+      ...(document.data.processingAt === undefined
         ? { processingAt: commerceFieldValue.serverTimestamp() }
         : {}),
-    },
-    mustExist: true,
-  })]);
+    });
+  }, { shouldRetry: () => false });
 }
 
 async function markDeliveryReady(
@@ -1257,11 +1204,11 @@ async function markDeliveryReady(
     receiptTxs: result.receiptTxs,
     ...(result.irlClaims.length ? { irlClaims: result.irlClaims } : {}),
   };
-  const readyOrder = { ...document.fields, ...fields };
+  const readyOrder = { ...document.data, ...fields };
   const notificationOutbox = createReadyToShipNotificationOutbox({
-    before: document.fields,
+    before: document.data,
     after: readyOrder,
-    deliveryId: Number(document.id),
+    deliveryId: Number(document.key.documentId),
     dropId: runtime.dropId,
     nowMs: context.nowMs,
   });
@@ -1272,9 +1219,9 @@ async function markDeliveryReady(
   Object.assign(readyOrder, Object.fromEntries(
     Object.entries(packStatusOutbox).filter(([, value]) => !isCommerceDeleteField(value)),
   ));
-  await commitWrites(context, [updateWrite({
-    path: document.path,
-    values: {
+  await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
+    await transaction.getMany([document.key]);
+    await transaction.update(document.key, {
       ...fields,
       ...notificationOutbox.values,
       ...packStatusOutbox,
@@ -1289,10 +1236,9 @@ async function markDeliveryReady(
       ...(result.irlClaims.length
         ? { irlClaimsUpdatedAt: commerceFieldValue.serverTimestamp() }
         : {}),
-    },
-    mustExist: true,
-  })]);
-  return { ...document, fields: readyOrder };
+    });
+  }, { shouldRetry: () => false });
+  return { ...document, data: readyOrder };
 }
 
 async function recordDeliveryClose(
@@ -1301,11 +1247,11 @@ async function recordDeliveryClose(
   dropId: string,
   closeDeliveryTx: string,
 ): Promise<void> {
-  await commitWrites(context, [updateWrite({
-    path: documentPath,
-    values: { dropId, closeDeliveryTx, deliveryClosedAt: commerceFieldValue.serverTimestamp() },
-    mustExist: true,
-  })]);
+  await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
+    const key = requireCommerceKey(documentPath);
+    await transaction.getMany([key]);
+    await transaction.update(key, { dropId, closeDeliveryTx, deliveryClosedAt: commerceFieldValue.serverTimestamp() });
+  }, { shouldRetry: () => false });
 }
 
 function pendingReceiptItems(
@@ -1559,9 +1505,9 @@ async function retryIssueReceipts(args: {
   const deliveryId = Math.floor(args.request.deliveryId);
   const runtime = runtimeForDrop(args.request.dropId);
   const path = dropDeliveryOrderPath(runtime.dropId, deliveryId);
-  let document = await readDocument(args.commerce, path);
+  let document = await readDocument(args.commerce, requireCommerceKey(path));
   if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
-  if (document.fields.owner && document.fields.owner !== owner.toBase58()) {
+  if (document.data.owner && document.data.owner !== owner.toBase58()) {
     throw new DeliveryReceiptError('permission-denied', 'Order belongs to a different wallet.');
   }
   const connection = createConnection(args.provider, runtime);
@@ -1570,15 +1516,15 @@ async function retryIssueReceipts(args: {
   if (!signer.publicKey.equals(onchain.admin)) {
     throw new DeliveryReceiptError('failed-precondition', 'COSIGNER_SECRET does not match on-chain admin.');
   }
-  if (document.fields.status === 'ready_to_ship') {
+  if (document.data.status === 'ready_to_ship') {
     scheduleDeliveryPackStatusProjection({
       context: args.commerce,
       deliveryId,
       dropId: runtime.dropId,
       waitUntil: args.waitUntil,
     });
-    let closeDeliveryTx = typeof document.fields.closeDeliveryTx === 'string'
-      ? document.fields.closeDeliveryTx
+    let closeDeliveryTx = typeof document.data.closeDeliveryTx === 'string'
+      ? document.data.closeDeliveryTx
       : null;
     if (!closeDeliveryTx) {
       const [deliveryPda, deliveryBump] = deriveDeliveryPda(runtime, deliveryId);
@@ -1593,7 +1539,7 @@ async function retryIssueReceipts(args: {
           signal: args.provider.signal,
         });
         if (closeDeliveryTx) {
-          await recordDeliveryClose(args.commerce, document.path, runtime.dropId, closeDeliveryTx);
+          await recordDeliveryClose(args.commerce, document.key.path, runtime.dropId, closeDeliveryTx);
         }
       } catch (error) {
         console.warn({
@@ -1614,9 +1560,9 @@ async function retryIssueReceipts(args: {
     return {
       processed: true,
       deliveryId,
-      receiptsMinted: Number(document.fields.receiptsMinted || 0),
-      receiptTxs: Array.isArray(document.fields.receiptTxs)
-        ? document.fields.receiptTxs.filter((value): value is string => typeof value === 'string')
+      receiptsMinted: Number(document.data.receiptsMinted || 0),
+      receiptTxs: Array.isArray(document.data.receiptTxs)
+        ? document.data.receiptTxs.filter((value): value is string => typeof value === 'string')
         : [],
       closeDeliveryTx,
     };
@@ -1625,7 +1571,7 @@ async function retryIssueReceipts(args: {
     ? await verifyReceiptIssuanceBySignature({
         connection,
         deliveryId,
-        order: document.fields,
+        order: document.data,
         ownerWallet: owner.toBase58(),
         runtime,
         signature: args.request.signature,
@@ -1633,43 +1579,43 @@ async function retryIssueReceipts(args: {
     : await verifyReceiptIssuanceByDeliveryRecord({
         connection,
         deliveryId,
-        order: document.fields,
+        order: document.data,
         ownerWallet: owner.toBase58(),
         runtime,
       });
   await markDeliveryProcessing(args.commerce, document, runtime, verified.signature);
-  const storedPendingSubmission = pendingReceiptSubmission(document.fields);
+  const storedPendingSubmission = pendingReceiptSubmission(document.data);
   if (storedPendingSubmission) {
     const outcome = await reconcilePendingReceiptSubmission({
       commerce: args.commerce,
       provider: args.provider,
       runtime,
-      path: document.path,
+      path: document.key.path,
       pending: storedPendingSubmission,
     });
     if (outcome === 'unresolved') {
       throw new DeliveryReceiptError('aborted', 'A receipt transaction is still being reconciled.');
     }
-    const reconciled = await readDocument(args.commerce, path);
+    const reconciled = await readDocument(args.commerce, requireCommerceKey(path));
     if (!reconciled) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
     document = reconciled;
   }
   const lifecycle: ReceiptSubmissionLifecycle = {
     prepare: (pendingSubmission) => persistPendingReceiptSubmission(
       args.commerce,
-      document.path,
+      document.key.path,
       pendingSubmission,
     ),
     reconcile: (pendingSubmission) => reconcilePendingReceiptSubmission({
       commerce: args.commerce,
       provider: args.provider,
       runtime,
-      path: document.path,
+      path: document.key.path,
       pending: pendingSubmission,
     }),
     settle: (pendingSubmission, outcome) => settlePendingReceiptSubmission(
       cleanupContext(args.commerce),
-      document.path,
+      document.key.path,
       pendingSubmission,
       outcome,
     ),
@@ -1679,9 +1625,9 @@ async function retryIssueReceipts(args: {
     commitment: 'confirmed',
     dataSlice: { offset: 0, length: 0 },
   });
-  const pending = pendingReceiptItems(document.fields, verified.targetAssetIds, infos, runtime);
+  const pending = pendingReceiptItems(document.data, verified.targetAssetIds, infos, runtime);
   const alreadyProcessed = verified.targetAssetIds.length - pending.length;
-  const receiptTxs = confirmedReceiptTransactions(document.fields);
+  const receiptTxs = confirmedReceiptTransactions(document.data);
   let totalProcessed = 0;
   while (pending.length) {
     if (args.provider.signal.aborted) throw args.provider.signal.reason;
@@ -1723,8 +1669,8 @@ async function retryIssueReceipts(args: {
   const receiptsMinted = alreadyProcessed + totalProcessed;
   const irlClaims: Array<{ code: string; boxId: number; boxAssetId: string; dudeIds: number[] }> = [];
   if (runtime.itemsPerBox > 0) {
-    const items = Array.isArray(document.fields.items)
-      ? document.fields.items.filter((item): item is CommerceDocumentData => isRecord(item))
+    const items = Array.isArray(document.data.items)
+      ? document.data.items.filter((item): item is CommerceDocumentData => isRecord(item))
       : [];
     for (const item of items) {
       if (item.kind !== 'box' || typeof item.assetId !== 'string') continue;
@@ -1778,7 +1724,7 @@ async function retryIssueReceipts(args: {
     });
   }
   if (closeDeliveryTx) {
-    await recordDeliveryClose(args.commerce, document.path, runtime.dropId, closeDeliveryTx);
+    await recordDeliveryClose(args.commerce, document.key.path, runtime.dropId, closeDeliveryTx);
   }
   await publishReadyToShipNotifications({
     context: args.commerce,
@@ -1834,8 +1780,8 @@ function pendingReceiptSubmission(order: Record<string, unknown>): PendingReceip
 
 async function hasPendingReceiptSubmission(context: CommerceContext, path: string): Promise<boolean> {
   try {
-    const document = await readDocument(context, path);
-    return Boolean(document && pendingReceiptSubmission(document.fields));
+    const document = await readDocument(context, requireCommerceKey(path));
+    return Boolean(document && pendingReceiptSubmission(document.data));
   } catch {
     return true;
   }
@@ -1863,33 +1809,26 @@ async function persistPendingReceiptSubmission(
   pending: PendingReceiptSubmission,
 ): Promise<void> {
   try {
-    await runCommerceWriteTransaction(context, async (transaction) => {
-      const document = await readDocument(context, path, transaction);
+    await runCommerceTransaction(context, async (transaction) => {
+      const document = await readDocument(context, requireCommerceKey(path), transaction);
       if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
-      const existing = pendingReceiptSubmission(document.fields);
+      const existing = pendingReceiptSubmission(document.data);
       if (existing && !samePendingReceiptSubmission(existing, pending)) {
         throw new DeliveryReceiptError('aborted', 'A receipt transaction is still being reconciled.');
       }
-      return {
-        result: undefined,
-        writes: [updateWrite({
-          path,
-          values: {
-            [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: pending,
-            'receiptRecovery.leaseExpiresAt': commerceTimestamp(
-              context.nowMs + DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS,
-            ),
-          },
-          mustExist: true,
-        })],
-      };
+      await transaction.update(document.key, {
+        [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: pending,
+        'receiptRecovery.leaseExpiresAt': commerceTimestamp(
+          context.nowMs + DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS,
+        ),
+      });
     });
   } catch (error) {
     if (!(error instanceof CommerceWriteConflict)) {
       try {
         const cleanup = cleanupContext(context);
-        const document = await readDocument(cleanup, path);
-        const stored = document && pendingReceiptSubmission(document.fields);
+        const document = await readDocument(cleanup, requireCommerceKey(path));
+        const stored = document && pendingReceiptSubmission(document.data);
         if (stored && samePendingReceiptSubmission(stored, pending)) return;
       } catch {}
     }
@@ -1904,37 +1843,30 @@ async function settlePendingReceiptSubmission(
   outcome: Exclude<ReceiptSubmissionOutcome, 'unresolved'>,
 ): Promise<void> {
   try {
-    await runCommerceWriteTransaction(context, async (transaction) => {
-      const document = await readDocument(context, path, transaction);
+    await runCommerceTransaction(context, async (transaction) => {
+      const document = await readDocument(context, requireCommerceKey(path), transaction);
       if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
-      const existing = pendingReceiptSubmission(document.fields);
+      const existing = pendingReceiptSubmission(document.data);
       if (!existing) {
-        if (pendingReceiptSubmissionAlreadySettled(document.fields, pending, outcome)) return { result: undefined };
+        if (pendingReceiptSubmissionAlreadySettled(document.data, pending, outcome)) return;
         throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
       }
       if (!samePendingReceiptSubmission(existing, pending)) {
         throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
       }
-      return {
-        result: undefined,
-        writes: [updateWrite({
-          path,
-          values: {
-            ...(outcome === 'confirmed' ? { receiptTxs: commerceFieldValue.arrayUnion(pending.signature) } : {}),
-            [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: commerceFieldValue.delete(),
-          },
-          mustExist: true,
-        })],
-      };
+      await transaction.update(document.key, {
+        ...(outcome === 'confirmed' ? { receiptTxs: commerceFieldValue.arrayUnion(pending.signature) } : {}),
+        [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: commerceFieldValue.delete(),
+      });
     });
   } catch (error) {
     try {
       const cleanup = cleanupContext(context);
-      const document = await readDocument(cleanup, path);
-      const stored = document && pendingReceiptSubmission(document.fields);
+      const document = await readDocument(cleanup, requireCommerceKey(path));
+      const stored = document && pendingReceiptSubmission(document.data);
       if (
         document && !stored &&
-        pendingReceiptSubmissionAlreadySettled(document.fields, pending, outcome)
+        pendingReceiptSubmissionAlreadySettled(document.data, pending, outcome)
       ) return;
     } catch {}
     throw error;
@@ -2009,8 +1941,8 @@ async function handlePreparedRecoveryFailure(
   errorCode: string | undefined,
   nowMs = Date.now(),
 ): Promise<void> {
-  const current = await readDocument(context, documentPath);
-  if (current?.fields.status !== 'prepared') return;
+  const current = await readDocument(context, requireCommerceKey(documentPath));
+  if (current?.data.status !== 'prepared') return;
   if (outcome === 'missing_delivery') {
     await recordPreparedDeliveryRecoveryMiss(context, current, nowMs);
   } else if (isRetryableRecoveryErrorCode(errorCode)) {
@@ -2057,10 +1989,10 @@ async function issueReceiptsRequest(
   }
   const runtime = runtimeForDrop(body.dropId);
   const path = dropDeliveryOrderPath(runtime.dropId, body.deliveryId);
-  const order = await readDocument(commerce, path);
+  const order = await readDocument(commerce, requireCommerceKey(path));
   if (!order) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
   let acquiredLease: Extract<Awaited<ReturnType<typeof acquireDeliveryRecoveryLease>>, { acquired: true }>['lease'] | undefined;
-  if (order.fields.status !== 'ready_to_ship') {
+  if (order.data.status !== 'ready_to_ship') {
     const lease = await acquireDeliveryRecoveryLease(commerce, path, ownerWallet, Date.now(), true);
     if (!lease.acquired) {
       if (lease.result.outcome === 'lease_active') {
@@ -2164,7 +2096,7 @@ async function recoverReceiptsRequest(
   let recovered = 0;
   let candidates: DeliveryOrderDocument[] = [];
   if (filterDropId && body.deliveryId !== undefined) {
-    const document = await readDocument(commerce, dropDeliveryOrderPath(filterDropId, body.deliveryId));
+    const document = await readDocument(commerce, requireCommerceKey(dropDeliveryOrderPath(filterDropId, body.deliveryId)));
     if (document) candidates = [document];
     else {
       results.push({
@@ -2182,15 +2114,15 @@ async function recoverReceiptsRequest(
       runPendingReadyNotificationQuery(commerce, wallet),
     ]);
     candidates = Array.from(
-      new Map([...recovery, ...pendingReady].map((document) => [document.path, document])).values(),
-    ).filter((document) => !filterDropId || resolveDeliveryOrderDropId(document.fields, document.path) === filterDropId);
+      new Map([...recovery, ...pendingReady].map((document) => [document.key.path, document])).values(),
+    ).filter((document) => !filterDropId || resolveDeliveryOrderDropId(document.data, document.key.path) === filterDropId);
   }
   candidates.sort(compareDeliveryRecoveryCandidates);
   for (const document of candidates) {
     if (commerce.signal.aborted) throw commerce.signal.reason;
     const base = orderResultBase(document);
     if (!base) continue;
-    if (document.fields.owner && document.fields.owner !== wallet) {
+    if (document.data.owner && document.data.owner !== wallet) {
       results.push({
         ...base,
         outcome: 'failed',
@@ -2231,7 +2163,7 @@ async function recoverReceiptsRequest(
           provider,
           runtime,
           base.deliveryId,
-          document.fields,
+          document.data,
         );
       } catch (error) {
         if (isDeliveryRecoveryCancellation(error, commerce.signal)) throw commerce.signal.reason;
@@ -2278,7 +2210,7 @@ async function recoverReceiptsRequest(
       });
       continue;
     }
-    const lease = await acquireDeliveryRecoveryLease(commerce, document.path, wallet, nowMs, force);
+    const lease = await acquireDeliveryRecoveryLease(commerce, document.key.path, wallet, nowMs, force);
     if (!lease.acquired) {
       results.push(lease.result);
       continue;
@@ -2306,16 +2238,16 @@ async function recoverReceiptsRequest(
         verification: 'delivery_pda',
         message: result.processed ? 'receipts issued' : 'order already processed',
       });
-      await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), document.path, {}).catch(() => undefined);
+      await finalizeDeliveryRecoveryAttempt(cleanupContext(commerce), document.key.path, {}).catch(() => undefined);
     } catch (error) {
       rethrowDeferredWorkRegistrationError(error);
       if (isDeliveryRecoveryCancellation(error, commerce.signal)) {
         const reason = commerce.signal.reason;
         const cleanup = cleanupContext(commerce);
-        if (!await hasPendingReceiptSubmission(cleanup, document.path)) {
+        if (!await hasPendingReceiptSubmission(cleanup, document.key.path)) {
           await cancelDeliveryRecoveryAttempt(
             cleanup,
-            document.path,
+            document.key.path,
             lease.lease,
           ).catch(() => undefined);
         }
@@ -2326,13 +2258,13 @@ async function recoverReceiptsRequest(
       if (base.statusBefore === 'prepared') {
         await handlePreparedRecoveryFailure(
           cleanup,
-          document.path,
+          document.key.path,
           outcome,
           errorCode,
         ).catch(() => undefined);
       }
-      if (!await hasPendingReceiptSubmission(cleanup, document.path)) {
-        await finalizeDeliveryRecoveryAttempt(cleanup, document.path, {
+      if (!await hasPendingReceiptSubmission(cleanup, document.key.path)) {
+        await finalizeDeliveryRecoveryAttempt(cleanup, document.key.path, {
           errorCode,
           message,
         }).catch(() => undefined);
@@ -2375,66 +2307,76 @@ export async function handleDeliveryReceiptRequest(
   overrides: Partial<DeliveryReceiptDependencies> = {},
 ): Promise<DeliveryReceiptRequestResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  const metrics: DeliveryRequestMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = errorResponse(new DeliveryReceiptError('invalid-argument', 'Method not allowed.'));
     response.headers.set('Allow', 'POST, OPTIONS');
     return {
       response: new Response(response.body, { headers: response.headers, status: 405 }),
-      metrics,
+      metrics: { upstreamCalls: 0, providerDurationMs: 0 },
       authOutcome: 'rejected',
     };
   }
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.timeoutMs,
+  return withAuthenticatedRequest(request, {
+    opsDb: env.OPS_DB,
     timeoutMessage: 'Delivery receipt request timed out',
-  });
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
+    dependencies,
+  }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
+    let identity: RequestIdentity | undefined;
+    let dropId: string | undefined;
+    let deliveryId: number | undefined;
     try {
-      return await dependencies.providerFetch(input, init);
-    } finally {
-      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  };
-  let identity: RequestIdentity | undefined;
-  let dropId: string | undefined;
-  let deliveryId: number | undefined;
-  try {
-    const verifiedIdentity = await dependencies.verifyIdentity(
-      request,
-      env.OPS_DB,
-      deadline.signal,
-      dependencies.nowMs(),
-    );
-    identity = verifiedIdentity;
-    const rawBody = await readRequestBody(
-      request,
-      deadline.signal,
-      path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'issue' : 'recover',
-    );
-    const apiKey = String(env.HELIUS_API_KEY || '').trim();
-    const cosignerSecret = String(env.COSIGNER_SECRET || '').trim();
-    if (!apiKey || !cosignerSecret) {
-      throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
-    }
-    const common: CommerceContext = {
-      commerceDb: env.COMMERCE_DB,
-      repository: new D1CommerceRepository(env.COMMERCE_DB),
-      nowMs: dependencies.nowMs(),
-      providerFetch: trackedFetch,
-      signal: deadline.signal,
-      dataDb: env.DATA_DB,
-    };
-    const provider: ProviderContext = { apiKey, fetch: trackedFetch, signal: deadline.signal };
-    if (path === DELIVERY_RECEIPTS_ISSUE_PATH) {
-      const body = rawBody as IssueRequest;
-      dropId = normalizeDropId(body.dropId);
+      const verifiedIdentity = await authenticate();
+      identity = verifiedIdentity;
+      const rawBody = await readRequestBody(
+        request,
+        deadline.signal,
+        path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'issue' : 'recover',
+      );
+      const apiKey = String(env.HELIUS_API_KEY || '').trim();
+      const cosignerSecret = String(env.COSIGNER_SECRET || '').trim();
+      if (!apiKey || !cosignerSecret) {
+        throw new DeliveryReceiptError('unavailable', 'Receipt issuance is temporarily unavailable.');
+      }
+      const common: CommerceContext = {
+        repository: new D1CommerceRepository(env.COMMERCE_DB),
+        nowMs: dependencies.nowMs(),
+        providerFetch: trackedFetch,
+        signal: deadline.signal,
+        dataDb: env.DATA_DB,
+      };
+      const provider: ProviderContext = { apiKey, fetch: trackedFetch, signal: deadline.signal };
+      if (path === DELIVERY_RECEIPTS_ISSUE_PATH) {
+        const body = rawBody as IssueRequest;
+        dropId = normalizeDropId(body.dropId);
+        deliveryId = body.deliveryId;
+        const result: IssueReceiptsResult = await runCriticalRequestOperation(
+          () => dependencies.issue(
+            body,
+            verifiedIdentity,
+            env,
+            common,
+            provider,
+            defer,
+          ),
+          { deadline, defer },
+        );
+        return {
+          response: jsonResponse(result, 200, {
+            headers: { 'Timing-Allow-Origin': '*' },
+          }),
+          metrics,
+          authOutcome: 'accepted',
+          dropId,
+          deliveryId,
+          verification: 'signature',
+        };
+      }
+      const body = rawBody as RecoverRequest;
+      dropId = body.dropId ? normalizeDropId(body.dropId) : undefined;
       deliveryId = body.deliveryId;
-      const result: IssueReceiptsResult = await runCriticalRequestOperation(
-        () => dependencies.issue(
+      const result = await runCriticalRequestOperation(
+        () => dependencies.recover(
           body,
           verifiedIdentity,
           env,
@@ -2450,80 +2392,54 @@ export async function handleDeliveryReceiptRequest(
         }),
         metrics,
         authOutcome: 'accepted',
-        dropId,
-        deliveryId,
-        verification: 'signature',
-      };
-    }
-    const body = rawBody as RecoverRequest;
-    dropId = body.dropId ? normalizeDropId(body.dropId) : undefined;
-    deliveryId = body.deliveryId;
-    const result = await runCriticalRequestOperation(
-      () => dependencies.recover(
-        body,
-        verifiedIdentity,
-        env,
-        common,
-        provider,
-        defer,
-      ),
-      { deadline, defer },
-    );
-    return {
-      response: jsonResponse(result, 200, {
-        headers: { 'Timing-Allow-Origin': '*' },
-      }),
-      metrics,
-      authOutcome: 'accepted',
-      ...(dropId ? { dropId } : {}),
-      ...(deliveryId === undefined ? {} : { deliveryId }),
-      verification: 'delivery_pda',
-      attempted: result.attempted,
-      recovered: result.recovered,
-    };
-  } catch (error) {
-    rethrowDeferredWorkRegistrationError(error);
-    let receiptError: DeliveryReceiptError;
-    if (isRequestCancellationError(request, error)) throw error;
-    if (deadline.timedOut()) {
-      receiptError = new DeliveryReceiptError('deadline-exceeded', 'Delivery receipt request timed out.');
-    } else if (error instanceof RequestIdentityError) {
-      receiptError = new DeliveryReceiptError(
-        error.kind === 'invalid-token' ? 'unauthenticated' : 'unavailable',
-        error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',
-      );
-    } else if (error instanceof DeliveryReceiptError) {
-      receiptError = error;
-    } else if (error instanceof ProfileReadError) {
-      receiptError = new DeliveryReceiptError(
-        error.code === 'deadline-exceeded' ? 'deadline-exceeded' : 'unavailable',
-        'Receipt data is temporarily unavailable.',
-      );
-    } else {
-      console.error({
-        event: 'delivery_receipt_unhandled_error',
-        path,
         ...(dropId ? { dropId } : {}),
         ...(deliveryId === undefined ? {} : { deliveryId }),
-        error: summarizeError(error),
-      });
-      receiptError = new DeliveryReceiptError('internal', 'Delivery receipt request failed.');
+        verification: 'delivery_pda',
+        attempted: result.attempted,
+        recovered: result.recovered,
+      };
+    } catch (error) {
+      rethrowDeferredWorkRegistrationError(error);
+      let receiptError: DeliveryReceiptError;
+      if (isRequestCancellationError(request, error)) throw error;
+      if (deadline.timedOut()) {
+        receiptError = new DeliveryReceiptError('deadline-exceeded', 'Delivery receipt request timed out.');
+      } else if (error instanceof RequestIdentityError) {
+        receiptError = new DeliveryReceiptError(
+          error.kind === 'invalid-token' ? 'unauthenticated' : 'unavailable',
+          error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',
+        );
+      } else if (error instanceof DeliveryReceiptError) {
+        receiptError = error;
+      } else if (error instanceof ProfileReadError) {
+        receiptError = new DeliveryReceiptError(
+          error.code === 'deadline-exceeded' ? 'deadline-exceeded' : 'unavailable',
+          'Receipt data is temporarily unavailable.',
+        );
+      } else {
+        console.error({
+          event: 'delivery_receipt_unhandled_error',
+          path,
+          ...(dropId ? { dropId } : {}),
+          ...(deliveryId === undefined ? {} : { deliveryId }),
+          error: summarizeError(error),
+        });
+        receiptError = new DeliveryReceiptError('internal', 'Delivery receipt request failed.');
+      }
+      return {
+        response: errorResponse(receiptError),
+        metrics,
+        authOutcome: identity
+          ? 'accepted'
+          : error instanceof RequestIdentityError && error.kind !== 'invalid-token'
+            ? 'provider-failure'
+            : 'rejected',
+        ...(dropId ? { dropId } : {}),
+        ...(deliveryId === undefined ? {} : { deliveryId }),
+        verification: path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'signature' : 'delivery_pda',
+      };
     }
-    return {
-      response: errorResponse(receiptError),
-      metrics,
-      authOutcome: identity
-        ? 'accepted'
-        : error instanceof RequestIdentityError && error.kind !== 'invalid-token'
-          ? 'provider-failure'
-          : 'rejected',
-      ...(dropId ? { dropId } : {}),
-      ...(deliveryId === undefined ? {} : { deliveryId }),
-      verification: path === DELIVERY_RECEIPTS_ISSUE_PATH ? 'signature' : 'delivery_pda',
-    };
-  } finally {
-    deadline.dispose();
-  }
+  });
 }
 
 export const deliveryReceiptTestHooks = {
@@ -2551,7 +2467,6 @@ export const deliveryReceiptTestHooks = {
   ReceiptBatchRetryExhaustedError,
   recoverReceiptsRequest,
   runtimeForDrop,
-  rollbackTransactionBestEffort,
   runDeliveryRecoveryOrderQuery,
   runPendingReadyNotificationQuery,
   sendReceiptBatch,

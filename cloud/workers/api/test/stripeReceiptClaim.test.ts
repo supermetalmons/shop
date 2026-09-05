@@ -14,10 +14,11 @@ import {
 } from '../../../../shared/boxMinterConfigCodec.ts';
 import { MPL_CORE_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
-import { readCommerceDocument } from '../src/commerceTransactions.ts';
+import { readCommerceRecord, requireCommerceKey } from '../src/commerceTransactions.ts';
 import { DeliveryReceiptError, runtimeForDrop, sendAndConfirmSignedTransaction } from '../src/deliveryReceiptOnchain.ts';
 import {
   commerceKeyFromPath,
+  D1CommerceRepository,
   type CommerceDocumentData,
 } from '../src/commerceRepository.ts';
 import {
@@ -135,9 +136,9 @@ function commerceContext(
     });
   }
   return {
-    commerceDb: options.commitConflicts
+    repository: new D1CommerceRepository(options.commitConflicts
       ? conflictDatabase(harness.db, options.commitConflicts)
-      : harness.db,
+      : harness.db),
     nowMs: 1_700_000_000_000,
     providerFetch: async () => assert.fail('commerce persistence must not use provider fetch'),
     signal: new AbortController().signal,
@@ -273,10 +274,15 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
     new Request(`https://api.mons.shop${STRIPE_RECEIPT_CLAIM_PATH}`),
     env(),
     failOnDeferredWork,
-    dependencies(),
+    dependencies({
+      timeoutMs: Number.NaN,
+      nowMs: () => assert.fail('Rejected methods must not read the clock'),
+      verifyIdentity: async () => assert.fail('Rejected methods must not authenticate'),
+    }),
   );
   assert.equal(method.response.status, 405);
   assert.equal(method.response.headers.get('allow'), 'POST, OPTIONS');
+  assert.deepEqual(method.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
 
   const extra = await handleStripeReceiptClaim(
     request({ code: CODE, recipient: RECIPIENT, extra: true }),
@@ -294,6 +300,48 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
   );
   assert.equal(missingSecret.response.status, 502);
   assert.equal(missingSecret.outcome, 'unavailable');
+});
+
+test('Stripe receipt claims reject malformed JSON before authenticating', async () => {
+  let authenticationCalls = 0;
+  const result = await handleStripeReceiptClaim(
+    request(undefined, { body: '{' }),
+    env(),
+    failOnDeferredWork,
+    dependencies({
+      nowMs: () => assert.fail('Malformed input must not read the authentication clock'),
+      verifyIdentity: async () => {
+        authenticationCalls += 1;
+        throw new RequestIdentityError('invalid-token');
+      },
+    }),
+  );
+  assert.equal(authenticationCalls, 0);
+  assert.equal(result.response.status, 400);
+  assert.equal(result.authOutcome, 'provider-failure');
+  assert.equal(result.outcome, 'invalid-argument');
+  assert.equal(result.response.headers.get('Timing-Allow-Origin'), '*');
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'invalid-argument', message: 'Invalid receipt claim request.' },
+  });
+});
+
+test('Stripe receipt claims preserve authentication provider timeout responses', async () => {
+  const result = await handleStripeReceiptClaim(
+    request(),
+    env(),
+    failOnDeferredWork,
+    dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('provider-timeout'); } }),
+  );
+  assert.equal(result.response.status, 504);
+  assert.equal(result.authOutcome, 'provider-failure');
+  assert.equal(result.outcome, 'deadline-exceeded');
+  assert.equal(result.response.headers.get('Timing-Allow-Origin'), '*');
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'deadline-exceeded', message: 'Authentication is temporarily unavailable.' },
+  });
 });
 
 test('Stripe receipt claim handler returns its deadline and tracks unfinished cleanup', async () => {
@@ -440,8 +488,8 @@ test('abort after Solana submission preserves the deterministic signature and re
     'next-attempt',
     Date.now() + 10 * 60_000,
   ), /locked to the receiver/);
-  const stored = await readCommerceDocument(context, `claimCodes/${CODE}`);
-  assert.equal((stored?.fields.receiptTxSubmissions as Array<{ status: string }>)[0].status, 'submitted');
+  const stored = await readCommerceRecord(context, requireCommerceKey(`claimCodes/${CODE}`));
+  assert.equal((stored?.data.receiptTxSubmissions as Array<{ status: string }>)[0].status, 'submitted');
 });
 
 test('Stripe receipt recovery distinguishes rejected transfers from unresolved evidence', async (testContext) => {
@@ -544,10 +592,10 @@ test('Stripe receipt recovery distinguishes rejected transfers from unresolved e
         message: 'Card receipt ownership is still resolving for the original receiver; retry shortly.',
         details: { keepReceiptClaimProcessing: true },
       });
-      const stored = await readCommerceDocument(commerce, `claimCodes/${CODE}`);
-      assert.equal(stored?.fields.status, 'processing');
-      assert.equal(stored?.fields.recipient, RECIPIENT);
-      const submissions = stored?.fields.receiptTxSubmissions as Array<{ signature: string; status: string }>;
+      const stored = await readCommerceRecord(commerce, requireCommerceKey(`claimCodes/${CODE}`));
+      assert.equal(stored?.data.status, 'processing');
+      assert.equal(stored?.data.recipient, RECIPIENT);
+      const submissions = stored?.data.receiptTxSubmissions as Array<{ signature: string; status: string }>;
       assert.equal(submissions[0].signature, SIGNATURE);
       assert.equal(submissions[0].status, outcome === 'instruction-mismatch' ? 'not_landed' : 'submitted');
       assert.equal(signatureChecks, outcome === 'instruction-mismatch' ? 0 : 1);
@@ -568,12 +616,12 @@ test('Stripe receipt claim start writes compatible claim and order leases', asyn
   assert.equal(result.status, 'started');
   assert.equal(result.dropId, DROP_ID);
   assert.equal(result.deliveryId, DELIVERY_ID);
-  const claim = await readCommerceDocument(context, `claimCodes/${CODE}`);
-  const order = await readCommerceDocument(context, `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`);
-  assert.equal(claim?.fields.status, 'processing');
-  assert.equal(claim?.fields.processingAttemptId, 'stripe_receipt:attempt');
-  assert.equal(claim?.fields.processingLeaseExpiresAt, 1_700_000_090_000);
-  assert.equal(order?.fields.dropId, DROP_ID);
+  const claim = await readCommerceRecord(context, requireCommerceKey(`claimCodes/${CODE}`));
+  const order = await readCommerceRecord(context, requireCommerceKey(`drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`));
+  assert.equal(claim?.data.status, 'processing');
+  assert.equal(claim?.data.processingAttemptId, 'stripe_receipt:attempt');
+  assert.equal(claim?.data.processingLeaseExpiresAt, 1_700_000_090_000);
+  assert.equal(order?.data.dropId, DROP_ID);
 });
 
 test('Stripe receipt claim start reconciles a processing lease whose acknowledgement is lost', async () => {
@@ -604,13 +652,13 @@ test('Stripe receipt claim start reconciles a processing lease whose acknowledge
   assert.equal(result.attemptId, 'stripe_receipt:lost-ack');
   assert.equal(result.resumingPreviousProcessingClaim, false);
   assert.equal(loseAcknowledgement, false);
-  const claim = await readCommerceDocument(context, `claimCodes/${CODE}`);
-  const order = await readCommerceDocument(
+  const claim = await readCommerceRecord(context, requireCommerceKey(`claimCodes/${CODE}`));
+  const order = await readCommerceRecord(
     context,
-    `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`,
+    requireCommerceKey(`drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`),
   );
-  assert.equal(claim?.fields.processingAttemptId, 'stripe_receipt:lost-ack');
-  assert.equal((order?.fields.stripeReceiptClaim as Record<string, unknown>)?.status, 'processing');
+  assert.equal(claim?.data.processingAttemptId, 'stripe_receipt:lost-ack');
+  assert.equal((order?.data.stripeReceiptClaim as Record<string, unknown>)?.status, 'processing');
 });
 
 test('Stripe receipt claim cancellation reconciles a lost start acknowledgement and clears the exact lease', async () => {
@@ -655,16 +703,16 @@ test('Stripe receipt claim cancellation reconciles a lost start acknowledgement 
   assert.equal(loseAcknowledgement, false);
   assert.equal(sendCalls, 0);
   const safeContext = { ...context, signal: new AbortController().signal };
-  const claim = await readCommerceDocument(safeContext, `claimCodes/${CODE}`);
-  const order = await readCommerceDocument(
+  const claim = await readCommerceRecord(safeContext, requireCommerceKey(`claimCodes/${CODE}`));
+  const order = await readCommerceRecord(
     safeContext,
-    `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`,
+    requireCommerceKey(`drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`),
   );
-  assert.equal(claim?.fields.status, 'unclaimed');
-  assert.equal(claim?.fields.processingAttemptId, undefined);
-  assert.equal(claim?.fields.processingLeaseExpiresAt, undefined);
-  assert.equal((order?.fields.stripeReceiptClaim as Record<string, unknown>)?.status, 'unclaimed');
-  assert.equal((order?.fields.stripeReceiptClaim as Record<string, unknown>)?.recipient, undefined);
+  assert.equal(claim?.data.status, 'unclaimed');
+  assert.equal(claim?.data.processingAttemptId, undefined);
+  assert.equal(claim?.data.processingLeaseExpiresAt, undefined);
+  assert.equal((order?.data.stripeReceiptClaim as Record<string, unknown>)?.status, 'unclaimed');
+  assert.equal((order?.data.stripeReceiptClaim as Record<string, unknown>)?.recipient, undefined);
 });
 
 test('Stripe receipt claim start is idempotent and preserves recipient locks', async () => {
@@ -786,12 +834,12 @@ test('Stripe receipt claim retries D1 conflicts and updates plural and singular 
     1_700_000_000_000,
   );
   assert.equal(result.status, 'started');
-  const order = await readCommerceDocument(context, orderPath);
+  const order = await readCommerceRecord(context, requireCommerceKey(orderPath));
   assert.equal(
-    ((order?.fields.stripeReceiptClaimsByBoxId as Record<string, any>)?.box_16 as Record<string, unknown>)?.status,
+    ((order?.data.stripeReceiptClaimsByBoxId as Record<string, any>)?.box_16 as Record<string, unknown>)?.status,
     'processing',
   );
-  assert.equal((order?.fields.stripeReceiptClaim as Record<string, unknown>)?.status, 'processing');
+  assert.equal((order?.data.stripeReceiptClaim as Record<string, unknown>)?.status, 'processing');
 });
 
 test('Stripe receipt claim cleanup and candidate persistence are attempt-owned', async () => {
@@ -809,7 +857,7 @@ test('Stripe receipt claim cleanup and candidate persistence are attempt-owned',
     CODE,
     new Error('failed'),
   );
-  assert.equal((await readCommerceDocument(staleContext, `claimCodes/${CODE}`))?.fields.status, 'processing');
+  assert.equal((await readCommerceRecord(staleContext, requireCommerceKey(`claimCodes/${CODE}`)))?.data.status, 'processing');
 
   documents[`claimCodes/${CODE}`] = {
     ...documents[`claimCodes/${CODE}`],
@@ -822,9 +870,9 @@ test('Stripe receipt claim cleanup and candidate persistence are attempt-owned',
     CODE,
     new Error('failed'),
   );
-  const cleaned = await readCommerceDocument(ownerContext, `claimCodes/${CODE}`);
-  assert.equal(cleaned?.fields.status, 'unclaimed');
-  assert.equal(cleaned?.fields.processingAttemptId, undefined);
+  const cleaned = await readCommerceRecord(ownerContext, requireCommerceKey(`claimCodes/${CODE}`));
+  assert.equal(cleaned?.data.status, 'unclaimed');
+  assert.equal(cleaned?.data.processingAttemptId, undefined);
 
   documents[`claimCodes/${CODE}`] = {
     ...directDocuments()[`claimCodes/${CODE}`],
@@ -841,9 +889,9 @@ test('Stripe receipt claim cleanup and candidate persistence are attempt-owned',
     SIGNATURE,
     { lastValidBlockHeight: 200, submittedAtMs: 1_700_000_000_000, status: 'submitted' },
   );
-  const candidate = await readCommerceDocument(candidateContext, `claimCodes/${CODE}`);
-  assert.equal(Array.isArray(candidate?.fields.receiptTxSubmissions), true);
-  assert.equal(Number.isSafeInteger(candidate?.fields.processingLeaseExpiresAt), true);
+  const candidate = await readCommerceRecord(candidateContext, requireCommerceKey(`claimCodes/${CODE}`));
+  assert.equal(Array.isArray(candidate?.data.receiptTxSubmissions), true);
+  assert.equal(Number.isSafeInteger(candidate?.data.processingLeaseExpiresAt), true);
 });
 
 test('Stripe receipt claim execution returns a claimed record without provider or Solana work', async () => {
@@ -902,9 +950,9 @@ test('Stripe receipt claim finalization only accepts the owning attempt', async 
     1,
   );
   assert.deepEqual(receiptTxs, [SIGNATURE]);
-  const finalized = await readCommerceDocument(context, `claimCodes/${CODE}`);
-  assert.equal(finalized?.fields.status, 'claimed');
-  assert.equal(finalized?.fields.processingAttemptId, undefined);
+  const finalized = await readCommerceRecord(context, requireCommerceKey(`claimCodes/${CODE}`));
+  assert.equal(finalized?.data.status, 'claimed');
+  assert.equal(finalized?.data.processingAttemptId, undefined);
 
   documents[`claimCodes/${CODE}`] = { ...documents[`claimCodes/${CODE}`], processingAttemptId: 'different' };
   await assert.rejects(() => stripeReceiptClaimTestHooks.finalizeClaim(
@@ -916,6 +964,43 @@ test('Stripe receipt claim finalization only accepts the owning attempt', async 
     'box',
     1,
   ), /lease changed/);
+});
+
+test('Stripe receipt finalization keeps claim and order timestamps aligned and rejects missing orders atomically', async () => {
+  const documents = unclaimedDocuments();
+  const claimKey = requireCommerceKey(`claimCodes/${CODE}`);
+  const orderKey = requireCommerceKey(`drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`);
+  documents[claimKey.path] = {
+    ...documents[claimKey.path],
+    status: 'processing',
+    recipient: RECIPIENT,
+    processingAttemptId: 'attempt',
+  };
+  const context = commerceContext(documents);
+  await context.repository.run(1_900_000_000_000, async (transaction) => {
+    await transaction.update(orderKey, { updatedAt: 1_900_000_000_000 });
+  });
+  const previousOrder = await context.repository.get(orderKey);
+
+  await finalizeClaim(context, startedClaim(), CODE, RECIPIENT, SIGNATURE, 'box', 1);
+
+  const claim = await context.repository.get(claimKey);
+  const order = await context.repository.get(orderKey);
+  assert.ok(claim && order && previousOrder);
+  assert.equal(claim.updateTime, order.updateTime);
+  assert.ok(order.updateTime > previousOrder.updateTime);
+  assert.equal(claim.data.claimedAt, (order.data.stripeReceiptClaim as Record<string, unknown>).claimedAt);
+
+  delete documents[orderKey.path];
+  const missingOrderContext = commerceContext(documents);
+  await assert.rejects(
+    finalizeClaim(missingOrderContext, startedClaim(), CODE, RECIPIENT, SIGNATURE, 'box', 1),
+    { name: 'CommerceWriteConflict', code: 'failed-precondition' },
+  );
+  const unchanged = await missingOrderContext.repository.get(claimKey);
+  assert.equal(unchanged?.data.status, 'processing');
+  assert.equal(unchanged?.data.processingAttemptId, 'attempt');
+  assert.equal(unchanged?.data.receiptTxs, undefined);
 });
 
 test('Stripe receipt claim selects legacy, openable, and direct flows', () => {

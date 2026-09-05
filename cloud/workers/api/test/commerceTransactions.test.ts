@@ -8,16 +8,11 @@ import {
   commerceKeys,
 } from '../src/commerceRepository.js';
 import {
-  commitCommerceWrites,
-  createCommerceWrite,
-  readCommerceDocument,
-  readCommerceDocuments,
+  readCommerceRecord,
+  requireCommerceKey,
   runCommerceTransaction,
-  runCommerceWriteTransaction,
-  updateCommerceWrite,
-  type CommerceDocumentContext,
+  type CommerceRepositoryContext,
   type CommerceTransactionTarget,
-  type CommerceWrite,
 } from '../src/commerceTransactions.js';
 import {
   createCommerceD1Harness,
@@ -26,123 +21,116 @@ import {
 } from './commerceD1Harness.js';
 import { ProfileReadError } from '../src/dataAccess.js';
 
-const writeBatchRunners = {
-  commitCommerceWrites: async (context: CommerceDocumentContext, writes: readonly CommerceWrite[]) => {
-    await commitCommerceWrites(context, writes);
-  },
-  runCommerceWriteTransaction: async (context: CommerceDocumentContext, writes: readonly CommerceWrite[]) => {
-    const result = await runCommerceWriteTransaction(context, async () => ({ result: 'committed', writes }), {
-      shouldRetry: () => false,
-    });
-    assert.equal(result, 'committed');
-  },
-};
-
 function transactionTarget(context: TestContext, signal?: AbortSignal): CommerceTransactionTarget {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
   return { nowMs: 100, repository: new D1CommerceRepository(harness.db), signal };
 }
 
-for (const [name, runWrites] of Object.entries(writeBatchRunners)) {
-  test(`${name} commits multiple timestamp-guarded updates`, async () => {
-    const harness = createCommerceD1Harness();
-    const repository = new D1CommerceRepository(harness.db);
-    const keys = [commerceKeys.claimCode('FIRST'), commerceKeys.claimCode('SECOND')];
-    const updateTime = '2026-09-05T00:00:00.000Z';
-    const nowMs = Date.parse(updateTime) + 1000;
-    seedCommerceDocuments(harness, keys.map((key) => ({
-      key, data: { status: 'available' }, updateTime,
-    })));
-
-    await runWrites({ commerceDb: harness.db, repository, nowMs, signal: new AbortController().signal },
-      keys.map((key) => updateCommerceWrite({
-        path: key.path,
-        expectedUpdateTime: updateTime,
-        values: { status: 'claimed' },
-      })));
-
-    for (const key of keys) {
-      const stored = (await repository.get(key))!;
-      assert.deepEqual(stored.data, { status: 'claimed' });
-      assert.equal(Date.parse(stored.updateTime), nowMs);
-      assert.equal(stored.version, 2);
-    }
-  });
-
-  test(`${name} rejects a stale timestamp later in the batch without changing any documents`, async () => {
-    const harness = createCommerceD1Harness();
-    const repository = new D1CommerceRepository(harness.db);
-    const keys = [commerceKeys.claimCode('FIRST'), commerceKeys.claimCode('SECOND')];
-    const updateTime = '2026-09-05T00:00:00.000Z';
-    seedCommerceDocuments(harness, keys.map((key) => ({
-      key, data: { status: 'available' }, updateTime,
-    })));
-
-    await assert.rejects(runWrites({
-      commerceDb: harness.db, repository, nowMs: Date.parse(updateTime) + 1000,
-      signal: new AbortController().signal,
-    }, keys.map((key, index) => updateCommerceWrite({
-      path: key.path,
-      expectedUpdateTime: index === 0 ? updateTime : '2026-09-04T00:00:00.000Z',
-      values: { status: 'claimed' },
-    }))), (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted');
-
-    for (const key of keys) {
-      const stored = (await repository.get(key))!;
-      assert.deepEqual(stored.data, { status: 'available' });
-      assert.equal(stored.updateTime, updateTime);
-      assert.equal(stored.version, 1);
-    }
-  });
-
-  test(`${name} batches uncached reads and preserves ordered writes to the same document`, async () => {
-    const calls: CommerceD1CallObservation[] = [];
-    const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
-    const repository = new D1CommerceRepository(harness.db);
-    const existing = commerceKeys.claimCode('EXISTING');
-    const created = commerceKeys.claimCode('CREATED');
-    const merged = commerceKeys.claimCode('MERGED');
-    seedCommerceDocuments(harness, [{ key: existing, data: { status: 'available', count: 1 } }]);
-
-    await runWrites({ commerceDb: harness.db, repository, nowMs: 100, signal: new AbortController().signal }, [
-      updateCommerceWrite({ path: existing.path, values: { count: commerceFieldValue.increment(1) }, mustExist: true }),
-      createCommerceWrite({ path: created.path, values: { status: 'available', count: 0 } }),
-      updateCommerceWrite({ path: merged.path, values: { status: 'available' } }),
-      updateCommerceWrite({ path: created.path, values: { status: 'claimed', count: commerceFieldValue.increment(1) }, mustExist: true }),
-      updateCommerceWrite({ path: existing.path, values: { status: 'claimed', count: commerceFieldValue.increment(1) } }),
-    ]);
-
-    assert.equal(calls.length, 3);
-    assert.deepEqual((await repository.get(existing))?.data, { status: 'claimed', count: 3 });
-    assert.deepEqual((await repository.get(created))?.data, { status: 'claimed', count: 1 });
-    assert.deepEqual((await repository.get(merged))?.data, { status: 'available' });
-  });
-}
-
-test('commerce value maps preserve omitted fields and apply explicit deletes and transforms', async () => {
+test('native transactions commit multiple timestamp-guarded updates', async (context) => {
   const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const keys = [commerceKeys.claimCode('FIRST'), commerceKeys.claimCode('SECOND')];
+  const updateTime = '2026-09-05T00:00:00.000Z';
+  const nowMs = Date.parse(updateTime) + 1000;
+  seedCommerceDocuments(harness, keys.map((key) => ({
+    key, data: { status: 'available' }, updateTime,
+  })));
+
+  const result = await runCommerceTransaction({ repository, nowMs }, async (transaction) => {
+    const records = await transaction.getMany(keys);
+    if (records.some((record) => record?.updateTime !== updateTime)) throw new CommerceWriteConflict();
+    for (const key of keys) await transaction.update(key, { status: 'claimed' });
+    return 'committed';
+  });
+
+  assert.equal(result, 'committed');
+  for (const key of keys) {
+    const stored = (await repository.get(key))!;
+    assert.deepEqual(stored.data, { status: 'claimed' });
+    assert.equal(Date.parse(stored.updateTime), nowMs);
+    assert.equal(stored.version, 2);
+  }
+});
+
+test('native transactions reject a stale timestamp later in the batch atomically', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const keys = [commerceKeys.claimCode('FIRST'), commerceKeys.claimCode('SECOND')];
+  const updateTime = '2026-09-05T00:00:00.000Z';
+  const expectedUpdateTimes = [updateTime, '2026-09-04T00:00:00.000Z'];
+  seedCommerceDocuments(harness, keys.map((key) => ({
+    key, data: { status: 'available' }, updateTime,
+  })));
+
+  await assert.rejects(runCommerceTransaction({
+    repository, nowMs: Date.parse(updateTime) + 1000,
+  }, async (transaction) => {
+    const records = await transaction.getMany(keys);
+    if (records.some((record, index) => record?.updateTime !== expectedUpdateTimes[index])) {
+      throw new CommerceWriteConflict();
+    }
+    for (const key of keys) await transaction.update(key, { status: 'claimed' });
+  }, { shouldRetry: () => false }), (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted');
+
+  for (const key of keys) {
+    const stored = (await repository.get(key))!;
+    assert.deepEqual(stored.data, { status: 'available' });
+    assert.equal(stored.updateTime, updateTime);
+    assert.equal(stored.version, 1);
+  }
+});
+
+test('native transactions batch uncached reads and preserve ordered writes to the same record', async (context) => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const existing = commerceKeys.claimCode('EXISTING');
+  const created = commerceKeys.claimCode('CREATED');
+  const merged = commerceKeys.claimCode('MERGED');
+  seedCommerceDocuments(harness, [{ key: existing, data: { status: 'available', count: 1 } }]);
+
+  await runCommerceTransaction({ repository, nowMs: 100 }, async (transaction) => {
+    await transaction.getMany([existing, created, merged, created, existing]);
+    await transaction.update(existing, { count: commerceFieldValue.increment(1) });
+    await transaction.create(created, { status: 'available', count: 0 });
+    await transaction.set(merged, { status: 'available' }, { merge: true });
+    await transaction.update(created, { status: 'claimed', count: commerceFieldValue.increment(1) });
+    await transaction.set(existing, { status: 'claimed', count: commerceFieldValue.increment(1) }, { merge: true });
+  });
+
+  assert.equal(calls.length, 3);
+  assert.deepEqual((await repository.get(existing))?.data, { status: 'claimed', count: 3 });
+  assert.deepEqual((await repository.get(created))?.data, { status: 'claimed', count: 1 });
+  assert.deepEqual((await repository.get(merged))?.data, { status: 'available' });
+});
+
+test('native value maps preserve omitted fields and apply explicit deletes and transforms', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
   const repository = new D1CommerceRepository(harness.db);
   const key = commerceKeys.deliveryOrder('poncho', '7');
   const nowMs = 1_700_000_000_000;
-  const context = { commerceDb: harness.db, repository, nowMs, signal: new AbortController().signal };
-  await commitCommerceWrites(context, [createCommerceWrite({
-    path: key.path,
-    values: {
+  await runCommerceTransaction({ repository, nowMs }, async (transaction) => {
+    await transaction.get(key);
+    await transaction.create(key, {
       status: 'prepared',
       retained: 'keep',
       obsolete: 'remove',
       lease: { id: 'old-claim', attempts: 2 },
       tags: ['first'],
       createdAt: commerceFieldValue.serverTimestamp(),
-    },
-  })]);
+    });
+  });
   const created = (await repository.get(key))!;
 
-  await commitCommerceWrites({ ...context, nowMs: nowMs + 1000 }, [updateCommerceWrite({
-    path: key.path,
-    expectedUpdateTime: created.updateTime,
-    values: {
+  await runCommerceTransaction({ repository, nowMs: nowMs + 1000 }, async (transaction) => {
+    const record = await transaction.get(key);
+    if (record?.updateTime !== created.updateTime) throw new CommerceWriteConflict();
+    await transaction.update(key, {
       status: 'ready_to_ship',
       obsolete: commerceFieldValue.delete(),
       'lease.id': commerceFieldValue.delete(),
@@ -151,8 +139,8 @@ test('commerce value maps preserve omitted fields and apply explicit deletes and
       optional: null,
       updatedAt: commerceFieldValue.serverTimestamp(),
       processedAt: commerceFieldValue.timestamp(1_700_000_001, 123_456_789),
-    },
-  })]);
+    });
+  });
 
   const updated = (await repository.get(key))!;
   assert.deepEqual(updated.data, {
@@ -168,65 +156,35 @@ test('commerce value maps preserve omitted fields and apply explicit deletes and
   assert.deepEqual(updated.processedAt, { seconds: 1_700_000_001, nanos: 123_456_789 });
 });
 
-test('commerce value maps preserve create, must-exist and merge preconditions', async () => {
+test('native create, update and merge retain existence preconditions and atomicity', async (context) => {
   const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
   const repository = new D1CommerceRepository(harness.db);
   const existing = commerceKeys.claimCode('EXISTING');
   const missing = commerceKeys.claimCode('MISSING');
   seedCommerceDocuments(harness, [{ key: existing, data: { status: 'available' } }]);
-  const context = { commerceDb: harness.db, repository, nowMs: 100, signal: new AbortController().signal };
+  const target = { repository, nowMs: 100 };
 
-  await assert.rejects(commitCommerceWrites(context, [createCommerceWrite({
-    path: existing.path,
-    values: { status: 'replacement' },
-  })]), (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'already-exists');
-  await assert.rejects(commitCommerceWrites(context, [
-    updateCommerceWrite({ path: existing.path, values: { status: 'claimed' }, mustExist: true }),
-    updateCommerceWrite({ path: missing.path, values: { status: 'claimed' }, mustExist: true }),
-  ]), (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'failed-precondition');
+  await assert.rejects(runCommerceTransaction(target, async (transaction) => {
+    await transaction.get(existing);
+    await transaction.create(existing, { status: 'replacement' });
+  }, { shouldRetry: () => false }), (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'already-exists');
+  await assert.rejects(runCommerceTransaction(target, async (transaction) => {
+    await transaction.getMany([existing, missing]);
+    await transaction.update(existing, { status: 'claimed' });
+    await transaction.update(missing, { status: 'claimed' });
+  }, { shouldRetry: () => false }), (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'failed-precondition');
   assert.equal(await repository.get(missing), null);
-
-  await commitCommerceWrites(context, [updateCommerceWrite({
-    path: missing.path,
-    values: { status: 'available', absent: commerceFieldValue.delete() },
-  })]);
   assert.deepEqual((await repository.get(existing))?.data, { status: 'available' });
+
+  await runCommerceTransaction(target, async (transaction) => {
+    await transaction.get(missing);
+    await transaction.set(missing, { status: 'available', absent: commerceFieldValue.delete() }, { merge: true });
+  });
   assert.deepEqual((await repository.get(missing))?.data, { status: 'available' });
 });
 
-test('stale commerce write timestamps reject the whole batch', async () => {
-  const harness = createCommerceD1Harness();
-  const repository = new D1CommerceRepository(harness.db);
-  const first = commerceKeys.claimCode('FIRST');
-  const second = commerceKeys.claimCode('SECOND');
-  const updateTime = '2026-09-05T00:00:00.000Z';
-  seedCommerceDocuments(harness, [
-    { key: first, data: { status: 'available' }, updateTime },
-    { key: second, data: { status: 'available' }, updateTime },
-  ]);
-
-  await assert.rejects(commitCommerceWrites({
-    commerceDb: harness.db,
-    repository,
-    nowMs: 100,
-    signal: new AbortController().signal,
-  }, [
-    updateCommerceWrite({
-      path: first.path,
-      values: { status: 'claimed' },
-      expectedUpdateTime: '2026-09-04T00:00:00.000Z',
-    }),
-    updateCommerceWrite({ path: second.path, values: { status: 'claimed' }, mustExist: true }),
-  ]), (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'aborted');
-
-  for (const key of [first, second]) {
-    const stored = (await repository.get(key))!;
-    assert.deepEqual(stored.data, { status: 'available' });
-    assert.equal(stored.updateTime, updateTime);
-  }
-});
-
-test('transactional document read failures retain their cause and unavailable status', async (context) => {
+test('transactional record read failures retain their cause and unavailable status', async (context) => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
   const repository = new D1CommerceRepository(harness.db);
@@ -234,9 +192,9 @@ test('transactional document read failures retain their cause and unavailable st
   for (const signal of [new AbortController().signal, AbortSignal.abort(new Error('unrelated cancellation'))]) {
     const transaction = await repository.begin(100);
     context.mock.method(transaction, 'get', async () => { throw cause; });
-    await assert.rejects(readCommerceDocument({
-      commerceDb: harness.db, repository, nowMs: 100, signal,
-    }, commerceKeys.claimCode('READ').path, transaction), (error: unknown) => {
+    await assert.rejects(readCommerceRecord({
+      repository, nowMs: 100, signal,
+    }, commerceKeys.claimCode('READ'), transaction), (error: unknown) => {
       assert.ok(error instanceof CommerceRepositoryError);
       assert.equal(error.code, 'unavailable');
       assert.equal(error.status, 503);
@@ -247,7 +205,7 @@ test('transactional document read failures retain their cause and unavailable st
   }
 });
 
-test('transactional document reads preserve typed errors and cancellation identity', async (context) => {
+test('transactional record reads preserve typed errors and cancellation identity', async (context) => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
   const repository = new D1CommerceRepository(harness.db);
@@ -264,16 +222,17 @@ test('transactional document reads preserve typed errors and cancellation identi
   for (const { error, signal } of cases) {
     const transaction = await repository.begin(100);
     context.mock.method(transaction, 'get', async () => { throw error; });
-    await assert.rejects(readCommerceDocument({
-      commerceDb: harness.db, repository, nowMs: 100, signal,
-    }, commerceKeys.claimCode('READ').path, transaction), (caught) => caught === error);
+    await assert.rejects(readCommerceRecord({
+      repository, nowMs: 100, signal,
+    }, commerceKeys.claimCode('READ'), transaction), (caught) => caught === error);
     transaction.rollback();
   }
 });
 
-test('commerce document batches preserve caller order, missing documents, and document metadata', async () => {
+test('native record batches preserve caller order, missing records, and metadata', async (context) => {
   const calls: CommerceD1CallObservation[] = [];
   const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  context.after(() => harness.database.close());
   const claimKey = commerceKeys.claimCode('BATCH');
   const orderKey = commerceKeys.deliveryOrder('poncho', '7');
   const missingKey = commerceKeys.claimCode('MISSING');
@@ -285,34 +244,67 @@ test('commerce document batches preserve caller order, missing documents, and do
   const transaction = await new D1CommerceRepository(harness.db).begin(100);
   calls.length = 0;
 
-  const documents = await readCommerceDocuments(transaction, [
-    orderKey.path, missingKey.path, claimKey.path, orderKey.path,
-  ]);
+  const records = await transaction.getMany([orderKey, missingKey, claimKey, orderKey]);
 
-  const order = { fields: { status: 'prepared' }, id: '7', path: orderKey.path, updateTime };
-  assert.deepEqual(documents, [
+  const metadata = { createTime: updateTime, updateTime, version: 1, processedAt: null };
+  const order = { ...metadata, data: { status: 'prepared' }, key: orderKey };
+  assert.deepEqual(records, [
     order,
     null,
-    { fields: { code: 'BATCH' }, id: 'BATCH', path: claimKey.path, updateTime },
+    { ...metadata, data: { code: 'BATCH' }, key: claimKey },
     order,
   ]);
   assert.equal(calls.length, 1);
   transaction.rollback();
 });
 
-test('commerce document batches validate every path before issuing reads', async () => {
+test('stored commerce paths validate before issuing reads', async (context) => {
   const calls: CommerceD1CallObservation[] = [];
   const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  context.after(() => harness.database.close());
   const transaction = await new D1CommerceRepository(harness.db).begin(100);
   calls.length = 0;
 
-  await assert.rejects(
-    readCommerceDocuments(transaction, ['claimCodes/VALID', 'not-a-commerce-path']),
-    /Invalid commerce document path/,
-  );
+  assert.deepEqual(requireCommerceKey('claimCodes/VALID'), commerceKeys.claimCode('VALID'));
+  await assert.rejects(async () => {
+    await transaction.getMany(['claimCodes/VALID', 'not-a-commerce-path'].map(requireCommerceKey));
+  }, /Invalid commerce document path/);
 
   assert.equal(calls.length, 0);
   transaction.rollback();
+});
+
+test('a one-shot commit omits surrounding cancellation and never retries conflicts', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const surrounding: CommerceRepositoryContext = {
+    nowMs: 100,
+    repository: new D1CommerceRepository(harness.db),
+    signal: AbortSignal.abort(new Error('request already cancelled')),
+  };
+  const target = { repository: surrounding.repository, nowMs: surrounding.nowMs };
+  const key = commerceKeys.claimCode('ONE_SHOT');
+  const options = { shouldRetry: () => false, sleep: async () => assert.fail('one-shot operation retried') };
+
+  const result = await runCommerceTransaction(target, async (transaction) => {
+    await readCommerceRecord(surrounding, key, transaction);
+    await transaction.create(key, { status: 'committed' });
+    return 'committed';
+  }, options);
+  assert.equal(surrounding.signal.aborted, true);
+  assert.equal(result, 'committed');
+  assert.deepEqual((await surrounding.repository.get(key))?.data, { status: 'committed' });
+
+  const conflict = new CommerceWriteConflict();
+  let attempts = 0;
+  await assert.rejects(runCommerceTransaction(target, async (transaction) => {
+    attempts += 1;
+    await readCommerceRecord(surrounding, key, transaction);
+    await transaction.update(key, { status: 'rolled-back' });
+    throw conflict;
+  }, options), (error) => error === conflict);
+  assert.equal(attempts, 1);
+  assert.deepEqual((await surrounding.repository.get(key))?.data, { status: 'committed' });
 });
 
 test('commerce conflict retries use the standard schedule', async (context) => {

@@ -24,10 +24,6 @@ function dropRootPath(dropId: string): string {
   return `drops/${dropId}`;
 }
 
-export function dropBoxAssignmentPath(dropId: string, boxAssetId: string): string {
-  return `${dropRootPath(dropId)}/boxAssignments/${boxAssetId}`;
-}
-
 function dropDeliveryOrdersCollectionPath(dropId: string): string {
   return `${dropRootPath(dropId)}/deliveryOrders`;
 }
@@ -41,10 +37,6 @@ export function dropDeliveryOrderPath(dropId: string, deliveryId: number): strin
 
 export function dropAdminIrlRedeemRequestPath(dropId: string, requestId: string): string {
   return `${dropRootPath(dropId)}/adminIrlRedeemRequests/${requestId}`;
-}
-
-export function dropAdminIrlRedeemPackMarkerPath(dropId: string, originalAssetId: string): string {
-  return `${dropRootPath(dropId)}/adminIrlRedeemPackMarkers/${originalAssetId}`;
 }
 
 export function dropAdminIrlRedeemReceiptMarkerPath(dropId: string, receiptAssetId: string): string {

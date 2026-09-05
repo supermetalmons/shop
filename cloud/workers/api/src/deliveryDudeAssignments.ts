@@ -3,10 +3,7 @@ import {
   CommerceDudeAssignmentError,
   assignCommerceDudes,
 } from './commerceDudeAssignments.js';
-import {
-  commerceRepository,
-  type CommerceDocumentContext,
-} from './commerceTransactions.js';
+import type { CommerceRepositoryContext } from './commerceTransactions.js';
 import { DeliveryReceiptError, mapProviderError } from './deliveryReceiptErrors.js';
 import type { DeliveryRuntime } from './deliveryReceiptOnchain.js';
 
@@ -15,7 +12,7 @@ type DeliveryAssignmentRuntime = Pick<DeliveryRuntime, 'dropId' | 'itemsPerBox' 
 };
 
 export async function assignDudesForBox(
-  context: CommerceDocumentContext,
+  context: CommerceRepositoryContext,
   runtime: DeliveryAssignmentRuntime,
   boxAssetId: string,
   randomInt: (maxExclusive: number) => number,
@@ -29,7 +26,7 @@ export async function assignDudesForBox(
       maxDudeId: runtime.maxDudeId,
       nowMs: context.nowMs,
       randomInt,
-      repository: commerceRepository(context),
+      repository: context.repository,
       signal: context.signal,
       sleep: (milliseconds) => sleepWithSignal(milliseconds, context.signal),
     });

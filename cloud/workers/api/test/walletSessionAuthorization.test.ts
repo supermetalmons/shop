@@ -7,6 +7,7 @@ import { deliveryPrepareTestHooks } from '../src/deliveryPrepare.js';
 import { deliveryReceiptTestHooks } from '../src/deliveryReceipts.js';
 import { irlClaimTestHooks } from '../src/irlClaim.js';
 import { revealDudesTestHooks } from '../src/revealDudes.js';
+import { D1CommerceRepository } from '../src/commerceRepository.js';
 
 const AUTH_SUBJECT = 'anon:00000000-0000-4000-8000-000000000001';
 const WALLET = Keypair.generate().publicKey.toBase58();
@@ -45,8 +46,10 @@ function authWalletBindingDb(): D1Database {
 
 test('delivery, reveal, claim, receipt, and admin authorization load auth-wallet bindings only from D1', async () => {
   let providerRequests = 0;
+  const commerceDb = createCommerceD1();
   const context = {
-    commerceDb: createCommerceD1(),
+    commerceDb,
+    repository: new D1CommerceRepository(commerceDb),
     nowMs: 1_700_000_000_000,
     providerFetch: async () => {
       providerRequests += 1;

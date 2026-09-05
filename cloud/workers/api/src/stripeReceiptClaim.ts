@@ -26,7 +26,6 @@ import {
   type DirectCardReceiptClaimTransferEvidence,
 } from './adminIrlCardReceipt.js';
 import { getApiDrop } from './dropConfig.js';
-import { dropDeliveryOrderPath } from './dropPaths.js';
 import {
   assetMatchesReceiptDropIdentity,
   assetMatchesReceiptMetadataIdentity,
@@ -75,27 +74,26 @@ import {
   type ProfileProviderFetch,
 } from './boundedResponse.js';
 import {
-  createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
   readBoundedRequestJson,
   runCriticalRequestOperation,
   sleepWithSignal,
 } from './boundedRequest.js';
+import { withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import {
   D1CommerceRepository,
   commerceFieldValue,
+  commerceKeys,
   type CommerceDocumentWriteData,
-  type CommerceUnitOfWork,
 } from './commerceRepository.js';
 import {
   commerceTimestamp,
-  readCommerceDocument,
-  runCommerceWriteTransaction,
-  updateCommerceWrite,
-  type CommerceDocumentContext,
-  type CommerceWrite,
+  readCommerceRecord,
+  requireCommerceKey,
+  runCommerceTransaction,
+  type CommerceRepositoryContext,
 } from './commerceTransactions.js';
 import {
   buildRuntime as buildAdminIrlRedeemRuntime,
@@ -151,7 +149,7 @@ const requestSchema = z.object({
 
 type ClaimEnv = Pick<Env, 'COSIGNER_SECRET' | 'HELIUS_API_KEY'> &
   Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
-type CommerceContext = CommerceDocumentContext & {
+type CommerceContext = CommerceRepositoryContext & {
   dataDb?: D1Database;
   providerFetch: ProfileProviderFetch;
   [key: string]: unknown;
@@ -446,23 +444,6 @@ function timestamp(value: number) {
   return commerceTimestamp(value);
 }
 
-async function runTransaction<T>(
-  context: CommerceContext,
-  operation: (transaction: CommerceUnitOfWork) => Promise<{ result: T; writes?: CommerceWrite[] }>,
-): Promise<T> {
-  return runCommerceWriteTransaction(context, operation);
-}
-
-function updateWrite(args: {
-  path: string;
-  values: CommerceDocumentWriteData;
-}): CommerceWrite {
-  return updateCommerceWrite({
-    ...args,
-    mustExist: true,
-  });
-}
-
 export async function startClaim(
   context: CommerceContext,
   code: string,
@@ -470,13 +451,13 @@ export async function startClaim(
   attemptId: string,
   nowMs: number,
 ): Promise<ClaimStart> {
-  const claimPath = `claimCodes/${code}`;
+  const claimKey = commerceKeys.claimCode(code);
   let attemptedStart: StartedClaim | undefined;
   try {
-    return await runTransaction<ClaimStart>(context, async (transaction) => {
-      const claimDocument = await readCommerceDocument(context, claimPath, transaction);
+    return await runCommerceTransaction<ClaimStart>(context, async (transaction) => {
+      const claimDocument = await readCommerceRecord(context, claimKey, transaction);
       if (!claimDocument) throw new StripeReceiptClaimError('not-found', 'Invalid receipt claim code.');
-      const claim = claimDocument.fields;
+      const claim = claimDocument.data;
       if (claim.namespace !== STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE) {
         throw new StripeReceiptClaimError('not-found', 'Invalid receipt claim code.');
       }
@@ -511,7 +492,7 @@ export async function startClaim(
       const recipientLock = directFigureReceipt ? directRecipientLock : status === 'processing';
       if (status === 'claimed') {
         if (claimedRecipient === recipientWallet) {
-          return { result: { status: 'already_claimed' as const, dropId, deliveryId, boxId, receiptTxs, ...storedResult } };
+          return { status: 'already_claimed' as const, dropId, deliveryId, boxId, receiptTxs, ...storedResult };
         }
         throw new StripeReceiptClaimError('failed-precondition', 'This receipt claim code has already been used.');
       }
@@ -525,10 +506,10 @@ export async function startClaim(
           'This receipt claim code is locked to the receiver address from the previous attempt. Retry with that same address.',
         );
       }
-      const orderPath = dropDeliveryOrderPath(dropId, deliveryId);
-      const orderDocument = await readCommerceDocument(context, orderPath, transaction);
+      const orderKey = commerceKeys.deliveryOrder(dropId, String(deliveryId));
+      const orderDocument = await readCommerceRecord(context, orderKey, transaction);
       if (!orderDocument) throw new StripeReceiptClaimError('not-found', 'Receipt claim order not found.');
-      const order = orderDocument.fields;
+      const order = orderDocument.data;
       if (!isReceiptClaimDeliveryOrderSource(order.source)) {
         throw new StripeReceiptClaimError('failed-precondition', 'Claim code is not for a receipt claim order.');
       }
@@ -563,7 +544,7 @@ export async function startClaim(
         deliveryId,
         boxId,
         attemptId,
-        orderPath,
+        orderPath: orderKey.path,
         orderIrlClaims: Array.isArray(order.irlClaims) ? order.irlClaims : [],
         receiptTxs,
         receiptTxSubmissions,
@@ -572,26 +553,17 @@ export async function startClaim(
         ...(directFigureReceipt ? { directFigureReceipt } : {}),
         ...target,
       };
-      return {
-        result: attemptedStart,
-        writes: [
-          updateWrite({
-            path: claimPath,
-            values: {
-              status: 'processing',
-              recipient: recipientWallet,
-              processingAttemptId: attemptId,
-              processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
-              processingStartedAt: commerceFieldValue.serverTimestamp(),
-              updatedAt: commerceFieldValue.serverTimestamp(),
-            },
-          }),
-          updateWrite({
-            path: orderPath,
-            values: orderValues,
-          }),
-        ],
-      };
+      await transaction.getMany([claimKey, orderKey]);
+      await transaction.update(claimKey, {
+        status: 'processing',
+        recipient: recipientWallet,
+        processingAttemptId: attemptId,
+        processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
+        processingStartedAt: commerceFieldValue.serverTimestamp(),
+        updatedAt: commerceFieldValue.serverTimestamp(),
+      });
+      await transaction.update(orderKey, orderValues);
+      return attemptedStart;
     });
   } catch (error) {
     const cancellation = isSignalCancellationError(context.signal, error);
@@ -601,19 +573,19 @@ export async function startClaim(
     }
     try {
       const cleanup = cleanupContext(context);
-      const claim = await readCommerceDocument(cleanup, claimPath);
+      const claim = await readCommerceRecord(cleanup, claimKey);
       if (
-        claim?.fields.status === 'processing' &&
-        claim.fields.processingAttemptId === attemptId &&
-        claim.fields.recipient === recipientWallet
+        claim?.data.status === 'processing' &&
+        claim.data.processingAttemptId === attemptId &&
+        claim.data.recipient === recipientWallet
       ) {
-        const order = await readCommerceDocument(cleanup, attemptedStart.orderPath);
+        const order = await readCommerceRecord(cleanup, requireCommerceKey(attemptedStart.orderPath));
         const orderClaims = order ? [
           ...(attemptedStart.updatePluralOrderClaim
-            ? [orderStripeReceiptClaimByBoxId(order.fields, attemptedStart.boxId)]
+            ? [orderStripeReceiptClaimByBoxId(order.data, attemptedStart.boxId)]
             : []),
           ...(attemptedStart.updateSingularOrderClaim
-            ? [isRecord(order.fields.stripeReceiptClaim) ? order.fields.stripeReceiptClaim : null]
+            ? [isRecord(order.data.stripeReceiptClaim) ? order.data.stripeReceiptClaim : null]
             : []),
         ] : [];
         if (
@@ -653,11 +625,11 @@ export async function clearProcessing(
 ): Promise<void> {
   const safeContext = cleanupContext(context);
   try {
-    await runTransaction(safeContext, async (transaction) => {
-      const claimPath = `claimCodes/${code}`;
-      const claim = await readCommerceDocument(safeContext, claimPath, transaction);
-      if (!claim || claim.fields.status !== 'processing' || claim.fields.processingAttemptId !== started.attemptId) {
-        return { result: undefined };
+    await runCommerceTransaction(safeContext, async (transaction) => {
+      const claimKey = commerceKeys.claimCode(code);
+      const claim = await readCommerceRecord(safeContext, claimKey, transaction);
+      if (!claim || claim.data.status !== 'processing' || claim.data.processingAttemptId !== started.attemptId) {
+        return;
       }
       const lastError = summarizeError(error);
       const orderValues = orderClaimValues({
@@ -673,24 +645,18 @@ export async function clearProcessing(
         updatePluralOrderClaim: started.updatePluralOrderClaim,
         updateSingularOrderClaim: started.updateSingularOrderClaim,
       });
-      return {
-        result: undefined,
-        writes: [
-          updateWrite({
-            path: claimPath,
-            values: {
-              status: 'unclaimed',
-              lastClaimError: lastError,
-              processingAttemptId: commerceFieldValue.delete(),
-              processingStartedAt: commerceFieldValue.delete(),
-              processingLeaseExpiresAt: commerceFieldValue.delete(),
-              lastClaimErrorAt: commerceFieldValue.serverTimestamp(),
-              updatedAt: commerceFieldValue.serverTimestamp(),
-            },
-          }),
-          updateWrite({ path: started.orderPath, values: orderValues }),
-        ],
-      };
+      const orderKey = requireCommerceKey(started.orderPath);
+      await transaction.getMany([claimKey, orderKey]);
+      await transaction.update(claimKey, {
+        status: 'unclaimed',
+        lastClaimError: lastError,
+        processingAttemptId: commerceFieldValue.delete(),
+        processingStartedAt: commerceFieldValue.delete(),
+        processingLeaseExpiresAt: commerceFieldValue.delete(),
+        lastClaimErrorAt: commerceFieldValue.serverTimestamp(),
+        updatedAt: commerceFieldValue.serverTimestamp(),
+      });
+      await transaction.update(orderKey, orderValues);
     });
   } catch (cleanupError) {
     console.warn({
@@ -710,41 +676,37 @@ export async function rememberSubmittedTransaction(
   submission?: Omit<DirectCardReceiptClaimSubmission, 'signature'> | null,
 ): Promise<void> {
   const safeContext = context.signal.aborted ? cleanupContext(context) : context;
-  await runTransaction(safeContext, async (transaction) => {
-    const path = `claimCodes/${code}`;
-    const claim = await readCommerceDocument(safeContext, path, transaction);
+  await runCommerceTransaction(safeContext, async (transaction) => {
+    const key = commerceKeys.claimCode(code);
+    const claim = await readCommerceRecord(safeContext, key, transaction);
     if (!claim) throw new StripeReceiptClaimError('not-found', 'Receipt claim code not found.');
-    if (claim.fields.status !== 'processing' || claim.fields.processingAttemptId !== attemptId) {
+    if (claim.data.status !== 'processing' || claim.data.processingAttemptId !== attemptId) {
       throw new StripeReceiptClaimError('aborted', 'Receipt claim processing lease changed.');
     }
-    const isDirect = Boolean(directReceiptAssetId(claim.fields));
+    const isDirect = Boolean(directReceiptAssetId(claim.data));
     const normalizedSubmission = isDirect && submission
       ? normalizeSubmissions([{ signature: receiptTx, ...submission }])[0]
       : undefined;
-    const submissions = isDirect ? normalizeSubmissions(claim.fields.receiptTxSubmissions) : [];
+    const submissions = isDirect ? normalizeSubmissions(claim.data.receiptTxSubmissions) : [];
     if (normalizedSubmission) {
       const existing = submissions.findIndex((entry) => entry.signature === normalizedSubmission.signature);
       if (existing >= 0) submissions[existing] = normalizedSubmission;
       else submissions.push(normalizedSubmission);
     }
-    const merged = Array.from(new Set([...normalizeReceiptTxs(claim.fields.receiptTxs), receiptTx]));
+    const merged = Array.from(new Set([...normalizeReceiptTxs(claim.data.receiptTxs), receiptTx]));
     const receiptTxs = isDirect && submissions.length
       ? activeDirectCardReceiptClaimSignatures({ receiptTxs: merged, submissions })
       : merged;
-    return {
-      result: undefined,
-      writes: [updateWrite({
-        path,
-        values: {
-          receiptTxs,
-          ...(normalizedSubmission ? { receiptTxSubmissions: submissions } : {}),
-          ...(normalizedSubmission
-            ? { processingLeaseExpiresAt: timestamp(Date.now() + DIRECT_SUBMISSION_PROCESSING_LEASE_MS) }
-            : {}),
-          updatedAt: commerceFieldValue.serverTimestamp(),
-        },
-      })],
+    const values = {
+      receiptTxs,
+      ...(normalizedSubmission ? { receiptTxSubmissions: submissions } : {}),
+      ...(normalizedSubmission
+        ? { processingLeaseExpiresAt: timestamp(Date.now() + DIRECT_SUBMISSION_PROCESSING_LEASE_MS) }
+        : {}),
+      updatedAt: commerceFieldValue.serverTimestamp(),
     };
+    await transaction.getMany([key]);
+    await transaction.update(key, values);
   });
 }
 
@@ -759,23 +721,23 @@ export async function finalizeClaim(
   figureIds?: number[],
 ): Promise<string[]> {
   const safeContext = context.signal.aborted ? cleanupContext(context) : context;
-  return runTransaction(safeContext, async (transaction) => {
-    const claimPath = `claimCodes/${code}`;
-    const claim = await readCommerceDocument(safeContext, claimPath, transaction);
+  return runCommerceTransaction(safeContext, async (transaction) => {
+    const claimKey = commerceKeys.claimCode(code);
+    const claim = await readCommerceRecord(safeContext, claimKey, transaction);
     if (!claim) throw new StripeReceiptClaimError('not-found', 'Receipt claim code not found.');
-    const storedReceiptTxs = normalizeReceiptTxs(claim.fields.receiptTxs);
-    const isDirect = Boolean(directReceiptAssetId(claim.fields));
-    const submissions = isDirect ? normalizeSubmissions(claim.fields.receiptTxSubmissions) : [];
+    const storedReceiptTxs = normalizeReceiptTxs(claim.data.receiptTxs);
+    const isDirect = Boolean(directReceiptAssetId(claim.data));
+    const submissions = isDirect ? normalizeSubmissions(claim.data.receiptTxSubmissions) : [];
     const existingTxs = isDirect && submissions.length
       ? activeDirectCardReceiptClaimSignatures({ receiptTxs: storedReceiptTxs, submissions })
       : storedReceiptTxs;
-    if (claim.fields.status === 'claimed') {
-      if (claim.fields.recipient !== recipientWallet) {
+    if (claim.data.status === 'claimed') {
+      if (claim.data.recipient !== recipientWallet) {
         throw new StripeReceiptClaimError('failed-precondition', 'This receipt claim code has already been used.');
       }
-      return { result: existingTxs };
+      return existingTxs;
     }
-    if (claim.fields.processingAttemptId !== started.attemptId) {
+    if (claim.data.processingAttemptId !== started.attemptId) {
       throw new StripeReceiptClaimError('aborted', 'Receipt claim processing lease changed.');
     }
     const receiptTxs = receiptTx ? Array.from(new Set([...existingTxs, receiptTx])) : existingTxs;
@@ -799,31 +761,23 @@ export async function finalizeClaim(
         updateSingularOrderClaim: started.updateSingularOrderClaim,
       }),
     };
-    return {
-      result: receiptTxs,
-      writes: [
-        updateWrite({
-          path: claimPath,
-          values: {
-            status: 'claimed',
-            recipient: recipientWallet,
-            receiptTxs,
-            receiptKind,
-            receiptsTransferred,
-            figureIds: figureIds?.length ? figureIds : commerceFieldValue.delete(),
-            processingAttemptId: commerceFieldValue.delete(),
-            processingStartedAt: commerceFieldValue.delete(),
-            processingLeaseExpiresAt: commerceFieldValue.delete(),
-            claimedAt: commerceFieldValue.serverTimestamp(),
-            updatedAt: commerceFieldValue.serverTimestamp(),
-          },
-        }),
-        updateWrite({
-          path: started.orderPath,
-          values: orderValues,
-        }),
-      ],
-    };
+    const orderKey = requireCommerceKey(started.orderPath);
+    await transaction.getMany([claimKey, orderKey]);
+    await transaction.update(claimKey, {
+      status: 'claimed',
+      recipient: recipientWallet,
+      receiptTxs,
+      receiptKind,
+      receiptsTransferred,
+      figureIds: figureIds?.length ? figureIds : commerceFieldValue.delete(),
+      processingAttemptId: commerceFieldValue.delete(),
+      processingStartedAt: commerceFieldValue.delete(),
+      processingLeaseExpiresAt: commerceFieldValue.delete(),
+      claimedAt: commerceFieldValue.serverTimestamp(),
+      updatedAt: commerceFieldValue.serverTimestamp(),
+    });
+    await transaction.update(orderKey, orderValues);
+    return receiptTxs;
   });
 }
 
@@ -1615,9 +1569,9 @@ export async function claimStripeReceipt(
       catch {}
       if (runtime && runtime.itemsPerBox >= BOX_MINTER_MIN_OPENABLE_ITEMS_PER_BOX) {
         try {
-          const order = await readCommerceDocument(commerce, dropDeliveryOrderPath(claim.dropId, claim.deliveryId));
+          const order = await readCommerceRecord(commerce, commerceKeys.deliveryOrder(claim.dropId, String(claim.deliveryId)));
           const assignment = order
-            ? stripeAssignedIrlClaimForBox(order.fields, claim.boxId, {
+            ? stripeAssignedIrlClaimForBox(order.data, claim.boxId, {
                 itemsPerBox: runtime.itemsPerBox,
                 maxDudeId: runtime.maxDudeId,
               })
@@ -1931,95 +1885,82 @@ export async function handleStripeReceiptClaim(
   overrides: Partial<ClaimDependencies> = {},
 ): Promise<StripeReceiptClaimRequestResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  const metrics: ClaimMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
-    try { return await dependencies.providerFetch(input, init); }
-    finally { metrics.providerDurationMs += Math.max(0, performance.now() - startedAt); }
-  };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = errorResponse(new StripeReceiptClaimError('invalid-argument', 'Method not allowed.'));
     response.headers.set('Allow', 'POST, OPTIONS');
     return {
       response: new Response(response.body, { status: 405, headers: response.headers }),
-      metrics,
+      metrics: { upstreamCalls: 0, providerDurationMs: 0 },
       authOutcome: 'rejected',
       outcome: 'method_not_allowed',
     };
   }
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.timeoutMs,
+  return withAuthenticatedRequest(request, {
+    opsDb: env.OPS_DB,
     timeoutMessage: 'Stripe receipt claim timed out',
-  });
-  let identity: RequestIdentity | undefined;
-  let claimContext: ClaimLogContext | undefined;
-  try {
-    const body = await readRequestBody(request, deadline.signal);
-    identity = await dependencies.verifyIdentity(
-      request,
-      env.OPS_DB,
-      deadline.signal,
-      dependencies.nowMs(),
-    );
-    const apiKey = String(env.HELIUS_API_KEY || '').trim();
-    const cosignerSecret = String(env.COSIGNER_SECRET || '').trim();
-    if (!apiKey || !cosignerSecret) {
-      throw new StripeReceiptClaimError('unavailable', 'Receipt claiming is temporarily unavailable.');
-    }
-    const nowMs = dependencies.nowMs();
-    const result = await runCriticalRequestOperation(
-      () => dependencies.claim(
-        body,
-        { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
-        {
-          commerceDb: env.COMMERCE_DB,
-          repository: new D1CommerceRepository(env.COMMERCE_DB),
-          nowMs,
-          providerFetch: trackedFetch,
-          signal: deadline.signal,
-        },
-        { apiKey, providerFetch: trackedFetch, signal: deadline.signal },
-        (context) => { claimContext = context; },
-      ),
-      { deadline, defer, ignoreDeferredErrors: true },
-    );
-    return {
-      response: jsonResponse(result.response, 200, { headers: { 'Timing-Allow-Origin': '*' } }),
-      metrics,
-      authOutcome: 'accepted',
-      dropId: result.response.dropId,
-      deliveryId: result.response.deliveryId,
-      outcome: result.outcome,
-    };
-  } catch (error) {
-    rethrowDeferredWorkRegistrationError(error);
-    let normalized: StripeReceiptClaimError;
-    if (isSignalCancellationError(request.signal, error)) throw request.signal.reason;
-    if (isRequestCancellationError(request, error)) throw error;
-    if (deadline.timedOut()) {
-      normalized = new StripeReceiptClaimError('deadline-exceeded', 'Receipt claim request timed out.');
-    } else if (error instanceof RequestIdentityError) {
-      normalized = new StripeReceiptClaimError(
-        error.kind === 'invalid-token' ? 'unauthenticated' : error.kind === 'provider-timeout' ? 'deadline-exceeded' : 'unavailable',
-        error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',
-      );
-    } else {
-      normalized = normalizedError(error, 'Receipt claim failed.');
-      if (normalized.code === 'internal') {
-        console.error({ event: 'stripe_receipt_claim_unhandled_error', error: summarizeError(error) });
+    dependencies,
+  }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
+    let identity: RequestIdentity | undefined;
+    let claimContext: ClaimLogContext | undefined;
+    try {
+      const body = await readRequestBody(request, deadline.signal);
+      identity = await authenticate();
+      const apiKey = String(env.HELIUS_API_KEY || '').trim();
+      const cosignerSecret = String(env.COSIGNER_SECRET || '').trim();
+      if (!apiKey || !cosignerSecret) {
+        throw new StripeReceiptClaimError('unavailable', 'Receipt claiming is temporarily unavailable.');
       }
+      const nowMs = dependencies.nowMs();
+      const result = await runCriticalRequestOperation(
+        () => dependencies.claim(
+          body,
+          { ...env, COSIGNER_SECRET: cosignerSecret, HELIUS_API_KEY: apiKey },
+          {
+            repository: new D1CommerceRepository(env.COMMERCE_DB),
+            nowMs,
+            providerFetch: trackedFetch,
+            signal: deadline.signal,
+          },
+          { apiKey, providerFetch: trackedFetch, signal: deadline.signal },
+          (context) => { claimContext = context; },
+        ),
+        { deadline, defer, ignoreDeferredErrors: true },
+      );
+      return {
+        response: jsonResponse(result.response, 200, { headers: { 'Timing-Allow-Origin': '*' } }),
+        metrics,
+        authOutcome: 'accepted',
+        dropId: result.response.dropId,
+        deliveryId: result.response.deliveryId,
+        outcome: result.outcome,
+      };
+    } catch (error) {
+      rethrowDeferredWorkRegistrationError(error);
+      let normalized: StripeReceiptClaimError;
+      if (isSignalCancellationError(request.signal, error)) throw request.signal.reason;
+      if (isRequestCancellationError(request, error)) throw error;
+      if (deadline.timedOut()) {
+        normalized = new StripeReceiptClaimError('deadline-exceeded', 'Receipt claim request timed out.');
+      } else if (error instanceof RequestIdentityError) {
+        normalized = new StripeReceiptClaimError(
+          error.kind === 'invalid-token' ? 'unauthenticated' : error.kind === 'provider-timeout' ? 'deadline-exceeded' : 'unavailable',
+          error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',
+        );
+      } else {
+        normalized = normalizedError(error, 'Receipt claim failed.');
+        if (normalized.code === 'internal') {
+          console.error({ event: 'stripe_receipt_claim_unhandled_error', error: summarizeError(error) });
+        }
+      }
+      const rejected = ['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(normalized.code);
+      return {
+        response: errorResponse(normalized),
+        metrics,
+        authOutcome: identity ? (rejected ? 'rejected' : 'provider-failure') : normalized.code === 'unauthenticated' ? 'rejected' : 'provider-failure',
+        ...claimContext,
+        outcome: normalized.code,
+      };
     }
-    const rejected = ['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(normalized.code);
-    return {
-      response: errorResponse(normalized),
-      metrics,
-      authOutcome: identity ? (rejected ? 'rejected' : 'provider-failure') : normalized.code === 'unauthenticated' ? 'rejected' : 'provider-failure',
-      ...claimContext,
-      outcome: normalized.code,
-    };
-  } finally {
-    deadline.dispose();
-  }
+  });
 }

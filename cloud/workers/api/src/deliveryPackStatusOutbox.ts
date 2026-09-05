@@ -1,7 +1,6 @@
 import { API_DROPS } from './dropConfig.js';
 import { runtimeForDrop, type DeliveryRuntime } from './deliveryReceiptOnchain.js';
 import { DeliveryReceiptError, summarizeDeliveryReceiptError as summarizeError } from './deliveryReceiptErrors.js';
-import { dropDeliveryOrderPath } from './dropPaths.js';
 import { resolveDeliveryOrderIdentity } from './deliveryOrderSummaries.js';
 import {
   PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
@@ -25,16 +24,15 @@ import { isRecord } from './dataAccess.js';
 import {
   D1CommerceRepository,
   commerceFieldValue,
+  commerceKeys,
+  type CommerceDocumentRecord,
   type CommerceDocumentWriteData,
 } from './commerceRepository.js';
 import {
-  commerceDocument,
-  commerceRepository as repository,
-  readCommerceDocument as readDocument,
-  runCommerceWriteTransaction,
-  updateCommerceWrite as updateWrite,
-  type CommerceDocument,
-  type CommerceDocumentContext,
+  readCommerceRecord,
+  requireCommerceKey,
+  runCommerceTransaction,
+  type CommerceRepositoryContext,
 } from './commerceTransactions.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import { registerDeferredWork, type DeferredWork } from './deferredWork.js';
@@ -58,7 +56,7 @@ class DeliveryPackStatusProjectionInvalidError extends Error {
   }
 }
 
-type DeliveryPackStatusContext = CommerceDocumentContext & {
+type DeliveryPackStatusContext = CommerceRepositoryContext & {
   dataDb?: D1Database;
 };
 
@@ -166,17 +164,11 @@ async function transitionDeliveryPackStatusProjection(
     requiredState: string;
   },
 ): Promise<boolean> {
-  return runCommerceWriteTransaction(context, async (transaction) => {
-    const document = await readDocument(context, documentPath, transaction);
-    if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== options.requiredState) return { result: false };
-    return {
-      result: true,
-      writes: [updateWrite({
-        path: documentPath,
-        values: options.values,
-        mustExist: true,
-      })],
-    };
+  return runCommerceTransaction(context, async (transaction) => {
+    const document = await readCommerceRecord(context, requireCommerceKey(documentPath), transaction);
+    if (!document || document.data[PACK_STATUS_PROJECTION_STATE_FIELD] !== options.requiredState) return false;
+    await transaction.update(document.key, options.values);
+    return true;
   });
 }
 
@@ -236,37 +228,31 @@ async function recordDeliveryPackStatusProjectionTransientFailure(args: {
   documentPath: string;
   errorCode: string;
 }): Promise<boolean> {
-  return runCommerceWriteTransaction(args.context, async (transaction) => {
-    const document = await readDocument(args.context, args.documentPath, transaction);
-    if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== PACK_STATUS_PROJECTION_PENDING) {
-      return { result: false };
+  return runCommerceTransaction(args.context, async (transaction) => {
+    const document = await readCommerceRecord(args.context, requireCommerceKey(args.documentPath), transaction);
+    if (!document || document.data[PACK_STATUS_PROJECTION_STATE_FIELD] !== PACK_STATUS_PROJECTION_PENDING) {
+      return false;
     }
     if (
       deliveryPackStatusProjectionNextAttemptAtMs(
-        document.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD],
+        document.data[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD],
       ) > args.attemptStartedAtMs
-    ) return { result: false };
+    ) return false;
     const failureCount = deliveryPackStatusProjectionFailureCount(
-      document.fields[PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD],
+      document.data[PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD],
     );
     const backoffMs = PACK_STATUS_PROJECTION_BACKOFF_MS[
       Math.min(failureCount, PACK_STATUS_PROJECTION_BACKOFF_MS.length - 1)
     ];
-    return {
-      result: true,
-      writes: [updateWrite({
-        path: args.documentPath,
-        values: {
-          [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
-          [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: args.attemptStartedAtMs + backoffMs,
-          [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: Math.min(Number.MAX_SAFE_INTEGER, failureCount + 1),
-          [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: args.errorCode,
-          [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
-          [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
-        },
-        mustExist: true,
-      })],
-    };
+    await transaction.update(document.key, {
+      [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
+      [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: args.attemptStartedAtMs + backoffMs,
+      [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: Math.min(Number.MAX_SAFE_INTEGER, failureCount + 1),
+      [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: args.errorCode,
+      [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
+      [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
+    });
+    return true;
   });
 }
 
@@ -296,24 +282,25 @@ export async function projectPendingDeliveryPackStatus(args: {
     nowMs: attemptStartedAtMs,
     signal: controller.signal,
   };
-  const documentPath = dropDeliveryOrderPath(args.dropId, args.deliveryId);
+  const key = commerceKeys.deliveryOrder(args.dropId, String(args.deliveryId));
+  const documentPath = key.path;
   try {
-    const order = await raceWithSignal(readDocument(context, documentPath), context.signal);
+    const order = await raceWithSignal(readCommerceRecord(context, key), context.signal);
     if (!order) return 'not-needed';
-    const state = order.fields[PACK_STATUS_PROJECTION_STATE_FIELD];
+    const state = order.data[PACK_STATUS_PROJECTION_STATE_FIELD];
     if (state !== PACK_STATUS_PROJECTION_PENDING) return 'not-needed';
     if (
       deliveryPackStatusProjectionNextAttemptAtMs(
-        order.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD],
+        order.data[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD],
       ) > attemptStartedAtMs
     ) return 'not-due';
-    if (order.fields.status !== 'ready_to_ship') {
+    if (order.data.status !== 'ready_to_ship') {
       throw new DeliveryPackStatusProjectionInvalidError(
         'invalid-order-status',
         'Pack-status projection order is not ready to ship.',
       );
     }
-    const resolution = resolveDeliveryOrderIdentity(order.id, order.fields, order.path);
+    const resolution = resolveDeliveryOrderIdentity(order.key.documentId, order.data, order.key.path);
     if (
       !('identity' in resolution) ||
       resolution.identity.dropId !== args.dropId ||
@@ -333,8 +320,8 @@ export async function projectPendingDeliveryPackStatus(args: {
         'Pack-status projection drop is invalid.',
       );
     }
-    if (!shouldProjectNormalIrlPackStatus(runtime, order.fields)) {
-      await raceWithSignal(clearDeliveryPackStatusProjection(context, order.path), context.signal);
+    if (!shouldProjectNormalIrlPackStatus(runtime, order.data)) {
+      await raceWithSignal(clearDeliveryPackStatusProjection(context, order.key.path), context.signal);
       log({
         event: 'delivery_pack_status_projection_skipped',
         dropId: args.dropId,
@@ -343,8 +330,8 @@ export async function projectPendingDeliveryPackStatus(args: {
       return 'not-needed';
     }
     if (
-      countDeliveryOrderBoxItems(order.fields.items) < 1 &&
-      countDeliveryOrderDudeItems(order.fields.items) < 1
+      countDeliveryOrderBoxItems(order.data.items) < 1 &&
+      countDeliveryOrderDudeItems(order.data.items) < 1
     ) {
       throw new DeliveryPackStatusProjectionInvalidError(
         'invalid-order-items',
@@ -353,10 +340,10 @@ export async function projectPendingDeliveryPackStatus(args: {
     }
     if (!context.dataDb) throw new Error('pack_status_data_db_not_configured');
     await raceWithSignal(
-      countNormalIrlPackStatus(context, runtime, args.deliveryId, order.fields),
+      countNormalIrlPackStatus(context, runtime, args.deliveryId, order.data),
       context.signal,
     );
-    await raceWithSignal(markDeliveryPackStatusProjectionCompleted(context, order.path), context.signal);
+    await raceWithSignal(markDeliveryPackStatusProjectionCompleted(context, order.key.path), context.signal);
     log({
       event: 'delivery_pack_status_projection_completed',
       dropId: args.dropId,
@@ -408,13 +395,12 @@ async function runDueDeliveryPackStatusProjectionQuery(
   dropId: string,
   dueAtMs: number,
   limit: number,
-): Promise<CommerceDocument[]> {
-  const value = await repository(context).queryDuePackStatusProjections({
+): Promise<CommerceDocumentRecord[]> {
+  return context.repository.queryDuePackStatusProjections({
     dropId,
     dueAtMs,
     limit,
   });
-  return value.map((record) => commerceDocument(record)!);
 }
 
 export async function reconcilePendingDeliveryPackStatusProjections(
@@ -431,7 +417,6 @@ export async function reconcilePendingDeliveryPackStatusProjections(
   const dueAtMs = nowMs();
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
   const context: DeliveryPackStatusContext = {
-    commerceDb: env.COMMERCE_DB,
     repository: new D1CommerceRepository(env.COMMERCE_DB),
     nowMs: dueAtMs,
     signal,
@@ -461,12 +446,12 @@ export async function reconcilePendingDeliveryPackStatusProjections(
       const document = lane.documents.shift();
       if (!document) continue;
       inspected += 1;
-      const resolution = resolveDeliveryOrderIdentity(document.id, document.fields, document.path);
+      const resolution = resolveDeliveryOrderIdentity(document.key.documentId, document.data, document.key.path);
       if (!('identity' in resolution) || resolution.identity.dropId !== lane.dropId) {
         try {
           await markDeliveryPackStatusProjectionFailed(
             cleanupContext(context),
-            document.path,
+            document.key.path,
             'invalid-order-identity',
           );
         } catch (error) {

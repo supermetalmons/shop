@@ -1,13 +1,11 @@
 import {
   CommerceRepositoryError,
   CommerceWriteConflict,
-  D1CommerceRepository,
+  type D1CommerceRepository,
   commerceFieldValue,
   commerceKeyFromPath,
-  type CommerceDocumentData,
   type CommerceDocumentKey,
   type CommerceDocumentRecord,
-  type CommerceDocumentWriteData,
   type CommerceUnitOfWork,
   type CommerceUpdateValue,
 } from './commerceRepository.js';
@@ -34,32 +32,37 @@ export type CommerceTransactionTarget = {
   signal?: AbortSignal;
 };
 
-export type CommerceDocumentContext = {
-  commerceDb: D1Database;
+export type CommerceRepositoryContext = {
   nowMs: number;
-  repository?: D1CommerceRepository;
+  repository: D1CommerceRepository;
   signal: AbortSignal;
 };
 
-export type CommerceDocument = {
-  fields: CommerceDocumentData;
-  id: string;
-  path: string;
-  updateTime: string;
-};
+export function requireCommerceKey(path: string): CommerceDocumentKey {
+  const key = commerceKeyFromPath(path);
+  if (!key) throw new Error('Invalid commerce document path.');
+  return key;
+}
 
-export type CommerceWrite = {
-  expectedUpdateTime?: string;
-  mustExist?: boolean;
-  operation: 'create' | 'update';
-  path: string;
-  values: CommerceDocumentWriteData;
-};
-
-export type CommerceWriteTransactionResult<T> = {
-  result: T;
-  writes?: readonly CommerceWrite[];
-};
+export async function readCommerceRecord(
+  context: CommerceRepositoryContext,
+  key: CommerceDocumentKey,
+  transaction?: CommerceUnitOfWork,
+): Promise<CommerceDocumentRecord | null> {
+  if (!transaction) return context.repository.get(key);
+  try {
+    return await transaction.get(key);
+  } catch (error) {
+    if (
+      error instanceof ProfileReadError ||
+      error instanceof CommerceWriteConflict ||
+      isSignalCancellationError(context.signal, error)
+    ) throw error;
+    const unavailable = new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
+    unavailable.cause = error;
+    throw unavailable;
+  }
+}
 
 function commerceTransactionDelayMs(failedAttempt: number): number {
   return COMMERCE_TRANSACTION_RETRY_DELAYS_MS[
@@ -124,149 +127,10 @@ export function runCommerceTransaction<T>(
   );
 }
 
-export function commerceRepository(
-  context: Pick<CommerceDocumentContext, 'commerceDb' | 'repository'>,
-): D1CommerceRepository {
-  return context.repository || new D1CommerceRepository(context.commerceDb);
-}
-
-export function rollbackCommerceTransaction(
-  _context: CommerceDocumentContext,
-  transaction: CommerceUnitOfWork,
-): Promise<void> {
-  transaction.rollback();
-  return Promise.resolve();
-}
-
-function commerceDocumentKey(path: string): CommerceDocumentKey {
-  const key = commerceKeyFromPath(path);
-  if (!key) throw new Error('Invalid commerce document path.');
-  return key;
-}
-
-export function commerceDocument(record: CommerceDocumentRecord | null): CommerceDocument | null {
-  return record ? {
-    fields: record.data,
-    id: record.key.documentId,
-    path: record.key.path,
-    updateTime: record.updateTime,
-  } : null;
-}
-
-export async function readCommerceDocument(
-  context: CommerceDocumentContext,
-  path: string,
-  transaction?: CommerceUnitOfWork,
-): Promise<CommerceDocument | null> {
-  const key = commerceDocumentKey(path);
-  if (!transaction) return commerceDocument(await commerceRepository(context).get(key));
-  let record: CommerceDocumentRecord | null;
-  try {
-    record = await transaction.get(key);
-  } catch (error) {
-    if (
-      error instanceof ProfileReadError ||
-      error instanceof CommerceWriteConflict ||
-      isSignalCancellationError(context.signal, error)
-    ) throw error;
-    const unavailable = new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
-    unavailable.cause = error;
-    throw unavailable;
-  }
-  return commerceDocument(record);
-}
-
-export async function readCommerceDocuments(
-  transaction: CommerceUnitOfWork,
-  paths: readonly string[],
-): Promise<Array<CommerceDocument | null>> {
-  const records = await transaction.getMany(paths.map(commerceDocumentKey));
-  return records.map(commerceDocument);
-}
-
-async function applyCommerceWrites(
-  transaction: CommerceUnitOfWork,
-  writes: readonly CommerceWrite[],
-): Promise<void> {
-  if (!writes.length) return;
-  const keys = writes.map((write) => commerceDocumentKey(write.path));
-  const documents = await transaction.getMany(keys);
-  for (const [index, write] of writes.entries()) {
-    if (write.expectedUpdateTime && documents[index]?.updateTime !== write.expectedUpdateTime) {
-      throw new CommerceWriteConflict();
-    }
-  }
-  for (const [index, write] of writes.entries()) {
-    const key = keys[index];
-    if (write.operation === 'create') await transaction.create(key, write.values);
-    else if (write.mustExist || write.expectedUpdateTime) await transaction.update(key, write.values);
-    else await transaction.set(key, write.values, { merge: true });
-  }
-}
-
-export async function commitCommerceWrites(
-  context: CommerceDocumentContext,
-  writes: readonly CommerceWrite[],
-  transaction?: CommerceUnitOfWork,
-): Promise<void> {
-  const unit = transaction || await commerceRepository(context).begin(context.nowMs);
-  try {
-    await applyCommerceWrites(unit, writes);
-    await unit.commit();
-  } catch (error) {
-    unit.rollback();
-    throw error;
-  }
-}
-
-export function runCommerceWriteTransaction<T>(
-  context: CommerceDocumentContext,
-  operation: (
-    transaction: CommerceUnitOfWork,
-  ) => Promise<CommerceWriteTransactionResult<T>>,
-  options: Omit<CommerceConflictRetryOptions, 'signal'> = {},
-): Promise<T> {
-  return runCommerceTransaction({
-    nowMs: context.nowMs,
-    repository: commerceRepository(context),
-    signal: context.signal,
-  }, async (transaction) => {
-    const { result, writes = [] } = await operation(transaction);
-    await applyCommerceWrites(transaction, writes);
-    return result;
-  }, options);
-}
-
 export function commerceTimestamp(milliseconds: number): CommerceUpdateValue {
   const seconds = Math.floor(milliseconds / 1000);
   return commerceFieldValue.timestamp(
     seconds,
     (milliseconds - seconds * 1000) * 1_000_000,
   );
-}
-
-export function createCommerceWrite(args: {
-  path: string;
-  values: CommerceDocumentWriteData;
-}): CommerceWrite {
-  return {
-    operation: 'create',
-    path: args.path,
-    values: { ...args.values },
-  };
-}
-
-export function updateCommerceWrite(args: {
-  expectedUpdateTime?: string;
-  mustExist?: boolean;
-  path: string;
-  values: CommerceDocumentWriteData;
-}): CommerceWrite {
-  return {
-    operation: 'update',
-    path: args.path,
-    values: { ...args.values },
-    ...(args.expectedUpdateTime ? { expectedUpdateTime: args.expectedUpdateTime } : {}),
-    ...(args.mustExist ? { mustExist: true } : {}),
-  };
 }

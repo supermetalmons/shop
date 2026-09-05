@@ -3,7 +3,7 @@ import {
   resolveDeliveryOrderIdentity,
 } from './deliveryOrderSummaries.js';
 import { D1CommerceRepository } from './commerceRepository.js';
-import { commerceDocument, type CommerceDocumentContext } from './commerceTransactions.js';
+import type { CommerceRepositoryContext } from './commerceTransactions.js';
 import {
   markPendingReadyToShipNotificationsFailed,
   notificationPersistenceContext,
@@ -23,8 +23,7 @@ export async function reconcilePendingReadyToShipNotifications(
 ): Promise<number> {
   const nowMs = overrides.nowMs || Date.now;
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
-  const context: CommerceDocumentContext = {
-    commerceDb: env.COMMERCE_DB,
+  const context: CommerceRepositoryContext = {
     repository,
     nowMs: nowMs(),
     signal,
@@ -38,25 +37,23 @@ export async function reconcilePendingReadyToShipNotifications(
   const failures: unknown[] = [];
   let publicationAttempts = 0;
   let processed = 0;
-  for (const candidate of candidates) {
+  for (const document of candidates) {
     if (signal.aborted) {
       failures.push(signal.reason);
       break;
     }
-    const document = commerceDocument(candidate);
-    if (!document) continue;
-    const resolution = resolveDeliveryOrderIdentity(document.id, document.fields, document.path);
-    const dropId = resolveDeliveryOrderDropId(document.fields, document.path);
+    const resolution = resolveDeliveryOrderIdentity(document.key.documentId, document.data, document.key.path);
+    const dropId = resolveDeliveryOrderDropId(document.data, document.key.path);
     if (!('identity' in resolution) || !dropId || dropId !== resolution.identity.dropId) {
       try {
         await markPendingReadyToShipNotificationsFailed(
           notificationPersistenceContext(context),
-          document.path,
+          document.key.path,
           'invalid-order-identity',
         );
         log({
           event: 'ready_to_ship_notifications_invalid_order',
-          documentPath: document.path,
+          documentPath: document.key.path,
         });
       } catch (error) {
         failures.push(error);

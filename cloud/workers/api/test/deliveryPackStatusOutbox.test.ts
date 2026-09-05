@@ -13,8 +13,8 @@ import {
   scheduleDeliveryPackStatusProjection,
 } from '../src/deliveryPackStatusOutbox.ts';
 import { runtimeForDrop } from '../src/deliveryReceiptOnchain.ts';
-import { commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
-import { readCommerceDocument } from '../src/commerceTransactions.ts';
+import { D1CommerceRepository, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
+import { readCommerceRecord } from '../src/commerceTransactions.ts';
 
 const READY_NOTIFICATION_NOW_MS = 1_700_000_000_000;
 
@@ -30,7 +30,7 @@ async function nativeDeliveryContext(
   return {
     harness,
     context: {
-      commerceDb: harness.db,
+      repository: new D1CommerceRepository(harness.db),
       nowMs: READY_NOTIFICATION_NOW_MS,
       signal: new AbortController().signal,
       dataDb: undefined as D1Database | undefined,
@@ -95,12 +95,12 @@ test('native pack-status projection applies once and marks the delivery complete
     dropId: 'card_nft_2',
     nowMs: () => READY_NOTIFICATION_NOW_MS,
   }), 'completed');
-  const completed = await readCommerceDocument(
+  const completed = await readCommerceRecord(
     native.context,
-    'drops/card_nft_2/deliveryOrders/7',
+    commerceKeys.deliveryOrder('card_nft_2', '7'),
   );
   assert.equal(projection.applied, 1);
-  assert.equal(completed?.fields.packStatusProjectionState, 'completed');
+  assert.equal(completed?.data.packStatusProjectionState, 'completed');
 });
 
 test('pack-status projection persists retry state when a non-cooperative D1 write is cancelled', async () => {
@@ -126,17 +126,17 @@ test('pack-status projection persists retry state when a non-cooperative D1 writ
     dropId: 'card_nft_2',
     nowMs: () => READY_NOTIFICATION_NOW_MS,
   });
-  const pending = await readCommerceDocument(
+  const pending = await readCommerceRecord(
     { ...native.context, signal: new AbortController().signal },
-    'drops/card_nft_2/deliveryOrders/7',
+    commerceKeys.deliveryOrder('card_nft_2', '7'),
   );
 
   assert.equal(outcome, 'pending');
   assert.equal(projection.attempts, 1);
-  assert.equal(pending?.fields.packStatusProjectionState, 'pending');
-  assert.equal(pending?.fields.packStatusProjectionFailureCount, 1);
-  assert.equal(pending?.fields.packStatusProjectionLastErrorCode, 'aborted');
-  assert.equal(pending?.fields.packStatusProjectionNextAttemptAtMs, READY_NOTIFICATION_NOW_MS + 5 * 60_000);
+  assert.equal(pending?.data.packStatusProjectionState, 'pending');
+  assert.equal(pending?.data.packStatusProjectionFailureCount, 1);
+  assert.equal(pending?.data.packStatusProjectionLastErrorCode, 'aborted');
+  assert.equal(pending?.data.packStatusProjectionNextAttemptAtMs, READY_NOTIFICATION_NOW_MS + 5 * 60_000);
 });
 
 test('scheduled pack-status projection survives request cancellation', async () => {
@@ -163,12 +163,12 @@ test('scheduled pack-status projection survives request cancellation', async () 
   });
   await deferred.drain();
 
-  const completed = await readCommerceDocument(
+  const completed = await readCommerceRecord(
     { ...native.context, signal: new AbortController().signal },
-    'drops/card_nft_2/deliveryOrders/7',
+    commerceKeys.deliveryOrder('card_nft_2', '7'),
   );
   assert.equal(projection.applied, 1);
-  assert.equal(completed?.fields.packStatusProjectionState, 'completed');
+  assert.equal(completed?.data.packStatusProjectionState, 'completed');
 });
 
 function pendingOrder(deliveryId: number, dropId = 'card_nft_2'): CommerceDocumentData {
@@ -241,10 +241,10 @@ test('projection transitions reread conflicts and preserve a concurrent terminal
       log: () => {},
     });
     assert.equal(reads, 3);
-    const stored = await readCommerceDocument(native.context, 'drops/card_nft_2/deliveryOrders/7');
-    assert.equal(stored?.fields.packStatusProjectionState, 'failed');
-    assert.equal(stored?.fields.packStatusProjectionLastErrorCode, 'manual-review');
-    assert.equal(stored?.fields.packStatusProjectionFailureCount, 0);
+    const stored = await readCommerceRecord(native.context, commerceKeys.deliveryOrder('card_nft_2', '7'));
+    assert.equal(stored?.data.packStatusProjectionState, 'failed');
+    assert.equal(stored?.data.packStatusProjectionLastErrorCode, 'manual-review');
+    assert.equal(stored?.data.packStatusProjectionFailureCount, 0);
   }
 });
 
@@ -298,10 +298,10 @@ test('projection sweep marks malformed identities failed and counts them against
     new AbortController().signal,
     { dropIds: ['card_nft_2'], nowMs: () => READY_NOTIFICATION_NOW_MS, log: () => {} },
   ), 3);
-  const context = { commerceDb: harness.db, nowMs: READY_NOTIFICATION_NOW_MS, signal: new AbortController().signal };
-  const invalid = await readCommerceDocument(context, 'drops/card_nft_2/deliveryOrders/1');
-  assert.equal(invalid?.fields.packStatusProjectionState, 'failed');
-  assert.equal(invalid?.fields.packStatusProjectionLastErrorCode, 'invalid-order-identity');
-  assert.equal((await readCommerceDocument(context, 'drops/card_nft_2/deliveryOrders/5'))?.fields.packStatusProjectionState, 'pending');
+  const context = { repository: new D1CommerceRepository(harness.db), nowMs: READY_NOTIFICATION_NOW_MS, signal: new AbortController().signal };
+  const invalid = await readCommerceRecord(context, commerceKeys.deliveryOrder('card_nft_2', '1'));
+  assert.equal(invalid?.data.packStatusProjectionState, 'failed');
+  assert.equal(invalid?.data.packStatusProjectionLastErrorCode, 'invalid-order-identity');
+  assert.equal((await readCommerceRecord(context, commerceKeys.deliveryOrder('card_nft_2', '5')))?.data.packStatusProjectionState, 'pending');
   assert.equal(projection.applied, 3);
 });
