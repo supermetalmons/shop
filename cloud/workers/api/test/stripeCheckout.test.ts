@@ -19,7 +19,8 @@ import {
   requireFulfillmentPrerequisites,
   stripeKeys,
 } from '../src/stripeCheckout.ts';
-import { createStripeCheckoutStore } from '../src/stripeCheckout/store.ts';
+import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
+import { runCommerceTransaction } from '../src/commerceTransactions.ts';
 
 const DROP: StripeCheckoutSessionDrop = {
   dropId: 'card_nft_binder_devnet',
@@ -444,11 +445,12 @@ test('checkout retry does not overwrite a session that already advanced', async 
   );
 
   assert.equal((await run()).response.status, 200);
-  const reference = createStripeCheckoutStore({ commerceDb: checkoutEnv.COMMERCE_DB })
-    .doc(`drops/${DROP.dropId}/stripeCheckouts/cs_test_123`);
-  await reference.update({ status: 'fulfillment_pending' });
+  const repository = new D1CommerceRepository(checkoutEnv.COMMERCE_DB);
+  const key = commerceKeys.stripeCheckout(DROP.dropId, 'cs_test_123');
+  await runCommerceTransaction({ repository, nowMs: Date.now }, (transaction) =>
+    transaction.update(key, { status: 'fulfillment_pending' }));
   assert.equal((await run()).response.status, 200);
-  assert.equal((await reference.get()).get('status'), 'fulfillment_pending');
+  assert.equal((await repository.get(key))?.data.status, 'fulfillment_pending');
 });
 
 test('checkout client cancellation aborts the injected Stripe fetch', async () => {

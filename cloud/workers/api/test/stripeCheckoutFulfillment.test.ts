@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import { PublicKey } from '@solana/web3.js';
 import type { DecodedBoxMinterConfigData } from '../../../../shared/boxMinterConfigCodec.ts';
 import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { StripeCheckoutFulfillmentError } from '../src/stripeCheckout/errors.ts';
+import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
+import { isCommerceServerTimestamp } from '../src/commerceRepositoryTypes.ts';
+import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import {
   flowDependencies,
   fulfillmentRuntime,
@@ -23,6 +26,15 @@ const stripeCheckoutFulfillmentTestHooks = {
   validateOnchainConfig,
   workerFulfillmentCompletionFields,
 };
+
+function commerceFixture(context: TestContext) {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  return {
+    harness,
+    commerce: { repository: new D1CommerceRepository(harness.db), nowMs: Date.now },
+  };
+}
 
 function matchingConfig(): {
   decoded: DecodedBoxMinterConfigData;
@@ -101,7 +113,7 @@ test('Stripe fulfillment pack-status events use card-equivalent quantity', () =>
   assert.equal(stripeCheckoutFulfillmentTestHooks.packStatusEventQuantity(runtime, 2), 6);
 });
 
-test('Stripe fulfillment resolves late checkout ownership through Ops D1', async () => {
+test('Stripe fulfillment resolves late checkout ownership through Ops D1', async (context) => {
   const wallet = PublicKey.unique().toBase58();
   const opsDb = {
     prepare() {
@@ -124,13 +136,13 @@ test('Stripe fulfillment resolves late checkout ownership through Ops D1', async
   } as unknown as D1Database;
   const dependencies = stripeCheckoutFulfillmentTestHooks.flowDependencies(
     { ADDRESS_DECRYPTION_SECRET: '', OPS_DB: opsDb } as any,
-    {} as any,
+    commerceFixture(context).commerce,
     new AbortController().signal,
   );
   assert.equal(await dependencies.resolveWalletOwner?.('anonymous-subject'), wallet);
 });
 
-test('Stripe fulfillment writes pack-status events to required D1 without checkout-store access', async () => {
+test('Stripe fulfillment writes pack-status events to required D1 without reading commerce', async (context) => {
   let query = '';
   let bindings: unknown[] = [];
   let runs = 0;
@@ -149,9 +161,11 @@ test('Stripe fulfillment writes pack-status events to required D1 without checko
       };
     },
   } as unknown as D1Database;
+  const { commerce } = commerceFixture(context);
+  context.mock.method(commerce.repository, 'get', () => assert.fail('pack-status projection must not read commerce'));
   const dependencies = stripeCheckoutFulfillmentTestHooks.flowDependencies(
     { ADDRESS_DECRYPTION_SECRET: '', DATA_DB: dataDb } as any,
-    { doc: () => assert.fail('pack-status projection must not access the checkout store') } as any,
+    commerce,
     new AbortController().signal,
   );
   assert.ok(dependencies.countPackStatus);
@@ -176,7 +190,7 @@ test('Stripe fulfillment writes pack-status events to required D1 without checko
 
   const missing = stripeCheckoutFulfillmentTestHooks.flowDependencies(
     { ADDRESS_DECRYPTION_SECRET: '' } as any,
-    {} as any,
+    commerce,
     new AbortController().signal,
   );
   const missingCountPackStatus = missing.countPackStatus;
@@ -193,53 +207,47 @@ test('Stripe fulfillment writes pack-status events to required D1 without checko
   );
 });
 
-test('Stripe pack-status repair skips unsupported drops and rejects inconsistent orders', async () => {
-  let reads = 0;
-  const store = {
-    doc: () => {
-      reads += 1;
-      return {
-        get: async () => ({
-          exists: true,
-          data: () => ({
-            dropId: 'card_nft_2',
-            deliveryId: 123,
-            source: 'stripe_offchain',
-            stripeCheckoutSessionId: 'wrong-session',
-            offchainOrderHash: '00'.repeat(32),
-            metadataIds: [1, 'invalid'],
-          }),
-        }),
-      };
+test('Stripe pack-status repair skips unsupported drops and rejects inconsistent orders', async (context) => {
+  const { harness, commerce } = commerceFixture(context);
+  const reads = context.mock.method(commerce.repository, 'get', commerce.repository.get.bind(commerce.repository));
+  const checkoutKey = commerceKeys.stripeCheckout('card_nft_2', 'cs_test_repair');
+  seedCommerceDocument(harness, {
+    key: checkoutKey,
+    data: {
+      dropId: 'card_nft_2',
+      sessionId: 'cs_test_repair',
+      deliveryId: 123,
+      livemode: true,
     },
-  } as any;
+  });
+  seedCommerceDocument(harness, {
+    key: commerceKeys.deliveryOrder('card_nft_2', '123'),
+    data: {
+      dropId: 'card_nft_2',
+      deliveryId: 123,
+      source: 'stripe_offchain',
+      stripeCheckoutSessionId: 'wrong-session',
+      offchainOrderHash: '00'.repeat(32),
+      metadataIds: [1, 'invalid'],
+    },
+  });
   const dependencies = stripeCheckoutFulfillmentTestHooks.flowDependencies(
     { ADDRESS_DECRYPTION_SECRET: '' } as any,
-    store,
+    commerce,
     new AbortController().signal,
   );
   const repairPackStatus = dependencies.repairPackStatus;
   assert.ok(repairPackStatus);
   await repairPackStatus({
     dropRuntime: stripeCheckoutFulfillmentTestHooks.fulfillmentRuntime('card_nft_binder_devnet'),
-    checkoutRef: { get: async () => assert.fail('unsupported drops must not be read') } as any,
+    checkoutKey: commerceKeys.stripeCheckout('card_nft_binder_devnet', 'cs_test_skip'),
     sessionId: 'cs_test_skip',
   });
-  assert.equal(reads, 0);
+  assert.equal(reads.mock.callCount(), 0);
   await assert.rejects(
     repairPackStatus({
       dropRuntime: stripeCheckoutFulfillmentTestHooks.fulfillmentRuntime('card_nft_2'),
-      checkoutRef: {
-        get: async () => ({
-          exists: true,
-          data: () => ({
-            dropId: 'card_nft_2',
-            sessionId: 'cs_test_repair',
-            deliveryId: 123,
-            livemode: true,
-          }),
-        }),
-      } as any,
+      checkoutKey,
       sessionId: 'cs_test_repair',
     }),
     /stripe_pack_status_repair_order_invalid/,
@@ -257,8 +265,5 @@ test('Stripe fulfillment defers address encryption setup until the address is pe
 test('Stripe fulfillment provides Worker completion fields for the atomic fulfilled write', () => {
   const fields = stripeCheckoutFulfillmentTestHooks.workerFulfillmentCompletionFields();
   assert.equal(fields.fulfillmentCompletedBy, 'cloudflare_queue_v1');
-  assert.equal(
-    (fields.fulfillmentCompletedAt as { kind?: unknown }).kind,
-    'server_timestamp',
-  );
+  assert.ok(isCommerceServerTimestamp(fields.fulfillmentCompletedAt));
 });

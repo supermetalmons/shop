@@ -39,7 +39,7 @@ class PreparedStatement {
     const result: D1Result<T> = {
       success: true,
       results: this.statement().all(...this.values) as T[],
-      meta: {} as D1Meta & Record<string, unknown>,
+      meta: {} as D1Result<T>['meta'],
     };
     this.observeStatement?.({ method: 'all', sql: this.sql });
     return result;
@@ -57,7 +57,7 @@ class PreparedStatement {
       result = {
         success: true,
         results: statement.all(...this.values) as T[],
-        meta: {} as D1Meta & Record<string, unknown>,
+        meta: {} as D1Result<T>['meta'],
       };
     } else {
       const execution = statement.run(...this.values);
@@ -67,7 +67,7 @@ class PreparedStatement {
         meta: {
           changes: Number(execution.changes),
           last_row_id: Number(execution.lastInsertRowid),
-        } as D1Meta & Record<string, unknown>,
+        } as D1Result<T>['meta'],
       };
     }
     this.observeStatement?.({ method: 'run', sql: this.sql });

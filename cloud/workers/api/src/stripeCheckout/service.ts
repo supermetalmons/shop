@@ -11,7 +11,6 @@ import {
 import type Stripe from 'stripe';
 import type { MintSelectionConfig, SolanaCluster } from '../dropConfig.js';
 import type { DropFamily, DropSalesMode } from '../../../../../shared/deploymentCore.js';
-import { dropDeliveryOrderPath, dropRootPath } from '../dropPaths.js';
 import {
   buildStripeOffchainAddressSnapshot,
   buildStripeOffchainDeliveryOrderDocument,
@@ -59,14 +58,16 @@ import { toMillisMaybe } from '../time.js';
 import { StripeCheckoutFulfillmentError } from './errors.js';
 import { createStripeTerminalNotificationOutboxFields } from './notificationOutboxState.js';
 import {
-  stripeCheckoutFieldValue,
-  type StripeCheckoutDocumentReference,
-  type StripeCheckoutDocumentSnapshot,
-  type StripeCheckoutStore,
-} from './store.js';
+  commerceFieldValue,
+  commerceKeys,
+  type CommerceDocumentKey,
+  type CommerceDocumentRecord,
+} from '../commerceRepository.js';
+import { commerceTimestamp, runCommerceTransaction } from '../commerceTransactions.js';
+import { stripeCheckoutWriteData, type StripeCheckoutCommerceContext } from './commerce.js';
 
 type StripeCheckoutDocumentRecord = {
-  ref: StripeCheckoutDocumentReference;
+  key: CommerceDocumentKey<'stripe_checkout'>;
   checkout: any;
 } & StripeCheckoutDocumentData;
 
@@ -88,7 +89,7 @@ export type StripeCheckoutManualReviewSummary = {
 export type StripeCheckoutFulfillmentStart =
   | {
       started: true;
-      checkoutRef: StripeCheckoutDocumentReference;
+      checkoutKey: CommerceDocumentKey<'stripe_checkout'>;
       checkout: StripeCheckoutDocumentRecord;
       variantKey?: string;
       processingAttemptId: string;
@@ -169,7 +170,7 @@ type StripeCheckoutPackStatusCounter<Runtime extends StripeCheckoutPackStatusRun
 
 type StripeCheckoutPackStatusRepair<Runtime extends StripeCheckoutPackStatusRuntime> = (params: {
   dropRuntime: Runtime;
-  checkoutRef: StripeCheckoutDocumentReference;
+  checkoutKey: CommerceDocumentKey<'stripe_checkout'>;
   sessionId: string;
 }) => Promise<void>;
 
@@ -368,7 +369,8 @@ class StripeCheckoutProcessingAttemptOwnershipCheckError extends Error {
 }
 
 async function recordStripeCheckoutRetryableFulfillmentError(params: {
-  checkoutRef: StripeCheckoutDocumentReference;
+  commerce: StripeCheckoutCommerceContext;
+  checkoutKey: CommerceDocumentKey<'stripe_checkout'>;
   summarizeError: (err: unknown) => unknown;
   err: unknown;
   attempt: number;
@@ -377,35 +379,36 @@ async function recordStripeCheckoutRetryableFulfillmentError(params: {
 }): Promise<'recorded' | 'stale'> {
   const update = {
     lastRetryableFulfillmentError: params.summarizeError(params.err),
-    lastRetryableFulfillmentErrorAt: stripeCheckoutFieldValue.serverTimestamp(),
+    lastRetryableFulfillmentErrorAt: commerceFieldValue.serverTimestamp(),
     lastRetryableFulfillmentAttempt: params.attempt,
-    nextFulfillmentRetryAt: stripeCheckoutFieldValue.timestampFromMillis(Date.now() + params.retryDelayMs),
-    updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
+    nextFulfillmentRetryAt: commerceTimestamp(Date.now() + params.retryDelayMs),
+    updatedAt: commerceFieldValue.serverTimestamp(),
   };
 
   if (!params.processingAttemptId) {
-    await params.checkoutRef.update(update).catch(() => undefined);
+    await runCommerceTransaction(params.commerce, async (tx) => {
+      await tx.update(params.checkoutKey, stripeCheckoutWriteData(update));
+    }, { shouldRetry: (error) => error.code === 'aborted' }).catch(() => undefined);
     return 'recorded';
   }
 
-  return params.checkoutRef.store
-    .runTransaction(async (tx) => {
-      const snap = await tx.get(params.checkoutRef);
-      const checkout = snap.exists ? (snap.data() as any) : null;
-      const currentAttemptId = typeof checkout?.processingAttemptId === 'string' ? checkout.processingAttemptId : '';
-      if (currentAttemptId !== params.processingAttemptId) return 'stale' as const;
-      tx.update(params.checkoutRef, update);
-      return 'recorded' as const;
-    })
-    .catch((err) => {
-      throw new StripeCheckoutProcessingAttemptOwnershipCheckError(err);
-    });
+  return runCommerceTransaction(params.commerce, async (tx) => {
+    const record = await tx.get(params.checkoutKey);
+    const checkout = record?.data ?? null;
+    const currentAttemptId = typeof checkout?.processingAttemptId === 'string' ? checkout.processingAttemptId : '';
+    if (currentAttemptId !== params.processingAttemptId) return 'stale' as const;
+    await tx.update(params.checkoutKey, stripeCheckoutWriteData(update));
+    return 'recorded' as const;
+  }, { shouldRetry: (error) => error.code === 'aborted' }).catch((err) => {
+    throw new StripeCheckoutProcessingAttemptOwnershipCheckError(err);
+  });
 }
 
 export async function runStripeCheckoutFulfillmentWithRetry<T>(
   operation: (attempt: number) => Promise<T>,
   params: {
-    checkoutRef: StripeCheckoutDocumentReference;
+    commerce: StripeCheckoutCommerceContext;
+    checkoutKey: CommerceDocumentKey<'stripe_checkout'>;
     summarizeError: (err: unknown) => unknown;
     maxAttempts?: number;
     retryDelayMs?: number;
@@ -423,7 +426,8 @@ export async function runStripeCheckoutFulfillmentWithRetry<T>(
       if (attempt >= maxAttempts || !isRetryableStripeCheckoutFulfillmentError(err)) throw err;
 
       const retryRecordStatus = await recordStripeCheckoutRetryableFulfillmentError({
-        checkoutRef: params.checkoutRef,
+        commerce: params.commerce,
+        checkoutKey: params.checkoutKey,
         summarizeError: params.summarizeError,
         err,
         attempt,
@@ -746,21 +750,21 @@ function requireAppCreatedStripeCheckoutDocumentData(params: {
   }
 }
 
-function requireAppCreatedStripeCheckoutSnapshot(params: {
+function requireAppCreatedStripeCheckoutRecord(params: {
   dropId: string;
   variantKey?: string;
   sessionId: string;
   expectedLivemode?: boolean;
-  ref: StripeCheckoutDocumentReference;
-  snap: StripeCheckoutDocumentSnapshot;
+  key: CommerceDocumentKey<'stripe_checkout'>;
+  record: CommerceDocumentRecord | null;
 }): StripeCheckoutDocumentRecord {
-  if (!params.snap.exists) {
+  if (!params.record) {
     throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout session was not created by this app', {
       dropId: params.dropId,
       sessionId: params.sessionId,
     });
   }
-  const checkout = params.snap.data() as any;
+  const checkout = params.record.data;
   const checkoutData = requireAppCreatedStripeCheckoutDocumentData({
     dropId: params.dropId,
     variantKey: params.variantKey,
@@ -768,26 +772,26 @@ function requireAppCreatedStripeCheckoutSnapshot(params: {
     expectedLivemode: params.expectedLivemode,
     checkout,
   });
-  return { ref: params.ref, checkout, ...checkoutData };
+  return { key: params.key, checkout, ...checkoutData };
 }
 
 function stripeCheckoutFailureStateClearUpdate(): Record<string, unknown> {
   return {
-    lastFulfillmentError: stripeCheckoutFieldValue.delete(),
-    lastRetryableFulfillmentAttempt: stripeCheckoutFieldValue.delete(),
-    lastRetryableFulfillmentError: stripeCheckoutFieldValue.delete(),
-    lastRetryableFulfillmentErrorAt: stripeCheckoutFieldValue.delete(),
-    manualRefundReviewRequired: stripeCheckoutFieldValue.delete(),
-    manualRefundReviewReason: stripeCheckoutFieldValue.delete(),
-    nextFulfillmentRetryAt: stripeCheckoutFieldValue.delete(),
-    failedAt: stripeCheckoutFieldValue.delete(),
+    lastFulfillmentError: commerceFieldValue.delete(),
+    lastRetryableFulfillmentAttempt: commerceFieldValue.delete(),
+    lastRetryableFulfillmentError: commerceFieldValue.delete(),
+    lastRetryableFulfillmentErrorAt: commerceFieldValue.delete(),
+    manualRefundReviewRequired: commerceFieldValue.delete(),
+    manualRefundReviewReason: commerceFieldValue.delete(),
+    nextFulfillmentRetryAt: commerceFieldValue.delete(),
+    failedAt: commerceFieldValue.delete(),
   };
 }
 
 function stripeCheckoutProcessingStateClearUpdate(): Record<string, unknown> {
   return {
-    processingAttemptId: stripeCheckoutFieldValue.delete(),
-    processingLeaseExpiresAt: stripeCheckoutFieldValue.delete(),
+    processingAttemptId: commerceFieldValue.delete(),
+    processingLeaseExpiresAt: commerceFieldValue.delete(),
   };
 }
 
@@ -817,13 +821,13 @@ function stripeCheckoutFulfilledUpdate(params: {
     status: STRIPE_CHECKOUT_STATUS.FULFILLED,
     ...createStripeTerminalNotificationOutboxFields(params.before, 'fulfilled'),
     deliveryId: params.deliveryId,
-    ...(metadataId ? { metadataId } : metadataIds.length > 1 ? { metadataId: stripeCheckoutFieldValue.delete() } : {}),
+    ...(metadataId ? { metadataId } : metadataIds.length > 1 ? { metadataId: commerceFieldValue.delete() } : {}),
     ...(metadataIds.length ? { metadataIds, quantity: metadataIds.length } : {}),
     ...(typeof params.receiptTx === 'string' || params.receiptTx === null ? { receiptTx: params.receiptTx } : {}),
     ...params.fulfillmentCompletionFields,
-    fulfilledAt: stripeCheckoutFieldValue.serverTimestamp(),
+    fulfilledAt: commerceFieldValue.serverTimestamp(),
     ...stripeCheckoutFulfillmentClearUpdate(),
-    updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
+    updatedAt: commerceFieldValue.serverTimestamp(),
   };
 }
 
@@ -854,7 +858,8 @@ function stripeCheckoutFulfilledWriteStatus(
 }
 
 export async function markStripeCheckoutFulfillmentFulfilled(
-  checkoutRef: StripeCheckoutDocumentReference,
+  commerce: StripeCheckoutCommerceContext,
+  checkoutKey: CommerceDocumentKey<'stripe_checkout'>,
   params: {
     deliveryId: number;
     metadataId?: number;
@@ -864,22 +869,20 @@ export async function markStripeCheckoutFulfillmentFulfilled(
     fulfillmentCompletionFields?: StripeCheckoutFulfillmentCompletionFields;
   },
 ): Promise<StripeCheckoutFulfillmentSuccessMarkResult> {
-  return checkoutRef.store
-    .runTransaction(async (tx) => {
-      const checkoutSnap = await tx.get(checkoutRef);
-      const checkout = checkoutSnap.exists ? (checkoutSnap.data() as any) : null;
-      if (params.processingAttemptId) {
-        const status = stripeCheckoutFulfilledWriteStatus(checkout, params.processingAttemptId);
-        if (status === 'already_fulfilled') return { status: 'already_fulfilled' as const };
-        if (status === 'stale_processing_attempt') return { status: 'stale_processing_attempt' as const };
-      }
-      tx.update(checkoutRef, stripeCheckoutFulfilledUpdate({ ...params, before: checkout }));
-      return { status: 'fulfilled' as const };
-    })
-    .catch((err) => {
-      if (!params.processingAttemptId) throw err;
-      throw new StripeCheckoutProcessingAttemptOwnershipCheckError(err);
-    });
+  return runCommerceTransaction(commerce, async (tx) => {
+    const record = await tx.get(checkoutKey);
+    const checkout = record?.data ?? null;
+    if (params.processingAttemptId) {
+      const status = stripeCheckoutFulfilledWriteStatus(checkout, params.processingAttemptId);
+      if (status === 'already_fulfilled') return { status: 'already_fulfilled' as const };
+      if (status === 'stale_processing_attempt') return { status: 'stale_processing_attempt' as const };
+    }
+    await tx.update(checkoutKey, stripeCheckoutWriteData(stripeCheckoutFulfilledUpdate({ ...params, before: checkout })));
+    return { status: 'fulfilled' as const };
+  }, { shouldRetry: (error) => error.code === 'aborted' }).catch((err) => {
+    if (!params.processingAttemptId) throw err;
+    throw new StripeCheckoutProcessingAttemptOwnershipCheckError(err);
+  });
 }
 
 function positiveInteger(value: unknown): number | undefined {
@@ -907,12 +910,12 @@ function receiptTxMaybe(value: unknown): string | null | undefined {
   return undefined;
 }
 
-function readStripeOffchainDeliveryOrderMarker(marker: { get(fieldPath: string): unknown }): StripeOffchainDeliveryOrderMarker | null {
-  const deliveryId = Math.floor(Number(marker.get('deliveryId')));
+function readStripeOffchainDeliveryOrderMarker(marker: Record<string, unknown>): StripeOffchainDeliveryOrderMarker | null {
+  const deliveryId = Math.floor(Number(marker.deliveryId));
   if (!Number.isFinite(deliveryId) || deliveryId <= 0) return null;
-  const metadataId = positiveInteger(marker.get('metadataId'));
-  const metadataIds = normalizedMetadataIds(marker.get('metadataIds'), metadataId);
-  const receiptTx = receiptTxMaybe(marker.get('receiptTx'));
+  const metadataId = positiveInteger(marker.metadataId);
+  const metadataIds = normalizedMetadataIds(marker.metadataIds, metadataId);
+  const receiptTx = receiptTxMaybe(marker.receiptTx);
   return {
     deliveryId,
     ...(metadataId ? { metadataId } : {}),
@@ -922,26 +925,28 @@ function readStripeOffchainDeliveryOrderMarker(marker: { get(fieldPath: string):
 }
 
 async function fetchStripeOffchainDeliveryOrderMarker(params: {
-  db: StripeCheckoutStore;
+  commerce: StripeCheckoutCommerceContext;
   dropId: string;
   orderHashHex: string;
 }): Promise<StripeOffchainDeliveryOrderMarker | null> {
-  const marker = await params.db.doc(`${dropRootPath(params.dropId)}/offchainOrders/${params.orderHashHex}`).get();
-  return marker.exists ? readStripeOffchainDeliveryOrderMarker(marker) : null;
+  params.commerce.signal?.throwIfAborted();
+  const marker = await params.commerce.repository.get(commerceKeys.offchainOrder(params.dropId, params.orderHashHex));
+  params.commerce.signal?.throwIfAborted();
+  return marker ? readStripeOffchainDeliveryOrderMarker(marker.data) : null;
 }
 
 export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends StripeCheckoutPackStatusRuntime = StripeCheckoutPackStatusRuntime>(params: {
-  db: StripeCheckoutStore;
+  commerce: StripeCheckoutCommerceContext;
   dropRuntime?: Runtime;
   order: StripeOffchainDeliveryOrderDraft;
-  checkoutRef: StripeCheckoutDocumentReference;
+  checkoutKey: CommerceDocumentKey<'stripe_checkout'>;
   isAlreadyExistsError: (err: unknown) => boolean;
   processingAttemptId?: string;
   fulfillmentCompletionFields?: StripeCheckoutFulfillmentCompletionFields;
   countPackStatus?: StripeCheckoutPackStatusCounter<Runtime>;
   logPackStatusError?: (entry: Record<string, unknown>) => void;
 }): Promise<StripeOffchainDeliveryOrderResult> {
-  const { db, order, checkoutRef } = params;
+  const { commerce, order, checkoutKey } = params;
   const { dropId, orderHashHex } = order;
   if (params.dropRuntime && params.dropRuntime.dropId !== dropId) {
     throw new StripeCheckoutFulfillmentError('failed-precondition', 'Stripe checkout drop runtime does not match the delivery order drop.', {
@@ -951,43 +956,43 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
   }
   const metadataIds = normalizedMetadataIds(order.metadataIds, order.metadataId);
   const quantity = normalizeStripeCheckoutQuantity(metadataIds.length);
-  const markerRef = db.doc(`${dropRootPath(dropId)}/offchainOrders/${orderHashHex}`);
+  const markerKey = commerceKeys.offchainOrder(dropId, orderHashHex);
   const MAX_DELIVERY_ID_ATTEMPTS = 16;
   const MAX_CLAIM_CODE_ATTEMPTS = 40;
   const maxAttempts = MAX_DELIVERY_ID_ATTEMPTS * MAX_CLAIM_CODE_ATTEMPTS;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const candidate = randomInt(1, 2 ** 31);
-    const orderRef = db.doc(dropDeliveryOrderPath(dropId, candidate));
+    const orderKey = commerceKeys.deliveryOrder(dropId, String(candidate));
     const claimCodes = generateUniqueStripeReceiptClaimCodes(quantity);
-    const claimRefs = claimCodes.map((claimCode) => db.doc(`claimCodes/${claimCode}`));
+    const claimKeys = claimCodes.map((claimCode) => commerceKeys.claimCode(claimCode));
 
     try {
-      const operation = () => db.runTransaction(async (tx) => {
-        const marker = await tx.get(markerRef);
-        const checkoutSnap = await tx.get(checkoutRef);
-        const checkout = checkoutSnap.exists ? (checkoutSnap.data() as any) : null;
+      const operation = () => runCommerceTransaction(commerce, async (tx) => {
+        const marker = await tx.get(markerKey);
+        const checkoutSnap = await tx.get(checkoutKey);
+        const checkout = checkoutSnap?.data ?? null;
         const checkoutStatus = stripeCheckoutFulfilledWriteStatus(
           params.processingAttemptId ? checkout : null,
           params.processingAttemptId,
         );
-        if (marker.exists) {
-          const existingOrder = readStripeOffchainDeliveryOrderMarker(marker);
+        if (marker) {
+          const existingOrder = readStripeOffchainDeliveryOrderMarker(marker.data);
           if (existingOrder) {
             if (checkoutStatus === 'stale_processing_attempt') {
               return { checkoutStatus };
             }
             if (checkoutStatus === 'fulfilled') {
-              tx.update(
-                checkoutRef,
-                stripeCheckoutFulfilledUpdate({
+              await tx.update(
+                checkoutKey,
+                stripeCheckoutWriteData(stripeCheckoutFulfilledUpdate({
                   before: checkout,
                   deliveryId: existingOrder.deliveryId,
                   metadataId: existingOrder.metadataId,
                   metadataIds: existingOrder.metadataIds,
                   receiptTx: existingOrder.receiptTx,
                   fulfillmentCompletionFields: params.fulfillmentCompletionFields,
-                }),
+                })),
               );
             }
             return { deliveryId: existingOrder.deliveryId, checkoutStatus };
@@ -1013,17 +1018,17 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
           metadataIds,
           stripeReceiptClaims,
         };
-        tx.create(orderRef, {
+        await tx.create(orderKey, stripeCheckoutWriteData({
           ...buildStripeOffchainDeliveryOrderDocument(deliveryOrder),
-          processedAt: stripeCheckoutFieldValue.serverTimestamp(),
-          createdAt: stripeCheckoutFieldValue.serverTimestamp(),
-        });
-        tx.create(markerRef, {
+          processedAt: commerceFieldValue.serverTimestamp(),
+          createdAt: commerceFieldValue.serverTimestamp(),
+        }));
+        await tx.create(markerKey, stripeCheckoutWriteData({
           ...buildStripeOffchainOrderMarkerDocument(deliveryOrder),
-          createdAt: stripeCheckoutFieldValue.serverTimestamp(),
-        });
-        stripeReceiptClaims.forEach((claim, index) => {
-          tx.create(claimRefs[index], {
+          createdAt: commerceFieldValue.serverTimestamp(),
+        }));
+        for (const [index, claim] of stripeReceiptClaims.entries()) {
+          await tx.create(claimKeys[index], stripeCheckoutWriteData({
             version: 1,
             namespace: STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
             code: claim.code,
@@ -1038,13 +1043,13 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
             offchainOrderHash: order.orderHashHex,
             stripeCheckoutSessionId: order.stripeSession.id,
             status: 'unclaimed',
-            createdAt: stripeCheckoutFieldValue.serverTimestamp(),
-          });
-        });
+            createdAt: commerceFieldValue.serverTimestamp(),
+          }));
+        }
         if (checkoutStatus === 'fulfilled') {
-          tx.update(
-            checkoutRef,
-            {
+          await tx.update(
+            checkoutKey,
+            stripeCheckoutWriteData({
               ...stripeCheckoutFulfilledUpdate({
                 before: checkout,
                 deliveryId: candidate,
@@ -1053,11 +1058,11 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
                 receiptTx: order.receiptTx,
                 fulfillmentCompletionFields: params.fulfillmentCompletionFields,
               }),
-            },
+            }),
           );
         }
         return { deliveryId: candidate, checkoutStatus, created: true };
-      });
+      }, { shouldRetry: (error) => error.code === 'aborted' });
       const result = await operation();
       if (
         params.dropRuntime &&
@@ -1121,7 +1126,7 @@ async function fulfillStripeCheckoutSession<
   Runtime extends StripeCheckoutDropRuntime,
   Config extends StripeCheckoutOnchainConfig,
 >(params: {
-  db: StripeCheckoutStore;
+  commerce: StripeCheckoutCommerceContext;
   session: Stripe.Checkout.Session;
   stripe: Stripe;
   checkout: StripeCheckoutDocumentRecord;
@@ -1138,7 +1143,7 @@ async function fulfillStripeCheckoutSession<
   metadataIds?: number[];
   receiptTx?: string | null;
 }> {
-  const { db, session, stripe, checkout, deps } = params;
+  const { commerce, session, stripe, checkout, deps } = params;
   const sessionId = requireStripeCheckoutSessionId(session.id);
   if (sessionId !== params.expectedSessionId) {
     throw new StripeCheckoutFulfillmentError('failed-precondition', 'Fetched Stripe checkout session id does not match the pending fulfillment', {
@@ -1181,9 +1186,9 @@ async function fulfillStripeCheckoutSession<
       : 0;
   const orderHash = stripeCheckoutSessionOrderHash(sessionId, Boolean(session.livemode));
   const orderHashHex = orderHash.toString('hex');
-  const existingOrder = await fetchStripeOffchainDeliveryOrderMarker({ db, dropId, orderHashHex });
+  const existingOrder = await fetchStripeOffchainDeliveryOrderMarker({ commerce, dropId, orderHashHex });
   if (existingOrder) {
-    const markResult = await markStripeCheckoutFulfillmentFulfilled(checkout.ref, {
+    const markResult = await markStripeCheckoutFulfillmentFulfilled(commerce, checkout.key, {
       deliveryId: existingOrder.deliveryId,
       metadataId: existingOrder.metadataId,
       metadataIds: existingOrder.metadataIds,
@@ -1363,7 +1368,7 @@ async function fulfillStripeCheckoutSession<
     : await deps.resolveWalletOwner(authSubject);
 
   const order = await createOrGetStripeOffchainDeliveryOrder({
-    db,
+    commerce,
     dropRuntime,
     order: {
       dropId,
@@ -1379,7 +1384,7 @@ async function fulfillStripeCheckoutSession<
       receiptTx,
       addressSnapshot,
     },
-    checkoutRef: checkout.ref,
+    checkoutKey: checkout.key,
     isAlreadyExistsError: deps.isAlreadyExistsError,
     processingAttemptId: params.processingAttemptId,
     fulfillmentCompletionFields: params.fulfillmentCompletionFields,
@@ -1400,19 +1405,20 @@ async function fulfillStripeCheckoutSession<
 }
 
 export async function startStripeCheckoutFulfillmentDocument(params: {
+  commerce: StripeCheckoutCommerceContext;
   dropId: string;
   sessionId: string;
-  checkoutRef: StripeCheckoutDocumentReference;
+  checkoutKey: CommerceDocumentKey<'stripe_checkout'>;
   expectedLivemode?: boolean;
   nowMs?: number;
 }): Promise<StripeCheckoutFulfillmentStart> {
-  const { dropId, sessionId, checkoutRef } = params;
+  const { commerce, dropId, sessionId, checkoutKey } = params;
   const nowMs = Math.floor(Number(params.nowMs ?? Date.now()));
   const processingAttemptId = createStripeCheckoutProcessingAttemptId(nowMs);
-  return checkoutRef.store.runTransaction(async (tx) => {
-    const snap = await tx.get(checkoutRef);
-    if (!snap.exists) return { started: false, reason: 'not_pending' };
-    const checkoutData = snap.data() as any;
+  return runCommerceTransaction(commerce, async (tx) => {
+    const snap = await tx.get(checkoutKey);
+    if (!snap) return { started: false, reason: 'not_pending' };
+    const checkoutData = snap.data;
     const status = typeof checkoutData?.status === 'string' ? checkoutData.status : '';
     if (status === STRIPE_CHECKOUT_STATUS.FULFILLED) return { started: false, reason: 'already_fulfilled' };
     if (status === STRIPE_CHECKOUT_STATUS.PROCESSING && !isStripeCheckoutProcessingLeaseExpired(checkoutData, nowMs)) {
@@ -1424,26 +1430,26 @@ export async function startStripeCheckoutFulfillmentDocument(params: {
     }
 
     const variantKey = String(checkoutData?.variantKey || '').trim();
-    const checkout = requireAppCreatedStripeCheckoutSnapshot({
+    const checkout = requireAppCreatedStripeCheckoutRecord({
       dropId,
       ...(variantKey ? { variantKey } : {}),
       sessionId,
       expectedLivemode: params.expectedLivemode,
-      ref: checkoutRef,
-      snap,
+      key: checkoutKey,
+      record: snap,
     });
 
-    tx.update(checkoutRef, {
+    await tx.update(checkoutKey, stripeCheckoutWriteData({
       status: STRIPE_CHECKOUT_STATUS.PROCESSING,
-      processingStartedAt: stripeCheckoutFieldValue.serverTimestamp(),
-      processingAttemptCount: stripeCheckoutFieldValue.increment(1),
+      processingStartedAt: commerceFieldValue.serverTimestamp(),
+      processingAttemptCount: commerceFieldValue.increment(1),
       ...stripeCheckoutFailureStateClearUpdate(),
       processingAttemptId,
-      processingLeaseExpiresAt: stripeCheckoutFieldValue.timestampFromMillis(nowMs + STRIPE_CHECKOUT_PROCESSING_LEASE_MS),
-      updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
-    });
-    return { started: true, checkoutRef, checkout, ...(variantKey ? { variantKey } : {}), processingAttemptId };
-  });
+      processingLeaseExpiresAt: commerceTimestamp(nowMs + STRIPE_CHECKOUT_PROCESSING_LEASE_MS),
+      updatedAt: commerceFieldValue.serverTimestamp(),
+    }));
+    return { started: true, checkoutKey, checkout, ...(variantKey ? { variantKey } : {}), processingAttemptId };
+  }, { shouldRetry: (error) => error.code === 'aborted' });
 }
 
 export type StripeCheckoutFulfillmentFailureMarkResult =
@@ -1457,36 +1463,38 @@ export type StripeCheckoutFulfillmentRetryReleaseResult =
   | { status: 'stale_processing_attempt' };
 
 export async function releaseStripeCheckoutFulfillmentForRetry(
-  checkoutRef: StripeCheckoutDocumentReference,
+  commerce: StripeCheckoutCommerceContext,
+  checkoutKey: CommerceDocumentKey<'stripe_checkout'>,
   err: unknown,
   params: {
     summarizeError: (err: unknown) => unknown;
     processingAttemptId: string;
   },
 ): Promise<StripeCheckoutFulfillmentRetryReleaseResult> {
-  return checkoutRef.store.runTransaction(async (tx) => {
-    const checkoutSnap = await tx.get(checkoutRef);
-    const checkout = checkoutSnap.exists ? (checkoutSnap.data() as any) : null;
+  return runCommerceTransaction(commerce, async (tx) => {
+    const checkoutSnap = await tx.get(checkoutKey);
+    const checkout = checkoutSnap?.data ?? null;
     const writeStatus = stripeCheckoutProcessingAttemptWriteStatus(checkout, params.processingAttemptId);
     if (writeStatus !== 'current') return { status: writeStatus };
-    tx.update(checkoutRef, {
+    await tx.update(checkoutKey, stripeCheckoutWriteData({
       status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
       lastRetryableFulfillmentAttempt: STRIPE_CHECKOUT_FULFILLMENT_MAX_ATTEMPTS,
       lastRetryableFulfillmentError: params.summarizeError(err),
-      lastRetryableFulfillmentErrorAt: stripeCheckoutFieldValue.serverTimestamp(),
-      nextFulfillmentRetryAt: stripeCheckoutFieldValue.delete(),
-      processingStartedAt: stripeCheckoutFieldValue.delete(),
+      lastRetryableFulfillmentErrorAt: commerceFieldValue.serverTimestamp(),
+      nextFulfillmentRetryAt: commerceFieldValue.delete(),
+      processingStartedAt: commerceFieldValue.delete(),
       ...stripeCheckoutProcessingStateClearUpdate(),
-      updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
-    });
+      updatedAt: commerceFieldValue.serverTimestamp(),
+    }));
     return { status: 'released' as const };
-  }).catch((error) => {
+  }, { shouldRetry: (error) => error.code === 'aborted' }).catch((error) => {
     throw new StripeCheckoutProcessingAttemptOwnershipCheckError(error);
   });
 }
 
 export async function markStripeCheckoutFulfillmentFailed(
-  checkoutRef: StripeCheckoutDocumentReference,
+  commerce: StripeCheckoutCommerceContext,
+  checkoutKey: CommerceDocumentKey<'stripe_checkout'>,
   err: unknown,
   params: {
     summarizeError: (err: unknown) => unknown;
@@ -1498,9 +1506,9 @@ export async function markStripeCheckoutFulfillmentFailed(
   const identityUpdate = params.sessionIdentity
     ? { dropId: params.sessionIdentity.dropId, sessionId: params.sessionIdentity.sessionId }
     : {};
-  return checkoutRef.store.runTransaction(async (tx) => {
-    const checkoutSnap = await tx.get(checkoutRef);
-    const checkout = checkoutSnap.exists ? (checkoutSnap.data() as any) : null;
+  return runCommerceTransaction(commerce, async (tx) => {
+    const checkoutSnap = await tx.get(checkoutKey);
+    const checkout = checkoutSnap?.data ?? null;
     const writeStatus = stripeCheckoutProcessingAttemptWriteStatus(checkout, params.processingAttemptId);
     if (writeStatus === 'already_fulfilled') {
       return { status: 'already_fulfilled' as const };
@@ -1509,52 +1517,52 @@ export async function markStripeCheckoutFulfillmentFailed(
       return { status: 'stale_processing_attempt' as const };
     }
 
-    tx.set(
-      checkoutRef,
-      {
+    await tx.set(
+      checkoutKey,
+      stripeCheckoutWriteData({
         ...identityUpdate,
         status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
         ...createStripeTerminalNotificationOutboxFields(checkout, 'manual_review'),
-        failedAt: stripeCheckoutFieldValue.serverTimestamp(),
+        failedAt: commerceFieldValue.serverTimestamp(),
         lastFulfillmentError: error,
         manualRefundReviewRequired: true,
         manualRefundReviewReason: STRIPE_MANUAL_REFUND_REASON,
-        nextFulfillmentRetryAt: stripeCheckoutFieldValue.delete(),
+        nextFulfillmentRetryAt: commerceFieldValue.delete(),
         ...stripeCheckoutProcessingStateClearUpdate(),
-        updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
-      },
+        updatedAt: commerceFieldValue.serverTimestamp(),
+      }),
       { merge: true },
     );
     return { status: 'failed' as const };
-  });
+  }, { shouldRetry: (error) => error.code === 'aborted' });
 }
 
 export async function processStripeCheckoutFulfillmentDocument<
   Runtime extends StripeCheckoutDropRuntime,
   Config extends StripeCheckoutOnchainConfig,
 >(params: {
-  db: StripeCheckoutStore;
+  commerce: StripeCheckoutCommerceContext;
   dropId: string;
   sessionId: string;
-  checkoutRef: StripeCheckoutDocumentReference;
+  checkoutKey: CommerceDocumentKey<'stripe_checkout'>;
   apiKeys: readonly string[];
   deps: StripeCheckoutFlowDeps<Runtime, Config>;
   treatRetryableFailureAsTerminal?: boolean;
   fulfillmentCompletionFields?: StripeCheckoutFulfillmentCompletionFields;
 }): Promise<StripeCheckoutFulfillmentProcessResult> {
-  const { db, dropId, sessionId, checkoutRef, deps } = params;
+  const { commerce, dropId, sessionId, checkoutKey, deps } = params;
   const dropRuntime = deps.getDropRuntime(dropId);
   const mode = stripeApiModeForCluster(dropRuntime.cluster);
   const expectedLivemode = mode === 'live';
 
   let started: StripeCheckoutFulfillmentStart;
   try {
-    started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef, expectedLivemode });
+    started = await startStripeCheckoutFulfillmentDocument({ commerce, dropId, sessionId, checkoutKey, expectedLivemode });
   } catch (err) {
     if (isRetryableStripeCheckoutFulfillmentError(err) && !params.treatRetryableFailureAsTerminal) {
       throw err;
     }
-    const markResult = await markStripeCheckoutFulfillmentFailed(checkoutRef, err, {
+    const markResult = await markStripeCheckoutFulfillmentFailed(commerce, checkoutKey, err, {
       summarizeError: deps.summarizeError,
       sessionIdentity: { dropId, sessionId },
     });
@@ -1572,7 +1580,7 @@ export async function processStripeCheckoutFulfillmentDocument<
       });
     }
     if (started.reason === 'already_fulfilled' && deps.repairPackStatus) {
-      await deps.repairPackStatus({ dropRuntime, checkoutRef, sessionId });
+      await deps.repairPackStatus({ dropRuntime, checkoutKey, sessionId });
     }
     return { status: 'ignored', dropId, sessionId, reason: started.reason };
   }
@@ -1586,7 +1594,7 @@ export async function processStripeCheckoutFulfillmentDocument<
         }
         const { session, stripe } = checkoutSessionResult;
         return fulfillStripeCheckoutSession({
-          db,
+          commerce,
           session,
           stripe,
           checkout: started.checkout,
@@ -1599,7 +1607,8 @@ export async function processStripeCheckoutFulfillmentDocument<
         });
       },
       {
-        checkoutRef: started.checkoutRef,
+        commerce,
+        checkoutKey: started.checkoutKey,
         summarizeError: deps.summarizeError,
         processingAttemptId: started.processingAttemptId,
       },
@@ -1614,7 +1623,7 @@ export async function processStripeCheckoutFulfillmentDocument<
       return { status: 'ignored', dropId, sessionId, reason: 'stale_processing_attempt' };
     }
     if (isRetryableStripeCheckoutFulfillmentError(err) && !params.treatRetryableFailureAsTerminal) {
-      const releaseResult = await releaseStripeCheckoutFulfillmentForRetry(started.checkoutRef, err, {
+      const releaseResult = await releaseStripeCheckoutFulfillmentForRetry(commerce, started.checkoutKey, err, {
         summarizeError: deps.summarizeError,
         processingAttemptId: started.processingAttemptId,
       });
@@ -1623,7 +1632,7 @@ export async function processStripeCheckoutFulfillmentDocument<
       }
       throw err;
     }
-    const markResult = await markStripeCheckoutFulfillmentFailed(started.checkoutRef, err, {
+    const markResult = await markStripeCheckoutFulfillmentFailed(commerce, started.checkoutKey, err, {
       summarizeError: deps.summarizeError,
       sessionIdentity: { dropId, sessionId },
       processingAttemptId: started.processingAttemptId,

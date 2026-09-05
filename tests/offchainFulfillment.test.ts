@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { PublicKey, SystemProgram } from '@solana/web3.js';
@@ -62,7 +62,19 @@ import {
   stripeCheckoutKindForDrop,
   stripeTestApiKey,
 } from '../cloud/workers/api/src/stripeCheckout/service.ts';
-import { stripeCheckoutFieldValue } from '../cloud/workers/api/src/stripeCheckout/store.ts';
+import {
+  D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeys,
+  type CommerceDocumentData,
+} from '../cloud/workers/api/src/commerceRepository.ts';
+import {
+  createCommerceD1Harness,
+  seedCommerceDocument,
+  type CommerceD1CallObservation,
+} from '../cloud/workers/api/test/commerceD1Harness.ts';
+import { parseStripeTerminalNotificationOutbox } from '../cloud/workers/api/src/stripeCheckout/notificationOutboxState.ts';
+import type { StripeCheckoutCommerceContext } from '../cloud/workers/api/src/stripeCheckout/commerce.ts';
 import {
   createStripeCheckoutSessionCore,
   createStripeCheckoutIdentity,
@@ -90,6 +102,46 @@ function pubkey(seed: number): PublicKey {
 }
 
 const STRIPE_CHECKOUT_OPERATION_ID = '11111111-1111-4111-8111-111111111111';
+const COMMERCE_NOW_MS = 1_700_000_000_000;
+
+function stripeCommerceFixture(
+  t: TestContext,
+  data: Record<string, unknown> | null,
+  {
+    dropId = 'little_swag_hoodies_devnet',
+    sessionId = 'cs_test_123',
+    nowMs = COMMERCE_NOW_MS,
+    observeCall,
+  }: {
+    dropId?: string;
+    sessionId?: string;
+    nowMs?: number;
+    observeCall?: (call: CommerceD1CallObservation) => void;
+  } = {},
+) {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({
+    observeCall: (call) => {
+      calls.push(call);
+      observeCall?.(call);
+    },
+  });
+  t.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const checkoutKey = commerceKeys.stripeCheckout(dropId, sessionId);
+  if (data) seedCommerceDocument(harness, {
+    key: checkoutKey,
+    data: data as CommerceDocumentData,
+    updateTime: new Date(nowMs - 1).toISOString(),
+  });
+  const commerce: StripeCheckoutCommerceContext = { repository, nowMs: () => nowMs };
+  return { harness, repository, checkoutKey, commerce, calls };
+}
+
+function commerceDocumentWriteBatches(calls: readonly CommerceD1CallObservation[]) {
+  return calls.filter((call) => call.method === 'batch'
+    && call.statements.some((statement) => /INSERT INTO commerce_documents/.test(statement.sql)));
+}
 
 function u32LE(value: number): Buffer {
   const buf = Buffer.alloc(4);
@@ -1272,52 +1324,22 @@ test('buildStripeOffchainDeliveryOrderDocument omits variant labels for pack che
   assert.deepEqual(marker.metadataIds, [1, 2]);
 });
 
-test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code atomically', async () => {
+test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code atomically', async (t) => {
   const dropId = 'little_swag_hoodies_devnet';
   const orderHashHex = 'cd'.repeat(32);
-  const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
-  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/cs_test_456` } as any;
-  const creates: Array<{ ref: any; data: any }> = [];
-  const updates: Array<{ ref: any; data: any }> = [];
-  const db = {
-    doc: (path: string) => {
-      if (path === markerRef.path) return markerRef;
-      if (path.startsWith(`drops/${dropId}/deliveryOrders/`)) return { path };
-      if (path.startsWith('claimCodes/')) return { path };
-      return { path };
-    },
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          if (ref === markerRef) return { exists: false };
-          if (ref === checkoutRef) {
-            return {
-              exists: true,
-              data: () => ({
-                status: STRIPE_CHECKOUT_STATUS.PROCESSING,
-                processingAttemptId: 'attempt_current',
-              }),
-            };
-          }
-          if (String(ref?.path || '').startsWith('claimCodes/')) return { exists: false };
-          throw new Error(`unexpected ref: ${ref?.path}`);
-        },
-        create: (ref: any, data: any) => {
-          creates.push({ ref, data });
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
-  } as any;
+  const markerKey = commerceKeys.offchainOrder(dropId, orderHashHex);
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_current',
+  }, { dropId, sessionId: 'cs_test_456' });
   const result = await createOrGetStripeOffchainDeliveryOrder({
-    db,
-    checkoutRef,
+    commerce,
+    checkoutKey,
     isAlreadyExistsError: () => false,
     processingAttemptId: 'attempt_current',
     fulfillmentCompletionFields: {
       fulfillmentCompletedBy: 'cloudflare_queue_v1',
-      fulfillmentCompletedAt: stripeCheckoutFieldValue.serverTimestamp(),
+      fulfillmentCompletedAt: commerceFieldValue.serverTimestamp(),
     },
     order: {
       dropId,
@@ -1335,14 +1357,21 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
   });
 
   assert.equal(result.checkoutStatus, 'fulfilled');
-  assert.equal(creates.length, 3);
-  const orderCreate = creates.find((entry) => String(entry.ref.path).startsWith(`drops/${dropId}/deliveryOrders/`));
-  const markerCreate = creates.find((entry) => entry.ref === markerRef);
-  const claimCreate = creates.find((entry) => String(entry.ref.path).startsWith('claimCodes/'));
+  const orders = await repository.query({ kind: 'delivery_order', dropId });
+  const markers = await repository.query({ kind: 'offchain_order', dropId });
+  const claims = await repository.query({ kind: 'claim_code' });
+  const checkout = await repository.get(checkoutKey);
+  assert.equal(orders.length, 1);
+  assert.equal(markers.length, 1);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  const orderCreate = orders[0];
+  const markerCreate = await repository.get(markerKey);
+  assert.equal(claims.length, 1);
+  const claimCreate = claims[0];
   assert.ok(orderCreate);
   assert.ok(markerCreate);
   assert.ok(claimCreate);
-  assert.match(claimCreate.data.code, /^[A-Z]{6}-\d{10}$/);
+  assert.match(String(claimCreate.data.code), /^[A-Z]{6}-\d{10}$/);
   assert.equal(claimCreate.data.authSubject, 'anon_uid_456');
   assert.equal(claimCreate.data.namespace, STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE);
   assert.equal(claimCreate.data.status, 'unclaimed');
@@ -1355,55 +1384,28 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
     status: 'unclaimed',
   });
   assert.equal(markerCreate.data.stripeReceiptClaimCode, claimCreate.data.code);
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].data.fulfillmentCompletedBy, 'cloudflare_queue_v1');
-  assert.equal(updates[0].data.fulfillmentCompletedAt?.kind, 'server_timestamp');
-  assert.equal(updates[0].data.stripeTerminalNotificationState, 'pending');
-  assert.equal(updates[0].data.stripeTerminalNotification.outcome, 'fulfilled');
-  assert.equal(updates[0].data.stripeTerminalNotification.attemptCount, 0);
+  assert.equal(checkout?.version, 2);
+  assert.ok(checkout);
+  const notification = parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification);
+  assert.ok(notification);
+  assert.equal(checkout.data.fulfillmentCompletedBy, 'cloudflare_queue_v1');
+  assert.equal(checkout.data.fulfillmentCompletedAt, COMMERCE_NOW_MS);
+  assert.equal(checkout.data.stripeTerminalNotificationState, 'pending');
+  assert.equal(notification.outcome, 'fulfilled');
+  assert.equal(notification.attemptCount, 0);
 });
 
-test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple claim codes', async () => {
+test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple claim codes', async (t) => {
   const dropId = 'little_swag_hoodies_devnet';
   const orderHashHex = 'ef'.repeat(32);
-  const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
-  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/cs_test_multi` } as any;
-  const creates: Array<{ ref: any; data: any }> = [];
-  const updates: Array<{ ref: any; data: any }> = [];
-  const db = {
-    doc: (path: string) => {
-      if (path === markerRef.path) return markerRef;
-      if (path.startsWith(`drops/${dropId}/deliveryOrders/`)) return { path };
-      if (path.startsWith('claimCodes/')) return { path };
-      return { path };
-    },
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          if (ref === markerRef) return { exists: false };
-          if (ref === checkoutRef) {
-            return {
-              exists: true,
-              data: () => ({
-                status: STRIPE_CHECKOUT_STATUS.PROCESSING,
-                processingAttemptId: 'attempt_current',
-              }),
-            };
-          }
-          if (String(ref?.path || '').startsWith('claimCodes/')) return { exists: false };
-          throw new Error(`unexpected ref: ${ref?.path}`);
-        },
-        create: (ref: any, data: any) => {
-          creates.push({ ref, data });
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
-  } as any;
+  const markerKey = commerceKeys.offchainOrder(dropId, orderHashHex);
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_current',
+  }, { dropId, sessionId: 'cs_test_multi' });
   const result = await createOrGetStripeOffchainDeliveryOrder({
-    db,
-    checkoutRef,
+    commerce,
+    checkoutKey,
     isAlreadyExistsError: () => false,
     processingAttemptId: 'attempt_current',
     order: {
@@ -1423,14 +1425,20 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
   });
 
   assert.equal(result.checkoutStatus, 'fulfilled');
-  assert.equal(creates.length, 5);
-  const orderCreate = creates.find((entry) => String(entry.ref.path).startsWith(`drops/${dropId}/deliveryOrders/`));
-  const markerCreate = creates.find((entry) => entry.ref === markerRef);
-  const claimCreates = creates.filter((entry) => String(entry.ref.path).startsWith('claimCodes/'));
+  const orders = await repository.query({ kind: 'delivery_order', dropId });
+  const markers = await repository.query({ kind: 'offchain_order', dropId });
+  const claims = await repository.query({ kind: 'claim_code' });
+  const checkout = await repository.get(checkoutKey);
+  assert.equal(orders.length, 1);
+  assert.equal(markers.length, 1);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  const orderCreate = orders[0];
+  const markerCreate = await repository.get(markerKey);
+  const claimCreates = claims;
   assert.ok(orderCreate);
   assert.ok(markerCreate);
   assert.equal(claimCreates.length, 3);
-  assert.deepEqual(claimCreates.map((entry) => entry.data.boxId).sort((a, b) => a - b), [16, 17, 18]);
+  assert.deepEqual(claimCreates.map((entry) => entry.data.boxId).sort((a, b) => Number(a) - Number(b)), [16, 17, 18]);
   assert.equal(new Set(claimCreates.map((entry) => entry.data.code)).size, 3);
   assert.deepEqual(orderCreate.data.items, [
     { kind: 'box', refId: 16, variantKey: 'XL' },
@@ -1444,69 +1452,33 @@ test('createOrGetStripeOffchainDeliveryOrder creates one order with multiple cla
   assert.deepEqual(markerCreate.data.metadataIds, [16, 17, 18]);
   assert.deepEqual(Object.keys(markerCreate.data.stripeReceiptClaimCodesByBoxId).sort(), ['box_16', 'box_17', 'box_18']);
   assert.equal('stripeReceiptClaims' in markerCreate.data, false);
-  assert.equal(updates.length, 1);
-  assert.equal('fulfillmentCompletedBy' in updates[0].data, false);
-  assert.equal('fulfillmentCompletedAt' in updates[0].data, false);
-  assert.deepEqual(updates[0].data.metadataIds, [16, 17, 18]);
-  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'metadataId'), true);
-  assert.notEqual(updates[0].data.metadataId, 16);
-  assert.equal(updates[0].data.quantity, 3);
+  assert.equal(checkout?.version, 2);
+  assert.ok(checkout);
+  assert.equal('fulfillmentCompletedBy' in checkout.data, false);
+  assert.equal('fulfillmentCompletedAt' in checkout.data, false);
+  assert.deepEqual(checkout.data.metadataIds, [16, 17, 18]);
+  assert.equal(Object.hasOwn(checkout.data, 'metadataId'), false);
+  assert.equal(checkout.data.quantity, 3);
 });
 
-test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the critical commerce transaction', async () => {
+test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the critical commerce transaction', async (t) => {
   const dropId = 'card_nft_2';
   const orderHashHex = '12'.repeat(32);
-  const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
-  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/cs_live_pack` } as any;
-  const transactions: Array<{
-    gets: string[];
-    creates: Array<{ ref: any; data: any }>;
-    updates: Array<{ ref: any; data: any }>;
-  }> = [];
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_current',
+  }, { dropId, sessionId: 'cs_live_pack' });
   const packStatusCalls: unknown[] = [];
-  const db = {
-    doc: (path: string) => {
-      if (path === markerRef.path) return markerRef;
-      if (path.startsWith(`drops/${dropId}/deliveryOrders/`)) return { path };
-      if (path.startsWith('claimCodes/')) return { path };
-      return { path };
-    },
-    runTransaction: async (fn: any) => {
-      const ops = { gets: [] as string[], creates: [] as Array<{ ref: any; data: any }>, updates: [] as Array<{ ref: any; data: any }> };
-      transactions.push(ops);
-      return fn({
-        get: async (ref: any) => {
-          ops.gets.push(String(ref?.path || ''));
-          if (ref === markerRef) return { exists: false };
-          if (ref === checkoutRef) {
-            return {
-              exists: true,
-              data: () => ({
-                status: STRIPE_CHECKOUT_STATUS.PROCESSING,
-                processingAttemptId: 'attempt_current',
-              }),
-            };
-          }
-          if (String(ref?.path || '').startsWith('claimCodes/')) return { exists: false };
-          throw new Error(`unexpected ref: ${ref?.path}`);
-        },
-        create: (ref: any, data: any) => {
-          ops.creates.push({ ref, data });
-        },
-        update: (ref: any, data: any) => {
-          ops.updates.push({ ref, data });
-        },
-      });
-    },
-  } as any;
 
   const result = await createOrGetStripeOffchainDeliveryOrder({
-    db,
+    commerce,
     dropRuntime: { dropId, cluster: 'mainnet-beta', itemsPerBox: 3, maxSupply: 12_000 },
-    checkoutRef,
+    checkoutKey,
     isAlreadyExistsError: () => false,
     processingAttemptId: 'attempt_current',
     countPackStatus: async (input) => {
+      assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+      assert.equal((await repository.get(checkoutKey))?.data.status, STRIPE_CHECKOUT_STATUS.FULFILLED);
       packStatusCalls.push(input);
     },
     order: {
@@ -1525,12 +1497,13 @@ test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the 
   });
 
   assert.equal(result.checkoutStatus, 'fulfilled');
-  assert.equal(transactions.length, 1);
-  const critical = transactions[0];
-  assert.ok(critical);
-  assert.equal(critical.gets.some((path) => path.includes('/meta/packStatus') || path.includes('/packStatusEvents/')), false);
-  for (const write of [...critical.creates, ...critical.updates]) {
-    assert.equal(Object.prototype.hasOwnProperty.call(write.data, 'packStatus'), false);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  const statements = calls.flatMap((call) => call.method === 'batch' ? call.statements : [call]);
+  assert.equal(statements.some(({ sql }) => /pack_status|packStatusEvents/.test(sql)), false);
+  for (const kind of ['delivery_order', 'offchain_order', 'claim_code', 'stripe_checkout'] as const) {
+    for (const record of await repository.query({ kind })) {
+      assert.equal(Object.hasOwn(record.data, 'packStatus'), false);
+    }
   }
   assert.equal(packStatusCalls.length, 1);
   const packStatusCall = packStatusCalls[0] as Record<string, unknown>;
@@ -1545,11 +1518,14 @@ test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the 
   });
 });
 
-test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers on retry', async () => {
+test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers on retry', async (t) => {
   const dropId = 'card_nft_2';
   const orderHashHex = '34'.repeat(32);
-  const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
-  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/cs_test_pack_retry` } as any;
+  const markerKey = commerceKeys.offchainOrder(dropId, orderHashHex);
+  const { harness, repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_current',
+  }, { dropId, sessionId: 'cs_test_pack_retry' });
   const markerData = buildStripeOffchainOrderMarkerDocument({
     dropId,
     deliveryId: 789,
@@ -1567,49 +1543,13 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
       { code: 'PACKDD-0123456789', boxId: 2, status: 'unclaimed' },
     ],
   });
-  const creates: Array<{ ref: any; data: any }> = [];
-  const updates: Array<{ ref: any; data: any }> = [];
+  seedCommerceDocument(harness, { key: markerKey, data: markerData as CommerceDocumentData });
   const packStatusCalls: unknown[] = [];
-  const db = {
-    doc: (path: string) => {
-      if (path === markerRef.path) return markerRef;
-      if (path.startsWith(`drops/${dropId}/deliveryOrders/`)) return { path };
-      if (path.startsWith('claimCodes/')) return { path };
-      return { path };
-    },
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          if (ref === markerRef) {
-            return {
-              exists: true,
-              get: (fieldPath: string) => (markerData as any)[fieldPath],
-            };
-          }
-          if (ref === checkoutRef) {
-            return {
-              exists: true,
-              data: () => ({
-                status: STRIPE_CHECKOUT_STATUS.PROCESSING,
-                processingAttemptId: 'attempt_current',
-              }),
-            };
-          }
-          throw new Error(`unexpected ref: ${ref?.path}`);
-        },
-        create: (ref: any, data: any) => {
-          creates.push({ ref, data });
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
-  } as any;
 
   const result = await createOrGetStripeOffchainDeliveryOrder({
-    db,
+    commerce,
     dropRuntime: { dropId, cluster: 'mainnet-beta', itemsPerBox: 3, maxSupply: 12_000 },
-    checkoutRef,
+    checkoutKey,
     isAlreadyExistsError: () => false,
     processingAttemptId: 'attempt_current',
     countPackStatus: async (input) => {
@@ -1630,20 +1570,28 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
   });
 
   assert.deepEqual(result, { deliveryId: 789, checkoutStatus: 'fulfilled' });
-  assert.equal(creates.length, 0);
-  assert.equal(updates.length, 1);
-  assert.deepEqual(updates[0].data.metadataIds, [1, 2]);
-  assert.equal(updates[0].data.quantity, 2);
-  assert.equal(updates[0].data.stripeTerminalNotificationState, 'pending');
-  assert.equal(updates[0].data.stripeTerminalNotification.outcome, 'fulfilled');
+  assert.equal((await repository.query({ kind: 'delivery_order', dropId })).length, 0);
+  assert.equal((await repository.query({ kind: 'claim_code' })).length, 0);
+  assert.equal((await repository.get(markerKey))?.version, 1);
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  const notification = parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification);
+  assert.ok(notification);
+  assert.equal(checkout.version, 2);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  assert.deepEqual(checkout.data.metadataIds, [1, 2]);
+  assert.equal(checkout.data.quantity, 2);
+  assert.equal(checkout.data.stripeTerminalNotificationState, 'pending');
+  assert.equal(notification.outcome, 'fulfilled');
   assert.equal('variantKey' in markerData, false);
   assert.equal(packStatusCalls.length, 1);
   assert.equal((packStatusCalls[0] as { deliveryId: number }).deliveryId, 789);
+  const originalNotification = structuredClone(checkout.data.stripeTerminalNotification);
   await assert.rejects(
     createOrGetStripeOffchainDeliveryOrder({
-      db,
+      commerce,
       dropRuntime: { dropId, cluster: 'mainnet-beta', itemsPerBox: 3, maxSupply: 12_000 },
-      checkoutRef,
+      checkoutKey,
       isAlreadyExistsError: () => false,
       processingAttemptId: 'attempt_current',
       countPackStatus: async () => {
@@ -1664,6 +1612,10 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
     }),
     StripeCheckoutPackStatusProjectionError,
   );
+  const retried = await repository.get(checkoutKey);
+  assert.equal(retried?.data.status, STRIPE_CHECKOUT_STATUS.FULFILLED);
+  assert.deepEqual(retried?.data.stripeTerminalNotification, originalNotification);
+  assert.equal((await repository.get(markerKey))?.version, 1);
 });
 
 test('validateStripeCheckoutDocumentData accepts only the app-created session contract', () => {
@@ -2088,190 +2040,10 @@ test('stripeCheckoutProductTaxCodeForDrop requires explicit checkout enablement 
   );
 });
 
-test('startStripeCheckoutFulfillmentDocument processes only pending checkout documents', async () => {
+test('startStripeCheckoutFulfillmentDocument processes only pending checkout documents', async (t) => {
   const dropId = 'little_swag_hoodies_devnet';
   const sessionId = 'cs_test_123';
   const variantKey = 'XL';
-  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
-  const updates: Array<{ ref: any; data: any }> = [];
-  const checkoutSnap = {
-    exists: true,
-    data: () =>
-      ({
-        ...buildStripeCheckoutDocument({
-          dropId,
-          sessionId,
-          ...createStripeCheckoutIdentity('anon_uid_123'),
-          variantKey,
-          unitAmountCents: 100,
-          createdAt: 'createdAt',
-          updatedAt: 'updatedAt',
-        }),
-        status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-      }),
-  };
-  const tx = {
-    get: async (ref: any) => {
-      assert.equal(ref, checkoutRef);
-      return checkoutSnap;
-    },
-    update: (ref: any, data: any) => {
-      updates.push({ ref, data });
-    },
-  };
-  checkoutRef.store = { runTransaction: async (fn: any) => fn(tx) };
-
-  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef });
-
-  assert.equal(started.started, true);
-  const processingAttemptId = started.started ? started.processingAttemptId : '';
-  assert.match(processingAttemptId, /^[0-9a-z]+:[0-9a-z]+$/);
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].ref, checkoutRef);
-  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
-  assert.equal(updates[0].data.processingAttemptId, processingAttemptId);
-});
-
-test('startStripeCheckoutFulfillmentDocument starts pack documents without variantKey', async () => {
-  const dropId = 'card_nft_2';
-  const sessionId = 'cs_test_pack';
-  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
-  const updates: Array<{ ref: any; data: any }> = [];
-  const checkoutSnap = {
-    exists: true,
-    data: () => ({
-      ...buildStripeCheckoutDocument({
-        dropId,
-        sessionId,
-        ...createStripeCheckoutIdentity('anon_uid_pack'),
-        quantity: 2,
-        unitAmountCents: 100,
-        createdAt: 'createdAt',
-        updatedAt: 'updatedAt',
-      }),
-      status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
-    }),
-  };
-  checkoutRef.store = {
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          assert.equal(ref, checkoutRef);
-          return checkoutSnap;
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
-  };
-
-  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef });
-
-  assert.equal(started.started, true);
-  if (started.started) {
-    assert.equal('variantKey' in started, false);
-    assert.equal(started.checkout.quantity, 2);
-  }
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
-});
-
-test('startStripeCheckoutFulfillmentDocument skips active processing leases', async () => {
-  const dropId = 'little_swag_hoodies_devnet';
-  const sessionId = 'cs_test_123';
-  const variantKey = 'XL';
-  const nowMs = 1_700_000_000_000;
-  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
-  const updates: Array<{ ref: any; data: any }> = [];
-  const checkoutSnap = {
-    exists: true,
-    data: () => ({
-      ...buildStripeCheckoutDocument({
-        dropId,
-        sessionId,
-        ...createStripeCheckoutIdentity('anon_uid_123'),
-        variantKey,
-        unitAmountCents: 100,
-        createdAt: 'createdAt',
-        updatedAt: 'updatedAt',
-      }),
-      status: STRIPE_CHECKOUT_STATUS.PROCESSING,
-      processingLeaseExpiresAt: timestampLike(nowMs + 1_000),
-      processingStartedAt: timestampLike(nowMs - STRIPE_CHECKOUT_PROCESSING_LEASE_MS - 1_000),
-    }),
-  };
-  checkoutRef.store = {
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          assert.equal(ref, checkoutRef);
-          return checkoutSnap;
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
-  };
-
-  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef, nowMs });
-
-  assert.deepEqual(started, { started: false, reason: 'processing' });
-  assert.equal(updates.length, 0);
-});
-
-test('startStripeCheckoutFulfillmentDocument reclaims expired processing leases', async () => {
-  const dropId = 'little_swag_hoodies_devnet';
-  const sessionId = 'cs_test_123';
-  const variantKey = 'XL';
-  const nowMs = 1_700_000_000_000;
-  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
-  const updates: Array<{ ref: any; data: any }> = [];
-  const checkoutSnap = {
-    exists: true,
-    data: () => ({
-      ...buildStripeCheckoutDocument({
-        dropId,
-        sessionId,
-        ...createStripeCheckoutIdentity('anon_uid_123'),
-        variantKey,
-        unitAmountCents: 100,
-        createdAt: 'createdAt',
-        updatedAt: 'updatedAt',
-      }),
-      status: STRIPE_CHECKOUT_STATUS.PROCESSING,
-      processingLeaseExpiresAt: timestampLike(nowMs - 1),
-    }),
-  };
-  checkoutRef.store = {
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          assert.equal(ref, checkoutRef);
-          return checkoutSnap;
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
-  };
-
-  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef, nowMs });
-
-  assert.equal(started.started, true);
-  const processingAttemptId = started.started ? started.processingAttemptId : '';
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
-  assert.equal(updates[0].data.processingAttemptId, processingAttemptId);
-  assert.equal(typeof updates[0].data.processingLeaseExpiresAt?.toMillis, 'function');
-});
-
-test('startStripeCheckoutFulfillmentDocument uses legacy processingStartedAt as stale fallback', async () => {
-  const dropId = 'little_swag_hoodies_devnet';
-  const sessionId = 'cs_test_123';
-  const variantKey = 'XL';
-  const nowMs = 1_700_000_000_000;
-  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/${sessionId}` } as any;
-  const updates: Array<{ ref: any; data: any }> = [];
   const checkoutData = {
     ...buildStripeCheckoutDocument({
       dropId,
@@ -2279,82 +2051,188 @@ test('startStripeCheckoutFulfillmentDocument uses legacy processingStartedAt as 
       ...createStripeCheckoutIdentity('anon_uid_123'),
       variantKey,
       unitAmountCents: 100,
-      createdAt: 'createdAt',
-      updatedAt: 'updatedAt',
+      createdAt: COMMERCE_NOW_MS,
+      updatedAt: COMMERCE_NOW_MS,
     }),
-    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
-    processingStartedAt: timestampLike(nowMs - STRIPE_CHECKOUT_PROCESSING_LEASE_MS - 1),
+    status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
   };
-  checkoutRef.store = {
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          assert.equal(ref, checkoutRef);
-          return { exists: true, data: () => checkoutData };
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
-  };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData, { dropId, sessionId });
 
-  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, checkoutRef, nowMs });
+  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, commerce, checkoutKey });
 
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
   assert.equal(started.started, true);
   const processingAttemptId = started.started ? started.processingAttemptId : '';
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
-  assert.equal(updates[0].data.processingAttemptId, processingAttemptId);
+  assert.match(processingAttemptId, /^[0-9a-z]+:[0-9a-z]+$/);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  assert.equal(checkout.version, 2);
+  assert.deepEqual(checkout.key, checkoutKey);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
+  assert.equal(checkout.data.processingAttemptId, processingAttemptId);
 });
 
-test('markStripeCheckoutFulfillmentFailed leaves an already-fulfilled checkout intact', async () => {
-  const sets: Array<{ ref: any; data: any; options: any }> = [];
-  const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.store = {
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          assert.equal(ref, checkoutRef);
-          return {
-            exists: true,
-            data: () => ({
-              status: STRIPE_CHECKOUT_STATUS.FULFILLED,
-              deliveryId: 123,
-              metadataId: 16,
-              receiptTx: 'tx123',
-            }),
-          };
-        },
-        set: (ref: any, data: any, options: any) => {
-          sets.push({ ref, data, options });
-        },
-      }),
+test('startStripeCheckoutFulfillmentDocument starts pack documents without variantKey', async (t) => {
+  const dropId = 'card_nft_2';
+  const sessionId = 'cs_test_pack';
+  const checkoutData = {
+    ...buildStripeCheckoutDocument({
+      dropId,
+      sessionId,
+      ...createStripeCheckoutIdentity('anon_uid_pack'),
+      quantity: 2,
+      unitAmountCents: 100,
+      createdAt: COMMERCE_NOW_MS,
+      updatedAt: COMMERCE_NOW_MS,
+    }),
+    status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
   };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData, { dropId, sessionId });
 
-  const result = await markStripeCheckoutFulfillmentFailed(checkoutRef, new Error('late failure'), {
+  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, commerce, checkoutKey });
+
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  assert.equal(started.started, true);
+  if (started.started) {
+    assert.equal('variantKey' in started, false);
+    assert.equal(started.checkout.quantity, 2);
+  }
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  assert.equal(checkout.version, 2);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
+});
+
+test('startStripeCheckoutFulfillmentDocument skips active processing leases', async (t) => {
+  const dropId = 'little_swag_hoodies_devnet';
+  const sessionId = 'cs_test_123';
+  const variantKey = 'XL';
+  const nowMs = 1_700_000_000_000;
+  const checkoutData = {
+    ...buildStripeCheckoutDocument({
+      dropId,
+      sessionId,
+      ...createStripeCheckoutIdentity('anon_uid_123'),
+      variantKey,
+      unitAmountCents: 100,
+      createdAt: COMMERCE_NOW_MS,
+      updatedAt: COMMERCE_NOW_MS,
+    }),
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingLeaseExpiresAt: nowMs + 1_000,
+    processingStartedAt: nowMs - STRIPE_CHECKOUT_PROCESSING_LEASE_MS - 1_000,
+  };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData, { dropId, sessionId, nowMs });
+
+  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, commerce, checkoutKey, nowMs });
+
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  assert.deepEqual(started, { started: false, reason: 'processing' });
+  assert.equal(commerceDocumentWriteBatches(calls).length, 0);
+  assert.equal(checkout.version, 1);
+  assert.deepEqual(checkout.data, checkoutData);
+});
+
+test('startStripeCheckoutFulfillmentDocument reclaims expired processing leases', async (t) => {
+  const dropId = 'little_swag_hoodies_devnet';
+  const sessionId = 'cs_test_123';
+  const variantKey = 'XL';
+  const nowMs = 1_700_000_000_000;
+  const checkoutData = {
+    ...buildStripeCheckoutDocument({
+      dropId,
+      sessionId,
+      ...createStripeCheckoutIdentity('anon_uid_123'),
+      variantKey,
+      unitAmountCents: 100,
+      createdAt: COMMERCE_NOW_MS,
+      updatedAt: COMMERCE_NOW_MS,
+    }),
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingLeaseExpiresAt: nowMs - 1,
+  };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData, { dropId, sessionId, nowMs });
+
+  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, commerce, checkoutKey, nowMs });
+
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  assert.equal(started.started, true);
+  const processingAttemptId = started.started ? started.processingAttemptId : '';
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  assert.equal(checkout.version, 2);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
+  assert.equal(checkout.data.processingAttemptId, processingAttemptId);
+  assert.equal(checkout.data.processingLeaseExpiresAt, nowMs + STRIPE_CHECKOUT_PROCESSING_LEASE_MS);
+});
+
+test('startStripeCheckoutFulfillmentDocument uses legacy processingStartedAt as stale fallback', async (t) => {
+  const dropId = 'little_swag_hoodies_devnet';
+  const sessionId = 'cs_test_123';
+  const variantKey = 'XL';
+  const nowMs = 1_700_000_000_000;
+  const checkoutData = {
+    ...buildStripeCheckoutDocument({
+      dropId,
+      sessionId,
+      ...createStripeCheckoutIdentity('anon_uid_123'),
+      variantKey,
+      unitAmountCents: 100,
+      createdAt: COMMERCE_NOW_MS,
+      updatedAt: COMMERCE_NOW_MS,
+    }),
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingStartedAt: nowMs - STRIPE_CHECKOUT_PROCESSING_LEASE_MS - 1,
+  };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData, { dropId, sessionId, nowMs });
+
+  const started = await startStripeCheckoutFulfillmentDocument({ dropId, sessionId, commerce, checkoutKey, nowMs });
+
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  assert.equal(started.started, true);
+  const processingAttemptId = started.started ? started.processingAttemptId : '';
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  assert.equal(checkout.version, 2);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.PROCESSING);
+  assert.equal(checkout.data.processingAttemptId, processingAttemptId);
+});
+
+test('markStripeCheckoutFulfillmentFailed leaves an already-fulfilled checkout intact', async (t) => {
+  const checkoutData = {
+    status: STRIPE_CHECKOUT_STATUS.FULFILLED,
+    deliveryId: 123,
+    metadataId: 16,
+    receiptTx: 'tx123',
+  };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData);
+
+  const result = await markStripeCheckoutFulfillmentFailed(commerce, checkoutKey, new Error('late failure'), {
     summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
     sessionIdentity: { dropId: 'little_swag_hoodies_devnet', sessionId: 'cs_test_123' },
   });
 
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
   assert.deepEqual(result, { status: 'already_fulfilled' });
-  assert.equal(sets.length, 0);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 0);
+  assert.equal(checkout.version, 1);
+  assert.deepEqual(checkout.data, checkoutData);
 });
 
-test('retryable fulfillment failures release the current lease back to pending', async () => {
-  const updates: Array<{ ref: any; data: any }> = [];
-  const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.store = {
-    runTransaction: async (fn: any) => fn({
-      get: async () => ({
-        exists: true,
-        data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_current' }),
-      }),
-      update: (ref: any, data: any) => updates.push({ ref, data }),
-    }),
+test('retryable fulfillment failures release the current lease back to pending', async (t) => {
+  const checkoutData = {
+    processingLeaseExpiresAt: COMMERCE_NOW_MS + 1_000,
+    processingStartedAt: COMMERCE_NOW_MS - 1_000,
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_current',
   };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData);
 
   const result = await releaseStripeCheckoutFulfillmentForRetry(
-    checkoutRef,
+    commerce,
+    checkoutKey,
     new Error('provider unavailable'),
     {
       summarizeError: (error) => ({ message: error instanceof Error ? error.message : String(error) }),
@@ -2362,43 +2240,36 @@ test('retryable fulfillment failures release the current lease back to pending',
     },
   );
 
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
   assert.deepEqual(result, { status: 'released' });
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
-  assert.equal(updates[0].data.lastRetryableFulfillmentError.message, 'provider unavailable');
-  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingAttemptId'), true);
-  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingLeaseExpiresAt'), true);
-  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingStartedAt'), true);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  assert.equal(checkout.version, 2);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+  assert.deepEqual(checkout.data.lastRetryableFulfillmentError, { message: 'provider unavailable' });
+  assert.equal(Object.hasOwn(checkout.data, 'processingAttemptId'), false);
+  assert.equal(Object.hasOwn(checkout.data, 'processingLeaseExpiresAt'), false);
+  assert.equal(Object.hasOwn(checkout.data, 'processingStartedAt'), false);
 });
 
-test('final Queue attempts persist retryable fulfillment failures for manual review', async () => {
-  const sets: Array<{ data: any }> = [];
-  const checkoutRef = { path: 'checkout' } as any;
-  let transactionCalls = 0;
-  checkoutRef.store = {
-    runTransaction: async (fn: any) => {
-      transactionCalls += 1;
-      if (transactionCalls === 1) {
-        return fn({
-          get: async () => {
-            throw Object.assign(new Error('provider unavailable'), { code: 'unavailable' });
-          },
-        });
-      }
-      return fn({
-        get: async () => ({
-          exists: true,
-          data: () => ({ status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING }),
-        }),
-        set: (_ref: any, data: any) => sets.push({ data }),
-      });
-    },
-  };
-  const result = await processStripeCheckoutFulfillmentDocument({
-    db: checkoutRef.store,
+test('final Queue attempts persist retryable fulfillment failures for manual review', async (t) => {
+  let failNextRead = true;
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
+  }, {
     dropId: 'card_nft_binder_devnet',
     sessionId: 'cs_test_final_attempt',
-    checkoutRef,
+    observeCall: () => {
+      if (!failNextRead) return;
+      failNextRead = false;
+      throw Object.assign(new Error('provider unavailable'), { code: 'unavailable' });
+    },
+  });
+  const result = await processStripeCheckoutFulfillmentDocument({
+    commerce,
+    dropId: 'card_nft_binder_devnet',
+    sessionId: 'cs_test_final_attempt',
+    checkoutKey,
     apiKeys: [],
     deps: {
       getDropRuntime: () => ({ cluster: 'devnet' }),
@@ -2406,30 +2277,30 @@ test('final Queue attempts persist retryable fulfillment failures for manual rev
     } as any,
     treatRetryableFailureAsTerminal: true,
   });
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  const notification = parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification);
+  assert.ok(notification);
   assert.equal(result.status, 'failed');
-  assert.equal(sets.length, 1);
-  assert.equal(sets[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
-  assert.equal(sets[0].data.manualRefundReviewRequired, true);
-  assert.equal(sets[0].data.stripeTerminalNotificationState, 'pending');
-  assert.equal(sets[0].data.stripeTerminalNotification.outcome, 'manual_review');
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  assert.equal(checkout.version, 2);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
+  assert.equal(checkout.data.manualRefundReviewRequired, true);
+  assert.equal(checkout.data.stripeTerminalNotificationState, 'pending');
+  assert.equal(notification.outcome, 'manual_review');
 });
 
-test('already-fulfilled Queue retries repair pack status idempotently', async () => {
-  const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.store = {
-    runTransaction: async (operation: any) => operation({
-      get: async () => ({
-        exists: true,
-        data: () => ({ status: STRIPE_CHECKOUT_STATUS.FULFILLED, deliveryId: 123 }),
-      }),
-    }),
-  };
+test('already-fulfilled Queue retries repair pack status idempotently', async (t) => {
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.FULFILLED,
+    deliveryId: 123,
+  }, { dropId: 'card_nft_2', sessionId: 'cs_test_repair' });
   const repairs: unknown[] = [];
   const result = await processStripeCheckoutFulfillmentDocument({
-    db: checkoutRef.store,
+    commerce,
     dropId: 'card_nft_2',
     sessionId: 'cs_test_repair',
-    checkoutRef,
+    checkoutKey,
     apiKeys: [],
     deps: {
       getDropRuntime: () => ({ dropId: 'card_nft_2', cluster: 'mainnet-beta' }),
@@ -2444,296 +2315,238 @@ test('already-fulfilled Queue retries repair pack status idempotently', async ()
     sessionId: 'cs_test_repair',
     reason: 'already_fulfilled',
   });
-  assert.equal(repairs.length, 1);
+  assert.deepEqual(repairs, [{
+    dropRuntime: { dropId: 'card_nft_2', cluster: 'mainnet-beta' },
+    checkoutKey,
+    sessionId: 'cs_test_repair',
+  }]);
+  assert.equal((await repository.get(checkoutKey))?.version, 1);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 0);
 });
 
-test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async () => {
-  const sets: Array<{ ref: any; data: any; options: any }> = [];
-  const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.store = {
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          assert.equal(ref, checkoutRef);
-          return {
-            exists: true,
-            data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_current' }),
-          };
-        },
-        set: (ref: any, data: any, options: any) => {
-          sets.push({ ref, data, options });
-        },
-      }),
+test('markStripeCheckoutFulfillmentFailed writes manual-review failure', async (t) => {
+  const checkoutData = {
+    preserved: 'checkout-field',
+    processingLeaseExpiresAt: COMMERCE_NOW_MS + 1_000,
+    nextFulfillmentRetryAt: COMMERCE_NOW_MS + 2_000,
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_current',
   };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData);
 
-  const result = await markStripeCheckoutFulfillmentFailed(checkoutRef, new Error('processing failure'), {
+  const result = await markStripeCheckoutFulfillmentFailed(commerce, checkoutKey, new Error('processing failure'), {
     summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
     sessionIdentity: { dropId: 'little_swag_hoodies_devnet', sessionId: 'cs_test_123' },
     processingAttemptId: 'attempt_current',
   });
 
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  const notification = parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification);
+  assert.ok(notification);
   assert.deepEqual(result, { status: 'failed' });
-  assert.equal(sets.length, 1);
-  assert.equal(sets[0].ref, checkoutRef);
-  assert.equal(sets[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
-  assert.equal(sets[0].data.manualRefundReviewRequired, true);
-  assert.equal(sets[0].data.stripeTerminalNotificationState, 'pending');
-  assert.equal(sets[0].data.stripeTerminalNotification.version, 1);
-  assert.equal(sets[0].data.stripeTerminalNotification.outcome, 'manual_review');
-  assert.equal(sets[0].data.stripeTerminalNotification.attemptCount, 0);
-  assert.match(sets[0].data.stripeTerminalNotification.jobIds.stripe_checkout_manual_review, /^[0-9a-f-]{36}$/);
-  assert.equal(Object.prototype.hasOwnProperty.call(sets[0].data, 'processingAttemptId'), true);
-  assert.equal(Object.prototype.hasOwnProperty.call(sets[0].data, 'processingLeaseExpiresAt'), true);
-  assert.equal(Object.prototype.hasOwnProperty.call(sets[0].data, 'nextFulfillmentRetryAt'), true);
-  assert.deepEqual(sets[0].options, { merge: true });
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  assert.equal(checkout.version, 2);
+  assert.deepEqual(checkout.key, checkoutKey);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
+  assert.equal(checkout.data.manualRefundReviewRequired, true);
+  assert.equal(checkout.data.stripeTerminalNotificationState, 'pending');
+  assert.equal(notification.version, 1);
+  assert.equal(notification.outcome, 'manual_review');
+  assert.equal(notification.attemptCount, 0);
+  assert.match(notification.jobIds.stripe_checkout_manual_review, /^[0-9a-f-]{36}$/);
+  assert.equal(Object.hasOwn(checkout.data, 'processingAttemptId'), false);
+  assert.equal(Object.hasOwn(checkout.data, 'processingLeaseExpiresAt'), false);
+  assert.equal(Object.hasOwn(checkout.data, 'nextFulfillmentRetryAt'), false);
+  assert.equal(checkout.data.preserved, 'checkout-field');
+
+  const missing = stripeCommerceFixture(t, null);
+  assert.equal(await missing.repository.get(missing.checkoutKey), null);
+  assert.deepEqual(await markStripeCheckoutFulfillmentFailed(missing.commerce, missing.checkoutKey, new Error('missing checkout'), {
+    summarizeError: () => ({ message: 'missing checkout' }),
+    sessionIdentity: { dropId: 'little_swag_hoodies_devnet', sessionId: 'cs_test_123' },
+  }), { status: 'failed' });
+  const created = await missing.repository.get(missing.checkoutKey);
+  assert.equal(created?.version, 1);
+  assert.equal(created?.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
+  assert.equal(created?.data.dropId, 'little_swag_hoodies_devnet');
+  assert.equal(created?.data.sessionId, 'cs_test_123');
+  assert.equal(created?.data.manualRefundReviewRequired, true);
+  assert.equal(created?.data.failedAt, COMMERCE_NOW_MS);
+  assert.equal(created?.data.stripeTerminalNotificationState, 'pending');
+  assert.equal(parseStripeTerminalNotificationOutbox(created?.data.stripeTerminalNotification)?.outcome, 'manual_review');
+  assert.equal(commerceDocumentWriteBatches(missing.calls).length, 1);
 });
 
-test('markStripeCheckoutFulfillmentFailed ignores stale processing attempts', async () => {
-  const sets: Array<{ ref: any; data: any; options: any }> = [];
-  const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.store = {
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          assert.equal(ref, checkoutRef);
-          return {
-            exists: true,
-            data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_new' }),
-          };
-        },
-        set: (ref: any, data: any, options: any) => {
-          sets.push({ ref, data, options });
-        },
-      }),
+test('markStripeCheckoutFulfillmentFailed ignores stale processing attempts', async (t) => {
+  const checkoutData = {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_new',
   };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData);
 
-  const result = await markStripeCheckoutFulfillmentFailed(checkoutRef, new Error('late failure'), {
+  const result = await markStripeCheckoutFulfillmentFailed(commerce, checkoutKey, new Error('late failure'), {
     summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
     sessionIdentity: { dropId: 'little_swag_hoodies_devnet', sessionId: 'cs_test_123' },
     processingAttemptId: 'attempt_old',
   });
 
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
   assert.deepEqual(result, { status: 'stale_processing_attempt' });
-  assert.equal(sets.length, 0);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 0);
+  assert.equal(checkout.version, 1);
+  assert.deepEqual(checkout.data, checkoutData);
 });
 
-test('markStripeCheckoutFulfillmentFulfilled writes only the current processing attempt', async () => {
-  const updates: Array<{ ref: any; data: any }> = [];
-  const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.store = {
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          assert.equal(ref, checkoutRef);
-          return {
-            exists: true,
-            data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_current' }),
-          };
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
+test('markStripeCheckoutFulfillmentFulfilled writes only the current processing attempt', async (t) => {
+  const checkoutData = {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_current',
   };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData);
 
-  const result = await markStripeCheckoutFulfillmentFulfilled(checkoutRef, {
+  const result = await markStripeCheckoutFulfillmentFulfilled(commerce, checkoutKey, {
     deliveryId: 123,
     metadataId: 16,
     receiptTx: 'tx123',
     processingAttemptId: 'attempt_current',
     fulfillmentCompletionFields: {
       fulfillmentCompletedBy: 'cloudflare_queue_v1',
-      fulfillmentCompletedAt: stripeCheckoutFieldValue.serverTimestamp(),
+      fulfillmentCompletedAt: commerceFieldValue.serverTimestamp(),
     },
   });
 
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  const notification = parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification);
+  assert.ok(notification);
   assert.deepEqual(result, { status: 'fulfilled' });
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].ref, checkoutRef);
-  assert.equal(updates[0].data.status, STRIPE_CHECKOUT_STATUS.FULFILLED);
-  assert.equal(updates[0].data.deliveryId, 123);
-  assert.equal(updates[0].data.fulfillmentCompletedBy, 'cloudflare_queue_v1');
-  assert.equal(updates[0].data.fulfillmentCompletedAt?.kind, 'server_timestamp');
-  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'processingAttemptId'), true);
-  assert.equal(updates[0].data.stripeTerminalNotificationState, 'pending');
-  assert.equal(updates[0].data.stripeTerminalNotification.version, 1);
-  assert.equal(updates[0].data.stripeTerminalNotification.outcome, 'fulfilled');
-  assert.equal(updates[0].data.stripeTerminalNotification.attemptCount, 0);
-  assert.match(updates[0].data.stripeTerminalNotification.jobIds.buyer_order_received, /^[0-9a-f-]{36}$/);
-  assert.match(updates[0].data.stripeTerminalNotification.jobIds.shipper_ready_to_ship, /^[0-9a-f-]{36}$/);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  assert.equal(checkout.version, 2);
+  assert.deepEqual(checkout.key, checkoutKey);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLED);
+  assert.equal(checkout.data.deliveryId, 123);
+  assert.equal(checkout.data.fulfillmentCompletedBy, 'cloudflare_queue_v1');
+  assert.equal(checkout.data.fulfillmentCompletedAt, COMMERCE_NOW_MS);
+  assert.equal(Object.hasOwn(checkout.data, 'processingAttemptId'), false);
+  assert.equal(checkout.data.stripeTerminalNotificationState, 'pending');
+  assert.equal(notification.version, 1);
+  assert.equal(notification.outcome, 'fulfilled');
+  assert.equal(notification.attemptCount, 0);
+  assert.match(notification.jobIds.buyer_order_received, /^[0-9a-f-]{36}$/);
+  assert.match(notification.jobIds.shipper_ready_to_ship, /^[0-9a-f-]{36}$/);
 });
 
-test('terminal checkout writes preserve queued notifications on replay without a processing attempt', async () => {
+test('terminal checkout writes preserve queued notifications on replay without a processing attempt', async (t) => {
   for (const outcome of ['fulfilled', 'manual_review'] as const) {
-    let checkout: Record<string, unknown> = { status: STRIPE_CHECKOUT_STATUS.PROCESSING };
-    const writes: Record<string, unknown>[] = [];
-    const checkoutRef = { path: 'checkout' } as any;
-    const persist = (_ref: unknown, data: Record<string, unknown>) => {
-      writes.push(data);
-      checkout = { ...checkout, ...data };
-    };
-    checkoutRef.store = {
-      runTransaction: async (operation: any) => operation({
-        get: async () => ({ exists: true, data: () => ({ ...checkout }) }),
-        update: persist,
-        set: persist,
-      }),
-    };
+    const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, { status: STRIPE_CHECKOUT_STATUS.PROCESSING });
     const complete = () => outcome === 'fulfilled'
-      ? markStripeCheckoutFulfillmentFulfilled(checkoutRef, { deliveryId: 123 })
-      : markStripeCheckoutFulfillmentFailed(checkoutRef, new Error('payment requires review'), {
+      ? markStripeCheckoutFulfillmentFulfilled(commerce, checkoutKey, { deliveryId: 123 })
+      : markStripeCheckoutFulfillmentFailed(commerce, checkoutKey, new Error('payment requires review'), {
         summarizeError: () => ({ message: 'payment requires review' }),
       });
 
     await complete();
-    assert.equal(checkout.stripeTerminalNotificationState, 'pending');
-    checkout.stripeTerminalNotificationState = 'queued';
-    const notification = structuredClone(checkout.stripeTerminalNotification);
+    const completed = await repository.get(checkoutKey);
+    assert.equal(completed?.data.stripeTerminalNotificationState, 'pending');
+    const notification = structuredClone(completed?.data.stripeTerminalNotification);
+    await repository.run(COMMERCE_NOW_MS, (unit) => unit.update(checkoutKey, { stripeTerminalNotificationState: 'queued' }));
     await complete();
 
-    assert.equal(writes.length, 2);
-    assert.equal(checkout.stripeTerminalNotificationState, 'queued');
-    assert.deepEqual(checkout.stripeTerminalNotification, notification);
-    assert.equal(Object.hasOwn(writes[1], 'stripeTerminalNotificationState'), false);
-    assert.equal(Object.hasOwn(writes[1], 'stripeTerminalNotification'), false);
+    const replayed = await repository.get(checkoutKey);
+    assert.equal(commerceDocumentWriteBatches(calls).length, 3);
+    assert.equal(replayed?.version, 4);
+    assert.equal(replayed?.data.stripeTerminalNotificationState, 'queued');
+    assert.deepEqual(replayed?.data.stripeTerminalNotification, notification);
   }
 });
 
-test('terminal checkout writes do not backfill notifications for historical terminal records', async () => {
+test('terminal checkout writes do not backfill notifications for historical terminal records', async (t) => {
   for (const outcome of ['fulfilled', 'manual_review'] as const) {
-    const checkout = outcome === 'fulfilled'
+    const initial = outcome === 'fulfilled'
       ? { status: STRIPE_CHECKOUT_STATUS.FULFILLED }
       : { status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED, manualRefundReviewRequired: true };
-    const writes: Record<string, unknown>[] = [];
-    const checkoutRef = { path: 'checkout' } as any;
-    const persist = (_ref: unknown, data: Record<string, unknown>) => writes.push(data);
-    checkoutRef.store = {
-      runTransaction: async (operation: any) => operation({
-        get: async () => ({ exists: true, data: () => checkout }),
-        update: persist,
-        set: persist,
-      }),
-    };
+    const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, initial);
 
     if (outcome === 'fulfilled') {
-      await markStripeCheckoutFulfillmentFulfilled(checkoutRef, { deliveryId: 123 });
+      await markStripeCheckoutFulfillmentFulfilled(commerce, checkoutKey, { deliveryId: 123 });
     } else {
-      await markStripeCheckoutFulfillmentFailed(checkoutRef, new Error('payment requires review'), {
+      await markStripeCheckoutFulfillmentFailed(commerce, checkoutKey, new Error('payment requires review'), {
         summarizeError: () => ({ message: 'payment requires review' }),
       });
     }
 
-    assert.equal(writes.length, 1);
-    assert.equal(Object.hasOwn(writes[0], 'stripeTerminalNotificationState'), false);
-    assert.equal(Object.hasOwn(writes[0], 'stripeTerminalNotification'), false);
+    const checkout = await repository.get(checkoutKey);
+    assert.ok(checkout);
+    assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+    assert.equal(checkout.version, 2);
+    assert.equal(Object.hasOwn(checkout.data, 'stripeTerminalNotificationState'), false);
+    assert.equal(Object.hasOwn(checkout.data, 'stripeTerminalNotification'), false);
   }
 });
 
-test('markStripeCheckoutFulfillmentFulfilled clears singular metadataId for multi-item checkout docs', async () => {
-  const updates: Array<{ ref: any; data: any }> = [];
-  const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.store = {
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          assert.equal(ref, checkoutRef);
-          return {
-            exists: true,
-            data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_current' }),
-          };
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
+test('markStripeCheckoutFulfillmentFulfilled clears singular metadataId for multi-item checkout docs', async (t) => {
+  const checkoutData = {
+    metadataId: 16,
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_current',
   };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData);
 
-  const result = await markStripeCheckoutFulfillmentFulfilled(checkoutRef, {
+  const result = await markStripeCheckoutFulfillmentFulfilled(commerce, checkoutKey, {
     deliveryId: 123,
     metadataIds: [16, 17, 18],
     receiptTx: 'tx123',
     processingAttemptId: 'attempt_current',
   });
 
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
   assert.deepEqual(result, { status: 'fulfilled' });
-  assert.equal(updates.length, 1);
-  assert.deepEqual(updates[0].data.metadataIds, [16, 17, 18]);
-  assert.equal('fulfillmentCompletedBy' in updates[0].data, false);
-  assert.equal('fulfillmentCompletedAt' in updates[0].data, false);
-  assert.equal(updates[0].data.quantity, 3);
-  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].data, 'metadataId'), true);
-  assert.notEqual(updates[0].data.metadataId, 16);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  assert.equal(checkout.version, 2);
+  assert.deepEqual(checkout.data.metadataIds, [16, 17, 18]);
+  assert.equal('fulfillmentCompletedBy' in checkout.data, false);
+  assert.equal('fulfillmentCompletedAt' in checkout.data, false);
+  assert.equal(checkout.data.quantity, 3);
+  assert.equal(Object.hasOwn(checkout.data, 'metadataId'), false);
 });
 
-test('markStripeCheckoutFulfillmentFulfilled ignores stale processing attempts', async () => {
-  const updates: Array<{ ref: any; data: any }> = [];
-  const checkoutRef = { path: 'checkout' } as any;
-  checkoutRef.store = {
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          assert.equal(ref, checkoutRef);
-          return {
-            exists: true,
-            data: () => ({ status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED, processingAttemptId: 'attempt_new' }),
-          };
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
+test('markStripeCheckoutFulfillmentFulfilled ignores stale processing attempts', async (t) => {
+  const checkoutData = {
+    status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
+    processingAttemptId: 'attempt_new',
   };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData);
 
-  const result = await markStripeCheckoutFulfillmentFulfilled(checkoutRef, {
+  const result = await markStripeCheckoutFulfillmentFulfilled(commerce, checkoutKey, {
     deliveryId: 123,
     metadataId: 16,
     receiptTx: 'tx123',
     processingAttemptId: 'attempt_old',
   });
 
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
   assert.deepEqual(result, { status: 'stale_processing_attempt' });
-  assert.equal(updates.length, 0);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 0);
+  assert.equal(checkout.version, 1);
+  assert.deepEqual(checkout.data, checkoutData);
 });
 
-test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale processing attempts', async () => {
+test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale processing attempts', async (t) => {
   const dropId = 'little_swag_hoodies_devnet';
   const orderHashHex = 'ab'.repeat(32);
-  const markerRef = { path: `drops/${dropId}/offchainOrders/${orderHashHex}` };
-  const checkoutRef = { path: `drops/${dropId}/stripeCheckouts/cs_test_123` } as any;
-  const creates: Array<{ ref: any; data: any }> = [];
-  const updates: Array<{ ref: any; data: any }> = [];
-  const db = {
-    doc: (path: string) => {
-      if (path === markerRef.path) return markerRef;
-      return { path };
-    },
-    runTransaction: async (fn: any) =>
-      fn({
-        get: async (ref: any) => {
-          if (ref === markerRef) return { exists: false };
-          if (ref === checkoutRef) {
-            return {
-              exists: true,
-              data: () => ({
-                status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
-                processingAttemptId: 'attempt_new',
-              }),
-            };
-          }
-          throw new Error(`unexpected ref: ${ref?.path}`);
-        },
-        create: (ref: any, data: any) => {
-          creates.push({ ref, data });
-        },
-        update: (ref: any, data: any) => {
-          updates.push({ ref, data });
-        },
-      }),
-  } as any;
+  const checkoutData = {
+    status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
+    processingAttemptId: 'attempt_new',
+  };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData, { dropId });
 
   const result = await createOrGetStripeOffchainDeliveryOrder({
-    db,
-    checkoutRef,
+    commerce,
+    checkoutKey,
     isAlreadyExistsError: () => false,
     processingAttemptId: 'attempt_old',
     order: {
@@ -2752,8 +2565,13 @@ test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale
   });
 
   assert.deepEqual(result, { checkoutStatus: 'stale_processing_attempt' });
-  assert.equal(creates.length, 0);
-  assert.equal(updates.length, 0);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 0);
+  assert.equal((await repository.query({ kind: 'delivery_order', dropId })).length, 0);
+  assert.equal((await repository.query({ kind: 'offchain_order', dropId })).length, 0);
+  assert.equal((await repository.query({ kind: 'claim_code' })).length, 0);
+  const checkout = await repository.get(checkoutKey);
+  assert.equal(checkout?.version, 1);
+  assert.deepEqual(checkout?.data, checkoutData);
 });
 
 test('isRetryableStripeCheckoutFulfillmentError classifies transient errors only', () => {
@@ -2773,13 +2591,11 @@ test('isRetryableStripeCheckoutFulfillmentError classifies transient errors only
   assert.equal(isRetryableStripeCheckoutFulfillmentError(Object.assign(new Error('bad request'), { statusCode: 400 })), false);
 });
 
-test('runStripeCheckoutFulfillmentWithRetry retries a retryable failure once', async () => {
-  const updates: any[] = [];
-  const checkoutRef = {
-    update: async (data: any) => {
-      updates.push(data);
-    },
-  } as any;
+test('runStripeCheckoutFulfillmentWithRetry retries a retryable failure once', async (t) => {
+  const checkoutData = {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+  };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData);
   let attempts = 0;
 
   const result = await runStripeCheckoutFulfillmentWithRetry(
@@ -2791,7 +2607,8 @@ test('runStripeCheckoutFulfillmentWithRetry retries a retryable failure once', a
       return 'fulfilled';
     },
     {
-      checkoutRef,
+      commerce,
+      checkoutKey,
       summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
       retryDelayMs: 0,
     },
@@ -2799,17 +2616,17 @@ test('runStripeCheckoutFulfillmentWithRetry retries a retryable failure once', a
 
   assert.equal(result, 'fulfilled');
   assert.equal(attempts, 2);
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].lastRetryableFulfillmentAttempt, 1);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 1);
+  const checkout = await repository.get(checkoutKey);
+  assert.equal(checkout?.version, 2);
+  assert.equal(checkout?.data.lastRetryableFulfillmentAttempt, 1);
 });
 
-test('runStripeCheckoutFulfillmentWithRetry does not retry deterministic failures', async () => {
-  const updates: any[] = [];
-  const checkoutRef = {
-    update: async (data: any) => {
-      updates.push(data);
-    },
-  } as any;
+test('runStripeCheckoutFulfillmentWithRetry does not retry deterministic failures', async (t) => {
+  const checkoutData = {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+  };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData);
   let attempts = 0;
 
   await assert.rejects(
@@ -2822,7 +2639,8 @@ test('runStripeCheckoutFulfillmentWithRetry does not retry deterministic failure
           });
         },
         {
-          checkoutRef,
+          commerce,
+          checkoutKey,
           summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
           retryDelayMs: 0,
         },
@@ -2831,31 +2649,18 @@ test('runStripeCheckoutFulfillmentWithRetry does not retry deterministic failure
   );
 
   assert.equal(attempts, 1);
-  assert.equal(updates.length, 0);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 0);
+  const checkout = await repository.get(checkoutKey);
+  assert.equal(checkout?.version, 1);
+  assert.deepEqual(checkout?.data, checkoutData);
 });
 
-test('runStripeCheckoutFulfillmentWithRetry stops when processing attempt is stale', async () => {
-  const updates: any[] = [];
-  const checkoutRef = {
-    update: async (data: any) => {
-      updates.push(data);
-    },
-    store: {
-      runTransaction: async (fn: any) =>
-        fn({
-          get: async (ref: any) => {
-            assert.equal(ref, checkoutRef);
-            return {
-              exists: true,
-              data: () => ({ status: STRIPE_CHECKOUT_STATUS.PROCESSING, processingAttemptId: 'attempt_new' }),
-            };
-          },
-          update: (ref: any, data: any) => {
-            updates.push({ ref, data });
-          },
-        }),
-    },
-  } as any;
+test('runStripeCheckoutFulfillmentWithRetry stops when processing attempt is stale', async (t) => {
+  const checkoutData = {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_new',
+  };
+  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData);
   let attempts = 0;
 
   await assert.rejects(
@@ -2866,7 +2671,8 @@ test('runStripeCheckoutFulfillmentWithRetry stops when processing attempt is sta
           throw Object.assign(new Error('temporary rpc timeout'), { code: 'deadline-exceeded' });
         },
         {
-          checkoutRef,
+          commerce,
+          checkoutKey,
           summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
           retryDelayMs: 0,
           processingAttemptId: 'attempt_old',
@@ -2876,17 +2682,19 @@ test('runStripeCheckoutFulfillmentWithRetry stops when processing attempt is sta
   );
 
   assert.equal(attempts, 1);
-  assert.equal(updates.length, 0);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 0);
+  const checkout = await repository.get(checkoutKey);
+  assert.equal(checkout?.version, 1);
+  assert.deepEqual(checkout?.data, checkoutData);
 });
 
-test('runStripeCheckoutFulfillmentWithRetry fails closed when ownership cannot be verified', async () => {
-  const checkoutRef = {
-    store: {
-      runTransaction: async () => {
-        throw new Error('commerce store unavailable');
-      },
-    },
-  } as any;
+test('runStripeCheckoutFulfillmentWithRetry fails closed when ownership cannot be verified', async (t) => {
+  const { commerce, checkoutKey } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_current',
+  }, {
+    observeCall: () => { throw new Error('commerce database unavailable'); },
+  });
   let attempts = 0;
 
   await assert.rejects(
@@ -2897,7 +2705,8 @@ test('runStripeCheckoutFulfillmentWithRetry fails closed when ownership cannot b
           throw Object.assign(new Error('temporary rpc timeout'), { code: 'deadline-exceeded' });
         },
         {
-          checkoutRef,
+          commerce,
+          checkoutKey,
           summarizeError: (err) => ({ message: err instanceof Error ? err.message : String(err) }),
           retryDelayMs: 0,
           processingAttemptId: 'attempt_current',

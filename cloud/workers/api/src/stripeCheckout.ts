@@ -41,7 +41,14 @@ import {
   runCriticalRequestOperation,
 } from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
-import { createStripeCheckoutStore, stripeCheckoutFieldValue } from './stripeCheckout/store.js';
+import {
+  CommerceRepositoryError,
+  D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeyFromPath,
+} from './commerceRepository.js';
+import { runCommerceTransaction } from './commerceTransactions.js';
+import { stripeCheckoutWriteData } from './stripeCheckout/commerce.js';
 import {
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
@@ -440,24 +447,29 @@ async function persistCheckoutDocument(
   nowMs: number,
   commerceDb: D1Database,
 ): Promise<void> {
-  const store = createStripeCheckoutStore({ commerceDb, nowMs: () => nowMs });
-  const reference = store.doc(path);
-  await store.runTransaction(async (transaction) => {
-    const existing = await transaction.get(reference);
-    if (existing.exists) {
+  const key = commerceKeyFromPath(path);
+  if (!key || key.kind !== 'stripe_checkout') {
+    throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe checkout document path.');
+  }
+  await runCommerceTransaction({
+    repository: new D1CommerceRepository(commerceDb),
+    nowMs,
+  }, async (transaction) => {
+    const existing = await transaction.get(key);
+    if (existing) {
       if (
-        existing.get('operationId') === document.operationId &&
-        existing.get('sessionId') === document.sessionId &&
-        existing.get('dropId') === document.dropId
+        existing.data.operationId === document.operationId &&
+        existing.data.sessionId === document.sessionId &&
+        existing.data.dropId === document.dropId
       ) return;
       throw new StripeCheckoutSessionError('failed-precondition', 'Stripe checkout operation conflicts with an existing session.');
     }
-    transaction.create(reference, {
+    await transaction.create(key, stripeCheckoutWriteData({
       ...document,
-      createdAt: stripeCheckoutFieldValue.serverTimestamp(),
-      updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
-    });
-  });
+      createdAt: commerceFieldValue.serverTimestamp(),
+      updatedAt: commerceFieldValue.serverTimestamp(),
+    }));
+  }, { shouldRetry: (error) => error.code === 'aborted' });
 }
 
 export async function handleStripeCheckoutSession(

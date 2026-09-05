@@ -20,8 +20,8 @@ import {
 import { handleStripeWebhookRequest } from '../src/stripeWebhook.ts';
 import { isRequestCancellationError } from '../src/boundedRequest.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
-import { createStripeCheckoutStore } from '../src/stripeCheckout/store.ts';
 import {
+  D1CommerceRepository,
   commerceKeys,
   type CommerceDocumentData,
 } from '../src/commerceRepository.ts';
@@ -207,14 +207,14 @@ test('signed devnet webhook atomically queues the existing checkout', async () =
   assert.equal(result.metrics.upstreamCalls, 0);
   assert.ok(result.metrics.providerDurationMs >= 0);
   assert.equal(result.response.headers.has('access-control-allow-origin'), false);
-  const checkout = await createStripeCheckoutStore({ commerceDb: context.harness.db })
-    .doc(`drops/${DEVNET_DROP}/stripeCheckouts/cs_test_123`)
-    .get();
-  assert.equal(checkout.get('status'), STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
-  assert.equal(checkout.get('paymentStatus'), 'paid');
-  assert.equal(checkout.get('fulfillmentProcessor'), 'cloudflare_queue_v1');
-  assert.deepEqual(checkout.get('stripeWebhookEventIds'), ['evt_test_123']);
-  assert.equal(checkout.get('manualRefundReviewRequired'), undefined);
+  const checkout = await new D1CommerceRepository(context.harness.db)
+    .get(commerceKeys.stripeCheckout(DEVNET_DROP, 'cs_test_123'));
+  assert.ok(checkout);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+  assert.equal(checkout.data.paymentStatus, 'paid');
+  assert.equal(checkout.data.fulfillmentProcessor, 'cloudflare_queue_v1');
+  assert.deepEqual(checkout.data.stripeWebhookEventIds, ['evt_test_123']);
+  assert.equal(checkout.data.manualRefundReviewRequired, undefined);
   const serializedLogs = JSON.stringify(logs);
   assert.doesNotMatch(serializedLogs, /whsec_|Stripe-Signature|automatic_tax|amount_total/);
   assert.match(serializedLogs, /stripe_webhook_request/);
@@ -564,9 +564,9 @@ test('webhook commits before publish and duplicate delivery repairs a failed Que
   );
   assert.equal(failed.response.status, 500);
   assert.equal(failed.outcome, 'processing_error');
-  const reference = createStripeCheckoutStore({ commerceDb: context.harness.db })
-    .doc(`drops/${DEVNET_DROP}/stripeCheckouts/cs_test_123`);
-  assert.equal((await reference.get()).get('status'), STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+  const checkout = await new D1CommerceRepository(context.harness.db)
+    .get(commerceKeys.stripeCheckout(DEVNET_DROP, 'cs_test_123'));
+  assert.equal(checkout?.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
 
   const jobs: unknown[] = [];
   const events: string[] = [];
@@ -618,11 +618,11 @@ test('signed mainnet webhook uses the live secret and preserves fulfilled idempo
     sessionId: 'cs_live_123',
     deliveryId: 17,
   });
-  const checkout = await createStripeCheckoutStore({ commerceDb: context.harness.db })
-    .doc(`drops/${MAINNET_DROP}/stripeCheckouts/cs_live_123`)
-    .get();
-  assert.equal(checkout.get('lastStripeWebhookEventId'), 'evt_test_123');
-  assert.equal(checkout.get('status'), STRIPE_CHECKOUT_STATUS.FULFILLED);
+  const checkout = await new D1CommerceRepository(context.harness.db)
+    .get(commerceKeys.stripeCheckout(MAINNET_DROP, 'cs_live_123'));
+  assert.ok(checkout);
+  assert.equal(checkout.data.lastStripeWebhookEventId, 'evt_test_123');
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLED);
 });
 
 test('invalid and missing checkout documents stay retryable', async () => {

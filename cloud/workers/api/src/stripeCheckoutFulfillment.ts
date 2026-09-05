@@ -25,7 +25,6 @@ import {
   boxMinterMetadataBaseMatchesDrop,
   normalizeDropId,
 } from '../../../../shared/deploymentCore.js';
-import { dropDeliveryOrderPath } from './dropPaths.js';
 import { isStripeOffchainDeliveryOrderSource } from '../../../../shared/fulfillmentSources.js';
 import {
   packStatusCardsPerPack,
@@ -48,7 +47,6 @@ import {
   type StripeCheckoutOnchainConfig,
 } from './stripeCheckout/service.js';
 import { StripeCheckoutFulfillmentError } from './stripeCheckout/errors.js';
-import { stripeCheckoutFieldValue } from './stripeCheckout/store.js';
 import { stripeCheckoutSessionOrderHash } from './stripeCheckout/contract.js';
 import {
   publishPendingStripeCheckoutTerminalNotifications,
@@ -58,8 +56,13 @@ import {
   STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
   type StripeCheckoutFulfillmentJobV1,
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
-import { CommerceWriteConflict } from './commerceRepository.js';
-import { createStripeCheckoutStore } from './stripeCheckout/store.js';
+import {
+  CommerceWriteConflict,
+  D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeys,
+} from './commerceRepository.js';
+import type { StripeCheckoutCommerceContext } from './stripeCheckout/commerce.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { heliusRpcUrl } from './solanaProvider.js';
@@ -445,7 +448,7 @@ export function packStatusEventQuantity(runtime: Pick<FulfillmentRuntime, 'items
 
 export function flowDependencies(
   env: FulfillmentEnv,
-  store: ReturnType<typeof createStripeCheckoutStore>,
+  commerce: StripeCheckoutCommerceContext,
   signal: AbortSignal,
 ): StripeCheckoutFlowDeps<FulfillmentRuntime, StripeCheckoutOnchainConfig> {
   const countPackStatus = async ({
@@ -526,13 +529,15 @@ export function flowDependencies(
       }
     },
     countPackStatus,
-    repairPackStatus: async ({ dropRuntime, checkoutRef, sessionId }) => {
+    repairPackStatus: async ({ dropRuntime, checkoutKey, sessionId }) => {
       if (!shouldTrackPackStatusForDrop(dropRuntime)) return;
-      const checkout = await checkoutRef.get();
-      const checkoutData = checkout.data() || {};
+      commerce.signal?.throwIfAborted();
+      const checkout = await commerce.repository.get(checkoutKey);
+      commerce.signal?.throwIfAborted();
+      const checkoutData = checkout?.data || {};
       const deliveryId = Math.floor(Number(checkoutData.deliveryId));
       if (
-        !checkout.exists ||
+        !checkout ||
         checkoutData.dropId !== dropRuntime.dropId ||
         checkoutData.sessionId !== sessionId ||
         !Number.isSafeInteger(deliveryId) ||
@@ -540,8 +545,10 @@ export function flowDependencies(
       ) {
         throw new Error('stripe_pack_status_repair_checkout_invalid');
       }
-      const deliveryOrder = await store.doc(dropDeliveryOrderPath(dropRuntime.dropId, deliveryId)).get();
-      const order = deliveryOrder.data() || {};
+      commerce.signal?.throwIfAborted();
+      const deliveryOrder = await commerce.repository.get(commerceKeys.deliveryOrder(dropRuntime.dropId, String(deliveryId)));
+      commerce.signal?.throwIfAborted();
+      const order = deliveryOrder?.data || {};
       const orderHashHex = typeof order.offchainOrderHash === 'string' ? order.offchainOrderHash.trim() : '';
       const expectedOrderHashHex = stripeCheckoutSessionOrderHash(
         sessionId,
@@ -555,7 +562,7 @@ export function flowDependencies(
         ? metadataIds.length
         : Number.isSafeInteger(legacyMetadataId) && legacyMetadataId > 0 ? 1 : legacyQuantity;
       if (
-        !deliveryOrder.exists ||
+        !deliveryOrder ||
         order.dropId !== dropRuntime.dropId ||
         Number(order.deliveryId) !== deliveryId ||
         !isStripeOffchainDeliveryOrderSource(order.source) ||
@@ -586,7 +593,7 @@ export function flowDependencies(
 export function workerFulfillmentCompletionFields(): StripeCheckoutFulfillmentCompletionFields {
   return {
     fulfillmentCompletedBy: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
-    fulfillmentCompletedAt: stripeCheckoutFieldValue.serverTimestamp(),
+    fulfillmentCompletedAt: commerceFieldValue.serverTimestamp(),
   };
 }
 
@@ -596,19 +603,19 @@ export async function processStripeCheckoutFulfillmentJob(
   signal: AbortSignal,
   options: { persistenceSignal?: AbortSignal; treatRetryableFailureAsTerminal?: boolean } = {},
 ): Promise<FulfillmentProcessingResult> {
-  const store = createStripeCheckoutStore({
-    commerceDb: env.COMMERCE_DB,
+  const commerce: StripeCheckoutCommerceContext = {
+    repository: new D1CommerceRepository(env.COMMERCE_DB),
+    nowMs: () => Date.now(),
     signal: options.persistenceSignal || signal,
-  });
-  const checkoutPath = `drops/${job.dropId}/stripeCheckouts/${job.sessionId}`;
-  const checkoutRef = store.doc(checkoutPath);
+  };
+  const checkoutKey = commerceKeys.stripeCheckout(job.dropId, job.sessionId);
   const fulfillment = await processStripeCheckoutFulfillmentDocument({
-    db: store,
+    commerce,
     dropId: job.dropId,
     sessionId: job.sessionId,
-    checkoutRef,
+    checkoutKey,
     apiKeys: stripeKeys(env),
-    deps: flowDependencies(env, store, signal),
+    deps: flowDependencies(env, commerce, signal),
     treatRetryableFailureAsTerminal: options.treatRetryableFailureAsTerminal,
     fulfillmentCompletionFields: workerFulfillmentCompletionFields(),
   });
@@ -621,7 +628,7 @@ export async function processStripeCheckoutFulfillmentJob(
   const notifications = await publishPendingStripeCheckoutTerminalNotifications({
     dropId: job.dropId,
     sessionId: job.sessionId,
-    store,
+    commerce,
     signal,
     queue: env.NOTIFICATION_EMAIL_QUEUE,
     initializeMissing: true,

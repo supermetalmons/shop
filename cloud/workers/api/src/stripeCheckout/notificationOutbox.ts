@@ -1,9 +1,10 @@
-import { dropDeliveryOrderPath } from '../dropPaths.js';
 import type { NotificationEmailJobV1 } from '../../../../../shared/notificationEmailJob.js';
+import { commerceFieldValue, commerceKeys } from '../commerceRepository.js';
+import { runCommerceTransaction } from '../commerceTransactions.js';
 import {
-  stripeCheckoutFieldValue,
-  type StripeCheckoutStore,
-} from './store.js';
+  stripeCheckoutWriteData,
+  type StripeCheckoutCommerceContext,
+} from './commerce.js';
 import { prepareStripeCheckoutTerminalNotifications } from './terminalNotifications.js';
 import {
   createStripeTerminalNotificationOutboxFields,
@@ -29,8 +30,8 @@ export type StripeCheckoutTerminalPublicationResult = {
 type PublicationOptions = {
   dropId: string;
   sessionId: string;
-  store: StripeCheckoutStore;
-  createCleanupStore?: () => StripeCheckoutStore;
+  commerce: StripeCheckoutCommerceContext;
+  createCleanupCommerce?: () => StripeCheckoutCommerceContext;
   queue: Pick<Queue<NotificationEmailJobV1>, 'sendBatch'>;
   signal: AbortSignal;
   getDropName: (dropId: string) => string;
@@ -57,12 +58,11 @@ function skipped(
 }
 
 async function claimNotifications(args: PublicationOptions): Promise<ClaimResult> {
-  const reference = args.store.doc(`drops/${args.dropId}/stripeCheckouts/${args.sessionId}`);
-  return args.store.runTransaction(async (transaction) => {
+  const key = commerceKeys.stripeCheckout(args.dropId, args.sessionId);
+  return runCommerceTransaction(args.commerce, async (transaction) => {
     args.signal.throwIfAborted();
-    const snapshot = await transaction.get(reference);
-    const checkout = snapshot.data();
-    if (!snapshot.exists || !checkout) return skipped('invalid', 'none', 'missing_checkout');
+    const checkout = (await transaction.get(key))?.data;
+    if (!checkout) return skipped('invalid', 'none', 'missing_checkout');
     const outcome = stripeTerminalNotificationOutcome(checkout);
     if (!outcome) return skipped('not_terminal', 'none');
     const nowMs = (args.nowMs || Date.now)();
@@ -75,10 +75,10 @@ async function claimNotifications(args: PublicationOptions): Promise<ClaimResult
     const state = checkout[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD];
     const outbox = parseStripeTerminalNotificationOutbox(checkout[STRIPE_TERMINAL_NOTIFICATION_FIELD]);
     const dueAtMs = checkout[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD];
-    const fail = (reason: string): ClaimResult => {
-      transaction.update(reference, {
+    const fail = async (reason: string): Promise<ClaimResult> => {
+      await transaction.update(key, {
         [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: 'failed',
-        [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: stripeCheckoutFieldValue.delete(),
+        [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: commerceFieldValue.delete(),
         stripeTerminalNotificationLastError: reason,
       });
       return skipped(outcome, 'failed', reason);
@@ -101,13 +101,13 @@ async function claimNotifications(args: PublicationOptions): Promise<ClaimResult
         ? nowMs + STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS
         : outbox.retryUntilMs,
     };
-    transaction.update(reference, {
+    await transaction.update(key, stripeCheckoutWriteData({
       [STRIPE_TERMINAL_NOTIFICATION_FIELD]: claimed,
       [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: 'pending',
       [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: nowMs + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS,
-    });
+    }));
     return { claim: { checkout, outbox: claimed, expiresAtMs: nowMs + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS } };
-  });
+  }, { shouldRetry: (error) => error.code === 'aborted' });
 }
 
 async function updateClaim(
@@ -115,18 +115,18 @@ async function updateClaim(
   claim: NotificationClaim,
   update: (outbox: StripeTerminalNotificationOutbox) => Record<string, unknown>,
 ): Promise<boolean> {
-  const reference = args.store.doc(`drops/${args.dropId}/stripeCheckouts/${args.sessionId}`);
-  return args.store.runTransaction(async (transaction) => {
-    const checkout = (await transaction.get(reference)).data();
+  const key = commerceKeys.stripeCheckout(args.dropId, args.sessionId);
+  return runCommerceTransaction(args.commerce, async (transaction) => {
+    const checkout = (await transaction.get(key))?.data;
     const outbox = parseStripeTerminalNotificationOutbox(checkout?.[STRIPE_TERMINAL_NOTIFICATION_FIELD]);
     if (
       !checkout || !outbox || checkout[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD] !== 'pending' ||
       outbox.claimId !== claim.outbox.claimId ||
       stripeTerminalNotificationOutcome(checkout) !== claim.outbox.outcome
     ) return false;
-    transaction.update(reference, update(outbox));
+    await transaction.update(key, stripeCheckoutWriteData(update(outbox)));
     return true;
-  });
+  }, { shouldRetry: (error) => error.code === 'aborted' });
 }
 
 function validJobIdentity(args: PublicationOptions, claim: NotificationClaim, job: NotificationEmailJobV1): boolean {
@@ -171,8 +171,10 @@ export async function publishPendingStripeCheckoutTerminalNotifications(
             data: claim.checkout,
           }),
           loadDeliveryOrder: async (dropId, deliveryId) => {
-            const order = await args.store.doc(dropDeliveryOrderPath(dropId, deliveryId)).get();
-            return order.data() || null;
+            args.commerce.signal?.throwIfAborted();
+            const order = await args.commerce.repository.get(commerceKeys.deliveryOrder(dropId, String(deliveryId)));
+            args.commerce.signal?.throwIfAborted();
+            return order?.data || null;
           },
           getDropName: args.getDropName,
         },
@@ -202,9 +204,9 @@ export async function publishPendingStripeCheckoutTerminalNotifications(
       return {
         [STRIPE_TERMINAL_NOTIFICATION_FIELD]: complete,
         [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: 'queued',
-        [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: stripeCheckoutFieldValue.delete(),
-        stripeTerminalNotificationQueuedAt: stripeCheckoutFieldValue.serverTimestamp(),
-        stripeTerminalNotificationLastError: stripeCheckoutFieldValue.delete(),
+        [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: commerceFieldValue.delete(),
+        stripeTerminalNotificationQueuedAt: commerceFieldValue.serverTimestamp(),
+        stripeTerminalNotificationLastError: commerceFieldValue.delete(),
       };
     });
     if (!finalized) throw new Error('stripe_terminal_notification_finalization_lost');
@@ -213,7 +215,7 @@ export async function publishPendingStripeCheckoutTerminalNotifications(
     return { outcome: claim.outbox.outcome, publication: 'queued', queuedJobs: jobs.length };
   } catch (error) {
     if (args.signal.aborted && !sendStarted) {
-      const cleanup = args.createCleanupStore ? { ...args, store: args.createCleanupStore() } : args;
+      const cleanup = args.createCleanupCommerce ? { ...args, commerce: args.createCleanupCommerce() } : args;
       await updateClaim(cleanup, claim, (outbox) => {
         const { claimId: _claimId, ...released } = outbox;
         return {

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
-import { createStripeCheckoutStore } from '../src/stripeCheckout/store.ts';
+import { commerceKeys, D1CommerceRepository } from '../src/commerceRepository.ts';
+import { stripeCheckoutWriteData } from '../src/stripeCheckout/commerce.ts';
 import {
   createStripeTerminalNotificationOutboxFields,
   parseStripeTerminalNotificationOutbox,
@@ -14,32 +15,32 @@ import { createCommerceD1Harness } from './commerceD1Harness.ts';
 
 const DROP_ID = 'card_nft_2';
 const NOW = Date.UTC(2026, 8, 5);
-const checkoutPath = (sessionId: string) => `drops/${DROP_ID}/stripeCheckouts/${sessionId}`;
+const checkoutKey = (sessionId: string) => commerceKeys.stripeCheckout(DROP_ID, sessionId);
 
 test('cron recovers fulfilled and manual-review notifications without fulfillment messages or historical backfill', async (context) => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
-  const store = createStripeCheckoutStore({ commerceDb: harness.db, nowMs: () => NOW });
-  await store.runTransaction(async (transaction) => {
-    transaction.create(store.doc(`drops/${DROP_ID}/deliveryOrders/7`), {
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(NOW, async (transaction) => {
+    await transaction.create(commerceKeys.deliveryOrder(DROP_ID, '7'), {
       deliveryId: 7, status: 'ready_to_ship', source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
       owner: 'anonymous:anon:recovery', addressSnapshot: { email: 'buyer@example.com' },
       items: [{ kind: 'box', refId: 3 }],
     });
-    transaction.create(store.doc(checkoutPath('cs_fulfilled')), {
+    await transaction.create(checkoutKey('cs_fulfilled'), stripeCheckoutWriteData({
       status: 'fulfilled', deliveryId: 7,
       ...createStripeTerminalNotificationOutboxFields(null, 'fulfilled', NOW - 60_000),
-    });
-    transaction.create(store.doc(checkoutPath('cs_manual')), {
+    }));
+    await transaction.create(checkoutKey('cs_manual'), stripeCheckoutWriteData({
       status: 'fulfillment_failed', manualRefundReviewRequired: true,
       owner: 'anonymous:anon:recovery', ownerKind: 'anonymous', authSubject: 'anon:recovery',
       ...createStripeTerminalNotificationOutboxFields(null, 'manual_review', NOW - 60_000),
-    });
-    transaction.create(store.doc(checkoutPath('cs_historical')), { status: 'fulfilled', deliveryId: 7 });
-    transaction.create(store.doc(checkoutPath('cs_processing')), {
+    }));
+    await transaction.create(checkoutKey('cs_historical'), { status: 'fulfilled', deliveryId: 7 });
+    await transaction.create(checkoutKey('cs_processing'), stripeCheckoutWriteData({
       status: 'processing',
       ...createStripeTerminalNotificationOutboxFields(null, 'manual_review', NOW - 60_000),
-    });
+    }));
   });
   const jobs: NotificationEmailJobV1[] = [];
   const env = {
@@ -64,10 +65,10 @@ test('cron recovers fulfilled and manual-review notifications without fulfillmen
     'buyer_order_received', 'shipper_ready_to_ship', 'stripe_checkout_manual_review',
   ]);
   for (const sessionId of ['cs_fulfilled', 'cs_manual']) {
-    assert.equal((await store.doc(checkoutPath(sessionId)).get()).get('stripeTerminalNotificationState'), 'queued');
+    assert.equal((await repository.get(checkoutKey(sessionId)))?.data.stripeTerminalNotificationState, 'queued');
   }
-  assert.equal((await store.doc(checkoutPath('cs_historical')).get()).get('stripeTerminalNotificationState'), undefined);
-  assert.equal((await store.doc(checkoutPath('cs_processing')).get()).get('stripeTerminalNotificationState'), 'pending');
+  assert.equal((await repository.get(checkoutKey('cs_historical')))?.data.stripeTerminalNotificationState, undefined);
+  assert.equal((await repository.get(checkoutKey('cs_processing')))?.data.stripeTerminalNotificationState, 'pending');
   assert.equal(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, {
     nowMs: () => NOW,
   }), 0);
@@ -77,14 +78,14 @@ test('cron recovers fulfilled and manual-review notifications without fulfillmen
 test('notification reconciliation continues past a failed publication and retains it for recovery', async (context) => {
   const harness = createCommerceD1Harness();
   context.after(() => harness.database.close());
-  const store = createStripeCheckoutStore({ commerceDb: harness.db, nowMs: () => NOW });
-  await store.runTransaction(async (transaction) => {
+  const repository = new D1CommerceRepository(harness.db);
+  await repository.run(NOW, async (transaction) => {
     for (const sessionId of ['cs_a_fail', 'cs_b_success']) {
-      transaction.create(store.doc(checkoutPath(sessionId)), {
+      await transaction.create(checkoutKey(sessionId), stripeCheckoutWriteData({
         status: 'fulfillment_failed', manualRefundReviewRequired: true,
         owner: 'anonymous:anon:recovery', ownerKind: 'anonymous', authSubject: 'anon:recovery',
         ...createStripeTerminalNotificationOutboxFields(null, 'manual_review', NOW),
-      });
+      }));
     }
   });
   const failure = new Error('queue temporarily unavailable');
@@ -104,8 +105,8 @@ test('notification reconciliation continues past a failed publication and retain
     assert.deepEqual(error.errors, [failure]);
     return true;
   });
-  assert.equal((await store.doc(checkoutPath('cs_a_fail')).get()).get('stripeTerminalNotificationState'), 'pending');
-  assert.equal((await store.doc(checkoutPath('cs_b_success')).get()).get('stripeTerminalNotificationState'), 'queued');
+  assert.equal((await repository.get(checkoutKey('cs_a_fail')))?.data.stripeTerminalNotificationState, 'pending');
+  assert.equal((await repository.get(checkoutKey('cs_b_success')))?.data.stripeTerminalNotificationState, 'queued');
 });
 
 test('cancelled reconciliation releases unused claims and preserves every notification for retry', async (context) => {
@@ -121,21 +122,21 @@ test('cancelled reconciliation releases unused claims and preserves every notifi
   context.after(() => harness.database.close());
   context.mock.method(console, 'log', () => undefined);
   context.mock.method(console, 'error', () => undefined);
-  const store = createStripeCheckoutStore({ commerceDb: harness.db, nowMs: () => NOW });
-  const cancelled = store.doc(checkoutPath('cs_a_cancelled'));
-  const next = store.doc(checkoutPath('cs_b_next'));
-  await store.runTransaction(async (transaction) => {
-    for (const reference of [cancelled, next]) {
-      transaction.create(reference, {
+  const repository = new D1CommerceRepository(harness.db);
+  const cancelled = checkoutKey('cs_a_cancelled');
+  const next = checkoutKey('cs_b_next');
+  await repository.run(NOW, async (transaction) => {
+    for (const key of [cancelled, next]) {
+      await transaction.create(key, stripeCheckoutWriteData({
         status: 'fulfillment_failed', manualRefundReviewRequired: true,
         owner: 'anonymous:anon:recovery', ownerKind: 'anonymous', authSubject: 'anon:recovery',
         ...createStripeTerminalNotificationOutboxFields(null, 'manual_review', NOW),
-      });
+      }));
     }
   });
-  const initialOutbox = parseStripeTerminalNotificationOutbox((await cancelled.get()).get('stripeTerminalNotification'));
+  const initialOutbox = parseStripeTerminalNotificationOutbox((await repository.get(cancelled))?.data.stripeTerminalNotification);
   assert.ok(initialOutbox);
-  const nextBefore = (await next.get()).data();
+  const nextBefore = (await repository.get(next))?.data;
   const jobs: NotificationEmailJobV1[] = [];
   const env = {
     COMMERCE_DB: harness.db,
@@ -152,15 +153,16 @@ test('cancelled reconciliation releases unused claims and preserves every notifi
     await assert.rejects(reconcilePendingStripeTerminalNotifications(env, controller.signal, {
       nowMs: () => NOW,
     }), AggregateError);
-    const checkout = await cancelled.get();
-    const outbox = parseStripeTerminalNotificationOutbox(checkout.get('stripeTerminalNotification'));
+    const checkout = (await repository.get(cancelled))?.data;
+    assert.ok(checkout);
+    const outbox = parseStripeTerminalNotificationOutbox(checkout.stripeTerminalNotification);
     assert.ok(outbox);
     assert.equal(outbox.attemptCount, 0);
     assert.equal(outbox.claimId, undefined);
     assert.deepEqual(outbox.jobIds, initialOutbox.jobIds);
-    assert.equal(checkout.get('stripeTerminalNotificationState'), 'pending');
-    assert.equal(checkout.get('stripeTerminalNotificationNextAttemptAtMs'), NOW);
-    assert.deepEqual((await next.get()).data(), nextBefore);
+    assert.equal(checkout.stripeTerminalNotificationState, 'pending');
+    assert.equal(checkout.stripeTerminalNotificationNextAttemptAtMs, NOW);
+    assert.deepEqual((await repository.get(next))?.data, nextBefore);
     assert.equal(jobs.length, 0);
   }
   assert.equal(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, {
@@ -168,8 +170,8 @@ test('cancelled reconciliation releases unused claims and preserves every notifi
   }), 2);
   assert.deepEqual(jobs.map((job) => job.context.sessionId), ['cs_a_cancelled', 'cs_b_next']);
   assert.equal(jobs[0].jobId, initialOutbox.jobIds.stripe_checkout_manual_review);
-  assert.equal((await cancelled.get()).get('stripeTerminalNotificationState'), 'queued');
-  assert.equal((await next.get()).get('stripeTerminalNotificationState'), 'queued');
+  assert.equal((await repository.get(cancelled))?.data.stripeTerminalNotificationState, 'queued');
+  assert.equal((await repository.get(next))?.data.stripeTerminalNotificationState, 'queued');
   assert.equal(await reconcilePendingStripeTerminalNotifications(env, new AbortController().signal, {
     nowMs: () => NOW,
   }), 0);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { commerceKeys, D1CommerceRepository } from '../src/commerceRepository.ts';
-import { createStripeCheckoutStore } from '../src/stripeCheckout/store.ts';
+import { stripeCheckoutWriteData, type StripeCheckoutCommerceContext } from '../src/stripeCheckout/commerce.ts';
 import { publishPendingStripeCheckoutTerminalNotifications } from '../src/stripeCheckout/notificationOutbox.ts';
 import {
   createStripeTerminalNotificationOutboxFields,
@@ -21,8 +21,8 @@ import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harne
 const NOW_MS = 1_800_000_000_000;
 const DROP_ID = 'card_nft_2';
 const SESSION_ID = 'cs_test_terminal_outbox';
-const CHECKOUT_PATH = `drops/${DROP_ID}/stripeCheckouts/${SESSION_ID}`;
-const ORDER_PATH = `drops/${DROP_ID}/deliveryOrders/7`;
+const CHECKOUT_KEY = commerceKeys.stripeCheckout(DROP_ID, SESSION_ID);
+const ORDER_KEY = commerceKeys.deliveryOrder(DROP_ID, '7');
 type PublicationOptions = Parameters<typeof publishPendingStripeCheckoutTerminalNotifications>[0];
 
 async function fixture(context: TestContext, options: {
@@ -36,7 +36,7 @@ async function fixture(context: TestContext, options: {
   context.mock.method(console, 'error', () => undefined);
   const outcome = options.outcome || 'fulfilled';
   seedCommerceDocument(harness, {
-    key: commerceKeys.stripeCheckout(DROP_ID, SESSION_ID),
+    key: CHECKOUT_KEY,
     data: {
       status: outcome === 'fulfilled' ? 'fulfilled' : 'fulfillment_failed',
       deliveryId: 7,
@@ -48,7 +48,7 @@ async function fixture(context: TestContext, options: {
     },
   });
   seedCommerceDocument(harness, {
-    key: commerceKeys.deliveryOrder(DROP_ID, '7'),
+    key: ORDER_KEY,
     data: {
       source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
       status: 'ready_to_ship',
@@ -59,9 +59,13 @@ async function fixture(context: TestContext, options: {
     },
   });
   let nowMs = NOW_MS;
-  const store = createStripeCheckoutStore({ commerceDb: harness.db, nowMs: () => nowMs });
-  const reference = store.doc(CHECKOUT_PATH);
-  await reference.update(createStripeTerminalNotificationOutboxFields(null, outcome, options.markerTimeMs ?? nowMs));
+  const repository = new D1CommerceRepository(harness.db);
+  const commerce: StripeCheckoutCommerceContext = { repository, nowMs: () => nowMs };
+  await repository.run(nowMs, async (transaction) => {
+    await transaction.update(CHECKOUT_KEY, stripeCheckoutWriteData(
+      createStripeTerminalNotificationOutboxFields(null, outcome, options.markerTimeMs ?? nowMs),
+    ));
+  });
   const sent: NotificationEmailJobV1[][] = [];
   const queue: PublicationOptions['queue'] = {
     sendBatch: async (messages) => {
@@ -70,8 +74,7 @@ async function fixture(context: TestContext, options: {
     },
   };
   const read = async () => {
-    const checkout = (await new D1CommerceRepository(harness.db)
-      .get(commerceKeys.stripeCheckout(DROP_ID, SESSION_ID)))?.data;
+    const checkout = (await repository.get(CHECKOUT_KEY))?.data;
     assert.ok(checkout);
     return checkout;
   };
@@ -82,15 +85,15 @@ async function fixture(context: TestContext, options: {
   };
   return {
     harness,
-    store,
-    reference,
+    commerce,
+    repository,
     queue,
     sent,
     read,
     outbox,
     setTime: (value: number) => { nowMs = value; },
     publish: (overrides: Partial<PublicationOptions> = {}) => publishPendingStripeCheckoutTerminalNotifications({
-      store,
+      commerce,
       dropId: DROP_ID,
       sessionId: SESSION_ID,
       queue,
@@ -127,9 +130,11 @@ test('failed queue publication retains the pending outbox and exact jobs for a l
 
   assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'busy', queuedJobs: 0 });
   assert.equal(state.sent.length, 1);
-  await state.store.doc(ORDER_PATH).update({
-    addressSnapshot: { email: 'changed@example.com', name: 'Changed Buyer' },
-    items: [{ kind: 'box', refId: 99 }],
+  await state.repository.run(state.commerce.nowMs(), async (transaction) => {
+    await transaction.update(ORDER_KEY, {
+      addressSnapshot: { email: 'changed@example.com', name: 'Changed Buyer' },
+      items: [{ kind: 'box', refId: 99 }],
+    });
   });
   state.setTime(NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS + 1);
   assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 });
@@ -162,9 +167,12 @@ test('concurrent D1 publishers claim one notification batch', { timeout: 5_000 }
       return result;
     },
   };
-  const competingStore = createStripeCheckoutStore({ commerceDb: state.harness.db, nowMs: () => NOW_MS });
+  const competingCommerce: StripeCheckoutCommerceContext = {
+    repository: new D1CommerceRepository(state.harness.db),
+    nowMs: () => NOW_MS,
+  };
   const first = state.publish({ queue });
-  const second = state.publish({ store: competingStore, queue });
+  const second = state.publish({ commerce: competingCommerce, queue });
   await started.promise;
   try {
     assert.deepEqual(await Promise.race([first, second]), {
@@ -237,12 +245,14 @@ test('expired retries and exhausted attempt budgets fail without sending', async
     await context.test(exhausted, async (subcontext) => {
       const state = await fixture(subcontext);
       const outbox = await state.outbox();
-      await state.reference.update({
-        [STRIPE_TERMINAL_NOTIFICATION_FIELD]: {
-          ...outbox,
-          attemptCount: exhausted === 'attempts' ? STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS : 1,
-          retryUntilMs: exhausted === 'window' ? NOW_MS : outbox.retryUntilMs,
-        },
+      await state.repository.run(state.commerce.nowMs(), async (transaction) => {
+        await transaction.update(CHECKOUT_KEY, stripeCheckoutWriteData({
+          [STRIPE_TERMINAL_NOTIFICATION_FIELD]: {
+            ...outbox,
+            attemptCount: exhausted === 'attempts' ? STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS : 1,
+            retryUntilMs: exhausted === 'window' ? NOW_MS : outbox.retryUntilMs,
+          },
+        }));
       });
       assert.deepEqual(await state.publish(), {
         outcome: 'fulfilled', publication: 'failed', queuedJobs: 0, reason: 'manual-review-required',

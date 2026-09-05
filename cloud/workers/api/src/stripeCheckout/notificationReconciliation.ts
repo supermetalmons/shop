@@ -1,6 +1,6 @@
 import { D1CommerceRepository } from '../commerceRepository.js';
 import { getApiDrop } from '../dropConfig.js';
-import { createStripeCheckoutStore } from './store.js';
+import type { StripeCheckoutCommerceContext } from './commerce.js';
 import { publishPendingStripeCheckoutTerminalNotifications } from './notificationOutbox.js';
 
 export async function reconcilePendingStripeTerminalNotifications(
@@ -12,7 +12,7 @@ export async function reconcilePendingStripeTerminalNotifications(
   signal.throwIfAborted();
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
   const candidates = await repository.queryDueStripeTerminalNotifications(nowMs());
-  const store = createStripeCheckoutStore({ commerceDb: env.COMMERCE_DB, signal, nowMs });
+  const commerce: StripeCheckoutCommerceContext = { repository, signal, nowMs };
   const failures: unknown[] = [];
   let queued = 0;
   for (const candidate of candidates) {
@@ -25,9 +25,9 @@ export async function reconcilePendingStripeTerminalNotifications(
       const result = await publishPendingStripeCheckoutTerminalNotifications({
         dropId: candidate.key.dropId,
         sessionId: candidate.key.documentId,
-        store,
-        createCleanupStore: () => createStripeCheckoutStore({
-          commerceDb: env.COMMERCE_DB,
+        commerce,
+        createCleanupCommerce: () => ({
+          repository,
           signal: AbortSignal.timeout(5_000),
           nowMs,
         }),

@@ -20,7 +20,7 @@ export function parseDropDeliveryOrderPath(path: string): DropDeliveryOrderPathI
     : { dropId: parts[1], documentId: parts[3], deliveryId };
 }
 
-export function dropRootPath(dropId: string): string {
+function dropRootPath(dropId: string): string {
   return `drops/${dropId}`;
 }
 

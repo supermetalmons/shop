@@ -4,12 +4,14 @@ import {
   createStripeCheckoutFulfillmentJobV1,
   type StripeCheckoutFulfillmentEventType,
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
-import { stripeCheckoutFieldValue } from './stripeCheckout/store.js';
 import {
   D1CommerceRepository,
+  commerceFieldValue,
+  commerceKeys,
   type CommerceDocumentRecord,
 } from './commerceRepository.js';
-import { createStripeCheckoutStore } from './stripeCheckout/store.js';
+import { runCommerceTransaction } from './commerceTransactions.js';
+import { stripeCheckoutWriteData } from './stripeCheckout/commerce.js';
 
 export const STRIPE_FULFILLMENT_REQUEUE_AFTER_MS = 15 * 60 * 1000;
 type RequeueCandidate = {
@@ -96,22 +98,29 @@ export async function reconcileStaleStripeFulfillments(
   const candidates = await (overrides.loadCandidates
     ? overrides.loadCandidates(nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS, signal)
     : loadCandidates(env, nowMs - STRIPE_FULFILLMENT_REQUEUE_AFTER_MS, signal));
-  const store = createStripeCheckoutStore({
-    commerceDb: env.COMMERCE_DB,
+  const commerce = {
+    repository: new D1CommerceRepository(env.COMMERCE_DB),
+    nowMs: () => Date.now(),
     signal,
-  });
+  };
   const markEnqueued = overrides.markEnqueued || (async (candidate: RequeueCandidate) => {
-    await store.doc(candidate.checkoutPath).update({
-      fulfillmentQueueReenqueuedAt: stripeCheckoutFieldValue.serverTimestamp(),
-      updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
-    });
+    await runCommerceTransaction(commerce, (transaction) => transaction.update(
+      commerceKeys.stripeCheckout(candidate.dropId, candidate.sessionId),
+      {
+        fulfillmentQueueReenqueuedAt: commerceFieldValue.serverTimestamp(),
+        updatedAt: commerceFieldValue.serverTimestamp(),
+      },
+    ), { shouldRetry: (error) => error.code === 'aborted' });
   });
   const markInvalid = overrides.markInvalid || (async (candidate: RequeueCandidate, error: unknown) => {
-    await store.doc(candidate.checkoutPath).update({
-      lastFulfillmentReconciliationError: reconciliationError(error),
-      lastFulfillmentReconciliationErrorAt: stripeCheckoutFieldValue.serverTimestamp(),
-      updatedAt: stripeCheckoutFieldValue.serverTimestamp(),
-    });
+    await runCommerceTransaction(commerce, (transaction) => transaction.update(
+      commerceKeys.stripeCheckout(candidate.dropId, candidate.sessionId),
+      stripeCheckoutWriteData({
+        lastFulfillmentReconciliationError: reconciliationError(error),
+        lastFulfillmentReconciliationErrorAt: commerceFieldValue.serverTimestamp(),
+        updatedAt: commerceFieldValue.serverTimestamp(),
+      }),
+    ), { shouldRetry: (error) => error.code === 'aborted' });
   });
   let enqueued = 0;
   let failed = 0;
