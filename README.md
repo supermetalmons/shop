@@ -171,6 +171,11 @@ pack-status, ops-state, and commerce read-model integrity, and then publishes th
 native `wrangler deploy --strict`. This order ensures the deployed code never
 expects a schema that has not been applied.
 
+`deploy:api` also requires activated figure inventory through
+`check:commerce-d1 -- --for-deployment`. The standalone database check still
+accepts staged legacy inventory. Use the
+[inventory cutover runbook](scripts/docs/dude_inventory_cutover.md) for the first activation.
+
 D1 changes and Worker publication are separate platform operations. Production
 recovery is fix-forward: if any step fails, stop, inspect the remote state,
 correct the problem, and rerun the same command. The currently deployed Worker
@@ -365,8 +370,15 @@ ready-to-ship notifications, ordered by their existing publication lease expiry
 and document path. Apply it before publishing the updated API Worker through
 `npm run deploy:api`. It requires no document backfill or Commerce pause and
 preserves the older notification indexes and Ops cursor storage for compatible
-overlap with the previous Worker. Append `0010_<description>.sql` for the next
-change.
+overlap with the previous Worker.
+Migration `0010_dude_inventory.sql` adds per-figure availability and an inactive,
+one-way inventory storage switch. Apply its additive schema before maintenance,
+then follow the [figure inventory cutover](scripts/docs/dude_inventory_cutover.md)
+to prepare inventory, publish the compatible Worker, activate, and resume.
+New allocations require initialized inventory in `rows` mode. Existing figure
+ownership and box assignment documents stay authoritative. New drops require
+explicit initialization, and old allocators cannot be resumed after activation.
+Append `0011_<description>.sql` for the next change.
 The Worker preserves the existing commerce API and transaction behavior through
 the D1 document-store adapter.
 

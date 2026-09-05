@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import {
+  commerceFieldValue,
   commerceKeys,
   D1CommerceRepository,
   type CommerceDocumentData,
@@ -33,6 +34,7 @@ const ORDER_KEY = commerceKeys.deliveryOrder(DROP_ID, '7');
 type PublicationOptions = Parameters<typeof publishPendingStripeCheckoutTerminalNotifications>[0];
 
 async function fixture(context: TestContext, options: {
+  dropId?: string;
   outcome?: StripeTerminalNotificationOutcome;
   markerTimeMs?: number;
   harness?: Parameters<typeof createCommerceD1Harness>[0];
@@ -41,9 +43,12 @@ async function fixture(context: TestContext, options: {
   context.after(() => harness.database.close());
   context.mock.method(console, 'log', () => undefined);
   context.mock.method(console, 'error', () => undefined);
+  const dropId = options.dropId || DROP_ID;
+  const checkoutKey = commerceKeys.stripeCheckout(dropId, SESSION_ID);
+  const orderKey = commerceKeys.deliveryOrder(dropId, '7');
   const outcome = options.outcome || 'fulfilled';
   seedCommerceDocument(harness, {
-    key: CHECKOUT_KEY,
+    key: checkoutKey,
     data: {
       status: outcome === 'fulfilled' ? 'fulfilled' : 'fulfillment_failed',
       deliveryId: 7,
@@ -55,7 +60,7 @@ async function fixture(context: TestContext, options: {
     },
   });
   seedCommerceDocument(harness, {
-    key: ORDER_KEY,
+    key: orderKey,
     data: {
       source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
       status: 'ready_to_ship',
@@ -69,7 +74,7 @@ async function fixture(context: TestContext, options: {
   const repository = new D1CommerceRepository(harness.db);
   const commerce: StripeCheckoutCommerceContext = { repository, nowMs: () => nowMs };
   await repository.run(nowMs, async (transaction) => {
-    await transaction.update(CHECKOUT_KEY, stripeCheckoutWriteData(
+    await transaction.update(checkoutKey, stripeCheckoutWriteData(
       createStripeTerminalNotificationOutboxFields(null, outcome, options.markerTimeMs ?? nowMs),
     ));
   });
@@ -81,7 +86,7 @@ async function fixture(context: TestContext, options: {
     },
   };
   const read = async () => {
-    const checkout = (await repository.get(CHECKOUT_KEY))?.data;
+    const checkout = (await repository.get(checkoutKey))?.data;
     assert.ok(checkout);
     return checkout;
   };
@@ -92,6 +97,7 @@ async function fixture(context: TestContext, options: {
   };
   return {
     harness,
+    orderKey,
     commerce,
     repository,
     queue,
@@ -101,7 +107,7 @@ async function fixture(context: TestContext, options: {
     setTime: (value: number) => { nowMs = value; },
     publish: (overrides: Partial<PublicationOptions> = {}) => publishPendingStripeCheckoutTerminalNotifications({
       commerce,
-      dropId: DROP_ID,
+      dropId,
       sessionId: SESSION_ID,
       queue,
       signal: new AbortController().signal,
@@ -155,11 +161,73 @@ test('queued outboxes never publish again or retain email payloads', async (cont
   await state.publish();
   state.setTime(NOW_MS + STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS + 1);
   assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 0 });
+  assert.deepEqual(await state.publish({ initializeMissing: true }), {
+    outcome: 'fulfilled', publication: 'queued', queuedJobs: 0,
+  });
   assert.equal(state.sent.length, 1);
   const checkout = await state.read();
   assert.equal(checkout[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD], undefined);
   assert.equal((await state.outbox()).jobs, undefined);
   assert.equal((await state.outbox()).claimId, undefined);
+});
+
+test('a terminal checkout without markers initializes only when explicitly requested', async (context) => {
+  const state = await fixture(context);
+  await state.repository.run(NOW_MS, (transaction) => transaction.update(CHECKOUT_KEY, {
+    [STRIPE_TERMINAL_NOTIFICATION_FIELD]: commerceFieldValue.delete(),
+    [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: commerceFieldValue.delete(),
+    [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: commerceFieldValue.delete(),
+  }));
+  const before = await state.read();
+  assert.deepEqual(await state.publish(), {
+    outcome: 'fulfilled', publication: 'none', queuedJobs: 0, reason: 'missing_outbox',
+  });
+  assert.deepEqual(await state.read(), before);
+  assert.equal(state.sent.length, 0);
+  assert.deepEqual(await state.publish({ initializeMissing: true }), {
+    outcome: 'fulfilled', publication: 'queued', queuedJobs: 2,
+  });
+  assert.equal((await state.outbox()).attemptCount, 1);
+});
+
+test('a terminal group with no recipients completes without sending a queue batch', async (context) => {
+  const state = await fixture(context, { dropId: 'clear_cards_devnet_v2' });
+  await state.repository.run(NOW_MS, (transaction) => transaction.update(state.orderKey, {
+    addressSnapshot: {},
+  }));
+  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 0 });
+  assert.equal(state.sent.length, 0);
+  const checkout = await state.read();
+  assert.equal(checkout[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'queued');
+  assert.equal(checkout[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD], undefined);
+  assert.equal((await state.outbox()).claimId, undefined);
+  assert.equal((await state.outbox()).jobs, undefined);
+});
+
+test('a completed outcome keeps its group while a different terminal outcome creates new notifications', async (context) => {
+  const state = await fixture(context, { outcome: 'manual_review' });
+  await state.publish();
+  const before = await state.read();
+  assert.deepEqual(createStripeTerminalNotificationOutboxFields(before, 'manual_review', NOW_MS + 1), {});
+  assert.deepEqual(createStripeTerminalNotificationOutboxFields(
+    { ...before, status: 'processing' }, 'manual_review', NOW_MS + 1,
+  ), {});
+  await state.repository.run(NOW_MS + 1, (transaction) => transaction.update(CHECKOUT_KEY, stripeCheckoutWriteData({
+    status: 'fulfilled',
+    manualRefundReviewRequired: false,
+    ...createStripeTerminalNotificationOutboxFields(before, 'fulfilled', NOW_MS + 1),
+  })));
+  const rearmed = await state.outbox();
+  assert.equal(rearmed.outcome, 'fulfilled');
+  assert.equal(rearmed.attemptCount, 0);
+  assert.equal(rearmed.jobIds.stripe_checkout_manual_review, undefined);
+  state.setTime(NOW_MS + 1);
+  assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 });
+  assert.deepEqual(state.sent.map((jobs) => jobs.map((job) => job.kind)), [
+    ['stripe_checkout_manual_review'],
+    ['buyer_order_received', 'shipper_ready_to_ship'],
+  ]);
+  assert.equal((await state.outbox()).attemptCount, 1);
 });
 
 test('concurrent D1 publishers claim one notification batch', { timeout: 5_000 }, async (context) => {

@@ -1,4 +1,4 @@
-export type SanitizedDudeAssignmentPool = {
+type SanitizedDudeAssignmentPool = {
   pool: number[];
   usedDefaultPool: boolean;
   rawPoolLen: number | null;

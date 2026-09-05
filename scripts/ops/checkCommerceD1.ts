@@ -6,6 +6,7 @@ import {
   safeInteger,
 } from '../shared/commerceD1Maintenance.ts';
 import { sqlSchemaFingerprint } from '../shared/sqlSchemaFingerprint.ts';
+import { inventoryDropConfigs } from '../shared/dudeInventoryMaintenance.ts';
 import { READY_NOTIFICATION_DUE_SQL } from '../../shared/readyNotificationDueSql.ts';
 
 function fail(message: string): never {
@@ -40,6 +41,27 @@ const DOCUMENT_PATH_REVISION_TRIGGER_FINGERPRINTS: Readonly<Record<string, strin
 const DOCUMENT_VERSION_UPDATE_GUARD_SCHEMA_FINGERPRINT = '4d4dbe364e9ffcae153407fd64732d1593adf240d59f06d7b05837f61c5ce106';
 const LEASE_SCHEMA_FINGERPRINT = 'a243cba949108449376cf4df9b99eadb75d80e118120dd367f093636e57eb752';
 const WIPE_GUARD_SCHEMA_FINGERPRINT = 'b6aca59498285edd6d66adb915170774a8fb17903802bcce4c783b81317cb40a';
+const INVENTORY_TABLE_SCHEMA_FINGERPRINTS: Readonly<Record<string, string>> = Object.freeze({
+  commerce_authority_control: '56e85468c566ce15194d936c2a4e71da19973420e0b51631e5088d226ccad794',
+  commerce_inventory_drops: '0d7e041097d610fd56347c7041916ed093d9daad1a7e998192098d7c6188f841',
+  commerce_available_dudes: '566abda64362ec252f4dbfa5738cf94964dee392c60c88ab53cf826e53958628',
+});
+const INVENTORY_TRIGGER_FINGERPRINTS: Readonly<Record<string, string>> = Object.freeze({
+  commerce_inventory_drop_insert_guard: '0dee5e9624568019fd0f8ab5df005c17ac6693855fea12f393e0a313687ed480',
+  commerce_inventory_drop_update_guard: 'bad6152a599de6ea051984d96e4221170687b68733c81798e46243b8a5b8ac7f',
+  commerce_inventory_drop_delete_guard: 'b983b9d424bbddcd5788d83667c99c92c36fc5639e1ad126e30b07b4238f84cb',
+  commerce_available_dude_insert_guard: 'd1c5d9e4b6077e10a7b0fa1c24d3cf3a57029532290b766e2911aac5f2b08b73',
+  commerce_available_dude_update_guard: '2130fd3767482323bad5255db8e03af5cc50292921cf16d5825714d9d76a2a54',
+  commerce_available_dude_delete_guard: '2dc3cc3ef3b6c68aa2a392a063135411127ae299dfd490f8db3e00e5636c83a4',
+  commerce_dude_inventory_mode_guard: '0ead2fac0102823fd8a5e391692d746d1ad11658352a14e31179cbd44ce75636',
+  commerce_dude_inventory_resume_guard: '7999f72d6f05b67963540e20bc20d6f657accc9e33bc380480ec900692b4daa6',
+  commerce_dude_pool_insert_fence: 'ac36b14758fb354600e977dfd5fc974f048725076fffa1105ad880c834950a21',
+  commerce_dude_pool_update_fence: '7991f212aa00ed7bca2a85e083600df3a796f9976104c5d0b458744cd9169413',
+  commerce_dude_assignment_inventory_guard: '69cc411cd7bdbfb77283c3bdba4e18f50f0a16f72007c848ab2cfe21a2b9a557',
+  commerce_dude_assignment_consume_inventory: 'f91f17ad32a84cb2fa3474608b2c8c258c853e55e1f9c585ee4c1b9fd0bb2991',
+  commerce_dude_assignment_update_guard: '6b6bda941dcd1a028c08b930378053164d52f595e4722c8f287e62d65f6ef2f3',
+  commerce_dude_assignment_delete_guard: 'e8a6a8d3f8e2597282ac5f0cc2ca39a1dddf1123435a61372de12adabed42557',
+});
 const PENDING_READY_NOTIFICATION_INDEX_SQL: Readonly<Record<string, string>> = Object.freeze({
   commerce_delivery_orders_buyer_notifications_pending: `CREATE INDEX
     commerce_delivery_orders_buyer_notifications_pending ON commerce_documents (document_path)
@@ -118,6 +140,7 @@ export type CheckCommerceD1Query = typeof defaultQueryRemoteCommerceD1;
 
 export function checkCommerceD1(
   queryRemoteCommerceD1: CheckCommerceD1Query = defaultQueryRemoteCommerceD1,
+  options: { forDeployment?: boolean } = {},
 ): Record<string, unknown> {
   const quick = queryRemoteCommerceD1('PRAGMA quick_check');
   if (quick.length !== 1 || quick[0].quick_check !== 'ok') fail('Commerce D1 quick check failed.');
@@ -125,7 +148,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 9 ||
+    migrations.length !== 10 ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -134,7 +157,8 @@ export function checkCommerceD1(
     migrations[5].name !== '0006_document_path_revisions.sql' ||
     migrations[6].name !== '0007_stripe_terminal_notifications.sql' ||
     migrations[7].name !== '0008_admin_irl_redeem_workflow_operation.sql' ||
-    migrations[8].name !== '0009_ready_notification_due_index.sql'
+    migrations[8].name !== '0009_ready_notification_due_index.sql' ||
+    migrations[9].name !== '0010_dude_inventory.sql'
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -147,10 +171,12 @@ export function checkCommerceD1(
   const requiredTables = [
     'commerce_authority_control',
     'commerce_authority_control_lease',
+    'commerce_available_dudes',
     'commerce_commit_guards',
     'commerce_delivery_owner_revisions',
     'commerce_document_path_revisions',
     'commerce_documents',
+    'commerce_inventory_drops',
     'commerce_wipe_guards',
   ];
   if (
@@ -164,6 +190,12 @@ export function checkCommerceD1(
   const authority = authorityRows[0];
   if (!['paused', 'd1'].includes(String(authority.authority_state))) {
     fail('Commerce D1 authority state is invalid.');
+  }
+  if (authority.dude_inventory_mode !== 'legacy' && authority.dude_inventory_mode !== 'rows') {
+    fail('Commerce D1 inventory mode is invalid.');
+  }
+  if (options.forDeployment && authority.dude_inventory_mode !== 'rows') {
+    fail('API deployment requires activated figure inventory (rows mode). Follow scripts/docs/dude_inventory_cutover.md for the initial cutover.');
   }
   safeInteger(authority.revision, 'Commerce authority revision');
   safeInteger(authority.documents_revision, 'Commerce document revision');
@@ -279,7 +311,7 @@ export function checkCommerceD1(
           ON path_revision.document_path = document.document_path
         WHERE path_revision.document_path IS NULL) AS missing_live_count`);
   if (
-    authorityColumns.join(',') !== 'singleton,authority_state,revision,documents_revision,paused_at_ms,updated_at_ms' ||
+    authorityColumns.join(',') !== 'singleton,authority_state,revision,documents_revision,paused_at_ms,updated_at_ms,dude_inventory_mode' ||
     commitGuardColumns.join(',') !==
       'guard_id,expectations_json,expected_documents_revision,created_at_ms,delivery_owner_expectations_json' ||
     documentPathRevisionColumns.join(',') !== 'document_path,revision' ||
@@ -334,6 +366,7 @@ export function checkCommerceD1(
     'commerce_delivery_owner_revision_insert_guard',
     'commerce_delivery_owner_revision_path',
     'commerce_delivery_owner_revision_update_guard',
+    ...Object.keys(INVENTORY_TRIGGER_FINGERPRINTS),
   ]);
   const triggers = queryRemoteCommerceD1(`SELECT name FROM sqlite_master
     WHERE type = 'trigger' AND name LIKE 'commerce_%' ORDER BY name`);
@@ -341,6 +374,51 @@ export function checkCommerceD1(
     triggers.length !== requiredTriggers.size ||
     triggers.some((row) => !requiredTriggers.has(String(row.name)))
   ) fail('Commerce D1 trigger inventory is invalid.');
+
+  for (const [type, fingerprints] of [
+    ['table', INVENTORY_TABLE_SCHEMA_FINGERPRINTS],
+    ['trigger', INVENTORY_TRIGGER_FINGERPRINTS],
+  ] as const) {
+    const inventorySchema = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
+      WHERE type = '${type}' AND name IN (${Object.keys(fingerprints).map((name) => `'${name}'`).join(', ')})`);
+    if (
+      inventorySchema.length !== Object.keys(fingerprints).length ||
+      inventorySchema.some((row) => sqlSchemaFingerprint(String(row.sql || '')) !== fingerprints[String(row.name)])
+    ) fail(`Commerce D1 inventory ${type} schema is invalid.`);
+  }
+
+  const inventory = queryRemoteCommerceD1(`SELECT inventory.*,
+      (SELECT COUNT(*) FROM commerce_available_dudes WHERE drop_id = inventory.drop_id) AS available_count,
+      (SELECT COUNT(*) FROM commerce_available_dudes
+        WHERE drop_id = inventory.drop_id AND
+          (dude_id > inventory.max_dude_id OR pool_position >= inventory.max_dude_id)) AS invalid_available_count,
+      (SELECT COUNT(*) FROM commerce_available_dudes AS available
+        JOIN commerce_documents AS assignment
+          ON assignment.document_path = 'drops/' || available.drop_id || '/dudeAssignments/' || available.dude_id
+        WHERE available.drop_id = inventory.drop_id) AS assigned_overlap_count
+    FROM commerce_inventory_drops AS inventory ORDER BY inventory.drop_id`);
+  const inventoryConfigs = new Map(inventoryDropConfigs().map((config) => [config.dropId, config]));
+  const readyInventoryDrops = new Set<string>();
+  let availableDudes = 0;
+  for (const row of inventory) {
+    const config = inventoryConfigs.get(String(row.drop_id));
+    if (
+      !config || !UUID_V4_PATTERN.test(String(row.generation || '')) ||
+      row.drop_family !== config.dropFamily || row.items_per_box !== config.itemsPerBox ||
+      row.max_dude_id !== config.maxDudeId || (row.ready !== 0 && row.ready !== 1) ||
+      safeInteger(row.invalid_available_count, 'Commerce invalid inventory availability count') !== 0 ||
+      safeInteger(row.assigned_overlap_count, 'Commerce assigned inventory overlap count') !== 0
+    ) fail(`Commerce D1 inventory state is invalid for ${String(row.drop_id)}.`);
+    safeInteger(row.initialized_at_ms, 'Commerce inventory initialization timestamp');
+    availableDudes += safeInteger(row.available_count, 'Commerce available inventory count');
+    if (row.ready === 1) readyInventoryDrops.add(config.dropId);
+  }
+  if (authority.dude_inventory_mode === 'rows' && (
+    [...inventoryConfigs.keys()].some((dropId) => !readyInventoryDrops.has(dropId)) ||
+    authoritativeDocuments.some((document) =>
+      ['dude_pool', 'dude_assignment', 'box_assignment'].includes(String(document.document_kind)) &&
+      !readyInventoryDrops.has(String(document.drop_id)))
+  )) fail('Commerce D1 inventory initialization is incomplete.');
 
   const deliveryOwnerRevisionTriggers = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
     WHERE type = 'trigger' AND name GLOB 'commerce_delivery_owner_revision_*'
@@ -616,6 +694,9 @@ export function checkCommerceD1(
   return {
     authorityState: authority.authority_state,
     authorityRevision: safeInteger(authority.revision, 'Commerce authority revision'),
+    inventoryMode: authority.dude_inventory_mode,
+    inventoryDrops: inventory.length,
+    availableDudes,
     authoritativeDocuments: authoritativeDocuments.length,
     deliveryOwnerRevisions: safeInteger(deliveryOwnerRevisionState[0].count, 'Commerce delivery-owner revision count'),
     documentPathRevisions: safeInteger(documentPathRevisionState[0].count, 'Commerce document-path revision count'),
@@ -624,7 +705,11 @@ export function checkCommerceD1(
 }
 
 async function main(): Promise<void> {
-  console.log(JSON.stringify(checkCommerceD1(), null, 2));
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length === 1 && args[0] !== '--for-deployment')) {
+    fail('Usage: npm run check:commerce-d1 -- [--for-deployment]');
+  }
+  console.log(JSON.stringify(checkCommerceD1(undefined, { forDeployment: args.length === 1 }), null, 2));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

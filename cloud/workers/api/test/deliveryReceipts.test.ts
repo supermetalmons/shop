@@ -3,9 +3,11 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import {
+  availableCommerceDudeIds,
   createCommerceD1,
   createCommerceD1Harness,
   d1Database,
+  initializeCommerceInventory,
   seedCommerceDocument,
   seedCommerceDocuments,
   type CommerceD1CallObservation,
@@ -1881,7 +1883,7 @@ test('settled receipt submission cancellation restores the owning recovery lease
   assert.equal(recovery.pendingSubmission, undefined);
 });
 
-test('native assignment initializes a missing dude pool', async () => {
+test('native assignment consumes explicitly initialized default inventory', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
   const assign = assignDudesForBox;
@@ -1898,9 +1900,11 @@ test('native assignment initializes a missing dude pool', async () => {
     itemsPerBox: 1,
     maxDudeId: 2,
   } as Parameters<typeof assign>[1];
+  initializeCommerceInventory(harness, { ...runtime, dropFamily: runtime.config.dropFamily });
 
   assert.deepEqual(await assign(context, runtime, 'box', () => 0), [1]);
-  assert.deepEqual((await repository.get(commerceKeys.dudePool('drop')))?.data.available, [2]);
+  assert.deepEqual(availableCommerceDudeIds(harness, 'drop'), [2]);
+  assert.equal(await repository.get(commerceKeys.dudePool('drop')), null);
   assert.deepEqual((await repository.get(commerceKeys.boxAssignment('drop', 'box')))?.data.dudeIds, [1]);
 });
 

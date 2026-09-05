@@ -7,7 +7,14 @@ import {
 } from './commerceTransactions.js';
 import { DeliveryReceiptError, summarizeDeliveryReceiptError as summarizeError } from './deliveryReceiptErrors.js';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.js';
-import { planNotificationPublicationClaim, publishClaimedNotificationBatch } from './notificationOutboxPublication.js';
+import { publishClaimedNotificationBatch } from './notificationOutboxPublication.js';
+import {
+  claimNotificationOutbox,
+  updateClaimedNotificationOutbox,
+  type NotificationOutboxAdapter,
+  type NotificationOutboxClaim,
+  type NotificationOutboxTarget,
+} from './notificationOutboxStore.js';
 import {
   BUYER_ORDER_RECEIVED_EMAIL_JOB_FIELD,
   BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
@@ -70,44 +77,52 @@ export function notificationPersistenceContext(context: CommerceRepositoryContex
   };
 }
 
+function notificationOutboxTarget(
+  context: CommerceRepositoryContext,
+  documentPath: string,
+): NotificationOutboxTarget {
+  const key = requireCommerceKey(documentPath);
+  return { context, key, read: (transaction) => readCommerceRecord(context, key, transaction) };
+}
+
+function inspectNotificationClaim(document: CommerceDocumentRecord) {
+  return {
+    claimId: document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD],
+    state: document.data,
+  };
+}
+
 async function markReadyToShipNotificationsQueued(
   context: CommerceRepositoryContext,
   documentPath: string,
   claimId: string,
   pending: readonly PendingReadyToShipNotification[],
 ): Promise<string[]> {
-  return runCommerceTransaction(context, async (transaction) => {
-    const document = await readCommerceRecord(context, requireCommerceKey(documentPath), transaction);
-    if (
-      !document ||
-      document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] !== claimId
-    ) return [];
-    const matching = pending.filter((marker) => (
-      document.data[marker.stateField] === READY_TO_SHIP_NOTIFICATION_PENDING &&
-      document.data[marker.jobIdField] === marker.jobId &&
-      document.data[marker.idempotencyKeyField] === marker.idempotencyKey
-    ));
-    if (!matching.length) return [];
-    const values: CommerceDocumentWriteData = Object.fromEntries(matching.flatMap((marker) => [
-      [marker.stateField, READY_TO_SHIP_NOTIFICATION_QUEUED],
-      [marker.jobIdField, marker.jobId],
-      [marker.jobField, commerceFieldValue.delete()],
-      [marker.queuedAtField, commerceFieldValue.serverTimestamp()],
-    ]));
-    clearCompletedNotificationClaim(document.data, values);
-    await transaction.update(document.key, values);
-    return matching.map((marker) => marker.kind);
+  return updateClaimedNotificationOutbox({
+    target: notificationOutboxTarget(context, documentPath),
+    claimId,
+    inspect: inspectNotificationClaim,
+    lost: () => [],
+    update: (fields) => {
+      const matching = pending.filter((marker) => (
+        fields[marker.stateField] === READY_TO_SHIP_NOTIFICATION_PENDING &&
+        fields[marker.jobIdField] === marker.jobId &&
+        fields[marker.idempotencyKeyField] === marker.idempotencyKey
+      ));
+      if (!matching.length) return { result: [] };
+      const values: CommerceDocumentWriteData = Object.fromEntries(matching.flatMap((marker) => [
+        [marker.stateField, READY_TO_SHIP_NOTIFICATION_QUEUED],
+        [marker.jobIdField, marker.jobId],
+        [marker.jobField, commerceFieldValue.delete()],
+        [marker.queuedAtField, commerceFieldValue.serverTimestamp()],
+      ]));
+      clearCompletedNotificationClaim(fields, values);
+      return { values, result: matching.map((marker) => marker.kind) };
+    },
   });
 }
 
-type ReadyToShipNotificationClaim = {
-  claimId: string;
-  document: CommerceDocumentRecord;
-  pending: PendingReadyToShipNotification[];
-  previousAttemptCount: number;
-  expiresAtMs: number;
-  retryUntilMs: number;
-};
+type ReadyToShipNotificationClaim = NotificationOutboxClaim<PendingReadyToShipNotification[]>;
 
 type ReadyToShipNotificationClaimResult =
   | { outcome: 'busy' | 'manual-review' | 'none' }
@@ -124,34 +139,35 @@ async function claimReadyToShipNotifications(args: {
   dropId: string;
   nowMs: () => number;
 }): Promise<ReadyToShipNotificationClaimResult> {
-  return runCommerceTransaction<ReadyToShipNotificationClaimResult>(args.context, async (transaction) => {
-    const document = await readCommerceRecord(args.context, requireCommerceKey(args.documentPath), transaction);
-    if (!document) return { outcome: 'none' };
-    const inspection = inspectPendingReadyToShipNotifications(document.data, {
-      deliveryId: args.deliveryId,
-      dropId: args.dropId,
-    });
-    if (!inspection.pending.length) return { outcome: 'none' };
-    const activeClaimId = document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD];
-    const claimExpiresAtMs = readyToShipNotificationNonNegativeInteger(
-      document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD],
-    );
-    const retryUntilMs = readyToShipNotificationNonNegativeInteger(
-      document.data[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD],
-    );
-    const attemptCount = readyToShipNotificationNonNegativeInteger(
-      document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD],
-    );
-    const plan = planNotificationPublicationClaim({
-      nowMs: Math.max(0, Math.floor(args.nowMs())),
-      attemptCount,
-      retryUntilMs,
-      activeUntilMs: typeof activeClaimId === 'string' && activeClaimId ? claimExpiresAtMs : null,
-    });
-    if (plan.outcome === 'busy') return { outcome: 'busy' };
-    if (plan.outcome === 'exhausted') {
-      await transaction.update(document.key, {
-        ...Object.fromEntries(inspection.pending.flatMap((marker) => [
+  const adapter: NotificationOutboxAdapter<PendingReadyToShipNotification[], 'busy' | 'manual-review' | 'none'> = {
+    missing: 'none',
+    inspect: (document) => {
+      const inspection = inspectPendingReadyToShipNotifications(document.data, {
+        deliveryId: args.deliveryId,
+        dropId: args.dropId,
+      });
+      if (!inspection.pending.length) return { result: 'none' };
+      const activeClaimId = document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD];
+      return {
+        state: inspection.pending,
+        attemptCount: readyToShipNotificationNonNegativeInteger(
+          document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD],
+        ),
+        retryUntilMs: readyToShipNotificationNonNegativeInteger(
+          document.data[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD],
+        ),
+        activeUntilMs: typeof activeClaimId === 'string' && activeClaimId
+          ? readyToShipNotificationNonNegativeInteger(
+              document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD],
+            )
+          : null,
+      };
+    },
+    busy: () => 'busy',
+    exhausted: (pending) => ({
+      result: 'manual-review',
+      values: {
+        ...Object.fromEntries(pending.flatMap((marker) => [
           [marker.stateField, READY_TO_SHIP_NOTIFICATION_FAILED],
           [marker.jobField, commerceFieldValue.delete()],
         ])),
@@ -159,28 +175,24 @@ async function claimReadyToShipNotifications(args: {
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
         [READY_NOTIFICATION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
-      });
-      return { outcome: 'manual-review' };
-    }
-    const claimId = crypto.randomUUID();
-    await transaction.update(document.key, {
-      [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: claimId,
-      [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: plan.expiresAtMs,
-      [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: plan.attemptCount,
-      [READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]: plan.retryUntilMs,
-    });
-    return {
-      outcome: 'claimed',
-      claim: {
-        claimId,
-        document,
-        pending: inspection.pending,
-        previousAttemptCount: plan.attemptCount - 1,
-        expiresAtMs: plan.expiresAtMs,
-        retryUntilMs: plan.retryUntilMs,
       },
-    };
+    }),
+    claim: (pending, lease) => ({
+      state: pending,
+      values: {
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: lease.claimId,
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: lease.expiresAtMs,
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: lease.attemptCount,
+        [READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]: lease.retryUntilMs,
+      },
+    }),
+  };
+  const result = await claimNotificationOutbox({
+    target: notificationOutboxTarget(args.context, args.documentPath),
+    adapter,
+    nowMs: () => Math.max(0, Math.floor(args.nowMs())),
   });
+  return result.outcome === 'claimed' ? result : { outcome: result.result };
 }
 
 async function releaseReadyToShipNotificationClaim(
@@ -188,18 +200,19 @@ async function releaseReadyToShipNotificationClaim(
   documentPath: string,
   claim: ReadyToShipNotificationClaim,
 ): Promise<boolean> {
-  return runCommerceTransaction(context, async (transaction) => {
-    const document = await readCommerceRecord(context, requireCommerceKey(documentPath), transaction);
-    if (
-      !document ||
-      document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] !== claim.claimId
-    ) return false;
-    await transaction.update(document.key, {
-      [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: claim.previousAttemptCount,
-      [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
-      [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
-    });
-    return true;
+  return updateClaimedNotificationOutbox({
+    target: notificationOutboxTarget(context, documentPath),
+    claimId: claim.claimId,
+    inspect: inspectNotificationClaim,
+    lost: () => false,
+    update: () => ({
+      values: {
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: claim.previousAttemptCount,
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
+        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
+      },
+      result: true,
+    }),
   });
 }
 
@@ -239,42 +252,48 @@ async function persistReadyToShipNotificationJobs(args: {
   prepared: readonly { marker: PendingReadyToShipNotification; job: NotificationEmailJobV1 }[];
   nowMs: () => number;
 }): Promise<{ pending: PendingReadyToShipNotification[]; jobs: NotificationEmailJobV1[] }> {
-  return runCommerceTransaction(args.context, async (transaction) => {
-    const document = await readCommerceRecord(args.context, requireCommerceKey(args.documentPath), transaction);
-    if (
-      !document || document.data.status !== 'ready_to_ship' ||
-      document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] !== args.claim.claimId ||
-      document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD] !== args.claim.expiresAtMs
-    ) throw new ReadyToShipNotificationEnqueueError('Ready-to-ship notification publication claim changed. Retry later.');
-    const nowMs = args.nowMs();
-    if (nowMs >= args.claim.expiresAtMs || nowMs >= args.claim.retryUntilMs) {
-      throw new ReadyToShipNotificationEnqueueError('Ready-to-ship notification publication claim expired. Retry later.');
-    }
-    const values: CommerceDocumentWriteData = {};
-    const pending: PendingReadyToShipNotification[] = [];
-    const jobs: NotificationEmailJobV1[] = [];
-    for (const { marker, job } of args.prepared) {
+  const claimChanged = () => {
+    throw new ReadyToShipNotificationEnqueueError('Ready-to-ship notification publication claim changed. Retry later.');
+  };
+  return updateClaimedNotificationOutbox({
+    target: notificationOutboxTarget(args.context, args.documentPath),
+    claimId: args.claim.claimId,
+    inspect: inspectNotificationClaim,
+    lost: claimChanged,
+    update: (fields) => {
       if (
-        document.data[marker.stateField] !== READY_TO_SHIP_NOTIFICATION_PENDING ||
-        document.data[marker.jobIdField] !== marker.jobId ||
-        document.data[marker.idempotencyKeyField] !== marker.idempotencyKey
-      ) throw new ReadyToShipNotificationEnqueueError('Ready-to-ship notification identity changed. Retry later.');
-      const hasSnapshot = Object.hasOwn(document.data, marker.jobField);
-      const snapshot = hasSnapshot ? document.data[marker.jobField] : job;
-      if (!isReadyToShipNotificationJob(snapshot, marker)) {
-        values[marker.stateField] = READY_TO_SHIP_NOTIFICATION_FAILED;
-        values[marker.jobField] = commerceFieldValue.delete();
-        values[READY_NOTIFICATION_LAST_ERROR_CODE_FIELD] = 'invalid-notification-data';
-        values[READY_NOTIFICATION_FAILED_AT_FIELD] = commerceFieldValue.serverTimestamp();
-        continue;
+        fields.status !== 'ready_to_ship' ||
+        fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD] !== args.claim.expiresAtMs
+      ) return claimChanged();
+      const nowMs = args.nowMs();
+      if (nowMs >= args.claim.expiresAtMs || nowMs >= args.claim.retryUntilMs) {
+        throw new ReadyToShipNotificationEnqueueError('Ready-to-ship notification publication claim expired. Retry later.');
       }
-      if (!hasSnapshot) values[marker.jobField] = snapshot;
-      pending.push(marker);
-      jobs.push(snapshot);
-    }
-    clearCompletedNotificationClaim(document.data, values);
-    if (Object.keys(values).length) await transaction.update(document.key, values);
-    return { pending, jobs };
+      const values: CommerceDocumentWriteData = {};
+      const pending: PendingReadyToShipNotification[] = [];
+      const jobs: NotificationEmailJobV1[] = [];
+      for (const { marker, job } of args.prepared) {
+        if (
+          fields[marker.stateField] !== READY_TO_SHIP_NOTIFICATION_PENDING ||
+          fields[marker.jobIdField] !== marker.jobId ||
+          fields[marker.idempotencyKeyField] !== marker.idempotencyKey
+        ) throw new ReadyToShipNotificationEnqueueError('Ready-to-ship notification identity changed. Retry later.');
+        const hasSnapshot = Object.hasOwn(fields, marker.jobField);
+        const snapshot = hasSnapshot ? fields[marker.jobField] : job;
+        if (!isReadyToShipNotificationJob(snapshot, marker)) {
+          values[marker.stateField] = READY_TO_SHIP_NOTIFICATION_FAILED;
+          values[marker.jobField] = commerceFieldValue.delete();
+          values[READY_NOTIFICATION_LAST_ERROR_CODE_FIELD] = 'invalid-notification-data';
+          values[READY_NOTIFICATION_FAILED_AT_FIELD] = commerceFieldValue.serverTimestamp();
+          continue;
+        }
+        if (!hasSnapshot) values[marker.jobField] = snapshot;
+        pending.push(marker);
+        jobs.push(snapshot);
+      }
+      clearCompletedNotificationClaim(fields, values);
+      return { values, result: { pending, jobs } };
+    },
   });
 }
 
@@ -359,7 +378,7 @@ export async function publishReadyToShipNotifications(args: {
     ),
     prepareAndPersist: async () => {
       const prepared: Array<{ marker: PendingReadyToShipNotification; job: NotificationEmailJobV1 }> = [];
-      for (const marker of claim.pending) {
+      for (const marker of claim.state) {
         try {
           const markerJobs = marker.job ? [marker.job] : await createReadyToShipNotificationJobs({
             order: claim.document.data,

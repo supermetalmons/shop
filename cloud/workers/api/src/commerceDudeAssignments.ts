@@ -3,8 +3,8 @@ import {
   pickDudeIdsForAssignment,
   type DudeAssignmentBucket,
 } from '../../../../shared/assignDudesPicker.js';
-import { sanitizeDudeAssignmentPool } from '../../../../shared/dudeAssignmentPool.js';
 import {
+  CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
   commerceKeys,
@@ -90,7 +90,6 @@ export function assignCommerceDudes(args: {
   sleep?: CommerceRetrySleep;
 }): Promise<CommerceDudeAssignmentResult> {
   const assignmentKey = commerceKeys.boxAssignment(args.dropId, args.boxAssetId);
-  const poolKey = commerceKeys.dudePool(args.dropId);
   return runCommerceTransaction({
     nowMs: args.nowMs,
     repository: args.repository,
@@ -108,11 +107,7 @@ export function assignCommerceDudes(args: {
         outcome: 'existing' as const,
       };
     }
-    const poolDocument = await transaction.get(poolKey);
-    const pool = sanitizeDudeAssignmentPool(
-      poolDocument?.data.available,
-      args.maxDudeId,
-    ).pool;
+    const { generation, pool } = await args.repository.getDudeInventory(args);
     if (pool.length < args.itemsPerBox) {
       throw poolExhausted(args.boxAssetId, pool.length, args.itemsPerBox);
     }
@@ -124,9 +119,7 @@ export function assignCommerceDudes(args: {
         maxDudeId: args.maxDudeId,
         pool,
         randomInt: args.randomInt,
-        isAssigned: async (dudeId) => Boolean(await transaction.get(
-          commerceKeys.dudeAssignment(args.dropId, String(dudeId)),
-        )),
+        isAssigned: () => false,
       });
     } catch (error) {
       if (!(error instanceof DudeAssignmentPoolExhaustedError)) throw error;
@@ -139,17 +132,17 @@ export function assignCommerceDudes(args: {
         staleAssigned: error.staleAssigned,
       });
     }
-    for (const dudeId of picked.chosen) {
-      await transaction.create(commerceKeys.dudeAssignment(args.dropId, String(dudeId)), {
+    const assignmentKeys = picked.chosen.map((dudeId) =>
+      commerceKeys.dudeAssignment(args.dropId, String(dudeId)));
+    if ((await transaction.getMany(assignmentKeys)).some(Boolean)) throw new CommerceWriteConflict();
+    for (const [index, dudeId] of picked.chosen.entries()) {
+      await transaction.create(assignmentKeys[index], {
         assignedAt: commerceFieldValue.serverTimestamp(),
         boxAssetId: args.boxAssetId,
         dudeId,
+        inventoryGeneration: generation,
       });
     }
-    await transaction.set(poolKey, {
-      available: pool,
-      updatedAt: commerceFieldValue.serverTimestamp(),
-    }, { merge: true });
     await transaction.create(assignmentKey, {
       createdAt: commerceFieldValue.serverTimestamp(),
       dudeIds: picked.chosen,

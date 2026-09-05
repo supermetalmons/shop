@@ -39,6 +39,7 @@ import {
   readRemoteCommerceAuthority,
   releaseCommerceAuthorityLease,
   renewCommerceAuthorityLease,
+  safeInteger,
   sqlString,
   type CommerceAuthorityQuery,
   type CommerceD1Authority,
@@ -120,8 +121,23 @@ export type RepoPlan = {
   };
 };
 
+type CommerceD1InventorySnapshot = {
+  mode: 'legacy' | 'rows';
+  metadata: {
+    generation: string;
+    ready: boolean;
+    dropFamily: string;
+    itemsPerBox: number;
+    maxDudeId: number;
+    initializedAtMs: number;
+  } | null;
+  availableCount: number;
+};
+
 export type CommerceD1Plan = {
   authority: CommerceD1Authority;
+  dropId: string;
+  inventory: CommerceD1InventorySnapshot;
   claimCodesByDropId: string[];
   claimCodesFromAssignments: string[];
   claimCodesFromDeliveryOrders: string[];
@@ -886,6 +902,7 @@ export function buildCommerceD1PlanFromDocuments(args: {
   assignmentDocuments: CommerceD1Document[];
   claimDocuments: CommerceD1Document[];
   dropId: string;
+  inventory: CommerceD1InventorySnapshot;
   targetDocuments: CommerceD1Document[];
 }): CommerceD1Plan {
   const dropId = validateDropId(args.dropId, 'drop id');
@@ -961,6 +978,8 @@ export function buildCommerceD1PlanFromDocuments(args: {
     .sort((left, right) => left.path.localeCompare(right.path));
   return {
     authority: args.authority,
+    dropId,
+    inventory: args.inventory,
     claimCodesByDropId,
     claimCodesFromAssignments,
     claimCodesFromDeliveryOrders,
@@ -986,10 +1005,50 @@ export function buildCommerceD1Plan(dropId: string): CommerceD1Plan {
   return buildCommerceD1PlanFromDocuments({
     authority: readRemoteCommerceAuthority(),
     dropId,
+    inventory: readRemoteCommerceInventory(dropId),
     targetDocuments: commerceDocuments(`drop_id = ${sqlString(dropId)}`),
     claimDocuments: commerceDocuments(`document_kind = 'claim_code'`),
     assignmentDocuments: commerceDocuments(`document_kind = 'box_assignment'`),
   });
+}
+
+function readRemoteCommerceInventory(dropId: string): CommerceD1InventorySnapshot {
+  const rows = queryRemoteCommerceD1(`SELECT authority.dude_inventory_mode,
+      inventory.generation, inventory.ready, inventory.drop_family, inventory.items_per_box,
+      inventory.max_dude_id, inventory.initialized_at_ms,
+      (SELECT COUNT(*) FROM commerce_available_dudes WHERE drop_id = ${sqlString(dropId)}) AS available_count
+    FROM commerce_authority_control AS authority
+    LEFT JOIN commerce_inventory_drops AS inventory ON inventory.drop_id = ${sqlString(dropId)}
+    WHERE authority.singleton = 1`);
+  if (rows.length !== 1) fail('Commerce D1 inventory state is invalid.');
+  const row = rows[0];
+  const mode = row.dude_inventory_mode;
+  if (mode !== 'legacy' && mode !== 'rows') fail('Commerce D1 inventory mode is invalid.');
+  const availableCount = safeInteger(row.available_count, 'Commerce available inventory count');
+  if (row.generation === null) {
+    if (availableCount !== 0) fail('Commerce D1 inventory metadata is missing.');
+    return { mode, metadata: null, availableCount };
+  }
+  const generation = String(row.generation);
+  const dropFamily = String(row.drop_family || '');
+  const itemsPerBox = safeInteger(row.items_per_box, 'Commerce inventory items per box');
+  const maxDudeId = safeInteger(row.max_dude_id, 'Commerce inventory maximum figure id');
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(generation) ||
+    !dropFamily || (row.ready !== 0 && row.ready !== 1) || itemsPerBox < 1 || maxDudeId < itemsPerBox
+  ) fail('Commerce D1 inventory metadata is invalid.');
+  return {
+    mode,
+    availableCount,
+    metadata: {
+      generation,
+      ready: row.ready === 1,
+      dropFamily,
+      itemsPerBox,
+      maxDudeId,
+      initializedAtMs: safeInteger(row.initialized_at_ms, 'Commerce inventory initialization timestamp'),
+    },
+  };
 }
 
 export async function buildRepoPlan(args: {
@@ -1583,6 +1642,11 @@ function printPlan(args: {
   console.log('commerce d1');
   console.log(`- authority revision: ${commercePlan.authority.revision}`);
   console.log(`- documents revision: ${commercePlan.authority.documentsRevision}`);
+  console.log(`- figure inventory mode: ${commercePlan.inventory.mode}`);
+  console.log(`- available figure rows to delete: ${commercePlan.inventory.availableCount}`);
+  if (commercePlan.inventory.metadata) {
+    console.log(`- inventory generation to delete: ${commercePlan.inventory.metadata.generation}`);
+  }
   console.log(`- drop-scoped documents to delete: ${commercePlan.targetDocumentCount}`);
   console.log(`- claimCodes where dropId == ${args.dropId}: ${commercePlan.claimCodesByDropId.length}`);
   console.log(`- claim codes from boxAssignments: ${commercePlan.claimCodesFromAssignments.length}`);
@@ -4677,6 +4741,21 @@ export function applySynchronousWipePhases<TPrepared>(args: {
 export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, nowMs: number): string {
   requireExecutableCommerceD1Wipe(plan.authority);
   if (!guardId || !Number.isSafeInteger(nowMs) || nowMs < 0) fail('Commerce D1 wipe metadata is invalid.');
+  const dropId = validateDropId(plan.dropId, 'drop id');
+  const inventory = plan.inventory;
+  const metadata = inventory.metadata;
+  const metadataExpectation = metadata
+    ? `EXISTS (SELECT 1 FROM commerce_inventory_drops
+        WHERE drop_id = ${sqlString(dropId)} AND generation = ${sqlString(metadata.generation)}
+          AND ready = ${metadata.ready ? 1 : 0} AND drop_family = ${sqlString(metadata.dropFamily)}
+          AND items_per_box = ${metadata.itemsPerBox} AND max_dude_id = ${metadata.maxDudeId}
+          AND initialized_at_ms = ${metadata.initializedAtMs})`
+    : `NOT EXISTS (SELECT 1 FROM commerce_inventory_drops WHERE drop_id = ${sqlString(dropId)})`;
+  const inventoryExpectation = `${metadataExpectation}
+      AND (SELECT COUNT(*) FROM commerce_available_dudes WHERE drop_id = ${sqlString(dropId)}) = ${inventory.availableCount}
+      AND (SELECT dude_inventory_mode FROM commerce_authority_control WHERE singleton = 1) = ${sqlString(inventory.mode)}
+      AND EXISTS (SELECT 1 FROM commerce_authority_control_lease
+        WHERE singleton = 1 AND expires_at_ms > CAST(strftime('%s', 'now') AS INTEGER) * 1000)`;
   const expectations = plan.documentsToDelete.map((document) => ({
     path: document.path,
     version: document.version,
@@ -4693,14 +4772,15 @@ export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, no
     expected_authority_revision, created_at_ms
   ) VALUES (
     ${sqlString(guardIds[index])}, ${sqlString(JSON.stringify(chunk))},
-    ${plan.authority.documentsRevision}, ${plan.authority.revision}, ${nowMs}
+    CASE WHEN ${inventoryExpectation} THEN ${plan.authority.documentsRevision} ELSE -1 END,
+    ${plan.authority.revision}, ${nowMs}
   );`).join('\n');
   const deletes = chunks.filter((chunk) => chunk.length).map((chunk) => `DELETE FROM commerce_documents
   WHERE document_path IN (${chunk.map((document) => sqlString(document.path)).join(', ')});`).join('\n');
   const scrubGuards = guardIds.map((id) =>
     `UPDATE commerce_wipe_guards SET expectations_json = '[]' WHERE guard_id = ${sqlString(id)};`
   ).join('\n');
-  const advanceRevision = expectations.length
+  const advanceRevision = expectations.length || metadata || inventory.availableCount
     ? `UPDATE commerce_authority_control
   SET documents_revision = documents_revision + 1,
     updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
@@ -4710,6 +4790,8 @@ export function buildCommerceD1WipeSql(plan: CommerceD1Plan, guardId: string, no
     : '';
   return `${guards}
   ${deletes}
+  DELETE FROM commerce_available_dudes WHERE drop_id = ${sqlString(dropId)};
+  DELETE FROM commerce_inventory_drops WHERE drop_id = ${sqlString(dropId)};
   ${advanceRevision}
   ${scrubGuards}`;
 }
@@ -4718,6 +4800,7 @@ function readCommerceD1WipeOutcome(
   dropId: string,
   plan: CommerceD1Plan,
   operationGuardPrefix: string,
+  queryCommerceD1: typeof queryRemoteCommerceD1 = queryRemoteCommerceD1,
 ): 'committed' | 'unknown' {
   const claimCountSql = plan.claimCodesToDelete.length
     ? `(SELECT COUNT(*) FROM commerce_documents
@@ -4726,8 +4809,9 @@ function readCommerceD1WipeOutcome(
     : '0';
   let rows: Record<string, unknown>[];
   try {
-    rows = queryRemoteCommerceD1(`SELECT
+    rows = queryCommerceD1(`SELECT
       authority_state,
+      dude_inventory_mode,
       revision,
       documents_revision,
       paused_at_ms,
@@ -4735,6 +4819,10 @@ function readCommerceD1WipeOutcome(
       (SELECT COUNT(*) FROM commerce_documents
         WHERE drop_id = ${sqlString(dropId)}) AS target_count,
       ${claimCountSql} AS claim_count,
+      (SELECT COUNT(*) FROM commerce_inventory_drops
+        WHERE drop_id = ${sqlString(dropId)}) AS inventory_count,
+      (SELECT COUNT(*) FROM commerce_available_dudes
+        WHERE drop_id = ${sqlString(dropId)}) AS available_count,
       (SELECT COUNT(*) FROM commerce_wipe_guards
         WHERE substr(guard_id, 1, ${operationGuardPrefix.length}) = ${sqlString(operationGuardPrefix)}) AS guard_count
       FROM commerce_authority_control WHERE singleton = 1`);
@@ -4749,9 +4837,12 @@ function readCommerceD1WipeOutcome(
   const databaseNowMs = Number(row.database_now_ms);
   const targetCount = Number(row.target_count);
   const claimCount = Number(row.claim_count);
+  const inventoryCount = Number(row.inventory_count);
+  const availableCount = Number(row.available_count);
   const guardCount = Number(row.guard_count);
   if (
     row.authority_state !== 'paused' ||
+    row.dude_inventory_mode !== plan.inventory.mode ||
     revision !== plan.authority.revision ||
     row.paused_at_ms === null ||
     !Number.isSafeInteger(documentsRevision) ||
@@ -4760,14 +4851,18 @@ function readCommerceD1WipeOutcome(
     databaseNowMs - pausedAtMs < COMMERCE_WIPE_D1_PAUSE_THRESHOLD_MS ||
     !Number.isSafeInteger(targetCount) ||
     !Number.isSafeInteger(claimCount) ||
+    !Number.isSafeInteger(inventoryCount) ||
+    !Number.isSafeInteger(availableCount) ||
     !Number.isSafeInteger(guardCount)
   ) return 'unknown';
-  const revisionDelta = plan.documentsToDelete.length ? 1 : 0;
+  const revisionDelta = plan.documentsToDelete.length || plan.inventory.metadata || plan.inventory.availableCount ? 1 : 0;
   const expectedGuardCount = Math.max(1, Math.ceil(plan.documentsToDelete.length / 50));
   if (
     documentsRevision === plan.authority.documentsRevision + revisionDelta &&
     targetCount === 0 &&
     claimCount === 0 &&
+    inventoryCount === 0 &&
+    availableCount === 0 &&
     guardCount === expectedGuardCount
   ) return 'committed';
   return 'unknown';
@@ -4779,6 +4874,7 @@ export function commitCommerceD1Wipe(
   nowMs = Date.now(),
 ): string {
   dropId = validateDropId(dropId, 'drop id');
+  if (dropId !== plan.dropId) fail('Commerce D1 wipe plan drop id does not match.');
   requireExecutableCommerceD1Wipe(plan.authority);
   const operationGuardId = `wipe:${dropId}:${crypto.randomUUID()}`;
   const operationGuardPrefix = `${operationGuardId}:`;
@@ -4807,13 +4903,15 @@ export function verifyCommerceD1Wipe(
   dropId: string,
   plan: CommerceD1Plan,
   operationGuardPrefix: string,
+  queryCommerceD1: typeof queryRemoteCommerceD1 = queryRemoteCommerceD1,
 ): void {
   dropId = validateDropId(dropId, 'drop id');
-  if (readCommerceD1WipeOutcome(dropId, plan, operationGuardPrefix) !== 'committed') {
+  if (dropId !== plan.dropId) fail('Commerce D1 wipe plan drop id does not match.');
+  if (readCommerceD1WipeOutcome(dropId, plan, operationGuardPrefix, queryCommerceD1) !== 'committed') {
     fail('Commerce D1 wipe verification failed.');
   }
   const dropGuardPrefix = `wipe:${dropId}:`;
-  const deleted = queryRemoteCommerceD1(`DELETE FROM commerce_wipe_guards
+  const deleted = queryCommerceD1(`DELETE FROM commerce_wipe_guards
     WHERE substr(guard_id, 1, ${dropGuardPrefix.length}) = ${sqlString(dropGuardPrefix)}
     RETURNING guard_id`);
   if (!deleted.some((row) => String(row.guard_id).startsWith(operationGuardPrefix))) {

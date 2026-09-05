@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite';
+import { sanitizeDudeAssignmentPool } from '../../../../scripts/shared/dudeAssignmentPool.ts';
 import type {
   CommerceDocumentData,
   CommerceDocumentKey,
@@ -196,6 +197,7 @@ export function createCommerceD1Harness(
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0007_stripe_terminal_notifications.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0008_admin_irl_redeem_workflow_operation.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0009_ready_notification_due_index.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0010_dude_inventory.sql', 'utf8'));
   resumeFreshCommerce(database);
   return {
     database,
@@ -210,6 +212,75 @@ export function createCommerceD1Harness(
 
 export function createCommerceD1(): D1Database {
   return createCommerceD1Harness().db;
+}
+
+export function initializeCommerceInventory(harness: CommerceD1Harness, args: {
+  dropId: string;
+  dropFamily: string;
+  itemsPerBox: number;
+  maxDudeId: number;
+  available?: readonly number[];
+  activate?: boolean;
+}): string {
+  const { database } = harness;
+  const generation = crypto.randomUUID();
+  const leaseToken = crypto.randomUUID();
+  const legacyPool = database.prepare(`SELECT document_json FROM commerce_documents
+    WHERE document_kind = 'dude_pool' AND drop_id = ?`).get(args.dropId);
+  const rawPool = args.available ?? (legacyPool ? JSON.parse(String(legacyPool.document_json)).available : undefined);
+  const pool = sanitizeDudeAssignmentPool(rawPool, args.maxDudeId).pool;
+  const assigned = new Set(database.prepare(`SELECT document_id FROM commerce_documents
+    WHERE document_kind = 'dude_assignment' AND drop_id = ?`).all(args.dropId)
+    .map((row) => Number(row.document_id)));
+  database.exec('BEGIN');
+  try {
+    database.prepare(`INSERT INTO commerce_authority_control_lease (
+      singleton, lease_token, acquired_at_ms, expires_at_ms
+    ) VALUES (1, ?, CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+      CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000)`).run(leaseToken);
+    database.exec(`UPDATE commerce_authority_control
+      SET authority_state = 'paused', revision = revision + 1, paused_at_ms = NULL,
+        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+      WHERE singleton = 1 AND authority_state = 'd1';
+      UPDATE commerce_authority_control
+      SET paused_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+      WHERE singleton = 1 AND paused_at_ms IS NULL;`);
+    database.prepare('DELETE FROM commerce_inventory_drops WHERE drop_id = ?').run(args.dropId);
+    database.prepare(`INSERT INTO commerce_inventory_drops (
+      drop_id, generation, ready, drop_family, items_per_box, max_dude_id, initialized_at_ms
+    ) VALUES (?, ?, 0, ?, ?, ?, 100)`).run(
+      args.dropId, generation, args.dropFamily, args.itemsPerBox, args.maxDudeId,
+    );
+    const insert = database.prepare(`INSERT INTO commerce_available_dudes (drop_id, dude_id, pool_position)
+      VALUES (?, ?, ?)`);
+    pool.forEach((id, position) => {
+      if (!assigned.has(id)) insert.run(args.dropId, id, position);
+    });
+    database.prepare('UPDATE commerce_inventory_drops SET ready = 1 WHERE drop_id = ?').run(args.dropId);
+    if (args.activate !== false) {
+      database.exec("UPDATE commerce_authority_control SET dude_inventory_mode = 'rows' WHERE singleton = 1");
+    }
+    database.exec(`UPDATE commerce_authority_control
+      SET documents_revision = documents_revision + 1,
+        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+      WHERE singleton = 1;
+      UPDATE commerce_authority_control
+      SET authority_state = 'd1', revision = revision + 1, paused_at_ms = NULL,
+        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+      WHERE singleton = 1;`);
+    database.prepare('DELETE FROM commerce_authority_control_lease WHERE singleton = 1 AND lease_token = ?').run(leaseToken);
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+  return generation;
+}
+
+export function availableCommerceDudeIds(harness: CommerceD1Harness, dropId: string): number[] {
+  return harness.database.prepare(`SELECT dude_id FROM commerce_available_dudes
+    WHERE drop_id = ? ORDER BY pool_position`).all(dropId).map((row) => Number(row.dude_id));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

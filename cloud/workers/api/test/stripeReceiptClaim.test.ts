@@ -23,20 +23,21 @@ import {
 } from '../src/commerceRepository.ts';
 import {
   STRIPE_RECEIPT_CLAIM_PATH,
-  StripeReceiptClaimError,
   buildWithOptionalLookupTable,
   claimFlowFor,
   claimStripeReceipt,
+  handleStripeReceiptClaim,
+  readRequestBody,
+  responseForClaim,
+} from '../src/stripeReceiptClaim.ts';
+import { StripeReceiptClaimError } from '../src/stripeReceiptClaimErrors.ts';
+import {
   clearProcessing,
   finalizeClaim,
-  handleStripeReceiptClaim,
   normalizeSubmissions,
-  orderTarget,
-  readRequestBody,
   rememberSubmittedTransaction,
-  responseForClaim,
   startClaim,
-} from '../src/stripeReceiptClaim.ts';
+} from '../src/stripeReceiptClaimStore.ts';
 
 const stripeReceiptClaimTestHooks = {
   buildWithOptionalLookupTable,
@@ -45,7 +46,6 @@ const stripeReceiptClaimTestHooks = {
   clearProcessing,
   finalizeClaim,
   normalizeSubmissions,
-  orderTarget,
   readRequestBody,
   rememberSubmittedTransaction,
   responseForClaim,
@@ -1009,7 +1009,7 @@ test('Stripe receipt claim selects legacy, openable, and direct flows', () => {
   assert.equal(stripeReceiptClaimTestHooks.claimFlowFor({ receiptAssetId: RECEIPT_ASSET_ID, figureId: BOX_ID }, 0), 'direct_figure');
 });
 
-test('Stripe receipt claim response and order target validators reject inconsistent data', () => {
+test('Stripe receipt claim response and order validation reject inconsistent data', async () => {
   assert.deepEqual(stripeReceiptClaimTestHooks.responseForClaim({
     dropId: DROP_ID,
     deliveryId: DELIVERY_ID,
@@ -1025,9 +1025,19 @@ test('Stripe receipt claim response and order target validators reject inconsist
     receiptKind: 'figure',
     figureIds: [1, 2, 3],
   });
-  assert.throws(() => stripeReceiptClaimTestHooks.orderTarget({
+  const documents = unclaimedDocuments();
+  const orderPath = `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`;
+  documents[orderPath] = {
+    ...documents[orderPath],
     stripeReceiptClaimsByBoxId: {
       box_16: { code: 'ZZZZZZ-1234567890', boxId: BOX_ID },
     },
-  }, CODE, BOX_ID), /mismatch/);
+  };
+  await assert.rejects(() => startClaim(
+    commerceContext(documents),
+    CODE,
+    RECIPIENT,
+    'attempt',
+    1_700_000_000_000,
+  ), /mismatch/);
 });

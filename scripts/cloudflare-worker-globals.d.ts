@@ -1,6 +1,6 @@
-interface Queue {
+interface Queue<Body = unknown> {
   sendBatch(messages: Iterable<{
-    body: unknown;
+    body: Body;
     contentType?: 'json' | 'text' | 'bytes' | 'v8';
     delaySeconds?: number;
   }>): Promise<unknown>;

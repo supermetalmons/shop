@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createCommerceD1, createCommerceD1Harness } from './commerceD1Harness.ts';
+import {
+  availableCommerceDudeIds,
+  createCommerceD1,
+  createCommerceD1Harness,
+  initializeCommerceInventory,
+} from './commerceD1Harness.ts';
 import {
   createDeferredWorkCollector,
   failOnDeferredWork,
@@ -1183,13 +1188,14 @@ function revealConsumerEnv(apiKey = 'helius-test-key') {
   };
 }
 
-test('D1 assignment atomically creates markers, updates the pool, and creates the box assignment', async () => {
+test('D1 assignment atomically creates markers, consumes inventory, and creates the box assignment', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
   await repository.run(1, async (unit) => unit.create(commerceKeys.dudePool(DROP_ID), {
     available: [1, 2, 3],
   }));
   const runtime = revealDudesTestHooks.runtimeForDrop(DROP_ID);
+  initializeCommerceInventory(harness, { ...runtime, dropFamily: runtime.config.dropFamily });
   const dependencySubset = {
     randomInt: () => 0,
     sleep: async () => undefined,
@@ -1204,7 +1210,7 @@ test('D1 assignment atomically creates markers, updates the pool, and creates th
 
   assert.deepEqual(result, { dudeIds: [1], outcome: 'created' });
   assert.equal((await repository.get(commerceKeys.dudeAssignment(DROP_ID, '1')))?.data.boxAssetId, BOX_ASSET.toBase58());
-  assert.deepEqual((await repository.get(commerceKeys.dudePool(DROP_ID)))?.data.available, [2, 3]);
+  assert.deepEqual(availableCommerceDudeIds(harness, DROP_ID), [2, 3]);
   assert.deepEqual((await repository.get(commerceKeys.boxAssignment(DROP_ID, BOX_ASSET.toBase58())))?.data.dudeIds, [1]);
 });
 
@@ -1231,13 +1237,15 @@ test('D1 assignment returns an existing valid assignment without touching the po
   assert.equal(await repository.get(commerceKeys.dudePool(DROP_ID)), null);
 });
 
-test('D1 assignment removes stale markers and retries commit conflicts', async () => {
+test('D1 assignment excludes stale pool entries and retries commit conflicts', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
   await repository.run(1, async (unit) => {
     await unit.create(commerceKeys.dudePool(DROP_ID), { available: [1, 2] });
     await unit.create(commerceKeys.dudeAssignment(DROP_ID, '1'), { dudeId: 1, boxAssetId: 'stale-box' });
   });
+  const runtime = revealDudesTestHooks.runtimeForDrop(DROP_ID);
+  initializeCommerceInventory(harness, { ...runtime, dropFamily: runtime.config.dropFamily });
   let sleeps = 0;
   let batches = 0;
   const baseBatch = harness.db.batch.bind(harness.db);
@@ -1276,6 +1284,7 @@ test('D1 assignment fails closed when the pool is exhausted', async () => {
   const repository = new D1CommerceRepository(harness.db);
   await repository.run(1, async (unit) => unit.create(commerceKeys.dudePool(DROP_ID), { available: [] }));
   const runtime = revealDudesTestHooks.runtimeForDrop(DROP_ID);
+  initializeCommerceInventory(harness, { ...runtime, dropFamily: runtime.config.dropFamily });
   const dependencySubset = {
     randomInt: () => 0,
     sleep: async () => undefined,

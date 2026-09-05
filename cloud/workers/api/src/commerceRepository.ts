@@ -632,6 +632,63 @@ async function authority(db: D1Database): Promise<CommerceAuthorityControl> {
 export class D1CommerceRepository {
   constructor(private readonly db: D1Database) {}
 
+  async getDudeInventory(args: Readonly<{
+    dropFamily: string;
+    dropId: string;
+    itemsPerBox: number;
+    maxDudeId: number;
+  }>): Promise<{ generation: string; pool: number[] }> {
+    let results: D1Result<Record<string, unknown>>[];
+    try {
+      results = await this.db.batch<Record<string, unknown>>([
+        this.db.prepare(`SELECT authority_state, dude_inventory_mode
+          FROM commerce_authority_control WHERE singleton = 1`),
+        this.db.prepare(`SELECT generation, ready, drop_family, items_per_box, max_dude_id
+          FROM commerce_inventory_drops WHERE drop_id = ?`).bind(args.dropId),
+        this.db.prepare(`SELECT available.dude_id, available.pool_position
+          FROM commerce_authority_control AS authority
+          CROSS JOIN commerce_inventory_drops AS inventory
+          JOIN commerce_available_dudes AS available ON available.drop_id = inventory.drop_id
+          WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+            AND authority.dude_inventory_mode = 'rows'
+            AND inventory.drop_id = ? AND inventory.ready = 1
+          ORDER BY available.pool_position`).bind(args.dropId),
+      ]);
+    } catch (error) {
+      reportCommerceReadFailure(error);
+      throw unavailableCommerce(error);
+    }
+    if (results.length !== 3 || results.some((result) =>
+      result.success !== true || !Array.isArray(result.results) || !isObject(result.meta))) {
+      throw unavailableCommerceData();
+    }
+    const [authorityResult, inventoryResult, availableResult] = results;
+    const control = authorityResult.results[0];
+    if (authorityResult.results.length !== 1 || !isObject(control) ||
+      control.authority_state !== 'd1' || control.dude_inventory_mode !== 'rows') {
+      throw unavailableCommerce();
+    }
+    const inventory = inventoryResult.results[0];
+    if (inventoryResult.results.length !== 1 || !isObject(inventory) || inventory.ready !== 1 ||
+      inventory.drop_family !== args.dropFamily || inventory.items_per_box !== args.itemsPerBox ||
+      inventory.max_dude_id !== args.maxDudeId ||
+      typeof inventory.generation !== 'string' || inventory.generation.length !== 36) {
+      throw new CommerceRepositoryError('unavailable', 'Figure inventory is not initialized for this drop.');
+    }
+    let previousPosition = -1;
+    const pool = availableResult.results.map((row) => {
+      const id = row.dude_id;
+      const position = row.pool_position;
+      if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1 || id > args.maxDudeId ||
+        typeof position !== 'number' || !Number.isSafeInteger(position) || position <= previousPosition) {
+        throw unavailableCommerceData();
+      }
+      previousPosition = position;
+      return id;
+    });
+    return { generation: inventory.generation, pool };
+  }
+
   async getAdminIrlRedeemRequestForWorkflowStatus<T extends CommerceDocumentData>(
     operationId: string,
   ): Promise<CommerceDocumentRecord<T> | null> {
