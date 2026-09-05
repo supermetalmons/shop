@@ -80,6 +80,7 @@ import {
   isSignalCancellationError,
   readBoundedRequestJson,
   runCriticalRequestOperation,
+  sleepWithSignal,
 } from './boundedRequest.js';
 import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import {
@@ -105,7 +106,6 @@ import {
   receiptDropIdentity as adminIrlRedeemReceiptDropIdentity,
   rpcCall as adminIrlRedeemRpcCall,
 } from './adminIrlRedeemOnchain.js';
-import { deliveryReceiptRuntime } from './deliveryReceipts.js';
 import {
   DeliveryReceiptError,
   createConnection as createDeliveryConnection,
@@ -1384,7 +1384,7 @@ async function resolveAmbiguousDirectSubmission(args: {
     } catch {
       if (args.signal.aborted) throw args.signal.reason;
     }
-    await deliveryReceiptRuntime.pause(DIRECT_SUBMISSION_RESOLUTION_POLL_MS, args.signal);
+    await sleepWithSignal(DIRECT_SUBMISSION_RESOLUTION_POLL_MS, args.signal);
   }
   return 'unresolved';
 }

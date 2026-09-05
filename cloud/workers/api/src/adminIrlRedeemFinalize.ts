@@ -82,6 +82,7 @@ import {
   isSignalCancellationError,
   raceWithSignal,
   readBoundedRequestJson,
+  sleepWithSignal,
 } from './boundedRequest.js';
 import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import {
@@ -115,7 +116,8 @@ import {
   createDeliveryPackStatusProjectionOutbox,
   projectPendingDeliveryPackStatus,
 } from './deliveryPackStatusOutbox.js';
-import { deliveryReceiptRuntime } from './deliveryReceipts.js';
+import { assignDudesForBox } from './deliveryDudeAssignments.js';
+import { secureRandomInt } from './deliveryRandom.js';
 import {
   DeliveryReceiptError,
   buildTransaction as buildDeliveryTransaction,
@@ -1768,7 +1770,7 @@ async function mintPackReceipts(
             completed = true;
             break;
           }
-          if (attempt < 2) await deliveryReceiptRuntime.pause(Math.min(4_000, 600 * 2 ** attempt), commerce.signal);
+          if (attempt < 2) await sleepWithSignal(Math.min(4_000, 600 * 2 ** attempt), commerce.signal);
         }
       }
       if (completed) break;
@@ -1916,7 +1918,7 @@ async function ensureInternalDelivery(
     return send(request.internalDeliveryId, pda, bump);
   }
   for (let attempt = 0; attempt < MAX_DELIVERY_ALLOCATION_ATTEMPTS; attempt += 1) {
-    const deliveryId = deliveryReceiptRuntime.secureRandomInt(2 ** 31 - 1) + 1;
+    const deliveryId = secureRandomInt(2 ** 31 - 1) + 1;
     const [pda, bump] = deriveDeliveryPda(runtime, deliveryId);
     if (await connection.getAccountInfo(pda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } })) continue;
     await updateRequest(commerce, path, attemptId, { internalDeliveryId: deliveryId, internalDeliveryPda: pda.toBase58() });
@@ -2084,7 +2086,7 @@ async function findReceiptAssets(
       await scanAssetsByOwner(provider, runtime, owner, add, undefined, deadlineMs);
     }
     if (items.every((item) => (direct.get(item.refId) || []).length === 1)) return direct;
-    await deliveryReceiptRuntime.pause(RECEIPT_INDEX_POLL_MS, provider.signal);
+    await sleepWithSignal(RECEIPT_INDEX_POLL_MS, provider.signal);
   }
   return direct;
 }
@@ -2123,7 +2125,7 @@ async function waitForCardReceipt(
       if (disposition === 'fatal') throw normalizedError(error, 'Admin IRL card receipt lookup failed.');
       lastTransient = disposition === 'transient' ? error : undefined;
     }
-    await deliveryReceiptRuntime.pause(RECEIPT_INDEX_POLL_MS, provider.signal);
+    await sleepWithSignal(RECEIPT_INDEX_POLL_MS, provider.signal);
   }
   throw new AdminIrlRedeemFinalizeError('unavailable', lastTransient
     ? 'Admin IRL card receipt lookup failed while waiting for indexing; retry shortly.'
@@ -2346,7 +2348,7 @@ async function reusableExistingMarkerState(
 }
 
 function newDeliveryId(): number {
-  return deliveryReceiptRuntime.secureRandomInt(2 ** 31 - 1) + 1;
+  return secureRandomInt(2 ** 31 - 1) + 1;
 }
 
 function newClaimCodes(quantity: number): string[] {
@@ -3170,11 +3172,11 @@ export async function prepareAdminIrlRedeemFinalizeWorkflowDraft(
     if (matches.length !== 1 || !receiptAssetId) {
       throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem pack receipt indexing is ambiguous.');
     }
-    const dudeIds = await deliveryReceiptRuntime.assignDudesForBox(
+    const dudeIds = await assignDudesForBox(
       loaded.commerce,
       runtime,
       receiptAssetId,
-      deliveryReceiptRuntime.secureRandomInt,
+      secureRandomInt,
     );
     boxes.push({ boxId: item.refId, originalAssetId: item.assetId, receiptAssetId, dudeIds });
   }

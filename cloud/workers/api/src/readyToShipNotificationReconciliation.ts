@@ -21,11 +21,12 @@ export async function reconcilePendingReadyToShipNotifications(
     nowMs?: () => number;
   } = {},
 ): Promise<number> {
+  const nowMs = overrides.nowMs || Date.now;
   const repository = new D1CommerceRepository(env.COMMERCE_DB);
   const context: CommerceDocumentContext = {
     commerceDb: env.COMMERCE_DB,
     repository,
-    nowMs: (overrides.nowMs || Date.now)(),
+    nowMs: nowMs(),
     signal,
   };
   const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
@@ -71,6 +72,7 @@ export async function reconcilePendingReadyToShipNotifications(
         document,
         dropId,
         queue: env.NOTIFICATION_EMAIL_QUEUE,
+        nowMs,
       });
       if (published) processed += 1;
     } catch (error) {

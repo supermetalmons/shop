@@ -20,7 +20,7 @@ import {
   MPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
 import { API_DROPS } from '../src/dropConfig.ts';
-import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
+import { readCommerceDocument } from '../src/commerceTransactions.ts';
 import { deriveDeliveryPda, sendAndConfirmSignedTransaction } from '../src/deliveryReceiptOnchain.ts';
 import { adminIrlRedeemPrepareTestHooks } from '../src/adminIrlRedeemPrepare.ts';
 import {
@@ -215,8 +215,8 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     status: 'reserved',
     payload: { version: 1, dropId: DROP_ID, requestId: REQUEST_ID },
   });
-  let document = await deliveryReceiptRuntime.readDocument(
-    { commerceDb: harness.db, nowMs: 1_700_000_000_000, providerFetch: fetch, signal: new AbortController().signal },
+  let document = await readCommerceDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_000_000, signal: new AbortController().signal },
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
   assert.equal(document?.fields.processingAttemptId, expectedOperationId);
@@ -236,8 +236,8 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
   };
   const entryStartedAtMs = Date.now();
   assert.deepEqual(await resumeAndReconcileAdminIrlRedeemFinalizeWorkflow(workflowArgs), { status: 'ready' });
-  document = await deliveryReceiptRuntime.readDocument(
-    { commerceDb: harness.db, nowMs: 1_700_000_000_000, providerFetch: fetch, signal: new AbortController().signal },
+  document = await readCommerceDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_000_000, signal: new AbortController().signal },
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
   const enteredEffect = (document?.fields.workflowFinalizeV1 as { pendingEffect?: {
@@ -284,8 +284,8 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     staffWallet: OWNER,
     nowMs: 1_700_000_010_000,
   });
-  document = await deliveryReceiptRuntime.readDocument(
-    { commerceDb: harness.db, nowMs: 1_700_000_010_000, providerFetch: fetch, signal: new AbortController().signal },
+  document = await readCommerceDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_010_000, signal: new AbortController().signal },
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
   assert.equal(document?.fields.processingLeaseExpiresAt, 1_700_001_810_000);
@@ -308,8 +308,8 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     staffWallet: OWNER,
     nowMs: 1_700_000_015_000,
   });
-  document = await deliveryReceiptRuntime.readDocument(
-    { commerceDb: harness.db, nowMs: 1_700_000_015_000, providerFetch: fetch, signal: new AbortController().signal },
+  document = await readCommerceDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_015_000, signal: new AbortController().signal },
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
   assert.equal(
@@ -344,8 +344,8 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     staffWallet: OWNER,
     nowMs: 1_700_000_020_000,
   });
-  document = await deliveryReceiptRuntime.readDocument(
-    { commerceDb: harness.db, nowMs: 1_700_000_020_000, providerFetch: fetch, signal: new AbortController().signal },
+  document = await readCommerceDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_020_000, signal: new AbortController().signal },
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
   assert.equal(document?.fields.processingLeaseExpiresAt, 1_700_001_820_000);
@@ -387,8 +387,8 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     staffWallet: OWNER,
     nowMs: 1_700_000_024_000,
   });
-  document = await deliveryReceiptRuntime.readDocument(
-    { commerceDb: harness.db, nowMs: 1_700_000_024_000, providerFetch: fetch, signal: new AbortController().signal },
+  document = await readCommerceDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_024_000, signal: new AbortController().signal },
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
   replayExecution = document?.fields.workflowFinalizeV1 as Record<string, unknown>;
@@ -402,8 +402,8 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     staffWallet: OWNER,
     nowMs: 1_700_000_025_000,
   });
-  document = await deliveryReceiptRuntime.readDocument(
-    { commerceDb: harness.db, nowMs: 1_700_000_025_000, providerFetch: fetch, signal: new AbortController().signal },
+  document = await readCommerceDocument(
+    { commerceDb: harness.db, nowMs: 1_700_000_025_000, signal: new AbortController().signal },
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
   replayExecution = document?.fields.workflowFinalizeV1 as Record<string, unknown>;
@@ -474,8 +474,8 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     signal: new AbortController().signal,
   });
   assert.deepEqual(cleaned, { cleared: true });
-  document = await deliveryReceiptRuntime.readDocument(
-    { commerceDb: harness.db, nowMs: Date.now(), providerFetch: fetch, signal: new AbortController().signal },
+  document = await readCommerceDocument(
+    { commerceDb: harness.db, nowMs: Date.now(), signal: new AbortController().signal },
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
   assert.equal(document?.fields.status, 'prepared');
@@ -1668,7 +1668,7 @@ test('Admin IRL finalization acquires, rejects, and recovers processing leases',
     1_700_000_000_000,
   );
   assert.equal(started.status, 'started');
-  const startedDocument = await deliveryReceiptRuntime.readDocument(
+  const startedDocument = await readCommerceDocument(
     startedContext,
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
@@ -1735,7 +1735,7 @@ test('Admin IRL finalization reconciles an applied processing lease whose acknow
 
   assert.equal(started.status, 'started');
   assert.equal(loseAcknowledgement, false);
-  const document = await deliveryReceiptRuntime.readDocument(
+  const document = await readCommerceDocument(
     context,
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
@@ -1772,7 +1772,7 @@ test('Admin IRL finalization writes submission intent before broadcast and keeps
     payload: { version: 1, dropId: DROP_ID, requestId: REQUEST_ID },
     signal: new AbortController().signal,
   }), { cleared: false });
-  let document = await deliveryReceiptRuntime.readDocument(
+  let document = await readCommerceDocument(
     context,
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
@@ -1800,7 +1800,7 @@ test('Admin IRL finalization writes submission intent before broadcast and keeps
     payload: { version: 1, dropId: DROP_ID, requestId: REQUEST_ID },
     signal: new AbortController().signal,
   }), { cleared: false });
-  document = await deliveryReceiptRuntime.readDocument(
+  document = await readCommerceDocument(
     context,
     `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`,
   );
@@ -1846,7 +1846,7 @@ test('Admin IRL submission intent recovers a lost D1 commit acknowledgement', as
     pending,
   );
 
-  const document = await deliveryReceiptRuntime.readDocument(context, path);
+  const document = await readCommerceDocument(context, path);
   assert.deepEqual(document?.fields.pendingFinalizeSubmission, pending);
 });
 
@@ -1889,7 +1889,7 @@ test('Admin IRL submission settlement survives a lost D1 acknowledgement', async
     'confirmed',
   );
 
-  const document = await deliveryReceiptRuntime.readDocument(context, path);
+  const document = await readCommerceDocument(context, path);
   assert.equal(document?.fields.pendingFinalizeSubmission, undefined);
   assert.deepEqual(document?.fields.receiptTxs, [pending.signature]);
 });
@@ -1925,7 +1925,7 @@ test('Admin IRL pre-broadcast cancellation clears only its exact submission inte
     }),
     (error) => error === reason,
   );
-  const document = await deliveryReceiptRuntime.readDocument(
+  const document = await readCommerceDocument(
     { ...context, signal: new AbortController().signal },
     path,
   );
@@ -2029,7 +2029,7 @@ test('Admin IRL finalization clears definitive preflight submissions without tom
     pending,
   });
 
-  const document = await deliveryReceiptRuntime.readDocument(context, path);
+  const document = await readCommerceDocument(context, path);
   assert.equal(document?.fields.pendingFinalizeSubmission, undefined);
   assert.equal(document?.fields.status, 'processing');
 });
@@ -2051,7 +2051,7 @@ test('Admin IRL finalization promotes only confirmed pending submissions', async
     assetIds: [Keypair.generate().publicKey.toBase58()],
   };
   await adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(context, path, 'attempt', pending);
-  let document = await deliveryReceiptRuntime.readDocument(context, path);
+  let document = await readCommerceDocument(context, path);
   assert.deepEqual(document?.fields.receiptTxs, [SIGNATURE]);
   await adminIrlRedeemFinalizeTestHooks.settlePendingFinalizeSubmission(
     context,
@@ -2060,7 +2060,7 @@ test('Admin IRL finalization promotes only confirmed pending submissions', async
     pending,
     'confirmed',
   );
-  document = await deliveryReceiptRuntime.readDocument(context, path);
+  document = await readCommerceDocument(context, path);
   assert.deepEqual(document?.fields.receiptTxs, [SIGNATURE, confirmedSignature]);
   assert.equal(document?.fields.pendingFinalizeSubmission, undefined);
   assert.equal(document?.fields.status, 'processing');

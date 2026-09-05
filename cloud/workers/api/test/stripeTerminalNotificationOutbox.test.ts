@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
-import { commerceKeys, D1CommerceRepository } from '../src/commerceRepository.ts';
+import {
+  commerceKeys,
+  D1CommerceRepository,
+  type CommerceDocumentData,
+  type CommerceDocumentKey,
+} from '../src/commerceRepository.ts';
 import { stripeCheckoutWriteData, type StripeCheckoutCommerceContext } from '../src/stripeCheckout/commerce.ts';
 import { publishPendingStripeCheckoutTerminalNotifications } from '../src/stripeCheckout/notificationOutbox.ts';
 import {
@@ -9,16 +14,18 @@ import {
   STRIPE_TERMINAL_NOTIFICATION_FIELD,
   STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD,
   STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD,
-  STRIPE_TERMINAL_NOTIFICATION_LEASE_MS,
-  STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS,
-  STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS,
   type StripeTerminalNotificationOutcome,
 } from '../src/stripeCheckout/notificationOutboxState.ts';
+import {
+  NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS as STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS,
+} from '../src/notificationOutboxPublication.ts';
 import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 
 const NOW_MS = 1_800_000_000_000;
+const STRIPE_TERMINAL_NOTIFICATION_LEASE_MS = 10 * 60_000;
+const STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS = 4;
 const DROP_ID = 'card_nft_2';
 const SESSION_ID = 'cs_test_terminal_outbox';
 const CHECKOUT_KEY = commerceKeys.stripeCheckout(DROP_ID, SESSION_ID);
@@ -208,6 +215,12 @@ test('successful queue send followed by failed D1 finalization retries the same 
   assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'pending');
   assert.deepEqual((await state.outbox()).jobs, state.sent[0]);
 
+  await state.repository.run(state.commerce.nowMs(), async (transaction) => {
+    await transaction.update(ORDER_KEY, {
+      addressSnapshot: { email: 'changed@example.com', name: 'Changed Buyer' },
+      items: [{ kind: 'box', refId: 99 }],
+    });
+  });
   state.setTime(NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS + 1);
   await state.publish();
   assert.equal(state.sent.length, 2);
@@ -293,4 +306,137 @@ test('cancellation after claiming but before queue send releases its unused atte
   assert.equal((await state.outbox()).claimId, undefined);
   assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD], NOW_MS);
   assert.deepEqual(await state.publish(), { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 });
+});
+
+test('cancellation after snapshot persistence restores the attempt and keeps the exact jobs', async (context) => {
+  const controller = new AbortController();
+  const aborted = new Error('cancelled after snapshot');
+  let armed = false;
+  const state = await fixture(context, { harness: {
+    observeBatchAfterCommit: () => {
+      if (!armed) return;
+      const row = state.harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
+        .get(CHECKOUT_KEY.path) as { document_json: string };
+      const outbox = parseStripeTerminalNotificationOutbox(JSON.parse(row.document_json)[STRIPE_TERMINAL_NOTIFICATION_FIELD]);
+      if (!outbox?.jobs) return;
+      armed = false;
+      controller.abort(aborted);
+    },
+  } });
+  armed = true;
+  await assert.rejects(state.publish({
+    signal: controller.signal,
+    commerce: { ...state.commerce, signal: controller.signal },
+  }), (error: unknown) => error === aborted);
+  const released = await state.outbox();
+  assert.equal(state.sent.length, 0);
+  assert.equal(released.attemptCount, 0);
+  assert.equal(released.claimId, undefined);
+  assert.equal(released.jobs?.length, 2);
+  await state.repository.run(state.commerce.nowMs(), async (transaction) => {
+    await transaction.update(ORDER_KEY, { addressSnapshot: { email: 'changed@example.com' } });
+  });
+  await state.publish();
+  assert.deepEqual(state.sent[0], released.jobs);
+});
+
+test('successful queue submission finalizes even when the caller is cancelled during the send', async (context) => {
+  const state = await fixture(context);
+  const controller = new AbortController();
+  const result = await state.publish({
+    signal: controller.signal,
+    commerce: { ...state.commerce, signal: controller.signal },
+    queue: { sendBatch: async (messages) => {
+      const result = await state.queue.sendBatch(messages);
+      controller.abort(new Error('caller disconnected'));
+      return result;
+    } },
+  });
+  assert.deepEqual(result, { outcome: 'fulfilled', publication: 'queued', queuedJobs: 2 });
+  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'queued');
+  assert.equal((await state.outbox()).jobs, undefined);
+  assert.equal((await state.outbox()).claimId, undefined);
+  assert.equal((await state.outbox()).attemptCount, 1);
+});
+
+test('an ambiguous queue failure with cancellation retains the claim and frozen jobs', async (context) => {
+  const state = await fixture(context);
+  const controller = new AbortController();
+  const queueFailure = new Error('queue response lost');
+  await assert.rejects(state.publish({
+    signal: controller.signal,
+    commerce: { ...state.commerce, signal: controller.signal },
+    queue: { sendBatch: async (messages) => {
+      await state.queue.sendBatch(messages);
+      controller.abort(new Error('caller disconnected'));
+      throw queueFailure;
+    } },
+  }), (error: unknown) => error === queueFailure);
+  const pending = await state.outbox();
+  assert.ok(pending.claimId);
+  assert.equal(pending.attemptCount, 1);
+  assert.deepEqual(pending.jobs, state.sent[0]);
+  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'pending');
+  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD], NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS);
+  state.setTime(NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS);
+  await state.publish();
+  assert.deepEqual(state.sent[1], state.sent[0]);
+});
+
+test('failed snapshot persistence prevents queue submission', async (context) => {
+  let armed = false;
+  const state = await fixture(context, { harness: {
+    observeCall: (call) => {
+      if (!armed || call.method !== 'batch' || !call.statements.some(({ sql }) => sql.includes('INSERT INTO commerce_documents'))) return;
+      const row = state.harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
+        .get(CHECKOUT_KEY.path) as { document_json: string };
+      const outbox = parseStripeTerminalNotificationOutbox(JSON.parse(row.document_json)[STRIPE_TERMINAL_NOTIFICATION_FIELD]);
+      if (outbox?.claimId && !outbox.jobs) throw new Error('snapshot write unavailable');
+    },
+  } });
+  armed = true;
+  await assert.rejects(state.publish());
+  assert.equal(state.sent.length, 0);
+  assert.equal((await state.outbox()).jobs, undefined);
+  assert.equal((await state.outbox()).attemptCount, 1);
+  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'pending');
+});
+
+test('a replaced claim cannot persist or submit an old publisher payload', async (context) => {
+  const state = await fixture(context);
+  const replacementClaimId = '00000000-0000-4000-8000-000000000999';
+  const commerce: StripeCheckoutCommerceContext = {
+    ...state.commerce,
+    repository: {
+      run: (nowMs, operation) => state.repository.run(nowMs, operation),
+      get: async <T extends CommerceDocumentData>(key: CommerceDocumentKey) => {
+        const record = await state.repository.get<T>(key);
+        if (key.path === ORDER_KEY.path) {
+          const outbox = await state.outbox();
+          await state.repository.run(state.commerce.nowMs(), async (transaction) => {
+            await transaction.update(CHECKOUT_KEY, stripeCheckoutWriteData({
+              [STRIPE_TERMINAL_NOTIFICATION_FIELD]: { ...outbox, claimId: replacementClaimId },
+            }));
+          });
+        }
+        return record;
+      },
+    },
+  };
+  await assert.rejects(state.publish({ commerce }), /claim_lost/);
+  assert.equal(state.sent.length, 0);
+  assert.equal((await state.outbox()).claimId, replacementClaimId);
+  assert.equal((await state.outbox()).jobs, undefined);
+});
+
+test('a lease that expires during preparation blocks queue submission', async (context) => {
+  const state = await fixture(context, { outcome: 'manual_review' });
+  await assert.rejects(state.publish({ getDropName: () => {
+    state.setTime(NOW_MS + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS);
+    return 'Card NFT 2';
+  } }), /claim_expired/);
+  assert.equal(state.sent.length, 0);
+  assert.equal((await state.outbox()).jobs?.length, 1);
+  assert.equal((await state.outbox()).attemptCount, 1);
+  assert.equal((await state.read())[STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD], 'pending');
 });

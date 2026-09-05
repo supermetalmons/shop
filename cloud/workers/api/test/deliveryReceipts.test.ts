@@ -22,10 +22,12 @@ import {
   BOX_MINTER_CONFIG_DISCRIMINATOR,
 } from '../../../../shared/boxMinterConfigCodec.ts';
 import { IRL_CLAIM_CODE_NAMESPACE, IRL_CLAIM_CODE_DIGITS } from '../src/claimCodes.ts';
+import { commerceRepository, readCommerceDocument } from '../src/commerceTransactions.ts';
+import { assignDudesForBox } from '../src/deliveryDudeAssignments.ts';
+import { secureRandomInt } from '../src/deliveryRandom.ts';
 import {
   DELIVERY_RECEIPTS_ISSUE_PATH,
   DELIVERY_RECEIPTS_RECOVER_PATH,
-  deliveryReceiptRuntime,
   deliveryReceiptTestHooks,
   handleDeliveryReceiptRequest,
 } from '../src/deliveryReceipts.ts';
@@ -404,7 +406,7 @@ test('native ready-to-ship persistence includes notification and pack-status out
     addressSnapshot: { email: 'buyer@example.com' },
     items: [{ kind: 'box', refId: 3 }],
   });
-  const document = await deliveryReceiptRuntime.readDocument(
+  const document = await readCommerceDocument(
     native.context,
     'drops/card_nft_2/deliveryOrders/7',
   );
@@ -415,7 +417,7 @@ test('native ready-to-ship persistence includes notification and pack-status out
     receiptTxs: [SIGNATURE],
     irlClaims: [],
   });
-  const ready = await deliveryReceiptRuntime.readDocument(
+  const ready = await readCommerceDocument(
     native.context,
     'drops/card_nft_2/deliveryOrders/7',
   );
@@ -428,7 +430,7 @@ test('native ready-to-ship persistence includes notification and pack-status out
 
 test('native ready-notification publication claims, queues, and finalizes atomically', async () => {
   const native = await nativeDeliveryContext(readyNotificationOrderFields(7));
-  const document = await deliveryReceiptRuntime.readDocument(
+  const document = await readCommerceDocument(
     native.context,
     'drops/card_nft_2/deliveryOrders/7',
   );
@@ -446,7 +448,7 @@ test('native ready-notification publication claims, queues, and finalizes atomic
       },
     }),
   }), true);
-  const finalized = await deliveryReceiptRuntime.readDocument(
+  const finalized = await readCommerceDocument(
     native.context,
     'drops/card_nft_2/deliveryOrders/7',
   );
@@ -491,7 +493,7 @@ test('receipt API reports notification claim read failures as unavailable withou
     dependencies({
       issue: async (...args: Parameters<typeof deliveryReceiptTestHooks.issueReceiptsRequest>) => {
         const [body, , requestEnv, commerce] = args;
-        const document = await deliveryReceiptRuntime.readDocument(commerce, 'drops/card_nft_2/deliveryOrders/7');
+        const document = await readCommerceDocument(commerce, 'drops/card_nft_2/deliveryOrders/7');
         assert.ok(document);
         await publishReadyToShipNotifications({
           context: commerce,
@@ -512,7 +514,7 @@ test('receipt API reports notification claim read failures as unavailable withou
 
 test('pre-enqueue cancellation releases the ready-notification claim and attempt', async () => {
   const native = await nativeDeliveryContext(readyNotificationOrderFields(7));
-  const document = await deliveryReceiptRuntime.readDocument(
+  const document = await readCommerceDocument(
     native.context,
     'drops/card_nft_2/deliveryOrders/7',
   );
@@ -537,7 +539,7 @@ test('pre-enqueue cancellation releases the ready-notification claim and attempt
     }),
     (error: unknown) => error === cancellation,
   );
-  const released = await deliveryReceiptRuntime.readDocument(
+  const released = await readCommerceDocument(
     native.context,
     'drops/card_nft_2/deliveryOrders/7',
   );
@@ -649,7 +651,7 @@ test('read-only commerce rollback is best effort', async () => {
     providerFetch: async () => Response.json({}),
     signal: new AbortController().signal,
   };
-  const transaction = await deliveryReceiptRuntime.beginTransaction(context);
+  const transaction = await commerceRepository(context).begin(context.nowMs);
   authorityReads = 0;
   await assert.doesNotReject(deliveryReceiptTestHooks.rollbackTransactionBestEffort(context, transaction));
   assert.equal(authorityReads, 0);
@@ -683,7 +685,7 @@ test('existing assignment revalidates paused authority before returning', async 
     data: { dudeIds: [1] },
   });
   armed = true;
-  const assign = deliveryReceiptRuntime.assignDudesForBox;
+  const assign = assignDudesForBox;
   const context = {
     commerceDb: harness.db,
     repository: new D1CommerceRepository(harness.db),
@@ -970,7 +972,7 @@ test('receipt submissions are persisted before broadcast and promoted idempotent
   };
 
   await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
-  let stored = await deliveryReceiptRuntime.readDocument(native.context, path);
+  let stored = await readCommerceDocument(native.context, path);
   assert.deepEqual(
     (stored?.fields.receiptRecovery as Record<string, unknown>).pendingSubmission,
     pending,
@@ -990,7 +992,7 @@ test('receipt submissions are persisted before broadcast and promoted idempotent
     'confirmed',
   );
 
-  stored = await deliveryReceiptRuntime.readDocument(native.context, path);
+  stored = await readCommerceDocument(native.context, path);
   assert.deepEqual(stored?.fields.receiptTxs, [SIGNATURE, SECOND_SIGNATURE]);
   assert.deepEqual(
     deliveryReceiptTestHooks.confirmedReceiptTransactions(stored?.fields || {}),
@@ -1023,7 +1025,7 @@ test('receipt submission intent recovers a lost D1 commit acknowledgement', asyn
   armed = true;
   await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
 
-  const stored = await deliveryReceiptRuntime.readDocument(native.context, path);
+  const stored = await readCommerceDocument(native.context, path);
   assert.deepEqual(
     (stored?.fields.receiptRecovery as Record<string, unknown>).pendingSubmission,
     pending,
@@ -1135,7 +1137,7 @@ test('expired receipt submissions clear without being promoted', async () => {
     pending,
     'expired',
   );
-  const stored = await deliveryReceiptRuntime.readDocument(native.context, path);
+  const stored = await readCommerceDocument(native.context, path);
   assert.equal((stored?.fields.receiptRecovery as Record<string, unknown>).pendingSubmission, undefined);
   assert.deepEqual(stored?.fields.receiptTxs, undefined);
 });
@@ -1240,7 +1242,7 @@ test('receipt retries preserve a competing submission and recovery lease', async
       );
     }
     assert.equal(changed, true, operation);
-    const stored = await deliveryReceiptRuntime.readDocument(native.context, path);
+    const stored = await readCommerceDocument(native.context, path);
     assert.deepEqual(stored?.fields.receiptRecovery, {
       pendingSubmission: competing,
       attemptCount: 3,
@@ -1295,7 +1297,7 @@ test('prepared recovery failures reread the leased order and preserve retryable 
     'unavailable',
     2_000,
   );
-  const recovered = await deliveryReceiptRuntime.readDocument(native.context, path);
+  const recovered = await readCommerceDocument(native.context, path);
   const recovery = recovered?.fields.receiptRecovery as Record<string, unknown>;
   assert.equal(recovery.preparedProbeCount, 1);
   assert.equal(recovery.lastPreparedProbeAt, 1_000);
@@ -1341,7 +1343,7 @@ test('delivery recovery cancellation stops probes and restores its lease attempt
       ),
       (error: unknown) => error === reason,
     );
-    const stored = await deliveryReceiptRuntime.readDocument(
+    const stored = await readCommerceDocument(
       { ...native.context, signal: new AbortController().signal },
       'drops/card_nft_2/deliveryOrders/7',
     );
@@ -1374,7 +1376,7 @@ test('delivery recovery cancellation stops probes and restores its lease attempt
     ),
     (error: unknown) => error === reason,
   );
-  const stored = await deliveryReceiptRuntime.readDocument(
+  const stored = await readCommerceDocument(
     { ...native.context, signal: new AbortController().signal },
     'drops/card_nft_2/deliveryOrders/7',
   );
@@ -1411,7 +1413,7 @@ test('delivery recovery cancellation stops probes and restores its lease attempt
     ),
     (error: unknown) => error === issueReason,
   );
-  const issueStored = await deliveryReceiptRuntime.readDocument(
+  const issueStored = await readCommerceDocument(
     { ...issueNative.context, signal: new AbortController().signal },
     'drops/card_nft_2/deliveryOrders/7',
   );
@@ -1529,7 +1531,7 @@ test('receipt batch cancellation before broadcast survives a lost settlement ack
     (error) => error === reason,
   );
 
-  const stored = await deliveryReceiptRuntime.readDocument(
+  const stored = await readCommerceDocument(
     { ...native.context, signal: new AbortController().signal },
     path,
   );
@@ -1592,7 +1594,7 @@ test('receipt batch keeps write-ahead state when D1 promotion fails after confir
     (error) => error === persistenceError,
   );
 
-  const stored = await deliveryReceiptRuntime.readDocument(native.context, path);
+  const stored = await readCommerceDocument(native.context, path);
   const recovery = stored?.fields.receiptRecovery as Record<string, unknown>;
   assert.equal((recovery.pendingSubmission as Record<string, unknown>).signature, submittedSignature);
   assert.equal(stored?.fields.receiptTxs, undefined);
@@ -1691,7 +1693,7 @@ test('ambiguous receipt cancellation keeps its lease and unrelated errors win ab
     ),
     (error) => error === ambiguousReason,
   );
-  const ambiguousStored = await deliveryReceiptRuntime.readDocument(
+  const ambiguousStored = await readCommerceDocument(
     { ...ambiguousNative.context, signal: new AbortController().signal },
     'drops/card_nft_2/deliveryOrders/7',
   );
@@ -1730,7 +1732,7 @@ test('ambiguous receipt cancellation keeps its lease and unrelated errors win ab
     ),
     (error) => error === domainError,
   );
-  const domainStored = await deliveryReceiptRuntime.readDocument(
+  const domainStored = await readCommerceDocument(
     { ...domainNative.context, signal: new AbortController().signal },
     'drops/card_nft_2/deliveryOrders/7',
   );
@@ -1785,7 +1787,7 @@ test('settled receipt submission cancellation restores the owning recovery lease
     (error) => error === reason,
   );
 
-  const stored = await deliveryReceiptRuntime.readDocument(
+  const stored = await readCommerceDocument(
     { ...native.context, signal: new AbortController().signal },
     path,
   );
@@ -1800,7 +1802,7 @@ test('settled receipt submission cancellation restores the owning recovery lease
 test('native assignment initializes a missing dude pool', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
-  const assign = deliveryReceiptRuntime.assignDudesForBox;
+  const assign = assignDudesForBox;
   const context = {
     commerceDb: harness.db,
     repository,
@@ -1821,7 +1823,7 @@ test('native assignment initializes a missing dude pool', async () => {
 });
 
 test('native assignment preserves exact cancellation reasons', async () => {
-  const assign = deliveryReceiptRuntime.assignDudesForBox;
+  const assign = assignDudesForBox;
   const controller = new AbortController();
   const reason = new Error('assignment cancelled');
   controller.abort(reason);
@@ -1913,17 +1915,17 @@ test('receipt issuance rejects committed on-chain configuration drift', async ()
 
 test('secure random assignment indices stay within the requested range', () => {
   for (let index = 0; index < 100; index += 1) {
-    const value = deliveryReceiptTestHooks.secureRandomInt(7);
+    const value = secureRandomInt(7);
     assert.equal(Number.isInteger(value), true);
     assert.equal(value >= 0 && value < 7, true);
   }
   const claimCodeRange = 10 ** IRL_CLAIM_CODE_DIGITS;
   for (let index = 0; index < 100; index += 1) {
-    const value = deliveryReceiptTestHooks.secureRandomInt(claimCodeRange);
+    const value = secureRandomInt(claimCodeRange);
     assert.equal(Number.isInteger(value), true);
     assert.equal(value >= 0 && value < claimCodeRange, true);
   }
-  assert.throws(() => deliveryReceiptTestHooks.secureRandomInt(0), /range is invalid/);
+  assert.throws(() => secureRandomInt(0), /range is invalid/);
 });
 
 test('receipt batches shrink after transient retries are exhausted', () => {

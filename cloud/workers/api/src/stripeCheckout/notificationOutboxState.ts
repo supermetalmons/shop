@@ -1,8 +1,4 @@
-import {
-  READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
-  READY_TO_SHIP_NOTIFICATION_MAX_PUBLISH_ATTEMPTS,
-  READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS,
-} from '../readyToShipNotifications.js';
+import { NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS } from '../notificationOutboxPublication.js';
 import { isRecord } from '../dataAccess.js';
 import {
   isNotificationEmailJobId,
@@ -14,9 +10,6 @@ import { STRIPE_CHECKOUT_STATUS } from './contract.js';
 export const STRIPE_TERMINAL_NOTIFICATION_FIELD = 'stripeTerminalNotification';
 export const STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD = 'stripeTerminalNotificationState';
 export const STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD = 'stripeTerminalNotificationNextAttemptAtMs';
-export const STRIPE_TERMINAL_NOTIFICATION_LEASE_MS = READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS;
-export const STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS = READY_TO_SHIP_NOTIFICATION_MAX_PUBLISH_ATTEMPTS;
-export const STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS = READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS;
 
 export type StripeTerminalNotificationOutcome = 'fulfilled' | 'manual_review';
 type StripeTerminalNotificationKind = 'buyer_order_received' | 'shipper_ready_to_ship' | 'stripe_checkout_manual_review';
@@ -58,7 +51,7 @@ export function createStripeTerminalNotificationOutboxFields(
     outcome,
     jobIds: Object.fromEntries(kinds.map((kind) => [kind, crypto.randomUUID()])),
     attemptCount: 0,
-    retryUntilMs: nowMs + STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS,
+    retryUntilMs: nowMs + NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS,
   };
   return {
     [STRIPE_TERMINAL_NOTIFICATION_FIELD]: outbox,

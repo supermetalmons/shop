@@ -4,16 +4,18 @@ import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmai
 import { commerceKeys, D1CommerceRepository, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import { reconcilePendingReadyToShipNotifications } from '../src/readyToShipNotificationReconciliation.ts';
 import {
-  READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
+  NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS as READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS,
+} from '../src/notificationOutboxPublication.ts';
+import {
   READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD as ATTEMPTS,
   READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD as CLAIM_EXPIRY,
   READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD as CLAIM_ID,
   READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD as RETRY_UNTIL,
-  READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS,
 } from '../src/readyToShipNotifications.ts';
 import { createCommerceD1Harness, seedCommerceDocuments } from './commerceD1Harness.ts';
 
 const NOW_MS = 1_700_000_000_000;
+const READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS = 10 * 60_000;
 
 function order(deliveryId: number, overrides: CommerceDocumentData = {}): CommerceDocumentData {
   return {

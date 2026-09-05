@@ -414,8 +414,14 @@ out of the query until their ten-minute lease expires. Missing or malformed
 claims are immediately eligible for inspection; unclaimed orders sort before
 expired claims, then by document path. Recovery does not use an Ops D1 cursor.
 The four-attempt cap, six-hour retry window, job IDs, and idempotency keys are
-preserved. Partial publication retains pending markers and their lease; a
-cancellation before enqueue releases the claim and restores its attempt count.
+preserved. Before enqueue, publication saves each complete email job in
+`buyerOrderReceivedEmailJob` or `shipperReadyToShipEmailJob` under its active
+claim. Retries reuse the saved payload even if order content changes. Each
+payload is removed when its marker becomes queued or failed; pending siblings
+keep theirs. Existing pending markers acquire payloads lazily without a backfill.
+Partial publication retains pending markers and their lease; a cancellation
+before enqueue releases the claim and restores its attempt count while retaining
+any saved payloads.
 Reconcile stored job IDs with Queue and Resend outcomes before replaying work
 because a Queue publish may have succeeded before its D1 marker update.
 

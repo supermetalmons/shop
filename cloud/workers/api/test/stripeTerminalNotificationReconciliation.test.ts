@@ -7,13 +7,13 @@ import { stripeCheckoutWriteData } from '../src/stripeCheckout/commerce.ts';
 import {
   createStripeTerminalNotificationOutboxFields,
   parseStripeTerminalNotificationOutbox,
-  STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS,
 } from '../src/stripeCheckout/notificationOutboxState.ts';
 import { reconcilePendingStripeTerminalNotifications } from '../src/stripeCheckout/notificationReconciliation.ts';
 import { runScheduledReconciliations } from '../src/workerScheduled.ts';
 import { createCommerceD1Harness } from './commerceD1Harness.ts';
 
 const DROP_ID = 'card_nft_2';
+const STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS = 4;
 const NOW = Date.UTC(2026, 8, 5);
 const checkoutKey = (sessionId: string) => commerceKeys.stripeCheckout(DROP_ID, sessionId);
 

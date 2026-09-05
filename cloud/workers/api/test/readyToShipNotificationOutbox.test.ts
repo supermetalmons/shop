@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
-import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
+import { createNotificationEmailJobV1, type NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 import { CommerceRepositoryError, commerceKeys, D1CommerceRepository, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import { readCommerceDocument, type CommerceDocumentContext } from '../src/commerceTransactions.ts';
 import {
@@ -9,12 +9,15 @@ import {
   ReadyToShipNotificationEnqueueError,
 } from '../src/readyToShipNotificationOutbox.ts';
 import {
-  READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
+  NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS as READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS,
+} from '../src/notificationOutboxPublication.ts';
+import {
+  BUYER_ORDER_RECEIVED_EMAIL_JOB_FIELD as BUYER_JOB,
+  SHIPPER_READY_TO_SHIP_EMAIL_JOB_FIELD as SHIPPER_JOB,
   READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD as ATTEMPTS,
   READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD as CLAIM_EXPIRY,
   READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD as CLAIM_ID,
   READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD as RETRY_UNTIL,
-  READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS,
 } from '../src/readyToShipNotifications.ts';
 import {
   createCommerceD1Harness,
@@ -23,9 +26,23 @@ import {
 } from './commerceD1Harness.ts';
 
 const NOW_MS = 1_700_000_000_000;
+const READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS = 10 * 60_000;
 const KEY = commerceKeys.deliveryOrder('card_nft_2', '7');
 const BUYER_JOB_ID = '00000000-0000-4000-8000-000000000007';
 const SHIPPER_JOB_ID = '00000000-0000-4000-9000-000000000007';
+
+function buyerJob(): NotificationEmailJobV1 {
+  return createNotificationEmailJobV1({
+    jobId: BUYER_JOB_ID,
+    kind: 'buyer_order_received',
+    idempotencyKey: 'card_nft_2:7:order_received',
+    recipients: ['original@example.com'],
+    subject: 'Original subject',
+    text: 'Original text',
+    html: '<p>Original HTML</p>',
+    context: { dropId: 'card_nft_2', deliveryId: 7 },
+  });
+}
 
 function order(overrides: CommerceDocumentData = {}): CommerceDocumentData {
   return {
@@ -64,12 +81,16 @@ function fixture(
     assert.ok(document);
     return document;
   };
-  const publish = async (send: (jobs: NotificationEmailJobV1[]) => Promise<void> = async () => {}) => (
+  const publish = async (
+    send: (jobs: NotificationEmailJobV1[]) => Promise<void> = async () => {},
+    nowMs?: () => number,
+  ) => (
     publishReadyToShipNotifications({
       context: commerce,
       deliveryId: 7,
       document: await load(),
       dropId: 'card_nft_2',
+      nowMs: nowMs || (() => commerce.nowMs),
       queue: {
         sendBatch: async (messages) => {
           await send(Array.from(messages, (message) => message.body));
@@ -86,17 +107,17 @@ function jobIdentity(job: NotificationEmailJobV1) {
   return { kind: job.kind, jobId: job.jobId, idempotencyKey: job.idempotencyKey };
 }
 
-test('notification publication reuses each transaction read when claiming and finalizing', async (context) => {
+test('notification publication reuses each transaction read when claiming, freezing, and finalizing', async (context) => {
   const calls: CommerceD1CallObservation[] = [];
   const native = fixture(context, {}, { observeCall: (call) => calls.push(call) });
   calls.length = 0;
 
   assert.equal(await native.publish(), true);
 
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 10);
   const transactionReads = calls.filter((call) => call.method === 'batch' &&
     call.statements.some(({ sql }) => /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql)));
-  assert.equal(transactionReads.length, 2);
+  assert.equal(transactionReads.length, 3);
   assert.equal((await native.load()).fields.buyerOrderReceivedEmailState, 'queued');
 });
 
@@ -227,13 +248,14 @@ test('cancellation after claim persistence releases the claim and restores the a
 });
 
 for (const abort of [false, true]) {
-  test(`ambiguous enqueue ${abort ? 'with cancellation ' : ''}retains its lease and reuses job identity`, async (context) => {
+  test(`ambiguous enqueue ${abort ? 'with cancellation ' : ''}retains its lease and exact payload after order changes`, async (context) => {
     const native = fixture(context);
     const controller = new AbortController();
     native.commerce.signal = controller.signal;
     const sends: NotificationEmailJobV1[][] = [];
     await assert.rejects(native.publish(async (jobs) => {
       sends.push(jobs);
+      assert.deepEqual((await native.load()).fields[BUYER_JOB], jobs[0]);
       if (abort) controller.abort(new DOMException('queue response lost', 'AbortError'));
       throw new Error('queue response lost');
     }), ReadyToShipNotificationEnqueueError);
@@ -242,6 +264,10 @@ for (const abort of [false, true]) {
     assert.equal(pending[ATTEMPTS], 1);
     assert.equal(pending[CLAIM_EXPIRY], NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS);
     assert.equal((await native.due()).length, 0);
+    await native.repository.run(NOW_MS + 1, (unit) => unit.update(KEY, {
+      addressSnapshot: { email: 'changed@example.com' },
+      items: [{ kind: 'box', refId: 99 }],
+    }));
     native.commerce.signal = new AbortController().signal;
     native.commerce.nowMs = NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS - 1;
     assert.equal(await native.publish(async () => assert.fail('lease was bypassed')), false);
@@ -252,9 +278,11 @@ for (const abort of [false, true]) {
       [{ kind: 'buyer_order_received', jobId: BUYER_JOB_ID, idempotencyKey: 'card_nft_2:7:order_received' }],
       [{ kind: 'buyer_order_received', jobId: BUYER_JOB_ID, idempotencyKey: 'card_nft_2:7:order_received' }],
     ]);
+    assert.deepEqual(sends[1], sends[0]);
     const completed = (await native.load()).fields;
     assert.equal(completed[ATTEMPTS], 2);
     assert.equal(completed[CLAIM_ID], undefined);
+    assert.equal(completed[BUYER_JOB], undefined);
   });
 }
 
@@ -277,9 +305,15 @@ test('successful enqueue followed by failed finalization keeps recoverable pendi
   assert.equal(pending.buyerOrderReceivedEmailState, 'pending');
   assert.equal(pending[ATTEMPTS], 1);
   assert.equal((await native.due()).length, 0);
+  assert.deepEqual(pending[BUYER_JOB], sends[0][0]);
+  await native.repository.run(NOW_MS + 1, (unit) => unit.update(KEY, {
+    addressSnapshot: { email: 'changed@example.com' },
+    items: [{ kind: 'box', refId: 99 }],
+  }));
   native.commerce.nowMs += READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS;
   assert.equal(await native.publish(async (jobs) => { sends.push(jobs); }), true);
-  assert.deepEqual(sends[0].map(jobIdentity), sends[1].map(jobIdentity));
+  assert.deepEqual(sends[0], sends[1]);
+  assert.equal((await native.load()).fields[BUYER_JOB], undefined);
 });
 
 test('partial publication preserves the remaining marker and retries only that notification', async (context) => {
@@ -294,6 +328,8 @@ test('partial publication preserves the remaining marker and retries only that n
   const partial = (await native.load()).fields;
   assert.equal(partial.buyerOrderReceivedEmailState, 'pending');
   assert.equal(partial.shipperReadyToShipEmailState, 'queued');
+  assert.equal(partial[SHIPPER_JOB], undefined);
+  assert.equal(partial[BUYER_JOB], undefined);
   assert.equal(partial[ATTEMPTS], 1);
   assert.equal((await native.due()).length, 0);
   await native.repository.run(NOW_MS + 1, (unit) => unit.update(KEY, { addressSnapshot: { email: 'buyer@example.com' } }));
@@ -325,6 +361,7 @@ for (const exhausted of [
       [RETRY_UNTIL]: exhausted.retryUntil,
       [CLAIM_ID]: 'existing-claim',
       [CLAIM_EXPIRY]: NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
+      [BUYER_JOB]: buyerJob(),
     });
     assert.equal(await native.publish(async () => assert.fail('exhausted notification was sent')), false);
     assert.equal((await native.load()).fields.buyerOrderReceivedEmailState, 'pending');
@@ -336,6 +373,7 @@ for (const exhausted of [
     assert.equal(failed[ATTEMPTS], exhausted.attempts);
     assert.equal(failed.readyToShipNotificationLastErrorCode, 'manual-review-required');
     assert.equal(failed[CLAIM_ID], undefined);
+    assert.equal(failed[BUYER_JOB], undefined);
     assert.equal((await native.due()).length, 0);
   });
 }
@@ -356,4 +394,171 @@ test('invalid notification identity is failed while another valid marker can sti
   assert.equal(completed.buyerOrderReceivedEmailState, 'failed');
   assert.equal(completed.shipperReadyToShipEmailState, 'queued');
   assert.equal((await native.due()).length, 0);
+});
+
+test('failed snapshot persistence prevents enqueue and leaves the legacy pending marker recoverable', async (context) => {
+  const unavailable = new Error('snapshot database unavailable');
+  let writes = 0;
+  const native = fixture(context, {}, {
+    observeCall: (call) => {
+      if (call.method !== 'batch' || !call.statements.some(({ sql }) => /INSERT INTO commerce_documents/.test(sql))) return;
+      if (++writes === 2) throw unavailable;
+    },
+  });
+  await assert.rejects(native.publish(async () => assert.fail('unpersisted snapshot reached queue')), (error: unknown) => (
+    error instanceof ReadyToShipNotificationEnqueueError && error.cause === unavailable
+  ));
+  const pending = (await native.load()).fields;
+  assert.equal(pending.buyerOrderReceivedEmailState, 'pending');
+  assert.equal(pending[BUYER_JOB], undefined);
+  assert.equal(pending[ATTEMPTS], 1);
+  native.commerce.nowMs += READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS;
+  assert.equal(await native.publish(), true);
+});
+
+test('cancellation after snapshot persistence retains its payload and restores the unused attempt', async (context) => {
+  const controller = new AbortController();
+  const cancellation = new DOMException('cancelled after snapshot', 'AbortError');
+  let snapshot: unknown;
+  const native = fixture(context, {}, {
+    observeBatchAfterCommit: () => {
+      if (snapshot) return;
+      const row = native.harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
+        .get(KEY.path) as { document_json: string };
+      snapshot = JSON.parse(row.document_json)[BUYER_JOB];
+      if (snapshot) controller.abort(cancellation);
+    },
+  });
+  native.commerce.signal = controller.signal;
+  await assert.rejects(native.publish(async () => assert.fail('cancelled snapshot reached queue')), cancellation);
+  const released = (await native.load()).fields;
+  assert.ok(snapshot);
+  assert.deepEqual(released[BUYER_JOB], snapshot);
+  assert.equal(released[ATTEMPTS], 0);
+  assert.equal(released[CLAIM_ID], undefined);
+  assert.equal(released[CLAIM_EXPIRY], undefined);
+  await native.repository.run(NOW_MS + 1, (unit) => unit.update(KEY, {
+    addressSnapshot: { email: 'changed@example.com' },
+    items: [{ kind: 'box', refId: 99 }],
+  }));
+  native.commerce.signal = new AbortController().signal;
+  assert.equal(await native.publish(async (jobs) => { assert.deepEqual(jobs, [snapshot]); }), true);
+});
+
+for (const [name, replacement] of Object.entries({
+  claim: { [CLAIM_ID]: 'replacement-claim' },
+  status: { status: 'shipped' },
+  marker: { buyerOrderReceivedEmailJobId: '00000000-0000-4000-8000-000000000008' },
+})) {
+  test(`a changed ${name} before snapshot persistence blocks sending without clobbering its replacement`, async (context) => {
+    let replaced = false;
+    const native = fixture(context, {}, {
+      observeBatchAfterCommit: () => {
+        if (replaced) return;
+        const row = native.harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
+          .get(KEY.path) as { document_json: string };
+        const fields = JSON.parse(row.document_json);
+        if (!fields[CLAIM_ID]) return;
+        replaced = true;
+        seedCommerceDocuments(native.harness, [{ key: KEY, version: 3, data: { ...fields, ...replacement } }]);
+      },
+    });
+    await assert.rejects(native.publish(async () => assert.fail('replaced claim reached queue')), ReadyToShipNotificationEnqueueError);
+    assert.equal(replaced, true);
+    const current = (await native.load()).fields;
+    for (const [field, value] of Object.entries(replacement)) assert.equal(current[field], value);
+    assert.equal(current[BUYER_JOB], undefined);
+  });
+}
+
+test('an expired claim before snapshot persistence cannot enqueue', async (context) => {
+  let nowMs = NOW_MS;
+  const native = fixture(context, {}, {
+    observeBatchAfterCommit: () => {
+      const row = native.harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
+        .get(KEY.path) as { document_json: string };
+      if (JSON.parse(row.document_json)[CLAIM_ID]) nowMs += READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS;
+    },
+  });
+  await assert.rejects(native.publish(
+    async () => assert.fail('expired claim reached queue'),
+    () => nowMs,
+  ), /claim expired/);
+  const pending = (await native.load()).fields;
+  assert.equal(pending.buyerOrderReceivedEmailState, 'pending');
+  assert.equal(pending[ATTEMPTS], 1);
+  assert.equal(pending[BUYER_JOB], undefined);
+});
+
+for (const [name, snapshot] of Object.entries({
+  malformed: { ...buyerJob(), html: '' },
+  identity: { ...buyerJob(), jobId: SHIPPER_JOB_ID },
+  context: { ...buyerJob(), context: { dropId: 'card_nft_2', deliveryId: 8 } },
+})) {
+  test(`a ${name} snapshot fails only its marker and allows its sibling to publish`, async (context) => {
+    const native = fixture(context, {
+      [BUYER_JOB]: snapshot,
+      shipperReadyToShipEmailState: 'pending',
+      shipperReadyToShipEmailJobId: SHIPPER_JOB_ID,
+      shipperReadyToShipEmailIdempotencyKey: 'card_nft_2:7:ready_to_ship',
+    });
+    assert.equal(await native.publish(async (jobs) => {
+      assert.deepEqual(jobs.map((job) => job.kind), ['shipper_ready_to_ship']);
+    }), true);
+    const completed = (await native.load()).fields;
+    assert.equal(completed.buyerOrderReceivedEmailState, 'failed');
+    assert.equal(completed.shipperReadyToShipEmailState, 'queued');
+    assert.equal(completed[BUYER_JOB], undefined);
+    assert.equal(completed[SHIPPER_JOB], undefined);
+    assert.equal(completed[CLAIM_ID], undefined);
+  });
+}
+
+test('snapshot corruption after claiming is failed transactionally while a valid sibling publishes', async (context) => {
+  let replaced = false;
+  const native = fixture(context, {
+    shipperReadyToShipEmailState: 'pending',
+    shipperReadyToShipEmailJobId: SHIPPER_JOB_ID,
+    shipperReadyToShipEmailIdempotencyKey: 'card_nft_2:7:ready_to_ship',
+  }, {
+    observeBatchAfterCommit: () => {
+      if (replaced) return;
+      const row = native.harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
+        .get(KEY.path) as { document_json: string };
+      const fields = JSON.parse(row.document_json);
+      if (!fields[CLAIM_ID]) return;
+      replaced = true;
+      seedCommerceDocuments(native.harness, [{
+        key: KEY,
+        version: 3,
+        data: { ...fields, [BUYER_JOB]: { ...buyerJob(), jobId: SHIPPER_JOB_ID } },
+      }]);
+    },
+  });
+  assert.equal(await native.publish(async (jobs) => {
+    assert.deepEqual(jobs.map((job) => job.kind), ['shipper_ready_to_ship']);
+  }), true);
+  const completed = (await native.load()).fields;
+  assert.equal(completed.buyerOrderReceivedEmailState, 'failed');
+  assert.equal(completed.shipperReadyToShipEmailState, 'queued');
+  assert.equal(completed[BUYER_JOB], undefined);
+  assert.equal(completed[CLAIM_ID], undefined);
+});
+
+test('stale invalid snapshot cleanup preserves a concurrently replaced valid marker', async (context) => {
+  const native = fixture(context, { [BUYER_JOB]: { invalid: true } });
+  const observed = await native.load();
+  const replacement = buyerJob();
+  await native.repository.run(NOW_MS + 1, (unit) => unit.update(KEY, { [BUYER_JOB]: replacement }));
+  assert.deepEqual(await markPendingReadyToShipNotificationsFailed(
+    native.commerce,
+    KEY.path,
+    'invalid-notification-data',
+    ['buyerOrderReceivedEmailState'],
+    observed.updateTime,
+  ), []);
+  const current = (await native.load()).fields;
+  assert.equal(current.buyerOrderReceivedEmailState, 'pending');
+  assert.deepEqual(current[BUYER_JOB], replacement);
+  assert.equal(await native.publish(async (jobs) => { assert.deepEqual(jobs, [replacement]); }), true);
 });

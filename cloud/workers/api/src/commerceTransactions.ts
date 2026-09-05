@@ -130,12 +130,6 @@ export function commerceRepository(
   return context.repository || new D1CommerceRepository(context.commerceDb);
 }
 
-export function beginCommerceTransaction(
-  context: CommerceDocumentContext,
-): Promise<CommerceUnitOfWork> {
-  return commerceRepository(context).begin(context.nowMs);
-}
-
 export function rollbackCommerceTransaction(
   _context: CommerceDocumentContext,
   transaction: CommerceUnitOfWork,

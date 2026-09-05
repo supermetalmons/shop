@@ -14,8 +14,8 @@ import {
 } from '../../../../shared/boxMinterConfigCodec.ts';
 import { MPL_CORE_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
-import { deliveryReceiptRuntime } from '../src/deliveryReceipts.ts';
-import { DeliveryReceiptError, sendAndConfirmSignedTransaction } from '../src/deliveryReceiptOnchain.ts';
+import { readCommerceDocument } from '../src/commerceTransactions.ts';
+import { DeliveryReceiptError, runtimeForDrop, sendAndConfirmSignedTransaction } from '../src/deliveryReceiptOnchain.ts';
 import {
   commerceKeyFromPath,
   type CommerceDocumentData,
@@ -440,13 +440,13 @@ test('abort after Solana submission preserves the deterministic signature and re
     'next-attempt',
     Date.now() + 10 * 60_000,
   ), /locked to the receiver/);
-  const stored = await deliveryReceiptRuntime.readDocument(context, `claimCodes/${CODE}`);
+  const stored = await readCommerceDocument(context, `claimCodes/${CODE}`);
   assert.equal((stored?.fields.receiptTxSubmissions as Array<{ status: string }>)[0].status, 'submitted');
 });
 
 test('Stripe receipt recovery distinguishes rejected transfers from unresolved evidence', async (testContext) => {
   const signer = Keypair.generate();
-  const runtime = deliveryReceiptRuntime.runtimeForDrop(DROP_ID);
+  const runtime = runtimeForDrop(DROP_ID);
   const integer = (value: number, bytes: 4 | 8) => {
     const buffer = Buffer.alloc(bytes);
     if (bytes === 4) buffer.writeUInt32LE(value);
@@ -544,7 +544,7 @@ test('Stripe receipt recovery distinguishes rejected transfers from unresolved e
         message: 'Card receipt ownership is still resolving for the original receiver; retry shortly.',
         details: { keepReceiptClaimProcessing: true },
       });
-      const stored = await deliveryReceiptRuntime.readDocument(commerce, `claimCodes/${CODE}`);
+      const stored = await readCommerceDocument(commerce, `claimCodes/${CODE}`);
       assert.equal(stored?.fields.status, 'processing');
       assert.equal(stored?.fields.recipient, RECIPIENT);
       const submissions = stored?.fields.receiptTxSubmissions as Array<{ signature: string; status: string }>;
@@ -568,8 +568,8 @@ test('Stripe receipt claim start writes compatible claim and order leases', asyn
   assert.equal(result.status, 'started');
   assert.equal(result.dropId, DROP_ID);
   assert.equal(result.deliveryId, DELIVERY_ID);
-  const claim = await deliveryReceiptRuntime.readDocument(context, `claimCodes/${CODE}`);
-  const order = await deliveryReceiptRuntime.readDocument(context, `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`);
+  const claim = await readCommerceDocument(context, `claimCodes/${CODE}`);
+  const order = await readCommerceDocument(context, `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`);
   assert.equal(claim?.fields.status, 'processing');
   assert.equal(claim?.fields.processingAttemptId, 'stripe_receipt:attempt');
   assert.equal(claim?.fields.processingLeaseExpiresAt, 1_700_000_090_000);
@@ -604,8 +604,8 @@ test('Stripe receipt claim start reconciles a processing lease whose acknowledge
   assert.equal(result.attemptId, 'stripe_receipt:lost-ack');
   assert.equal(result.resumingPreviousProcessingClaim, false);
   assert.equal(loseAcknowledgement, false);
-  const claim = await deliveryReceiptRuntime.readDocument(context, `claimCodes/${CODE}`);
-  const order = await deliveryReceiptRuntime.readDocument(
+  const claim = await readCommerceDocument(context, `claimCodes/${CODE}`);
+  const order = await readCommerceDocument(
     context,
     `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`,
   );
@@ -655,8 +655,8 @@ test('Stripe receipt claim cancellation reconciles a lost start acknowledgement 
   assert.equal(loseAcknowledgement, false);
   assert.equal(sendCalls, 0);
   const safeContext = { ...context, signal: new AbortController().signal };
-  const claim = await deliveryReceiptRuntime.readDocument(safeContext, `claimCodes/${CODE}`);
-  const order = await deliveryReceiptRuntime.readDocument(
+  const claim = await readCommerceDocument(safeContext, `claimCodes/${CODE}`);
+  const order = await readCommerceDocument(
     safeContext,
     `drops/${DROP_ID}/deliveryOrders/${DELIVERY_ID}`,
   );
@@ -786,7 +786,7 @@ test('Stripe receipt claim retries D1 conflicts and updates plural and singular 
     1_700_000_000_000,
   );
   assert.equal(result.status, 'started');
-  const order = await deliveryReceiptRuntime.readDocument(context, orderPath);
+  const order = await readCommerceDocument(context, orderPath);
   assert.equal(
     ((order?.fields.stripeReceiptClaimsByBoxId as Record<string, any>)?.box_16 as Record<string, unknown>)?.status,
     'processing',
@@ -809,7 +809,7 @@ test('Stripe receipt claim cleanup and candidate persistence are attempt-owned',
     CODE,
     new Error('failed'),
   );
-  assert.equal((await deliveryReceiptRuntime.readDocument(staleContext, `claimCodes/${CODE}`))?.fields.status, 'processing');
+  assert.equal((await readCommerceDocument(staleContext, `claimCodes/${CODE}`))?.fields.status, 'processing');
 
   documents[`claimCodes/${CODE}`] = {
     ...documents[`claimCodes/${CODE}`],
@@ -822,7 +822,7 @@ test('Stripe receipt claim cleanup and candidate persistence are attempt-owned',
     CODE,
     new Error('failed'),
   );
-  const cleaned = await deliveryReceiptRuntime.readDocument(ownerContext, `claimCodes/${CODE}`);
+  const cleaned = await readCommerceDocument(ownerContext, `claimCodes/${CODE}`);
   assert.equal(cleaned?.fields.status, 'unclaimed');
   assert.equal(cleaned?.fields.processingAttemptId, undefined);
 
@@ -841,7 +841,7 @@ test('Stripe receipt claim cleanup and candidate persistence are attempt-owned',
     SIGNATURE,
     { lastValidBlockHeight: 200, submittedAtMs: 1_700_000_000_000, status: 'submitted' },
   );
-  const candidate = await deliveryReceiptRuntime.readDocument(candidateContext, `claimCodes/${CODE}`);
+  const candidate = await readCommerceDocument(candidateContext, `claimCodes/${CODE}`);
   assert.equal(Array.isArray(candidate?.fields.receiptTxSubmissions), true);
   assert.equal(Number.isSafeInteger(candidate?.fields.processingLeaseExpiresAt), true);
 });
@@ -902,7 +902,7 @@ test('Stripe receipt claim finalization only accepts the owning attempt', async 
     1,
   );
   assert.deepEqual(receiptTxs, [SIGNATURE]);
-  const finalized = await deliveryReceiptRuntime.readDocument(context, `claimCodes/${CODE}`);
+  const finalized = await readCommerceDocument(context, `claimCodes/${CODE}`);
   assert.equal(finalized?.fields.status, 'claimed');
   assert.equal(finalized?.fields.processingAttemptId, undefined);
 

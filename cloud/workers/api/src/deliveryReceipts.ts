@@ -94,15 +94,14 @@ import {
   type CommerceDocumentRecord,
   type CommerceDocumentWriteData,
   type CommerceJsonValue,
-  type CommerceUnitOfWork,
 } from './commerceRepository.js';
 import {
   CommerceDudeAssignmentError,
-  assignCommerceDudes,
   normalizeCommerceDudeIds,
 } from './commerceDudeAssignments.js';
+import { assignDudesForBox } from './deliveryDudeAssignments.js';
+import { secureRandomInt } from './deliveryRandom.js';
 import {
-  beginCommerceTransaction as beginTransaction,
   commitCommerceWrites as commitWrites,
   commerceDocument,
   commerceRepository as repository,
@@ -310,18 +309,6 @@ function canonicalPublicKey(value: string, label: string): PublicKey {
   } catch {
     throw new DeliveryReceiptError('invalid-argument', `Invalid ${label}.`);
   }
-}
-
-function commerceString(value: string): string {
-  return value;
-}
-
-function commerceInteger(value: number): number {
-  return Math.floor(value);
-}
-
-function commerceValue<T>(value: T): T {
-  return value;
 }
 
 async function loadBoundWallet(
@@ -757,23 +744,6 @@ async function fetchDeliveryRecoveryState(
 
 const pause = sleepWithSignal;
 
-function secureRandomInt(maxExclusive: number): number {
-  const maximum = Math.floor(maxExclusive);
-  if (!Number.isSafeInteger(maximum) || maximum < 1) {
-    throw new DeliveryReceiptError('internal', 'Secure random range is invalid.');
-  }
-  const range = 1n << 64n;
-  const maximumBigInt = BigInt(maximum);
-  const limit = (range / maximumBigInt) * maximumBigInt;
-  const words = new Uint32Array(2);
-  let value: bigint;
-  do {
-    crypto.getRandomValues(words);
-    value = (BigInt(words[0]) << 32n) | BigInt(words[1]);
-  } while (value >= limit);
-  return Number(value % maximumBigInt);
-}
-
 function normalizeAssignedDudeIds(
   value: unknown,
   runtime: DeliveryRuntime,
@@ -784,39 +754,6 @@ function normalizeAssignedDudeIds(
   } catch (error) {
     if (!(error instanceof CommerceDudeAssignmentError)) throw error;
     throw new DeliveryReceiptError('failed-precondition', 'Stored figure assignment is invalid.', { boxAssetId });
-  }
-}
-
-async function assignDudesForBox(
-  context: CommerceContext,
-  runtime: DeliveryRuntime,
-  boxAssetId: string,
-  randomInt: (maxExclusive: number) => number,
-): Promise<number[]> {
-  try {
-    const result = await assignCommerceDudes({
-      boxAssetId,
-      dropFamily: runtime.config.dropFamily,
-      dropId: runtime.dropId,
-      itemsPerBox: runtime.itemsPerBox,
-      maxDudeId: runtime.maxDudeId,
-      nowMs: context.nowMs,
-      randomInt,
-      repository: repository(context),
-      signal: context.signal,
-      sleep: (milliseconds) => pause(milliseconds, context.signal),
-    });
-    return result.dudeIds;
-  } catch (error) {
-    if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-    if (error instanceof CommerceDudeAssignmentError) {
-      throw new DeliveryReceiptError(
-        error.code === 'invalid-stored-assignment' ? 'failed-precondition' : 'resource-exhausted',
-        error.message,
-        error.details,
-      );
-    }
-    throw mapProviderError(error, 'Figure assignment is temporarily unavailable.');
   }
 }
 
@@ -2617,36 +2554,7 @@ export const deliveryReceiptTestHooks = {
   rollbackTransactionBestEffort,
   runDeliveryRecoveryOrderQuery,
   runPendingReadyNotificationQuery,
-  secureRandomInt,
   sendReceiptBatch,
   shouldShrinkReceiptBatch,
   storedDeliveryItemIds,
-};
-
-export const deliveryReceiptRuntime = {
-  assignDudesForBox,
-  beginTransaction: (context: CommerceContext) => beginTransaction(context),
-  commitWrites: (
-    context: CommerceContext,
-    writes: readonly CommerceWrite[],
-    transaction?: CommerceUnitOfWork,
-  ) => commitWrites(context, writes, transaction),
-  createWrite,
-  commerceInteger,
-  commerceString,
-  commerceTimestamp,
-  commerceValue,
-  pause,
-  readDocument: (
-    context: CommerceContext,
-    path: string,
-    transaction?: CommerceUnitOfWork,
-  ) => readDocument(context, path, transaction),
-  rollbackTransactionBestEffort: (
-    context: CommerceContext,
-    transaction: CommerceUnitOfWork,
-  ) => rollbackTransactionBestEffort(context, transaction),
-  runtimeForDrop,
-  secureRandomInt,
-  updateWrite,
 };

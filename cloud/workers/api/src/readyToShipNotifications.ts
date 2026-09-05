@@ -23,6 +23,7 @@ import {
   createNotificationEmailJobV1,
   isNotificationEmailIdempotencyKey,
   isNotificationEmailJobId,
+  isNotificationEmailJobV1,
   type NotificationEmailJobV1,
 } from '../../../../shared/notificationEmailJob.js';
 import {
@@ -31,13 +32,11 @@ import {
   READY_NOTIFICATION_SHIPPER_STATE_FIELD,
 } from '../../../../shared/readyToShipNotificationReconciliation.js';
 import { commerceFieldValue, type CommerceDocumentWriteData } from './commerceRepository.js';
+import { NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS } from './notificationOutboxPublication.js';
 
 export const READY_TO_SHIP_NOTIFICATION_PENDING = READY_NOTIFICATION_PENDING_STATE;
 export const READY_TO_SHIP_NOTIFICATION_QUEUED = 'queued' as const;
 export const READY_TO_SHIP_NOTIFICATION_FAILED = 'failed' as const;
-export const READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS = 6 * 60 * 60_000;
-export const READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS = 10 * 60_000;
-export const READY_TO_SHIP_NOTIFICATION_MAX_PUBLISH_ATTEMPTS = 4;
 export const READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD = 'readyToShipNotificationRetryUntilMs';
 export const READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD = 'readyToShipNotificationPublishClaimId';
 export const READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD =
@@ -47,10 +46,12 @@ export const READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD =
 
 export const BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD = READY_NOTIFICATION_BUYER_STATE_FIELD;
 export const BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD = 'buyerOrderReceivedEmailJobId';
+export const BUYER_ORDER_RECEIVED_EMAIL_JOB_FIELD = 'buyerOrderReceivedEmailJob';
 export const BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD = 'buyerOrderReceivedEmailIdempotencyKey';
 export const BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD = 'buyerOrderReceivedEmailQueuedAt';
 export const SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD = READY_NOTIFICATION_SHIPPER_STATE_FIELD;
 export const SHIPPER_READY_TO_SHIP_EMAIL_JOB_ID_FIELD = 'shipperReadyToShipEmailJobId';
+export const SHIPPER_READY_TO_SHIP_EMAIL_JOB_FIELD = 'shipperReadyToShipEmailJob';
 export const SHIPPER_READY_TO_SHIP_EMAIL_IDEMPOTENCY_KEY_FIELD = 'shipperReadyToShipEmailIdempotencyKey';
 export const SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD = 'shipperReadyToShipEmailQueuedAt';
 
@@ -60,6 +61,7 @@ type ReadyToShipNotificationMarkerDefinition = {
   kind: ReadyToShipNotificationKind;
   stateField: string;
   jobIdField: string;
+  jobField: string;
   idempotencyKeyField: string;
   queuedAtField: string;
   idempotencySuffix: 'order_received' | 'ready_to_ship';
@@ -68,6 +70,7 @@ type ReadyToShipNotificationMarkerDefinition = {
 export type PendingReadyToShipNotification = ReadyToShipNotificationMarkerDefinition & {
   jobId: string;
   idempotencyKey: string;
+  job?: NotificationEmailJobV1;
 };
 
 export type ReadyToShipNotificationOutbox = {
@@ -85,6 +88,7 @@ const MARKERS: readonly ReadyToShipNotificationMarkerDefinition[] = [
     kind: 'buyer_order_received',
     stateField: BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
     jobIdField: BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD,
+    jobField: BUYER_ORDER_RECEIVED_EMAIL_JOB_FIELD,
     idempotencyKeyField: BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD,
     queuedAtField: BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD,
     idempotencySuffix: 'order_received',
@@ -93,6 +97,7 @@ const MARKERS: readonly ReadyToShipNotificationMarkerDefinition[] = [
     kind: 'shipper_ready_to_ship',
     stateField: SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD,
     jobIdField: SHIPPER_READY_TO_SHIP_EMAIL_JOB_ID_FIELD,
+    jobField: SHIPPER_READY_TO_SHIP_EMAIL_JOB_FIELD,
     idempotencyKeyField: SHIPPER_READY_TO_SHIP_EMAIL_IDEMPOTENCY_KEY_FIELD,
     queuedAtField: SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD,
     idempotencySuffix: 'ready_to_ship',
@@ -186,6 +191,7 @@ export function createReadyToShipNotificationOutbox(args: {
   for (const marker of pending) {
     values[marker.stateField] = READY_TO_SHIP_NOTIFICATION_PENDING;
     values[marker.jobIdField] = marker.jobId;
+    values[marker.jobField] = commerceFieldValue.delete();
     values[marker.idempotencyKeyField] = marker.idempotencyKey;
     values[marker.queuedAtField] = commerceFieldValue.delete();
   }
@@ -193,12 +199,22 @@ export function createReadyToShipNotificationOutbox(args: {
     const nowMs = Number.isSafeInteger(args.nowMs) && Number(args.nowMs) >= 0
       ? Number(args.nowMs)
       : Date.now();
-    values[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD] = nowMs + READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS;
+    values[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD] = nowMs + NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS;
     values[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD] = 0;
     values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] = commerceFieldValue.delete();
     values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD] = commerceFieldValue.delete();
   }
   return { values, pending };
+}
+
+export function isReadyToShipNotificationJob(
+  value: unknown,
+  marker: PendingReadyToShipNotification,
+): value is NotificationEmailJobV1 {
+  return isNotificationEmailJobV1(value) &&
+    value.kind === marker.kind && value.jobId === marker.jobId &&
+    value.idempotencyKey === marker.idempotencyKey &&
+    value.idempotencyKey === `${value.context.dropId}:${value.context.deliveryId}:${marker.idempotencySuffix}`;
 }
 
 export function inspectPendingReadyToShipNotifications(
@@ -223,7 +239,17 @@ export function inspectPendingReadyToShipNotifications(
       invalidStateFields.push(marker.stateField);
       continue;
     }
-    pending.push({ ...marker, jobId, idempotencyKey });
+    const pendingMarker = { ...marker, jobId, idempotencyKey };
+    if (Object.hasOwn(order, marker.jobField)) {
+      const job = order[marker.jobField];
+      if (!isReadyToShipNotificationJob(job, pendingMarker)) {
+        invalidStateFields.push(marker.stateField);
+        continue;
+      }
+      pending.push({ ...pendingMarker, job });
+    } else {
+      pending.push(pendingMarker);
+    }
   }
   return { invalidStateFields, pending };
 }

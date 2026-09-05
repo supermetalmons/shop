@@ -1,6 +1,7 @@
 import type { NotificationEmailJobV1 } from '../../../../../shared/notificationEmailJob.js';
 import { commerceFieldValue, commerceKeys } from '../commerceRepository.js';
 import { runCommerceTransaction } from '../commerceTransactions.js';
+import { planNotificationPublicationClaim, publishClaimedNotificationBatch } from '../notificationOutboxPublication.js';
 import {
   stripeCheckoutWriteData,
   type StripeCheckoutCommerceContext,
@@ -11,10 +12,7 @@ import {
   parseStripeTerminalNotificationOutbox,
   stripeTerminalNotificationOutcome,
   STRIPE_TERMINAL_NOTIFICATION_FIELD,
-  STRIPE_TERMINAL_NOTIFICATION_LEASE_MS,
-  STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS,
   STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD,
-  STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS,
   STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD,
   type StripeTerminalNotificationOutbox,
   type StripeTerminalNotificationOutcome,
@@ -88,25 +86,26 @@ async function claimNotifications(args: PublicationOptions): Promise<ClaimResult
     if (state !== 'pending' || !Number.isSafeInteger(dueAtMs) || Number(dueAtMs) < 0) {
       return fail('invalid-notification-state');
     }
-    if (Number(dueAtMs) > nowMs) return skipped(outcome, 'busy');
-    if (
-      outbox.attemptCount >= STRIPE_TERMINAL_NOTIFICATION_MAX_ATTEMPTS ||
-      (outbox.attemptCount > 0 && outbox.retryUntilMs <= nowMs)
-    ) return fail('manual-review-required');
+    const plan = planNotificationPublicationClaim({
+      nowMs,
+      activeUntilMs: Number(dueAtMs),
+      attemptCount: outbox.attemptCount,
+      retryUntilMs: outbox.retryUntilMs,
+    });
+    if (plan.outcome === 'busy') return skipped(outcome, 'busy');
+    if (plan.outcome === 'exhausted') return fail('manual-review-required');
     const claimed: StripeTerminalNotificationOutbox = {
       ...outbox,
-      attemptCount: outbox.attemptCount + 1,
+      attemptCount: plan.attemptCount,
       claimId: crypto.randomUUID(),
-      retryUntilMs: outbox.attemptCount === 0
-        ? nowMs + STRIPE_TERMINAL_NOTIFICATION_RETRY_WINDOW_MS
-        : outbox.retryUntilMs,
+      retryUntilMs: plan.retryUntilMs,
     };
     await transaction.update(key, stripeCheckoutWriteData({
       [STRIPE_TERMINAL_NOTIFICATION_FIELD]: claimed,
       [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: 'pending',
-      [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: nowMs + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS,
+      [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: plan.expiresAtMs,
     }));
-    return { claim: { checkout, outbox: claimed, expiresAtMs: nowMs + STRIPE_TERMINAL_NOTIFICATION_LEASE_MS } };
+    return { claim: { checkout, outbox: claimed, expiresAtMs: plan.expiresAtMs } };
   }, { shouldRetry: (error) => error.code === 'aborted' });
 }
 
@@ -144,6 +143,54 @@ function validJobIdentity(args: PublicationOptions, claim: NotificationClaim, jo
     job.context.deliveryId === deliveryId && job.idempotencyKey === `${args.dropId}:${deliveryId}:${suffix}`;
 }
 
+async function prepareNotificationJobs(
+  args: PublicationOptions,
+  claim: NotificationClaim,
+): Promise<NotificationEmailJobV1[]> {
+  let jobs = claim.outbox.jobs;
+  if (!jobs) {
+    const prepared = await prepareStripeCheckoutTerminalNotifications({
+      dropId: args.dropId,
+      sessionId: args.sessionId,
+      jobIds: claim.outbox.jobIds,
+      dependencies: {
+        loadCheckout: async () => ({
+          path: `drops/${args.dropId}/stripeCheckouts/${args.sessionId}`,
+          data: claim.checkout,
+        }),
+        loadDeliveryOrder: async (dropId, deliveryId) => {
+          args.commerce.signal?.throwIfAborted();
+          const order = await args.commerce.repository.get(commerceKeys.deliveryOrder(dropId, String(deliveryId)));
+          args.commerce.signal?.throwIfAborted();
+          return order?.data || null;
+        },
+        getDropName: args.getDropName,
+      },
+    });
+    if (prepared.outcome !== claim.outbox.outcome) {
+      throw new Error(`stripe_terminal_notification_${prepared.reason || 'invalid-outcome'}`);
+    }
+    jobs = prepared.jobs;
+    if (!await updateClaim(args, claim, (outbox) => ({
+      [STRIPE_TERMINAL_NOTIFICATION_FIELD]: { ...outbox, jobs },
+    }))) throw new Error('stripe_terminal_notification_claim_lost');
+  }
+  if (jobs.some((job) => !validJobIdentity(args, claim, job))) {
+    throw new Error('stripe_terminal_notification_job_identity_invalid');
+  }
+  return jobs;
+}
+
+function cleanupPublication(args: PublicationOptions): PublicationOptions {
+  return {
+    ...args,
+    commerce: args.createCleanupCommerce?.() || {
+      ...args.commerce,
+      signal: AbortSignal.timeout(5_000),
+    },
+  };
+}
+
 export async function publishPendingStripeCheckoutTerminalNotifications(
   args: PublicationOptions,
 ): Promise<StripeCheckoutTerminalPublicationResult> {
@@ -156,74 +203,42 @@ export async function publishPendingStripeCheckoutTerminalNotifications(
     return claimed.result;
   }
   const { claim } = claimed;
-  let sendStarted = false;
   try {
-    args.signal.throwIfAborted();
-    let jobs = claim.outbox.jobs;
-    if (!jobs) {
-      const prepared = await prepareStripeCheckoutTerminalNotifications({
-        dropId: args.dropId,
-        sessionId: args.sessionId,
-        jobIds: claim.outbox.jobIds,
-        dependencies: {
-          loadCheckout: async () => ({
-            path: `drops/${args.dropId}/stripeCheckouts/${args.sessionId}`,
-            data: claim.checkout,
-          }),
-          loadDeliveryOrder: async (dropId, deliveryId) => {
-            args.commerce.signal?.throwIfAborted();
-            const order = await args.commerce.repository.get(commerceKeys.deliveryOrder(dropId, String(deliveryId)));
-            args.commerce.signal?.throwIfAborted();
-            return order?.data || null;
-          },
-          getDropName: args.getDropName,
-        },
-      });
-      if (prepared.outcome !== claim.outbox.outcome) {
-        throw new Error(`stripe_terminal_notification_${prepared.reason || 'invalid-outcome'}`);
-      }
-      jobs = prepared.jobs;
-      if (!await updateClaim(args, claim, (outbox) => ({
-        [STRIPE_TERMINAL_NOTIFICATION_FIELD]: { ...outbox, jobs },
-      }))) throw new Error('stripe_terminal_notification_claim_lost');
-    }
-    if (jobs.some((job) => !validJobIdentity(args, claim, job))) {
-      throw new Error('stripe_terminal_notification_job_identity_invalid');
-    }
-    args.signal.throwIfAborted();
-    const nowMs = (args.nowMs || Date.now)();
-    if (nowMs >= claim.expiresAtMs || nowMs >= claim.outbox.retryUntilMs) {
-      throw new Error('stripe_terminal_notification_claim_expired');
-    }
-    if (jobs.length) {
-      sendStarted = true;
-      await args.queue.sendBatch(jobs.map((body) => ({ body, contentType: 'json' })));
-    }
-    const finalized = await updateClaim(args, claim, (outbox) => {
-      const { claimId: _claimId, jobs: _jobs, ...complete } = outbox;
-      return {
-        [STRIPE_TERMINAL_NOTIFICATION_FIELD]: complete,
-        [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: 'queued',
-        [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: commerceFieldValue.delete(),
-        stripeTerminalNotificationQueuedAt: commerceFieldValue.serverTimestamp(),
-        stripeTerminalNotificationLastError: commerceFieldValue.delete(),
-      };
+    return await publishClaimedNotificationBatch<StripeCheckoutTerminalPublicationResult>({
+      signal: args.signal,
+      nowMs: args.nowMs || Date.now,
+      expiresAtMs: claim.expiresAtMs,
+      retryUntilMs: claim.outbox.retryUntilMs,
+      queue: args.queue,
+      prepareAndPersist: () => prepareNotificationJobs(args, claim),
+      createExpiredClaimError: () => new Error('stripe_terminal_notification_claim_expired'),
+      finalize: async (jobs) => {
+        const finalized = await updateClaim(cleanupPublication(args), claim, (outbox) => {
+          const { claimId: _claimId, jobs: _jobs, ...complete } = outbox;
+          return {
+            [STRIPE_TERMINAL_NOTIFICATION_FIELD]: complete,
+            [STRIPE_TERMINAL_NOTIFICATION_STATE_FIELD]: 'queued',
+            [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: commerceFieldValue.delete(),
+            stripeTerminalNotificationQueuedAt: commerceFieldValue.serverTimestamp(),
+            stripeTerminalNotificationLastError: commerceFieldValue.delete(),
+          };
+        });
+        if (!finalized) throw new Error('stripe_terminal_notification_finalization_lost');
+        console.log({ event: 'stripe_terminal_notifications_queued', dropId: args.dropId,
+          sessionId: args.sessionId, jobs: jobs.map((job) => ({ jobId: job.jobId, kind: job.kind })) });
+        return { outcome: claim.outbox.outcome, publication: 'queued', queuedJobs: jobs.length };
+      },
+      releaseUnusedClaim: async () => {
+        await updateClaim(cleanupPublication(args), claim, (outbox) => {
+          const { claimId: _claimId, ...released } = outbox;
+          return {
+            [STRIPE_TERMINAL_NOTIFICATION_FIELD]: { ...released, attemptCount: outbox.attemptCount - 1 },
+            [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: (args.nowMs || Date.now)(),
+          };
+        });
+      },
     });
-    if (!finalized) throw new Error('stripe_terminal_notification_finalization_lost');
-    console.log({ event: 'stripe_terminal_notifications_queued', dropId: args.dropId,
-      sessionId: args.sessionId, jobs: jobs.map((job) => ({ jobId: job.jobId, kind: job.kind })) });
-    return { outcome: claim.outbox.outcome, publication: 'queued', queuedJobs: jobs.length };
   } catch (error) {
-    if (args.signal.aborted && !sendStarted) {
-      const cleanup = args.createCleanupCommerce ? { ...args, commerce: args.createCleanupCommerce() } : args;
-      await updateClaim(cleanup, claim, (outbox) => {
-        const { claimId: _claimId, ...released } = outbox;
-        return {
-          [STRIPE_TERMINAL_NOTIFICATION_FIELD]: { ...released, attemptCount: outbox.attemptCount - 1 },
-          [STRIPE_TERMINAL_NOTIFICATION_NEXT_ATTEMPT_FIELD]: (args.nowMs || Date.now)(),
-        };
-      }).catch(() => undefined);
-    }
     console.error({ event: 'stripe_terminal_notifications_publish_failed', dropId: args.dropId,
       sessionId: args.sessionId, error: error instanceof Error ? { name: error.name } : { name: 'UnknownError' } });
     throw error;
