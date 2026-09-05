@@ -301,6 +301,7 @@ import {
   type LocalPendingReveal,
 } from './shop/persistedState';
 import { startPostActionInventoryPolling } from './shop/postActionPolling';
+import { runMintWorkflow, type MintMode } from './shop/mint';
 import {
   applyRevealRequestRetry,
   requestRevealWithSubmissionRecovery,
@@ -1766,7 +1767,7 @@ function App({
     adapter: receiptTransferWalletAdapter,
     supported: receiptTransferWalletSupported,
   });
-  const mintActionLockRef = useRef<null | 'mint' | 'discount'>(null);
+  const mintActionLockRef = useRef<MintMode | null>(null);
   const openSelectedLockRef = useRef(false);
   const openSelectedBoxIdRef = useRef<string | null>(null);
   const previousConnectedWalletForOwnerRef = useRef(connectedWallet);
@@ -4619,9 +4620,10 @@ function App({
     }));
   };
 
-  const handleMint = async (quantity: number, variantKey?: string) => {
+  const handleSolanaMint = async (mode: MintMode, quantity: number, variantKey?: string) => {
     if (blockViewerModeAction()) return;
-    const mintDrop = requireRouteDrop('mint');
+    const action = mode === 'discount' ? 'discount mint' : 'mint';
+    const mintDrop = requireRouteDrop(action);
     if (mintDrop.salesMode === 'stripe_receipt_only') {
       showToast('This drop is available through Stripe checkout only');
       return;
@@ -4630,170 +4632,61 @@ function App({
       setVisible(true);
       return;
     }
-    if (!routeConnection) throw new Error('Missing route connection for mint');
+    if (!routeConnection) throw new Error(`Missing route connection for ${action}`);
     if (mintedOut || minting || discountMinting || mintActionLockRef.current) return;
     if (mintDrop.mintSelection?.kind === 'size' && !variantKey) {
       showToast('Select a size');
       return;
     }
-    const mintedQuantity = mintDrop.mintSelection?.kind === 'size' ? 1 : quantity;
-    let didConfirmMint = false;
-    let mintedBoxAssetIds: string[] = [];
-    mintActionLockRef.current = 'mint';
-    setMinting(true);
-    try {
-      const cfg = await fetchBoxMinterConfig(routeConnection, mintDrop);
-      const sendOnce = async () => {
-        const { tx, boxAccounts } =
-          mintDrop.mintSelection?.kind === 'size'
-            ? await buildMintVariantBoxTxWithAccounts(routeConnection, cfg, publicKey, variantKey || '', mintDrop)
-            : await buildMintBoxesTxWithAccounts(routeConnection, cfg, publicKey, quantity, mintDrop);
-        mintedBoxAssetIds = boxAccounts.map((account) => account.toBase58());
-        return sendAndConfirmMintViaConnection(tx, routeConnection, {
-          onAlreadyProcessedWithoutSignature: (err) =>
-            recoverAlreadyProcessedAccounts(routeConnection, boxAccounts, err),
-        });
-      };
-      const hasConfirmationError = await retryAfterBlockhashExpiry(
-        sendOnce,
-        'Transaction expired before you approved it. Please approve again…',
-      );
-      if (!hasConfirmationError) {
-        registerRecentExpectedInventoryAssets(
-          publicKey.toBase58(),
-          mintDrop.solanaCluster,
-          mintedBoxAssetIds,
-        );
-        addLocalMintedBoxes(mintedQuantity, mintDrop.dropId, mintedBoxAssetIds);
-        setSuccessfulMintToken((prev) => prev + 1);
-        didConfirmMint = true;
-      }
-      await Promise.all([
-        shouldFetchMintStats ? refetchStats() : Promise.resolve(),
-        didConfirmMint ? refreshInventoryAfterMint() : refetchInventory(),
-      ]);
-    } catch (err) {
-      if (isUserRejectedError(err)) return;
-      if (didConfirmMint) {
-        console.warn('Mint succeeded but failed to refresh mint state', err);
-        return;
-      }
-      throw err;
-    } finally {
-      if (mintActionLockRef.current === 'mint') {
-        mintActionLockRef.current = null;
-      }
-      setMinting(false);
-    }
-  };
 
-  const handleDiscountMint = async (quantity: number, variantKey?: string) => {
-    if (blockViewerModeAction()) return;
-    const mintDrop = requireRouteDrop('discount mint');
-    if (mintDrop.salesMode === 'stripe_receipt_only') {
-      showToast('This drop is available through Stripe checkout only');
-      return;
-    }
-    if (!connectedWallet || !publicKey) {
-      setVisible(true);
-      return;
-    }
-    if (!routeConnection) throw new Error('Missing route connection for discount mint');
-    if (mintedOut || discountMinting || minting || mintActionLockRef.current) return;
-    if (mintDrop.mintSelection?.kind === 'size' && !variantKey) {
-      showToast('Select a size');
-      return;
-    }
-    const maxDiscountQuantity = Math.max(0, discountRemainingCount);
-    if (!Number.isFinite(quantity) || quantity < 1 || quantity > maxDiscountQuantity) {
-      if (maxDiscountQuantity > 0) {
-        showToast(`Discount available for up to ${dropAssetCount(mintDrop, 'box', maxDiscountQuantity)}`);
-      } else {
-        showToast('Wallet is not eligible for the discount');
-      }
-      return;
-    }
-
-    mintActionLockRef.current = 'discount';
-    setDiscountMinting(true);
-    let didConfirmMint = false;
-    let mintedBoxAssetIds: string[] = [];
-    try {
-      const proof = await getDiscountProof(mintDrop.dropId, publicKey.toBase58());
-      if (!proof) {
-        setDiscountEligible(false);
-        setDiscountRemainingCount(0);
-        showToast('Wallet is not eligible for the discount');
-        return;
-      }
-
-      const mintedQuantity = mintDrop.mintSelection?.kind === 'size' ? 1 : quantity;
-      const cfg = await fetchBoxMinterConfig(routeConnection, mintDrop);
-      const onchainDiscountAllowance = cfg.discountMintsPerWallet;
-      const onchainUsedCount = await fetchDiscountMintRecordUsedCount(routeConnection, publicKey, mintDrop);
-      const onchainRemainingCount = Math.max(0, onchainDiscountAllowance - onchainUsedCount);
-      if (quantity > onchainRemainingCount) {
-        setDiscountRemainingCount(onchainRemainingCount);
-        setDiscountEligible(onchainRemainingCount > 0);
-        if (connectedWallet) persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, onchainUsedCount);
-        if (onchainRemainingCount > 0) {
-          showToast(`Discount available for up to ${dropAssetCount(mintDrop, 'box', onchainRemainingCount)}`);
-        } else {
-          showToast('Wallet is not eligible for the discount');
+    await runMintWorkflow({
+      mode,
+      quantity,
+      drop: mintDrop,
+      discountRemainingCount,
+      lock: mintActionLockRef,
+    }, {
+      setBusy: mode === 'discount' ? setDiscountMinting : setMinting,
+      getDiscountProof: () => getDiscountProof(mintDrop.dropId, publicKey.toBase58()),
+      fetchConfig: () => fetchBoxMinterConfig(routeConnection, mintDrop),
+      fetchDiscountUsedCount: () => fetchDiscountMintRecordUsedCount(routeConnection, publicKey, mintDrop),
+      buildTransaction: (config, proof) => {
+        if (proof) {
+          return mintDrop.mintSelection?.kind === 'size'
+            ? buildMintDiscountedVariantBoxTxWithAccounts(routeConnection, config, publicKey, variantKey || '', proof, mintDrop)
+            : buildMintDiscountedBoxTxWithAccounts(routeConnection, config, publicKey, quantity, proof, mintDrop);
         }
-        return;
-      }
-      const sendOnce = async () => {
-        const { tx, boxAccounts } =
-          mintDrop.mintSelection?.kind === 'size'
-            ? await buildMintDiscountedVariantBoxTxWithAccounts(routeConnection, cfg, publicKey, variantKey || '', proof, mintDrop)
-            : await buildMintDiscountedBoxTxWithAccounts(routeConnection, cfg, publicKey, quantity, proof, mintDrop);
-        mintedBoxAssetIds = boxAccounts.map((account) => account.toBase58());
-        return sendAndConfirmMintViaConnection(tx, routeConnection, {
-          onAlreadyProcessedWithoutSignature: (err) =>
-            recoverAlreadyProcessedAccounts(routeConnection, boxAccounts, err),
-        });
-      };
-      const hasConfirmationError = await retryAfterBlockhashExpiry(
-        sendOnce,
-        'Transaction expired before you approved it. Please approve again…',
-      );
-      if (!hasConfirmationError) {
-        registerRecentExpectedInventoryAssets(
-          publicKey.toBase58(),
-          mintDrop.solanaCluster,
-          mintedBoxAssetIds,
-        );
-        addLocalMintedBoxes(mintedQuantity, mintDrop.dropId, mintedBoxAssetIds);
+        return mintDrop.mintSelection?.kind === 'size'
+          ? buildMintVariantBoxTxWithAccounts(routeConnection, config, publicKey, variantKey || '', mintDrop)
+          : buildMintBoxesTxWithAccounts(routeConnection, config, publicKey, quantity, mintDrop);
+      },
+      sendAndConfirm: ({ tx, boxAccounts }) => sendAndConfirmMintViaConnection(tx, routeConnection, {
+        onAlreadyProcessedWithoutSignature: (error) => recoverAlreadyProcessedAccounts(routeConnection, boxAccounts, error),
+      }),
+      onConfirmed: (mintedQuantity, assetIds) => {
+        registerRecentExpectedInventoryAssets(publicKey.toBase58(), mintDrop.solanaCluster, assetIds);
+        addLocalMintedBoxes(mintedQuantity, mintDrop.dropId, assetIds);
         setSuccessfulMintToken((prev) => prev + 1);
-        didConfirmMint = true;
-      }
-      const nextUsedCount = hasConfirmationError ? onchainUsedCount : onchainUsedCount + mintedQuantity;
-      const nextRemainingCount = hasConfirmationError
-        ? onchainRemainingCount
-        : Math.max(0, onchainDiscountAllowance - nextUsedCount);
-      setDiscountRemainingCount(nextRemainingCount);
-      setDiscountEligible(nextRemainingCount > 0);
-      if (connectedWallet) persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, nextUsedCount);
-      await Promise.all([
+      },
+      updateDiscount: (remainingCount, usedCount) => {
+        setDiscountRemainingCount(remainingCount);
+        setDiscountEligible(remainingCount > 0);
+        if (usedCount !== undefined) {
+          persistDiscountUsedCount(activeDiscountScope, activeDiscountVersion, connectedWallet, usedCount);
+        }
+      },
+      refresh: (confirmed) => Promise.all([
         shouldFetchMintStats ? refetchStats() : Promise.resolve(),
-        didConfirmMint ? refreshInventoryAfterMint() : refetchInventory(),
-      ]);
-    } catch (err) {
-      if (isUserRejectedError(err)) return;
-      if (didConfirmMint) {
-        console.warn('Discount mint succeeded but failed to refresh mint state', err);
-        return;
-      }
-      showToast(err instanceof Error ? err.message : `Failed to mint discounted ${boxLabelForDropId(mintDrop.dropId)}`);
-      return;
-    } finally {
-      if (mintActionLockRef.current === 'discount') {
-        mintActionLockRef.current = null;
-      }
-      setDiscountMinting(false);
-    }
+        confirmed ? refreshInventoryAfterMint() : refetchInventory(),
+      ]),
+      isUserRejectedError,
+      showToast,
+      warn: (message, error) => console.warn(message, error),
+    });
   };
+
+  const handleMint = (quantity: number, variantKey?: string) => handleSolanaMint('mint', quantity, variantKey);
+  const handleDiscountMint = (quantity: number, variantKey?: string) => handleSolanaMint('discount', quantity, variantKey);
 
   const handleStripePayment = async (quantity: number, variantKey?: string) => {
     if (blockViewerModeAction()) return;
