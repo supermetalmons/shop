@@ -1,4 +1,5 @@
 import {
+  CommerceRepositoryError,
   CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
@@ -10,6 +11,8 @@ import {
   type CommerceUnitOfWork,
   type CommerceUpdateValue,
 } from './commerceRepository.js';
+import { isSignalCancellationError } from './boundedRequest.js';
+import { ProfileReadError } from './dataAccess.js';
 
 const COMMERCE_TRANSACTION_ATTEMPTS = 6;
 const COMMERCE_TRANSACTION_RETRY_DELAYS_MS = [50, 100, 200, 400, 800] as const;
@@ -88,7 +91,7 @@ function sleepForCommerceRetry(
   });
 }
 
-export async function retryCommerceConflicts<T>(
+async function retryCommerceConflicts<T>(
   operation: (attempt: number) => Promise<T>,
   options: CommerceConflictRetryOptions = {},
 ): Promise<T> {
@@ -162,9 +165,20 @@ export async function readCommerceDocument(
   transaction?: CommerceUnitOfWork,
 ): Promise<CommerceDocument | null> {
   const key = commerceDocumentKey(path);
-  const record = transaction
-    ? await transaction.get(key)
-    : await commerceRepository(context).get(key);
+  if (!transaction) return commerceDocument(await commerceRepository(context).get(key));
+  let record: CommerceDocumentRecord | null;
+  try {
+    record = await transaction.get(key);
+  } catch (error) {
+    if (
+      error instanceof ProfileReadError ||
+      error instanceof CommerceWriteConflict ||
+      isSignalCancellationError(context.signal, error)
+    ) throw error;
+    const unavailable = new CommerceRepositoryError('unavailable', 'Commerce data is temporarily unavailable.');
+    unavailable.cause = error;
+    throw unavailable;
+  }
   return commerceDocument(record);
 }
 

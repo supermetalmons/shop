@@ -441,7 +441,14 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       nowMs: 1_000,
       wallet: PROFILE_WALLET,
     });
-    assert.equal(initialSession.revision, 1);
+    assert.deepEqual(initialSession, {
+      authSubject: sessionUid,
+      wallet: PROFILE_WALLET,
+      updatedAtMs: 1_000,
+      revision: 1,
+      reconcileLeaseId: null,
+      reconcileLeaseExpiresAtMs: null,
+    });
     const reboundSession = await establishD1AuthWalletBinding({
       baseline: initialSession,
       db: env.OPS_DB,
@@ -449,7 +456,12 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       nowMs: 2_000,
       wallet: RACE_WALLET,
     });
-    assert.equal(reboundSession.revision, 2);
+    assert.deepEqual(reboundSession, {
+      ...initialSession,
+      wallet: RACE_WALLET,
+      updatedAtMs: 2_000,
+      revision: 2,
+    });
     await assert.rejects(
       establishD1AuthWalletBinding({
         baseline: initialSession,
@@ -474,8 +486,13 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
       nowMs: 5_000,
       wallet: RACE_WALLET,
     });
-    assert.equal(renewedDuringLease.wallet, RACE_WALLET);
-    assert.equal(renewedDuringLease.revision, 3);
+    assert.deepEqual(renewedDuringLease, {
+      ...reboundSession,
+      updatedAtMs: 5_000,
+      revision: 3,
+      reconcileLeaseId: lease!.id,
+      reconcileLeaseExpiresAtMs: lease!.expiresAtMs,
+    });
     await assert.rejects(
       establishD1AuthWalletBinding({
         baseline: reboundSession,

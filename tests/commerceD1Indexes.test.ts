@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
-import { READY_NOTIFICATION_DUE_SQL } from '../shared/readyNotificationDueSql.ts';
+import {
+  adminIrlRedeemWorkflowStatusQuery,
+  deliveryOrdersByOwnerQuery,
+  deliveryRecoveryOrdersQuery,
+  duePackStatusProjectionsQuery,
+  dueReadyNotificationsQuery,
+  dueStripeTerminalNotificationsQuery,
+  pendingReadyNotificationsQuery,
+  staleStripeFulfillmentsQuery,
+  type CommerceSqlQuery,
+} from '../cloud/workers/api/src/commerceQueries.ts';
 
 const schemaSql = readFileSync(
   new URL('../cloud/workers/api/commerce-migrations/0001_current_schema.sql', import.meta.url),
@@ -210,8 +220,8 @@ function indexColumns(db: DatabaseSync, name: string): string[] {
   return db.prepare(`PRAGMA index_info(${name})`).all().map((row) => String(row.name));
 }
 
-function planDetails(db: DatabaseSync, sql: string, ...bindings: SQLInputValue[]): string {
-  return db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...bindings).map((row) => String(row.detail)).join('\n');
+function planDetails(db: DatabaseSync, query: CommerceSqlQuery): string {
+  return db.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.bindings).map((row) => String(row.detail)).join('\n');
 }
 
 test('Commerce migrations create the exact current authority and guard schema', () => {
@@ -1217,20 +1227,11 @@ test('Admin IRL Workflow status lookup searches its operation index without temp
         data: { workflowFinalizeV1: { operationId } },
       });
     });
-    const sql = `SELECT document_path, document_kind, drop_id, document_id, document_json,
-        version, create_time, update_time, processed_at_seconds, processed_at_nanos
-      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
-      WHERE
-        authority.singleton = 1 AND
-        document_kind = 'admin_irl_redeem_request' AND
-        json_type(document_json, '$.workflowFinalizeV1.operationId') = 'text' AND
-        json_extract(document_json, '$.workflowFinalizeV1.operationId') = ?
-      ORDER BY document_path ASC
-      LIMIT 2`;
-    const plan = planDetails(db, sql, operationId);
+    const query = adminIrlRedeemWorkflowStatusQuery(operationId);
+    const plan = planDetails(db, query);
     assert.match(plan, /SEARCH commerce_documents USING INDEX commerce_admin_irl_redeem_workflow_operation \(<expr>=\?\)/);
     assert.doesNotMatch(plan, /USE TEMP B-TREE/);
-    assert.deepEqual(db.prepare(sql).all(operationId).map((row) => row.document_path), [
+    assert.deepEqual(db.prepare(query.sql).all(...query.bindings).map((row) => row.document_path), [
       'drops/drop/adminIrlRedeemRequests/100',
       'drops/drop/adminIrlRedeemRequests/101',
     ]);
@@ -1322,98 +1323,39 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     );
     assert.deepEqual(indexColumns(db, 'commerce_stripe_checkouts_reconciliation_due'), ['null', 'document_path']);
     assert.deepEqual(indexColumns(db, 'commerce_stripe_terminal_notifications_due'), ['null', 'document_path']);
-    assert.match(planDetails(db, `SELECT document_path FROM commerce_documents
-      WHERE document_kind = 'delivery_order' AND owner = 'owner'
-      ORDER BY document_path LIMIT 450`), /commerce_documents_delivery_owner_path/);
-    const deliveryRecoveryPlan = planDetails(db, `SELECT
-        document.document_path,
-        document.document_kind,
-        document.drop_id,
-        document.document_id,
-        document.document_json,
-        document.version,
-        document.create_time,
-        document.update_time,
-        document.processed_at_seconds,
-        document.processed_at_nanos
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document.document_kind = 'delivery_order' AND
-        document.owner = ? AND
-        document.status IN ('processing', 'prepared')`, 'owner');
+    const ownerQueryPlan = planDetails(db, deliveryOrdersByOwnerQuery({ owner: 'owner', limit: 450 }));
+    assert.match(ownerQueryPlan, /SEARCH document USING INDEX commerce_documents_delivery_owner_path \(owner=\?\)/);
+    assert.match(ownerQueryPlan, /SEARCH path_revision .*\(document_path=\?\) LEFT-JOIN/);
+    assert.doesNotMatch(ownerQueryPlan, /USE TEMP B-TREE/);
+    const deliveryRecoveryPlan = planDetails(db, deliveryRecoveryOrdersQuery('owner'));
     assert.match(
       deliveryRecoveryPlan,
       /SEARCH document USING INDEX commerce_documents_delivery_owner_status \(document_kind=\? AND owner=\? AND status=\?\)/,
     );
     assert.doesNotMatch(deliveryRecoveryPlan, /USE TEMP B-TREE/);
-    const ownerNotificationPlan = planDetails(db, `WITH candidate_paths AS (
-      SELECT document_path FROM commerce_documents
-        INDEXED BY commerce_delivery_orders_buyer_notifications_pending_owner_path
-      WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
-        AND buyer_notification_state = 'pending' AND owner = ? AND document_path > ?
-      UNION
-      SELECT document_path FROM commerce_documents
-        INDEXED BY commerce_delivery_orders_shipper_notifications_pending_owner_path
-      WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
-        AND shipper_notification_state = 'pending' AND owner = ? AND document_path > ?
-    ) SELECT document_path FROM candidate_paths ORDER BY document_path LIMIT 8`,
-    'owner', 'drops/a/deliveryOrders/1', 'owner', 'drops/a/deliveryOrders/1');
+    for (const owner of [undefined, 'other']) {
+      for (const startAfterPath of [undefined, 'drops/drop/deliveryOrders/100']) {
+        const query = pendingReadyNotificationsQuery({ limit: 8, owner, startAfterPath });
+        const plan = planDetails(db, query);
+        for (const kind of ['buyer', 'shipper']) {
+          const indexName = `commerce_delivery_orders_${kind}_notifications_pending${owner ? '_owner_path' : ''}`;
+          const search = owner
+            ? (startAfterPath ? String.raw` \(owner=\? AND document_path>\?\)` : String.raw` \(owner=\?\)`)
+            : (startAfterPath ? String.raw` \(document_path>\?\)` : String.raw`\b`);
+          assert.match(plan, new RegExp(`${indexName}${search}`));
+        }
+        assert.deepEqual(db.prepare(query.sql).all(...query.bindings).map((row) => row.document_path),
+          startAfterPath
+            ? ['drops/drop/deliveryOrders/200']
+            : ['drops/drop/deliveryOrders/100', 'drops/drop/deliveryOrders/200']);
+      }
+    }
     assert.match(
-      ownerNotificationPlan,
-      /commerce_delivery_orders_buyer_notifications_pending_owner_path \(owner=\? AND document_path>\?\)/,
+      planDetails(db, duePackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 })),
+      /commerce_documents_pack_projection/,
     );
-    assert.match(
-      ownerNotificationPlan,
-      /commerce_delivery_orders_shipper_notifications_pending_owner_path \(owner=\? AND document_path>\?\)/,
-    );
-    const ownerlessNotificationPlan = planDetails(db, `WITH candidate_paths AS (
-      SELECT document_path FROM commerce_documents
-        INDEXED BY commerce_delivery_orders_buyer_notifications_pending
-      WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
-        AND buyer_notification_state = 'pending' AND document_path > ?
-      UNION
-      SELECT document_path FROM commerce_documents
-        INDEXED BY commerce_delivery_orders_shipper_notifications_pending
-      WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
-        AND shipper_notification_state = 'pending' AND document_path > ?
-    ) SELECT document_path FROM candidate_paths ORDER BY document_path LIMIT 8`,
-    'drops/a/deliveryOrders/1', 'drops/a/deliveryOrders/1');
-    assert.match(
-      ownerlessNotificationPlan,
-      /commerce_delivery_orders_buyer_notifications_pending \(document_path>\?\)/,
-    );
-    assert.match(
-      ownerlessNotificationPlan,
-      /commerce_delivery_orders_shipper_notifications_pending \(document_path>\?\)/,
-    );
-    assert.match(planDetails(db, `SELECT document_path FROM commerce_documents
-      WHERE document_kind = 'delivery_order' AND drop_id = 'drop'
-        AND pack_projection_state = 'pending' AND pack_projection_next_attempt_ms <= 1
-      ORDER BY pack_projection_next_attempt_ms, document_path LIMIT 4`), /commerce_documents_pack_projection/);
-    assert.match(planDetails(db, `SELECT document_path FROM commerce_documents
-      WHERE document_kind = 'stripe_checkout'
-        AND fulfillment_processor = 'cloudflare_queue_v1'
-        AND status IN ('fulfillment_pending', 'processing')
-        AND json_type(document_json, '$.updatedAt') IN ('integer', 'real')
-        AND json_type(document_json, '$.lastStripeWebhookEventId') = 'text'
-        AND CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) <= 1
-      ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER), document_path LIMIT 100`),
-    /commerce_stripe_checkouts_reconciliation_due/);
-    const terminalNotificationPlan = planDetails(db, `SELECT document_path
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents INDEXED BY commerce_stripe_terminal_notifications_due
-      WHERE
-        authority.singleton = 1 AND authority.authority_state = 'd1' AND
-        document_kind = 'stripe_checkout' AND
-        (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
-        json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending' AND
-        CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER) <= ?
-      ORDER BY CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER),
-        document_path
-      LIMIT ?`, 1, 20);
+    assert.match(planDetails(db, staleStripeFulfillmentsQuery(1)), /commerce_stripe_checkouts_reconciliation_due/);
+    const terminalNotificationPlan = planDetails(db, dueStripeTerminalNotificationsQuery({ dueAtMs: 1, limit: 20 }));
     assert.match(terminalNotificationPlan, /SEARCH commerce_documents USING INDEX commerce_stripe_terminal_notifications_due/);
   } finally {
     db.close();
@@ -1453,17 +1395,12 @@ test('ready-notification due index upgrades populated Commerce without changing 
     assert.deepEqual(db.prepare('SELECT * FROM commerce_documents ORDER BY document_path').all(), before);
     assert.deepEqual(db.prepare('SELECT * FROM commerce_authority_control').all(), authorityBefore);
     assert.deepEqual(db.prepare('SELECT * FROM commerce_document_path_revisions ORDER BY document_path').all(), revisionsBefore);
-    const { indexName, dueAtExpression, pendingPredicate } = READY_NOTIFICATION_DUE_SQL;
-    const sql = `SELECT document_path FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents INDEXED BY ${indexName}
-      WHERE authority.singleton = 1 AND authority.authority_state = 'd1' AND
-        ${pendingPredicate} AND (${dueAtExpression}) <= ?
-      ORDER BY (${dueAtExpression}), document_path LIMIT ?`;
-    const plan = planDetails(db, sql, 10, 8);
+    const query = dueReadyNotificationsQuery({ dueAtMs: 10, limit: 8 });
+    const plan = planDetails(db, query);
     assert.match(plan, /SEARCH commerce_documents USING INDEX commerce_ready_notifications_due/);
     assert.doesNotMatch(plan, /SCAN commerce_documents|USE TEMP B-TREE/);
     assert.deepEqual(
-      db.prepare(sql).all(10, 8).map((row) => row.document_path),
+      db.prepare(query.sql).all(...query.bindings).map((row) => row.document_path),
       ['drops/drop/deliveryOrders/unclaimed', 'drops/drop/deliveryOrders/boundary'],
     );
     for (const [kind, column] of [['buyer', 'buyer_notification_state'], ['shipper', 'shipper_notification_state']]) {
@@ -1496,11 +1433,10 @@ test('ready-notification due index treats integral real expiries as leases', () 
         WHERE document_path = 'drops/drop/deliveryOrders/real-expiry'`)
         .run('{"status":"ready_to_ship","buyerOrderReceivedEmailState":"pending","readyToShipNotificationPublishClaimId":"claim","readyToShipNotificationPublishClaimExpiresAtMs":10.0}');
     });
-    const { indexName, dueAtExpression, pendingPredicate } = READY_NOTIFICATION_DUE_SQL;
-    const statement = db.prepare(`SELECT document_path FROM commerce_documents INDEXED BY ${indexName}
-      WHERE ${pendingPredicate} AND (${dueAtExpression}) <= ? ORDER BY (${dueAtExpression}), document_path LIMIT 8`);
-    assert.deepEqual(statement.all(9), []);
-    assert.equal(statement.all(10).length, 1);
+    for (const [dueAtMs, expectedCount] of [[9, 0], [10, 1]]) {
+      const query = dueReadyNotificationsQuery({ dueAtMs, limit: 8 });
+      assert.equal(db.prepare(query.sql).all(...query.bindings).length, expectedCount);
+    }
   } finally {
     db.close();
   }

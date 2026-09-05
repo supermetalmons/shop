@@ -113,9 +113,9 @@ import {
 } from './adminIrlRedeemOnchain.js';
 import {
   createDeliveryPackStatusProjectionOutbox,
-  deliveryReceiptRuntime,
   projectPendingDeliveryPackStatus,
-} from './deliveryReceipts.js';
+} from './deliveryPackStatusOutbox.js';
+import { deliveryReceiptRuntime } from './deliveryReceipts.js';
 import {
   DeliveryReceiptError,
   buildTransaction as buildDeliveryTransaction,

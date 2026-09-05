@@ -1,8 +1,7 @@
 import { commerceFieldValue, type CommerceDocumentWriteData } from './commerceRepository.js';
 import {
-  commitCommerceWrites as commitWrites,
   readCommerceDocument as readDocument,
-  retryCommerceConflicts,
+  runCommerceWriteTransaction,
   updateCommerceWrite as updateWrite,
   type CommerceDocument,
   type CommerceDocumentContext,
@@ -62,18 +61,18 @@ async function markReadyToShipNotificationsQueued(
   claimId: string,
   pending: readonly PendingReadyToShipNotification[],
 ): Promise<string[]> {
-  return retryCommerceConflicts(async () => {
-    const document = await readDocument(context, documentPath);
+  return runCommerceWriteTransaction(context, async (transaction) => {
+    const document = await readDocument(context, documentPath, transaction);
     if (
       !document ||
       document.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] !== claimId
-    ) return [];
+    ) return { result: [] };
     const matching = pending.filter((marker) => (
       document.fields[marker.stateField] === READY_TO_SHIP_NOTIFICATION_PENDING &&
       document.fields[marker.jobIdField] === marker.jobId &&
       document.fields[marker.idempotencyKeyField] === marker.idempotencyKey
     ));
-    if (!matching.length) return [];
+    if (!matching.length) return { result: [] };
     const matchingStateFields = new Set(matching.map((marker) => marker.stateField));
     const hasRemainingPendingMarker = [
       BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
@@ -91,13 +90,11 @@ async function markReadyToShipNotificationsQueued(
       values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] = commerceFieldValue.delete();
       values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD] = commerceFieldValue.delete();
     }
-    await commitWrites(context, [updateWrite({
-      path: documentPath,
-      values,
-      expectedUpdateTime: document.updateTime,
-    })]);
-    return matching.map((marker) => marker.kind);
-  }, { signal: context.signal });
+    return {
+      result: matching.map((marker) => marker.kind),
+      writes: [updateWrite({ path: documentPath, values, mustExist: true })],
+    };
+  });
 }
 
 type ReadyToShipNotificationClaim = {
@@ -122,20 +119,20 @@ async function claimReadyToShipNotifications(args: {
   dropId: string;
 }): Promise<ReadyToShipNotificationClaimResult> {
   const nowMs = Math.max(0, Math.floor(args.context.nowMs));
-  return retryCommerceConflicts(async () => {
-    const document = await readDocument(args.context, args.documentPath);
-    if (!document) return { outcome: 'none' };
+  return runCommerceWriteTransaction<ReadyToShipNotificationClaimResult>(args.context, async (transaction) => {
+    const document = await readDocument(args.context, args.documentPath, transaction);
+    if (!document) return { result: { outcome: 'none' } };
     const inspection = inspectPendingReadyToShipNotifications(document.fields, {
       deliveryId: args.deliveryId,
       dropId: args.dropId,
     });
-    if (!inspection.pending.length) return { outcome: 'none' };
+    if (!inspection.pending.length) return { result: { outcome: 'none' } };
     const activeClaimId = document.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD];
     const claimExpiresAtMs = readyToShipNotificationNonNegativeInteger(
       document.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD],
     );
     if (typeof activeClaimId === 'string' && activeClaimId && claimExpiresAtMs !== null && claimExpiresAtMs > nowMs) {
-      return { outcome: 'busy' };
+      return { result: { outcome: 'busy' } };
     }
     const retryUntilMs = readyToShipNotificationNonNegativeInteger(
       document.fields[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD],
@@ -150,43 +147,47 @@ async function claimReadyToShipNotifications(args: {
       (attemptCount > 0 && retryUntilMs <= nowMs)
     ) {
       const stateFields = inspection.pending.map((marker) => marker.stateField);
-      await commitWrites(args.context, [updateWrite({
-        path: args.documentPath,
-        values: {
-          ...Object.fromEntries(stateFields.map((stateField) => [stateField, READY_TO_SHIP_NOTIFICATION_FAILED])),
-          [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: 'manual-review-required',
-          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
-          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
-          [READY_NOTIFICATION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
-        },
-        expectedUpdateTime: document.updateTime,
-      })]);
-      return { outcome: 'manual-review' };
+      return {
+        result: { outcome: 'manual-review' },
+        writes: [updateWrite({
+          path: args.documentPath,
+          values: {
+            ...Object.fromEntries(stateFields.map((stateField) => [stateField, READY_TO_SHIP_NOTIFICATION_FAILED])),
+            [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: 'manual-review-required',
+            [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
+            [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
+            [READY_NOTIFICATION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
+          },
+          mustExist: true,
+        })],
+      };
     }
     const claimId = crypto.randomUUID();
-    await commitWrites(args.context, [updateWrite({
-      path: args.documentPath,
-      values: {
-        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: claimId,
-        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]:
-          nowMs + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
-        [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: attemptCount + 1,
-        [READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]: attemptCount === 0
-          ? nowMs + READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS
-          : retryUntilMs,
-      },
-      expectedUpdateTime: document.updateTime,
-    })]);
     return {
-      outcome: 'claimed',
-      claim: {
-        claimId,
-        document,
-        pending: inspection.pending,
-        previousAttemptCount: attemptCount,
+      result: {
+        outcome: 'claimed',
+        claim: {
+          claimId,
+          document,
+          pending: inspection.pending,
+          previousAttemptCount: attemptCount,
+        },
       },
+      writes: [updateWrite({
+        path: args.documentPath,
+        values: {
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: claimId,
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]:
+            nowMs + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: attemptCount + 1,
+          [READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]: attemptCount === 0
+            ? nowMs + READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS
+            : retryUntilMs,
+        },
+        mustExist: true,
+      })],
     };
-  }, { signal: args.context.signal });
+  });
 }
 
 async function releaseReadyToShipNotificationClaim(
@@ -194,23 +195,25 @@ async function releaseReadyToShipNotificationClaim(
   documentPath: string,
   claim: ReadyToShipNotificationClaim,
 ): Promise<boolean> {
-  return retryCommerceConflicts(async () => {
-    const document = await readDocument(context, documentPath);
+  return runCommerceWriteTransaction(context, async (transaction) => {
+    const document = await readDocument(context, documentPath, transaction);
     if (
       !document ||
       document.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] !== claim.claimId
-    ) return false;
-    await commitWrites(context, [updateWrite({
-      path: documentPath,
-      values: {
-        [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: claim.previousAttemptCount,
-        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
-        [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
-      },
-      expectedUpdateTime: document.updateTime,
-    })]);
-    return true;
-  }, { signal: context.signal });
+    ) return { result: false };
+    return {
+      result: true,
+      writes: [updateWrite({
+        path: documentPath,
+        values: {
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: claim.previousAttemptCount,
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
+          [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
+        },
+        mustExist: true,
+      })],
+    };
+  });
 }
 
 export async function markPendingReadyToShipNotificationsFailed(
@@ -219,9 +222,9 @@ export async function markPendingReadyToShipNotificationsFailed(
   errorCode: string,
   targetStateFields?: readonly string[],
 ): Promise<string[]> {
-  return retryCommerceConflicts(async () => {
-    const document = await readDocument(context, documentPath);
-    if (!document) return [];
+  return runCommerceWriteTransaction(context, async (transaction) => {
+    const document = await readDocument(context, documentPath, transaction);
+    if (!document) return { result: [] };
     const stateFields = [
       BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD,
       SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD,
@@ -229,20 +232,22 @@ export async function markPendingReadyToShipNotificationsFailed(
       document.fields[fieldPath] === READY_TO_SHIP_NOTIFICATION_PENDING &&
       (!targetStateFields || targetStateFields.includes(fieldPath))
     ));
-    if (!stateFields.length) return [];
-    await commitWrites(context, [updateWrite({
-      path: documentPath,
-      values: {
-        ...Object.fromEntries(
-          stateFields.map((fieldPath) => [fieldPath, READY_TO_SHIP_NOTIFICATION_FAILED]),
-        ),
-        [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: errorCode,
-        [READY_NOTIFICATION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
-      },
-      expectedUpdateTime: document.updateTime,
-    })]);
-    return stateFields;
-  }, { signal: context.signal });
+    if (!stateFields.length) return { result: [] };
+    return {
+      result: stateFields,
+      writes: [updateWrite({
+        path: documentPath,
+        values: {
+          ...Object.fromEntries(
+            stateFields.map((fieldPath) => [fieldPath, READY_TO_SHIP_NOTIFICATION_FAILED]),
+          ),
+          [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: errorCode,
+          [READY_NOTIFICATION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
+        },
+        mustExist: true,
+      })],
+    };
+  });
 }
 
 export async function publishReadyToShipNotifications(args: {

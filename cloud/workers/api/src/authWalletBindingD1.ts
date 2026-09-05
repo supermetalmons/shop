@@ -6,6 +6,13 @@ import {
 
 const AUTH_WALLET_BINDING_RECONCILE_LEASE_MS = 120_000;
 const AUTH_WALLET_BINDING_WRITE_ATTEMPTS = 5;
+const AUTH_WALLET_BINDING_COLUMNS = `
+  auth_subject,
+  wallet,
+  updated_at_ms,
+  revision,
+  reconcile_lease_id,
+  reconcile_lease_expires_at_ms`;
 
 export type D1AuthWalletBinding = {
   authSubject: string;
@@ -97,13 +104,7 @@ export async function loadD1AuthWalletBinding(
   signal?: AbortSignal,
 ): Promise<D1AuthWalletBinding | null> {
   throwIfAborted(signal);
-  const row = await db.prepare(`SELECT
-      auth_subject,
-      wallet,
-      updated_at_ms,
-      revision,
-      reconcile_lease_id,
-      reconcile_lease_expires_at_ms
+  const row = await db.prepare(`SELECT ${AUTH_WALLET_BINDING_COLUMNS}
     FROM auth_wallet_bindings
     WHERE auth_subject = ?`)
     .bind(authSubject)
@@ -126,14 +127,14 @@ function leaseActive(binding: D1AuthWalletBinding, nowMs: number): boolean {
     binding.reconcileLeaseExpiresAtMs > nowMs;
 }
 
-async function requireD1AuthWalletBinding(
-  db: D1Database,
-  authSubject: string,
+async function writeD1AuthWalletBinding(
+  statement: D1PreparedStatement,
   signal?: AbortSignal,
-): Promise<D1AuthWalletBinding> {
-  const binding = await loadD1AuthWalletBinding(db, authSubject, signal);
-  if (!binding) throw new AuthWalletBindingD1InvalidDataError();
-  return binding;
+): Promise<D1AuthWalletBinding | null> {
+  throwIfAborted(signal);
+  const row = await statement.first<Record<string, unknown>>();
+  throwIfAborted(signal);
+  return bindingFromRow(row);
 }
 
 export async function establishD1AuthWalletBinding(args: {
@@ -162,7 +163,7 @@ export async function establishD1AuthWalletBinding(args: {
     const current = await loadD1AuthWalletBinding(args.db, args.authSubject, args.signal);
     if (!current) {
       if (args.baseline) throw new AuthWalletBindingD1SupersededError();
-      const inserted = await args.db.prepare(`INSERT INTO auth_wallet_bindings (
+      const inserted = await writeD1AuthWalletBinding(args.db.prepare(`INSERT INTO auth_wallet_bindings (
           auth_subject,
           wallet,
           updated_at_ms,
@@ -170,33 +171,29 @@ export async function establishD1AuthWalletBinding(args: {
           reconcile_lease_id,
           reconcile_lease_expires_at_ms
         ) VALUES (?, ?, ?, 1, NULL, NULL)
-        ON CONFLICT (auth_subject) DO NOTHING`)
+        ON CONFLICT (auth_subject) DO NOTHING
+        RETURNING ${AUTH_WALLET_BINDING_COLUMNS}`)
         .bind(
           args.authSubject,
           wallet,
           args.nowMs,
-        )
-        .run();
-      if (changed(inserted)) {
-        return requireD1AuthWalletBinding(args.db, args.authSubject, args.signal);
-      }
+        ), args.signal);
+      if (inserted) return inserted;
       continue;
     }
     if (current.wallet === wallet) {
-      const renewed = await args.db.prepare(`UPDATE auth_wallet_bindings
+      const renewed = await writeD1AuthWalletBinding(args.db.prepare(`UPDATE auth_wallet_bindings
         SET
           updated_at_ms = MAX(updated_at_ms, ?),
           revision = revision + 1
-        WHERE auth_subject = ? AND wallet = ?`)
+        WHERE auth_subject = ? AND wallet = ?
+        RETURNING ${AUTH_WALLET_BINDING_COLUMNS}`)
         .bind(
           args.nowMs,
           args.authSubject,
           wallet,
-        )
-        .run();
-      if (changed(renewed)) {
-        return requireD1AuthWalletBinding(args.db, args.authSubject, args.signal);
-      }
+        ), args.signal);
+      if (renewed) return renewed;
       continue;
     }
     if (
@@ -207,7 +204,7 @@ export async function establishD1AuthWalletBinding(args: {
       throw new AuthWalletBindingD1SupersededError();
     }
     if (leaseActive(current, args.nowMs)) throw new AuthWalletBindingD1BusyError();
-    const rebound = await args.db.prepare(`UPDATE auth_wallet_bindings
+    const rebound = await writeD1AuthWalletBinding(args.db.prepare(`UPDATE auth_wallet_bindings
       SET
         wallet = ?,
         updated_at_ms = MAX(updated_at_ms, ?),
@@ -221,7 +218,8 @@ export async function establishD1AuthWalletBinding(args: {
         (
           reconcile_lease_id IS NULL OR
           reconcile_lease_expires_at_ms <= ?
-        )`)
+        )
+      RETURNING ${AUTH_WALLET_BINDING_COLUMNS}`)
       .bind(
         wallet,
         args.nowMs,
@@ -229,11 +227,8 @@ export async function establishD1AuthWalletBinding(args: {
         current.wallet,
         current.revision,
         args.nowMs,
-      )
-      .run();
-    if (changed(rebound)) {
-      return requireD1AuthWalletBinding(args.db, args.authSubject, args.signal);
-    }
+      ), args.signal);
+    if (rebound) return rebound;
   }
   throw new AuthWalletBindingD1SupersededError();
 }

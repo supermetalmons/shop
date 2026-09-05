@@ -24,6 +24,7 @@ import {
   looksLikeRateLimitOrRpcError,
   mintReceiptsInstruction,
   mplCoreBurnInstruction,
+  runtimeForDrop,
   sendAndConfirmSignedTransaction,
   transactionErrorLogs,
   transactionErrorMessage,
@@ -38,10 +39,6 @@ import {
   summarizeDeliveryReceiptError as summarizeError,
 } from './deliveryReceiptErrors.js';
 import { transactionAccountKeys } from './receiptTransferVerification.js';
-import {
-  API_DROPS,
-  getApiDrop,
-} from './dropConfig.js';
 import {
   IRL_CLAIM_CODE_DIGITS,
   IRL_CLAIM_CODE_NAMESPACE,
@@ -64,15 +61,6 @@ import {
   preparedDeliveryRecoveryNextCheckMs,
   processingDeliveryRecoveryNextCheckMs,
 } from '../../../../shared/deliveryRecovery.js';
-import {
-  PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD,
-  PACK_STATUS_PROJECTION_PENDING,
-  PACK_STATUS_PROJECTION_STATE_FIELD,
-} from '../../../../shared/deliveryPackStatusProjectionReconciliation.js';
-import {
-  BOX_MINTER_CONFIG_SEED,
-  isConfiguredBoxMinterItemsPerBox,
-} from '../../../../shared/boxMinterProtocol.js';
 import type {
   DeliveryRecoveryOutcome,
   IssueReceiptsResult,
@@ -81,17 +69,6 @@ import type {
   WalletDeliveryRecoveryState,
 } from '../../../../shared/contracts.js';
 import { normalizeDropId } from '../../../../shared/deploymentCore.js';
-import {
-  isAdminIrlRedeemDeliveryOrderSource,
-  isStripeOffchainDeliveryOrderSource,
-} from '../../../../shared/fulfillmentSources.js';
-import {
-  countDeliveryOrderBoxItems,
-  countDeliveryOrderDudeItems,
-  packStatusCardsPerPack,
-  shouldTrackPackStatusForDrop,
-  type PackStatusEvent,
-} from '../../../../shared/packStatus.js';
 import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
@@ -102,7 +79,6 @@ import {
   createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
-  raceWithSignal,
   readBoundedRequestJson,
   runCriticalRequestOperation,
   sleepWithSignal,
@@ -133,7 +109,6 @@ import {
   commerceTimestamp,
   createCommerceWrite as createWrite,
   readCommerceDocument as readDocument,
-  retryCommerceConflicts,
   rollbackCommerceTransaction as rollbackTransactionBestEffort,
   runCommerceWriteTransaction,
   updateCommerceWrite as updateWrite,
@@ -147,9 +122,11 @@ import {
   publishReadyToShipNotifications,
   ReadyToShipNotificationEnqueueError,
 } from './readyToShipNotificationOutbox.js';
-import { applyPackStatusProjection } from './packStatusProjection.js';
 import {
-  registerDeferredWork,
+  createDeliveryPackStatusProjectionOutbox,
+  scheduleDeliveryPackStatusProjection,
+} from './deliveryPackStatusOutbox.js';
+import {
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
 } from './deferredWork.js';
@@ -160,17 +137,7 @@ export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
 const REQUEST_MAX_BYTES = 4096;
 const HANDLER_TIMEOUT_MS = 55_000;
 const CLEANUP_TIMEOUT_MS = 5_000;
-const PACK_STATUS_TIMEOUT_MS = 10_000;
 const PENDING_READY_NOTIFICATION_QUERY_PAGE_SIZE = 8;
-const PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE = 4;
-const PACK_STATUS_PROJECTION_RECONCILIATION_CONCURRENCY = 2;
-const PACK_STATUS_PROJECTION_BACKOFF_MS = [5 * 60_000, 15 * 60_000, 60 * 60_000, 6 * 60 * 60_000, 24 * 60 * 60_000] as const;
-const PACK_STATUS_PROJECTION_COMPLETED = 'completed';
-const PACK_STATUS_PROJECTION_FAILED = 'failed';
-const PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD = 'packStatusProjectionFailureCount';
-const PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD = 'packStatusProjectionCompletedAt';
-const PACK_STATUS_PROJECTION_FAILED_AT_FIELD = 'packStatusProjectionFailedAt';
-const PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD = 'packStatusProjectionLastErrorCode';
 const TX_MAX_SEND_ATTEMPTS = 3;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
 const DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS = 4 * 60_000;
@@ -213,13 +180,6 @@ class ReceiptBatchRetryExhaustedError extends DeliveryReceiptError {
       lastError: transactionErrorMessage(lastError),
     });
     this.name = 'ReceiptBatchRetryExhaustedError';
-  }
-}
-
-class DeliveryPackStatusProjectionInvalidError extends Error {
-  constructor(readonly code: string, message: string) {
-    super(message);
-    this.name = 'DeliveryPackStatusProjectionInvalidError';
   }
 }
 
@@ -350,56 +310,6 @@ function canonicalPublicKey(value: string, label: string): PublicKey {
   } catch {
     throw new DeliveryReceiptError('invalid-argument', `Invalid ${label}.`);
   }
-}
-
-function configuredPublicKey(value: string | undefined, label: string, required = true): PublicKey {
-  const normalized = String(value || '').trim();
-  if (!normalized) {
-    if (!required) return PublicKey.default;
-    throw new DeliveryReceiptError('failed-precondition', `${label} is not configured.`);
-  }
-  try {
-    const key = new PublicKey(normalized);
-    if (required && key.equals(PublicKey.default)) {
-      throw new DeliveryReceiptError('failed-precondition', `${label} is not configured.`);
-    }
-    return key;
-  } catch (error) {
-    if (error instanceof DeliveryReceiptError) throw error;
-    throw new DeliveryReceiptError('failed-precondition', `${label} is invalid.`);
-  }
-}
-
-function runtimeForDrop(rawDropId: string): DeliveryRuntime {
-  const dropId = normalizeDropId(rawDropId);
-  const config = getApiDrop(dropId);
-  if (!config) throw new DeliveryReceiptError('invalid-argument', `Unsupported dropId: ${dropId}`);
-  const itemsPerBox = Number(config.itemsPerBox);
-  const maxSupply = Number(config.maxSupply);
-  const maxDudeId = itemsPerBox * maxSupply;
-  if (
-    !isConfiguredBoxMinterItemsPerBox(itemsPerBox) ||
-    !Number.isInteger(maxSupply) || maxSupply < 1 || maxSupply > 0xffff_ffff ||
-    !Number.isSafeInteger(maxDudeId) || maxDudeId > 0xffff
-  ) {
-    throw new DeliveryReceiptError('failed-precondition', 'Delivery drop configuration is invalid.', { dropId });
-  }
-  const boxMinterProgramId = configuredPublicKey(config.boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
-  const boxMinterConfigPda = configuredPublicKey(config.boxMinterConfigPda, 'BOX_MINTER_CONFIG_PDA', false);
-  return {
-    config,
-    dropId,
-    cluster: config.solanaCluster,
-    boxMinterProgramId,
-    boxMinterConfigPda: boxMinterConfigPda.equals(PublicKey.default)
-      ? PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0]
-      : boxMinterConfigPda,
-    collectionMint: configuredPublicKey(config.collectionMint, 'COLLECTION_MINT'),
-    receiptsMerkleTree: configuredPublicKey(config.receiptsMerkleTree, 'RECEIPTS_MERKLE_TREE'),
-    itemsPerBox,
-    maxSupply,
-    maxDudeId,
-  };
 }
 
 function commerceString(value: string): string {
@@ -713,30 +623,33 @@ async function cancelDeliveryRecoveryAttempt(
     previousLastAttemptAt: CommerceJsonValue | undefined;
   },
 ): Promise<void> {
-  return retryCommerceConflicts(async () => {
-    const document = await readDocument(context, path);
-    if (!document) return;
+  return runCommerceWriteTransaction(context, async (transaction) => {
+    const document = await readDocument(context, path, transaction);
+    if (!document) return { result: undefined };
     const recovery = isRecord(document.fields.receiptRecovery) ? document.fields.receiptRecovery : {};
     const leaseExpiresAt = toMillisMaybe(recovery.leaseExpiresAt);
     if (
       leaseExpiresAt === null || leaseExpiresAt < lease.leaseExpiresAtMs ||
       toMillisMaybe(recovery.lastAttemptAt) !== lease.lastAttemptAtMs ||
       Number(recovery.attemptCount) !== lease.attemptCount
-    ) return;
-    await commitWrites(context, [updateWrite({
-      path,
-      values: {
-        'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
-        'receiptRecovery.lastAttemptAt': lease.previousLastAttemptAt === undefined
-          ? commerceFieldValue.delete()
-          : lease.previousLastAttemptAt,
-        'receiptRecovery.attemptCount': lease.previousAttemptCount === undefined
-          ? commerceFieldValue.delete()
-          : lease.previousAttemptCount,
-      },
-      expectedUpdateTime: document.updateTime,
-    })]);
-  }, { signal: context.signal });
+    ) return { result: undefined };
+    return {
+      result: undefined,
+      writes: [updateWrite({
+        path,
+        values: {
+          'receiptRecovery.leaseExpiresAt': commerceFieldValue.delete(),
+          'receiptRecovery.lastAttemptAt': lease.previousLastAttemptAt === undefined
+            ? commerceFieldValue.delete()
+            : lease.previousLastAttemptAt,
+          'receiptRecovery.attemptCount': lease.previousAttemptCount === undefined
+            ? commerceFieldValue.delete()
+            : lease.previousAttemptCount,
+        },
+        mustExist: true,
+      })],
+    };
+  });
 }
 
 async function finalizeDeliveryRecoveryAttempt(
@@ -1110,464 +1023,6 @@ async function ensureIrlClaimCodeForBox(
     if (error instanceof DeliveryReceiptError) throw error;
     throw mapProviderError(error, 'IRL claim code is temporarily unavailable.');
   }
-}
-
-function shouldProjectNormalIrlPackStatus(
-  runtime: DeliveryRuntime,
-  order: Record<string, unknown>,
-): boolean {
-  if (!shouldTrackPackStatusForDrop({
-    dropId: runtime.dropId,
-    cluster: runtime.cluster,
-    itemsPerBox: runtime.itemsPerBox,
-    maxSupply: runtime.maxSupply,
-  })) return false;
-  if (isStripeOffchainDeliveryOrderSource(order.source)) return false;
-  if (
-    isAdminIrlRedeemDeliveryOrderSource(order.source) &&
-    isRecord(order.adminIrlRedeem) &&
-    order.adminIrlRedeem.targetKind === 'card_receipt'
-  ) return false;
-  return true;
-}
-
-export function createDeliveryPackStatusProjectionOutbox(
-  runtime: DeliveryRuntime,
-  order: Record<string, unknown>,
-  nowMs = Date.now(),
-): CommerceDocumentWriteData {
-  if (!shouldProjectNormalIrlPackStatus(runtime, order)) return {};
-  if (countDeliveryOrderBoxItems(order.items) < 1 && countDeliveryOrderDudeItems(order.items) < 1) {
-    return {};
-  }
-  const nextAttemptAtMs = Number.isSafeInteger(nowMs) && nowMs >= 0 ? nowMs : Date.now();
-  return {
-    [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
-    [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: nextAttemptAtMs,
-    [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: 0,
-    [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
-    [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
-    [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: commerceFieldValue.delete(),
-  };
-}
-
-async function countNormalIrlPackStatus(
-  context: CommerceContext,
-  runtime: DeliveryRuntime,
-  deliveryId: number,
-  order: Record<string, unknown>,
-): Promise<void> {
-  if (!shouldProjectNormalIrlPackStatus(runtime, order)) return;
-  const packQuantity = countDeliveryOrderBoxItems(order.items);
-  const cardQuantity = countDeliveryOrderDudeItems(order.items);
-  if (packQuantity < 1 && cardQuantity < 1) return;
-  const event: PackStatusEvent = {
-    dropId: runtime.dropId,
-    type: 'redeemedIrlNormal',
-    eventKey: String(deliveryId),
-    quantity: packQuantity * packStatusCardsPerPack(runtime) + cardQuantity,
-    increments: {
-      ...(packQuantity ? { redeemedIrlNormal: packQuantity } : {}),
-      ...(cardQuantity ? { redeemedUnsealedCards: cardQuantity } : {}),
-    },
-    deliveryId,
-    createdAtMs: context.nowMs,
-  };
-  await applyPackStatusProjection({
-    dataDb: context.dataDb,
-    event,
-    log: (entry) => console.warn(entry),
-  });
-}
-
-function deliveryPackStatusProjectionFailureCount(value: unknown): number {
-  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
-}
-
-function deliveryPackStatusProjectionNextAttemptAtMs(value: unknown): number {
-  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0;
-}
-
-function deliveryPackStatusProjectionErrorCode(error: unknown): string {
-  if (error instanceof DeliveryPackStatusProjectionInvalidError) return error.code;
-  if (error instanceof DeliveryReceiptError) return error.code;
-  if (error instanceof DOMException && error.name === 'TimeoutError') return 'deadline-exceeded';
-  if (error instanceof DOMException && error.name === 'AbortError') return 'aborted';
-  if (error instanceof Error && error.message === 'pack_status_data_db_not_configured') {
-    return 'data-db-unavailable';
-  }
-  if (error instanceof Error && error.message === 'pack_status_d1_write_failed') return 'd1-write-failed';
-  return 'internal';
-}
-
-async function transitionDeliveryPackStatusProjection(
-  context: CommerceContext,
-  documentPath: string,
-  options: {
-    values: CommerceDocumentWriteData;
-    requiredState: string;
-  },
-): Promise<boolean> {
-  return retryCommerceConflicts(async () => {
-    const document = await readDocument(context, documentPath);
-    if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== options.requiredState) return false;
-    await commitWrites(context, [updateWrite({
-      path: documentPath,
-      values: options.values,
-      expectedUpdateTime: document.updateTime,
-    })]);
-    return true;
-  }, { signal: context.signal });
-}
-
-async function markDeliveryPackStatusProjectionCompleted(
-  context: CommerceContext,
-  documentPath: string,
-): Promise<boolean> {
-  return transitionDeliveryPackStatusProjection(context, documentPath, {
-    values: {
-      [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_COMPLETED,
-      [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: commerceFieldValue.delete(),
-      [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
-      [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: commerceFieldValue.delete(),
-      [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
-    },
-    requiredState: PACK_STATUS_PROJECTION_PENDING,
-  });
-}
-
-async function markDeliveryPackStatusProjectionFailed(
-  context: CommerceContext,
-  documentPath: string,
-  errorCode: string,
-): Promise<boolean> {
-  return transitionDeliveryPackStatusProjection(context, documentPath, {
-    values: {
-      [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_FAILED,
-      [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: errorCode,
-      [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: commerceFieldValue.delete(),
-      [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
-      [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
-    },
-    requiredState: PACK_STATUS_PROJECTION_PENDING,
-  });
-}
-
-async function clearDeliveryPackStatusProjection(
-  context: CommerceContext,
-  documentPath: string,
-): Promise<boolean> {
-  return transitionDeliveryPackStatusProjection(context, documentPath, {
-    values: {
-      [PACK_STATUS_PROJECTION_STATE_FIELD]: commerceFieldValue.delete(),
-      [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: commerceFieldValue.delete(),
-      [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: commerceFieldValue.delete(),
-      [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
-      [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
-      [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: commerceFieldValue.delete(),
-    },
-    requiredState: PACK_STATUS_PROJECTION_PENDING,
-  });
-}
-
-async function recordDeliveryPackStatusProjectionTransientFailure(args: {
-  attemptStartedAtMs: number;
-  context: CommerceContext;
-  documentPath: string;
-  errorCode: string;
-}): Promise<boolean> {
-  return retryCommerceConflicts(async () => {
-    const document = await readDocument(args.context, args.documentPath);
-    if (!document || document.fields[PACK_STATUS_PROJECTION_STATE_FIELD] !== PACK_STATUS_PROJECTION_PENDING) {
-      return false;
-    }
-    if (
-      deliveryPackStatusProjectionNextAttemptAtMs(
-        document.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD],
-      ) > args.attemptStartedAtMs
-    ) return false;
-    const failureCount = deliveryPackStatusProjectionFailureCount(
-      document.fields[PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD],
-    );
-    const backoffMs = PACK_STATUS_PROJECTION_BACKOFF_MS[
-      Math.min(failureCount, PACK_STATUS_PROJECTION_BACKOFF_MS.length - 1)
-    ];
-    await commitWrites(args.context, [updateWrite({
-      path: args.documentPath,
-      values: {
-        [PACK_STATUS_PROJECTION_STATE_FIELD]: PACK_STATUS_PROJECTION_PENDING,
-        [PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD]: args.attemptStartedAtMs + backoffMs,
-        [PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD]: Math.min(Number.MAX_SAFE_INTEGER, failureCount + 1),
-        [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: args.errorCode,
-        [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
-        [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
-      },
-      expectedUpdateTime: document.updateTime,
-    })]);
-    return true;
-  }, { signal: args.context.signal });
-}
-
-type DeliveryPackStatusProjectionOutcome = 'completed' | 'failed' | 'not-due' | 'not-needed' | 'pending';
-
-export async function projectPendingDeliveryPackStatus(args: {
-  context: CommerceContext;
-  deliveryId: number;
-  dropId: string;
-  log?: (entry: Record<string, unknown>) => void;
-  nowMs?: () => number;
-}): Promise<DeliveryPackStatusProjectionOutcome> {
-  const log = args.log || ((entry: Record<string, unknown>) => console.log(entry));
-  const attemptStartedAtMs = (args.nowMs || Date.now)();
-  const controller = new AbortController();
-  const onAbort = () => {
-    if (!controller.signal.aborted) controller.abort(args.context.signal.reason);
-  };
-  args.context.signal.addEventListener('abort', onAbort, { once: true });
-  if (args.context.signal.aborted) onAbort();
-  const timeout = setTimeout(
-    () => controller.abort(new DOMException('Pack-status projection timed out', 'TimeoutError')),
-    PACK_STATUS_TIMEOUT_MS,
-  );
-  const context: CommerceContext = {
-    ...args.context,
-    nowMs: attemptStartedAtMs,
-    signal: controller.signal,
-  };
-  const documentPath = dropDeliveryOrderPath(args.dropId, args.deliveryId);
-  try {
-    const order = await raceWithSignal(readDocument(context, documentPath), context.signal);
-    if (!order) return 'not-needed';
-    const state = order.fields[PACK_STATUS_PROJECTION_STATE_FIELD];
-    if (state !== PACK_STATUS_PROJECTION_PENDING) return 'not-needed';
-    if (
-      deliveryPackStatusProjectionNextAttemptAtMs(
-        order.fields[PACK_STATUS_PROJECTION_NEXT_ATTEMPT_AT_MS_FIELD],
-      ) > attemptStartedAtMs
-    ) return 'not-due';
-    if (order.fields.status !== 'ready_to_ship') {
-      throw new DeliveryPackStatusProjectionInvalidError(
-        'invalid-order-status',
-        'Pack-status projection order is not ready to ship.',
-      );
-    }
-    const resolution = resolveDeliveryOrderIdentity(order.id, order.fields, order.path);
-    if (
-      !('identity' in resolution) ||
-      resolution.identity.dropId !== args.dropId ||
-      resolution.identity.deliveryId !== args.deliveryId
-    ) {
-      throw new DeliveryPackStatusProjectionInvalidError(
-        'invalid-order-identity',
-        'Pack-status projection order identity is invalid.',
-      );
-    }
-    let runtime: DeliveryRuntime;
-    try {
-      runtime = runtimeForDrop(args.dropId);
-    } catch {
-      throw new DeliveryPackStatusProjectionInvalidError(
-        'invalid-drop',
-        'Pack-status projection drop is invalid.',
-      );
-    }
-    if (!shouldProjectNormalIrlPackStatus(runtime, order.fields)) {
-      await raceWithSignal(clearDeliveryPackStatusProjection(context, order.path), context.signal);
-      log({
-        event: 'delivery_pack_status_projection_skipped',
-        dropId: args.dropId,
-        deliveryId: args.deliveryId,
-      });
-      return 'not-needed';
-    }
-    if (
-      countDeliveryOrderBoxItems(order.fields.items) < 1 &&
-      countDeliveryOrderDudeItems(order.fields.items) < 1
-    ) {
-      throw new DeliveryPackStatusProjectionInvalidError(
-        'invalid-order-items',
-        'Pack-status projection order has no countable items.',
-      );
-    }
-    if (!context.dataDb) throw new Error('pack_status_data_db_not_configured');
-    await raceWithSignal(
-      countNormalIrlPackStatus(context, runtime, args.deliveryId, order.fields),
-      context.signal,
-    );
-    await raceWithSignal(markDeliveryPackStatusProjectionCompleted(context, order.path), context.signal);
-    log({
-      event: 'delivery_pack_status_projection_completed',
-      dropId: args.dropId,
-      deliveryId: args.deliveryId,
-    });
-    return 'completed';
-  } catch (error) {
-    const errorCode = deliveryPackStatusProjectionErrorCode(error);
-    const persistenceContext = cleanupContext(args.context);
-    if (error instanceof DeliveryPackStatusProjectionInvalidError) {
-      await raceWithSignal(
-        markDeliveryPackStatusProjectionFailed(persistenceContext, documentPath, errorCode),
-        persistenceContext.signal,
-      );
-      log({
-        event: 'delivery_pack_status_projection_failed',
-        dropId: args.dropId,
-        deliveryId: args.deliveryId,
-        errorCode,
-        error: summarizeError(error),
-      });
-      return 'failed';
-    }
-    await raceWithSignal(
-      recordDeliveryPackStatusProjectionTransientFailure({
-        attemptStartedAtMs,
-        context: persistenceContext,
-        documentPath,
-        errorCode,
-      }),
-      persistenceContext.signal,
-    );
-    log({
-      event: 'delivery_pack_status_projection_retry_scheduled',
-      dropId: args.dropId,
-      deliveryId: args.deliveryId,
-      errorCode,
-      error: summarizeError(error),
-    });
-    return 'pending';
-  } finally {
-    clearTimeout(timeout);
-    args.context.signal.removeEventListener('abort', onAbort);
-  }
-}
-
-async function runDueDeliveryPackStatusProjectionQuery(
-  context: CommerceContext,
-  dropId: string,
-  dueAtMs: number,
-  limit: number,
-): Promise<DeliveryOrderDocument[]> {
-  const value = await repository(context).queryDuePackStatusProjections({
-    dropId,
-    dueAtMs,
-    limit,
-  });
-  return decodeDeliveryOrderQuery(value, false);
-}
-
-export async function reconcilePendingDeliveryPackStatusProjections(
-  env: Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>,
-  signal: AbortSignal,
-  overrides: {
-    dropIds?: readonly string[];
-    log?: (entry: Record<string, unknown>) => void;
-    nowMs?: () => number;
-    providerFetch?: ProfileProviderFetch;
-  } = {},
-): Promise<number> {
-  const nowMs = overrides.nowMs || Date.now;
-  const dueAtMs = nowMs();
-  const log = overrides.log || ((entry: Record<string, unknown>) => console.log(entry));
-  const context: CommerceContext = {
-    commerceDb: env.COMMERCE_DB,
-    repository: new D1CommerceRepository(env.COMMERCE_DB),
-    nowMs: dueAtMs,
-    providerFetch: overrides.providerFetch || ((input, init) => fetch(input, init)),
-    signal,
-    dataDb: env.DATA_DB,
-  };
-  const lanes = await Promise.all(
-    (overrides.dropIds || Object.keys(API_DROPS).sort()).flatMap((dropId) => {
-      const runtime = runtimeForDrop(dropId);
-      if (!shouldTrackPackStatusForDrop(runtime)) return [];
-      return [runDueDeliveryPackStatusProjectionQuery(
-        context,
-        runtime.dropId,
-        dueAtMs,
-        PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE,
-      ).then((documents) => ({ documents, dropId: runtime.dropId }))];
-    }),
-  );
-  const candidates: Array<{ deliveryId: number; dropId: string }> = [];
-  const errors: unknown[] = [];
-  let inspected = 0;
-  while (
-    inspected < PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE &&
-    lanes.some((lane) => lane.documents.length)
-  ) {
-    for (const lane of lanes) {
-      if (inspected >= PACK_STATUS_PROJECTION_RECONCILIATION_BATCH_SIZE) break;
-      const document = lane.documents.shift();
-      if (!document) continue;
-      inspected += 1;
-      const resolution = resolveDeliveryOrderIdentity(document.id, document.fields, document.path);
-      if (!('identity' in resolution) || resolution.identity.dropId !== lane.dropId) {
-        try {
-          await markDeliveryPackStatusProjectionFailed(
-            cleanupContext(context),
-            document.path,
-            'invalid-order-identity',
-          );
-        } catch (error) {
-          errors.push(error);
-        }
-        continue;
-      }
-      candidates.push({
-        deliveryId: resolution.identity.deliveryId,
-        dropId: lane.dropId,
-      });
-    }
-  }
-  let nextCandidate = 0;
-  const worker = async () => {
-    while (nextCandidate < candidates.length) {
-      if (signal.aborted) {
-        errors.push(signal.reason);
-        return;
-      }
-      const candidate = candidates[nextCandidate];
-      nextCandidate += 1;
-      try {
-        await projectPendingDeliveryPackStatus({
-          ...candidate,
-          context,
-          log,
-          nowMs,
-        });
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-  };
-  await Promise.all(
-    Array.from(
-      { length: Math.min(PACK_STATUS_PROJECTION_RECONCILIATION_CONCURRENCY, candidates.length) },
-      worker,
-    ),
-  );
-  if (errors.length) throw new AggregateError(errors, 'Pack-status projection reconciliation failed');
-  return candidates.length;
-}
-
-function scheduleDeliveryPackStatusProjection(args: {
-  context: CommerceContext;
-  deliveryId: number;
-  dropId: string;
-  waitUntil: DeferredWork;
-}): void {
-  const task = projectPendingDeliveryPackStatus({
-    ...args,
-    context: { ...args.context, signal: new AbortController().signal },
-  }).catch((error) => {
-    console.error({
-      event: 'delivery_pack_status_projection_background_failed',
-      dropId: args.dropId,
-      deliveryId: args.deliveryId,
-      error: summarizeError(error),
-    });
-  });
-  registerDeferredWork(args.waitUntil, task);
 }
 
 function decodeDeliverArgs(data: Buffer): { deliveryId: number; feeLamports: number; deliveryBump: number } {
@@ -2471,24 +1926,27 @@ async function persistPendingReceiptSubmission(
   pending: PendingReceiptSubmission,
 ): Promise<void> {
   try {
-    await retryCommerceConflicts(async () => {
-      const document = await readDocument(context, path);
+    await runCommerceWriteTransaction(context, async (transaction) => {
+      const document = await readDocument(context, path, transaction);
       if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
       const existing = pendingReceiptSubmission(document.fields);
       if (existing && !samePendingReceiptSubmission(existing, pending)) {
         throw new DeliveryReceiptError('aborted', 'A receipt transaction is still being reconciled.');
       }
-      await commitWrites(context, [updateWrite({
-        path,
-        values: {
-          [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: pending,
-          'receiptRecovery.leaseExpiresAt': commerceTimestamp(
-            context.nowMs + DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS,
-          ),
-        },
-        expectedUpdateTime: document.updateTime,
-      })]);
-    }, { signal: context.signal });
+      return {
+        result: undefined,
+        writes: [updateWrite({
+          path,
+          values: {
+            [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: pending,
+            'receiptRecovery.leaseExpiresAt': commerceTimestamp(
+              context.nowMs + DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS,
+            ),
+          },
+          mustExist: true,
+        })],
+      };
+    });
   } catch (error) {
     if (!(error instanceof CommerceWriteConflict)) {
       try {
@@ -2509,26 +1967,29 @@ async function settlePendingReceiptSubmission(
   outcome: Exclude<ReceiptSubmissionOutcome, 'unresolved'>,
 ): Promise<void> {
   try {
-    await retryCommerceConflicts(async () => {
-      const document = await readDocument(context, path);
+    await runCommerceWriteTransaction(context, async (transaction) => {
+      const document = await readDocument(context, path, transaction);
       if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
       const existing = pendingReceiptSubmission(document.fields);
       if (!existing) {
-        if (pendingReceiptSubmissionAlreadySettled(document.fields, pending, outcome)) return;
+        if (pendingReceiptSubmissionAlreadySettled(document.fields, pending, outcome)) return { result: undefined };
         throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
       }
       if (!samePendingReceiptSubmission(existing, pending)) {
         throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
       }
-      await commitWrites(context, [updateWrite({
-        path,
-        values: {
-          ...(outcome === 'confirmed' ? { receiptTxs: commerceFieldValue.arrayUnion(pending.signature) } : {}),
-          [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: commerceFieldValue.delete(),
-        },
-        expectedUpdateTime: document.updateTime,
-      })]);
-    }, { signal: context.signal });
+      return {
+        result: undefined,
+        writes: [updateWrite({
+          path,
+          values: {
+            ...(outcome === 'confirmed' ? { receiptTxs: commerceFieldValue.arrayUnion(pending.signature) } : {}),
+            [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: commerceFieldValue.delete(),
+          },
+          mustExist: true,
+        })],
+      };
+    });
   } catch (error) {
     try {
       const cleanup = cleanupContext(context);
@@ -3149,8 +2610,6 @@ export const deliveryReceiptTestHooks = {
   loadBoundWallet,
   markDeliveryReady,
   normalizeAssignedDudeIds,
-  projectPendingDeliveryPackStatus,
-  recordDeliveryPackStatusProjectionTransientFailure,
   pendingReceiptItems,
   ReceiptBatchRetryExhaustedError,
   recoverReceiptsRequest,
@@ -3158,7 +2617,6 @@ export const deliveryReceiptTestHooks = {
   rollbackTransactionBestEffort,
   runDeliveryRecoveryOrderQuery,
   runPendingReadyNotificationQuery,
-  scheduleDeliveryPackStatusProjection,
   secureRandomInt,
   sendReceiptBatch,
   shouldShrinkReceiptBatch,
@@ -3173,7 +2631,6 @@ export const deliveryReceiptRuntime = {
     writes: readonly CommerceWrite[],
     transaction?: CommerceUnitOfWork,
   ) => commitWrites(context, writes, transaction),
-  countNormalIrlPackStatus,
   createWrite,
   commerceInteger,
   commerceString,

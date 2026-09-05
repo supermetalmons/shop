@@ -9,7 +9,7 @@ import {
   VersionedTransaction,
   type FetchFn,
 } from '@solana/web3.js';
-import type { ApiDropConfig } from './dropConfig.js';
+import { getApiDrop, type ApiDropConfig } from './dropConfig.js';
 import {
   BoxMinterConfigCodecError,
   decodeBoxMinterConfigData,
@@ -18,9 +18,11 @@ import {
 import {
   BOX_MINTER_CONFIG_SEED,
   isBoxMinterDiscountMintsPerWallet,
+  isConfiguredBoxMinterItemsPerBox,
 } from '../../../../shared/boxMinterProtocol.js';
 import {
   boxMinterMetadataBaseMatchesDrop,
+  normalizeDropId,
   type SolanaCluster,
 } from '../../../../shared/deploymentCore.js';
 import {
@@ -89,6 +91,56 @@ export type ProviderContext = {
   fetch: ProfileProviderFetch;
   signal: AbortSignal;
 };
+
+function configuredPublicKey(value: string | undefined, label: string, required = true): PublicKey {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    if (!required) return PublicKey.default;
+    throw new DeliveryReceiptError('failed-precondition', `${label} is not configured.`);
+  }
+  try {
+    const key = new PublicKey(normalized);
+    if (required && key.equals(PublicKey.default)) {
+      throw new DeliveryReceiptError('failed-precondition', `${label} is not configured.`);
+    }
+    return key;
+  } catch (error) {
+    if (error instanceof DeliveryReceiptError) throw error;
+    throw new DeliveryReceiptError('failed-precondition', `${label} is invalid.`);
+  }
+}
+
+export function runtimeForDrop(rawDropId: string): DeliveryRuntime {
+  const dropId = normalizeDropId(rawDropId);
+  const config = getApiDrop(dropId);
+  if (!config) throw new DeliveryReceiptError('invalid-argument', `Unsupported dropId: ${dropId}`);
+  const itemsPerBox = Number(config.itemsPerBox);
+  const maxSupply = Number(config.maxSupply);
+  const maxDudeId = itemsPerBox * maxSupply;
+  if (
+    !isConfiguredBoxMinterItemsPerBox(itemsPerBox) ||
+    !Number.isInteger(maxSupply) || maxSupply < 1 || maxSupply > 0xffff_ffff ||
+    !Number.isSafeInteger(maxDudeId) || maxDudeId > 0xffff
+  ) {
+    throw new DeliveryReceiptError('failed-precondition', 'Delivery drop configuration is invalid.', { dropId });
+  }
+  const boxMinterProgramId = configuredPublicKey(config.boxMinterProgramId, 'BOX_MINTER_PROGRAM_ID');
+  const boxMinterConfigPda = configuredPublicKey(config.boxMinterConfigPda, 'BOX_MINTER_CONFIG_PDA', false);
+  return {
+    config,
+    dropId,
+    cluster: config.solanaCluster,
+    boxMinterProgramId,
+    boxMinterConfigPda: boxMinterConfigPda.equals(PublicKey.default)
+      ? PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0]
+      : boxMinterConfigPda,
+    collectionMint: configuredPublicKey(config.collectionMint, 'COLLECTION_MINT'),
+    receiptsMerkleTree: configuredPublicKey(config.receiptsMerkleTree, 'RECEIPTS_MERKLE_TREE'),
+    itemsPerBox,
+    maxSupply,
+    maxDudeId,
+  };
+}
 
 export function decodeCosigner(secret: string): Keypair {
   let decoded: Uint8Array;

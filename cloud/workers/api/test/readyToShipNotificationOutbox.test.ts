@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import type { NotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
-import { commerceKeys, D1CommerceRepository, type CommerceDocumentData } from '../src/commerceRepository.ts';
+import { CommerceRepositoryError, commerceKeys, D1CommerceRepository, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import { readCommerceDocument, type CommerceDocumentContext } from '../src/commerceTransactions.ts';
 import {
+  markPendingReadyToShipNotificationsFailed,
   publishReadyToShipNotifications,
   ReadyToShipNotificationEnqueueError,
 } from '../src/readyToShipNotificationOutbox.ts';
@@ -15,7 +16,11 @@ import {
   READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD as RETRY_UNTIL,
   READY_TO_SHIP_NOTIFICATION_RETRY_WINDOW_MS,
 } from '../src/readyToShipNotifications.ts';
-import { createCommerceD1Harness, seedCommerceDocuments } from './commerceD1Harness.ts';
+import {
+  createCommerceD1Harness,
+  seedCommerceDocuments,
+  type CommerceD1CallObservation,
+} from './commerceD1Harness.ts';
 
 const NOW_MS = 1_700_000_000_000;
 const KEY = commerceKeys.deliveryOrder('card_nft_2', '7');
@@ -80,6 +85,94 @@ function fixture(
 function jobIdentity(job: NotificationEmailJobV1) {
   return { kind: job.kind, jobId: job.jobId, idempotencyKey: job.idempotencyKey };
 }
+
+test('notification publication reuses each transaction read when claiming and finalizing', async (context) => {
+  const calls: CommerceD1CallObservation[] = [];
+  const native = fixture(context, {}, { observeCall: (call) => calls.push(call) });
+  calls.length = 0;
+
+  assert.equal(await native.publish(), true);
+
+  assert.equal(calls.length, 7);
+  const transactionReads = calls.filter((call) => call.method === 'batch' &&
+    call.statements.some(({ sql }) => /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql)));
+  assert.equal(transactionReads.length, 2);
+  assert.equal((await native.load()).fields.buyerOrderReceivedEmailState, 'queued');
+});
+
+test('a competing claim causes a fresh transactional read without publishing', async (context) => {
+  let raced = false;
+  const native = fixture(context, {}, {
+    observeBatchAfterCommit: ({ statements }) => {
+      if (raced || !statements.some(({ sql }) => /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql))) return;
+      raced = true;
+      seedCommerceDocuments(native.harness, [{
+        key: KEY,
+        version: 2,
+        data: order({
+          [CLAIM_ID]: 'concurrent-claim',
+          [CLAIM_EXPIRY]: NOW_MS + READY_TO_SHIP_NOTIFICATION_CLAIM_LEASE_MS,
+          [ATTEMPTS]: 1,
+          concurrentValue: 'retained',
+        }),
+      }]);
+    },
+  });
+
+  assert.equal(await native.publish(async () => assert.fail('competing claim reached the queue')), false);
+  assert.equal(raced, true);
+  const stored = (await native.load()).fields;
+  assert.equal(stored[CLAIM_ID], 'concurrent-claim');
+  assert.equal(stored[ATTEMPTS], 1);
+  assert.equal(stored.concurrentValue, 'retained');
+});
+
+test('a no-write notification update revalidates its read and retries changed markers', async (context) => {
+  let raced = false;
+  const native = fixture(context, { buyerOrderReceivedEmailState: 'queued' }, {
+    observeBatchAfterCommit: ({ statements }) => {
+      if (raced || !statements.some(({ sql }) => /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql))) return;
+      raced = true;
+      seedCommerceDocuments(native.harness, [{ key: KEY, version: 2, data: order({ concurrentValue: 'retained' }) }]);
+    },
+  });
+
+  assert.deepEqual(await markPendingReadyToShipNotificationsFailed(native.commerce, KEY.path, 'invalid-notification-data'),
+    ['buyerOrderReceivedEmailState']);
+  assert.equal(raced, true);
+  const stored = (await native.load()).fields;
+  assert.equal(stored.buyerOrderReceivedEmailState, 'failed');
+  assert.equal(stored.concurrentValue, 'retained');
+});
+
+test('a no-write notification update revalidates authority after a maintenance pause', async (context) => {
+  let paused = false;
+  const native = fixture(context, { buyerOrderReceivedEmailState: 'queued' }, {
+    observeBatchAfterCommit: ({ statements }) => {
+      if (paused || !statements.some(({ sql }) => /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql))) return;
+      paused = true;
+      native.harness.database.exec(`INSERT INTO commerce_authority_control_lease (
+        singleton, lease_token, acquired_at_ms, expires_at_ms
+      ) VALUES (
+        1, '00000000-0000-4000-8000-000000000107',
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+        CAST(strftime('%s', 'now') AS INTEGER) * 1000 + 60000
+      );
+      UPDATE commerce_authority_control SET authority_state = 'paused',
+        revision = revision + 1, paused_at_ms = NULL,
+        updated_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000
+        WHERE singleton = 1;
+      DELETE FROM commerce_authority_control_lease;`);
+    },
+  });
+
+  await assert.rejects(markPendingReadyToShipNotificationsFailed(native.commerce, KEY.path, 'invalid-notification-data'),
+    (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable');
+  assert.equal(paused, true);
+  const stored = native.harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
+    .get(KEY.path) as { document_json: string };
+  assert.equal(JSON.parse(stored.document_json).buyerOrderReceivedEmailState, 'queued');
+});
 
 test('overlapping publishers share the persisted claim and enqueue only once', async (context) => {
   const native = fixture(context);

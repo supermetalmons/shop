@@ -8,6 +8,7 @@ import {
   d1Database,
   seedCommerceDocument,
   seedCommerceDocuments,
+  type CommerceD1CallObservation,
 } from './commerceD1Harness.ts';
 import {
   createDeferredWorkCollector,
@@ -58,45 +59,6 @@ function notificationQueue(overrides: Partial<Queue> = {}): Queue {
     send: async () => ({ metadata: { metrics } }),
     sendBatch: async () => ({ metadata: { metrics } }),
     ...overrides,
-  };
-}
-
-function projectionDataDb(args: {
-  delay?: () => Promise<void>;
-  failures?: number;
-  hasEvent?: boolean;
-} = {}) {
-  let attempts = 0;
-  let applied = 0;
-  let failures = args.failures || 0;
-  let hasEvent = args.hasEvent || false;
-  const statement = {
-    bind() {
-      return this;
-    },
-    async run() {
-      attempts += 1;
-      await args.delay?.();
-      if (failures > 0) {
-        failures -= 1;
-        throw new Error('d1 unavailable');
-      }
-      const changes = hasEvent ? 0 : 1;
-      if (changes) {
-        hasEvent = true;
-        applied += 1;
-      }
-      return {
-        success: true,
-        results: [],
-        meta: { changes },
-      };
-    },
-  };
-  return {
-    db: { prepare: () => statement } as unknown as Env['DATA_DB'],
-    get applied() { return applied; },
-    get attempts() { return attempts; },
   };
 }
 
@@ -493,6 +455,61 @@ test('native ready-notification publication claims, queues, and finalizes atomic
   assert.equal(finalized?.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
 });
 
+test('receipt API reports notification claim read failures as unavailable without enqueueing', async (context) => {
+  let failClaimReads = false;
+  let failedReads = 0;
+  let queueCalls = 0;
+  const native = await nativeDeliveryContext(readyNotificationOrderFields(7), {
+    observeCall: (call) => {
+      if (failClaimReads && call.method === 'batch' && call.statements.some(({ sql }) =>
+        /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql))) {
+        failedReads += 1;
+        throw new Error('D1_ERROR: network connection lost');
+      }
+    },
+  });
+  context.after(() => native.harness.database.close());
+  failClaimReads = true;
+  const result = await handleDeliveryReceiptRequest(
+    request(DELIVERY_RECEIPTS_ISSUE_PATH, {
+      owner: OWNER,
+      deliveryId: 7,
+      signature: SIGNATURE,
+      dropId: 'card_nft_2',
+    }),
+    env({
+      COMMERCE_DB: native.harness.db,
+      NOTIFICATION_EMAIL_QUEUE: notificationQueue({
+        sendBatch: async () => {
+          queueCalls += 1;
+          return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
+        },
+      }),
+    }),
+    DELIVERY_RECEIPTS_ISSUE_PATH,
+    failOnDeferredWork,
+    dependencies({
+      issue: async (...args: Parameters<typeof deliveryReceiptTestHooks.issueReceiptsRequest>) => {
+        const [body, , requestEnv, commerce] = args;
+        const document = await deliveryReceiptRuntime.readDocument(commerce, 'drops/card_nft_2/deliveryOrders/7');
+        assert.ok(document);
+        await publishReadyToShipNotifications({
+          context: commerce,
+          deliveryId: body.deliveryId,
+          document,
+          dropId: body.dropId,
+          queue: requestEnv.NOTIFICATION_EMAIL_QUEUE,
+        });
+        assert.fail('failed notification publication must reject receipt issuance');
+      },
+    }),
+  );
+  assert.equal(failedReads, 1);
+  assert.equal(queueCalls, 0);
+  assert.equal(result.response.status, 503);
+  assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'unavailable');
+});
+
 test('pre-enqueue cancellation releases the ready-notification claim and attempt', async () => {
   const native = await nativeDeliveryContext(readyNotificationOrderFields(7));
   const document = await deliveryReceiptRuntime.readDocument(
@@ -527,99 +544,6 @@ test('pre-enqueue cancellation releases the ready-notification claim and attempt
   assert.equal(queueCalls, 0);
   assert.equal(released?.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD], 0);
   assert.equal(released?.fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
-});
-
-test('native pack-status projection applies once and marks the delivery complete', async () => {
-  const native = await nativeDeliveryContext({
-    deliveryId: 7,
-    status: 'ready_to_ship',
-    packStatusProjectionState: 'pending',
-    packStatusProjectionNextAttemptAtMs: READY_NOTIFICATION_NOW_MS,
-    packStatusProjectionFailureCount: 0,
-    items: [{ kind: 'box', refId: 1 }],
-  });
-  const projection = projectionDataDb();
-  native.context.dataDb = projection.db;
-  assert.equal(await deliveryReceiptTestHooks.projectPendingDeliveryPackStatus({
-    context: native.context,
-    deliveryId: 7,
-    dropId: 'card_nft_2',
-    nowMs: () => READY_NOTIFICATION_NOW_MS,
-  }), 'completed');
-  const completed = await deliveryReceiptRuntime.readDocument(
-    native.context,
-    'drops/card_nft_2/deliveryOrders/7',
-  );
-  assert.equal(projection.applied, 1);
-  assert.equal(completed?.fields.packStatusProjectionState, 'completed');
-});
-
-test('pack-status projection persists retry state when a non-cooperative D1 write is cancelled', async () => {
-  const native = await nativeDeliveryContext({
-    deliveryId: 7,
-    status: 'ready_to_ship',
-    packStatusProjectionState: 'pending',
-    packStatusProjectionNextAttemptAtMs: 0,
-    packStatusProjectionFailureCount: 0,
-    items: [{ kind: 'box', refId: 1 }],
-  });
-  const controller = new AbortController();
-  const cancellation = new DOMException('caller cancelled', 'AbortError');
-  const projection = projectionDataDb({
-    delay: () => new Promise<void>(() => controller.abort(cancellation)),
-  });
-  native.context.dataDb = projection.db;
-  native.context.signal = controller.signal;
-
-  const outcome = await deliveryReceiptTestHooks.projectPendingDeliveryPackStatus({
-    context: native.context,
-    deliveryId: 7,
-    dropId: 'card_nft_2',
-    nowMs: () => READY_NOTIFICATION_NOW_MS,
-  });
-  const pending = await deliveryReceiptRuntime.readDocument(
-    { ...native.context, signal: new AbortController().signal },
-    'drops/card_nft_2/deliveryOrders/7',
-  );
-
-  assert.equal(outcome, 'pending');
-  assert.equal(projection.attempts, 1);
-  assert.equal(pending?.fields.packStatusProjectionState, 'pending');
-  assert.equal(pending?.fields.packStatusProjectionFailureCount, 1);
-  assert.equal(pending?.fields.packStatusProjectionLastErrorCode, 'aborted');
-  assert.equal(pending?.fields.packStatusProjectionNextAttemptAtMs, READY_NOTIFICATION_NOW_MS + 5 * 60_000);
-});
-
-test('scheduled pack-status projection survives request cancellation', async () => {
-  const native = await nativeDeliveryContext({
-    deliveryId: 7,
-    status: 'ready_to_ship',
-    packStatusProjectionState: 'pending',
-    packStatusProjectionNextAttemptAtMs: 0,
-    packStatusProjectionFailureCount: 0,
-    items: [{ kind: 'box', refId: 1 }],
-  });
-  const projection = projectionDataDb();
-  const controller = new AbortController();
-  native.context.dataDb = projection.db;
-  native.context.signal = controller.signal;
-  const deferred = createDeferredWorkCollector();
-  controller.abort(new Error('client disconnected'));
-
-  deliveryReceiptTestHooks.scheduleDeliveryPackStatusProjection({
-    context: native.context,
-    deliveryId: 7,
-    dropId: 'card_nft_2',
-    waitUntil: deferred.defer,
-  });
-  await deferred.drain();
-
-  const completed = await deliveryReceiptRuntime.readDocument(
-    { ...native.context, signal: new AbortController().signal },
-    'drops/card_nft_2/deliveryOrders/7',
-  );
-  assert.equal(projection.applied, 1);
-  assert.equal(completed?.fields.packStatusProjectionState, 'completed');
 });
 
 test('receipt routes reject methods and strict invalid payloads before service execution', async () => {
@@ -1214,6 +1138,117 @@ test('expired receipt submissions clear without being promoted', async () => {
   const stored = await deliveryReceiptRuntime.readDocument(native.context, path);
   assert.equal((stored?.fields.receiptRecovery as Record<string, unknown>).pendingSubmission, undefined);
   assert.deepEqual(stored?.fields.receiptTxs, undefined);
+});
+
+test('receipt persistence, settlement, and cancellation each read their document once', async () => {
+  for (const operation of ['persist', 'settle', 'cancel']) {
+    const calls: CommerceD1CallObservation[] = [];
+    const pending = {
+      signature: SIGNATURE,
+      blockhash: Keypair.generate().publicKey.toBase58(),
+      lastValidBlockHeight: 123,
+      assetIds: [Keypair.generate().publicKey.toBase58()],
+    };
+    const native = await nativeDeliveryContext({
+      deliveryId: 7,
+      status: 'processing',
+      receiptRecovery: {
+        pendingSubmission: pending,
+        attemptCount: 2,
+        lastAttemptAt: 100,
+        leaseExpiresAt: 200,
+      },
+    }, { observeCall: (call) => calls.push(call) });
+    calls.length = 0;
+    const path = 'drops/card_nft_2/deliveryOrders/7';
+    if (operation === 'persist') {
+      await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
+    } else if (operation === 'settle') {
+      await deliveryReceiptTestHooks.settlePendingReceiptSubmission(native.context, path, pending, 'confirmed');
+    } else {
+      await deliveryReceiptTestHooks.cancelDeliveryRecoveryAttempt(native.context, path, {
+        attemptCount: 2,
+        lastAttemptAtMs: 100,
+        leaseExpiresAtMs: 200,
+        previousAttemptCount: 1,
+        previousLastAttemptAt: 50,
+      });
+    }
+    const reads = calls.flatMap((call) => call.method === 'batch' ? call.statements : [call])
+      .filter(({ sql }) => sql.includes('document_json') && /\b(?:FROM|JOIN) commerce_documents\b/.test(sql));
+    assert.equal(reads.length, 1, operation);
+  }
+});
+
+test('receipt retries preserve a competing submission and recovery lease', async () => {
+  for (const operation of ['persist', 'settle', 'cancel']) {
+    const pending = {
+      signature: SIGNATURE,
+      blockhash: Keypair.generate().publicKey.toBase58(),
+      lastValidBlockHeight: 123,
+      assetIds: [Keypair.generate().publicKey.toBase58()],
+    };
+    const competing = { ...pending, signature: SECOND_SIGNATURE };
+    const fields = {
+      deliveryId: 7,
+      status: 'processing',
+      receiptRecovery: {
+        pendingSubmission: pending,
+        attemptCount: 2,
+        lastAttemptAt: 100,
+        leaseExpiresAt: 200,
+      },
+    };
+    let armed = false;
+    let changed = false;
+    const native = await nativeDeliveryContext(fields, {
+      observeBatchAfterCommit: ({ statements }) => {
+        if (!armed || changed || !statements.some(({ sql }) =>
+          sql.includes('document_json') && /\b(?:FROM|JOIN) commerce_documents\b/.test(sql))) return;
+        changed = true;
+        seedCommerceDocument(native.harness, {
+          key: commerceKeys.deliveryOrder('card_nft_2', '7'),
+          data: {
+            ...fields,
+            receiptRecovery: {
+              pendingSubmission: competing,
+              attemptCount: 3,
+              lastAttemptAt: 300,
+              leaseExpiresAt: 400,
+            },
+          },
+          version: 2,
+        });
+      },
+    });
+    armed = true;
+    const path = 'drops/card_nft_2/deliveryOrders/7';
+    if (operation === 'cancel') {
+      await deliveryReceiptTestHooks.cancelDeliveryRecoveryAttempt(native.context, path, {
+        attemptCount: 2,
+        lastAttemptAtMs: 100,
+        leaseExpiresAtMs: 200,
+        previousAttemptCount: 1,
+        previousLastAttemptAt: 50,
+      });
+    } else {
+      await assert.rejects(
+        operation === 'persist'
+          ? deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending)
+          : deliveryReceiptTestHooks.settlePendingReceiptSubmission(native.context, path, pending, 'confirmed'),
+        (error: unknown) => error instanceof DeliveryReceiptError && error.code === 'aborted',
+      );
+    }
+    assert.equal(changed, true, operation);
+    const stored = await deliveryReceiptRuntime.readDocument(native.context, path);
+    assert.deepEqual(stored?.fields.receiptRecovery, {
+      pendingSubmission: competing,
+      attemptCount: 3,
+      lastAttemptAt: 300,
+      leaseExpiresAt: 400,
+    });
+    assert.equal(stored?.fields.receiptTxs, undefined);
+  }
 });
 
 test('delivery recovery eligibility preserves backoff, prepared probes, and force behavior', () => {

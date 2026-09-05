@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import {
+  CommerceRepositoryError,
   CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
@@ -9,12 +10,13 @@ import {
 import {
   commitCommerceWrites,
   createCommerceWrite,
+  readCommerceDocument,
   readCommerceDocuments,
-  retryCommerceConflicts,
   runCommerceTransaction,
   runCommerceWriteTransaction,
   updateCommerceWrite,
   type CommerceDocumentContext,
+  type CommerceTransactionTarget,
   type CommerceWrite,
 } from '../src/commerceTransactions.js';
 import {
@@ -22,6 +24,7 @@ import {
   seedCommerceDocuments,
   type CommerceD1CallObservation,
 } from './commerceD1Harness.js';
+import { ProfileReadError } from '../src/dataAccess.js';
 
 const writeBatchRunners = {
   commitCommerceWrites: async (context: CommerceDocumentContext, writes: readonly CommerceWrite[]) => {
@@ -34,6 +37,12 @@ const writeBatchRunners = {
     assert.equal(result, 'committed');
   },
 };
+
+function transactionTarget(context: TestContext, signal?: AbortSignal): CommerceTransactionTarget {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  return { nowMs: 100, repository: new D1CommerceRepository(harness.db), signal };
+}
 
 for (const [name, runWrites] of Object.entries(writeBatchRunners)) {
   test(`${name} commits multiple timestamp-guarded updates`, async () => {
@@ -217,6 +226,51 @@ test('stale commerce write timestamps reject the whole batch', async () => {
   }
 });
 
+test('transactional document read failures retain their cause and unavailable status', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const cause = new Error('D1 read failed');
+  for (const signal of [new AbortController().signal, AbortSignal.abort(new Error('unrelated cancellation'))]) {
+    const transaction = await repository.begin(100);
+    context.mock.method(transaction, 'get', async () => { throw cause; });
+    await assert.rejects(readCommerceDocument({
+      commerceDb: harness.db, repository, nowMs: 100, signal,
+    }, commerceKeys.claimCode('READ').path, transaction), (error: unknown) => {
+      assert.ok(error instanceof CommerceRepositoryError);
+      assert.equal(error.code, 'unavailable');
+      assert.equal(error.status, 503);
+      assert.equal(error.cause, cause);
+      return true;
+    });
+    transaction.rollback();
+  }
+});
+
+test('transactional document reads preserve typed errors and cancellation identity', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const cancellation = new Error('cancelled during read');
+  const activeSignal = new AbortController().signal;
+  const cancelledSignal = AbortSignal.abort(cancellation);
+  const cases = [
+    { error: new CommerceWriteConflict(), signal: activeSignal },
+    { error: new CommerceRepositoryError('invalid-argument', 'Invalid read'), signal: activeSignal },
+    { error: new ProfileReadError('unavailable', 503, 'Read unavailable'), signal: activeSignal },
+    { error: cancellation, signal: cancelledSignal },
+    { error: new Error('Read interrupted', { cause: cancellation }), signal: cancelledSignal },
+  ];
+  for (const { error, signal } of cases) {
+    const transaction = await repository.begin(100);
+    context.mock.method(transaction, 'get', async () => { throw error; });
+    await assert.rejects(readCommerceDocument({
+      commerceDb: harness.db, repository, nowMs: 100, signal,
+    }, commerceKeys.claimCode('READ').path, transaction), (caught) => caught === error);
+    transaction.rollback();
+  }
+});
+
 test('commerce document batches preserve caller order, missing documents, and document metadata', async () => {
   const calls: CommerceD1CallObservation[] = [];
   const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
@@ -261,10 +315,10 @@ test('commerce document batches validate every path before issuing reads', async
   transaction.rollback();
 });
 
-test('commerce conflict retries use the standard schedule', async () => {
+test('commerce conflict retries use the standard schedule', async (context) => {
   const delays: number[] = [];
   let attempts = 0;
-  const result = await retryCommerceConflicts(async () => {
+  const result = await runCommerceTransaction(transactionTarget(context), async () => {
     attempts += 1;
     if (attempts < 6) throw new CommerceWriteConflict();
     return 'committed';
@@ -279,11 +333,11 @@ test('commerce conflict retries use the standard schedule', async () => {
   assert.deepEqual(delays, [50, 100, 200, 400, 800]);
 });
 
-test('commerce conflict retries preserve exhausted and non-conflict errors', async () => {
+test('commerce conflict retries preserve exhausted and non-conflict errors', async (context) => {
   const conflict = new CommerceWriteConflict();
   let conflictAttempts = 0;
   await assert.rejects(
-    retryCommerceConflicts(async () => {
+    runCommerceTransaction(transactionTarget(context), async () => {
       conflictAttempts += 1;
       throw conflict;
     }, { sleep: async () => undefined }),
@@ -294,7 +348,7 @@ test('commerce conflict retries preserve exhausted and non-conflict errors', asy
   const failure = new Error('not a conflict');
   let failureAttempts = 0;
   await assert.rejects(
-    retryCommerceConflicts(async () => {
+    runCommerceTransaction(transactionTarget(context), async () => {
       failureAttempts += 1;
       throw failure;
     }),
@@ -303,11 +357,11 @@ test('commerce conflict retries preserve exhausted and non-conflict errors', asy
   assert.equal(failureAttempts, 1);
 });
 
-test('commerce conflict filtering keeps create collisions non-retryable', async () => {
+test('commerce conflict filtering keeps create collisions non-retryable', async (context) => {
   const collision = new CommerceWriteConflict('already-exists');
   let attempts = 0;
   await assert.rejects(
-    retryCommerceConflicts(async () => {
+    runCommerceTransaction(transactionTarget(context), async () => {
       attempts += 1;
       throw collision;
     }, {
@@ -318,16 +372,16 @@ test('commerce conflict filtering keeps create collisions non-retryable', async 
   assert.equal(attempts, 1);
 });
 
-test('commerce conflict retries preserve abort reasons', async () => {
+test('commerce conflict retries preserve abort reasons', async (context) => {
   const before = new AbortController();
   const beforeReason = new Error('aborted before attempt');
   before.abort(beforeReason);
   let beforeAttempts = 0;
   await assert.rejects(
-    retryCommerceConflicts(async () => {
+    runCommerceTransaction(transactionTarget(context, before.signal), async () => {
       beforeAttempts += 1;
       return null;
-    }, { signal: before.signal }),
+    }),
     (error) => error === beforeReason,
   );
   assert.equal(beforeAttempts, 0);
@@ -335,10 +389,9 @@ test('commerce conflict retries preserve abort reasons', async () => {
   const during = new AbortController();
   const duringReason = new Error('aborted during wait');
   await assert.rejects(
-    retryCommerceConflicts(async () => {
+    runCommerceTransaction(transactionTarget(context, during.signal), async () => {
       throw new CommerceWriteConflict();
     }, {
-      signal: during.signal,
       sleep: async (_milliseconds, signal) => {
         during.abort(duringReason);
         signal?.throwIfAborted();

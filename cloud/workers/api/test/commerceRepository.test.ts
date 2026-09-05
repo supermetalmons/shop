@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { deliveryOrderOwnersQuery } from '../src/commerceQueries.ts';
 import {
   CommerceRepositoryError,
   CommerceWriteConflict,
@@ -521,26 +522,16 @@ test('delivery-order owner pagination uses a distinct indexed keyset query', asy
   assertAuthoritativeReadBatch(calls[0]);
   assert.match(calls[0].statements[1].sql.replace(/\s+/g, ' '), /document\.owner > \?/);
 
-  const plan = harness.database.prepare(`EXPLAIN QUERY PLAN SELECT DISTINCT document.owner AS owner
-    FROM commerce_authority_control AS authority
-    CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
-    WHERE
-      authority.singleton = 1 AND
-      authority.authority_state = 'd1' AND
-      document.document_kind = 'delivery_order' AND
-      document.owner IS NOT NULL AND
-      typeof(document.owner) = 'text' AND
-      length(document.owner) BETWEEN 32 AND 44 AND
-      document.owner NOT GLOB '*[^0-9A-Za-z]*' AND
-      document.owner NOT GLOB '*[0OIl]*' AND
-      document.owner > '${ownerB}'
-    ORDER BY document.owner ASC
-    LIMIT 2`).all().map((row) => String(row.detail || ''));
-  assert.equal(
-    plan.some((detail) => detail.includes('SEARCH document USING INDEX commerce_documents_delivery_owner_path')),
-    true,
-  );
-  assert.equal(plan.some((detail) => detail.includes('USE TEMP B-TREE')), false);
+  for (const startAfterOwner of [undefined, ownerB]) {
+    const query = deliveryOrderOwnersQuery({ startAfterOwner, limit: 2 });
+    const plan = harness.database.prepare(`EXPLAIN QUERY PLAN ${query.sql}`)
+      .all(...query.bindings).map((row) => String(row.detail || ''));
+    assert.equal(
+      plan.some((detail) => detail.includes('SEARCH document USING INDEX commerce_documents_delivery_owner_path')),
+      true,
+    );
+    assert.equal(plan.some((detail) => detail.includes('USE TEMP B-TREE')), false);
+  }
 
   await assert.rejects(
     repository.queryDeliveryOrderOwners({ limit: 0 }),

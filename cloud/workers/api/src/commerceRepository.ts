@@ -19,9 +19,19 @@ import {
   type CommerceUpdateValue,
 } from './commerceRepositoryTypes.js';
 import { isCommerceDocumentSegment } from '../../../../shared/commerceDocumentPath.js';
-import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.js';
-import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
-import { READY_NOTIFICATION_DUE_SQL } from '../../../../shared/readyNotificationDueSql.js';
+import {
+  COMMERCE_DOCUMENT_COLUMNS as DOCUMENT_COLUMNS,
+  adminIrlRedeemWorkflowStatusQuery,
+  deliveryOrderOwnersQuery,
+  deliveryOrdersByOwnerQuery,
+  deliveryRecoveryOrdersQuery,
+  duePackStatusProjectionsQuery,
+  dueReadyNotificationsQuery,
+  dueStripeTerminalNotificationsQuery,
+  pendingReadyNotificationsQuery,
+  staleStripeFulfillmentsQuery,
+  type CommerceSqlQuery,
+} from './commerceQueries.js';
 
 export * from './commerceRepositoryTypes.js';
 
@@ -53,37 +63,9 @@ type DocumentExpectation = Readonly<{
   pathRevision?: number;
 }>;
 
-const DOCUMENT_COLUMN_NAMES = [
-  'document_path',
-  'document_kind',
-  'drop_id',
-  'document_id',
-  'document_json',
-  'version',
-  'create_time',
-  'update_time',
-  'processed_at_seconds',
-  'processed_at_nanos',
-] as const;
-const DOCUMENT_COLUMNS = DOCUMENT_COLUMN_NAMES.join(', ');
 const COMMERCE_READ_BATCH_SIZE = 50;
 const COMMERCE_AUTHORITY_SELECT = `SELECT authority_state, revision, documents_revision
   FROM commerce_authority_control WHERE singleton = 1`;
-const PENDING_READY_NOTIFICATION_INDEXES = Object.freeze({
-  buyer: Object.freeze({
-    owner: 'commerce_delivery_orders_buyer_notifications_pending_owner_path',
-    ownerless: 'commerce_delivery_orders_buyer_notifications_pending',
-  }),
-  shipper: Object.freeze({
-    owner: 'commerce_delivery_orders_shipper_notifications_pending_owner_path',
-    ownerless: 'commerce_delivery_orders_shipper_notifications_pending',
-  }),
-});
-
-function qualifiedDocumentColumns(alias: string): string {
-  return DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
-}
-
 const INDEXED_COLUMNS: Readonly<Record<CommerceIndexedField, string>> = Object.freeze({
   buyerOrderReceivedEmailState: 'buyer_notification_state',
   fulfillmentProcessor: 'fulfillment_processor',
@@ -450,12 +432,7 @@ function ensureQuery(query: CommerceQuery): void {
   throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query cursor.');
 }
 
-type CompiledCommerceQuery = {
-  bindings: Array<string | number>;
-  sql: string;
-};
-
-function compileCommerceQuery(query: CommerceQuery, authoritative = false): CompiledCommerceQuery {
+function compileCommerceQuery(query: CommerceQuery, authoritative = false): CommerceSqlQuery {
   ensureQuery(query);
   const bindings: Array<string | number> = [query.kind];
   const predicates = ['document_kind = ?'];
@@ -661,15 +638,11 @@ export class D1CommerceRepository {
     if (!/^airf-v1-[0-9a-f]{64}$/.test(operationId)) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid Admin IRL redeem Workflow operation id.');
     }
-    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
-      WHERE
-        authority.singleton = 1 AND
-        document_kind = 'admin_irl_redeem_request' AND
-        json_type(document_json, '$.workflowFinalizeV1.operationId') = 'text' AND
-        json_extract(document_json, '$.workflowFinalizeV1.operationId') = ?
-      ORDER BY document_path ASC
-      LIMIT 2`).bind(operationId), true);
+    const query = adminIrlRedeemWorkflowStatusQuery(operationId);
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(query.sql).bind(...query.bindings),
+      true,
+    );
     if (result.results.length > 1) {
       throw new CommerceRepositoryError('internal', 'Duplicate Admin IRL redeem Workflow operation id.');
     }
@@ -712,21 +685,10 @@ export class D1CommerceRepository {
     const startAfterOwner = args.startAfterOwner === undefined
       ? undefined
       : deliveryOwner(args.startAfterOwner);
-    const cursorPredicate = startAfterOwner === undefined ? '' : ' AND\n        document.owner > ?';
-    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT DISTINCT document.owner AS owner
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document.document_kind = 'delivery_order' AND
-        document.owner IS NOT NULL AND
-        typeof(document.owner) = 'text' AND
-        length(document.owner) BETWEEN 32 AND 44 AND
-        document.owner NOT GLOB '*[^0-9A-Za-z]*' AND
-        document.owner NOT GLOB '*[0OIl]*'${cursorPredicate}
-      ORDER BY document.owner ASC
-      LIMIT ?`).bind(...(startAfterOwner === undefined ? [limit] : [startAfterOwner, limit])));
+    const query = deliveryOrderOwnersQuery({ limit, startAfterOwner });
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(query.sql).bind(...query.bindings),
+    );
     if (result.results.length > limit) throw unavailableCommerceData();
     const owners = result.results.map((row) => {
       if (!isObject(row) || typeof row.owner !== 'string') throw unavailableCommerceData();
@@ -738,15 +700,10 @@ export class D1CommerceRepository {
 
   async queryDeliveryRecoveryOrders(owner: string): Promise<CommerceDocumentRecord[]> {
     const scopedOwner = deliveryOwner(owner);
-    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${qualifiedDocumentColumns('document')}
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document.document_kind = 'delivery_order' AND
-        document.owner = ? AND
-        document.status IN ('processing', 'prepared')`).bind(scopedOwner));
+    const query = deliveryRecoveryOrdersQuery(scopedOwner);
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(query.sql).bind(...query.bindings),
+    );
     const documents = result.results.map(parseRow);
     reportInefficientQuery('delivery-recovery-orders', 'delivery_order', result, documents.length);
     return documents.map((document) => publicRecord(document));
@@ -758,44 +715,10 @@ export class D1CommerceRepository {
     startAfterPath?: string;
   }): Promise<CommerceDocumentRecord[]> {
     const limit = positiveQueryLimit(args.limit);
-    const indexVariant = args.owner === undefined ? 'ownerless' : 'owner';
-    const buyerIndex = PENDING_READY_NOTIFICATION_INDEXES.buyer[indexVariant];
-    const shipperIndex = PENDING_READY_NOTIFICATION_INDEXES.shipper[indexVariant];
-    const ownerPredicate = args.owner === undefined ? '' : ' AND document.owner = ?';
-    const cursorPredicate = args.startAfterPath === undefined ? '' : ' AND document.document_path > ?';
-    const armBindings = () => [
-      ...(args.owner === undefined ? [] : [args.owner]),
-      ...(args.startAfterPath === undefined ? [] : [args.startAfterPath]),
-    ];
-    const bindings = [...armBindings(), ...armBindings(), limit];
-    const result = await this.readBatchWithAuthority(() => this.db.prepare(`WITH candidate_paths AS (
-      SELECT document.document_path
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents AS document
-        INDEXED BY ${buyerIndex}
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document.document_kind = 'delivery_order' AND
-        document.status = 'ready_to_ship' AND
-        document.buyer_notification_state = 'pending'${ownerPredicate}${cursorPredicate}
-      UNION
-      SELECT document.document_path
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents AS document
-        INDEXED BY ${shipperIndex}
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document.document_kind = 'delivery_order' AND
-        document.status = 'ready_to_ship' AND
-        document.shipper_notification_state = 'pending'${ownerPredicate}${cursorPredicate}
-    )
-    SELECT ${qualifiedDocumentColumns('document')}
-    FROM commerce_documents AS document
-    JOIN candidate_paths USING (document_path)
-    ORDER BY document.document_path ASC
-    LIMIT ?`).bind(...bindings));
+    const query = pendingReadyNotificationsQuery({ ...args, limit });
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(query.sql).bind(...query.bindings),
+    );
     reportInefficientQuery('pending-ready-notifications', 'delivery_order', result, result.results.length);
     return result.results.map(parseRow).map((document) => publicRecord(document));
   }
@@ -808,17 +731,10 @@ export class D1CommerceRepository {
     if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid ready-notification cutoff.');
     }
-    const { indexName, dueAtExpression, pendingPredicate } = READY_NOTIFICATION_DUE_SQL;
-    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents INDEXED BY ${indexName}
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        ${pendingPredicate} AND
-        (${dueAtExpression}) <= ?
-      ORDER BY (${dueAtExpression}) ASC, document_path ASC
-      LIMIT ?`).bind(args.dueAtMs, limit));
+    const query = dueReadyNotificationsQuery({ ...args, limit });
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(query.sql).bind(...query.bindings),
+    );
     reportInefficientQuery('due-ready-notifications', 'delivery_order', result, result.results.length);
     return result.results.map(parseRow).map((document) => publicRecord(document));
   }
@@ -832,17 +748,10 @@ export class D1CommerceRepository {
     if (!Number.isSafeInteger(args.dueAtMs) || args.dueAtMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce projection cutoff.');
     }
-    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document_kind = 'delivery_order' AND
-        drop_id = ? AND
-        pack_projection_state = 'pending' AND
-        pack_projection_next_attempt_ms <= ?
-      ORDER BY pack_projection_next_attempt_ms ASC, document_path ASC
-      LIMIT ?`).bind(args.dropId, args.dueAtMs, limit));
+    const query = duePackStatusProjectionsQuery({ ...args, limit });
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(query.sql).bind(...query.bindings),
+    );
     reportInefficientQuery('due-pack-status-projections', 'delivery_order', result, result.results.length);
     return result.results.map(parseRow).map((document) => publicRecord(document));
   }
@@ -851,20 +760,10 @@ export class D1CommerceRepository {
     if (!Number.isSafeInteger(cutoffMs) || cutoffMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe reconciliation cutoff.');
     }
-    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents INDEXED BY commerce_stripe_checkouts_reconciliation_due
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document_kind = 'stripe_checkout' AND
-        fulfillment_processor = '${STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR}' AND
-        status IN ('${STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING}', '${STRIPE_CHECKOUT_STATUS.PROCESSING}') AND
-        json_type(document_json, '$.updatedAt') IN ('integer', 'real') AND
-        json_type(document_json, '$.lastStripeWebhookEventId') = 'text' AND
-        CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) <= ?
-      ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) ASC, document_path ASC
-      LIMIT 100`).bind(cutoffMs));
+    const query = staleStripeFulfillmentsQuery(cutoffMs);
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(query.sql).bind(...query.bindings),
+    );
     reportInefficientQuery('stale-stripe-fulfillments', 'stripe_checkout', result, result.results.length);
     return result.results.map(parseRow).map((document) => publicRecord(document));
   }
@@ -874,19 +773,10 @@ export class D1CommerceRepository {
     if (!Number.isSafeInteger(dueAtMs) || dueAtMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe notification cutoff.');
     }
-    const result = await this.readBatchWithAuthority(() => this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-      FROM commerce_authority_control AS authority
-      CROSS JOIN commerce_documents INDEXED BY commerce_stripe_terminal_notifications_due
-      WHERE
-        authority.singleton = 1 AND
-        authority.authority_state = 'd1' AND
-        document_kind = 'stripe_checkout' AND
-        (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
-        json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending' AND
-        CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER) <= ?
-      ORDER BY CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER) ASC,
-        document_path ASC
-      LIMIT ?`).bind(dueAtMs, limit));
+    const query = dueStripeTerminalNotificationsQuery({ dueAtMs, limit });
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(query.sql).bind(...query.bindings),
+    );
     reportInefficientQuery('due-stripe-terminal-notifications', 'stripe_checkout', result, result.results.length);
     return result.results.map(parseRow).map((document) => publicRecord(document));
   }
@@ -1000,16 +890,10 @@ export class CommerceUnitOfWork {
     if (this.writesStarted) throw new CommerceRepositoryError('invalid-argument', 'Commerce reads must precede writes.');
     const scopedOwner = deliveryOwner(args.owner);
     const boundedLimit = positiveQueryLimit(args.limit);
+    const query = deliveryOrdersByOwnerQuery({ owner: scopedOwner, limit: boundedLimit });
     const results = await this.db.batch<Record<string, unknown>>([
       deliveryOwnerRevisionStatement(this.db, scopedOwner),
-      this.db.prepare(`SELECT ${qualifiedDocumentColumns('document')},
-          COALESCE(path_revision.revision, 0) AS path_revision
-        FROM commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
-        LEFT JOIN commerce_document_path_revisions AS path_revision
-          ON path_revision.document_path = document.document_path
-        WHERE document.document_kind = 'delivery_order' AND document.owner = ?
-        ORDER BY document.document_path ASC
-        LIMIT ?`).bind(scopedOwner, boundedLimit),
+      this.db.prepare(query.sql).bind(...query.bindings),
     ]);
     if (results.length !== 2) throw unavailableCommerceData();
     const [revisionResult, dataResult] = results;
