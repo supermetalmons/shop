@@ -1,8 +1,9 @@
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -36,6 +37,7 @@ import {
   cleanupUpgradeResources,
   CommandCancellationController,
   CommandCancelledError,
+  executeUpgrade,
   expectedPaddedProgramImageSha256,
   inspectSharedProgramConfigs,
   inspectResumeBufferAccount,
@@ -43,6 +45,7 @@ import {
   parseArgs,
   postUpgradeConfigMinContextSlot,
   programImagesAreEquivalent,
+  readProgramShow,
   redactRpcDetailsInText,
   redactRpcUrl,
   runAfterUnchangedUpgradeGate,
@@ -53,6 +56,7 @@ import {
   UPGRADE_CLUSTER_GENESIS_HASHES,
   UPGRADE_PROGRAM_TARGETS,
   validateRpcUrl,
+  writeVerifiedUpgradeAuthority,
   type ProgramShowInfo,
   type SharedProgramConfigAudit,
   type UpgradeGateState,
@@ -1615,62 +1619,208 @@ test('raw Node help exposes audit-only without requiring tsx', () => {
   assert.match(result.stdout, /required for mutating mainnet/);
 });
 
-test('audit-only returns before build preparation and never creates a read-only key file', () => {
-  const source = readFileSync(
-    path.join(process.cwd(), 'scripts/upgrade-onchain.ts'),
-    'utf8',
-  );
-  const auditReturn = source.indexOf('if (opts.auditOnly) {');
-  const typecheck = source.indexOf('if (!opts.skipTypecheck)', auditReturn);
-  const buildLock = source.indexOf(
-    'acquireDeploymentRegistryMutationLock({',
-    auditReturn,
-  );
-  const authorityKey = source.indexOf(
-    'authorityKeypairPath = writeTempKeypairFile(',
-    auditReturn,
-  );
-  assert.ok(auditReturn >= 0);
-  assert.ok(typecheck > auditReturn);
-  assert.ok(buildLock > auditReturn);
-  assert.ok(authorityKey > auditReturn);
-  assert.doesNotMatch(source, /upgrade-readonly/);
-  assert.match(source, /Array\.from\(Keypair\.generate\(\)\.secretKey\)/);
-  assert.match(source, /stdin: args\.signerInput/);
+function preflightConfig(
+  schema: SharedProgramConfigAudit['schema'],
+  source: SharedProgramConfigAudit['source'] = 'active-registry',
+): SharedProgramConfigAudit {
+  return {
+    dropId: 'preflight-fixture',
+    source,
+    ...(source === 'tombstone' ? { reason: 'historical-orphan' as const } : {}),
+    configPda: PublicKey.default.toBase58(),
+    size: schema === 'legacy' ? 376 : 488,
+    schema,
+    dropSeed: Buffer.alloc(32, 1).toString('hex'),
+    bump: 1,
+    collectionMint: COLLECTION,
+    paymentRoute: schema === 'legacy' ? legacyRoute(TREASURY) : SPLIT_ROUTING,
+  };
+}
+
+function upgradePreflightFixture(
+  t: TestContext,
+  configs: ReadonlyArray<SharedProgramConfigAudit>,
+) {
+  const root = mkdtempSync(path.join(tmpdir(), 'mons-shop-upgrade-preflight-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.mock.method(console, 'log', () => undefined);
+  const args: Parameters<typeof executeUpgrade>[0] = {
+    opts: parseArgs(['little_swag_hoodies_devnet']),
+    drop: DEPLOYMENT_DROPS.little_swag_hoodies_devnet,
+    target: UPGRADE_PROGRAM_TARGETS.devnet,
+    root,
+    onchainDir: path.join(root, 'onchain'),
+    registryPath: path.join(root, 'deploymentRegistry.ts'),
+    programBinary: path.join(root, 'onchain', 'box_minter.so'),
+    solanaUrl: 'http://127.0.0.1:1',
+    toolEnv: {},
+  };
+  const calls: string[] = [];
+  const configPaths: string[] = [];
+  const compatibilitySigners = new Set<string>();
+  const stopped = new Error('Stopped before build preparation');
+  const initialSignalListeners = ['SIGINT', 'SIGTERM'].map((signal) => process.listenerCount(signal));
+  t.after(() => {
+    assert.deepEqual(
+      ['SIGINT', 'SIGTERM'].map((signal) => process.listenerCount(signal)),
+      initialSignalListeners,
+    );
+    for (const filePath of configPaths) assert.equal(existsSync(filePath), false);
+  });
+  const effects: Parameters<typeof executeUpgrade>[1] = {
+    captureGateState: async (input) => {
+      calls.push('audit');
+      assert.equal(input.stage, 'initial preflight');
+      assert.equal(input.minContextSlot, 0);
+      configPaths.push(input.solanaConfigPath);
+      assert.match(readFileSync(input.solanaConfigPath, 'utf8'), /^keypair_path: ''$/m);
+      const signerBytes = JSON.parse(input.signerInput);
+      assert.equal(signerBytes.length, 64);
+      const signer = Keypair.fromSecretKey(Uint8Array.from(signerBytes));
+      compatibilitySigners.add(signer.publicKey.toBase58());
+      return { ...gateState(1), configs };
+    },
+    runCommand: async (command, commandArgs) => {
+      calls.push(`${command} ${commandArgs.join(' ')}`);
+      throw stopped;
+    },
+    acquireRegistryLock: () => {
+      calls.push('lock');
+      throw stopped;
+    },
+  };
+  return {
+    calls,
+    compatibilitySigners,
+    stopped,
+    run: (opts: Partial<typeof args.opts>) => executeUpgrade({
+      ...args,
+      opts: { ...args.opts, ...opts },
+    }, effects),
+  };
+}
+
+test('audit-only stops before preparation for every test and typecheck skip combination', async (t) => {
+  const fixture = upgradePreflightFixture(t, [preflightConfig('split-payments-v1')]);
+  for (const skipTests of [false, true]) {
+    for (const skipTypecheck of [false, true]) {
+      fixture.calls.length = 0;
+      await fixture.run({ auditOnly: true, skipTests, skipTypecheck });
+      assert.deepEqual(fixture.calls, ['audit']);
+    }
+  }
+  assert.equal(fixture.compatibilitySigners.size, 4);
 });
 
-test('upgrade authority is validated before its secret is written to disk', () => {
-  const source = readFileSync(
-    path.join(process.cwd(), 'scripts/upgrade-onchain.ts'),
-    'utf8',
-  );
-  const authorityPubkey = source.indexOf(
-    'const authorityPubkey = authority.publicKey.toBase58();',
-  );
-  const authorityCheck = source.indexOf(
-    'buildBaseline.program.show.authority !== authorityPubkey',
-    authorityPubkey,
-  );
-  const authorityKeyWrite = source.indexOf(
-    'authorityKeypairPath = writeTempKeypairFile(',
-    authorityPubkey,
-  );
-  assert.ok(authorityPubkey >= 0);
-  assert.ok(authorityCheck > authorityPubkey);
-  assert.ok(authorityKeyWrite > authorityCheck);
+test('active and tombstoned split lineages reject skipped tests before build preparation', async (t) => {
+  for (const source of ['active-registry', 'tombstone'] as const) {
+    await t.test(source, async (t) => {
+      const fixture = upgradePreflightFixture(t, [preflightConfig('split-payments-v1', source)]);
+      for (const skipTypecheck of [false, true]) {
+        fixture.calls.length = 0;
+        await assert.rejects(
+          fixture.run({ skipTests: true, skipTypecheck }),
+          /--skip-tests is forbidden once a split-payments-v1 config exists/,
+        );
+        assert.deepEqual(fixture.calls, ['audit']);
+      }
+    });
+  }
 });
 
-test('split lineages cannot bypass the exact-ELF suite during mutation', () => {
-  const source = readFileSync(
-    path.join(process.cwd(), 'scripts/upgrade-onchain.ts'),
-    'utf8',
-  );
-  assert.match(
-    source,
-    /opts\.skipTests[\s\S]*!opts\.dryRun[\s\S]*config\.schema === 'split-payments-v1'/,
-  );
-  assert.match(
-    source,
-    /--skip-tests is forbidden once a split-payments-v1 config exists/,
-  );
+test('permitted preflights reach preparation without weakening the split mutation guard', async (t) => {
+  const cases = [
+    { name: 'legacy mutation', schema: 'legacy', skipTests: true, dryRun: false },
+    { name: 'split dry run', schema: 'split-payments-v1', skipTests: true, dryRun: true },
+    { name: 'split mutation with tests', schema: 'split-payments-v1', skipTests: false, dryRun: false },
+  ] as const;
+  for (const scenario of cases) {
+    await t.test(scenario.name, async (t) => {
+      const fixture = upgradePreflightFixture(t, [preflightConfig(scenario.schema)]);
+      await assert.rejects(
+        fixture.run({ skipTests: scenario.skipTests, dryRun: scenario.dryRun }),
+        (error) => error === fixture.stopped,
+      );
+      assert.deepEqual(fixture.calls, ['audit', 'npm run typecheck']);
+    });
+  }
+});
+
+test('invalid and mismatched upgrade authorities never reach the keypair writer', () => {
+  const authority = Keypair.fromSeed(Uint8Array.from({ length: 32 }, () => 1));
+  let writes = 0;
+  const writeKeypair = () => {
+    writes += 1;
+    return '/unused-authority.json';
+  };
+  assert.throws(() => writeVerifiedUpgradeAuthority({
+    input: 'not a private key',
+    expectedAuthority: authority.publicKey.toBase58(),
+    writeKeypair,
+  }));
+  assert.throws(() => writeVerifiedUpgradeAuthority({
+    input: JSON.stringify(Array.from(authority.secretKey)),
+    expectedAuthority: TREASURY,
+    writeKeypair,
+  }), {
+    message: `Private key does not match the deployed upgrade authority.\n` +
+      `Expected: ${TREASURY}\nGot     : ${authority.publicKey.toBase58()}`,
+  });
+  assert.equal(writes, 0);
+});
+
+test('verified upgrade authorities write once and return the path for cleanup', () => {
+  const authority = Keypair.fromSeed(Uint8Array.from({ length: 32 }, () => 1));
+  const authorityPubkey = authority.publicKey.toBase58();
+  for (const input of [JSON.stringify(Array.from(authority.secretKey)), bs58.encode(authority.secretKey)]) {
+    let writes = 0;
+    const result = writeVerifiedUpgradeAuthority({
+      input,
+      expectedAuthority: authorityPubkey,
+      writeKeypair: (keypair, prefix) => {
+        writes += 1;
+        assert.equal(keypair.publicKey.toBase58(), authorityPubkey);
+        assert.equal(prefix, 'mons-shop-upgrade-authority');
+        return '/verified-authority.json';
+      },
+    });
+    assert.equal(writes, 1);
+    assert.deepEqual(result, { authorityPubkey, keypairPath: '/verified-authority.json' });
+  }
+});
+
+test('program inspection sends its compatibility signer through stdin and parses the response', async () => {
+  const signerInput = JSON.stringify(Array.from(Keypair.fromSeed(new Uint8Array(32)).secretKey));
+  const cancellation = new CommandCancellationController();
+  const args = {
+    programId: DEVNET_PROGRAM_ID.toBase58(),
+    solanaUrl: 'http://127.0.0.1:1',
+    solanaConfigPath: '/temporary-solana-config.yml',
+    signerInput,
+    cwd: '/temporary-onchain',
+    env: { PREFLIGHT_FIXTURE: 'true' },
+    cancellation,
+    allowAfterCancellation: true,
+  };
+  let calls = 0;
+  const result = await readProgramShow(args, async (command, commandArgs, options) => {
+    calls += 1;
+    assert.equal(command, 'solana');
+    assert.deepEqual(commandArgs, buildProgramShowArgs(args));
+    assert.equal(commandArgs[commandArgs.indexOf('--keypair') + 1], '-');
+    assert.deepEqual(options, {
+      cwd: args.cwd,
+      env: args.env,
+      stdin: signerInput,
+      sensitiveRpcUrl: args.solanaUrl,
+      cancellation,
+      allowAfterCancellation: true,
+    });
+    return JSON.stringify(showInfo());
+  });
+  assert.equal(calls, 1);
+  assert.deepEqual(result, showInfo());
+  await assert.rejects(readProgramShow(args, async () => 'invalid JSON'), {
+    message: `solana program show returned invalid JSON for ${args.programId}`,
+  });
 });

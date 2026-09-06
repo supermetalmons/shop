@@ -1,11 +1,49 @@
-import test from 'node:test';
+import test, { after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { MintPanel } from '../src/components/MintPanel.tsx';
-import { mintPanelPreviewQuantity } from '../src/components/MintPreview.tsx';
-import { shouldFetchMintProgress } from '../src/hooks/useMintProgress.ts';
-import { resolveDropXProfile } from '../src/lib/dropSocialLinks.ts';
+import { setupFrontendDom } from './helpers/frontendDom.ts';
+
+const { dom } = setupFrontendDom();
+const { act, cleanup, fireEvent, render, within } = await import('@testing-library/react');
+const { MintPanel } = await import('../src/components/MintPanel.tsx');
+const { mintPanelPreviewQuantity } = await import('../src/components/MintPreview.tsx');
+const { shouldFetchMintProgress } = await import('../src/hooks/useMintProgress.ts');
+const { resolveDropXProfile } = await import('../src/lib/dropSocialLinks.ts');
+type Props = Parameters<typeof MintPanel>[0];
+
+afterEach(cleanup);
+after(() => dom.window.close());
+
+function panelProps(overrides: Partial<Props> = {}): Props {
+  return {
+    stats: { minted: 0, total: 15, remaining: 15, maxPerTx: 5 },
+    onMint: () => undefined,
+    busy: false,
+    boxNamePrefix: 'pack',
+    priceSol: 1,
+    discountPriceSol: 1,
+    maxSupply: 15,
+    maxPerTx: 5,
+    ...overrides,
+  };
+}
+
+function stripeOnlyProps(overrides: Partial<Props> = {}): Props {
+  return panelProps({
+    stats: { minted: 0, total: 15, remaining: 15, maxPerTx: 1 },
+    solanaMintVisible: false,
+    title: 'Card NFT Binder',
+    boxNamePrefix: 'binder',
+    dropId: 'card_nft_binder',
+    priceSol: 1_000_000,
+    discountPriceSol: 1_000_000,
+    maxPerTx: 1,
+    onStripePaymentClick: () => undefined,
+    stripePaymentVisible: true,
+    stripePaymentUnitAmountCents: 10_000,
+    ...overrides,
+  });
+}
 
 test('drop X profiles cover every current storefront family and inherit across environments', () => {
   const expectedProfiles = new Map([
@@ -36,119 +74,69 @@ test('clear cards keep a single pack preview as mint quantity changes', () => {
   assert.equal(mintPanelPreviewQuantity('card_nft_2', 3, true), 1);
 });
 
-test('quantity slider panels include the quantity in the responsive mint label', () => {
-  const markup = renderToStaticMarkup(
-    createElement(MintPanel, {
-      stats: {
-        minted: 0,
-        total: 15,
-        remaining: 15,
-        maxPerTx: 5,
-      },
-      onMint: () => undefined,
-      busy: false,
-      boxNamePrefix: 'pack',
-      priceSol: 1,
-      discountPriceSol: 1,
-      maxSupply: 15,
-      maxPerTx: 5,
-    }),
-  );
+test('quantity changes update the mint label, price, and submitted quantity', async () => {
+  const minted: number[] = [];
+  const view = render(createElement(MintPanel, panelProps({ onMint: (quantity) => { minted.push(quantity); } })));
+  const quantity = view.getByRole('slider', { name: 'Mint quantity' });
+  assert.match(view.getByRole('button', { name: /Mint/ }).textContent!, /1 pack.*1 SOL/);
 
-  assert.match(markup, /<span class="mint-panel__label-text muted small">1 pack<\/span>/);
-  assert.match(markup, /<input type="range" aria-label="Mint quantity"/);
-  assert.match(markup, /Mint<span class="mint-panel__submit-quantity"> 1 pack<\/span>/);
-  assert.match(markup, /<span class="mint-panel__submit-price"[^>]*>1 SOL<\/span>/);
+  fireEvent.change(quantity, { target: { value: '3' } });
+  assert.equal((quantity as HTMLInputElement).value, '3');
+  const mint = view.getByRole('button', { name: /Mint/ });
+  assert.match(mint.textContent!, /3 packs.*3 SOL/);
+  await act(async () => { fireEvent.click(mint); });
+  assert.deepEqual(minted, [3]);
 });
 
-test('drop X profile is grouped with the drop name while availability stays separate', () => {
-  const markup = renderToStaticMarkup(
-    createElement(MintPanel, {
-      stats: {
-        minted: 0,
-        total: 15,
-        remaining: 15,
-        maxPerTx: 1,
-      },
-      onMint: () => undefined,
-      busy: false,
-      title: 'Card NFT Binder',
-      dropId: 'card_nft_binder',
-      priceSol: 1,
-      discountPriceSol: 1,
-      maxSupply: 15,
-      maxPerTx: 1,
-    }),
-  );
-
-  const profilePosition = markup.indexOf('class="mint-panel__social-link"');
-  const titlePosition = markup.indexOf('class="mint-panel__price"');
-  const remainingPosition = markup.indexOf('class="mint-panel__remaining"');
-
-  assert.ok(profilePosition >= 0);
-  assert.ok(titlePosition >= 0);
-  assert.ok(remainingPosition >= 0);
-  assert.ok(titlePosition < profilePosition);
-  assert.ok(profilePosition < remainingPosition);
-  assert.match(markup, /href="https:\/\/x\.com\/bis__cut\/status\/2082471519683326394"/);
-  assert.match(markup, /<div class="mint-panel__price"><span class="mint-panel__drop-name">Card NFT Binder<\/span><a class="mint-panel__social-link"[^>]*aria-label="Open @bis__cut on X"><svg viewBox="26\.8 48 460\.2 416"[^>]*>/);
-  assert.doesNotMatch(markup, />@bis__cut<\/a>/);
-  assert.doesNotMatch(markup, /mint-panel__social-separator|•/);
+test('drop title and accessible X profile stay grouped separately from availability', () => {
+  const view = render(createElement(MintPanel, stripeOnlyProps()));
+  const title = view.getByText('Card NFT Binder');
+  const profile = view.getByRole('link', { name: 'Open @bis__cut on X' });
+  assert.equal(profile.getAttribute('href'), 'https://x.com/bis__cut/status/2082471519683326394');
+  const titleGroup = title.closest('.mint-panel__price');
+  assert.ok(titleGroup?.contains(profile));
+  assert.equal(titleGroup.contains(view.getByText('15 / 15 left')), false);
 });
 
-test('upcoming drop X profile stays with the drop name instead of the Soon label', () => {
-  const markup = renderToStaticMarkup(
-    createElement(MintPanel, {
-      onMint: () => undefined,
-      busy: false,
-      title: 'Clear Cards',
-      dropId: 'clear_cards',
-      priceSol: 0,
-      discountPriceSol: 0,
-      maxSupply: 1,
-      maxPerTx: 1,
-      terminalAction: {
-        statusText: 'Soon',
-        buttonText: 'Notify Me',
-        onClick: () => undefined,
-      },
-    }),
-  );
-
-  assert.match(markup, /<span class="mint-panel__drop-name">Clear Cards<\/span><a class="mint-panel__social-link"[^>]*aria-label="Open @gucci4mycat on X"><svg viewBox="26\.8 48 460\.2 416"[^>]*>/);
-  assert.match(markup, /<div class="mint-panel__remaining mint-panel__remaining--with-info"><span>Soon<\/span>/);
+test('upcoming drops expose their profile and notification action', () => {
+  let notifications = 0;
+  const view = render(createElement(MintPanel, panelProps({
+    stats: undefined,
+    title: 'Clear Cards',
+    dropId: 'clear_cards',
+    terminalAction: {
+      statusText: 'Soon',
+      buttonText: 'Notify Me',
+      onClick: () => { notifications += 1; },
+    },
+  })));
+  assert.ok(view.getByText('Clear Cards'));
+  assert.equal(view.getByRole('link', { name: 'Open @gucci4mycat on X' }).getAttribute('href'), 'https://x.com/gucci4mycat');
+  assert.ok(view.getByText('Soon'));
+  fireEvent.click(view.getByRole('button', { name: 'Notify Me' }));
+  assert.equal(notifications, 1);
 });
 
-test('Stripe-only single-item mint panels render checkout without a SOL mint action', () => {
-  const markup = renderToStaticMarkup(
-    createElement(MintPanel, {
-      stats: {
-        minted: 0,
-        total: 15,
-        remaining: 15,
-        maxPerTx: 1,
-      },
-      onMint: () => undefined,
-      solanaMintVisible: false,
-      busy: false,
-      title: 'Card NFT Binder',
-      boxNamePrefix: 'binder',
-      dropId: 'card_nft_binder',
-      priceSol: 1_000_000,
-      discountPriceSol: 1_000_000,
-      maxSupply: 15,
-      maxPerTx: 1,
-      onStripePaymentClick: () => undefined,
-      stripePaymentVisible: true,
-      stripePaymentUnitAmountCents: 10_000,
-    }),
-  );
+test('Stripe-only single-item panels submit checkout once and block repeat clicks while pending', async () => {
+  const payments: number[] = [];
+  let finishPayment!: () => void;
+  const payment = new Promise<void>((resolve) => { finishPayment = resolve; });
+  const view = render(createElement(MintPanel, stripeOnlyProps({
+    onStripePaymentClick: (quantity) => { payments.push(quantity); return payment; },
+    onMint: () => assert.fail('Stripe-only checkout must not mint with SOL'),
+  })));
+  const checkout = view.getByRole('button', { name: /Checkout/ }) as HTMLButtonElement;
+  assert.match(checkout.textContent!, /\$100\.00/);
+  assert.equal(view.queryByRole('slider'), null);
+  assert.equal(view.queryByRole('button', { name: /Mint/ }), null);
+  assert.equal(checkout.disabled, false);
 
-  assert.match(markup, />Checkout</);
-  assert.match(markup, />\$100\.00</);
-  assert.doesNotMatch(markup, /type="range"/);
-  assert.doesNotMatch(markup, /mint-panel__submit/);
-  assert.doesNotMatch(markup, /mint-panel__cta-stack--with-payment/);
+  fireEvent.click(checkout);
+  assert.equal(checkout.disabled, true);
+  fireEvent.click(checkout);
+  assert.deepEqual(payments, [1]);
+  await act(async () => finishPayment());
+  assert.equal(checkout.disabled, false);
 });
 
 test('Stripe-only drops poll mint progress unless they are forced sold out', () => {
@@ -169,90 +157,44 @@ test('Stripe-only drops poll mint progress unless they are forced sold out', () 
   assert.equal(shouldFetchMintProgress(null), false);
 });
 
-test('Stripe checkout is hidden when mint progress reports zero remaining', () => {
-  const markup = renderToStaticMarkup(
-    createElement(MintPanel, {
-      stats: {
-        minted: 15,
-        total: 15,
-        remaining: 0,
-        maxPerTx: 1,
-      },
-      onMint: () => undefined,
-      solanaMintVisible: false,
-      busy: false,
-      title: 'Card NFT Binder',
-      boxNamePrefix: 'binder',
-      dropId: 'card_nft_binder',
-      priceSol: 1_000_000,
-      discountPriceSol: 1_000_000,
-      maxSupply: 15,
-      maxPerTx: 1,
-      onStripePaymentClick: () => undefined,
-      stripePaymentVisible: true,
-      stripePaymentUnitAmountCents: 10_000,
-    }),
-  );
-
-  assert.match(markup, /<span class="mint-panel__drop-name">Card NFT Binder<\/span><a class="mint-panel__social-link"[^>]*aria-label="Open @bis__cut on X"><svg viewBox="26\.8 48 460\.2 416"[^>]*>/);
-  assert.match(markup, /<div class="mint-panel__remaining mint-panel__remaining--with-info"><span>Minted Out<\/span>/);
-  assert.doesNotMatch(markup, />Checkout</);
+test('Stripe checkout disappears when refreshed mint progress reaches zero remaining', () => {
+  const props = stripeOnlyProps();
+  const view = render(createElement(MintPanel, props));
+  assert.ok(view.getByRole('button', { name: /Checkout/ }));
+  view.rerender(createElement(MintPanel, {
+    ...props,
+    stats: { minted: 15, total: 15, remaining: 0, maxPerTx: 1 },
+  }));
+  assert.ok(view.getByText('Minted Out'));
+  assert.ok(view.getByRole('link', { name: 'Open @bis__cut on X' }));
+  assert.equal(view.queryByRole('button', { name: /Checkout/ }), null);
 });
 
-test('sold-out shared receipt-pool drops replace marketplaces with the next-drop notification action', () => {
-  const markup = renderToStaticMarkup(
-    createElement(MintPanel, {
-      stats: {
-        minted: 15,
-        total: 15,
-        remaining: 0,
-        maxPerTx: 1,
-      },
-      onMint: () => undefined,
-      solanaMintVisible: false,
-      busy: false,
-      title: 'Card NFT Binder',
-      boxNamePrefix: 'binder',
-      dropId: 'card_nft_binder',
-      receiptPoolId: 'mons_shop_receipts',
-      priceSol: 1_000_000,
-      discountPriceSol: 1_000_000,
-      maxSupply: 15,
-      maxPerTx: 1,
-      onStripePaymentClick: () => undefined,
-      stripePaymentVisible: true,
-      stripePaymentUnitAmountCents: 10_000,
-      onNotifyNextDrops: () => undefined,
-    }),
-  );
-
-  assert.match(markup, />Sold Out</);
-  assert.match(markup, />Notify me</);
-  assert.doesNotMatch(markup, /Minted Out|Magic Eden|Tensor|>Checkout</);
+test('sold-out shared receipt-pool drops offer next-drop notifications', () => {
+  let notifications = 0;
+  const view = render(createElement(MintPanel, stripeOnlyProps({
+    stats: { minted: 15, total: 15, remaining: 0, maxPerTx: 1 },
+    receiptPoolId: 'mons_shop_receipts',
+    onNotifyNextDrops: () => { notifications += 1; },
+  })));
+  assert.ok(view.getByText('Sold Out'));
+  assert.equal(view.queryByText('Minted Out'), null);
+  assert.equal(view.queryByRole('link', { name: /Magic Eden|Tensor/ }), null);
+  assert.equal(view.queryByRole('button', { name: /Checkout/ }), null);
+  fireEvent.click(view.getByRole('button', { name: 'Notify me' }));
+  assert.equal(notifications, 1);
 });
 
-test('sold-out card NFT 2 renders three marketplaces in one responsive row', () => {
-  const markup = renderToStaticMarkup(
-    createElement(MintPanel, {
-      stats: {
-        minted: 100,
-        total: 100,
-        remaining: 0,
-        maxPerTx: 1,
-      },
-      onMint: () => undefined,
-      busy: false,
-      title: 'Card NFT 2',
-      dropId: 'card_nft_2',
-      priceSol: 1,
-      discountPriceSol: 1,
-      maxSupply: 100,
-      maxPerTx: 1,
-    }),
-  );
-
-  assert.match(
-    markup,
-    /mint-panel__terminal-buttons--triple[^>]*><a[^>]*>.*Magic Eden.*<\/a><a[^>]*>.*Tensor.*<\/a><a[^>]*href="https:\/\/opensea\.io\/collection\/cardnft2"[^>]*>.*OpenSea.*<\/a>/,
-  );
+test('sold-out Card NFT 2 keeps all three marketplaces in its responsive row', () => {
+  const view = render(createElement(MintPanel, panelProps({
+    stats: { minted: 100, total: 100, remaining: 0, maxPerTx: 1 },
+    title: 'Card NFT 2',
+    dropId: 'card_nft_2',
+    maxSupply: 100,
+    maxPerTx: 1,
+  })));
+  const row = view.getByRole('link', { name: 'Magic Eden' }).closest('.mint-panel__terminal-buttons--triple');
+  assert.ok(row);
+  assert.deepEqual(within(row as HTMLElement).getAllByRole('link').map((link) => link.textContent), ['Magic Eden', 'Tensor', 'OpenSea']);
+  assert.equal(within(row as HTMLElement).getByRole('link', { name: 'OpenSea' }).getAttribute('href'), 'https://opensea.io/collection/cardnft2');
 });

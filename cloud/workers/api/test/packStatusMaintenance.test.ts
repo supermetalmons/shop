@@ -13,6 +13,7 @@ import {
   requireSettledPackStatusProjectionOutboxes,
 } from '../../../../scripts/ops/rebuildPackStatus.ts';
 import type { CommerceD1Document } from '../../../../scripts/shared/commerceD1Maintenance.ts';
+import type { PackStatusCounters } from '../../../../shared/packStatus.ts';
 
 const dropRows = [
   ['card_nft_2', 100, 300, 3],
@@ -26,10 +27,39 @@ const packStatusMigrationPaths = [
   'cloud/workers/api/migrations/0003_pack_status_historical_replay.sql',
 ] as const;
 
-function applicationSchema(): Record<string, unknown>[] {
+function createPackStatusDatabase(): DatabaseSync {
   const database = new DatabaseSync(':memory:');
+  for (const path of packStatusMigrationPaths) database.exec(readFileSync(path, 'utf8'));
+  return database;
+}
+
+function databaseState(database: DatabaseSync) {
+  return {
+    summaries: database.prepare('SELECT * FROM pack_status ORDER BY drop_id').all(),
+    events: database.prepare('SELECT * FROM pack_status_events ORDER BY drop_id, event_type, event_key').all(),
+    metadata: database.prepare('SELECT * FROM pack_status_metadata').all(),
+  };
+}
+
+function countersRow(counters: PackStatusCounters, nowMs: number) {
+  return {
+    drop_id: counters.dropId,
+    version: 1,
+    total_initial_supply: counters.totalInitialSupply,
+    total_cards: counters.totalCards,
+    cards_per_pack: counters.cardsPerPack,
+    unsealed_online: counters.unsealedOnline,
+    redeemed_irl_normal: counters.redeemedIrlNormal,
+    redeemed_irl_stripe: counters.redeemedIrlStripe,
+    redeemed_unsealed_cards: counters.redeemedUnsealedCards,
+    rebuilt_at_ms: nowMs,
+    updated_at_ms: nowMs,
+  };
+}
+
+function applicationSchema(): Record<string, unknown>[] {
+  const database = createPackStatusDatabase();
   try {
-    for (const path of packStatusMigrationPaths) database.exec(readFileSync(path, 'utf8'));
     return database.prepare(`SELECT name, type, tbl_name, sql
       FROM sqlite_schema
       WHERE
@@ -158,8 +188,10 @@ test('D1 integrity rejects an incomplete migration ledger and drifted trigger SQ
   }), /schema/);
 });
 
-test('authoritative rebuild SQL updates one allowlisted summary and metadata generation once', () => {
-  const sql = buildD1SummaryRebuildSql({
+test('authoritative rebuild inserts and updates one summary while preserving other drops and events', (t) => {
+  const database = createPackStatusDatabase();
+  t.after(() => database.close());
+  const counters: PackStatusCounters = {
     dropId: 'card_nft_2',
     totalInitialSupply: 10,
     totalCards: 30,
@@ -168,15 +200,23 @@ test('authoritative rebuild SQL updates one allowlisted summary and metadata gen
     redeemedIrlNormal: 1,
     redeemedIrlStripe: 2,
     redeemedUnsealedCards: 1,
-  }, 500);
-  assert.match(sql, /INSERT INTO pack_status/);
-  assert.match(sql, /ON CONFLICT\(drop_id\) DO UPDATE SET/);
-  assert.equal((sql.match(/UPDATE pack_status_metadata/g) || []).length, 1);
-  assert.equal((sql.match(/cache_generation = cache_generation \+ 1/g) || []).length, 1);
-  assert.doesNotMatch(sql, /pack_status_rollout/);
-  assert.doesNotMatch(sql, /pack_status_events/);
-  assert.doesNotMatch(sql, /commerce/i);
-  assert.equal((sql.match(/total_initial_supply = excluded\.total_initial_supply/g) || []).length, 1);
+  };
+  database.exec(buildD1SummaryRebuildSql(counters, 500));
+  assert.deepEqual(databaseState(database).summaries.map((row) => ({ ...row })), [countersRow(counters, 500)]);
+  assert.deepEqual({ ...databaseState(database).metadata[0] }, { singleton: 1, cache_generation: 2, updated_at_ms: 500 });
+
+  database.exec(buildD1SummaryRebuildSql({ ...counters, dropId: 'little_swag_boxes' }, 510));
+  database.prepare(`INSERT INTO pack_status_events (
+    drop_id, event_type, event_key, quantity, unsealed_online_delta, apply_delta, created_at_ms
+  ) VALUES (?, 'onlineReveal', 'historical-box', 1, 1, 0, 520)`).run('card_nft_2');
+  const before = databaseState(database);
+  const updated = { ...counters, totalInitialSupply: 20, totalCards: 60, unsealedOnline: 4 };
+  database.exec(buildD1SummaryRebuildSql(updated, 600));
+  const after = databaseState(database);
+  assert.deepEqual({ ...after.summaries[0] }, countersRow(updated, 600));
+  assert.deepEqual(after.summaries[1], before.summaries[1]);
+  assert.deepEqual(after.events, before.events);
+  assert.deepEqual({ ...after.metadata[0] }, { singleton: 1, cache_generation: 4, updated_at_ms: 600 });
   assert.throws(() => buildD1SummaryRebuildSql({
     dropId: 'unsupported',
     totalInitialSupply: 1,
@@ -189,8 +229,10 @@ test('authoritative rebuild SQL updates one allowlisted summary and metadata gen
   }, 500), /Unsupported/);
 });
 
-test('all-drop authoritative rebuild preserves exact event counts and invalidates cache once', () => {
-  const sql = buildD1SummaryRebuildSql(dropRows.map(([
+test('all-drop authoritative rebuild preserves events and rejects stale event counts without changing state', (t) => {
+  const database = createPackStatusDatabase();
+  t.after(() => database.close());
+  const counters = dropRows.map(([
     dropId,
     totalInitialSupply,
     totalCards,
@@ -204,17 +246,38 @@ test('all-drop authoritative rebuild preserves exact event counts and invalidate
     redeemedIrlNormal: 0,
     redeemedIrlStripe: 0,
     redeemedUnsealedCards: 0,
-  })), 500, [
-    { dropId: 'card_nft_2', eventCount: 700, historicalEventCount: 699, appliedEventCount: 1 },
-    { dropId: 'little_swag_boxes', eventCount: 100, historicalEventCount: 100, appliedEventCount: 0 },
-    { dropId: 'poncho_drifella', eventCount: 70, historicalEventCount: 70, appliedEventCount: 0 },
-  ]);
-  assert.equal((sql.match(/INSERT INTO pack_status/g) || []).length, 3);
-  assert.equal((sql.match(/UPDATE pack_status_metadata/g) || []).length, 1);
-  assert.equal((sql.match(/cache_generation = cache_generation \+ 1/g) || []).length, 1);
-  assert.equal((sql.match(/SELECT COUNT\(\*\) FROM pack_status_events\) = 870/g) || []).length, 4);
-  assert.match(sql, /drop_id = 'card_nft_2' AND apply_delta = 0\) = 699/);
-  assert.match(sql, /drop_id = 'card_nft_2' AND apply_delta = 1\) = 1/);
+  }));
+  const expectedEvents = [
+    { dropId: 'card_nft_2', eventCount: 3, historicalEventCount: 2, appliedEventCount: 1 },
+    { dropId: 'little_swag_boxes', eventCount: 1, historicalEventCount: 1, appliedEventCount: 0 },
+    { dropId: 'poncho_drifella', eventCount: 2, historicalEventCount: 1, appliedEventCount: 1 },
+  ];
+  database.exec(buildD1SummaryRebuildSql(counters, 100));
+  const insertEvent = database.prepare(`INSERT INTO pack_status_events (
+    drop_id, event_type, event_key, quantity, unsealed_online_delta, apply_delta, created_at_ms
+  ) VALUES (?, 'onlineReveal', ?, 1, 1, ?, 200)`);
+  for (const expectation of expectedEvents) {
+    for (let index = 0; index < expectation.eventCount; index += 1) {
+      insertEvent.run(expectation.dropId, `box-${index}`, index < expectation.historicalEventCount ? 0 : 1);
+    }
+  }
+  const before = databaseState(database);
+  database.exec(buildD1SummaryRebuildSql(counters, 500, expectedEvents));
+  const after = databaseState(database);
+  assert.deepEqual(after.summaries.map((row) => ({ ...row })), counters.map((entry) => countersRow(entry, 500)));
+  assert.deepEqual(after.events, before.events);
+  assert.deepEqual({ ...after.metadata[0] }, { singleton: 1, cache_generation: 3, updated_at_ms: 500 });
+
+  for (const staleCardCounts of [
+    { eventCount: 2, historicalEventCount: 1, appliedEventCount: 1 },
+    { eventCount: 3, historicalEventCount: 1, appliedEventCount: 2 },
+  ]) {
+    const staleEvents = expectedEvents.map((entry) => entry.dropId === 'card_nft_2'
+      ? { ...entry, ...staleCardCounts }
+      : entry);
+    database.exec(buildD1SummaryRebuildSql(counters, 600, staleEvents));
+    assert.deepEqual(databaseState(database), after);
+  }
   assert.throws(() => buildD1SummaryRebuildSql([
     {
       dropId: 'card_nft_2',
@@ -307,27 +370,4 @@ test('authoritative rebuild derives assignment and delivery counters from Commer
   });
   assert.equal(result.counters.unsealedOnline, 0);
   assert.equal(result.counters.redeemedIrlNormal, 2);
-});
-
-test('pack-status migrations include metadata, immutable event guards, and replay conflict protection', () => {
-  const baseline = readFileSync(
-    'cloud/workers/api/migrations/0001_current_schema.sql',
-    'utf8',
-  );
-  const conflictGuard = readFileSync(
-    'cloud/workers/api/migrations/0002_pack_status_event_conflict_guard.sql',
-    'utf8',
-  );
-  const historicalReplay = readFileSync(
-    'cloud/workers/api/migrations/0003_pack_status_historical_replay.sql',
-    'utf8',
-  );
-  assert.match(baseline, /CREATE TABLE pack_status_metadata/);
-  assert.match(baseline, /VALUES \(1, 1, 0\)/);
-  assert.match(baseline, /CREATE TRIGGER pack_status_event_delete_guard/);
-  assert.match(baseline, /RAISE\(ABORT, 'pack-status events are immutable'\)/);
-  assert.match(conflictGuard, /CREATE TRIGGER pack_status_event_conflict_guard/);
-  assert.match(conflictGuard, /RAISE\(ABORT, 'pack-status event payload conflict'\)/);
-  assert.match(historicalReplay, /DROP TRIGGER pack_status_event_conflict_guard/);
-  assert.doesNotMatch(historicalReplay, /apply_delta IS NEW\.apply_delta/);
 });

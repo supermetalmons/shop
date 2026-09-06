@@ -74,6 +74,10 @@ dry run. `check` is the full repository gate, including API and runtime tests,
 dead-code checks, on-chain tests, generated Worker types, Worker startup
 validation, and both production bundles.
 
+Knip discovers supported CLI entrypoints from `package.json` scripts. Dynamic
+drop configurations remain explicit in `knip.ts`; standalone scripts are not
+automatically treated as live code.
+
 ## Anonymous Auth and legacy-provider retirement
 
 The frontend creates fresh anonymous identities through `mons-shop-api`. The
@@ -542,6 +546,10 @@ Metadata URI history is part of live on-chain compatibility:
 
 Those records, compatibility helpers, and their verifier are retained
 operational evidence, not obsolete deployment tooling.
+
+The completed URI rollout commands have been retired. Historical recovery uses
+the pinned source and artifacts described in the
+[URI migration release record](releases/mainnet-uri-migrations-2026-08-05/README.md#historical-tooling-and-recovery).
 
 Verify the historical mainnet URI migrations before changing URI logic:
 

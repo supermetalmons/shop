@@ -1849,6 +1849,28 @@ function writeTempKeypairFile(keypair: Keypair, prefix: string): string {
   return filePath;
 }
 
+export function writeVerifiedUpgradeAuthority({
+  input,
+  expectedAuthority,
+  writeKeypair = writeTempKeypairFile,
+}: {
+  input: string;
+  expectedAuthority: string;
+  writeKeypair?: typeof writeTempKeypairFile;
+}): { authorityPubkey: string; keypairPath: string } {
+  const authority = parsePrivateKeyInput(input);
+  const authorityPubkey = authority.publicKey.toBase58();
+  if (expectedAuthority !== authorityPubkey) {
+    throw new Error(
+      `Private key does not match the deployed upgrade authority.\n` +
+        `Expected: ${expectedAuthority}\n` +
+        `Got     : ${authorityPubkey}`,
+    );
+  }
+  const keypairPath = writeKeypair(authority, 'mons-shop-upgrade-authority');
+  return { authorityPubkey, keypairPath };
+}
+
 function writeTempSolanaConfigFile(rpcUrl: string): string {
   const filePath = path.join(
     tmpdir(),
@@ -1868,7 +1890,7 @@ function writeTempSolanaConfigFile(rpcUrl: string): string {
   return filePath;
 }
 
-async function readProgramShow(args: {
+export async function readProgramShow(args: {
   programId: string;
   solanaUrl: string;
   solanaConfigPath: string;
@@ -1877,8 +1899,8 @@ async function readProgramShow(args: {
   env: ToolEnv;
   cancellation?: CommandCancellationController;
   allowAfterCancellation?: boolean;
-}): Promise<unknown> {
-  const output = await runCapture(
+}, capture: typeof runCapture = runCapture): Promise<unknown> {
+  const output = await capture(
     'solana',
     buildProgramShowArgs(args),
     {
@@ -2228,7 +2250,19 @@ function printSharedConfigAudit(
   }
 }
 
-async function executeUpgrade(args: {
+type UpgradePreflightEffects = {
+  captureGateState: typeof captureUpgradeGateState;
+  runCommand: typeof runUpgradeCommand;
+  acquireRegistryLock: typeof acquireDeploymentRegistryMutationLock;
+};
+
+const upgradePreflightEffects: UpgradePreflightEffects = {
+  captureGateState: captureUpgradeGateState,
+  runCommand: runUpgradeCommand,
+  acquireRegistryLock: acquireDeploymentRegistryMutationLock,
+};
+
+export async function executeUpgrade(args: {
   opts: ParsedCliOptions;
   drop: DeploymentDropConfigSerialized;
   target: { programId: string; buildFeature: string };
@@ -2238,7 +2272,8 @@ async function executeUpgrade(args: {
   programBinary: string;
   solanaUrl: string;
   toolEnv: ToolEnv;
-}): Promise<void> {
+}, effects: UpgradePreflightEffects = upgradePreflightEffects): Promise<void> {
+  const { captureGateState, runCommand, acquireRegistryLock } = effects;
   const {
     opts,
     drop,
@@ -2312,7 +2347,7 @@ async function executeUpgrade(args: {
     if (drop.boxMinterConfigPda) console.log('config  :', drop.boxMinterConfigPda);
     console.log('');
 
-    const initialState = await captureUpgradeGateState({
+    const initialState = await captureGateState({
       connection,
       cluster: drop.solanaCluster as SupportedUpgradeCluster,
       programId,
@@ -2355,25 +2390,25 @@ async function executeUpgrade(args: {
     }
 
     if (!opts.skipTypecheck) {
-      await runUpgradeCommand('npm', ['run', 'typecheck'], {
+      await runCommand('npm', ['run', 'typecheck'], {
         cwd: root,
         env: toolEnv,
         cancellation,
       });
     }
     if (!opts.skipTests) {
-      await runUpgradeCommand('cargo', ['test', '--lib', '--locked'], {
+      await runCommand('cargo', ['test', '--lib', '--locked'], {
         cwd: onchainDir,
         env: toolEnv,
         cancellation,
       });
     }
 
-    releaseRegistryLock = acquireDeploymentRegistryMutationLock({
+    releaseRegistryLock = acquireRegistryLock({
       root,
       operation: `build upgrade ${drop.dropId}`,
     });
-    const preBuildState = await captureUpgradeGateState({
+    const preBuildState = await captureGateState({
       connection,
       cluster: drop.solanaCluster as SupportedUpgradeCluster,
       programId,
@@ -2399,7 +2434,7 @@ async function executeUpgrade(args: {
       'no-log-ix-name',
       target.buildFeature,
     ].join(',');
-    await runUpgradeCommand(
+    await runCommand(
       'anchor',
       [
         'build',
@@ -2431,7 +2466,7 @@ async function executeUpgrade(args: {
     const localBinary = readFileSync(verifiedProgramBinaryPath);
     const localHash = sha256(localBinary);
     if (!opts.skipTests) {
-      await runUpgradeCommand(
+      await runCommand(
         'cargo',
         [
           'test',
@@ -2463,7 +2498,7 @@ async function executeUpgrade(args: {
       );
     }
 
-    const buildBaseline = await captureUpgradeGateState({
+    const buildBaseline = await captureGateState({
       connection,
       cluster: drop.solanaCluster as SupportedUpgradeCluster,
       programId,
@@ -2568,19 +2603,12 @@ async function executeUpgrade(args: {
     } finally {
       authorityPromptAbort = undefined;
     }
-    const authority = parsePrivateKeyInput(authorityInput);
-    const authorityPubkey = authority.publicKey.toBase58();
-    if (buildBaseline.program.show.authority !== authorityPubkey) {
-      throw new Error(
-        `Private key does not match the deployed upgrade authority.\n` +
-          `Expected: ${buildBaseline.program.show.authority}\n` +
-        `Got     : ${authorityPubkey}`,
-      );
-    }
-    authorityKeypairPath = writeTempKeypairFile(
-      authority,
-      'mons-shop-upgrade-authority',
-    );
+    const verifiedAuthority = writeVerifiedUpgradeAuthority({
+      input: authorityInput,
+      expectedAuthority: buildBaseline.program.show.authority,
+    });
+    authorityKeypairPath = verifiedAuthority.keypairPath;
+    const { authorityPubkey } = verifiedAuthority;
     if (resumeBufferSigner) {
       resumeBufferKeypairPath = writeTempKeypairFile(
         resumeBufferSigner,
@@ -2593,7 +2621,7 @@ async function executeUpgrade(args: {
       );
     }
 
-    releaseRegistryLock = acquireDeploymentRegistryMutationLock({
+    releaseRegistryLock = acquireRegistryLock({
       root,
       operation: `upgrade ${drop.dropId}`,
     });
@@ -2615,7 +2643,7 @@ async function executeUpgrade(args: {
         stage: 'after reacquiring the deployment lock',
       });
     }
-    const lockedState = await captureUpgradeGateState({
+    const lockedState = await captureGateState({
       connection,
       cluster: drop.solanaCluster as SupportedUpgradeCluster,
       programId,
@@ -2698,7 +2726,7 @@ async function executeUpgrade(args: {
         resumeBufferBeforeFinalGate,
       );
     }
-    const finalPreDeployState = await captureUpgradeGateState({
+    const finalPreDeployState = await captureGateState({
       connection,
       cluster: drop.solanaCluster as SupportedUpgradeCluster,
       programId,
@@ -2762,7 +2790,7 @@ async function executeUpgrade(args: {
         const recovered = await runBufferWriteAttemptWithVerification({
           cancellation,
           write: () =>
-            runUpgradeCommand(
+            runCommand(
               'solana',
               buildProgramWriteBufferArgs({
                 programBinaryPath: verifiedProgramBinaryPath,
@@ -2789,7 +2817,7 @@ async function executeUpgrade(args: {
               minContextSlot: finalPreDeployState.minContextSlot,
             });
             assertResumeBufferComplete(bufferAfterWrite, localHash);
-            const stateAfterWrite = await captureUpgradeGateState({
+            const stateAfterWrite = await captureGateState({
               connection,
               cluster: drop.solanaCluster as SupportedUpgradeCluster,
               programId,
@@ -2866,7 +2894,7 @@ async function executeUpgrade(args: {
                 computeUnitPrice: opts.computeUnitPrice,
                 maxSignAttempts: opts.maxSignAttempts,
               });
-          return runUpgradeCommand('solana', commandArgs, {
+          return runCommand('solana', commandArgs, {
             cwd: onchainDir,
             env: toolEnv,
             sensitiveRpcUrl: solanaUrl,

@@ -13,7 +13,6 @@ const config = {
         'cloud/workers/api/test/*.test.ts',
         'cloud/workers/api/runtime-test/*.test.ts',
         'cloud/workers/frontend/test/*.test.ts',
-        'scripts/*.{ts,mjs}',
         'scripts/newDrops/*.ts',
         'scripts/ops/*.ts',
         'tests/api/*.test.ts',

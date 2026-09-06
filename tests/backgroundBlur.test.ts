@@ -1,17 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import test from 'node:test';
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import {
-  BackgroundBlurPortal,
-  BackgroundBlurProvider,
-} from '../src/components/BackgroundBlurLayer.tsx';
-import {
-  ModalFocusScope,
-  shouldMoveFocusIntoModalScope,
-} from '../src/components/ModalFocusScope.tsx';
-import { SuccessHud } from '../src/components/SuccessHud.tsx';
+import { registerHooks } from 'node:module';
+import test, { after, afterEach } from 'node:test';
+import { createElement, Fragment, useState } from 'react';
+import { setupFrontendDom } from './helpers/frontendDom.ts';
 import { prepareWalletModalDialog } from '../src/wallet/walletModalFocus.ts';
 import {
   combineBackgroundBlurStates,
@@ -28,6 +20,25 @@ import {
   resolveActiveModalLayer,
   shouldToastAppearAboveModal,
 } from '../src/lib/modalLayers.ts';
+
+const { dom } = setupFrontendDom();
+const { cleanup, fireEvent, render, waitFor } = await import('@testing-library/react');
+const { BackgroundBlurPortal, BackgroundBlurProvider, BackgroundLayerPortal } = await import('../src/components/BackgroundBlurLayer.tsx');
+const { ModalFocusScope, shouldMoveFocusIntoModalScope } = await import('../src/components/ModalFocusScope.tsx');
+const { SuccessHud, useSuccessHud } = await import('../src/components/SuccessHud.tsx');
+const cssImports = registerHooks({
+  load(url, context, nextLoad) {
+    return url.endsWith('.css')
+      ? { format: 'module', source: '', shortCircuit: true }
+      : nextLoad(url, context);
+  },
+});
+const { PonchoCardViewerOverlay } = await import('../src/components/PonchoRevealOverlay.tsx');
+cssImports.deregister();
+const { getDrifCardByFigureId } = await import('../src/drifCards.ts');
+
+afterEach(cleanup);
+after(() => dom.window.close());
 
 const source = (relativePath: string) =>
   readFileSync(new URL(relativePath, import.meta.url), 'utf8');
@@ -131,49 +142,82 @@ test('closing blur preserves valid foreground focus', () => {
 });
 
 test('active blur portals render even when open is false', () => {
-  const markup = renderToStaticMarkup(
-    createElement(
-      BackgroundBlurPortal,
-      {
-        open: false,
-        active: true,
-        children: createElement('span', null, 'Foreground'),
-      },
-    ),
-  );
-  assert.equal(markup, '<span>Foreground</span>');
+  const view = render(createElement(BackgroundBlurPortal, {
+    open: false,
+    active: true,
+    children: createElement('button', null, 'Foreground'),
+  }));
+  assert.ok(view.getByRole('button', { name: 'Foreground' }));
 });
 
-test('success HUD renders its announcement and visual content together', () => {
-  const markup = renderToStaticMarkup(
-    createElement(SuccessHud, {
-      announcement: 'Transfer complete',
-      className: 'success-hud--drif',
-      phase: 'visible',
-    }),
+function Hud({ suspended = false }: { suspended?: boolean }) {
+  const hud = useSuccessHud(suspended);
+  return createElement(Fragment, null,
+    createElement('button', { onClick: () => hud.show('Transfer complete') }, 'Finish transfer'),
+    createElement(SuccessHud, { ...hud, className: 'success-hud--drif' }),
   );
+}
 
-  assert.match(markup, /role="status"/);
-  assert.match(markup, />Transfer complete</);
-  assert.match(markup, /class="success-hud success-hud--drif"/);
+test('success HUD announces completion and clears announcements while suspended', async () => {
+  const view = render(createElement(Hud));
+  assert.equal(view.getByRole('status').textContent, '');
+  fireEvent.click(view.getByRole('button', { name: 'Finish transfer' }));
+  await waitFor(() => assert.equal(view.getByRole('status').textContent, 'Transfer complete'));
+  const visual = document.body.querySelector('.success-hud--drif');
+  assert.ok(visual);
+  assert.equal(visual.getAttribute('aria-hidden'), 'true');
+
+  view.rerender(createElement(Hud, { suspended: true }));
+  assert.equal(view.getByRole('status').textContent, '');
+  assert.equal(visual.isConnected, false);
+  fireEvent.click(view.getByRole('button', { name: 'Finish transfer' }));
+  assert.equal(view.getByRole('status').textContent, '');
+  assert.equal(document.body.querySelector('.success-hud--drif'), null);
 });
 
 test('background provider preserves header, page, and trailing control tab order', () => {
-  const markup = renderToStaticMarkup(
-    createElement(
-      BackgroundBlurProvider,
-      null,
-      createElement('main', null, 'Page'),
+  const view = render(createElement(BackgroundBlurProvider, {
+    children: createElement(Fragment, null,
+      createElement(BackgroundLayerPortal, { placement: 'leading', children: createElement('button', null, 'Header control') }),
+      createElement('main', null, createElement('button', null, 'Page control')),
+      createElement(BackgroundLayerPortal, { children: createElement('button', null, 'Trailing control') }),
     ),
-  );
-  const portalMarker = 'class="background-blur-layer__portals"';
-  const leadingPortal = markup.indexOf(portalMarker);
-  const pageStage = markup.indexOf('class="background-blur-layer__stage"');
-  const trailingPortal = markup.indexOf(portalMarker, leadingPortal + portalMarker.length);
+  }));
+  assert.deepEqual(view.getAllByRole('button').map((button) => button.textContent), [
+    'Header control', 'Page control', 'Trailing control',
+  ]);
+  for (const button of view.getAllByRole('button')) {
+    assert.equal(button.tabIndex, 0);
+    button.focus();
+    assert.equal(document.activeElement, button);
+  }
+});
 
-  assert.ok(leadingPortal >= 0);
-  assert.ok(pageStage > leadingPortal);
-  assert.ok(trailingPortal > pageStage);
+function BlurredPage() {
+  const [open, setOpen] = useState(false);
+  return createElement(BackgroundBlurProvider, {
+    children: createElement(Fragment, null,
+      createElement('button', { onClick: () => setOpen(true) }, 'Open viewer'),
+      createElement(BackgroundBlurPortal, {
+        open,
+        active: open,
+        children: createElement('button', { onClick: () => setOpen(false) }, 'Close viewer'),
+      }),
+    ),
+  });
+}
+
+test('closing the foreground viewer restores its opener after the background becomes usable', () => {
+  const view = render(createElement(BlurredPage));
+  const opener = view.getByRole('button', { name: 'Open viewer' });
+  opener.focus();
+  fireEvent.click(opener);
+  assert.ok(opener.closest('[inert]'));
+  const close = view.getByRole('button', { name: 'Close viewer' });
+  close.focus();
+  fireEvent.click(close);
+  assert.equal(opener.closest('[inert]'), null);
+  assert.equal(document.activeElement, opener);
 });
 
 test('background portal hosts do not create viewport-sized hit-testing boxes', () => {
@@ -183,84 +227,71 @@ test('background portal hosts do not create viewport-sized hit-testing boxes', (
   assert.doesNotMatch(portalRule, /position: fixed|inset:|pointer-events:/);
 });
 
-test('focus fallback skips non-tabbable and hidden controls', () => {
-  let focused = '';
-  let focusableSelector = '';
-  const control = (
-    name: string,
-    { tabIndex = 0, hidden = false }: { tabIndex?: number; hidden?: boolean } = {},
-  ) => ({
-    tabIndex,
-    isConnected: true,
-    matches: () => false,
-    closest: () => (hidden ? {} : null),
-    focus: () => {
-      focused = name;
-    },
-  });
-  const spacerLink = control('spacer', { tabIndex: -1 });
-  const hiddenButton = control('hidden', { hidden: true });
-  const visibleButton = control('visible');
-  const root = {
-    querySelectorAll: (selector: string) => {
-      focusableSelector = selector;
-      return [spacerLink, hiddenButton, visibleButton];
-    },
-    focus: () => {
-      focused = 'root';
-    },
-  };
-
-  focusFirstControl(root as unknown as HTMLElement);
-  assert.equal(focused, 'visible');
-  assert.match(focusableSelector, /summary/);
+test('focus fallback skips untabbable, hidden, and disabled controls', () => {
+  const view = render(createElement('div', null,
+    createElement('a', { href: '#spacer', tabIndex: -1 }, 'Spacer'),
+    createElement('button', { hidden: true }, 'Hidden'),
+    createElement('button', { disabled: true }, 'Disabled'),
+    createElement('details', null,
+      createElement('summary', null, 'Options'),
+      createElement('button', null, 'Inside closed details'),
+    ),
+    createElement('button', null, 'Visible'),
+  ));
+  focusFirstControl(view.container);
+  assert.equal(document.activeElement, view.getByText('Options'));
 });
 
 test('focus restoration rejects controls hidden by closed details', () => {
-  const summary = {
-    matches: (selector: string) => selector === 'summary',
-    contains: () => false,
-  };
-  const details = {
-    matches: (selector: string) => selector === 'details:not([open])',
-    children: [summary],
-    parentElement: null,
-  };
-  const control = {
-    isConnected: true,
-    matches: () => false,
-    closest: () => null,
-    parentElement: details,
-  };
-
-  assert.equal(canRestoreFocus(control as unknown as HTMLElement), false);
+  const view = render(createElement('details', null,
+    createElement('summary', null, 'Options'),
+    createElement('button', null, 'Inside details'),
+  ));
+  const control = view.getByText('Inside details');
+  assert.equal(canRestoreFocus(control), false);
+  (view.getByText('Options').parentElement as HTMLDetailsElement).open = true;
+  assert.equal(canRestoreFocus(control), true);
 });
 
-test('modal focus scopes expose active, suspended, and nested semantics', () => {
-  const activeMarkup = renderToStaticMarkup(
-    createElement(
-      ModalFocusScope,
-      {
-        ariaLabel: 'Card viewer',
-        children: createElement('button', { type: 'button' }, 'Bookmark'),
-      },
+test('modal focus scopes trap focus and disable focus and Escape handling while suspended', () => {
+  let escapes = 0;
+  const props = {
+    ariaLabel: 'Card viewer',
+    onEscape: () => { escapes += 1; },
+    children: createElement(Fragment, null,
+      createElement('button', null, 'Bookmark'),
+      createElement('button', null, 'Share'),
     ),
-  );
-  const suspendedMarkup = renderToStaticMarkup(
-    createElement(ModalFocusScope, { ariaLabel: 'Exporting', children: null, suspended: true }),
-  );
-  const nestedMarkup = renderToStaticMarkup(
-    createElement(ModalFocusScope, { ariaLabel: 'Nested', children: null, enabled: false }),
-  );
+  };
+  const view = render(createElement(ModalFocusScope, props));
+  const dialog = view.getByRole('dialog', { name: 'Card viewer' });
+  const first = view.getByRole('button', { name: 'Bookmark' });
+  const last = view.getByRole('button', { name: 'Share' });
+  assert.equal(dialog.getAttribute('aria-modal'), 'true');
+  assert.equal(document.activeElement, first);
+  fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+  assert.equal(document.activeElement, last);
+  fireEvent.keyDown(document, { key: 'Tab' });
+  assert.equal(document.activeElement, first);
+  fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(escapes, 1);
 
-  assert.match(activeMarkup, /role="dialog"/);
-  assert.match(activeMarkup, /aria-modal="true"/);
-  assert.match(activeMarkup, /<button type="button">Bookmark<\/button>/);
-  assert.match(suspendedMarkup, /role="dialog"/);
-  assert.match(suspendedMarkup, /aria-hidden="true"/);
-  assert.match(suspendedMarkup, /inert=""/);
-  assert.doesNotMatch(suspendedMarkup, /aria-modal=/);
-  assert.doesNotMatch(nestedMarkup, /role=|aria-modal=|aria-hidden=|inert=/);
+  view.rerender(createElement(ModalFocusScope, { ...props, suspended: true }));
+  assert.equal(dialog.getAttribute('aria-hidden'), 'true');
+  assert.equal(dialog.hasAttribute('inert'), true);
+  assert.equal(dialog.hasAttribute('aria-modal'), false);
+  fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(escapes, 1);
+  const outside = document.createElement('button');
+  document.body.append(outside);
+  outside.focus();
+  assert.equal(document.activeElement, outside);
+  outside.remove();
+
+  view.rerender(createElement(ModalFocusScope, { ...props, enabled: false }));
+  assert.equal(view.queryByRole('dialog'), null);
+  assert.equal(dialog.hasAttribute('inert'), false);
+  assert.equal(dialog.hasAttribute('aria-hidden'), false);
 });
 
 test('modal focus scopes retry autofocus from the root or an invalid descendant', () => {
@@ -509,13 +540,6 @@ test('blur viewport background is route-overridable without retheming portals', 
 test('frosted surfaces use native backdrop filters without live element capture', () => {
   const styles = source('../src/styles.css');
   const clearCardStyles = source('../src/clearCardWip.css');
-  const blurProvider = source('../src/components/BackgroundBlurLayer.tsx');
-  const componentSources = [
-    source('../src/App.tsx'),
-    source('../src/components/ClearCardRevealOverlay.tsx'),
-    source('../src/components/ShopHeader.tsx'),
-    source('../src/components/SuccessHud.tsx'),
-  ].join('\n');
 
   assert.match(cssRule(styles, '.top__backdrop'), /backdrop-filter: blur\(18px\)/);
   assert.match(styles, /\.toast \{[^}]*backdrop-filter: blur\(12px\)/s);
@@ -533,8 +557,6 @@ test('frosted surfaces use native backdrop filters without live element capture'
   assert.doesNotMatch(styles, standardBeforePrefixed);
   assert.doesNotMatch(clearCardStyles, standardBeforePrefixed);
   assert.doesNotMatch(styles, /-moz-element|--frosted-|data-frosted-surface/);
-  assert.doesNotMatch(blurProvider, /--background-blur-source-scroll-y/);
-  assert.doesNotMatch(componentSources, /data-frosted-surface/);
 });
 
 test('global foreground layers have deterministic stacking', () => {
@@ -565,7 +587,6 @@ test('global foreground layers have deterministic stacking', () => {
 
 test('suspended blur filtering stays scoped to static viewers', () => {
   const styles = source('../src/styles.css');
-  const ponchoViewer = source('../src/components/PonchoRevealOverlay.tsx');
   const genericRule = cssRule(styles, '.reveal-overlay--suspended');
   const staticViewerRule = cssRule(
     styles,
@@ -582,8 +603,37 @@ test('suspended blur filtering stays scoped to static viewers', () => {
     ),
     /filter:/,
   );
-  assert.match(ponchoViewer, /interactive=\{!suspended\}/);
-  assert.doesNotMatch(ponchoViewer, /interactive=\{!interactionSuspended\}/);
+});
+
+test('Poncho viewer suspends card controls and dismissal while preserving closing animation readiness', () => {
+  let dismissals = 0;
+  const card = getDrifCardByFigureId(1);
+  assert.ok(card);
+  const props = { active: true, closing: false, card, onDismiss: () => { dismissals += 1; } };
+  const view = render(createElement(PonchoCardViewerOverlay, props));
+  const dialog = view.getByRole('dialog', { name: 'Card viewer' });
+  const control = view.getByRole('button', { name: 'Revealed card' });
+  fireEvent.load(view.getByRole('img', { name: 'Revealed card' }));
+  assert.equal(control.getAttribute('aria-disabled'), null);
+  assert.equal(control.tabIndex, 0);
+  fireEvent.click(control);
+  assert.equal(dismissals, 0);
+  fireEvent.click(dialog);
+  assert.equal(dismissals, 1);
+
+  view.rerender(createElement(PonchoCardViewerOverlay, { ...props, suspended: true }));
+  assert.equal(control.getAttribute('aria-disabled'), 'true');
+  assert.equal(control.tabIndex, -1);
+  assert.equal(dialog.hasAttribute('inert'), true);
+  fireEvent.click(dialog);
+  assert.equal(dismissals, 1);
+
+  view.rerender(createElement(PonchoCardViewerOverlay, { ...props, closing: true }));
+  assert.equal(control.getAttribute('aria-disabled'), null);
+  assert.equal(control.tabIndex, 0);
+  assert.equal(dialog.hasAttribute('inert'), true);
+  fireEvent.click(dialog);
+  assert.equal(dismissals, 1);
 });
 
 test('Clear Card lighting uses native backdrop blur instead of Firefox live capture', () => {

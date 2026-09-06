@@ -31,7 +31,6 @@ test('dependency RPC fallback rewriting never invents an unsupported testnet rou
     rewriteDependencyPublicRpcFallbacks(source, '/repo/node_modules/solana/index.js', normalizeMonsApiOrigin(undefined)),
     undefined,
   );
-  assert.doesNotMatch(source, /api\.mons\.shop\/rpc\/testnet/);
 });
 
 test('dependency RPC fallback rewriting does not touch application source', () => {
