@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MintPanel, mintPanelPreviewQuantity } from '../src/components/MintPanel.tsx';
+import { MintPanel } from '../src/components/MintPanel.tsx';
+import { mintPanelPreviewQuantity } from '../src/components/MintPreview.tsx';
 import { shouldFetchMintProgress } from '../src/hooks/useMintProgress.ts';
 import { resolveDropXProfile } from '../src/lib/dropSocialLinks.ts';
 

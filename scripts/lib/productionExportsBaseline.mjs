@@ -216,7 +216,7 @@ const productionExportBaseline = [
   ["src/api/shop.ts","exports","createShopApiClient"],
   ["src/api/transport.ts","exports","profileApiTimeoutMs"],
   ["src/api/transport.ts","exports","requestProfileApi"],
-  ["src/components/MintPanel.tsx","exports","mintPanelPreviewQuantity"],
+  ["src/components/MintPreview.tsx","exports","mintPanelPreviewQuantity"],
   ["src/components/ModalFocusScope.tsx","exports","shouldMoveFocusIntoModalScope"],
   ["src/config/deployment.ts","exports","DROP_METADATA_IPFS_GATEWAY"],
   ["src/fulfillment/orders.ts","exports","canCollapseFulfillmentOrderGroupContact"],
