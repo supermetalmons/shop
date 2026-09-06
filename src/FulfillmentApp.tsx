@@ -12,18 +12,8 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { FiAlertTriangle, FiDownload, FiEdit2, FiMoreHorizontal } from 'react-icons/fi';
-import {
-  listFulfillmentManualReviewCheckouts,
-  listFulfillmentOrders,
-  updateFulfillmentAddress,
-  updateFulfillmentStatus,
-} from './api/fulfillment';
-import {
-  FulfillmentManualReviewCheckout,
-  FulfillmentOrder,
-  FulfillmentOrdersCursor,
-  FulfillmentStatus,
-} from './types';
+import { updateFulfillmentAddress, updateFulfillmentStatus } from './api/fulfillment';
+import { FulfillmentOrder, FulfillmentStatus } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import {
@@ -44,6 +34,7 @@ import { isDirectDeliveryItemsPerBox } from '../shared/shipping.ts';
 import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { Modal } from './components/Modal';
 import { FulfillmentShipStationModal } from './fulfillment/FulfillmentShipStationModal';
+import { useFulfillmentOrders } from './fulfillment/useFulfillmentOrders';
 import { ShopHeader } from './components/ShopHeader';
 import { BodyPortal } from './components/BackgroundBlurLayer';
 import {
@@ -88,26 +79,18 @@ import {
 import { hasFulfillmentAddressAdminAccess, listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 import { walletSessionSignInReadiness } from './lib/profileClientLifecycle';
 import {
-  dedupeManualReviewCheckouts,
   formatManualReviewAmount,
   formatOrderDate,
   manualReviewCheckoutKey,
   manualReviewIssueText,
   shortenStripeSessionId,
-  sortManualReviewCheckouts,
 } from './fulfillment/manualReview';
-import {
-  dedupeOrdersByKey,
-  fulfillmentOrderKey,
-  groupFulfillmentOrders,
-  sortFulfillmentOrders,
-} from './fulfillment/orders';
+import { fulfillmentOrderKey, groupFulfillmentOrders } from './fulfillment/orders';
 import {
   collectFulfillmentFigureMetadataTargets,
   mergeFigureMetadataRecords,
 } from './fulfillment/figureMetadata';
 
-const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
 const FIGURE_METADATA_RETRY_MS = 3000;
 const BOX_CONTENTS_FIGURE_WIDTH = 130;
@@ -149,8 +132,6 @@ type DuplicateFigureSummary = {
   count: number;
   sortValue: number;
 };
-
-type FulfillmentOrdersCursorByDropId = Record<string, FulfillmentOrdersCursor | null>;
 
 function getBoxContentsStyle(itemCount: number): CSSProperties {
   const columns = Math.max(1, Math.min(itemCount, 3));
@@ -827,14 +808,6 @@ export default function FulfillmentApp({
     walletAdapter.autoConnect &&
     (walletReadyState === WalletReadyState.Installed || walletReadyState === WalletReadyState.Loadable);
 
-  const [orders, setOrders] = useState<FulfillmentOrder[]>([]);
-  const [orderPageKeys, setOrderPageKeys] = useState<string[][]>([]);
-  const [cursorsByDropId, setCursorsByDropId] = useState<FulfillmentOrdersCursorByDropId>({});
-  const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [ordersError, setOrdersError] = useState<string | null>(null);
-  const [manualReviewCheckouts, setManualReviewCheckouts] = useState<FulfillmentManualReviewCheckout[]>([]);
   const [manualReviewMenuOpen, setManualReviewMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [secretCodesExporting, setSecretCodesExporting] = useState(false);
@@ -857,7 +830,6 @@ export default function FulfillmentApp({
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const manualReviewMenuRef = useRef<HTMLDivElement | null>(null);
   const exportMenuRef = useRef<HTMLDivElement | null>(null);
-  const orderRequestEpochRef = useRef(0);
 
   useDismissibleMenu(manualReviewMenuOpen, manualReviewMenuRef, setManualReviewMenuOpen);
   useDismissibleMenu(exportMenuOpen, exportMenuRef, setExportMenuOpen);
@@ -915,39 +887,7 @@ export default function FulfillmentApp({
     });
   }, []);
 
-  const loadInitial = useCallback(async () => {
-    if (!hasFulfillmentAccess || !signedIn || !selectedDropIds.length) {
-      orderRequestEpochRef.current += 1;
-      setLoading(false);
-      setLoadingMore(false);
-      setOrdersError(null);
-      setHasMore(false);
-      setCursorsByDropId({});
-      setOrders([]);
-      setOrderPageKeys([]);
-      setManualReviewCheckouts([]);
-      setManualReviewMenuOpen(false);
-      setStatusEdits({});
-      setTrackingCodeEdits({});
-      setStatusSaving({});
-      setActiveUpdateOrderKey(null);
-      setActiveAddressOrderKey(null);
-      setActiveShipstationOrderKey(null);
-      setAddressEditText('');
-      setAddressSaving(false);
-      setAddressError(null);
-      return;
-    }
-    const requestEpoch = orderRequestEpochRef.current + 1;
-    orderRequestEpochRef.current = requestEpoch;
-    setLoading(true);
-    setLoadingMore(false);
-    setOrdersError(null);
-    setHasMore(true);
-    setCursorsByDropId({});
-    setOrders([]);
-    setOrderPageKeys([]);
-    setManualReviewCheckouts([]);
+  const resetOrderUi = useCallback(() => {
     setManualReviewMenuOpen(false);
     setStatusEdits({});
     setTrackingCodeEdits({});
@@ -958,120 +898,27 @@ export default function FulfillmentApp({
     setAddressEditText('');
     setAddressSaving(false);
     setAddressError(null);
-    try {
-      const responses = await Promise.all(
-        selectedDropIds.map(async (dropId) => {
-          const [ordersResp, manualReviewResp] = await Promise.all([
-            listFulfillmentOrders({
-              limit: FULFILLMENT_ORDER_REQUEST_LIMIT,
-              cursor: null,
-              dropId,
-            }),
-            listFulfillmentManualReviewCheckouts({ dropId }).catch((err) => {
-              console.warn('[mons] failed to load fulfillment manual-review checkouts', { dropId, error: err });
-              return { checkouts: [] as FulfillmentManualReviewCheckout[] };
-            }),
-          ]);
-          return {
-            dropId,
-            orders: Array.isArray(ordersResp.orders) ? ordersResp.orders : [],
-            nextCursor: ordersResp.nextCursor || null,
-            manualReviewCheckouts: Array.isArray(manualReviewResp.checkouts) ? manualReviewResp.checkouts : [],
-          };
-        }),
-      );
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      const nextCursors = responses.reduce<FulfillmentOrdersCursorByDropId>((acc, resp) => {
-        acc[resp.dropId] = resp.nextCursor;
-        return acc;
-      }, {});
-      const nextOrders = sortFulfillmentOrders(dedupeOrdersByKey(responses.flatMap((resp) => resp.orders)));
-      const nextManualReviewCheckouts = sortManualReviewCheckouts(
-        dedupeManualReviewCheckouts(responses.flatMap((resp) => resp.manualReviewCheckouts)),
-      );
-      setOrders(nextOrders);
-      setOrderPageKeys(nextOrders.length ? [nextOrders.map((order) => fulfillmentOrderKey(order))] : []);
-      setManualReviewCheckouts(nextManualReviewCheckouts);
-      mergeStatusEdits(nextOrders);
-      setCursorsByDropId(nextCursors);
-      setHasMore(Object.values(nextCursors).some(Boolean));
-    } catch (err) {
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      console.error(err);
-      setOrdersError(err instanceof Error ? err.message : 'Failed to load orders');
-      setManualReviewCheckouts([]);
-      setManualReviewMenuOpen(false);
-    } finally {
-      if (orderRequestEpochRef.current === requestEpoch) {
-        setLoading(false);
-      }
-    }
-  }, [hasFulfillmentAccess, signedIn, selectedDropIds, mergeStatusEdits]);
+  }, []);
 
-  const loadMore = useCallback(async () => {
-    if (!hasFulfillmentAccess || !signedIn || !selectedDropIds.length || loadingMore || loading || !hasMore) return;
-    const dropIdsWithMore = selectedDropIds.filter((dropId) => cursorsByDropId[dropId]);
-    if (!dropIdsWithMore.length) {
-      setHasMore(false);
-      return;
-    }
-    const requestEpoch = orderRequestEpochRef.current;
-    const existingOrderKeys = new Set(orders.map((order) => fulfillmentOrderKey(order)));
-    setLoadingMore(true);
-    setOrdersError(null);
-    try {
-      const responses = await Promise.all(
-        dropIdsWithMore.map(async (dropId) => {
-          const resp = await listFulfillmentOrders({
-            limit: FULFILLMENT_ORDER_REQUEST_LIMIT,
-            cursor: cursorsByDropId[dropId],
-            dropId,
-          });
-          return { dropId, orders: Array.isArray(resp.orders) ? resp.orders : [], nextCursor: resp.nextCursor || null };
-        }),
-      );
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      const nextCursors = { ...cursorsByDropId };
-      responses.forEach((resp) => {
-        nextCursors[resp.dropId] = resp.nextCursor;
-      });
-      const nextOrders = sortFulfillmentOrders(
-        dedupeOrdersByKey(
-          responses.flatMap((resp) => resp.orders),
-          existingOrderKeys,
-        ),
-      );
-      if (nextOrders.length) {
-        setOrders((prev) => prev.concat(nextOrders));
-        setOrderPageKeys((prev) => prev.concat([nextOrders.map((order) => fulfillmentOrderKey(order))]));
-        mergeStatusEdits(nextOrders);
-      }
-      setCursorsByDropId(nextCursors);
-      setHasMore(Object.values(nextCursors).some(Boolean));
-    } catch (err) {
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      console.error(err);
-      setOrdersError(err instanceof Error ? err.message : 'Failed to load more orders');
-    } finally {
-      if (orderRequestEpochRef.current === requestEpoch) {
-        setLoadingMore(false);
-      }
-    }
-  }, [
-    hasFulfillmentAccess,
-    signedIn,
-    selectedDropIds,
-    loadingMore,
-    loading,
-    hasMore,
-    cursorsByDropId,
-    mergeStatusEdits,
+  const {
+    scopeVersion,
     orders,
-  ]);
-
-  useEffect(() => {
-    void loadInitial();
-  }, [loadInitial]);
+    orderPageKeys,
+    manualReviewCheckouts,
+    loading,
+    loadingMore,
+    ordersError,
+    loadMore,
+    setOrdersError,
+    updateOrder,
+    isCurrentScope,
+  } = useFulfillmentOrders({
+    walletAddress: authenticatedWallet,
+    enabled: hasFulfillmentAccess && signedIn,
+    dropIds: selectedDropIds,
+    onReset: resetOrderUi,
+    onOrdersLoaded: mergeStatusEdits,
+  });
 
   useEffect(() => {
     if (!manualReviewCheckouts.length && manualReviewMenuOpen) {
@@ -1227,7 +1074,6 @@ export default function FulfillmentApp({
   const handleSaveStatus = useCallback(
     async (orderToUpdate: FulfillmentOrder) => {
       if (!hasFulfillmentAccess || !signedIn) return false;
-      const requestEpoch = orderRequestEpochRef.current;
       const key = fulfillmentOrderKey(orderToUpdate);
       setStatusSaving((prev) => ({ ...prev, [key]: true }));
       setOrdersError(null);
@@ -1241,23 +1087,17 @@ export default function FulfillmentApp({
           orderToUpdate.dropId,
           nextTrackingCode,
         );
-        if (orderRequestEpochRef.current !== requestEpoch) return false;
+        if (!isCurrentScope()) return false;
         const normalized = normalizeFulfillmentStatus(resp.fulfillmentStatus || nextStatus);
         const responseTrackingCode = normalizeOptionalFulfillmentTrackingCode(resp.fulfillmentTrackingCode);
-        setOrders((prev) =>
-          prev.map((order) =>
-            fulfillmentOrderKey(order) === key
-              ? {
-                  ...order,
-                  fulfillmentStatus: normalized || undefined,
-                  fulfillmentTrackingCode:
-                    normalized === 'Shipped'
-                      ? responseTrackingCode
-                      : responseTrackingCode || normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode),
-                }
-              : order,
-          ),
-        );
+        updateOrder(key, (order) => ({
+          ...order,
+          fulfillmentStatus: normalized || undefined,
+          fulfillmentTrackingCode:
+            normalized === 'Shipped'
+              ? responseTrackingCode
+              : responseTrackingCode || normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode),
+        }));
         setStatusEdits((prev) => ({ ...prev, [key]: normalized }));
         setTrackingCodeEdits((prev) => ({
           ...prev,
@@ -1268,17 +1108,17 @@ export default function FulfillmentApp({
         }));
         return true;
       } catch (err) {
-        if (orderRequestEpochRef.current !== requestEpoch) return false;
+        if (!isCurrentScope()) return false;
         console.error(err);
         setOrdersError(err instanceof Error ? err.message : 'Failed to update status');
         return false;
       } finally {
-        if (orderRequestEpochRef.current === requestEpoch) {
+        if (isCurrentScope()) {
           setStatusSaving((prev) => ({ ...prev, [key]: false }));
         }
       }
     },
-    [hasFulfillmentAccess, signedIn, statusEdits, trackingCodeEdits],
+    [hasFulfillmentAccess, isCurrentScope, setOrdersError, signedIn, statusEdits, trackingCodeEdits, updateOrder],
   );
 
   const statusDirty = useMemo(() => {
@@ -1318,11 +1158,6 @@ export default function FulfillmentApp({
     () => orders.find((order) => fulfillmentOrderKey(order) === activeShipstationOrderKey) ?? null,
     [activeShipstationOrderKey, orders],
   );
-  const shipstationRequestEpoch = orderRequestEpochRef.current;
-  const isShipstationScopeCurrent = useCallback(
-    () => orderRequestEpochRef.current === shipstationRequestEpoch,
-    [shipstationRequestEpoch],
-  );
   const handleOpenShipstationModal = useCallback((orderKey: string) => {
     setActiveShipstationOrderKey(orderKey);
   }, []);
@@ -1334,12 +1169,12 @@ export default function FulfillmentApp({
     update: (order: FulfillmentOrder) => FulfillmentOrder,
     trackingCodeUpdate?: string | null,
   ) => {
-    if (!isShipstationScopeCurrent()) return;
-    setOrders((prev) => prev.map((order) => fulfillmentOrderKey(order) === key ? update(order) : order));
+    if (!isCurrentScope()) return;
+    updateOrder(key, update);
     if (trackingCodeUpdate !== undefined) {
       setTrackingCodeEdits((prev) => ({ ...prev, [key]: trackingCodeUpdate ?? '' }));
     }
-  }, [isShipstationScopeCurrent]);
+  }, [isCurrentScope, updateOrder]);
 
   const handleCancelUpdate = useCallback(() => {
     if (!activeUpdateOrder) {
@@ -1365,8 +1200,8 @@ export default function FulfillmentApp({
       return;
     }
     const ok = await handleSaveStatus(activeUpdateOrder);
-    if (ok) setActiveUpdateOrderKey(null);
-  }, [activeUpdateDirty, activeUpdateOrder, handleSaveStatus]);
+    if (ok && isCurrentScope()) setActiveUpdateOrderKey(null);
+  }, [activeUpdateDirty, activeUpdateOrder, handleSaveStatus, isCurrentScope]);
 
   const activeAddressOrder = useMemo(
     () => orders.find((order) => fulfillmentOrderKey(order) === activeAddressOrderKey) ?? null,
@@ -1408,7 +1243,6 @@ export default function FulfillmentApp({
       return;
     }
 
-    const requestEpoch = orderRequestEpochRef.current;
     const orderKey = fulfillmentOrderKey(activeAddressOrder);
     setAddressSaving(true);
     setAddressError(null);
@@ -1418,22 +1252,16 @@ export default function FulfillmentApp({
         full,
         activeAddressOrder.dropId,
       );
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      setOrders((current) =>
-        current.map((order) =>
-          fulfillmentOrderKey(order) === orderKey
-            ? { ...order, address: { ...order.address, ...response.address } }
-            : order,
-        ),
-      );
+      if (!isCurrentScope()) return;
+      updateOrder(orderKey, (order) => ({ ...order, address: { ...order.address, ...response.address } }));
       setActiveAddressOrderKey(null);
       setAddressEditText('');
     } catch (err) {
-      if (orderRequestEpochRef.current !== requestEpoch) return;
+      if (!isCurrentScope()) return;
       console.error(err);
       setAddressError(err instanceof Error ? err.message : 'Failed to update delivery address');
     } finally {
-      if (orderRequestEpochRef.current === requestEpoch) {
+      if (isCurrentScope()) {
         setAddressSaving(false);
       }
     }
@@ -1444,6 +1272,8 @@ export default function FulfillmentApp({
     addressSaving,
     canAdminEditFulfillmentAddress,
     handleCloseAddressModal,
+    isCurrentScope,
+    updateOrder,
   ]);
 
   const handleSolanaSignIn = useCallback(() => {
@@ -1569,7 +1399,7 @@ export default function FulfillmentApp({
         setSecretCodePngExportingKey((current) => (current === exportKey ? null : current));
       }
     },
-    [dropById, figureMetadataByKey, loadFulfillmentExportFigureMetadata, secretCodePngExportingKey, secretCodesExporting],
+    [dropById, figureMetadataByKey, loadFulfillmentExportFigureMetadata, secretCodePngExportingKey, secretCodesExporting, setOrdersError],
   );
 
   const downloadDisplayedSecretCodes = useCallback(async () => {
@@ -1609,6 +1439,7 @@ export default function FulfillmentApp({
     secretCodePngExportingKey,
     secretCodesExporting,
     selectedDropId,
+    setOrdersError,
   ]);
 
   const secretCodesExportPercent = Math.max(0, Math.min(100, Math.round(secretCodesExportProgress)));
@@ -2162,11 +1993,11 @@ export default function FulfillmentApp({
       </Modal>
 
       <FulfillmentShipStationModal
-        key={shipstationRequestEpoch}
+        key={scopeVersion}
         order={activeShipstationOrder}
         canManage={hasFulfillmentAccess && signedIn}
         suspended={walletModalVisible}
-        isCurrentScope={isShipstationScopeCurrent}
+        isCurrentScope={isCurrentScope}
         onClose={handleCloseShipstationModal}
         onOrderUpdated={handleShipstationOrderUpdated}
       />
