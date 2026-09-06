@@ -20,8 +20,9 @@ after(() => dom.window.close());
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 test('admin viewing uses its own cache and returning to the owner restores the authenticated profile', async () => {
@@ -135,6 +136,7 @@ test('header and shipment sign-in share a pending signature and wait for session
     shipments = result.current.handleSignInForShipments();
   });
   assert.equal(result.current.pendingHeaderWalletSignIn, true);
+  assert.equal(result.current.pendingShipmentsSignIn, false);
   assert.equal(calls, 1);
   await act(async () => {
     signature.resolve({ wallet: initial.connectedWallet! });
@@ -142,6 +144,155 @@ test('header and shipment sign-in share a pending signature and wait for session
   });
   assert.equal(result.current.pendingHeaderWalletSignIn, false);
   assert.equal(calls, 1);
+});
+
+test('overlapping queued sign-ins wait for restoration and keep only the header pending during signing', async () => {
+  const signature = deferred<{ wallet: string }>();
+  let calls = 0;
+  const connected = signInOptions({ claimOpen: true });
+  connected.auth.signIn = () => { calls += 1; return signature.promise; };
+  const initial: typeof connected = { ...connected, connectedWallet: undefined, publicKey: null, walletModalVisible: true };
+  const { result, rerender } = renderHook(useShopSignIn, { initialProps: initial });
+
+  act(() => {
+    void result.current.handleSignInForShipments();
+    void result.current.handleHeaderWalletSignIn();
+    result.current.requestClaimSignIn();
+  });
+  assert.equal(result.current.pendingShipmentsSignIn, true);
+  assert.equal(result.current.pendingHeaderWalletSignIn, true);
+  assert.equal(result.current.pendingClaimSignIn, true);
+  assert.equal(calls, 0);
+
+  rerender({ ...connected, auth: { ...connected.auth, sessionResolution: 'resolving' } });
+  assert.equal(calls, 0);
+  assert.equal(result.current.pendingShipmentsSignIn, true);
+  assert.equal(result.current.pendingHeaderWalletSignIn, true);
+  assert.equal(result.current.pendingClaimSignIn, true);
+
+  rerender({ ...connected, auth: { ...connected.auth, loading: true } });
+  assert.equal(calls, 0);
+  rerender(connected);
+  assert.equal(calls, 1);
+  assert.equal(result.current.pendingShipmentsSignIn, false);
+  assert.equal(result.current.pendingClaimSignIn, false);
+  assert.equal(result.current.pendingHeaderWalletSignIn, true);
+
+  await act(async () => { signature.resolve({ wallet: connected.connectedWallet! }); });
+  assert.equal(result.current.pendingHeaderWalletSignIn, false);
+  assert.equal(calls, 1);
+});
+
+test('closing a claim clears only its queued sign-in intent', async () => {
+  const signature = deferred<{ wallet: string }>();
+  let calls = 0;
+  const connected = signInOptions({ claimOpen: true });
+  connected.auth.signIn = () => { calls += 1; return signature.promise; };
+  const initial: typeof connected = { ...connected, connectedWallet: undefined, publicKey: null, walletModalVisible: true };
+  const { result, rerender } = renderHook(useShopSignIn, { initialProps: initial });
+
+  act(() => result.current.requestClaimSignIn());
+  rerender({ ...initial, claimOpen: false });
+  assert.equal(result.current.pendingClaimSignIn, false);
+  rerender({ ...connected, claimOpen: false });
+  assert.equal(calls, 0);
+
+  rerender(initial);
+  act(() => {
+    void result.current.handleSignInForShipments();
+    void result.current.handleHeaderWalletSignIn();
+    result.current.requestClaimSignIn();
+  });
+  rerender({ ...initial, claimOpen: false });
+  assert.equal(result.current.pendingClaimSignIn, false);
+  assert.equal(result.current.pendingShipmentsSignIn, true);
+  assert.equal(result.current.pendingHeaderWalletSignIn, true);
+
+  rerender({ ...connected, claimOpen: false });
+  assert.equal(calls, 1);
+  assert.equal(result.current.pendingHeaderWalletSignIn, true);
+  await act(async () => { signature.resolve({ wallet: connected.connectedWallet! }); });
+  assert.equal(result.current.pendingHeaderWalletSignIn, false);
+});
+
+test('closing the wallet modal cancels queued sign-ins only after connection is idle', () => {
+  let calls = 0;
+  const connected = signInOptions({ claimOpen: true });
+  connected.auth.signIn = async () => { calls += 1; return { wallet: connected.connectedWallet! }; };
+  const initial: typeof connected = { ...connected, connectedWallet: undefined, publicKey: null, walletModalVisible: true };
+  const { result, rerender } = renderHook(useShopSignIn, { initialProps: initial });
+
+  act(() => {
+    void result.current.handleSignInForShipments();
+    void result.current.handleHeaderWalletSignIn();
+    result.current.requestClaimSignIn();
+  });
+  rerender({ ...initial, walletModalVisible: false, wallet: { connecting: true, disconnecting: false } });
+  assert.equal(result.current.pendingShipmentsSignIn, true);
+  assert.equal(result.current.pendingHeaderWalletSignIn, true);
+  assert.equal(result.current.pendingClaimSignIn, true);
+
+  rerender({ ...initial, walletModalVisible: false });
+  assert.equal(result.current.pendingShipmentsSignIn, false);
+  assert.equal(result.current.pendingHeaderWalletSignIn, false);
+  assert.equal(result.current.pendingClaimSignIn, false);
+  rerender(connected);
+  assert.equal(calls, 0);
+});
+
+test('a restored wallet session consumes queued sign-ins without requesting a signature', () => {
+  let calls = 0;
+  const connected = signInOptions({ claimOpen: true });
+  connected.auth.signIn = async () => { calls += 1; return { wallet: connected.connectedWallet! }; };
+  const initial: typeof connected = { ...connected, connectedWallet: undefined, publicKey: null, walletModalVisible: true };
+  const { result, rerender } = renderHook(useShopSignIn, { initialProps: initial });
+
+  act(() => {
+    void result.current.handleSignInForShipments();
+    void result.current.handleHeaderWalletSignIn();
+    result.current.requestClaimSignIn();
+  });
+  rerender({
+    ...connected,
+    isSignedInWallet: true,
+    hasAuthenticatedAccount: true,
+    auth: { ...connected.auth, authenticated: true, sessionWallet: connected.connectedWallet! },
+  });
+  assert.equal(calls, 0);
+  assert.equal(result.current.pendingShipmentsSignIn, false);
+  assert.equal(result.current.pendingHeaderWalletSignIn, false);
+  assert.equal(result.current.pendingClaimSignIn, false);
+});
+
+test('a rejected shared signature clears header pending and preserves error feedback', async (t) => {
+  for (const userRejected of [true, false]) {
+    await t.test(userRejected ? 'user rejection stays silent' : 'other failures are shown once', async () => {
+      const signature = deferred<{ wallet: string }>();
+      let calls = 0;
+      const messages: string[] = [];
+      const initial = signInOptions({
+        showToast: (message) => { messages.push(message); },
+        isUserRejectedError: () => userRejected,
+      });
+      initial.auth.signIn = () => { calls += 1; return signature.promise; };
+      const { result, unmount } = renderHook(useShopSignIn, { initialProps: initial });
+      let header!: Promise<void>;
+      let shipments!: Promise<void>;
+      act(() => {
+        header = result.current.handleHeaderWalletSignIn();
+        shipments = result.current.handleSignInForShipments();
+      });
+      assert.equal(calls, 1);
+      assert.equal(result.current.pendingHeaderWalletSignIn, true);
+      await act(async () => {
+        signature.reject(new Error('Signature failed'));
+        await Promise.all([header, shipments]);
+      });
+      assert.equal(result.current.pendingHeaderWalletSignIn, false);
+      assert.deepEqual(messages, userRejected ? [] : ['Signature failed']);
+      unmount();
+    });
+  }
 });
 
 test('a stale header completion cannot clear a later wallet sign-in', async () => {
@@ -161,6 +312,12 @@ test('a stale header completion cannot clear a later wallet sign-in', async () =
     await oldHeader;
   });
   assert.equal(result.current.pendingHeaderWalletSignIn, true);
-  await act(async () => { second.resolve({ wallet: nextKey.toBase58() }); });
+  let currentRequest!: Promise<boolean>;
+  act(() => { currentRequest = result.current.ensureSignedIn(); });
+  assert.equal(calls, 2);
+  await act(async () => {
+    second.resolve({ wallet: nextKey.toBase58() });
+    assert.equal(await currentRequest, true);
+  });
   await waitFor(() => assert.equal(result.current.pendingHeaderWalletSignIn, false));
 });

@@ -45,6 +45,21 @@ function stripeOnlyProps(overrides: Partial<Props> = {}): Props {
   });
 }
 
+function sizedPanelProps(overrides: Partial<Props> = {}): Props {
+  return panelProps({
+    dropId: 'little_swag_hoodies',
+    mintSelection: {
+      kind: 'size',
+      options: [
+        { key: 'L', label: 'L', startId: 1, endId: 5 },
+        { key: 'XL', label: 'XL', startId: 6, endId: 10 },
+        { key: '2XL', label: '2XL', startId: 11, endId: 15 },
+      ],
+    },
+    ...overrides,
+  });
+}
+
 test('drop X profiles cover every current storefront family and inherit across environments', () => {
   const expectedProfiles = new Map([
     ['little_swag_boxes', ['@supermetalx', 'https://x.com/supermetalx/status/2004991803301548393']],
@@ -86,6 +101,219 @@ test('quantity changes update the mint label, price, and submitted quantity', as
   assert.match(mint.textContent!, /3 packs.*3 SOL/);
   await act(async () => { fireEvent.click(mint); });
   assert.deepEqual(minted, [3]);
+});
+
+test('minting switches between discounted and regular prices as quantity and allowance change', async () => {
+  const discounted: number[] = [];
+  const regular: number[] = [];
+  const props = panelProps({
+    discountAvailable: true,
+    discountPriceSol: 0.5,
+    discountMaxQuantity: 2,
+    onDiscountMint: (quantity) => { discounted.push(quantity); },
+    onMint: (quantity) => { regular.push(quantity); },
+  });
+  const view = render(createElement(MintPanel, props));
+  const quantity = view.getByRole('slider', { name: 'Mint quantity' });
+
+  fireEvent.change(quantity, { target: { value: '2' } });
+  await act(async () => {
+    fireEvent.click(view.getByRole('button', { name: 'Mint with discount for 1 SOL. Regular price 2 SOL.' }));
+  });
+  fireEvent.change(quantity, { target: { value: '3' } });
+  assert.equal(view.queryByRole('button', { name: /Mint with discount/ }), null);
+  const regularMint = view.getByRole('button', { name: /Mint/ });
+  assert.match(regularMint.textContent!, /3 packs.*3 SOL/);
+  await act(async () => { fireEvent.click(regularMint); });
+
+  fireEvent.change(quantity, { target: { value: '1' } });
+  assert.ok(view.getByRole('button', { name: /Mint with discount for 0.5 SOL/ }));
+  view.rerender(createElement(MintPanel, { ...props, discountMaxQuantity: 0 }));
+  assert.equal(view.queryByRole('button', { name: /Mint with discount/ }), null);
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: /Mint/ })); });
+  assert.deepEqual(discounted, [2]);
+  assert.deepEqual(regular, [3, 1]);
+});
+
+test('both payment methods require an available size and submit the selected variant', async () => {
+  const mints: Array<[number, string | undefined]> = [];
+  const payments: Array<[number, string | undefined]> = [];
+  const props = sizedPanelProps({
+    stats: {
+      minted: 5, total: 15, remaining: 10, maxPerTx: 5,
+      mintSelectionAvailability: { L: 5, XL: 5, '2XL': 0 },
+    },
+    onMint: (quantity, size) => { mints.push([quantity, size]); },
+    stripePaymentVisible: true,
+    stripePaymentUnitAmountCents: 10_000,
+    onStripePaymentClick: (quantity, size) => { payments.push([quantity, size]); },
+  });
+  const view = render(createElement(MintPanel, props));
+  assert.equal(view.queryByRole('slider'), null);
+  const submitBoth = async () => {
+    await act(async () => { fireEvent.click(view.getByRole('button', { name: /Mint/ })); });
+    await act(async () => { fireEvent.click(view.getByRole('button', { name: /Checkout/ })); });
+  };
+  await submitBoth();
+  assert.deepEqual(mints, []);
+  assert.deepEqual(payments, []);
+  const unavailableSize = view.getByRole('radio', { name: '2XL' }) as HTMLButtonElement;
+  assert.equal(unavailableSize.disabled, true);
+  fireEvent.click(unavailableSize);
+  assert.equal(unavailableSize.getAttribute('aria-checked'), 'false');
+
+  fireEvent.click(view.getByRole('radio', { name: 'L', exact: true }));
+  fireEvent.click(view.getByRole('radio', { name: 'L', exact: true }));
+  assert.equal(view.getByRole('radio', { name: 'L', exact: true }).getAttribute('aria-checked'), 'false');
+  fireEvent.click(view.getByRole('radio', { name: 'XL', exact: true }));
+  await submitBoth();
+  assert.deepEqual(mints, [[1, 'XL']]);
+  assert.deepEqual(payments, [[1, 'XL']]);
+
+  view.rerender(createElement(MintPanel, {
+    ...props,
+    stats: { ...props.stats!, mintSelectionAvailability: { L: 5, XL: 0, '2XL': 0 } },
+  }));
+  assert.equal(view.getByRole('radio', { name: 'XL', exact: true }).getAttribute('aria-checked'), 'false');
+  await submitBoth();
+  assert.deepEqual(mints, [[1, 'XL']]);
+  assert.deepEqual(payments, [[1, 'XL']]);
+});
+
+test('size selection resets after a successful mint or after leaving size selection', () => {
+  const props = sizedPanelProps();
+  const view = render(createElement(MintPanel, props));
+  const large = () => view.getByRole('radio', { name: 'L', exact: true });
+  assert.equal((large() as HTMLButtonElement).disabled, false);
+  fireEvent.click(large());
+  assert.equal(large().getAttribute('aria-checked'), 'true');
+
+  view.rerender(createElement(MintPanel, { ...props, successfulMintToken: 1 }));
+  assert.equal(large().getAttribute('aria-checked'), 'false');
+  fireEvent.click(large());
+  view.rerender(createElement(MintPanel, { ...props, successfulMintToken: 1 }));
+  assert.equal(large().getAttribute('aria-checked'), 'true');
+  view.rerender(createElement(MintPanel, { ...props, successfulMintToken: 1, mintSelection: undefined }));
+  assert.equal(view.queryByRole('radiogroup'), null);
+  view.rerender(createElement(MintPanel, { ...props, successfulMintToken: 1 }));
+  assert.equal(large().getAttribute('aria-checked'), 'false');
+});
+
+test('quantity clamps to refreshed limits and resets only when the successful mint token changes', async () => {
+  const minted: number[] = [];
+  const props = panelProps({ onMint: (quantity) => { minted.push(quantity); } });
+  const view = render(createElement(MintPanel, props));
+  const quantity = view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement;
+  fireEvent.change(quantity, { target: { value: '5' } });
+  const refreshed = { ...props, stats: { minted: 12, total: 15, remaining: 3, maxPerTx: 4 } };
+  view.rerender(createElement(MintPanel, refreshed));
+  assert.equal(quantity.value, '3');
+  assert.equal(quantity.max, '3');
+  await act(async () => { fireEvent.click(view.getByRole('button', { name: /Mint/ })); });
+  assert.deepEqual(minted, [3]);
+
+  view.rerender(createElement(MintPanel, { ...refreshed, stats: { ...refreshed.stats, maxPerTx: 2 } }));
+  assert.equal(quantity.value, '2');
+  assert.equal(quantity.max, '2');
+  view.rerender(createElement(MintPanel, { ...refreshed, successfulMintToken: 1 }));
+  assert.equal(quantity.value, '1');
+  fireEvent.change(quantity, { target: { value: '2' } });
+  view.rerender(createElement(MintPanel, { ...refreshed, successfulMintToken: 1 }));
+  assert.equal(quantity.value, '2');
+  view.rerender(createElement(MintPanel, { ...refreshed, successfulMintToken: 2 }));
+  assert.equal(quantity.value, '1');
+});
+
+test('Stripe displays quantity totals from cents and falls back to the supplied price label', () => {
+  const props = panelProps({
+    stripePaymentVisible: true,
+    onStripePaymentClick: () => undefined,
+    stripePaymentUnitAmountCents: 1234,
+    stripePaymentPriceLabel: '  from $12  ',
+  });
+  const view = render(createElement(MintPanel, props));
+  const quantity = view.getByRole('slider', { name: 'Mint quantity' });
+  fireEvent.change(quantity, { target: { value: '3' } });
+  assert.ok(view.getByRole('button', { name: /^Checkout\s*\$37\.02$/ }));
+  view.rerender(createElement(MintPanel, { ...props, stripePaymentUnitAmountCents: undefined }));
+  assert.ok(view.getByRole('button', { name: /^Checkout\s*from \$12 x 3$/ }));
+  fireEvent.change(quantity, { target: { value: '1' } });
+  assert.ok(view.getByRole('button', { name: /^Checkout\s*from \$12$/ }));
+  view.rerender(createElement(MintPanel, { ...props, stripePaymentUnitAmountCents: 0 }));
+  assert.ok(view.getByRole('button', { name: /^Checkout\s*\$0\.00$/ }));
+  view.rerender(createElement(MintPanel, {
+    ...props, stripePaymentUnitAmountCents: undefined, stripePaymentPriceLabel: ' ',
+  }));
+  assert.equal(view.queryByRole('button', { name: /Checkout/ }), null);
+});
+
+test('pending discount mint blocks both payment methods and releases controls after an error', async () => {
+  const errors: string[] = [];
+  let discountCalls = 0;
+  let rejectMint!: (error: Error) => void;
+  const pendingMint = new Promise<void>((_resolve, reject) => { rejectMint = reject; });
+  const view = render(createElement(MintPanel, panelProps({
+    discountAvailable: true,
+    discountPriceSol: 0.5,
+    onDiscountMint: () => { discountCalls += 1; return pendingMint; },
+    onMint: () => assert.fail('A discounted mint must use the discount action'),
+    stripePaymentVisible: true,
+    stripePaymentUnitAmountCents: 1000,
+    onStripePaymentClick: () => assert.fail('Checkout must stay blocked while minting'),
+    onError: (message) => { errors.push(message); },
+  })));
+  const mint = view.getByRole('button', { name: /Mint with discount/ }) as HTMLButtonElement;
+  const checkout = view.getByRole('button', { name: /Checkout/ }) as HTMLButtonElement;
+  const quantity = view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement;
+  fireEvent.click(mint);
+  assert.equal(mint.disabled, true);
+  assert.equal(checkout.disabled, true);
+  assert.equal(quantity.disabled, true);
+  assert.match(mint.textContent!, /Minting…/);
+  fireEvent.click(mint);
+  fireEvent.click(checkout);
+  assert.equal(discountCalls, 1);
+  await act(async () => rejectMint(new Error('Wallet declined the mint')));
+  assert.deepEqual(errors, ['Wallet declined the mint']);
+  assert.equal(mint.disabled, false);
+  assert.equal(checkout.disabled, false);
+  assert.equal(quantity.disabled, false);
+});
+
+test('pending Stripe checkout blocks minting and reports a fallback error before allowing retry', async () => {
+  const errors: string[] = [];
+  let paymentCalls = 0;
+  let rejectPayment!: (error: unknown) => void;
+  const pendingPayment = new Promise<void>((_resolve, reject) => { rejectPayment = reject; });
+  const view = render(createElement(MintPanel, panelProps({
+    onMint: () => assert.fail('Minting must stay blocked while opening Stripe'),
+    stripePaymentVisible: true,
+    stripePaymentUnitAmountCents: 1000,
+    onStripePaymentClick: () => {
+      paymentCalls += 1;
+      return paymentCalls === 1 ? pendingPayment : Promise.resolve();
+    },
+    onError: (message) => { errors.push(message); },
+  })));
+  const mint = view.getByRole('button', { name: /Mint/ }) as HTMLButtonElement;
+  const checkout = view.getByRole('button', { name: /Checkout/ }) as HTMLButtonElement;
+  const quantity = view.getByRole('slider', { name: 'Mint quantity' }) as HTMLInputElement;
+  fireEvent.click(checkout);
+  assert.ok(view.getByRole('button', { name: 'Opening Stripe…' }));
+  assert.equal(checkout.disabled, true);
+  assert.equal(mint.disabled, true);
+  assert.equal(quantity.disabled, true);
+  fireEvent.click(checkout);
+  fireEvent.click(mint);
+  assert.equal(paymentCalls, 1);
+  await act(async () => rejectPayment({ reason: 'network unavailable' }));
+  assert.deepEqual(errors, ['Failed to start Stripe payment']);
+  assert.equal(checkout.disabled, false);
+  assert.equal(mint.disabled, false);
+  assert.equal(quantity.disabled, false);
+  await act(async () => { fireEvent.click(checkout); });
+  assert.equal(paymentCalls, 2);
+  assert.equal(checkout.disabled, false);
 });
 
 test('drop title and accessible X profile stay grouped separately from availability', () => {

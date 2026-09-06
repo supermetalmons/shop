@@ -73,64 +73,55 @@ export function useShopSignIn({
     return promise;
   };
 
-  useEffect(() => {
-    if (!pendingShipmentsSignIn || !connectedWallet || !publicKey) return;
-    if (isSignedInWallet) {
-      setPendingShipmentsSignIn(false);
-      return;
-    }
-    if (!authReady || authLoading) return;
-    setPendingShipmentsSignIn(false);
-    void ensureSignedIn();
-  }, [authLoading, authReady, connectedWallet, isSignedInWallet, pendingShipmentsSignIn, publicKey]);
-
-  useEffect(() => {
-    if (!pendingShipmentsSignIn || walletModalVisible || connectedWallet || wallet.connecting) return;
-    setPendingShipmentsSignIn(false);
-  }, [connectedWallet, pendingShipmentsSignIn, wallet.connecting, walletModalVisible]);
-
-  useEffect(() => {
-    if (!pendingHeaderWalletSignIn || !connectedWallet || !publicKey) return;
-    if (isSignedInWallet) {
-      headerWalletSignInGenerationRef.current += 1;
-      setPendingHeaderWalletSignIn(false);
-      return;
-    }
-    if (!authReady || authLoading) return;
+  const runHeaderSignIn = async () => {
     const generation = headerWalletSignInGenerationRef.current + 1;
     headerWalletSignInGenerationRef.current = generation;
-    void ensureSignedIn().finally(() => {
+    setPendingHeaderWalletSignIn(true);
+    try {
+      await ensureSignedIn();
+    } finally {
       if (headerWalletSignInGenerationRef.current === generation) {
         setPendingHeaderWalletSignIn(false);
       }
-    });
-  }, [authLoading, authReady, connectedWallet, isSignedInWallet, pendingHeaderWalletSignIn, publicKey]);
+    }
+  };
 
   useEffect(() => {
-    if (!pendingHeaderWalletSignIn || walletModalVisible || connectedWallet || wallet.connecting) return;
-    headerWalletSignInGenerationRef.current += 1;
-    setPendingHeaderWalletSignIn(false);
-  }, [connectedWallet, pendingHeaderWalletSignIn, wallet.connecting, walletModalVisible]);
+    const claimRequested = pendingClaimSignIn && claimOpen;
+    if (pendingClaimSignIn && !claimOpen) setPendingClaimSignIn(false);
+    if (!pendingShipmentsSignIn && !pendingHeaderWalletSignIn && !claimRequested) return;
 
-  useEffect(() => {
-    if (!pendingClaimSignIn || !connectedWallet || !publicKey) return;
-    if (isSignedInWallet) {
+    const cancelled = !walletModalVisible && !connectedWallet && !wallet.connecting;
+    const alreadySignedIn = connectedWallet && publicKey && isSignedInWallet;
+    if (cancelled || alreadySignedIn) {
+      setPendingShipmentsSignIn(false);
       setPendingClaimSignIn(false);
+      if (pendingHeaderWalletSignIn) {
+        headerWalletSignInGenerationRef.current += 1;
+        setPendingHeaderWalletSignIn(false);
+      }
       return;
     }
-    if (!authReady || authLoading) return;
-    setPendingClaimSignIn(false);
-    void ensureSignedIn();
-  }, [authLoading, authReady, connectedWallet, isSignedInWallet, pendingClaimSignIn, publicKey]);
+    if (!connectedWallet || !publicKey || !authReady || authLoading) return;
 
-  useEffect(() => {
-    if (!pendingClaimSignIn || walletModalVisible || connectedWallet || wallet.connecting) return;
+    setPendingShipmentsSignIn(false);
     setPendingClaimSignIn(false);
-  }, [connectedWallet, pendingClaimSignIn, wallet.connecting, walletModalVisible]);
+    if (pendingHeaderWalletSignIn) void runHeaderSignIn();
+    else void ensureSignedIn();
+  }, [
+    authLoading,
+    authReady,
+    claimOpen,
+    connectedWallet,
+    isSignedInWallet,
+    pendingClaimSignIn,
+    pendingHeaderWalletSignIn,
+    pendingShipmentsSignIn,
+    publicKey,
+    wallet.connecting,
+    walletModalVisible,
+  ]);
 
-  useEffect(() => {
-    if (!claimOpen) setPendingClaimSignIn(false);
-  }, [claimOpen]);
   useEffect(() => {
     if (isSignedInWallet || hasAuthenticatedAccount || !authReady || authLoading) {
       setHeaderWalletButtonRevealed(false);
@@ -185,16 +176,7 @@ export function useShopSignIn({
       setVisible(true);
       return;
     }
-    const generation = headerWalletSignInGenerationRef.current + 1;
-    headerWalletSignInGenerationRef.current = generation;
-    setPendingHeaderWalletSignIn(true);
-    try {
-      await ensureSignedIn();
-    } finally {
-      if (headerWalletSignInGenerationRef.current === generation) {
-        setPendingHeaderWalletSignIn(false);
-      }
-    }
+    await runHeaderSignIn();
   };
 
   return {
