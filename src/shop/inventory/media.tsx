@@ -1,9 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState
-} from 'react';
+import { useFigureImage } from '../../hooks/useFigureImage';
 import { ColorSchemeImage } from '../../components/ColorSchemeImage';
 import {
   isDropFamily
@@ -12,7 +7,6 @@ import {
   normalizeBoxDisplayImage
 } from '../../lib/dropContent';
 import {
-  loadFigureMetadata,
   type FigureMetadataRecord
 } from '../../lib/figureMetadata';
 import {
@@ -44,65 +38,8 @@ export function FigureTileImage(props: {
   fallbackSrc?: string;
   onMetadataResolved?: (record: FigureMetadataRecord) => void;
 }) {
-  const { dropId, figureId, alt, primarySrc, fallbackSrc, onMetadataResolved } = props;
-  const [activeSrc, setActiveSrc] = useState<string | null>(() => primarySrc || fallbackSrc || null);
-  const [usingFallback, setUsingFallback] = useState(() => !primarySrc && Boolean(fallbackSrc));
-  const requestIdRef = useRef(0);
-
-  useEffect(() => {
-    requestIdRef.current += 1;
-    if (primarySrc) {
-      setActiveSrc(primarySrc);
-      setUsingFallback(false);
-      return;
-    }
-    if (fallbackSrc) {
-      setActiveSrc(fallbackSrc);
-      setUsingFallback(true);
-      return;
-    }
-    setActiveSrc(null);
-    setUsingFallback(false);
-  }, [dropId, figureId, primarySrc]);
-
-  useEffect(() => {
-    if (!fallbackSrc) return;
-    setActiveSrc((current) => (current ? current : fallbackSrc));
-    setUsingFallback((current) => current || !primarySrc);
-  }, [fallbackSrc, primarySrc]);
-
-  useEffect(
-    () => () => {
-      requestIdRef.current += 1;
-    },
-    [],
-  );
-
-  const handleError = useCallback(() => {
-    if (usingFallback) {
-      setActiveSrc(null);
-      return;
-    }
-    if (fallbackSrc && fallbackSrc !== primarySrc) {
-      setActiveSrc(fallbackSrc);
-      setUsingFallback(true);
-      return;
-    }
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    setActiveSrc(null);
-    void loadFigureMetadata(dropId, figureId)
-      .then((record) => {
-        if (requestIdRef.current !== requestId || !record?.image || record.image === primarySrc) return;
-        onMetadataResolved?.(record);
-        setActiveSrc(record.image);
-        setUsingFallback(true);
-      })
-      .catch(() => {
-        if (requestIdRef.current !== requestId) return;
-        setActiveSrc(null);
-      });
-  }, [dropId, fallbackSrc, figureId, onMetadataResolved, primarySrc, usingFallback]);
+  const { dropId, alt } = props;
+  const { activeSrc, handleError } = useFigureImage(props);
 
   if (!activeSrc) {
     return <div className="figure-image figure-image--placeholder" aria-hidden="true" />;

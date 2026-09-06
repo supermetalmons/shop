@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type DropFamily } from '../config/deployment';
+import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
 import { COUNTRIES, countryLabel, findCountryByCode } from '../lib/countries';
 import { dropAssetLabel } from '../lib/dropLabels';
 import { normalizeCountryCode } from '../../shared/countryNormalization.ts';
@@ -76,8 +77,9 @@ export function DeliveryForm({
   const [state, setState] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [localCountryCode, setLocalCountryCode] = useState(countryCode || 'US');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { pending: saving, error, setError, isPending, run } = useAsyncSubmit({
+    formatError: (error) => error instanceof Error ? error.message : 'Failed to ship',
+  });
   const selectedCountryCode = countryCode ?? localCountryCode;
   const directDelivery = isDirectDeliveryItemsPerBox(shippingContext.itemsPerBox);
   const pricing = resolveDeliveryPricing(selectedCountryCode, shippingContext.itemsPerBox, shippingContext.dropFamily);
@@ -111,7 +113,7 @@ export function DeliveryForm({
 
   const handleSubmit = async (evt: FormEvent<HTMLFormElement>) => {
     evt.preventDefault();
-    if (submitDisabled || shipmentPending) return;
+    if (isPending() || submitDisabled || shipmentPending) return;
     if (!evt.currentTarget.checkValidity()) {
       setError('Please complete the required fields.');
       return;
@@ -121,24 +123,16 @@ export function DeliveryForm({
       setError('Please add an email for shipping updates.');
       return;
     }
-    setSaving(true);
-    setError(null);
-    try {
-      const formatted = [
-        fullName,
-        line1,
-        line2,
-        `${city}, ${state} ${postalCode}`.trim(),
-        countryName,
-      ]
-        .filter(Boolean)
-        .join('\n');
-      await onSubmit({ formatted, country: countryName, countryCode: selectedCountryCode, email: normalizedEmail });
-      setSaving(false);
-    } catch (err) {
-      setSaving(false);
-      setError(err instanceof Error ? err.message : 'Failed to ship');
-    }
+    const formatted = [
+      fullName,
+      line1,
+      line2,
+      `${city}, ${state} ${postalCode}`.trim(),
+      countryName,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    await run(() => onSubmit({ formatted, country: countryName, countryCode: selectedCountryCode, email: normalizedEmail }));
   };
 
   return (

@@ -5,6 +5,7 @@ import bs58 from 'bs58';
 import { PublicKey, type Connection, type VersionedTransaction } from '@solana/web3.js';
 import type { WalletContextState } from '@solana/wallet-adapter-react';
 import { getFrontendDrop } from '../src/config/deployment.ts';
+import type { ReceiptOperation } from '../src/lib/receiptTransfer.ts';
 import type { InventoryItem } from '../src/types.ts';
 import { usePreparedTransactionState } from '../src/shop/commerce/usePreparedTransactionState.ts';
 import { useReceiptOperationState } from '../src/shop/commerce/useReceiptOperationState.ts';
@@ -114,6 +115,59 @@ test('prepared storage events resync the active wallet without clearing another 
   assert.deepEqual(result.current.pendingPreparedTransaction, entry);
 });
 
+test('receipt submissions retain their identity and clear retry metadata for normal and admin transfers', () => {
+  for (const adminFinalizeRequestId of [undefined, 'admin-request']) {
+    const { result } = renderHook(() => useReceiptOperationState(walletA));
+    let operation!: ReceiptOperation;
+    act(() => {
+      operation = result.current.beginReceiptOperation({ wallet: walletA, assetId: receiptId, dropId: drop.dropId });
+    });
+    const original = operation;
+    assert.equal(result.current.isReceiptOperationCurrent(operation), true);
+    assert.equal(result.current.isReceiptOperationCurrent(null), false);
+
+    act(() => {
+      const recorded = result.current.recordReceiptSubmission(operation, {
+        phase: 'in-flight', signature, recentBlockhash: blockhash,
+        ...(adminFinalizeRequestId ? { adminFinalizeRequestId } : {}),
+      });
+      assert.equal(recorded.applied, true);
+      operation = recorded.operation;
+    });
+    assert.equal(result.current.receiptOperations.get(original.key), operation);
+    assert.equal(operation.adminFinalizeRequestId, adminFinalizeRequestId);
+    assert.equal(result.current.receiptOperationHiddenAssets.has(receiptId), false);
+
+    act(() => {
+      const reset = result.current.resetReceiptSubmissionForRetry(operation);
+      assert.ok(reset);
+      operation = reset;
+    });
+    assert.equal(operation.phase, 'in-flight');
+    assert.equal(operation.signature, undefined);
+    assert.equal(operation.recentBlockhash, undefined);
+    assert.equal(operation.adminFinalizeRequestId, undefined);
+
+    act(() => {
+      const recorded = result.current.recordReceiptSubmission(operation, {
+        phase: 'hidden', signature: 'retry-signature', recentBlockhash: 'retry-blockhash',
+        ...(adminFinalizeRequestId ? { adminFinalizeRequestId: 'retry-admin-request' } : {}),
+      });
+      assert.equal(recorded.applied, true);
+      operation = recorded.operation;
+    });
+    assert.equal(result.current.receiptOperations.get(original.key), operation);
+    assert.equal(operation.wallet, original.wallet);
+    assert.equal(operation.assetId, original.assetId);
+    assert.equal(operation.dropId, original.dropId);
+    assert.equal(operation.generation, original.generation);
+    assert.equal(operation.createdGeneration, original.createdGeneration);
+    assert.equal(operation.adminFinalizeRequestId, adminFinalizeRequestId ? 'retry-admin-request' : undefined);
+    assert.equal(result.current.receiptOperationGenerationRef.current, original.generation);
+    assert.equal(result.current.receiptOperationHiddenAssets.has(receiptId), true);
+  }
+});
+
 test('receipt adapter changes close transfer UI and invalidate pending operation callbacks', () => {
   const initialWallet = walletContext();
   const { result, rerender } = renderHook(({ wallet }) => {
@@ -130,7 +184,9 @@ test('receipt adapter changes close transfer UI and invalidate pending operation
   const receipt: InventoryItem = { id: receiptId, dropId: drop.dropId, kind: 'certificate', name: 'Receipt' };
   act(() => {
     operation = result.current.receiptState.beginReceiptOperation({ wallet: walletA, assetId: receiptId, dropId: drop.dropId });
-    result.current.receiptState.updateReceiptOperation(operation, (current) => ({ ...current, signature, recentBlockhash: blockhash }));
+    operation = result.current.receiptState.recordReceiptSubmission(operation, {
+      phase: 'in-flight', signature, recentBlockhash: blockhash,
+    }).operation;
     result.current.modals.openReceiptTransfer(receipt, document.createElement('button'));
   });
   const previousGeneration = result.current.modals.receiptTransferWalletSessionGenerationRef.current;
@@ -139,9 +195,97 @@ test('receipt adapter changes close transfer UI and invalidate pending operation
   assert.equal(result.current.modals.receiptTransferReturnFocusRef.current, null);
   assert.equal(result.current.modals.receiptTransferWalletSessionGenerationRef.current, previousGeneration + 1);
   assert.equal(result.current.receiptState.receiptOperations.get(operation.key)?.phase, 'unverified');
+  const rebasedRegistry = result.current.receiptState.receiptOperations;
+  assert.equal(result.current.receiptState.isReceiptOperationCurrent(operation), false);
+  act(() => {
+    const stale = result.current.receiptState.recordReceiptSubmission(operation, {
+      phase: 'hidden', signature: 'late-signature', recentBlockhash: 'late-blockhash',
+      adminFinalizeRequestId: 'late-admin-request',
+    });
+    assert.equal(stale.applied, false);
+    assert.equal(stale.operation.signature, 'late-signature');
+    assert.equal(stale.operation.recentBlockhash, 'late-blockhash');
+    assert.equal(stale.operation.adminFinalizeRequestId, 'late-admin-request');
+    assert.equal(stale.operation.generation, operation.generation);
+    assert.equal(result.current.receiptState.resetReceiptSubmissionForRetry(stale.operation), null);
+  });
+  assert.equal(result.current.receiptState.receiptOperations, rebasedRegistry);
+  assert.equal(rebasedRegistry.get(operation.key)?.signature, signature);
+  assert.equal(rebasedRegistry.get(operation.key)?.createdGeneration, operation.createdGeneration);
   let applied = true;
   act(() => { applied = result.current.receiptState.updateReceiptOperation(operation, () => null); });
   assert.equal(applied, false);
+});
+
+test('receipt submission helpers reject replaced operations without touching other wallets or assets', () => {
+  const { result } = renderHook(() => useReceiptOperationState(walletA));
+  let first!: ReceiptOperation;
+  let replacement!: ReceiptOperation;
+  let otherAsset!: ReceiptOperation;
+  let otherWallet!: ReceiptOperation;
+  act(() => {
+    first = result.current.beginReceiptOperation({ wallet: walletA, assetId: receiptId, dropId: drop.dropId });
+    otherAsset = result.current.beginReceiptOperation({ wallet: walletA, assetId: address(6), dropId: drop.dropId });
+    otherWallet = result.current.beginReceiptOperation({ wallet: walletB, assetId: receiptId, dropId: drop.dropId });
+    replacement = result.current.beginReceiptOperation({ wallet: walletA, assetId: receiptId, dropId: drop.dropId });
+  });
+  const registry = result.current.receiptOperations;
+  act(() => {
+    const stale = result.current.recordReceiptSubmission(first, {
+      phase: 'hidden', signature, recentBlockhash: blockhash,
+    });
+    assert.equal(stale.applied, false);
+    assert.equal(result.current.resetReceiptSubmissionForRetry(first), null);
+  });
+  assert.equal(result.current.receiptOperations, registry);
+  assert.equal(result.current.isReceiptOperationCurrent(first), false);
+  assert.equal(result.current.isReceiptOperationCurrent(replacement), true);
+  assert.equal(registry.get(otherAsset.key), otherAsset);
+  assert.equal(registry.get(otherWallet.key), otherWallet);
+  assert.equal(result.current.receiptOperationGenerationRef.current, replacement.generation);
+});
+
+test('receipt cleanup uses creation generations after wallet changes and preserves newer transfers', () => {
+  const { result, rerender } = renderHook(({ wallet }) => {
+    const connectedWallet = wallet.publicKey!.toBase58();
+    const connectedWalletRef = useRef<string | null>(connectedWallet);
+    const receiptState = useReceiptOperationState(connectedWallet);
+    useCommerceModals({
+      wallet, connectedWallet, connectedWalletRef,
+      rebaseReceiptOperations: receiptState.rebaseReceiptOperations,
+      claimDeepLinkCode: null, navigate: () => undefined,
+    });
+    return receiptState;
+  }, { initialProps: { wallet: walletContext() } });
+  let returned!: ReceiptOperation;
+  let newer!: ReceiptOperation;
+  let claimStartedGeneration = 0;
+  act(() => {
+    returned = result.current.beginReceiptOperation({ wallet: walletA, assetId: receiptId, dropId: drop.dropId });
+    returned = result.current.recordReceiptSubmission(returned, {
+      phase: 'hidden', signature, recentBlockhash: blockhash,
+    }).operation;
+    claimStartedGeneration = result.current.receiptOperationGenerationRef.current;
+    newer = result.current.beginReceiptOperation({ wallet: walletA, assetId: address(6), dropId: drop.dropId });
+    newer = result.current.recordReceiptSubmission(newer, {
+      phase: 'hidden', signature, recentBlockhash: blockhash,
+    }).operation;
+  });
+  rerender({ wallet: walletContext(walletB) });
+  const rebasedReturned = result.current.receiptOperations.get(returned.key)!;
+  const rebasedNewer = result.current.receiptOperations.get(newer.key)!;
+  assert.equal(result.current.isReceiptOperationCurrent(returned), false);
+  assert.equal(result.current.isReceiptOperationCurrent(rebasedReturned), true);
+  assert.equal(rebasedReturned.phase, 'unverified');
+  assert.ok(rebasedReturned.generation > claimStartedGeneration);
+  assert.equal(rebasedReturned.createdGeneration, returned.createdGeneration);
+  act(() => {
+    result.current.clearAuthoritativelyReturnedReceiptOperations(
+      walletA, [returned.assetId, newer.assetId], claimStartedGeneration,
+    );
+  });
+  assert.equal(result.current.receiptOperations.has(returned.key), false);
+  assert.equal(result.current.receiptOperations.get(newer.key), rebasedNewer);
 });
 
 test('wallet signing checks the current wallet again before broadcasting', async () => {

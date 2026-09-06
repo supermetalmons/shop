@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { shouldAutoFocusFormControl } from '../lib/focusTrap';
 import { isStripeReceiptClaimCode } from '../lib/stripeReceiptClaims';
+import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
 
 type ClaimFormResult = {
   itemsPerBox?: number;
@@ -48,17 +49,16 @@ export function ClaimForm({
   initialCode = '',
   defaultRecipient = '',
 }: ClaimFormProps) {
-  const mountedRef = useRef(false);
   const codeInputRef = useRef<HTMLInputElement | null>(null);
   const recipientInputRef = useRef<HTMLInputElement | null>(null);
   const recipientTouchedRef = useRef(false);
-  const onLoadingChangeRef = useRef(onLoadingChange);
-  onLoadingChangeRef.current = onLoadingChange;
   const shouldAutoFocusCodeInput = shouldAutoFocusFormControl();
   const [code, setCode] = useState(initialCode);
   const [recipient, setRecipient] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { pending: loading, error, setError, isPending, run } = useAsyncSubmit({
+    formatError: (error) => error instanceof Error ? error.message : 'Unable to claim certificates',
+    onPendingChange: onLoadingChange,
+  });
   const [success, setSuccess] = useState<string | null>(null);
   const figuresPerBox = normalizeItemsPerBoxCount(itemsPerBox);
   const defaultBoxReceiptWord = resolveReceiptWord(boxNamePrefix, 'box');
@@ -77,14 +77,6 @@ export function ClaimForm({
     if (!isStripeCode || recipientTouchedRef.current || !defaultRecipient) return;
     setRecipient((current) => (current ? current : defaultRecipient));
   }, [defaultRecipient, isStripeCode]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      onLoadingChangeRef.current?.(false);
-    };
-  }, []);
 
   useLayoutEffect(() => {
     if (!shouldAutoFocusCodeInput) return;
@@ -106,36 +98,26 @@ export function ClaimForm({
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (isPending()) return;
     if (!shouldAutoFocusCodeInput) {
       codeInputRef.current?.blur();
       recipientInputRef.current?.blur();
     }
-    setLoading(true);
-    onLoadingChangeRef.current?.(true);
-    setError(null);
     setSuccess(null);
-    try {
-      const result = await onClaim({
+    await run(
+      () => onClaim({
         code: code.trim(),
         ...(isStripeCode ? { recipient: recipient.trim() } : {}),
-      });
-      if (!mountedRef.current) return;
-      if (result?.deferred) return;
-      if (onSuccess) {
-        onSuccess();
-      } else {
-        setSuccess(buildSuccessMessage(result || {}));
-      }
-    } catch (err) {
-      if (mountedRef.current) {
-        setError(err instanceof Error ? err.message : 'Unable to claim certificates');
-      }
-    } finally {
-      if (mountedRef.current) {
-        setLoading(false);
-        onLoadingChangeRef.current?.(false);
-      }
-    }
+      }),
+      (result) => {
+        if (result && result.deferred) return;
+        if (onSuccess) {
+          onSuccess();
+        } else {
+          setSuccess(buildSuccessMessage(result || {}));
+        }
+      },
+    );
   };
 
   return (

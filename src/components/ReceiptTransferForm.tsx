@@ -7,6 +7,7 @@ import {
   useState,
 } from 'react';
 import { shouldAutoFocusFormControl } from '../lib/focusTrap';
+import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
 import { normalizeReceiptTransferDestination } from '../lib/receiptTransfer';
 
 export type ReceiptTransferFormProps = {
@@ -25,22 +26,14 @@ export function ReceiptTransferForm({
   onTransfer,
   onCancel,
 }: ReceiptTransferFormProps) {
-  const mountedRef = useRef(false);
-  const pendingRef = useRef(false);
   const destinationInputRef = useRef<HTMLInputElement | null>(null);
   const cancelButtonRef = useRef<HTMLButtonElement | null>(null);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const errorId = useId();
   const [destination, setDestination] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  const { pending, error, setError, isPending, run } = useAsyncSubmit({
+    formatError: readableTransferError,
+  });
 
   useLayoutEffect(() => {
     const initialFocus = shouldAutoFocusFormControl()
@@ -54,13 +47,13 @@ export function ReceiptTransferForm({
   }, [pending]);
 
   const dismiss = () => {
-    if (pendingRef.current) return;
+    if (isPending()) return;
     onCancel();
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (pendingRef.current) return;
+    if (isPending()) return;
 
     const trimmedDestination = destination.trim();
     setDestination(trimmedDestination);
@@ -75,20 +68,7 @@ export function ReceiptTransferForm({
     }
 
     setDestination(normalizedDestination);
-    setError(null);
-    pendingRef.current = true;
-    setPending(true);
-
-    try {
-      await onTransfer(normalizedDestination);
-    } catch (transferError) {
-      if (mountedRef.current) {
-        setError(readableTransferError(transferError));
-      }
-    } finally {
-      pendingRef.current = false;
-      if (mountedRef.current) setPending(false);
-    }
+    await run(() => onTransfer(normalizedDestination));
   };
 
   return (

@@ -79,6 +79,9 @@ export function useReceiptActions({
     receiptOperationGenerationRef,
     beginReceiptOperation,
     updateReceiptOperation,
+    recordReceiptSubmission,
+    resetReceiptSubmissionForRetry,
+    isReceiptOperationCurrent,
   } = receiptState;
   const assertReceiptTransferWalletReady = (
     expectedWallet: string,
@@ -333,11 +336,7 @@ export function useReceiptActions({
     let transferConfirmed = false;
     let receiptOperation: ReceiptOperation | null = null;
     const receiptOperationIsCurrent = () =>
-      !isReceiptTarget ||
-      Boolean(
-        receiptOperation &&
-          receiptOperationsRef.current.get(receiptOperation.key)?.generation === receiptOperation.generation,
-      );
+      !isReceiptTarget || isReceiptOperationCurrent(receiptOperation);
     try {
       setAdminIrlRedeeming(true);
       const adminIrlDrop = requireKnownDropConfig(adminIrlDropId, 'Admin IRL redeem selection');
@@ -371,31 +370,14 @@ export function useReceiptActions({
         requestId: string,
       ): boolean => {
         if (!receiptOperation) return false;
-        const previousOperation = receiptOperation;
-        const nextOperation: ReceiptOperation = {
-          ...previousOperation,
+        const recorded = recordReceiptSubmission(receiptOperation, {
           phase,
           signature,
           recentBlockhash: submittedTx.message.recentBlockhash,
           adminFinalizeRequestId: requestId,
-        };
-        const applied = updateReceiptOperation(previousOperation, () => nextOperation);
-        receiptOperation = nextOperation;
-        return applied;
-      };
-      const resetReceiptSubmissionForRetry = () => {
-        if (!receiptOperation) return;
-        const previousOperation = receiptOperation;
-        const nextOperation: ReceiptOperation = {
-          ...previousOperation,
-          phase: 'in-flight',
-          signature: undefined,
-          recentBlockhash: undefined,
-          adminFinalizeRequestId: undefined,
-        };
-        if (updateReceiptOperation(previousOperation, () => nextOperation)) {
-          receiptOperation = nextOperation;
-        }
+        });
+        receiptOperation = recorded.operation;
+        return recorded.applied;
       };
 
       const submitTransfer = (encodedTx: string, requestId: string): Promise<string> => {
@@ -462,7 +444,9 @@ export function useReceiptActions({
           forgetPendingAdminIrlRedeem(wallet, broadcastAttemptRequestId);
           broadcastAttemptRequestId = '';
         }
-        resetReceiptSubmissionForRetry();
+        if (receiptOperation) {
+          receiptOperation = resetReceiptSubmissionForRetry(receiptOperation) ?? receiptOperation;
+        }
         if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
           showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
         }
@@ -626,34 +610,13 @@ export function useReceiptActions({
         submittedTx: VersionedTransaction,
       ): boolean => {
         if (!receiptOperation) return false;
-        const previousOperation = receiptOperation;
-        const nextOperation: ReceiptOperation = {
-          ...previousOperation,
+        const recorded = recordReceiptSubmission(receiptOperation, {
           phase,
           signature,
           recentBlockhash: submittedTx.message.recentBlockhash,
-        };
-        const applied = updateReceiptOperation(previousOperation, () => nextOperation);
-        receiptOperation = nextOperation;
-        return applied;
-      };
-      const receiptOperationIsCurrent = () =>
-        Boolean(
-          receiptOperation &&
-            receiptOperationsRef.current.get(receiptOperation.key)?.generation === receiptOperation.generation,
-        );
-      const resetReceiptSubmissionForRetry = () => {
-        if (!receiptOperation) return;
-        const previousOperation = receiptOperation;
-        const nextOperation: ReceiptOperation = {
-          ...previousOperation,
-          phase: 'in-flight',
-          signature: undefined,
-          recentBlockhash: undefined,
-        };
-        if (updateReceiptOperation(previousOperation, () => nextOperation)) {
-          receiptOperation = nextOperation;
-        }
+        });
+        receiptOperation = recorded.operation;
+        return recorded.applied;
       };
       const submitTransfer = (encodedTx: string) => {
         assertReceiptTransferWalletReady(
@@ -690,7 +653,7 @@ export function useReceiptActions({
         );
       };
       const finishPendingTransfer = (signature: string) => {
-        if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+        if (connectedWalletRef.current === wallet && isReceiptOperationCurrent(receiptOperation)) {
           setReceiptTransferTarget(null);
           closeRevealOverlay();
           showToast(`Receipt transfer submitted · confirmation pending · ${shortAddress(signature)}`);
@@ -725,8 +688,10 @@ export function useReceiptActions({
               return null;
             }
             if (attempt > 0 || submittedSignature || !isBlockhashExpiredError(err)) throw err;
-            resetReceiptSubmissionForRetry();
-            if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+            if (receiptOperation) {
+              receiptOperation = resetReceiptSubmissionForRetry(receiptOperation) ?? receiptOperation;
+            }
+            if (connectedWalletRef.current === wallet && isReceiptOperationCurrent(receiptOperation)) {
               showToast('Prepared transaction expired. Preparing a fresh one…');
             }
           }
@@ -736,7 +701,7 @@ export function useReceiptActions({
       const signature = await submitWithBlockhashRetry();
       if (!signature) return;
 
-      if (connectedWalletRef.current === wallet && receiptOperationIsCurrent()) {
+      if (connectedWalletRef.current === wallet && isReceiptOperationCurrent(receiptOperation)) {
         setReceiptTransferTarget(null);
         closeRevealOverlay();
         showToast(`Receipt transferred to ${shortAddress(destination)} · ${shortAddress(signature)}`);

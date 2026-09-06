@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 import { z } from 'zod';
+import { useAsyncSubmit } from '../hooks/useAsyncSubmit';
 import { subscribeToNotifications } from '../lib/notificationSubscriptions';
 
 interface NotifyFormProps {
@@ -14,20 +15,12 @@ function isValidEmail(email: string): boolean {
 }
 
 export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
-  const mountedRef = useRef(false);
-  const pendingRef = useRef(false);
   const submitButtonRef = useRef<HTMLButtonElement | null>(null);
   const errorId = useId();
   const [email, setEmail] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  const { pending, error, setError, isPending, run } = useAsyncSubmit({
+    formatError: () => 'Unable to subscribe. Please try again.',
+  });
 
   useEffect(() => {
     if (pending) submitButtonRef.current?.focus({ preventScroll: true });
@@ -35,7 +28,7 @@ export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (pendingRef.current) return;
+    if (isPending()) return;
 
     const normalizedEmail = email.trim();
     setEmail(normalizedEmail);
@@ -45,24 +38,12 @@ export function NotifyForm({ onSuccess, onCancel }: NotifyFormProps) {
       return;
     }
 
-    pendingRef.current = true;
-    setPending(true);
-    setError(null);
-
-    try {
+    await run(async () => {
       const result = await subscribeToNotifications({ email: normalizedEmail });
       if (!result || result.subscribed !== true) {
         throw new Error('Unexpected subscription response.');
       }
-    } catch {
-      if (mountedRef.current) setError('Unable to subscribe. Please try again.');
-      return;
-    } finally {
-      pendingRef.current = false;
-      if (mountedRef.current) setPending(false);
-    }
-
-    if (mountedRef.current) onSuccess();
+    }, onSuccess);
   };
 
   return (

@@ -65,6 +65,41 @@ export function useReceiptOperationState(connectedWallet: string | undefined) {
     },
     [updateReceiptOperations],
   );
+  const recordReceiptSubmission = useCallback(
+    (
+      operation: ReceiptOperation,
+      submission: {
+        phase: Extract<ReceiptOperation['phase'], 'in-flight' | 'hidden'>;
+        signature: string;
+        recentBlockhash: string;
+        adminFinalizeRequestId?: string;
+      },
+    ): { operation: ReceiptOperation; applied: boolean } => {
+      const nextOperation = { ...operation, ...submission };
+      const applied = updateReceiptOperation(operation, () => nextOperation);
+      return { operation: nextOperation, applied };
+    },
+    [updateReceiptOperation],
+  );
+  const resetReceiptSubmissionForRetry = useCallback(
+    (operation: ReceiptOperation): ReceiptOperation | null => {
+      const nextOperation: ReceiptOperation = {
+        ...operation,
+        phase: 'in-flight',
+        signature: undefined,
+        recentBlockhash: undefined,
+        adminFinalizeRequestId: undefined,
+      };
+      return updateReceiptOperation(operation, () => nextOperation) ? nextOperation : null;
+    },
+    [updateReceiptOperation],
+  );
+  const isReceiptOperationCurrent = useCallback(
+    (operation: ReceiptOperation | null): boolean => Boolean(
+      operation && receiptOperationsRef.current.get(operation.key)?.generation === operation.generation,
+    ),
+    [],
+  );
   const clearAuthoritativelyReturnedReceiptOperations = useCallback(
     (wallet: string, assetIds: readonly string[], maximumCreatedGeneration: number) => {
       updateReceiptOperations((current) =>
@@ -93,6 +128,9 @@ export function useReceiptOperationState(connectedWallet: string | undefined) {
     receiptOperationHiddenAssets,
     beginReceiptOperation,
     updateReceiptOperation,
+    recordReceiptSubmission,
+    resetReceiptSubmissionForRetry,
+    isReceiptOperationCurrent,
     clearAuthoritativelyReturnedReceiptOperations,
     rebaseReceiptOperations,
   };
