@@ -94,11 +94,10 @@ type FulfillmentOrdersOptions = {
   enabled: boolean;
   dropIds: readonly string[];
   onReset: () => void;
-  onOrdersLoaded: (orders: FulfillmentOrder[]) => void;
 };
 
 export function useFulfillmentOrders(
-  { walletAddress, enabled, dropIds, onReset, onOrdersLoaded }: FulfillmentOrdersOptions,
+  { walletAddress, enabled, dropIds, onReset }: FulfillmentOrdersOptions,
   api = defaultFulfillmentApi,
 ) {
   const [state, dispatch] = useReducer(fulfillmentOrdersReducer, undefined, createFulfillmentOrdersState);
@@ -149,7 +148,6 @@ export function useFulfillmentOrders(
           dedupeManualReviewCheckouts(responses.flatMap((response) => response.checkouts)),
         );
         dispatch({ type: 'initialLoaded', orders, cursorsByDropId, manualReviewCheckouts });
-        onOrdersLoaded(orders);
       } catch (error) {
         if (!isCurrent()) return;
         console.error(error);
@@ -162,7 +160,7 @@ export function useFulfillmentOrders(
       generationRef.current += 1;
       paginationPendingRef.current = false;
     };
-  }, [api, canLoad, enabled, onOrdersLoaded, onReset, selectedDropIds, walletAddress]);
+  }, [api, canLoad, enabled, onReset, selectedDropIds, walletAddress]);
 
   const loadMore = useCallback(async () => {
     if (!isCurrentScope() || paginationPendingRef.current || state.loading || state.loadingMore || !state.hasMore) return;
@@ -192,13 +190,12 @@ export function useFulfillmentOrders(
       responses.forEach((response) => { cursorsByDropId[response.dropId] = response.nextCursor; });
       const orders = sortFulfillmentOrders(dedupeOrdersByKey(responses.flatMap((response) => response.orders), existingOrderKeys));
       dispatch({ type: 'moreLoaded', orders, cursorsByDropId });
-      if (orders.length) onOrdersLoaded(orders);
     } catch (error) {
       if (!isCurrentScope()) return;
       console.error(error);
       dispatch({ type: 'failed', error: error instanceof Error ? error.message : 'Failed to load more orders' });
     }
-  }, [api, isCurrentScope, onOrdersLoaded, selectedDropIds, state]);
+  }, [api, isCurrentScope, selectedDropIds, state]);
 
   const updateOrder = useCallback((key: string, update: OrderUpdater) => {
     if (isCurrentScope()) dispatch({ type: 'updateOrder', key, update });

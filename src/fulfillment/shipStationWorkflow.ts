@@ -55,7 +55,7 @@ export function isActiveShipStationLabel(label: FulfillmentOrder['shipstationLab
   return label?.status === 'completed' || label?.status === 'processing';
 }
 
-export function shipStationTrackingCodeUpdateForOrder(
+function shipStationTrackingCodeUpdateForOrder(
   order: FulfillmentOrder,
   nextLabel: FulfillmentOrder['shipstationLabel'],
 ): string | null | undefined {

@@ -12,8 +12,7 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { FiAlertTriangle, FiDownload, FiEdit2, FiMoreHorizontal } from 'react-icons/fi';
-import { updateFulfillmentAddress, updateFulfillmentStatus } from './api/fulfillment';
-import { FulfillmentOrder, FulfillmentStatus } from './types';
+import type { FulfillmentOrder } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import {
@@ -32,7 +31,8 @@ import {
 } from './lib/fulfillmentCodes';
 import { isDirectDeliveryItemsPerBox } from '../shared/shipping.ts';
 import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
-import { Modal } from './components/Modal';
+import { FulfillmentStatusModal } from './fulfillment/FulfillmentStatusModal';
+import { FulfillmentAddressModal } from './fulfillment/FulfillmentAddressModal';
 import { FulfillmentShipStationModal } from './fulfillment/FulfillmentShipStationModal';
 import { useFulfillmentOrders } from './fulfillment/useFulfillmentOrders';
 import { useFulfillmentExports } from './fulfillment/useFulfillmentExports';
@@ -45,7 +45,7 @@ import {
   resolveFulfillmentFigurePreview,
   type FulfillmentFigureLabelOverrideArgs,
 } from './lib/fulfillmentLabels';
-import { FULFILLMENT_STATUS_OPTIONS, normalizeFulfillmentStatus } from './lib/fulfillmentStatus';
+import { normalizeFulfillmentStatus } from './lib/fulfillmentStatus';
 import {
   DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER,
   FULFILLMENT_ORDER_VISIBILITY_OPTIONS,
@@ -57,7 +57,6 @@ import {
 import {
   normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
-  sanitizeFulfillmentTrackingCode,
   shouldDisplayFulfillmentTrackingCode,
 } from '../shared/fulfillmentTracking.ts';
 import {
@@ -508,17 +507,11 @@ export default function FulfillmentApp({
   const [manualReviewMenuOpen, setManualReviewMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const closeExportMenu = useCallback(() => setExportMenuOpen(false), []);
-  const [statusEdits, setStatusEdits] = useState<Record<string, FulfillmentStatus | ''>>({});
-  const [trackingCodeEdits, setTrackingCodeEdits] = useState<Record<string, string>>({});
-  const [statusSaving, setStatusSaving] = useState<Record<string, boolean>>({});
   const [figureMetadataByKey, setFigureMetadataByKey] = useState<Record<string, FigureMetadataRecord>>({});
   const [pendingSignIn, setPendingSignIn] = useState(false);
   const [activeUpdateOrderKey, setActiveUpdateOrderKey] = useState<string | null>(null);
   const [activeAddressOrderKey, setActiveAddressOrderKey] = useState<string | null>(null);
   const [activeShipstationOrderKey, setActiveShipstationOrderKey] = useState<string | null>(null);
-  const [addressEditText, setAddressEditText] = useState('');
-  const [addressSaving, setAddressSaving] = useState(false);
-  const [addressError, setAddressError] = useState<string | null>(null);
   const walletConnectingSeenRef = useRef(false);
   const [walletReady, setWalletReady] = useState(() => !walletAdapter.wallet || !autoConnectPossible);
   const authReady = sessionResolution === 'settled';
@@ -559,40 +552,11 @@ export default function FulfillmentApp({
     }
   }, [onSelectedDropIdChange, selectedDropId, visibleDrops, walletAddress]);
 
-  const mergeStatusEdits = useCallback((incoming: FulfillmentOrder[]) => {
-    setStatusEdits((prev) => {
-      const next = { ...prev };
-      incoming.forEach((order) => {
-        const key = fulfillmentOrderKey(order);
-        if (!(key in next)) {
-          next[key] = normalizeFulfillmentStatus(order.fulfillmentStatus);
-        }
-      });
-      return next;
-    });
-    setTrackingCodeEdits((prev) => {
-      const next = { ...prev };
-      incoming.forEach((order) => {
-        const key = fulfillmentOrderKey(order);
-        if (!(key in next)) {
-          next[key] = normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode) || '';
-        }
-      });
-      return next;
-    });
-  }, []);
-
   const resetOrderUi = useCallback(() => {
     setManualReviewMenuOpen(false);
-    setStatusEdits({});
-    setTrackingCodeEdits({});
-    setStatusSaving({});
     setActiveUpdateOrderKey(null);
     setActiveAddressOrderKey(null);
     setActiveShipstationOrderKey(null);
-    setAddressEditText('');
-    setAddressSaving(false);
-    setAddressError(null);
   }, []);
 
   const {
@@ -612,7 +576,6 @@ export default function FulfillmentApp({
     enabled: hasFulfillmentAccess && signedIn,
     dropIds: selectedDropIds,
     onReset: resetOrderUi,
-    onOrdersLoaded: mergeStatusEdits,
   });
 
   useEffect(() => {
@@ -762,85 +725,10 @@ export default function FulfillmentApp({
     return () => observer.disconnect();
   }, [hasFulfillmentAccess, signedIn, selectedDropIds, loadMore]);
 
-  const handleSaveStatus = useCallback(
-    async (orderToUpdate: FulfillmentOrder) => {
-      if (!hasFulfillmentAccess || !signedIn) return false;
-      const key = fulfillmentOrderKey(orderToUpdate);
-      setStatusSaving((prev) => ({ ...prev, [key]: true }));
-      setOrdersError(null);
-      try {
-        const nextStatus = normalizeFulfillmentStatus(statusEdits[key]);
-        const nextTrackingCode =
-          nextStatus === 'Shipped' ? sanitizeFulfillmentTrackingCode(trackingCodeEdits[key]) : undefined;
-        const resp = await updateFulfillmentStatus(
-          orderToUpdate.deliveryId,
-          nextStatus,
-          orderToUpdate.dropId,
-          nextTrackingCode,
-        );
-        if (!isCurrentScope()) return false;
-        const normalized = normalizeFulfillmentStatus(resp.fulfillmentStatus || nextStatus);
-        const responseTrackingCode = normalizeOptionalFulfillmentTrackingCode(resp.fulfillmentTrackingCode);
-        updateOrder(key, (order) => ({
-          ...order,
-          fulfillmentStatus: normalized || undefined,
-          fulfillmentTrackingCode:
-            normalized === 'Shipped'
-              ? responseTrackingCode
-              : responseTrackingCode || normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode),
-        }));
-        setStatusEdits((prev) => ({ ...prev, [key]: normalized }));
-        setTrackingCodeEdits((prev) => ({
-          ...prev,
-          [key]:
-            normalized === 'Shipped'
-              ? responseTrackingCode || ''
-              : responseTrackingCode || normalizeOptionalFulfillmentTrackingCode(orderToUpdate.fulfillmentTrackingCode) || '',
-        }));
-        return true;
-      } catch (err) {
-        if (!isCurrentScope()) return false;
-        console.error(err);
-        setOrdersError(err instanceof Error ? err.message : 'Failed to update status');
-        return false;
-      } finally {
-        if (isCurrentScope()) {
-          setStatusSaving((prev) => ({ ...prev, [key]: false }));
-        }
-      }
-    },
-    [hasFulfillmentAccess, isCurrentScope, setOrdersError, signedIn, statusEdits, trackingCodeEdits, updateOrder],
-  );
-
-  const statusDirty = useMemo(() => {
-    const dirty = new Set<string>();
-    orders.forEach((order) => {
-      const key = fulfillmentOrderKey(order);
-      const current = normalizeFulfillmentStatus(order.fulfillmentStatus);
-      const edited = statusEdits[key] ?? '';
-      const currentTrackingCode = normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode) || '';
-      const editedTrackingCode = sanitizeFulfillmentTrackingCode(trackingCodeEdits[key]);
-      if (current !== edited || (edited === 'Shipped' && currentTrackingCode !== editedTrackingCode)) dirty.add(key);
-    });
-    return dirty;
-  }, [orders, statusEdits, trackingCodeEdits]);
-
   const activeUpdateOrder = useMemo(
     () => orders.find((order) => fulfillmentOrderKey(order) === activeUpdateOrderKey) ?? null,
     [activeUpdateOrderKey, orders],
   );
-  const activeUpdateOrderKeyResolved = activeUpdateOrder ? fulfillmentOrderKey(activeUpdateOrder) : '';
-  const activeUpdateText = activeUpdateOrder
-    ? statusEdits[activeUpdateOrderKeyResolved] ?? normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus)
-    : '';
-  const activeUpdateTrackingCode = activeUpdateOrder
-    ? trackingCodeEdits[activeUpdateOrderKeyResolved] ??
-      normalizeOptionalFulfillmentTrackingCode(activeUpdateOrder.fulfillmentTrackingCode) ??
-      ''
-    : '';
-  const activeUpdateDirty = activeUpdateOrder ? statusDirty.has(activeUpdateOrderKeyResolved) : false;
-  const activeUpdateSaving = activeUpdateOrder ? Boolean(statusSaving[activeUpdateOrderKeyResolved]) : false;
-
   const handleOpenUpdateModal = useCallback((orderKey: string) => {
     setActiveUpdateOrderKey(orderKey);
   }, []);
@@ -855,117 +743,21 @@ export default function FulfillmentApp({
   const handleCloseShipstationModal = useCallback(() => {
     setActiveShipstationOrderKey(null);
   }, []);
-  const handleShipstationOrderUpdated = useCallback((
-    key: string,
-    update: (order: FulfillmentOrder) => FulfillmentOrder,
-    trackingCodeUpdate?: string | null,
-  ) => {
-    if (!isCurrentScope()) return;
-    updateOrder(key, update);
-    if (trackingCodeUpdate !== undefined) {
-      setTrackingCodeEdits((prev) => ({ ...prev, [key]: trackingCodeUpdate ?? '' }));
-    }
-  }, [isCurrentScope, updateOrder]);
-
-  const handleCancelUpdate = useCallback(() => {
-    if (!activeUpdateOrder) {
-      setActiveUpdateOrderKey(null);
-      return;
-    }
-    const key = fulfillmentOrderKey(activeUpdateOrder);
-    setStatusEdits((prev) => ({
-      ...prev,
-      [key]: normalizeFulfillmentStatus(activeUpdateOrder.fulfillmentStatus),
-    }));
-    setTrackingCodeEdits((prev) => ({
-      ...prev,
-      [key]: normalizeOptionalFulfillmentTrackingCode(activeUpdateOrder.fulfillmentTrackingCode) || '',
-    }));
-    setActiveUpdateOrderKey(null);
-  }, [activeUpdateOrder]);
-
-  const handleSaveActiveUpdate = useCallback(async () => {
-    if (!activeUpdateOrder) return;
-    if (!activeUpdateDirty) {
-      setActiveUpdateOrderKey(null);
-      return;
-    }
-    const ok = await handleSaveStatus(activeUpdateOrder);
-    if (ok && isCurrentScope()) setActiveUpdateOrderKey(null);
-  }, [activeUpdateDirty, activeUpdateOrder, handleSaveStatus, isCurrentScope]);
+  const handleCloseUpdateModal = useCallback(() => setActiveUpdateOrderKey(null), []);
 
   const activeAddressOrder = useMemo(
     () => orders.find((order) => fulfillmentOrderKey(order) === activeAddressOrderKey) ?? null,
     [activeAddressOrderKey, orders],
   );
-  const activeAddressText =
-    typeof activeAddressOrder?.address.full === 'string' && activeAddressOrder.address.full !== '***'
-      ? activeAddressOrder.address.full.trim()
-      : '';
-  const addressEditDirty = Boolean(activeAddressOrder && addressEditText.trim() !== activeAddressText);
-
   const handleOpenAddressModal = useCallback(
     (order: FulfillmentOrder) => {
       if (!canAdminEditFulfillmentAddress || isRedeemedForIrlFulfillmentOrder(order)) return;
-      const full = typeof order.address.full === 'string' && order.address.full !== '***' ? order.address.full : '';
-      setAddressEditText(full);
-      setAddressError(null);
       setActiveAddressOrderKey(fulfillmentOrderKey(order));
     },
     [canAdminEditFulfillmentAddress],
   );
 
-  const handleCloseAddressModal = useCallback(() => {
-    if (addressSaving) return;
-    setActiveAddressOrderKey(null);
-    setAddressEditText('');
-    setAddressError(null);
-  }, [addressSaving]);
-
-  const handleSaveAddress = useCallback(async () => {
-    if (!activeAddressOrder || !canAdminEditFulfillmentAddress || addressSaving) return;
-    const full = addressEditText.trim();
-    if (!full) {
-      setAddressError('Enter a delivery address.');
-      return;
-    }
-    if (!addressEditDirty) {
-      handleCloseAddressModal();
-      return;
-    }
-
-    const orderKey = fulfillmentOrderKey(activeAddressOrder);
-    setAddressSaving(true);
-    setAddressError(null);
-    try {
-      const response = await updateFulfillmentAddress(
-        activeAddressOrder.deliveryId,
-        full,
-        activeAddressOrder.dropId,
-      );
-      if (!isCurrentScope()) return;
-      updateOrder(orderKey, (order) => ({ ...order, address: { ...order.address, ...response.address } }));
-      setActiveAddressOrderKey(null);
-      setAddressEditText('');
-    } catch (err) {
-      if (!isCurrentScope()) return;
-      console.error(err);
-      setAddressError(err instanceof Error ? err.message : 'Failed to update delivery address');
-    } finally {
-      if (isCurrentScope()) {
-        setAddressSaving(false);
-      }
-    }
-  }, [
-    activeAddressOrder,
-    addressEditDirty,
-    addressEditText,
-    addressSaving,
-    canAdminEditFulfillmentAddress,
-    handleCloseAddressModal,
-    isCurrentScope,
-    updateOrder,
-  ]);
+  const handleCloseAddressModal = useCallback(() => setActiveAddressOrderKey(null), []);
 
   const handleSolanaSignIn = useCallback(() => {
     if (!connectedWallet || !publicKey) {
@@ -1515,120 +1307,36 @@ export default function FulfillmentApp({
         </BodyPortal>
       ) : null}
 
-      <Modal
-        open={activeAddressOrderKey !== null}
-        title={activeAddressOrder ? `Edit address · Order ${activeAddressOrder.deliveryId}` : 'Edit address'}
-        onClose={handleCloseAddressModal}
-        showCloseButton={false}
-        closeOnEscape={!addressSaving}
+      <FulfillmentAddressModal
+        key={`address:${scopeVersion}`}
+        order={activeAddressOrder}
+        canManage={canAdminEditFulfillmentAddress}
         suspended={walletModalVisible}
-      >
-        <form
-          className="modal-form fulfillment-address-form"
-          onSubmit={(evt) => {
-            evt.preventDefault();
-            void handleSaveAddress();
-          }}
-        >
-          <label>
-            <span className="muted">Delivery address</span>
-            <textarea
-              value={addressEditText}
-              onChange={(evt) => setAddressEditText(evt.target.value)}
-              rows={8}
-              maxLength={2048}
-              required
-              disabled={addressSaving}
-              autoComplete="street-address"
-              aria-label="Delivery address"
-            />
-          </label>
-          <div className="muted small">This changes the address for this order only.</div>
-          {addressError ? <div className="error">{addressError}</div> : null}
-          <div className="row row--end">
-            <button
-              type="button"
-              className="secondary-light"
-              onClick={handleCloseAddressModal}
-              disabled={addressSaving}
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={!activeAddressOrder || addressSaving || !addressEditDirty || !addressEditText.trim()}
-            >
-              {addressSaving ? 'Saving…' : 'Save address'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+        isCurrentScope={isCurrentScope}
+        onClose={handleCloseAddressModal}
+        onOrderUpdated={updateOrder}
+      />
 
       <FulfillmentShipStationModal
-        key={scopeVersion}
+        key={`shipstation:${scopeVersion}`}
         order={activeShipstationOrder}
         canManage={hasFulfillmentAccess && signedIn}
         suspended={walletModalVisible}
         isCurrentScope={isCurrentScope}
         onClose={handleCloseShipstationModal}
-        onOrderUpdated={handleShipstationOrderUpdated}
+        onOrderUpdated={updateOrder}
       />
 
-      <Modal
-        open={activeUpdateOrderKey !== null}
-        title={activeUpdateOrder ? `Order ${activeUpdateOrder.deliveryId}` : 'Order'}
-        onClose={handleCancelUpdate}
-        showCloseButton={false}
+      <FulfillmentStatusModal
+        key={`status:${scopeVersion}`}
+        order={activeUpdateOrder}
+        canManage={hasFulfillmentAccess && signedIn}
         suspended={walletModalVisible}
-      >
-        <div className="modal-form">
-          <select
-            className="status-input"
-            value={activeUpdateText}
-            onChange={(evt) => {
-              if (!activeUpdateOrder) return;
-              const nextStatus = normalizeFulfillmentStatus(evt.target.value);
-              setStatusEdits((prev) => ({ ...prev, [fulfillmentOrderKey(activeUpdateOrder)]: nextStatus }));
-            }}
-            aria-label="Fulfillment status"
-          >
-            <option value="">Not set</option>
-            {FULFILLMENT_STATUS_OPTIONS.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </select>
-          {activeUpdateText === 'Shipped' ? (
-            <input
-              className="tracking-input"
-              value={activeUpdateTrackingCode}
-              onChange={(evt) => {
-                if (!activeUpdateOrder) return;
-                setTrackingCodeEdits((prev) => ({
-                  ...prev,
-                  [fulfillmentOrderKey(activeUpdateOrder)]: evt.target.value,
-                }));
-              }}
-              placeholder="Tracking link"
-              aria-label="Tracking link"
-              autoComplete="off"
-            />
-          ) : null}
-          <div className="row row--end">
-            <button type="button" className="secondary-light" onClick={handleCancelUpdate}>
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSaveActiveUpdate()}
-              disabled={!activeUpdateOrder || activeUpdateSaving || !activeUpdateDirty}
-            >
-              Save
-            </button>
-          </div>
-        </div>
-      </Modal>
+        isCurrentScope={isCurrentScope}
+        onClose={handleCloseUpdateModal}
+        onOrderUpdated={updateOrder}
+        onError={setOrdersError}
+      />
 
       {authError ? <div className="error">{authError}</div> : null}
     </div>

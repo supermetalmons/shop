@@ -111,13 +111,13 @@ function mount(initialOrders: FulfillmentOrder[] = [order()], overrides: Partial
     getFulfillmentShipStationLabel: unexpected,
     ...overrides,
   };
-  const updates: Array<{ key: string; tracking: string | null | undefined }> = [];
+  const updates: string[] = [];
   let scopeCurrent = true;
   const view = renderHook(({ canManage }: { canManage: boolean }) => {
     const [orders, setOrders] = useState(() => Object.fromEntries(initialOrders.map((item) => [fulfillmentOrderKey(item), item])));
     const [selectedKey, setSelectedKey] = useState<string | null>(fulfillmentOrderKey(initialOrders[0]));
-    const onOrderUpdated = useCallback<OrderUpdated>((key, update, tracking) => {
-      updates.push({ key, tracking });
+    const onOrderUpdated = useCallback<OrderUpdated>((key, update) => {
+      updates.push(key);
       setOrders((current) => ({ ...current, [key]: update(current[key]) }));
     }, []);
     const onClose = useCallback(() => setSelectedKey(null), []);
@@ -293,7 +293,6 @@ test('purchase uncertainty preserves its request identity and survives reopening
   assert.equal(view.result.current.orders[key].shipstationPurchaseUnknown, false);
   assert.equal(view.result.current.orders[key].shipstationLabel?.status, 'completed');
   assert.equal(view.result.current.orders[key].fulfillmentTrackingCode, 'TRACK-1');
-  assert.equal(view.updates.at(-1)?.tracking, 'TRACK-1');
 });
 
 test('expired quotes leave purchase review and require fresh rates', async (t) => {
@@ -328,7 +327,6 @@ for (const tracking of ['TRACK-1', 'MANUAL-TRACKING']) {
     const updated = view.result.current.orders[fulfillmentOrderKey(initial)];
     assert.equal(updated.shipstationLabel?.status, 'voided');
     assert.equal(updated.fulfillmentTrackingCode, tracking === 'TRACK-1' ? undefined : tracking);
-    assert.equal(view.updates.at(-1)?.tracking, tracking === 'TRACK-1' ? null : undefined);
     assert.equal(view.result.current.workflow.shipstationReviewingVoid, false);
     assert.equal(view.result.current.workflow.shipstationLabelDownloadUrl, null);
     assert.equal(view.result.current.workflow.activeShipstationCanGetRates, true);

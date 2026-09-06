@@ -539,6 +539,7 @@ test('blur viewport background is route-overridable without retheming portals', 
 
 test('frosted surfaces use native backdrop filters without live element capture', () => {
   const styles = source('../src/styles.css');
+  const fulfillmentStyles = source('../src/fulfillment/styles.css');
   const clearCardStyles = source('../src/clearCardWip.css');
 
   assert.match(cssRule(styles, '.top__backdrop'), /backdrop-filter: blur\(18px\)/);
@@ -555,16 +556,19 @@ test('frosted surfaces use native backdrop filters without live element capture'
   const standardBeforePrefixed =
     /(?:^|[{;])\s*backdrop-filter\s*:[^;{}]+;\s*-webkit-backdrop-filter\s*:/m;
   assert.doesNotMatch(styles, standardBeforePrefixed);
+  assert.doesNotMatch(fulfillmentStyles, standardBeforePrefixed);
   assert.doesNotMatch(clearCardStyles, standardBeforePrefixed);
   assert.doesNotMatch(styles, /-moz-element|--frosted-|data-frosted-surface/);
+  assert.doesNotMatch(fulfillmentStyles, /-moz-element|--frosted-|data-frosted-surface/);
 });
 
 test('global foreground layers have deterministic stacking', () => {
   const styles = source('../src/styles.css');
+  const fulfillmentStyles = source('../src/fulfillment/styles.css');
   const orderedLayers = [
     cssZIndex(styles, 'header.top--fixed'),
     cssZIndex(styles, '.selection-panel'),
-    cssZIndex(styles, '.fulfillment-export-progress'),
+    cssZIndex(fulfillmentStyles, '.fulfillment-export-progress'),
     cssZIndex(styles, '.modal-overlay--suspended'),
     cssZIndex(styles, '.modal-overlay'),
     cssZIndex(

@@ -28,7 +28,6 @@ import {
   SHIPSTATION_PACKAGE_FIELDS,
   shipStationLabelOrderUpdate,
   shipStationPackageDraft,
-  shipStationTrackingCodeUpdateForOrder,
   shipStationWorkflowReducer,
   type ShipStationPackageDraft,
 } from './shipStationWorkflow';
@@ -48,7 +47,6 @@ export type ShipStationWorkflowOptions = {
   onOrderUpdated: (
     key: string,
     update: (current: FulfillmentOrder) => FulfillmentOrder,
-    trackingCodeUpdate?: string | null,
   ) => void;
   isCurrentScope: () => boolean;
 };
@@ -229,7 +227,7 @@ export function useShipStationWorkflow(
         shipstationPackageCount: response.packageCount,
         ...shipStationLabelOrderUpdate(order, response.label),
         shipstationPurchaseUnknown: Boolean(response.purchaseUnknown),
-      }), shipStationTrackingCodeUpdateForOrder(activeShipstationOrder, response.label));
+      }));
       dispatch({ type: 'rates-received', key, response });
     } catch (err) {
       if (!isCurrent()) return;
@@ -263,7 +261,7 @@ export function useShipStationWorkflow(
       if (!isCurrent()) return;
       onOrderUpdated(key, (order) => ({
         ...order, ...shipStationLabelOrderUpdate(order, response.label), shipstationPurchaseUnknown: false,
-      }), shipStationTrackingCodeUpdateForOrder(activeShipstationOrder, response.label));
+      }));
       dispatch({ type: 'purchase-completed', labelDownloadUrl: response.labelDownloadUrl || null });
     } catch (err) {
       if (!isCurrent()) return;
@@ -298,7 +296,7 @@ export function useShipStationWorkflow(
       }
       onOrderUpdated(key, (order) => ({
         ...order, ...shipStationLabelOrderUpdate(order, response.label), shipstationPurchaseUnknown: false,
-      }), shipStationTrackingCodeUpdateForOrder(activeShipstationOrder, response.label));
+      }));
       dispatch({ type: 'void-completed' });
     } catch (err) {
       if (!isCurrent()) return;
@@ -324,7 +322,7 @@ export function useShipStationWorkflow(
         ...order,
         ...shipStationLabelOrderUpdate(order, response.label),
         shipstationPurchaseUnknown: Boolean(response.purchaseUnknown),
-      }), shipStationTrackingCodeUpdateForOrder(activeShipstationOrder, response.label));
+      }));
       dispatch({
         type: 'label-received', purchaseUnknown: Boolean(response.purchaseUnknown),
         labelDownloadUrl: response.labelDownloadUrl || null,

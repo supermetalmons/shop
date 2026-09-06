@@ -3,6 +3,7 @@ import FulfillmentApp from './FulfillmentApp';
 import { type SolanaCluster, listFrontendDrops } from './config/deployment';
 import { buildFulfillmentFiltersHref, parseFulfillmentFilters } from './fulfillment/filters';
 import { WalletContextProvider } from './wallet/WalletContext';
+import './fulfillment/styles.css';
 
 const NEUTRAL_WALLET_CLUSTER: SolanaCluster = 'mainnet-beta';
 

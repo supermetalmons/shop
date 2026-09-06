@@ -56,7 +56,6 @@ function options(overrides: Partial<Options> = {}): Options {
     enabled: true,
     dropIds: ['drop-a'],
     onReset: () => undefined,
-    onOrdersLoaded: () => undefined,
     ...overrides,
   };
 }
@@ -97,9 +96,8 @@ function mount(initialProps: Options, api: Api, strict = false) {
 test('initial load sorts and deduplicates every drop while manual-review failure stays optional', async (t) => {
   const { api, orderCalls, reviewCalls } = createApi(true);
   const onReset = t.mock.fn();
-  const onOrdersLoaded = t.mock.fn();
   const warning = t.mock.method(console, 'warn', () => undefined);
-  const { result } = mount(options({ dropIds: ['drop-b', 'drop-a', 'drop-c'], onReset, onOrdersLoaded }), api);
+  const { result } = mount(options({ dropIds: ['drop-b', 'drop-a', 'drop-c'], onReset }), api);
 
   assert.equal(result.current.loading, true);
   assert.equal(onReset.mock.callCount(), 1);
@@ -123,16 +121,13 @@ test('initial load sorts and deduplicates every drop while manual-review failure
   assert.equal(result.current.ordersError, null);
   assert.equal(result.current.loading, false);
   assert.equal(result.current.hasMore, false);
-  assert.equal(onOrdersLoaded.mock.callCount(), 1);
-  assert.deepEqual(keys(onOrdersLoaded.mock.calls[0].arguments[0]), expected);
   assert.equal(warning.mock.callCount(), 1);
 });
 
 test('pagination uses remaining drop cursors, prevents overlap, and preserves page boundaries and local edits', async (t) => {
   const { api, orderCalls, reviewCalls } = createApi();
   const onReset = t.mock.fn();
-  const onOrdersLoaded = t.mock.fn();
-  const initial = options({ dropIds: ['drop-a', 'drop-b'], onReset, onOrdersLoaded });
+  const initial = options({ dropIds: ['drop-a', 'drop-b'], onReset });
   const { result, rerender } = mount(initial, api);
   await act(async () => { await result.current.loadMore(); });
   assert.equal(orderCalls.length, 2);
@@ -172,7 +167,6 @@ test('pagination uses remaining drop cursors, prevents overlap, and preserves pa
   assert.equal(result.current.orders[0].fulfillmentStatus, 'Shipped');
   assert.equal(result.current.orders[0].shipstationShipmentId, 'shipment-local');
   assert.equal(result.current.orders[0].address.full, 'Corrected address');
-  assert.deepEqual(keys(onOrdersLoaded.mock.calls[1].arguments[0]), ['drop-a:2']);
   assert.equal(onReset.mock.callCount(), 1);
   assert.equal(reviewCalls.length, 2);
 
@@ -185,7 +179,6 @@ test('pagination uses remaining drop cursors, prevents overlap, and preserves pa
   assert.equal(result.current.hasMore, false);
   assert.equal(result.current.loadingMore, false);
   assert.deepEqual(result.current.orderPageKeys, [['drop-a:1', 'drop-b:1'], ['drop-a:2']]);
-  assert.equal(onOrdersLoaded.mock.callCount(), 2);
   await act(async () => { await result.current.loadMore(); });
   assert.equal(orderCalls.length, 4);
 });
@@ -193,8 +186,7 @@ test('pagination uses remaining drop cursors, prevents overlap, and preserves pa
 test('a failed pagination batch retains all rows and cursors for retry', async (t) => {
   t.mock.method(console, 'error', () => undefined);
   const { api, orderCalls } = createApi();
-  const loaded = t.mock.fn();
-  const { result } = mount(options({ dropIds: ['drop-a', 'drop-b'], onOrdersLoaded: loaded }), api);
+  const { result } = mount(options({ dropIds: ['drop-a', 'drop-b'] }), api);
   await act(async () => {
     orderCalls[0].pending.resolve({ orders: [order('drop-a', 1)], nextCursor: cursor('a-next') });
     orderCalls[1].pending.resolve({ orders: [order('drop-b', 1)], nextCursor: cursor('b-next') });
@@ -213,7 +205,6 @@ test('a failed pagination batch retains all rows and cursors for retry', async (
   assert.equal(result.current.ordersError, 'Orders unavailable');
   assert.equal(result.current.loadingMore, false);
   assert.equal(result.current.hasMore, true);
-  assert.equal(loaded.mock.callCount(), 1);
 
   act(() => { page = result.current.loadMore(); });
   assert.equal(result.current.ordersError, null);
@@ -235,9 +226,8 @@ for (const scope of ['wallet', 'drop', 'access'] as const) {
     test(`${scope} changes ignore stale initial ${outcome} and completion`, async (t) => {
       t.mock.method(console, 'error', () => undefined);
       const { api, orderCalls } = createApi();
-      const loaded = t.mock.fn();
       const reset = t.mock.fn();
-      const initial = options({ onOrdersLoaded: loaded, onReset: reset });
+      const initial = options({ onReset: reset });
       const { result, rerender } = mount(initial, api);
       const oldGuard = result.current.isCurrentScope;
       const next = {
@@ -257,7 +247,6 @@ for (const scope of ['wallet', 'drop', 'access'] as const) {
       assert.deepEqual(result.current.orderPageKeys, []);
       assert.equal(result.current.ordersError, null);
       assert.equal(result.current.loading, scope !== 'access');
-      assert.equal(loaded.mock.callCount(), 0);
       if (scope === 'access') {
         assert.equal(result.current.hasMore, false);
         assert.equal(result.current.isCurrentScope(), false);
@@ -269,7 +258,6 @@ for (const scope of ['wallet', 'drop', 'access'] as const) {
       });
       assert.deepEqual(keys(result.current.orders), [`${next.dropIds[0]}:1`]);
       assert.equal(result.current.loading, false);
-      assert.equal(loaded.mock.callCount(), 1);
     });
   }
 }
@@ -338,21 +326,13 @@ test('captured guards and setters reject old writes even when the same wallet re
   await act(async () => { orderCalls[1].pending.resolve({ orders: [order('drop-a', 99)] }); });
 });
 
-test('reset and loaded callbacks support parent drafts without resetting them during pagination', async () => {
+test('scope resets close the active editor while pagination preserves it', async () => {
   const { api, orderCalls } = createApi();
-  let drafts: Record<string, string> = { 'stale:1': 'Old draft' };
   let activeEditor: string | null = 'stale:1';
-  const initial = options({
-    onReset() { drafts = {}; activeEditor = null; },
-    onOrdersLoaded(incoming) {
-      for (const entry of incoming) drafts[`${entry.dropId}:${entry.deliveryId}`] ??= entry.fulfillmentStatus || '';
-    },
-  });
+  const initial = options({ onReset() { activeEditor = null; } });
   const { result, rerender } = mount(initial, api);
-  assert.deepEqual(drafts, {});
   assert.equal(activeEditor, null);
   await act(async () => { orderCalls[0].pending.resolve({ orders: [order('drop-a', 1)], nextCursor: cursor('next') }); });
-  drafts['drop-a:1'] = 'Unsaved draft';
   activeEditor = 'drop-a:1';
   let page!: Promise<void>;
   act(() => { page = result.current.loadMore(); });
@@ -360,18 +340,15 @@ test('reset and loaded callbacks support parent drafts without resetting them du
     orderCalls[1].pending.resolve({ orders: [order('drop-a', 1), order('drop-a', 2)] });
     await page;
   });
-  assert.deepEqual(drafts, { 'drop-a:1': 'Unsaved draft', 'drop-a:2': 'Preparing' });
   assert.equal(activeEditor, 'drop-a:1');
   rerender({ ...initial, enabled: false });
-  assert.deepEqual(drafts, {});
   assert.equal(activeEditor, null);
 });
 
 test('StrictMode cleanup invalidates its first request while the replacement stays active', async (t) => {
   t.mock.method(console, 'error', () => undefined);
   const { api, orderCalls } = createApi();
-  const loaded = t.mock.fn();
-  const { result, unmount } = mount(options({ onOrdersLoaded: loaded }), api, true);
+  const { result, unmount } = mount(options(), api, true);
   assert.equal(orderCalls.length, 2);
   await act(async () => { orderCalls[0].pending.reject(new Error('Discarded StrictMode request')); });
   assert.equal(result.current.loading, true);
@@ -380,7 +357,6 @@ test('StrictMode cleanup invalidates its first request while the replacement sta
   await act(async () => { orderCalls[1].pending.resolve({ orders: [order('drop-a', 1)] }); });
   assert.deepEqual(keys(result.current.orders), ['drop-a:1']);
   assert.equal(result.current.loading, false);
-  assert.equal(loaded.mock.callCount(), 1);
   const guard = result.current.isCurrentScope;
   unmount();
   assert.equal(guard(), false);
@@ -390,9 +366,8 @@ for (const outcome of ['success', 'failure'] as const) {
   test(`unmount ignores late ${outcome} without notifying the parent`, async (t) => {
     t.mock.method(console, 'error', () => undefined);
     const { api, orderCalls } = createApi();
-    const loaded = t.mock.fn();
     const reset = t.mock.fn();
-    const { result, unmount } = mount(options({ onOrdersLoaded: loaded, onReset: reset }), api);
+    const { result, unmount } = mount(options({ onReset: reset }), api);
     const guard = result.current.isCurrentScope;
     unmount();
     await act(async () => {
@@ -400,7 +375,6 @@ for (const outcome of ['success', 'failure'] as const) {
       else orderCalls[0].pending.reject(new Error('Unmounted request'));
     });
     assert.equal(guard(), false);
-    assert.equal(loaded.mock.callCount(), 0);
     assert.equal(reset.mock.callCount(), 1);
   });
 }
