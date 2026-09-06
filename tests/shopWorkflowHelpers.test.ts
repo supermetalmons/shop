@@ -28,7 +28,6 @@ import {
   resolveRevealOverlayPhaseAfterReveal,
 } from '../src/shop/reveal.ts';
 import {
-  persistPreparedReservationOrThrow,
   withBrowserLock,
   type BrowserLockManager,
 } from '../src/shop/preparedSubmission.ts';
@@ -284,24 +283,7 @@ test('reveal retry resets only the matching unresolved ready overlay session', (
   }), 'ready');
 });
 
-test('prepared submission helpers require durable persistence and an available exclusive lock', async () => {
-  const events: string[] = [];
-  const reservation = { operationId: 'reservation' };
-  persistPreparedReservationOrThrow(
-    reservation,
-    (entry) => {
-      events.push(`persist:${entry.operationId}`);
-      return true;
-    },
-    'Unable to save reservation',
-  );
-  events.push('sign');
-  assert.deepEqual(events, ['persist:reservation', 'sign']);
-  assert.throws(
-    () => persistPreparedReservationOrThrow(reservation, () => false, 'Unable to save reservation'),
-    /Unable to save reservation/,
-  );
-
+test('prepared submissions require an available exclusive lock', async () => {
   await assert.rejects(
     withBrowserLock('wallet', async () => undefined, null),
     /cannot safely coordinate wallet transactions/,

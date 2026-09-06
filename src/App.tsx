@@ -212,7 +212,6 @@ import {
   type PendingPreparingDeliveryTransaction,
   type PendingPreparedTransaction,
   type PendingSubmittedClaimTransaction,
-  type PendingSubmittedDeliveryTransaction,
   type PendingSubmittedTransaction,
 } from './lib/pendingPreparedTransactions';
 import { calculateDeliveryLamports, canDeliverItemKind, isDirectDeliveryItemsPerBox } from '../shared/shipping.ts';
@@ -277,7 +276,7 @@ import {
   type RevealOverlayPhase,
 } from './shop/reveal';
 import {
-  persistPreparedReservationOrThrow,
+  createPreparedTransactionCoordinator,
   withBrowserLock,
 } from './shop/preparedSubmission';
 import {
@@ -5284,25 +5283,24 @@ function App({
     const deliveryWallet = publicKey.toBase58();
     const deliveryGeneration = ++deliveryActionGenerationRef.current;
     const deliverableIds = deliverableItems.map((item) => item.id);
-    let activeDeliveryReservation: PendingPreparingDeliveryTransaction | null = null;
     const deliveryUiIsCurrent = () => (
       deliveryActionGenerationRef.current === deliveryGeneration &&
       connectedWalletRef.current === deliveryWallet &&
       ownerRef.current === deliveryWallet
     );
-    const assertDeliveryWalletCurrent = () => {
-      if (!deliveryUiIsCurrent()) throw new Error('Wallet changed while preparing shipment');
-      let pending = readPendingPreparedTransaction(deliveryWallet, false);
-      if (pending && pendingPreparingTransactionExpired(pending)) {
-        if (activeDeliveryReservation && samePendingPreparedTransaction(pending, activeDeliveryReservation)) {
-          throw new Error('Shipment preparation expired');
-        }
-        if (forgetPendingPreparedTransaction(pending)) pending = null;
-      }
-      if (pending && (!activeDeliveryReservation || !samePendingPreparedTransaction(pending, activeDeliveryReservation))) {
-        throw new Error('Another wallet transaction is already pending');
-      }
-    };
+    const deliveryTransaction = createPreparedTransactionCoordinator('delivery', {
+      wallet: deliveryWallet,
+      isCurrent: deliveryUiIsCurrent,
+      readPending: readPendingPreparedTransaction,
+      persistReservation: rememberPendingPreparedTransaction,
+      persistSubmission: submitPendingPreparedTransaction,
+      forget: forgetPendingPreparedTransaction,
+    });
+    const {
+      assertCurrent: assertDeliveryWalletCurrent,
+      recordSubmitted: recordSubmittedDelivery,
+      getSubmitted: getSubmittedDelivery,
+    } = deliveryTransaction;
     if (!deliverableIds.length) {
       showToast(`Select ${boxLabelForDropId(undefined, 2)} or ${figureLabelForDropId(undefined, 2)} to ship`);
       return;
@@ -5315,10 +5313,7 @@ function App({
     if (deliverableItems.some((item) => item.dropId !== deliveryDropId)) {
       return;
     }
-    let existingPending = readPendingPreparedTransaction(deliveryWallet, false);
-    if (existingPending && pendingPreparingTransactionExpired(existingPending)) {
-      if (forgetPendingPreparedTransaction(existingPending)) existingPending = null;
-    }
+    const existingPending = deliveryTransaction.readPending(false);
     if (existingPending) {
       if (deliveryUiIsCurrent()) showToast('Another wallet transaction is already pending');
       return;
@@ -5354,33 +5349,6 @@ function App({
         return prepared;
       };
       let resp!: Awaited<ReturnType<typeof requestTx>>;
-      let submittedDelivery: PendingSubmittedDeliveryTransaction | null = null;
-      const getSubmittedDelivery = (): PendingSubmittedDeliveryTransaction | null => submittedDelivery;
-      const recordSubmittedDelivery = (
-        signature: string,
-        submittedTx: VersionedTransaction,
-      ) => {
-        const recentBlockhash = submittedTx.message.recentBlockhash;
-        if (submittedDelivery) {
-          if (submittedDelivery.signature !== signature || submittedDelivery.recentBlockhash !== recentBlockhash) {
-            throw new Error('Shipment submission changed unexpectedly');
-          }
-          return;
-        }
-        const reservation = activeDeliveryReservation;
-        if (!reservation) throw new Error('Shipment reservation is missing');
-        const submission: PendingSubmittedDeliveryTransaction = {
-          ...reservation,
-          kind: 'delivery',
-          phase: 'submitted',
-          signature,
-          recentBlockhash,
-        };
-        if (!submitPendingPreparedTransaction(reservation, submission)) {
-          throw new Error('Unable to save submitted shipment');
-        }
-        submittedDelivery = submission;
-      };
       const submitDelivery = (encodedTx: string) => sendPreparedTransaction(
         encodedTx,
         deliveryConnection,
@@ -5395,8 +5363,7 @@ function App({
       );
       const submitWithBlockhashRetry = async (): Promise<string | null> => {
         for (let attempt = 0; ; attempt += 1) {
-          submittedDelivery = null;
-          activeDeliveryReservation = {
+          deliveryTransaction.reserve({
             kind: 'delivery',
             phase: 'preparing',
             wallet: deliveryWallet,
@@ -5406,17 +5373,7 @@ function App({
             blockhashContextSlot: resp.blockhashContextSlot,
             deliveryId: resp.deliveryId,
             itemIds: [...deliverableIds],
-          };
-          try {
-            persistPreparedReservationOrThrow(
-              activeDeliveryReservation,
-              rememberPendingPreparedTransaction,
-              'Unable to save shipment reservation',
-            );
-          } catch (error) {
-            activeDeliveryReservation = null;
-            throw error;
-          }
+          });
           pendingPreparedSubmissionKeysRef.current.add(deliveryWallet);
           try {
             const signature = await submitDelivery(resp.encodedTx);
@@ -5426,13 +5383,13 @@ function App({
               hideAssetsForWallet(deliveryWallet, deliverableIds);
               forgetPendingPreparedTransaction(confirmedSubmission);
             }
-            activeDeliveryReservation = null;
+            deliveryTransaction.releaseReservation();
             return signature;
           } catch (err) {
             const pendingSubmission = getSubmittedDelivery();
             pendingPreparedSubmissionKeysRef.current.delete(deliveryWallet);
             if (pendingSubmission && isPotentiallySubmittedTransactionError(err)) {
-              activeDeliveryReservation = null;
+              deliveryTransaction.releaseReservation();
               startShipmentRefresh(
                 pendingSubmission.wallet,
                 pendingSubmission.dropId,
@@ -5453,11 +5410,7 @@ function App({
               void reconcilePendingPreparedTransaction(pendingSubmission).catch(() => undefined);
               return null;
             }
-            const reservation = pendingSubmission || activeDeliveryReservation;
-            if (reservation && !forgetPendingPreparedTransaction(reservation)) {
-              throw new Error('Unable to clear shipment reservation');
-            }
-            activeDeliveryReservation = null;
+            deliveryTransaction.clearReservation();
             if (attempt > 0 || !isBlockhashExpiredError(err)) throw err;
             if (deliveryUiIsCurrent()) {
               showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
@@ -6298,24 +6251,20 @@ function App({
       connectedWalletRef.current === claimWallet &&
       ownerRef.current === claimWallet
     );
-    let activeClaimReservation: PendingPreparingClaimTransaction | null = null;
-    const assertClaimReservationCurrent = () => {
-      if (!numericClaimUiIsCurrent()) throw new Error('Wallet changed while preparing claim');
-      let pending = readPendingPreparedTransaction(claimWallet, false);
-      if (pending && pendingPreparingTransactionExpired(pending)) {
-        if (activeClaimReservation && samePendingPreparedTransaction(pending, activeClaimReservation)) {
-          throw new Error('Claim preparation expired');
-        }
-        if (forgetPendingPreparedTransaction(pending)) pending = null;
-      }
-      if (pending && (!activeClaimReservation || !samePendingPreparedTransaction(pending, activeClaimReservation))) {
-        throw new Error('Another wallet transaction is already pending');
-      }
-    };
-    let existingPending = readPendingPreparedTransaction(claimWallet);
-    if (existingPending && pendingPreparingTransactionExpired(existingPending)) {
-      if (forgetPendingPreparedTransaction(existingPending)) existingPending = null;
-    }
+    const claimTransaction = createPreparedTransactionCoordinator('claim', {
+      wallet: claimWallet,
+      isCurrent: numericClaimUiIsCurrent,
+      readPending: readPendingPreparedTransaction,
+      persistReservation: rememberPendingPreparedTransaction,
+      persistSubmission: submitPendingPreparedTransaction,
+      forget: forgetPendingPreparedTransaction,
+    });
+    const {
+      assertCurrent: assertClaimReservationCurrent,
+      recordSubmitted: recordSubmittedClaim,
+      getSubmitted: getSubmittedClaim,
+    } = claimTransaction;
+    const existingPending = claimTransaction.readPending();
     const existingPendingClaim = pendingSubmittedClaim(existingPending, claimWallet);
     if (existingPendingClaim) {
       if (numericClaimUiIsCurrent()) {
@@ -6350,33 +6299,6 @@ function App({
     let resp!: Awaited<ReturnType<typeof requestTx>>;
     let claimDrop!: FrontendDeploymentConfig;
     let claimConnection!: Connection;
-    let submittedClaim: PendingSubmittedClaimTransaction | null = null;
-    const getSubmittedClaim = (): PendingSubmittedClaimTransaction | null => submittedClaim;
-    const recordSubmittedClaim = (
-      signature: string,
-      submittedTx: VersionedTransaction,
-    ) => {
-      const recentBlockhash = submittedTx.message.recentBlockhash;
-      if (submittedClaim) {
-        if (submittedClaim.signature !== signature || submittedClaim.recentBlockhash !== recentBlockhash) {
-          throw new Error('Claim submission changed unexpectedly');
-        }
-        return;
-      }
-      const reservation = activeClaimReservation;
-      if (!reservation) throw new Error('Claim reservation is missing');
-      const submission: PendingSubmittedClaimTransaction = {
-        ...reservation,
-        kind: 'claim',
-        phase: 'submitted',
-        signature,
-        recentBlockhash,
-      };
-      if (!submitPendingPreparedTransaction(reservation, submission)) {
-        throw new Error('Unable to save submitted claim');
-      }
-      submittedClaim = submission;
-    };
     const submitClaim = (encodedTx: string, connection: Connection) => sendPreparedTransaction(
       encodedTx,
       connection,
@@ -6398,8 +6320,7 @@ function App({
         claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction response');
         claimConnection = getDropConnection(claimDrop.dropId);
         for (let attempt = 0; ; attempt += 1) {
-          submittedClaim = null;
-          activeClaimReservation = {
+          claimTransaction.reserve({
             kind: 'claim',
             phase: 'preparing',
             wallet: claimWallet,
@@ -6409,17 +6330,7 @@ function App({
             blockhashContextSlot: resp.blockhashContextSlot,
             certificates: [...resp.certificates],
             certificateId: resp.certificateId,
-          };
-          try {
-            persistPreparedReservationOrThrow(
-              activeClaimReservation,
-              rememberPendingPreparedTransaction,
-              'Unable to save claim reservation',
-            );
-          } catch (error) {
-            activeClaimReservation = null;
-            throw error;
-          }
+          });
           pendingPreparedSubmissionKeysRef.current.add(claimWallet);
           try {
             await submitClaim(resp.encodedTx, claimConnection);
@@ -6428,13 +6339,13 @@ function App({
               pendingPreparedSubmissionKeysRef.current.delete(claimWallet);
               forgetPendingPreparedTransaction(confirmedSubmission);
             }
-            activeClaimReservation = null;
+            claimTransaction.releaseReservation();
             return false;
           } catch (err) {
             const pendingSubmission = getSubmittedClaim();
             pendingPreparedSubmissionKeysRef.current.delete(claimWallet);
             if (pendingSubmission && isPotentiallySubmittedTransactionError(err)) {
-              activeClaimReservation = null;
+              claimTransaction.releaseReservation();
               if (numericClaimUiIsCurrent()) {
                 showToast(`Claim submitted · confirmation pending · ${shortAddress(pendingSubmission.signature)}`);
               }
@@ -6444,11 +6355,7 @@ function App({
               });
               return true;
             }
-            const reservation = pendingSubmission || activeClaimReservation;
-            if (reservation && !forgetPendingPreparedTransaction(reservation)) {
-              throw new Error('Unable to clear claim reservation');
-            }
-            activeClaimReservation = null;
+            claimTransaction.clearReservation();
             if (attempt > 0 || !isBlockhashExpiredError(err)) throw err;
             if (!numericClaimUiIsCurrent()) return true;
             showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
