@@ -35,19 +35,10 @@ import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { Modal } from './components/Modal';
 import { FulfillmentShipStationModal } from './fulfillment/FulfillmentShipStationModal';
 import { useFulfillmentOrders } from './fulfillment/useFulfillmentOrders';
+import { useFulfillmentExports } from './fulfillment/useFulfillmentExports';
 import { ShopHeader } from './components/ShopHeader';
 import { BodyPortal } from './components/BackgroundBlurLayer';
-import {
-  buildFulfillmentAddressExport,
-  buildFulfillmentCardClaimSecretCodeExportEntry,
-  buildFulfillmentExportFilename,
-  buildFulfillmentOrdersExport,
-  buildFulfillmentSecretCodeExportEntry,
-  buildFulfillmentSecretCodeExportEntries,
-  countFulfillmentSecretCodeExportEntries,
-  formatFulfillmentAddressText,
-  type FulfillmentSecretCodeExportEntry,
-} from './lib/fulfillmentExports';
+import { formatFulfillmentAddressText } from './lib/fulfillmentExports';
 import {
   fulfillmentBoxContentsLabel,
   resolveFulfillmentDirectDeliveryBoxLabel,
@@ -96,30 +87,6 @@ const FIGURE_METADATA_RETRY_MS = 3000;
 const BOX_CONTENTS_FIGURE_WIDTH = 130;
 const BOX_CONTENTS_FIGURE_GAP = 12;
 const BOX_CONTENTS_HORIZONTAL_CHROME = 54;
-const SECRET_CODE_PNG_WIDTH = 2000;
-const SECRET_CODE_PNG_HEIGHT = 2800;
-const SECRET_CODE_QR_SIZE = 1450;
-const SECRET_CODE_QR_TOP = 150;
-const SECRET_CODE_PREVIEW_BAND_TOP = 1615;
-const SECRET_CODE_PREVIEW_BAND_HEIGHT = 780;
-const SECRET_CODE_PREVIEW_MAX_ROW_WIDTH = 1600;
-const SECRET_CODE_PREVIEW_TILE_SIZE = 420;
-const SECRET_CODE_PREVIEW_SINGLE_TILE_SIZE = 570;
-const SECRET_CODE_PREVIEW_MIN_TILE_SIZE = 240;
-const SECRET_CODE_PREVIEW_TILE_GAP = 90;
-const SECRET_CODE_PREVIEW_IMAGE_TIMEOUT_MS = 12_000;
-const SECRET_CODE_PREVIEW_IMAGE_MAX_ATTEMPTS = 5;
-const SECRET_CODE_PREVIEW_IMAGE_RETRY_BASE_DELAY_MS = 400;
-const SECRET_CODE_TEXT_Y = 2525;
-const SECRET_CODE_TEXT_MAX_WIDTH = 1800;
-const SECRET_CODE_TEXT_MAX_FONT_SIZE = 132;
-const SECRET_CODE_TEXT_MIN_FONT_SIZE = 12;
-type QRCodeModule = typeof import('qrcode');
-type SecretCodesZipProgressHandler = (percent: number) => void;
-type SecretCodePreviewImageCache = Map<string, Promise<HTMLImageElement>>;
-type FulfillmentSecretCodeDownloadTarget =
-  | { kind: 'box'; index: number }
-  | { kind: 'card-claim'; index: number };
 
 function listOrderFigureIds(order: FulfillmentOrder): number[] {
   return [...fulfillmentOrderLooseFigureIds(order), ...order.boxes.flatMap((box) => box.dudeIds)];
@@ -137,276 +104,6 @@ function getBoxContentsStyle(itemCount: number): CSSProperties {
   const columns = Math.max(1, Math.min(itemCount, 3));
   const contentWidth = columns * BOX_CONTENTS_FIGURE_WIDTH + Math.max(0, columns - 1) * BOX_CONTENTS_FIGURE_GAP;
   return { width: `min(100%, ${contentWidth + BOX_CONTENTS_HORIZONTAL_CHROME}px)` };
-}
-
-function downloadBlobFile(filename: string, blob: Blob) {
-  if (typeof document === 'undefined' || typeof URL === 'undefined') return;
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.style.display = 'none';
-  document.body.appendChild(anchor);
-  anchor.click();
-  document.body.removeChild(anchor);
-  window.setTimeout(() => URL.revokeObjectURL(url), 5_000);
-}
-
-function downloadJsonFile(filename: string, data: unknown) {
-  const blob = new Blob([`${JSON.stringify(data, null, 2)}\n`], { type: 'application/json;charset=utf-8' });
-  downloadBlobFile(filename, blob);
-}
-
-function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    try {
-      canvas.toBlob((blob) => {
-        if (blob) {
-          resolve(blob);
-        } else {
-          reject(new Error('Failed to render secret code PNG'));
-        }
-      }, 'image/png');
-    } catch (err) {
-      reject(err);
-    }
-  });
-}
-
-function fitSecretCodeText(ctx: CanvasRenderingContext2D, secretCode: string): void {
-  let fontSize = SECRET_CODE_TEXT_MAX_FONT_SIZE;
-  while (fontSize > SECRET_CODE_TEXT_MIN_FONT_SIZE) {
-    ctx.font = `700 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
-    if (ctx.measureText(secretCode).width <= SECRET_CODE_TEXT_MAX_WIDTH) return;
-    fontSize -= 4;
-  }
-
-  ctx.font = `700 ${SECRET_CODE_TEXT_MIN_FONT_SIZE}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
-  const measuredWidth = ctx.measureText(secretCode).width;
-  const fittedSize = Math.max(
-    1,
-    Math.floor((SECRET_CODE_TEXT_MIN_FONT_SIZE * SECRET_CODE_TEXT_MAX_WIDTH) / Math.max(1, measuredWidth)),
-  );
-  ctx.font = `700 ${fittedSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
-function loadSecretCodePreviewImageOnce(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    let settled = false;
-    const timeout = window.setTimeout(() => {
-      finish(new Error(`Timed out loading secret code preview image: ${src}`));
-    }, SECRET_CODE_PREVIEW_IMAGE_TIMEOUT_MS);
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timeout);
-      image.onload = null;
-      image.onerror = null;
-      if (error) {
-        image.src = '';
-        reject(error);
-        return;
-      }
-      resolve(image);
-    };
-
-    image.crossOrigin = 'anonymous';
-    image.decoding = 'async';
-    image.onload = () => {
-      if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-        finish();
-      } else {
-        finish(new Error(`Loaded secret code preview image without dimensions: ${src}`));
-      }
-    };
-    image.onerror = () => finish(new Error(`Failed to load secret code preview image: ${src}`));
-    image.src = src;
-    if (image.complete && image.naturalWidth > 0 && image.naturalHeight > 0) {
-      finish();
-    }
-  });
-}
-
-function secretCodePreviewImageExportSrc(src: string): string {
-  const normalizedSrc = String(src || '').trim();
-  if (!/^https?:\/\//i.test(normalizedSrc)) return normalizedSrc;
-
-  try {
-    const url = new URL(normalizedSrc);
-    if (url.hostname.toLowerCase() !== 'cdn.lil.org') return normalizedSrc;
-    url.searchParams.set('mons_export_cors', '1');
-    return url.toString();
-  } catch {
-    return normalizedSrc;
-  }
-}
-
-async function loadSecretCodePreviewImageWithRetry(src: string): Promise<HTMLImageElement> {
-  const exportSrc = secretCodePreviewImageExportSrc(src);
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= SECRET_CODE_PREVIEW_IMAGE_MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await loadSecretCodePreviewImageOnce(exportSrc);
-    } catch (err) {
-      lastError = err;
-      if (attempt === SECRET_CODE_PREVIEW_IMAGE_MAX_ATTEMPTS) break;
-      await wait(SECRET_CODE_PREVIEW_IMAGE_RETRY_BASE_DELAY_MS * attempt);
-    }
-  }
-  const detail = lastError instanceof Error ? lastError.message : 'Unknown image load error';
-  throw new Error(
-    `Failed to load required secret code preview image after ${SECRET_CODE_PREVIEW_IMAGE_MAX_ATTEMPTS} attempts: ${src}. ${detail}`,
-  );
-}
-
-function loadSecretCodePreviewImage(src: string, cache: SecretCodePreviewImageCache): Promise<HTMLImageElement> {
-  const cached = cache.get(src);
-  if (cached) return cached;
-
-  const promise = loadSecretCodePreviewImageWithRetry(src).catch((err) => {
-    cache.delete(src);
-    throw err;
-  });
-  cache.set(src, promise);
-  return promise;
-}
-
-async function loadSecretCodePreviewImages(
-  previews: FulfillmentSecretCodeExportEntry['previewImages'],
-  cache: SecretCodePreviewImageCache,
-): Promise<HTMLImageElement[]> {
-  if (!previews?.length) return [];
-  return Promise.all(previews.map((preview) => loadSecretCodePreviewImage(preview.src, cache)));
-}
-
-function drawContainedPreviewImage(
-  ctx: CanvasRenderingContext2D,
-  image: HTMLImageElement,
-  x: number,
-  y: number,
-  size: number,
-): void {
-  if (image.naturalWidth <= 0 || image.naturalHeight <= 0) return;
-  const maxSize = size;
-  const scale = Math.min(maxSize / image.naturalWidth, maxSize / image.naturalHeight);
-  const drawWidth = image.naturalWidth * scale;
-  const drawHeight = image.naturalHeight * scale;
-  const drawX = x + (size - drawWidth) / 2;
-  const drawY = y + (size - drawHeight) / 2;
-
-  ctx.drawImage(image, drawX, drawY, drawWidth, drawHeight);
-}
-
-function drawSecretCodePreviewImages(ctx: CanvasRenderingContext2D, images: HTMLImageElement[]): void {
-  if (!images.length) return;
-
-  const gap = images.length > 1 ? SECRET_CODE_PREVIEW_TILE_GAP : 0;
-  const preferredTileSize = images.length === 1 ? SECRET_CODE_PREVIEW_SINGLE_TILE_SIZE : SECRET_CODE_PREVIEW_TILE_SIZE;
-  const tileSize = Math.max(
-    SECRET_CODE_PREVIEW_MIN_TILE_SIZE,
-    Math.min(
-      preferredTileSize,
-      Math.floor((SECRET_CODE_PREVIEW_MAX_ROW_WIDTH - Math.max(0, images.length - 1) * gap) / images.length),
-    ),
-  );
-  const rowWidth = images.length * tileSize + Math.max(0, images.length - 1) * gap;
-  const startX = Math.floor((SECRET_CODE_PNG_WIDTH - rowWidth) / 2);
-  const y = Math.floor(SECRET_CODE_PREVIEW_BAND_TOP + (SECRET_CODE_PREVIEW_BAND_HEIGHT - tileSize) / 2);
-
-  ctx.save();
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  images.forEach((image, index) => {
-    const x = startX + index * (tileSize + gap);
-    drawContainedPreviewImage(ctx, image, x, y, tileSize);
-  });
-  ctx.restore();
-}
-
-async function renderSecretCodePngBlob(
-  qrCode: QRCodeModule,
-  entry: FulfillmentSecretCodeExportEntry,
-  previewImageCache: SecretCodePreviewImageCache,
-): Promise<Blob> {
-  if (typeof document === 'undefined') throw new Error('Secret code PNG export requires a browser document');
-
-  const canvas = document.createElement('canvas');
-  canvas.width = SECRET_CODE_PNG_WIDTH;
-  canvas.height = SECRET_CODE_PNG_HEIGHT;
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Failed to create secret code PNG canvas');
-
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, SECRET_CODE_PNG_WIDTH, SECRET_CODE_PNG_HEIGHT);
-
-  const qrCanvas = document.createElement('canvas');
-  await qrCode.toCanvas(qrCanvas, entry.claimUrl, {
-    errorCorrectionLevel: 'M',
-    margin: 3,
-    width: SECRET_CODE_QR_SIZE,
-    color: {
-      dark: '#000000ff',
-      light: '#ffffffff',
-    },
-  });
-
-  const qrLeft = Math.floor((SECRET_CODE_PNG_WIDTH - SECRET_CODE_QR_SIZE) / 2);
-  ctx.drawImage(qrCanvas, qrLeft, SECRET_CODE_QR_TOP, SECRET_CODE_QR_SIZE, SECRET_CODE_QR_SIZE);
-
-  const previewImages = await loadSecretCodePreviewImages(entry.previewImages, previewImageCache);
-  drawSecretCodePreviewImages(ctx, previewImages);
-
-  ctx.fillStyle = '#000000';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  fitSecretCodeText(ctx, entry.secretCode);
-  ctx.fillText(entry.secretCode, SECRET_CODE_PNG_WIDTH / 2, SECRET_CODE_TEXT_Y);
-
-  return canvasToPngBlob(canvas);
-}
-
-async function loadQRCodeModule(): Promise<QRCodeModule> {
-  const qrCodeImport = await import('qrcode');
-  return ((qrCodeImport as QRCodeModule & { default?: QRCodeModule }).default || qrCodeImport) as QRCodeModule;
-}
-
-async function buildSecretCodePngBlob(
-  entry: FulfillmentSecretCodeExportEntry,
-  previewImageCache?: SecretCodePreviewImageCache,
-  qrCode?: QRCodeModule,
-): Promise<Blob> {
-  const resolvedQrCode = qrCode || (await loadQRCodeModule());
-  return renderSecretCodePngBlob(resolvedQrCode, entry, previewImageCache || new Map());
-}
-
-async function buildSecretCodesZipBlob(
-  entries: FulfillmentSecretCodeExportEntry[],
-  onProgress?: SecretCodesZipProgressHandler,
-): Promise<Blob> {
-  const [{ default: JSZip }, qrCode] = await Promise.all([import('jszip'), loadQRCodeModule()]);
-  const zip = new JSZip();
-  const totalEntries = entries.length;
-  const previewImageCache: SecretCodePreviewImageCache = new Map();
-
-  onProgress?.(0);
-
-  for (const [index, entry] of entries.entries()) {
-    const pngBlob = await buildSecretCodePngBlob(entry, previewImageCache, qrCode);
-    zip.file(entry.filename, pngBlob);
-    onProgress?.(Math.min(95, Math.round(((index + 1) / Math.max(1, totalEntries)) * 95)));
-  }
-
-  return zip.generateAsync({ type: 'blob', compression: 'STORE' }, (metadata) => {
-    onProgress?.(Math.min(100, 95 + Math.round((metadata.percent || 0) / 20)));
-  });
 }
 
 function useDismissibleMenu<T extends HTMLElement>(
@@ -810,9 +507,7 @@ export default function FulfillmentApp({
 
   const [manualReviewMenuOpen, setManualReviewMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
-  const [secretCodesExporting, setSecretCodesExporting] = useState(false);
-  const [secretCodesExportProgress, setSecretCodesExportProgress] = useState(0);
-  const [secretCodePngExportingKey, setSecretCodePngExportingKey] = useState<string | null>(null);
+  const closeExportMenu = useCallback(() => setExportMenuOpen(false), []);
   const [statusEdits, setStatusEdits] = useState<Record<string, FulfillmentStatus | ''>>({});
   const [trackingCodeEdits, setTrackingCodeEdits] = useState<Record<string, string>>({});
   const [statusSaving, setStatusSaving] = useState<Record<string, boolean>>({});
@@ -934,10 +629,6 @@ export default function FulfillmentApp({
   const displayedOrders = useMemo(
     () => filterFulfillmentOrdersByVisibility(orders, orderVisibilityFilter),
     [orderVisibilityFilter, orders],
-  );
-  const displayedSecretCodeCount = useMemo(
-    () => countFulfillmentSecretCodeExportEntries(displayedOrders),
-    [displayedOrders],
   );
 
   const groupedOrders = useMemo(
@@ -1305,145 +996,26 @@ export default function FulfillmentApp({
   const hasVisibleOrderCards = duplicateFigures.length > 0 || groupedOrders.length > 0;
   const showManualReviewDropId = selectedDropIds.length > 1;
 
-  const downloadDisplayedOrders = useCallback(() => {
-    const filename = buildFulfillmentExportFilename({
-      kind: 'orders',
-      selectedDropId,
-      orderVisibilityFilter,
-    });
-    const payload = buildFulfillmentOrdersExport(displayedOrders, { dropById, figureMetadataByKey });
-    downloadJsonFile(filename, payload);
-    setExportMenuOpen(false);
-  }, [displayedOrders, dropById, figureMetadataByKey, orderVisibilityFilter, selectedDropId]);
-
-  const downloadDisplayedAddresses = useCallback(() => {
-    const filename = buildFulfillmentExportFilename({
-      kind: 'addresses-sensitive',
-      selectedDropId,
-      orderVisibilityFilter,
-    });
-    const payload = buildFulfillmentAddressExport(displayedOrders);
-    downloadJsonFile(filename, payload);
-    setExportMenuOpen(false);
-  }, [displayedOrders, orderVisibilityFilter, selectedDropId]);
-
-  const loadFulfillmentExportFigureMetadata = useCallback(async (targets = fulfillmentFigureMetadataTargets) => {
-    let exportFigureMetadataByKey = figureMetadataByKey;
-    if (targets.length) {
-      const records = await loadFigureMetadataBatch(targets);
-      if (records.length) {
-        mergeLoadedFigureMetadata(records);
-        exportFigureMetadataByKey = mergeFigureMetadataRecords(exportFigureMetadataByKey, records);
-      }
-    }
-    return exportFigureMetadataByKey;
-  }, [figureMetadataByKey, fulfillmentFigureMetadataTargets, mergeLoadedFigureMetadata]);
-
-  const downloadSecretCodePng = useCallback(
-    async (order: FulfillmentOrder, target: FulfillmentSecretCodeDownloadTarget) => {
-      if (secretCodesExporting || secretCodePngExportingKey) return;
-
-      let figureIds: number[];
-      if (target.kind === 'box') {
-        const box = order.boxes[target.index];
-        if (!box || !fulfillmentBoxSecretCode(box)) return;
-        figureIds = box.dudeIds;
-      } else {
-        const claim = order.cardClaims?.[target.index];
-        const secretCode = claim ? fulfillmentCardClaimSecretCode(claim) : '';
-        if (!claim || !secretCode || isUsedReceiptClaimStatus(claim.receiptClaimStatus)) return;
-        figureIds = [claim.figureId];
-      }
-
-      const exportKey = `${fulfillmentOrderKey(order)}:${
-        target.kind === 'box' ? target.index : `card:${target.index}`
-      }`;
-      setSecretCodePngExportingKey(exportKey);
-      setOrdersError(null);
-      try {
-        const orderDrop = dropById.get(order.dropId);
-        const exportFigureMetadataByKey = await loadFulfillmentExportFigureMetadata(
-          orderDrop
-            ? collectFulfillmentFigureMetadataTargets({
-                entries: [{ drop: orderDrop, figureIds }],
-                figureMetadataByKey,
-              })
-            : [],
-        );
-        const options = { dropById, figureMetadataByKey: exportFigureMetadataByKey };
-        const entry =
-          target.kind === 'box'
-            ? buildFulfillmentSecretCodeExportEntry({ order, boxIndex: target.index, options })
-            : buildFulfillmentCardClaimSecretCodeExportEntry({
-                order,
-                cardClaimIndex: target.index,
-                options,
-              });
-        if (!entry) throw new Error('Secret code unavailable');
-
-        const pngBlob = await buildSecretCodePngBlob(entry);
-        downloadBlobFile(entry.filename, pngBlob);
-      } catch (err) {
-        const fallbackMessage =
-          target.kind === 'card-claim'
-            ? 'Failed to export fulfillment card secret code PNG'
-            : 'Failed to export fulfillment secret code PNG';
-        console.error(
-          target.kind === 'card-claim'
-            ? '[mons] failed to export fulfillment card secret code PNG'
-            : '[mons] failed to export fulfillment secret code PNG',
-          err,
-        );
-        setOrdersError(err instanceof Error ? err.message : fallbackMessage);
-      } finally {
-        setSecretCodePngExportingKey((current) => (current === exportKey ? null : current));
-      }
-    },
-    [dropById, figureMetadataByKey, loadFulfillmentExportFigureMetadata, secretCodePngExportingKey, secretCodesExporting, setOrdersError],
-  );
-
-  const downloadDisplayedSecretCodes = useCallback(async () => {
-    setExportMenuOpen(false);
-    if (secretCodesExporting || secretCodePngExportingKey || !displayedSecretCodeCount) return;
-
-    setSecretCodesExporting(true);
-    setSecretCodesExportProgress(0);
-    setOrdersError(null);
-    try {
-      const filename = buildFulfillmentExportFilename({
-        kind: 'secret-codes',
-        selectedDropId,
-        orderVisibilityFilter,
-      });
-      const exportFigureMetadataByKey = await loadFulfillmentExportFigureMetadata();
-      const exportEntries = buildFulfillmentSecretCodeExportEntries(displayedOrders, {
-        dropById,
-        figureMetadataByKey: exportFigureMetadataByKey,
-      });
-      const zipBlob = await buildSecretCodesZipBlob(exportEntries, setSecretCodesExportProgress);
-      setSecretCodesExportProgress(100);
-      downloadBlobFile(filename, zipBlob);
-    } catch (err) {
-      console.error('[mons] failed to export fulfillment secret code PNGs', err);
-      setOrdersError(err instanceof Error ? err.message : 'Failed to export fulfillment secret code PNGs');
-    } finally {
-      setSecretCodesExporting(false);
-      setSecretCodesExportProgress(0);
-    }
-  }, [
+  const {
     displayedSecretCodeCount,
-    displayedOrders,
-    dropById,
-    loadFulfillmentExportFigureMetadata,
-    orderVisibilityFilter,
-    secretCodePngExportingKey,
     secretCodesExporting,
+    secretCodesExportPercent,
+    secretCodeDownloadDisabled,
+    downloadDisplayedOrders,
+    downloadDisplayedAddresses,
+    downloadDisplayedSecretCodes,
+    downloadSecretCodePng,
+  } = useFulfillmentExports({
+    displayedOrders,
     selectedDropId,
+    orderVisibilityFilter,
+    dropById,
+    figureMetadataByKey,
+    fulfillmentFigureMetadataTargets,
+    mergeLoadedFigureMetadata,
     setOrdersError,
-  ]);
-
-  const secretCodesExportPercent = Math.max(0, Math.min(100, Math.round(secretCodesExportProgress)));
-  const secretCodeDownloadDisabled = secretCodesExporting || Boolean(secretCodePngExportingKey);
+    onMenuClose: closeExportMenu,
+  });
 
   const renderManualReviewMenu = () => (
     <div className="manual-review-menu" role="dialog" aria-label="Needs manual review">
