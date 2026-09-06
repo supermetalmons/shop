@@ -13,30 +13,18 @@ import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { FiAlertTriangle, FiDownload, FiEdit2, FiMoreHorizontal } from 'react-icons/fi';
 import {
-  addFulfillmentOrderToShipStation,
-  fulfillmentShipStationAddressCorrectionDetails,
-  getFulfillmentShipStationLabel,
-  getFulfillmentShipStationRates,
   listFulfillmentManualReviewCheckouts,
   listFulfillmentOrders,
-  purchaseFulfillmentShipStationLabel,
   updateFulfillmentAddress,
   updateFulfillmentStatus,
-  voidFulfillmentShipStationLabel,
 } from './api/fulfillment';
 import {
   FulfillmentManualReviewCheckout,
   FulfillmentOrder,
   FulfillmentOrdersCursor,
-  FulfillmentShipStationInvalidRate,
-  FulfillmentShipStationRate,
   FulfillmentStatus,
-  ShipStationMoney,
-  ShipStationEditableAddressField,
-  ShipStationPackageInput,
 } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
-import { useOverlayScrollLock } from './hooks/useOverlayScrollLock';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import {
   loadFigureMetadata,
@@ -55,6 +43,7 @@ import {
 import { isDirectDeliveryItemsPerBox } from '../shared/shipping.ts';
 import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { Modal } from './components/Modal';
+import { FulfillmentShipStationModal } from './fulfillment/FulfillmentShipStationModal';
 import { ShopHeader } from './components/ShopHeader';
 import { BodyPortal } from './components/BackgroundBlurLayer';
 import {
@@ -84,19 +73,6 @@ import {
   type FulfillmentOrderVisibilityFilter,
 } from './lib/fulfillmentOrderVisibility';
 import {
-  fulfillmentShipStationDeliveryText,
-  groupFulfillmentShipStationRates,
-  prepareFulfillmentShipStationRates,
-} from './lib/fulfillmentShipStationRates';
-import {
-  fulfillmentShipStationAddressCanRetry,
-  fulfillmentShipStationAddressCorrectionFailure,
-  fulfillmentShipStationAddressDraft,
-  fulfillmentShipStationAddressOtherFailure,
-  fulfillmentShipStationAddressPatch,
-  type FulfillmentShipStationAddressCorrectionSession,
-} from './lib/fulfillmentShipStationAddress';
-import {
   normalizeOptionalFulfillmentTrackingCode,
   resolveFulfillmentTrackingHref,
   sanitizeFulfillmentTrackingCode,
@@ -111,12 +87,6 @@ import {
 } from './config/deployment';
 import { hasFulfillmentAddressAdminAccess, listAllowedFulfillmentDropIds } from './lib/fulfillmentAccess';
 import { walletSessionSignInReadiness } from './lib/profileClientLifecycle';
-import {
-  defaultShipStationPackage,
-  normalizeShipStationPackage,
-  SHIPSTATION_PACKAGE_RANGE_MESSAGE,
-} from '../shared/shipstationPackage.js';
-import { buildShipStationCustomsDeclaration } from '../shared/shipstationCustoms.js';
 import {
   dedupeManualReviewCheckouts,
   formatManualReviewAmount,
@@ -138,7 +108,6 @@ import {
 } from './fulfillment/figureMetadata';
 
 const FULFILLMENT_ORDER_REQUEST_LIMIT = 1000;
-const SHIPSTATION_AWAITING_SHIPMENT_URL = 'https://ship.shipstation.com/orders/awaiting-shipment';
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
 const FIGURE_METADATA_RETRY_MS = 3000;
 const BOX_CONTENTS_FIGURE_WIDTH = 130;
@@ -168,157 +137,6 @@ type SecretCodePreviewImageCache = Map<string, Promise<HTMLImageElement>>;
 type FulfillmentSecretCodeDownloadTarget =
   | { kind: 'box'; index: number }
   | { kind: 'card-claim'; index: number };
-
-type ShipStationPackageDraft = { length: string; width: string; height: string; weight: string };
-
-const SHIPSTATION_PACKAGE_FIELDS: { key: keyof ShipStationPackageDraft; label: string; ariaLabel: string }[] = [
-  { key: 'length', label: 'L in', ariaLabel: 'Package length in inches' },
-  { key: 'width', label: 'W in', ariaLabel: 'Package width in inches' },
-  { key: 'height', label: 'H in', ariaLabel: 'Package height in inches' },
-  { key: 'weight', label: 'oz', ariaLabel: 'Package weight in ounces' },
-];
-
-const SHIPSTATION_ADDRESS_FIELDS: Record<
-  ShipStationEditableAddressField,
-  { label: string; autoComplete: string; optional?: boolean }
-> = {
-  name: { label: 'Recipient name', autoComplete: 'name' },
-  address_line1: { label: 'Address line 1', autoComplete: 'address-line1' },
-  address_line2: { label: 'Address line 2', autoComplete: 'address-line2', optional: true },
-  address_line3: { label: 'Address line 3', autoComplete: 'address-line3', optional: true },
-  city_locality: { label: 'City', autoComplete: 'address-level2' },
-  state_province: { label: 'State / province', autoComplete: 'address-level1' },
-  postal_code: { label: 'Postal code', autoComplete: 'postal-code' },
-  country_code: { label: 'Country code', autoComplete: 'country' },
-};
-
-function defaultShipStationPackageDraft(order: FulfillmentOrder): ShipStationPackageDraft {
-  const parcel = defaultShipStationPackage(order.boxes.length + order.looseDudes.length);
-  const countryCode = String(order.address.countryCode || '').trim().toUpperCase();
-  if (!countryCode || countryCode === 'US') return shipStationPackageDraft(parcel);
-  const declaration = buildShipStationCustomsDeclaration(
-    order.dropId,
-    order.boxes.length,
-    order.looseDudes.length,
-  );
-  return shipStationPackageDraft(
-    declaration && parcel.weight < declaration.minimumPackageWeightOunces
-      ? { ...parcel, weight: declaration.minimumPackageWeightOunces }
-      : parcel,
-  );
-}
-
-function shipStationPackageDraft(parcel: ShipStationPackageInput): ShipStationPackageDraft {
-  return {
-    length: String(parcel.length),
-    width: String(parcel.width),
-    height: String(parcel.height),
-    weight: String(parcel.weight),
-  };
-}
-
-function formatShipStationMoney(money: ShipStationMoney | undefined): string {
-  if (!money) return '—';
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: money.currency.toUpperCase(),
-    }).format(money.amount);
-  } catch {
-    return `${money.amount.toFixed(2)} ${money.currency.toUpperCase()}`;
-  }
-}
-
-function ShipStationRateOption({
-  rate,
-  detail,
-  selected,
-  disabled,
-  onSelect,
-}: {
-  rate: FulfillmentShipStationRate;
-  detail?: string;
-  selected: boolean;
-  disabled: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <label className={`shipstation-rate-option${selected ? ' shipstation-rate-option--selected' : ''}`}>
-      <input
-        type="radio"
-        name="shipstation-rate"
-        value={rate.rateId}
-        checked={selected}
-        onChange={onSelect}
-        disabled={disabled}
-      />
-      <span className="shipstation-rate-option__body">
-        <span className="shipstation-rate-option__main">
-          <span>
-            <strong>{rate.carrierName}</strong>
-            <span className="muted"> · {rate.serviceName}</span>
-          </span>
-          <strong>{formatShipStationMoney(rate.totalAmount)}</strong>
-        </span>
-        {detail ? <span className="muted small">{detail}</span> : null}
-        <span className="muted small">
-          {fulfillmentShipStationDeliveryText(rate)}
-          {rate.guaranteedService ? ' · Guaranteed' : ''}
-        </span>
-        {rate.warningMessages.map((warning, warningIndex) => (
-          <span key={`${rate.rateId}:${warningIndex}`} className="shipstation-rate-option__warning small">
-            {warning}
-          </span>
-        ))}
-      </span>
-    </label>
-  );
-}
-
-function isActiveShipStationLabel(label: FulfillmentOrder['shipstationLabel']): boolean {
-  return label?.status === 'completed' || label?.status === 'processing';
-}
-
-function shipStationTrackingCodeUpdateForOrder(
-  order: FulfillmentOrder,
-  nextLabel: FulfillmentOrder['shipstationLabel'],
-): string | null | undefined {
-  if (!nextLabel) return undefined;
-  if (isActiveShipStationLabel(nextLabel) && nextLabel.trackingNumber) return nextLabel.trackingNumber;
-  const currentTrackingCode = normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode);
-  if (
-    currentTrackingCode &&
-    order.shipstationLabel?.trackingNumber === currentTrackingCode &&
-    (order.shipstationLabel.labelId !== nextLabel.labelId || !isActiveShipStationLabel(nextLabel))
-  ) {
-    return null;
-  }
-  return undefined;
-}
-
-function shipStationLabelOrderUpdate(
-  order: FulfillmentOrder,
-  nextLabel: FulfillmentOrder['shipstationLabel'],
-) {
-  const trackingCodeUpdate = shipStationTrackingCodeUpdateForOrder(order, nextLabel);
-  return {
-    shipstationLabel: nextLabel,
-    ...(trackingCodeUpdate === null
-      ? { fulfillmentTrackingCode: undefined }
-      : trackingCodeUpdate
-        ? { fulfillmentTrackingCode: trackingCodeUpdate }
-        : {}),
-  };
-}
-
-function downloadShipStationLabel(url: string): void {
-  if (typeof window === 'undefined' || !/^https:\/\//i.test(url)) return;
-  window.open(url, '_blank', 'noopener,noreferrer');
-}
-
-function parseShipStationMeasurement(value: string): number {
-  return Number(value.trim().replace(',', '.'));
-}
 
 function listOrderFigureIds(order: FulfillmentOrder): number[] {
   return [...fulfillmentOrderLooseFigureIds(order), ...order.boxes.flatMap((box) => box.dudeIds)];
@@ -1033,25 +851,6 @@ export default function FulfillmentApp({
   const [addressEditText, setAddressEditText] = useState('');
   const [addressSaving, setAddressSaving] = useState(false);
   const [addressError, setAddressError] = useState<string | null>(null);
-  const [shipstationSaving, setShipstationSaving] = useState(false);
-  const [shipstationRatesLoading, setShipstationRatesLoading] = useState(false);
-  const [shipstationPurchasing, setShipstationPurchasing] = useState(false);
-  const [shipstationLabelLoading, setShipstationLabelLoading] = useState(false);
-  const [shipstationVoiding, setShipstationVoiding] = useState(false);
-  const [shipstationError, setShipstationError] = useState<string | null>(null);
-  const [shipstationPackageEdits, setShipstationPackageEdits] = useState<Record<string, ShipStationPackageDraft>>({});
-  const [shipstationAddressCorrection, setShipstationAddressCorrection] =
-    useState<FulfillmentShipStationAddressCorrectionSession | null>(null);
-  const [shipstationRates, setShipstationRates] = useState<FulfillmentShipStationRate[]>([]);
-  const [shipstationInvalidRates, setShipstationInvalidRates] = useState<FulfillmentShipStationInvalidRate[]>([]);
-  const [shipstationRatesExpanded, setShipstationRatesExpanded] = useState(false);
-  const [shipstationSelectedRateId, setShipstationSelectedRateId] = useState<string | null>(null);
-  const [shipstationRatesRequested, setShipstationRatesRequested] = useState(false);
-  const [shipstationReviewingPurchase, setShipstationReviewingPurchase] = useState(false);
-  const [shipstationReviewingVoid, setShipstationReviewingVoid] = useState(false);
-  const [shipstationPurchaseRequestId, setShipstationPurchaseRequestId] = useState<string | null>(null);
-  const [shipstationLabelDownloadUrl, setShipstationLabelDownloadUrl] = useState<string | null>(null);
-  const [shipstationPurchaseUnknown, setShipstationPurchaseUnknown] = useState(false);
   const walletConnectingSeenRef = useRef(false);
   const [walletReady, setWalletReady] = useState(() => !walletAdapter.wallet || !autoConnectPossible);
   const authReady = sessionResolution === 'settled';
@@ -1062,24 +861,6 @@ export default function FulfillmentApp({
 
   useDismissibleMenu(manualReviewMenuOpen, manualReviewMenuRef, setManualReviewMenuOpen);
   useDismissibleMenu(exportMenuOpen, exportMenuRef, setExportMenuOpen);
-  useOverlayScrollLock({ active: activeShipstationOrderKey !== null && !walletModalVisible });
-
-  const resetShipstationFlow = useCallback(() => {
-    setShipstationVoiding(false);
-    setShipstationRates([]);
-    setShipstationInvalidRates([]);
-    setShipstationRatesExpanded(false);
-    setShipstationSelectedRateId(null);
-    setShipstationRatesRequested(false);
-    setShipstationReviewingPurchase(false);
-    setShipstationReviewingVoid(false);
-    setShipstationPurchaseRequestId(null);
-    setShipstationLabelDownloadUrl(null);
-    setShipstationPurchaseUnknown(false);
-    setShipstationError(null);
-    setShipstationAddressCorrection(null);
-  }, []);
-
   useEffect(() => {
     walletConnectingSeenRef.current = false;
     setWalletReady(!walletAdapter.wallet || !autoConnectPossible);
@@ -1155,12 +936,6 @@ export default function FulfillmentApp({
       setAddressEditText('');
       setAddressSaving(false);
       setAddressError(null);
-      setShipstationSaving(false);
-      setShipstationRatesLoading(false);
-      setShipstationPurchasing(false);
-      setShipstationLabelLoading(false);
-      setShipstationPackageEdits({});
-      resetShipstationFlow();
       return;
     }
     const requestEpoch = orderRequestEpochRef.current + 1;
@@ -1183,12 +958,6 @@ export default function FulfillmentApp({
     setAddressEditText('');
     setAddressSaving(false);
     setAddressError(null);
-    setShipstationSaving(false);
-    setShipstationRatesLoading(false);
-    setShipstationPurchasing(false);
-    setShipstationLabelLoading(false);
-    setShipstationPackageEdits({});
-    resetShipstationFlow();
     try {
       const responses = await Promise.all(
         selectedDropIds.map(async (dropId) => {
@@ -1237,7 +1006,7 @@ export default function FulfillmentApp({
         setLoading(false);
       }
     }
-  }, [hasFulfillmentAccess, signedIn, selectedDropIds, mergeStatusEdits, resetShipstationFlow]);
+  }, [hasFulfillmentAccess, signedIn, selectedDropIds, mergeStatusEdits]);
 
   const loadMore = useCallback(async () => {
     if (!hasFulfillmentAccess || !signedIn || !selectedDropIds.length || loadingMore || loading || !hasMore) return;
@@ -1549,504 +1318,28 @@ export default function FulfillmentApp({
     () => orders.find((order) => fulfillmentOrderKey(order) === activeShipstationOrderKey) ?? null,
     [activeShipstationOrderKey, orders],
   );
-  const activeShipstationAddressBaseline = useMemo(
-    () => activeShipstationOrder ? fulfillmentShipStationAddressDraft(activeShipstationOrder.address) : null,
-    [activeShipstationOrder],
+  const shipstationRequestEpoch = orderRequestEpochRef.current;
+  const isShipstationScopeCurrent = useCallback(
+    () => orderRequestEpochRef.current === shipstationRequestEpoch,
+    [shipstationRequestEpoch],
   );
-  const activeShipstationOrderKeyResolved = activeShipstationOrder ? fulfillmentOrderKey(activeShipstationOrder) : '';
-  const activeShipstationPackageDraft = activeShipstationOrder
-    ? shipstationPackageEdits[activeShipstationOrderKeyResolved] ??
-      (activeShipstationOrder.shipstationPackage
-        ? shipStationPackageDraft(activeShipstationOrder.shipstationPackage)
-        : defaultShipStationPackageDraft(activeShipstationOrder))
-    : { length: '', width: '', height: '', weight: '' };
-  const activeShipstationLabel = activeShipstationOrder?.shipstationLabel;
-  const activeShipstationHasLabel = isActiveShipStationLabel(activeShipstationLabel);
-  const activeShipstationPackageKnown = Boolean(
-    activeShipstationOrder &&
-      (!activeShipstationOrder.shipstationShipmentId ||
-        activeShipstationOrder.shipstationPackage ||
-        shipstationPackageEdits[activeShipstationOrderKeyResolved]),
-  );
-  const activeShipstationMultiPackage = Boolean(
-    activeShipstationOrder?.shipstationShipmentId &&
-      activeShipstationOrder.shipstationPackageCount != null &&
-      activeShipstationOrder.shipstationPackageCount !== 1,
-  );
-  const activeShipstationPurchaseUnknown = Boolean(
-    shipstationPurchaseUnknown || activeShipstationOrder?.shipstationPurchaseUnknown,
-  );
-  const activeShipstationBusy =
-    shipstationSaving || shipstationRatesLoading || shipstationPurchasing || shipstationLabelLoading || shipstationVoiding;
-  const activeShipstationSelectedRate =
-    shipstationRates.find((rate) => rate.rateId === shipstationSelectedRateId) ?? null;
-  const activeShipstationPreparedRates = useMemo(
-    () => prepareFulfillmentShipStationRates(shipstationRates),
-    [shipstationRates],
-  );
-  const activeShipstationRateGroups = useMemo(
-    () => groupFulfillmentShipStationRates(activeShipstationPreparedRates.rates, shipstationSelectedRateId),
-    [activeShipstationPreparedRates.rates, shipstationSelectedRateId],
-  );
-  const activeShipstationSelectedRateDetail = activeShipstationSelectedRate
-    ? activeShipstationPreparedRates.detailByRateId.get(activeShipstationSelectedRate.rateId)
-    : undefined;
-  const activeShipstationSelectedOtherRate = activeShipstationRateGroups.selectedOtherRate;
-  const visibleShipstationInvalidRates = shipstationRates.length
-    ? shipstationInvalidRates.filter((rate) => rate.responseIssue)
-    : shipstationInvalidRates;
-  const activeShipstationCanAdd = Boolean(
-    activeShipstationOrder &&
-      !activeShipstationOrder.shipstationShipmentId &&
-      normalizeFulfillmentStatus(activeShipstationOrder.fulfillmentStatus) !== 'Shipped',
-  );
-  const activeShipstationAddressPatch = shipstationAddressCorrection
-    ? fulfillmentShipStationAddressPatch(shipstationAddressCorrection)
-    : {};
-  const activeShipstationAddressCorrectionValid = Boolean(
-    shipstationAddressCorrection && fulfillmentShipStationAddressCanRetry(shipstationAddressCorrection),
-  );
-  const activeShipstationCanGetRates = Boolean(
-    activeShipstationOrder?.shipstationShipmentId &&
-      !activeShipstationHasLabel &&
-      !activeShipstationMultiPackage &&
-      !activeShipstationPurchaseUnknown,
-  );
-
-  const handleSelectShipstationRate = (rateId: string) => {
-    setShipstationSelectedRateId(rateId);
-    setShipstationPurchaseRequestId(null);
-    setShipstationError(null);
-  };
-
   const handleOpenShipstationModal = useCallback((orderKey: string) => {
-    resetShipstationFlow();
     setActiveShipstationOrderKey(orderKey);
-  }, [resetShipstationFlow]);
-
+  }, []);
   const handleCloseShipstationModal = useCallback(() => {
-    if (activeShipstationBusy) return;
     setActiveShipstationOrderKey(null);
-    resetShipstationFlow();
-  }, [activeShipstationBusy, resetShipstationFlow]);
-
-  const handleAddToShipStation = useCallback(async () => {
-    if (
-      !activeShipstationOrder ||
-      !hasFulfillmentAccess ||
-      !signedIn ||
-      shipstationSaving ||
-      (Boolean(shipstationAddressCorrection?.visibleFields.length) && !activeShipstationAddressCorrectionValid)
-    ) return;
-    const requestEpoch = orderRequestEpochRef.current;
-    const key = fulfillmentOrderKey(activeShipstationOrder);
-    const addressPatch = shipstationAddressCorrection && Object.keys(activeShipstationAddressPatch).length > 0
-      ? activeShipstationAddressPatch
-      : undefined;
-    const draft = shipstationPackageEdits[key] ?? defaultShipStationPackageDraft(activeShipstationOrder);
-    const parcel = normalizeShipStationPackage({
-      length: parseShipStationMeasurement(draft.length),
-      width: parseShipStationMeasurement(draft.width),
-      height: parseShipStationMeasurement(draft.height),
-      weight: parseShipStationMeasurement(draft.weight),
-    });
-    if (!parcel) {
-      setShipstationError(SHIPSTATION_PACKAGE_RANGE_MESSAGE);
-      return;
+  }, []);
+  const handleShipstationOrderUpdated = useCallback((
+    key: string,
+    update: (order: FulfillmentOrder) => FulfillmentOrder,
+    trackingCodeUpdate?: string | null,
+  ) => {
+    if (!isShipstationScopeCurrent()) return;
+    setOrders((prev) => prev.map((order) => fulfillmentOrderKey(order) === key ? update(order) : order));
+    if (trackingCodeUpdate !== undefined) {
+      setTrackingCodeEdits((prev) => ({ ...prev, [key]: trackingCodeUpdate ?? '' }));
     }
-    setShipstationSaving(true);
-    setShipstationError(null);
-    try {
-      const response = await addFulfillmentOrderToShipStation(
-        activeShipstationOrder.deliveryId,
-        activeShipstationOrder.dropId,
-        parcel,
-        addressPatch,
-      );
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      setOrders((prev) =>
-        prev.map((order) =>
-          fulfillmentOrderKey(order) === key
-            ? {
-                ...order,
-                shipstationShipmentId: response.shipmentId,
-                shipstationAddedAt: response.shipstationAddedAt ?? order.shipstationAddedAt ?? Date.now(),
-                ...(!response.alreadyAdded
-                  ? { shipstationPackage: parcel, shipstationPackageCount: 1 }
-                  : {}),
-              }
-            : order,
-        ),
-      );
-      if (response.alreadyAdded) {
-        setShipstationError(
-          `This order was already in ShipStation, so these measurements${addressPatch ? ' and address corrections' : ''} were not applied.`,
-        );
-      }
-      setShipstationAddressCorrection(null);
-      setShipstationPackageEdits((prev) => {
-        if (!Object.hasOwn(prev, key)) return prev;
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-    } catch (err) {
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      console.error(err);
-      setShipstationError(err instanceof Error ? err.message : 'Failed to add the order to ShipStation');
-      const correction = fulfillmentShipStationAddressCorrectionDetails(err);
-      setShipstationAddressCorrection((current) => correction
-        ? fulfillmentShipStationAddressCorrectionFailure(
-            current,
-            activeShipstationAddressBaseline,
-            correction.fields,
-            addressPatch ?? {},
-          )
-        : fulfillmentShipStationAddressOtherFailure(current, addressPatch ?? {}));
-    } finally {
-      if (orderRequestEpochRef.current === requestEpoch) setShipstationSaving(false);
-    }
-  }, [
-    activeShipstationAddressBaseline,
-    activeShipstationAddressCorrectionValid,
-    activeShipstationAddressPatch,
-    activeShipstationOrder,
-    hasFulfillmentAccess,
-    shipstationAddressCorrection,
-    shipstationPackageEdits,
-    shipstationSaving,
-    signedIn,
-  ]);
-
-  const handleGetShipstationRates = useCallback(async () => {
-    if (
-      !activeShipstationOrder ||
-      !activeShipstationOrder.shipstationShipmentId ||
-      !hasFulfillmentAccess ||
-      !signedIn ||
-      activeShipstationBusy ||
-      activeShipstationHasLabel ||
-      activeShipstationMultiPackage ||
-      activeShipstationPurchaseUnknown
-    ) {
-      return;
-    }
-    const requestEpoch = orderRequestEpochRef.current;
-    const key = fulfillmentOrderKey(activeShipstationOrder);
-    const packageDraft = shipstationPackageEdits[key];
-    const draftPackage = packageDraft ? {
-      length: parseShipStationMeasurement(packageDraft.length),
-      width: parseShipStationMeasurement(packageDraft.width),
-      height: parseShipStationMeasurement(packageDraft.height),
-      weight: parseShipStationMeasurement(packageDraft.weight),
-    } : undefined;
-    const canonicalPackage = activeShipstationOrder.shipstationPackage;
-    const draftMatchesCanonical = Boolean(
-      draftPackage &&
-      canonicalPackage &&
-      SHIPSTATION_PACKAGE_FIELDS.every(({ key: field }) => draftPackage[field] === canonicalPackage[field]),
-    );
-    let parcel: ShipStationPackageInput | undefined;
-    if (draftPackage && !draftMatchesCanonical) {
-      parcel = normalizeShipStationPackage(draftPackage) ?? undefined;
-      if (!parcel) {
-        setShipstationError(SHIPSTATION_PACKAGE_RANGE_MESSAGE);
-        return;
-      }
-    }
-    setShipstationRatesLoading(true);
-    setShipstationRatesRequested(true);
-    setShipstationRatesExpanded(false);
-    setShipstationReviewingPurchase(false);
-    setShipstationPurchaseRequestId(null);
-    setShipstationError(null);
-    setShipstationInvalidRates([]);
-    try {
-      const response = await getFulfillmentShipStationRates(
-        activeShipstationOrder.deliveryId,
-        activeShipstationOrder.dropId,
-        parcel,
-      );
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      const resolvedPackage = response.package;
-      if (resolvedPackage) {
-        setShipstationPackageEdits((prev) => {
-          if (!Object.hasOwn(prev, key)) return prev;
-          const next = { ...prev };
-          delete next[key];
-          return next;
-        });
-      }
-      setOrders((prev) =>
-        prev.map((order) =>
-          fulfillmentOrderKey(order) === key
-            ? {
-                ...order,
-                ...(response.package ? { shipstationPackage: response.package } : {}),
-                shipstationPackageCount: response.packageCount,
-                ...shipStationLabelOrderUpdate(order, response.label),
-                shipstationPurchaseUnknown: Boolean(response.purchaseUnknown),
-              }
-            : order,
-        ),
-      );
-      setShipstationRates(response.rates);
-      setShipstationInvalidRates(response.invalidRates ?? []);
-      setShipstationSelectedRateId(response.rates[0]?.rateId ?? null);
-      setShipstationLabelDownloadUrl(response.labelDownloadUrl || null);
-      setShipstationPurchaseUnknown(Boolean(response.purchaseUnknown));
-      const trackingCodeUpdate = shipStationTrackingCodeUpdateForOrder(activeShipstationOrder, response.label);
-      if (trackingCodeUpdate !== undefined) {
-        setTrackingCodeEdits((prev) => ({ ...prev, [key]: trackingCodeUpdate ?? '' }));
-      }
-      if (!response.label && !response.purchaseUnknown && response.packageCount === 1 && !response.rates.length) {
-        if (!response.invalidRates?.length) {
-          setShipstationError('ShipStation returned no valid rates for this shipment.');
-        }
-      }
-    } catch (err) {
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      console.error(err);
-      setShipstationError(err instanceof Error ? err.message : 'Failed to get ShipStation rates');
-    } finally {
-      if (orderRequestEpochRef.current === requestEpoch) setShipstationRatesLoading(false);
-    }
-  }, [
-    activeShipstationBusy,
-    activeShipstationHasLabel,
-    activeShipstationMultiPackage,
-    activeShipstationOrder,
-    activeShipstationPurchaseUnknown,
-    hasFulfillmentAccess,
-    shipstationPackageEdits,
-    signedIn,
-  ]);
-
-  const handleReviewShipstationPurchase = useCallback(() => {
-    if (!activeShipstationSelectedRate || activeShipstationBusy) return;
-    setShipstationPurchaseRequestId(globalThis.crypto.randomUUID());
-    setShipstationReviewingPurchase(true);
-    setShipstationError(null);
-  }, [activeShipstationBusy, activeShipstationSelectedRate]);
-
-  const handleConfirmShipstationPurchase = useCallback(async () => {
-    if (
-      !activeShipstationOrder ||
-      !activeShipstationSelectedRate ||
-      !hasFulfillmentAccess ||
-      !signedIn ||
-      activeShipstationBusy
-    ) {
-      return;
-    }
-    const requestEpoch = orderRequestEpochRef.current;
-    const key = fulfillmentOrderKey(activeShipstationOrder);
-    const requestId = shipstationPurchaseRequestId || globalThis.crypto.randomUUID();
-    setShipstationPurchaseRequestId(requestId);
-    setShipstationPurchasing(true);
-    setShipstationError(null);
-    try {
-      const response = await purchaseFulfillmentShipStationLabel({
-        dropId: activeShipstationOrder.dropId,
-        deliveryId: activeShipstationOrder.deliveryId,
-        rateId: activeShipstationSelectedRate.rateId,
-        expectedTotal: activeShipstationSelectedRate.totalAmount,
-        requestId,
-      });
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      setOrders((prev) =>
-        prev.map((order) =>
-          fulfillmentOrderKey(order) === key
-            ? {
-                ...order,
-                ...shipStationLabelOrderUpdate(order, response.label),
-                shipstationPurchaseUnknown: false,
-              }
-            : order,
-        ),
-      );
-      setShipstationRates([]);
-      setShipstationRatesExpanded(false);
-      setShipstationSelectedRateId(null);
-      setShipstationReviewingPurchase(false);
-      setShipstationPurchaseUnknown(false);
-      setShipstationLabelDownloadUrl(response.labelDownloadUrl || null);
-      const trackingCodeUpdate = shipStationTrackingCodeUpdateForOrder(activeShipstationOrder, response.label);
-      if (trackingCodeUpdate !== undefined) {
-        setTrackingCodeEdits((prev) => ({ ...prev, [key]: trackingCodeUpdate ?? '' }));
-      }
-    } catch (err) {
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      console.error(err);
-      const message = err instanceof Error ? err.message : 'Failed to purchase the ShipStation label';
-      setShipstationError(message);
-      if (/check purchase status|may already|did not confirm/i.test(message)) {
-        setShipstationPurchaseUnknown(true);
-        setOrders((prev) =>
-          prev.map((order) =>
-            fulfillmentOrderKey(order) === key ? { ...order, shipstationPurchaseUnknown: true } : order,
-          ),
-        );
-      } else if (/rate.*changed|refresh rates|no longer valid/i.test(message)) {
-        setShipstationRates([]);
-        setShipstationRatesExpanded(false);
-        setShipstationSelectedRateId(null);
-        setShipstationReviewingPurchase(false);
-        setShipstationPurchaseRequestId(null);
-        setShipstationRatesRequested(true);
-      } else {
-        setShipstationPurchaseRequestId(null);
-      }
-    } finally {
-      if (orderRequestEpochRef.current === requestEpoch) setShipstationPurchasing(false);
-    }
-  }, [
-    activeShipstationBusy,
-    activeShipstationOrder,
-    activeShipstationSelectedRate,
-    hasFulfillmentAccess,
-    shipstationPurchaseRequestId,
-    signedIn,
-  ]);
-
-  const handleConfirmShipstationVoid = useCallback(async () => {
-    if (
-      !activeShipstationOrder ||
-      activeShipstationLabel?.status !== 'completed' ||
-      !hasFulfillmentAccess ||
-      !signedIn ||
-      activeShipstationBusy
-    ) {
-      return;
-    }
-    const requestEpoch = orderRequestEpochRef.current;
-    const key = fulfillmentOrderKey(activeShipstationOrder);
-    const labelId = activeShipstationLabel.labelId;
-    setShipstationVoiding(true);
-    setShipstationError(null);
-    try {
-      const response = await voidFulfillmentShipStationLabel({
-        dropId: activeShipstationOrder.dropId,
-        deliveryId: activeShipstationOrder.deliveryId,
-        labelId,
-      });
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      if (response.label.labelId !== labelId) {
-        throw new Error('ShipStation returned a different label. Check its status again.');
-      }
-      setOrders((prev) =>
-        prev.map((order) =>
-          fulfillmentOrderKey(order) === key
-            ? {
-                ...order,
-                ...shipStationLabelOrderUpdate(order, response.label),
-                shipstationPurchaseUnknown: false,
-              }
-            : order,
-        ),
-      );
-      setShipstationRates([]);
-      setShipstationInvalidRates([]);
-      setShipstationRatesExpanded(false);
-      setShipstationSelectedRateId(null);
-      setShipstationRatesRequested(false);
-      setShipstationReviewingPurchase(false);
-      setShipstationReviewingVoid(false);
-      setShipstationPurchaseRequestId(null);
-      setShipstationPurchaseUnknown(false);
-      setShipstationLabelDownloadUrl(null);
-      const trackingCodeUpdate = shipStationTrackingCodeUpdateForOrder(activeShipstationOrder, response.label);
-      if (trackingCodeUpdate !== undefined) {
-        setTrackingCodeEdits((prev) => ({ ...prev, [key]: trackingCodeUpdate ?? '' }));
-      }
-    } catch (err) {
-      if (orderRequestEpochRef.current !== requestEpoch) return;
-      console.error(err);
-      setShipstationError(err instanceof Error ? err.message : 'Failed to void the ShipStation label');
-    } finally {
-      if (orderRequestEpochRef.current === requestEpoch) setShipstationVoiding(false);
-    }
-  }, [
-    activeShipstationBusy,
-    activeShipstationLabel,
-    activeShipstationOrder,
-    hasFulfillmentAccess,
-    signedIn,
-  ]);
-
-  const refreshShipstationLabel = useCallback(
-    async (downloadAfterRefresh: boolean) => {
-      if (
-        !activeShipstationOrder ||
-        !activeShipstationOrder.shipstationShipmentId ||
-        !hasFulfillmentAccess ||
-        !signedIn ||
-        shipstationLabelLoading ||
-        shipstationPurchasing
-      ) {
-        return;
-      }
-      const requestEpoch = orderRequestEpochRef.current;
-      const key = fulfillmentOrderKey(activeShipstationOrder);
-      setShipstationLabelLoading(true);
-      setShipstationError(null);
-      try {
-        const response = await getFulfillmentShipStationLabel(
-          activeShipstationOrder.deliveryId,
-          activeShipstationOrder.dropId,
-        );
-        if (orderRequestEpochRef.current !== requestEpoch) return;
-        setOrders((prev) =>
-          prev.map((order) =>
-            fulfillmentOrderKey(order) === key
-              ? {
-                  ...order,
-                  ...shipStationLabelOrderUpdate(order, response.label),
-                  shipstationPurchaseUnknown: Boolean(response.purchaseUnknown),
-                }
-              : order,
-          ),
-        );
-        setShipstationPurchaseUnknown(Boolean(response.purchaseUnknown));
-        setShipstationLabelDownloadUrl(response.labelDownloadUrl || null);
-        const trackingCodeUpdate = shipStationTrackingCodeUpdateForOrder(activeShipstationOrder, response.label);
-        if (trackingCodeUpdate !== undefined) {
-          setTrackingCodeEdits((prev) => ({ ...prev, [key]: trackingCodeUpdate ?? '' }));
-        }
-        if (downloadAfterRefresh && response.labelDownloadUrl) {
-          downloadShipStationLabel(response.labelDownloadUrl);
-        } else if (downloadAfterRefresh && !response.labelDownloadUrl) {
-          setShipstationError('The ShipStation label PDF is not ready yet.');
-        }
-      } catch (err) {
-        if (orderRequestEpochRef.current !== requestEpoch) return;
-        console.error(err);
-        setShipstationError(err instanceof Error ? err.message : 'Failed to check the ShipStation label');
-      } finally {
-        if (orderRequestEpochRef.current === requestEpoch) setShipstationLabelLoading(false);
-      }
-    },
-    [
-      activeShipstationOrder,
-      hasFulfillmentAccess,
-      shipstationLabelLoading,
-      shipstationPurchasing,
-      signedIn,
-    ],
-  );
-
-  useEffect(() => {
-    if (!activeShipstationOrderKey || activeShipstationLabel?.status !== 'processing' || activeShipstationBusy) return;
-    const interval = window.setInterval(() => {
-      void refreshShipstationLabel(false);
-    }, 2500);
-    return () => window.clearInterval(interval);
-  }, [
-    activeShipstationBusy,
-    activeShipstationLabel?.status,
-    activeShipstationOrderKey,
-    refreshShipstationLabel,
-  ]);
+  }, [isShipstationScopeCurrent]);
 
   const handleCancelUpdate = useCallback(() => {
     if (!activeUpdateOrder) {
@@ -2868,417 +2161,15 @@ export default function FulfillmentApp({
         </form>
       </Modal>
 
-      <Modal
-        open={activeShipstationOrderKey !== null}
-        title={activeShipstationOrder ? `Print label · Order ${activeShipstationOrder.deliveryId}` : 'Print label'}
-        onClose={handleCloseShipstationModal}
-        showCloseButton={false}
-        closeOnEscape={!activeShipstationBusy}
+      <FulfillmentShipStationModal
+        key={shipstationRequestEpoch}
+        order={activeShipstationOrder}
+        canManage={hasFulfillmentAccess && signedIn}
         suspended={walletModalVisible}
-      >
-        <div className="modal-form">
-          {activeShipstationOrder && !isRedeemedForIrlFulfillmentOrder(activeShipstationOrder) ? (
-            <div className="fulfillment-shipstation">
-              {activeShipstationOrder.shipstationShipmentId ? (
-                <div className="shipstation-header-actions">
-                  <a
-                    className="link small no-focus-style"
-                    href={SHIPSTATION_AWAITING_SHIPMENT_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    View on ShipStation
-                  </a>
-                </div>
-              ) : null}
-
-              {shipstationReviewingVoid && activeShipstationLabel?.status === 'completed' ? (
-                <div className="shipstation-review shipstation-review--void" role="alert">
-                  <div className="shipstation-review__title">Void this label?</div>
-                  <div className="small">
-                    This cannot be undone. ShipStation will request a carrier refund when applicable, but approval and timing depend on the carrier.
-                  </div>
-                  {activeShipstationLabel.trackingNumber ? (
-                    <div className="muted small">Tracking {activeShipstationLabel.trackingNumber}</div>
-                  ) : null}
-                </div>
-              ) : activeShipstationLabel ? (
-                <div className="shipstation-label-summary" aria-live="polite">
-                  <div className="shipstation-label-summary__heading">
-                    {activeShipstationLabel.status === 'processing'
-                      ? 'Label purchase is processing'
-                      : activeShipstationLabel.status === 'completed'
-                        ? 'Label purchased'
-                        : activeShipstationLabel.status === 'voided'
-                          ? 'Previous label was voided'
-                          : 'Previous label could not be created'}
-                  </div>
-                  {activeShipstationHasLabel ? (
-                    <div className="shipstation-label-summary__details">
-                      <span>
-                        {[activeShipstationLabel.carrierName || activeShipstationLabel.carrierCode,
-                          activeShipstationLabel.serviceName || activeShipstationLabel.serviceCode]
-                          .filter(Boolean)
-                          .join(' · ') || 'Carrier details pending'}
-                      </span>
-                      {activeShipstationLabel.totalCost ? (
-                        <span>{formatShipStationMoney(activeShipstationLabel.totalCost)}</span>
-                      ) : null}
-                      {activeShipstationLabel.trackingNumber ? (
-                        <span>Tracking {activeShipstationLabel.trackingNumber}</span>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="muted small">Get fresh rates to purchase another label.</div>
-                  )}
-                </div>
-              ) : null}
-
-              {activeShipstationPurchaseUnknown ? (
-                <div className="shipstation-notice" role="status">
-                  ShipStation may already have charged for this label. Check its status before taking any other action.
-                </div>
-              ) : null}
-
-              {activeShipstationMultiPackage && !activeShipstationHasLabel ? (
-                <div className="shipstation-notice">
-                  {activeShipstationOrder.shipstationPackageCount
-                    ? `This shipment has ${activeShipstationOrder.shipstationPackageCount} packages.`
-                    : 'This shipment does not have a single package.'}{' '}
-                  Buy its label in ShipStation; the in-app flow supports one package only.
-                </div>
-              ) : null}
-
-              {!activeShipstationHasLabel && !activeShipstationMultiPackage && !activeShipstationPurchaseUnknown ? (
-                activeShipstationPackageKnown ? (
-                  <div className="shipstation-package">
-                    {SHIPSTATION_PACKAGE_FIELDS.map((field) => (
-                      <label key={field.key} className="shipstation-package-field">
-                        <span className="muted small">{field.label}</span>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={activeShipstationPackageDraft[field.key]}
-                          onChange={(evt) => {
-                            const value = evt.target.value;
-                            setShipstationPackageEdits((prev) => ({
-                              ...prev,
-                              [activeShipstationOrderKeyResolved]: {
-                                ...(prev[activeShipstationOrderKeyResolved] ?? activeShipstationPackageDraft),
-                                [field.key]: value,
-                              },
-                            }));
-                            setShipstationRates([]);
-                            setShipstationInvalidRates([]);
-                            setShipstationRatesExpanded(false);
-                            setShipstationSelectedRateId(null);
-                            setShipstationReviewingPurchase(false);
-                            setShipstationPurchaseRequestId(null);
-                            setShipstationError(null);
-                          }}
-                          disabled={activeShipstationBusy || shipstationReviewingPurchase}
-                          aria-label={field.ariaLabel}
-                          autoComplete="off"
-                        />
-                      </label>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="muted small">
-                    Package details will be loaded from ShipStation when you get rates.
-                  </div>
-                )
-              ) : null}
-
-              {shipstationReviewingPurchase && activeShipstationSelectedRate ? (
-                <div className="shipstation-review">
-                  <div className="shipstation-review__title">Review label purchase</div>
-                  <div className="shipstation-review__row">
-                    <span>Carrier</span>
-                    <strong>{activeShipstationSelectedRate.carrierName}</strong>
-                  </div>
-                  <div className="shipstation-review__row">
-                    <span>Service</span>
-                    <strong>{activeShipstationSelectedRate.serviceName}</strong>
-                  </div>
-                  <div className="shipstation-review__row shipstation-review__row--total">
-                    <span>Total charge</span>
-                    <strong>{formatShipStationMoney(activeShipstationSelectedRate.totalAmount)}</strong>
-                  </div>
-                  {activeShipstationSelectedRateDetail ? (
-                    <div className="muted small">{activeShipstationSelectedRateDetail}</div>
-                  ) : null}
-                  <div className="muted small">The charge is made through your ShipStation account.</div>
-                </div>
-              ) : activeShipstationPreparedRates.rates.length ? (
-                <div className="shipstation-rate-picker">
-                  <div className="shipstation-rate-picker__head">
-                    <div id="shipstation-lowest-prices-label" className="shipstation-rate-section__label">
-                      Lowest prices
-                    </div>
-                    {activeShipstationRateGroups.otherRates.length ? (
-                      <button
-                        type="button"
-                        className="link small shipstation-rate-toggle"
-                        aria-expanded={shipstationRatesExpanded}
-                        aria-controls="shipstation-rate-options"
-                        onClick={() => setShipstationRatesExpanded((expanded) => !expanded)}
-                        disabled={activeShipstationBusy}
-                      >
-                        {shipstationRatesExpanded
-                          ? 'Show fewer'
-                          : `Show all ${activeShipstationPreparedRates.rates.length} rates`}
-                      </button>
-                    ) : null}
-                  </div>
-                  <div
-                    id="shipstation-rate-options"
-                    className="shipstation-rate-groups"
-                    role="radiogroup"
-                    aria-label="Shipping rates"
-                  >
-                    <div
-                      className="shipstation-rate-section"
-                      role="group"
-                      aria-labelledby="shipstation-lowest-prices-label"
-                    >
-                      <div className="shipstation-rate-list">
-                        {activeShipstationRateGroups.recommendedRates.map((rate) => (
-                          <ShipStationRateOption
-                            key={rate.rateId}
-                            rate={rate}
-                            detail={activeShipstationPreparedRates.detailByRateId.get(rate.rateId)}
-                            selected={rate.rateId === shipstationSelectedRateId}
-                            disabled={activeShipstationBusy}
-                            onSelect={() => handleSelectShipstationRate(rate.rateId)}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                    {shipstationRatesExpanded ? (
-                      <div
-                        className="shipstation-rate-section"
-                        role="group"
-                        aria-labelledby="shipstation-other-rates-label"
-                      >
-                        <div id="shipstation-other-rates-label" className="shipstation-rate-section__label">
-                          Other rates
-                        </div>
-                        <div className="shipstation-rate-list">
-                          {activeShipstationRateGroups.otherRates.map((rate) => (
-                            <ShipStationRateOption
-                              key={rate.rateId}
-                              rate={rate}
-                              detail={activeShipstationPreparedRates.detailByRateId.get(rate.rateId)}
-                              selected={rate.rateId === shipstationSelectedRateId}
-                              disabled={activeShipstationBusy}
-                              onSelect={() => handleSelectShipstationRate(rate.rateId)}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    ) : activeShipstationSelectedOtherRate ? (
-                      <div
-                        className="shipstation-rate-section"
-                        role="group"
-                        aria-labelledby="shipstation-selected-rate-label"
-                      >
-                        <div id="shipstation-selected-rate-label" className="shipstation-rate-section__label">
-                          Selected rate
-                        </div>
-                        <div className="shipstation-rate-list">
-                          <ShipStationRateOption
-                            rate={activeShipstationSelectedOtherRate}
-                            detail={activeShipstationPreparedRates.detailByRateId.get(
-                              activeShipstationSelectedOtherRate.rateId,
-                            )}
-                            selected
-                            disabled={activeShipstationBusy}
-                            onSelect={() => handleSelectShipstationRate(activeShipstationSelectedOtherRate.rateId)}
-                          />
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-              {visibleShipstationInvalidRates.length ? (
-                <div className="error shipstation-invalid-rates" role="status">
-                  <strong>
-                    {shipstationRates.length
-                      ? 'Some ShipStation rates couldn’t be processed'
-                      : 'ShipStation couldn’t quote these services'}
-                  </strong>
-                  {visibleShipstationInvalidRates.map((rate, rateIndex) => (
-                    <div
-                      key={`${rate.carrierId}:${rate.serviceCode}:${rateIndex}`}
-                      className="shipstation-invalid-rate"
-                    >
-                      <span>
-                        {[rate.carrierName, rate.serviceName].filter(Boolean).join(' · ')}
-                      </span>
-                      {rate.errorMessages.map((message, messageIndex) => (
-                        <span key={`${rateIndex}:${messageIndex}`}>{message}</span>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {shipstationError ? <div className="error">{shipstationError}</div> : null}
-          {shipstationAddressCorrection?.visibleFields.length ? (
-            <div className="shipstation-address-correction" role="group" aria-label="Temporary ShipStation address corrections">
-              <div className="shipstation-address-correction__heading">Correct the ShipStation address</div>
-              <div className="muted small">
-                {shipstationAddressCorrection.baseline
-                  ? 'These changes apply only to the ShipStation shipment and do not update the saved fulfillment address.'
-                  : 'The saved address is hidden for this account. Enter the requested values; they apply only to the ShipStation shipment.'}
-              </div>
-              <div className="shipstation-address-correction__fields">
-                {shipstationAddressCorrection.visibleFields.map((field) => {
-                  const config = SHIPSTATION_ADDRESS_FIELDS[field];
-                  return (
-                    <label key={field} className="shipstation-address-correction__field">
-                      <span className="muted small">
-                        {config.label}{config.optional ? ' (optional)' : ''}
-                      </span>
-                      <input
-                        type="text"
-                        value={shipstationAddressCorrection.draft[field]}
-                        onChange={(evt) => {
-                          const value = field === 'country_code' ? evt.target.value.toUpperCase() : evt.target.value;
-                          setShipstationAddressCorrection((current) => current ? {
-                            ...current,
-                            draft: { ...current.draft, [field]: value },
-                          } : current);
-                        }}
-                        maxLength={field === 'country_code' ? 2 : 50}
-                        required={!config.optional}
-                        disabled={activeShipstationBusy}
-                        autoComplete={config.autoComplete}
-                        aria-label={config.label}
-                      />
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-          <div className="row row--end">
-            <button
-              type="button"
-              className="secondary-light"
-              onClick={handleCloseShipstationModal}
-              disabled={activeShipstationBusy}
-            >
-              Cancel
-            </button>
-            {activeShipstationCanAdd ? (
-              <button
-                type="button"
-                onClick={() => void handleAddToShipStation()}
-                disabled={activeShipstationBusy || (
-                  Boolean(shipstationAddressCorrection?.visibleFields.length) &&
-                    !activeShipstationAddressCorrectionValid
-                )}
-              >
-                {shipstationSaving ? 'Adding…' : 'Add to ShipStation'}
-              </button>
-            ) : shipstationReviewingVoid && activeShipstationLabel?.status === 'completed' ? (
-              <>
-                <button
-                  type="button"
-                  className="secondary-light"
-                  onClick={() => {
-                    setShipstationReviewingVoid(false);
-                    setShipstationError(null);
-                  }}
-                  disabled={activeShipstationBusy}
-                >
-                  Back
-                </button>
-                <button
-                  type="button"
-                  className="shipstation-void-confirm"
-                  onClick={() => void handleConfirmShipstationVoid()}
-                  disabled={activeShipstationBusy}
-                >
-                  {shipstationVoiding ? 'Voiding…' : 'Confirm void'}
-                </button>
-              </>
-            ) : activeShipstationPurchaseUnknown || activeShipstationLabel?.status === 'processing' ? (
-              <button type="button" onClick={() => void refreshShipstationLabel(false)} disabled={activeShipstationBusy}>
-                {shipstationLabelLoading ? 'Checking…' : 'Check purchase status'}
-              </button>
-            ) : activeShipstationLabel?.status === 'completed' ? (
-              <>
-                <button
-                  type="button"
-                  className="secondary-light shipstation-void-button"
-                  onClick={() => {
-                    setShipstationReviewingPurchase(false);
-                    setShipstationReviewingVoid(true);
-                    setShipstationError(null);
-                  }}
-                  disabled={activeShipstationBusy}
-                >
-                  Void label
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (shipstationLabelDownloadUrl) {
-                      downloadShipStationLabel(shipstationLabelDownloadUrl);
-                    } else {
-                      void refreshShipstationLabel(true);
-                    }
-                  }}
-                  disabled={activeShipstationBusy}
-                >
-                  {shipstationLabelLoading ? 'Preparing PDF…' : 'Download PDF'}
-                </button>
-              </>
-            ) : shipstationReviewingPurchase && activeShipstationSelectedRate ? (
-              <>
-                <button
-                  type="button"
-                  className="secondary-light"
-                  onClick={() => {
-                    setShipstationReviewingPurchase(false);
-                    setShipstationPurchaseRequestId(null);
-                    setShipstationError(null);
-                  }}
-                  disabled={activeShipstationBusy}
-                >
-                  Back
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleConfirmShipstationPurchase()}
-                  disabled={activeShipstationBusy}
-                >
-                  {shipstationPurchasing
-                    ? 'Purchasing…'
-                    : `Confirm purchase · ${formatShipStationMoney(activeShipstationSelectedRate.totalAmount)}`}
-                </button>
-              </>
-            ) : shipstationRates.length ? (
-              <button
-                type="button"
-                onClick={handleReviewShipstationPurchase}
-                disabled={activeShipstationBusy || !activeShipstationSelectedRate}
-              >
-                Review purchase
-              </button>
-            ) : activeShipstationCanGetRates ? (
-              <button type="button" onClick={() => void handleGetShipstationRates()} disabled={activeShipstationBusy}>
-                {shipstationRatesLoading ? 'Getting rates…' : shipstationRatesRequested ? 'Refresh rates' : 'Get rates'}
-              </button>
-            ) : null}
-          </div>
-        </div>
-      </Modal>
+        isCurrentScope={isShipstationScopeCurrent}
+        onClose={handleCloseShipstationModal}
+        onOrderUpdated={handleShipstationOrderUpdated}
+      />
 
       <Modal
         open={activeUpdateOrderKey !== null}
