@@ -445,6 +445,33 @@ button.fulfillment-export-menu__item:focus-visible {
   white-space: pre-wrap;
 }
 
+.fulfillment-page .order-items,
+.fulfillment-page .figure-grid {
+  width: 100%;
+  min-width: 0;
+}
+
+.fulfillment-page .figure-tile {
+  width: 130px;
+  min-width: 0;
+}
+
+.fulfillment-page .fulfillment-image-frame {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  width: 100%;
+}
+
+.fulfillment-page .fulfillment-image-frame > .figure-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  object-fit: contain;
+}
+
 .fulfillment-page .figure-image,
 .fulfillment-page .fulfillment-pack-secret-image {
   user-select: none;
@@ -472,7 +499,6 @@ button.fulfillment-export-menu__item:focus-visible {
 
 .card.subtle.box-contents .figure-grid {
   align-self: flex-start;
-  width: auto;
 }
 
 .fulfillment-pack-secret {

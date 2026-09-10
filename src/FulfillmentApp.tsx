@@ -175,22 +175,42 @@ function summarizeDuplicateFigures(args: {
     .sort((a, b) => b.count - a.count || a.sortValue - b.sortValue || a.figureId - b.figureId);
 }
 
+function FulfillmentImage(props: {
+  src?: string | null;
+  alt: string;
+  aspectRatio: number;
+  onError?: () => void;
+}) {
+  return (
+    <span className="fulfillment-image-frame" style={{ aspectRatio: props.aspectRatio }}>
+      {props.src ? (
+        <img
+          src={props.src}
+          alt={props.alt}
+          loading="lazy"
+          draggable={false}
+          className="figure-image"
+          onError={props.onError}
+        />
+      ) : (
+        <span className="figure-image figure-image--placeholder" aria-hidden="true" />
+      )}
+    </span>
+  );
+}
+
 function FigureTileImage(props: {
   dropId: string;
   figureId: number;
   alt: string;
+  aspectRatio: number;
   primarySrc?: string;
   fallbackSrc?: string;
   onMetadataResolved?: (record: FigureMetadataRecord) => void;
 }) {
-  const { alt } = props;
   const { activeSrc, handleError } = useFigureImage(props);
 
-  if (!activeSrc) {
-    return <span className="figure-image figure-image--placeholder" aria-hidden="true" />;
-  }
-
-  return <img src={activeSrc} alt={alt} loading="lazy" draggable={false} className="figure-image" onError={handleError} />;
+  return <FulfillmentImage src={activeSrc} alt={props.alt} aspectRatio={props.aspectRatio} onError={handleError} />;
 }
 
 function renderFigureTiles(args: {
@@ -221,6 +241,7 @@ function renderFigureTiles(args: {
     labelOverride,
     renderFooter,
   } = args;
+  const aspectRatio = resolveDropContent(drop || dropId).figures.fulfillmentAspectRatio;
   return (
     <div className="figure-grid">
       {figureIds.map((figureId, index) => {
@@ -242,6 +263,7 @@ function renderFigureTiles(args: {
               primarySrc={preview.primarySrc}
               fallbackSrc={preview.fallbackSrc}
               alt={preview.alt}
+              aspectRatio={aspectRatio}
               onMetadataResolved={onMetadataResolved}
             />
             <span className="muted small">{preview.label}</span>
@@ -312,6 +334,7 @@ function SecretCodeDisplay(props: {
 function renderBoxTiles(args: {
   boxes: Array<{ boxId: number; boxIndex: number; secretCode: string; receiptClaimStatus?: string }>;
   keyPrefix: string;
+  aspectRatio: number;
   labelSource: Pick<FrontendDeploymentConfig, 'namePrefix' | 'figureNamePrefix' | 'mintSelection'>;
   getPreviewSrc?: (boxId: number) => string | undefined;
   secretCodeDownloadDisabled?: boolean;
@@ -320,6 +343,7 @@ function renderBoxTiles(args: {
   const {
     boxes,
     keyPrefix,
+    aspectRatio,
     labelSource,
     getPreviewSrc,
     secretCodeDownloadDisabled,
@@ -333,11 +357,7 @@ function renderBoxTiles(args: {
         const hideSecretCodeDownload = isUsedReceiptClaimStatus(receiptClaimStatus);
         return (
           <div key={`${keyPrefix}:${boxId}:${index}`} className="figure-tile">
-            {imageSrc ? (
-              <img src={imageSrc} alt={label} loading="lazy" draggable={false} className="figure-image" />
-            ) : (
-              <div className="figure-image figure-image--placeholder" aria-hidden="true" />
-            )}
+            <FulfillmentImage src={imageSrc} alt={label} aspectRatio={aspectRatio} />
             <div className={sizeLabel ? 'fulfillment-size-label' : 'muted small'}>{label}</div>
             {secretCode ? (
               <SecretCodeDisplay
@@ -948,6 +968,7 @@ export default function FulfillmentApp({
                   receiptClaimStatus: box.receiptClaimStatus,
                 })),
                 keyPrefix: `${orderKey}:box`,
+                aspectRatio: orderDropContent.box.aspectRatio,
                 labelSource: orderDrop,
                 getPreviewSrc: (boxId) => normalizeBoxDisplayImage({ dropId: orderDrop.dropId, boxId }),
                 secretCodeDownloadDisabled,

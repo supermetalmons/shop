@@ -98,6 +98,7 @@ export type DropExtraContentOverride = {
     inventoryImageUrl?: string;
     revealPresentation?: DropFigureRevealPresentation;
     fulfillmentPreviewMode?: DropFigureFulfillmentPreviewMode;
+    fulfillmentAspectRatio?: number;
     revealVideoBaseUrl?: string;
     fulfillmentMediaBaseUrl?: string;
   };
@@ -122,6 +123,9 @@ const DRIFELLA_SHIRT_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   mintPanel: {
     previewImageUrl: DRIFELLA_SHIRT_CLEAN_IMAGE_URL,
     aspectRatio: DRIFELLA_SHIRT_CLEAN_IMAGE_ASPECT_RATIO,
+  },
+  figures: {
+    fulfillmentAspectRatio: DRIFELLA_SHIRT_CLEAN_IMAGE_ASPECT_RATIO,
   },
   certificates: {
     boxInventoryImageBaseUrl: DRIFELLA_SHIRT_RECEIPT_IMAGE_BASE_URL,
@@ -148,6 +152,7 @@ const PONCHO_DRIFELLA_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   figures: {
     inventoryImageBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE_URL,
     fulfillmentPreviewMode: 'media_map_folder',
+    fulfillmentAspectRatio: 5 / 7,
     fulfillmentMediaBaseUrl: PONCHO_DRIFELLA_CLEAN_ITEMS_BASE_URL,
   },
   certificates: {
@@ -166,6 +171,7 @@ const LITTLE_SWAG_HOODIES_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   },
   figures: {
     inventoryImageUrl: LITTLE_SWAG_HOODIE_CLEAN_IMAGE_URL,
+    fulfillmentAspectRatio: HOODIE_CLEAN_IMAGE_ASPECT_RATIO,
   },
   certificates: {
     boxInventoryImageBaseUrl: LITTLE_SWAG_HOODIE_RECEIPT_IMAGE_BASE_URL,
@@ -177,6 +183,7 @@ const LITTLE_SWAG_BOXES_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   mediaBaseUrl: LITTLE_SWAG_BOXES_CDN_BASE_URL,
   figures: {
     inventoryImageBaseUrl: LITTLE_SWAG_BOXES_FIGURE_CLEAN_BASE_URL,
+    fulfillmentAspectRatio: 2 / 3,
   },
   certificates: {
     inventoryImageBaseUrl: LITTLE_SWAG_BOXES_RECEIPT_BASE_URL,
@@ -194,6 +201,9 @@ const CARD_NFT_2_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
     renderer: 'interactive_card_pack',
     frameTiming: INTERACTIVE_CARD_PACK_REVEAL_TIMING,
   },
+  figures: {
+    fulfillmentAspectRatio: 5 / 7,
+  },
   certificates: {
     boxInventoryImageBaseUrl: CARD_NFT_2_PACK_BASE_URL,
     boxInventoryImagePathMode: 'receipt_pack_file',
@@ -208,6 +218,9 @@ const CARD_NFT_BINDER_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   mintPanel: {
     previewImageUrl: CARD_NFT_BINDER_CLEAN_IMAGE_URL,
     aspectRatio: CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
+  },
+  figures: {
+    fulfillmentAspectRatio: CARD_NFT_BINDER_PREVIEW_ASPECT_RATIO,
   },
   certificates: {
     inventoryImageUrl: CARD_NFT_BINDER_RECEIPT_IMAGE_URL,
@@ -229,6 +242,7 @@ const CLEAR_CARDS_FAMILY_EXTRA_CONTENT: DropExtraContentOverride = {
   figures: {
     inventoryImageBaseUrl: CLEAR_CARDS_CARD_CLEAN_BASE_URL,
     fulfillmentPreviewMode: 'media_map_folder',
+    fulfillmentAspectRatio: 963 / 1400,
     fulfillmentMediaBaseUrl: CLEAR_CARDS_CARD_CLEAN_BASE_URL,
   },
   certificates: {

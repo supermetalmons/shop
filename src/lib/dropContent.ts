@@ -48,6 +48,7 @@ export type ResolvedDropContent = {
     inventoryImageUrl?: string;
     revealPresentation: DropFigureRevealPresentation;
     fulfillmentPreviewMode: DropFigureFulfillmentPreviewMode;
+    fulfillmentAspectRatio: number;
     revealVideoBaseUrl?: string;
     fulfillmentMediaBaseUrl?: string;
   };
@@ -295,6 +296,7 @@ function defaultAnimatedDropContent(drop: FrontendDropConfig, mediaBaseUrl?: str
       inventoryImageUrl: undefined,
       revealPresentation: 'videos',
       fulfillmentPreviewMode: 'media_map_folder',
+      fulfillmentAspectRatio: 1,
       revealVideoBaseUrl: joinDropAssetUrl(base, 'figures/small-rotating/'),
       fulfillmentMediaBaseUrl: joinDropAssetUrl(base, 'figures/clean'),
     },
@@ -332,6 +334,7 @@ function defaultStaticDropContent(): ResolvedDropContent {
       inventoryImageUrl: undefined,
       revealPresentation: 'metadata_stills',
       fulfillmentPreviewMode: 'metadata_stills',
+      fulfillmentAspectRatio: 1,
       revealVideoBaseUrl: undefined,
       fulfillmentMediaBaseUrl: undefined,
     },
@@ -391,6 +394,7 @@ function applyDropExtraContentOverride(
       inventoryImageUrl: resolveDisplayMediaUrl(override.figures?.inventoryImageUrl) ?? base.figures.inventoryImageUrl,
       revealPresentation: override.figures?.revealPresentation || base.figures.revealPresentation,
       fulfillmentPreviewMode: override.figures?.fulfillmentPreviewMode || base.figures.fulfillmentPreviewMode,
+      fulfillmentAspectRatio: asPositiveNumber(override.figures?.fulfillmentAspectRatio, base.figures.fulfillmentAspectRatio),
       revealVideoBaseUrl: resolveDisplayMediaUrl(override.figures?.revealVideoBaseUrl) ?? base.figures.revealVideoBaseUrl,
       fulfillmentMediaBaseUrl:
         resolveDisplayMediaUrl(override.figures?.fulfillmentMediaBaseUrl) ?? base.figures.fulfillmentMediaBaseUrl,
