@@ -373,6 +373,35 @@ button.fulfillment-export-menu__item:focus-visible {
   padding-top: 24px;
 }
 
+.fulfillment-order-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.fulfillment-chargeback {
+  display: inline-block;
+  border: 1px solid #b91c1c;
+  border-radius: 4px;
+  padding: 3px 6px;
+  background: #fff1f2;
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  .fulfillment-chargeback {
+    border-color: #f87171;
+    background: #450a0a;
+    color: #fda4af;
+  }
+}
+
 .status-input {
   width: 100%;
   padding-right: 44px;

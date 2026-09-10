@@ -9,7 +9,7 @@ import type {
   StripeCheckoutManualReviewSummary,
 } from './contracts.ts';
 import { normalizeFulfillmentStatus } from './fulfillmentStatus.ts';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from './fulfillmentSources.ts';
+import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE, STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from './fulfillmentSources.ts';
 import { normalizeOptionalFulfillmentTrackingCode } from './fulfillmentTracking.ts';
 import { parseShipStationPackage } from './shipstationPackage.ts';
 import { normalizeStripeCheckoutIdentity } from './checkoutIdentity.ts';
@@ -117,6 +117,7 @@ export function fulfillmentOrderFromRecord(
     canViewSensitiveAddress: boolean;
     decryptAddress: (payload: string) => string | null;
     dropId: string;
+    stripeChargeback?: boolean;
   },
 ): FulfillmentOrder | null {
   const order = record(value);
@@ -233,6 +234,9 @@ export function fulfillmentOrderFromRecord(
     deliveryId,
     owner: optionalString(order.owner) || '',
     source,
+    ...(source === STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE && options.stripeChargeback === true
+      ? { stripeChargeback: true }
+      : {}),
     status: optionalString(order.status) || 'unknown',
     createdAt: optionalMillis(order.createdAt),
     processedAt: optionalMillis(order.processedAt),

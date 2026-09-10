@@ -514,7 +514,7 @@ test('webhook enforces methods, content type, bounded bodies, and required signa
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': String(256 * 1024 + 1),
+        'Content-Length': String(4 * 1024 * 1024 + 1),
         'Stripe-Signature': 'present',
       },
       body: '{}',

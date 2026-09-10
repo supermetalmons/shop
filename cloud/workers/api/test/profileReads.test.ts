@@ -24,6 +24,7 @@ import {
   type ProfileReadPath,
 } from '../src/profileReads.ts';
 import { readBoundedResponseJson } from '../src/boundedResponse.ts';
+import { loadStripeChargebackSessionIds, recordStripeChargeback } from '../src/stripeChargebackStore.ts';
 import {
   D1CommerceRepository,
   commerceKeys,
@@ -217,6 +218,87 @@ function d1ProfileDependencies(
     overrides,
   );
 }
+
+test('fulfillment adds only matching dispute history without exposing Stripe IDs or changing orders', async () => {
+  const harness = createCommerceD1Harness();
+  await recordStripeChargeback(harness.db, {
+    livemode: true,
+    sessionId: 'cs_live_history',
+    disputeId: 'dp_history',
+    dropId: 'card_nft_2',
+    chargeId: 'ch_history',
+    paymentIntentId: 'pi_history',
+    disputeCreatedAt: Math.floor(NOW_MS / 1000) - 60,
+    recordedAtMs: NOW_MS,
+  });
+  await recordStripeChargeback(harness.db, {
+    livemode: false,
+    sessionId: 'cs_test_otherdrop',
+    disputeId: 'dp_otherdrop',
+    dropId: 'little_swag_boxes',
+    chargeId: 'ch_otherdrop',
+    paymentIntentId: 'pi_otherdrop',
+    disputeCreatedAt: Math.floor(NOW_MS / 1000) - 60,
+    recordedAtMs: NOW_MS,
+  });
+  const variations: CommerceDocumentData[] = [
+    { stripeCheckoutSessionId: 'cs_live_history' },
+    { stripeCheckoutSessionId: 'cs_live_clean' },
+    { stripeCheckoutSessionId: 'cs_live_history', source: 'onchain' },
+    { stripeCheckoutSessionId: 'cs_live_history', source: 'admin_irl_redeem' },
+    { stripeCheckoutSessionId: 'cs_live_history ' },
+    { stripeCheckoutSessionId: 'https://stripe.example/cs_live_history' },
+    {},
+    { stripeCheckoutSessionId: 'cs_test_otherdrop' },
+    { stripeCheckoutSessionId: 'cs_live_history', dropId: 'little_swag_boxes' },
+    { stripeChargeback: true },
+    { stripeCheckoutSessionId: 'cs_live_history' },
+  ];
+  variations.forEach((variation, index) => seedCommerceDocument(harness, {
+    key: commerceKeys.deliveryOrder('card_nft_2', String(index + 1)),
+    data: {
+      deliveryId: index + 1,
+      owner: OWNER,
+      source: 'stripe_offchain',
+      status: 'ready_to_ship',
+      fulfillmentStatus: 'Preparing',
+      createdAt: NOW_MS + 1000,
+      processedAt: NOW_MS + 1000,
+      stripePaymentIntentId: 'pi_should_not_leak',
+      items: [],
+      ...variation,
+    },
+    processedAt: { seconds: Math.floor(NOW_MS / 1000) + 1, nanos: 0 },
+  }));
+  const before = harness.database.prepare('SELECT * FROM commerce_documents ORDER BY document_path').all();
+  const lookups: { dropId: string; sessionIds: readonly string[] }[] = [];
+  const result = await handleProfileReadRequest(
+    tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 20 }),
+    { COMMERCE_DB: harness.db, ADDRESS_DECRYPTION_SECRET: '' },
+    FULFILLMENT_ORDERS_PATH,
+    d1ProfileDependencies(async () => { throw new Error('Unexpected provider request'); }, {
+      verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
+      loadStripeChargebackSessionIds: async (db, dropId, sessionIds) => {
+        lookups.push({ dropId, sessionIds });
+        return loadStripeChargebackSessionIds(db, dropId, sessionIds);
+      },
+    }),
+  );
+  assert.equal(result.response.status, 200);
+  const text = await result.response.text();
+  const payload = JSON.parse(text) as { orders: { deliveryId: number; stripeChargeback?: boolean; fulfillmentStatus: string }[] };
+  assert.equal(payload.orders.length, variations.length);
+  assert.deepEqual(
+    payload.orders.filter((order) => order.stripeChargeback).map((order) => order.deliveryId).sort((a, b) => a - b),
+    [1, 11],
+  );
+  assert.equal(payload.orders.every((order) => order.fulfillmentStatus === 'Preparing'), true);
+  assert.equal(lookups.length, 1);
+  assert.equal(lookups[0].dropId, 'card_nft_2');
+  assert.deepEqual([...lookups[0].sessionIds].sort(), ['cs_live_clean', 'cs_live_history', 'cs_test_otherdrop']);
+  assert.doesNotMatch(text, /stripeCheckoutSessionId|stripePaymentIntentId|cs_live_|cs_test_|pi_should_not_leak/);
+  assert.deepEqual(harness.database.prepare('SELECT * FROM commerce_documents ORDER BY document_path').all(), before);
+});
 
 test('bounded provider JSON preserves exact aborts and an earlier stream failure', async () => {
   const abortController = new AbortController();

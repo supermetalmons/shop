@@ -17,6 +17,10 @@ import {
   STRIPE_WEBHOOK_PATH,
 } from './stripeWebhook.js';
 import {
+  handleStripeChargebackBackfill,
+  STRIPE_CHARGEBACK_BACKFILL_PATH,
+} from './stripeChargebackBackfill.js';
+import {
   applyProfileCors,
   handleProfileCorsPreflight,
   handleProfileReadRequest,
@@ -235,6 +239,22 @@ async function dispatchStripeCheckout(context: WorkerRouteContext): Promise<Work
       profileAuthOutcome: result.authOutcome,
       ...(result.dropId ? { checkoutDropId: result.dropId } : {}),
       ...(result.mode ? { checkoutMode: result.mode } : {}),
+    },
+  };
+}
+
+async function dispatchStripeChargebackBackfill(context: WorkerRouteContext): Promise<WorkerRouteResult> {
+  const result = await handleStripeChargebackBackfill(context.request, context.env, {
+    defer: context.defer,
+  });
+  addMetrics(context.metrics, result);
+  return {
+    response: result.response,
+    logFields: {
+      profileAuthOutcome: result.authOutcome,
+      ...(result.mode ? { stripeChargebackMode: result.mode } : {}),
+      ...(result.write === undefined ? {} : { stripeChargebackWrite: result.write }),
+      ...(result.failures === undefined ? {} : { stripeChargebackFailures: result.failures }),
     },
   };
 }
@@ -536,6 +556,11 @@ const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
       unexpectedError: 'stripe-webhook',
     }),
     dispatchStripeWebhook,
+  ),
+  exactRoute(
+    STRIPE_CHARGEBACK_BACKFILL_PATH,
+    profilePolicy({ commerceMutation: true, staff: 'required' }),
+    dispatchStripeChargebackBackfill,
   ),
   exactRoute(
     IRL_CLAIM_PREPARE_PATH,

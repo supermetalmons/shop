@@ -382,7 +382,10 @@ to prepare inventory, publish the compatible Worker, activate, and resume.
 New allocations require initialized inventory in `rows` mode. Existing figure
 ownership and box assignment documents stay authoritative. New drops require
 explicit initialization, and old allocators cannot be resumed after activation.
-Append `0011_<description>.sql` for the next change.
+Migration `0011_stripe_order_disputes.sql` adds independent, additive Stripe
+chargeback history. It changes no commerce documents or processing timestamps
+and requires no Commerce pause. Apply it before the chargeback-capable Worker.
+Append `0012_<description>.sql` for the next change.
 The Worker preserves the existing commerce API and transaction behavior through
 the D1 document-store adapter.
 
@@ -473,6 +476,104 @@ replayed fulfillment jobs initialize missing outboxes.
 Inventory, pending-box, notification-subscription, and RPC browser requests are
 accepted only from `mons.shop`, `www.mons.shop`, localhost, and `127.0.0.1`.
 Candidate and version-preview frontend origins are intentionally unsupported.
+
+## Stripe chargeback labels
+
+Fulfillment displays a prominent **CHARGEBACK** label for a Stripe order with
+any recorded dispute or inquiry. This records history permanently, including
+won, lost, prevented, and otherwise resolved disputes. It does not change
+fulfillment, shipping, claims, notifications, sorting, filtering, or available
+order actions. Refunds and standalone fraud warnings do not create this label.
+History lives separately in Commerce D1's `stripe_order_disputes` table, linked
+by Stripe mode, Checkout Session, and exact stored drop identity. Duplicate
+webhooks and repeated backfills do not duplicate records.
+
+Deploy with the standard checked commands, which apply the additive Commerce
+migration before publishing the API:
+
+```bash
+npm run deploy:api
+npm run deploy
+```
+
+Use existing Wrangler authentication (or the configured `CLOUDFLARE_API_TOKEN`)
+with `--cloudflare`. This connects to the API Worker's private
+`StripeChargebackMaintenance` service entrypoint in the existing Cloudflare
+account. Stripe credentials remain inside that deployed Worker. No staff-browser
+login, local Stripe key, or additional shared secret is required. The operator
+configuration pins the account, Worker, and named service; it does not publish an
+operator Worker or add a public HTTP route.
+
+Inspect, then enable dispute events on the existing active live and test Stripe
+webhook destinations:
+
+```bash
+npm run backfill:stripe-chargebacks -- --cloudflare --configure-webhooks
+npm run backfill:stripe-chargebacks -- --cloudflare --configure-webhooks --write
+```
+
+The inspection is a dry run and reports missing event counts. The write command
+preserves all enabled events, signing secrets, URLs, and endpoint status, adds
+only these events, and verifies the result:
+
+- `charge.dispute.created`
+- `charge.dispute.updated`
+- `charge.dispute.closed`
+- `charge.dispute.funds_withdrawn`
+- `charge.dispute.funds_reinstated`
+
+Setup rereads each endpoint before merging subscriptions. Avoid concurrent
+Dashboard/API edits during setup: Stripe replaces the full event list.
+
+Backfill the full live and test dispute history after deployment:
+
+```bash
+npm run backfill:stripe-chargebacks -- --cloudflare
+npm run backfill:stripe-chargebacks -- --cloudflare --write
+```
+
+For operators who already have a fulfillment-admin staff session, omitting
+`--cloudflare` retains the authenticated HTTP transport. Supply its token only
+through `MONS_STAFF_SESSION_TOKEN`, never as a CLI argument. That transport pins
+`https://api.mons.shop/admin/stripe-chargebacks/backfill` and refuses redirects.
+Do not print or commit either kind of credential. Webhook configuration requires
+`--cloudflare`; both transports share the same backfill checkpoints and results.
+
+The first command is a dry run. Each request scans one dispute, without date,
+drop, fulfillment-status, or dispute-status filters. Both commands default to
+live and test modes; `--mode live` or `--mode test` limits an investigation to
+one mode. Each mode must finish successfully in the write run to complete the
+historical rollout. Verify the resulting labels in Fulfillment and investigate
+every reported failure. `matchedOrders` counts matched dispute-to-order records;
+multiple disputes may refer to the same order.
+
+Private local checkpoints in `.cache/stripe-chargebacks/` keep separate
+live/test and dry-run/write cursors, successful-page totals, and failure details.
+They contain no credentials. Interrupted runs resume their current page; HTTP
+429, 408, 5xx, and network failures retry the identical request up to five times,
+with a capped `Retry-After` delay. Pages containing only temporary Stripe,
+storage, or order-persistence failures use the same retry budget. RPC failures
+expose only recognized error codes. Authentication errors, permanent dispute
+failures, and malformed responses stop immediately. Cloudflare RPC also stops
+immediately for configuration and identity errors; exhausted temporary failures
+exit nonzero. Fix the cause and rerun
+the same command. Failed pages are not skipped. Their successful inserts remain
+idempotent and may count as `existing` when that page is retried; progress totals
+include only pages that fully succeeded.
+
+Completed mode checkpoints start a fresh full scan on the next invocation.
+`--restart` explicitly starts over from the beginning, including for an
+interrupted run. A fresh write scan is safe and picks up newer disputes that
+arrived ahead of an interrupted cursor. After recovering an interrupted rollout,
+run a fresh complete scan in both modes before declaring the backfill finished.
+
+The admin-only API accepts `{ mode: "live" | "test", cursor?: string,
+write?: boolean }`; `write` defaults to false. Its successful response contains
+`ok`, `mode`, `write`, `nextCursor`, `scanned`, `matchedOrders`, `inserted`,
+`existing`, `unrelated`, and `failures` (`disputeId` and `code`). A null next
+cursor means the end only when `failures` is empty. Unrelated Stripe payments
+are counted without adding labels; an unresolved app order is a failure that
+must be investigated.
 
 ## Operations
 

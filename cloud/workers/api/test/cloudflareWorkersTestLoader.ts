@@ -6,7 +6,7 @@ export async function loadCloudflareWorkersModule<T>(load: () => Promise<T>): Pr
       if (specifier === 'cloudflare:workers') {
         return {
           shortCircuit: true,
-          url: 'data:text/javascript,export class WorkflowEntrypoint { constructor(ctx, env) { this.ctx = ctx; this.env = env; } }',
+          url: 'data:text/javascript,export class WorkerEntrypoint { constructor(ctx, env) { this.ctx = ctx; this.env = env; } } export class WorkflowEntrypoint extends WorkerEntrypoint {}',
         };
       }
       return nextResolve(specifier, context);

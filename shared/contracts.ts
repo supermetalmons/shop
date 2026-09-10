@@ -288,6 +288,7 @@ export type FulfillmentOrder = {
   deliveryId: number;
   owner: string;
   source?: string;
+  stripeChargeback?: boolean;
   status: string;
   createdAt?: number;
   processedAt?: number;

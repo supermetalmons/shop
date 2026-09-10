@@ -64,6 +64,7 @@
     "check:pack-status-d1": "node --import tsx scripts/ops/checkPackStatusD1.ts",
     "check:ops-d1": "node --import tsx scripts/ops/checkOpsD1.ts",
     "check:commerce-d1": "node --import tsx scripts/ops/checkCommerceD1.ts",
+    "backfill:stripe-chargebacks": "node --import tsx scripts/ops/backfillStripeChargebacks.ts",
     "check:queue-backlogs": "node --import tsx scripts/ops/checkQueueBacklogs.ts",
     "commerce-authority-control": "node --import tsx scripts/ops/commerceAuthorityControl.ts",
     "dude-inventory-control": "node --import tsx scripts/ops/dudeInventoryControl.ts",

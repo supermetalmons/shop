@@ -198,6 +198,7 @@ export function createCommerceD1Harness(
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0008_admin_irl_redeem_workflow_operation.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0009_ready_notification_due_index.sql', 'utf8'));
   database.exec(readFileSync('cloud/workers/api/commerce-migrations/0010_dude_inventory.sql', 'utf8'));
+  database.exec(readFileSync('cloud/workers/api/commerce-migrations/0011_stripe_order_disputes.sql', 'utf8'));
   resumeFreshCommerce(database);
   return {
     database,

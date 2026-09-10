@@ -8,6 +8,8 @@ import {
 import { sqlSchemaFingerprint } from '../shared/sqlSchemaFingerprint.ts';
 import { inventoryDropConfigs } from '../shared/dudeInventoryMaintenance.ts';
 import { READY_NOTIFICATION_DUE_SQL } from '../../shared/readyNotificationDueSql.ts';
+import { isCommerceDocumentSegment } from '../../shared/commerceDocumentPath.ts';
+import { isStripeChargebackSessionId, isStripeDisputeId } from '../../shared/stripeChargebacks.ts';
 
 function fail(message: string): never {
   throw new Error(message);
@@ -148,7 +150,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 10 ||
+    migrations.length !== 11 ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -158,7 +160,8 @@ export function checkCommerceD1(
     migrations[6].name !== '0007_stripe_terminal_notifications.sql' ||
     migrations[7].name !== '0008_admin_irl_redeem_workflow_operation.sql' ||
     migrations[8].name !== '0009_ready_notification_due_index.sql' ||
-    migrations[9].name !== '0010_dude_inventory.sql'
+    migrations[9].name !== '0010_dude_inventory.sql' ||
+    migrations[10].name !== '0011_stripe_order_disputes.sql'
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -178,12 +181,33 @@ export function checkCommerceD1(
     'commerce_documents',
     'commerce_inventory_drops',
     'commerce_wipe_guards',
+    'stripe_order_disputes',
   ];
   if (
     authoritativeTables.length !== requiredTables.length ||
     authoritativeTables.some((row, index) => row.name !== requiredTables[index] || row.strict !== 1)
   ) {
     fail('Commerce D1 authoritative strict table inventory is invalid.');
+  }
+  const chargebackSchema = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'table' AND name = 'stripe_order_disputes'`);
+  const chargebackIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+    WHERE type = 'index' AND name = 'stripe_order_disputes_drop_session'`);
+  if (chargebackSchema.length !== 1 ||
+    sqlSchemaFingerprint(String(chargebackSchema[0].sql)) !== '722711e091525e0b50cced4e2c85593574bc0dbcc471f9232f156db94de5754f' ||
+    chargebackIndex.length !== 1 ||
+    sqlSchemaFingerprint(String(chargebackIndex[0].sql)) !== '6f82bc70a76c4d1d960e01da07a6a9df42c067965134d4cd68a5abf0d4b3600e') {
+    fail('Stripe chargeback history schema is invalid.');
+  }
+  for (const row of queryRemoteCommerceD1('SELECT * FROM stripe_order_disputes')) {
+    if ((row.livemode !== 0 && row.livemode !== 1) || !isStripeChargebackSessionId(row.session_id) ||
+      row.session_id.startsWith('cs_live_') !== (row.livemode === 1) || !isStripeDisputeId(row.dispute_id) ||
+      !isCommerceDocumentSegment(row.drop_id) || typeof row.charge_id !== 'string' ||
+      row.charge_id.length > 256 || !/^(?:ch|py)_[A-Za-z0-9_]+$/.test(row.charge_id) ||
+      typeof row.payment_intent_id !== 'string' || row.payment_intent_id.length > 256 ||
+      !/^pi_[A-Za-z0-9_]+$/.test(row.payment_intent_id)) fail('Stripe chargeback history identity is invalid.');
+    safeInteger(row.dispute_created_at, 'Stripe dispute creation time');
+    safeInteger(row.recorded_at_ms, 'Stripe chargeback recording time');
   }
   const authorityRows = queryRemoteCommerceD1('SELECT * FROM commerce_authority_control');
   if (authorityRows.length !== 1) fail('Commerce D1 authority singleton is invalid.');

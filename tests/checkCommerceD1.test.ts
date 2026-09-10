@@ -19,6 +19,7 @@ const migrationNames = [
   '0008_admin_irl_redeem_workflow_operation.sql',
   '0009_ready_notification_due_index.sql',
   '0010_dude_inventory.sql',
+  '0011_stripe_order_disputes.sql',
 ] as const;
 
 function currentDatabase(seedDocuments = true): DatabaseSync {
@@ -180,6 +181,30 @@ test('Commerce D1 checker accepts the current in-memory schema', () => {
         stripe_checkout: 256,
       },
     });
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker validates chargeback history independently of commerce documents', () => {
+  const database = currentDatabase(false);
+  try {
+    database.prepare(`INSERT INTO stripe_order_disputes VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(1, 'cs_live_history', 'du_history', 'retired_drop', 'ch_history', 'pi_history', 1, 2);
+    assert.doesNotThrow(() => checkCommerceD1(localQuery(database)));
+    database.exec('DROP INDEX stripe_order_disputes_drop_session');
+    assert.throws(() => checkCommerceD1(localQuery(database)), /chargeback history schema is invalid/);
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker rejects chargeback history with mismatched Stripe mode', () => {
+  const database = currentDatabase(false);
+  try {
+    database.prepare(`INSERT INTO stripe_order_disputes VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(1, 'cs_test_history', 'du_history', 'drop', 'ch_history', 'pi_history', 1, 2);
+    assert.throws(() => checkCommerceD1(localQuery(database)), /chargeback history identity is invalid/);
   } finally {
     database.close();
   }

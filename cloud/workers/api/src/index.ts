@@ -43,6 +43,7 @@ import {
 
 export { runScheduledReconciliations } from './workerScheduled.js';
 export { AdminIrlRedeemFinalizeWorkflowV1 } from './adminIrlRedeemFinalizeWorkflow.js';
+export { StripeChargebackMaintenance } from './stripeChargebackMaintenance.js';
 export {
   processBackgroundJobBatch,
   processStripeFulfillmentMessage,

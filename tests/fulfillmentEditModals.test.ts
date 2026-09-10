@@ -70,8 +70,9 @@ test('status saves sanitized tracking once and merges the normalized response in
   const request = deferred<StatusResponse>();
   const update = t.mock.fn(() => request.promise);
   const onClose = t.mock.fn();
-  let current = order();
+  let current: FulfillmentOrder = { ...order(), stripeChargeback: true };
   const props = statusProps({
+    order: current,
     api: { updateFulfillmentStatus: update },
     onClose,
     onOrderUpdated: (key, apply) => {
@@ -89,6 +90,7 @@ test('status saves sanitized tracking once and merges the normalized response in
   assert.equal((save as HTMLButtonElement).disabled, true);
   await act(async () => request.resolve({ deliveryId: 42, fulfillmentStatus: 'Shipped', fulfillmentTrackingCode: '  https://tracking.example/canonical  ' }));
   assert.equal(current.fulfillmentStatus, 'Shipped');
+  assert.equal(current.stripeChargeback, true);
   assert.equal(current.fulfillmentTrackingCode, 'https://tracking.example/canonical');
   assert.equal(onClose.mock.callCount(), 1);
 });

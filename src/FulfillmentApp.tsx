@@ -32,6 +32,7 @@ import {
 import { isDirectDeliveryItemsPerBox } from '../shared/shipping.ts';
 import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
 import { FulfillmentStatusModal } from './fulfillment/FulfillmentStatusModal';
+import { FulfillmentOrderTitle } from './fulfillment/FulfillmentOrderTitle';
 import { FulfillmentAddressModal } from './fulfillment/FulfillmentAddressModal';
 import { FulfillmentShipStationModal } from './fulfillment/FulfillmentShipStationModal';
 import { useFulfillmentOrders } from './fulfillment/useFulfillmentOrders';
@@ -850,7 +851,7 @@ export default function FulfillmentApp({
       <div key={orderKey} className="fulfillment-order-section">
         <div className="card__head">
           <div>
-            <div className="card__title">Order {order.deliveryId}</div>
+            <FulfillmentOrderTitle order={order} />
             <div className="muted fulfillment-order-date small">{formatOrderDate(order.processedAt || order.createdAt)}</div>
             {showOrderEmailLine ? (
               <div className="fulfillment-order-email-line">

@@ -1,0 +1,14 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "mons-shop-chargeback-operator",
+  "account_id": "e25f90fc073ea309b54b8b5144bf28e0",
+  "compatibility_date": "2026-08-08",
+  "services": [
+    {
+      "binding": "CHARGEBACKS",
+      "service": "mons-shop-api",
+      "entrypoint": "StripeChargebackMaintenance",
+      "remote": true
+    }
+  ]
+}

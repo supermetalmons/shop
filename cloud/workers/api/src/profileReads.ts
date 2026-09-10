@@ -38,6 +38,9 @@ import {
 import { parseCanonicalPositiveInteger } from '../../../../shared/positiveInteger.js';
 import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
 import { stripeCheckoutAnonymousOwnerId } from '../../../../shared/stripeCheckoutSession.js';
+import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
+import { isStripeChargebackSessionId } from '../../../../shared/stripeChargebacks.js';
+import { loadStripeChargebackSessionIds } from './stripeChargebackStore.js';
 import {
   RequestIdentityError,
   isStaffOnlyApiPath,
@@ -224,6 +227,7 @@ type ProfileReadDependencies = {
     db: D1Database,
   ) => Pick<D1CommerceRepository, 'query' | 'queryDeliveryOrderOwners'>;
   loadProfileEmail: typeof loadProfileEmail;
+  loadStripeChargebackSessionIds: typeof loadStripeChargebackSessionIds;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
   resolveD1AuthWalletBinding: (
@@ -247,6 +251,7 @@ type ProfileReadEnv = Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env,
 const defaultDependencies: ProfileReadDependencies = {
   createCommerceRepository: (db) => new D1CommerceRepository(db),
   loadProfileEmail,
+  loadStripeChargebackSessionIds,
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
   resolveD1AuthWalletBinding: (db, uid, signal) => {
@@ -581,12 +586,23 @@ function timestampCursor(document: CommerceDocumentRecord): FulfillmentOrdersCur
     : null;
 }
 
+function fulfillmentStripeSessionId(document: CommerceDocumentRecord, dropId: string): string | null {
+  if (
+    document.key.kind !== 'delivery_order' || document.key.dropId !== dropId ||
+    document.data.source !== STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE ||
+    (document.data.dropId !== undefined && document.data.dropId !== dropId)
+  ) return null;
+  const sessionId = document.data.stripeCheckoutSessionId;
+  return isStripeChargebackSessionId(sessionId) ? sessionId : null;
+}
+
 function fulfillmentOrdersFromDocuments(args: {
   addressSecret: string;
   canViewSensitiveAddress: boolean;
   documents: readonly CommerceDocumentRecord[];
   dropId: string;
   limit: number;
+  chargebackSessionIds: ReadonlySet<string>;
 }): { orders: FulfillmentOrder[]; nextCursor: FulfillmentOrdersCursor | null } {
   const hasMore = args.documents.length > args.limit;
   const page = hasMore ? args.documents.slice(0, args.limit) : args.documents;
@@ -594,10 +610,12 @@ function fulfillmentOrdersFromDocuments(args: {
   const orders = page.flatMap((document) => {
     const parsed = fulfillmentDocumentIdentity(document, args.dropId);
     if (!parsed) return [];
+    const sessionId = fulfillmentStripeSessionId(document, args.dropId);
     const order = fulfillmentOrderFromRecord(parsed.id, parsed.fields, {
       canViewSensitiveAddress: args.canViewSensitiveAddress,
       decryptAddress,
       dropId: args.dropId,
+      stripeChargeback: sessionId !== null && args.chargebackSessionIds.has(sessionId),
     });
     return order ? [order] : [];
   });
@@ -611,6 +629,9 @@ async function loadFulfillmentOrders(args: {
   dropId: string;
   limit: number;
   repository: Pick<D1CommerceRepository, 'query'>;
+  db: D1Database;
+  loadStripeChargebackSessionIds: typeof loadStripeChargebackSessionIds;
+  signal: AbortSignal;
 }): Promise<{ orders: FulfillmentOrder[]; nextCursor: FulfillmentOrdersCursor | null }> {
   const documents = await args.repository.query({
     dropId: args.dropId,
@@ -628,7 +649,15 @@ async function loadFulfillmentOrders(args: {
       ],
     } : {}),
   });
-  return fulfillmentOrdersFromDocuments({ ...args, documents });
+  args.signal.throwIfAborted();
+  const sessionIds = [...new Set(documents.slice(0, args.limit).flatMap((document) => {
+    const sessionId = fulfillmentStripeSessionId(document, args.dropId);
+    return sessionId ? [sessionId] : [];
+  }))];
+  const chargebackSessionIds = sessionIds.length
+    ? await args.loadStripeChargebackSessionIds(args.db, args.dropId, sessionIds)
+    : new Set<string>();
+  return fulfillmentOrdersFromDocuments({ ...args, documents, chargebackSessionIds });
 }
 
 function stripeKeys(env: Partial<Pick<Env, 'STRIPE_SECRET_KEY' | 'STRIPE_RESTRICTED_KEY' | 'STRIPE_SECRET_KEY_LIVE' | 'STRIPE_RESTRICTED_KEY_LIVE'>>, mode: 'test' | 'live'): string[] {
@@ -880,6 +909,8 @@ export async function handleProfileReadRequest(
           return {
             response: jsonResponse(await boundedRead(loadFulfillmentOrders({
               ...common,
+              db: env.COMMERCE_DB,
+              loadStripeChargebackSessionIds: dependencies.loadStripeChargebackSessionIds,
               addressSecret,
               canViewSensitiveAddress: access.canViewSensitiveAddress,
               cursor: requestBody.cursor && typeof requestBody.cursor === 'object'

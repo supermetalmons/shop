@@ -12,6 +12,7 @@ import {
   type CommerceDocumentData,
   type CommerceDocumentKey,
 } from '../src/commerceRepository.ts';
+import { loadStripeChargebackSessionIds, recordStripeChargeback } from '../src/stripeChargebackStore.ts';
 
 function insertDocument(
   db: D1Database,
@@ -162,6 +163,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0008_admin_irl_redeem_workflow_operation.sql',
       '0009_ready_notification_due_index.sql',
       '0010_dude_inventory.sql',
+      '0011_stripe_order_disputes.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -273,6 +275,32 @@ test('commerce repository reads and transaction guards run through the real D1 r
           updated_at_ms = updated_at_ms + 1
         WHERE singleton = 1`),
     ]);
+    const commerceBeforeChargeback = (await env.COMMERCE_DB.prepare(`SELECT document_path,
+      document_json, version, update_time FROM commerce_documents ORDER BY document_path`).all()).results;
+    const authorityBeforeChargeback = await env.COMMERCE_DB.prepare(
+      'SELECT * FROM commerce_authority_control WHERE singleton = 1',
+    ).first();
+    const chargeback = {
+      livemode: true,
+      sessionId: 'cs_live_runtime',
+      disputeId: 'du_runtime',
+      dropId: 'runtime',
+      chargeId: 'ch_runtime',
+      paymentIntentId: 'pi_runtime',
+      disputeCreatedAt: 100,
+      recordedAtMs: 200,
+    };
+    assert.equal(await recordStripeChargeback(env.COMMERCE_DB, chargeback, false), 'unwritten');
+    assert.equal(await recordStripeChargeback(env.COMMERCE_DB, chargeback), 'inserted');
+    assert.equal(await recordStripeChargeback(env.COMMERCE_DB, { ...chargeback, recordedAtMs: 300 }), 'existing');
+    assert.deepEqual(await loadStripeChargebackSessionIds(env.COMMERCE_DB, 'runtime', ['cs_live_runtime']),
+      new Set(['cs_live_runtime']));
+    assert.deepEqual(await loadStripeChargebackSessionIds(env.COMMERCE_DB, 'other', ['cs_live_runtime']), new Set());
+    assert.equal((await env.COMMERCE_DB.prepare('SELECT recorded_at_ms FROM stripe_order_disputes').first())?.recorded_at_ms, 200);
+    assert.deepEqual((await env.COMMERCE_DB.prepare(`SELECT document_path,
+      document_json, version, update_time FROM commerce_documents ORDER BY document_path`).all()).results, commerceBeforeChargeback);
+    assert.deepEqual(await env.COMMERCE_DB.prepare('SELECT * FROM commerce_authority_control WHERE singleton = 1').first(),
+      authorityBeforeChargeback);
     const repository = new D1CommerceRepository(env.COMMERCE_DB);
     assert.deepEqual((await repository.get(claimKey))?.data, { status: 'unused' });
     assert.equal(await repository.get(commerceKeys.claimCode('MISSING')), null);

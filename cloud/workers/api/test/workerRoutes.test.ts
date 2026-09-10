@@ -21,6 +21,7 @@ const EXPECTED_EXACT_ROUTES = [
   ['/internal/notifications/enqueue', 'none', false, 'optional', false, 'internal', '/internal/notifications/enqueue'],
   ['/checkout/session', 'profile', true, 'optional', true, 'profile', '/checkout/session'],
   ['/webhooks/stripe', 'none', false, 'optional', true, 'stripe-webhook', '/webhooks/stripe'],
+  ['/admin/stripe-chargebacks/backfill', 'profile', true, 'required', true, 'profile', '/admin/stripe-chargebacks/backfill'],
   ['/claims/irl/prepare', 'profile', true, 'optional', true, 'profile', '/claims/irl/prepare'],
   ['/receipts/stripe/claim', 'profile', true, 'optional', true, 'profile', '/receipts/stripe/claim'],
   ['/receipts/transfer/prepare', 'profile', true, 'optional', true, 'profile', '/receipts/transfer/prepare'],

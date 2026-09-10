@@ -1,6 +1,16 @@
 import Stripe from 'stripe';
 import { getApiDrop } from './dropConfig.js';
 import {
+  isStripeDisputeEventType,
+  normalizeStripeDispute,
+  type StripeDispute,
+} from '../../../../shared/stripeChargebacks.js';
+import {
+  processStripeDispute,
+  StripeChargebackError,
+  type StripeChargebackEnv,
+} from './stripeChargebacks.js';
+import {
   STRIPE_WEBHOOK_PATH,
   resolveStripeWebhookAction,
   stripeWebhookTransition,
@@ -42,14 +52,23 @@ import { runCommerceTransaction } from './commerceTransactions.js';
 
 export { STRIPE_WEBHOOK_PATH };
 
-const STRIPE_WEBHOOK_MAX_BODY_BYTES = 256 * 1024;
+const STRIPE_WEBHOOK_MAX_BODY_BYTES = 4 * 1024 * 1024;
 const STRIPE_WEBHOOK_TIMEOUT_MS = 15_000;
 
 type StripeWebhookEnv = Pick<Env,
   | 'STRIPE_FULFILLMENT_QUEUE'
   | 'STRIPE_WEBHOOK_SECRET'
   | 'STRIPE_WEBHOOK_SECRET_DEVNET'
-> & Pick<Env, 'COMMERCE_DB'>;
+> & StripeChargebackEnv;
+
+type StripeDisputeWebhookEvent = {
+  id: string;
+  type: string;
+  livemode: boolean;
+  dispute: StripeDispute;
+};
+
+type NormalizedStripeWebhookEvent = StripeWebhookEvent | StripeDisputeWebhookEvent;
 
 type StripeWebhookMetrics = {
   upstreamCalls: number;
@@ -72,12 +91,13 @@ type StripeWebhookDependencies = {
   log: (entry: Record<string, unknown>) => void;
   nowMs: () => number;
   providerFetch: ProfileProviderFetch;
+  processDispute: typeof processStripeDispute;
   timeoutMs: number;
   verifyEvent: (
     payload: Uint8Array,
     signature: string,
     secret: string,
-  ) => Promise<StripeWebhookEvent>;
+  ) => Promise<NormalizedStripeWebhookEvent>;
 };
 
 type WebhookSecret = {
@@ -111,6 +131,7 @@ const defaultDependencies: StripeWebhookDependencies = {
   log: (entry) => console.log(entry),
   nowMs: () => Date.now(),
   providerFetch: (input, init) => fetch(input, init),
+  processDispute: processStripeDispute,
   timeoutMs: STRIPE_WEBHOOK_TIMEOUT_MS,
   verifyEvent: async (payload, signature, secret) => {
     const event = await Stripe.webhooks.constructEventAsync(
@@ -137,11 +158,18 @@ function normalizeMetadata(value: unknown): Record<string, string> {
   return metadata;
 }
 
-function normalizeStripeEvent(value: unknown): StripeWebhookEvent {
+function normalizeStripeEvent(value: unknown): NormalizedStripeWebhookEvent {
   if (!isRecord(value) || typeof value.id !== 'string' || typeof value.type !== 'string' || !isRecord(value.data)) {
     throw new StripeWebhookRequestError(400, 'invalid_event');
   }
   const eventType = value.type.trim();
+  if (isStripeDisputeEventType(eventType)) {
+    const dispute = normalizeStripeDispute(value.data.object);
+    if (!dispute || typeof value.livemode !== 'boolean' || value.livemode !== dispute.livemode) {
+      throw new StripeWebhookRequestError(400, 'invalid_dispute_event');
+    }
+    return { id: value.id, type: eventType, livemode: value.livemode, dispute };
+  }
   if (!isStripeCheckoutFulfillmentEventType(eventType)) {
     return {
       id: value.id,
@@ -223,7 +251,7 @@ async function verifyWebhookEvent(
   signature: string,
   secrets: readonly WebhookSecret[],
   verifyEvent: StripeWebhookDependencies['verifyEvent'],
-): Promise<{ event: StripeWebhookEvent; verifiedScope: StripeWebhookSecretScope }> {
+): Promise<{ event: NormalizedStripeWebhookEvent; verifiedScope: StripeWebhookSecretScope }> {
   for (const secret of secrets) {
     try {
       return {
@@ -342,6 +370,38 @@ export async function handleStripeWebhookRequest(
         verifyWebhookEvent(payload, signature, secrets, dependencies.verifyEvent),
         deadline.signal,
       );
+      if ('dispute' in verified.event) {
+        const event = verified.event;
+        logContext = { outcome: 'dispute_received', eventId: event.id, eventType: event.type };
+        if (
+          event.livemode !== event.dispute.livemode ||
+          event.livemode !== (verified.verifiedScope === 'mainnet')
+        ) {
+          throw new StripeWebhookRequestError(400, 'secret_scope_mismatch');
+        }
+        const disputeResult = await runCriticalRequestOperation(() => dependencies.processDispute(event.dispute, env, {
+          signal: deadline.signal,
+          nowMs: dependencies.nowMs,
+          providerFetch: async (input, init) => {
+            const providerStartedAt = performance.now();
+            metrics.upstreamCalls += 1;
+            try {
+              return await dependencies.providerFetch(input, init);
+            } finally {
+              metrics.providerDurationMs += Math.max(0, performance.now() - providerStartedAt);
+            }
+          },
+        }), { deadline, defer: dependencies.defer, ignoreDeferredErrors: true });
+        const outcome = disputeResult.unrelated ? 'unrelated_dispute' : 'chargeback_recorded';
+        logContext = { ...logContext, outcome };
+        responseStatus = 200;
+        return {
+          response: jsonResponse({ received: true, ...disputeResult }, 200),
+          metrics,
+          ...logContext,
+          outcome,
+        };
+      }
       const action = resolveStripeWebhookAction(verified.event, dependencies.getDrop);
       logContext = {
         outcome: action.kind,
@@ -451,7 +511,9 @@ export async function handleStripeWebhookRequest(
         ? 'write_conflict'
         : error instanceof ProfileReadError && error.code === 'deadline-exceeded'
           ? 'deadline_exceeded'
-          : 'processing_error'
+          : error instanceof StripeChargebackError
+            ? error.code
+            : 'processing_error'
     );
     logContext = { ...logContext, outcome };
     responseStatus = status;
