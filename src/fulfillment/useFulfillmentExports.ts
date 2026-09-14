@@ -38,7 +38,7 @@ const defaultFulfillmentExportDependencies = {
   downloadJsonFile,
 };
 
-type FulfillmentSecretCodeDownloadTarget =
+export type FulfillmentSecretCodeDownloadTarget =
   | { kind: 'box'; index: number }
   | { kind: 'card-claim'; index: number };
 

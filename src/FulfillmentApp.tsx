@@ -4,35 +4,24 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
-  type ReactNode,
   type RefObject,
 } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { WalletReadyState } from '@solana/wallet-adapter-base';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { FiAlertTriangle, FiDownload, FiEdit2, FiMoreHorizontal } from 'react-icons/fi';
+import { FiAlertTriangle, FiDownload, FiMoreHorizontal } from 'react-icons/fi';
 import type { FulfillmentOrder } from './types';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
-import { useFigureImage } from './hooks/useFigureImage';
 import { getMediaIdForFigureId } from './lib/figureMediaMap';
 import {
   loadFigureMetadataBatch,
   type FigureMetadataRecord,
 } from './lib/figureMetadata';
-import { normalizeBoxDisplayImage, resolveBoxMediaIdForDrop, resolveDropContent } from './lib/dropContent';
-import { dropAssetLabel } from './lib/dropLabels';
-import {
-  fulfillmentBoxSecretCode,
-  fulfillmentCardClaimSecretCode,
-  fulfillmentLooseFigureIdsExcludingCardClaims,
-  fulfillmentOrderLooseFigureIds,
-  isUsedReceiptClaimStatus,
-} from './lib/fulfillmentCodes';
-import { isDirectDeliveryItemsPerBox } from '../shared/shipping.ts';
-import { CARD_NFT_2_PACK_IMAGES } from './lib/cardNft2Packs';
+import { resolveDropContent } from './lib/dropContent';
+import { fulfillmentOrderLooseFigureIds } from './lib/fulfillmentCodes';
+import { FulfillmentOrderCard } from './fulfillment/FulfillmentOrderCard';
+import { FulfillmentFigureTiles } from './fulfillment/FulfillmentMedia';
 import { FulfillmentStatusModal } from './fulfillment/FulfillmentStatusModal';
-import { FulfillmentOrderTitle } from './fulfillment/FulfillmentOrderTitle';
 import { FulfillmentAddressModal } from './fulfillment/FulfillmentAddressModal';
 import { FulfillmentShipStationModal } from './fulfillment/FulfillmentShipStationModal';
 import { useFulfillmentOrders } from './fulfillment/useFulfillmentOrders';
@@ -41,27 +30,13 @@ import { ShopHeader } from './components/ShopHeader';
 import { BodyPortal } from './components/BackgroundBlurLayer';
 import { formatFulfillmentAddressText } from './lib/fulfillmentExports';
 import {
-  fulfillmentBoxContentsLabel,
-  resolveFulfillmentDirectDeliveryBoxLabel,
-  resolveFulfillmentFigurePreview,
-  type FulfillmentFigureLabelOverrideArgs,
-} from './lib/fulfillmentLabels';
-import { normalizeFulfillmentStatus } from './lib/fulfillmentStatus';
-import {
   DEFAULT_FULFILLMENT_ORDER_VISIBILITY_FILTER,
   FULFILLMENT_ORDER_VISIBILITY_OPTIONS,
-  canEditFulfillmentOrderAddress,
   filterFulfillmentOrdersByVisibility,
   isRedeemedForIrlFulfillmentOrder,
   type FulfillmentOrderVisibilityFilter,
 } from './lib/fulfillmentOrderVisibility';
 import {
-  normalizeOptionalFulfillmentTrackingCode,
-  resolveFulfillmentTrackingHref,
-  shouldDisplayFulfillmentTrackingCode,
-} from '../shared/fulfillmentTracking.ts';
-import {
-  isDropFamily,
   listFrontendDrops,
   normalizeDropId,
   type FigureMediaConfig,
@@ -84,9 +59,6 @@ import {
 
 const LITTLE_SWAG_BOXES_DROP_ID = 'little_swag_boxes';
 const FIGURE_METADATA_RETRY_MS = 3000;
-const BOX_CONTENTS_FIGURE_WIDTH = 130;
-const BOX_CONTENTS_FIGURE_GAP = 12;
-const BOX_CONTENTS_HORIZONTAL_CHROME = 54;
 
 function listOrderFigureIds(order: FulfillmentOrder): number[] {
   return [...fulfillmentOrderLooseFigureIds(order), ...order.boxes.flatMap((box) => box.dudeIds)];
@@ -99,12 +71,6 @@ type DuplicateFigureSummary = {
   count: number;
   sortValue: number;
 };
-
-function getBoxContentsStyle(itemCount: number): CSSProperties {
-  const columns = Math.max(1, Math.min(itemCount, 3));
-  const contentWidth = columns * BOX_CONTENTS_FIGURE_WIDTH + Math.max(0, columns - 1) * BOX_CONTENTS_FIGURE_GAP;
-  return { width: `min(100%, ${contentWidth + BOX_CONTENTS_HORIZONTAL_CHROME}px)` };
-}
 
 function useDismissibleMenu<T extends HTMLElement>(
   open: boolean,
@@ -173,230 +139,6 @@ function summarizeDuplicateFigures(args: {
   return Array.from(grouped.values())
     .filter((entry) => entry.count >= minimumCount)
     .sort((a, b) => b.count - a.count || a.sortValue - b.sortValue || a.figureId - b.figureId);
-}
-
-function FulfillmentImage(props: {
-  src?: string | null;
-  alt: string;
-  aspectRatio: number;
-  onError?: () => void;
-}) {
-  return (
-    <span className="fulfillment-image-frame" style={{ aspectRatio: props.aspectRatio }}>
-      {props.src ? (
-        <img
-          src={props.src}
-          alt={props.alt}
-          loading="lazy"
-          draggable={false}
-          className="figure-image"
-          onError={props.onError}
-        />
-      ) : (
-        <span className="figure-image figure-image--placeholder" aria-hidden="true" />
-      )}
-    </span>
-  );
-}
-
-function FigureTileImage(props: {
-  dropId: string;
-  figureId: number;
-  alt: string;
-  aspectRatio: number;
-  primarySrc?: string;
-  fallbackSrc?: string;
-  onMetadataResolved?: (record: FigureMetadataRecord) => void;
-}) {
-  const { activeSrc, handleError } = useFigureImage(props);
-
-  return <FulfillmentImage src={activeSrc} alt={props.alt} aspectRatio={props.aspectRatio} onError={handleError} />;
-}
-
-function renderFigureTiles(args: {
-  drop?: FrontendDeploymentConfig | null;
-  dropId: string;
-  figureIds: number[];
-  keyPrefix: string;
-  figureNamePrefix?: string;
-  previewMode: 'media_map_folder' | 'metadata_stills';
-  figureMedia?: FigureMediaConfig;
-  figureMediaBase?: string;
-  figureMetadataByKey: Record<string, FigureMetadataRecord>;
-  onMetadataResolved?: (record: FigureMetadataRecord) => void;
-  labelOverride?: (args: FulfillmentFigureLabelOverrideArgs) => string;
-  renderFooter?: (args: { figureId: number; index: number }) => ReactNode;
-}) {
-  const {
-    dropId,
-    figureIds,
-    keyPrefix,
-    drop,
-    figureNamePrefix,
-    previewMode,
-    figureMedia,
-    figureMediaBase,
-    figureMetadataByKey,
-    onMetadataResolved,
-    labelOverride,
-    renderFooter,
-  } = args;
-  const aspectRatio = resolveDropContent(drop || dropId).figures.fulfillmentAspectRatio;
-  return (
-    <div className="figure-grid">
-      {figureIds.map((figureId, index) => {
-        const preview = resolveFulfillmentFigurePreview({
-          dropId,
-          drop: drop || { dropId, figureNamePrefix, figureMedia },
-          figureId,
-          index,
-          previewMode,
-          figureMediaBase,
-          figureMetadataByKey,
-          labelOverride,
-        });
-        return (
-          <div key={`${keyPrefix}:${figureId}:${index}`} className="figure-tile">
-            <FigureTileImage
-              dropId={dropId}
-              figureId={figureId}
-              primarySrc={preview.primarySrc}
-              fallbackSrc={preview.fallbackSrc}
-              alt={preview.alt}
-              aspectRatio={aspectRatio}
-              onMetadataResolved={onMetadataResolved}
-            />
-            <span className="muted small">{preview.label}</span>
-            {renderFooter?.({ figureId, index })}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function SecretCodeDownloadButton(props: {
-  secretCode: string;
-  disabled?: boolean;
-  onClick?: () => void;
-}) {
-  if (!props.onClick) return null;
-
-  return (
-    <button
-      type="button"
-      className="fulfillment-secret-code-download"
-      aria-label={`Download PNG for secret code ${props.secretCode}`}
-      title="Download PNG"
-      disabled={props.disabled}
-      onClick={(evt) => {
-        evt.stopPropagation();
-        props.onClick?.();
-      }}
-    >
-      <FiDownload aria-hidden="true" />
-    </button>
-  );
-}
-
-function fulfillmentSecretCodeClassName(receiptClaimStatus: string | undefined): string {
-  return isUsedReceiptClaimStatus(receiptClaimStatus)
-    ? 'fulfillment-secret-code fulfillment-secret-code--used'
-    : 'fulfillment-secret-code';
-}
-
-function SecretCodeDisplay(props: {
-  secretCode: string;
-  receiptClaimStatus?: string;
-  downloadDisabled?: boolean;
-  onDownload?: () => void;
-  className?: string;
-}) {
-  const className = props.className
-    ? `fulfillment-secret-code-group ${props.className}`
-    : 'fulfillment-secret-code-group';
-
-  return (
-    <span className={className}>
-      <span className="fulfillment-secret-code-heading">
-        <span>Secret Code</span>
-        <SecretCodeDownloadButton
-          secretCode={props.secretCode}
-          disabled={props.downloadDisabled}
-          onClick={props.onDownload}
-        />
-      </span>
-      <span className={fulfillmentSecretCodeClassName(props.receiptClaimStatus)}>{props.secretCode}</span>
-    </span>
-  );
-}
-
-function renderBoxTiles(args: {
-  boxes: Array<{ boxId: number; boxIndex: number; secretCode: string; receiptClaimStatus?: string }>;
-  keyPrefix: string;
-  aspectRatio: number;
-  labelSource: Pick<FrontendDeploymentConfig, 'namePrefix' | 'figureNamePrefix' | 'mintSelection'>;
-  getPreviewSrc?: (boxId: number) => string | undefined;
-  secretCodeDownloadDisabled?: boolean;
-  onDownloadSecretCode?: (boxIndex: number) => void;
-}) {
-  const {
-    boxes,
-    keyPrefix,
-    aspectRatio,
-    labelSource,
-    getPreviewSrc,
-    secretCodeDownloadDisabled,
-    onDownloadSecretCode,
-  } = args;
-  return (
-    <div className="figure-grid">
-      {boxes.map(({ boxId, boxIndex, secretCode, receiptClaimStatus }, index) => {
-        const { label, sizeLabel } = resolveFulfillmentDirectDeliveryBoxLabel(labelSource, boxId);
-        const imageSrc = getPreviewSrc?.(boxId);
-        const hideSecretCodeDownload = isUsedReceiptClaimStatus(receiptClaimStatus);
-        return (
-          <div key={`${keyPrefix}:${boxId}:${index}`} className="figure-tile">
-            <FulfillmentImage src={imageSrc} alt={label} aspectRatio={aspectRatio} />
-            <div className={sizeLabel ? 'fulfillment-size-label' : 'muted small'}>{label}</div>
-            {secretCode ? (
-              <SecretCodeDisplay
-                className="muted small"
-                secretCode={secretCode}
-                receiptClaimStatus={receiptClaimStatus}
-                downloadDisabled={secretCodeDownloadDisabled}
-                onDownload={
-                  onDownloadSecretCode && !hideSecretCodeDownload ? () => onDownloadSecretCode(boxIndex) : undefined
-                }
-              />
-            ) : null}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function renderFulfillmentPackSecretImage(args: {
-  dropId: string;
-  boxId: number;
-}) {
-  const { dropId, boxId } = args;
-  const cardNft2PackMediaId = isDropFamily(dropId, 'card_nft_2') ? resolveBoxMediaIdForDrop(dropId, boxId) : null;
-  const imageSrc =
-    (cardNft2PackMediaId ? CARD_NFT_2_PACK_IMAGES[cardNft2PackMediaId - 1]?.src : undefined) ||
-    normalizeBoxDisplayImage({ dropId, boxId });
-  if (!imageSrc) return null;
-  return (
-    <img
-      src={imageSrc}
-      alt=""
-      aria-hidden="true"
-      loading="lazy"
-      draggable={false}
-      className="fulfillment-pack-secret-image"
-    />
-  );
 }
 
 type FulfillmentAppProps = {
@@ -843,255 +585,6 @@ export default function FulfillmentApp({
     </div>
   );
 
-  const renderFulfillmentOrderSection = (
-    order: FulfillmentOrder,
-    options?: { showContactInfo?: boolean; showFullAddress?: boolean },
-  ) => {
-    const orderDrop = dropById.get(order.dropId);
-    if (!orderDrop) return null;
-    const orderKey = fulfillmentOrderKey(order);
-    const orderDropContent = resolveDropContent(orderDrop);
-    const orderFigureMediaBase = orderDropContent.figures.fulfillmentMediaBaseUrl;
-    const orderIsDirectDeliveryDrop = isDirectDeliveryItemsPerBox(orderDrop.itemsPerBox);
-    const orderShowsFulfillmentPackPreview = isDropFamily(orderDrop, 'card_nft_2');
-    const cardClaims = order.cardClaims || [];
-    const looseDudes = fulfillmentLooseFigureIdsExcludingCardClaims(order);
-    const showContactInfo = options?.showContactInfo ?? true;
-    const showFullAddress = options?.showFullAddress ?? true;
-    const canEditOrderAddress = canEditFulfillmentOrderAddress(order, {
-      showFullAddress,
-      hasAddressAccess: canAdminEditFulfillmentAddress,
-    });
-    const canPrintOrderLabel =
-      !isRedeemedForIrlFulfillmentOrder(order) &&
-      (Boolean(order.shipstationShipmentId) || normalizeFulfillmentStatus(order.fulfillmentStatus) !== 'Shipped');
-    const showOrderEmailLine =
-      showContactInfo && ((order.address.full !== '***' && Boolean(order.address.email)) || canEditOrderAddress);
-    return (
-      <div key={orderKey} className="fulfillment-order-section">
-        <div className="card__head">
-          <div>
-            <FulfillmentOrderTitle order={order} />
-            <div className="muted fulfillment-order-date small">{formatOrderDate(order.processedAt || order.createdAt)}</div>
-            {showOrderEmailLine ? (
-              <div className="fulfillment-order-email-line">
-                {order.address.full !== '***' && order.address.email ? (
-                  <div className="muted small">{order.address.email}</div>
-                ) : null}
-                {canEditOrderAddress ? (
-                  <button
-                    type="button"
-                    className="fulfillment-order-address-edit"
-                    onClick={() => handleOpenAddressModal(order)}
-                    aria-label={`Edit address for order ${order.deliveryId}`}
-                    title="Edit address"
-                  >
-                    <FiEdit2 aria-hidden="true" />
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-            {showContactInfo && order.address.full !== '***' && order.address.phone ? (
-              <div className="muted small">{order.address.phone}</div>
-            ) : null}
-          </div>
-          <div className="order-update">
-            {(() => {
-              const statusText = normalizeFulfillmentStatus(order.fulfillmentStatus);
-              const trackingCode = shouldDisplayFulfillmentTrackingCode(order.fulfillmentStatus, order.fulfillmentTrackingCode)
-                ? normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode)
-                : '';
-              const trackingHref = resolveFulfillmentTrackingHref(trackingCode);
-              return statusText ? (
-                <>
-                  <div className="status-readout fulfillment-order-status-text small">{statusText}</div>
-                  {trackingCode ? (
-                    trackingHref ? (
-                      <a className="tracking-link small" href={trackingHref} target="_blank" rel="noopener noreferrer">
-                        Tracking
-                      </a>
-                    ) : (
-                      <div className="tracking-code-readout mono small">{trackingCode}</div>
-                    )
-                  ) : null}
-                </>
-              ) : (
-                <em className="muted fulfillment-order-status-text small">Not set</em>
-              );
-            })()}
-            <button
-              type="button"
-              className="link fulfillment-order-status-action small no-focus-style"
-              onClick={() => handleOpenUpdateModal(orderKey)}
-            >
-              {normalizeFulfillmentStatus(order.fulfillmentStatus) ? 'Edit status' : 'Set status'}
-            </button>
-          </div>
-        </div>
-
-        <div className="order-items">
-          {showFullAddress || canPrintOrderLabel ? (
-            <div className="address-lines">
-              {showFullAddress ? (
-                order.address.full ? (
-                  <div className="address-text">
-                    {formatFulfillmentAddressText(order.address)}
-                  </div>
-                ) : (
-                  <>
-                    <div className="muted small">Encrypted address payload</div>
-                    <div className="mono small">{order.address.encrypted || 'Unavailable'}</div>
-                  </>
-                )
-              ) : null}
-              {canPrintOrderLabel ? (
-                <div className="fulfillment-order-address-actions">
-                  <button
-                    type="button"
-                    className="link fulfillment-order-address-action small no-focus-style"
-                    onClick={() => handleOpenShipstationModal(orderKey)}
-                  >
-                    Print Label
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {order.boxes.length ? (
-            orderIsDirectDeliveryDrop ? (
-              renderBoxTiles({
-                boxes: order.boxes.map((box, boxIndex) => ({
-                  boxId: box.boxId,
-                  boxIndex,
-                  secretCode: fulfillmentBoxSecretCode(box),
-                  receiptClaimStatus: box.receiptClaimStatus,
-                })),
-                keyPrefix: `${orderKey}:box`,
-                aspectRatio: orderDropContent.box.aspectRatio,
-                labelSource: orderDrop,
-                getPreviewSrc: (boxId) => normalizeBoxDisplayImage({ dropId: orderDrop.dropId, boxId }),
-                secretCodeDownloadDisabled,
-                onDownloadSecretCode: (boxIndex) =>
-                  void downloadSecretCodePng(order, { kind: 'box', index: boxIndex }),
-              })
-            ) : (
-              <div className="box-contents-list">
-                {order.boxes.map((box, boxIndex) => {
-                  const secretCode = fulfillmentBoxSecretCode(box);
-                  const hideSecretCodeDownload = isUsedReceiptClaimStatus(box.receiptClaimStatus);
-                  const packSecretImage = orderShowsFulfillmentPackPreview
-                    ? renderFulfillmentPackSecretImage({
-                        dropId: orderDrop.dropId,
-                        boxId: box.boxId,
-                      })
-                    : null;
-                  return (
-                    <div
-                      key={`${orderKey}:${box.boxId}`}
-                      className="card subtle box-contents"
-                      style={getBoxContentsStyle(box.dudeIds.length)}
-                    >
-                      <div className="card__title">
-                        {secretCode ? (
-                          <span className="fulfillment-pack-secret">
-                            {packSecretImage}
-                            <SecretCodeDisplay
-                              secretCode={secretCode}
-                              receiptClaimStatus={box.receiptClaimStatus}
-                              downloadDisabled={secretCodeDownloadDisabled}
-                              onDownload={
-                                hideSecretCodeDownload
-                                  ? undefined
-                                  : () => void downloadSecretCodePng(order, { kind: 'box', index: boxIndex })
-                              }
-                            />
-                          </span>
-                        ) : (
-                          fulfillmentBoxContentsLabel(orderDrop, box.boxId, '')
-                        )}
-                      </div>
-                      {!secretCode ? (
-                        <div className="muted small">Secret code unavailable</div>
-                      ) : !box.dudeIds.length ? (
-                        <div className="muted small">Assigned {dropAssetLabel(orderDrop, 'figure', 2)} pending</div>
-                      ) : null}
-                      {box.dudeIds.length ? (
-                        renderFigureTiles({
-                          dropId: orderDrop.dropId,
-                          drop: orderDrop,
-                          figureIds: box.dudeIds,
-                          keyPrefix: `${orderKey}:${box.boxId}`,
-                          figureNamePrefix: orderDrop.figureNamePrefix,
-                          previewMode: orderDropContent.figures.fulfillmentPreviewMode,
-                          figureMediaBase: orderFigureMediaBase,
-                          figureMedia: orderDrop.figureMedia,
-                          figureMetadataByKey,
-                          onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
-                        })
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            )
-          ) : null}
-
-          {cardClaims.length
-            ? renderFigureTiles({
-                dropId: orderDrop.dropId,
-                drop: orderDrop,
-                figureIds: cardClaims.map((claim) => claim.figureId),
-                keyPrefix: `${orderKey}:card-claim`,
-                figureNamePrefix: orderDrop.figureNamePrefix,
-                previewMode: orderDropContent.figures.fulfillmentPreviewMode,
-                figureMediaBase: orderFigureMediaBase,
-                figureMedia: orderDrop.figureMedia,
-                figureMetadataByKey,
-                onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
-                renderFooter: ({ index }) => {
-                  const claim = cardClaims[index];
-                  const secretCode = claim ? fulfillmentCardClaimSecretCode(claim) : '';
-                  if (!claim || !secretCode) {
-                    return <span className="muted small">Secret code unavailable</span>;
-                  }
-                  const hideSecretCodeDownload = isUsedReceiptClaimStatus(claim.receiptClaimStatus);
-                  return (
-                    <SecretCodeDisplay
-                      className="muted small"
-                      secretCode={secretCode}
-                      receiptClaimStatus={claim.receiptClaimStatus}
-                      downloadDisabled={secretCodeDownloadDisabled}
-                      onDownload={
-                        hideSecretCodeDownload
-                          ? undefined
-                          : () => void downloadSecretCodePng(order, { kind: 'card-claim', index })
-                      }
-                    />
-                  );
-                },
-              })
-            : null}
-
-          {looseDudes.length
-            ? renderFigureTiles({
-                dropId: orderDrop.dropId,
-                drop: orderDrop,
-                figureIds: looseDudes,
-                keyPrefix: `${orderKey}:dude`,
-                figureNamePrefix: orderDrop.figureNamePrefix,
-                previewMode: orderDropContent.figures.fulfillmentPreviewMode,
-                figureMediaBase: orderFigureMediaBase,
-                figureMedia: orderDrop.figureMedia,
-                figureMetadataByKey,
-                onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
-              })
-            : null}
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div className="page fulfillment-page">
       <ShopHeader scrollHomeToTop />
@@ -1205,24 +698,24 @@ export default function FulfillmentApp({
                       <div className="card__title">New Duplicates</div>
                     </div>
                     <div className="order-items">
-                      {renderFigureTiles({
-                        dropId: duplicateDrop.dropId,
-                        drop: duplicateDrop,
-                        figureIds: duplicateFigures.map((entry) => entry.figureId),
-                        keyPrefix: 'duplicates',
-                        figureNamePrefix: duplicateDrop.figureNamePrefix,
-                        previewMode: duplicateDropContent.figures.fulfillmentPreviewMode,
-                        figureMediaBase: duplicateFigureMediaBase,
-                        figureMedia: duplicateDrop.figureMedia,
-                        figureMetadataByKey,
-                        onMetadataResolved: (record) => mergeLoadedFigureMetadata([record]),
-                        labelOverride: ({ figureId, mediaId }) => {
+                      <FulfillmentFigureTiles
+                        dropId={duplicateDrop.dropId}
+                        drop={duplicateDrop}
+                        figureIds={duplicateFigures.map((entry) => entry.figureId)}
+                        keyPrefix="duplicates"
+                        figureNamePrefix={duplicateDrop.figureNamePrefix}
+                        previewMode={duplicateDropContent.figures.fulfillmentPreviewMode}
+                        figureMediaBase={duplicateFigureMediaBase}
+                        figureMedia={duplicateDrop.figureMedia}
+                        figureMetadataByKey={figureMetadataByKey}
+                        onMetadataResolved={(record) => mergeLoadedFigureMetadata([record])}
+                        labelOverride={({ figureId, mediaId }) => {
                           const duplicate = duplicateFigureByFigureId.get(figureId);
                           const labelId = duplicate?.labelId || (mediaId ? String(mediaId) : String(figureId));
                           const count = duplicate?.count || 0;
                           return `${labelId} x ${count}`;
-                        },
-                      })}
+                        }}
+                      />
                     </div>
                   </div>
                 ) : null}
@@ -1231,12 +724,23 @@ export default function FulfillmentApp({
                     key={`${group.pageIndex}:${group.groupKey}`}
                     className="card subtle fulfillment-order-group"
                   >
-                    {group.orders.map((order, index) =>
-                      renderFulfillmentOrderSection(order, {
-                        showContactInfo: !group.collapseSharedContact || index === 0,
-                        showFullAddress: !group.collapseSharedContact || index === 0,
-                      }),
-                    )}
+                    {group.orders.map((order, index) => (
+                      <FulfillmentOrderCard
+                        key={fulfillmentOrderKey(order)}
+                        order={order}
+                        drop={dropById.get(order.dropId)}
+                        figureMetadataByKey={figureMetadataByKey}
+                        showContactInfo={!group.collapseSharedContact || index === 0}
+                        showFullAddress={!group.collapseSharedContact || index === 0}
+                        canAdminEditFulfillmentAddress={canAdminEditFulfillmentAddress}
+                        secretCodeDownloadDisabled={secretCodeDownloadDisabled}
+                        onMetadataResolved={(record) => mergeLoadedFigureMetadata([record])}
+                        onEditAddress={handleOpenAddressModal}
+                        onEditStatus={handleOpenUpdateModal}
+                        onPrintLabel={handleOpenShipstationModal}
+                        onDownloadSecretCode={downloadSecretCodePng}
+                      />
+                    ))}
                   </div>
                 ))}
               </div>

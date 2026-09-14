@@ -3,7 +3,7 @@ import type { Connection, VersionedTransaction } from '@solana/web3.js';
 import { prepareAdminIrlRedeemTx, finalizeAdminIrlRedeem, prepareReceiptTransferTx } from '../../api/commerce';
 import type { FrontendDeploymentConfig } from '../../config/deployment';
 import { canAdminIrlRedeemCardReceipt, canAdminIrlRedeemSelection, forgetPendingAdminIrlRedeem, rememberPendingAdminIrlRedeem } from '../../lib/adminIrlRedeem';
-import { isBlockhashExpiredError, isPotentiallySubmittedTransactionError, isSubmittedTransactionFailureError, reconcileSubmittedTransaction, sendPreparedTransaction, shortAddress } from '../../lib/solana';
+import { isBlockhashExpiredError, isPotentiallySubmittedTransactionError, isSubmittedTransactionFailureError, reconcileSubmittedTransaction, shortAddress } from '../../lib/solana';
 import { receiptOperationKey, receiptReconciliationDisposition, type ReceiptOperation } from '../../lib/receiptTransfer';
 import type { InventoryItem } from '../../types';
 import { ADMIN_VIEWER_READ_ONLY_MESSAGE } from '../account/display';
@@ -11,7 +11,8 @@ import type { RevealOverlayState } from '../reveal/types';
 import type { CommerceWalletContext, CommerceInventoryRefresh, PreparedTransactionSender, DropConnection } from './contracts';
 import type { useCommerceModals } from './useCommerceModals';
 import type { useReceiptOperationState } from './useReceiptOperationState';
-import { isUserRejectedError, PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS, RECEIPT_STATUS_CHECK_TIMEOUT_MS, RECEIPT_TRANSFER_WALLET_CHANGED_MESSAGE, RECEIPT_TRANSFER_WALLET_UNSUPPORTED_MESSAGE } from './transactionSupport';
+import { isUserRejectedError, RECEIPT_STATUS_CHECK_TIMEOUT_MS, RECEIPT_TRANSFER_WALLET_CHANGED_MESSAGE, RECEIPT_TRANSFER_WALLET_UNSUPPORTED_MESSAGE } from './transactionSupport';
+import { sendReceiptSubmission } from './receiptSubmission';
 
 type ReceiptActionOptions = Omit<CommerceWalletContext, 'ownerRef'> & {
   wallet: WalletContextState;
@@ -380,59 +381,43 @@ export function useReceiptActions({
         return recorded.applied;
       };
 
-      const submitTransfer = (encodedTx: string, requestId: string): Promise<string> => {
-        if (isReceiptTarget) {
-          assertReceiptTransferWalletReady(
-            wallet,
-            operationWalletAdapter,
-            operationWalletSessionGeneration,
-          );
-        }
-        return sendPreparedTransaction(
+      const submitTransfer = (encodedTx: string, requestId: string): Promise<string> =>
+        sendReceiptSubmission({
           encodedTx,
-          adminIrlConnection,
-          (tx) =>
-            signAndSendPreparedViaConnection(
-              tx,
-              adminIrlConnection,
-              isReceiptTarget
-                ? {
-                    assertWalletCurrent: () =>
-                      assertReceiptTransferWalletReady(
-                        wallet,
-                        operationWalletAdapter,
-                        operationWalletSessionGeneration,
-                      ),
-                    signedSendTimeoutMs: PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS,
-                    onBroadcastAttempt: (signature, submittedTx) => {
-                      recordReceiptSubmissionState('in-flight', signature, submittedTx, requestId);
-                      rememberPendingAdminIrlRedeem(wallet, {
-                        dropId: adminIrlDrop.dropId,
-                        requestId,
-                        transferSignature: signature,
-                        itemIds: redeemIds,
-                      });
-                      broadcastAttemptRequestId = requestId;
-                    },
-                  }
-                : undefined,
-            ),
-          {
-            onSubmitted: (submittedSig, submittedTx) => {
-              rememberPendingAdminIrlRedeem(wallet, {
-                dropId: adminIrlDrop.dropId,
-                requestId,
-                transferSignature: submittedSig,
-                itemIds: redeemIds,
-              });
-              pendingFinalizeRequestId = requestId;
-              pendingFinalizeTransferSignature = submittedSig;
-              pendingFinalizeRecentBlockhash = submittedTx.message.recentBlockhash;
-              recordReceiptSubmissionState('hidden', submittedSig, submittedTx, requestId);
-            },
+          connection: adminIrlConnection,
+          signAndSendPreparedViaConnection,
+          receiptWallet: isReceiptTarget
+            ? {
+                assertCurrent: () => assertReceiptTransferWalletReady(
+                  wallet,
+                  operationWalletAdapter,
+                  operationWalletSessionGeneration,
+                ),
+                onBroadcastAttempt: (signature, submittedTx) => {
+                  recordReceiptSubmissionState('in-flight', signature, submittedTx, requestId);
+                  rememberPendingAdminIrlRedeem(wallet, {
+                    dropId: adminIrlDrop.dropId,
+                    requestId,
+                    transferSignature: signature,
+                    itemIds: redeemIds,
+                  });
+                  broadcastAttemptRequestId = requestId;
+                },
+              }
+            : undefined,
+          onSubmitted: (submittedSig, submittedTx) => {
+            rememberPendingAdminIrlRedeem(wallet, {
+              dropId: adminIrlDrop.dropId,
+              requestId,
+              transferSignature: submittedSig,
+              itemIds: redeemIds,
+            });
+            pendingFinalizeRequestId = requestId;
+            pendingFinalizeTransferSignature = submittedSig;
+            pendingFinalizeRecentBlockhash = submittedTx.message.recentBlockhash;
+            recordReceiptSubmissionState('hidden', submittedSig, submittedTx, requestId);
           },
-        );
-      };
+        });
 
       let resp = await requestTx();
       let sig: string;
@@ -618,40 +603,30 @@ export function useReceiptActions({
         receiptOperation = recorded.operation;
         return recorded.applied;
       };
-      const submitTransfer = (encodedTx: string) => {
-        assertReceiptTransferWalletReady(
-          wallet,
-          operationWalletAdapter,
-          operationWalletSessionGeneration,
-        );
-        return sendPreparedTransaction(
+      const submitTransfer = (encodedTx: string) =>
+        sendReceiptSubmission({
           encodedTx,
-          transferConnection,
-          (tx) =>
-            signAndSendPreparedViaConnection(tx, transferConnection, {
-              assertWalletCurrent: () =>
-                assertReceiptTransferWalletReady(
-                  wallet,
-                  operationWalletAdapter,
-                  operationWalletSessionGeneration,
-                ),
-              signedSendTimeoutMs: PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS,
-              onBroadcastAttempt: (signature, submittedTx) => {
-                recordReceiptSubmissionState('in-flight', signature, submittedTx);
-              },
-            }),
-          {
-            simulateBeforeSigning: true,
-            onSubmitted: (signature, submittedTx) => {
-              submittedSignature = signature;
-              const applied = recordReceiptSubmissionState('hidden', signature, submittedTx);
-              if (applied && connectedWalletRef.current === wallet) {
-                showToast(`Receipt transfer submitted · ${shortAddress(signature)}`);
-              }
+          connection: transferConnection,
+          signAndSendPreparedViaConnection,
+          receiptWallet: {
+            assertCurrent: () => assertReceiptTransferWalletReady(
+              wallet,
+              operationWalletAdapter,
+              operationWalletSessionGeneration,
+            ),
+            onBroadcastAttempt: (signature, submittedTx) => {
+              recordReceiptSubmissionState('in-flight', signature, submittedTx);
             },
           },
-        );
-      };
+          simulateBeforeSigning: true,
+          onSubmitted: (signature, submittedTx) => {
+            submittedSignature = signature;
+            const applied = recordReceiptSubmissionState('hidden', signature, submittedTx);
+            if (applied && connectedWalletRef.current === wallet) {
+              showToast(`Receipt transfer submitted · ${shortAddress(signature)}`);
+            }
+          },
+        });
       const finishPendingTransfer = (signature: string) => {
         if (connectedWalletRef.current === wallet && isReceiptOperationCurrent(receiptOperation)) {
           setReceiptTransferTarget(null);
