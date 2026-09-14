@@ -82,7 +82,7 @@ import {
   type RequestIdentity,
 } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
-import { withAuthenticatedRequest } from './authenticatedRequest.js';
+import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
   isRequestCancellationError,
   isSignalCancellationError,
@@ -1314,11 +1314,11 @@ export async function handleAdminIrlRedeemPrepare(
           authOutcome = 'rejected';
         }
       } else if (error instanceof RequestIdentityError) {
-        prepareError = error.kind === 'invalid-token'
-          ? new AdminIrlRedeemPrepareError('unauthenticated', 'Authentication is required.')
-          : error.kind === 'provider-timeout'
-            ? new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem preparation timed out.')
-            : new AdminIrlRedeemPrepareError('unavailable', 'Authentication is temporarily unavailable.');
+        const mapped = requestIdentityErrorDetails(error, {
+          code: 'deadline-exceeded',
+          message: 'Admin IRL redeem preparation timed out.',
+        });
+        prepareError = new AdminIrlRedeemPrepareError(mapped.code, mapped.message);
         authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
       } else if (error instanceof ProfileReadError) {
         prepareError = new AdminIrlRedeemPrepareError(error.code, error.message, error.details);

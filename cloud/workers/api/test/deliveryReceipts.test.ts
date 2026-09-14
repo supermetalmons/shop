@@ -469,7 +469,7 @@ test('receipt API reports notification claim read failures as unavailable withou
   const native = await nativeDeliveryContext(readyNotificationOrderFields(7), {
     observeCall: (call) => {
       if (failClaimReads && call.method === 'batch' && call.statements.some(({ sql }) =>
-        /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql))) {
+        /FROM commerce_document_path_revisions\s+WHERE document_path IN \(\?\)/.test(sql))) {
         failedReads += 1;
         throw new Error('D1_ERROR: network connection lost');
       }

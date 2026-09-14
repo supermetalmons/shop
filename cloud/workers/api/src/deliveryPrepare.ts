@@ -62,7 +62,7 @@ import {
 } from '../../../../shared/shipping.js';
 import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
-import { withAuthenticatedRequest } from './authenticatedRequest.js';
+import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
   isRequestCancellationError,
   isSignalCancellationError,
@@ -1312,11 +1312,11 @@ export async function handleDeliveryPrepare(
           authOutcome = 'rejected';
         }
       } else if (error instanceof RequestIdentityError) {
-        deliveryError = error.kind === 'invalid-token'
-          ? new DeliveryPrepareError('unauthenticated', 'Authentication is required.')
-          : error.kind === 'provider-timeout'
-            ? new DeliveryPrepareError('deadline-exceeded', 'Delivery preparation request timed out.')
-            : new DeliveryPrepareError('unavailable', 'Authentication is temporarily unavailable.');
+        const mapped = requestIdentityErrorDetails(error, {
+          code: 'deadline-exceeded',
+          message: 'Delivery preparation request timed out.',
+        });
+        deliveryError = new DeliveryPrepareError(mapped.code, mapped.message);
         authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
       } else if (error instanceof ProfileReadError) {
         deliveryError = new DeliveryPrepareError(error.code, error.message, error.details);

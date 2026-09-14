@@ -63,7 +63,7 @@ import {
 } from './receiptTransferRateLimit.js';
 import { RequestIdentityError, requestIdentitySubject, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
-import { withAuthenticatedRequest } from './authenticatedRequest.js';
+import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
   isRequestCancellationError,
   isSignalCancellationError,
@@ -944,11 +944,11 @@ export async function handleReceiptTransferPrepare(
           authOutcome = 'rejected';
         }
       } else if (error instanceof RequestIdentityError) {
-        transferError = error.kind === 'invalid-token'
-          ? new ReceiptTransferError('unauthenticated', 'Authentication is required.')
-          : error.kind === 'provider-timeout'
-            ? new ReceiptTransferError('deadline-exceeded', 'Receipt transfer request timed out.')
-            : new ReceiptTransferError('unavailable', 'Authentication is temporarily unavailable.');
+        const mapped = requestIdentityErrorDetails(error, {
+          code: 'deadline-exceeded',
+          message: 'Receipt transfer request timed out.',
+        });
+        transferError = new ReceiptTransferError(mapped.code, mapped.message);
         authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
       } else if (error instanceof ProfileReadError) {
         transferError = new ReceiptTransferError(error.code, error.message, error.details);

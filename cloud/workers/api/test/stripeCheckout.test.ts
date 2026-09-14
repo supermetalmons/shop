@@ -21,6 +21,7 @@ import {
 } from '../src/stripeCheckout.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { runCommerceTransaction } from '../src/commerceTransactions.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 
 const DROP: StripeCheckoutSessionDrop = {
   dropId: 'card_nft_binder_devnet',
@@ -253,17 +254,25 @@ test('checkout handler rejects methods, malformed bodies, extra keys, and oversi
 });
 
 test('checkout handler maps authentication and provider failures to stable envelopes', async () => {
-  const unauthenticated = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), dependencies({
-    verifyIdentity: async () => {
-      const { RequestIdentityError } = await import('../src/requestIdentity.ts');
-      throw new RequestIdentityError('invalid-token');
-    },
-  }));
-  assert.equal(unauthenticated.response.status, 401);
-  assert.deepEqual(await unauthenticated.response.json(), {
-    ok: false,
-    error: { code: 'unauthenticated', message: 'Authentication is required.' },
-  });
+  for (const failure of [
+    { kind: 'invalid-token', status: 401, code: 'unauthenticated', message: 'Authentication is required.', authOutcome: 'rejected' },
+    { kind: 'provider-timeout', status: 504, code: 'deadline-exceeded', message: 'Checkout request timed out.', authOutcome: 'provider-failure' },
+    { kind: 'provider-unavailable', status: 502, code: 'unavailable', message: 'Authentication is temporarily unavailable.', authOutcome: 'provider-failure' },
+  ] as const) {
+    const result = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), dependencies({
+      verifyIdentity: async () => { throw new RequestIdentityError(failure.kind); },
+      createProviderSession: async () => assert.fail('Authentication failure reached Stripe'),
+      persistCheckout: async () => assert.fail('Authentication failure persisted a checkout'),
+    }));
+    assert.equal(result.response.status, failure.status);
+    assert.deepEqual(await result.response.json(), {
+      ok: false,
+      error: { code: failure.code, message: failure.message },
+    });
+    assert.equal(result.authOutcome, failure.authOutcome);
+    assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
+    assert.equal(result.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), null);
+  }
 
   const providerFailure = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), dependencies({
     createProviderSession: async () => {
@@ -276,6 +285,51 @@ test('checkout handler maps authentication and provider failures to stable envel
     error: { code: 'unavailable', message: 'Stripe checkout is temporarily unavailable.' },
   });
   assert.equal(providerFailure.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), null);
+});
+
+test('checkout rejects methods and invalid JSON before authentication or clock reads', async () => {
+  for (const [input, status] of [
+    [new Request('https://api.mons.shop/checkout/session'), 405],
+    [new Request('https://api.mons.shop/checkout/session', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{',
+    }), 400],
+  ] as const) {
+    let authenticationCalls = 0;
+    let clockReads = 0;
+    const result = await handleStripeCheckoutSession(input, env(), dependencies({
+      verifyIdentity: async () => {
+        authenticationCalls += 1;
+        throw new RequestIdentityError('invalid-token');
+      },
+      nowMs: () => { clockReads += 1; return 1_700_000_000_000; },
+    }));
+    assert.equal(result.response.status, status);
+    assert.equal(authenticationCalls, 0);
+    assert.equal(clockReads, 0);
+    assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
+  }
+});
+
+test('checkout reports tracked provider metrics on success and failure', async (context) => {
+  let elapsed = 0;
+  context.mock.method(performance, 'now', () => elapsed);
+  type ProviderSession = NonNullable<NonNullable<Parameters<typeof handleStripeCheckoutSession>[2]>['createProviderSession']>;
+  const createProviderSession: ProviderSession = async (_input, _mode, _env, providerFetch) => {
+    await providerFetch('https://provider.example/checkout');
+    return { id: 'cs_test_123', url: 'https://checkout.stripe.com/c/pay/test', livemode: false };
+  };
+  for (const fail of [false, true]) {
+    const result = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), dependencies({
+      createProviderSession,
+      providerFetch: async () => {
+        elapsed += 7;
+        if (fail) throw new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.');
+        return new Response('{}');
+      },
+    }));
+    assert.equal(result.response.status, fail ? 502 : 200);
+    assert.deepEqual(result.metrics, { upstreamCalls: 1, providerDurationMs: 7 });
+  }
 });
 
 test('checkout prerequisites validate cosigner identity and address decryption material', () => {

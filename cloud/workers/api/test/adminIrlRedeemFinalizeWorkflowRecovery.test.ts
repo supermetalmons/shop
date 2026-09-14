@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { AdminIrlRedeemFinalizeWorkflowError } from '../src/adminIrlRedeemFinalize.ts';
+import type { AdminIrlRedeemFinalizeWorkflowError } from '../src/adminIrlRedeemFinalizeWorkflowState.ts';
 import {
   projectAdminIrlRedeemFinalizeStatusDecision,
   reconcileAdminIrlRedeemFinalizeInspection,

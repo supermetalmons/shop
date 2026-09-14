@@ -346,6 +346,52 @@ function encryptedAddress(full: string): string {
   );
 }
 
+test('profile writes preserve identity failure responses and rejected authentication outcomes', async (context) => {
+  for (const expected of [
+    {
+      kind: 'invalid-token',
+      status: 401,
+      code: 'unauthenticated',
+      message: 'Authentication is required.',
+    },
+    {
+      kind: 'provider-timeout',
+      status: 504,
+      code: 'deadline-exceeded',
+      message: 'Profile request timed out.',
+    },
+    {
+      kind: 'provider-unavailable',
+      status: 502,
+      code: 'unavailable',
+      message: 'Authentication is temporarily unavailable.',
+    },
+  ] as const) {
+    await context.test(expected.kind, async () => {
+      const result = await handleProfileWriteRequest(
+        request(PROFILE_ADDRESSES_PATH, { encrypted: 'cipher', country: 'US', hint: 'hint' }),
+        env,
+        PROFILE_ADDRESSES_PATH,
+        {
+          nowMs: () => NOW_MS,
+          verifyIdentity: async () => { throw new RequestIdentityError(expected.kind); },
+          createCommerceRepository: () => assert.fail('Identity failure must not access Commerce'),
+          resolveD1AuthWalletBinding: async () => assert.fail('Identity failure must not resolve a wallet'),
+          saveProfileAddress: async () => assert.fail('Identity failure must not persist an address'),
+          providerFetch: async () => assert.fail('Identity failure must not contact a provider'),
+        },
+      );
+      assert.equal(result.response.status, expected.status);
+      assert.deepEqual(await result.response.json(), {
+        ok: false,
+        error: { code: expected.code, message: expected.message },
+      });
+      assert.equal(result.authOutcome, 'rejected');
+      assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
+    });
+  }
+});
+
 test('address route authenticates and atomically persists the exact D1 profile address', async () => {
   let persisted: Record<string, unknown> | undefined;
   const calls: Array<{ url: URL; authorization: string }> = [];

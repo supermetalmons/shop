@@ -3,7 +3,7 @@ import {
   walletHasAdminAccess,
 } from '../../../../shared/fulfillmentAccess.js';
 import type { StripeChargebackBackfillRequest } from '../../../../shared/stripeChargebacks.js';
-import { withAuthenticatedRequest } from './authenticatedRequest.js';
+import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
   isRequestCancellationError,
   raceWithSignal,
@@ -127,8 +127,10 @@ export async function handleStripeChargebackBackfill(
         message = 'Stripe chargeback backfill timed out.';
       } else if (error instanceof RequestIdentityError) {
         status = error.kind === 'invalid-token' ? 401 : 503;
-        code = error.kind === 'invalid-token' ? 'unauthenticated' : 'unavailable';
-        message = error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.';
+        ({ code, message } = requestIdentityErrorDetails(error, {
+          code: 'unavailable',
+          message: 'Authentication is temporarily unavailable.',
+        }));
       } else if (error instanceof ProfileReadError) {
         ({ status, code, message } = error);
       } else if (error instanceof StripeChargebackError) {

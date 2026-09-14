@@ -5,18 +5,20 @@ import {
   type WorkflowStepConfig,
 } from 'cloudflare:workers';
 import {
-  AdminIrlRedeemFinalizeError,
-  adminIrlRedeemFinalizeWorkflowError,
   cleanupAdminIrlRedeemFinalizeWorkflow,
   prepareAdminIrlRedeemFinalizeWorkflowDraft,
   publishAdminIrlRedeemFinalizeWorkflow,
   resumeAndReconcileAdminIrlRedeemFinalizeWorkflow,
   validateAdminIrlRedeemFinalizeWorkflow,
+} from './adminIrlRedeemFinalize.js';
+import {
+  AdminIrlRedeemFinalizeError,
+  adminIrlRedeemFinalizeWorkflowError,
   type AdminIrlRedeemFinalizeWorkflowError,
   type AdminIrlRedeemFinalizeWorkflowOutput,
   type AdminIrlRedeemFinalizeWorkflowPayload,
   type AdminIrlRedeemFinalizeWorkflowResultReference,
-} from './adminIrlRedeemFinalize.js';
+} from './adminIrlRedeemFinalizeWorkflowState.js';
 
 const STEP_TIMEOUT_MS = 10 * 60 * 1000;
 const PACK_STEP_TIMEOUT_MS = 25 * 60 * 1000;

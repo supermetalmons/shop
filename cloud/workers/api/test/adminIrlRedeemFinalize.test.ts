@@ -34,22 +34,26 @@ import {
   type CommerceDocumentData,
 } from '../src/commerceRepository.ts';
 import {
-  AdminIrlRedeemFinalizeError,
-  adminIrlRedeemFinalizeWorkflowError,
   adminIrlRedeemFinalizeTestHooks,
-  claimAdminIrlRedeemFinalizeWorkflowEffect,
   cleanupAdminIrlRedeemFinalizeWorkflow,
-  dispatchAdminIrlRedeemFinalizeWorkflowRestart,
-  loadAdminIrlRedeemFinalizeWorkflowOperation,
   loadAdminIrlRedeemFinalizeWorkflowResult,
   prepareAdminIrlRedeemFinalizeWorkflowDraft,
   publishAdminIrlRedeemFinalizeWorkflow,
-  parseAdminIrlRedeemFinalizeWorkflowOutput,
-  retractAdminIrlRedeemFinalizeWorkflowRestartDispatch,
   reserveAdminIrlRedeemFinalizeWorkflow,
   resumeAndReconcileAdminIrlRedeemFinalizeWorkflow,
   validateAdminIrlRedeemFinalizeWorkflow,
 } from '../src/adminIrlRedeemFinalize.ts';
+import {
+  AdminIrlRedeemFinalizeError,
+  adminIrlRedeemFinalizeWorkflowError,
+  parseAdminIrlRedeemFinalizeWorkflowOutput,
+} from '../src/adminIrlRedeemFinalizeWorkflowState.ts';
+import {
+  claimAdminIrlRedeemFinalizeWorkflowEffect,
+  dispatchAdminIrlRedeemFinalizeWorkflowRestart,
+  loadAdminIrlRedeemFinalizeWorkflowOperation,
+  retractAdminIrlRedeemFinalizeWorkflowRestartDispatch,
+} from '../src/adminIrlRedeemFinalizeWorkflowStore.ts';
 
 const OWNER = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
 const DROP_ID = 'card_nft_2';

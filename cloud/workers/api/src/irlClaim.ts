@@ -76,7 +76,7 @@ import {
   raceReadWithSignal,
   readBoundedRequestJson,
 } from './boundedRequest.js';
-import { withAuthenticatedRequest } from './authenticatedRequest.js';
+import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
 import {
@@ -1097,11 +1097,11 @@ export async function handleIrlClaimPrepare(
           authOutcome = 'rejected';
         }
       } else if (error instanceof RequestIdentityError) {
-        claimError = error.kind === 'invalid-token'
-          ? new IrlClaimError('unauthenticated', 'Authentication is required.')
-          : error.kind === 'provider-timeout'
-            ? new IrlClaimError('deadline-exceeded', 'IRL claim request timed out.')
-            : new IrlClaimError('unavailable', 'Authentication is temporarily unavailable.');
+        const mapped = requestIdentityErrorDetails(error, {
+          code: 'deadline-exceeded',
+          message: 'IRL claim request timed out.',
+        });
+        claimError = new IrlClaimError(mapped.code, mapped.message);
         authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
       } else if (error instanceof ProfileReadError) {
         claimError = new IrlClaimError(error.code, error.message, error.details);

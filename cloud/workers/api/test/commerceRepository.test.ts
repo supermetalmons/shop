@@ -74,9 +74,9 @@ function assertTransactionalPointReadBatch(observation: CommerceD1BatchObservati
   const dataSql = observation.statements[1].sql.replace(/\s+/g, ' ');
   assert.match(
     revisionSql,
-    /SELECT COALESCE\(\( SELECT revision FROM commerce_document_path_revisions WHERE document_path = \? \), 0\) AS revision/,
+    /SELECT document_path, revision FROM commerce_document_path_revisions WHERE document_path IN \(\?\)/,
   );
-  assert.match(dataSql, /FROM commerce_documents WHERE document_path = \?/);
+  assert.match(dataSql, /FROM commerce_documents WHERE document_path IN \(\?\)/);
 }
 
 function assertReadOnlyRevalidationBatch(observation: CommerceD1BatchObservation): void {
@@ -972,7 +972,7 @@ test('getMany preserves point-read conflict guards for writes and read-only comm
   }
 });
 
-test('getMany fails closed on malformed batch results', async (context) => {
+test('point and batch reads fail closed on malformed batch results', async (context) => {
   const mutations: Record<string, (results: D1Result<Record<string, unknown>>[]) => unknown> = {
     'missing result': (results) => results.slice(0, 1),
     'failed revision result': (results) => [{ ...results[0], success: false }, results[1]],
@@ -993,22 +993,24 @@ test('getMany fails closed on malformed batch results', async (context) => {
       results: [{ ...results[1].results[0], document_json: '{' }],
     }],
   };
-  for (const [name, mutate] of Object.entries(mutations)) {
-    await context.test(name, async () => {
-      const harness = createCommerceD1Harness();
-      const key = commerceKeys.claimCode('EXISTING');
-      seedCommerceDocument(harness, { key, data: { status: 'unused' } });
-      const db = new Proxy(harness.db, {
-        get(target, property, receiver) {
-          if (property === 'batch') return async (statements: D1PreparedStatement[]) =>
-            mutate(await target.batch<Record<string, unknown>>(statements));
-          return Reflect.get(target, property, receiver);
-        },
+  for (const method of ['get', 'getMany'] as const) {
+    for (const [name, mutate] of Object.entries(mutations)) {
+      await context.test(`${method}: ${name}`, async () => {
+        const harness = createCommerceD1Harness();
+        const key = commerceKeys.claimCode('EXISTING');
+        seedCommerceDocument(harness, { key, data: { status: 'unused' } });
+        const db = new Proxy(harness.db, {
+          get(target, property, receiver) {
+            if (property === 'batch') return async (statements: D1PreparedStatement[]) =>
+              mutate(await target.batch<Record<string, unknown>>(statements));
+            return Reflect.get(target, property, receiver);
+          },
+        });
+        const unit = await new D1CommerceRepository(db).begin(10);
+        await assert.rejects(method === 'get' ? unit.get(key) : unit.getMany([key]), isUnavailableCommerceError);
+        unit.rollback();
       });
-      const unit = await new D1CommerceRepository(db).begin(10);
-      await assert.rejects(unit.getMany([key]), isUnavailableCommerceError);
-      unit.rollback();
-    });
+    }
   }
 });
 

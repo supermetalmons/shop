@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AdminIrlRedeemFinalizeError } from '../src/adminIrlRedeemFinalize.ts';
+import { AdminIrlRedeemFinalizeError } from '../src/adminIrlRedeemFinalizeWorkflowState.ts';
 import { loadCloudflareWorkersModule } from './cloudflareWorkersTestLoader.ts';
 
 const workflowModule = await loadCloudflareWorkersModule(() =>

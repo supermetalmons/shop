@@ -33,13 +33,13 @@ import {
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
 import {
-  createRequestDeadline,
   isRequestCancellationError,
   raceReadWithSignal,
   raceWithSignal,
   readBoundedRequestJson,
   runCriticalRequestOperation,
 } from './boundedRequest.js';
+import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
   CommerceRepositoryError,
@@ -478,165 +478,153 @@ export async function handleStripeCheckoutSession(
   overrides: Partial<CheckoutDependencies> = {},
 ): Promise<StripeCheckoutResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
-  const metrics: StripeCheckoutMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
-  const trackedFetch: ProfileProviderFetch = async (input, init) => {
-    const startedAt = performance.now();
-    metrics.upstreamCalls += 1;
-    try {
-      return await dependencies.providerFetch(input, init);
-    } finally {
-      metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = checkoutErrorResponse(new StripeCheckoutSessionError('invalid-argument', 'Method not allowed.'));
     response.headers.set('Allow', 'POST, OPTIONS');
-    return { response: new Response(response.body, { headers: response.headers, status: 405 }), metrics, authOutcome: 'rejected' };
-  }
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.timeoutMs,
-    timeoutMessage: 'Checkout request timed out',
-  });
-  let identity: RequestIdentity | undefined;
-  try {
-    const body = await readBoundedRequestJson(request, {
-      maxBytes: CHECKOUT_REQUEST_MAX_BYTES,
-      signal: deadline.signal,
-      createError: (failure) => new StripeCheckoutSessionError(
-        'invalid-argument',
-        failure === 'unsupported-media-type'
-          ? 'Content-Type must be application/json.'
-          : failure === 'too-large'
-            ? 'Checkout request is too large.'
-            : 'Invalid checkout request.',
-      ),
-    });
-    identity = await dependencies.verifyIdentity(
-      request,
-      env.OPS_DB,
-      deadline.signal,
-      dependencies.nowMs(),
-    );
-    const heliusApiKey = String(env.HELIUS_API_KEY || '').trim();
-    if (!heliusApiKey) {
-      throw new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.');
-    }
-    const resolvedWallet = identity.kind === 'staff-wallet'
-      ? identity.wallet
-      : env.OPS_DB
-        ? (await raceReadWithSignal(
-            dependencies.resolveAuthWalletBinding(
-              env.OPS_DB,
-              identity.authSubject,
-              deadline.signal,
-            ),
-            deadline.signal,
-          )).wallet
-        : null;
-    const result = await createStripeCheckoutSessionCore({
-      identity: createStripeCheckoutIdentity(
-        identity.kind === 'staff-wallet' ? identity.wallet : identity.authSubject,
-        resolvedWallet || undefined,
-      ),
-      requestOrigin: request.headers.get('Origin') || undefined,
-      allowedOrigins: request.headers.get('Origin') ? [request.headers.get('Origin')!] : [],
-      body,
-      operationId: request.headers.get(STRIPE_CHECKOUT_OPERATION_HEADER) || undefined,
-    }, {
-      getDrop: dependencies.getDrop || checkoutDrop,
-      loadOnchainConfig: dependencies.loadOnchainConfig ||
-        ((drop) => fetchOnchainConfig(drop, heliusApiKey, trackedFetch, deadline.signal)),
-      requireFulfillmentPrerequisites: dependencies.requireFulfillmentPrerequisites ||
-        ((config) => requireFulfillmentPrerequisites(env, config)),
-      createProviderSession: (providerRequest, mode) =>
-        (dependencies.createProviderSession || createStripeProviderSession)(
-          providerRequest,
-          mode,
-          env,
-          trackedFetch,
-          deadline.signal,
-        ),
-      persistCheckout: (path, document) => {
-        return runCriticalRequestOperation(
-          () => dependencies.persistCheckout
-            ? dependencies.persistCheckout(path, document)
-            : persistCheckoutDocument(
-                path,
-                document,
-                dependencies.nowMs(),
-                env.COMMERCE_DB,
-              ),
-          { deadline, defer: dependencies.defer },
-        );
-      },
-      nowMs: dependencies.nowMs,
-    });
     return {
-      response: jsonResponse(result.session, 200),
-      metrics,
-      authOutcome: 'accepted',
-      dropId: result.dropId,
-      mode: result.mode,
+      response: new Response(response.body, { headers: response.headers, status: 405 }),
+      metrics: { upstreamCalls: 0, providerDurationMs: 0 },
+      authOutcome: 'rejected',
     };
-  } catch (error) {
-    rethrowDeferredWorkRegistrationError(error);
-    if (isRequestCancellationError(request, error)) throw error;
-    if (error instanceof RequestIdentityError) {
-      if (error.kind === 'invalid-token') {
+  }
+  return withAuthenticatedRequest<StripeCheckoutResult>(request, {
+    opsDb: env.OPS_DB,
+    timeoutMessage: 'Checkout request timed out',
+    dependencies,
+  }, async ({ deadline, metrics, trackedFetch, authenticate }) => {
+    let identity: RequestIdentity | undefined;
+    try {
+      const body = await readBoundedRequestJson(request, {
+        maxBytes: CHECKOUT_REQUEST_MAX_BYTES,
+        signal: deadline.signal,
+        createError: (failure) => new StripeCheckoutSessionError(
+          'invalid-argument',
+          failure === 'unsupported-media-type'
+            ? 'Content-Type must be application/json.'
+            : failure === 'too-large'
+              ? 'Checkout request is too large.'
+              : 'Invalid checkout request.',
+        ),
+      });
+      identity = await authenticate();
+      const heliusApiKey = String(env.HELIUS_API_KEY || '').trim();
+      if (!heliusApiKey) {
+        throw new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.');
+      }
+      const resolvedWallet = identity.kind === 'staff-wallet'
+        ? identity.wallet
+        : env.OPS_DB
+          ? (await raceReadWithSignal(
+              dependencies.resolveAuthWalletBinding(
+                env.OPS_DB,
+                identity.authSubject,
+                deadline.signal,
+              ),
+              deadline.signal,
+            )).wallet
+          : null;
+      const result = await createStripeCheckoutSessionCore({
+        identity: createStripeCheckoutIdentity(
+          identity.kind === 'staff-wallet' ? identity.wallet : identity.authSubject,
+          resolvedWallet || undefined,
+        ),
+        requestOrigin: request.headers.get('Origin') || undefined,
+        allowedOrigins: request.headers.get('Origin') ? [request.headers.get('Origin')!] : [],
+        body,
+        operationId: request.headers.get(STRIPE_CHECKOUT_OPERATION_HEADER) || undefined,
+      }, {
+        getDrop: dependencies.getDrop || checkoutDrop,
+        loadOnchainConfig: dependencies.loadOnchainConfig ||
+          ((drop) => fetchOnchainConfig(drop, heliusApiKey, trackedFetch, deadline.signal)),
+        requireFulfillmentPrerequisites: dependencies.requireFulfillmentPrerequisites ||
+          ((config) => requireFulfillmentPrerequisites(env, config)),
+        createProviderSession: (providerRequest, mode) =>
+          (dependencies.createProviderSession || createStripeProviderSession)(
+            providerRequest,
+            mode,
+            env,
+            trackedFetch,
+            deadline.signal,
+          ),
+        persistCheckout: (path, document) => {
+          return runCriticalRequestOperation(
+            () => dependencies.persistCheckout
+              ? dependencies.persistCheckout(path, document)
+              : persistCheckoutDocument(
+                  path,
+                  document,
+                  dependencies.nowMs(),
+                  env.COMMERCE_DB,
+                ),
+            { deadline, defer: dependencies.defer },
+          );
+        },
+        nowMs: dependencies.nowMs,
+      });
+      return {
+        response: jsonResponse(result.session, 200),
+        metrics,
+        authOutcome: 'accepted',
+        dropId: result.dropId,
+        mode: result.mode,
+      };
+    } catch (error) {
+      rethrowDeferredWorkRegistrationError(error);
+      if (isRequestCancellationError(request, error)) throw error;
+      if (error instanceof RequestIdentityError) {
+        const mapped = requestIdentityErrorDetails(error, {
+          code: 'deadline-exceeded',
+          message: 'Checkout request timed out.',
+        });
+        if (mapped.code === 'unauthenticated') {
+          return {
+            response: jsonResponse(apiErrorBody(mapped), 401),
+            metrics,
+            authOutcome: 'rejected',
+          };
+        }
+        const checkoutError = new StripeCheckoutSessionError(mapped.code, mapped.message);
+        return { response: checkoutErrorResponse(checkoutError), metrics, authOutcome: 'provider-failure' };
+      }
+      if (deadline.timedOut()) {
         return {
-          response: jsonResponse(apiErrorBody({
-            code: 'unauthenticated',
-            message: 'Authentication is required.',
-          }), 401),
+          response: checkoutErrorResponse(
+            new StripeCheckoutSessionError('deadline-exceeded', 'Checkout request timed out.'),
+            true,
+          ),
           metrics,
-          authOutcome: 'rejected',
+          authOutcome: identity ? 'provider-failure' : 'rejected',
         };
       }
-      const checkoutError = error.kind === 'provider-timeout'
-        ? new StripeCheckoutSessionError('deadline-exceeded', 'Checkout request timed out.')
-        : new StripeCheckoutSessionError('unavailable', 'Authentication is temporarily unavailable.');
-      return { response: checkoutErrorResponse(checkoutError), metrics, authOutcome: 'provider-failure' };
-    }
-    if (deadline.timedOut()) {
+      if (error instanceof StripeCheckoutOperationUncertainError) {
+        return {
+          response: checkoutErrorResponse(error, true),
+          metrics,
+          authOutcome: 'provider-failure',
+        };
+      }
+      if (error instanceof StripeCheckoutSessionError) {
+        return {
+          response: checkoutErrorResponse(error),
+          metrics,
+          authOutcome: error.code === 'invalid-argument' || error.code === 'failed-precondition'
+            ? 'rejected'
+            : 'provider-failure',
+        };
+      }
+      if (error instanceof ProfileReadError) {
+        return {
+          response: checkoutErrorResponse(new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.')),
+          metrics,
+          authOutcome: 'provider-failure',
+        };
+      }
       return {
-        response: checkoutErrorResponse(
-          new StripeCheckoutSessionError('deadline-exceeded', 'Checkout request timed out.'),
-          true,
-        ),
-        metrics,
-        authOutcome: identity ? 'provider-failure' : 'rejected',
-      };
-    }
-    if (error instanceof StripeCheckoutOperationUncertainError) {
-      return {
-        response: checkoutErrorResponse(error, true),
-        metrics,
-        authOutcome: 'provider-failure',
-      };
-    }
-    if (error instanceof StripeCheckoutSessionError) {
-      return {
-        response: checkoutErrorResponse(error),
-        metrics,
-        authOutcome: error.code === 'invalid-argument' || error.code === 'failed-precondition'
-          ? 'rejected'
-          : 'provider-failure',
-      };
-    }
-    if (error instanceof ProfileReadError) {
-      return {
-        response: checkoutErrorResponse(new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.')),
+        response: checkoutErrorResponse(new StripeCheckoutSessionError('internal', 'Stripe checkout failed.')),
         metrics,
         authOutcome: 'provider-failure',
       };
     }
-    return {
-      response: checkoutErrorResponse(new StripeCheckoutSessionError('internal', 'Stripe checkout failed.')),
-      metrics,
-      authOutcome: 'provider-failure',
-    };
-  } finally {
-    deadline.dispose();
-  }
+  });
 }

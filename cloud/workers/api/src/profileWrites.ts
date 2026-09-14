@@ -36,13 +36,14 @@ import {
   raceReadWithSignal,
   runCriticalRequestOperation,
 } from './boundedRequest.js';
-import { withAuthenticatedRequest } from './authenticatedRequest.js';
+import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
   isRecord,
   ProfileReadError,
 } from './dataAccess.js';
 import {
   apiErrorBody,
+  httpStatusForApiErrorCode,
   jsonResponse,
 } from './httpResponse.js';
 import { rethrowDeferredWorkRegistrationError } from './deferredWork.js';
@@ -636,14 +637,12 @@ export async function handleProfileWriteRequest(
           authOutcome = 'rejected';
         }
       } else if (error instanceof RequestIdentityError) {
-        if (error.kind === 'invalid-token') {
-          profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
-          authOutcome = 'rejected';
-        } else if (error.kind === 'provider-timeout') {
-          profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
-        } else {
-          profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
-        }
+        const mapped = requestIdentityErrorDetails(error, {
+          code: 'deadline-exceeded',
+          message: 'Profile request timed out.',
+        });
+        profileError = new ProfileReadError(mapped.code, httpStatusForApiErrorCode(mapped.code, 502), mapped.message);
+        if (error.kind === 'invalid-token') authOutcome = 'rejected';
       } else if (deadline.timedOut()) {
         profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
       } else {

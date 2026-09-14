@@ -70,7 +70,7 @@ import {
   runCriticalRequestOperation,
   sleepWithSignal,
 } from './boundedRequest.js';
-import { withAuthenticatedRequest } from './authenticatedRequest.js';
+import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord } from './dataAccess.js';
 import { D1CommerceRepository } from './commerceRepository.js';
 import type { CommerceRepositoryContext as CommerceContext } from './commerceTransactions.js';
@@ -1401,10 +1401,11 @@ export async function handleStripeReceiptClaim(
       if (deadline.timedOut()) {
         normalized = new StripeReceiptClaimError('deadline-exceeded', 'Receipt claim request timed out.');
       } else if (error instanceof RequestIdentityError) {
-        normalized = new StripeReceiptClaimError(
-          error.kind === 'invalid-token' ? 'unauthenticated' : error.kind === 'provider-timeout' ? 'deadline-exceeded' : 'unavailable',
-          error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',
-        );
+        const mapped = requestIdentityErrorDetails(error, {
+          code: 'deadline-exceeded',
+          message: 'Authentication is temporarily unavailable.',
+        });
+        normalized = new StripeReceiptClaimError(mapped.code, mapped.message);
       } else {
         normalized = normalizedError(error, 'Receipt claim failed.');
         if (normalized.code === 'internal') {

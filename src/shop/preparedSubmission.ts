@@ -19,7 +19,7 @@ function browserLockManager(): BrowserLockManager | null {
   if (typeof navigator === 'undefined' || typeof navigator.locks?.request !== 'function') return null;
   return navigator.locks as unknown as BrowserLockManager;
 }
-export async function withBrowserLock<T>(
+async function withBrowserLock<T>(
   name: string,
   run: () => Promise<T>,
   lockManager: BrowserLockManager | null = browserLockManager(),

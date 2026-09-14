@@ -7,16 +7,20 @@ import {
   createAdminIrlRedeemFinalizeOperationId,
 } from '../../../../shared/contracts.ts';
 import {
-  AdminIrlRedeemFinalizeError,
-  claimAdminIrlRedeemFinalizeWorkflowEffect,
   cleanupAdminIrlRedeemFinalizeWorkflow,
-  dispatchAdminIrlRedeemFinalizeWorkflowRestart,
-  loadAdminIrlRedeemFinalizeWorkflowOperation,
   reserveAdminIrlRedeemFinalizeWorkflow,
-  retractAdminIrlRedeemFinalizeWorkflowRestartDispatch,
+} from '../src/adminIrlRedeemFinalize.ts';
+import {
+  AdminIrlRedeemFinalizeError,
   type AdminIrlRedeemFinalizeWorkflowOutput,
   type AdminIrlRedeemFinalizeWorkflowPayload,
-} from '../src/adminIrlRedeemFinalize.ts';
+} from '../src/adminIrlRedeemFinalizeWorkflowState.ts';
+import {
+  claimAdminIrlRedeemFinalizeWorkflowEffect,
+  dispatchAdminIrlRedeemFinalizeWorkflowRestart,
+  loadAdminIrlRedeemFinalizeWorkflowOperation,
+  retractAdminIrlRedeemFinalizeWorkflowRestartDispatch,
+} from '../src/adminIrlRedeemFinalizeWorkflowStore.ts';
 import {
   ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH,
   handleAdminIrlRedeemFinalizeWorkflowStart,

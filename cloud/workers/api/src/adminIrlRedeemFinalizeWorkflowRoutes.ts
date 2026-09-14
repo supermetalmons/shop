@@ -10,19 +10,23 @@ import {
   type AdminIrlRedeemFinalizeRecovery,
 } from '../../../../shared/contracts.js';
 import {
+  loadAdminIrlRedeemFinalizeWorkflowResult,
+  readAdminIrlRedeemFinalizeRequest,
+  reserveAdminIrlRedeemFinalizeWorkflow,
+  resolveAdminIrlRedeemFinalizeStaffWallet,
+} from './adminIrlRedeemFinalize.js';
+import {
   AdminIrlRedeemFinalizeError,
   adminIrlRedeemFinalizeWorkflowError,
+  type AdminIrlRedeemFinalizeErrorCode,
+  type AdminIrlRedeemFinalizeWorkflowOutput,
+} from './adminIrlRedeemFinalizeWorkflowState.js';
+import {
   claimAdminIrlRedeemFinalizeWorkflowEffect,
   dispatchAdminIrlRedeemFinalizeWorkflowRestart,
   loadAdminIrlRedeemFinalizeWorkflowOperation,
-  loadAdminIrlRedeemFinalizeWorkflowResult,
-  readAdminIrlRedeemFinalizeRequest,
   retractAdminIrlRedeemFinalizeWorkflowRestartDispatch,
-  reserveAdminIrlRedeemFinalizeWorkflow,
-  resolveAdminIrlRedeemFinalizeStaffWallet,
-  type AdminIrlRedeemFinalizeErrorCode,
-  type AdminIrlRedeemFinalizeWorkflowOutput,
-} from './adminIrlRedeemFinalize.js';
+} from './adminIrlRedeemFinalizeWorkflowStore.js';
 import {
   inspectAdminIrlRedeemFinalizeWorkflow,
   inspectAndReconcileAdminIrlRedeemFinalizeWorkflow,

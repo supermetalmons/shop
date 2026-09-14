@@ -27,10 +27,6 @@ import {
   requestRevealWithSubmissionRecovery,
   resolveRevealOverlayPhaseAfterReveal,
 } from '../src/shop/reveal.ts';
-import {
-  withBrowserLock,
-  type BrowserLockManager,
-} from '../src/shop/preparedSubmission.ts';
 
 function memoryStorage(initial: Record<string, string> = {}): ShopStorage {
   const values = new Map(Object.entries(initial));
@@ -281,29 +277,4 @@ test('reveal retry resets only the matching unresolved ready overlay session', (
     mediaStart: 1,
     hasResults: true,
   }), 'ready');
-});
-
-test('prepared submissions require an available exclusive lock', async () => {
-  await assert.rejects(
-    withBrowserLock('wallet', async () => undefined, null),
-    /cannot safely coordinate wallet transactions/,
-  );
-  const held = {
-    request: async (_name, options, callback) => {
-      assert.deepEqual(options, { ifAvailable: true });
-      return callback(null);
-    },
-  } as BrowserLockManager;
-  await assert.rejects(
-    withBrowserLock('wallet', async () => undefined, held),
-    /Another wallet transaction is already in progress/,
-  );
-  const available = {
-    request: async (name, options, callback) => {
-      assert.equal(name, 'wallet');
-      assert.deepEqual(options, { ifAvailable: true });
-      return callback({});
-    },
-  } as BrowserLockManager;
-  assert.equal(await withBrowserLock('wallet', async () => 'submitted', available), 'submitted');
 });

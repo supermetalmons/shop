@@ -548,27 +548,7 @@ function deliveryOwnerRevisionStatement(db: D1Database, owner: string): D1Prepar
   ), 0) AS revision`).bind(owner);
 }
 
-function documentPathRevisionStatement(db: D1Database, path: string): D1PreparedStatement {
-  return db.prepare(`SELECT COALESCE((
-    SELECT revision FROM commerce_document_path_revisions WHERE document_path = ?
-  ), 0) AS revision`).bind(path);
-}
-
 function parseDeliveryOwnerRevision(result: D1Result<Record<string, unknown>>): number {
-  const row = result.results[0];
-  const revision = isObject(row) ? row.revision : undefined;
-  if (
-    result.success !== true ||
-    result.results.length !== 1 ||
-    !isObject(result.meta) ||
-    typeof revision !== 'number' ||
-    !Number.isSafeInteger(revision) ||
-    revision < 0
-  ) throw unavailableCommerceData();
-  return revision;
-}
-
-function parseDocumentPathRevision(result: D1Result<Record<string, unknown>>): number {
   const row = result.results[0];
   const revision = isObject(row) ? row.revision : undefined;
   if (
@@ -1187,24 +1167,7 @@ export class CommerceUnitOfWork {
     if (cached && this.expectations.get(key.path)?.pathRevision !== undefined) {
       return this.original.get(key.path) || null;
     }
-    const results = await this.db.batch<Record<string, unknown>>([
-      documentPathRevisionStatement(this.db, key.path),
-      this.db.prepare(`SELECT ${DOCUMENT_COLUMNS}
-        FROM commerce_documents WHERE document_path = ?`).bind(key.path),
-    ]);
-    if (results.length !== 2) throw unavailableCommerceData();
-    const [pathRevisionResult, documentResult] = results;
-    const pathRevision = parseDocumentPathRevision(pathRevisionResult);
-    if (
-      documentResult.success !== true ||
-      documentResult.results.length > 1 ||
-      !Array.isArray(documentResult.results) ||
-      !isObject(documentResult.meta)
-    ) throw unavailableCommerceData();
-    const row = documentResult.results[0];
-    const document = row ? parseRow(row) : null;
-    if (document) assertDocumentIdentity(document.key, key);
-    this.recordRead(key.path, document?.version ?? -1, document, pathRevision);
+    await this.loadBatch([key]);
     return this.original.get(key.path) || null;
   }
 

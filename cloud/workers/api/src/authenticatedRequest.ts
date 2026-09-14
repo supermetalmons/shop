@@ -1,6 +1,17 @@
 import { createRequestDeadline, type RequestDeadline } from './boundedRequest.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
-import type { RequestIdentity, verifyRequestIdentity } from './requestIdentity.js';
+import type { RequestIdentity, RequestIdentityError, verifyRequestIdentity } from './requestIdentity.js';
+
+export function requestIdentityErrorDetails(
+  error: RequestIdentityError,
+  timeout: { code: 'deadline-exceeded' | 'unavailable'; message: string },
+): { code: 'unauthenticated' | 'deadline-exceeded' | 'unavailable'; message: string } {
+  if (error.kind === 'invalid-token') {
+    return { code: 'unauthenticated', message: 'Authentication is required.' };
+  }
+  if (error.kind === 'provider-timeout') return { ...timeout };
+  return { code: 'unavailable', message: 'Authentication is temporarily unavailable.' };
+}
 
 type AuthenticatedRequestDependencies = {
   nowMs: () => number;

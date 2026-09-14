@@ -24,6 +24,7 @@ import {
   type ProfileReadPath,
 } from '../src/profileReads.ts';
 import { readBoundedResponseJson } from '../src/boundedResponse.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { loadStripeChargebackSessionIds, recordStripeChargeback } from '../src/stripeChargebackStore.ts';
 import {
   D1CommerceRepository,
@@ -218,6 +219,56 @@ function d1ProfileDependencies(
     overrides,
   );
 }
+
+test('profile reads preserve identity failure responses and authentication outcomes', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  for (const expected of [
+    {
+      kind: 'invalid-token',
+      status: 401,
+      code: 'unauthenticated',
+      message: 'Authentication is required.',
+      authOutcome: 'rejected',
+    },
+    {
+      kind: 'provider-timeout',
+      status: 504,
+      code: 'deadline-exceeded',
+      message: 'Profile request timed out.',
+      authOutcome: 'provider-failure',
+    },
+    {
+      kind: 'provider-unavailable',
+      status: 502,
+      code: 'unavailable',
+      message: 'Authentication is temporarily unavailable.',
+      authOutcome: 'provider-failure',
+    },
+  ] as const) {
+    await context.test(expected.kind, async () => {
+      const result = await handleProfileReadRequest(
+        tokenRequest(PROFILE_STATE_PATH, {}),
+        { COMMERCE_DB: harness.db },
+        PROFILE_STATE_PATH,
+        {
+          nowMs: () => NOW_MS,
+          verifyIdentity: async () => { throw new RequestIdentityError(expected.kind); },
+          createCommerceRepository: () => assert.fail('Identity failure must not access Commerce'),
+          resolveD1AuthWalletBinding: async () => assert.fail('Identity failure must not resolve a wallet'),
+          providerFetch: async () => assert.fail('Identity failure must not contact a provider'),
+        },
+      );
+      assert.equal(result.response.status, expected.status);
+      assert.deepEqual(await result.response.json(), {
+        ok: false,
+        error: { code: expected.code, message: expected.message },
+      });
+      assert.equal(result.authOutcome, expected.authOutcome);
+      assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
+    });
+  }
+});
 
 test('fulfillment adds only matching dispute history without exposing Stripe IDs or changing orders', async () => {
   const harness = createCommerceD1Harness();

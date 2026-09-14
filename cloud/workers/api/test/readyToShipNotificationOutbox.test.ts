@@ -115,7 +115,7 @@ test('notification publication reuses each transaction read when claiming, freez
 
   assert.equal(calls.length, 10);
   const transactionReads = calls.filter((call) => call.method === 'batch' &&
-    call.statements.some(({ sql }) => /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql)));
+    call.statements.some(({ sql }) => /FROM commerce_document_path_revisions\s+WHERE document_path IN \(\?\)/.test(sql)));
   assert.equal(transactionReads.length, 3);
   assert.equal((await native.load()).data.buyerOrderReceivedEmailState, 'queued');
 });
@@ -124,7 +124,7 @@ test('a competing claim causes a fresh transactional read without publishing', a
   let raced = false;
   const native = fixture(context, {}, {
     observeBatchAfterCommit: ({ statements }) => {
-      if (raced || !statements.some(({ sql }) => /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql))) return;
+      if (raced || !statements.some(({ sql }) => /FROM commerce_document_path_revisions\s+WHERE document_path IN \(\?\)/.test(sql))) return;
       raced = true;
       seedCommerceDocuments(native.harness, [{
         key: KEY,
@@ -151,7 +151,7 @@ test('a no-write notification update revalidates its read and retries changed ma
   let raced = false;
   const native = fixture(context, { buyerOrderReceivedEmailState: 'queued' }, {
     observeBatchAfterCommit: ({ statements }) => {
-      if (raced || !statements.some(({ sql }) => /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql))) return;
+      if (raced || !statements.some(({ sql }) => /FROM commerce_document_path_revisions\s+WHERE document_path IN \(\?\)/.test(sql))) return;
       raced = true;
       seedCommerceDocuments(native.harness, [{ key: KEY, version: 2, data: order({ concurrentValue: 'retained' }) }]);
     },
@@ -169,7 +169,7 @@ test('a no-write notification update revalidates authority after a maintenance p
   let paused = false;
   const native = fixture(context, { buyerOrderReceivedEmailState: 'queued' }, {
     observeBatchAfterCommit: ({ statements }) => {
-      if (paused || !statements.some(({ sql }) => /FROM commerce_document_path_revisions WHERE document_path = \?/.test(sql))) return;
+      if (paused || !statements.some(({ sql }) => /FROM commerce_document_path_revisions\s+WHERE document_path IN \(\?\)/.test(sql))) return;
       paused = true;
       native.harness.database.exec(`INSERT INTO commerce_authority_control_lease (
         singleton, lease_token, acquired_at_ms, expires_at_ms

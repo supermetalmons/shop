@@ -80,7 +80,7 @@ import {
   runCriticalRequestOperation,
   sleepWithSignal,
 } from './boundedRequest.js';
-import { withAuthenticatedRequest } from './authenticatedRequest.js';
+import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
 import {
@@ -2402,10 +2402,11 @@ export async function handleDeliveryReceiptRequest(
       if (deadline.timedOut()) {
         receiptError = new DeliveryReceiptError('deadline-exceeded', 'Delivery receipt request timed out.');
       } else if (error instanceof RequestIdentityError) {
-        receiptError = new DeliveryReceiptError(
-          error.kind === 'invalid-token' ? 'unauthenticated' : 'unavailable',
-          error.kind === 'invalid-token' ? 'Authentication is required.' : 'Authentication is temporarily unavailable.',
-        );
+        const mapped = requestIdentityErrorDetails(error, {
+          code: 'unavailable',
+          message: 'Authentication is temporarily unavailable.',
+        });
+        receiptError = new DeliveryReceiptError(mapped.code, mapped.message);
       } else if (error instanceof DeliveryReceiptError) {
         receiptError = error;
       } else if (error instanceof ProfileReadError) {
