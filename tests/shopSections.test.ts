@@ -63,7 +63,7 @@ test('shipment rows preserve retained-data warnings and keyboard image viewing',
   const opened: Array<Parameters<Parameters<typeof ShopShipmentsSection>[0]['openImageViewer']>> = [];
   const props: Parameters<typeof ShopShipmentsSection>[0] = {
     openClearCardModelViewer: () => undefined,
-    openImageViewer: (...args) => { opened.push(args); },
+    openImageViewer: (...args) => { opened.push(args); return true; },
     openInteractiveCardViewer: () => undefined,
     usesClearCard3dRevealForDropId: () => false,
     usesInteractiveCardPackRevealForDropId: () => false,

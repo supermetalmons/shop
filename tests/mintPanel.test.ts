@@ -162,10 +162,10 @@ test('both payment methods require an available size and submit the selected var
   fireEvent.click(unavailableSize);
   assert.equal(unavailableSize.getAttribute('aria-checked'), 'false');
 
-  fireEvent.click(view.getByRole('radio', { name: 'L', exact: true }));
-  fireEvent.click(view.getByRole('radio', { name: 'L', exact: true }));
-  assert.equal(view.getByRole('radio', { name: 'L', exact: true }).getAttribute('aria-checked'), 'false');
-  fireEvent.click(view.getByRole('radio', { name: 'XL', exact: true }));
+  fireEvent.click(view.getByRole('radio', { name: 'L' }));
+  fireEvent.click(view.getByRole('radio', { name: 'L' }));
+  assert.equal(view.getByRole('radio', { name: 'L' }).getAttribute('aria-checked'), 'false');
+  fireEvent.click(view.getByRole('radio', { name: 'XL' }));
   await submitBoth();
   assert.deepEqual(mints, [[1, 'XL']]);
   assert.deepEqual(payments, [[1, 'XL']]);
@@ -174,7 +174,7 @@ test('both payment methods require an available size and submit the selected var
     ...props,
     stats: { ...props.stats!, mintSelectionAvailability: { L: 5, XL: 0, '2XL': 0 } },
   }));
-  assert.equal(view.getByRole('radio', { name: 'XL', exact: true }).getAttribute('aria-checked'), 'false');
+  assert.equal(view.getByRole('radio', { name: 'XL' }).getAttribute('aria-checked'), 'false');
   await submitBoth();
   assert.deepEqual(mints, [[1, 'XL']]);
   assert.deepEqual(payments, [[1, 'XL']]);
@@ -183,7 +183,7 @@ test('both payment methods require an available size and submit the selected var
 test('size selection resets after a successful mint or after leaving size selection', () => {
   const props = sizedPanelProps();
   const view = render(createElement(MintPanel, props));
-  const large = () => view.getByRole('radio', { name: 'L', exact: true });
+  const large = () => view.getByRole('radio', { name: 'L' });
   assert.equal((large() as HTMLButtonElement).disabled, false);
   fireEvent.click(large());
   assert.equal(large().getAttribute('aria-checked'), 'true');

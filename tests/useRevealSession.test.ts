@@ -60,7 +60,7 @@ function item(id: string): InventoryItem {
 }
 
 function pending(id: string): PendingOpenBox {
-  return { boxAssetId: id, dropId: 'drop-a', owner: 'wallet-a' } as PendingOpenBox;
+  return { dropId: 'drop-a', pendingPda: `pending-${id}`, boxAssetId: id, dudeAssetIds: [] };
 }
 
 function scheduler() {
