@@ -5,6 +5,7 @@ import {
   type PendingPreparingTransaction,
   type PendingSubmittedTransaction,
 } from '../lib/pendingPreparedTransactions';
+import { isBlockhashExpiredError, isPotentiallySubmittedTransactionError } from '../lib/solana';
 
 export type BrowserLockManager = {
   request: <T>(
@@ -121,4 +122,84 @@ export function createPreparedTransactionCoordinator<Kind extends PreparedTransa
   }
 
   return { readPending, assertCurrent, reserve, recordSubmitted, getSubmitted, releaseReservation, clearReservation };
+}
+
+type SubmittedTransaction<Kind extends PreparedTransactionKind> = Extract<PendingSubmittedTransaction, { kind: Kind }>;
+
+type PreparedSubmissionOptions<Kind extends PreparedTransactionKind, Context> = {
+  wallet: string;
+  coordinator: ReturnType<typeof createPreparedTransactionCoordinator<Kind>>;
+  pendingSubmissionKeys: Set<string>;
+  forgetSubmission: (submission: SubmittedTransaction<Kind>) => boolean;
+  prepare: (attempt: number) => Promise<{
+    context: Context;
+    reservation: Extract<PendingPreparingTransaction, { kind: Kind }>;
+  } | null>;
+  send: (context: Context) => Promise<string>;
+  onConfirmed?: (submission: SubmittedTransaction<Kind>, context: Context) => void | Promise<void>;
+  onPending: (submission: SubmittedTransaction<Kind>, context: Context) => void | Promise<void>;
+  beforeRetry: () => boolean;
+};
+
+type PreparedSubmissionResult<Kind extends PreparedTransactionKind, Context> =
+  | { status: 'confirmed'; context: Context; signature: string; submission: SubmittedTransaction<Kind> | null }
+  | { status: 'pending'; context: Context; submission: SubmittedTransaction<Kind> }
+  | { status: 'deferred' };
+
+export function runPreparedSubmission<Kind extends PreparedTransactionKind, Context>(
+  {
+    wallet,
+    coordinator,
+    pendingSubmissionKeys,
+    forgetSubmission,
+    prepare,
+    send,
+    onConfirmed,
+    onPending,
+    beforeRetry,
+  }: PreparedSubmissionOptions<Kind, Context>,
+  lockManager: BrowserLockManager | null = browserLockManager(),
+): Promise<PreparedSubmissionResult<Kind, Context>> {
+  return withBrowserLock(
+    `mons:pending-prepared-submission:${wallet}`,
+    async (): Promise<PreparedSubmissionResult<Kind, Context>> => {
+      coordinator.assertCurrent();
+      for (let attempt = 0; ; attempt += 1) {
+        const prepared = await prepare(attempt);
+        if (!prepared) return { status: 'deferred' };
+        const { context, reservation } = prepared;
+        coordinator.reserve(reservation);
+        pendingSubmissionKeys.add(wallet);
+        try {
+          let signature: string;
+          try {
+            signature = await send(context);
+          } catch (error) {
+            pendingSubmissionKeys.delete(wallet);
+            const submission = coordinator.getSubmitted();
+            if (submission && isPotentiallySubmittedTransactionError(error)) {
+              coordinator.releaseReservation();
+              await onPending(submission, context);
+              return { status: 'pending', context, submission };
+            }
+            coordinator.clearReservation();
+            if (attempt > 0 || !isBlockhashExpiredError(error)) throw error;
+            if (!beforeRetry()) return { status: 'deferred' };
+            continue;
+          }
+          pendingSubmissionKeys.delete(wallet);
+          const submission = coordinator.getSubmitted();
+          if (submission) {
+            await onConfirmed?.(submission, context);
+            forgetSubmission(submission);
+          }
+          return { status: 'confirmed', context, signature, submission };
+        } finally {
+          pendingSubmissionKeys.delete(wallet);
+          coordinator.releaseReservation();
+        }
+      }
+    },
+    lockManager,
+  );
 }

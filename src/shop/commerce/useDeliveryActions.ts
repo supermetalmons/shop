@@ -2,10 +2,10 @@ import { useEffect } from 'react';
 import { requestDeliveryTx, issueReceipts } from '../../api/commerce';
 import { saveEncryptedAddress } from '../../api/profile';
 import type { FrontendDeploymentConfig } from '../../config/deployment';
-import { encryptAddressPayload, isBlockhashExpiredError, isPotentiallySubmittedTransactionError, sendPreparedTransaction, shortAddress } from '../../lib/solana';
+import { encryptAddressPayload, sendPreparedTransaction, shortAddress } from '../../lib/solana';
 import { isUserRejectedError } from './transactionSupport';
 import { isRetryableReceiptIssuanceError, retryWithBackoff } from '../../lib/apiErrors';
-import { createPreparedTransactionCoordinator, withBrowserLock } from '../preparedSubmission';
+import { createPreparedTransactionCoordinator, runPreparedSubmission } from '../preparedSubmission';
 import type { InventoryItem } from '../../types';
 import type { CommerceWalletContext, CommerceInventoryRefresh, PreparedTransactionSender, DeliveryRecovery, DropConnection } from './contracts';
 import type { usePreparedTransactionState } from './usePreparedTransactionState';
@@ -130,7 +130,6 @@ export function useDeliveryActions({
     const {
       assertCurrent: assertDeliveryWalletCurrent,
       recordSubmitted: recordSubmittedDelivery,
-      getSubmitted: getSubmittedDelivery,
     } = deliveryTransaction;
     if (!deliverableIds.length) {
       showToast(`Select ${boxLabelForDropId(undefined, 2)} or ${figureLabelForDropId(undefined, 2)} to ship`);
@@ -179,7 +178,6 @@ export function useDeliveryActions({
         assertDeliveryWalletCurrent();
         return prepared;
       };
-      let resp!: Awaited<ReturnType<typeof requestTx>>;
       const submitDelivery = (encodedTx: string) => sendPreparedTransaction(
         encodedTx,
         deliveryConnection,
@@ -192,73 +190,61 @@ export function useDeliveryActions({
           onSubmitted: recordSubmittedDelivery,
         },
       );
-      const submitWithBlockhashRetry = async (): Promise<string | null> => {
-        for (let attempt = 0; ; attempt += 1) {
-          deliveryTransaction.reserve({
-            kind: 'delivery',
-            phase: 'preparing',
-            wallet: deliveryWallet,
-            dropId: deliveryDrop.dropId,
-            createdAt: Date.now(),
-            operationId: createPendingPreparedOperationId(),
-            blockhashContextSlot: resp.blockhashContextSlot,
-            deliveryId: resp.deliveryId,
-            itemIds: [...deliverableIds],
-          });
-          pendingPreparedSubmissionKeysRef.current.add(deliveryWallet);
-          try {
-            const signature = await submitDelivery(resp.encodedTx);
-            const confirmedSubmission = getSubmittedDelivery();
-            if (confirmedSubmission) {
-              pendingPreparedSubmissionKeysRef.current.delete(deliveryWallet);
-              hideAssetsForWallet(deliveryWallet, deliverableIds);
-              forgetPendingPreparedTransaction(confirmedSubmission);
-            }
-            deliveryTransaction.releaseReservation();
-            return signature;
-          } catch (err) {
-            const pendingSubmission = getSubmittedDelivery();
-            pendingPreparedSubmissionKeysRef.current.delete(deliveryWallet);
-            if (pendingSubmission && isPotentiallySubmittedTransactionError(err)) {
-              deliveryTransaction.releaseReservation();
-              startShipmentRefresh(
-                pendingSubmission.wallet,
-                pendingSubmission.dropId,
-                pendingSubmission.deliveryId,
-                pendingSubmittedTransactionKey(pendingSubmission),
-              );
-              if (deliveryUiIsCurrent()) {
-                showToast(
-                  `Shipment submitted · id ${pendingSubmission.deliveryId} · confirmation pending · ${shortAddress(pendingSubmission.signature)}`,
-                );
-              }
-              const recovery = runDeliveryRecovery({
-                dropId: pendingSubmission.dropId,
-                deliveryId: pendingSubmission.deliveryId,
-                force: true,
-              });
-              void recovery.catch(() => undefined);
-              void reconcilePendingPreparedTransaction(pendingSubmission).catch(() => undefined);
-              return null;
-            }
-            deliveryTransaction.clearReservation();
-            if (attempt > 0 || !isBlockhashExpiredError(err)) throw err;
-            if (deliveryUiIsCurrent()) {
-              showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
-            }
-            resp = await requestTx();
-          }
-        }
-      };
-      const sig = await withBrowserLock(
-        `mons:pending-prepared-submission:${deliveryWallet}`,
-        async () => {
-          assertDeliveryWalletCurrent();
-          resp = await requestTx();
-          return submitWithBlockhashRetry();
+      const result = await runPreparedSubmission<'delivery', Awaited<ReturnType<typeof requestTx>>>({
+        wallet: deliveryWallet,
+        coordinator: deliveryTransaction,
+        pendingSubmissionKeys: pendingPreparedSubmissionKeysRef.current,
+        forgetSubmission: forgetPendingPreparedTransaction,
+        prepare: async () => {
+          const resp = await requestTx();
+          return {
+            context: resp,
+            reservation: {
+              kind: 'delivery',
+              phase: 'preparing',
+              wallet: deliveryWallet,
+              dropId: deliveryDrop.dropId,
+              createdAt: Date.now(),
+              operationId: createPendingPreparedOperationId(),
+              blockhashContextSlot: resp.blockhashContextSlot,
+              deliveryId: resp.deliveryId,
+              itemIds: [...deliverableIds],
+            },
+          };
         },
-      );
-      if (!sig) return;
+        send: (resp) => submitDelivery(resp.encodedTx),
+        onConfirmed: () => {
+          hideAssetsForWallet(deliveryWallet, deliverableIds);
+        },
+        onPending: (pendingSubmission) => {
+          startShipmentRefresh(
+            pendingSubmission.wallet,
+            pendingSubmission.dropId,
+            pendingSubmission.deliveryId,
+            pendingSubmittedTransactionKey(pendingSubmission),
+          );
+          if (deliveryUiIsCurrent()) {
+            showToast(
+              `Shipment submitted · id ${pendingSubmission.deliveryId} · confirmation pending · ${shortAddress(pendingSubmission.signature)}`,
+            );
+          }
+          const recovery = runDeliveryRecovery({
+            dropId: pendingSubmission.dropId,
+            deliveryId: pendingSubmission.deliveryId,
+            force: true,
+          });
+          void recovery.catch(() => undefined);
+          void reconcilePendingPreparedTransaction(pendingSubmission).catch(() => undefined);
+        },
+        beforeRetry: () => {
+          if (deliveryUiIsCurrent()) {
+            showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
+          }
+          return true;
+        },
+      });
+      if (result.status !== 'confirmed') return;
+      const { context: resp, signature: sig } = result;
       const idSuffix = resp.deliveryId ? ` · id ${resp.deliveryId}` : '';
       if (deliveryUiIsCurrent()) showToast(`Shipment submitted${idSuffix} · ${sig}`);
 

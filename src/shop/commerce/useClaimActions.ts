@@ -1,11 +1,11 @@
 import { PublicKey, type Connection } from '@solana/web3.js';
 import { claimStripeReceipt, requestClaimTx } from '../../api/commerce';
 import type { FrontendDeploymentConfig } from '../../config/deployment';
-import { isBlockhashExpiredError, isPotentiallySubmittedTransactionError, sendPreparedTransaction, shortAddress } from '../../lib/solana';
+import { sendPreparedTransaction, shortAddress } from '../../lib/solana';
 import { pendingSubmittedClaim } from '../../lib/pendingPreparedTransactions';
 import { hasAlphabeticClaimCodeCharacters, isStripeReceiptClaimCode } from '../../lib/stripeReceiptClaims';
 import type { InventoryItem } from '../../types';
-import { createPreparedTransactionCoordinator, withBrowserLock } from '../preparedSubmission';
+import { createPreparedTransactionCoordinator, runPreparedSubmission } from '../preparedSubmission';
 import type { CommerceWalletContext, CommerceInventoryRefresh, PreparedTransactionSender, DropConnection } from './contracts';
 import type { usePreparedTransactionState } from './usePreparedTransactionState';
 import type { useCommerceModals } from './useCommerceModals';
@@ -123,7 +123,6 @@ export function useClaimActions({
     const {
       assertCurrent: assertClaimReservationCurrent,
       recordSubmitted: recordSubmittedClaim,
-      getSubmitted: getSubmittedClaim,
     } = claimTransaction;
     const existingPending = claimTransaction.readPending();
     const existingPendingClaim = pendingSubmittedClaim(existingPending, claimWallet);
@@ -157,9 +156,6 @@ export function useClaimActions({
       assertClaimReservationCurrent();
       return prepared;
     };
-    let resp!: Awaited<ReturnType<typeof requestTx>>;
-    let claimDrop!: FrontendDeploymentConfig;
-    let claimConnection!: Connection;
     const submitClaim = (encodedTx: string, connection: Connection) => sendPreparedTransaction(
       encodedTx,
       connection,
@@ -172,16 +168,22 @@ export function useClaimActions({
         onSubmitted: recordSubmittedClaim,
       },
     );
-    const claimDeferred = await withBrowserLock(
-      `mons:pending-prepared-submission:${claimWallet}`,
-      async () => {
-        assertClaimReservationCurrent();
-        resp = await requestTx();
-        if (!numericClaimUiIsCurrent()) return true;
-        claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction response');
-        claimConnection = getDropConnection(claimDrop.dropId);
-        for (let attempt = 0; ; attempt += 1) {
-          claimTransaction.reserve({
+    const result = await runPreparedSubmission<'claim', { encodedTx: string; connection: Connection }>({
+      wallet: claimWallet,
+      coordinator: claimTransaction,
+      pendingSubmissionKeys: pendingPreparedSubmissionKeysRef.current,
+      forgetSubmission: forgetPendingPreparedTransaction,
+      prepare: async (attempt) => {
+        const resp = await requestTx();
+        if (!numericClaimUiIsCurrent()) return null;
+        const claimDrop = requireKnownDropConfig(
+          resp.dropId,
+          attempt === 0 ? 'claim transaction response' : 'claim transaction retry response',
+        );
+        const connection = getDropConnection(claimDrop.dropId);
+        return {
+          context: { encodedTx: resp.encodedTx, connection },
+          reservation: {
             kind: 'claim',
             phase: 'preparing',
             wallet: claimWallet,
@@ -191,45 +193,27 @@ export function useClaimActions({
             blockhashContextSlot: resp.blockhashContextSlot,
             certificates: [...resp.certificates],
             certificateId: resp.certificateId,
-          });
-          pendingPreparedSubmissionKeysRef.current.add(claimWallet);
-          try {
-            await submitClaim(resp.encodedTx, claimConnection);
-            const confirmedSubmission = getSubmittedClaim();
-            if (confirmedSubmission) {
-              pendingPreparedSubmissionKeysRef.current.delete(claimWallet);
-              forgetPendingPreparedTransaction(confirmedSubmission);
-            }
-            claimTransaction.releaseReservation();
-            return false;
-          } catch (err) {
-            const pendingSubmission = getSubmittedClaim();
-            pendingPreparedSubmissionKeysRef.current.delete(claimWallet);
-            if (pendingSubmission && isPotentiallySubmittedTransactionError(err)) {
-              claimTransaction.releaseReservation();
-              if (numericClaimUiIsCurrent()) {
-                showToast(`Claim submitted · confirmation pending · ${shortAddress(pendingSubmission.signature)}`);
-              }
-              void reconcilePendingPreparedTransaction(pendingSubmission, {
-                claimUiIsCurrent: numericClaimUiIsCurrent,
-                previousReceiptIds,
-              });
-              return true;
-            }
-            claimTransaction.clearReservation();
-            if (attempt > 0 || !isBlockhashExpiredError(err)) throw err;
-            if (!numericClaimUiIsCurrent()) return true;
-            showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
-            resp = await requestTx();
-            if (!numericClaimUiIsCurrent()) return true;
-            claimDrop = requireKnownDropConfig(resp.dropId, 'claim transaction retry response');
-            claimConnection = getDropConnection(claimDrop.dropId);
-          }
-        }
+          },
+        };
       },
-    );
-    if (claimDeferred) return { deferred: true };
-    const confirmedClaim = getSubmittedClaim();
+      send: ({ encodedTx, connection }) => submitClaim(encodedTx, connection),
+      onPending: (pendingSubmission) => {
+        if (numericClaimUiIsCurrent()) {
+          showToast(`Claim submitted · confirmation pending · ${shortAddress(pendingSubmission.signature)}`);
+        }
+        void reconcilePendingPreparedTransaction(pendingSubmission, {
+          claimUiIsCurrent: numericClaimUiIsCurrent,
+          previousReceiptIds,
+        });
+      },
+      beforeRetry: () => {
+        if (!numericClaimUiIsCurrent()) return false;
+        showToast('Prepared transaction expired before you approved it. Preparing a fresh one…');
+        return true;
+      },
+    });
+    if (result.status !== 'confirmed') return { deferred: true };
+    const confirmedClaim = result.submission;
     if (!confirmedClaim) throw new Error('Claim confirmed without a recoverable submission');
     return presentConfirmedNumericClaim(confirmedClaim, previousReceiptIds, numericClaimUiIsCurrent);
   };

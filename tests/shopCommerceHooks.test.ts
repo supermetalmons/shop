@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test, { afterEach } from 'node:test';
 import { useRef } from 'react';
 import bs58 from 'bs58';
-import { PublicKey, type Connection, type VersionedTransaction } from '@solana/web3.js';
+import { PublicKey, TransactionMessage, VersionedTransaction, type Connection } from '@solana/web3.js';
 import type { WalletContextState } from '@solana/wallet-adapter-react';
 import { getFrontendDrop } from '../src/config/deployment.ts';
 import type { ReceiptOperation } from '../src/lib/receiptTransfer.ts';
@@ -13,12 +13,17 @@ import { useCommerceModals } from '../src/shop/commerce/useCommerceModals.ts';
 import { useWalletTransactions } from '../src/shop/commerce/useWalletTransactions.ts';
 import { useClaimPresentation } from '../src/shop/commerce/useClaimPresentation.ts';
 import { usePreparedTransactionRecovery } from '../src/shop/commerce/usePreparedTransactionRecovery.ts';
-import { createPreparedTransactionCoordinator } from '../src/shop/preparedSubmission.ts';
+import { createPreparedTransactionCoordinator, runPreparedSubmission } from '../src/shop/preparedSubmission.ts';
+import { sendPreparedTransaction } from '../src/lib/solana.ts';
+import { PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS } from '../src/shop/commerce/transactionSupport.ts';
 import {
+  forgetPendingPreparedTransaction,
   loadPendingPreparedTransaction,
   pendingPreparedTransactionStorageKey,
   persistPendingPreparedTransaction,
+  replacePendingPreparedTransaction,
   type PendingPreparingDeliveryTransaction,
+  type PendingPreparingTransaction,
   type PendingSubmittedClaimTransaction,
   type PendingSubmittedDeliveryTransaction,
 } from '../src/lib/pendingPreparedTransactions.ts';
@@ -304,6 +309,79 @@ test('wallet signing checks the current wallet again before broadcasting', async
   await assert.rejects(submission, /wallet changed/);
   assert.equal(broadcasts, 0);
 });
+
+for (const change of ['wallet', 'claim modal'] as const) {
+  test(`prepared submission never signs when the ${change} changes after preparation`, async (t) => {
+    t.mock.method(console, 'error', () => undefined);
+    let currentWallet = walletA;
+    let claimGeneration = 1;
+    let signatures = 0;
+    let broadcasts = 0;
+    const wallet = {
+      ...walletContext(),
+      signTransaction: async (transaction: VersionedTransaction) => {
+        signatures += 1;
+        return transaction;
+      },
+    } as WalletContextState;
+    const { result } = renderHook(() => useWalletTransactions(wallet, () => undefined));
+    const connection = {
+      sendRawTransaction: async () => { broadcasts += 1; return signature; },
+    } as unknown as Connection;
+    const transaction = new VersionedTransaction(new TransactionMessage({
+      payerKey: new PublicKey(walletA), recentBlockhash: blockhash, instructions: [],
+    }).compileToV0Message());
+    const encodedTx = Buffer.from(transaction.serialize()).toString('base64');
+    const reservation: PendingPreparingTransaction = change === 'wallet'
+      ? preparingDelivery()
+      : {
+          kind: 'claim', phase: 'preparing', wallet: walletA, dropId: drop.dropId,
+          createdAt: Date.now(), operationId: '01'.repeat(16), blockhashContextSlot: 123,
+          certificateId: receiptId, certificates: [11],
+        };
+    const otherWalletReservation = { ...reservation, wallet: walletB };
+    assert.equal(persistPendingPreparedTransaction(otherWalletReservation), true);
+    const coordinator = createPreparedTransactionCoordinator(reservation.kind, {
+      wallet: walletA,
+      isCurrent: () => currentWallet === walletA && claimGeneration === 1,
+      readPending: (wallet) => loadPendingPreparedTransaction(wallet),
+      persistReservation: persistPendingPreparedTransaction,
+      persistSubmission: replacePendingPreparedTransaction,
+      forget: forgetPendingPreparedTransaction,
+    });
+    const pendingSubmissionKeys = new Set<string>();
+    await assert.rejects(runPreparedSubmission({
+      wallet: walletA, coordinator, pendingSubmissionKeys,
+      forgetSubmission: forgetPendingPreparedTransaction,
+      prepare: async () => {
+        coordinator.assertCurrent();
+        queueMicrotask(() => {
+          if (change === 'wallet') currentWallet = walletB;
+          else claimGeneration += 1;
+        });
+        return { context: encodedTx, reservation };
+      },
+      send: (encoded: string) => sendPreparedTransaction(
+        encoded,
+        connection,
+        (prepared) => result.current.signAndSendPreparedViaConnection(prepared, connection, {
+          assertWalletCurrent: coordinator.assertCurrent,
+          signedSendTimeoutMs: PREPARED_TRANSACTION_SIGNED_SEND_TIMEOUT_MS,
+          onBroadcastAttempt: coordinator.recordSubmitted,
+        }),
+        { onSubmitted: coordinator.recordSubmitted },
+      ),
+      onConfirmed: () => assert.fail('Stale submission cannot confirm'),
+      onPending: () => assert.fail('Unsigned transaction cannot need recovery'),
+      beforeRetry: () => assert.fail('Stale submission cannot retry'),
+    }, { request: async (_name, _options, callback) => callback({}) }), /Wallet changed while preparing/);
+    assert.equal(signatures, 0);
+    assert.equal(broadcasts, 0);
+    assert.equal(pendingSubmissionKeys.size, 0);
+    assert.equal(loadPendingPreparedTransaction(walletA), null);
+    assert.deepEqual(loadPendingPreparedTransaction(walletB), otherWalletReservation);
+  });
+}
 
 test('numeric claim preview queues once and abandons presentation after modal generation changes', async () => {
   const inventory: InventoryItem[] = [{
