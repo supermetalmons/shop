@@ -1,0 +1,55 @@
+.card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.receipts-section__head {
+  align-items: baseline;
+}
+
+.inventory-section,
+.inventory-section *,
+.shipments-section,
+.shipments-section *,
+.receipts-section,
+.receipts-section * {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.inventory-section,
+.shipments-section,
+.receipts-section {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button.receipts-section__code-button {
+  background: transparent;
+  border-radius: 0;
+  color: var(--accent);
+  line-height: 1;
+  padding: 0;
+}
+
+button.receipts-section__code-button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--accent-hover);
+}
+
+.placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+footer {
+  padding-top: 8px;
+  font-size: 13px;
+}
+

@@ -1,0 +1,28 @@
+@media (max-width: 640px) {
+  .page {
+    gap: 22px;
+  }
+
+  .drop-page-frame--active:not(.drop-page-frame--drops-panel) + .inventory-section {
+    margin-top: -18px;
+  }
+
+  .app-section {
+    padding-top: 20px;
+    gap: 14px;
+  }
+
+  .card {
+    padding: 20px;
+  }
+}
+
+.color-scheme-background-image {
+  background-image: var(--color-scheme-image-light);
+}
+
+@media (prefers-color-scheme: dark) {
+  .color-scheme-background-image {
+    background-image: var(--color-scheme-image-dark);
+  }
+}

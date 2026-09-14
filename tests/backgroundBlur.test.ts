@@ -40,8 +40,15 @@ const { getDrifCardByFigureId } = await import('../src/drifCards.ts');
 afterEach(cleanup);
 after(() => dom.window.close());
 
-const source = (relativePath: string) =>
-  readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+function source(relativePath: string, baseUrl = import.meta.url): string {
+  const url = new URL(relativePath, baseUrl);
+  const contents = readFileSync(url, 'utf8');
+  if (!url.pathname.endsWith('.css')) return contents;
+  return contents.replace(
+    /^@import\s+(['"])(\.{1,2}\/[^'"]+)\1\s*;[ \t]*$/gm,
+    (_match, _quote, importPath: string) => source(importPath, url.href),
+  );
+}
 
 function cssRule(styles: string, selector: string) {
   const marker = `${selector} {`;

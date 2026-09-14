@@ -1,0 +1,159 @@
+.inventory {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 16px;
+}
+
+.inventory--receipts {
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .inventory:not(.inventory--receipts) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px;
+  }
+
+  .inventory--receipts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .inventory--receipts .inventory__media {
+    padding: clamp(2px, 1.5vw, 6px);
+  }
+
+  .inventory--receipts .inventory__item--receipt .inventory__image,
+  .inventory--receipts .inventory__item--receipt .inventory__media > .placeholder {
+    width: 100%;
+    height: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .inventory--receipts {
+    gap: 6px;
+  }
+}
+
+@media (max-width: 340px) {
+  .inventory--receipts {
+    gap: 4px;
+  }
+
+}
+
+.inventory__item {
+  aspect-ratio: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  background: transparent;
+  border: 3px solid transparent;
+  border-radius: var(--radius);
+  padding: 0;
+  overflow: hidden;
+  position: relative;
+  transition: border-color 0.15s ease, background 0.15s ease;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.inventory__item * {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.inventory__size-badge {
+  position: absolute;
+  bottom: 8px;
+  right: 10px;
+  z-index: 2;
+  color: #5c5c5e;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .inventory__size-badge {
+    color: #b5b5b9;
+  }
+}
+
+.inventory__item--box .inventory__media {
+  padding: 6px;
+}
+
+.inventory__item--selectable,
+.inventory__item--viewable {
+  cursor: pointer;
+}
+
+.inventory__item--selectable:focus,
+.inventory__item--selectable:focus-visible,
+.inventory__item--viewable:focus,
+.inventory__item--viewable:focus-visible,
+.inventory__item--revealable:focus,
+.inventory__item--revealable:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.inventory--receipts .inventory__item:focus,
+.inventory--receipts .inventory__item:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.inventory__item--revealable {
+  cursor: pointer;
+}
+
+.inventory__item--selected {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+
+.inventory__item--receipt {
+  border-radius: 0;
+}
+
+.inventory__item--receipt .inventory__image {
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 0;
+  width: 88%;
+  height: 88%;
+}
+
+.inventory__item--receipt-drifella-shirt {
+  aspect-ratio: 932 / 1006;
+}
+
+.inventory__item--receipt-drifella-shirt .inventory__image {
+  aspect-ratio: 932 / 1006;
+  height: auto;
+  max-height: 88%;
+}
+
+@media (max-width: 720px) {
+  .inventory--receipts .inventory__item--receipt-drifella-shirt .inventory__image {
+    height: auto;
+    max-height: 100%;
+  }
+}
+
+.inventory__item--pending {
+  border: 2px dashed rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.02);
+}
+
