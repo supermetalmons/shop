@@ -33,7 +33,7 @@ export default function MiNoteCardsGallery({ onNotify }: MiNoteCardsGalleryProps
             <img
               key={card.mid}
               className="mi-note-cards__image"
-              src={card.mid}
+              src={card.mid.replace('/mid/', '/thumbs/')}
               alt={card.name}
               loading="lazy"
               decoding="async"

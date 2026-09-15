@@ -14,6 +14,8 @@
   width: 100%;
   aspect-ratio: 1;
   object-fit: contain;
+  font-size: 0;
+  color: transparent;
 }
 
 .mi-note-cards__notify {

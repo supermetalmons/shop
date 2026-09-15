@@ -61,15 +61,7 @@ class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { fail
   }
 
   render() {
-    if (this.state.failed) {
-      return (
-        <main aria-label="Mi Note cards">
-          <p role="alert">Unable to load the gallery.</p>
-          <button type="button" onClick={() => window.location.reload()}>Reload</button>
-        </main>
-      );
-    }
-    return this.props.children;
+    return this.state.failed ? null : this.props.children;
   }
 }
 
@@ -364,7 +356,7 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
         />
         {miNoteCardsPage ? (
           <MiNoteCardsErrorBoundary>
-            <Suspense fallback={<div role="status">Loading…</div>}>
+            <Suspense fallback={null}>
               <MiNoteCardsGallery onNotify={notifications.handleOpenNotify} />
             </Suspense>
           </MiNoteCardsErrorBoundary>
