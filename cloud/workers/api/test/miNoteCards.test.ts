@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MI_NOTE_2_CONTRACT_ADDRESS, MI_NOTE_CARDS_API_PATH } from '../../../../shared/miNoteCards.ts';
+import {
+  MI_NOTE_2_CONTRACT_ADDRESS,
+  MI_NOTE_3_CONTRACT_ADDRESS,
+  MI_NOTE_CONTRACT_ADDRESSES,
+  MI_NOTE_CARDS_API_PATH,
+  type MiNoteContractAddress,
+} from '../../../../shared/miNoteCards.ts';
 import { handleMiNoteCards } from '../src/miNoteCards.ts';
 
 const OWNER = '0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9';
@@ -11,8 +17,18 @@ const EXPIRY_HEADER = 'X-Mi-Note-Cards-Expires-At';
 type Dependencies = Parameters<typeof handleMiNoteCards>[2];
 type Metrics = Parameters<typeof handleMiNoteCards>[3];
 
-function nft(tokenId: string, balance = '1') {
-  return { contractAddress: MI_NOTE_2_CONTRACT_ADDRESS, tokenId, balance };
+function nft(tokenId: string, balance = '1', contractAddress: MiNoteContractAddress = MI_NOTE_2_CONTRACT_ADDRESS) {
+  return { contractAddress, tokenId, balance };
+}
+
+function ownership(tokenIds: string[] = ['1'], note3TokenIds: string[] = []) {
+  return {
+    ok: true,
+    tokenIdsByContract: {
+      [MI_NOTE_2_CONTRACT_ADDRESS]: tokenIds,
+      [MI_NOTE_3_CONTRACT_ADDRESS]: note3TokenIds,
+    },
+  };
 }
 
 function page(tokenIds: string[] = ['1'], pageKey?: string | null) {
@@ -93,7 +109,7 @@ test('mi note ownership sends fixed collection queries and follows encoded curso
     assert.equal(url.origin, 'https://eth-mainnet.g.alchemy.com');
     assert.equal(url.pathname, `/nft/v3/${API_KEY}/getNFTsForOwner`);
     assert.equal(url.searchParams.get('owner'), OWNER.toLowerCase());
-    assert.deepEqual(url.searchParams.getAll('contractAddresses[]'), [MI_NOTE_2_CONTRACT_ADDRESS]);
+    assert.deepEqual(url.searchParams.getAll('contractAddresses[]'), MI_NOTE_CONTRACT_ADDRESSES);
     assert.equal(url.searchParams.get('withMetadata'), 'false');
     assert.equal(url.searchParams.get('pageSize'), '100');
     assert.equal(url.searchParams.get('pageKey'), index === 0 ? null : 'cursor +/&=?');
@@ -122,6 +138,60 @@ test('mi note ownership normalizes uint256 IDs, deduplicates, and excludes zero 
   const result = await fixture.run();
   assert.deepEqual(await result.response.json(), { ok: true, tokenIds: ['0', '10', maxId] });
 });
+
+test('mi note v2 ownership retains both collections across mixed pages and deduplicates within each', async () => {
+  let calls = 0;
+  const fixture = setup({
+    providerFetch: async () => {
+      calls += 1;
+      return Response.json({
+        ownedNfts: calls === 1
+          ? [nft('12'), nft('0x02', '1', MI_NOTE_3_CONTRACT_ADDRESS), nft('2')]
+          : [
+            nft('00002', '1', MI_NOTE_3_CONTRACT_ADDRESS),
+            nft('12'),
+            { ...nft('4'), contractAddress: `0x${MI_NOTE_3_CONTRACT_ADDRESS.slice(2).toUpperCase()}` },
+            nft('7', '0', MI_NOTE_3_CONTRACT_ADDRESS),
+          ],
+        pageKey: calls === 1 ? 'next' : null,
+      });
+    },
+  });
+  const result = await fixture.run(request(`?address=${OWNER}&version=2`));
+  assert.equal(result.response.status, 200);
+  assert.deepEqual(await result.response.json(), ownership(['2', '12'], ['2', '4']));
+  assert.equal(calls, 2);
+  assertCors(result.response);
+});
+
+test('mi note legacy ownership stays empty when only Mi Note 3 is owned', async () => {
+  const fixture = setup({
+    providerFetch: async () => Response.json({ ownedNfts: [nft('2', '1', MI_NOTE_3_CONTRACT_ADDRESS)] }),
+  });
+  const legacy = await fixture.run();
+  assert.deepEqual(await legacy.response.json(), { ok: true, tokenIds: [] });
+  const v2 = await fixture.run(request(`?address=${OWNER}&version=2`));
+  assert.deepEqual(await v2.response.json(), ownership([], ['2']));
+});
+
+for (const version of ['version=', 'version=1', 'version=3', 'version=02', 'version=2&version=2', 'version=2&version=']) {
+  test(`mi note ownership rejects invalid response version ${version} before cache or provider access`, async () => {
+    let cacheCalls = 0;
+    const fixture = setup({
+      cache: {
+        match: async () => { cacheCalls += 1; return undefined; },
+        put: async () => { cacheCalls += 1; },
+      },
+    });
+    const result = await fixture.run(request(`?address=${OWNER}&${version}`));
+    assert.equal(result.response.status, 400);
+    assert.deepEqual(await result.response.json(), { ok: false, error: 'invalid-request' });
+    assert.equal(cacheCalls, 0);
+    assert.equal(fixture.metrics.upstreamCalls, 0);
+    assert.equal(fixture.rateKeys.length, 0);
+    assertCors(result.response);
+  });
+}
 
 for (const search of ['', '?address=', '?address=garbage', `?address=${OWNER}&address=${OWNER}`, '?address=vitalik.eth']) {
   test(`mi note ownership rejects invalid address query ${search || '(missing)'}`, async () => {
@@ -200,19 +270,24 @@ test('mi note ownership accepts exactly 100 complete pages and rejects further p
       providerFetch: async () => {
         const offset = calls * 100;
         calls += 1;
-        return page(
-          Array.from({ length: 100 }, (_, index) => String(offset + index)),
-          complete && calls === 100 ? null : String(calls),
-        );
+        return Response.json({
+          ownedNfts: Array.from({ length: 100 }, (_, index) => nft(
+            String(offset + index),
+            '1',
+            index % 2 === 0 ? MI_NOTE_2_CONTRACT_ADDRESS : MI_NOTE_3_CONTRACT_ADDRESS,
+          )),
+          pageKey: complete && calls === 100 ? null : String(calls),
+        });
       },
     });
-    const result = await fixture.run();
+    const result = await fixture.run(request(`?address=${OWNER}&version=2`));
     assert.equal(fixture.metrics.upstreamCalls, 100);
     assert.equal(result.response.status, complete ? 200 : 502);
     if (complete) {
-      const body = await result.response.json() as { tokenIds: string[] };
-      assert.equal(body.tokenIds.length, 10_000);
-      assert.equal(body.tokenIds.at(-1), '9999');
+      const body = await result.response.json() as ReturnType<typeof ownership>;
+      assert.equal(body.tokenIdsByContract[MI_NOTE_2_CONTRACT_ADDRESS].length, 5_000);
+      assert.equal(body.tokenIdsByContract[MI_NOTE_3_CONTRACT_ADDRESS].length, 5_000);
+      assert.equal(body.tokenIdsByContract[MI_NOTE_3_CONTRACT_ADDRESS].at(-1), '9999');
     }
   }
 });
@@ -362,6 +437,8 @@ test('mi note ownership caches populated and empty results for 60 seconds per lo
     assert.equal(entries.size, 1);
     const [cacheUrl, cached] = [...entries.entries()][0];
     assert.equal(new URL(cacheUrl).searchParams.get('address'), OWNER.toLowerCase());
+    assert.equal(new URL(cacheUrl).searchParams.get('version'), '2');
+    assert.deepEqual(await cached.clone().json(), ownership(tokenIds));
     assert.equal(cached.headers.get('Cache-Control'), 'public, max-age=60');
     assert.equal(cached.headers.get(EXPIRY_HEADER), String(NOW + 60_000));
     assert.equal(cached.headers.has('Access-Control-Allow-Origin'), false);
@@ -377,12 +454,53 @@ test('mi note ownership caches populated and empty results for 60 seconds per lo
   }
 });
 
+test('mi note legacy and v2 requests share only the combined v2 cache and project the response', async () => {
+  for (const legacyFirst of [true, false]) {
+    const entries = new Map<string, Response>();
+    const lookups: string[] = [];
+    const oldCacheUrl = `https://api.mons.shop${MI_NOTE_CARDS_API_PATH}?address=${OWNER.toLowerCase()}`;
+    entries.set(oldCacheUrl, Response.json({ ok: true, tokenIds: ['99'] }, {
+      headers: { [EXPIRY_HEADER]: String(NOW + 60_000) },
+    }));
+    const fixture = setup({
+      providerFetch: async () => Response.json({
+        ownedNfts: [nft('2'), nft('2', '1', MI_NOTE_3_CONTRACT_ADDRESS), nft('5', '1', MI_NOTE_3_CONTRACT_ADDRESS)],
+      }),
+      cache: {
+        match: async (input) => {
+          const url = new Request(input).url;
+          lookups.push(url);
+          return entries.get(url)?.clone();
+        },
+        put: async (input, response) => { entries.set(new Request(input).url, response.clone()); },
+      },
+    });
+    const first = await fixture.run(request(`?address=${OWNER}${legacyFirst ? '' : '&version=2'}`));
+    assert.equal(first.cacheStatus, 'MISS');
+    assert.deepEqual(await first.response.json(), legacyFirst ? { ok: true, tokenIds: ['2'] } : ownership(['2'], ['2', '5']));
+    await Promise.all(fixture.deferred);
+    const newCacheUrl = `${oldCacheUrl}&version=2`;
+    assert.deepEqual(await entries.get(newCacheUrl)?.clone().json(), ownership(['2'], ['2', '5']));
+    const second = await fixture.run(request(`?address=${OWNER.toLowerCase()}${legacyFirst ? '&version=2' : ''}`));
+    assert.equal(second.cacheStatus, 'HIT');
+    assert.deepEqual(await second.response.json(), legacyFirst ? ownership(['2'], ['2', '5']) : { ok: true, tokenIds: ['2'] });
+    assert.deepEqual(lookups, [newCacheUrl, newCacheUrl]);
+    assert.equal(fixture.metrics.upstreamCalls, 1);
+    assert.equal(entries.size, 2);
+  }
+});
+
 for (const cached of [
-  () => Response.json({ ok: true, tokenIds: ['1'] }),
-  () => Response.json({ ok: true, tokenIds: ['1'] }, { headers: { [EXPIRY_HEADER]: String(NOW) } }),
-  () => Response.json({ ok: true, tokenIds: ['1'] }, { headers: { [EXPIRY_HEADER]: String(NOW + 60_001) } }),
-  () => Response.json({ ok: true, tokenIds: ['01'] }, { headers: { [EXPIRY_HEADER]: String(NOW + 60_000) } }),
-  () => Response.json({ ok: true, tokenIds: ['1', '1'] }, { headers: { [EXPIRY_HEADER]: String(NOW + 60_000) } }),
+  () => Response.json(ownership()),
+  () => Response.json(ownership(), { headers: { [EXPIRY_HEADER]: String(NOW) } }),
+  () => Response.json(ownership(), { headers: { [EXPIRY_HEADER]: String(NOW + 60_001) } }),
+  () => Response.json(ownership(['01']), { headers: { [EXPIRY_HEADER]: String(NOW + 60_000) } }),
+  () => Response.json(ownership(['1', '1']), { headers: { [EXPIRY_HEADER]: String(NOW + 60_000) } }),
+  () => Response.json({ ok: true, tokenIds: ['1'] }, { headers: { [EXPIRY_HEADER]: String(NOW + 60_000) } }),
+  () => Response.json(ownership(
+    Array.from({ length: 5001 }, (_, index) => String(index)),
+    Array.from({ length: 5000 }, (_, index) => String(index)),
+  ), { headers: { [EXPIRY_HEADER]: String(NOW + 60_000) } }),
   () => new Response('{', { headers: { 'Content-Type': 'application/json', [EXPIRY_HEADER]: String(NOW + 60_000) } }),
 ]) {
   test('mi note ownership treats invalid or expired cached results as misses', async () => {
@@ -417,7 +535,7 @@ test('mi note ownership rechecks cache expiry after reading the body', async () 
       match: async () => new Response(new ReadableStream<Uint8Array>({
         pull(controller) {
           currentTime = NOW + 1;
-          controller.enqueue(new TextEncoder().encode(JSON.stringify({ ok: true, tokenIds: ['8'] })));
+          controller.enqueue(new TextEncoder().encode(JSON.stringify(ownership(['8']))));
           controller.close();
         },
       }, { highWaterMark: 0 }), {

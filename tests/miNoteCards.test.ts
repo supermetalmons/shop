@@ -3,7 +3,7 @@ import { registerHooks } from 'node:module';
 import test, { after, afterEach } from 'node:test';
 import { createElement } from 'react';
 import miNoteCollections from '../mi_note_eth.json';
-import { MI_NOTE_2_CONTRACT_ADDRESS } from '../shared/miNoteCards.ts';
+import { MI_NOTE_2_CONTRACT_ADDRESS, MI_NOTE_3_CONTRACT_ADDRESS } from '../shared/miNoteCards.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
 const { dom } = setupFrontendDom();
@@ -22,6 +22,7 @@ cssImports.deregister();
 const ADDRESS = '0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9';
 const OTHER_ADDRESS = '0x1111111111111111111111111111111111111111';
 const COLLECTION = miNoteCollections.find((collection) => collection.contractAddress === MI_NOTE_2_CONTRACT_ADDRESS)!;
+const COLLECTION_3 = miNoteCollections.find((collection) => collection.contractAddress === MI_NOTE_3_CONTRACT_ADDRESS)!;
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -40,6 +41,16 @@ function navigateSearch(search: string, event = 'popstate') {
     setSearch(search);
     window.dispatchEvent(new dom.window.Event(event));
   });
+}
+
+function holdings(miNote2: string[] = [], miNote3: string[] = []) {
+  return {
+    ok: true,
+    tokenIdsByContract: {
+      [MI_NOTE_2_CONTRACT_ADDRESS]: miNote2,
+      [MI_NOTE_3_CONTRACT_ADDRESS]: miNote3,
+    },
+  };
 }
 
 function captureRequests(ignoreAborts = false) {
@@ -73,18 +84,43 @@ test('no address preserves 300 unique random cards without an ownership request'
   assert.equal(requests.length, 0);
 });
 
-test('address mode starts empty and returns only catalogued Mi Note 2 cards in catalog order', async () => {
+test('address mode starts empty and returns only catalogued holdings in collection and catalog order', async () => {
   setSearch(`?address=${ADDRESS}`);
   const requests = captureRequests();
   const { result } = renderHook(useMiNoteCards);
   assert.deepEqual(result.current, []);
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, `https://api.mons.shop/mi-note-cards?address=${ADDRESS.toLowerCase()}`);
+  assert.equal(requests[0].url, `https://api.mons.shop/mi-note-cards?address=${ADDRESS.toLowerCase()}&version=2`);
   await act(async () => {
-    requests[0].resolve(Response.json({ ok: true, tokenIds: ['1154', '779', '1', '999999'] }));
+    requests[0].resolve(Response.json(holdings(['1154', '779', '1', '999999'], ['117', '2', '1', '999999'])));
   });
-  assert.deepEqual(result.current.map((card) => card.id), ['1', '1154']);
-  assert.ok(result.current.every((card) => card.mid.includes('/mi_note_2/mid/')));
+  assert.deepEqual(result.current, [
+    ...COLLECTION.tokens.filter((card) => ['1', '1154'].includes(card.id)),
+    ...COLLECTION_3.tokens.filter((card) => ['2', '117'].includes(card.id)),
+  ]);
+});
+
+test('Mi Note 3-only holdings do not display Mi Note 2 cards with the same IDs', async () => {
+  setSearch(`?address=${ADDRESS}`);
+  const requests = captureRequests();
+  const { result } = renderHook(useMiNoteCards);
+  await act(async () => {
+    requests[0].resolve(Response.json(holdings([], ['2', '3'])));
+  });
+  assert.deepEqual(result.current, COLLECTION_3.tokens.filter((card) => ['2', '3'].includes(card.id)));
+  assert.equal(result.current.length, 2);
+  assert.ok(result.current.every((card) => card.mid.includes('/mi_note_3/mid/')));
+});
+
+test('the same token ID owned in both collections displays both cards', async () => {
+  setSearch(`?address=${ADDRESS}`);
+  const requests = captureRequests();
+  const { result } = renderHook(useMiNoteCards);
+  await act(async () => {
+    requests[0].resolve(Response.json(holdings(['2'], ['2'])));
+  });
+  assert.deepEqual(result.current, [COLLECTION.tokens.find((card) => card.id === '2'), COLLECTION_3.tokens[0]]);
+  assert.equal(new Set(result.current.map((card) => card.mid)).size, 2);
 });
 
 test('address mode shows every known holding without the random gallery limit', async () => {
@@ -92,10 +128,13 @@ test('address mode shows every known holding without the random gallery limit', 
   const requests = captureRequests();
   const { result } = renderHook(useMiNoteCards);
   await act(async () => {
-    requests[0].resolve(Response.json({ ok: true, tokenIds: COLLECTION.tokens.map((card) => card.id).reverse() }));
+    requests[0].resolve(Response.json(holdings(
+      COLLECTION.tokens.map((card) => card.id).reverse(),
+      COLLECTION_3.tokens.map((card) => card.id).reverse(),
+    )));
   });
-  assert.equal(result.current.length, 1117);
-  assert.deepEqual(result.current, COLLECTION.tokens);
+  assert.equal(result.current.length, 1222);
+  assert.deepEqual(result.current, [...COLLECTION.tokens, ...COLLECTION_3.tokens]);
 });
 
 for (const search of ['?address=', '?address=invalid', `?address=${ADDRESS}&address=${OTHER_ADDRESS}`]) {
@@ -118,7 +157,7 @@ for (const outcome of ['no holdings', 'provider error', 'network error', 'invali
       else if (outcome === 'provider error') {
         requests[0].resolve(Response.json({ ok: false, error: 'provider-unavailable' }, { status: 502 }));
       } else if (outcome === 'invalid response') requests[0].resolve(Response.json({ ok: true, tokenIds: [1] }));
-      else requests[0].resolve(Response.json({ ok: true, tokenIds: [] }));
+      else requests[0].resolve(Response.json(holdings()));
     });
     assert.deepEqual(result.current, []);
   });
@@ -136,13 +175,13 @@ test('query navigation clears previous cards before a new request and never show
   renders.length = 0;
   navigateSearch(`?address=${ADDRESS}`, 'mons:navigate');
   assert.ok(renders.every((cards) => cards.length === 0));
-  await act(async () => { requests[0].resolve(Response.json({ ok: true, tokenIds: ['1'] })); });
+  await act(async () => { requests[0].resolve(Response.json(holdings(['1']))); });
   assert.deepEqual(result.current.map((card) => card.id), ['1']);
 
   renders.length = 0;
   navigateSearch(`?address=${OTHER_ADDRESS}`);
   assert.ok(renders.every((cards) => cards.length === 0));
-  await act(async () => { requests[1].resolve(Response.json({ ok: true, tokenIds: ['2'] })); });
+  await act(async () => { requests[1].resolve(Response.json(holdings([], ['2']))); });
   assert.deepEqual(result.current.map((card) => card.id), ['2']);
 
   navigateSearch('?address=invalid', 'pageshow');
@@ -159,8 +198,8 @@ test('late results from an aborted address cannot replace the current holdings',
   const { result } = renderHook(useMiNoteCards);
   navigateSearch(`?address=${OTHER_ADDRESS}`);
   assert.equal(requests[0].signal.aborted, true);
-  await act(async () => { requests[1].resolve(Response.json({ ok: true, tokenIds: ['2'] })); });
-  await act(async () => { requests[0].resolve(Response.json({ ok: true, tokenIds: ['1'] })); });
+  await act(async () => { requests[1].resolve(Response.json(holdings([], ['2']))); });
+  await act(async () => { requests[0].resolve(Response.json(holdings(['1']))); });
   assert.deepEqual(result.current.map((card) => card.id), ['2']);
 });
 
@@ -168,12 +207,12 @@ test('returning to a previously visited address stays empty until its new reques
   setSearch(`?address=${ADDRESS}`);
   const requests = captureRequests();
   const { result } = renderHook(useMiNoteCards);
-  await act(async () => { requests[0].resolve(Response.json({ ok: true, tokenIds: ['1'] })); });
+  await act(async () => { requests[0].resolve(Response.json(holdings(['1']))); });
   navigateSearch(`?address=${OTHER_ADDRESS}`);
   navigateSearch(`?address=${ADDRESS}`);
   assert.deepEqual(result.current, []);
   assert.equal(requests[1].signal.aborted, true);
-  await act(async () => { requests[2].resolve(Response.json({ ok: true, tokenIds: ['3'] })); });
+  await act(async () => { requests[2].resolve(Response.json(holdings([], ['3']))); });
   assert.deepEqual(result.current.map((card) => card.id), ['3']);
 });
 
@@ -197,10 +236,13 @@ test('gallery keeps its thumbnail rendering and Notify me button without adding 
   fireEvent.click(gallery.getByRole('button', { name: 'Notify me' }));
   assert.equal(notifications, 1);
 
-  await act(async () => { requests[0].resolve(Response.json({ ok: true, tokenIds: ['1'] })); });
-  const image = gallery.getByRole('img', { name: COLLECTION.tokens[0].name });
-  assert.equal(image.getAttribute('src'), COLLECTION.tokens[0].mid.replace('/mid/', '/thumbs/'));
-  assert.equal(image.getAttribute('loading'), 'lazy');
-  assert.equal(image.getAttribute('decoding'), 'async');
+  await act(async () => { requests[0].resolve(Response.json(holdings(['2'], ['2']))); });
+  assert.equal(gallery.getAllByRole('img').length, 2);
+  for (const card of [COLLECTION.tokens.find((token) => token.id === '2')!, COLLECTION_3.tokens[0]]) {
+    const image = gallery.getByRole('img', { name: card.name });
+    assert.equal(image.getAttribute('src'), card.mid.replace('/mid/', '/thumbs/'));
+    assert.equal(image.getAttribute('loading'), 'lazy');
+    assert.equal(image.getAttribute('decoding'), 'async');
+  }
   assert.equal(gallery.getAllByRole('button').length, 1);
 });

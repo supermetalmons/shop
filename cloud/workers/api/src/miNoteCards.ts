@@ -1,10 +1,14 @@
 import {
   MI_NOTE_2_CONTRACT_ADDRESS,
+  MI_NOTE_3_CONTRACT_ADDRESS,
+  MI_NOTE_CONTRACT_ADDRESSES,
   MI_NOTE_CARDS_API_PATH,
-  isExactMiNoteCardsResponse,
+  isExactMiNoteCardsResponseV2,
   miNoteAddressFromSearch,
   normalizeMiNoteAddress,
-  type MiNoteCardsResponse,
+  type MiNoteCardsResponseV2,
+  type MiNoteContractAddress,
+  type MiNoteTokenIdsByContract,
 } from '../../../../shared/miNoteCards.js';
 import {
   createRequestDeadline,
@@ -76,7 +80,7 @@ async function readCachedOwnership(
   dependencies: MiNoteCardsDependencies,
   signal: AbortSignal,
   now: () => number,
-): Promise<MiNoteCardsResponse | null> {
+): Promise<MiNoteCardsResponseV2 | null> {
   if (!dependencies.cache) return null;
   try {
     const cached = await responseWithSignal(dependencies.cache.match(cacheRequest), signal);
@@ -97,7 +101,7 @@ async function readCachedOwnership(
       createError: providerFailure,
     });
     if (expiresAt <= now()) return null;
-    if (isExactMiNoteCardsResponse(body)) return body;
+    if (isExactMiNoteCardsResponseV2(body)) return body;
     logEvent(dependencies, 'mi_note_cards_cache_invalid');
   } catch {
     if (signal.aborted) throw signal.reason;
@@ -112,15 +116,20 @@ async function fetchOwnership(
   dependencies: MiNoteCardsDependencies,
   metrics: WorkerRequestMetrics,
   signal: AbortSignal,
-): Promise<MiNoteCardsResponse> {
-  const tokenIds = new Set<string>();
+): Promise<MiNoteCardsResponseV2> {
+  const tokenIds: Record<MiNoteContractAddress, Set<string>> = {
+    [MI_NOTE_2_CONTRACT_ADDRESS]: new Set(),
+    [MI_NOTE_3_CONTRACT_ADDRESS]: new Set(),
+  };
   const pageKeys = new Set<string>();
   let pageKey: string | undefined;
   for (let page = 0; page < MAX_PAGES; page += 1) {
     if (signal.aborted) throw signal.reason;
     const url = new URL(`https://eth-mainnet.g.alchemy.com/nft/v3/${encodeURIComponent(apiKey)}/getNFTsForOwner`);
     url.searchParams.set('owner', address);
-    url.searchParams.set('contractAddresses[]', MI_NOTE_2_CONTRACT_ADDRESS);
+    for (const contract of MI_NOTE_CONTRACT_ADDRESSES) {
+      url.searchParams.append('contractAddresses[]', contract);
+    }
     url.searchParams.set('withMetadata', 'false');
     url.searchParams.set('pageSize', String(PAGE_SIZE));
     if (pageKey) url.searchParams.set('pageKey', pageKey);
@@ -152,20 +161,26 @@ async function fetchOwnership(
       throw providerFailure();
     }
     for (const nft of body.ownedNfts) {
-      if (!isRecord(nft) || normalizeMiNoteAddress(nft.contractAddress) !== MI_NOTE_2_CONTRACT_ADDRESS) {
+      if (!isRecord(nft)) throw providerFailure();
+      const contract = normalizeMiNoteAddress(nft.contractAddress);
+      if (contract !== MI_NOTE_2_CONTRACT_ADDRESS && contract !== MI_NOTE_3_CONTRACT_ADDRESS) {
         throw providerFailure();
       }
       const tokenId = uint256(nft.tokenId);
       const balance = uint256(nft.balance);
       if (tokenId === null || balance === null) throw providerFailure();
-      if (balance > 0n) tokenIds.add(tokenId.toString());
+      if (balance > 0n) tokenIds[contract].add(tokenId.toString());
     }
     if (body.pageKey === null || body.pageKey === undefined) {
-      const result: MiNoteCardsResponse = {
-        ok: true,
-        tokenIds: [...tokenIds].sort((left, right) => BigInt(left) < BigInt(right) ? -1 : 1),
+      const tokenIdsByContract: MiNoteTokenIdsByContract = {
+        [MI_NOTE_2_CONTRACT_ADDRESS]: [],
+        [MI_NOTE_3_CONTRACT_ADDRESS]: [],
       };
-      if (!isExactMiNoteCardsResponse(result)) throw providerFailure();
+      for (const contract of MI_NOTE_CONTRACT_ADDRESSES) {
+        tokenIdsByContract[contract] = [...tokenIds[contract]].sort((left, right) => BigInt(left) < BigInt(right) ? -1 : 1);
+      }
+      const result: MiNoteCardsResponseV2 = { ok: true, tokenIdsByContract };
+      if (!isExactMiNoteCardsResponseV2(result)) throw providerFailure();
       return result;
     }
     if (
@@ -193,14 +208,20 @@ export async function handleMiNoteCards(
   if (!origin) return result(jsonResponse({ ok: false, error: 'origin-not-allowed' }, 403));
   const url = new URL(request.url);
   const { address } = miNoteAddressFromSearch(url.search);
-  if (!address) return result(jsonResponse({ ok: false, error: 'invalid-request' }, 400));
+  const versions = url.searchParams.getAll('version');
+  if (!address || (versions.length > 0 && (versions.length !== 1 || versions[0] !== '2'))) {
+    return result(jsonResponse({ ok: false, error: 'invalid-request' }, 400));
+  }
+  const ownershipResponse = (body: MiNoteCardsResponseV2) => jsonResponse(versions.length === 0
+    ? { ok: true, tokenIds: body.tokenIdsByContract[MI_NOTE_2_CONTRACT_ADDRESS] }
+    : body, 200);
   const now = dependencies.now ?? Date.now;
   const deadline = createRequestDeadline(request, {
     timeoutMs: dependencies.timeoutMs ?? 30_000,
     timeoutMessage: 'Mi note ownership request timed out',
   });
   let cacheWrite: Promise<void> | undefined;
-  let body: MiNoteCardsResponse;
+  let body: MiNoteCardsResponseV2;
   try {
     await raceWithSignal(observePublicRateLimit({
       binding: env.PUBLIC_SHOP_RATE_LIMITER,
@@ -212,9 +233,10 @@ export async function handleMiNoteCards(
     }), deadline.signal);
     const cacheUrl = new URL(MI_NOTE_CARDS_API_PATH, url.origin);
     cacheUrl.searchParams.set('address', address);
+    cacheUrl.searchParams.set('version', '2');
     const cacheRequest = new Request(cacheUrl);
     const cached = await readCachedOwnership(cacheRequest, dependencies, deadline.signal, now);
-    if (cached) return result(jsonResponse(cached, 200), 'HIT');
+    if (cached) return result(ownershipResponse(cached), 'HIT');
     const apiKey = typeof env.ALCHEMY_MI_NOTE_API_KEY === 'string' ? env.ALCHEMY_MI_NOTE_API_KEY.trim() : '';
     if (!apiKey) throw providerFailure();
     body = await fetchOwnership(address, apiKey, dependencies, metrics, deadline.signal);
@@ -249,5 +271,5 @@ export async function handleMiNoteCards(
       logEvent(dependencies, 'mi_note_cards_cache_registration_failed');
     }
   }
-  return result(jsonResponse(body, 200), 'MISS');
+  return result(ownershipResponse(body), 'MISS');
 }

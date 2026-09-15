@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import miNoteCollections from '../../mi_note_eth.json';
-import { MI_NOTE_2_CONTRACT_ADDRESS, miNoteAddressFromSearch } from '../../shared/miNoteCards.ts';
-import { fetchMiNoteTokenIds } from '../lib/shopApi';
+import { MI_NOTE_CONTRACT_ADDRESSES, miNoteAddressFromSearch } from '../../shared/miNoteCards.ts';
+import { fetchMiNoteHoldings } from '../lib/shopApi';
 import { subscribeToNavigation } from '../navigation';
 
 const MI_NOTE_IMAGES = miNoteCollections.flatMap((collection) => collection.tokens);
-const MI_NOTE_2_IMAGES = miNoteCollections.find(
-  (collection) => collection.contractAddress.toLowerCase() === MI_NOTE_2_CONTRACT_ADDRESS,
-)!.tokens;
+const MI_NOTE_OWNED_COLLECTIONS = MI_NOTE_CONTRACT_ADDRESSES.map((contractAddress) => ({
+  contractAddress,
+  tokens: miNoteCollections.find(
+    (collection) => collection.contractAddress.toLowerCase() === contractAddress,
+  )!.tokens,
+}));
 const MI_NOTE_CARD_COUNT = 300;
 
 function selectRandomCards() {
@@ -38,11 +41,14 @@ export function useMiNoteCards() {
     const controller = new AbortController();
     let active = true;
 
-    fetchMiNoteTokenIds(request.address, controller.signal).then(
-      (tokenIds) => {
+    fetchMiNoteHoldings(request.address, controller.signal).then(
+      (tokenIdsByContract) => {
         if (!active) return;
-        const ownedIds = new Set(tokenIds);
-        setOwnedCards({ request, cards: MI_NOTE_2_IMAGES.filter((card) => ownedIds.has(card.id)) });
+        const cards = MI_NOTE_OWNED_COLLECTIONS.flatMap(({ contractAddress, tokens }) => {
+          const ownedIds = new Set(tokenIdsByContract[contractAddress]);
+          return tokens.filter((card) => ownedIds.has(card.id));
+        });
+        setOwnedCards({ request, cards });
       },
       () => {
         if (active) setOwnedCards({ request, cards: [] });
