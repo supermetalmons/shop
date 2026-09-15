@@ -82,42 +82,38 @@ automatically treated as live code.
 
 `/mi_note_cards` shows 300 random cards. Add one Ethereum address parameter, such
 as `/mi_note_cards?address=0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9`, to show
-all owned Mi Note 2, Mi Note 3, and original Mi Note tokens that have images in
-`mi_note_eth.json`. Completed collections appear immediately, in catalog order,
-with Mi Note 2 followed by Mi Note 3 and original Mi Note. A failed collection
-does not remove results from the other collections. Invalid or empty addresses
-and empty ownership leave the grid empty. No wallet connection is required.
+owned tokens that have images in `mi_note_eth.json`. Cards appear together in
+catalog order: Mi Note 3, Mi Note 2, then original Mi Note. A failed collection
+leaves the other collections available. Invalid or empty addresses and empty
+ownership leave the grid empty. No wallet connection is required.
 
-The browser calls `GET /mi-note-cards?address=...` on the API Worker with
-`Accept: application/x-ndjson`. The Worker queries Alchemy NFT API v3 on Ethereum
-Mainnet for Mi Note 2 contract
-`0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f` and Mi Note 3 contract
-`0xc22bd85e6d6c058226f46a693f0df4054496db5b` in one paginated lookup. In parallel,
-it reads the 166 original catalog IDs from the shared ERC-1155 contract
-`0x495f947276749ce646f68ac8c248420045cb7b5e` using one Alchemy Ethereum
-`balanceOfBatch` call. Original ownership uses minted on-chain balances.
-Each collection starts an OpenSea backup after one second, or immediately if
-its Alchemy lookup fails. The first provider to finish a valid complete lookup
-wins that collection; partial provider pages are never published.
+The browser calls `GET /mi-note-cards?address=...` on the API Worker and receives
+one JSON response after both provider lookups finish. The Worker starts these
+lookups concurrently:
 
-The stream sends one `collection` or `error` event per contract, followed by
-`done`. Blank keepalive lines let the runtime detect disconnects during idle
-provider requests; clients ignore them. Collection events include
-`contractAddress`, `tokenIds`, `provider`, and `visibilityLimited`; the latter
-is true for OpenSea because its account index
-can omit hidden NFTs even when auto-hidden items are requested. Without the
-NDJSON accept header, the endpoint returns JSON containing `ok`,
-`tokenIdsByContract`, and `resultsByContract`, with all three contract keys.
-Token IDs are distinct within each contract; the same ID can belong to several
-collections. If every collection fails, JSON requests return 502 or 504;
-streaming requests report those failures as events after their 200 headers.
+- Alchemy NFT API v3 on Ethereum Mainnet queries Mi Note 2 contract
+  `0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f` and Mi Note 3 contract
+  `0xc22bd85e6d6c058226f46a693f0df4054496db5b` in one paginated lookup.
+- OpenSea queries the `minote` collection for original Mi Note on the shared
+  ERC-1155 contract `0x495f947276749ce646f68ac8c248420045cb7b5e`, retaining only
+  the 166 original catalog IDs.
+
+The JSON envelope contains `ok`, `tokenIdsByContract`, and `resultsByContract`,
+with all three contract keys. Token IDs are distinct within each contract; the
+same ID can belong to several collections. Successful results identify their
+provider and include `visibilityLimited`: false for Mi Note 2 and 3 from
+Alchemy, true for original Mi Note from OpenSea. OpenSea's account index can
+omit hidden NFTs even when auto-hidden items are requested. Collection
+failures have an empty token list and an error result. If every collection
+fails, the endpoint returns 502 or 504.
 
 Successful collection results, including empty lists and provider metadata,
-are cached separately for 60 seconds per normalized address and contract.
+are cached separately for 60 seconds per normalized address and contract using
+cache version 4. Cached results must match the collection's assigned provider.
 Browser responses use `no-store`. Failures are never cached. All collection
 lookups share a 30-second deadline; provider pages are limited to 256 KiB,
-100 pages, and 10,000 returned token IDs overall. Leaving the page cancels
-unfinished lookups.
+100 pages, and 10,000 returned token IDs overall. Client cancellation propagates
+to unfinished lookups.
 
 Use the Alchemy app `mons.shop` (app ID `ypzq1to6uyb32l8q`) with Ethereum Mainnet
 enabled and configure its key as the `ALCHEMY_MI_NOTE_API_KEY` Worker secret
@@ -125,10 +121,9 @@ using the secret procedure below. Configure the OpenSea key as `OPENSEA_API_KEY`
 on the same Worker. Both keys belong only in the API Worker.
 For local live verification, provide them through the process environment or
 an ignored `.dev.vars` file in `cloud/workers/api/`, start the API Worker
-locally, and set
-`VITE_MONS_API_ORIGIN=http://localhost:8787` for the frontend dev server.
-When releasing this feature, configure both secrets and deploy the API before
-deploying the frontend.
+locally, and set `VITE_MONS_API_ORIGIN=http://localhost:8787` for the frontend.
+For this JSON rollout, deploy the frontend first, then the API Worker, so the
+browser uses the JSON contract before the API change takes effect.
 
 ## Anonymous Auth and legacy-provider retirement
 

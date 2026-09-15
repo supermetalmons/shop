@@ -7,9 +7,7 @@ import {
   MI_NOTE_2_CONTRACT_ADDRESS,
   MI_NOTE_3_CONTRACT_ADDRESS,
   MI_NOTE_CONTRACT_ADDRESS,
-  type MiNoteCardsCollectionEvent,
-  type MiNoteCardsEvent,
-  type MiNoteContractAddress,
+  type MiNoteCardsResponse,
 } from '../shared/miNoteCards.ts';
 import { setupFrontendDom } from './helpers/frontendDom.ts';
 
@@ -51,43 +49,34 @@ function navigateSearch(search: string, event = 'popstate') {
   });
 }
 
-function collectionEvent(contractAddress: MiNoteContractAddress, tokenIds: string[]): MiNoteCardsCollectionEvent {
+function holdings(miNote2: string[] = [], miNote3: string[] = [], original: string[] = []): MiNoteCardsResponse {
   return {
-    type: 'collection', contractAddress, tokenIds,
-    provider: contractAddress === MI_NOTE_CONTRACT_ADDRESS ? 'opensea' : 'alchemy',
-    visibilityLimited: contractAddress === MI_NOTE_CONTRACT_ADDRESS,
+    ok: true,
+    tokenIdsByContract: {
+      [MI_NOTE_2_CONTRACT_ADDRESS]: miNote2,
+      [MI_NOTE_3_CONTRACT_ADDRESS]: miNote3,
+      [MI_NOTE_CONTRACT_ADDRESS]: original,
+    },
+    resultsByContract: {
+      [MI_NOTE_2_CONTRACT_ADDRESS]: { status: 'success', provider: 'alchemy', visibilityLimited: false },
+      [MI_NOTE_3_CONTRACT_ADDRESS]: { status: 'success', provider: 'alchemy', visibilityLimited: false },
+      [MI_NOTE_CONTRACT_ADDRESS]: { status: 'success', provider: 'opensea', visibilityLimited: true },
+    },
   };
 }
 
-function holdings(miNote2: string[] = [], miNote3: string[] = [], original: string[] = []): MiNoteCardsEvent[] {
-  return [
-    collectionEvent(MI_NOTE_2_CONTRACT_ADDRESS, miNote2),
-    collectionEvent(MI_NOTE_3_CONTRACT_ADDRESS, miNote3),
-    collectionEvent(MI_NOTE_CONTRACT_ADDRESS, original),
-    { type: 'done' },
-  ];
-}
-
-function streamResponse(events: MiNoteCardsEvent[]) {
-  return new Response(events.map((event) => `${JSON.stringify(event)}\n`).join(''), {
-    headers: { 'Content-Type': 'application/x-ndjson' },
-  });
-}
-
-function openStream() {
+function openResponse() {
   let controller!: ReadableStreamDefaultController<Uint8Array>;
   let cancelled = false;
-  const stream = new ReadableStream<Uint8Array>({
+  const body = new ReadableStream<Uint8Array>({
     start(value) { controller = value; },
     cancel() { cancelled = true; },
   });
-  const encoder = new TextEncoder();
   return {
-    response: new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } }),
-    emit: (event: MiNoteCardsEvent) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)),
-    malformed: () => controller.enqueue(encoder.encode('{broken}\n')),
+    response: new Response(body, { headers: { 'Content-Type': 'application/json' } }),
+    append: (value: string) => controller.enqueue(new TextEncoder().encode(value)),
     close: () => controller.close(),
-    fail: () => controller.error(new Error('Stream failed')),
+    fail: () => controller.error(new Error('Body failed')),
     get cancelled() { return cancelled; },
   };
 }
@@ -131,11 +120,11 @@ test('address mode starts empty and returns only catalogued holdings in collecti
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url, `https://api.mons.shop/mi-note-cards?address=${ADDRESS.toLowerCase()}`);
   await act(async () => {
-    requests[0].resolve(streamResponse(holdings(['1154', '779', '1', '999999'], ['117', '2', '1', '999999'])));
+    requests[0].resolve(Response.json(holdings(['1154', '779', '1', '999999'], ['117', '2', '1', '999999'])));
   });
   assert.deepEqual(result.current, [
-    ...COLLECTION.tokens.filter((card) => ['1', '1154'].includes(card.id)),
     ...COLLECTION_3.tokens.filter((card) => ['2', '117'].includes(card.id)),
+    ...COLLECTION.tokens.filter((card) => ['1', '1154'].includes(card.id)),
   ]);
 });
 
@@ -144,7 +133,7 @@ test('Mi Note 3-only holdings do not display Mi Note 2 cards with the same IDs',
   const requests = captureRequests();
   const { result } = renderHook(useMiNoteCards);
   await act(async () => {
-    requests[0].resolve(streamResponse(holdings([], ['2', '3'])));
+    requests[0].resolve(Response.json(holdings([], ['2', '3'])));
   });
   assert.deepEqual(result.current, COLLECTION_3.tokens.filter((card) => ['2', '3'].includes(card.id)));
   assert.equal(result.current.length, 2);
@@ -156,9 +145,9 @@ test('the same token ID owned in both collections displays both cards', async ()
   const requests = captureRequests();
   const { result } = renderHook(useMiNoteCards);
   await act(async () => {
-    requests[0].resolve(streamResponse(holdings(['2'], ['2'])));
+    requests[0].resolve(Response.json(holdings(['2'], ['2'])));
   });
-  assert.deepEqual(result.current, [COLLECTION.tokens.find((card) => card.id === '2'), COLLECTION_3.tokens[0]]);
+  assert.deepEqual(result.current, [COLLECTION_3.tokens[0], COLLECTION.tokens.find((card) => card.id === '2')]);
   assert.equal(new Set(result.current.map((card) => card.mid)).size, 2);
 });
 
@@ -167,89 +156,64 @@ test('address mode shows every known holding without the random gallery limit', 
   const requests = captureRequests();
   const { result } = renderHook(useMiNoteCards);
   await act(async () => {
-    requests[0].resolve(streamResponse(holdings(
+    requests[0].resolve(Response.json(holdings(
       COLLECTION.tokens.map((card) => card.id).reverse(),
       COLLECTION_3.tokens.map((card) => card.id).reverse(),
       ORIGINAL_COLLECTION.tokens.map((card) => card.id).reverse(),
     )));
   });
   assert.equal(result.current.length, 1388);
-  assert.deepEqual(result.current, [...COLLECTION.tokens, ...COLLECTION_3.tokens, ...ORIGINAL_COLLECTION.tokens]);
+  assert.deepEqual(result.current, [...COLLECTION_3.tokens, ...COLLECTION.tokens, ...ORIGINAL_COLLECTION.tokens]);
 });
 
-for (const first of ['original', 'modern'] as const) {
-  test(`${first} holdings appear before the other provider completes, in fixed collection order`, async () => {
+test('address mode waits for the complete JSON response before showing cards in 3, 2, original order', async () => {
+  setSearch(`?address=${ADDRESS}`);
+  const requests = captureRequests();
+  const body = openResponse();
+  const { result } = renderHook(useMiNoteCards);
+  const originalCard = ORIGINAL_COLLECTION.tokens[72];
+  const payload = JSON.stringify(holdings(['2'], ['2'], [originalCard.id]));
+  const split = Math.floor(payload.length / 2);
+  await act(async () => {
+    requests[0].resolve(body.response);
+    body.append(payload.slice(0, split));
+  });
+  assert.deepEqual(result.current, []);
+  await act(async () => {
+    body.append(payload.slice(split));
+    body.close();
+  });
+  assert.deepEqual(result.current, [COLLECTION_3.tokens[0], COLLECTION.tokens.find((card) => card.id === '2'), originalCard]);
+});
+
+for (const failure of ['truncated', 'network'] as const) {
+  test(`${failure} JSON response never displays partially received holdings`, async () => {
     setSearch(`?address=${ADDRESS}`);
     const requests = captureRequests();
-    const stream = openStream();
+    const body = openResponse();
     const { result } = renderHook(useMiNoteCards);
-    await act(async () => { requests[0].resolve(stream.response); });
-    const originalCard = ORIGINAL_COLLECTION.tokens[72];
-    const miNote2Card = COLLECTION.tokens.find((card) => card.id === '2')!;
-    const miNote3Card = COLLECTION_3.tokens[0];
     await act(async () => {
-      stream.emit(first === 'original'
-        ? collectionEvent(MI_NOTE_CONTRACT_ADDRESS, [originalCard.id, '999999'])
-        : collectionEvent(MI_NOTE_3_CONTRACT_ADDRESS, [miNote3Card.id]));
+      requests[0].resolve(body.response);
+      body.append(JSON.stringify(holdings(['2'])).slice(0, -1));
     });
-    assert.deepEqual(result.current, [first === 'original' ? originalCard : miNote3Card]);
+    assert.deepEqual(result.current, []);
     await act(async () => {
-      stream.emit(collectionEvent(MI_NOTE_2_CONTRACT_ADDRESS, [miNote2Card.id]));
+      if (failure === 'network') body.fail();
+      else body.close();
     });
-    assert.deepEqual(result.current, [miNote2Card, first === 'original' ? originalCard : miNote3Card]);
-    await act(async () => {
-      stream.emit(first === 'original'
-        ? collectionEvent(MI_NOTE_3_CONTRACT_ADDRESS, [miNote3Card.id])
-        : collectionEvent(MI_NOTE_CONTRACT_ADDRESS, [originalCard.id]));
-      stream.emit({ type: 'done' });
-      stream.close();
-    });
-    assert.deepEqual(result.current, [miNote2Card, miNote3Card, originalCard]);
+    assert.deepEqual(result.current, []);
   });
 }
 
-for (const failure of ['provider', 'malformed', 'truncated', 'network'] as const) {
-  test(`later ${failure} failure preserves cards from completed collections`, async () => {
-    setSearch(`?address=${ADDRESS}`);
-    const requests = captureRequests();
-    const stream = openStream();
-    const { result } = renderHook(useMiNoteCards);
-    await act(async () => {
-      requests[0].resolve(stream.response);
-      stream.emit(collectionEvent(MI_NOTE_2_CONTRACT_ADDRESS, ['2']));
-    });
-    const shown = [COLLECTION.tokens.find((card) => card.id === '2')];
-    assert.deepEqual(result.current, shown);
-    await act(async () => {
-      if (failure === 'malformed') stream.malformed();
-      else if (failure === 'network') stream.fail();
-      else {
-        if (failure === 'provider') {
-          stream.emit({ type: 'error', contractAddress: MI_NOTE_3_CONTRACT_ADDRESS, error: 'provider-timeout' });
-          stream.emit({ type: 'error', contractAddress: MI_NOTE_CONTRACT_ADDRESS, error: 'provider-unavailable' });
-          stream.emit({ type: 'done' });
-        }
-        stream.close();
-      }
-    });
-    assert.deepEqual(result.current, shown);
-    if (failure === 'malformed') assert.equal(stream.cancelled, true);
-  });
-}
-
-test('original holdings survive both modern collection failures', async () => {
+test('a compatible partial JSON response shows only successful collection holdings', async () => {
   setSearch(`?address=${ADDRESS}`);
   const requests = captureRequests();
   const { result } = renderHook(useMiNoteCards);
   const card = ORIGINAL_COLLECTION.tokens[72];
-  await act(async () => {
-    requests[0].resolve(streamResponse([
-      collectionEvent(MI_NOTE_CONTRACT_ADDRESS, [card.id]),
-      { type: 'error', contractAddress: MI_NOTE_2_CONTRACT_ADDRESS, error: 'provider-unavailable' },
-      { type: 'error', contractAddress: MI_NOTE_3_CONTRACT_ADDRESS, error: 'provider-unavailable' },
-      { type: 'done' },
-    ]));
-  });
+  const payload = holdings([], [], [card.id]);
+  payload.resultsByContract[MI_NOTE_2_CONTRACT_ADDRESS] = { status: 'error', error: 'provider-unavailable' };
+  payload.resultsByContract[MI_NOTE_3_CONTRACT_ADDRESS] = { status: 'error', error: 'provider-timeout' };
+  await act(async () => { requests[0].resolve(Response.json(payload)); });
   assert.deepEqual(result.current, [card]);
 });
 
@@ -273,7 +237,7 @@ for (const outcome of ['no holdings', 'provider error', 'network error', 'invali
       else if (outcome === 'provider error') {
         requests[0].resolve(Response.json({ ok: false, error: 'provider-unavailable' }, { status: 502 }));
       } else if (outcome === 'invalid response') requests[0].resolve(Response.json({ ok: true, tokenIds: [1] }));
-      else requests[0].resolve(streamResponse(holdings()));
+      else requests[0].resolve(Response.json(holdings()));
     });
     assert.deepEqual(result.current, []);
   });
@@ -291,13 +255,13 @@ test('query navigation clears previous cards before a new request and never show
   renders.length = 0;
   navigateSearch(`?address=${ADDRESS}`, 'mons:navigate');
   assert.ok(renders.every((cards) => cards.length === 0));
-  await act(async () => { requests[0].resolve(streamResponse(holdings(['1']))); });
+  await act(async () => { requests[0].resolve(Response.json(holdings(['1']))); });
   assert.deepEqual(result.current.map((card) => card.id), ['1']);
 
   renders.length = 0;
   navigateSearch(`?address=${OTHER_ADDRESS}`);
   assert.ok(renders.every((cards) => cards.length === 0));
-  await act(async () => { requests[1].resolve(streamResponse(holdings([], ['2']))); });
+  await act(async () => { requests[1].resolve(Response.json(holdings([], ['2']))); });
   assert.deepEqual(result.current.map((card) => card.id), ['2']);
 
   navigateSearch('?address=invalid', 'pageshow');
@@ -314,8 +278,8 @@ test('late results from an aborted address cannot replace the current holdings',
   const { result } = renderHook(useMiNoteCards);
   navigateSearch(`?address=${OTHER_ADDRESS}`);
   assert.equal(requests[0].signal.aborted, true);
-  await act(async () => { requests[1].resolve(streamResponse(holdings([], ['2']))); });
-  await act(async () => { requests[0].resolve(streamResponse(holdings(['1']))); });
+  await act(async () => { requests[1].resolve(Response.json(holdings([], ['2']))); });
+  await act(async () => { requests[0].resolve(Response.json(holdings(['1']))); });
   assert.deepEqual(result.current.map((card) => card.id), ['2']);
 });
 
@@ -323,12 +287,12 @@ test('returning to a previously visited address stays empty until its new reques
   setSearch(`?address=${ADDRESS}`);
   const requests = captureRequests();
   const { result } = renderHook(useMiNoteCards);
-  await act(async () => { requests[0].resolve(streamResponse(holdings(['1']))); });
+  await act(async () => { requests[0].resolve(Response.json(holdings(['1']))); });
   navigateSearch(`?address=${OTHER_ADDRESS}`);
   navigateSearch(`?address=${ADDRESS}`);
   assert.deepEqual(result.current, []);
   assert.equal(requests[1].signal.aborted, true);
-  await act(async () => { requests[2].resolve(streamResponse(holdings([], ['3']))); });
+  await act(async () => { requests[2].resolve(Response.json(holdings([], ['3']))); });
   assert.deepEqual(result.current.map((card) => card.id), ['3']);
 });
 
@@ -340,38 +304,37 @@ test('unmount aborts the ownership request', async () => {
   assert.equal(requests[0].signal.aborted, true);
 });
 
-test('query changes cancel an open stream and hide its already delivered cards', async () => {
+test('query changes and unmount cancel pending JSON response bodies', async () => {
   setSearch(`?address=${ADDRESS}`);
   const requests = captureRequests();
-  const stream = openStream();
+  const body = openResponse();
   const { result, unmount } = renderHook(useMiNoteCards);
   await act(async () => {
-    requests[0].resolve(stream.response);
-    stream.emit(collectionEvent(MI_NOTE_CONTRACT_ADDRESS, [ORIGINAL_COLLECTION.tokens[0].id]));
+    requests[0].resolve(body.response);
+    body.append(JSON.stringify(holdings(['2'])).slice(0, -1));
   });
-  assert.equal(result.current.length, 1);
   navigateSearch(`?address=${OTHER_ADDRESS}`);
   assert.deepEqual(result.current, []);
   assert.equal(requests[0].signal.aborted, true);
-  assert.equal(stream.cancelled, true);
-  const next = openStream();
+  assert.equal(body.cancelled, true);
+  const next = openResponse();
   await act(async () => {
     requests[1].resolve(next.response);
-    next.emit(collectionEvent(MI_NOTE_3_CONTRACT_ADDRESS, ['2']));
+    next.append(JSON.stringify(holdings([], ['2'])).slice(0, -1));
   });
-  assert.deepEqual(result.current, [COLLECTION_3.tokens[0]]);
+  assert.deepEqual(result.current, []);
   await act(async () => { unmount(); });
   assert.equal(next.cancelled, true);
 });
 
-test('StrictMode ignores the aborted initial stream and retains the active stream updates', async () => {
+test('StrictMode ignores the aborted initial request and displays the active response', async () => {
   setSearch(`?address=${ADDRESS}`);
   const requests = captureRequests(true);
   const { result } = renderHook(useMiNoteCards, { reactStrictMode: true });
   assert.equal(requests.length, 2);
   assert.equal(requests[0].signal.aborted, true);
-  await act(async () => { requests[1].resolve(streamResponse(holdings([], ['2']))); });
-  await act(async () => { requests[0].resolve(streamResponse(holdings(['1']))); });
+  await act(async () => { requests[1].resolve(Response.json(holdings([], ['2']))); });
+  await act(async () => { requests[0].resolve(Response.json(holdings(['1']))); });
   assert.deepEqual(result.current, [COLLECTION_3.tokens[0]]);
 });
 
@@ -387,7 +350,7 @@ test('gallery keeps its thumbnail rendering and Notify me button without adding 
   fireEvent.click(gallery.getByRole('button', { name: 'Notify me' }));
   assert.equal(notifications, 1);
 
-  await act(async () => { requests[0].resolve(streamResponse(holdings(['2'], ['2']))); });
+  await act(async () => { requests[0].resolve(Response.json(holdings(['2'], ['2']))); });
   assert.equal(gallery.getAllByRole('img').length, 2);
   for (const card of [COLLECTION.tokens.find((token) => token.id === '2')!, COLLECTION_3.tokens[0]]) {
     const image = gallery.getByRole('img', { name: card.name });

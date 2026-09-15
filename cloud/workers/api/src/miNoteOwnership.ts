@@ -14,9 +14,8 @@ const MAX_PAGE_BYTES = 256 * 1024;
 const MAX_PAGES = 100;
 const PAGE_SIZE = 100;
 const MAX_UINT256 = (1n << 256n) - 1n;
-const ORIGINAL_IDS = miNoteCollections.find((collection) => collection.contractAddress === MI_NOTE_CONTRACT_ADDRESS)!.tokens.map((token) => token.id);
-const ORIGINAL_ID_SET = new Set(ORIGINAL_IDS);
-const COLLECTION_SLUGS = new Map(miNoteCollections.map((collection) => [collection.contractAddress, collection.openseaSlug]));
+const ORIGINAL_COLLECTION = miNoteCollections.find((collection) => collection.contractAddress === MI_NOTE_CONTRACT_ADDRESS)!;
+const ORIGINAL_ID_SET = new Set(ORIGINAL_COLLECTION.tokens.map((token) => token.id));
 
 type ProviderContext = {
   providerFetch: WorkerDependencies['providerFetch'];
@@ -122,39 +121,11 @@ export async function fetchAlchemyMiNotes(
   throw miNoteProviderFailure();
 }
 
-function abiWord(value: bigint): string {
-  return value.toString(16).padStart(64, '0');
-}
-
-export async function fetchOriginalMiNotes(
+export async function fetchOpenSeaMiNotes(
   address: string, apiKey: string, context: ProviderContext,
 ): Promise<string[]> {
   if (!apiKey) throw miNoteProviderFailure();
-  const size = ORIGINAL_IDS.length;
-  const owners = abiWord(BigInt(size)) + address.slice(2).padStart(64, '0').repeat(size);
-  const ids = abiWord(BigInt(size)) + ORIGINAL_IDS.map((id) => abiWord(BigInt(id))).join('');
-  const data = '0x4e1273f4' + abiWord(64n) + abiWord(BigInt(64 + owners.length / 2)) + owners + ids;
-  const id = 'mi-note-original';
-  const body = await providerJson(new URL(`https://eth-mainnet.g.alchemy.com/v2/${encodeURIComponent(apiKey)}`), {
-    method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id, method: 'eth_call', params: [{ to: MI_NOTE_CONTRACT_ADDRESS, data }, 'latest'] }),
-  }, context);
-  if (!isRecord(body) || body.jsonrpc !== '2.0' || body.id !== id || Object.hasOwn(body, 'error') || typeof body.result !== 'string') {
-    throw miNoteProviderFailure();
-  }
-  const result = body.result;
-  if (result.trim() !== result || !/^0x[0-9a-fA-F]+$/.test(result) || result.length !== 2 + (size + 2) * 64 ||
-      BigInt('0x' + result.slice(2, 66)) !== 32n || BigInt('0x' + result.slice(66, 130)) !== BigInt(size)) {
-    throw miNoteProviderFailure();
-  }
-  return ORIGINAL_IDS.filter((_id, index) => BigInt('0x' + result.slice(130 + index * 64, 194 + index * 64)) > 0n);
-}
-
-export async function fetchOpenSeaMiNotes(
-  address: string, contract: MiNoteContractAddress, apiKey: string, context: ProviderContext,
-): Promise<string[]> {
-  if (!apiKey) throw miNoteProviderFailure();
-  const slug = COLLECTION_SLUGS.get(contract)!;
+  const slug = ORIGINAL_COLLECTION.openseaSlug;
   const tokenIds = new Set<string>();
   const cursors = new Set<string>();
   let cursor: string | undefined;
@@ -169,11 +140,11 @@ export async function fetchOpenSeaMiNotes(
     }, context);
     if (!isRecord(body) || !Array.isArray(body.nfts) || body.nfts.length > PAGE_SIZE) throw miNoteProviderFailure();
     for (const nft of body.nfts) {
-      if (!isRecord(nft) || normalizeMiNoteAddress(nft.contract) !== contract || nft.collection !== slug || nft.token_standard !== 'erc1155') {
+      if (!isRecord(nft) || normalizeMiNoteAddress(nft.contract) !== MI_NOTE_CONTRACT_ADDRESS || nft.collection !== slug || nft.token_standard !== 'erc1155') {
         throw miNoteProviderFailure();
       }
       const id = uint256(nft.identifier).toString();
-      if (contract === MI_NOTE_CONTRACT_ADDRESS && !ORIGINAL_ID_SET.has(id)) continue;
+      if (!ORIGINAL_ID_SET.has(id)) continue;
       tokenIds.add(id);
       if (tokenIds.size > MAX_MI_NOTE_TOKEN_IDS) throw miNoteProviderFailure();
     }

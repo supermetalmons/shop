@@ -10,13 +10,10 @@ import {
 } from '../../shared/shopApi.ts';
 import type { PackStatusBreakdown } from '../../shared/contracts.ts';
 import {
-  isExactMiNoteCardsEvent,
-  MAX_MI_NOTE_STREAM_BYTES,
-  MAX_MI_NOTE_TOKEN_IDS,
+  isExactMiNoteCardsResponse,
+  MAX_MI_NOTE_RESPONSE_BYTES,
   MI_NOTE_CARDS_API_PATH,
-  MI_NOTE_CONTRACT_ADDRESSES,
-  type MiNoteCardsOutcome,
-  type MiNoteContractAddress,
+  type MiNoteTokenIdsByContract,
 } from '../../shared/miNoteCards.ts';
 import type { InventoryItem, PendingOpenBox } from '../types';
 import {
@@ -144,9 +141,9 @@ export async function fetchPackStatus(dropId: string, signal?: AbortSignal): Pro
 
 export async function fetchMiNoteHoldings(
   address: string,
-  onOutcome: (outcome: MiNoteCardsOutcome) => void,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<MiNoteTokenIdsByContract> {
+  signal?.throwIfAborted();
   const invalidResponse = () => new Error('Shop API returned an invalid Mi Note cards response');
   const controller = new AbortController();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -161,11 +158,10 @@ export async function fetchMiNoteHoldings(
   controller.signal.addEventListener('abort', abortRead, { once: true });
   signal?.addEventListener('abort', abort, { once: true });
   try {
-    if (signal?.aborted) abort();
     const response = await Promise.race([
       fetch(`${monsApiOrigin()}${MI_NOTE_CARDS_API_PATH}?address=${encodeURIComponent(address)}`, {
         method: 'GET',
-        headers: { Accept: 'application/x-ndjson' },
+        headers: { Accept: 'application/json' },
         cache: 'no-store',
         signal: controller.signal,
       }).then((result) => {
@@ -179,56 +175,33 @@ export async function fetchMiNoteHoldings(
     ]);
     if (!response.body) throw invalidResponse();
     reader = response.body.getReader();
-    if (response.ok && response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/x-ndjson') {
+    if (response.ok && response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
       throw invalidResponse();
     }
+    const contentLength = Number(response.headers.get('Content-Length'));
+    if (contentLength > MAX_MI_NOTE_RESPONSE_BYTES) throw invalidResponse();
     const decoder = new TextDecoder('utf-8', { fatal: true });
-    const contracts = new Set<MiNoteContractAddress>();
+    const parts: string[] = [];
     let bytes = 0;
-    let totalIds = 0;
-    let pending = '';
-    let done = false;
-    const consumeLine = (line: string) => {
-      if (line.trim() === '') return;
-      let event: unknown;
-      try { event = JSON.parse(line); } catch { throw invalidResponse(); }
-      if (done || !isExactMiNoteCardsEvent(event)) throw invalidResponse();
-      if (event.type === 'done') {
-        if (contracts.size !== MI_NOTE_CONTRACT_ADDRESSES.length) throw invalidResponse();
-        done = true;
-        return;
-      }
-      if (contracts.has(event.contractAddress)) throw invalidResponse();
-      if (event.type === 'collection') totalIds += event.tokenIds.length;
-      if (totalIds > MAX_MI_NOTE_TOKEN_IDS) throw invalidResponse();
-      contracts.add(event.contractAddress);
-      controller.signal.throwIfAborted();
-      onOutcome(event);
-    };
     while (true) {
       const chunk = await Promise.race([reader.read(), aborted]);
       controller.signal.throwIfAborted();
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
-      if (bytes > MAX_MI_NOTE_STREAM_BYTES) throw invalidResponse();
-      pending += decoder.decode(chunk.value, { stream: true });
-      if (!response.ok) continue;
-      let newline = pending.indexOf('\n');
-      while (newline !== -1) {
-        consumeLine(pending.slice(0, newline));
-        pending = pending.slice(newline + 1);
-        newline = pending.indexOf('\n');
-      }
+      if (bytes > MAX_MI_NOTE_RESPONSE_BYTES) throw invalidResponse();
+      parts.push(decoder.decode(chunk.value, { stream: true }));
     }
-    pending += decoder.decode();
+    parts.push(decoder.decode());
+    let payload: unknown;
+    try { payload = JSON.parse(parts.join('')); } catch {
+      if (response.ok) throw invalidResponse();
+    }
     if (!response.ok) {
-      let payload: unknown;
-      try { payload = JSON.parse(pending); } catch {}
       const code = isExactShopApiErrorResponse(payload) ? payload.error : `http-${response.status}`;
       throw new Error(`Shop API request failed: ${code}`);
     }
-    if (pending) consumeLine(pending);
-    if (!done) throw invalidResponse();
+    if (!isExactMiNoteCardsResponse(payload)) throw invalidResponse();
+    return payload.tokenIdsByContract;
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener('abort', abort);

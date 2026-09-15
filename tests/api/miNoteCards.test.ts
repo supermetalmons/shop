@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isExactMiNoteCardsEvent,
+  isCanonicalMiNoteTokenIds,
   isExactMiNoteCardsResponse,
   MI_NOTE_2_CONTRACT_ADDRESS,
   MI_NOTE_3_CONTRACT_ADDRESS,
@@ -28,10 +28,6 @@ function response() {
     MI_NOTE_CONTRACT_ADDRESSES.map((contract) => [contract, successfulResult()]),
   );
   return { ok: true, tokenIdsByContract, resultsByContract };
-}
-
-function collection(contractAddress = MI_NOTE_2_CONTRACT_ADDRESS, tokenIds: unknown = []) {
-  return { type: 'collection', contractAddress, tokenIds, provider: 'alchemy', visibilityLimited: false };
 }
 
 function invalidTokenIds(): unknown[] {
@@ -62,13 +58,13 @@ test('Mi Note address queries distinguish random mode from invalid owner mode', 
   }
 });
 
-test('Mi Note contract lists keep modern collections first and the original collection separate', () => {
+test('Mi Note gallery order is 3, 2, original while modern lookup order stays 2, 3', () => {
   assert.equal(MI_NOTE_CONTRACT_ADDRESS, '0x495f947276749ce646f68ac8c248420045cb7b5e');
   assert.deepEqual(MI_NOTE_MODERN_CONTRACT_ADDRESSES, [
     MI_NOTE_2_CONTRACT_ADDRESS, MI_NOTE_3_CONTRACT_ADDRESS,
   ]);
   assert.deepEqual(MI_NOTE_CONTRACT_ADDRESSES, [
-    MI_NOTE_2_CONTRACT_ADDRESS, MI_NOTE_3_CONTRACT_ADDRESS, MI_NOTE_CONTRACT_ADDRESS,
+    MI_NOTE_3_CONTRACT_ADDRESS, MI_NOTE_2_CONTRACT_ADDRESS, MI_NOTE_CONTRACT_ADDRESS,
   ]);
 });
 
@@ -193,68 +189,9 @@ test('Mi Note ownership responses limit the total across all three collections t
   assert.equal(isExactMiNoteCardsResponse(payload), false);
 });
 
-test('Mi Note stream events accept exact collection, error, and done shapes', () => {
-  assert.equal(isExactMiNoteCardsEvent({ type: 'done' }), true);
-  for (const contract of MI_NOTE_CONTRACT_ADDRESSES) {
-    for (const provider of ['alchemy', 'opensea'] as const) {
-      for (const tokenIds of [[], ['0', '1', MAX_TOKEN_ID]]) {
-        assert.equal(isExactMiNoteCardsEvent({
-          ...collection(contract, tokenIds), provider, visibilityLimited: provider === 'opensea',
-        }), true);
-      }
-    }
-    for (const error of ERROR_CODES) {
-      assert.equal(isExactMiNoteCardsEvent({ type: 'error', contractAddress: contract, error }), true);
-    }
-  }
-});
-
-test('Mi Note collection stream events require an exact supported contract, provider, and visibility flag', () => {
-  for (const value of [
-    null, undefined, true, 1, '', [], {}, response(),
-    { ...collection(), type: 'unknown' }, { ...collection(), extra: true },
-    { ...collection(), contractAddress: 'unknown' }, { ...collection(), contractAddress: ADDRESS },
-    { ...collection(), contractAddress: MI_NOTE_2_CONTRACT_ADDRESS.toUpperCase() },
-    { ...collection(), contractAddress: null },
-    { ...collection(), provider: 'unknown' }, { ...collection(), provider: null },
-    { ...collection(), visibilityLimited: true },
-    { ...collection(), provider: 'opensea', visibilityLimited: false },
-    { ...collection(), visibilityLimited: 'false' }, { ...collection(), visibilityLimited: null },
-    { ...collection(), status: 'success' }, { ...collection(), error: 'provider-timeout' },
-  ]) assert.equal(isExactMiNoteCardsEvent(value), false);
-
-  for (const field of Object.keys(collection())) {
-    const event: Record<string, unknown> = collection();
-    delete event[field];
-    assert.equal(isExactMiNoteCardsEvent(event), false);
-  }
-});
-
-test('Mi Note collection stream events require distinct canonical uint256 IDs and at most 10,000 IDs', () => {
-  const ids = Array.from({ length: 10_000 }, (_, index) => String(index));
-  for (const contract of MI_NOTE_CONTRACT_ADDRESSES) {
-    assert.equal(isExactMiNoteCardsEvent(collection(contract, ids)), true);
-    for (const tokenIds of invalidTokenIds()) {
-      assert.equal(isExactMiNoteCardsEvent({ ...collection(contract), tokenIds }), false);
-    }
-  }
-});
-
-test('Mi Note error and done stream events reject missing, extra, and invalid fields', () => {
-  const errorEvent = { type: 'error', contractAddress: MI_NOTE_CONTRACT_ADDRESS, error: 'provider-timeout' };
-  for (const value of [
-    { ...errorEvent, contractAddress: 'unknown' }, { ...errorEvent, contractAddress: null },
-    { ...errorEvent, error: 'unknown' }, { ...errorEvent, error: null },
-    { ...errorEvent, extra: true }, { ...errorEvent, tokenIds: [] },
-    { ...errorEvent, provider: 'alchemy' }, { ...errorEvent, visibilityLimited: false },
-    { ...errorEvent, status: 'error' },
-    { type: 'done', extra: true }, { type: 'done', contractAddress: MI_NOTE_CONTRACT_ADDRESS },
-    { type: 'done', tokenIds: [] }, { type: 'done', error: 'provider-timeout' },
-  ]) assert.equal(isExactMiNoteCardsEvent(value), false);
-
-  for (const field of Object.keys(errorEvent)) {
-    const event: Record<string, unknown> = { ...errorEvent };
-    delete event[field];
-    assert.equal(isExactMiNoteCardsEvent(event), false);
-  }
+test('Mi Note canonical token validation enforces uint256 strings, uniqueness, and the cache limit', () => {
+  assert.equal(isCanonicalMiNoteTokenIds([]), true);
+  assert.equal(isCanonicalMiNoteTokenIds(['0', '1', MAX_TOKEN_ID]), true);
+  assert.equal(isCanonicalMiNoteTokenIds(Array.from({ length: 10_000 }, (_, index) => String(index))), true);
+  for (const value of invalidTokenIds()) assert.equal(isCanonicalMiNoteTokenIds(value), false);
 });

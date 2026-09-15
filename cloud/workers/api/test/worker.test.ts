@@ -4028,16 +4028,15 @@ test('Mi Note GET route is public and preserves method, origin, and error polici
   const dependencies: RequestDependencies = {
     cache: null,
     log: () => {},
-    providerFetch: async (input) => {
+    providerFetch: async (input, init) => {
       calls += 1;
-      if (new URL(String(input)).pathname.startsWith('/v2/')) {
-        const catalogs = JSON.parse(readFileSync('mi_note_eth.json', 'utf8')) as { contractAddress: string; tokens: unknown[] }[];
-        const size = catalogs.find((collection) => collection.contractAddress === '0x495f947276749ce646f68ac8c248420045cb7b5e')!.tokens.length;
-        return Response.json({
-          jsonrpc: '2.0', id: 'mi-note-original',
-          result: `0x${'20'.padStart(64, '0')}${size.toString(16).padStart(64, '0')}${'0'.repeat(size * 64)}`,
-        });
+      assert.equal(init?.method, 'GET');
+      const providerUrl = new URL(String(input));
+      if (providerUrl.hostname === 'api.opensea.io') {
+        assert.equal(providerUrl.searchParams.get('collection'), 'minote');
+        return Response.json({ nfts: [], next: null });
       }
+      assert.equal(providerUrl.pathname, '/nft/v3/alchemy-test-key/getNFTsForOwner');
       return Response.json({ ownedNfts: [{
         contractAddress: '0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f', tokenId: '1', balance: '1',
       }] });
@@ -4045,7 +4044,7 @@ test('Mi Note GET route is public and preserves method, origin, and error polici
   };
   const response = await handleRequest(new Request(url, {
     headers: { Origin: 'https://mons.shop', Authorization: 'Bearer unrelated' },
-  }), env({ alchemyApiKey: 'alchemy-test-key', commerceState: 'paused' }), dependencies);
+  }), { ...env({ alchemyApiKey: 'alchemy-test-key', commerceState: 'paused' }), OPENSEA_API_KEY: 'opensea-test-key' }, dependencies);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     ok: true,
@@ -4057,7 +4056,7 @@ test('Mi Note GET route is public and preserves method, origin, and error polici
     resultsByContract: {
       '0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f': { status: 'success', provider: 'alchemy', visibilityLimited: false },
       '0xc22bd85e6d6c058226f46a693f0df4054496db5b': { status: 'success', provider: 'alchemy', visibilityLimited: false },
-      '0x495f947276749ce646f68ac8c248420045cb7b5e': { status: 'success', provider: 'alchemy', visibilityLimited: false },
+      '0x495f947276749ce646f68ac8c248420045cb7b5e': { status: 'success', provider: 'opensea', visibilityLimited: true },
     },
   });
   assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
