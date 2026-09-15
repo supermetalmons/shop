@@ -2910,41 +2910,60 @@ test('inventory paginates sequentially, compacts pages, and never exceeds three 
   assert.ok(maxConcurrent <= 3);
 });
 
-test('serialized provider body reads do not consume queued attempt time', async () => {
+test('serialized provider body reads do not consume queued attempt time', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0;
+  context.mock.method(performance, 'now', () => now);
+  const expectedCalls = listShopCollectionQueryRuntimes(true).length;
+  const bodyReads = Array.from({ length: expectedCalls }, () => Promise.withResolvers<() => void>());
   let calls = 0;
+  let reads = 0;
+  let longestQueueWait = 0;
   const providerFetch: ProviderFetch = async (_input, init) => {
     calls += 1;
+    assert.ok(calls <= expectedCalls, 'Queued body reads must not trigger a retry');
+    const headersAt = now;
     const body = JSON.parse(String(init?.body));
     const text = JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { items: [] } });
     let pulled = false;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
     return new Response(new ReadableStream<Uint8Array>({
       start(controller) {
         init?.signal?.addEventListener('abort', () => {
-          if (timeout !== undefined) clearTimeout(timeout);
           controller.error(new DOMException('aborted', 'AbortError'));
         }, { once: true });
       },
       pull(controller) {
         if (pulled) return;
         pulled = true;
-        timeout = setTimeout(() => {
+        longestQueueWait = Math.max(longestQueueWait, now - headersAt);
+        bodyReads[reads++].resolve(() => {
+          assert.equal(init?.signal?.aborted, false);
           controller.enqueue(new TextEncoder().encode(text));
           controller.close();
-        }, 10);
-      },
-      cancel() {
-        if (timeout !== undefined) clearTimeout(timeout);
+        });
       },
     }, { highWaterMark: 0 }));
   };
-  const response = await handleRequest(request('/inventory', { owner: OWNER, includeDevnet: true }), env(), {
+  const pending = handleRequest(request('/inventory', { owner: OWNER, includeDevnet: true }), env(), {
     ...quietDependencies(providerFetch),
     providerAttemptTimeoutMs: 15,
     providerTimeoutMs: 250,
   });
+  for (const bodyRead of bodyReads) {
+    const finishRead = await Promise.race([
+      bodyRead.promise,
+      pending.then(() => { throw new Error('Inventory finished before all provider bodies were read'); }),
+    ]);
+    now += 10;
+    context.mock.timers.tick(10);
+    finishRead();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const response = await pending;
   assert.equal(response.status, 200);
-  assert.equal(calls, listShopCollectionQueryRuntimes(true).length);
+  assert.equal(calls, expectedCalls);
+  assert.equal(reads, expectedCalls);
+  assert.ok(longestQueueWait >= 20);
 });
 
 test('inventory downsizes oversized cursor pages and keeps the smaller limit', async (context) => {
