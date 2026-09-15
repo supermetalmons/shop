@@ -13,7 +13,7 @@ control, rate-limit state, and shipment and fulfillment data.
   to `mons-shop-api` through a service binding.
 - `mons-shop-api` serves `api.mons.shop`, including inventory, Solana RPC,
   profiles, delivery, claims, Stripe, ShipStation, notifications, admin routes,
-  scheduled reconciliation, and Queue consumers.
+  scheduled reconciliation, Mi Note ownership, and Queue consumers.
 - Ops D1 stores opaque anonymous-session hashes and the immutable legacy-auth
   retirement record. The retired Google Cloud project was deletion-requested on
   2026-08-26 without creating a database archive and is not an application
@@ -77,6 +77,32 @@ validation, and both production bundles.
 Knip discovers supported CLI entrypoints from `package.json` scripts. Dynamic
 drop configurations remain explicit in `knip.ts`; standalone scripts are not
 automatically treated as live code.
+
+## Mi Note cards
+
+`/mi_note_cards` shows 300 random cards. Add one Ethereum address parameter, such
+as `/mi_note_cards?address=0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9`, to show
+all owned Mi Note 2 tokens that have images in `mi_note_eth.json`, in catalog
+order. Invalid or empty addresses, empty ownership, and lookup failures leave
+the grid empty. No wallet connection is required.
+
+The browser calls `GET /mi-note-cards?address=...` on the API Worker. The Worker
+queries Alchemy NFT API v3 on Ethereum Mainnet for contract
+`0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f`, follows pagination, and returns
+`{ "ok": true, "tokenIds": ["1"] }`. Successful results, including empty
+lists, are cached in the Worker for 60 seconds per normalized address; browser
+responses use `no-store`. Ownership reflects Alchemy's indexed state plus this
+cache period. Provider failures return 502, timeouts return 504, and neither is
+cached.
+
+Use the Alchemy app `mons.shop` (app ID `ypzq1to6uyb32l8q`) with Ethereum Mainnet
+enabled and configure its key as the `ALCHEMY_MI_NOTE_API_KEY` Worker secret
+using the secret procedure below. The key belongs only in the API Worker.
+For local live verification, provide it through an ignored `.dev.vars` file in
+`cloud/workers/api/`, start the API Worker locally, and set
+`VITE_MONS_API_ORIGIN=http://localhost:8787` for the frontend dev server.
+When releasing this feature, configure the secret and deploy the API before
+deploying the frontend.
 
 ## Anonymous Auth and legacy-provider retirement
 
@@ -313,7 +339,7 @@ integrity without hard-coded production count floors.
 ### Worker secrets
 
 Cloudflare Worker secrets are the runtime secret system. The required inventory
-is declared in `cloud/workers/api/wrangler.jsonc` and includes Helius, the
+is declared in `cloud/workers/api/wrangler.jsonc` and includes Alchemy, Helius, the
 cosigner and address-decryption keys, Resend, notification enqueue, ShipStation,
 and Stripe values.
 

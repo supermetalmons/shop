@@ -18,6 +18,7 @@ type ExpectedExactRoute = readonly [
 
 const EXPECTED_EXACT_ROUTES = [
   ['/health', 'none', false, 'optional', false, 'internal', '/health'],
+  ['/mi-note-cards', 'public', false, 'skip', false, 'public', '/mi-note-cards'],
   ['/internal/notifications/enqueue', 'none', false, 'optional', false, 'internal', '/internal/notifications/enqueue'],
   ['/checkout/session', 'profile', true, 'optional', true, 'profile', '/checkout/session'],
   ['/webhooks/stripe', 'none', false, 'optional', true, 'stripe-webhook', '/webhooks/stripe'],
@@ -104,6 +105,18 @@ test('exact Worker routes are unique, complete, policy-stable, and dispatchable'
       unexpectedError,
     }, pathname);
   }
+});
+
+test('unexpected Mi Note errors retain GET public CORS', () => {
+  const route = workerRouteRegistry.resolve('/mi-note-cards');
+  assert.equal(route.publicMethods, 'GET, OPTIONS');
+  const response = unexpectedWorkerRouteResponse(route, new Request('https://api.mons.shop/mi-note-cards', {
+    headers: { Origin: 'https://mons.shop' },
+  }));
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('Access-Control-Allow-Origin'), 'https://mons.shop');
+  assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
 });
 
 test('pack-status route resolution distinguishes valid, invalid, and nonmatching paths', () => {

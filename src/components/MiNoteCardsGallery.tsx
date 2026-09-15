@@ -1,29 +1,13 @@
-import { useState } from 'react';
-import miNoteCollections from '../../mi_note_eth.json';
+import { useMiNoteCards } from '../hooks/useMiNoteCards';
 import { BackgroundLayerPortal } from './BackgroundBlurLayer';
 import '../styles/mi-note-cards.css';
-
-const MI_NOTE_IMAGES = miNoteCollections.flatMap((collection) => collection.tokens);
-const MI_NOTE_CARD_COUNT = 300;
-
-function selectRandomCards() {
-  const cards = [...MI_NOTE_IMAGES];
-  const count = Math.min(MI_NOTE_CARD_COUNT, cards.length);
-
-  for (let index = 0; index < count; index += 1) {
-    const randomIndex = index + Math.floor(Math.random() * (cards.length - index));
-    [cards[index], cards[randomIndex]] = [cards[randomIndex], cards[index]];
-  }
-
-  return cards.slice(0, count);
-}
 
 type MiNoteCardsGalleryProps = {
   onNotify: () => void;
 };
 
 export default function MiNoteCardsGallery({ onNotify }: MiNoteCardsGalleryProps) {
-  const [cards] = useState(selectRandomCards);
+  const cards = useMiNoteCards();
 
   return (
     <>

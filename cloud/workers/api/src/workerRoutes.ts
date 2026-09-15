@@ -107,6 +107,8 @@ import {
 } from './publicRequestPolicy.js';
 import type { DeferredWork } from './deferredWork.js';
 import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
+import { MI_NOTE_CARDS_API_PATH } from '../../../../shared/miNoteCards.js';
+import { handleMiNoteCards } from './miNoteCards.js';
 
 type WorkerRouteCorsPolicy =
   | 'none'
@@ -129,6 +131,7 @@ type WorkerRoutePolicy = Readonly<{
   commerceMutation: boolean;
   cors: WorkerRouteCorsPolicy;
   profileOriginGate: boolean;
+  publicMethods?: 'GET, OPTIONS' | 'POST, OPTIONS';
   staff: WorkerRouteStaffPolicy;
   unexpectedError: WorkerRouteUnexpectedErrorPolicy;
 }>;
@@ -538,8 +541,37 @@ async function dispatchNotFound(): Promise<WorkerRouteResult> {
   return { response: publicJsonResponse({ ok: false, error: 'not-found' }, 404) };
 }
 
+async function dispatchMiNoteCards(context: WorkerRouteContext): Promise<WorkerRouteResult> {
+  if (context.request.method !== 'GET') {
+    return { response: handlePublicMethodNotAllowed(context.request, 'GET, OPTIONS') };
+  }
+  const result = await handleMiNoteCards(
+    context.request,
+    context.env,
+    context.dependencies,
+    context.metrics,
+    context.defer,
+  );
+  return {
+    response: result.response,
+    logFields: result.cacheStatus ? { providerCacheStatus: result.cacheStatus } : {},
+  };
+}
+
 const EXACT_ROUTE_ENTRIES: readonly ExactWorkerRoute[] = [
   exactRoute('/health', INTERNAL_POLICY, dispatchHealth),
+  exactRoute(
+    MI_NOTE_CARDS_API_PATH,
+    Object.freeze({
+      commerceMutation: false,
+      cors: 'public',
+      profileOriginGate: false,
+      publicMethods: 'GET, OPTIONS',
+      staff: 'skip',
+      unexpectedError: 'public',
+    }),
+    dispatchMiNoteCards,
+  ),
   exactRoute(NOTIFICATION_ENQUEUE_PATH, INTERNAL_POLICY, dispatchNotificationEnqueue),
   exactRoute(
     STRIPE_CHECKOUT_SESSION_PATH,
@@ -802,8 +834,8 @@ export function strictPublicOriginDeniedResponse(
       : handleRpcMethodNotAllowed(request);
   }
   return request.method === 'OPTIONS'
-    ? handlePublicPreflight(request)
-    : handlePublicMethodNotAllowed(request);
+    ? handlePublicPreflight(request, route.publicMethods)
+    : handlePublicMethodNotAllowed(request, route.publicMethods);
 }
 
 export function workerRoutePreflightResponse(
@@ -815,7 +847,7 @@ export function workerRoutePreflightResponse(
   if (route.cors === 'staff-auth') {
     return handleProfileCorsPreflight(request, isAllowedStaffAuthOrigin);
   }
-  if (route.cors === 'public') return handlePublicPreflight(request);
+  if (route.cors === 'public') return handlePublicPreflight(request, route.publicMethods);
   if (route.cors === 'rpc') return handleRpcPreflight(request);
   if (route.cors === 'pack-status' && route.packStatusDropId !== null) {
     return new Response(null, {
@@ -861,7 +893,7 @@ export function unexpectedWorkerRouteResponse(
       headers: { Vary: 'Origin' },
     });
     const origin = publicRequestOrigin(request);
-    return origin ? applyPublicCors(response, origin, 'POST, OPTIONS') : response;
+    return origin ? applyPublicCors(response, origin, route.publicMethods ?? 'POST, OPTIONS') : response;
   }
   if (route.unexpectedError === 'stripe-webhook') {
     return sharedJsonResponse({

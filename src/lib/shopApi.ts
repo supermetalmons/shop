@@ -9,6 +9,7 @@ import {
   type ShopPendingOpenBoxesRequest,
 } from '../../shared/shopApi.ts';
 import type { PackStatusBreakdown } from '../../shared/contracts.ts';
+import { isExactMiNoteCardsResponse, MI_NOTE_CARDS_API_PATH } from '../../shared/miNoteCards.ts';
 import type { InventoryItem, PendingOpenBox } from '../types';
 import {
   normalizeBoxDisplayImage,
@@ -131,4 +132,14 @@ export async function fetchPackStatus(dropId: string, signal?: AbortSignal): Pro
     throw new Error('Shop API returned an invalid pack-status response');
   }
   return payload.packStatus;
+}
+
+export async function fetchMiNoteTokenIds(address: string, signal?: AbortSignal): Promise<string[]> {
+  const payload = await requestShopApi(
+    `${MI_NOTE_CARDS_API_PATH}?address=${encodeURIComponent(address)}`,
+    { method: 'GET' },
+    signal,
+  );
+  if (!isExactMiNoteCardsResponse(payload)) throw new Error('Shop API returned an invalid Mi Note cards response');
+  return payload.tokenIds;
 }

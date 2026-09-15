@@ -111,6 +111,7 @@
 	],
 	"secrets": {
 		"required": [
+			"ALCHEMY_MI_NOTE_API_KEY",
 			"HELIUS_API_KEY",
 			"COSIGNER_SECRET",
 			"RESEND_API_KEY",

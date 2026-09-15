@@ -95,6 +95,20 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.match(health.headers.get('cache-control') || '', /no-store/);
     assert.match(health.headers.get('server-timing') || '', /total;dur=/);
 
+    const miNotePreflight = await worker.fetch('https://api.mons.shop/mi-note-cards', {
+      method: 'OPTIONS',
+      headers: { Origin: 'https://mons.shop' },
+    });
+    assert.equal(miNotePreflight.status, 204);
+    assert.equal(miNotePreflight.headers.get('access-control-allow-origin'), 'https://mons.shop');
+    assert.equal(miNotePreflight.headers.get('access-control-allow-methods'), 'GET, OPTIONS');
+    const miNoteMissingAddress = await worker.fetch('https://api.mons.shop/mi-note-cards', {
+      headers: { Origin: 'https://mons.shop' },
+    });
+    assert.equal(miNoteMissingAddress.status, 400);
+    assert.deepEqual(await miNoteMissingAddress.json(), { ok: false, error: 'invalid-request' });
+    assert.equal(miNoteMissingAddress.headers.get('access-control-allow-methods'), 'GET, OPTIONS');
+
     const inventoryPreflight = await worker.fetch('https://api.mons.shop/inventory', {
       method: 'OPTIONS',
       headers: { Origin: 'https://mons.shop' },

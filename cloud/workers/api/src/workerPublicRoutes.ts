@@ -253,25 +253,25 @@ function publicOriginDeniedResponse(): Response {
   });
 }
 
-export function handlePublicPreflight(request: Request): Response {
+export function handlePublicPreflight(request: Request, allowMethods = 'POST, OPTIONS'): Response {
   const origin = publicRequestOrigin(request);
   if (!origin) return publicOriginDeniedResponse();
   return new Response(null, {
     status: 204,
     headers: {
-      ...publicCorsHeaders(origin, 'POST, OPTIONS'),
+      ...publicCorsHeaders(origin, allowMethods),
       'Cache-Control': 'no-store',
     },
   });
 }
 
-export function handlePublicMethodNotAllowed(request: Request): Response {
+export function handlePublicMethodNotAllowed(request: Request, allowMethods = 'POST, OPTIONS'): Response {
   const origin = publicRequestOrigin(request);
   if (!origin) return publicOriginDeniedResponse();
   return applyPublicCors(
-    publicJsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: 'POST, OPTIONS' }),
+    publicJsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: allowMethods }),
     origin,
-    'POST, OPTIONS',
+    allowMethods,
   );
 }
 

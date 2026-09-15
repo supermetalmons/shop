@@ -71,6 +71,7 @@ function env(signer = COSIGNER, backgroundQueue = queue()): Env {
     REVEAL_BACKGROUND_QUEUE: backgroundQueue,
     STRIPE_FULFILLMENT_QUEUE: queue(),
     HELIUS_API_KEY: 'helius-test-key',
+    ALCHEMY_MI_NOTE_API_KEY: '',
     COSIGNER_SECRET: bs58.encode(signer.secretKey),
     RESEND_API_KEY: '',
     RESEND_CONTACTS_API_KEY: '',

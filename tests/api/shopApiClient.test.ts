@@ -12,7 +12,7 @@ import {
   isExactShopPendingOpenBoxesResponse,
 } from '../../shared/shopApi.ts';
 import { createShopApiClient } from '../../src/api/shop.ts';
-import { fetchInventory, fetchPackStatus, fetchPendingOpenBoxes } from '../../src/lib/shopApi.ts';
+import { fetchInventory, fetchMiNoteTokenIds, fetchPackStatus, fetchPendingOpenBoxes } from '../../src/lib/shopApi.ts';
 import { rpcEndpointForCluster, SHOP_SOLANA_CONNECTION_CONFIG } from '../../src/lib/shopRpc.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
@@ -161,6 +161,53 @@ test('pack-status client propagates aborts and API errors', async () => {
     { status: 502 },
   )) as typeof fetch, async () => {
     await assert.rejects(fetchPackStatus('card_nft_2'), /provider-unavailable/);
+  });
+});
+
+test('Mi Note cards client requests the worker with an encoded address, no-store, and an abort signal', async () => {
+  const address = '0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9';
+  await withFetch((async (input, init) => {
+    assert.equal(String(input), `https://api.mons.shop/mi-note-cards?address=${encodeURIComponent(address)}`);
+    assert.equal(init?.method, 'GET');
+    assert.equal(init?.cache, 'no-store');
+    assert.equal(init?.body, undefined);
+    assert.ok(init?.signal);
+    return Response.json({ ok: true, tokenIds: ['1', '1154'] });
+  }) as typeof fetch, async () => {
+    assert.deepEqual(await fetchMiNoteTokenIds(address), ['1', '1154']);
+  });
+});
+
+test('Mi Note cards client accepts empty holdings and rejects invalid response data', async () => {
+  await withFetch((async () => Response.json({ ok: true, tokenIds: [] })) as typeof fetch, async () => {
+    assert.deepEqual(await fetchMiNoteTokenIds(OWNER), []);
+  });
+  for (const payload of [
+    { ok: true, tokenIds: [1] },
+    { ok: true, tokenIds: ['1', '1'] },
+    { ok: true, tokenIds: ['0x1'] },
+    { ok: true, tokenIds: ['1'], extra: true },
+  ]) {
+    await withFetch((async () => Response.json(payload)) as typeof fetch, async () => {
+      await assert.rejects(fetchMiNoteTokenIds(OWNER), /invalid Mi Note cards response/);
+    });
+  }
+});
+
+test('Mi Note cards client propagates aborts and provider failures', async () => {
+  await withFetch((async (_input, init) => {
+    if (init?.signal?.aborted) throw init.signal.reason;
+    throw new Error('unexpected');
+  }) as typeof fetch, async () => {
+    const controller = new AbortController();
+    controller.abort(new DOMException('aborted', 'AbortError'));
+    await assert.rejects(fetchMiNoteTokenIds(OWNER, controller.signal), { name: 'AbortError' });
+  });
+  await withFetch((async () => Response.json(
+    { ok: false, error: 'provider-unavailable' },
+    { status: 502 },
+  )) as typeof fetch, async () => {
+    await assert.rejects(fetchMiNoteTokenIds(OWNER), /provider-unavailable/);
   });
 });
 
