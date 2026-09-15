@@ -32,15 +32,10 @@ export function miNoteAddressFromSearch(search: string): { present: boolean; add
   };
 }
 
-export function isExactMiNoteCardsResponse(value: unknown): value is MiNoteCardsResponse {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const response = value as Record<string, unknown>;
-  if (
-    Object.keys(response).length !== 2 || response.ok !== true ||
-    !Array.isArray(response.tokenIds) || response.tokenIds.length > 10_000
-  ) return false;
+function isCanonicalTokenIds(value: unknown): value is string[] {
+  if (!Array.isArray(value) || value.length > 10_000) return false;
   const ids = new Set<string>();
-  for (const id of response.tokenIds) {
+  for (const id of value) {
     if (
       typeof id !== 'string' || id.length > 78 || !/^(0|[1-9][0-9]*)$/.test(id) ||
       BigInt(id) > MAX_TOKEN_ID || ids.has(id)
@@ -60,9 +55,9 @@ export function isExactMiNoteCardsResponseV2(value: unknown): value is MiNoteCar
   let total = 0;
   for (const contract of MI_NOTE_CONTRACT_ADDRESSES) {
     if (!Object.hasOwn(groups, contract)) return false;
-    const group = { ok: true, tokenIds: (groups as Record<string, unknown>)[contract] };
-    if (!isExactMiNoteCardsResponse(group)) return false;
-    total += group.tokenIds.length;
+    const tokenIds = (groups as Record<string, unknown>)[contract];
+    if (!isCanonicalTokenIds(tokenIds)) return false;
+    total += tokenIds.length;
     if (total > 10_000) return false;
   }
   return true;

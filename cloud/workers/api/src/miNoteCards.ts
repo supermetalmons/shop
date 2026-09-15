@@ -6,6 +6,7 @@ import {
   isExactMiNoteCardsResponseV2,
   miNoteAddressFromSearch,
   normalizeMiNoteAddress,
+  type MiNoteCardsResponse,
   type MiNoteCardsResponseV2,
   type MiNoteContractAddress,
   type MiNoteTokenIdsByContract,
@@ -212,9 +213,12 @@ export async function handleMiNoteCards(
   if (!address || (versions.length > 0 && (versions.length !== 1 || versions[0] !== '2'))) {
     return result(jsonResponse({ ok: false, error: 'invalid-request' }, 400));
   }
-  const ownershipResponse = (body: MiNoteCardsResponseV2) => jsonResponse(versions.length === 0
-    ? { ok: true, tokenIds: body.tokenIdsByContract[MI_NOTE_2_CONTRACT_ADDRESS] }
-    : body, 200);
+  const ownershipResponse = (body: MiNoteCardsResponseV2) => {
+    const payload: MiNoteCardsResponse | MiNoteCardsResponseV2 = versions.length === 0
+      ? { ok: true, tokenIds: body.tokenIdsByContract[MI_NOTE_2_CONTRACT_ADDRESS] }
+      : body;
+    return jsonResponse(payload, 200);
+  };
   const now = dependencies.now ?? Date.now;
   const deadline = createRequestDeadline(request, {
     timeoutMs: dependencies.timeoutMs ?? 30_000,

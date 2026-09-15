@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isExactMiNoteCardsResponse,
   isExactMiNoteCardsResponseV2,
   MI_NOTE_2_CONTRACT_ADDRESS,
   MI_NOTE_3_CONTRACT_ADDRESS,
@@ -56,15 +55,20 @@ test('Mi Note v2 responses keep token IDs separate for each collection', () => {
 
 test('Mi Note ownership responses require distinct canonical uint256 token IDs', () => {
   const maxId = ((1n << 256n) - 1n).toString();
-  assert.equal(isExactMiNoteCardsResponse({ ok: true, tokenIds: [] }), true);
-  assert.equal(isExactMiNoteCardsResponse({ ok: true, tokenIds: ['0', '1', maxId] }), true);
-  for (const value of [
-    null, [], {}, { ok: false, tokenIds: [] }, { ok: true },
-    { ok: true, tokenIds: [], extra: true },
-    ...[[1], ['1', '1'], ['01'], ['0x1'], ['-1'], ['1.1'], [''], [(1n << 256n).toString()],
-      Array.from({ length: 10_001 }, (_, index) => String(index))]
-      .map((tokenIds) => ({ ok: true, tokenIds })),
-  ]) {
-    assert.equal(isExactMiNoteCardsResponse(value), false);
+  for (const contract of [MI_NOTE_2_CONTRACT_ADDRESS, MI_NOTE_3_CONTRACT_ADDRESS]) {
+    const payload = (tokenIds: unknown) => ({
+      ok: true,
+      tokenIdsByContract: {
+        [MI_NOTE_2_CONTRACT_ADDRESS]: [],
+        [MI_NOTE_3_CONTRACT_ADDRESS]: [],
+        [contract]: tokenIds,
+      },
+    });
+    assert.equal(isExactMiNoteCardsResponseV2(payload([])), true);
+    assert.equal(isExactMiNoteCardsResponseV2(payload(['0', '1', maxId])), true);
+    for (const ids of [
+      null, {}, [1], ['1', '1'], ['01'], ['0x1'], ['-1'], ['1.1'], [''],
+      [(1n << 256n).toString()], Array.from({ length: 10_001 }, (_, index) => String(index)),
+    ]) assert.equal(isExactMiNoteCardsResponseV2(payload(ids)), false);
   }
 });
