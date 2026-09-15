@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  isExactMiNoteCardsResponseV2,
+  isExactMiNoteCardsResponse,
   MI_NOTE_2_CONTRACT_ADDRESS,
   MI_NOTE_3_CONTRACT_ADDRESS,
   miNoteAddressFromSearch,
@@ -23,7 +23,7 @@ test('Mi Note address queries distinguish random mode from invalid owner mode', 
   }
 });
 
-test('Mi Note v2 responses keep token IDs separate for each collection', () => {
+test('Mi Note combined responses keep token IDs separate for each collection', () => {
   const payload = (two: unknown, three: unknown) => ({
     ok: true,
     tokenIdsByContract: {
@@ -31,9 +31,9 @@ test('Mi Note v2 responses keep token IDs separate for each collection', () => {
       [MI_NOTE_3_CONTRACT_ADDRESS]: three,
     },
   });
-  assert.equal(isExactMiNoteCardsResponseV2(payload([], [])), true);
-  assert.equal(isExactMiNoteCardsResponseV2(payload(['2'], ['2'])), true);
-  assert.equal(isExactMiNoteCardsResponseV2(payload([], ['2'])), true);
+  assert.equal(isExactMiNoteCardsResponse(payload([], [])), true);
+  assert.equal(isExactMiNoteCardsResponse(payload(['2'], ['2'])), true);
+  assert.equal(isExactMiNoteCardsResponse(payload([], ['2'])), true);
   for (const value of [
     null, [], {}, { ok: true, tokenIds: [] },
     { ...payload([], []), extra: true },
@@ -46,11 +46,11 @@ test('Mi Note v2 responses keep token IDs separate for each collection', () => {
     payload(['2', '2'], []), payload([], ['2', '2']), payload(['01'], []),
     payload([], ['0x2']), payload([], [2]), payload(null, []),
     payload([], [(1n << 256n).toString()]),
-  ]) assert.equal(isExactMiNoteCardsResponseV2(value), false);
+  ]) assert.equal(isExactMiNoteCardsResponse(value), false);
 
   const ids = Array.from({ length: 5000 }, (_, index) => String(index));
-  assert.equal(isExactMiNoteCardsResponseV2(payload(ids, ids)), true);
-  assert.equal(isExactMiNoteCardsResponseV2(payload(ids, [...ids, '5000'])), false);
+  assert.equal(isExactMiNoteCardsResponse(payload(ids, ids)), true);
+  assert.equal(isExactMiNoteCardsResponse(payload(ids, [...ids, '5000'])), false);
 });
 
 test('Mi Note ownership responses require distinct canonical uint256 token IDs', () => {
@@ -64,11 +64,11 @@ test('Mi Note ownership responses require distinct canonical uint256 token IDs',
         [contract]: tokenIds,
       },
     });
-    assert.equal(isExactMiNoteCardsResponseV2(payload([])), true);
-    assert.equal(isExactMiNoteCardsResponseV2(payload(['0', '1', maxId])), true);
+    assert.equal(isExactMiNoteCardsResponse(payload([])), true);
+    assert.equal(isExactMiNoteCardsResponse(payload(['0', '1', maxId])), true);
     for (const ids of [
       null, {}, [1], ['1', '1'], ['01'], ['0x1'], ['-1'], ['1.1'], [''],
       [(1n << 256n).toString()], Array.from({ length: 10_001 }, (_, index) => String(index)),
-    ]) assert.equal(isExactMiNoteCardsResponseV2(payload(ids)), false);
+    ]) assert.equal(isExactMiNoteCardsResponse(payload(ids)), false);
   }
 });

@@ -87,15 +87,14 @@ Cards appear in catalog order, with Mi Note 2 followed by Mi Note 3.
 Invalid or empty addresses, empty ownership, and lookup failures leave
 the grid empty. No wallet connection is required.
 
-The browser calls `GET /mi-note-cards?address=...&version=2` on the API Worker.
+The browser calls `GET /mi-note-cards?address=...` on the API Worker.
 The Worker queries Alchemy NFT API v3 on Ethereum Mainnet for Mi Note 2 contract
 `0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f` and Mi Note 3 contract
 `0xc22bd85e6d6c058226f46a693f0df4054496db5b` in one paginated lookup. It returns
 `{ "ok": true, "tokenIdsByContract": { "<contract-address>": ["1"] } }`, with
 both contract keys always present. Token IDs are distinct within each contract;
-the same ID can belong to both collections. Requests without `version` retain
-the legacy `{ "ok": true, "tokenIds": ["1"] }` response containing Mi Note 2
-holdings only. Other or repeated version values return 400.
+the same ID can belong to both collections. This is the only response format;
+there is no request version selector or Mi Note 2-only response.
 
 Successful combined results, including empty lists, are cached under a versioned
 key in the Worker for 60 seconds per normalized address; browser

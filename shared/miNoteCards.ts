@@ -5,15 +5,10 @@ export const MI_NOTE_CARDS_API_PATH = '/mi-note-cards';
 
 const MAX_TOKEN_ID = (1n << 256n) - 1n;
 
-export type MiNoteCardsResponse = {
-  ok: true;
-  tokenIds: string[];
-};
-
 export type MiNoteContractAddress = typeof MI_NOTE_CONTRACT_ADDRESSES[number];
 export type MiNoteTokenIdsByContract = Record<MiNoteContractAddress, string[]>;
 
-export type MiNoteCardsResponseV2 = {
+export type MiNoteCardsResponse = {
   ok: true;
   tokenIdsByContract: MiNoteTokenIdsByContract;
 };
@@ -45,7 +40,7 @@ function isCanonicalTokenIds(value: unknown): value is string[] {
   return true;
 }
 
-export function isExactMiNoteCardsResponseV2(value: unknown): value is MiNoteCardsResponseV2 {
+export function isExactMiNoteCardsResponse(value: unknown): value is MiNoteCardsResponse {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const response = value as Record<string, unknown>;
   if (Object.keys(response).length !== 2 || response.ok !== true) return false;

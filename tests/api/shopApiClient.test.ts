@@ -177,7 +177,7 @@ test('Mi Note cards client requests the worker with an encoded address, no-store
   const address = '0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9';
   const tokenIdsByContract = miNoteHoldings(['2', '1154'], ['2', '117']);
   await withFetch((async (input, init) => {
-    assert.equal(String(input), `https://api.mons.shop/mi-note-cards?address=${encodeURIComponent(address)}&version=2`);
+    assert.equal(String(input), `https://api.mons.shop/mi-note-cards?address=${encodeURIComponent(address)}`);
     assert.equal(init?.method, 'GET');
     assert.equal(init?.cache, 'no-store');
     assert.equal(init?.body, undefined);

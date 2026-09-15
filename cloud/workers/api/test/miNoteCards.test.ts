@@ -103,7 +103,7 @@ test('mi note ownership sends fixed collection queries and follows encoded curso
   const result = await fixture.run();
   assert.equal(result.response.status, 200);
   assert.equal(result.cacheStatus, 'MISS');
-  assert.deepEqual(await result.response.json(), { ok: true, tokenIds: ['2', '4', '12'] });
+  assert.deepEqual(await result.response.json(), ownership(['2', '4', '12']));
   assert.equal(urls.length, 2);
   for (const [index, url] of urls.entries()) {
     assert.equal(url.origin, 'https://eth-mainnet.g.alchemy.com');
@@ -136,10 +136,10 @@ test('mi note ownership normalizes uint256 IDs, deduplicates, and excludes zero 
     },
   });
   const result = await fixture.run();
-  assert.deepEqual(await result.response.json(), { ok: true, tokenIds: ['0', '10', maxId] });
+  assert.deepEqual(await result.response.json(), ownership(['0', '10', maxId]));
 });
 
-test('mi note v2 ownership retains both collections across mixed pages and deduplicates within each', async () => {
+test('mi note ownership retains both collections across mixed pages and deduplicates within each', async () => {
   let calls = 0;
   const fixture = setup({
     providerFetch: async () => {
@@ -157,41 +157,20 @@ test('mi note v2 ownership retains both collections across mixed pages and dedup
       });
     },
   });
-  const result = await fixture.run(request(`?address=${OWNER}&version=2`));
+  const result = await fixture.run();
   assert.equal(result.response.status, 200);
   assert.deepEqual(await result.response.json(), ownership(['2', '12'], ['2', '4']));
   assert.equal(calls, 2);
   assertCors(result.response);
 });
 
-test('mi note legacy ownership stays empty when only Mi Note 3 is owned', async () => {
+test('mi note ownership includes Mi Note 3 when no Mi Note 2 tokens are owned', async () => {
   const fixture = setup({
     providerFetch: async () => Response.json({ ownedNfts: [nft('2', '1', MI_NOTE_3_CONTRACT_ADDRESS)] }),
   });
-  const legacy = await fixture.run();
-  assert.deepEqual(await legacy.response.json(), { ok: true, tokenIds: [] });
-  const v2 = await fixture.run(request(`?address=${OWNER}&version=2`));
-  assert.deepEqual(await v2.response.json(), ownership([], ['2']));
+  const result = await fixture.run();
+  assert.deepEqual(await result.response.json(), ownership([], ['2']));
 });
-
-for (const version of ['version=', 'version=1', 'version=3', 'version=02', 'version=2&version=2', 'version=2&version=']) {
-  test(`mi note ownership rejects invalid response version ${version} before cache or provider access`, async () => {
-    let cacheCalls = 0;
-    const fixture = setup({
-      cache: {
-        match: async () => { cacheCalls += 1; return undefined; },
-        put: async () => { cacheCalls += 1; },
-      },
-    });
-    const result = await fixture.run(request(`?address=${OWNER}&${version}`));
-    assert.equal(result.response.status, 400);
-    assert.deepEqual(await result.response.json(), { ok: false, error: 'invalid-request' });
-    assert.equal(cacheCalls, 0);
-    assert.equal(fixture.metrics.upstreamCalls, 0);
-    assert.equal(fixture.rateKeys.length, 0);
-    assertCors(result.response);
-  });
-}
 
 for (const search of ['', '?address=', '?address=garbage', `?address=${OWNER}&address=${OWNER}`, '?address=vitalik.eth']) {
   test(`mi note ownership rejects invalid address query ${search || '(missing)'}`, async () => {
@@ -280,7 +259,7 @@ test('mi note ownership accepts exactly 100 complete pages and rejects further p
         });
       },
     });
-    const result = await fixture.run(request(`?address=${OWNER}&version=2`));
+    const result = await fixture.run();
     assert.equal(fixture.metrics.upstreamCalls, 100);
     assert.equal(result.response.status, complete ? 200 : 502);
     if (complete) {
@@ -448,14 +427,17 @@ test('mi note ownership caches populated and empty results for 60 seconds per lo
     }));
     assert.equal(second.cacheStatus, 'HIT');
     assert.equal(fixture.metrics.upstreamCalls, 1);
-    assert.deepEqual(await second.response.json(), { ok: true, tokenIds });
+    assert.deepEqual(await second.response.json(), ownership(tokenIds));
     assert.equal(second.response.headers.has(EXPIRY_HEADER), false);
     assertCors(second.response, 'http://localhost:5173');
   }
 });
 
-test('mi note legacy and v2 requests share only the combined v2 cache and project the response', async () => {
-  for (const legacyFirst of [true, false]) {
+test('mi note ownership ignores extra query parameters and uses one combined cache identity', async () => {
+  for (const suffix of [
+    '', '&version=2', '&version=1', '&version=', '&version=02',
+    '&version=2&version=2', '&version=2&version=', '&unrelated=true',
+  ]) {
     const entries = new Map<string, Response>();
     const lookups: string[] = [];
     const oldCacheUrl = `https://api.mons.shop${MI_NOTE_CARDS_API_PATH}?address=${OWNER.toLowerCase()}`;
@@ -475,15 +457,18 @@ test('mi note legacy and v2 requests share only the combined v2 cache and projec
         put: async (input, response) => { entries.set(new Request(input).url, response.clone()); },
       },
     });
-    const first = await fixture.run(request(`?address=${OWNER}${legacyFirst ? '' : '&version=2'}`));
+    const first = await fixture.run(request(`?address=${OWNER}${suffix}`));
+    assert.equal(first.response.status, 200);
     assert.equal(first.cacheStatus, 'MISS');
-    assert.deepEqual(await first.response.json(), legacyFirst ? { ok: true, tokenIds: ['2'] } : ownership(['2'], ['2', '5']));
+    assert.deepEqual(await first.response.json(), ownership(['2'], ['2', '5']));
+    assertCors(first.response);
     await Promise.all(fixture.deferred);
     const newCacheUrl = `${oldCacheUrl}&version=2`;
     assert.deepEqual(await entries.get(newCacheUrl)?.clone().json(), ownership(['2'], ['2', '5']));
-    const second = await fixture.run(request(`?address=${OWNER.toLowerCase()}${legacyFirst ? '&version=2' : ''}`));
+    const second = await fixture.run(request(`?address=${OWNER.toLowerCase()}`));
+    assert.equal(second.response.status, 200);
     assert.equal(second.cacheStatus, 'HIT');
-    assert.deepEqual(await second.response.json(), legacyFirst ? ownership(['2'], ['2', '5']) : { ok: true, tokenIds: ['2'] });
+    assert.deepEqual(await second.response.json(), ownership(['2'], ['2', '5']));
     assert.deepEqual(lookups, [newCacheUrl, newCacheUrl]);
     assert.equal(fixture.metrics.upstreamCalls, 1);
     assert.equal(entries.size, 2);
@@ -508,7 +493,7 @@ for (const cached of [
     const result = await fixture.run();
     assert.equal(result.cacheStatus, 'MISS');
     assert.equal(fixture.metrics.upstreamCalls, 1);
-    assert.deepEqual(await result.response.json(), { ok: true, tokenIds: ['1'] });
+    assert.deepEqual(await result.response.json(), ownership());
     await Promise.all(fixture.deferred);
   });
 }
@@ -546,7 +531,7 @@ test('mi note ownership rechecks cache expiry after reading the body', async () 
   });
   const result = await fixture.run();
   assert.equal(result.cacheStatus, 'MISS');
-  assert.deepEqual(await result.response.json(), { ok: true, tokenIds: ['1'] });
+  assert.deepEqual(await result.response.json(), ownership());
   await Promise.all(fixture.deferred);
 });
 
@@ -559,7 +544,7 @@ test('mi note ownership preserves successful responses if deferred cache registr
     () => { throw new Error('deferred registration failed'); },
   );
   assert.equal(result.response.status, 200);
-  assert.deepEqual(await result.response.json(), { ok: true, tokenIds: ['1'] });
+  assert.deepEqual(await result.response.json(), ownership());
   assert.equal(fixture.logs.some((entry) => entry.event === 'mi_note_cards_cache_registration_failed'), true);
 });
 

@@ -4038,7 +4038,13 @@ test('Mi Note GET route is public and preserves method, origin, and error polici
     headers: { Origin: 'https://mons.shop', Authorization: 'Bearer unrelated' },
   }), env({ alchemyApiKey: 'alchemy-test-key', commerceState: 'paused' }), dependencies);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { ok: true, tokenIds: ['1'] });
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    tokenIdsByContract: {
+      '0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f': ['1'],
+      '0xc22bd85e6d6c058226f46a693f0df4054496db5b': [],
+    },
+  });
   assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
   assert.equal(calls, 1);

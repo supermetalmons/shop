@@ -62,17 +62,18 @@ test('Mi Note ownership uses native workerd fetch for pagination and rejects red
       });
     });
     const worker = server.getWorker('mi-note-cards-runtime');
-    const response = await worker.fetch(`https://api.mons.shop/mi-note-cards?address=${owner}&version=2`, {
+    const response = await worker.fetch(`https://api.mons.shop/mi-note-cards?address=${owner}`, {
       headers: { Origin: origin },
     });
-    assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), {
+    const expectedOwnership = {
       ok: true,
       tokenIdsByContract: {
         [MI_NOTE_2_CONTRACT_ADDRESS]: ['2', '4', '12'],
         [MI_NOTE_3_CONTRACT_ADDRESS]: ['1', '2', '12'],
       },
-    });
+    };
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), expectedOwnership);
     assert.equal(response.headers.get('Access-Control-Allow-Origin'), origin);
     assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
     assert.equal(response.headers.get('Cache-Control'), 'no-store');
@@ -80,17 +81,17 @@ test('Mi Note ownership uses native workerd fetch for pagination and rejects red
     assert.equal(outboundUrls[0].searchParams.get('pageKey'), null);
     assert.equal(outboundUrls[1].searchParams.get('pageKey'), pageKey);
 
-    const legacy = await worker.fetch(`https://api.mons.shop/mi-note-cards?address=${owner}`, {
+    const withExtraParameter = await worker.fetch(`https://api.mons.shop/mi-note-cards?address=${owner}&version=2`, {
       headers: { Origin: origin },
     });
-    assert.equal(legacy.status, 200);
-    assert.deepEqual(await legacy.json(), { ok: true, tokenIds: ['2', '4', '12'] });
+    assert.equal(withExtraParameter.status, 200);
+    assert.deepEqual(await withExtraParameter.json(), expectedOwnership);
 
     for (const status of [301, 302, 303, 307, 308]) {
       redirectStatus = status;
       const previousCalls: number = outboundUrls.length;
       const redirectOwner = `0x${status.toString(16).padStart(40, '0')}`;
-      const redirected = await worker.fetch(`https://api.mons.shop/mi-note-cards?address=${redirectOwner}&version=2`, {
+      const redirected = await worker.fetch(`https://api.mons.shop/mi-note-cards?address=${redirectOwner}`, {
         headers: { Origin: origin },
       });
       assert.equal(redirected.status, 502);

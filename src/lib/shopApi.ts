@@ -10,7 +10,7 @@ import {
 } from '../../shared/shopApi.ts';
 import type { PackStatusBreakdown } from '../../shared/contracts.ts';
 import {
-  isExactMiNoteCardsResponseV2,
+  isExactMiNoteCardsResponse,
   MI_NOTE_CARDS_API_PATH,
   type MiNoteTokenIdsByContract,
 } from '../../shared/miNoteCards.ts';
@@ -140,10 +140,10 @@ export async function fetchPackStatus(dropId: string, signal?: AbortSignal): Pro
 
 export async function fetchMiNoteHoldings(address: string, signal?: AbortSignal): Promise<MiNoteTokenIdsByContract> {
   const payload = await requestShopApi(
-    `${MI_NOTE_CARDS_API_PATH}?address=${encodeURIComponent(address)}&version=2`,
+    `${MI_NOTE_CARDS_API_PATH}?address=${encodeURIComponent(address)}`,
     { method: 'GET' },
     signal,
   );
-  if (!isExactMiNoteCardsResponseV2(payload)) throw new Error('Shop API returned an invalid Mi Note cards response');
+  if (!isExactMiNoteCardsResponse(payload)) throw new Error('Shop API returned an invalid Mi Note cards response');
   return payload.tokenIdsByContract;
 }

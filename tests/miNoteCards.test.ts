@@ -90,7 +90,7 @@ test('address mode starts empty and returns only catalogued holdings in collecti
   const { result } = renderHook(useMiNoteCards);
   assert.deepEqual(result.current, []);
   assert.equal(requests.length, 1);
-  assert.equal(requests[0].url, `https://api.mons.shop/mi-note-cards?address=${ADDRESS.toLowerCase()}&version=2`);
+  assert.equal(requests[0].url, `https://api.mons.shop/mi-note-cards?address=${ADDRESS.toLowerCase()}`);
   await act(async () => {
     requests[0].resolve(Response.json(holdings(['1154', '779', '1', '999999'], ['117', '2', '1', '999999'])));
   });
