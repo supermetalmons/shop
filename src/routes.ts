@@ -52,6 +52,7 @@ type AppRouteKind =
   | 'claim'
   | 'fulfillment'
   | 'notify'
+  | 'mi-note-cards'
   | 'wip';
 
 export type ResolvedAppRoute = {
@@ -110,6 +111,7 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   if (path === '/') return createRoute('home', path, replacementHref);
   if (path === '/fulfillment') return createRoute('fulfillment', path, replacementHref);
   if (path === '/notify_me') return createRoute('notify', path, replacementHref);
+  if (path === '/mi_note_cards') return createRoute('mi-note-cards', path, replacementHref);
 
   const wipRoute = WIP_ROUTE_BY_PATH.get(path);
   if (wipRoute) {

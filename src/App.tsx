@@ -1,6 +1,6 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { useEffect, useRef } from 'react';
+import { Component, lazy, Suspense, useEffect, useRef, type ReactNode } from 'react';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
@@ -51,6 +51,27 @@ import { useShopNotifications } from './shop/ui/useShopNotifications';
 import { useShopDrop } from './shop/useShopDrop';
 
 const ADDRESS_ENCRYPTION_PUBLIC_KEY = 'OeuwTqGXImT/vfBBV6j6G89Hs6tU1Ij5+Gd2fQSCQB4=';
+const MiNoteCardsGallery = lazy(() => import('./components/MiNoteCardsGallery'));
+
+class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <main aria-label="Mi Note cards">
+          <p role="alert">Unable to load the gallery.</p>
+          <button type="button" onClick={() => window.location.reload()}>Reload</button>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 type AppProps = {
   currentPath?: string;
@@ -311,6 +332,7 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
       ? auth.profileError
       : viewedProfileErrorMessage || (stripeRecovery.anonymousHistory.visible ? anonymousStripeHistoryErrorMessage : '');
   const showHeaderWalletButton = signIn.authReady && !auth.loading && !signIn.pendingHeaderWalletSignIn && !account.hasAuthenticatedAccount && signIn.headerWalletButtonRevealed;
+  const miNoteCardsPage = drop.normalizedCurrentPath === '/mi_note_cards';
   const dropsPanelFrameActive = !drop.routeDrop && !drop.upcomingDropRoute && drop.normalizedCurrentPath === '/';
   const primaryFrameClassName = [
     'drop-page-frame',
@@ -340,28 +362,38 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
             adminMenuDevnetDrops={drop.adminMenuDevnetDrops}
           />}
         />
-        <ShopPurchaseSection
-          {...drop}
-          {...purchaseState}
-          {...purchaseActions}
-          effectiveMintStats={effectiveMintStats}
-          connectedWallet={connectedWallet}
-          publicKey={publicKey}
-          walletBusy={walletBusy}
-          showToast={showToast}
-          handleOpenNotify={notifications.handleOpenNotify}
-        />
+        {miNoteCardsPage ? (
+          <MiNoteCardsErrorBoundary>
+            <Suspense fallback={<div role="status">Loading…</div>}>
+              <MiNoteCardsGallery onNotify={notifications.handleOpenNotify} />
+            </Suspense>
+          </MiNoteCardsErrorBoundary>
+        ) : (
+          <ShopPurchaseSection
+            {...drop}
+            {...purchaseState}
+            {...purchaseActions}
+            effectiveMintStats={effectiveMintStats}
+            connectedWallet={connectedWallet}
+            publicKey={publicKey}
+            walletBusy={walletBusy}
+            showToast={showToast}
+            handleOpenNotify={notifications.handleOpenNotify}
+          />
+        )}
       </div>
-      <ShopInventorySection
-        {...inventory}
-        canOpenBoxesForDropId={drop.canOpenBoxesForDropId}
-        onReveal={(id, rect) => {
-          const item = inventory.inventoryIndex.get(id);
-          if (item) void reveal.openPendingReveal(item, rect);
-        }}
-        revealLoading={reveal.revealLoading}
-        revealDisabled={Boolean(reveal.revealLoading || reveal.startOpenLoading || reveal.revealOverlay)}
-      />
+      {!miNoteCardsPage && (
+        <ShopInventorySection
+          {...inventory}
+          canOpenBoxesForDropId={drop.canOpenBoxesForDropId}
+          onReveal={(id, rect) => {
+            const item = inventory.inventoryIndex.get(id);
+            if (item) void reveal.openPendingReveal(item, rect);
+          }}
+          revealLoading={reveal.revealLoading}
+          revealDisabled={Boolean(reveal.revealLoading || reveal.startOpenLoading || reveal.revealOverlay)}
+        />
+      )}
       <ShopCommerceModals
         modals={modals}
         view={inventory}
@@ -380,33 +412,37 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
       />
       <ShopRevealLayer reveal={reveal} suspended={revealOverlaySuspended} receiptControls={receiptControls} />
       {activeError ? <div className="error">{activeError}</div> : null}
-      <ShopShipmentsSection
-        {...shipments}
-        {...reveal}
-        figureMetadataByKey={inventorySource.figureMetadataByKey}
-        getDropContent={drop.getDropContent}
-        dropById={drop.dropById}
-        mergeLoadedFigureMetadata={inventorySource.actions.mergeLoadedFigureMetadata}
-        shipmentsEmptyContent={<ShopShipmentsEmptyState {...shipments.emptyState} />}
-      />
-      <ShopReceiptsSection
-        onEnterCode={() => { if (!blockViewerModeAction()) modals.openClaim(); }}
-        receiptsContentVisible={shipments.receiptsContentVisible}
-        receiptItems={inventory.receiptItems}
-        selected={inventory.selected}
-        toggleSelected={inventory.toggleSelected}
-        openReceiptImageViewer={reveal.openReceiptImageViewer}
-      />
-      <ShopSelectionBar
-        {...inventory}
-        clearSelection={inventorySource.actions.clearSelection}
-        handleViewSelectedItem={() => { if (inventory.selectedViewableItem) reveal.viewItem(inventory.selectedViewableItem); }}
-        handleOpenSelectedBox={() => { if (inventory.selectedBox) void reveal.openSelectedBox(inventory.selectedBox); }}
-        handleOpenShip={deliveryActions.handleOpenShip}
-        startOpenLoading={reveal.startOpenLoading}
-        openActionLabelForDropId={drop.openActionLabelForDropId}
-        openActionProgressForDropId={drop.openActionProgressForDropId}
-      />
+      {!miNoteCardsPage && (
+        <>
+          <ShopShipmentsSection
+            {...shipments}
+            {...reveal}
+            figureMetadataByKey={inventorySource.figureMetadataByKey}
+            getDropContent={drop.getDropContent}
+            dropById={drop.dropById}
+            mergeLoadedFigureMetadata={inventorySource.actions.mergeLoadedFigureMetadata}
+            shipmentsEmptyContent={<ShopShipmentsEmptyState {...shipments.emptyState} />}
+          />
+          <ShopReceiptsSection
+            onEnterCode={() => { if (!blockViewerModeAction()) modals.openClaim(); }}
+            receiptsContentVisible={shipments.receiptsContentVisible}
+            receiptItems={inventory.receiptItems}
+            selected={inventory.selected}
+            toggleSelected={inventory.toggleSelected}
+            openReceiptImageViewer={reveal.openReceiptImageViewer}
+          />
+          <ShopSelectionBar
+            {...inventory}
+            clearSelection={inventorySource.actions.clearSelection}
+            handleViewSelectedItem={() => { if (inventory.selectedViewableItem) reveal.viewItem(inventory.selectedViewableItem); }}
+            handleOpenSelectedBox={() => { if (inventory.selectedBox) void reveal.openSelectedBox(inventory.selectedBox); }}
+            handleOpenShip={deliveryActions.handleOpenShip}
+            startOpenLoading={reveal.startOpenLoading}
+            openActionLabelForDropId={drop.openActionLabelForDropId}
+            openActionProgressForDropId={drop.openActionProgressForDropId}
+          />
+        </>
+      )}
     </div>
   );
 }
