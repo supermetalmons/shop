@@ -79,7 +79,7 @@ test('mi note ownership sends fixed collection queries and follows encoded curso
     providerFetch: async (input, init) => {
       urls.push(new URL(String(input)));
       assert.equal(init?.method, 'GET');
-      assert.equal(init?.redirect, 'error');
+      assert.equal(init?.redirect, 'manual');
       assert.ok(init?.signal);
       return urls.length === 1 ? page(['12', '2'], 'cursor +/&=?') : page(['4'], null);
     },

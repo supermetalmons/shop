@@ -131,7 +131,7 @@ async function fetchOwnership(
       const response = await responseWithSignal(dependencies.providerFetch(url, {
         method: 'GET',
         headers: { Accept: 'application/json' },
-        redirect: 'error',
+        redirect: 'manual',
         signal,
       }), signal);
       if (!response) throw providerFailure();
