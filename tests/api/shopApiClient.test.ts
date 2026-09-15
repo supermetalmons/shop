@@ -14,14 +14,55 @@ import {
 import { createShopApiClient } from '../../src/api/shop.ts';
 import { fetchInventory, fetchMiNoteHoldings, fetchPackStatus, fetchPendingOpenBoxes } from '../../src/lib/shopApi.ts';
 import { rpcEndpointForCluster, SHOP_SOLANA_CONNECTION_CONFIG } from '../../src/lib/shopRpc.ts';
-import { MI_NOTE_2_CONTRACT_ADDRESS, MI_NOTE_3_CONTRACT_ADDRESS } from '../../shared/miNoteCards.ts';
+import {
+  MAX_MI_NOTE_STREAM_BYTES,
+  MI_NOTE_2_CONTRACT_ADDRESS,
+  MI_NOTE_3_CONTRACT_ADDRESS,
+  MI_NOTE_CONTRACT_ADDRESS,
+  MI_NOTE_CONTRACT_ADDRESSES,
+  type MiNoteCardsCollectionEvent,
+  type MiNoteCardsEvent,
+  type MiNoteCardsOutcome,
+  type MiNoteContractAddress,
+} from '../../shared/miNoteCards.ts';
 
 const OWNER = 'kPG2L5zuxqNkvWvJNptbkqnPhk4nGjnGp7jwDFZPQgx';
 
-function miNoteHoldings(miNote2: string[] = [], miNote3: string[] = []) {
+function miNoteCollection(contractAddress: MiNoteContractAddress, tokenIds: string[]): MiNoteCardsCollectionEvent {
   return {
-    [MI_NOTE_2_CONTRACT_ADDRESS]: miNote2,
-    [MI_NOTE_3_CONTRACT_ADDRESS]: miNote3,
+    type: 'collection', contractAddress, tokenIds,
+    provider: contractAddress === MI_NOTE_CONTRACT_ADDRESS ? 'opensea' : 'alchemy',
+    visibilityLimited: contractAddress === MI_NOTE_CONTRACT_ADDRESS,
+  };
+}
+
+function miNoteHoldings(miNote2: string[] = [], miNote3: string[] = [], original: string[] = []): MiNoteCardsEvent[] {
+  return [
+    miNoteCollection(MI_NOTE_2_CONTRACT_ADDRESS, miNote2),
+    miNoteCollection(MI_NOTE_3_CONTRACT_ADDRESS, miNote3),
+    miNoteCollection(MI_NOTE_CONTRACT_ADDRESS, original),
+    { type: 'done' },
+  ];
+}
+
+function miNoteStream(events: unknown[], separator = '\n'): Response {
+  return new Response(events.map((event) => `${JSON.stringify(event)}${separator}`).join(''), {
+    headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8' },
+  });
+}
+
+function openMiNoteStream() {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(value) { controller = value; },
+    cancel() { cancelled = true; },
+  });
+  return {
+    response: new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } }),
+    emit: (event: unknown) => controller.enqueue(new TextEncoder().encode(`${JSON.stringify(event)}\n`)),
+    close: () => controller.close(),
+    get cancelled() { return cancelled; },
   };
 }
 
@@ -175,35 +216,44 @@ test('pack-status client propagates aborts and API errors', async () => {
 
 test('Mi Note cards client requests the worker with an encoded address, no-store, and an abort signal', async () => {
   const address = '0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9';
-  const tokenIdsByContract = miNoteHoldings(['2', '1154'], ['2', '117']);
+  const events = miNoteHoldings(['2', '1154'], ['2', '117'], ['1']);
   await withFetch((async (input, init) => {
     assert.equal(String(input), `https://api.mons.shop/mi-note-cards?address=${encodeURIComponent(address)}`);
     assert.equal(init?.method, 'GET');
     assert.equal(init?.cache, 'no-store');
+    assert.equal(new Headers(init?.headers).get('Accept'), 'application/x-ndjson');
     assert.equal(init?.body, undefined);
     assert.ok(init?.signal);
-    return Response.json({ ok: true, tokenIdsByContract });
+    return miNoteStream(events);
   }) as typeof fetch, async () => {
-    assert.deepEqual(await fetchMiNoteHoldings(address), tokenIdsByContract);
+    const outcomes: MiNoteCardsOutcome[] = [];
+    await fetchMiNoteHoldings(address, (outcome) => outcomes.push(outcome));
+    assert.deepEqual(outcomes, events.slice(0, 3));
   });
 });
 
 test('Mi Note cards client accepts empty holdings and rejects invalid response data', async () => {
-  await withFetch((async () => Response.json({ ok: true, tokenIdsByContract: miNoteHoldings() })) as typeof fetch, async () => {
-    assert.deepEqual(await fetchMiNoteHoldings(OWNER), miNoteHoldings());
+  await withFetch((async () => miNoteStream(miNoteHoldings())) as typeof fetch, async () => {
+    const outcomes: MiNoteCardsOutcome[] = [];
+    await fetchMiNoteHoldings(OWNER, (outcome) => outcomes.push(outcome));
+    assert.deepEqual(outcomes, miNoteHoldings().slice(0, 3));
   });
-  for (const payload of [
+  for (const event of [
     { ok: true, tokenIds: ['1'] },
-    { ok: true, tokenIdsByContract: { ...miNoteHoldings(), [MI_NOTE_2_CONTRACT_ADDRESS]: [1] } },
-    { ok: true, tokenIdsByContract: miNoteHoldings(['1', '1']) },
-    { ok: true, tokenIdsByContract: miNoteHoldings([], ['0x1']) },
-    { ok: true, tokenIdsByContract: miNoteHoldings(['1']), extra: true },
-    { ok: true, tokenIdsByContract: { [MI_NOTE_2_CONTRACT_ADDRESS]: ['1'] } },
+    { ...miNoteCollection(MI_NOTE_2_CONTRACT_ADDRESS, []), tokenIds: [1] },
+    miNoteCollection(MI_NOTE_2_CONTRACT_ADDRESS, ['1', '1']),
+    miNoteCollection(MI_NOTE_3_CONTRACT_ADDRESS, ['0x1']),
+    { ...miNoteCollection(MI_NOTE_CONTRACT_ADDRESS, ['1']), extra: true },
+    { ...miNoteCollection(MI_NOTE_2_CONTRACT_ADDRESS, []), visibilityLimited: true },
+    { ...miNoteCollection(MI_NOTE_CONTRACT_ADDRESS, []), visibilityLimited: false },
   ]) {
-    await withFetch((async () => Response.json(payload)) as typeof fetch, async () => {
-      await assert.rejects(fetchMiNoteHoldings(OWNER), /invalid Mi Note cards response/);
+    await withFetch((async () => miNoteStream([event])) as typeof fetch, async () => {
+      await assert.rejects(fetchMiNoteHoldings(OWNER, () => assert.fail('Invalid event was delivered')), /invalid Mi Note cards response/);
     });
   }
+  await withFetch((async () => Response.json({ ok: true, tokenIds: ['1'] })) as typeof fetch, async () => {
+    await assert.rejects(fetchMiNoteHoldings(OWNER, () => {}), /invalid Mi Note cards response/);
+  });
 });
 
 test('Mi Note cards client propagates aborts and provider failures', async () => {
@@ -213,13 +263,196 @@ test('Mi Note cards client propagates aborts and provider failures', async () =>
   }) as typeof fetch, async () => {
     const controller = new AbortController();
     controller.abort(new DOMException('aborted', 'AbortError'));
-    await assert.rejects(fetchMiNoteHoldings(OWNER, controller.signal), { name: 'AbortError' });
+    await assert.rejects(fetchMiNoteHoldings(OWNER, () => {}, controller.signal), { name: 'AbortError' });
   });
   await withFetch((async () => Response.json(
     { ok: false, error: 'provider-unavailable' },
     { status: 502 },
   )) as typeof fetch, async () => {
-    await assert.rejects(fetchMiNoteHoldings(OWNER), /provider-unavailable/);
+    await assert.rejects(fetchMiNoteHoldings(OWNER, () => {}), /provider-unavailable/);
+  });
+});
+
+test('Mi Note cards client delivers outcomes before the stream completes', async () => {
+  const stream = openMiNoteStream();
+  const outcomes: MiNoteCardsOutcome[] = [];
+  let received!: () => void;
+  const firstOutcome = new Promise<void>((resolve) => { received = resolve; });
+  let finished = false;
+  await withFetch((async () => stream.response) as typeof fetch, async () => {
+    const request = fetchMiNoteHoldings(OWNER, (outcome) => { outcomes.push(outcome); received(); })
+      .then(() => { finished = true; });
+    const original = miNoteCollection(MI_NOTE_CONTRACT_ADDRESS, ['1']);
+    stream.emit(original);
+    await firstOutcome;
+    assert.deepEqual(outcomes, [original]);
+    assert.equal(finished, false);
+    stream.emit({ type: 'error', contractAddress: MI_NOTE_2_CONTRACT_ADDRESS, error: 'provider-timeout' });
+    stream.emit(miNoteCollection(MI_NOTE_3_CONTRACT_ADDRESS, ['2']));
+    stream.emit({ type: 'done' });
+    stream.close();
+    await request;
+    assert.equal(outcomes.length, 3);
+    assert.equal(outcomes[1].type, 'error');
+  });
+});
+
+test('Mi Note cards client preserves delivered outcomes when a later event is invalid', async () => {
+  const first = miNoteCollection(MI_NOTE_2_CONTRACT_ADDRESS, ['2']);
+  const outcomes: MiNoteCardsOutcome[] = [];
+  await withFetch((async () => miNoteStream([first, { type: 'collection', contractAddress: 'unknown' }])) as typeof fetch, async () => {
+    await assert.rejects(fetchMiNoteHoldings(OWNER, (outcome) => outcomes.push(outcome)), /invalid Mi Note cards response/);
+    assert.deepEqual(outcomes, [first]);
+  });
+});
+
+test('Mi Note cards client decodes split chunks, CRLF lines, and an unterminated final line', async () => {
+  const events = miNoteHoldings(['2'], ['2'], ['3']);
+  const text = events.map((event) => JSON.stringify(event)).join('\r\n');
+  const bytes = new TextEncoder().encode(text);
+  await withFetch((async () => new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+      controller.close();
+    },
+  }), { headers: { 'Content-Type': 'application/x-ndjson' } })) as typeof fetch, async () => {
+    const outcomes: MiNoteCardsOutcome[] = [];
+    await fetchMiNoteHoldings(OWNER, (outcome) => outcomes.push(outcome));
+    assert.deepEqual(outcomes, events.slice(0, 3));
+  });
+});
+
+test('Mi Note cards client ignores blank keepalives before and between collection outcomes', async () => {
+  const events = miNoteHoldings(['2'], ['3'], ['4']);
+  const body = '\n\r\n \t\n' + events.map((event) => `${JSON.stringify(event)}\n\n\r\n \t\n`).join('');
+  await withFetch((async () => new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } })) as typeof fetch, async () => {
+    const outcomes: MiNoteCardsOutcome[] = [];
+    await fetchMiNoteHoldings(OWNER, (outcome) => outcomes.push(outcome));
+    assert.deepEqual(outcomes, events.slice(0, 3));
+  });
+});
+
+test('Mi Note cards keepalives cannot replace required outcomes or terminal done', async () => {
+  for (const body of [
+    '\n\r\n \t\n',
+    '\n{"type":"done"}\n',
+    '\n' + miNoteHoldings().slice(0, 3).map((event) => `${JSON.stringify(event)}\n\n`).join(''),
+  ]) {
+    const outcomes: MiNoteCardsOutcome[] = [];
+    await withFetch((async () => new Response(body, { headers: { 'Content-Type': 'application/x-ndjson' } })) as typeof fetch, async () => {
+      await assert.rejects(fetchMiNoteHoldings(OWNER, (outcome) => outcomes.push(outcome)), /invalid Mi Note cards response/);
+    });
+    assert.equal(outcomes.length, body.includes('collection') ? 3 : 0);
+  }
+});
+
+test('Mi Note cards client requires one unique outcome per contract followed by terminal done', async () => {
+  const events = miNoteHoldings();
+  const error = { type: 'error', contractAddress: MI_NOTE_2_CONTRACT_ADDRESS, error: 'provider-timeout' };
+  for (const malformed of [
+    [], [{ type: 'done' }], events.slice(0, 3), [...events.slice(0, 2), { type: 'done' }],
+    [...events, { type: 'done' }], [...events, events[0]],
+    [events[0], ...events], [error, ...events], [error, error, ...events.slice(1)],
+    [{ type: 'error', contractAddress: 'unknown', error: 'provider-timeout' }, ...events],
+    [events[0], { type: 'error', contractAddress: MI_NOTE_3_CONTRACT_ADDRESS, error: 'unknown' }, ...events.slice(2)],
+  ]) {
+    await withFetch((async () => miNoteStream(malformed)) as typeof fetch, async () => {
+      await assert.rejects(fetchMiNoteHoldings(OWNER, () => {}), /invalid Mi Note cards response/);
+    });
+  }
+  const errors = MI_NOTE_CONTRACT_ADDRESSES.map((contractAddress) => ({
+    type: 'error', contractAddress, error: 'provider-unavailable',
+  }));
+  await withFetch((async () => miNoteStream([...errors, { type: 'done' }])) as typeof fetch, async () => {
+    const outcomes: MiNoteCardsOutcome[] = [];
+    await fetchMiNoteHoldings(OWNER, (outcome) => outcomes.push(outcome));
+    assert.deepEqual(outcomes, errors);
+  });
+});
+
+test('Mi Note cards client enforces the combined token limit before publishing an overflowing group', async () => {
+  const ids = Array.from({ length: 5000 }, (_, index) => String(index));
+  await withFetch((async () => miNoteStream(miNoteHoldings(ids, ids))) as typeof fetch, async () => {
+    const outcomes: MiNoteCardsOutcome[] = [];
+    await fetchMiNoteHoldings(OWNER, (outcome) => outcomes.push(outcome));
+    assert.equal(outcomes.length, 3);
+  });
+  await withFetch((async () => miNoteStream(miNoteHoldings(ids, [...ids, '5000']))) as typeof fetch, async () => {
+    const outcomes: MiNoteCardsOutcome[] = [];
+    await assert.rejects(fetchMiNoteHoldings(OWNER, (outcome) => outcomes.push(outcome)), /invalid Mi Note cards response/);
+    assert.deepEqual(outcomes, [miNoteCollection(MI_NOTE_2_CONTRACT_ADDRESS, ids)]);
+  });
+});
+
+test('Mi Note cards client bounds incremental stream bytes and rejects malformed UTF-8', async () => {
+  const body = miNoteHoldings().map((event) => `${JSON.stringify(event)}\n`).join('');
+  const exact = ' '.repeat(MAX_MI_NOTE_STREAM_BYTES - body.length) + body;
+  await withFetch((async () => new Response(exact, { headers: { 'Content-Type': 'application/x-ndjson' } })) as typeof fetch, async () => {
+    const outcomes: MiNoteCardsOutcome[] = [];
+    await fetchMiNoteHoldings(OWNER, (outcome) => outcomes.push(outcome));
+    assert.equal(outcomes.length, 3);
+  });
+  for (const chunks of [
+    [new TextEncoder().encode(exact), new Uint8Array([32])],
+    [new Uint8Array([0xff])],
+    [new TextEncoder().encode('{broken}\n')],
+  ]) {
+    let cancelled = false;
+    await withFetch((async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { for (const chunk of chunks) controller.enqueue(chunk); },
+      cancel() { cancelled = true; },
+    }), { headers: { 'Content-Type': 'application/x-ndjson' } })) as typeof fetch, async () => {
+      await assert.rejects(fetchMiNoteHoldings(OWNER, () => {}));
+      assert.equal(cancelled, true);
+    });
+  }
+});
+
+test('Mi Note cards client cancels and rejects an open stream on external abort', async () => {
+  const stream = openMiNoteStream();
+  const controller = new AbortController();
+  const outcomes: MiNoteCardsOutcome[] = [];
+  let received!: () => void;
+  const first = new Promise<void>((resolve) => { received = resolve; });
+  await withFetch((async () => stream.response) as typeof fetch, async () => {
+    const request = fetchMiNoteHoldings(OWNER, (outcome) => { outcomes.push(outcome); received(); }, controller.signal);
+    stream.emit(miNoteCollection(MI_NOTE_2_CONTRACT_ADDRESS, ['2']));
+    await first;
+    controller.abort(new DOMException('aborted', 'AbortError'));
+    await assert.rejects(request, { name: 'AbortError' });
+    assert.equal(stream.cancelled, true);
+    assert.equal(outcomes.length, 1);
+  });
+});
+
+test('Mi Note cards timeout remains active after an early collection arrives', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const stream = openMiNoteStream();
+  let received!: () => void;
+  const first = new Promise<void>((resolve) => { received = resolve; });
+  await withFetch((async () => stream.response) as typeof fetch, async () => {
+    const outcomes: MiNoteCardsOutcome[] = [];
+    const request = fetchMiNoteHoldings(OWNER, (outcome) => { outcomes.push(outcome); received(); });
+    stream.emit(miNoteCollection(MI_NOTE_2_CONTRACT_ADDRESS, ['2']));
+    await first;
+    t.mock.timers.tick(70_000);
+    await assert.rejects(request, { name: 'TimeoutError' });
+    assert.equal(stream.cancelled, true);
+    assert.equal(outcomes.length, 1);
+  });
+});
+
+test('Mi Note cards client aborts a stalled fetch and cancels a late response body', async () => {
+  const stream = openMiNoteStream();
+  const controller = new AbortController();
+  let resolveFetch!: (response: Response) => void;
+  await withFetch((() => new Promise<Response>((resolve) => { resolveFetch = resolve; })) as typeof fetch, async () => {
+    const request = fetchMiNoteHoldings(OWNER, () => assert.fail('Aborted response was delivered'), controller.signal);
+    controller.abort(new DOMException('aborted', 'AbortError'));
+    await assert.rejects(request, { name: 'AbortError' });
+    resolveFetch(stream.response);
+    await Promise.resolve();
+    assert.equal(stream.cancelled, true);
   });
 });
 

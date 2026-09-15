@@ -5,6 +5,8 @@ const distDirectory = resolve(process.cwd(), 'dist');
 const forbiddenStrings = [
   'eth-mainnet.g.alchemy.com',
   'ALCHEMY_MI_NOTE_API_KEY',
+  'api.opensea.io',
+  'OPENSEA_API_KEY',
   'helius-rpc.com',
   'api.helius.xyz',
   'VITE_HELIUS_API_KEY',
@@ -38,5 +40,5 @@ if (violations.length) {
   violations.forEach(({ path, label }) => console.error(`[browser-bundle] Found ${label} in ${path}`));
   process.exitCode = 1;
 } else {
-  console.log('[browser-bundle] No direct Alchemy or Helius credentials/endpoints, Solana public RPC hosts, or Google API keys found.');
+  console.log('[browser-bundle] No direct Alchemy, OpenSea, or Helius credentials/endpoints, Solana public RPC hosts, or Google API keys found.');
 }

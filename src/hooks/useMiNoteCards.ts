@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import miNoteCollections from '../../mi_note_eth.json';
-import { MI_NOTE_CONTRACT_ADDRESSES, miNoteAddressFromSearch } from '../../shared/miNoteCards.ts';
+import {
+  MI_NOTE_CONTRACT_ADDRESSES,
+  miNoteAddressFromSearch,
+  type MiNoteContractAddress,
+} from '../../shared/miNoteCards.ts';
 import { fetchMiNoteHoldings } from '../lib/shopApi';
 import { subscribeToNavigation } from '../navigation';
 
@@ -40,20 +44,22 @@ export function useMiNoteCards() {
     if (!request.address) return;
     const controller = new AbortController();
     let active = true;
+    const holdings = new Map<MiNoteContractAddress, Set<string>>();
 
-    fetchMiNoteHoldings(request.address, controller.signal).then(
-      (tokenIdsByContract) => {
-        if (!active) return;
-        const cards = MI_NOTE_OWNED_COLLECTIONS.flatMap(({ contractAddress, tokens }) => {
-          const ownedIds = new Set(tokenIdsByContract[contractAddress]);
-          return tokens.filter((card) => ownedIds.has(card.id));
-        });
+    void fetchMiNoteHoldings(request.address, (outcome) => {
+      if (!active || outcome.type !== 'collection') return;
+      holdings.set(outcome.contractAddress, new Set(outcome.tokenIds));
+      const cards = MI_NOTE_OWNED_COLLECTIONS.flatMap(({ contractAddress, tokens }) => {
+        const ownedIds = holdings.get(contractAddress);
+        return ownedIds ? tokens.filter((card) => ownedIds.has(card.id)) : [];
+      });
+      setOwnedCards({ request, cards });
+    }, controller.signal).catch(() => {
+      if (active && holdings.size === 0) {
+        const cards: typeof MI_NOTE_IMAGES = [];
         setOwnedCards({ request, cards });
-      },
-      () => {
-        if (active) setOwnedCards({ request, cards: [] });
-      },
-    );
+      }
+    });
 
     return () => {
       active = false;

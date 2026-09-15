@@ -191,6 +191,7 @@ const env: Env = {
   },
   HELIUS_API_KEY: 'memory-test-key',
   ALCHEMY_MI_NOTE_API_KEY: '',
+  OPENSEA_API_KEY: '',
   RESEND_API_KEY: '',
   RESEND_CONTACTS_API_KEY: 'memory-resend-test-key',
   NOTIFICATION_ENQUEUE_SECRET: 'memory-notification-enqueue-secret',

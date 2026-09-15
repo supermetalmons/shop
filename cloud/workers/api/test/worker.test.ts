@@ -114,6 +114,7 @@ function env(options: {
     STRIPE_FULFILLMENT_QUEUE: notificationQueue,
     HELIUS_API_KEY: options.apiKey === undefined ? 'test-key' : options.apiKey,
     ALCHEMY_MI_NOTE_API_KEY: options.alchemyApiKey ?? '',
+    OPENSEA_API_KEY: '',
     RESEND_API_KEY: '',
     RESEND_CONTACTS_API_KEY: options.resendContactsApiKey === undefined
       ? 'resend-test-key'
@@ -4027,8 +4028,16 @@ test('Mi Note GET route is public and preserves method, origin, and error polici
   const dependencies: RequestDependencies = {
     cache: null,
     log: () => {},
-    providerFetch: async () => {
+    providerFetch: async (input) => {
       calls += 1;
+      if (new URL(String(input)).pathname.startsWith('/v2/')) {
+        const catalogs = JSON.parse(readFileSync('mi_note_eth.json', 'utf8')) as { contractAddress: string; tokens: unknown[] }[];
+        const size = catalogs.find((collection) => collection.contractAddress === '0x495f947276749ce646f68ac8c248420045cb7b5e')!.tokens.length;
+        return Response.json({
+          jsonrpc: '2.0', id: 'mi-note-original',
+          result: `0x${'20'.padStart(64, '0')}${size.toString(16).padStart(64, '0')}${'0'.repeat(size * 64)}`,
+        });
+      }
       return Response.json({ ownedNfts: [{
         contractAddress: '0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f', tokenId: '1', balance: '1',
       }] });
@@ -4043,11 +4052,17 @@ test('Mi Note GET route is public and preserves method, origin, and error polici
     tokenIdsByContract: {
       '0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f': ['1'],
       '0xc22bd85e6d6c058226f46a693f0df4054496db5b': [],
+      '0x495f947276749ce646f68ac8c248420045cb7b5e': [],
+    },
+    resultsByContract: {
+      '0x8ffc6bfbce284b508f0e53b8599f8f03ffeb452f': { status: 'success', provider: 'alchemy', visibilityLimited: false },
+      '0xc22bd85e6d6c058226f46a693f0df4054496db5b': { status: 'success', provider: 'alchemy', visibilityLimited: false },
+      '0x495f947276749ce646f68ac8c248420045cb7b5e': { status: 'success', provider: 'alchemy', visibilityLimited: false },
     },
   });
   assert.equal(response.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 
   for (const method of ['POST', 'PUT', 'HEAD']) {
     const rejected = await handleRequest(new Request(url, {
@@ -4077,5 +4092,5 @@ test('Mi Note GET route is public and preserves method, origin, and error polici
   assert.equal(unavailable.status, 502);
   assert.equal(unavailable.headers.get('Access-Control-Allow-Origin'), 'http://localhost:5173');
   assert.equal(unavailable.headers.get('Access-Control-Allow-Methods'), 'GET, OPTIONS');
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
