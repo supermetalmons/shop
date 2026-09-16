@@ -1,6 +1,11 @@
+import miNoteCollections from '../../mi_note_eth.json';
 import { useMiNoteCards } from '../hooks/useMiNoteCards';
 import { BackgroundLayerPortal } from './BackgroundBlurLayer';
 import '../styles/mi-note-cards.css';
+
+const MI_NOTE_OPENSEA_URLS = new Map(miNoteCollections.flatMap(({ contractAddress, tokens }) => (
+  tokens.map(({ id, mid }) => [mid, `https://opensea.io/item/ethereum/${contractAddress}/${id}`] as const)
+)));
 
 type MiNoteCardsGalleryProps = {
   onNotify: () => void;
@@ -24,7 +29,18 @@ export default function MiNoteCardsGallery({ onNotify }: MiNoteCardsGalleryProps
                 draggable={false}
                 onDragStart={(event) => event.preventDefault()}
               />
-              <figcaption className="mi-note-cards__name">{card.name}</figcaption>
+              <figcaption className="mi-note-cards__name">
+                <a
+                  className="mi-note-cards__link"
+                  href={MI_NOTE_OPENSEA_URLS.get(card.mid)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  draggable={false}
+                  onDragStart={(event) => event.preventDefault()}
+                >
+                  {card.name}
+                </a>
+              </figcaption>
             </figure>
           ))}
         </div>

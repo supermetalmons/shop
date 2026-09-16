@@ -35,6 +35,18 @@
   overflow-wrap: anywhere;
 }
 
+.mi-note-cards__link {
+  color: inherit;
+  text-decoration: none;
+  -webkit-user-drag: none;
+}
+
+.mi-note-cards__link:hover,
+.mi-note-cards__link:focus-visible {
+  text-decoration: underline dashed;
+  text-underline-offset: 2px;
+}
+
 .mi-note-cards__notify {
   position: fixed;
   bottom: calc(24px + env(safe-area-inset-bottom, 0px));
