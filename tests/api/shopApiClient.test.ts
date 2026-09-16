@@ -219,31 +219,31 @@ test('Mi Note cards client requests one JSON response with an encoded address, n
     assert.ok(init?.signal);
     return Response.json(payload);
   }) as typeof fetch, async () => {
-    assert.deepEqual(await fetchMiNoteHoldings(address), payload.tokenIdsByContract);
+    assert.deepEqual(await fetchMiNoteHoldings(address), payload);
   });
 });
 
 test('Mi Note cards client accepts empty holdings and deployed provider metadata for every collection', async () => {
   await withFetch((async () => Response.json(miNoteHoldings())) as typeof fetch, async () => {
-    assert.deepEqual(await fetchMiNoteHoldings(OWNER), miNoteHoldings().tokenIdsByContract);
+    assert.deepEqual(await fetchMiNoteHoldings(OWNER), miNoteHoldings());
   });
   for (const contract of MI_NOTE_CONTRACT_ADDRESSES) {
     for (const provider of ['alchemy', 'opensea'] as const) {
       const payload = miNoteHoldings(['2'], ['2'], ['1']);
       payload.resultsByContract[contract] = { status: 'success', provider, visibilityLimited: provider === 'opensea' };
       await withFetch((async () => Response.json(payload)) as typeof fetch, async () => {
-        assert.deepEqual(await fetchMiNoteHoldings(OWNER), payload.tokenIdsByContract);
+        assert.deepEqual(await fetchMiNoteHoldings(OWNER), payload);
       });
     }
   }
 });
 
-test('Mi Note cards client preserves successful groups in a compatible partial response', async () => {
+test('Mi Note cards client preserves successful groups and errors in a partial response', async () => {
   const payload = miNoteHoldings([], ['2']);
   payload.resultsByContract[MI_NOTE_2_CONTRACT_ADDRESS] = { status: 'error', error: 'provider-timeout' };
   payload.resultsByContract[MI_NOTE_CONTRACT_ADDRESS] = { status: 'error', error: 'provider-unavailable' };
   await withFetch((async () => Response.json(payload)) as typeof fetch, async () => {
-    assert.deepEqual(await fetchMiNoteHoldings(OWNER), payload.tokenIdsByContract);
+    assert.deepEqual(await fetchMiNoteHoldings(OWNER), payload);
   });
 });
 
@@ -282,7 +282,7 @@ test('Mi Note cards client waits for the complete JSON body and decodes split ch
     assert.equal(finished, false);
     for (const byte of new TextEncoder().encode(text.slice(split))) body.append(new Uint8Array([byte]));
     body.close();
-    assert.deepEqual(await request, payload.tokenIdsByContract);
+    assert.deepEqual(await request, payload);
   });
 });
 
@@ -305,7 +305,7 @@ test('Mi Note cards client rejects unsupported media, malformed JSON, truncated 
 test('Mi Note cards client enforces the combined token limit', async () => {
   const ids = Array.from({ length: 5000 }, (_, index) => String(index));
   await withFetch((async () => Response.json(miNoteHoldings(ids, ids))) as typeof fetch, async () => {
-    assert.deepEqual(await fetchMiNoteHoldings(OWNER), miNoteHoldings(ids, ids).tokenIdsByContract);
+    assert.deepEqual(await fetchMiNoteHoldings(OWNER), miNoteHoldings(ids, ids));
   });
   await withFetch((async () => Response.json(miNoteHoldings(ids, [...ids, '5000']))) as typeof fetch, async () => {
     await assert.rejects(fetchMiNoteHoldings(OWNER), /invalid Mi Note cards response/);
@@ -316,7 +316,7 @@ test('Mi Note cards client enforces the byte limit on both declared and received
   const payload = JSON.stringify(miNoteHoldings());
   const exact = ' '.repeat(MAX_MI_NOTE_RESPONSE_BYTES - payload.length) + payload;
   await withFetch((async () => new Response(exact, { headers: { 'Content-Type': 'application/json' } })) as typeof fetch, async () => {
-    assert.deepEqual(await fetchMiNoteHoldings(OWNER), miNoteHoldings().tokenIdsByContract);
+    assert.deepEqual(await fetchMiNoteHoldings(OWNER), miNoteHoldings());
   });
   for (const declared of [true, false]) {
     let cancelled = false;

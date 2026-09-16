@@ -13,7 +13,7 @@ import {
   isExactMiNoteCardsResponse,
   MAX_MI_NOTE_RESPONSE_BYTES,
   MI_NOTE_CARDS_API_PATH,
-  type MiNoteTokenIdsByContract,
+  type MiNoteCardsResponse,
 } from '../../shared/miNoteCards.ts';
 import type { InventoryItem, PendingOpenBox } from '../types';
 import {
@@ -142,7 +142,7 @@ export async function fetchPackStatus(dropId: string, signal?: AbortSignal): Pro
 export async function fetchMiNoteHoldings(
   address: string,
   signal?: AbortSignal,
-): Promise<MiNoteTokenIdsByContract> {
+): Promise<MiNoteCardsResponse> {
   signal?.throwIfAborted();
   const invalidResponse = () => new Error('Shop API returned an invalid Mi Note cards response');
   const controller = new AbortController();
@@ -201,7 +201,7 @@ export async function fetchMiNoteHoldings(
       throw new Error(`Shop API request failed: ${code}`);
     }
     if (!isExactMiNoteCardsResponse(payload)) throw invalidResponse();
-    return payload.tokenIdsByContract;
+    return payload;
   } finally {
     clearTimeout(timeout);
     signal?.removeEventListener('abort', abort);

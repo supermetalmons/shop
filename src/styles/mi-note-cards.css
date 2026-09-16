@@ -1,4 +1,5 @@
 .mi-note-cards {
+  --mi-note-muted: color-mix(in srgb, var(--fg) 70%, var(--bg));
   width: 100%;
   padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px));
   user-select: none;
@@ -9,6 +10,107 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.mi-note-cards__tabs {
+  display: flex;
+  width: fit-content;
+  margin: 0 auto 24px;
+  padding: 4px;
+  border-radius: 980px;
+  background: var(--surface);
+}
+
+.mi-note-cards__tabs button {
+  min-width: 88px;
+  min-height: 44px;
+  padding: 10px 22px;
+  background: transparent;
+  color: var(--mi-note-muted);
+}
+
+.mi-note-cards__tabs button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--fg);
+}
+
+.mi-note-cards__tabs button[aria-selected='true'] {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.mi-note-cards button:focus-visible {
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}
+
+.mi-note-cards__wallet,
+.mi-note-cards__error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 24px;
+}
+
+.mi-note-cards__wallet button {
+  min-height: 44px;
+}
+
+.mi-note-cards__connection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.mi-note-cards__address {
+  color: var(--mi-note-muted);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.mi-note-cards__message {
+  margin: 0;
+  max-width: 360px;
+  margin-inline: auto;
+  color: var(--mi-note-muted);
+  text-align: center;
+  font-size: 14px;
+}
+
+.mi-note-cards__wallet-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(100%, 280px);
+}
+
+.mi-note-cards__wallet-picker > .mi-note-cards__message {
+  margin-bottom: 8px;
+}
+
+.mi-note-cards__wallet-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+}
+
+.mi-note-cards__wallet-choice span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mi-note-cards__wallet-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: 4px;
+  object-fit: contain;
 }
 
 .mi-note-cards__item {

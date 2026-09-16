@@ -80,12 +80,25 @@ automatically treated as live code.
 
 ## Mi Note cards
 
-`/mi_note_cards` shows 300 random cards. Add one Ethereum address parameter, such
-as `/mi_note_cards?address=0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9`, to show
-owned tokens that have images in `mi_note_eth.json`. Cards appear together in
+`/mi_note_cards` opens the All tab with 300 random cards. The Your tab connects
+an installed Ethereum wallet to show its cards. Multiple wallets appear in an
+inline picker, using EIP-6963 discovery with a legacy `window.ethereum` fallback.
+The selected wallet is remembered locally; opening Your on a later visit quietly
+checks its authorized accounts. Only the Connect action requests wallet access.
+Disconnect clears the remembered choice. This connection is separate from the
+shop's Solana wallet and requires no signature or network switch.
+
+Add one Ethereum address parameter, such as
+`/mi_note_cards?address=0x000533f50ddd7f2fc4EfD06137b0c1A12CfB7Bb9`, to view that
+address directly without tabs or a wallet connection. Both ownership views show
+only tokens that have images in `mi_note_eth.json`. Cards appear together in
 catalog order: Mi Note 3, Mi Note 2, then original Mi Note. A failed collection
 leaves the other collections available. Invalid or empty addresses and empty
-ownership leave the grid empty. No wallet connection is required.
+ownership leave the address-link grid empty. Your displays loading, empty, and
+retryable error states, including a warning when some collections fail while
+keeping successfully loaded cards visible. Account changes clear obsolete cards
+before loading the new account's holdings; All preserves its random sample while
+switching tabs.
 
 The browser calls `GET /mi-note-cards?address=...` on the API Worker and receives
 one JSON response after both provider lookups finish. The Worker starts these
