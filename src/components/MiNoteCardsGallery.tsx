@@ -14,14 +14,18 @@ export default function MiNoteCardsGallery({ onNotify }: MiNoteCardsGalleryProps
       <main className="mi-note-cards" aria-label="Mi Note cards">
         <div className="mi-note-cards__grid">
           {cards.map((card) => (
-            <img
-              key={card.mid}
-              className="mi-note-cards__image"
-              src={card.mid.replace('/mid/', '/thumbs/')}
-              alt={card.name}
-              loading="lazy"
-              decoding="async"
-            />
+            <figure key={card.mid} className="mi-note-cards__item">
+              <img
+                className="mi-note-cards__image"
+                src={card.mid.replace('/mid/', '/thumbs/')}
+                alt={card.name}
+                loading="lazy"
+                decoding="async"
+                draggable={false}
+                onDragStart={(event) => event.preventDefault()}
+              />
+              <figcaption className="mi-note-cards__name">{card.name}</figcaption>
+            </figure>
           ))}
         </div>
       </main>
