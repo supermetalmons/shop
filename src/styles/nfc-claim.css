@@ -37,6 +37,16 @@
   object-fit: contain;
 }
 
+.nfc-mutating-card {
+  display: grid;
+  width: 100%;
+  isolation: isolate;
+}
+
+.nfc-mutating-card__frame {
+  grid-area: 1 / 1;
+}
+
 .nfc-claim-nft .nfc-claim-nft__image--certificate {
   width: 85%;
   justify-self: center;

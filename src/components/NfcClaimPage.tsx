@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { NfcMutatingCard } from './NfcMutatingCard';
 
 const NFT_PREVIEWS = [
   {
     title: 'Mutating Card',
     description: "Evolve it and get it physically delivered when you're ready.",
-    src: 'https://wip.lil.org/mutating_card_0.webp',
+    animated: true,
     width: 805,
     height: 1280,
   },
@@ -42,16 +43,20 @@ export function NfcClaimPage() {
       <ul className="nfc-claim-nfts" aria-label="Your NFTs" role="list">
         {NFT_PREVIEWS.map((nft) => (
           <li className="nfc-claim-nft" key={nft.title}>
-            <img
-              className={nft.imageClassName}
-              src={nft.src}
-              alt={nft.title}
-              width={nft.width}
-              height={nft.height}
-              style={{ aspectRatio: `${nft.width} / ${nft.height}` }}
-              decoding="async"
-              draggable={false}
-            />
+            {nft.animated ? (
+              <NfcMutatingCard alt={nft.title} width={nft.width} height={nft.height} />
+            ) : (
+              <img
+                className={nft.imageClassName}
+                src={nft.src}
+                alt={nft.title}
+                width={nft.width}
+                height={nft.height}
+                style={{ aspectRatio: `${nft.width} / ${nft.height}` }}
+                decoding="async"
+                draggable={false}
+              />
+            )}
             <div className="nfc-claim-nft__copy">
               <h2>{nft.title}</h2>
               <p>{nft.description}</p>
