@@ -109,18 +109,18 @@ test('NFC introduces both NFTs in order and reserves each image aspect ratio bef
   const rows = within(list).getAllByRole('listitem');
   const expected = [
     {
-      title: 'Gen 0 Card Certificate',
-      subtitle: 'Proves the authenticity of your physical card.',
-      src: 'https://wip.lil.org/zero10_certificate_2.webp',
-      width: 1254,
-      height: 1254,
-    },
-    {
-      title: 'Gen 1 Card',
-      subtitle: 'Evolve it and get it physically delivered.',
+      title: 'Mutating NFT Card',
+      subtitle: "Evolve it and get it physically delivered when you're ready..",
       src: 'https://wip.lil.org/zero10_card.webp',
       width: 836,
       height: 1280,
+    },
+    {
+      title: 'Certificate NFT',
+      subtitle: 'Proves the authenticity of the physical card you just scanned.',
+      src: 'https://wip.lil.org/zero10_certificate_2.webp',
+      width: 1254,
+      height: 1254,
     },
   ];
   assert.equal(rows.length, expected.length);

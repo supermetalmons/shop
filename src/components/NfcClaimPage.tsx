@@ -3,19 +3,19 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 
 const NFT_PREVIEWS = [
   {
-    title: 'Gen 0 Card Certificate',
-    description: 'Proves the authenticity of your physical card.',
-    src: 'https://wip.lil.org/zero10_certificate_2.webp',
-    width: 1254,
-    height: 1254,
-  },
-  {
-    title: 'Gen 1 Card',
-    description: 'Evolve it and get it physically delivered.',
+    title: 'Mutating NFT Card',
+    description: "Evolve it and get it physically delivered when you're ready..",
     src: 'https://wip.lil.org/zero10_card.webp',
     imageClassName: 'nfc-claim-nft__image--card',
     width: 836,
     height: 1280,
+  },
+  {
+    title: 'Certificate NFT',
+    description: 'Proves the authenticity of the physical card you just scanned.',
+    src: 'https://wip.lil.org/zero10_certificate_2.webp',
+    width: 1254,
+    height: 1254,
   },
 ];
 
