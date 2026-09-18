@@ -11,7 +11,7 @@ const NFT_PREVIEWS = [
     height: 1280,
   },
   {
-    title: 'NFC Card Certificate',
+    title: 'NFC Card Receipt',
     description: 'Proves the authenticity of the physical card you just scanned.',
     src: 'https://wip.lil.org/zero10_certificate_2.webp',
     imageClassName: 'nfc-claim-nft__image--certificate',

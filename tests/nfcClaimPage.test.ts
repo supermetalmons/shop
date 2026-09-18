@@ -116,7 +116,7 @@ test('NFC introduces both NFTs in order and reserves each image aspect ratio bef
       height: 1280,
     },
     {
-      title: 'NFC Card Certificate',
+      title: 'NFC Card Receipt',
       subtitle: 'Proves the authenticity of the physical card you just scanned.',
       src: 'https://wip.lil.org/zero10_certificate_2.webp',
       width: 1254,
