@@ -52,6 +52,30 @@
 
 .nfc-mutating-card__frame {
   grid-area: 1 / 1;
+  animation-duration: 2331ms;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+.nfc-mutating-card--ready .nfc-mutating-card__frame:nth-child(2) {
+  animation-name: nfc-mutating-card-middle;
+}
+
+.nfc-mutating-card--ready .nfc-mutating-card__frame:nth-child(3) {
+  animation-name: nfc-mutating-card-last;
+}
+
+@keyframes nfc-mutating-card-middle {
+  0%, 66.666667%, 100% { opacity: 0; }
+  33.333333% {
+    opacity: 1;
+    animation-timing-function: step-end;
+  }
+}
+
+@keyframes nfc-mutating-card-last {
+  0%, 33.333333%, 100% { opacity: 0; }
+  66.666667% { opacity: 1; }
 }
 
 .nfc-claim-nft .nfc-claim-nft__image--certificate {
