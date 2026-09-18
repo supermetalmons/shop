@@ -19,7 +19,7 @@
 .nfc-claim-nfts {
   margin: 0;
   padding: 0;
-  gap: 0;
+  gap: 40px;
   list-style: none;
 }
 
@@ -28,12 +28,6 @@
   grid-template-columns: 220px minmax(0, 1fr);
   align-items: center;
   gap: 32px;
-}
-
-.nfc-claim-nft + .nfc-claim-nft {
-  margin-top: 24px;
-  padding-top: 24px;
-  border-top: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
 }
 
 .nfc-claim-nft img {
@@ -45,6 +39,11 @@
 
 .nfc-claim-nft__image--card {
   margin-block: -9% -7%;
+}
+
+.nfc-claim-nft .nfc-claim-nft__image--certificate {
+  width: 85%;
+  justify-self: center;
 }
 
 .nfc-claim-nft__copy h2 {
@@ -84,9 +83,8 @@
     gap: 16px;
   }
 
-  .nfc-claim-nft + .nfc-claim-nft {
-    margin-top: 20px;
-    padding-top: 20px;
+  .nfc-claim-nfts {
+    gap: 32px;
   }
 
   .nfc-claim-nft__copy h2 {

@@ -104,19 +104,19 @@ test('NFC always shows Claim without an address or secret-code field', () => {
 test('NFC introduces both NFTs in order and reserves each image aspect ratio before loading', () => {
   const view = renderPage();
   const page = view.getByRole('main', { name: 'NFC claim' });
-  assert.ok(within(page).getByRole('heading', { level: 1, name: 'You got 2 NFTs' }));
+  assert.ok(within(page).getByRole('heading', { level: 1, name: 'You got 2 NFTs:' }));
   const list = within(page).getByRole('list', { name: 'Your NFTs' });
   const rows = within(list).getAllByRole('listitem');
   const expected = [
     {
-      title: 'Mutating NFT Card',
-      subtitle: "Evolve it and get it physically delivered when you're ready..",
+      title: 'Mutating Card',
+      subtitle: "Evolve it and get it physically delivered when you're ready.",
       src: 'https://wip.lil.org/zero10_card.webp',
       width: 836,
       height: 1280,
     },
     {
-      title: 'Certificate NFT',
+      title: 'NFC Card Certificate',
       subtitle: 'Proves the authenticity of the physical card you just scanned.',
       src: 'https://wip.lil.org/zero10_certificate_2.webp',
       width: 1254,

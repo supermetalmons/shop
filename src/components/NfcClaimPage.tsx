@@ -3,17 +3,18 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 
 const NFT_PREVIEWS = [
   {
-    title: 'Mutating NFT Card',
-    description: "Evolve it and get it physically delivered when you're ready..",
+    title: 'Mutating Card',
+    description: "Evolve it and get it physically delivered when you're ready.",
     src: 'https://wip.lil.org/zero10_card.webp',
     imageClassName: 'nfc-claim-nft__image--card',
     width: 836,
     height: 1280,
   },
   {
-    title: 'Certificate NFT',
+    title: 'NFC Card Certificate',
     description: 'Proves the authenticity of the physical card you just scanned.',
     src: 'https://wip.lil.org/zero10_certificate_2.webp',
+    imageClassName: 'nfc-claim-nft__image--certificate',
     width: 1254,
     height: 1254,
   },
@@ -38,7 +39,7 @@ export function NfcClaimPage() {
 
   return (
     <main className="nfc-claim-page" aria-label="NFC claim">
-      <h1 className="nfc-claim-page__title">You got 2 NFTs</h1>
+      <h1 className="nfc-claim-page__title">You got 2 NFTs:</h1>
       <ul className="nfc-claim-nfts" aria-label="Your NFTs" role="list">
         {NFT_PREVIEWS.map((nft) => (
           <li className="nfc-claim-nft" key={nft.title}>
