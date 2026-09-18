@@ -41,6 +41,10 @@
   display: grid;
   width: 100%;
   isolation: isolate;
+}
+
+.nfc-mutating-card,
+.nfc-claim-nft__image--certificate {
   outline: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
 }
 
