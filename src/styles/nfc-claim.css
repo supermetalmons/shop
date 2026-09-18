@@ -62,25 +62,9 @@
   line-height: 1.45;
 }
 
-.nfc-claim-form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+.nfc-claim-button {
   width: min(400px, 100%);
   align-self: center;
-}
-
-.nfc-claim-form input {
-  width: 100%;
-  min-width: 0;
-}
-
-.nfc-claim-form input::placeholder {
-  text-align: center;
-}
-
-.nfc-claim-form button {
-  width: 100%;
   min-height: 56px;
   flex-shrink: 0;
   font-size: 18px;

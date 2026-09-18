@@ -20,7 +20,6 @@ const { useOverlayScrollLock } = await import('../src/hooks/useOverlayScrollLock
 const { getNormalizedPathname, navigate, subscribeToNavigation } = await import('../src/navigation.ts');
 
 const walletKey = new PublicKey(new Uint8Array(32).fill(1));
-const destinationKey = new PublicKey(new Uint8Array(32).fill(2));
 
 afterEach(() => {
   cleanup();
@@ -89,17 +88,10 @@ function assertPageIsUnlocked() {
   assert.equal(document.querySelector('.background-blur-layer__viewport--active'), null);
 }
 
-test('NFC always shows the address and claim controls without a secret-code field', () => {
+test('NFC always shows Claim without an address or secret-code field', () => {
   for (const url of ['/nfc', '/nfc/', '/nfc/?code=', '/nfc/?code=STUB-SECRET-CODE', '/nfc/?code=secret%20code']) {
     const view = renderPage(walletState(), url);
-    const input = view.getByRole('textbox', { name: 'Solana address' }) as HTMLInputElement;
-    assert.equal(input.value, '');
-    assert.equal(input.placeholder, 'Solana address');
-    assert.equal(input.required, false);
-    assert.equal(input.hasAttribute('aria-invalid'), false);
-    assert.equal(input.hasAttribute('aria-describedby'), false);
-    assert.equal(input.form!.noValidate, true);
-    assert.equal(view.getAllByRole('textbox').length, 1);
+    assert.equal(view.queryByRole('textbox'), null);
     assert.ok(view.getByRole('button', { name: 'Claim' }));
     assert.ok(view.getByRole('main', { name: 'NFC claim' }));
     assert.equal(view.queryByPlaceholderText('Code'), null);
@@ -142,71 +134,32 @@ test('NFC introduces both NFTs in order and reserves each image aspect ratio bef
     assert.equal(image.height, nft.height);
     assert.equal(image.style.aspectRatio, `${nft.width} / ${nft.height}`);
   }
-  assert.ok(list.compareDocumentPosition(view.getByRole('textbox', { name: 'Solana address' })) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  assert.ok(list.compareDocumentPosition(view.getByRole('button', { name: 'Claim' })) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
 });
 
-test('NFC prefills a connected wallet and preserves a manually cleared or edited address', () => {
-  const wallet = walletState(walletKey);
-  const view = renderPage(wallet);
-  const input = view.getByRole('textbox', { name: 'Solana address' }) as HTMLInputElement;
-  assert.equal(input.value, walletKey.toBase58());
-
-  fireEvent.change(input, { target: { value: destinationKey.toBase58() } });
-  view.rerender(createElement(Fixture, { wallet: { ...wallet, publicKey: null } }));
-  view.rerender(createElement(Fixture, { wallet }));
-  assert.equal(input.value, destinationKey.toBase58());
-
-  fireEvent.change(input, { target: { value: '' } });
-  view.rerender(createElement(Fixture, { wallet: { ...wallet, publicKey: destinationKey } }));
-  assert.equal(input.value, '');
-});
-
-test('NFC accepts a delayed wallet prefill only while the address remains untouched', () => {
-  const wallet = walletState();
-  const view = renderPage(wallet);
-  const input = view.getByRole('textbox', { name: 'Solana address' }) as HTMLInputElement;
-  view.rerender(createElement(Fixture, { wallet: { ...wallet, publicKey: walletKey } }));
-  assert.equal(input.value, walletKey.toBase58());
-  view.rerender(createElement(Fixture, { wallet: { ...wallet, publicKey: destinationKey } }));
-  assert.equal(input.value, walletKey.toBase58());
-  view.unmount();
-
-  const editedView = renderPage(wallet);
-  const editedInput = editedView.getByRole('textbox', { name: 'Solana address' }) as HTMLInputElement;
-  fireEvent.change(editedInput, { target: { value: 'user entry' } });
-  editedView.rerender(createElement(Fixture, { wallet: { ...wallet, publicKey: walletKey } }));
-  assert.equal(editedInput.value, 'user entry');
-});
-
-test('NFC synchronously opens the video for any input without claiming or signing', (t) => {
+test('NFC synchronously opens the video with or without a wallet and never claims or signs', (t) => {
   const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({}));
   const open = t.mock.method(window, 'open', () => null);
-  const wallet = walletState();
-  const walletCalls = [wallet.connect, wallet.sendTransaction, wallet.signTransaction!, wallet.signAllTransactions!, wallet.signMessage!]
-    .map((method) => method as ReturnType<typeof mock.fn>);
-  const view = renderPage(wallet);
-  const input = view.getByRole('textbox', { name: 'Solana address' }) as HTMLInputElement;
-  const claim = view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement;
-  const values = ['', '   ', 'invalid-solana-address', destinationKey.toBase58(), `  ${destinationKey.toBase58()}  `];
-
-  for (const [index, value] of values.entries()) {
-    fireEvent.change(input, { target: { value } });
+  for (const [index, publicKey] of [null, walletKey].entries()) {
+    const wallet = walletState(publicKey);
+    const walletCalls = [wallet.connect, wallet.sendTransaction, wallet.signTransaction!, wallet.signAllTransactions!, wallet.signMessage!]
+      .map((method) => method as ReturnType<typeof mock.fn>);
+    const view = renderPage(wallet);
+    const claim = view.getByRole('button', { name: 'Claim' }) as HTMLButtonElement;
+    assert.equal(view.queryByRole('textbox'), null);
     assert.equal(claim.disabled, false);
     fireEvent.click(claim);
     assert.equal(open.mock.callCount(), index + 1);
     assert.deepEqual(open.mock.calls[index].arguments, [
       'https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank', 'noopener,noreferrer',
     ]);
-    assert.equal(input.value, value);
     assert.equal(view.queryByRole('alert'), null);
-    assert.equal(input.hasAttribute('aria-invalid'), false);
-    assert.equal(input.hasAttribute('aria-describedby'), false);
+    assert.ok(view.getByRole('main', { name: 'NFC claim' }));
+    assert.equal(window.location.pathname + window.location.search, '/nfc/?code=STUB-SECRET-CODE');
+    for (const method of walletCalls) assert.equal(method.mock.callCount(), 0);
+    view.unmount();
   }
-
-  assert.ok(view.getByRole('main', { name: 'NFC claim' }));
-  assert.equal(window.location.pathname + window.location.search, '/nfc/?code=STUB-SECRET-CODE');
   assert.equal(fetch.mock.callCount(), 0);
-  for (const method of walletCalls) assert.equal(method.mock.callCount(), 0);
 });
 
 test('NFC uses the shared home header and ordinary focus and scrolling on desktop and touch devices', () => {
@@ -215,27 +168,25 @@ test('NFC uses the shared home header and ordinary focus and scrolling on deskto
     document.body.style.overflow = 'auto';
     const view = renderPage();
     const home = view.getByRole('link', { name: 'Go to mons.shop home' });
-    const input = view.getByRole('textbox', { name: 'Solana address' });
+    const claim = view.getByRole('button', { name: 'Claim' });
     assert.ok(view.getByRole('banner'));
     assert.ok(view.getByRole('heading', { name: 'mons.shop' }));
     assert.ok(view.getByRole('button', { name: 'Connect wallet' }));
     assert.equal(view.queryByRole('dialog'), null);
-    assert.notEqual(document.activeElement, input);
+    assert.notEqual(document.activeElement, claim);
     assert.equal(document.body.style.overflow, 'auto');
     assertPageIsUnlocked();
 
-    input.focus();
+    claim.focus();
     home.focus();
     assert.equal(document.activeElement, home);
     view.unmount();
   }
 });
 
-test('outside clicks and Escape keep the NFC page, its URL, and entered address', (t) => {
+test('outside clicks and Escape keep the NFC page and its URL', (t) => {
   const view = renderPage();
-  const input = view.getByRole('textbox', { name: 'Solana address' }) as HTMLInputElement;
-  fireEvent.change(input, { target: { value: 'my address' } });
-  input.focus();
+  view.getByRole('button', { name: 'Claim' }).focus();
   const replaceState = t.mock.method(window.history, 'replaceState');
   const pushState = t.mock.method(window.history, 'pushState');
 
@@ -245,7 +196,6 @@ test('outside clicks and Escape keep the NFC page, its URL, and entered address'
   fireEvent.keyDown(document, { key: 'Escape' });
 
   assert.ok(view.getByRole('main', { name: 'NFC claim' }));
-  assert.equal(input.value, 'my address');
   assert.equal(window.location.pathname + window.location.search, '/nfc/?code=STUB-SECRET-CODE');
   assert.equal(replaceState.mock.callCount(), 0);
   assert.equal(pushState.mock.callCount(), 0);
@@ -277,11 +227,10 @@ test('the standard header navigates home and browser history restores the NFC pa
   assertPageIsUnlocked();
 });
 
-test('opening and closing the normal wallet picker preserves the NFC page, address, and scrolling', async () => {
+test('opening and closing the normal wallet picker preserves the NFC page, Claim button, and scrolling', async () => {
   document.body.style.overflow = 'auto';
   const view = renderPage();
-  const input = view.getByRole('textbox', { name: 'Solana address' }) as HTMLInputElement;
-  fireEvent.change(input, { target: { value: 'entered address' } });
+  const claim = view.getByRole('button', { name: 'Claim' });
   const connect = view.getByRole('button', { name: 'Connect wallet' });
   connect.focus();
   fireEvent.click(connect);
@@ -289,7 +238,7 @@ test('opening and closing the normal wallet picker preserves the NFC page, addre
   assert.ok(view.getByRole('dialog'));
   assert.equal(document.body.style.overflow, 'hidden');
   assert.ok(document.querySelector('.background-blur-layer__viewport--active'));
-  assert.equal(input.value, 'entered address');
+  assert.ok(claim.isConnected);
   assert.equal(window.location.pathname + window.location.search, '/nfc/?code=STUB-SECRET-CODE');
 
   fireEvent.keyDown(window, { key: 'Escape' });
@@ -297,8 +246,7 @@ test('opening and closing the normal wallet picker preserves the NFC page, addre
     if (view.queryByRole('dialog')) throw new Error('Wallet picker has not closed yet');
   });
   assert.ok(view.getByRole('main', { name: 'NFC claim' }));
-  assert.equal(view.getByRole('textbox', { name: 'Solana address' }), input);
-  assert.equal(input.value, 'entered address');
+  assert.equal(view.getByRole('button', { name: 'Claim' }), claim);
   assert.equal(window.location.pathname + window.location.search, '/nfc/?code=STUB-SECRET-CODE');
   assert.equal(document.body.style.overflow, 'auto');
   assertPageIsUnlocked();
@@ -400,7 +348,7 @@ test('NFC starts at the top after the previous inventory viewer restores its scr
   assert.equal(window.scrollY, 0);
   viewport.flushFrame();
   assert.equal(window.scrollY, 0);
-  assert.notEqual(document.activeElement, view.getByRole('textbox', { name: 'Solana address' }));
+  assert.notEqual(document.activeElement, view.getByRole('button', { name: 'Claim' }));
 });
 
 test('leaving NFC before its initial frame cancels the pending scroll reset', (t) => {

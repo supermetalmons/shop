@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
+import { useEffect, useRef } from 'react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 
 const NFT_PREVIEWS = [
@@ -21,12 +20,8 @@ const NFT_PREVIEWS = [
 ];
 
 export function NfcClaimPage() {
-  const { publicKey } = useWallet();
   const { visible: walletModalVisible } = useWalletModal();
-  const defaultRecipient = publicKey?.toBase58() || '';
-  const recipientTouchedRef = useRef(false);
   const initialScrollPendingRef = useRef(true);
-  const [recipient, setRecipient] = useState('');
 
   useEffect(() => {
     if (walletModalVisible || !initialScrollPendingRef.current) return;
@@ -37,13 +32,7 @@ export function NfcClaimPage() {
     return () => window.cancelAnimationFrame(frameId);
   }, [walletModalVisible]);
 
-  useEffect(() => {
-    if (recipientTouchedRef.current || !defaultRecipient) return;
-    setRecipient((current) => current || defaultRecipient);
-  }, [defaultRecipient]);
-
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
+  const openPlaceholderVideo = () => {
     window.open('https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank', 'noopener,noreferrer');
   };
 
@@ -70,21 +59,7 @@ export function NfcClaimPage() {
           </li>
         ))}
       </ul>
-      <form className="nfc-claim-form" onSubmit={submit} noValidate>
-        <input
-          value={recipient}
-          onChange={(event) => {
-            recipientTouchedRef.current = true;
-            setRecipient(event.target.value);
-          }}
-          placeholder="Solana address"
-          aria-label="Solana address"
-          autoComplete="off"
-          autoCapitalize="none"
-          spellCheck={false}
-        />
-        <button type="submit">Claim</button>
-      </form>
+      <button type="button" className="nfc-claim-button" onClick={openPlaceholderVideo}>Claim</button>
     </main>
   );
 }
