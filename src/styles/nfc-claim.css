@@ -37,10 +37,6 @@
   object-fit: contain;
 }
 
-.nfc-claim-nft__image--card {
-  margin-block: -9% -7%;
-}
-
 .nfc-claim-nft .nfc-claim-nft__image--certificate {
   width: 85%;
   justify-self: center;

@@ -111,8 +111,8 @@ test('NFC introduces both NFTs in order and reserves each image aspect ratio bef
     {
       title: 'Mutating Card',
       subtitle: "Evolve it and get it physically delivered when you're ready.",
-      src: 'https://wip.lil.org/zero10_card.webp',
-      width: 836,
+      src: 'https://wip.lil.org/mutating_card_0.webp',
+      width: 805,
       height: 1280,
     },
     {

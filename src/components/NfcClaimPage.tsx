@@ -5,9 +5,8 @@ const NFT_PREVIEWS = [
   {
     title: 'Mutating Card',
     description: "Evolve it and get it physically delivered when you're ready.",
-    src: 'https://wip.lil.org/zero10_card.webp',
-    imageClassName: 'nfc-claim-nft__image--card',
-    width: 836,
+    src: 'https://wip.lil.org/mutating_card_0.webp',
+    width: 805,
     height: 1280,
   },
   {
