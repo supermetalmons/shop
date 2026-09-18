@@ -119,7 +119,7 @@ test('NFC introduces both NFTs in order and reserves each image aspect ratio bef
     {
       title: 'Gen 0 Card Certificate',
       subtitle: 'Proves the authenticity of your physical card.',
-      src: 'https://wip.lil.org/zero10_certificate.webp',
+      src: 'https://wip.lil.org/zero10_certificate_2.webp',
       width: 1254,
       height: 1254,
     },

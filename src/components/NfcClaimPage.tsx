@@ -6,7 +6,7 @@ const NFT_PREVIEWS = [
   {
     title: 'Gen 0 Card Certificate',
     description: 'Proves the authenticity of your physical card.',
-    src: 'https://wip.lil.org/zero10_certificate.webp',
+    src: 'https://wip.lil.org/zero10_certificate_2.webp',
     width: 1254,
     height: 1254,
   },
@@ -14,6 +14,7 @@ const NFT_PREVIEWS = [
     title: 'Gen 1 Card',
     description: 'Evolve it and get it physically delivered.',
     src: 'https://wip.lil.org/zero10_card.webp',
+    imageClassName: 'nfc-claim-nft__image--card',
     width: 836,
     height: 1280,
   },
@@ -53,6 +54,7 @@ export function NfcClaimPage() {
         {NFT_PREVIEWS.map((nft) => (
           <li className="nfc-claim-nft" key={nft.title}>
             <img
+              className={nft.imageClassName}
               src={nft.src}
               alt={nft.title}
               width={nft.width}
