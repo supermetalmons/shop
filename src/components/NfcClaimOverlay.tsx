@@ -1,8 +1,7 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { shouldAutoFocusFormControl } from '../lib/focusTrap';
-import { canonicalReceiptPublicKey } from '../lib/receiptTransfer';
 import { navigate } from '../navigation';
 import { Modal } from './Modal';
 
@@ -13,8 +12,6 @@ export function NfcClaimOverlay() {
   const defaultRecipient = publicKey?.toBase58() || '';
   const recipientTouchedRef = useRef(false);
   const [recipient, setRecipient] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const errorId = useId();
 
   useLayoutEffect(() => {
     if (visible) setVisible(false);
@@ -28,13 +25,6 @@ export function NfcClaimOverlay() {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const address = canonicalReceiptPublicKey(recipient);
-    if (!address) {
-      setError('Enter a valid Solana address.');
-      return;
-    }
-    setError(null);
-    setRecipient(address);
     window.open('https://www.youtube.com/watch?v=dQw4w9WgXcQ', '_blank', 'noopener,noreferrer');
   };
 
@@ -56,18 +46,13 @@ export function NfcClaimOverlay() {
           onChange={(event) => {
             recipientTouchedRef.current = true;
             setRecipient(event.target.value);
-            setError(null);
           }}
-          placeholder="Receiver Solana address"
-          aria-label="Receiver Solana address"
-          aria-invalid={Boolean(error)}
-          aria-describedby={error ? errorId : undefined}
+          placeholder="Solana address"
+          aria-label="Solana address"
           autoComplete="off"
           autoCapitalize="none"
           spellCheck={false}
-          required
         />
-        {error ? <div id={errorId} className="error" role="alert">{error}</div> : null}
         <button type="submit">Claim</button>
       </form>
     </Modal>

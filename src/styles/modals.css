@@ -152,6 +152,10 @@
   min-width: 0;
 }
 
+.nfc-claim-form input::placeholder {
+  text-align: center;
+}
+
 .nfc-claim-form button {
   width: 100%;
   min-height: 56px;
