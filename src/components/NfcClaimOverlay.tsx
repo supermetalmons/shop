@@ -1,9 +1,25 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { shouldAutoFocusFormControl } from '../lib/focusTrap';
 import { navigate } from '../navigation';
 import { Modal } from './Modal';
+
+const NFT_PREVIEWS = [
+  {
+    title: 'Certificate NFT',
+    description: 'Proves the authenticity of your physical card.',
+    src: 'https://wip.lil.org/zero10_certificate.webp',
+    width: 1254,
+    height: 1254,
+  },
+  {
+    title: 'Basel Card NFT',
+    description: 'Evolve it and get it physically delivered.',
+    src: 'https://wip.lil.org/zero10_card.webp',
+    width: 836,
+    height: 1280,
+  },
+];
 
 export function NfcClaimOverlay() {
   const { publicKey } = useWallet();
@@ -31,15 +47,35 @@ export function NfcClaimOverlay() {
   return (
     <Modal
       open={ready}
-      title="NFC claim"
+      title="You got 2 NFTs"
+      ariaLabel="NFC claim"
       onClose={() => navigate('/', { replace: true })}
       className="nfc-claim-modal"
       overlayClassName="nfc-claim-overlay"
       showCloseButton={false}
       blurBackground
       suspended={visible}
-      focusTarget={shouldAutoFocusFormControl() ? 'first-control' : 'scope'}
+      focusTarget="scope"
     >
+      <ul className="nfc-claim-nfts" aria-label="Your NFTs" role="list">
+        {NFT_PREVIEWS.map((nft) => (
+          <li className="nfc-claim-nft" key={nft.title}>
+            <img
+              src={nft.src}
+              alt={nft.title}
+              width={nft.width}
+              height={nft.height}
+              style={{ aspectRatio: `${nft.width} / ${nft.height}` }}
+              decoding="async"
+              draggable={false}
+            />
+            <div className="nfc-claim-nft__copy">
+              <h2>{nft.title}</h2>
+              <p>{nft.description}</p>
+            </div>
+          </li>
+        ))}
+      </ul>
       <form className="modal-form nfc-claim-form" onSubmit={submit} noValidate>
         <input
           value={recipient}

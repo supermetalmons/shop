@@ -8,7 +8,7 @@ import { setupFrontendDom } from './helpers/frontendDom.ts';
 const { dom, setMediaQueryMatches } = setupFrontendDom();
 Object.defineProperty(globalThis, 'Event', { configurable: true, value: dom.window.Event });
 
-const { act, cleanup, fireEvent, render } = await import('@testing-library/react');
+const { act, cleanup, fireEvent, render, within } = await import('@testing-library/react');
 const { WalletContext } = await import('@solana/wallet-adapter-react');
 const { WalletModalContext, WalletModalProvider, useWalletModal } = await import('@solana/wallet-adapter-react-ui');
 const { BackgroundBlurProvider } = await import('../src/components/BackgroundBlurLayer.tsx');
@@ -114,6 +114,42 @@ test('NFC always shows the address and claim controls without a secret-code fiel
     assert.equal(window.location.pathname + window.location.search, url);
     view.unmount();
   }
+});
+
+test('NFC introduces both NFTs in order and reserves each image aspect ratio before loading', () => {
+  const view = renderOverlay();
+  const dialog = view.getByRole('dialog', { name: 'NFC claim' });
+  assert.ok(within(dialog).getByText('You got 2 NFTs'));
+  const list = within(dialog).getByRole('list', { name: 'Your NFTs' });
+  const rows = within(list).getAllByRole('listitem');
+  const expected = [
+    {
+      title: 'Certificate NFT',
+      subtitle: 'Proves the authenticity of your physical card.',
+      src: 'https://wip.lil.org/zero10_certificate.webp',
+      width: 1254,
+      height: 1254,
+    },
+    {
+      title: 'Basel Card NFT',
+      subtitle: 'Evolve it and get it physically delivered.',
+      src: 'https://wip.lil.org/zero10_card.webp',
+      width: 836,
+      height: 1280,
+    },
+  ];
+  assert.equal(rows.length, expected.length);
+  for (const [index, nft] of expected.entries()) {
+    const row = within(rows[index]);
+    assert.ok(row.getByRole('heading', { name: nft.title }));
+    assert.ok(row.getByText(nft.subtitle));
+    const image = row.getByRole('img', { name: nft.title }) as HTMLImageElement;
+    assert.equal(image.getAttribute('src'), nft.src);
+    assert.equal(image.width, nft.width);
+    assert.equal(image.height, nft.height);
+    assert.equal(image.style.aspectRatio, `${nft.width} / ${nft.height}`);
+  }
+  assert.ok(list.compareDocumentPosition(view.getByRole('textbox', { name: 'Solana address' })) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
 });
 
 test('NFC prefills a connected wallet and preserves a manually cleared or edited address', () => {
@@ -259,15 +295,18 @@ test('NFC traps keyboard focus and Escape restores focus to the home shop', () =
   const home = view.getByRole('button', { name: 'Home action' });
   home.focus();
   act(() => navigate('/nfc'));
+  const dialog = view.getByRole('dialog', { name: 'NFC claim' });
   const input = view.getByRole('textbox', { name: 'Solana address' });
   const claim = view.getByRole('button', { name: 'Claim' });
-  assert.equal(document.activeElement, input);
+  assert.equal(document.activeElement, dialog);
   fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
   assert.equal(document.activeElement, claim);
   fireEvent.keyDown(document, { key: 'Tab' });
   assert.equal(document.activeElement, input);
+  fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+  assert.equal(document.activeElement, claim);
   home.focus();
-  assert.equal(document.activeElement, input);
+  assert.equal(document.activeElement, dialog);
 
   fireEvent.keyDown(document, { key: 'Escape' });
   assert.equal(view.queryByRole('dialog'), null);
