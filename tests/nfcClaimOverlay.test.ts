@@ -124,14 +124,14 @@ test('NFC introduces both NFTs in order and reserves each image aspect ratio bef
   const rows = within(list).getAllByRole('listitem');
   const expected = [
     {
-      title: 'Certificate NFT',
+      title: 'Gen 0 Card Certificate',
       subtitle: 'Proves the authenticity of your physical card.',
       src: 'https://wip.lil.org/zero10_certificate.webp',
       width: 1254,
       height: 1254,
     },
     {
-      title: 'Basel Card NFT',
+      title: 'Gen 1 Card',
       subtitle: 'Evolve it and get it physically delivered.',
       src: 'https://wip.lil.org/zero10_card.webp',
       width: 836,
