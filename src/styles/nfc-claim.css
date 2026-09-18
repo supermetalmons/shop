@@ -41,6 +41,7 @@
   display: grid;
   width: 100%;
   isolation: isolate;
+  outline: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
 }
 
 .nfc-mutating-card__frame {
