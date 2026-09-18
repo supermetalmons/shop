@@ -50,6 +50,7 @@ type AppRouteKind =
   | 'drop'
   | 'upcoming'
   | 'claim'
+  | 'nfc'
   | 'fulfillment'
   | 'notify'
   | 'mi-note-cards'
@@ -60,6 +61,7 @@ export type ResolvedAppRoute = {
   path: string;
   replacementHref: string | null;
   claimDeepLinkCode: string | null;
+  nfcDeepLinkCode: string | null;
   drop: FrontendDropConfig | null;
   upcoming: UpcomingDropRouteConfig | null;
   wipExperience: ShopWipExperience | null;
@@ -85,6 +87,7 @@ function createRoute(
     path,
     replacementHref,
     claimDeepLinkCode: null,
+    nfcDeepLinkCode: null,
     drop: null,
     upcoming: null,
     wipExperience: null,
@@ -101,6 +104,12 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   if (requestedPath === '/claim') {
     return createRoute('claim', '/', null, {
       claimDeepLinkCode: new URLSearchParams(search).get('code') ?? '',
+    });
+  }
+
+  if (requestedPath === '/nfc') {
+    return createRoute('nfc', '/', null, {
+      nfcDeepLinkCode: new URLSearchParams(search).get('code') ?? '',
     });
   }
 

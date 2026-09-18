@@ -15,6 +15,7 @@ interface ModalProps {
   showCloseButton?: boolean;
   closeOnEscape?: boolean;
   blurBackground?: boolean;
+  focusTarget?: 'first-control' | 'scope';
   suspended?: boolean;
   returnFocusRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
@@ -31,6 +32,7 @@ export function Modal({
   showCloseButton = true,
   closeOnEscape = true,
   blurBackground = false,
+  focusTarget = 'first-control',
   suspended = false,
   returnFocusRef,
   children,
@@ -97,6 +99,7 @@ export function Modal({
   useModalFocusScope({
     dialogRef,
     enabled: open,
+    focusTarget,
     onEscape: closeOnEscape ? onClose : undefined,
     suspended,
   });

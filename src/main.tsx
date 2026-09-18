@@ -19,6 +19,7 @@ const routesEqual = (a: ResolvedAppRoute, b: ResolvedAppRoute): boolean =>
   a.kind === b.kind &&
   a.path === b.path &&
   a.claimDeepLinkCode === b.claimDeepLinkCode &&
+  a.nfcDeepLinkCode === b.nfcDeepLinkCode &&
   a.drop === b.drop &&
   a.upcoming === b.upcoming &&
   a.wipExperience === b.wipExperience;
@@ -85,6 +86,7 @@ function RoutedContent({ route }: RoutedContentProps) {
       cluster={route.walletCluster}
       currentPath={route.path}
       claimDeepLinkCode={route.claimDeepLinkCode}
+      nfcDeepLinkCode={route.nfcDeepLinkCode}
       wipExperience={route.wipExperience}
     />
   );

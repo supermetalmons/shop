@@ -153,9 +153,44 @@ test('claim deep links render the home shop without replacing their URL', () => 
   assert.equal(route.kind, 'claim');
   assert.equal(route.path, '/');
   assert.equal(route.claimDeepLinkCode, 'claim/123');
+  assert.equal(route.nfcDeepLinkCode, null);
   assert.equal(route.replacementHref, null);
   assert.equal(route.walletCluster, 'mainnet-beta');
   assert.equal(resolveAppRoute({ pathname: '/claim' }).claimDeepLinkCode, '');
+});
+
+test('NFC deep links render the home shop without replacing their URL or opening real claims', () => {
+  for (const pathname of ['/nfc', '/nfc/']) {
+    const route = resolveAppRoute({
+      pathname,
+      search: '?code=stub%2F123%2Babc+xyz',
+      hash: '#receipt',
+    });
+
+    assert.equal(route.kind, 'nfc');
+    assert.equal(route.path, '/');
+    assert.equal(route.nfcDeepLinkCode, 'stub/123+abc xyz');
+    assert.equal(route.claimDeepLinkCode, null);
+    assert.equal(route.replacementHref, null);
+    assert.equal(route.walletCluster, 'mainnet-beta');
+    assert.equal(route.drop, null);
+    assert.equal(route.upcoming, null);
+    assert.equal(route.wipExperience, null);
+  }
+});
+
+test('NFC links without a code still open the placeholder and do not affect other routes', () => {
+  for (const search of ['', '?code=', '?unrelated=1']) {
+    const route = resolveAppRoute({ pathname: '/nfc/', search });
+    assert.equal(route.kind, 'nfc');
+    assert.equal(route.nfcDeepLinkCode, '');
+    assert.equal(route.claimDeepLinkCode, null);
+    assert.equal(route.replacementHref, null);
+  }
+
+  for (const pathname of ['/', '/claim', '/clear_cards', '/fulfillment', '/nfc/unknown']) {
+    assert.equal(resolveAppRoute({ pathname, search: '?code=stub' }).nfcDeepLinkCode, null);
+  }
 });
 
 test('home and special routes keep their canonical paths and neutral wallet cluster', () => {

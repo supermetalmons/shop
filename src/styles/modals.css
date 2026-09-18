@@ -126,6 +126,39 @@
   gap: 16px;
 }
 
+.modal-overlay.nfc-claim-overlay {
+  z-index: 1110;
+  height: 100dvh;
+  background: transparent;
+}
+
+.modal.nfc-claim-modal {
+  width: min(400px, 100%);
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  outline: none;
+  overscroll-behavior: contain;
+}
+
+.nfc-claim-modal .modal__head {
+  display: none;
+}
+
+.nfc-claim-form input {
+  width: 100%;
+  min-width: 0;
+}
+
+.nfc-claim-form button {
+  width: 100%;
+  min-height: 56px;
+  flex-shrink: 0;
+  font-size: 18px;
+}
+
 .modal-overlay.notify-modal-overlay {
   background: transparent;
 }
@@ -371,4 +404,3 @@
   align-items: center;
   gap: 8px;
 }
-
