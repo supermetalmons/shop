@@ -40,6 +40,8 @@
 .nfc-mutating-card {
   display: grid;
   width: 100%;
+  border-radius: var(--interactive-card-radius);
+  overflow: hidden;
   isolation: isolate;
 }
 
