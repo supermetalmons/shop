@@ -6,6 +6,7 @@
 @import './styles/reveal.css';
 @import './styles/collection-details.css';
 @import './styles/modals.css';
+@import './styles/nfc-claim.css';
 @import './styles/selection.css';
 @import './styles/section-overrides.css';
 @import './styles/wallet.css';

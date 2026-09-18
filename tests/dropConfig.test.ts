@@ -159,7 +159,7 @@ test('claim deep links render the home shop without replacing their URL', () => 
   assert.equal(resolveAppRoute({ pathname: '/claim' }).claimDeepLinkCode, '');
 });
 
-test('NFC deep links render the home shop without replacing their URL or opening real claims', () => {
+test('NFC deep links render a dedicated page without replacing their URL or opening real claims', () => {
   for (const pathname of ['/nfc', '/nfc/']) {
     const route = resolveAppRoute({
       pathname,
@@ -168,7 +168,7 @@ test('NFC deep links render the home shop without replacing their URL or opening
     });
 
     assert.equal(route.kind, 'nfc');
-    assert.equal(route.path, '/');
+    assert.equal(route.path, '/nfc');
     assert.equal(route.nfcDeepLinkCode, 'stub/123+abc xyz');
     assert.equal(route.claimDeepLinkCode, null);
     assert.equal(route.replacementHref, null);
@@ -183,6 +183,7 @@ test('NFC links without a code still open the placeholder and do not affect othe
   for (const search of ['', '?code=', '?unrelated=1']) {
     const route = resolveAppRoute({ pathname: '/nfc/', search });
     assert.equal(route.kind, 'nfc');
+    assert.equal(route.path, '/nfc');
     assert.equal(route.nfcDeepLinkCode, '');
     assert.equal(route.claimDeepLinkCode, null);
     assert.equal(route.replacementHref, null);

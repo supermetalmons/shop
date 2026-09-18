@@ -108,7 +108,7 @@ export function resolveAppRoute(location: AppRouteLocation): ResolvedAppRoute {
   }
 
   if (requestedPath === '/nfc') {
-    return createRoute('nfc', '/', null, {
+    return createRoute('nfc', requestedPath, null, {
       nfcDeepLinkCode: new URLSearchParams(search).get('code') ?? '',
     });
   }

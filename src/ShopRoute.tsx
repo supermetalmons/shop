@@ -3,7 +3,6 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import App from './App';
 import { BackgroundBlurPortal } from './components/BackgroundBlurLayer';
 import { ModalFocusScope } from './components/ModalFocusScope';
-import { NfcClaimOverlay } from './components/NfcClaimOverlay';
 import { WalletContextProvider } from './wallet/WalletContext';
 import type { SolanaCluster } from './config/deployment';
 import { navigate } from './navigation';
@@ -128,8 +127,6 @@ export default function ShopRoute({
   wipExperience = null,
 }: ShopRouteProps) {
   const isWipRoute = wipExperience !== null;
-  const isNfcRoute = nfcDeepLinkCode !== null;
-  const isOverlayRoute = isWipRoute || isNfcRoute;
 
   React.useEffect(() => {
     if (!isWipRoute) return undefined;
@@ -145,9 +142,10 @@ export default function ShopRoute({
 
   const app = (
     <App
-      currentPath={isOverlayRoute ? '/' : currentPath}
+      currentPath={isWipRoute ? '/' : currentPath}
       claimDeepLinkCode={claimDeepLinkCode}
-      suspended={isOverlayRoute}
+      nfcDeepLinkCode={nfcDeepLinkCode}
+      suspended={isWipRoute}
     />
   );
   const wip = wipExperience ? (
@@ -166,7 +164,6 @@ export default function ShopRoute({
     <WalletContextProvider cluster={cluster}>
       {app}
       {wip ? <WipForeground>{wip}</WipForeground> : null}
-      {isNfcRoute ? <NfcClaimOverlay key={nfcDeepLinkCode} /> : null}
     </WalletContextProvider>
   );
 }

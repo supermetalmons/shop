@@ -1,8 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
-import { navigate } from '../navigation';
-import { Modal } from './Modal';
 
 const NFT_PREVIEWS = [
   {
@@ -21,18 +19,22 @@ const NFT_PREVIEWS = [
   },
 ];
 
-export function NfcClaimOverlay() {
+export function NfcClaimPage() {
   const { publicKey } = useWallet();
-  const { visible, setVisible } = useWalletModal();
-  const [ready, setReady] = useState(!visible);
+  const { visible: walletModalVisible } = useWalletModal();
   const defaultRecipient = publicKey?.toBase58() || '';
   const recipientTouchedRef = useRef(false);
+  const initialScrollPendingRef = useRef(true);
   const [recipient, setRecipient] = useState('');
 
-  useLayoutEffect(() => {
-    if (visible) setVisible(false);
-    else setReady(true);
-  }, [setVisible, visible]);
+  useEffect(() => {
+    if (walletModalVisible || !initialScrollPendingRef.current) return;
+    const frameId = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0 });
+      initialScrollPendingRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [walletModalVisible]);
 
   useEffect(() => {
     if (recipientTouchedRef.current || !defaultRecipient) return;
@@ -45,18 +47,8 @@ export function NfcClaimOverlay() {
   };
 
   return (
-    <Modal
-      open={ready}
-      title="You got 2 NFTs"
-      ariaLabel="NFC claim"
-      onClose={() => navigate('/', { replace: true })}
-      className="nfc-claim-modal"
-      overlayClassName="nfc-claim-overlay"
-      showCloseButton={false}
-      blurBackground
-      suspended={visible}
-      focusTarget="scope"
-    >
+    <main className="nfc-claim-page" aria-label="NFC claim">
+      <h1 className="nfc-claim-page__title">You got 2 NFTs</h1>
       <ul className="nfc-claim-nfts" aria-label="Your NFTs" role="list">
         {NFT_PREVIEWS.map((nft) => (
           <li className="nfc-claim-nft" key={nft.title}>
@@ -76,7 +68,7 @@ export function NfcClaimOverlay() {
           </li>
         ))}
       </ul>
-      <form className="modal-form nfc-claim-form" onSubmit={submit} noValidate>
+      <form className="nfc-claim-form" onSubmit={submit} noValidate>
         <input
           value={recipient}
           onChange={(event) => {
@@ -91,6 +83,6 @@ export function NfcClaimOverlay() {
         />
         <button type="submit">Claim</button>
       </form>
-    </Modal>
+    </main>
   );
 }

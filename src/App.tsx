@@ -1,6 +1,7 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import { Component, lazy, Suspense, useEffect, useRef, type ReactNode } from 'react';
+import { NfcClaimPage } from './components/NfcClaimPage';
 import { NotifySubscription } from './components/NotifySubscription';
 import { ShopHeader } from './components/ShopHeader';
 import { useSolanaAuth } from './hooks/useSolanaAuth';
@@ -68,10 +69,11 @@ class MiNoteCardsErrorBoundary extends Component<{ children: ReactNode }, { fail
 type AppProps = {
   currentPath?: string;
   claimDeepLinkCode?: string | null;
+  nfcDeepLinkCode?: string | null;
   suspended?: boolean;
 };
 
-function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppProps) {
+function App({ currentPath, claimDeepLinkCode = null, nfcDeepLinkCode = null, suspended = false }: AppProps) {
   const wallet = useWallet();
   const { visible: walletModalVisible, setVisible } = useWalletModal();
   const { publicKey } = wallet;
@@ -81,6 +83,8 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
   const statusUiSuspended = suspended || walletModalVisible;
   const auth = useSolanaAuth();
   const drop = useShopDrop(currentPath);
+  const isNfcPage = drop.normalizedCurrentPath === '/nfc';
+  const commerceUiSuspended = suspended || isNfcPage;
   const feedback = useShopFeedback(statusUiSuspended);
   const { showToast, showSuccessHud } = feedback;
   const purchaseState = useShopPurchaseState(drop);
@@ -130,7 +134,7 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
   const signIn = useShopSignIn({
     auth, connectedWallet, publicKey, wallet, walletModalVisible, setVisible,
     isSignedInWallet, hasAuthenticatedAccount: account.hasAuthenticatedAccount,
-    claimOpen: modals.claimOpen, showToast, isUserRejectedError,
+    claimOpen: modals.claimOpen && !commerceUiSuspended, showToast, isUserRejectedError,
   });
   const transactions = useWalletTransactions(wallet, showToast);
   const runDeliveryRecovery = useDeliveryRecovery({
@@ -143,7 +147,7 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
   });
   const reveal = useShopReveal({
     ...drop, ...inventorySource.actions,
-    connectedWallet, publicKey, owner, localAccountWallet, isViewerMode, suspended,
+    connectedWallet, publicKey, owner, localAccountWallet, isViewerMode, suspended: commerceUiSuspended,
     walletModalVisible, receiptTransferOpen: Boolean(modals.receiptTransferTarget),
     inventory: queries.inventory, pendingOpenBoxes: queries.pendingOpenBoxes,
     figureMetadataByKey: inventorySource.figureMetadataByKey,
@@ -201,7 +205,7 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
   const recovery = usePreparedTransactionRecovery({
     prepared, connectedWallet, connectedWalletRef, ownerRef,
     claimModalGenerationRef: modals.claimModalGenerationRef,
-    isViewerMode, suspended, isSignedInWallet,
+    isViewerMode, suspended: commerceUiSuspended, isSignedInWallet,
     getDropConnection: drop.getDropConnection,
     requireKnownDropConfig: drop.requireKnownDropConfig,
     hasAuthenticatedWalletSession: auth.hasAuthenticatedWalletSession,
@@ -307,7 +311,7 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
   }, [connectedWallet, owner]);
   useEffect(() => { modals.closeReceiptTransferModal(); }, [drop.normalizedCurrentPath]);
   useEffect(() => {
-    if (!inventory.selectedCount || activeModalLayer || suspended) return;
+    if (!inventory.selectedCount || activeModalLayer || commerceUiSuspended) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented) return;
       event.preventDefault();
@@ -315,7 +319,7 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeModalLayer, inventory.selectedCount, suspended]);
+  }, [activeModalLayer, inventory.selectedCount, commerceUiSuspended]);
   const viewedProfileErrorMessage = account.viewedProfileError instanceof Error ? account.viewedProfileError.message : '';
   const anonymousStripeHistoryErrorMessage = stripeRecovery.anonymousHistory.error instanceof Error ? stripeRecovery.anonymousHistory.error.message : '';
   const activeError = auth.error && !isUserRejectedError(auth.error)
@@ -335,12 +339,14 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
   return (
     <div className="page">
       <ShopStatus feedback={feedback} suspended={statusUiSuspended} toastAboveModal={toastAboveModal} />
-      <NotifySubscription
-        open={notifications.notifyOpen}
-        onOpenChange={notifications.handleNotifyOpenChange}
-        onSubscribed={showSuccessHud}
-        suspended={isModalLayerSuspended({ activeLayer: activeModalLayer, appSuspended: suspended, layer: 'notify', open: notifications.notifyOpen })}
-      />
+      {!isNfcPage && (
+        <NotifySubscription
+          open={notifications.notifyOpen}
+          onOpenChange={notifications.handleNotifyOpenChange}
+          onSubscribed={showSuccessHud}
+          suspended={isModalLayerSuspended({ activeLayer: activeModalLayer, appSuspended: suspended, layer: 'notify', open: notifications.notifyOpen })}
+        />
+      )}
       <div className={primaryFrameClassName}>
         <ShopHeader
           onNavigateHome={drop.restoreHomeOnNextNavigation}
@@ -354,7 +360,9 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
             adminMenuDevnetDrops={drop.adminMenuDevnetDrops}
           />}
         />
-        {miNoteCardsPage ? (
+        {isNfcPage ? (
+          <NfcClaimPage key={nfcDeepLinkCode} />
+        ) : miNoteCardsPage ? (
           <MiNoteCardsErrorBoundary>
             <Suspense fallback={null}>
               <MiNoteCardsGallery onNotify={notifications.handleOpenNotify} />
@@ -374,7 +382,7 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
           />
         )}
       </div>
-      {!miNoteCardsPage && (
+      {!miNoteCardsPage && !isNfcPage && (
         <ShopInventorySection
           {...inventory}
           canOpenBoxesForDropId={drop.canOpenBoxesForDropId}
@@ -386,25 +394,27 @@ function App({ currentPath, claimDeepLinkCode = null, suspended = false }: AppPr
           revealDisabled={Boolean(reveal.revealLoading || reveal.startOpenLoading || reveal.revealOverlay)}
         />
       )}
-      <ShopCommerceModals
-        modals={modals}
-        view={inventory}
-        activeModalLayer={activeModalLayer}
-        suspended={suspended}
-        connectedWallet={connectedWallet}
-        publicKey={publicKey}
-        routeDrop={drop.routeDrop}
-        viewedProfile={account.viewedProfile}
-        pendingDeliveryItemIds={prepared.pendingDeliveryItemIds}
-        revealOverlay={reveal.revealOverlay}
-        handleReceiptTransfer={receiptActions.handleReceiptTransfer}
-        handleAdminIrlRedeem={receiptActions.handleAdminIrlRedeem}
-        handleShip={deliveryActions.handleShip}
-        handleClaim={claimActions.handleClaim}
-      />
+      {!isNfcPage && (
+        <ShopCommerceModals
+          modals={modals}
+          view={inventory}
+          activeModalLayer={activeModalLayer}
+          suspended={suspended}
+          connectedWallet={connectedWallet}
+          publicKey={publicKey}
+          routeDrop={drop.routeDrop}
+          viewedProfile={account.viewedProfile}
+          pendingDeliveryItemIds={prepared.pendingDeliveryItemIds}
+          revealOverlay={reveal.revealOverlay}
+          handleReceiptTransfer={receiptActions.handleReceiptTransfer}
+          handleAdminIrlRedeem={receiptActions.handleAdminIrlRedeem}
+          handleShip={deliveryActions.handleShip}
+          handleClaim={claimActions.handleClaim}
+        />
+      )}
       <ShopRevealLayer reveal={reveal} suspended={revealOverlaySuspended} receiptControls={receiptControls} />
       {activeError ? <div className="error">{activeError}</div> : null}
-      {!miNoteCardsPage && (
+      {!miNoteCardsPage && !isNfcPage && (
         <>
           <ShopShipmentsSection
             {...shipments}
