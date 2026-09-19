@@ -6,10 +6,6 @@ import {
 } from '../../../../shared/fulfillmentAccess.js';
 import { FULFILLMENT_STATUS_OPTIONS } from '../../../../shared/fulfillmentStatus.js';
 import {
-  normalizeOptionalFulfillmentTrackingCode,
-  sanitizeFulfillmentTrackingCode,
-} from '../../../../shared/fulfillmentTracking.js';
-import {
   isActiveShipStationLabel,
   storedFulfillmentShipStationLabel,
 } from '../../../../shared/shipstationLabels.js';
@@ -50,7 +46,6 @@ import { rethrowDeferredWorkRegistrationError } from './deferredWork.js';
 import {
   D1CommerceRepository,
   commerceFieldValue,
-  type CommerceUpdateValue,
 } from './commerceRepository.js';
 import {
   mutateDeliveryOrder,
@@ -60,12 +55,14 @@ import { optionalString } from './profileWriteRates.js';
 import { saveD1ProfileAddress } from './profileD1.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
-  BUYER_ORDER_SHIPPED_EMAIL_PENDING,
   BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
   createBuyerOrderShippedNotificationJob,
-  decideBuyerOrderShippedNotification,
-  type BuyerOrderShippedDecision,
 } from './buyerOrderShipped.js';
+import {
+  markDeliveryOrderShippedEmailQueued,
+  setDeliveryOrderFulfillment,
+  type DeliveryOrderFulfillmentResponse,
+} from './deliveryOrderCommerce.js';
 import {
   type ProfileWriteDependencies,
   type ProfileWriteEnv,
@@ -207,83 +204,6 @@ async function saveAddress(
   }
 }
 
-type FulfillmentStatusResponse = {
-  buyerOrderShippedEmailState?: 'pending' | 'queued';
-  deliveryId: number;
-  fulfillmentStatus: (typeof FULFILLMENT_STATUS_OPTIONS)[number] | '';
-  fulfillmentTrackingCode?: string;
-};
-
-const BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD = 'buyerOrderShippedEmailState';
-const BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD = 'buyerOrderShippedEmailJobId';
-const BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD = 'buyerOrderShippedEmailIdempotencyKey';
-const BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD = 'buyerOrderShippedEmailQueuedAt';
-
-type FulfillmentStatusMutation = {
-  decision: BuyerOrderShippedDecision;
-  order: Record<string, unknown>;
-  response: FulfillmentStatusResponse;
-};
-
-function orderAfterFulfillmentStatusUpdate(args: {
-  dropId: string;
-  fields: Record<string, unknown>;
-  nextStatus: FulfillmentStatusResponse['fulfillmentStatus'];
-  nextTrackingCode?: string;
-  wallet: string;
-}): Record<string, unknown> {
-  const order: Record<string, unknown> = {
-    ...args.fields,
-    dropId: args.dropId,
-    fulfillmentUpdatedBy: args.wallet,
-  };
-  if (args.nextStatus) order.fulfillmentStatus = args.nextStatus;
-  else delete order.fulfillmentStatus;
-  if (args.nextStatus === 'Shipped') {
-    if (args.nextTrackingCode) order.fulfillmentTrackingCode = args.nextTrackingCode;
-    else delete order.fulfillmentTrackingCode;
-  }
-  return order;
-}
-
-function markerFieldPaths(): string[] {
-  return [
-    BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD,
-    BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD,
-    BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD,
-    BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD,
-  ];
-}
-
-async function markBuyerOrderShippedEmailQueued(args: {
-  common: CommerceWriteCommon;
-  deliveryId: number;
-  dropId: string;
-  jobId: string;
-}): Promise<boolean> {
-  return mutateDeliveryOrder({
-    common: args.common,
-    deliveryId: args.deliveryId,
-    dropId: args.dropId,
-    build: (document) => {
-      if (
-        document.fields[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] !== BUYER_ORDER_SHIPPED_EMAIL_PENDING ||
-        document.fields[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD] !== args.jobId
-      ) {
-        return { value: false };
-      }
-      return {
-        value: true,
-        updates: {
-          [BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD]: BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
-          [BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD]: args.jobId,
-          [BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
-        },
-      };
-    },
-  });
-}
-
 async function updateFulfillmentStatus(
   body: z.infer<typeof fulfillmentStatusSchema>,
   wallet: string,
@@ -293,82 +213,18 @@ async function updateFulfillmentStatus(
     ProfileWriteDependencies,
     'createNotificationJobId' | 'error' | 'log' | 'warn'
   >,
-): Promise<FulfillmentStatusResponse> {
+): Promise<DeliveryOrderFulfillmentResponse> {
   const dropId = supportedDropId(body.dropId);
   requireFulfillmentAccess(wallet, dropId);
-  const mutation = await mutateDeliveryOrder({
+  const mutation = await setDeliveryOrderFulfillment({
     common,
+    createNotificationJobId: dependencies.createNotificationJobId,
     deliveryId: body.deliveryId,
     dropId,
-    build: (document): { value: FulfillmentStatusMutation; updates: Record<string, CommerceUpdateValue> } => {
-      const nextStatus = body.status || '';
-      const currentTrackingCode = normalizeOptionalFulfillmentTrackingCode(
-        document.fields.fulfillmentTrackingCode,
-      );
-      const nextTrackingCode = nextStatus === 'Shipped'
-        ? sanitizeFulfillmentTrackingCode(body.trackingCode)
-        : currentTrackingCode;
-      const order = orderAfterFulfillmentStatusUpdate({
-        dropId,
-        fields: document.fields,
-        nextStatus,
-        nextTrackingCode,
-        wallet,
-      });
-      const decision = decideBuyerOrderShippedNotification({
-        before: document.fields,
-        after: order,
-        deliveryDocId: body.deliveryId,
-        dropId,
-        emailState: document.fields[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD],
-        forceRetry: body.retryShippedEmail === true,
-        idempotencyKey: document.fields[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD],
-        jobId: document.fields[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD],
-        createJobId: dependencies.createNotificationJobId,
-      });
-      const updates: Record<string, CommerceUpdateValue> = {
-        dropId,
-        fulfillmentUpdatedBy: wallet,
-        fulfillmentStatus: nextStatus || commerceFieldValue.delete(),
-        fulfillmentUpdatedAt: commerceFieldValue.serverTimestamp(),
-      };
-      if (nextStatus === 'Shipped') {
-        updates.fulfillmentTrackingCode = nextTrackingCode || commerceFieldValue.delete();
-      }
-      if (decision.kind === 'send') {
-        updates[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] = BUYER_ORDER_SHIPPED_EMAIL_PENDING;
-        updates[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD] = decision.jobId;
-        updates[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD] = decision.idempotencyKey;
-        updates[BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD] = commerceFieldValue.delete();
-        order[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] = BUYER_ORDER_SHIPPED_EMAIL_PENDING;
-        order[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD] = decision.jobId;
-        order[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD] = decision.idempotencyKey;
-        delete order[BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD];
-      } else if (decision.clearPending) {
-        for (const field of markerFieldPaths()) updates[field] = commerceFieldValue.delete();
-        delete order[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD];
-        delete order[BUYER_ORDER_SHIPPED_EMAIL_JOB_ID_FIELD];
-        delete order[BUYER_ORDER_SHIPPED_EMAIL_IDEMPOTENCY_KEY_FIELD];
-        delete order[BUYER_ORDER_SHIPPED_EMAIL_QUEUED_AT_FIELD];
-      }
-      return {
-        value: {
-          decision,
-          order,
-          response: {
-            ...(decision.kind === 'send'
-              ? { buyerOrderShippedEmailState: BUYER_ORDER_SHIPPED_EMAIL_PENDING }
-              : document.fields[BUYER_ORDER_SHIPPED_EMAIL_STATE_FIELD] === BUYER_ORDER_SHIPPED_EMAIL_QUEUED
-                ? { buyerOrderShippedEmailState: BUYER_ORDER_SHIPPED_EMAIL_QUEUED }
-                : {}),
-            deliveryId: body.deliveryId,
-            fulfillmentStatus: nextStatus,
-            ...(nextTrackingCode ? { fulfillmentTrackingCode: nextTrackingCode } : {}),
-          },
-        },
-        updates,
-      };
-    },
+    retryShippedEmail: body.retryShippedEmail,
+    status: body.status,
+    trackingCode: body.trackingCode,
+    wallet,
   });
   if (mutation.decision.kind === 'skip') {
     dependencies.log({
@@ -412,7 +268,7 @@ async function updateFulfillmentStatus(
     kind: job.kind,
   });
   try {
-    const marked = await markBuyerOrderShippedEmailQueued({
+    const marked = await markDeliveryOrderShippedEmailQueued({
       common,
       deliveryId: body.deliveryId,
       dropId,

@@ -98,27 +98,34 @@ export class CommerceRepositoryError extends ProfileReadError {
   }
 }
 
+declare const commerceTransformBrand: unique symbol;
+
 class ServerTimestampValue {
+  declare readonly [commerceTransformBrand]: void;
   readonly kind = 'server-timestamp';
 }
 
 class DeleteFieldValue {
+  declare readonly [commerceTransformBrand]: void;
   readonly kind = 'delete-field';
 }
 
 class IncrementValue {
+  declare readonly [commerceTransformBrand]: void;
   readonly kind = 'increment';
 
   constructor(readonly amount: number) {}
 }
 
 class TimestampValue {
+  declare readonly [commerceTransformBrand]: void;
   readonly kind = 'timestamp';
 
   constructor(readonly value: CommerceTimestamp) {}
 }
 
 class ArrayUnionValue {
+  declare readonly [commerceTransformBrand]: void;
   readonly kind = 'array-union';
 
   constructor(readonly values: readonly CommerceJsonValue[]) {}
@@ -135,12 +142,12 @@ export type CommerceUpdateValue =
 export type CommerceDocumentWriteData = { [key: string]: CommerceUpdateValue };
 
 export const commerceFieldValue = Object.freeze({
-  arrayUnion: (...values: CommerceJsonValue[]): CommerceUpdateValue =>
+  arrayUnion: (...values: CommerceJsonValue[]) =>
     Object.freeze(new ArrayUnionValue(Object.freeze([...values]))),
-  delete: (): CommerceUpdateValue => Object.freeze(new DeleteFieldValue()),
-  increment: (amount: number): CommerceUpdateValue => Object.freeze(new IncrementValue(amount)),
-  serverTimestamp: (): CommerceUpdateValue => Object.freeze(new ServerTimestampValue()),
-  timestamp: (seconds: number, nanos = 0): CommerceUpdateValue =>
+  delete: () => Object.freeze(new DeleteFieldValue()),
+  increment: (amount: number) => Object.freeze(new IncrementValue(amount)),
+  serverTimestamp: () => Object.freeze(new ServerTimestampValue()),
+  timestamp: (seconds: number, nanos = 0) =>
     Object.freeze(new TimestampValue(Object.freeze({ seconds, nanos }))),
 });
 

@@ -7,7 +7,6 @@ import {
   type CommerceDocumentKey,
   type CommerceDocumentRecord,
   type CommerceUnitOfWork,
-  type CommerceUpdateValue,
 } from './commerceRepository.js';
 import { isSignalCancellationError } from './boundedRequest.js';
 import { ProfileReadError } from './dataAccess.js';
@@ -127,7 +126,7 @@ export function runCommerceTransaction<T>(
   );
 }
 
-export function commerceTimestamp(milliseconds: number): CommerceUpdateValue {
+export function commerceTimestamp(milliseconds: number): ReturnType<typeof commerceFieldValue.timestamp> {
   const seconds = Math.floor(milliseconds / 1000);
   return commerceFieldValue.timestamp(
     seconds,

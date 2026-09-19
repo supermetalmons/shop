@@ -8,11 +8,109 @@ import {
 } from '../src/commerceRepository.ts';
 import { commerceTimestamp } from '../src/commerceTransactions.ts';
 import {
+  getStripeCheckout,
+  stripeCheckoutRecord,
   stripeCheckoutWriteData,
+  updateStripeCheckout,
+  validateStripeCheckoutForFulfillment,
   type StripeCheckoutCommerceContext,
 } from '../src/stripeCheckout/commerce.ts';
+import { StripeCheckoutFulfillmentError } from '../src/stripeCheckout/errors.ts';
+import { createStripeCheckoutIdentity } from '../../../../shared/checkoutIdentity.ts';
 import { markStripeCheckoutFulfillmentFulfilled } from '../src/stripeCheckout/service.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
+
+if (false) {
+  const transaction = { update: async () => {} };
+  const key = commerceKeys.stripeCheckout('drop', 'session');
+  // @ts-expect-error Checkout mutations must not accept delivery-order keys.
+  void updateStripeCheckout(transaction, commerceKeys.deliveryOrder('drop', '1'), { status: 'fulfilled' });
+  // @ts-expect-error Checkout lifecycle fields must be spelled correctly.
+  void updateStripeCheckout(transaction, key, { processingAttempId: 'attempt' });
+  // @ts-expect-error Checkout state must be a supported status.
+  void updateStripeCheckout(transaction, key, { status: 'shipped' });
+  // @ts-expect-error Numeric identifiers must not accept strings.
+  void updateStripeCheckout(transaction, key, { deliveryId: '123' });
+  // @ts-expect-error Increment operations cannot be applied to string fields.
+  void updateStripeCheckout(transaction, key, { processingAttemptId: commerceFieldValue.increment(1) });
+  // @ts-expect-error Plain JSON cannot impersonate a native delete operation.
+  void updateStripeCheckout(transaction, key, { processingAttemptId: { kind: 'delete-field' } });
+}
+
+test('typed checkout reads preserve sparse lifecycle records and normalize malformed optional fields', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.stripeCheckout('drop', 'session');
+  assert.equal(await getStripeCheckout(repository, key), null);
+  seedCommerceDocument(harness, {
+    key,
+    data: {
+      status: false,
+      processingAttemptId: 42,
+      processingLeaseExpiresAt: 'invalid',
+      processingStartedAt: 1_800_000_000_000,
+      historicalField: { retained: true },
+    },
+  });
+  const checkout = await getStripeCheckout(repository, key);
+  assert.ok(checkout);
+  assert.equal(checkout.status, '');
+  assert.equal(checkout.processingAttemptId, '');
+  assert.equal(checkout.processingLeaseExpiresAtMs, undefined);
+  assert.equal(checkout.processingStartedAtMs, 1_800_000_000_000);
+  assert.deepEqual(checkout.fields.historicalField, { retained: true });
+  await repository.run(1_800_000_000_100, async (unit) => {
+    assert.deepEqual(await getStripeCheckout(unit, key), checkout);
+    await updateStripeCheckout(unit, key, { status: 'processing', processingAttemptId: 'current' });
+  });
+  assert.equal((await getStripeCheckout(repository, key))?.processingAttemptId, 'current');
+  assert.deepEqual((await repository.get(key))?.data.historicalField, { retained: true });
+});
+
+test('validated checkout reads reuse contract normalization and reject mismatched identity', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.stripeCheckout('drop', 'cs_session');
+  const identity = createStripeCheckoutIdentity('anonymous-subject');
+  seedCommerceDocument(harness, {
+    key,
+    data: {
+      ...identity,
+      dropId: 'drop',
+      sessionId: 'cs_session',
+      fulfillmentMode: 'admin_variant_receipt',
+      currency: 'usd',
+      livemode: false,
+      quantity: 1,
+      unitAmountCents: '100',
+      deliveryId: '123',
+      status: 'fulfillment_pending',
+    },
+  });
+  const checkout = await getStripeCheckout(repository, key);
+  assert.ok(checkout);
+  const validated = validateStripeCheckoutForFulfillment(checkout, { dropId: 'drop', sessionId: 'cs_session' });
+  assert.deepEqual(validated, {
+    ...identity,
+    key,
+    quantity: 1,
+    unitAmountCents: 100,
+    deliveryId: 123,
+    livemode: false,
+    status: 'fulfillment_pending',
+  });
+  assert.throws(
+    () => validateStripeCheckoutForFulfillment(checkout, { dropId: 'other', sessionId: 'cs_session' }),
+    (error: unknown) => error instanceof StripeCheckoutFulfillmentError && error.code === 'failed-precondition',
+  );
+  const stored = await repository.get(key);
+  assert.throws(
+    () => stripeCheckoutRecord(commerceKeys.stripeCheckout('drop', 'other'), stored),
+    /Invalid Stripe checkout document identity/,
+  );
+});
 
 test('Stripe checkout commerce applies native fields, deletes, increments, and timestamps', async (context) => {
   const nowMs = 1_800_000_000_000;

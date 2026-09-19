@@ -24,6 +24,12 @@ export type StripeTerminalNotificationOutbox = {
   jobs?: NotificationEmailJobV1[];
 };
 
+export type StripeTerminalNotificationFields = {
+  stripeTerminalNotification?: StripeTerminalNotificationOutbox;
+  stripeTerminalNotificationState?: 'pending';
+  stripeTerminalNotificationNextAttemptAtMs?: number;
+};
+
 export function stripeTerminalNotificationOutcome(
   checkout: Record<string, unknown> | null,
 ): StripeTerminalNotificationOutcome | null {
@@ -39,7 +45,7 @@ export function createStripeTerminalNotificationOutboxFields(
   before: Record<string, unknown> | null,
   outcome: StripeTerminalNotificationOutcome,
   nowMs = Date.now(),
-): Record<string, unknown> {
+): StripeTerminalNotificationFields {
   if (stripeTerminalNotificationOutcome(before) === outcome) return {};
   const existing = before?.[STRIPE_TERMINAL_NOTIFICATION_FIELD];
   if (isRecord(existing) && existing.outcome === outcome) return {};

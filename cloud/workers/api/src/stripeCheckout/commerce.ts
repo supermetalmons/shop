@@ -1,5 +1,6 @@
-import type { D1CommerceRepository } from '../commerceRepository.js';
+import type { D1CommerceRepository, CommerceUnitOfWork } from '../commerceRepository.js';
 import {
+  commerceFieldValue,
   CommerceRepositoryError,
   isCommerceArrayUnion,
   isCommerceDeleteField,
@@ -7,15 +8,128 @@ import {
   isCommerceServerTimestamp,
   isCommerceTimestamp,
   type CommerceDocumentWriteData,
+  type CommerceDocumentData,
+  type CommerceDocumentKey,
+  type CommerceDocumentRecord,
   type CommerceJsonValue,
   type CommerceUpdateValue,
 } from '../commerceRepositoryTypes.js';
+import { toMillisMaybe } from '../time.js';
+import {
+  STRIPE_CHECKOUT_STATUS,
+  validateStripeCheckoutDocumentData,
+  type StripeCheckoutDocumentData,
+} from './contract.js';
+import { StripeCheckoutFulfillmentError } from './errors.js';
+import type { StripeTerminalNotificationFields } from './notificationOutboxState.js';
 
 export type StripeCheckoutCommerceContext = {
   repository: Pick<D1CommerceRepository, 'get' | 'run'>;
   nowMs: () => number;
   signal?: AbortSignal;
 };
+
+export type StripeCheckoutRecord = {
+  key: CommerceDocumentKey<'stripe_checkout'>;
+  fields: CommerceDocumentData;
+  status: string;
+  processingAttemptId: string;
+  processingStartedAtMs: number | undefined;
+  processingLeaseExpiresAtMs: number | undefined;
+};
+
+export type ValidatedStripeCheckoutRecord = StripeCheckoutDocumentData & {
+  key: CommerceDocumentKey<'stripe_checkout'>;
+};
+
+type DeleteField = ReturnType<typeof commerceFieldValue.delete>;
+type TimestampWrite = number | ReturnType<typeof commerceFieldValue.timestamp> |
+  ReturnType<typeof commerceFieldValue.serverTimestamp>;
+
+export type StripeCheckoutUpdate = StripeTerminalNotificationFields & {
+  status?: typeof STRIPE_CHECKOUT_STATUS[keyof typeof STRIPE_CHECKOUT_STATUS];
+  dropId?: string;
+  sessionId?: string;
+  processingAttemptId?: string | DeleteField;
+  processingAttemptCount?: number | ReturnType<typeof commerceFieldValue.increment>;
+  processingStartedAt?: TimestampWrite | DeleteField;
+  processingLeaseExpiresAt?: TimestampWrite | DeleteField;
+  lastRetryableFulfillmentAttempt?: number | DeleteField;
+  lastRetryableFulfillmentError?: unknown;
+  lastRetryableFulfillmentErrorAt?: TimestampWrite | DeleteField;
+  nextFulfillmentRetryAt?: TimestampWrite | DeleteField;
+  lastFulfillmentError?: unknown;
+  manualRefundReviewRequired?: boolean | DeleteField;
+  manualRefundReviewReason?: string | DeleteField;
+  failedAt?: TimestampWrite | DeleteField;
+  fulfilledAt?: TimestampWrite;
+  fulfillmentCompletedBy?: string;
+  fulfillmentCompletedAt?: TimestampWrite;
+  deliveryId?: number;
+  metadataId?: number | DeleteField;
+  metadataIds?: number[];
+  quantity?: number;
+  receiptTx?: string | null;
+  updatedAt?: TimestampWrite;
+};
+
+export function stripeCheckoutRecord(
+  key: CommerceDocumentKey<'stripe_checkout'>,
+  record: CommerceDocumentRecord | null,
+): StripeCheckoutRecord | null {
+  if (!record) return null;
+  if (
+    record.key.kind !== 'stripe_checkout' || record.key.path !== key.path ||
+    record.key.dropId !== key.dropId || record.key.documentId !== key.documentId
+  ) throw new CommerceRepositoryError('unavailable', 'Invalid Stripe checkout document identity.');
+  const fields = record.data;
+  return {
+    key,
+    fields,
+    status: typeof fields.status === 'string' ? fields.status : '',
+    processingAttemptId: typeof fields.processingAttemptId === 'string' ? fields.processingAttemptId : '',
+    processingStartedAtMs: toMillisMaybe(fields.processingStartedAt),
+    processingLeaseExpiresAtMs: toMillisMaybe(fields.processingLeaseExpiresAt),
+  };
+}
+
+export async function getStripeCheckout(
+  reader: Pick<D1CommerceRepository, 'get'>,
+  key: CommerceDocumentKey<'stripe_checkout'>,
+): Promise<StripeCheckoutRecord | null> {
+  return stripeCheckoutRecord(key, await reader.get(key));
+}
+
+export function validateStripeCheckoutForFulfillment(
+  record: StripeCheckoutRecord,
+  expected: { dropId: string; sessionId: string; variantKey?: string; expectedLivemode?: boolean },
+): ValidatedStripeCheckoutRecord {
+  try {
+    return { key: record.key, ...validateStripeCheckoutDocumentData({ ...expected, checkout: record.fields }) };
+  } catch (error) {
+    throw new StripeCheckoutFulfillmentError(
+      'failed-precondition',
+      error instanceof Error ? error.message : String(error),
+      { dropId: expected.dropId, sessionId: expected.sessionId },
+    );
+  }
+}
+
+export function updateStripeCheckout(
+  transaction: Pick<CommerceUnitOfWork, 'update'>,
+  key: CommerceDocumentKey<'stripe_checkout'>,
+  updates: StripeCheckoutUpdate,
+): Promise<void> {
+  return transaction.update(key, stripeCheckoutWriteData(updates));
+}
+
+export function mergeStripeCheckout(
+  transaction: Pick<CommerceUnitOfWork, 'set'>,
+  key: CommerceDocumentKey<'stripe_checkout'>,
+  updates: StripeCheckoutUpdate,
+): Promise<void> {
+  return transaction.set(key, stripeCheckoutWriteData(updates), { merge: true });
+}
 
 function jsonValue(value: unknown): CommerceJsonValue {
   if (value === null) return null;
