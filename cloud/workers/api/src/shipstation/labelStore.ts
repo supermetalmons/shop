@@ -1,23 +1,21 @@
-import { normalizeOptionalFulfillmentTrackingCode } from '../../../../../shared/fulfillmentTracking.js';
+import { parseDeliveryFulfillmentState, parseDeliveryOrderShipStation } from '../deliveryOrderReadModel.js';
 import {
   isActiveShipStationLabel,
   shipStationTrackingCodeUpdate,
   shouldClearShipStationPurchaseState,
   shouldTransitionShipStationPurchaseState,
-  storedFulfillmentShipStationLabel,
   type ShipStationLabelResult,
 } from '../../../../../shared/shipstationLabels.js';
 import { shipStationMoneyMatches } from '../../../../../shared/shipstationRates.js';
 import type { FulfillmentShipStationLabel } from '../../../../../shared/contracts.js';
-import { isRecord, ProfileReadError } from '../dataAccess.js';
+import { ProfileReadError } from '../dataAccess.js';
 import { commerceFieldValue } from '../commerceRepository.js';
 import { mutateDeliveryOrder } from '../fulfillmentStorePersistence.js';
 import type { FulfillmentDeliveryOrderUpdates } from '../fulfillmentDeliveryOrderUpdates.js';
 import type { FulfillmentStoreContext } from '../profileWriteCommerce.js';
-import { commerceMoney, optionalString, storedShipStationRateQuotes } from '../profileWriteRates.js';
+import { commerceMoney } from '../profileWriteRates.js';
 import {
   type ShipStationRateMutationExpectation,
-  shipStationState,
   requireRateMutationState,
   shipStationLabelIdentity,
   rejectIrlShipStationOrder,
@@ -78,16 +76,16 @@ export async function persistFulfillmentShipStationLabel(args: {
     dropId: args.dropId,
     deliveryId: args.deliveryId,
     build: ({ data: order }) => {
-      const shipstation = shipStationState(order);
+      const shipstation = parseDeliveryOrderShipStation(order);
       if (args.expectedRateMutation) requireRateMutationState(order, args.expectedRateMutation);
-      if (optionalString(shipstation.shipmentId) !== label.shipmentId) {
+      if (shipstation.shipmentId !== label.shipmentId) {
         throw new ProfileReadError(
           'aborted',
           409,
           'The ShipStation shipment changed. Refresh the order and try again.',
         );
       }
-      const currentLabel = storedFulfillmentShipStationLabel(shipstation.label);
+      const currentLabel = shipstation.label;
       const currentLabelIdentity = shipStationLabelIdentity(currentLabel);
       if (
         args.expectedPurchaseRequestId
@@ -98,8 +96,8 @@ export async function persistFulfillmentShipStationLabel(args: {
         return { value: currentLabel };
       }
       if (args.expectedPurchaseRequestId) {
-        const purchase = isRecord(shipstation.labelPurchase) ? shipstation.labelPurchase : {};
-        if (!shouldTransitionShipStationPurchaseState(purchase, args.expectedPurchaseRequestId, false)) {
+        const purchase = shipstation.labelPurchase;
+        if (!shouldTransitionShipStationPurchaseState(purchase.raw, args.expectedPurchaseRequestId, false)) {
           throw new ProfileReadError('aborted', 409, 'The ShipStation label purchase changed. Check its status again.');
         }
       }
@@ -111,7 +109,7 @@ export async function persistFulfillmentShipStationLabel(args: {
         throw new ProfileReadError('aborted', 409, 'The ShipStation label changed. Check its status again.');
       }
       const trackingCodeUpdate = shipStationTrackingCodeUpdate(
-        normalizeOptionalFulfillmentTrackingCode(order.fulfillmentTrackingCode),
+        parseDeliveryFulfillmentState(order).fulfillmentTrackingCode,
         currentLabel,
         label,
       );
@@ -152,19 +150,19 @@ export async function transitionShipStationPurchaseState(args: {
     dropId: args.dropId,
     deliveryId: args.deliveryId,
     build: ({ data: order }) => {
-      const shipstation = shipStationState(order);
-      if (optionalString(shipstation.shipmentId) !== args.expectedShipmentId) {
+      const shipstation = parseDeliveryOrderShipStation(order);
+      if (shipstation.shipmentId !== args.expectedShipmentId) {
         throw new ProfileReadError(
           'aborted',
           409,
           'The ShipStation shipment changed. Refresh the order and try again.',
         );
       }
-      const label = storedFulfillmentShipStationLabel(shipstation.label);
+      const label = shipstation.label;
       if (isActiveShipStationLabel(label)) return { value: { label, purchaseUnknown: false } };
       const purchase = shipstation.labelPurchase;
-      const status = isRecord(purchase) && typeof purchase.status === 'string' ? purchase.status : '';
-      if (!shouldTransitionShipStationPurchaseState(purchase, args.expectedRequestId, false)) {
+      const status = purchase.exactStatus ?? '';
+      if (!shouldTransitionShipStationPurchaseState(purchase.raw, args.expectedRequestId, false)) {
         return { value: { purchaseUnknown: status === 'purchasing' || status === 'unknown' } };
       }
       return {
@@ -196,15 +194,15 @@ export async function claimFulfillmentShipStationLabelPurchase(args: {
     dropId: args.dropId,
     build: ({ data: order }) => {
       rejectIrlShipStationOrder(order);
-      const shipstation = shipStationState(order);
-      if (optionalString(shipstation.shipmentId) !== args.shipmentId) {
+      const shipstation = parseDeliveryOrderShipStation(order);
+      if (shipstation.shipmentId !== args.shipmentId) {
         throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
       }
-      const currentLabel = storedFulfillmentShipStationLabel(shipstation.label);
+      const currentLabel = shipstation.label;
       if (currentLabel && isActiveShipStationLabel(currentLabel)) {
         return { value: { alreadyPurchased: true, label: currentLabel } };
       }
-      const quotedRate = storedShipStationRateQuotes(shipstation.rateQuotes)
+      const quotedRate = shipstation.rateQuotes
         .find((candidate) => candidate.rateId === args.body.rateId);
       if (!quotedRate || quotedRate.shipmentId !== args.shipmentId) {
         throw new ProfileReadError('failed-precondition', 409, 'Refresh rates before purchasing this label.');
@@ -216,9 +214,9 @@ export async function claimFulfillmentShipStationLabelPurchase(args: {
           'The selected quote changed. Refresh rates before purchasing.',
         );
       }
-      const purchase = isRecord(shipstation.labelPurchase) ? shipstation.labelPurchase : {};
-      const status = optionalString(purchase.status) ?? '';
-      const previousRequestId = optionalString(purchase.requestId) ?? '';
+      const purchase = shipstation.labelPurchase;
+      const status = purchase.status ?? '';
+      const previousRequestId = purchase.requestId ?? '';
       if (status === 'purchasing' || status === 'unknown') {
         throw new ProfileReadError(
           'aborted',
@@ -267,15 +265,15 @@ export async function transitionFulfillmentShipStationLabelPurchase(args: {
     deliveryId: args.body.deliveryId,
     dropId: args.dropId,
     build: ({ data: order }) => {
-      const shipstation = shipStationState(order);
-      if (optionalString(shipstation.shipmentId) !== args.shipmentId) {
+      const shipstation = parseDeliveryOrderShipStation(order);
+      if (shipstation.shipmentId !== args.shipmentId) {
         throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
       }
-      const label = storedFulfillmentShipStationLabel(shipstation.label);
+      const label = shipstation.label;
       if (isActiveShipStationLabel(label)) return { value: { label, purchaseUnknown: false } };
-      const purchase = isRecord(shipstation.labelPurchase) ? shipstation.labelPurchase : {};
-      const status = optionalString(purchase.status) ?? '';
-      if (!shouldTransitionShipStationPurchaseState(purchase, args.body.requestId, false)) {
+      const purchase = shipstation.labelPurchase;
+      const status = purchase.status ?? '';
+      if (!shouldTransitionShipStationPurchaseState(purchase.raw, args.body.requestId, false)) {
         return { value: { purchaseUnknown: status === 'purchasing' || status === 'unknown' } };
       }
       return {

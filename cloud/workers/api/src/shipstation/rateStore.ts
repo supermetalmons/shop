@@ -1,17 +1,14 @@
-import {
-  isActiveShipStationLabel,
-  storedFulfillmentShipStationLabel,
-} from '../../../../../shared/shipstationLabels.js';
+import { parseDeliveryOrderShipStation } from '../deliveryOrderReadModel.js';
+import { isActiveShipStationLabel } from '../../../../../shared/shipstationLabels.js';
 import type { ShipStationPackageInput } from '../../../../../shared/shipstationPackage.js';
 import type { GetFulfillmentShipStationRatesResponse } from '../../../../../shared/contracts.js';
-import { isRecord, ProfileReadError } from '../dataAccess.js';
+import { ProfileReadError } from '../dataAccess.js';
 import { commerceFieldValue, type CommerceDocumentData } from '../commerceRepository.js';
 import { mutateDeliveryOrder } from '../fulfillmentStorePersistence.js';
 import type { FulfillmentDeliveryOrderUpdates } from '../fulfillmentDeliveryOrderUpdates.js';
 import type { FulfillmentStoreContext } from '../profileWriteCommerce.js';
-import { commercePackage, commerceRateQuotes, optionalString } from '../profileWriteRates.js';
+import { commercePackage, commerceRateQuotes } from '../profileWriteRates.js';
 import {
-  shipStationState,
   type ShipStationRateMutationExpectation,
   requireRateMutationState,
   SHIPSTATION_CLAIM_TTL_MS,
@@ -61,8 +58,8 @@ export async function persistPendingShipStationRateRequest(args: {
     deliveryId: args.deliveryId,
     dropId: args.dropId,
     build: ({ data: order }) => {
-      requireRateMutationState(order, args.expected);
-      if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(shipStationState(order).label))) {
+      const shipstation = requireRateMutationState(order, args.expected);
+      if (isActiveShipStationLabel(shipstation.label)) {
         throw new ProfileReadError('failed-precondition', 409, 'This shipment already has a label.');
       }
       return {
@@ -93,15 +90,15 @@ export async function releaseShipStationRatesClaim(args: {
     deliveryId: args.deliveryId,
     dropId: args.dropId,
     build: ({ data: order }) => {
-      const shipstation = shipStationState(order);
-      if (optionalString(shipstation.shipmentId) !== args.shipmentId) return { value: undefined };
-      const currentClaimId = optionalString(shipstation.ratesClaimId);
+      const shipstation = parseDeliveryOrderShipStation(order);
+      if (shipstation.shipmentId !== args.shipmentId) return { value: undefined };
+      const currentClaimId = shipstation.ratesClaimId;
       if (currentClaimId && (
-        currentClaimId !== args.claimId || optionalString(shipstation.ratesClaimedBy) !== args.wallet
+        currentClaimId !== args.claimId || shipstation.ratesClaimedBy !== args.wallet
       )) {
         return { value: undefined };
       }
-      if (!currentClaimId && optionalString(shipstation.ratesClaimFenceId) === args.claimId) {
+      if (!currentClaimId && shipstation.ratesClaimFenceId === args.claimId) {
         return { value: undefined };
       }
       const updates: FulfillmentDeliveryOrderUpdates = currentClaimId
@@ -135,17 +132,14 @@ export async function claimShipStationRateRefresh(args: {
     dropId: args.dropId,
     build: ({ data: currentOrder }) => {
       const currentShipstation = requireRateMutationState(currentOrder, args.expected);
-      const currentPurchase = isRecord(currentShipstation.labelPurchase) ? currentShipstation.labelPurchase : {};
-      const currentPurchaseStatus = optionalString(currentPurchase.status);
+      const currentPurchaseStatus = currentShipstation.labelPurchase.status;
       if (currentPurchaseStatus === 'purchasing' || currentPurchaseStatus === 'unknown') {
         throw new ProfileReadError('aborted', 409, 'A label purchase may already be in progress. Check purchase status first.');
       }
-      if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(currentShipstation.label))) {
+      if (isActiveShipStationLabel(currentShipstation.label)) {
         throw new ProfileReadError('failed-precondition', 409, 'This shipment already has a label.');
       }
-      const claimedAt = typeof currentShipstation.ratesClaimedAt === 'number'
-        ? currentShipstation.ratesClaimedAt
-        : 0;
+      const claimedAt = currentShipstation.ratesClaimedAt ?? 0;
       if (claimedAt && args.common.nowMs - claimedAt < SHIPSTATION_CLAIM_TTL_MS) {
         throw new ProfileReadError('aborted', 409, 'Rates are already being refreshed for this shipment. Try again in a moment.');
       }
@@ -202,8 +196,8 @@ export async function completeShipStationRateRefresh(args: {
     deliveryId: args.deliveryId,
     dropId: args.dropId,
     build: ({ data: currentOrder }) => {
-      requireRateMutationState(currentOrder, args.expected);
-      if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(shipStationState(currentOrder).label))) {
+      const shipstation = requireRateMutationState(currentOrder, args.expected);
+      if (isActiveShipStationLabel(shipstation.label)) {
         throw new ProfileReadError('failed-precondition', 409, 'This shipment already has a label.');
       }
       return {

@@ -1,6 +1,6 @@
+import { parseDeliveryOrderShipStation } from '../deliveryOrderReadModel.js';
 import {
   type ShipStationRateMutationExpectation,
-  shipStationState,
   rejectIrlShipStationOrder,
   requireShipStationShipmentId,
 } from './state.js';
@@ -18,7 +18,6 @@ import {
   isActiveShipStationLabel,
   listShipStationLabelsForShipment,
   shouldTransitionShipStationPurchaseState,
-  storedFulfillmentShipStationLabel,
   ShipStationLabelProviderError,
   voidShipStationLabel,
 } from '../../../../../shared/shipstationLabels.js';
@@ -34,15 +33,9 @@ import type {
   VoidFulfillmentShipStationLabelResponse,
 } from '../../../../../shared/contracts.js';
 import { isSignalCancellationError } from '../boundedRequest.js';
-import {
-  isRecord,
-  ProfileReadError,
-} from '../dataAccess.js';
+import { ProfileReadError } from '../dataAccess.js';
 import { loadDeliveryOrderDocument } from '../deliveryOrderStore.js';
 import type { CommerceWriteCommon } from '../profileWriteCommerce.js';
-import {
-  optionalString,
-} from '../profileWriteRates.js';
 import {
   profileErrorForShipStation,
   supportedDropId,
@@ -113,7 +106,7 @@ export async function reconcileFulfillmentShipStationLabel(args: {
   shipmentId: string;
   wallet: string;
 }): Promise<ReconciledShipStationLabel> {
-  const storedLabel = storedFulfillmentShipStationLabel(shipStationState(args.order).label);
+  const storedLabel = parseDeliveryOrderShipStation(args.order).label;
   let inactive: FulfillmentShipStationLabel | undefined;
   try {
     if (storedLabel?.labelId && (args.refreshInactiveStoredLabel || isActiveShipStationLabel(storedLabel))) {
@@ -198,11 +191,9 @@ async function getFulfillmentShipStationLabel(
       ...(reconciled.downloadUrl ? { labelDownloadUrl: reconciled.downloadUrl } : {}),
     };
   }
-  const purchase = shipStationState(order).labelPurchase;
-  const purchaseStatus = isRecord(purchase) && typeof purchase.status === 'string' ? purchase.status : '';
-  const purchaseRequestId = isRecord(purchase) && typeof purchase.requestId === 'string'
-    ? purchase.requestId
-    : undefined;
+  const purchase = parseDeliveryOrderShipStation(order).labelPurchase;
+  const purchaseStatus = purchase.exactStatus ?? '';
+  const purchaseRequestId = purchase.exactRequestId;
   const resolvedPurchase = purchaseStatus === 'purchasing'
     ? await transitionShipStationPurchaseState({
         common,
@@ -226,7 +217,7 @@ function expectedFulfillmentShipStationLabelForVoid(
   shipmentId: string,
   labelId: string,
 ): FulfillmentShipStationLabel {
-  const label = storedFulfillmentShipStationLabel(shipStationState(order).label);
+  const label = parseDeliveryOrderShipStation(order).label;
   if (!label || label.labelId !== labelId) {
     throw new ProfileReadError('aborted', 409, 'The ShipStation label changed. Check its status again.');
   }
@@ -612,15 +603,15 @@ async function purchaseFulfillmentShipStationLabel(
       }))[0] ?? null,
       async () => {
         const current = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
-        const currentShipstation = shipStationState(current.data);
-        if (optionalString(currentShipstation.shipmentId) !== shipmentId) {
+        const currentShipstation = parseDeliveryOrderShipStation(current.data);
+        if (currentShipstation.shipmentId !== shipmentId) {
           throw new ProfileReadError(
             'aborted',
             409,
             'The ShipStation shipment changed. Refresh the order and try again.',
           );
         }
-        const currentLabel = storedFulfillmentShipStationLabel(currentShipstation.label);
+        const currentLabel = currentShipstation.label;
         if (currentLabel && isActiveShipStationLabel(currentLabel)) {
           labelAppearedBeforePurchase = currentLabel;
           return getShipStationLabelById(apiKey, currentLabel.labelId, {
@@ -628,10 +619,8 @@ async function purchaseFulfillmentShipStationLabel(
             signal: common.signal,
           });
         }
-        const currentPurchase = isRecord(currentShipstation.labelPurchase)
-          ? currentShipstation.labelPurchase
-          : {};
-        if (!shouldTransitionShipStationPurchaseState(currentPurchase, body.requestId, false)) {
+        const currentPurchase = currentShipstation.labelPurchase;
+        if (!shouldTransitionShipStationPurchaseState(currentPurchase.raw, body.requestId, false)) {
           throw new ProfileReadError(
             'aborted',
             409,

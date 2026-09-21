@@ -1,11 +1,12 @@
+import { parseDeliveryOrderShipStation } from '../deliveryOrderReadModel.js';
 import type { ShipStationPackageInput } from '../../../../../shared/shipstationPackage.js';
 import { ProfileReadError } from '../dataAccess.js';
 import { commerceFieldValue, type CommerceDocumentData } from '../commerceRepository.js';
 import { mutateDeliveryOrder } from '../fulfillmentStorePersistence.js';
 import type { FulfillmentDeliveryOrderUpdates } from '../fulfillmentDeliveryOrderUpdates.js';
 import type { FulfillmentStoreContext } from '../profileWriteCommerce.js';
-import { commercePackage, optionalString } from '../profileWriteRates.js';
-import { rejectIrlShipStationOrder, shipStationState, SHIPSTATION_CLAIM_TTL_MS } from './state.js';
+import { commercePackage } from '../profileWriteRates.js';
+import { rejectIrlShipStationOrder, SHIPSTATION_CLAIM_TTL_MS } from './state.js';
 
 type ShipStationShipmentClaim =
   | { alreadyAdded: true; shipmentId: string; addedAt?: number }
@@ -25,13 +26,13 @@ export async function claimFulfillmentShipStationShipment(args: {
     dropId: args.dropId,
     build: ({ data: order }) => {
       rejectIrlShipStationOrder(order);
-      const shipstation = shipStationState(order);
-      const shipmentId = optionalString(shipstation.shipmentId);
+      const shipstation = parseDeliveryOrderShipStation(order);
+      const shipmentId = shipstation.shipmentId;
       if (shipmentId) {
-        const addedAt = typeof shipstation.createdAt === 'number' ? shipstation.createdAt : undefined;
+        const addedAt = shipstation.createdAt;
         return { value: { alreadyAdded: true, shipmentId, ...(addedAt ? { addedAt } : {}) } };
       }
-      const claimedAt = typeof shipstation.claimedAt === 'number' ? shipstation.claimedAt : 0;
+      const claimedAt = shipstation.claimedAt ?? 0;
       if (claimedAt && args.common.nowMs - claimedAt < SHIPSTATION_CLAIM_TTL_MS) {
         throw new ProfileReadError(
           'aborted',
@@ -68,9 +69,9 @@ export async function transitionFulfillmentShipStationShipmentClaim(args: {
     deliveryId: args.deliveryId,
     dropId: args.dropId,
     build: ({ data: order }) => {
-      const shipstation = shipStationState(order);
-      const currentClaimId = optionalString(shipstation.claimId);
-      const currentClaimedBy = optionalString(shipstation.claimedBy);
+      const shipstation = parseDeliveryOrderShipStation(order);
+      const currentClaimId = shipstation.claimId;
+      const currentClaimedBy = shipstation.claimedBy;
       if (currentClaimId !== args.claimId || currentClaimedBy !== args.wallet) return { value: undefined };
       const updates: FulfillmentDeliveryOrderUpdates = args.retain
         ? {
@@ -114,14 +115,14 @@ export async function persistFulfillmentShipStationShipment(args: {
     deliveryId: args.deliveryId,
     dropId: args.dropId,
     build: ({ data: order }) => {
-      const shipstation = shipStationState(order);
+      const shipstation = parseDeliveryOrderShipStation(order);
       if (
-        optionalString(shipstation.claimId) !== args.claimId ||
-        optionalString(shipstation.claimedBy) !== args.wallet
+        shipstation.claimId !== args.claimId ||
+        shipstation.claimedBy !== args.wallet
       ) {
         throw new ProfileReadError('aborted', 409, 'The ShipStation shipment claim changed. Try again.');
       }
-      const currentShipmentId = optionalString(shipstation.shipmentId);
+      const currentShipmentId = shipstation.shipmentId;
       if (currentShipmentId && currentShipmentId !== args.shipmentId) {
         throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
       }

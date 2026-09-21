@@ -1,7 +1,7 @@
 import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../../shared/fulfillmentSources.js';
 import { storedFulfillmentShipStationLabel } from '../../../../../shared/shipstationLabels.js';
-import { isRecord, ProfileReadError } from '../dataAccess.js';
-import { optionalString } from '../profileWriteRates.js';
+import { ProfileReadError } from '../dataAccess.js';
+import { parseDeliveryOrderShipStation, type DeliveryOrderShipStation } from '../deliveryOrderReadModel.js';
 
 export const SHIPSTATION_CLAIM_TTL_MS = 120_000;
 
@@ -11,12 +11,8 @@ export function rejectIrlShipStationOrder(order: Record<string, unknown>): void 
   }
 }
 
-export function shipStationState(order: Record<string, unknown>): Record<string, unknown> {
-  return isRecord(order.shipstation) ? order.shipstation : {};
-}
-
 export function requireShipStationShipmentId(order: Record<string, unknown>): string {
-  const shipmentId = optionalString(shipStationState(order).shipmentId);
+  const shipmentId = parseDeliveryOrderShipStation(order).shipmentId;
   if (!shipmentId) {
     throw new ProfileReadError('failed-precondition', 409, 'Add this order to ShipStation before getting rates.');
   }
@@ -55,9 +51,9 @@ export function shipStationLabelIdentity(value: unknown): string {
   ]) : '';
 }
 
-function shipStationPurchaseIdentity(shipstation: Record<string, unknown>): string {
-  const purchase = isRecord(shipstation.labelPurchase) ? shipstation.labelPurchase : {};
-  return `${optionalString(purchase.status) ?? ''}\n${optionalString(purchase.requestId) ?? ''}`;
+function shipStationPurchaseIdentity(shipstation: DeliveryOrderShipStation): string {
+  const purchase = shipstation.labelPurchase;
+  return `${purchase.status ?? ''}\n${purchase.requestId ?? ''}`;
 }
 
 export function rateMutationExpectation(
@@ -65,22 +61,22 @@ export function rateMutationExpectation(
   shipmentId: string,
   claim?: { claimId: string; wallet: string },
 ): ShipStationRateMutationExpectation {
-  const shipstation = shipStationState(order);
+  const shipstation = parseDeliveryOrderShipStation(order);
   return {
     shipmentId,
     labelIdentity: shipStationLabelIdentity(shipstation.label),
     purchaseIdentity: shipStationPurchaseIdentity(shipstation),
-    claimId: claim?.claimId ?? optionalString(shipstation.ratesClaimId) ?? null,
-    claimedBy: claim?.wallet ?? optionalString(shipstation.ratesClaimedBy) ?? null,
+    claimId: claim?.claimId ?? shipstation.ratesClaimId ?? null,
+    claimedBy: claim?.wallet ?? shipstation.ratesClaimedBy ?? null,
   };
 }
 
 export function requireRateMutationState(
   order: Record<string, unknown>,
   expected: ShipStationRateMutationExpectation,
-): Record<string, unknown> {
-  const shipstation = shipStationState(order);
-  if (optionalString(shipstation.shipmentId) !== expected.shipmentId) {
+): DeliveryOrderShipStation {
+  const shipstation = parseDeliveryOrderShipStation(order);
+  if (shipstation.shipmentId !== expected.shipmentId) {
     throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
   }
   if (shipStationLabelIdentity(shipstation.label) !== expected.labelIdentity) {
@@ -90,8 +86,8 @@ export function requireRateMutationState(
     throw new ProfileReadError('aborted', 409, 'The ShipStation label purchase changed. Check its status again.');
   }
   if (
-    (optionalString(shipstation.ratesClaimId) ?? null) !== expected.claimId ||
-    (optionalString(shipstation.ratesClaimedBy) ?? null) !== expected.claimedBy
+    (shipstation.ratesClaimId ?? null) !== expected.claimId ||
+    (shipstation.ratesClaimedBy ?? null) !== expected.claimedBy
   ) {
     throw new ProfileReadError('aborted', 409, 'The ShipStation rate refresh claim changed. Try again.');
   }

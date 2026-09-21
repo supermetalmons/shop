@@ -30,12 +30,15 @@ import {
   type DeliveryOrderKey,
 } from './deliveryOrderStore.js';
 import {
+  parseDeliveryRecoveryState,
+  type DeliveryRecoveryState,
+} from './deliveryOrderReadModel.js';
+import {
   resolveDeliveryOrderDropId,
   resolveDeliveryOrderIdentity,
 } from './deliveryOrderSummaries.js';
 import { mapProviderError } from './deliveryReceiptErrors.js';
 import { isSignalCancellationError } from './boundedRequest.js';
-import { isRecord } from './dataAccess.js';
 
 const PENDING_READY_NOTIFICATION_QUERY_PAGE_SIZE = 8;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
@@ -58,17 +61,6 @@ type DeliveryRecoveryPatch = {
   'receiptRecovery.nextPreparedProbeAt'?: TimestampWrite | DeleteField;
 };
 
-type DeliveryRecoveryState = {
-  status: string | undefined;
-  createdAtMs: number | null;
-  processingAtMs: number | null;
-  lastAttemptAtMs: number | null;
-  leaseExpiresAtMs: number | null;
-  rawAttemptCount: CommerceJsonValue | undefined;
-  rawLastAttemptAt: CommerceJsonValue | undefined;
-  rawPreparedProbeCount: CommerceJsonValue | undefined;
-};
-
 export type DeliveryRecoveryLease = {
   attemptCount: number;
   lastAttemptAtMs: number;
@@ -85,24 +77,6 @@ type DeliveryRecoveryEligibility =
   | { eligible: true }
   | { eligible: false; outcome: DeliveryRecoveryOutcome; message: string };
 
-function toMillisMaybe(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function deliveryRecoveryState(order: CommerceDocumentData): DeliveryRecoveryState {
-  const recovery = isRecord(order.receiptRecovery) ? order.receiptRecovery : {};
-  return {
-    status: typeof order.status === 'string' ? order.status : undefined,
-    createdAtMs: toMillisMaybe(order.createdAt),
-    processingAtMs: toMillisMaybe(order.processingAt),
-    lastAttemptAtMs: toMillisMaybe(recovery.lastAttemptAt),
-    leaseExpiresAtMs: toMillisMaybe(recovery.leaseExpiresAt),
-    rawAttemptCount: recovery.attemptCount,
-    rawLastAttemptAt: recovery.lastAttemptAt,
-    rawPreparedProbeCount: recovery.preparedProbeCount,
-  };
-}
-
 function preparedDeliveryRecoveryCheckCount(state: DeliveryRecoveryState): number {
   const raw = Number(state.rawPreparedProbeCount || 0);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
@@ -113,7 +87,7 @@ function processingDeliveryRecoveryReferenceMs(state: DeliveryRecoveryState): nu
 }
 
 function deliveryRecoveryPriorityMs(order: CommerceDocumentData): number {
-  const state = deliveryRecoveryState(order);
+  const state = parseDeliveryRecoveryState(order);
   if (state.status === 'processing') return processingDeliveryRecoveryReferenceMs(state);
   if (state.status === 'prepared') return preparedDeliveryRecoveryNextCheckMs(order) ?? (state.createdAtMs ?? 0);
   return state.createdAtMs ?? 0;
@@ -167,8 +141,8 @@ export function compareDeliveryRecoveryCandidates(
   left: DeliveryOrderDocument,
   right: DeliveryOrderDocument,
 ): number {
-  const leftStatus = deliveryRecoveryState(left.data).status ?? '';
-  const rightStatus = deliveryRecoveryState(right.data).status ?? '';
+  const leftStatus = parseDeliveryRecoveryState(left.data).status ?? '';
+  const rightStatus = parseDeliveryRecoveryState(right.data).status ?? '';
   if (leftStatus !== rightStatus) {
     if (leftStatus === 'processing') return -1;
     if (rightStatus === 'processing') return 1;
@@ -182,7 +156,7 @@ export function deliveryRecoveryEligibility(
   nowMs: number,
   force: boolean,
 ): DeliveryRecoveryEligibility {
-  const recovery = deliveryRecoveryState(order);
+  const recovery = parseDeliveryRecoveryState(order);
   const status = recovery.status ?? 'unknown';
   if (status === 'processing') {
     if (force) return { eligible: true };
@@ -226,7 +200,7 @@ export function orderResultBase(document: DeliveryOrderDocument): {
   return {
     dropId: identity.identity.dropId,
     deliveryId: identity.identity.deliveryId,
-    statusBefore: deliveryRecoveryState(document.data).status ?? 'unknown',
+    statusBefore: parseDeliveryRecoveryState(document.data).status ?? 'unknown',
   };
 }
 
@@ -260,7 +234,7 @@ export async function acquireDeliveryRecoveryLease(
           result: {
             dropId: '',
             deliveryId: Number(document.key.documentId) || 0,
-            statusBefore: deliveryRecoveryState(document.data).status ?? 'unknown',
+            statusBefore: parseDeliveryRecoveryState(document.data).status ?? 'unknown',
             outcome: 'failed',
             verification: 'delivery_pda',
             message: 'delivery order is missing recovery identifiers',
@@ -291,7 +265,7 @@ export async function acquireDeliveryRecoveryLease(
           },
         };
       }
-      const recovery = deliveryRecoveryState(document.data);
+      const recovery = parseDeliveryRecoveryState(document.data);
       if ((recovery.leaseExpiresAtMs ?? 0) > nowMs) {
         return {
           acquired: false,
@@ -339,7 +313,7 @@ export function cancelDeliveryRecoveryAttempt(
   return runCommerceTransaction(context, async (transaction) => {
     const document = await readDeliveryOrder(context, key, transaction);
     if (!document) return;
-    const recovery = deliveryRecoveryState(document.data);
+    const recovery = parseDeliveryRecoveryState(document.data);
     if (
       recovery.leaseExpiresAtMs === null || recovery.leaseExpiresAtMs < lease.leaseExpiresAtMs ||
       recovery.lastAttemptAtMs !== lease.lastAttemptAtMs ||
@@ -379,7 +353,7 @@ export async function recordPreparedDeliveryRecoveryMiss(
   document: DeliveryOrderDocument,
   nowMs: number,
 ): Promise<number | null> {
-  const probeCount = preparedDeliveryRecoveryCheckCount(deliveryRecoveryState(document.data));
+  const probeCount = preparedDeliveryRecoveryCheckCount(parseDeliveryRecoveryState(document.data));
   const nextProbeCount = probeCount + 1;
   const nextDelayMs = nextPreparedDeliveryRecoveryDelayMs(nextProbeCount);
   const updates: DeliveryRecoveryPatch = {
@@ -409,7 +383,7 @@ async function stopPreparedDeliveryRecoveryChecks(
   nowMs: number,
 ): Promise<void> {
   const probeCount = Math.max(
-    preparedDeliveryRecoveryCheckCount(deliveryRecoveryState(document.data)),
+    preparedDeliveryRecoveryCheckCount(parseDeliveryRecoveryState(document.data)),
     MAX_PREPARED_DELIVERY_RECOVERY_CHECKS,
   );
   await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
@@ -431,7 +405,7 @@ async function deferPreparedDeliveryRecovery(
   document: DeliveryOrderDocument,
   nowMs: number,
 ): Promise<void> {
-  const recovery = deliveryRecoveryState(document.data);
+  const recovery = parseDeliveryRecoveryState(document.data);
   const nextCheckAt = Math.max(
     nowMs + DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS,
     recovery.leaseExpiresAtMs ?? 0,

@@ -1,15 +1,5 @@
-import {
-  normalizeFulfillmentStatus,
-  type FulfillmentStatus,
-} from '../../../../shared/fulfillmentStatus.js';
-import {
-  normalizeOptionalFulfillmentTrackingCode,
-  sanitizeFulfillmentTrackingCode,
-} from '../../../../shared/fulfillmentTracking.js';
-import {
-  isNotificationEmailIdempotencyKey,
-  isNotificationEmailJobId,
-} from '../../../../shared/notificationEmailJob.js';
+import type { FulfillmentStatus } from '../../../../shared/fulfillmentStatus.js';
+import { sanitizeFulfillmentTrackingCode } from '../../../../shared/fulfillmentTracking.js';
 import {
   BUYER_ORDER_SHIPPED_EMAIL_PENDING,
   BUYER_ORDER_SHIPPED_EMAIL_QUEUED,
@@ -26,19 +16,15 @@ import {
 import { runCommerceTransaction, type CommerceTransactionTarget } from './commerceTransactions.js';
 import { ProfileReadError } from './dataAccess.js';
 import { loadDeliveryOrderDocument, type DeliveryOrderDocument } from './deliveryOrderStore.js';
+import {
+  parseDeliveryFulfillmentState,
+  type DeliveryFulfillmentState,
+} from './deliveryOrderReadModel.js';
 
 type ShippedEmailState = typeof BUYER_ORDER_SHIPPED_EMAIL_PENDING | typeof BUYER_ORDER_SHIPPED_EMAIL_QUEUED;
 
-type DeliveryOrderFulfillment = {
-  fulfillmentStatus: FulfillmentStatus | undefined;
-  fulfillmentTrackingCode: string | undefined;
-  buyerOrderShippedEmailState: ShippedEmailState | undefined;
-  buyerOrderShippedEmailJobId: string | undefined;
-  buyerOrderShippedEmailIdempotencyKey: string | undefined;
-};
-
 type DeliveryOrderFulfillmentDocument = DeliveryOrderDocument & {
-  fulfillment: DeliveryOrderFulfillment;
+  fulfillment: DeliveryFulfillmentState;
 };
 
 export type DeliveryOrderFulfillmentResponse = {
@@ -72,23 +58,9 @@ async function loadDeliveryOrderFulfillment(
   deliveryId: number,
 ): Promise<DeliveryOrderFulfillmentDocument> {
   const record = await loadDeliveryOrderDocument({ repository: reader }, dropId, deliveryId);
-  const fields = record.data;
-  const emailState = fields.buyerOrderShippedEmailState;
   return {
     ...record,
-    fulfillment: {
-      fulfillmentStatus: normalizeFulfillmentStatus(fields.fulfillmentStatus),
-      fulfillmentTrackingCode: normalizeOptionalFulfillmentTrackingCode(fields.fulfillmentTrackingCode),
-      buyerOrderShippedEmailState: emailState === BUYER_ORDER_SHIPPED_EMAIL_PENDING || emailState === BUYER_ORDER_SHIPPED_EMAIL_QUEUED
-        ? emailState
-        : undefined,
-      buyerOrderShippedEmailJobId: isNotificationEmailJobId(fields.buyerOrderShippedEmailJobId)
-        ? fields.buyerOrderShippedEmailJobId
-        : undefined,
-      buyerOrderShippedEmailIdempotencyKey: isNotificationEmailIdempotencyKey(fields.buyerOrderShippedEmailIdempotencyKey)
-        ? fields.buyerOrderShippedEmailIdempotencyKey
-        : undefined,
-    },
+    fulfillment: parseDeliveryFulfillmentState(record.data),
   };
 }
 

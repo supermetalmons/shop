@@ -1,5 +1,5 @@
+import { parseDeliveryOrderShipStation, type DeliveryOrderShipStation } from '../deliveryOrderReadModel.js';
 import {
-  shipStationState,
   type ShipStationRateMutationExpectation,
   rejectIrlShipStationOrder,
   requireShipStationShipmentId,
@@ -32,7 +32,6 @@ import {
 } from '../../../../../shared/shipstationRates.js';
 import {
   normalizeShipStationPackage,
-  parseShipStationPackage,
   SHIPSTATION_PACKAGE_RANGE_MESSAGE,
   type ShipStationPackageInput,
 } from '../../../../../shared/shipstationPackage.js';
@@ -43,9 +42,6 @@ import {
 } from '../dataAccess.js';
 import { loadDeliveryOrderDocument } from '../deliveryOrderStore.js';
 import type { CommerceWriteCommon } from '../profileWriteCommerce.js';
-import {
-  optionalString,
-} from '../profileWriteRates.js';
 import {
   shipStationRatesSchema,
   supportedDropId,
@@ -92,40 +88,38 @@ export async function shipStationRateInputHash(value: unknown): Promise<string> 
 }
 
 function storedPendingShipStationRateRequest(
-  value: unknown,
+  value: DeliveryOrderShipStation['rateRequest'],
   shipmentId: string,
   parcel: ShipStationPackageInput,
   inputHash: string,
   nowMs: number,
 ): PendingShipStationRateRequest | undefined {
-  if (!isRecord(value)) return undefined;
-  const requestId = optionalString(value.requestId);
-  const storedShipmentId = optionalString(value.shipmentId);
-  const storedPackage = parseShipStationPackage(value.package);
-  const requestedAt = typeof value.requestedAt === 'number' ? value.requestedAt : 0;
+  const requestId = value.requestId;
+  const storedShipmentId = value.shipmentId;
+  const storedPackage = value.package;
+  const requestedAt = value.requestedAt ?? 0;
   if (
     !requestId ||
     storedShipmentId !== shipmentId ||
     !storedPackage ||
     !requestedAt ||
-    optionalString(value.inputHash) !== inputHash ||
+    value.inputHash !== inputHash ||
     nowMs - requestedAt >= SHIPSTATION_RATE_REQUEST_TTL_MS ||
     storedPackage.length !== parcel.length ||
     storedPackage.width !== parcel.width ||
     storedPackage.height !== parcel.height ||
     storedPackage.weight !== parcel.weight
   ) return undefined;
-  const createdAt = optionalString(value.createdAt);
+  const createdAt = value.createdAt;
   return { requestId, ...(createdAt ? { createdAt } : {}) };
 }
 
 function orderShipStationPackage(order: Record<string, unknown>): ShipStationPackageInput | undefined {
-  return parseShipStationPackage(shipStationState(order).package) ?? undefined;
+  return parseDeliveryOrderShipStation(order).package;
 }
 
 function orderShipStationPackageCount(order: Record<string, unknown>): number {
-  const packageCount = Math.floor(Number(shipStationState(order).packageCount) || 0);
-  return Math.max(0, packageCount);
+  return parseDeliveryOrderShipStation(order).packageCount;
 }
 
 export async function pauseForRatePoll(signal: AbortSignal, delayMs: number): Promise<void> {
@@ -278,8 +272,7 @@ async function getFulfillmentShipStationRates(
     if (requireShipStationShipmentId(order) !== shipmentId) {
       throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
     }
-    const purchase = shipStationState(order).labelPurchase;
-    const purchaseStatus = isRecord(purchase) ? optionalString(purchase.status) : undefined;
+    const purchaseStatus = parseDeliveryOrderShipStation(order).labelPurchase.status;
     if (purchaseStatus === 'purchasing' || purchaseStatus === 'unknown') {
       return {
         deliveryId: body.deliveryId,
@@ -422,7 +415,7 @@ async function getFulfillmentShipStationRates(
     const pendingRateRequest = repairedShipment
       ? undefined
       : storedPendingShipStationRateRequest(
-          shipStationState(claimedOrder).rateRequest,
+          parseDeliveryOrderShipStation(claimedOrder).rateRequest,
           shipmentId,
           storedPackage,
           inputHash,

@@ -42,6 +42,7 @@ test('delivery fulfillment updates validate legacy fields and reject missing ord
       buyerOrderShippedEmailState: { pending: true },
       buyerOrderShippedEmailJobId: 'invalid',
       buyerOrderShippedEmailIdempotencyKey: [],
+      receiptRecovery: { pendingSubmission: 'invalid' },
       futureField: { preserved: true },
     },
     {

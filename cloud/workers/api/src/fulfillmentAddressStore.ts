@@ -1,15 +1,12 @@
-import {
-  isActiveShipStationLabel,
-  storedFulfillmentShipStationLabel,
-} from '../../../../shared/shipstationLabels.js';
+import { isActiveShipStationLabel } from '../../../../shared/shipstationLabels.js';
 import type { FulfillmentOrderAddress, UpdateFulfillmentAddressResponse } from '../../../../shared/contracts.js';
-import { isRecord, ProfileReadError } from './dataAccess.js';
+import { ProfileReadError } from './dataAccess.js';
 import { commerceFieldValue } from './commerceRepository.js';
 import { mutateDeliveryOrder } from './fulfillmentStorePersistence.js';
 import type { FulfillmentDeliveryOrderUpdates } from './fulfillmentDeliveryOrderUpdates.js';
 import type { FulfillmentStoreContext } from './profileWriteCommerce.js';
-import { optionalString } from './profileWriteRates.js';
-import { rejectIrlShipStationOrder, shipStationState, SHIPSTATION_CLAIM_TTL_MS } from './shipstation/state.js';
+import { parseDeliveryAddressSnapshot, parseDeliveryOrderShipStation } from './deliveryOrderReadModel.js';
+import { rejectIrlShipStationOrder, SHIPSTATION_CLAIM_TTL_MS } from './shipstation/state.js';
 
 export async function setFulfillmentAddress(args: {
   common: FulfillmentStoreContext;
@@ -26,23 +23,22 @@ export async function setFulfillmentAddress(args: {
     deliveryId: args.deliveryId,
     build: ({ data: order }) => {
       rejectIrlShipStationOrder(order);
-      const shipstation = shipStationState(order);
-      if (optionalString(shipstation.shipmentId)) {
+      const shipstation = parseDeliveryOrderShipStation(order);
+      if (shipstation.shipmentId) {
         throw new ProfileReadError(
           'failed-precondition',
           409,
           'This order is already in ShipStation. Update its delivery address in ShipStation.',
         );
       }
-      if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(shipstation.label))) {
+      if (isActiveShipStationLabel(shipstation.label)) {
         throw new ProfileReadError(
           'failed-precondition',
           409,
           'This order already has a ShipStation label. Void it before changing the delivery address.',
         );
       }
-      const labelPurchase = isRecord(shipstation.labelPurchase) ? shipstation.labelPurchase : {};
-      const purchaseStatus = typeof labelPurchase.status === 'string' ? labelPurchase.status : '';
+      const purchaseStatus = shipstation.labelPurchase.exactStatus ?? '';
       if (purchaseStatus === 'purchasing' || purchaseStatus === 'unknown') {
         throw new ProfileReadError(
           'aborted',
@@ -50,7 +46,7 @@ export async function setFulfillmentAddress(args: {
           'Check the ShipStation label purchase status before editing this address.',
         );
       }
-      const shipmentClaimedAt = typeof shipstation.claimedAt === 'number' ? shipstation.claimedAt : 0;
+      const shipmentClaimedAt = shipstation.claimedAt ?? 0;
       if (shipmentClaimedAt && args.common.nowMs - shipmentClaimedAt < SHIPSTATION_CLAIM_TTL_MS) {
         throw new ProfileReadError(
           'aborted',
@@ -58,7 +54,7 @@ export async function setFulfillmentAddress(args: {
           'This order is being added to ShipStation. Try editing the address again in a moment.',
         );
       }
-      const ratesClaimedAt = typeof shipstation.ratesClaimedAt === 'number' ? shipstation.ratesClaimedAt : 0;
+      const ratesClaimedAt = shipstation.ratesClaimedAt ?? 0;
       if (ratesClaimedAt && args.common.nowMs - ratesClaimedAt < SHIPSTATION_CLAIM_TTL_MS) {
         throw new ProfileReadError(
           'aborted',
@@ -66,16 +62,11 @@ export async function setFulfillmentAddress(args: {
           'ShipStation rates are being refreshed. Try editing the address again in a moment.',
         );
       }
-      const snapshot = isRecord(order.addressSnapshot) ? order.addressSnapshot : {};
       const address: FulfillmentOrderAddress = {
+        ...parseDeliveryAddressSnapshot(order),
         full: args.full,
         encrypted: args.encrypted,
         hint: args.hint,
-        ...(typeof snapshot.label === 'string' ? { label: snapshot.label } : {}),
-        ...(typeof snapshot.email === 'string' ? { email: snapshot.email } : {}),
-        ...(typeof snapshot.phone === 'string' ? { phone: snapshot.phone } : {}),
-        ...(typeof snapshot.country === 'string' ? { country: snapshot.country } : {}),
-        ...(typeof snapshot.countryCode === 'string' ? { countryCode: snapshot.countryCode } : {}),
       };
       return {
         value: { deliveryId: args.deliveryId, address },

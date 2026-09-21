@@ -1,3 +1,4 @@
+import { parseDeliveryAddressSnapshot } from '../deliveryOrderReadModel.js';
 import {
   claimFulfillmentShipStationShipment,
   transitionFulfillmentShipStationShipmentClaim,
@@ -25,10 +26,7 @@ import type {
   ShipStationAddressPatch,
 } from '../../../../../shared/contracts.js';
 import { isSignalCancellationError } from '../boundedRequest.js';
-import {
-  isRecord,
-  ProfileReadError,
-} from '../dataAccess.js';
+import { ProfileReadError } from '../dataAccess.js';
 import {
   type CommerceWriteCommon,
 } from '../profileWriteCommerce.js';
@@ -185,12 +183,12 @@ async function addFulfillmentOrderToShipStation(
     let shipment = existing;
     let appliedPackage = existing ? shipStationPackageDetails(existing).package : undefined;
     if (!shipment) {
-      const addressSnapshot = isRecord(claim.order.addressSnapshot) ? claim.order.addressSnapshot : {};
+      const addressSnapshot = parseDeliveryAddressSnapshot(claim.order);
       const encrypted = optionalString(addressSnapshot.encrypted) ?? '';
       const full = encrypted ? decryptFulfillmentAddress(encrypted, addressSecret) : null;
       const parsed = parseShipStationShipTo(
         full,
-        typeof addressSnapshot.countryCode === 'string' ? addressSnapshot.countryCode : undefined,
+        addressSnapshot.countryCode,
       );
       if (!parsed.ok || !parsed.shipTo) {
         const reason = parsed.reason || 'Could not read the delivery address';
