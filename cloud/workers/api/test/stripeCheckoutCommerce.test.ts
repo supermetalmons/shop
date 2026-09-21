@@ -19,10 +19,18 @@ import { StripeCheckoutFulfillmentError } from '../src/stripeCheckout/errors.ts'
 import { createStripeCheckoutIdentity } from '../../../../shared/checkoutIdentity.ts';
 import { markStripeCheckoutFulfillmentFulfilled } from '../src/stripeCheckout/service.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
+import {
+  markStripeCheckoutReenqueued,
+  recordStripeCheckoutReconciliationFailure,
+} from '../src/stripeCheckout/sessionStore.ts';
 
 if (false) {
   const transaction = { update: async () => {} };
   const key = commerceKeys.stripeCheckout('drop', 'session');
+  // @ts-expect-error Reconciliation timestamps must not accept strings.
+  void updateStripeCheckout(transaction, key, { fulfillmentQueueReenqueuedAt: 'today' });
+  // @ts-expect-error Reconciliation failures require a string name.
+  void updateStripeCheckout(transaction, key, { lastFulfillmentReconciliationError: { name: 1 } });
   // @ts-expect-error Checkout mutations must not accept delivery-order keys.
   void updateStripeCheckout(transaction, commerceKeys.deliveryOrder('drop', '1'), { status: 'fulfilled' });
   // @ts-expect-error Checkout lifecycle fields must be spelled correctly.
@@ -36,6 +44,39 @@ if (false) {
   // @ts-expect-error Plain JSON cannot impersonate a native delete operation.
   void updateStripeCheckout(transaction, key, { processingAttemptId: { kind: 'delete-field' } });
 }
+
+test('checkout reconciliation transitions retain sparse records and unknown fields', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  const key = commerceKeys.stripeCheckout('drop', 'session');
+  const identity = { dropId: 'drop', sessionId: 'session' };
+  const legacy = { nested: [true, null, 'retained'] };
+  seedCommerceDocument(harness, { key, data: {
+    legacy,
+    fulfillmentQueueReenqueuedAt: 'invalid',
+    lastFulfillmentReconciliationError: { name: false },
+    lastFulfillmentReconciliationErrorAt: 'invalid',
+  } });
+  const initial = await getStripeCheckout(repository, key);
+  assert.equal(initial?.fulfillmentQueueReenqueuedAtMs, undefined);
+  assert.equal(initial?.lastFulfillmentReconciliationError, undefined);
+  assert.equal(initial?.lastFulfillmentReconciliationErrorAtMs, undefined);
+  const nowMs = 1_800_000_000_000;
+  const commerce = { repository, nowMs };
+  await markStripeCheckoutReenqueued(commerce, identity);
+  await recordStripeCheckoutReconciliationFailure({ ...commerce, nowMs: nowMs + 10 }, identity,
+    { name: 'RetryError', message: 'retry later' });
+  const checkout = await getStripeCheckout(repository, key);
+  assert.equal(checkout?.fulfillmentQueueReenqueuedAtMs, nowMs);
+  assert.equal(checkout?.lastFulfillmentReconciliationErrorAtMs, nowMs + 10);
+  assert.deepEqual(checkout?.lastFulfillmentReconciliationError, { name: 'RetryError', message: 'retry later' });
+  assert.deepEqual(checkout?.fields.legacy, legacy);
+  assert.equal(checkout?.fields.updatedAt, nowMs + 10);
+  assert.equal(checkout?.status, '');
+  await assert.rejects(markStripeCheckoutReenqueued(commerce, { ...identity, sessionId: 'missing' }),
+    (error: unknown) => error instanceof CommerceWriteConflict && error.code === 'failed-precondition');
+});
 
 test('typed checkout reads preserve sparse lifecycle records and normalize malformed optional fields', async (context) => {
   const harness = createCommerceD1Harness();

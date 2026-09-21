@@ -1,3 +1,4 @@
+import { STRIPE_API_BASE_URL, STRIPE_API_VERSION, stripeKeysForMode } from './stripeProviderConfig.js';
 import { isCommerceDocumentSegment } from '../../../../shared/commerceDocumentPath.js';
 import {
   isStripeChargebackSessionId,
@@ -73,11 +74,7 @@ function paymentIntentId(value: unknown, livemode: boolean): string | null {
 }
 
 function stripeKeys(env: StripeChargebackEnv, mode: StripeChargebackMode): string[] {
-  const values = mode === 'live'
-    ? [env.STRIPE_SECRET_KEY_LIVE, env.STRIPE_RESTRICTED_KEY_LIVE]
-    : [env.STRIPE_SECRET_KEY, env.STRIPE_RESTRICTED_KEY];
-  const pattern = mode === 'live' ? /^(?:sk|rk)_live_/ : /^(?:sk|rk)_test_/;
-  const keys = Array.from(new Set(values.map((value) => String(value || '').trim()).filter((key) => pattern.test(key))));
+  const keys = stripeKeysForMode(env, mode);
   if (!keys.length) throw new StripeChargebackError('stripe-not-configured', 503, `Stripe ${mode} credentials are not configured.`);
   return keys;
 }
@@ -97,12 +94,12 @@ export async function stripeRead(
       timeoutMessage: 'Stripe chargeback request timed out',
     });
     try {
-      const url = new URL(`https://api.stripe.com/v1/${pathname}`);
+      const url = new URL(`${STRIPE_API_BASE_URL}/${pathname}`);
       for (const [name, value] of Object.entries(query)) url.searchParams.set(name, value);
       const response = await raceWithSignal((options.providerFetch || fetch)(url.toString(), {
         headers: {
           Authorization: `Bearer ${key}`,
-          'Stripe-Version': '2026-07-29.dahlia',
+          'Stripe-Version': STRIPE_API_VERSION,
           ...(form ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
         },
         ...(form ? { method: 'POST', body: form.toString() } : {}),

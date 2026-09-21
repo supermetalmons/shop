@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { D1CommerceRepository, commerceFieldValue, commerceKeys } from '../src/commerceRepository.ts';
-import { loadDeliveryOrderDocument, readDeliveryOrder } from '../src/deliveryOrderStore.ts';
+import {
+  deliveryOrderFulfillmentDocument,
+  deliveryOrderRecoveryDocument,
+  loadDeliveryOrderDocument,
+  readDeliveryOrder,
+  updateDeliveryOrder,
+} from '../src/deliveryOrderStore.ts';
+import type { DeliveryRecoveryPatch, ReadyToShipNotificationUpdates } from '../src/deliveryOrderUpdates.ts';
 import type { FulfillmentDeliveryOrderUpdates } from '../src/fulfillmentDeliveryOrderUpdates.ts';
 import { mutateDeliveryOrder } from '../src/fulfillmentStorePersistence.ts';
 import { ProfileReadError } from '../src/dataAccess.ts';
@@ -13,6 +20,17 @@ const NOW_MS = 1_800_000_000_000;
 const key = commerceKeys.deliveryOrder(DROP_ID, String(DELIVERY_ID));
 
 if (false) {
+  const transaction = { update: async () => {} };
+  // @ts-expect-error Delivery mutations must reject checkout keys.
+  void updateDeliveryOrder(transaction, commerceKeys.stripeCheckout(DROP_ID, 'session'), {});
+  // @ts-expect-error Delivery operational fields must be spelled correctly.
+  void updateDeliveryOrder(transaction, key, { buyerOrderShippedEmailJobID: 'job' });
+  // @ts-expect-error A recovery lease must use a native timestamp transform.
+  void ({ 'receiptRecovery.leaseExpiresAt': 'tomorrow' } satisfies DeliveryRecoveryPatch);
+  // @ts-expect-error Notification state must be supported.
+  void ({ buyerOrderReceivedEmailState: 'sent' } satisfies ReadyToShipNotificationUpdates);
+  // @ts-expect-error Notification attempts must be numeric.
+  void ({ readyToShipNotificationPublishAttemptCount: '1' } satisfies ReadyToShipNotificationUpdates);
   const common = { repository: { get: async () => null }, signal: new AbortController().signal };
   // @ts-expect-error Delivery readers must reject checkout keys.
   void readDeliveryOrder(common, commerceKeys.stripeCheckout(DROP_ID, 'session'));
@@ -35,6 +53,40 @@ if (false) {
     'shipstation.claimedAt': commerceFieldValue.delete(),
   } satisfies FulfillmentDeliveryOrderUpdates);
 }
+
+test('delivery operational views preserve the envelope and raw legacy fields without extra reads', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  const data = {
+    status: 'processing',
+    fulfillmentStatus: 'Shipped',
+    fulfillmentTrackingCode: '  TRACKING  ',
+    receiptRecovery: { attemptCount: '2', lastAttemptAt: NOW_MS, legacy: true },
+    shipstation: { package: 'malformed but unrelated' },
+    legacy: { retained: [true, null] },
+  };
+  seedCommerceDocument(harness, { key, data });
+  const repository = new D1CommerceRepository(harness.db);
+  const document = await loadDeliveryOrderDocument({ repository }, DROP_ID, DELIVERY_ID);
+  const fulfillment = deliveryOrderFulfillmentDocument(document);
+  const recovery = deliveryOrderRecoveryDocument(document);
+  assert.equal(fulfillment.data, document.data);
+  assert.equal(recovery.data, document.data);
+  assert.equal(fulfillment.version, document.version);
+  assert.equal(recovery.updateTime, document.updateTime);
+  assert.equal(fulfillment.fulfillment.fulfillmentTrackingCode, 'TRACKING');
+  assert.equal(recovery.recovery.rawAttemptCount, '2');
+  assert.equal(recovery.recovery.lastAttemptAtMs, NOW_MS);
+  assert.deepEqual(document.data, data);
+  await repository.run(NOW_MS, (unit) => updateDeliveryOrder(unit, key, {
+    buyerOrderShippedEmailState: 'pending',
+    'receiptRecovery.leaseExpiresAt': commerceFieldValue.timestamp(Math.floor(NOW_MS / 1000), 0),
+  }));
+  const updated = await repository.get(key);
+  assert.deepEqual(updated?.data.legacy, data.legacy);
+  assert.deepEqual(updated?.data.shipstation, data.shipstation);
+  assert.deepEqual(updated?.data.receiptRecovery, { ...data.receiptRecovery, leaseExpiresAt: NOW_MS });
+});
 
 test('required delivery reads and no-op fulfillment mutations preserve the full canonical record', async (context) => {
   const harness = createCommerceD1Harness();

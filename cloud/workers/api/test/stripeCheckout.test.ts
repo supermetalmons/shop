@@ -1,3 +1,4 @@
+import { stripeKeysForMode as stripeKeys, STRIPE_API_VERSION } from '../src/stripeProviderConfig.ts';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createCommerceD1 } from './commerceD1Harness.ts';
@@ -17,7 +18,6 @@ import {
 import {
   handleStripeCheckoutSession,
   requireFulfillmentPrerequisites,
-  stripeKeys,
 } from '../src/stripeCheckout.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { runCommerceTransaction } from '../src/commerceTransactions.ts';
@@ -378,6 +378,7 @@ test('checkout Stripe provider uses the injected fetch with a stable idempotency
       providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
         providerCalls += 1;
         assert.equal(new URL(String(input)).hostname, 'api.stripe.com');
+        assert.equal(new Headers(init?.headers).get('Stripe-Version'), STRIPE_API_VERSION);
         stripeSignal = init?.signal;
         idempotencyKey = new Headers(init?.headers).get('idempotency-key') || '';
         await new Promise((resolve) => setTimeout(resolve, 5));

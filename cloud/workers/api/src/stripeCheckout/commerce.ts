@@ -14,6 +14,7 @@ import {
   type CommerceJsonValue,
   type CommerceUpdateValue,
 } from '../commerceRepositoryTypes.js';
+import { isRecord } from '../dataAccess.js';
 import { toMillisMaybe } from '../time.js';
 import {
   STRIPE_CHECKOUT_STATUS,
@@ -29,6 +30,8 @@ export type StripeCheckoutCommerceContext = {
   signal?: AbortSignal;
 };
 
+export type StripeReconciliationFailure = { name: string; message?: string };
+
 export type StripeCheckoutRecord = {
   key: CommerceDocumentKey<'stripe_checkout'>;
   fields: CommerceDocumentData;
@@ -36,6 +39,9 @@ export type StripeCheckoutRecord = {
   processingAttemptId: string;
   processingStartedAtMs: number | undefined;
   processingLeaseExpiresAtMs: number | undefined;
+  fulfillmentQueueReenqueuedAtMs: number | undefined;
+  lastFulfillmentReconciliationError: StripeReconciliationFailure | undefined;
+  lastFulfillmentReconciliationErrorAtMs: number | undefined;
 };
 
 export type ValidatedStripeCheckoutRecord = StripeCheckoutDocumentData & {
@@ -70,6 +76,9 @@ export type StripeCheckoutUpdate = StripeTerminalNotificationFields & {
   metadataIds?: number[];
   quantity?: number;
   receiptTx?: string | null;
+  fulfillmentQueueReenqueuedAt?: TimestampWrite;
+  lastFulfillmentReconciliationError?: StripeReconciliationFailure;
+  lastFulfillmentReconciliationErrorAt?: TimestampWrite;
   updatedAt?: TimestampWrite;
 };
 
@@ -83,6 +92,7 @@ export function stripeCheckoutRecord(
     record.key.dropId !== key.dropId || record.key.documentId !== key.documentId
   ) throw new CommerceRepositoryError('unavailable', 'Invalid Stripe checkout document identity.');
   const fields = record.data;
+  const failure = fields.lastFulfillmentReconciliationError;
   return {
     key,
     fields,
@@ -90,6 +100,11 @@ export function stripeCheckoutRecord(
     processingAttemptId: typeof fields.processingAttemptId === 'string' ? fields.processingAttemptId : '',
     processingStartedAtMs: toMillisMaybe(fields.processingStartedAt),
     processingLeaseExpiresAtMs: toMillisMaybe(fields.processingLeaseExpiresAt),
+    fulfillmentQueueReenqueuedAtMs: toMillisMaybe(fields.fulfillmentQueueReenqueuedAt),
+    lastFulfillmentReconciliationError: isRecord(failure) && typeof failure.name === 'string'
+      ? { name: failure.name, ...(typeof failure.message === 'string' ? { message: failure.message } : {}) }
+      : undefined,
+    lastFulfillmentReconciliationErrorAtMs: toMillisMaybe(fields.lastFulfillmentReconciliationErrorAt),
   };
 }
 

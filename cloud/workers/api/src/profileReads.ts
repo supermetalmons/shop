@@ -1,3 +1,4 @@
+import { STRIPE_API_BASE_URL, STRIPE_API_VERSION, stripeKeysForMode } from './stripeProviderConfig.js';
 import {
   deliveryOrderSummarySortAt,
   parseDeliveryOrderSummary,
@@ -112,8 +113,6 @@ const DELIVERY_ORDER_OWNER_SCAN_BATCH_LIMIT = 4;
 const MIN_DELIVERY_ORDER_OWNER_SCAN_CANDIDATES = 2048;
 const DELIVERY_ORDER_OWNER_SCAN_MULTIPLIER = 4;
 const MAX_STRIPE_RESPONSE_BYTES = 512 * 1024;
-const STRIPE_API_BASE_URL = 'https://api.stripe.com/v1';
-const STRIPE_API_VERSION = '2026-07-29.dahlia';
 const FULFILLMENT_ORDER_FIELDS = [
   'deliveryId', 'owner', 'source', 'status', 'createdAt', 'processedAt', 'fulfillmentStatus',
   'fulfillmentTrackingCode', 'fulfillmentUpdatedAt', 'fulfillmentInternalStatus', 'shipstation',
@@ -649,14 +648,6 @@ async function loadFulfillmentOrders(args: {
   return fulfillmentOrdersFromDocuments({ ...args, documents, chargebackSessionIds });
 }
 
-function stripeKeys(env: Partial<Pick<Env, 'STRIPE_SECRET_KEY' | 'STRIPE_RESTRICTED_KEY' | 'STRIPE_SECRET_KEY_LIVE' | 'STRIPE_RESTRICTED_KEY_LIVE'>>, mode: 'test' | 'live'): string[] {
-  const values = mode === 'test'
-    ? [env.STRIPE_SECRET_KEY, env.STRIPE_RESTRICTED_KEY]
-    : [env.STRIPE_SECRET_KEY_LIVE, env.STRIPE_RESTRICTED_KEY_LIVE];
-  const pattern = mode === 'test' ? /^(sk|rk)_test_/ : /^(sk|rk)_live_/;
-  return [...new Set(values.map((value) => String(value || '').trim()).filter((value) => pattern.test(value)))];
-}
-
 async function fetchStripeSession(
   sessionId: string,
   keys: string[],
@@ -704,7 +695,7 @@ async function manualReviewFromDocuments(args: {
   signal: AbortSignal;
 }): Promise<{ checkouts: FulfillmentManualReviewCheckout[] }> {
   const mode = DEPLOYMENT_DROPS[args.dropId]?.solanaCluster === 'mainnet-beta' ? 'live' : 'test';
-  const keys = stripeKeys(args.env, mode);
+  const keys = stripeKeysForMode(args.env, mode);
   const summaries = await Promise.all(args.documents.map(async (document) => {
     const fields = selectedFields(document.data, MANUAL_REVIEW_FIELDS);
     if (!isManualReviewCheckout(fields)) return null;

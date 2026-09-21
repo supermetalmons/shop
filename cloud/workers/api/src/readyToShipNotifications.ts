@@ -1,3 +1,4 @@
+import type { ReadyToShipNotificationUpdates } from './deliveryOrderUpdates.js';
 import {
   buildBuyerVisibleOrderEmailItems,
   buildShipperVisibleOrderEmailItems,
@@ -61,31 +62,26 @@ export type ReadyToShipNotificationStateField =
   | typeof BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD
   | typeof SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD;
 
-type NotificationDeleteField = ReturnType<typeof commerceFieldValue.delete>;
-type NotificationTimestamp = ReturnType<typeof commerceFieldValue.serverTimestamp>;
-type NotificationState =
-  | typeof READY_TO_SHIP_NOTIFICATION_PENDING
-  | typeof READY_TO_SHIP_NOTIFICATION_QUEUED
-  | typeof READY_TO_SHIP_NOTIFICATION_FAILED;
-
-export type ReadyToShipNotificationUpdates = {
-  buyerOrderReceivedEmailState?: NotificationState;
-  shipperReadyToShipEmailState?: NotificationState;
-  buyerOrderReceivedEmailJobId?: string;
-  shipperReadyToShipEmailJobId?: string;
-  buyerOrderReceivedEmailJob?: NotificationEmailJobV1 | NotificationDeleteField;
-  shipperReadyToShipEmailJob?: NotificationEmailJobV1 | NotificationDeleteField;
-  buyerOrderReceivedEmailIdempotencyKey?: string;
-  shipperReadyToShipEmailIdempotencyKey?: string;
-  buyerOrderReceivedEmailQueuedAt?: NotificationTimestamp | NotificationDeleteField;
-  shipperReadyToShipEmailQueuedAt?: NotificationTimestamp | NotificationDeleteField;
-  readyToShipNotificationRetryUntilMs?: number;
-  readyToShipNotificationPublishAttemptCount?: number;
-  readyToShipNotificationPublishClaimId?: string | NotificationDeleteField;
-  readyToShipNotificationPublishClaimExpiresAtMs?: number | NotificationDeleteField;
-  readyToShipNotificationFailedAt?: NotificationTimestamp;
-  readyToShipNotificationLastErrorCode?: string;
+export type ReadyToShipNotificationClaimState = {
+  claimId: string | null;
+  attemptCount: number | null;
+  retryUntilMs: number | null;
+  expiresAtMs: number | null;
 };
+
+function notificationNonNegativeInteger(value: unknown): number | null {
+  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
+}
+
+export function parseReadyToShipNotificationClaim(order: Record<string, unknown>): ReadyToShipNotificationClaimState {
+  const claimId = order[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD];
+  return {
+    claimId: typeof claimId === 'string' && claimId ? claimId : null,
+    attemptCount: notificationNonNegativeInteger(order[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]),
+    retryUntilMs: notificationNonNegativeInteger(order[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]),
+    expiresAtMs: notificationNonNegativeInteger(order[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]),
+  };
+}
 
 type ReadyToShipNotificationMarkerDefinition = {
   kind: ReadyToShipNotificationKind;

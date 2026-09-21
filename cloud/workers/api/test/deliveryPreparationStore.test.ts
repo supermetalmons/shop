@@ -11,7 +11,7 @@ import {
   type PreparedDeliveryCommerceContext,
   type PreparedDeliveryInput,
 } from '../src/deliveryPreparationStore.ts';
-import type { ReadyToShipNotificationUpdates } from '../src/readyToShipNotifications.ts';
+import type { ReadyToShipNotificationUpdates } from '../src/deliveryOrderUpdates.ts';
 import type { DeliveryPackStatusProjectionUpdates } from '../src/deliveryPackStatusOutbox.ts';
 import { createCommerceD1Harness } from './commerceD1Harness.ts';
 

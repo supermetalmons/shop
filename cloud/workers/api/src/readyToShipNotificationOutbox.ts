@@ -1,7 +1,13 @@
+import {
+  deliveryOrderDocument,
+  deliveryOrderKey,
+  readDeliveryOrder,
+  updateDeliveryOrder,
+  type DeliveryOrderKey,
+} from './deliveryOrderStore.js';
+import type { ReadyToShipNotificationUpdates } from './deliveryOrderUpdates.js';
 import { commerceFieldValue, type CommerceDocumentRecord } from './commerceRepository.js';
 import {
-  readCommerceRecord,
-  requireCommerceKey,
   runCommerceTransaction,
   type CommerceRepositoryContext,
 } from './commerceTransactions.js';
@@ -29,10 +35,10 @@ import {
   SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD,
   createReadyToShipNotificationJobs,
   inspectPendingReadyToShipNotifications,
+  parseReadyToShipNotificationClaim,
   isReadyToShipNotificationJob,
   type PendingReadyToShipNotification,
   type ReadyToShipNotificationStateField,
-  type ReadyToShipNotificationUpdates,
 } from './readyToShipNotifications.js';
 
 const READY_NOTIFICATION_FAILED_AT_FIELD = 'readyToShipNotificationFailedAt';
@@ -82,31 +88,29 @@ export function notificationPersistenceContext(context: CommerceRepositoryContex
 
 function notificationOutboxTarget(
   context: CommerceRepositoryContext,
-  documentPath: string,
+  key: DeliveryOrderKey,
 ): NotificationOutboxTarget {
-  const key = requireCommerceKey(documentPath);
-  return { context, key, read: (transaction) => readCommerceRecord(context, key, transaction) };
+  return { context, key, read: (transaction) => readDeliveryOrder(context, key, transaction) };
 }
 
 function inspectNotificationClaim(document: CommerceDocumentRecord) {
-  return {
-    claimId: document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD],
-    state: document.data,
-  };
+  const fields = deliveryOrderDocument(document).data;
+  const claim = parseReadyToShipNotificationClaim(fields);
+  return { claimId: claim.claimId, state: { fields, claim } };
 }
 
 async function markReadyToShipNotificationsQueued(
   context: CommerceRepositoryContext,
-  documentPath: string,
+  key: DeliveryOrderKey,
   claimId: string,
   pending: readonly PendingReadyToShipNotification[],
 ): Promise<string[]> {
   return updateClaimedNotificationOutbox({
-    target: notificationOutboxTarget(context, documentPath),
+    target: notificationOutboxTarget(context, key),
     claimId,
     inspect: inspectNotificationClaim,
     lost: () => [],
-    update: (fields) => {
+    update: ({ fields }) => {
       const matching = pending.filter((marker) => (
         fields[marker.stateField] === READY_TO_SHIP_NOTIFICATION_PENDING &&
         fields[marker.jobIdField] === marker.jobId &&
@@ -132,14 +136,10 @@ type ReadyToShipNotificationClaimResult =
   | { outcome: 'busy' | 'manual-review' | 'none' }
   | { outcome: 'claimed'; claim: ReadyToShipNotificationClaim };
 
-function readyToShipNotificationNonNegativeInteger(value: unknown): number | null {
-  return Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : null;
-}
-
 async function claimReadyToShipNotifications(args: {
   context: CommerceRepositoryContext;
   deliveryId: number;
-  documentPath: string;
+  key: DeliveryOrderKey;
   dropId: string;
   nowMs: () => number;
 }): Promise<ReadyToShipNotificationClaimResult> {
@@ -151,20 +151,12 @@ async function claimReadyToShipNotifications(args: {
         dropId: args.dropId,
       });
       if (!inspection.pending.length) return { result: 'none' };
-      const activeClaimId = document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD];
+      const claim = parseReadyToShipNotificationClaim(document.data);
       return {
         state: inspection.pending,
-        attemptCount: readyToShipNotificationNonNegativeInteger(
-          document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD],
-        ),
-        retryUntilMs: readyToShipNotificationNonNegativeInteger(
-          document.data[READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD],
-        ),
-        activeUntilMs: typeof activeClaimId === 'string' && activeClaimId
-          ? readyToShipNotificationNonNegativeInteger(
-              document.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD],
-            )
-          : null,
+        attemptCount: claim.attemptCount,
+        retryUntilMs: claim.retryUntilMs,
+        activeUntilMs: claim.claimId ? claim.expiresAtMs : null,
       };
     },
     busy: () => 'busy',
@@ -192,7 +184,7 @@ async function claimReadyToShipNotifications(args: {
     }),
   };
   const result = await claimNotificationOutbox({
-    target: notificationOutboxTarget(args.context, args.documentPath),
+    target: notificationOutboxTarget(args.context, args.key),
     adapter,
     nowMs: () => Math.max(0, Math.floor(args.nowMs())),
   });
@@ -201,11 +193,11 @@ async function claimReadyToShipNotifications(args: {
 
 async function releaseReadyToShipNotificationClaim(
   context: CommerceRepositoryContext,
-  documentPath: string,
+  key: DeliveryOrderKey,
   claim: ReadyToShipNotificationClaim,
 ): Promise<boolean> {
   return updateClaimedNotificationOutbox({
-    target: notificationOutboxTarget(context, documentPath),
+    target: notificationOutboxTarget(context, key),
     claimId: claim.claimId,
     inspect: inspectNotificationClaim,
     lost: () => false,
@@ -228,7 +220,7 @@ export async function markPendingReadyToShipNotificationsFailed(
   expectedUpdateTime?: string,
 ): Promise<string[]> {
   return runCommerceTransaction(context, async (transaction) => {
-    const document = await readCommerceRecord(context, requireCommerceKey(documentPath), transaction);
+    const document = await readDeliveryOrder(context, deliveryOrderKey(documentPath), transaction);
     if (!document || (expectedUpdateTime && document.updateTime !== expectedUpdateTime)) return [];
     const stateFields = NOTIFICATION_STATE_FIELDS.filter((fieldPath) => (
       document.data[fieldPath] === READY_TO_SHIP_NOTIFICATION_PENDING &&
@@ -244,14 +236,14 @@ export async function markPendingReadyToShipNotificationsFailed(
       values[NOTIFICATION_JOB_FIELDS[stateField]] = commerceFieldValue.delete();
     }
     clearCompletedNotificationClaim(document.data, values);
-    await transaction.update(document.key, values);
+    await updateDeliveryOrder(transaction, document.key, values);
     return stateFields;
   });
 }
 
 async function persistReadyToShipNotificationJobs(args: {
   context: CommerceRepositoryContext;
-  documentPath: string;
+  key: DeliveryOrderKey;
   claim: ReadyToShipNotificationClaim;
   prepared: readonly { marker: PendingReadyToShipNotification; job: NotificationEmailJobV1 }[];
   nowMs: () => number;
@@ -260,14 +252,14 @@ async function persistReadyToShipNotificationJobs(args: {
     throw new ReadyToShipNotificationEnqueueError('Ready-to-ship notification publication claim changed. Retry later.');
   };
   return updateClaimedNotificationOutbox({
-    target: notificationOutboxTarget(args.context, args.documentPath),
+    target: notificationOutboxTarget(args.context, args.key),
     claimId: args.claim.claimId,
     inspect: inspectNotificationClaim,
     lost: claimChanged,
-    update: (fields) => {
+    update: ({ fields, claim }) => {
       if (
         fields.status !== 'ready_to_ship' ||
-        fields[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD] !== args.claim.expiresAtMs
+        claim.expiresAtMs !== args.claim.expiresAtMs
       ) return claimChanged();
       const nowMs = args.nowMs();
       if (nowMs >= args.claim.expiresAtMs || nowMs >= args.claim.retryUntilMs) {
@@ -310,14 +302,15 @@ export async function publishReadyToShipNotifications(args: {
   nowMs?: () => number;
 }): Promise<boolean> {
   args.context.signal.throwIfAborted();
+  const document = deliveryOrderDocument(args.document);
   const startedAt = performance.now();
   const nowMs = args.nowMs || (() => args.context.nowMs + Math.max(0, Math.floor(performance.now() - startedAt)));
   const expectedIdentity = { deliveryId: args.deliveryId, dropId: args.dropId };
-  let initialDocument = args.document;
-  let initialInspection = inspectPendingReadyToShipNotifications(args.document.data, expectedIdentity);
+  let initialDocument = document;
+  let initialInspection = inspectPendingReadyToShipNotifications(document.data, expectedIdentity);
   let invalidMarkerFinalizationError: unknown;
   if (initialInspection.invalidStateFields.length) {
-    const currentDocument = await readCommerceRecord(args.context, args.document.key);
+    const currentDocument = await readDeliveryOrder(args.context, document.key);
     if (!currentDocument) return false;
     initialDocument = currentDocument;
     initialInspection = inspectPendingReadyToShipNotifications(currentDocument.data, expectedIdentity);
@@ -326,7 +319,7 @@ export async function publishReadyToShipNotifications(args: {
     try {
       await markPendingReadyToShipNotificationsFailed(
         notificationPersistenceContext(args.context),
-        args.document.key.path,
+        document.key.path,
         'invalid-notification-data',
         initialInspection.invalidStateFields,
         initialDocument.updateTime,
@@ -355,7 +348,7 @@ export async function publishReadyToShipNotifications(args: {
   const claimResult = await claimReadyToShipNotifications({
     context: args.context,
     deliveryId: args.deliveryId,
-    documentPath: args.document.key.path,
+    key: document.key,
     dropId: args.dropId,
     nowMs,
   });
@@ -417,7 +410,7 @@ export async function publishReadyToShipNotifications(args: {
       try {
         const stored = await persistReadyToShipNotificationJobs({
           context: args.context,
-          documentPath: args.document.key.path,
+          key: document.key,
           claim,
           prepared,
           nowMs,
@@ -467,12 +460,12 @@ export async function publishReadyToShipNotifications(args: {
       try {
         const finalizedKinds = await markReadyToShipNotificationsQueued(
           persistenceContext,
-          args.document.key.path,
+          document.key,
           claim.claimId,
           pending,
         );
         if (finalizedKinds.length !== pending.length) {
-          const latest = await readCommerceRecord(persistenceContext, args.document.key);
+          const latest = await readDeliveryOrder(persistenceContext, document.key);
           const remaining = pending.filter((marker) => (
             latest?.data[marker.stateField] === READY_TO_SHIP_NOTIFICATION_PENDING &&
             latest.data[marker.jobIdField] === marker.jobId &&
@@ -495,7 +488,7 @@ export async function publishReadyToShipNotifications(args: {
     releaseUnusedClaim: async () => {
       await releaseReadyToShipNotificationClaim(
         notificationPersistenceContext(args.context),
-        args.document.key.path,
+        document.key,
         claim,
       ).catch((releaseError) => {
         console.error({

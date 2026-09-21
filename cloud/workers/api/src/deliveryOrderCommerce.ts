@@ -15,17 +15,15 @@ import {
 } from './commerceRepository.js';
 import { runCommerceTransaction, type CommerceTransactionTarget } from './commerceTransactions.js';
 import { ProfileReadError } from './dataAccess.js';
-import { loadDeliveryOrderDocument, type DeliveryOrderDocument } from './deliveryOrderStore.js';
 import {
-  parseDeliveryFulfillmentState,
-  type DeliveryFulfillmentState,
-} from './deliveryOrderReadModel.js';
+  deliveryOrderFulfillmentDocument,
+  loadDeliveryOrderDocument,
+  updateDeliveryOrder,
+  type DeliveryOrderFulfillmentDocument,
+} from './deliveryOrderStore.js';
+import type { DeliveryOrderFulfillmentUpdates } from './deliveryOrderUpdates.js';
 
 type ShippedEmailState = typeof BUYER_ORDER_SHIPPED_EMAIL_PENDING | typeof BUYER_ORDER_SHIPPED_EMAIL_QUEUED;
-
-type DeliveryOrderFulfillmentDocument = DeliveryOrderDocument & {
-  fulfillment: DeliveryFulfillmentState;
-};
 
 export type DeliveryOrderFulfillmentResponse = {
   buyerOrderShippedEmailState?: ShippedEmailState;
@@ -40,28 +38,13 @@ type DeliveryOrderFulfillmentMutation = {
   response: DeliveryOrderFulfillmentResponse;
 };
 
-type DeliveryOrderFulfillmentUpdates = {
-  dropId?: string;
-  fulfillmentUpdatedBy?: string;
-  fulfillmentStatus?: FulfillmentStatus | ReturnType<typeof commerceFieldValue.delete>;
-  fulfillmentUpdatedAt?: ReturnType<typeof commerceFieldValue.serverTimestamp>;
-  fulfillmentTrackingCode?: string | ReturnType<typeof commerceFieldValue.delete>;
-  buyerOrderShippedEmailState?: ShippedEmailState | ReturnType<typeof commerceFieldValue.delete>;
-  buyerOrderShippedEmailJobId?: string | ReturnType<typeof commerceFieldValue.delete>;
-  buyerOrderShippedEmailIdempotencyKey?: string | ReturnType<typeof commerceFieldValue.delete>;
-  buyerOrderShippedEmailQueuedAt?: ReturnType<typeof commerceFieldValue.delete> | ReturnType<typeof commerceFieldValue.serverTimestamp>;
-};
-
 async function loadDeliveryOrderFulfillment(
   reader: Pick<D1CommerceRepository, 'get'>,
   dropId: string,
   deliveryId: number,
 ): Promise<DeliveryOrderFulfillmentDocument> {
   const record = await loadDeliveryOrderDocument({ repository: reader }, dropId, deliveryId);
-  return {
-    ...record,
-    fulfillment: parseDeliveryFulfillmentState(record.data),
-  };
+  return deliveryOrderFulfillmentDocument(record);
 }
 
 async function withDeliveryOrderFulfillment<T>(
@@ -97,7 +80,7 @@ export function markDeliveryOrderShippedEmailQueued(args: {
       buyerOrderShippedEmailJobId: args.jobId,
       buyerOrderShippedEmailQueuedAt: commerceFieldValue.serverTimestamp(),
     };
-    await unit.update(document.key, updates);
+    await updateDeliveryOrder(unit, document.key, updates);
     return true;
   });
 }
@@ -167,7 +150,7 @@ export function setDeliveryOrderFulfillment(args: {
       delete order.buyerOrderShippedEmailIdempotencyKey;
       delete order.buyerOrderShippedEmailQueuedAt;
     }
-    await unit.update(document.key, updates);
+    await updateDeliveryOrder(unit, document.key, updates);
     return {
       decision,
       order,

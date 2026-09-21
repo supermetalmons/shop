@@ -27,6 +27,13 @@ import {
 } from '../../../../shared/contracts.js';
 import type { StripeCheckoutMode } from '../../../../shared/stripeCheckoutCore.js';
 import {
+  isStripeCredentialError,
+  STRIPE_API_VERSION,
+  stripeApiKeyKindForLog,
+  stripeCredentialErrorSummary,
+  stripeKeysForMode,
+} from './stripeProviderConfig.js';
+import {
   type RequestAuthContext,
   RequestIdentityError,
   verifyRequestIdentity,
@@ -287,26 +294,6 @@ export function requireFulfillmentPrerequisites(env: CheckoutEnv, config: Stripe
   }
 }
 
-export function stripeKeys(env: CheckoutEnv, mode: StripeCheckoutMode): string[] {
-  const candidates = mode === 'test'
-    ? [env.STRIPE_SECRET_KEY, env.STRIPE_RESTRICTED_KEY]
-    : [env.STRIPE_SECRET_KEY_LIVE, env.STRIPE_RESTRICTED_KEY_LIVE];
-  const pattern = mode === 'test' ? /^(sk|rk)_test_/ : /^(sk|rk)_live_/;
-  return Array.from(new Set(candidates.map((value) => String(value || '').trim()).filter((value) => pattern.test(value))));
-}
-
-function stripeKeyKind(key: string): string {
-  return /^(sk|rk)_(test|live)_/.exec(key)?.slice(1).join('_') || 'unknown';
-}
-
-function stripeCredentialError(error: unknown): boolean {
-  if (!isRecord(error)) return false;
-  const type = String(error.type || error.rawType || error.name || '');
-  const raw = isRecord(error.raw) ? error.raw : {};
-  const statusCode = Number(error.statusCode ?? raw.statusCode);
-  return type === 'StripeAuthenticationError' || type === 'StripePermissionError' || statusCode === 401 || statusCode === 403;
-}
-
 function stripeSuccessBodyUncertain(error: unknown, status: number | undefined): boolean {
   const raw = error instanceof Stripe.errors.StripeAPIError && isRecord(error.raw)
     ? error.raw
@@ -325,7 +312,7 @@ async function createStripeProviderSession(
   providerFetch: ProfileProviderFetch,
   signal: AbortSignal,
 ): Promise<StripeCheckoutProviderResponse> {
-  const keys = stripeKeys(env, mode);
+  const keys = stripeKeysForMode(env, mode);
   if (!keys.length) throw new StripeCheckoutSessionError('failed-precondition', `Stripe ${mode} key is not configured.`);
   let providerFailureRacingAbort: unknown;
   let settledProviderStatus: number | undefined;
@@ -362,6 +349,7 @@ async function createStripeProviderSession(
     try {
       if (signal.aborted) throw signal.reason;
       const stripe = new Stripe(key, {
+        apiVersion: STRIPE_API_VERSION,
         httpClient: Stripe.createFetchHttpClient(stripeFetch),
         maxNetworkRetries: 1,
         timeout: 20_000,
@@ -403,7 +391,7 @@ async function createStripeProviderSession(
         throw signal.reason;
       }
       if (error instanceof StripeCheckoutSessionError) throw error;
-      if (!stripeCredentialError(error)) {
+      if (!isStripeCredentialError(error)) {
         const record = isRecord(error) ? error : {};
         const raw = isRecord(record.raw) ? record.raw : {};
         console.warn({
@@ -427,15 +415,10 @@ async function createStripeProviderSession(
       lastCredentialError = error;
     }
   }
-  const errorRecord = isRecord(lastCredentialError) ? lastCredentialError : {};
-  const raw = isRecord(errorRecord.raw) ? errorRecord.raw : {};
   throw new StripeCheckoutSessionError('failed-precondition', `Stripe ${mode} key was rejected by Stripe.`, {
     mode,
-    configuredKeyKinds: keys.map(stripeKeyKind),
-    stripeError: {
-      type: String(errorRecord.type || errorRecord.rawType || errorRecord.name || 'StripeCredentialError'),
-      statusCode: Number(errorRecord.statusCode ?? raw.statusCode) || undefined,
-    },
+    configuredKeyKinds: keys.map(stripeApiKeyKindForLog),
+    stripeError: stripeCredentialErrorSummary(lastCredentialError),
   });
 }
 

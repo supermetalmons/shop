@@ -31,13 +31,13 @@ import {
   type StripeAddressEncryptionResult,
 } from './contract.js';
 import {
-  isStripeApiKeyForMode,
   isStripeCredentialError,
+  selectStripeApiKeys,
   stripeApiKeyKindForLog,
-  stripeClientForKey,
   stripeCredentialErrorSummary,
   type StripeApiMode,
-} from './provider.js';
+} from '../stripeProviderConfig.js';
+import { stripeClientForKey } from './provider.js';
 import type {
   StripeCheckoutManualReviewAddress,
 } from '../../../../../shared/contracts.js';
@@ -379,9 +379,7 @@ export function stripeTestApiKey(apiKeys: readonly string[]): string {
 }
 
 export function stripeApiKeysForMode(apiKeys: readonly string[], mode: StripeApiMode): string[] {
-  const keys = Array.from(
-    new Set(apiKeys.map((value) => String(value || '').trim()).filter((value) => isStripeApiKeyForMode(value, mode))),
-  );
+  const keys = selectStripeApiKeys(apiKeys, mode);
   if (keys.length === 0) throw new StripeCheckoutFulfillmentError('failed-precondition', `Stripe ${mode} key is not configured.`);
   return keys;
 }

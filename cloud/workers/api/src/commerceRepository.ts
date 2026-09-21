@@ -33,7 +33,6 @@ import {
   reportInefficientQuery,
   unavailableCommerce,
   unavailableCommerceData,
-  type CommerceAuthorityControl as AuthorityControl,
 } from './commerceRepositorySupport.js';
 import { CommerceUnitOfWork } from './commerceUnitOfWork.js';
 
@@ -43,7 +42,6 @@ export {
   d1RetryCount,
   loadCommerceAuthorityControl,
 } from './commerceRepositorySupport.js';
-export type CommerceAuthorityControl = AuthorityControl;
 export { CommerceUnitOfWork } from './commerceUnitOfWork.js';
 
 export class D1CommerceRepository {

@@ -1,3 +1,4 @@
+import type { DeliveryRecoveryPatch } from './deliveryOrderUpdates.js';
 import {
   DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS,
   DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS,
@@ -25,6 +26,8 @@ import {
 } from './commerceTransactions.js';
 import {
   deliveryOrderDocument,
+  deliveryOrderRecoveryDocument,
+  updateDeliveryOrder,
   readDeliveryOrder,
   type DeliveryOrderDocument,
   type DeliveryOrderKey,
@@ -44,22 +47,6 @@ const PENDING_READY_NOTIFICATION_QUERY_PAGE_SIZE = 8;
 const DELIVERY_RECOVERY_LEASE_MS = 90_000;
 const MAX_PREPARED_DELIVERY_RECOVERY_CHECKS = DELIVERY_RECOVERY_PREPARED_CHECK_DELAYS_MS.length;
 export const MAX_DELIVERY_RECOVERY_ORDERS_PER_CALL = 2;
-
-type DeleteField = ReturnType<typeof commerceFieldValue.delete>;
-type TimestampWrite = ReturnType<typeof commerceTimestamp>;
-
-type DeliveryRecoveryPatch = {
-  status?: 'prepared_abandoned';
-  preparedRecoveryAbandonedAt?: TimestampWrite;
-  'receiptRecovery.leaseExpiresAt'?: TimestampWrite | DeleteField;
-  'receiptRecovery.lastAttemptAt'?: CommerceJsonValue | TimestampWrite | DeleteField;
-  'receiptRecovery.attemptCount'?: CommerceJsonValue | DeleteField;
-  'receiptRecovery.lastErrorCode'?: string | DeleteField;
-  'receiptRecovery.lastErrorMessage'?: string | DeleteField;
-  'receiptRecovery.preparedProbeCount'?: number;
-  'receiptRecovery.lastPreparedProbeAt'?: TimestampWrite;
-  'receiptRecovery.nextPreparedProbeAt'?: TimestampWrite | DeleteField;
-};
 
 export type DeliveryRecoveryLease = {
   attemptCount: number;
@@ -141,8 +128,8 @@ export function compareDeliveryRecoveryCandidates(
   left: DeliveryOrderDocument,
   right: DeliveryOrderDocument,
 ): number {
-  const leftStatus = parseDeliveryRecoveryState(left.data).status ?? '';
-  const rightStatus = parseDeliveryRecoveryState(right.data).status ?? '';
+  const leftStatus = deliveryOrderRecoveryDocument(left).recovery.status ?? '';
+  const rightStatus = deliveryOrderRecoveryDocument(right).recovery.status ?? '';
   if (leftStatus !== rightStatus) {
     if (leftStatus === 'processing') return -1;
     if (rightStatus === 'processing') return 1;
@@ -200,7 +187,7 @@ export function orderResultBase(document: DeliveryOrderDocument): {
   return {
     dropId: identity.identity.dropId,
     deliveryId: identity.identity.deliveryId,
-    statusBefore: parseDeliveryRecoveryState(document.data).status ?? 'unknown',
+    statusBefore: deliveryOrderRecoveryDocument(document).recovery.status ?? 'unknown',
   };
 }
 
@@ -234,7 +221,7 @@ export async function acquireDeliveryRecoveryLease(
           result: {
             dropId: '',
             deliveryId: Number(document.key.documentId) || 0,
-            statusBefore: parseDeliveryRecoveryState(document.data).status ?? 'unknown',
+            statusBefore: deliveryOrderRecoveryDocument(document).recovery.status ?? 'unknown',
             outcome: 'failed',
             verification: 'delivery_pda',
             message: 'delivery order is missing recovery identifiers',
@@ -265,7 +252,7 @@ export async function acquireDeliveryRecoveryLease(
           },
         };
       }
-      const recovery = parseDeliveryRecoveryState(document.data);
+      const recovery = deliveryOrderRecoveryDocument(document).recovery;
       if ((recovery.leaseExpiresAtMs ?? 0) > nowMs) {
         return {
           acquired: false,
@@ -287,7 +274,7 @@ export async function acquireDeliveryRecoveryLease(
         'receiptRecovery.lastAttemptAt': commerceTimestamp(nowMs),
         'receiptRecovery.attemptCount': attemptCount,
       } satisfies DeliveryRecoveryPatch;
-      await transaction.update(document.key, updates);
+      await updateDeliveryOrder(transaction, document.key, updates);
       return {
         acquired: true,
         lease: {
@@ -313,7 +300,7 @@ export function cancelDeliveryRecoveryAttempt(
   return runCommerceTransaction(context, async (transaction) => {
     const document = await readDeliveryOrder(context, key, transaction);
     if (!document) return;
-    const recovery = parseDeliveryRecoveryState(document.data);
+    const recovery = deliveryOrderRecoveryDocument(document).recovery;
     if (
       recovery.leaseExpiresAtMs === null || recovery.leaseExpiresAtMs < lease.leaseExpiresAtMs ||
       recovery.lastAttemptAtMs !== lease.lastAttemptAtMs ||
@@ -328,7 +315,7 @@ export function cancelDeliveryRecoveryAttempt(
         ? commerceFieldValue.delete()
         : lease.previousAttemptCount,
     } satisfies DeliveryRecoveryPatch;
-    await transaction.update(document.key, updates);
+    await updateDeliveryOrder(transaction, document.key, updates);
   });
 }
 
@@ -344,7 +331,7 @@ export async function finalizeDeliveryRecoveryAttempt(
       'receiptRecovery.lastErrorCode': result.errorCode || commerceFieldValue.delete(),
       'receiptRecovery.lastErrorMessage': result.message || commerceFieldValue.delete(),
     } satisfies DeliveryRecoveryPatch;
-    await transaction.update(key, updates);
+    await updateDeliveryOrder(transaction, key, updates);
   }, { shouldRetry: () => false });
 }
 
@@ -353,7 +340,7 @@ export async function recordPreparedDeliveryRecoveryMiss(
   document: DeliveryOrderDocument,
   nowMs: number,
 ): Promise<number | null> {
-  const probeCount = preparedDeliveryRecoveryCheckCount(parseDeliveryRecoveryState(document.data));
+  const probeCount = preparedDeliveryRecoveryCheckCount(deliveryOrderRecoveryDocument(document).recovery);
   const nextProbeCount = probeCount + 1;
   const nextDelayMs = nextPreparedDeliveryRecoveryDelayMs(nextProbeCount);
   const updates: DeliveryRecoveryPatch = {
@@ -372,7 +359,7 @@ export async function recordPreparedDeliveryRecoveryMiss(
   await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
     const [current] = await transaction.getMany([document.key]);
     if (current?.updateTime !== document.updateTime) throw new CommerceWriteConflict();
-    await transaction.update(document.key, updates);
+    await updateDeliveryOrder(transaction, document.key, updates);
   }, { shouldRetry: () => false });
   return nextDelayMs === null ? null : nowMs + nextDelayMs;
 }
@@ -383,7 +370,7 @@ async function stopPreparedDeliveryRecoveryChecks(
   nowMs: number,
 ): Promise<void> {
   const probeCount = Math.max(
-    preparedDeliveryRecoveryCheckCount(parseDeliveryRecoveryState(document.data)),
+    preparedDeliveryRecoveryCheckCount(deliveryOrderRecoveryDocument(document).recovery),
     MAX_PREPARED_DELIVERY_RECOVERY_CHECKS,
   );
   await runCommerceTransaction({ repository: context.repository, nowMs: context.nowMs }, async (transaction) => {
@@ -396,7 +383,7 @@ async function stopPreparedDeliveryRecoveryChecks(
       'receiptRecovery.lastPreparedProbeAt': commerceTimestamp(nowMs),
       'receiptRecovery.nextPreparedProbeAt': commerceFieldValue.delete(),
     } satisfies DeliveryRecoveryPatch;
-    await transaction.update(document.key, updates);
+    await updateDeliveryOrder(transaction, document.key, updates);
   }, { shouldRetry: () => false });
 }
 
@@ -405,7 +392,7 @@ async function deferPreparedDeliveryRecovery(
   document: DeliveryOrderDocument,
   nowMs: number,
 ): Promise<void> {
-  const recovery = parseDeliveryRecoveryState(document.data);
+  const recovery = deliveryOrderRecoveryDocument(document).recovery;
   const nextCheckAt = Math.max(
     nowMs + DELIVERY_RECOVERY_PROCESSING_RETRY_DELAY_MS,
     recovery.leaseExpiresAtMs ?? 0,
@@ -416,7 +403,7 @@ async function deferPreparedDeliveryRecovery(
     const updates = {
       'receiptRecovery.nextPreparedProbeAt': commerceTimestamp(nextCheckAt),
     } satisfies DeliveryRecoveryPatch;
-    await transaction.update(document.key, updates);
+    await updateDeliveryOrder(transaction, document.key, updates);
   }, { shouldRetry: () => false });
 }
 
@@ -425,9 +412,9 @@ export async function fetchDeliveryRecoveryState(
   ownerWallet: string,
   nowMs: number,
 ): Promise<WalletDeliveryRecoveryState> {
-  const documents = await runDeliveryRecoveryOrderQuery(context, ownerWallet);
-  const processing = documents.filter((document) => document.data.status === 'processing');
-  const prepared = documents.filter((document) => document.data.status === 'prepared');
+  const documents = (await runDeliveryRecoveryOrderQuery(context, ownerWallet)).map(deliveryOrderRecoveryDocument);
+  const processing = documents.filter((document) => document.recovery.status === 'processing');
+  const prepared = documents.filter((document) => document.recovery.status === 'prepared');
   return buildWalletDeliveryRecoveryState({
     remainingProcessing: processing.length,
     nextCheckCandidates: [
@@ -453,7 +440,7 @@ export async function handlePreparedRecoveryFailure(
   nowMs = Date.now(),
 ): Promise<void> {
   const current = await readDeliveryOrder(context, key);
-  if (current?.data.status !== 'prepared') return;
+  if (!current || deliveryOrderRecoveryDocument(current).recovery.status !== 'prepared') return;
   if (outcome === 'missing_delivery') {
     await recordPreparedDeliveryRecoveryMiss(context, current, nowMs);
   } else if (isRetryableRecoveryErrorCode(errorCode)) {

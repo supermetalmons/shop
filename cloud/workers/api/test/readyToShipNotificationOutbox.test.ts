@@ -18,6 +18,7 @@ import {
   READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD as CLAIM_EXPIRY,
   READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD as CLAIM_ID,
   READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD as RETRY_UNTIL,
+  parseReadyToShipNotificationClaim,
 } from '../src/readyToShipNotifications.ts';
 import {
   createCommerceD1Harness,
@@ -105,6 +106,37 @@ function fixture(
 function jobIdentity(job: NotificationEmailJobV1) {
   return { kind: job.kind, jobId: job.jobId, idempotencyKey: job.idempotencyKey };
 }
+
+test('notification claim parsing preserves existing sparse and malformed-field decisions', () => {
+  assert.deepEqual(parseReadyToShipNotificationClaim({}), {
+    claimId: null, attemptCount: null, retryUntilMs: null, expiresAtMs: null,
+  });
+  assert.deepEqual(parseReadyToShipNotificationClaim({
+    [CLAIM_ID]: 'existing-claim', [ATTEMPTS]: 0, [RETRY_UNTIL]: NOW_MS, [CLAIM_EXPIRY]: NOW_MS + 1,
+  }), { claimId: 'existing-claim', attemptCount: 0, retryUntilMs: NOW_MS, expiresAtMs: NOW_MS + 1 });
+  assert.deepEqual(parseReadyToShipNotificationClaim({
+    [CLAIM_ID]: 123, [ATTEMPTS]: '1', [RETRY_UNTIL]: -1, [CLAIM_EXPIRY]: Number.MAX_SAFE_INTEGER + 1,
+  }), { claimId: null, attemptCount: null, retryUntilMs: null, expiresAtMs: null });
+});
+
+test('ready-notification boundaries reject checkout documents without changing their state', async (context) => {
+  const native = fixture(context);
+  const checkoutKey = commerceKeys.stripeCheckout('card_nft_2', 'cs_checkout');
+  seedCommerceDocuments(native.harness, [{ key: checkoutKey, data: order() }]);
+  const checkout = await native.repository.get(checkoutKey);
+  assert.ok(checkout);
+  await assert.rejects(publishReadyToShipNotifications({
+    context: native.commerce,
+    deliveryId: 7,
+    document: checkout,
+    dropId: 'card_nft_2',
+    queue: { sendBatch: async () => assert.fail('invalid document reached queue') },
+  }), /Invalid delivery order document kind/);
+  await assert.rejects(markPendingReadyToShipNotificationsFailed(
+    native.commerce, checkoutKey.path, 'invalid-order',
+  ), /Invalid delivery order document path/);
+  assert.deepEqual(await native.repository.get(checkoutKey), checkout);
+});
 
 test('notification publication reuses each transaction read when claiming, freezing, and finalizing', async (context) => {
   const calls: CommerceD1CallObservation[] = [];

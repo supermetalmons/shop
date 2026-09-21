@@ -15,10 +15,9 @@ import {
   type CommerceDocumentWriteData,
 } from '../commerceRepository.js';
 import { runCommerceTransaction, type CommerceTransactionTarget } from '../commerceTransactions.js';
-import { stripeCheckoutWriteData } from './commerce.js';
+import { stripeCheckoutWriteData, updateStripeCheckout, type StripeReconciliationFailure } from './commerce.js';
 
 type StripeCheckoutIdentity = { dropId: string; sessionId: string };
-type ReconciliationFailure = { name: string; message?: string };
 
 export function createStripeCheckoutDocument(
   commerce: CommerceTransactionTarget,
@@ -77,7 +76,8 @@ export function markStripeCheckoutReenqueued(
   commerce: CommerceTransactionTarget,
   identity: StripeCheckoutIdentity,
 ): Promise<void> {
-  return runCommerceTransaction(commerce, (transaction) => transaction.update(
+  return runCommerceTransaction(commerce, (transaction) => updateStripeCheckout(
+    transaction,
     commerceKeys.stripeCheckout(identity.dropId, identity.sessionId),
     {
       fulfillmentQueueReenqueuedAt: commerceFieldValue.serverTimestamp(),
@@ -89,14 +89,15 @@ export function markStripeCheckoutReenqueued(
 export function recordStripeCheckoutReconciliationFailure(
   commerce: CommerceTransactionTarget,
   identity: StripeCheckoutIdentity,
-  failure: ReconciliationFailure,
+  failure: StripeReconciliationFailure,
 ): Promise<void> {
-  return runCommerceTransaction(commerce, (transaction) => transaction.update(
+  return runCommerceTransaction(commerce, (transaction) => updateStripeCheckout(
+    transaction,
     commerceKeys.stripeCheckout(identity.dropId, identity.sessionId),
-    stripeCheckoutWriteData({
+    {
       lastFulfillmentReconciliationError: failure,
       lastFulfillmentReconciliationErrorAt: commerceFieldValue.serverTimestamp(),
       updatedAt: commerceFieldValue.serverTimestamp(),
-    }),
+    },
   ), { shouldRetry: (error) => error.code === 'aborted' });
 }

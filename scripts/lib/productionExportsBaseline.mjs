@@ -69,7 +69,6 @@ const productionExportBaseline = [
   ["cloud/workers/api/src/shipstation/rates.ts","exports","shipStationRateInputHash"],
   ["cloud/workers/api/src/stripeChargebackMaintenance.ts","exports","StripeChargebackMaintenance"],
   ["cloud/workers/api/src/stripeCheckout.ts","exports","requireFulfillmentPrerequisites"],
-  ["cloud/workers/api/src/stripeCheckout.ts","exports","stripeKeys"],
   ["cloud/workers/api/src/stripeCheckout/contract.ts","exports","ACCOUNT_ADMIN_DELIVERY_ORDER"],
   ["cloud/workers/api/src/stripeCheckout/contract.ts","exports","ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE"],
   ["cloud/workers/api/src/stripeCheckout/contract.ts","exports","buildStripeCheckoutDocument"],

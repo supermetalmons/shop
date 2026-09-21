@@ -1,7 +1,7 @@
 import { CommerceWriteConflict } from './commerceRepository.js';
 import { runCommerceTransaction } from './commerceTransactions.js';
 import { ProfileReadError } from './dataAccess.js';
-import { loadDeliveryOrderDocument, type DeliveryOrderDocument } from './deliveryOrderStore.js';
+import { loadDeliveryOrderDocument, updateDeliveryOrder, type DeliveryOrderDocument } from './deliveryOrderStore.js';
 import type { FulfillmentDeliveryOrderUpdates } from './fulfillmentDeliveryOrderUpdates.js';
 import type { FulfillmentStoreContext } from './profileWriteCommerce.js';
 
@@ -22,7 +22,7 @@ export async function mutateDeliveryOrder<T>(args: {
     }, async (unit) => {
       const record = await loadDeliveryOrderDocument({ repository: unit }, args.dropId, args.deliveryId);
       const mutation = args.build(record);
-      if (mutation.updates) await unit.update(record.key, mutation.updates);
+      if (mutation.updates) await updateDeliveryOrder(unit, record.key, mutation.updates);
       return mutation.value;
     });
   } catch (error) {
