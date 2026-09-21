@@ -19,14 +19,13 @@ import {
 import {
   CommerceWriteConflict,
   commerceFieldValue,
-  commerceKeys,
   type CommerceDocumentData,
-  type CommerceDocumentKey,
   type CommerceUnitOfWork,
   type D1CommerceRepository,
 } from './commerceRepository.js';
 import { runCommerceTransaction, type CommerceTransactionTarget } from './commerceTransactions.js';
 import { ProfileReadError } from './dataAccess.js';
+import { loadDeliveryOrderDocument, type DeliveryOrderDocument } from './deliveryOrderStore.js';
 
 type ShippedEmailState = typeof BUYER_ORDER_SHIPPED_EMAIL_PENDING | typeof BUYER_ORDER_SHIPPED_EMAIL_QUEUED;
 
@@ -38,9 +37,7 @@ type DeliveryOrderFulfillment = {
   buyerOrderShippedEmailIdempotencyKey: string | undefined;
 };
 
-type DeliveryOrderFulfillmentDocument = {
-  key: CommerceDocumentKey<'delivery_order'>;
-  fields: CommerceDocumentData;
+type DeliveryOrderFulfillmentDocument = DeliveryOrderDocument & {
   fulfillment: DeliveryOrderFulfillment;
 };
 
@@ -69,19 +66,16 @@ type DeliveryOrderFulfillmentUpdates = {
   buyerOrderShippedEmailQueuedAt?: ReturnType<typeof commerceFieldValue.delete> | ReturnType<typeof commerceFieldValue.serverTimestamp>;
 };
 
-async function getDeliveryOrderFulfillment(
+async function loadDeliveryOrderFulfillment(
   reader: Pick<D1CommerceRepository, 'get'>,
   dropId: string,
   deliveryId: number,
-): Promise<DeliveryOrderFulfillmentDocument | null> {
-  const key = commerceKeys.deliveryOrder(dropId, String(deliveryId));
-  const record = await reader.get(key);
-  if (!record) return null;
+): Promise<DeliveryOrderFulfillmentDocument> {
+  const record = await loadDeliveryOrderDocument({ repository: reader }, dropId, deliveryId);
   const fields = record.data;
   const emailState = fields.buyerOrderShippedEmailState;
   return {
-    key,
-    fields,
+    ...record,
     fulfillment: {
       fulfillmentStatus: normalizeFulfillmentStatus(fields.fulfillmentStatus),
       fulfillmentTrackingCode: normalizeOptionalFulfillmentTrackingCode(fields.fulfillmentTrackingCode),
@@ -104,8 +98,7 @@ async function withDeliveryOrderFulfillment<T>(
 ): Promise<T> {
   try {
     return await runCommerceTransaction(args.common, async (unit) => {
-      const document = await getDeliveryOrderFulfillment(unit, args.dropId, args.deliveryId);
-      if (!document) throw new ProfileReadError('not-found', 404, 'Delivery order not found');
+      const document = await loadDeliveryOrderFulfillment(unit, args.dropId, args.deliveryId);
       return operation(unit, document);
     });
   } catch (error) {
@@ -153,7 +146,7 @@ export function setDeliveryOrderFulfillment(args: {
       ? sanitizeFulfillmentTrackingCode(args.trackingCode)
       : document.fulfillment.fulfillmentTrackingCode;
     const order: CommerceDocumentData = {
-      ...document.fields,
+      ...document.data,
       dropId: args.dropId,
       fulfillmentUpdatedBy: args.wallet,
     };

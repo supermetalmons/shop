@@ -10,19 +10,19 @@ import {
   commerceFieldValue,
   commerceKeys,
   isCommerceDeleteField,
-  type CommerceDocumentData,
-  type CommerceDocumentKey,
-  type CommerceDocumentRecord,
-  type CommerceUnitOfWork,
 } from './commerceRepository.js';
 import {
   commerceTimestamp,
   readCommerceRecord as readDocument,
-  requireCommerceKey,
   runCommerceTransaction,
   type CommerceRepositoryContext,
 } from './commerceTransactions.js';
 import { isRecord } from './dataAccess.js';
+import {
+  readDeliveryOrder,
+  type DeliveryOrderDocument,
+  type DeliveryOrderKey,
+} from './deliveryOrderStore.js';
 import { createDeliveryPackStatusProjectionOutbox } from './deliveryPackStatusOutbox.js';
 import { DeliveryReceiptError, mapProviderError } from './deliveryReceiptErrors.js';
 import type { DeliveryRuntime } from './deliveryReceiptOnchain.js';
@@ -32,9 +32,6 @@ import type { TransactionSubmissionOutcome } from './transactionSubmissionRecove
 
 const DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS = 4 * 60_000;
 const RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD = 'receiptRecovery.pendingSubmission';
-
-export type DeliveryOrderKey = CommerceDocumentKey<'delivery_order'>;
-export type DeliveryOrderDocument = CommerceDocumentRecord<CommerceDocumentData, 'delivery_order'>;
 
 export type PendingReceiptSubmission = {
   signature: string;
@@ -137,26 +134,6 @@ type SettledReceiptSubmissionUpdate = {
   receiptTxs?: ReturnType<typeof commerceFieldValue.arrayUnion>;
   [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: DeletedField;
 };
-
-export function deliveryOrderKey(path: string): DeliveryOrderKey {
-  const key = requireCommerceKey(path);
-  if (key.kind !== 'delivery_order') throw new Error('Invalid delivery order document path.');
-  return { ...key, kind: key.kind };
-}
-
-export function deliveryOrderDocument(record: CommerceDocumentRecord): DeliveryOrderDocument {
-  if (record.key.kind !== 'delivery_order') throw new Error('Invalid delivery order document kind.');
-  return { ...record, key: { ...record.key, kind: record.key.kind } };
-}
-
-export async function readDeliveryOrder(
-  context: CommerceRepositoryContext,
-  key: DeliveryOrderKey,
-  transaction?: CommerceUnitOfWork,
-): Promise<DeliveryOrderDocument | null> {
-  const document = await readDocument(context, key, transaction);
-  return document ? deliveryOrderDocument(document) : null;
-}
 
 function sameNumbers(left: readonly number[], right: readonly number[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);

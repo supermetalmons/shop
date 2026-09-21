@@ -38,10 +38,8 @@ import {
   isRecord,
   ProfileReadError,
 } from '../dataAccess.js';
-import {
-  loadDeliveryOrderDocument,
-  type CommerceWriteCommon,
-} from '../profileWriteCommerce.js';
+import { loadDeliveryOrderDocument } from '../deliveryOrderStore.js';
+import type { CommerceWriteCommon } from '../profileWriteCommerce.js';
 import {
   optionalString,
 } from '../profileWriteRates.js';
@@ -179,7 +177,7 @@ async function getFulfillmentShipStationLabel(
     throw new ShipStationProfileError('failed-precondition', 409, 'ShipStation API key is not configured');
   }
   const initial = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
-  const order = initial.fields;
+  const order = initial.data;
   rejectIrlShipStationOrder(order);
   const shipmentId = requireShipStationShipmentId(order);
   const reconciled = await reconcileFulfillmentShipStationLabel({
@@ -285,7 +283,7 @@ async function recoverAmbiguousFulfillmentShipStationLabelVoid(args: {
     try {
       const current = await loadDeliveryOrderDocument(common, args.dropId, args.body.deliveryId);
       const currentLabel = expectedFulfillmentShipStationLabelForVoid(
-        current.fields,
+        current.data,
         args.shipmentId,
         args.body.labelId,
       );
@@ -339,9 +337,9 @@ async function voidFulfillmentShipStationLabel(
     throw new ShipStationProfileError('failed-precondition', 409, 'ShipStation API key is not configured');
   }
   const initial = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
-  rejectIrlShipStationOrder(initial.fields);
-  const shipmentId = requireShipStationShipmentId(initial.fields);
-  const initialLabel = expectedFulfillmentShipStationLabelForVoid(initial.fields, shipmentId, body.labelId);
+  rejectIrlShipStationOrder(initial.data);
+  const shipmentId = requireShipStationShipmentId(initial.data);
+  const initialLabel = expectedFulfillmentShipStationLabelForVoid(initial.data, shipmentId, body.labelId);
   if (initialLabel.status === 'voided') {
     return {
       deliveryId: body.deliveryId,
@@ -468,7 +466,7 @@ async function recoverAmbiguousFulfillmentShipStationLabelPurchase(args: {
         deliveryId: args.body.deliveryId,
         dropId: args.dropId,
         expectedPurchaseRequestId: args.body.requestId,
-        order: current.fields,
+        order: current.data,
         refreshInactiveStoredLabel: false,
         shipmentId: args.shipmentId,
         wallet: args.wallet,
@@ -536,14 +534,14 @@ async function purchaseFulfillmentShipStationLabel(
     throw new ShipStationProfileError('failed-precondition', 409, 'ShipStation API key is not configured');
   }
   const initial = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
-  rejectIrlShipStationOrder(initial.fields);
-  const shipmentId = requireShipStationShipmentId(initial.fields);
+  rejectIrlShipStationOrder(initial.data);
+  const shipmentId = requireShipStationShipmentId(initial.data);
   const reconciled = await reconcileFulfillmentShipStationLabel({
     apiKey,
     common,
     deliveryId: body.deliveryId,
     dropId,
-    order: initial.fields,
+    order: initial.data,
     refreshInactiveStoredLabel: false,
     shipmentId,
     wallet,
@@ -614,7 +612,7 @@ async function purchaseFulfillmentShipStationLabel(
       }))[0] ?? null,
       async () => {
         const current = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
-        const currentShipstation = shipStationState(current.fields);
+        const currentShipstation = shipStationState(current.data);
         if (optionalString(currentShipstation.shipmentId) !== shipmentId) {
           throw new ProfileReadError(
             'aborted',

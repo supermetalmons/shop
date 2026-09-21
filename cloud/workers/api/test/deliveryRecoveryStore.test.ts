@@ -13,7 +13,7 @@ import {
 import {
   deliveryOrderKey,
   readDeliveryOrder,
-} from '../src/deliveryReceiptStore.ts';
+} from '../src/deliveryOrderStore.ts';
 import { readCommerceRecord, requireCommerceKey } from '../src/commerceTransactions.ts';
 import { CommerceWriteConflict, D1CommerceRepository, commerceKeys, type CommerceDocumentData } from '../src/commerceRepository.ts';
 import { createCommerceD1Harness, seedCommerceDocument, type CommerceD1CallObservation } from './commerceD1Harness.ts';

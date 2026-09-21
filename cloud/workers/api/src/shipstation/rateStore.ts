@@ -5,8 +5,9 @@ import {
 import type { ShipStationPackageInput } from '../../../../../shared/shipstationPackage.js';
 import type { GetFulfillmentShipStationRatesResponse } from '../../../../../shared/contracts.js';
 import { isRecord, ProfileReadError } from '../dataAccess.js';
-import { commerceFieldValue, type CommerceUpdateValue } from '../commerceRepository.js';
+import { commerceFieldValue, type CommerceDocumentData } from '../commerceRepository.js';
 import { mutateDeliveryOrder } from '../fulfillmentStorePersistence.js';
+import type { FulfillmentDeliveryOrderUpdates } from '../fulfillmentDeliveryOrderUpdates.js';
 import type { FulfillmentStoreContext } from '../profileWriteCommerce.js';
 import { commercePackage, commerceRateQuotes, optionalString } from '../profileWriteRates.js';
 import {
@@ -27,7 +28,7 @@ export async function persistUnsupportedShipStationPackageCount(args: {
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       requireRateMutationState(order, args.expected);
       return {
         value: undefined,
@@ -39,7 +40,7 @@ export async function persistUnsupportedShipStationPackageCount(args: {
           'shipstation.ratesClaimId': commerceFieldValue.delete(),
           'shipstation.ratesClaimedAt': commerceFieldValue.delete(),
           'shipstation.ratesClaimedBy': commerceFieldValue.delete(),
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });
@@ -59,7 +60,7 @@ export async function persistPendingShipStationRateRequest(args: {
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       requireRateMutationState(order, args.expected);
       if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(shipStationState(order).label))) {
         throw new ProfileReadError('failed-precondition', 409, 'This shipment already has a label.');
@@ -73,7 +74,7 @@ export async function persistPendingShipStationRateRequest(args: {
           'shipstation.rateRequest.inputHash': args.inputHash,
           'shipstation.rateRequest.package': commercePackage(args.package),
           'shipstation.rateRequest.requestedAt': commerceFieldValue.serverTimestamp(),
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });
@@ -91,7 +92,7 @@ export async function releaseShipStationRatesClaim(args: {
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       const shipstation = shipStationState(order);
       if (optionalString(shipstation.shipmentId) !== args.shipmentId) return { value: undefined };
       const currentClaimId = optionalString(shipstation.ratesClaimId);
@@ -103,7 +104,7 @@ export async function releaseShipStationRatesClaim(args: {
       if (!currentClaimId && optionalString(shipstation.ratesClaimFenceId) === args.claimId) {
         return { value: undefined };
       }
-      const updates: Record<string, CommerceUpdateValue> = currentClaimId
+      const updates: FulfillmentDeliveryOrderUpdates = currentClaimId
         ? {
             'shipstation.ratesClaimId': commerceFieldValue.delete(),
             'shipstation.ratesClaimedAt': commerceFieldValue.delete(),
@@ -127,12 +128,12 @@ export async function claimShipStationRateRefresh(args: {
   claimId: string;
   wallet: string;
   onWriteAttempt: () => void;
-}): Promise<Record<string, unknown>> {
-  return mutateDeliveryOrder<Record<string, unknown>>({
+}): Promise<CommerceDocumentData> {
+  return mutateDeliveryOrder<CommerceDocumentData>({
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: currentOrder }) => {
+    build: ({ data: currentOrder }) => {
       const currentShipstation = requireRateMutationState(currentOrder, args.expected);
       const currentPurchase = isRecord(currentShipstation.labelPurchase) ? currentShipstation.labelPurchase : {};
       const currentPurchaseStatus = optionalString(currentPurchase.status);
@@ -157,7 +158,7 @@ export async function claimShipStationRateRefresh(args: {
           'shipstation.ratesClaimedBy': args.wallet,
           'shipstation.ratesClaimFenceId': commerceFieldValue.delete(),
           'shipstation.ratesClaimedAt': commerceFieldValue.serverTimestamp(),
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });
@@ -174,14 +175,14 @@ export async function persistShipStationRatePackage(args: {
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: currentOrder }) => {
+    build: ({ data: currentOrder }) => {
       requireRateMutationState(currentOrder, args.expected);
       return {
         value: undefined,
         updates: {
           'shipstation.package': commercePackage(args.package),
           'shipstation.packageCount': 1,
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });
@@ -200,7 +201,7 @@ export async function completeShipStationRateRefresh(args: {
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: currentOrder }) => {
+    build: ({ data: currentOrder }) => {
       requireRateMutationState(currentOrder, args.expected);
       if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(shipStationState(currentOrder).label))) {
         throw new ProfileReadError('failed-precondition', 409, 'This shipment already has a label.');
@@ -217,7 +218,7 @@ export async function completeShipStationRateRefresh(args: {
           'shipstation.ratesClaimedAt': commerceFieldValue.delete(),
           'shipstation.ratesClaimedBy': commerceFieldValue.delete(),
           'shipstation.ratesUpdatedAt': commerceFieldValue.serverTimestamp(),
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });

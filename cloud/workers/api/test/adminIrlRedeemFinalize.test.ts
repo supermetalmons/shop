@@ -254,7 +254,7 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     status: 'reserved',
     payload: { version: 1, dropId: DROP_ID, requestId: REQUEST_ID },
   });
-  let document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), nowMs: 1_700_000_000_000, signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
+  let document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
   assert.equal(document?.data.processingAttemptId, expectedOperationId);
   assert.equal(document?.data.processingLeaseExpiresAt, 1_700_001_800_000);
   assert.equal((document?.data.workflowFinalizeV1 as { version?: unknown }).version, 1);
@@ -272,7 +272,7 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
   };
   const entryStartedAtMs = Date.now();
   assert.deepEqual(await resumeAndReconcileAdminIrlRedeemFinalizeWorkflow(workflowArgs), { status: 'ready' });
-  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), nowMs: 1_700_000_000_000, signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
+  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
   const enteredEffect = (document?.data.workflowFinalizeV1 as { pendingEffect?: {
     kind?: unknown;
     untilMs?: unknown;
@@ -317,7 +317,7 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     staffWallet: OWNER,
     nowMs: 1_700_000_010_000,
   });
-  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), nowMs: 1_700_000_010_000, signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
+  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
   assert.equal(document?.data.processingLeaseExpiresAt, 1_700_001_810_000);
   let replayExecution = document?.data.workflowFinalizeV1 as Record<string, unknown>;
   assert.deepEqual(replayExecution.config, initialExecution.config);
@@ -338,7 +338,7 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     staffWallet: OWNER,
     nowMs: 1_700_000_015_000,
   });
-  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), nowMs: 1_700_000_015_000, signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
+  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
   assert.equal(
     ((document?.data.workflowFinalizeV1 as { pendingEffect?: { kind?: unknown } }).pendingEffect)?.kind,
     'create',
@@ -371,7 +371,7 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     staffWallet: OWNER,
     nowMs: 1_700_000_020_000,
   });
-  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), nowMs: 1_700_000_020_000, signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
+  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
   assert.equal(document?.data.processingLeaseExpiresAt, 1_700_001_820_000);
   replayExecution = document?.data.workflowFinalizeV1 as Record<string, unknown>;
   assert.deepEqual(replayExecution.config, initialExecution.config);
@@ -411,7 +411,7 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     staffWallet: OWNER,
     nowMs: 1_700_000_024_000,
   });
-  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), nowMs: 1_700_000_024_000, signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
+  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
   replayExecution = document?.data.workflowFinalizeV1 as Record<string, unknown>;
   assert.deepEqual(replayExecution.failure, manualFailure);
   assert.equal((replayExecution.pendingEffect as { kind?: unknown }).kind, 'create');
@@ -423,7 +423,7 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     staffWallet: OWNER,
     nowMs: 1_700_000_025_000,
   });
-  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), nowMs: 1_700_000_025_000, signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
+  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
   replayExecution = document?.data.workflowFinalizeV1 as Record<string, unknown>;
   assert.deepEqual(replayExecution.failure, manualFailure);
   assert.equal((replayExecution.pendingEffect as { kind?: unknown }).kind, 'create');
@@ -492,7 +492,7 @@ test('Admin IRL Workflow reserves a deterministic exact-owner lease without a mi
     signal: new AbortController().signal,
   });
   assert.deepEqual(cleaned, { cleared: true });
-  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), nowMs: Date.now(), signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
+  document = await readCommerceRecord({ repository: new D1CommerceRepository(harness.db), signal: new AbortController().signal }, commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID));
   assert.equal(document?.data.status, 'prepared');
   assert.equal(document?.data.processingAttemptId, undefined);
   assert.equal((document?.data.workflowFinalizeV1 as { operationId?: unknown }).operationId, expectedOperationId);

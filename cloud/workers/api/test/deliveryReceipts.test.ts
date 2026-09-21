@@ -25,10 +25,10 @@ import {
 import { IRL_CLAIM_CODE_DIGITS } from '../src/claimCodes.ts';
 import { readCommerceRecord, requireCommerceKey } from '../src/commerceTransactions.ts';
 import {
-  deliveryOrderKey,
   persistPendingReceiptSubmission,
   settlePendingReceiptSubmission,
 } from '../src/deliveryReceiptStore.ts';
+import { deliveryOrderKey } from '../src/deliveryOrderStore.ts';
 import { assignDudesForBox } from '../src/deliveryDudeAssignments.ts';
 import { secureRandomInt } from '../src/deliveryRandom.ts';
 import {

@@ -41,10 +41,8 @@ import {
   isRecord,
   ProfileReadError,
 } from '../dataAccess.js';
-import {
-  loadDeliveryOrderDocument,
-  type CommerceWriteCommon,
-} from '../profileWriteCommerce.js';
+import { loadDeliveryOrderDocument } from '../deliveryOrderStore.js';
+import type { CommerceWriteCommon } from '../profileWriteCommerce.js';
 import {
   optionalString,
 } from '../profileWriteRates.js';
@@ -251,7 +249,7 @@ async function getFulfillmentShipStationRates(
   try {
     const shipFrom = parseShipStationShipFrom(shipFromSecret);
     const initial = await loadDeliveryOrderDocument(common, dropId, body.deliveryId);
-    let order = initial.fields;
+    let order = initial.data;
     rejectIrlShipStationOrder(order);
     shipmentId = requireShipStationShipmentId(order);
     const reconciled = await reconcileFulfillmentShipStationLabel({
@@ -276,7 +274,7 @@ async function getFulfillmentShipStationRates(
         ...(reconciled.downloadUrl ? { labelDownloadUrl: reconciled.downloadUrl } : {}),
       };
     }
-    order = (await loadDeliveryOrderDocument(common, dropId, body.deliveryId)).fields;
+    order = (await loadDeliveryOrderDocument(common, dropId, body.deliveryId)).data;
     if (requireShipStationShipmentId(order) !== shipmentId) {
       throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
     }

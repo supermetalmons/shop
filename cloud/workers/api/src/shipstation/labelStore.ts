@@ -10,12 +10,9 @@ import {
 import { shipStationMoneyMatches } from '../../../../../shared/shipstationRates.js';
 import type { FulfillmentShipStationLabel } from '../../../../../shared/contracts.js';
 import { isRecord, ProfileReadError } from '../dataAccess.js';
-import {
-  commerceFieldValue,
-  type CommerceDocumentData,
-  type CommerceUpdateValue,
-} from '../commerceRepository.js';
+import { commerceFieldValue } from '../commerceRepository.js';
 import { mutateDeliveryOrder } from '../fulfillmentStorePersistence.js';
+import type { FulfillmentDeliveryOrderUpdates } from '../fulfillmentDeliveryOrderUpdates.js';
 import type { FulfillmentStoreContext } from '../profileWriteCommerce.js';
 import { commerceMoney, optionalString, storedShipStationRateQuotes } from '../profileWriteRates.js';
 import {
@@ -36,7 +33,7 @@ type ShipStationLabelPurchaseInput = {
 function labelDocumentFields(
   label: FulfillmentShipStationLabel,
   wallet: string,
-): CommerceDocumentData {
+): NonNullable<FulfillmentDeliveryOrderUpdates['shipstation.label']> {
   if (!label.purchasedAt) throw new ProfileReadError('internal', 500, 'Profile request failed.');
   return {
     labelId: label.labelId,
@@ -80,7 +77,7 @@ export async function persistFulfillmentShipStationLabel(args: {
     common: args.common,
     dropId: args.dropId,
     deliveryId: args.deliveryId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       const shipstation = shipStationState(order);
       if (args.expectedRateMutation) requireRateMutationState(order, args.expectedRateMutation);
       if (optionalString(shipstation.shipmentId) !== label.shipmentId) {
@@ -118,7 +115,7 @@ export async function persistFulfillmentShipStationLabel(args: {
         currentLabel,
         label,
       );
-      const updates: Record<string, CommerceUpdateValue> = {
+      const updates: FulfillmentDeliveryOrderUpdates = {
         dropId: args.dropId,
         'shipstation.label': labelFields,
         'shipstation.rateQuotes': commerceFieldValue.delete(),
@@ -154,7 +151,7 @@ export async function transitionShipStationPurchaseState(args: {
     common: args.common,
     dropId: args.dropId,
     deliveryId: args.deliveryId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       const shipstation = shipStationState(order);
       if (optionalString(shipstation.shipmentId) !== args.expectedShipmentId) {
         throw new ProfileReadError(
@@ -176,7 +173,7 @@ export async function transitionShipStationPurchaseState(args: {
           'shipstation.labelPurchase.status': 'unknown',
           'shipstation.labelPurchase.checkedBy': args.wallet,
           'shipstation.labelPurchase.checkedAt': commerceFieldValue.serverTimestamp(),
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });
@@ -197,7 +194,7 @@ export async function claimFulfillmentShipStationLabelPurchase(args: {
     common: args.common,
     deliveryId: args.body.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       rejectIrlShipStationOrder(order);
       const shipstation = shipStationState(order);
       if (optionalString(shipstation.shipmentId) !== args.shipmentId) {
@@ -250,7 +247,7 @@ export async function claimFulfillmentShipStationLabelPurchase(args: {
           'shipstation.labelPurchase.checkedAt': commerceFieldValue.delete(),
           'shipstation.labelPurchase.checkedBy': commerceFieldValue.delete(),
           'shipstation.labelPurchase.claimedAt': commerceFieldValue.serverTimestamp(),
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });
@@ -269,7 +266,7 @@ export async function transitionFulfillmentShipStationLabelPurchase(args: {
     common: args.common,
     deliveryId: args.body.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       const shipstation = shipStationState(order);
       if (optionalString(shipstation.shipmentId) !== args.shipmentId) {
         throw new ProfileReadError('aborted', 409, 'The ShipStation shipment changed. Refresh the order and try again.');
@@ -291,7 +288,7 @@ export async function transitionFulfillmentShipStationLabelPurchase(args: {
           'shipstation.labelPurchase.lastError': args.message.slice(0, 500),
           'shipstation.labelPurchase.lastErrorBy': args.wallet,
           'shipstation.labelPurchase.lastErrorAt': commerceFieldValue.serverTimestamp(),
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });

@@ -1,12 +1,14 @@
-import { CommerceWriteConflict, commerceKeys, type CommerceUpdateValue } from './commerceRepository.js';
+import { CommerceWriteConflict } from './commerceRepository.js';
 import { runCommerceTransaction } from './commerceTransactions.js';
 import { ProfileReadError } from './dataAccess.js';
-import type { DeliveryOrderDocument, FulfillmentStoreContext } from './profileWriteCommerce.js';
+import { loadDeliveryOrderDocument, type DeliveryOrderDocument } from './deliveryOrderStore.js';
+import type { FulfillmentDeliveryOrderUpdates } from './fulfillmentDeliveryOrderUpdates.js';
+import type { FulfillmentStoreContext } from './profileWriteCommerce.js';
 
 export async function mutateDeliveryOrder<T>(args: {
   build: (document: DeliveryOrderDocument) => {
     value: T;
-    updates?: Record<string, CommerceUpdateValue>;
+    updates?: FulfillmentDeliveryOrderUpdates;
   };
   common: FulfillmentStoreContext;
   deliveryId: number;
@@ -18,11 +20,8 @@ export async function mutateDeliveryOrder<T>(args: {
       repository: args.common.repository,
       signal: args.common.signal,
     }, async (unit) => {
-      const record = await unit.get(
-        commerceKeys.deliveryOrder(args.dropId, String(args.deliveryId)),
-      );
-      if (!record) throw new ProfileReadError('not-found', 404, 'Delivery order not found');
-      const mutation = args.build({ fields: record.data });
+      const record = await loadDeliveryOrderDocument({ repository: unit }, args.dropId, args.deliveryId);
+      const mutation = args.build(record);
       if (mutation.updates) await unit.update(record.key, mutation.updates);
       return mutation.value;
     });

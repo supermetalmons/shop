@@ -193,7 +193,7 @@ test('transactional record read failures retain their cause and unavailable stat
     const transaction = await repository.begin(100);
     context.mock.method(transaction, 'get', async () => { throw cause; });
     await assert.rejects(readCommerceRecord({
-      repository, nowMs: 100, signal,
+      repository, signal,
     }, commerceKeys.claimCode('READ'), transaction), (error: unknown) => {
       assert.ok(error instanceof CommerceRepositoryError);
       assert.equal(error.code, 'unavailable');
@@ -223,7 +223,7 @@ test('transactional record reads preserve typed errors and cancellation identity
     const transaction = await repository.begin(100);
     context.mock.method(transaction, 'get', async () => { throw error; });
     await assert.rejects(readCommerceRecord({
-      repository, nowMs: 100, signal,
+      repository, signal,
     }, commerceKeys.claimCode('READ'), transaction), (caught) => caught === error);
     transaction.rollback();
   }

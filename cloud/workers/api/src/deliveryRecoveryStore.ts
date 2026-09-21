@@ -28,7 +28,7 @@ import {
   readDeliveryOrder,
   type DeliveryOrderDocument,
   type DeliveryOrderKey,
-} from './deliveryReceiptStore.js';
+} from './deliveryOrderStore.js';
 import {
   resolveDeliveryOrderDropId,
   resolveDeliveryOrderIdentity,

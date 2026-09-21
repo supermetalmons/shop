@@ -6,6 +6,7 @@ import type { FulfillmentOrderAddress, UpdateFulfillmentAddressResponse } from '
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import { commerceFieldValue } from './commerceRepository.js';
 import { mutateDeliveryOrder } from './fulfillmentStorePersistence.js';
+import type { FulfillmentDeliveryOrderUpdates } from './fulfillmentDeliveryOrderUpdates.js';
 import type { FulfillmentStoreContext } from './profileWriteCommerce.js';
 import { optionalString } from './profileWriteRates.js';
 import { rejectIrlShipStationOrder, shipStationState, SHIPSTATION_CLAIM_TTL_MS } from './shipstation/state.js';
@@ -23,7 +24,7 @@ export async function setFulfillmentAddress(args: {
     common: args.common,
     dropId: args.dropId,
     deliveryId: args.deliveryId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       rejectIrlShipStationOrder(order);
       const shipstation = shipStationState(order);
       if (optionalString(shipstation.shipmentId)) {
@@ -87,7 +88,7 @@ export async function setFulfillmentAddress(args: {
           'shipstation.ratesClaimId': commerceFieldValue.delete(),
           'shipstation.ratesClaimedAt': commerceFieldValue.delete(),
           'shipstation.ratesClaimedBy': commerceFieldValue.delete(),
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });

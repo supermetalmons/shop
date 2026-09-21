@@ -37,6 +37,11 @@ export type CommerceRepositoryContext = {
   signal: AbortSignal;
 };
 
+export type CommerceReadContext = {
+  repository: Pick<D1CommerceRepository, 'get'>;
+  signal: AbortSignal;
+};
+
 export function requireCommerceKey(path: string): CommerceDocumentKey {
   const key = commerceKeyFromPath(path);
   if (!key) throw new Error('Invalid commerce document path.');
@@ -44,7 +49,7 @@ export function requireCommerceKey(path: string): CommerceDocumentKey {
 }
 
 export async function readCommerceRecord(
-  context: CommerceRepositoryContext,
+  context: CommerceReadContext,
   key: CommerceDocumentKey,
   transaction?: CommerceUnitOfWork,
 ): Promise<CommerceDocumentRecord | null> {

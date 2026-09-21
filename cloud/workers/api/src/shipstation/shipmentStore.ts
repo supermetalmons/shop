@@ -1,14 +1,15 @@
 import type { ShipStationPackageInput } from '../../../../../shared/shipstationPackage.js';
 import { ProfileReadError } from '../dataAccess.js';
-import { commerceFieldValue, type CommerceUpdateValue } from '../commerceRepository.js';
+import { commerceFieldValue, type CommerceDocumentData } from '../commerceRepository.js';
 import { mutateDeliveryOrder } from '../fulfillmentStorePersistence.js';
+import type { FulfillmentDeliveryOrderUpdates } from '../fulfillmentDeliveryOrderUpdates.js';
 import type { FulfillmentStoreContext } from '../profileWriteCommerce.js';
 import { commercePackage, optionalString } from '../profileWriteRates.js';
 import { rejectIrlShipStationOrder, shipStationState, SHIPSTATION_CLAIM_TTL_MS } from './state.js';
 
 type ShipStationShipmentClaim =
   | { alreadyAdded: true; shipmentId: string; addedAt?: number }
-  | { alreadyAdded: false; claimId: string; order: Record<string, unknown> };
+  | { alreadyAdded: false; claimId: string; order: CommerceDocumentData };
 
 export async function claimFulfillmentShipStationShipment(args: {
   claimId: string;
@@ -22,7 +23,7 @@ export async function claimFulfillmentShipStationShipment(args: {
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       rejectIrlShipStationOrder(order);
       const shipstation = shipStationState(order);
       const shipmentId = optionalString(shipstation.shipmentId);
@@ -47,7 +48,7 @@ export async function claimFulfillmentShipStationShipment(args: {
           'shipstation.claimedBy': args.wallet,
           'shipstation.claimFenceId': commerceFieldValue.delete(),
           'shipstation.claimedAt': commerceFieldValue.serverTimestamp(),
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });
@@ -66,12 +67,12 @@ export async function transitionFulfillmentShipStationShipmentClaim(args: {
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       const shipstation = shipStationState(order);
       const currentClaimId = optionalString(shipstation.claimId);
       const currentClaimedBy = optionalString(shipstation.claimedBy);
       if (currentClaimId !== args.claimId || currentClaimedBy !== args.wallet) return { value: undefined };
-      const updates: Record<string, CommerceUpdateValue> = args.retain
+      const updates: FulfillmentDeliveryOrderUpdates = args.retain
         ? {
             'shipstation.claimId': args.claimId,
             'shipstation.claimedBy': args.wallet,
@@ -88,7 +89,10 @@ export async function transitionFulfillmentShipStationShipmentClaim(args: {
           };
       return {
         value: undefined,
-        updates: { ...updates, 'shipstation.lastErrorAt': commerceFieldValue.serverTimestamp() },
+        updates: {
+          ...updates,
+          'shipstation.lastErrorAt': commerceFieldValue.serverTimestamp(),
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });
@@ -109,7 +113,7 @@ export async function persistFulfillmentShipStationShipment(args: {
     common: args.common,
     deliveryId: args.deliveryId,
     dropId: args.dropId,
-    build: ({ fields: order }) => {
+    build: ({ data: order }) => {
       const shipstation = shipStationState(order);
       if (
         optionalString(shipstation.claimId) !== args.claimId ||
@@ -138,7 +142,7 @@ export async function persistFulfillmentShipStationShipment(args: {
           'shipstation.lastError': commerceFieldValue.delete(),
           'shipstation.lastErrorAt': commerceFieldValue.delete(),
           'shipstation.createdAt': commerceFieldValue.serverTimestamp(),
-        },
+        } satisfies FulfillmentDeliveryOrderUpdates,
       };
     },
   });
