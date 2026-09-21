@@ -1,5 +1,4 @@
 import { isCommerceDocumentSegment } from '../../../../shared/commerceDocumentPath.js';
-import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import {
   isStripeChargebackSessionId,
   isStripeDisputeId,
@@ -13,6 +12,10 @@ import { STRIPE_OFFCHAIN_FULFILLMENT_MODE } from '../../../../shared/stripeCheck
 import { createTimedAbortScope, raceWithSignal } from './boundedRequest.js';
 import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.js';
 import { recordStripeChargeback, StripeChargebackStoreError } from './stripeChargebackStore.js';
+import {
+  stripeChargebackLinkedSessionsQuery,
+  stripeChargebackMatchedDocumentsQuery,
+} from './commerceQueries.js';
 
 export type StripeChargebackEnv = Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env,
   'STRIPE_SECRET_KEY' | 'STRIPE_RESTRICTED_KEY' | 'STRIPE_SECRET_KEY_LIVE' | 'STRIPE_RESTRICTED_KEY_LIVE'
@@ -201,13 +204,9 @@ async function stripeSessions(
     if (!page.has_more) break;
     cursor = Array.from(sessions.keys()).at(-1);
   }
-  const linked = await env.COMMERCE_DB.prepare(`SELECT DISTINCT
-      CASE WHEN document_kind = 'stripe_checkout' THEN document_id
-        ELSE json_extract(document_json, '$.stripeCheckoutSessionId') END AS session_id
-    FROM commerce_documents
-    WHERE (document_kind = 'stripe_checkout' OR (document_kind = 'delivery_order' AND source = ?))
-      AND json_extract(document_json, '$.stripePaymentIntentId') = ?`)
-    .bind(STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE, pi).all<{ session_id: unknown }>();
+  const linkedQuery = stripeChargebackLinkedSessionsQuery(pi);
+  const linked = await env.COMMERCE_DB.prepare(linkedQuery.sql)
+    .bind(...linkedQuery.bindings).all<{ session_id: unknown }>();
   for (const row of linked.results) {
     if (!isStripeChargebackSessionId(row.session_id)) throw identityConflict();
     if (row.session_id.startsWith('cs_live_') !== livemode) continue;
@@ -220,12 +219,8 @@ async function stripeSessions(
 }
 
 async function matchedDropIds(db: D1Database, session: StripeSession): Promise<string[]> {
-  const rows = await db.prepare(`SELECT document_path, document_kind, document_id, drop_id, document_json
-    FROM commerce_documents
-    WHERE (document_kind = 'stripe_checkout' AND document_id = ?)
-      OR (document_kind = 'delivery_order' AND source = ?
-        AND json_extract(document_json, '$.stripeCheckoutSessionId') = ?)`)
-    .bind(session.id, STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE, session.id).all<Record<string, unknown>>();
+  const query = stripeChargebackMatchedDocumentsQuery(session.id);
+  const rows = await db.prepare(query.sql).bind(...query.bindings).all<Record<string, unknown>>();
   const drops = new Set<string>();
   for (const row of rows.results) {
     const dropId = row.drop_id;

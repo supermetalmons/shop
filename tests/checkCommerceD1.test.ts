@@ -18,6 +18,8 @@ import {
   manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
   staleStripeFulfillmentsQuery,
+  stripeChargebackLinkedSessionsQuery,
+  stripeChargebackMatchedDocumentsQuery,
 } from '../cloud/workers/api/src/commerceQueries.ts';
 import { renderCommerceQuerySql } from '../scripts/shared/commerceQuerySql.ts';
 
@@ -33,6 +35,7 @@ const migrationNames = [
   '0009_ready_notification_due_index.sql',
   '0010_dude_inventory.sql',
   '0011_stripe_order_disputes.sql',
+  '0012_stripe_identity_lookup_indexes.sql',
 ] as const;
 
 function currentDatabase(seedDocuments = true): DatabaseSync {
@@ -219,6 +222,8 @@ test('Commerce D1 checker accepts the current schema using complete production q
       staleStripeFulfillmentsQuery(1),
       dueReadyNotificationsQuery({ dueAtMs: 1, limit: 8 }),
       dueStripeTerminalNotificationsQuery({ dueAtMs: 1, limit: 20 }),
+      stripeChargebackLinkedSessionsQuery('pi_check'),
+      stripeChargebackMatchedDocumentsQuery('cs_live_check'),
       adminIrlRedeemWorkflowStatusQuery(`airf-v1-${'0'.repeat(64)}`),
     ];
     for (const productionQuery of productionPlans) {
@@ -533,6 +538,65 @@ test('Commerce D1 checker rejects a malformed Stripe terminal-notification index
       () => checkCommerceD1(localQuery(database)),
       /Commerce D1 Stripe terminal-notification index is invalid/,
     );
+  } finally {
+    database.close();
+  }
+});
+
+test('Commerce D1 checker rejects missing, malformed, or unique Stripe identity indexes', () => {
+  for (const name of [
+    'commerce_documents_stripe_payment_intent',
+    'commerce_stripe_checkouts_session_id',
+    'commerce_stripe_delivery_orders_session_id',
+  ]) {
+    const database = currentDatabase(false);
+    try {
+      const originalSql = String(database.prepare(`SELECT sql FROM sqlite_schema WHERE name = ?`).get(name)!.sql);
+      database.exec(`DROP INDEX ${name}`);
+      const expectedError = new RegExp(`Commerce D1 Stripe identity index ${name} is invalid`);
+      assert.throws(() => checkCommerceD1(localQuery(database)), expectedError);
+      database.exec(`CREATE INDEX ${name} ON commerce_documents (document_kind, document_path)`);
+      assert.throws(() => checkCommerceD1(localQuery(database)), expectedError);
+      database.exec(`DROP INDEX ${name}`);
+      database.exec(originalSql.replace('CREATE INDEX', 'CREATE UNIQUE INDEX'));
+      assert.throws(() => checkCommerceD1(localQuery(database)), expectedError);
+    } finally {
+      database.close();
+    }
+  }
+});
+
+test('Commerce D1 checker rejects Stripe identity scans and kind-only searches', () => {
+  const database = currentDatabase();
+  try {
+    const query = localQuery(database);
+    for (const [productionQuery, expectedSearchCount] of [
+      [stripeChargebackLinkedSessionsQuery('pi_check'), 1],
+      [stripeChargebackMatchedDocumentsQuery('cs_live_check'), 2],
+    ] as const) {
+      const sql = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(productionQuery)}`;
+      assert.doesNotMatch(sql, /INDEXED BY/i);
+      const plan = query(sql);
+      const identitySearches = plan.filter((row) =>
+        /SEARCH .*commerce_(?:documents_stripe_payment_intent|stripe_(?:checkouts|delivery_orders)_session_id)/
+          .test(String(row.detail)));
+      assert.equal(identitySearches.length, expectedSearchCount);
+      for (const search of identitySearches) {
+        const detail = String(search.detail);
+        for (const replacement of [
+          'SCAN commerce_documents',
+          detail.replace(/^SEARCH /, 'SCAN '),
+          detail.replace(/\([^)]*\)$/, '(document_kind=?)'),
+          detail.replace(/\([^)]*\)$/, '(source=?)'),
+          'SEARCH commerce_documents USING INDEX commerce_documents_owner (document_kind=?)',
+        ]) {
+          assert.throws(() => checkCommerceD1((requestedSql) => {
+            if (requestedSql !== sql) return query(requestedSql);
+            return plan.map((row) => row === search ? { ...row, detail: replacement } : row);
+          }), /does not search .* by Stripe identity/);
+        }
+      }
+    }
   } finally {
     database.close();
   }

@@ -21,6 +21,8 @@ import {
   manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
   staleStripeFulfillmentsQuery,
+  stripeChargebackLinkedSessionsQuery,
+  stripeChargebackMatchedDocumentsQuery,
   type CommerceSqlQuery,
 } from '../../cloud/workers/api/src/commerceQueries.ts';
 import { renderCommerceQuerySql } from '../shared/commerceQuerySql.ts';
@@ -116,6 +118,17 @@ const STRIPE_TERMINAL_NOTIFICATION_INDEX_SQL = `CREATE INDEX commerce_stripe_ter
     document_kind = 'stripe_checkout' AND
     (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
     json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending'`;
+const STRIPE_IDENTITY_INDEX_SQL: Readonly<Record<string, string>> = Object.freeze({
+  commerce_documents_stripe_payment_intent: `CREATE INDEX commerce_documents_stripe_payment_intent
+    ON commerce_documents (json_extract(document_json, '$.stripePaymentIntentId'))
+    WHERE document_kind IN ('stripe_checkout', 'delivery_order')`,
+  commerce_stripe_checkouts_session_id: `CREATE INDEX commerce_stripe_checkouts_session_id
+    ON commerce_documents (document_id)
+    WHERE document_kind = 'stripe_checkout'`,
+  commerce_stripe_delivery_orders_session_id: `CREATE INDEX commerce_stripe_delivery_orders_session_id
+    ON commerce_documents (source, json_extract(document_json, '$.stripeCheckoutSessionId'))
+    WHERE document_kind = 'delivery_order'`,
+});
 const ADMIN_IRL_WORKFLOW_OPERATION_INDEX_SQL = `CREATE INDEX commerce_admin_irl_redeem_workflow_operation
   ON commerce_documents (
     json_extract(document_json, '$.workflowFinalizeV1.operationId'),
@@ -146,6 +159,17 @@ function requireSearchIndex(plan: Record<string, unknown>[], indexName: string):
   })) fail(`Commerce D1 query plan does not search ${indexName}.`);
 }
 
+function requireIdentitySearchIndex(
+  plan: Record<string, unknown>[],
+  indexName: string,
+  identityConstraint: string,
+): void {
+  if (!plan.some((row) => {
+    const detail = normalizedSql(row.detail);
+    return detail.startsWith('SEARCH ') && detail.includes(`${indexName} (${identityConstraint})`);
+  })) fail(`Commerce D1 query plan does not search ${indexName} by Stripe identity.`);
+}
+
 function requireNoTemporaryBTree(plan: Record<string, unknown>[], operation: string): void {
   if (plan.some((row) => String(row.detail || '').includes('USE TEMP B-TREE'))) {
     fail(`Commerce D1 ${operation} query plan uses a temporary B-tree.`);
@@ -164,7 +188,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 11 ||
+    migrations.length !== 12 ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -175,7 +199,8 @@ export function checkCommerceD1(
     migrations[7].name !== '0008_admin_irl_redeem_workflow_operation.sql' ||
     migrations[8].name !== '0009_ready_notification_due_index.sql' ||
     migrations[9].name !== '0010_dude_inventory.sql' ||
-    migrations[10].name !== '0011_stripe_order_disputes.sql'
+    migrations[10].name !== '0011_stripe_order_disputes.sql' ||
+    migrations[11].name !== '0012_stripe_identity_lookup_indexes.sql'
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
@@ -507,6 +532,15 @@ export function checkCommerceD1(
     normalizedSql(stripeTerminalNotificationIndex[0].sql) !== normalizedSql(STRIPE_TERMINAL_NOTIFICATION_INDEX_SQL)
   ) fail('Commerce D1 Stripe terminal-notification index is invalid.');
 
+  for (const [name, expectedSql] of Object.entries(STRIPE_IDENTITY_INDEX_SQL)) {
+    const index = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
+      WHERE type = 'index' AND name = '${name}'`);
+    if (
+      index.length !== 1 ||
+      sqlSchemaFingerprint(String(index[0].sql || '')) !== sqlSchemaFingerprint(expectedSql)
+    ) fail(`Commerce D1 Stripe identity index ${name} is invalid.`);
+  }
+
   const adminIrlWorkflowOperationIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
     WHERE type = 'index' AND name = 'commerce_admin_irl_redeem_workflow_operation'`);
   if (
@@ -602,6 +636,16 @@ export function checkCommerceD1(
 
   const stripeTerminalNotificationPlan = queryPlan(dueStripeTerminalNotificationsQuery({ dueAtMs: 1, limit: 20 }));
   requireSearchIndex(stripeTerminalNotificationPlan, 'commerce_stripe_terminal_notifications_due');
+
+  const stripeLinkedSessionsPlan = queryPlan(stripeChargebackLinkedSessionsQuery('pi_check'));
+  requireIdentitySearchIndex(stripeLinkedSessionsPlan, 'commerce_documents_stripe_payment_intent', '<expr>=?');
+  const stripeMatchedDocumentsPlan = queryPlan(stripeChargebackMatchedDocumentsQuery('cs_live_check'));
+  requireIdentitySearchIndex(stripeMatchedDocumentsPlan, 'commerce_stripe_checkouts_session_id', 'document_id=?');
+  requireIdentitySearchIndex(
+    stripeMatchedDocumentsPlan,
+    'commerce_stripe_delivery_orders_session_id',
+    'source=? AND <expr>=?',
+  );
 
   const adminIrlWorkflowStatusPlan = queryPlan(adminIrlRedeemWorkflowStatusQuery(`airf-v1-${'0'.repeat(64)}`));
   requireSearchIndex(adminIrlWorkflowStatusPlan, 'commerce_admin_irl_redeem_workflow_operation');

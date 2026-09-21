@@ -2,6 +2,7 @@ import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession
 import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import { READY_NOTIFICATION_DUE_SQL } from '../../../../shared/readyNotificationDueSql.js';
 import { PROFILE_SHIPMENT_STATUSES } from '../../../../shared/deliveryOrderSummary.js';
+import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
 import type { CommerceTimestamp } from './commerceRepositoryTypes.js';
 
 export type CommerceSqlQuery = {
@@ -46,6 +47,30 @@ const PENDING_READY_NOTIFICATION_INDEXES = Object.freeze({
 
 function qualifiedDocumentColumns(alias: string): string {
   return DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
+}
+
+export function stripeChargebackLinkedSessionsQuery(paymentIntentId: string): CommerceSqlQuery {
+  return {
+    sql: `SELECT DISTINCT
+      CASE WHEN document_kind = 'stripe_checkout' THEN document_id
+        ELSE json_extract(document_json, '$.stripeCheckoutSessionId') END AS session_id
+      FROM commerce_documents
+      WHERE document_kind IN ('stripe_checkout', 'delivery_order')
+        AND (document_kind = 'stripe_checkout' OR (document_kind = 'delivery_order' AND source = ?))
+        AND json_extract(document_json, '$.stripePaymentIntentId') = ?`,
+    bindings: [STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE, paymentIntentId],
+  };
+}
+
+export function stripeChargebackMatchedDocumentsQuery(sessionId: string): CommerceSqlQuery {
+  return {
+    sql: `SELECT document_path, document_kind, document_id, drop_id, document_json
+      FROM commerce_documents
+      WHERE (document_kind = 'stripe_checkout' AND document_id = ?)
+        OR (document_kind = 'delivery_order' AND source = ?
+          AND json_extract(document_json, '$.stripeCheckoutSessionId') = ?)`,
+    bindings: [sessionId, STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE, sessionId],
+  };
 }
 
 export function deliveryHistoryQuery(args: Readonly<{ owners: readonly string[] }>): CommerceSqlQuery {

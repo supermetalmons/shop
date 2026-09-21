@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createTestHarness } from 'wrangler';
+import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.ts';
+import {
+  stripeChargebackLinkedSessionsQuery,
+  stripeChargebackMatchedDocumentsQuery,
+} from '../src/commerceQueries.ts';
 import {
   CommerceRepositoryError,
   CommerceWriteConflict,
@@ -168,6 +173,7 @@ test('commerce repository reads and transaction guards run through the real D1 r
       '0009_ready_notification_due_index.sql',
       '0010_dude_inventory.sql',
       '0011_stripe_order_disputes.sql',
+      '0012_stripe_identity_lookup_indexes.sql',
     ]);
     assert.deepEqual(
       await env.COMMERCE_DB.prepare(`SELECT authority_state, revision, documents_revision, paused_at_ms
@@ -707,6 +713,67 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const missingOwnerRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(missingOwnerRowsRead), true);
     assert.equal(missingOwnerRowsRead <= 4, true);
+
+    const indexedSessionId = 'cs_live_indexed';
+    const indexedPaymentIntentId = 'pi_indexed';
+    const indexedCheckoutKey = commerceKeys.stripeCheckout('stripe-indexes', indexedSessionId);
+    const indexedDeliveryKey = commerceKeys.deliveryOrder('stripe-indexes', 'indexed');
+    await env.COMMERCE_DB.batch([
+      insertDocument(env.COMMERCE_DB, indexedCheckoutKey, {
+        stripePaymentIntentId: indexedPaymentIntentId,
+      }),
+      insertDocument(env.COMMERCE_DB, indexedDeliveryKey, {
+        source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
+        stripeCheckoutSessionId: indexedSessionId,
+        stripePaymentIntentId: indexedPaymentIntentId,
+      }),
+    ]);
+    for (let offset = 0; offset < 600; offset += 100) {
+      await env.COMMERCE_DB.batch(Array.from({ length: 100 }, (_, index) => {
+        const id = offset + index;
+        return [
+          insertDocument(env.COMMERCE_DB, commerceKeys.stripeCheckout('stripe-indexes', `cs_live_unrelated_${id}`), {
+            stripePaymentIntentId: `pi_unrelated_${id}`,
+          }),
+          insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('stripe-indexes', `unrelated-${id}`), {
+            source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
+            stripeCheckoutSessionId: `cs_live_unrelated_${id}`,
+            stripePaymentIntentId: `pi_unrelated_${id}`,
+          }),
+        ];
+      }).flat());
+    }
+
+    for (const analyze of [false, true]) {
+      if (analyze) await env.COMMERCE_DB.prepare('ANALYZE commerce_documents').run();
+      for (const missing of [false, true]) {
+        const linkedQuery = stripeChargebackLinkedSessionsQuery(missing ? 'pi_missing_indexed' : indexedPaymentIntentId);
+        const linkedRows = await env.COMMERCE_DB.prepare(linkedQuery.sql).bind(...linkedQuery.bindings)
+          .all<{ session_id: unknown }>();
+        assert.deepEqual(linkedRows.results, missing ? [] : [{ session_id: indexedSessionId }]);
+        assert.ok(Number.isSafeInteger(linkedRows.meta.rows_read));
+        assert.ok(linkedRows.meta.rows_read <= 12, `Linked sessions read ${linkedRows.meta.rows_read} rows (analyzed: ${analyze})`);
+        const linkedPlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${linkedQuery.sql}`)
+          .bind(...linkedQuery.bindings).all<{ detail: string }>();
+        const linkedPlanDetails = linkedPlan.results.map((row) => row.detail).join('\n');
+        assert.match(linkedPlanDetails, /SEARCH commerce_documents USING INDEX commerce_documents_stripe_payment_intent\b/);
+        assert.doesNotMatch(linkedPlanDetails, /SCAN commerce_documents/i);
+
+        const matchedQuery = stripeChargebackMatchedDocumentsQuery(missing ? 'cs_live_missing_indexed' : indexedSessionId);
+        const matchedRows = await env.COMMERCE_DB.prepare(matchedQuery.sql).bind(...matchedQuery.bindings)
+          .all<{ document_path: string }>();
+        assert.deepEqual(matchedRows.results.map((row) => row.document_path).sort(),
+          missing ? [] : [indexedCheckoutKey.path, indexedDeliveryKey.path].sort());
+        assert.ok(Number.isSafeInteger(matchedRows.meta.rows_read));
+        assert.ok(matchedRows.meta.rows_read <= 12, `Matched documents read ${matchedRows.meta.rows_read} rows (analyzed: ${analyze})`);
+        const matchedPlan = await env.COMMERCE_DB.prepare(`EXPLAIN QUERY PLAN ${matchedQuery.sql}`)
+          .bind(...matchedQuery.bindings).all<{ detail: string }>();
+        const matchedPlanDetails = matchedPlan.results.map((row) => row.detail).join('\n');
+        assert.match(matchedPlanDetails, /SEARCH commerce_documents USING INDEX commerce_stripe_checkouts_session_id\b/);
+        assert.match(matchedPlanDetails, /SEARCH commerce_documents USING INDEX commerce_stripe_delivery_orders_session_id\b/);
+        assert.doesNotMatch(matchedPlanDetails, /SCAN commerce_documents/i);
+      }
+    }
 
     await env.COMMERCE_DB.batch([
       env.COMMERCE_DB.prepare(`INSERT INTO commerce_authority_control_lease (

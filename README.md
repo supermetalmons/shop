@@ -445,7 +445,13 @@ explicit initialization, and old allocators cannot be resumed after activation.
 Migration `0011_stripe_order_disputes.sql` adds independent, additive Stripe
 chargeback history. It changes no commerce documents or processing timestamps
 and requires no Commerce pause. Apply it before the chargeback-capable Worker.
-Append `0012_<description>.sql` for the next change.
+Migration `0012_stripe_identity_lookup_indexes.sql` adds non-unique partial
+indexes for Stripe payment-intent and checkout-session lookups. Apply it before
+publishing the updated Worker through `npm run deploy:api`; the deployment check
+verifies the index definitions and selective query plans. It preserves commerce
+documents, revisions, and authority state, requires no Commerce pause or document
+backfill, and remains compatible with the previous Worker.
+Append `0013_<description>.sql` for the next change.
 The Worker preserves the existing commerce API and transaction behavior through
 the D1 document-store adapter.
 

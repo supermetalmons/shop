@@ -180,6 +180,54 @@ test('stored PaymentIntent linkage retrieves the exact session if filtered Strip
   harness.database.close();
 });
 
+test('indexed PaymentIntent linkage rejects missing or malformed stored session IDs without writing history', async (context) => {
+  for (const sessionId of [undefined, null, 42, false, {}, [], 'bad-session']) {
+    const harness = createCommerceD1Harness();
+    context.after(() => harness.database.close());
+    seedCommerceDocument(harness, {
+      key: commerceKeys.deliveryOrder('retired_drop', '42'),
+      data: { source: 'stripe_offchain', stripePaymentIntentId: 'pi_history',
+        ...(sessionId === undefined ? {} : { stripeCheckoutSessionId: sessionId }) },
+    });
+    const calls: string[] = [];
+    await assert.rejects(processStripeDispute(normalizeStripeDispute(rawDispute())!, env(harness),
+      serviceOptions(provider((url) => {
+        calls.push(url.pathname);
+        return list([]);
+      }))), { code: 'chargeback-identity-conflict' });
+    assert.deepEqual(calls, ['/v1/checkout/sessions']);
+    assert.equal(harness.database.prepare('SELECT count(*) AS count FROM stripe_order_disputes').get()?.count, 0);
+  }
+});
+
+test('indexed session matching retains duplicate-drop rejection', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  seedOrder(harness, { delivery: false, dropId: 'first_drop' });
+  seedOrder(harness, { checkout: false, dropId: 'second_drop' });
+  await assert.rejects(processStripeDispute(normalizeStripeDispute(rawDispute())!, env(harness),
+    serviceOptions(provider(() => list([session({ metadata: {} })])))), { code: 'chargeback-identity-conflict' });
+  assert.equal(harness.database.prepare('SELECT count(*) AS count FROM stripe_order_disputes').get()?.count, 0);
+});
+
+test('indexed PaymentIntent linkage skips other-mode sessions and non-Stripe deliveries', async (context) => {
+  const harness = createCommerceD1Harness();
+  context.after(() => harness.database.close());
+  seedOrder(harness, { checkout: false, paymentIntentId: 'pi_history' });
+  seedOrder(harness, { checkout: false, dropId: 'test_drop', sessionId: 'cs_test_history', paymentIntentId: 'pi_history' });
+  seedOrder(harness, { checkout: false, dropId: 'non_stripe_drop', sessionId: 'cs_live_other',
+    paymentIntentId: 'pi_history', source: 'admin_irl_redeem' });
+  const calls: string[] = [];
+  const result = await processStripeDispute(normalizeStripeDispute(rawDispute())!, env(harness),
+    serviceOptions(provider((url) => {
+      calls.push(url.pathname);
+      return url.pathname === '/v1/checkout/sessions' ? list([]) : session();
+    })));
+  assert.equal(result.inserted, 1);
+  assert.deepEqual(calls, ['/v1/checkout/sessions', '/v1/checkout/sessions/cs_live_history']);
+  assert.equal(harness.database.prepare('SELECT count(*) AS count FROM stripe_order_disputes').get()?.count, 1);
+});
+
 test('charge fallback rejects wrong identities, modes, and missing fields rather than treating them as unrelated', async () => {
   const harness = createCommerceD1Harness();
   for (const value of [
