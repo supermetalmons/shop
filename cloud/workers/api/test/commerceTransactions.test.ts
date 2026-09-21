@@ -102,7 +102,7 @@ test('native transactions batch uncached reads and preserve ordered writes to th
     await transaction.set(existing, { status: 'claimed', count: commerceFieldValue.increment(1) }, { merge: true });
   });
 
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 2);
   assert.deepEqual((await repository.get(existing))?.data, { status: 'claimed', count: 3 });
   assert.deepEqual((await repository.get(created))?.data, { status: 'claimed', count: 1 });
   assert.deepEqual((await repository.get(merged))?.data, { status: 'available' });
@@ -417,7 +417,8 @@ test('commerce transaction retries delegate fresh repository runs', async () => 
 });
 
 test('commerce transaction rolls back failed attempts before committing a retry', async () => {
-  const harness = createCommerceD1Harness();
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
   const repository = new D1CommerceRepository(harness.db);
   const key = commerceKeys.claimCode('RETRY');
   let attempts = 0;
@@ -437,5 +438,11 @@ test('commerce transaction rolls back failed attempts before committing a retry'
 
   assert.equal(result, 'committed');
   assert.equal(attempts, 2);
+  assert.equal(calls.length, 3);
+  for (const call of calls.slice(0, 2)) {
+    if (call.method !== 'batch') assert.fail('Expected a fresh startup batch per attempt.');
+    assert.equal(call.statements.length, 3);
+    assert.match(call.statements[0].sql, /FROM commerce_authority_control WHERE singleton = 1/);
+  }
   assert.deepEqual((await repository.get(key))?.data, { attempt: 2 });
 });

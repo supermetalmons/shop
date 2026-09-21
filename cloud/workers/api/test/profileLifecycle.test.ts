@@ -645,11 +645,11 @@ test('profile reconciliation merges multiple session-validated batches and is id
       ) authorityReads += 1;
     },
     observeBatchAfterCommit: ({ statements }) => {
-      if (
-        statements.length !== 2 ||
-        !statements[0].sql.includes('commerce_delivery_owner_revisions') ||
-        !statements[1].sql.includes('commerce_documents_delivery_owner_path')
-      ) return;
+      if (!statements.some(({ sql }) => sql.includes('commerce_documents_delivery_owner_path'))) return;
+      assert.equal(statements.length, 3);
+      assert.match(statements[0].sql, /FROM commerce_authority_control WHERE singleton = 1/);
+      assert.match(statements[1].sql, /commerce_delivery_owner_revisions/);
+      assert.match(statements[2].sql, /commerce_documents_delivery_owner_path/);
       ownerQueryBatches += 1;
       if (ownerQueryBatches === 1) {
         seedCommerceDocument(commerceHarness, {
@@ -714,8 +714,8 @@ test('profile reconciliation merges multiple session-validated batches and is id
   );
   assert.equal(first.response.status, 200);
   assert.deepEqual(await first.response.json(), { mergedStripeDeliveryOrders: 451 });
-  assert.ok(commerceCalls <= 10, `Expected at most 10 D1 calls, received ${commerceCalls}`);
-  assert.equal(authorityReads, 3);
+  assert.ok(commerceCalls <= 7, `Expected at most 7 D1 calls, received ${commerceCalls}`);
+  assert.equal(authorityReads, 0);
   assert.equal(ownerQueryBatches, 3);
   assert.equal(unrelatedInjected, true);
   assert.equal(phantomInjected, true);
@@ -743,6 +743,7 @@ test('profile reconciliation merges multiple session-validated batches and is id
     5,
   );
   authorityReads = 0;
+  commerceCalls = 0;
   const second = await handleProfileLifecycleRequest(
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
     d1Env,
@@ -751,7 +752,8 @@ test('profile reconciliation merges multiple session-validated batches and is id
     d1Dependencies,
   );
   assert.deepEqual(await second.response.json(), { mergedStripeDeliveryOrders: 0 });
-  assert.equal(authorityReads, 1);
+  assert.equal(authorityReads, 0);
+  assert.equal(commerceCalls, 2);
   assert.equal(ownerQueryBatches, 4);
   assert.equal(releases, 2);
   assert.equal(

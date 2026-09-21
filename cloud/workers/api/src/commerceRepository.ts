@@ -24,7 +24,6 @@ import {
 } from './commerceQueries.js';
 import { isTimestampLike, parseRow, publicRecord } from './commerceDocumentCodec.js';
 import {
-  authority,
   authorityStatement,
   deliveryOwner,
   isObject,
@@ -275,8 +274,7 @@ export class D1CommerceRepository {
     if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
       throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce operation timestamp.');
     }
-    const control: CommerceAuthorityControl = await authority(this.db);
-    return new CommerceUnitOfWork(this.db, nowMs, control);
+    return new CommerceUnitOfWork(this.db, nowMs);
   }
 
   async run<T>(nowMs: number, operation: (unit: CommerceUnitOfWork) => Promise<T>): Promise<T> {

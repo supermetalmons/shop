@@ -113,10 +113,15 @@ test('notification publication reuses each transaction read when claiming, freez
 
   assert.equal(await native.publish(), true);
 
-  assert.equal(calls.length, 10);
+  assert.equal(calls.length, 7);
   const transactionReads = calls.filter((call) => call.method === 'batch' &&
     call.statements.some(({ sql }) => /FROM commerce_document_path_revisions\s+WHERE document_path IN \(\?\)/.test(sql)));
   assert.equal(transactionReads.length, 3);
+  for (const call of transactionReads) {
+    if (call.method !== 'batch') assert.fail('Expected a transaction read batch.');
+    assert.equal(call.statements.length, 3);
+    assert.match(call.statements[0].sql, /FROM commerce_authority_control WHERE singleton = 1/);
+  }
   assert.equal((await native.load()).data.buyerOrderReceivedEmailState, 'queued');
 });
 

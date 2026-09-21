@@ -41,7 +41,6 @@ import {
   reportInefficientQuery,
   unavailableCommerce,
   unavailableCommerceData,
-  type CommerceAuthorityControl,
 } from './commerceRepositorySupport.js';
 
 type PendingDocument = StoredDocument | null;
@@ -92,6 +91,7 @@ function parseConflictResult(result: D1Result<Record<string, unknown>>): boolean
 }
 
 export class CommerceUnitOfWork {
+  private authorityChecked = false;
   private closed = false;
   private readonly deliveryOwnerExpectations = new Map<string, number>();
   private readonly expectations = new Map<string, DocumentExpectation>();
@@ -105,7 +105,6 @@ export class CommerceUnitOfWork {
   constructor(
     private readonly db: D1Database,
     nowMs: number,
-    _control: CommerceAuthorityControl,
   ) {
     this.commitTimestamp = timestampFromMilliseconds(nowMs);
   }
@@ -151,36 +150,30 @@ export class CommerceUnitOfWork {
     const scopedOwner = deliveryOwner(args.owner);
     const boundedLimit = positiveQueryLimit(args.limit);
     const query = deliveryOrdersByOwnerQuery({ owner: scopedOwner, limit: boundedLimit });
-    const results = await this.db.batch<Record<string, unknown>>([
+    return this.readBatch([
       deliveryOwnerRevisionStatement(this.db, scopedOwner),
       this.db.prepare(query.sql).bind(...query.bindings),
-    ]);
-    if (results.length !== 2) throw unavailableCommerceData();
-    const [revisionResult, dataResult] = results;
-    const revision = parseDeliveryOwnerRevision(revisionResult);
-    if (
-      dataResult.success !== true ||
-      !Array.isArray(dataResult.results) ||
-      !isObject(dataResult.meta)
-    ) throw unavailableCommerceData();
-    const expectedRevision = this.deliveryOwnerExpectations.get(scopedOwner);
-    if (expectedRevision !== undefined && expectedRevision !== revision) throw new CommerceWriteConflict();
-    this.deliveryOwnerExpectations.set(scopedOwner, revision);
-    const documents = dataResult.results.map((row) => {
-      const document = parseRow(row);
-      const pathRevision = row.path_revision;
-      if (
-        typeof pathRevision !== 'number' ||
-        !Number.isSafeInteger(pathRevision) ||
-        pathRevision < 0
-      ) throw unavailableCommerceData();
-      return { document, pathRevision };
+    ], ([revisionResult, dataResult]) => {
+      const revision = parseDeliveryOwnerRevision(revisionResult);
+      const expectedRevision = this.deliveryOwnerExpectations.get(scopedOwner);
+      if (expectedRevision !== undefined && expectedRevision !== revision) throw new CommerceWriteConflict();
+      this.deliveryOwnerExpectations.set(scopedOwner, revision);
+      const documents = dataResult.results.map((row) => {
+        const document = parseRow(row);
+        const pathRevision = row.path_revision;
+        if (
+          typeof pathRevision !== 'number' ||
+          !Number.isSafeInteger(pathRevision) ||
+          pathRevision < 0
+        ) throw unavailableCommerceData();
+        return { document, pathRevision };
+      });
+      reportInefficientQuery('delivery-orders-by-owner', 'delivery_order', dataResult, documents.length);
+      for (const { document, pathRevision } of documents) {
+        this.recordRead(document.key.path, document.version, document, pathRevision);
+      }
+      return documents.map(({ document }) => publicRecord<T>(document));
     });
-    reportInefficientQuery('delivery-orders-by-owner', 'delivery_order', dataResult, documents.length);
-    for (const { document, pathRevision } of documents) {
-      this.recordRead(document.key.path, document.version, document, pathRevision);
-    }
-    return documents.map(({ document }) => publicRecord<T>(document));
   }
 
   async create(
@@ -394,45 +387,71 @@ export class CommerceUnitOfWork {
     return this.original.get(key.path) || null;
   }
 
-  private async loadBatch(keys: readonly CommerceDocumentKey[]): Promise<void> {
-    const keysByPath = new Map(keys.map((key) => [key.path, key]));
-    const paths = Array.from(keysByPath.keys());
-    const placeholders = paths.map(() => '?').join(', ');
-    const results = await this.db.batch<Record<string, unknown>>([
-      this.db.prepare(`SELECT document_path, revision FROM commerce_document_path_revisions
-        WHERE document_path IN (${placeholders})`).bind(...paths),
-      this.db.prepare(`SELECT ${DOCUMENT_COLUMNS} FROM commerce_documents
-        WHERE document_path IN (${placeholders})`).bind(...paths),
-    ]);
-    if (!Array.isArray(results) || results.length !== 2) throw unavailableCommerceData();
+  private async readBatch<T>(
+    statements: D1PreparedStatement[],
+    read: (results: D1Result<Record<string, unknown>>[]) => T,
+  ): Promise<T> {
+    const needsAuthority = !this.authorityChecked;
+    let results: D1Result<Record<string, unknown>>[];
+    try {
+      results = await this.db.batch<Record<string, unknown>>(
+        needsAuthority ? [authorityStatement(this.db), ...statements] : statements,
+      );
+    } catch (error) {
+      if (needsAuthority) throw unavailableCommerce(error);
+      throw error;
+    }
+    if (!Array.isArray(results) || results.length !== statements.length + Number(needsAuthority)) {
+      throw unavailableCommerceData();
+    }
     for (const result of results) {
       if (
         !isObject(result) || result.success !== true ||
         !Array.isArray(result.results) || !isObject(result.meta)
       ) throw unavailableCommerceData();
     }
-    const [revisionResult, documentResult] = results;
-    const revisions = new Map<string, number>();
-    for (const row of revisionResult.results) {
-      if (
-        !isObject(row) || typeof row.document_path !== 'string' ||
-        !keysByPath.has(row.document_path) || revisions.has(row.document_path) ||
-        typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0
-      ) throw unavailableCommerceData();
-      revisions.set(row.document_path, row.revision);
+    if (needsAuthority) {
+      const authorityResult = results[0];
+      if (authorityResult.results.length !== 1) throw unavailableCommerceData();
+      if (parseAuthorityControl(authorityResult.results[0]).state !== 'd1') throw unavailableCommerce();
     }
-    const documents = new Map<string, StoredDocument>();
-    for (const row of documentResult.results) {
-      const document = parseRow(row);
-      const key = keysByPath.get(document.key.path);
-      if (!key || documents.has(document.key.path)) throw unavailableCommerceData();
-      assertDocumentIdentity(document.key, key);
-      documents.set(key.path, document);
-    }
-    for (const key of keys) {
-      const document = documents.get(key.path) ?? null;
-      this.recordRead(key.path, document?.version ?? -1, document, revisions.get(key.path) ?? 0);
-    }
+    const value = read(needsAuthority ? results.slice(1) : results);
+    this.authorityChecked = true;
+    return value;
+  }
+
+  private async loadBatch(keys: readonly CommerceDocumentKey[]): Promise<void> {
+    const keysByPath = new Map(keys.map((key) => [key.path, key]));
+    const paths = Array.from(keysByPath.keys());
+    const placeholders = paths.map(() => '?').join(', ');
+    await this.readBatch([
+      this.db.prepare(`SELECT document_path, revision FROM commerce_document_path_revisions
+        WHERE document_path IN (${placeholders})`).bind(...paths),
+      this.db.prepare(`SELECT ${DOCUMENT_COLUMNS} FROM commerce_documents
+        WHERE document_path IN (${placeholders})`).bind(...paths),
+    ], ([revisionResult, documentResult]) => {
+      const revisions = new Map<string, number>();
+      for (const row of revisionResult.results) {
+        if (
+          !isObject(row) || typeof row.document_path !== 'string' ||
+          !keysByPath.has(row.document_path) || revisions.has(row.document_path) ||
+          typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 0
+        ) throw unavailableCommerceData();
+        revisions.set(row.document_path, row.revision);
+      }
+      const documents = new Map<string, StoredDocument>();
+      for (const row of documentResult.results) {
+        const document = parseRow(row);
+        const key = keysByPath.get(document.key.path);
+        if (!key || documents.has(document.key.path)) throw unavailableCommerceData();
+        assertDocumentIdentity(document.key, key);
+        documents.set(key.path, document);
+      }
+      for (const key of keys) {
+        const document = documents.get(key.path) ?? null;
+        this.recordRead(key.path, document?.version ?? -1, document, revisions.get(key.path) ?? 0);
+      }
+    });
   }
 
   private recordRead(

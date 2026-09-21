@@ -593,6 +593,38 @@ test('commerce repository reads and transaction guards run through the real D1 r
       },
     } as D1Database;
     const observedRepository = new D1CommerceRepository(observedDb);
+    for (const firstAccess of ['point', 'bulk', 'owner', 'mutation'] as const) {
+      observedBatchSizes.length = 0;
+      observedPreparedSql.length = 0;
+      const unit = await observedRepository.begin(Date.parse('2026-01-01T00:00:23.000Z'));
+      assert.deepEqual(await unit.getMany([]), []);
+      assert.deepEqual(observedBatchSizes, []);
+      assert.deepEqual(observedPreparedSql, []);
+      if (firstAccess === 'point') assert.equal((await unit.get(claimKey))?.key.path, claimKey.path);
+      else if (firstAccess === 'bulk') {
+        assert.deepEqual((await unit.getMany([claimKey, commerceKeys.claimCode('STARTUP-MISSING')]))
+          .map((record) => record?.key.path ?? null), [claimKey.path, null]);
+      } else if (firstAccess === 'owner') {
+        assert.deepEqual((await unit.queryDeliveryOrdersByOwner({ owner: 'runtime-wallet', limit: 5 }))
+          .map((record) => record.key.path), [deliveryKey.path]);
+      } else await unit.update(claimKey, { startupProbe: true });
+      assert.deepEqual(observedBatchSizes, [3], firstAccess);
+      if (firstAccess === 'mutation') await unit.update(checkoutKey, { startupProbe: true });
+      else assert.equal((await unit.get(checkoutKey))?.key.path, checkoutKey.path);
+      assert.deepEqual(observedBatchSizes, [3, 2], firstAccess);
+      assert.equal(observedPreparedSql.filter((sql) => /FROM commerce_authority_control WHERE singleton = 1/.test(sql)).length, 1);
+      unit.rollback();
+    }
+
+    observedBatchSizes.length = 0;
+    observedPreparedSql.length = 0;
+    await observedRepository.run(Date.parse('2026-01-01T00:00:23.000Z'), async (unit) => {
+      assert.equal((await unit.get(claimKey))?.key.path, claimKey.path);
+      await unit.update(claimKey, { startupRoundTripProbe: true });
+    });
+    assert.deepEqual(observedBatchSizes, [3, 4]);
+    assert.equal((await repository.get(claimKey))?.data.startupRoundTripProbe, true);
+
     const bulkUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:23.000Z'));
     const cachedKey = commerceKeys.deliveryOrder('runtime', 'paused-127');
     const cachedMissingKey = commerceKeys.deliveryOrder('runtime', 'bulk-cached-missing');
@@ -775,6 +807,13 @@ test('commerce repository reads and transaction guards run through the real D1 r
       }
     }
 
+    const pausedReadUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:24.000Z'));
+    const pausedWriteUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:25.000Z'));
+    const pausedEmptyUnit = await observedRepository.begin(Date.parse('2026-01-01T00:00:26.000Z'));
+    await pausedReadUnit.get(claimKey);
+    await pausedWriteUnit.get(claimKey);
+    const claimBeforePause = await repository.get(claimKey);
+
     await env.COMMERCE_DB.batch([
       env.COMMERCE_DB.prepare(`INSERT INTO commerce_authority_control_lease (
         singleton, lease_token, acquired_at_ms, expires_at_ms
@@ -792,6 +831,35 @@ test('commerce repository reads and transaction guards run through the real D1 r
       WHERE singleton = 1`),
       env.COMMERCE_DB.prepare('DELETE FROM commerce_authority_control_lease WHERE singleton = 1'),
     ]);
+    for (const firstAccess of ['point', 'bulk', 'owner', 'mutation'] as const) {
+      observedBatchSizes.length = 0;
+      observedPreparedSql.length = 0;
+      const unit = await observedRepository.begin(Date.parse('2026-01-01T00:00:27.000Z'));
+      assert.deepEqual(await unit.getMany([]), []);
+      assert.deepEqual(observedBatchSizes, []);
+      assert.deepEqual(observedPreparedSql, []);
+      const access = () => firstAccess === 'point' ? unit.get(claimKey)
+        : firstAccess === 'bulk' ? unit.getMany([claimKey])
+          : firstAccess === 'owner' ? unit.queryDeliveryOrdersByOwner({ owner: 'runtime-wallet', limit: 5 })
+            : unit.update(claimKey, { pausedStartupProbe: true });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await assert.rejects(access(),
+          (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable', firstAccess);
+      }
+      assert.deepEqual(observedBatchSizes, [3, 3], firstAccess);
+      unit.rollback();
+    }
+    await pausedWriteUnit.update(claimKey, { pausedCommitProbe: true });
+    for (const unit of [pausedReadUnit, pausedWriteUnit, pausedEmptyUnit]) {
+      await assert.rejects(unit.commit(),
+        (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable');
+    }
+    const claimAfterPause = await env.COMMERCE_DB.prepare(`SELECT document_json, version
+      FROM commerce_documents WHERE document_path = ?`).bind(claimKey.path)
+      .first<{ document_json: string; version: number }>();
+    assert.deepEqual(JSON.parse(claimAfterPause!.document_json), claimBeforePause?.data);
+    assert.equal(claimAfterPause?.version, claimBeforePause?.version);
+
     observedBatchResults = undefined;
     await assert.rejects(
       observedRepository.queryPendingReadyNotifications({

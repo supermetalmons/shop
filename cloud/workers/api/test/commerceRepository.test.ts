@@ -53,10 +53,18 @@ function assertAuthoritativeReadBatch(observation: CommerceD1BatchObservation): 
   assert.match(dataSql, /authority_state\s*=\s*'d1'/);
 }
 
-function assertDeliveryOwnerReadBatch(observation: CommerceD1BatchObservation): void {
-  assert.equal(observation.statements.length, 2);
-  const revisionSql = observation.statements[0].sql.replace(/\s+/g, ' ');
-  const dataSql = observation.statements[1].sql.replace(/\s+/g, ' ');
+function transactionalReadStatements(observation: CommerceD1BatchObservation, withAuthority: boolean) {
+  assert.equal(observation.statements.length, withAuthority ? 3 : 2);
+  if (withAuthority) {
+    assert.match(observation.statements[0].sql, /FROM commerce_authority_control WHERE singleton = 1/);
+  }
+  return observation.statements.slice(withAuthority ? 1 : 0);
+}
+
+function assertDeliveryOwnerReadBatch(observation: CommerceD1BatchObservation, withAuthority = false): void {
+  const statements = transactionalReadStatements(observation, withAuthority);
+  const revisionSql = statements[0].sql.replace(/\s+/g, ' ');
+  const dataSql = statements[1].sql.replace(/\s+/g, ' ');
   assert.match(
     revisionSql,
     /SELECT COALESCE\(\( SELECT revision FROM commerce_delivery_owner_revisions WHERE owner = \? \), 0\) AS revision/,
@@ -68,10 +76,10 @@ function assertDeliveryOwnerReadBatch(observation: CommerceD1BatchObservation): 
   assert.match(dataSql, /ORDER BY document\.document_path ASC\s+LIMIT \?/);
 }
 
-function assertTransactionalPointReadBatch(observation: CommerceD1BatchObservation): void {
-  assert.equal(observation.statements.length, 2);
-  const revisionSql = observation.statements[0].sql.replace(/\s+/g, ' ');
-  const dataSql = observation.statements[1].sql.replace(/\s+/g, ' ');
+function assertTransactionalPointReadBatch(observation: CommerceD1BatchObservation, withAuthority = false): void {
+  const statements = transactionalReadStatements(observation, withAuthority);
+  const revisionSql = statements[0].sql.replace(/\s+/g, ' ');
+  const dataSql = statements[1].sql.replace(/\s+/g, ' ');
   assert.match(
     revisionSql,
     /SELECT document_path, revision FROM commerce_document_path_revisions WHERE document_path IN \(\?\)/,
@@ -698,10 +706,10 @@ test('transactional delivery-owner queries use atomic scope snapshots and sorted
     (await unit.queryDeliveryOrdersByOwner({ owner: 'owner-z', limit: 10 })).map((record) => record.key.documentId),
     ['z'],
   );
-  for (const call of calls) {
+  for (const [index, call] of calls.entries()) {
     assert.equal(call.method, 'batch');
     if (call.method !== 'batch') assert.fail('Expected one D1 batch per owner query.');
-    assertDeliveryOwnerReadBatch(call);
+    assertDeliveryOwnerReadBatch(call, index === 0);
   }
   const ownerReadCount = calls.length;
   await unit.get(commerceKeys.deliveryOrder('drop', 'z'));
@@ -746,20 +754,19 @@ test('transactional delivery-owner queries use atomic scope snapshots and sorted
   invalid.rollback();
 });
 
-test('transactional point reads batch documents with path revisions', async () => {
+test('transaction startup batches authority with the first point read and caches it per unit', async () => {
   const calls: CommerceD1CallObservation[] = [];
   const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
   const existing = commerceKeys.claimCode('EXISTING');
   seedCommerceDocument(harness, { key: existing, data: { status: 'unused' } });
   const repository = new D1CommerceRepository(harness.db);
   const unit = await repository.begin(10);
-
-  calls.length = 0;
+  assert.equal(calls.length, 0);
   assert.deepEqual((await unit.get(existing))?.data, { status: 'unused' });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].method, 'batch');
   if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch per point read.');
-  assertTransactionalPointReadBatch(calls[0]);
+  assertTransactionalPointReadBatch(calls[0], true);
 
   calls.length = 0;
   assert.equal(await unit.get(commerceKeys.claimCode('MISSING')), null);
@@ -767,6 +774,173 @@ test('transactional point reads batch documents with path revisions', async () =
   assert.equal(calls[0].method, 'batch');
   if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch per point read.');
   assertTransactionalPointReadBatch(calls[0]);
+  unit.rollback();
+});
+
+test('empty transactions defer authority validation until commit', async (context) => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  context.after(() => harness.database.close());
+  const repository = new D1CommerceRepository(harness.db);
+  for (const timestamp of [-1, 1.5, Number.NaN]) {
+    await assert.rejects(repository.begin(timestamp), (error: unknown) =>
+      error instanceof CommerceRepositoryError && error.code === 'invalid-argument');
+  }
+  assert.equal(calls.length, 0);
+  for (const paused of [false, true]) {
+    if (paused) pauseCommerce(harness);
+    calls.length = 0;
+    const unit = await repository.begin(10);
+    assert.deepEqual(await unit.getMany([]), []);
+    assert.equal(calls.length, 0);
+    if (paused) await assert.rejects(unit.commit(), isUnavailableCommerceError);
+    else await unit.commit();
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, 'first');
+  }
+});
+
+test('mutation-first transactions validate authority before staging changes', async (context) => {
+  for (const method of ['create', 'set', 'update', 'delete'] as const) {
+    for (const paused of [false, true]) {
+      await context.test(`${method}: ${paused ? 'paused' : 'active'}`, async (context) => {
+        const calls: CommerceD1CallObservation[] = [];
+        const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+        context.after(() => harness.database.close());
+        const key = commerceKeys.claimCode('MUTATION');
+        if (method !== 'create') seedCommerceDocument(harness, { key, data: { status: 'unused' } });
+        if (paused) pauseCommerce(harness);
+        const unit = await new D1CommerceRepository(harness.db).begin(10);
+        const mutate = () => method === 'delete' ? unit.delete(key) : unit[method](key, { status: 'used' });
+        if (paused) await assert.rejects(mutate(), isUnavailableCommerceError);
+        else await mutate();
+        assert.equal(calls.length, 1);
+        if (calls[0].method !== 'batch') assert.fail('Expected one startup batch.');
+        assertTransactionalPointReadBatch(calls[0], true);
+        if (!paused) await unit.commit();
+        else unit.rollback();
+        const stored = harness.database.prepare('SELECT document_json FROM commerce_documents WHERE document_path = ?')
+          .get(key.path);
+        const expected = paused ? method === 'create' ? undefined : 'unused' : method === 'delete' ? undefined : 'used';
+        assert.equal(stored ? JSON.parse(String(stored.document_json)).status : undefined, expected);
+      });
+    }
+  }
+});
+
+test('failed startup authority checks expose no records and remain uncached', async (context) => {
+  const mutations: Record<string, (result: D1Result<Record<string, unknown>>) => unknown> = {
+    'missing authority row': (result) => ({ ...result, results: [] }),
+    'duplicate authority row': (result) => ({ ...result, results: [...result.results, ...result.results] }),
+    'failed authority result': (result) => ({ ...result, success: false }),
+    'invalid authority metadata': (result) => ({ ...result, meta: null }),
+    'invalid authority rows': (result) => ({ ...result, results: null }),
+    'invalid authority state': (result) => ({ ...result, results: [{ ...result.results[0], authority_state: 'invalid' }] }),
+    'invalid authority revision': (result) => ({ ...result, results: [{ ...result.results[0], revision: '1' }] }),
+    'paused authority': (result) => ({ ...result, results: [{ ...result.results[0], authority_state: 'paused' }] }),
+  };
+  for (const mode of ['get', 'getMany', 'owner'] as const) {
+    for (const [name, mutate] of Object.entries(mutations)) {
+      if (mode !== 'get' && name !== 'paused authority') continue;
+      await context.test(`${mode}: ${name}`, async (context) => {
+        const calls: CommerceD1CallObservation[] = [];
+        const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+        context.after(() => harness.database.close());
+        const key = commerceKeys.deliveryOrder('drop', 'AUTHORITY');
+        seedCommerceDocument(harness, { key, data: { owner: 'owner', status: 'before' } });
+        let fail = true;
+        const db = new Proxy(harness.db, {
+          get(target, property, receiver) {
+            if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+              const results = await target.batch<Record<string, unknown>>(statements);
+              return fail ? [mutate(results[0]), ...results.slice(1)] : results;
+            };
+            return Reflect.get(target, property, receiver);
+          },
+        });
+        const unit = await new D1CommerceRepository(db).begin(10);
+        const read = async () => mode === 'get' ? [await unit.get(key)] : mode === 'getMany'
+          ? unit.getMany([key]) : unit.queryDeliveryOrdersByOwner({ owner: 'owner', limit: 10 });
+        await assert.rejects(read(), isUnavailableCommerceError);
+        seedCommerceDocument(harness, { key, data: { owner: 'owner', status: 'after' }, version: 2 });
+        fail = false;
+        assert.equal((await read())[0]?.data.status, 'after');
+        assert.equal(calls.length, 2);
+        for (const call of calls) {
+          if (call.method !== 'batch') assert.fail('Expected startup read batches.');
+          transactionalReadStatements(call, true);
+        }
+        unit.rollback();
+      });
+    }
+  }
+});
+
+test('startup transport failures retain their cause and do not cache authority', async (context) => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  context.after(() => harness.database.close());
+  const cause = new Error('D1 unavailable');
+  let fail = true;
+  const db = new Proxy(harness.db, {
+    get(target, property, receiver) {
+      if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+        if (fail) throw cause;
+        return target.batch(statements);
+      };
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const unit = await new D1CommerceRepository(db).begin(10);
+  await assert.rejects(unit.get(commerceKeys.claimCode('FIRST')), (error: unknown) => {
+    assert.ok(isUnavailableCommerceError(error));
+    assert.equal((error as CommerceRepositoryError).cause, cause);
+    return true;
+  });
+  fail = false;
+  assert.equal(await unit.get(commerceKeys.claimCode('FIRST')), null);
+  if (calls[0].method !== 'batch') assert.fail('Expected a startup read batch.');
+  assertTransactionalPointReadBatch(calls[0], true);
+  fail = true;
+  await assert.rejects(unit.get(commerceKeys.claimCode('SECOND')), (error) => error === cause);
+  unit.rollback();
+});
+
+test('concurrent initial reads each validate their captured authority result', async (context) => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  context.after(() => harness.database.close());
+  const releases = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+  const started = Promise.withResolvers<void>();
+  let batchCount = 0;
+  const db = new Proxy(harness.db, {
+    get(target, property, receiver) {
+      if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+        const index = batchCount++;
+        const results = await target.batch<Record<string, unknown>>(statements);
+        if (index === 1) started.resolve();
+        if (index < 2) await releases[index].promise;
+        if (index !== 1) return results;
+        return [{ ...results[0], results: [{ ...results[0].results[0], authority_state: 'paused' }] }, ...results.slice(1)];
+      };
+      return Reflect.get(target, property, receiver);
+    },
+  });
+  const unit = await new D1CommerceRepository(db).begin(10);
+  const first = unit.get(commerceKeys.claimCode('FIRST'));
+  const second = unit.get(commerceKeys.claimCode('SECOND'));
+  await started.promise;
+  releases[0].resolve();
+  assert.equal(await first, null);
+  const rejection = assert.rejects(second, isUnavailableCommerceError);
+  releases[1].resolve();
+  await rejection;
+  assert.equal(await unit.get(commerceKeys.claimCode('THIRD')), null);
+  assert.equal(calls.length, 3);
+  for (const [index, call] of calls.entries()) {
+    if (call.method !== 'batch') assert.fail('Expected read batches.');
+    assertTransactionalPointReadBatch(call, index < 2);
+  }
   unit.rollback();
 });
 
@@ -789,10 +963,10 @@ test('getMany preserves order, missing documents, duplicate isolation, and cache
   assert.equal(calls.length, 1);
   const call = calls[0];
   if (call.method !== 'batch') assert.fail('Expected one batch for all requested paths.');
-  assert.equal(call.statements.length, 2);
-  assert.match(call.statements[0].sql, /FROM commerce_document_path_revisions\s+WHERE document_path IN/);
-  assert.match(call.statements[1].sql, /FROM commerce_documents\s+WHERE document_path IN/);
-  assert.deepEqual(call.statements.map((statement) => statement.sql.match(/\?/g)?.length), [3, 3]);
+  const statements = transactionalReadStatements(call, true);
+  assert.match(statements[0].sql, /FROM commerce_document_path_revisions\s+WHERE document_path IN/);
+  assert.match(statements[1].sql, /FROM commerce_documents\s+WHERE document_path IN/);
+  assert.deepEqual(statements.map((statement) => statement.sql.match(/\?/g)?.length), [3, 3]);
   assert.notEqual(records[0], records[3]);
   assert.notEqual(records[0]!.data, records[3]!.data);
   records[0]!.data.nested.value = 'caller mutation';
@@ -835,18 +1009,17 @@ test('getMany processes at most 50 unique uncached paths per sequential batch', 
     },
   });
   const unit = await new D1CommerceRepository(db).begin(10);
-  await unit.get(keys[51]);
-  calls.length = 0;
+  assert.equal(calls.length, 0);
   const requested = [keys[51], ...keys.slice(0, 51).reverse(), keys[0], keys[51]];
   const records = await unit.getMany(requested);
   assert.deepEqual(records.map((record) => record?.key.path), requested.map((key) => key.path));
   assert.equal(maximumActiveBatches, 1);
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls.map((call) => {
+  assert.deepEqual(calls.map((call, index) => {
     if (call.method !== 'batch') assert.fail('Expected bounded read batches.');
-    assert.equal(call.statements.length, 2);
-    return call.statements.map((statement) => statement.sql.match(/\?/g)?.length);
-  }), [[50, 50], [1, 1]]);
+    return transactionalReadStatements(call, index === 0)
+      .map((statement) => statement.sql.match(/\?/g)?.length);
+  }), [[50, 50], [2, 2]]);
   calls.length = 0;
   await unit.getMany(requested);
   assert.equal(calls.length, 0);
@@ -943,9 +1116,9 @@ test('owner queries reject malformed joined path revisions', async (context) => 
         get(target, property, receiver) {
           if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
             const results = await target.batch<Record<string, unknown>>(statements);
-            return [results[0], {
-              ...results[1],
-              results: results[1].results.map((row) => ({ ...row, path_revision: revision })),
+            return [...results.slice(0, -1), {
+              ...results.at(-1)!,
+              results: results.at(-1)!.results.map((row) => ({ ...row, path_revision: revision })),
             }];
           };
           return Reflect.get(target, property, receiver);
@@ -1027,15 +1200,24 @@ test('point and batch reads fail closed on malformed batch results', async (cont
         const harness = createCommerceD1Harness();
         const key = commerceKeys.claimCode('EXISTING');
         seedCommerceDocument(harness, { key, data: { status: 'unused' } });
+        const batchSizes: number[] = [];
+        let fail = true;
         const db = new Proxy(harness.db, {
           get(target, property, receiver) {
-            if (property === 'batch') return async (statements: D1PreparedStatement[]) =>
-              mutate(await target.batch<Record<string, unknown>>(statements));
+            if (property === 'batch') return async (statements: D1PreparedStatement[]) => {
+              batchSizes.push(statements.length);
+              const results = await target.batch<Record<string, unknown>>(statements);
+              return fail ? [results[0], ...mutate(results.slice(1)) as D1Result<Record<string, unknown>>[]] : results;
+            };
             return Reflect.get(target, property, receiver);
           },
         });
         const unit = await new D1CommerceRepository(db).begin(10);
         await assert.rejects(method === 'get' ? unit.get(key) : unit.getMany([key]), isUnavailableCommerceError);
+        fail = false;
+        const record = method === 'get' ? await unit.get(key) : (await unit.getMany([key]))[0];
+        assert.equal(record?.data.status, 'unused');
+        assert.deepEqual(batchSizes, [3, 3]);
         unit.rollback();
       });
     }

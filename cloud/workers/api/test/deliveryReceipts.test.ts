@@ -529,7 +529,8 @@ test('existing assignment revalidates paused authority before returning', async 
     observeBatchAfterCommit: ({ statements }) => {
       if (
         armed &&
-        statements.length === 2 &&
+        statements.length === 3 &&
+        statements[0].sql.includes('FROM commerce_authority_control') &&
         statements.some(({ sql }) => sql.includes('commerce_document_path_revisions')) &&
         statements.some(({ sql }) => sql.includes('FROM commerce_documents'))
       ) {
