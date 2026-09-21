@@ -127,6 +127,21 @@ export type StripeCheckoutDocumentInput = StripeCheckoutIdentity & {
   updatedAt: unknown;
 };
 
+export type StripeCheckoutCreatedDocument = StripeCheckoutIdentity & {
+  dropId: string;
+  operationId?: string;
+  sessionId: string;
+  variantKey?: string;
+  quantity: number;
+  currency: typeof STRIPE_OFFCHAIN_CURRENCY;
+  unitAmountCents: number;
+  fulfillmentMode: typeof STRIPE_OFFCHAIN_FULFILLMENT_MODE;
+  livemode: boolean;
+  status: typeof STRIPE_CHECKOUT_STATUS.CREATED;
+  createdAt: unknown;
+  updatedAt: unknown;
+};
+
 type StripeCheckoutSessionRequestData = {
   dropId: string;
   operationId: string;
@@ -173,7 +188,7 @@ export type StripeCheckoutSessionCoreDependencies = {
     request: StripeCheckoutProviderRequest,
     mode: StripeCheckoutMode,
   ) => Promise<StripeCheckoutProviderResponse>;
-  persistCheckout: (path: string, document: Record<string, unknown>) => Promise<void>;
+  persistCheckout: (path: string, document: StripeCheckoutCreatedDocument) => Promise<void>;
   nowMs?: () => number;
   testUnitAmountCents?: number;
 };
@@ -476,7 +491,7 @@ export function buildStripeCheckoutSessionMetadata(args: {
   };
 }
 
-export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): Record<string, unknown> {
+export function buildStripeCheckoutDocument(args: StripeCheckoutDocumentInput): StripeCheckoutCreatedDocument {
   const quantity = normalizeStripeCheckoutQuantity(args.quantity);
   const variantKey = normalizedString(args.variantKey);
   const identity = normalizeStripeCheckoutIdentity(args);

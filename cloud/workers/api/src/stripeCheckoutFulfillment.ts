@@ -58,7 +58,6 @@ import {
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
-  commerceFieldValue,
   commerceKeys,
 } from './commerceRepository.js';
 import type { StripeCheckoutCommerceContext } from './stripeCheckout/commerce.js';
@@ -654,7 +653,6 @@ export function flowDependencies(
 export function workerFulfillmentCompletionFields(): StripeCheckoutFulfillmentCompletionFields {
   return {
     fulfillmentCompletedBy: STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR,
-    fulfillmentCompletedAt: commerceFieldValue.serverTimestamp(),
   };
 }
 

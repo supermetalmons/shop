@@ -1,23 +1,21 @@
-import bs58 from 'bs58';
 import {
-  AdminIrlRedeemFinalizeError,
-  adminIrlRedeemFinalizeOperationIdForWallet,
-  canonicalPublicKey,
-  canonicalSignature,
-  isAdminIrlRedeemFinalizeErrorCode,
-  parseAdminIrlRedeemFinalizeWorkflowPayload,
-  parseWorkflowError,
-  workflowErrorForCode,
-  workflowPendingEffect,
-  WORKFLOW_EFFECT_LEASE_MS,
-  WORKFLOW_EXECUTION_FIELD,
-  type AdminIrlRedeemFinalizeErrorCode,
-  type AdminIrlRedeemFinalizeWorkflowError,
-  type AdminIrlRedeemFinalizeWorkflowPayload,
-  type AdminIrlRedeemFinalizeWorkflowPendingEffect,
-  type AdminIrlRedeemFinalizeWorkflowResultReference,
-} from './adminIrlRedeemFinalizeWorkflowState.js';
-import { z } from 'zod';
+  type FinalizeRequest,
+  type AdminIrlRedeemFinalizeResponse,
+  type AdminIrlRedeemFinalizeWorkflowExecutionV1,
+  type AdminIrlRedeemFinalizeWorkflowPublicationDraftV1,
+  type InternalDelivery,
+  MAX_DELIVERY_ALLOCATION_ATTEMPTS,
+  type PendingFinalizeSubmission,
+  type RequestItem,
+  type StartedRequest,
+  completeResponse,
+  finalizeRequestOwner,
+  normalizeItems,
+  normalizePendingFinalizeSubmission,
+  normalizeReceiptTxs,
+  validateWorkflowCompletion,
+  validateWorkflowDraftForRequest,
+} from './adminIrlRedeemRequestState.js';
 import {
   AddressLookupTableAccount,
   ComputeBudgetProgram,
@@ -29,103 +27,75 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
-import { API_DROPS, type ApiDropConfig } from './dropConfig.js';
-import {
-  ADMIN_IRL_REDEEM_CARD_MARKER_VERSION,
-  buildAdminIrlRedeemCardClaimCodeDocument,
-  buildAdminIrlRedeemCardDeliveryOrderDocument,
-  buildAdminIrlRedeemCardMarkerDocument,
-  buildAdminIrlRedeemClaimCodeDocument,
-  buildAdminIrlRedeemDeliveryOrderDocument,
-  buildAdminIrlRedeemMarkerDocument,
-  buildAdminIrlRedeemSelectionKey,
-  getAdminIrlRedeemUnsupportedReason,
-  resolveAdminIrlRedeemMarkerReuse,
-  type AdminIrlRedeemBoxBaseInput,
-  type AdminIrlRedeemCardInput,
-  type AdminIrlRedeemMarkerReuseResolution,
-} from './adminIrlRedeem.js';
-import {
-  adminIrlCardReceiptProofHasIdentity,
-  classifyAdminIrlCardReceiptLookupError,
-} from './adminIrlCardReceipt.js';
-import { dropAdminIrlRedeemRequestPath } from './dropPaths.js';
-import {
-  assetMatchesReceiptDropIdentity,
-  assetMatchesReceiptMetadataIdentity,
-} from './receiptProof.js';
-import {
-  bubblegumReceiptAssetIds,
-  coreTransferAssetIds,
-  matchingReceiptTransferCount,
-} from './receiptTransferVerification.js';
+import bs58 from 'bs58';
+import { z } from 'zod';
+import { dasAssetBoxId } from '../../../../shared/dasAsset.js';
+import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../shared/dasAssetCollections.js';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
   walletHasAdminIrlRedeemAccess,
 } from '../../../../shared/fulfillmentAccess.js';
-import {
-  getAdminIrlRedeemTargetEligibility,
-  type AdminIrlRedeemTargetKind,
-} from '../../../../shared/adminIrlEligibility.js';
-import { dasAssetBoxId } from '../../../../shared/dasAsset.js';
-import { HELIUS_COLLECTION_GROUPING_OPTIONS } from '../../../../shared/dasAssetCollections.js';
 import { heliusSearchAssetsHasNextPage, heliusSearchAssetsItems } from '../../../../shared/heliusDas.js';
 import {
   MPL_CORE_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
 import {
-  STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE,
-  generateUniqueStripeReceiptClaimCodes,
-  normalizeStripeReceiptClaimCode,
-  requireStripeReceiptClaimCode,
-  stripeReceiptClaimCodeMaybe,
-} from '../../../../shared/stripeReceiptClaims.js';
-import { ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfillmentSources.js';
+  adminIrlCardReceiptProofHasIdentity,
+  classifyAdminIrlCardReceiptLookupError,
+} from './adminIrlCardReceipt.js';
+import { getAdminIrlRedeemUnsupportedReason, type AdminIrlRedeemBoxBaseInput } from './adminIrlRedeem.js';
+import { PendingFinalizeSubmissionError } from './adminIrlRedeemErrors.js';
 import {
-  isAdminIrlRedeemFinalizeOperationId,
-} from '../../../../shared/contracts.js';
+  AdminIrlRedeemFinalizeError,
+  WORKFLOW_EXECUTION_FIELD,
+  adminIrlRedeemFinalizeOperationIdForWallet,
+  canonicalPublicKey,
+  canonicalSignature,
+  type AdminIrlRedeemFinalizeErrorCode,
+  type AdminIrlRedeemFinalizeWorkflowError,
+  type AdminIrlRedeemFinalizeWorkflowPayload,
+  type AdminIrlRedeemFinalizeWorkflowResultReference,
+} from './adminIrlRedeemFinalizeWorkflowState.js';
 import {
-  isStaffRequestIdentity,
-  type RequestIdentity,
-} from './requestIdentity.js';
-import {
-  isSignalCancellationError,
-  readBoundedRequestJson,
-  sleepWithSignal,
-} from './boundedRequest.js';
-import { isRecord, ProfileReadError } from './dataAccess.js';
-import {
-  D1CommerceRepository,
-  commerceFieldValue,
-  commerceKeys,
-  isCommerceDeleteField,
-  type CommerceDocumentData,
-  type CommerceDocumentKey,
-  type CommerceDocumentWriteData,
-  type CommerceUnitOfWork,
-} from './commerceRepository.js';
-import {
-  commerceTimestamp,
-  readCommerceRecord,
-  requireCommerceKey,
-  runCommerceTransaction,
-  type CommerceRepositoryContext,
-} from './commerceTransactions.js';
-import {
+  receiptDropIdentity as adminIrlRedeemReceiptDropIdentity,
+  rpcCall as adminIrlRedeemRpcCall,
   buildRuntime as buildAdminIrlRedeemRuntime,
   fetchAsset as fetchAdminIrlRedeemAsset,
   fetchAssetProof as fetchAdminIrlRedeemAssetProof,
   parseProof as parseAdminIrlRedeemProof,
-  receiptDropIdentity as adminIrlRedeemReceiptDropIdentity,
-  rpcCall as adminIrlRedeemRpcCall,
 } from './adminIrlRedeemOnchain.js';
 import {
-  createDeliveryPackStatusProjectionOutbox,
-  projectPendingDeliveryPackStatus,
-} from './deliveryPackStatusOutbox.js';
+  completeFromExistingMarkers,
+  publishCard,
+  publishPack,
+  reusableExistingMarkerState,
+} from './adminIrlRedeemPublicationStore.js';
+import {
+  cleanupContext,
+  enterWorkflow,
+  holdPendingFinalizeSubmission,
+  pendingFinalizeSubmissionAlreadySettled,
+  persistPendingFinalizeSubmission,
+  persistWorkflowDraft,
+  persistWorkflowOnchain,
+  recordCloseDelivery,
+  recordInternalDelivery,
+  recordWorkflowFailure,
+  settlePendingFinalizeSubmission,
+  startFinalize,
+} from './adminIrlRedeemRequestStore.js';
+import { isSignalCancellationError, readBoundedRequestJson, sleepWithSignal } from './boundedRequest.js';
+import { D1CommerceRepository, commerceKeys } from './commerceRepository.js';
+import {
+  readCommerceRecord,
+  requireCommerceKey,
+  type CommerceRepositoryContext,
+} from './commerceTransactions.js';
+import { ProfileReadError, isRecord } from './dataAccess.js';
 import { assignDudesForBox } from './deliveryDudeAssignments.js';
+import { projectPendingDeliveryPackStatus } from './deliveryPackStatusOutbox.js';
 import { secureRandomInt } from './deliveryRandom.js';
 import {
   DeliveryReceiptError,
@@ -137,28 +107,30 @@ import {
   mintReceiptsInstruction,
   sendAndConfirmSignedTransaction,
 } from './deliveryReceiptOnchain.js';
+import { API_DROPS, type ApiDropConfig } from './dropConfig.js';
+import { dropAdminIrlRedeemRequestPath } from './dropPaths.js';
+import { assetMatchesReceiptDropIdentity, assetMatchesReceiptMetadataIdentity } from './receiptProof.js';
+import {
+  bubblegumReceiptAssetIds,
+  coreTransferAssetIds,
+  matchingReceiptTransferCount,
+} from './receiptTransferVerification.js';
+import { isStaffRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { createSolanaConnection } from './solanaConnection.js';
 import {
   probeTransactionSubmission,
   type TransactionSubmissionOutcome,
 } from './transactionSubmissionRecovery.js';
-import { mutateSubmissionJournal } from './submissionJournal.js';
 
 export const ADMIN_IRL_REDEEM_FINALIZE_PATH = '/admin/irl-redeem/finalize';
 
 const REQUEST_MAX_BYTES = 4096;
-const CLEANUP_TIMEOUT_MS = 10_000;
-const PREPARED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const PROCESSING_LEASE_MS = 30 * 60 * 1000;
 const RECEIPT_INDEX_MAX_WAIT_MS = 30_000;
 const RECEIPT_INDEX_POLL_MS = 2_000;
-const MAX_ITEMS = 32;
-const MAX_DELIVERY_ALLOCATION_ATTEMPTS = 16;
 const HELIUS_ASSET_PAGE_LIMIT = 1000;
 const HELIUS_ASSET_MAX_PAGES = 64;
 const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
-const WORKFLOW_DRAFT_FIELD = 'workflowPublicationDraftV1';
 const MPL_CORE_PROGRAM_ID = new PublicKey(MPL_CORE_PROGRAM_ADDRESS);
 const SPL_NOOP_PROGRAM_ID = new PublicKey(SPL_NOOP_PROGRAM_ADDRESS);
 const IX_DELIVER = Buffer.from('fa83de39d3e5d193', 'hex');
@@ -175,8 +147,7 @@ const requestSchema = z.object({
     .refine((value) => canonicalSignature(value) === value),
 }).strict();
 
-export type AdminIrlRedeemFinalizeRequest = z.infer<typeof requestSchema>;
-type FinalizeRequest = AdminIrlRedeemFinalizeRequest;
+export type AdminIrlRedeemFinalizeRequest = FinalizeRequest;
 type CommerceContext = CommerceRepositoryContext & {
   dataDb?: D1Database;
   providerFetch: typeof fetch;
@@ -185,120 +156,6 @@ type CommerceContext = CommerceRepositoryContext & {
 type ProviderContext = Parameters<typeof fetchAdminIrlRedeemAsset>[0];
 type Runtime = ReturnType<typeof buildAdminIrlRedeemRuntime>;
 type OnchainConfig = Awaited<ReturnType<typeof fetchDeliveryOnchainConfig>>;
-class PendingFinalizeSubmissionError extends AdminIrlRedeemFinalizeError {
-  constructor(cause?: unknown) {
-    super('aborted', 'A submitted Admin IRL redeem transaction is still being reconciled.');
-    this.name = 'PendingFinalizeSubmissionError';
-    if (cause !== undefined) Object.defineProperty(this, 'cause', { value: cause });
-  }
-}
-
-type RequestItem = {
-  assetId: string;
-  kind: 'box' | 'card_receipt';
-  refId: number;
-};
-
-type PendingFinalizeSubmission =
-  | {
-    kind: 'internal_delivery';
-    signature: string;
-    blockhash: string;
-    deliveryId: number;
-    deliveryPda: string;
-  }
-  | {
-    kind: 'receipt_mint';
-    signature: string;
-    blockhash: string;
-    assetIds: string[];
-  };
-
-type AdminIrlRedeemFinalizeWorkflowOnchainV1 = {
-  adminWallet: string;
-  coreCollection: string;
-  treasury: string;
-};
-
-type AdminIrlRedeemFinalizeWorkflowExecutionV1 = {
-  version: 1;
-  operationId: string;
-  owner: string;
-  transferSignature: string;
-  adminWallet: string;
-  config: ApiDropConfig;
-  pendingEffect?: AdminIrlRedeemFinalizeWorkflowPendingEffect;
-  onchain?: AdminIrlRedeemFinalizeWorkflowOnchainV1;
-  failure?: AdminIrlRedeemFinalizeWorkflowError;
-};
-
-type AdminIrlRedeemFinalizeWorkflowCardDraftV1 = {
-  version: 1;
-  targetKind: 'card_receipt';
-  receiptOwner: string;
-  card: { figureId: number; receiptAssetId: string };
-};
-
-type AdminIrlRedeemFinalizeWorkflowPreparedPackDraftV1 = {
-  version: 1;
-  targetKind: 'pack';
-  mode: 'prepared';
-  receiptOwner: string;
-  internalDelivery: InternalDelivery;
-  closeDeliveryTx: string | null;
-  receiptTxs: string[];
-  boxes: AdminIrlRedeemBoxBaseInput[];
-};
-
-type AdminIrlRedeemFinalizeWorkflowMarkerReuseDraftV1 = {
-  version: 1;
-  targetKind: 'pack';
-  mode: 'marker_reuse';
-  receiptOwner: string;
-  deliveryId: number;
-  sourceRequestId: string;
-  fingerprint: string;
-};
-
-type AdminIrlRedeemFinalizeWorkflowPublicationDraftV1 =
-  | AdminIrlRedeemFinalizeWorkflowCardDraftV1
-  | AdminIrlRedeemFinalizeWorkflowPreparedPackDraftV1
-  | AdminIrlRedeemFinalizeWorkflowMarkerReuseDraftV1;
-
-type StartedRequest = {
-  adminWallet: string;
-  requestId: string;
-  dropId: string;
-  owner: string;
-  targetKind: AdminIrlRedeemTargetKind;
-  itemIds: string[];
-  items: RequestItem[];
-  receiptTxs: string[];
-  internalDeliveryId?: number;
-  internalDeliveryPda?: string;
-  internalDeliveryTx?: string;
-  closeDeliveryTx?: string;
-  pendingFinalizeSubmission?: PendingFinalizeSubmission;
-  workflowFinalizeV1?: AdminIrlRedeemFinalizeWorkflowExecutionV1;
-  workflowPublicationDraftV1?: AdminIrlRedeemFinalizeWorkflowPublicationDraftV1;
-};
-
-type InternalDelivery = {
-  deliveryId: number;
-  deliveryPda: string;
-  deliveryTx: string | null;
-};
-
-export type AdminIrlRedeemFinalizeResponse = {
-  processed: true;
-  dropId: string;
-  requestId: string;
-  deliveryId?: number;
-  receiptTxs: string[];
-  claimCodes: string[];
-  boxes: Array<{ boxId: number; receiptAssetId?: string; claimCode?: string; dudeIds?: number[] }>;
-  cards: Array<{ figureId: number; receiptAssetId: string; claimCode?: string }>;
-};
 
 export type AdminIrlRedeemFinalizeWorkflowPhaseResult = Readonly<{
   status: 'ready' | 'drafted' | 'complete';
@@ -417,596 +274,14 @@ async function adminIrlRedeemFinalizeOperationId(
   return adminIrlRedeemFinalizeOperationIdForWallet(parsed.data, canonicalWallet(staffWallet));
 }
 
-function normalizeReceiptTxs(value: unknown): string[] {
-  return Array.isArray(value)
-    ? Array.from(new Set(value.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim())).map((entry) => entry.trim())))
-    : [];
-}
-
-function normalizePendingFinalizeSubmission(value: unknown): PendingFinalizeSubmission | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (!isRecord(value)) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem submission recovery is invalid.');
-  }
-  const signature = canonicalSignature(value.signature);
-  const blockhash = canonicalPublicKey(value.blockhash);
-  if (!signature || !blockhash) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem submission recovery is invalid.');
-  }
-  if (value.kind === 'internal_delivery') {
-    const deliveryId = Math.floor(Number(value.deliveryId));
-    const deliveryPda = canonicalPublicKey(value.deliveryPda);
-    if (!Number.isSafeInteger(deliveryId) || deliveryId < 1 || !deliveryPda) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem submission recovery is invalid.');
-    }
-    return { kind: value.kind, signature, blockhash, deliveryId, deliveryPda };
-  }
-  if (value.kind === 'receipt_mint' && Array.isArray(value.assetIds)) {
-    const assetIds = value.assetIds.map(canonicalPublicKey);
-    if (!assetIds.length || assetIds.length > 3 || assetIds.some((assetId) => !assetId) || new Set(assetIds).size !== assetIds.length) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem submission recovery is invalid.');
-    }
-    return { kind: value.kind, signature, blockhash, assetIds: assetIds as string[] };
-  }
-  throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem submission recovery is invalid.');
-}
-
-function samePendingFinalizeSubmission(left: PendingFinalizeSubmission, right: PendingFinalizeSubmission): boolean {
-  if (left.kind !== right.kind || left.signature !== right.signature || left.blockhash !== right.blockhash) return false;
-  if (left.kind === 'internal_delivery' && right.kind === 'internal_delivery') {
-    return left.deliveryId === right.deliveryId && left.deliveryPda === right.deliveryPda;
-  }
-  return left.kind === 'receipt_mint' && right.kind === 'receipt_mint' &&
-    left.assetIds.length === right.assetIds.length && left.assetIds.every((assetId, index) => assetId === right.assetIds[index]);
-}
-
-function workflowConfig(value: unknown, dropId: string): ApiDropConfig {
-  if (!isRecord(value) || value.dropId !== dropId) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow configuration is invalid.');
-  }
-  const config = JSON.parse(JSON.stringify(value)) as ApiDropConfig;
-  try {
-    const runtime = buildAdminIrlRedeemRuntime(config);
-    const unsupported = getAdminIrlRedeemUnsupportedReason({
-      dropFamily: runtime.config.dropFamily,
-      itemsPerBox: runtime.itemsPerBox,
-      sharesCollectionMint: false,
-    });
-    if (unsupported) throw new Error(unsupported);
-  } catch {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow configuration is invalid.');
-  }
-  return config;
-}
-
-function normalizeWorkflowOnchain(value: unknown): AdminIrlRedeemFinalizeWorkflowOnchainV1 | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value) || Object.keys(value).length !== 3) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow on-chain configuration is invalid.');
-  }
-  const adminWallet = canonicalPublicKey(value.adminWallet);
-  const coreCollection = canonicalPublicKey(value.coreCollection);
-  const treasury = canonicalPublicKey(value.treasury);
-  if (!adminWallet || !coreCollection || !treasury) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow on-chain configuration is invalid.');
-  }
-  return { adminWallet, coreCollection, treasury };
-}
-
-function normalizeWorkflowExecution(
-  value: unknown,
-  body: FinalizeRequest,
-): AdminIrlRedeemFinalizeWorkflowExecutionV1 {
-  if (!isRecord(value) || value.version !== 1) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution is invalid.');
-  }
-  const operationId = typeof value.operationId === 'string' ? value.operationId : '';
-  const owner = canonicalPublicKey(value.owner);
-  const transferSignature = canonicalSignature(value.transferSignature);
-  const adminWallet = canonicalPublicKey(value.adminWallet);
-  if (
-    !isAdminIrlRedeemFinalizeOperationId(operationId) ||
-    !owner || !transferSignature || transferSignature !== body.transferSignature || !adminWallet
-  ) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution is invalid.');
-  }
-  const onchain = normalizeWorkflowOnchain(value.onchain);
-  const failure = value.failure === undefined ? undefined : parseWorkflowError(value.failure);
-  const pending = workflowPendingEffect(value);
-  if (
-    (value.failure !== undefined && !failure) ||
-    !pending.valid
-  ) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution is invalid.');
-  }
-  return {
-    version: 1,
-    operationId,
-    owner,
-    transferSignature,
-    adminWallet,
-    config: workflowConfig(value.config, body.dropId),
-    ...(pending.valid && pending.effect ? { pendingEffect: pending.effect } : {}),
-    ...(onchain ? { onchain } : {}),
-    ...(failure ? { failure } : {}),
-  };
-}
-
-function normalizeWorkflowDraft(
-  value: unknown,
-): AdminIrlRedeemFinalizeWorkflowPublicationDraftV1 | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value) || value.version !== 1) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem publication draft is invalid.');
-  }
-  const receiptOwner = canonicalPublicKey(value.receiptOwner);
-  if (!receiptOwner) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem publication draft is invalid.');
-  }
-  const exactKeys = (record: Record<string, unknown>, keys: readonly string[]) =>
-    Object.keys(record).length === keys.length && keys.every((key) => Object.hasOwn(record, key));
-  if (
-    value.targetKind === 'card_receipt' && isRecord(value.card) &&
-    exactKeys(value, ['version', 'targetKind', 'receiptOwner', 'card']) &&
-    exactKeys(value.card, ['figureId', 'receiptAssetId'])
-  ) {
-    const figureId = value.card.figureId;
-    const receiptAssetId = canonicalPublicKey(value.card.receiptAssetId);
-    if (typeof figureId !== 'number' || !Number.isSafeInteger(figureId) || figureId < 1 || !receiptAssetId) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem publication draft is invalid.');
-    }
-    return { version: 1, targetKind: value.targetKind, receiptOwner, card: { figureId, receiptAssetId } };
-  }
-  if (
-    value.targetKind === 'pack' && value.mode === 'marker_reuse' &&
-    exactKeys(value, [
-      'version', 'targetKind', 'mode', 'receiptOwner',
-      'deliveryId', 'sourceRequestId', 'fingerprint',
-    ]) &&
-    typeof value.deliveryId === 'number' && Number.isSafeInteger(value.deliveryId) && value.deliveryId > 0 &&
-    typeof value.sourceRequestId === 'string' && /^[A-Za-z0-9_-]{8,128}$/.test(value.sourceRequestId) &&
-    typeof value.fingerprint === 'string' && /^[a-f0-9]{64}$/.test(value.fingerprint)
-  ) {
-    return {
-      version: 1,
-      targetKind: value.targetKind,
-      mode: value.mode,
-      receiptOwner,
-      deliveryId: value.deliveryId,
-      sourceRequestId: value.sourceRequestId,
-      fingerprint: value.fingerprint,
-    };
-  }
-  if (
-    value.targetKind === 'pack' && value.mode === 'prepared' &&
-    isRecord(value.internalDelivery) && Array.isArray(value.boxes) &&
-    exactKeys(value, [
-      'version', 'targetKind', 'mode', 'receiptOwner', 'internalDelivery',
-      'closeDeliveryTx', 'receiptTxs', 'boxes',
-    ]) &&
-    exactKeys(value.internalDelivery, ['deliveryId', 'deliveryPda', 'deliveryTx'])
-  ) {
-    const deliveryId = value.internalDelivery.deliveryId;
-    const deliveryPda = canonicalPublicKey(value.internalDelivery.deliveryPda);
-    const rawDeliveryTx = value.internalDelivery.deliveryTx;
-    const deliveryTx = rawDeliveryTx === null ? null : canonicalSignature(rawDeliveryTx);
-    const closeDeliveryTx = value.closeDeliveryTx === null ? null : canonicalSignature(value.closeDeliveryTx);
-    const receiptTxs = Array.isArray(value.receiptTxs)
-      ? value.receiptTxs.map(canonicalSignature)
-      : null;
-    const boxes = value.boxes.map((entry): AdminIrlRedeemBoxBaseInput | null => {
-      if (!isRecord(entry)) return null;
-      const boxId = entry.boxId;
-      const originalAssetId = canonicalPublicKey(entry.originalAssetId);
-      const receiptAssetId = canonicalPublicKey(entry.receiptAssetId);
-      const rawDudeIds = Array.isArray(entry.dudeIds) ? entry.dudeIds : [];
-      const dudeIds = rawDudeIds;
-      return exactKeys(entry, ['boxId', 'originalAssetId', 'receiptAssetId', 'dudeIds']) &&
-        typeof boxId === 'number' && Number.isSafeInteger(boxId) && boxId > 0 && originalAssetId && receiptAssetId && dudeIds.length &&
-        dudeIds.every((id): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0)
-        ? { boxId, originalAssetId, receiptAssetId, dudeIds }
-        : null;
-    });
-    if (
-      typeof deliveryId !== 'number' || !Number.isSafeInteger(deliveryId) || deliveryId < 1 || !deliveryPda ||
-      (rawDeliveryTx !== null && !deliveryTx) ||
-      (value.closeDeliveryTx !== null && !closeDeliveryTx) ||
-      !receiptTxs || receiptTxs.some((signature) => !signature) ||
-      new Set(receiptTxs).size !== receiptTxs.length ||
-      !boxes.length || boxes.length > MAX_ITEMS || boxes.some((box) => !box)
-    ) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem publication draft is invalid.');
-    }
-    return {
-      version: 1,
-      targetKind: value.targetKind,
-      mode: value.mode,
-      receiptOwner,
-      internalDelivery: { deliveryId, deliveryPda, deliveryTx: deliveryTx || null },
-      closeDeliveryTx: closeDeliveryTx || null,
-      receiptTxs: receiptTxs as string[],
-      boxes: boxes as AdminIrlRedeemBoxBaseInput[],
-    };
-  }
-  throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem publication draft is invalid.');
-}
-
-function normalizeItems(request: Record<string, unknown>): {
-  itemIds: string[];
-  items: RequestItem[];
-  targetKind: AdminIrlRedeemTargetKind;
-} {
-  const rawItems = Array.isArray(request.items) ? request.items : [];
-  const items = rawItems.map((value): RequestItem | null => {
-    if (!isRecord(value)) return null;
-    const rawAssetId = typeof value.assetId === 'string' ? value.assetId.trim() : '';
-    const assetId = canonicalPublicKey(rawAssetId);
-    const refId = Math.floor(Number(value.refId));
-    if (
-      !assetId || assetId !== rawAssetId ||
-      !Number.isSafeInteger(refId) || refId < 1 || refId > 0xffff_ffff
-    ) return null;
-    if (value.kind === 'box' || value.kind === 'card_receipt') return { assetId, kind: value.kind, refId };
-    return null;
-  }).filter((value): value is RequestItem => value !== null);
-  if (!items.length || items.length !== rawItems.length || items.length > MAX_ITEMS) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request is missing selected items.');
-  }
-  if (new Set(items.map((item) => item.assetId)).size !== items.length || new Set(items.map((item) => item.refId)).size !== items.length) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request contains duplicate selected items.');
-  }
-  const targetKinds = new Set(items.map((item) => item.kind === 'box' ? 'pack' : 'card_receipt'));
-  if (targetKinds.size !== 1) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request cannot mix packs and card receipts.');
-  }
-  const targetKind = Array.from(targetKinds)[0] as AdminIrlRedeemTargetKind;
-  if ((request.targetKind === 'card_receipt' ? 'card_receipt' : 'pack') !== targetKind) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request target kind mismatch.');
-  }
-  const eligibility = getAdminIrlRedeemTargetEligibility({ targetKind, itemCount: items.length });
-  if (!eligibility.eligible) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem supports one card receipt at a time.');
-  }
-  const itemIds = items.map((item) => item.assetId);
-  const storedItemIds = Array.isArray(request.itemIds)
-    ? request.itemIds.filter((value): value is string => typeof value === 'string').map((value) => value.trim())
-    : [];
-  if (storedItemIds.length !== itemIds.length || storedItemIds.some((value, index) => value !== itemIds[index])) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request selected item mismatch.');
-  }
-  return { itemIds, items, targetKind };
-}
-
-function completeResponse(dropId: string, requestId: string, request: Record<string, unknown>): AdminIrlRedeemFinalizeResponse {
-  const boxes = Array.isArray(request.boxes) ? request.boxes.flatMap((value) => {
-    if (!isRecord(value)) return [];
-    const boxId = Math.floor(Number(value.boxId));
-    if (!Number.isSafeInteger(boxId) || boxId < 1) return [];
-    const receiptAssetId = typeof value.receiptAssetId === 'string' ? value.receiptAssetId.trim() : '';
-    const claimCode = typeof value.claimCode === 'string' ? normalizeStripeReceiptClaimCode(value.claimCode) : '';
-    const dudeIds = Array.isArray(value.dudeIds)
-      ? value.dudeIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0)
-      : [];
-    return [{ boxId, ...(receiptAssetId ? { receiptAssetId } : {}), ...(claimCode ? { claimCode } : {}), ...(dudeIds.length ? { dudeIds } : {}) }];
-  }) : [];
-  const cards = Array.isArray(request.cards) ? request.cards.flatMap((value) => {
-    if (!isRecord(value)) return [];
-    const figureId = Math.floor(Number(value.figureId));
-    const receiptAssetId = typeof value.receiptAssetId === 'string' ? value.receiptAssetId.trim() : '';
-    if (!Number.isSafeInteger(figureId) || figureId < 1 || !receiptAssetId) return [];
-    const claimCode = typeof value.claimCode === 'string' ? normalizeStripeReceiptClaimCode(value.claimCode) : '';
-    return [{ figureId, receiptAssetId, ...(claimCode ? { claimCode } : {}) }];
-  }) : [];
-  const deliveryId = Math.floor(Number(request.deliveryId));
-  return {
-    processed: true,
-    dropId,
-    requestId,
-    ...(Number.isSafeInteger(deliveryId) && deliveryId > 0 ? { deliveryId } : {}),
-    receiptTxs: normalizeReceiptTxs(request.receiptTxs),
-    claimCodes: Array.isArray(request.claimCodes)
-      ? request.claimCodes.map(normalizeStripeReceiptClaimCode).filter(Boolean)
-      : [],
-    boxes,
-    cards,
-  };
-}
-
-function validateWorkflowCompletion(
-  response: AdminIrlRedeemFinalizeResponse,
-  request: Record<string, unknown>,
-): AdminIrlRedeemFinalizeResponse {
-  let normalizedItems: ReturnType<typeof normalizeItems>;
-  let runtime: Runtime;
-  try {
-    normalizedItems = normalizeItems(request);
-    const execution = request[WORKFLOW_EXECUTION_FIELD];
-    if (!isRecord(execution)) throw new Error('missing Workflow execution');
-    runtime = buildAdminIrlRedeemRuntime(workflowConfig(execution.config, response.dropId));
-  } catch {
-    throw new AdminIrlRedeemFinalizeError('internal', 'Stored Admin IRL redeem Workflow result is invalid.');
-  }
-  const rawReceiptTxs = Array.isArray(request.receiptTxs) ? request.receiptTxs : [];
-  const rawClaimCodes = Array.isArray(request.claimCodes) ? request.claimCodes : [];
-  const rawBoxes = Array.isArray(request.boxes) ? request.boxes : [];
-  const rawCards = Array.isArray(request.cards) ? request.cards : [];
-  const nestedClaimCodes = [
-    ...response.boxes.map((box) => box.claimCode),
-    ...response.cards.map((card) => card.claimCode),
-  ];
-  const receiptAssetIds = [
-    ...response.boxes.map((box) => box.receiptAssetId),
-    ...response.cards.map((card) => card.receiptAssetId),
-  ];
-  const allDudeIds = response.boxes.flatMap((box) => box.dudeIds || []);
-  const validClaimCodes = response.claimCodes.every((code) => {
-    try { return requireStripeReceiptClaimCode(code) === code; } catch { return false; }
-  });
-  const rawReceiptTxsValid = rawReceiptTxs.every((signature) =>
-    typeof signature === 'string' && canonicalSignature(signature) === signature);
-  const rawClaimCodesValid = rawClaimCodes.every((code) => {
-    if (typeof code !== 'string') return false;
-    try { return requireStripeReceiptClaimCode(code) === code; } catch { return false; }
-  });
-  const rawBoxesValid = rawBoxes.every((value, index) => {
-    if (!isRecord(value) || Object.keys(value).length !== 5 || !Array.isArray(value.dudeIds)) return false;
-    const item = normalizedItems.items[index];
-    const dudeIds = value.dudeIds;
-    return item?.kind === 'box' &&
-      typeof value.boxId === 'number' && value.boxId === item.refId &&
-      value.originalAssetId === item.assetId &&
-      typeof value.receiptAssetId === 'string' && canonicalPublicKey(value.receiptAssetId) === value.receiptAssetId &&
-      typeof value.claimCode === 'string' && normalizeStripeReceiptClaimCode(value.claimCode) === value.claimCode &&
-      dudeIds.length === runtime.itemsPerBox &&
-      dudeIds.every((id) => typeof id === 'number' && Number.isSafeInteger(id) && id > 0 && id <= runtime.maxDudeId) &&
-      new Set(dudeIds).size === dudeIds.length;
-  });
-  const rawCardsValid = rawCards.every((value, index) => {
-    if (!isRecord(value) || Object.keys(value).length !== 3) return false;
-    const item = normalizedItems.items[index];
-    return item?.kind === 'card_receipt' &&
-      typeof value.figureId === 'number' && value.figureId === item.refId &&
-      value.receiptAssetId === item.assetId &&
-      typeof value.claimCode === 'string' && normalizeStripeReceiptClaimCode(value.claimCode) === value.claimCode;
-  });
-  if (
-    response.deliveryId === undefined ||
-    rawReceiptTxs.length !== response.receiptTxs.length ||
-    rawClaimCodes.length !== response.claimCodes.length ||
-    rawBoxes.length !== response.boxes.length ||
-    rawCards.length !== response.cards.length ||
-    (response.boxes.length === 0) === (response.cards.length === 0) ||
-    response.cards.length > 1 ||
-    !rawReceiptTxsValid || !rawClaimCodesValid || !rawBoxesValid || !rawCardsValid ||
-    response.receiptTxs.some((signature) => canonicalSignature(signature) !== signature) ||
-    new Set(response.receiptTxs).size !== response.receiptTxs.length ||
-    !validClaimCodes || new Set(response.claimCodes).size !== response.claimCodes.length ||
-    nestedClaimCodes.length !== response.claimCodes.length ||
-    nestedClaimCodes.some((code) => typeof code !== 'string') ||
-    nestedClaimCodes.some((code, index) => code !== response.claimCodes[index]) ||
-    receiptAssetIds.some((assetId) => typeof assetId !== 'string' || canonicalPublicKey(assetId) !== assetId) ||
-    new Set(receiptAssetIds).size !== receiptAssetIds.length ||
-    new Set(response.boxes.map((box) => box.boxId)).size !== response.boxes.length ||
-    new Set(response.cards.map((card) => card.figureId)).size !== response.cards.length ||
-    new Set(allDudeIds).size !== allDudeIds.length ||
-    (normalizedItems.targetKind === 'pack'
-      ? response.boxes.length !== normalizedItems.items.length || response.cards.length !== 0 ||
-        response.boxes.some((box, index) => box.boxId !== normalizedItems.items[index]?.refId)
-      : response.cards.length !== 1 || response.boxes.length !== 0 ||
-        response.cards[0]?.figureId !== normalizedItems.items[0]?.refId)
-  ) {
-    throw new AdminIrlRedeemFinalizeError('internal', 'Stored Admin IRL redeem Workflow result is invalid.');
-  }
-  return response;
+function requestKey(path: string) {
+  const key = requireCommerceKey(path);
+  if (key.kind !== 'admin_irl_redeem_request' || !key.dropId) throw new Error('Invalid commerce document path.');
+  return commerceKeys.adminIrlRedeemRequest(key.dropId, key.documentId);
 }
 
 function requestPath(body: FinalizeRequest): string {
   return dropAdminIrlRedeemRequestPath(body.dropId, body.requestId);
-}
-
-function timestamp(value: number) {
-  return commerceTimestamp(value);
-}
-
-type StartFinalizeResult =
-  | { status: 'complete'; request: Record<string, unknown> }
-  | { status: 'started'; request: StartedRequest };
-
-function finalizeRequestOwner(request: Record<string, unknown>, wallet: string): string {
-  let owner: string;
-  try {
-    owner = new PublicKey(String(request.owner || '')).toBase58();
-  } catch {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request owner is invalid.');
-  }
-  if (owner !== wallet) {
-    throw new AdminIrlRedeemFinalizeError('permission-denied', 'Only the requesting admin wallet can finalize this Admin IRL redeem.');
-  }
-  return owner;
-}
-
-function startedFinalizeRequest(
-  body: FinalizeRequest,
-  request: Record<string, unknown>,
-  owner: string,
-): StartedRequest {
-  const normalized = normalizeItems(request);
-  const adminWallet = canonicalPublicKey(request.adminWallet);
-  if (!adminWallet) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request admin wallet is invalid.');
-  }
-  const pendingFinalizeSubmission = normalizePendingFinalizeSubmission(request.pendingFinalizeSubmission);
-  const workflowFinalizeV1 = request[WORKFLOW_EXECUTION_FIELD] === undefined
-    ? undefined
-    : normalizeWorkflowExecution(request[WORKFLOW_EXECUTION_FIELD], body);
-  const workflowPublicationDraftV1 = normalizeWorkflowDraft(request[WORKFLOW_DRAFT_FIELD]);
-  const internalDeliveryId = Math.floor(Number(request.internalDeliveryId));
-  return {
-    adminWallet,
-    requestId: body.requestId,
-    dropId: body.dropId,
-    owner,
-    targetKind: normalized.targetKind,
-    itemIds: normalized.itemIds,
-    items: normalized.items,
-    receiptTxs: normalizeReceiptTxs(request.receiptTxs),
-    ...(Number.isSafeInteger(internalDeliveryId) && internalDeliveryId > 0 ? { internalDeliveryId } : {}),
-    ...(typeof request.internalDeliveryPda === 'string' && request.internalDeliveryPda ? { internalDeliveryPda: request.internalDeliveryPda } : {}),
-    ...(typeof request.internalDeliveryTx === 'string' && request.internalDeliveryTx ? { internalDeliveryTx: request.internalDeliveryTx } : {}),
-    ...(typeof request.closeDeliveryTx === 'string' && request.closeDeliveryTx ? { closeDeliveryTx: request.closeDeliveryTx } : {}),
-    ...(pendingFinalizeSubmission ? { pendingFinalizeSubmission } : {}),
-    ...(workflowFinalizeV1 ? { workflowFinalizeV1 } : {}),
-    ...(workflowPublicationDraftV1 ? { workflowPublicationDraftV1 } : {}),
-  };
-}
-
-function workflowExecutionForReplay(
-  value: unknown,
-  body: FinalizeRequest,
-  requested: AdminIrlRedeemFinalizeWorkflowExecutionV1,
-  allowTerminalFailure: boolean,
-): AdminIrlRedeemFinalizeWorkflowExecutionV1 {
-  if (value === undefined) return requested;
-  const existing = normalizeWorkflowExecution(value, body);
-  if (
-    existing.operationId !== requested.operationId ||
-    existing.owner !== requested.owner ||
-    existing.transferSignature !== requested.transferSignature ||
-    existing.adminWallet !== requested.adminWallet
-  ) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution changed.');
-  }
-  if (existing.failure && !existing.failure.retryable && !allowTerminalFailure) {
-    throw new AdminIrlRedeemFinalizeError(existing.failure.code, existing.failure.message);
-  }
-  return {
-    version: 1,
-    operationId: existing.operationId,
-    owner: existing.owner,
-    transferSignature: existing.transferSignature,
-    adminWallet: existing.adminWallet,
-    config: existing.config,
-    ...(existing.pendingEffect ? { pendingEffect: existing.pendingEffect } : {}),
-    ...(existing.onchain ? { onchain: existing.onchain } : {}),
-    ...(existing.failure ? { failure: existing.failure } : {}),
-  };
-}
-
-function workflowExecutionData(execution: AdminIrlRedeemFinalizeWorkflowExecutionV1): CommerceDocumentData {
-  const { paymentRouting, ...config } = execution.config;
-  return {
-    ...execution,
-    config: paymentRouting ? {
-      ...execution.config,
-      paymentRouting: {
-        ...paymentRouting,
-        mintProceeds: [...paymentRouting.mintProceeds],
-      },
-    } : config,
-  };
-}
-
-async function startFinalize(
-  context: CommerceContext,
-  body: FinalizeRequest,
-  wallet: string,
-  attemptId: string,
-  nowMs: number,
-  workflowExecution?: AdminIrlRedeemFinalizeWorkflowExecutionV1,
-): Promise<StartFinalizeResult> {
-  const key = commerceKeys.adminIrlRedeemRequest(body.dropId, body.requestId);
-  try {
-    return await runCommerceTransaction<StartFinalizeResult>(context, async (transaction) => {
-      const document = await readCommerceRecord(context, key, transaction);
-      if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
-      const request = document.data;
-      if (request.dropId !== body.dropId) throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request drop mismatch.');
-      const owner = finalizeRequestOwner(request, wallet);
-      const requestAdminWallet = canonicalPublicKey(request.adminWallet);
-      if (!requestAdminWallet) {
-        throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem request admin wallet is invalid.');
-      }
-      if (
-        workflowExecution &&
-        (workflowExecution.owner !== owner ||
-          workflowExecution.transferSignature !== body.transferSignature ||
-          workflowExecution.adminWallet !== requestAdminWallet ||
-          workflowExecution.operationId !== attemptId)
-      ) {
-        throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem Workflow execution does not match the request.');
-      }
-      const storedSignature = request.transferSignature === undefined
-        ? undefined
-        : canonicalSignature(request.transferSignature);
-      if (request.transferSignature !== undefined && !storedSignature) {
-        throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem transfer signature is invalid.');
-      }
-      if (storedSignature && storedSignature !== body.transferSignature) {
-        throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem transfer signature changed.');
-      }
-      if (request.status === 'complete') return { status: 'complete' as const, request };
-      const replayExecution = workflowExecution
-        ? workflowExecutionForReplay(
-            request[WORKFLOW_EXECUTION_FIELD],
-            body,
-            workflowExecution,
-            request.status === 'processing' && request.processingAttemptId === attemptId,
-          )
-        : undefined;
-      const leaseExpiresAt = Number(request.processingLeaseExpiresAt || 0);
-      if (request.status === 'processing' && Number.isFinite(leaseExpiresAt) && leaseExpiresAt > nowMs) {
-        if (request.processingAttemptId === attemptId && storedSignature === body.transferSignature) {
-          const started = startedFinalizeRequest(body, {
-            ...request,
-            ...(replayExecution ? { [WORKFLOW_EXECUTION_FIELD]: replayExecution } : {}),
-          }, owner);
-          await transaction.update(document.key, {
-            processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
-            ...(replayExecution ? { [WORKFLOW_EXECUTION_FIELD]: workflowExecutionData(replayExecution) } : {}),
-            updatedAt: commerceFieldValue.serverTimestamp(),
-          });
-          return { status: 'started' as const, request: started };
-        }
-        throw new AdminIrlRedeemFinalizeError('aborted', 'This Admin IRL redeem request is already being finalized.');
-      }
-      const requestWithWorkflow = replayExecution
-        ? { ...request, [WORKFLOW_EXECUTION_FIELD]: replayExecution }
-        : request;
-      const started = startedFinalizeRequest(body, requestWithWorkflow, owner);
-      await transaction.update(document.key, {
-        status: 'processing',
-        transferSignature: body.transferSignature,
-        processingAttemptId: attemptId,
-        processingLeaseExpiresAt: timestamp(nowMs + PROCESSING_LEASE_MS),
-        ...(replayExecution ? { [WORKFLOW_EXECUTION_FIELD]: workflowExecutionData(replayExecution) } : {}),
-        preparedExpiresAt: commerceFieldValue.delete(),
-        processingStartedAt: commerceFieldValue.serverTimestamp(),
-        updatedAt: commerceFieldValue.serverTimestamp(),
-      });
-      return { status: 'started' as const, request: started };
-    });
-  } catch (error) {
-    if (error instanceof AdminIrlRedeemFinalizeError) throw error;
-    try {
-      const cleanup = cleanupContext(context);
-      const document = await readCommerceRecord(cleanup, key);
-      const request = document?.data;
-      if (
-        request?.status === 'processing' &&
-        request.processingAttemptId === attemptId &&
-        request.transferSignature === body.transferSignature &&
-        request.dropId === body.dropId
-      ) {
-        const owner = finalizeRequestOwner(request, wallet);
-        return { status: 'started', request: startedFinalizeRequest(body, request, owner) };
-      }
-    } catch {}
-    throw error;
-  }
-}
-
-function cleanupContext(context: CommerceContext): CommerceContext {
-  return { ...context, nowMs: Date.now(), signal: AbortSignal.timeout(CLEANUP_TIMEOUT_MS) };
 }
 
 async function loadTransaction(
@@ -1115,153 +390,8 @@ function mplCoreBurn(asset: PublicKey, collection: PublicKey, signer: PublicKey)
   });
 }
 
-async function updateRequest(
-  commerce: CommerceContext,
-  path: string,
-  attemptId: string,
-  values: CommerceDocumentWriteData,
-): Promise<void> {
-  await runCommerceTransaction(commerce, async (transaction) => {
-    const document = await readCommerceRecord(commerce, requireCommerceKey(path), transaction);
-    if (!document || document.data.status !== 'processing' || document.data.processingAttemptId !== attemptId) {
-      throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
-    }
-    await transaction.update(document.key, {
-      ...values,
-      processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-      updatedAt: commerceFieldValue.serverTimestamp(),
-    });
-  });
-}
-
 function isTombstone(account: Awaited<ReturnType<Connection['getAccountInfo']>>): boolean {
   return !account || account.data.length <= 1;
-}
-
-async function persistPendingFinalizeSubmission(
-  context: CommerceContext,
-  path: string,
-  attemptId: string,
-  pending: PendingFinalizeSubmission,
-): Promise<void> {
-  await mutateSubmissionJournal({
-    context,
-    key: requireCommerceKey(path),
-    phase: 'persist',
-    createCleanupContext: () => cleanupContext(context),
-    plan: (document) => {
-      if (!document || document.data.status !== 'processing' || document.data.processingAttemptId !== attemptId) {
-        throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
-      }
-      const existing = normalizePendingFinalizeSubmission(document.data.pendingFinalizeSubmission);
-      if (existing && !samePendingFinalizeSubmission(existing, pending)) {
-        throw new PendingFinalizeSubmissionError();
-      }
-      return {
-        ...(existing ? {} : { pendingFinalizeSubmission: pending }),
-        processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-        updatedAt: commerceFieldValue.serverTimestamp(),
-      };
-    },
-    isApplied: (document) => {
-      const stored = document && normalizePendingFinalizeSubmission(document.data.pendingFinalizeSubmission);
-      return Boolean(
-        document?.data.status === 'processing' &&
-        document.data.processingAttemptId === attemptId &&
-        stored && samePendingFinalizeSubmission(stored, pending)
-      );
-    },
-  });
-}
-
-function pendingFinalizeSubmissionAlreadySettled(
-  document: Record<string, unknown>,
-  pending: PendingFinalizeSubmission,
-  outcome: 'confirmed' | 'expired',
-): boolean {
-  if (outcome === 'expired') return true;
-  if (pending.kind === 'receipt_mint') {
-    return Array.isArray(document.receiptTxs) && document.receiptTxs.includes(pending.signature);
-  }
-  return document.internalDeliveryId === pending.deliveryId &&
-    document.internalDeliveryPda === pending.deliveryPda &&
-    document.internalDeliveryTx === pending.signature;
-}
-
-async function settlePendingFinalizeSubmission(
-  context: CommerceContext,
-  path: string,
-  attemptId: string,
-  pending: PendingFinalizeSubmission,
-  outcome: 'confirmed' | 'expired',
-): Promise<void> {
-  await mutateSubmissionJournal({
-    context,
-    key: requireCommerceKey(path),
-    phase: 'settle',
-    createCleanupContext: () => cleanupContext(context),
-    plan: (document) => {
-      if (!document || document.data.status !== 'processing' || document.data.processingAttemptId !== attemptId) {
-        throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
-      }
-      const stored = normalizePendingFinalizeSubmission(document.data.pendingFinalizeSubmission);
-      if (!stored) {
-        if (pendingFinalizeSubmissionAlreadySettled(document.data, pending, outcome)) {
-          return {
-            processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-            updatedAt: commerceFieldValue.serverTimestamp(),
-          };
-        }
-        throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem submission recovery changed.');
-      }
-      if (!samePendingFinalizeSubmission(stored, pending)) {
-        throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem submission recovery changed.');
-      }
-      const values: CommerceDocumentWriteData = {
-        processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-        pendingFinalizeSubmission: commerceFieldValue.delete(),
-        updatedAt: commerceFieldValue.serverTimestamp(),
-      };
-      if (outcome === 'confirmed') {
-        if (pending.kind === 'internal_delivery') {
-          values.internalDeliveryId = pending.deliveryId;
-          values.internalDeliveryPda = pending.deliveryPda;
-          values.internalDeliveryTx = pending.signature;
-        } else {
-          values.receiptTxs = Array.from(new Set([...normalizeReceiptTxs(document.data.receiptTxs), pending.signature]));
-        }
-      }
-      return values;
-    },
-    isApplied: (document) => {
-      const stored = document && normalizePendingFinalizeSubmission(document.data.pendingFinalizeSubmission);
-      return Boolean(
-        document?.data.status === 'processing' &&
-        document.data.processingAttemptId === attemptId &&
-        !stored && pendingFinalizeSubmissionAlreadySettled(document.data, pending, outcome)
-      );
-    },
-  });
-}
-
-async function holdPendingFinalizeSubmission(
-  context: CommerceContext,
-  path: string,
-  attemptId: string,
-  pending: PendingFinalizeSubmission,
-): Promise<void> {
-  await runCommerceTransaction(context, async (transaction) => {
-    const document = await readCommerceRecord(context, requireCommerceKey(path), transaction);
-    if (!document || document.data.status !== 'processing' || document.data.processingAttemptId !== attemptId) {
-      return;
-    }
-    const stored = normalizePendingFinalizeSubmission(document.data.pendingFinalizeSubmission);
-    if (!stored || !samePendingFinalizeSubmission(stored, pending)) return;
-    await transaction.update(document.key, {
-      processingLeaseExpiresAt: timestamp(context.nowMs + PROCESSING_LEASE_MS),
-      updatedAt: commerceFieldValue.serverTimestamp(),
-    });
-  });
 }
 
 async function probePendingFinalizeSubmission(
@@ -1300,11 +430,11 @@ async function reconcilePendingFinalizeSubmission(args: {
   } catch {}
   const persistence = cleanupContext(args.commerce);
   if (outcome === 'unresolved') {
-    await holdPendingFinalizeSubmission(persistence, args.path, args.attemptId, args.pending);
+    await holdPendingFinalizeSubmission(persistence, requestKey(args.path), args.attemptId, args.pending);
   } else {
     await settlePendingFinalizeSubmission(
       persistence,
-      args.path,
+      requestKey(args.path),
       args.attemptId,
       args.pending,
       outcome,
@@ -1344,7 +474,7 @@ async function clearDefinitiveFinalizeSubmission(args: {
   try {
     await settlePendingFinalizeSubmission(
       cleanupContext(args.commerce),
-      args.path,
+      requestKey(args.path),
       args.attemptId,
       args.pending,
       'expired',
@@ -1378,7 +508,7 @@ async function executePendingFinalizeSubmission(args: {
   transaction: VersionedTransaction;
   label: string;
 }): Promise<void> {
-  await persistPendingFinalizeSubmission(args.commerce, args.path, args.attemptId, args.pending);
+  await persistPendingFinalizeSubmission(args.commerce, requestKey(args.path), args.attemptId, args.pending);
   let broadcastStarted = false;
   try {
     await sendAndConfirmSignedTransaction(
@@ -1388,7 +518,7 @@ async function executePendingFinalizeSubmission(args: {
       args.label,
       () => { broadcastStarted = true; },
     );
-    await settlePendingFinalizeSubmission(args.commerce, args.path, args.attemptId, args.pending, 'confirmed');
+    await settlePendingFinalizeSubmission(args.commerce, requestKey(args.path), args.attemptId, args.pending, 'confirmed');
   } catch (error) {
     await rethrowUnbroadcastFinalizeCancellation({ ...args, broadcastStarted, error });
     if (isDefinitiveTransactionFailure(error)) {
@@ -1625,7 +755,7 @@ async function ensureInternalDelivery(
     const deliveryId = secureRandomInt(2 ** 31 - 1) + 1;
     const [pda, bump] = deriveDeliveryPda(runtime, deliveryId);
     if ((await connection.getAccountInfoAndContext(pda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } })).value) continue;
-    await updateRequest(commerce, path, attemptId, { internalDeliveryId: deliveryId, internalDeliveryPda: pda.toBase58() });
+    await recordInternalDelivery(commerce, requestKey(path), attemptId, { deliveryId, deliveryPda: pda.toBase58() });
     return send(deliveryId, pda, bump);
   }
   throw new AdminIrlRedeemFinalizeError('unavailable', 'Failed to allocate hidden Admin IRL delivery id.');
@@ -1662,7 +792,7 @@ async function closeInternalDelivery(
       commerce.signal,
       'Admin IRL internal delivery close',
     );
-    await updateRequest(commerce, path, attemptId, { closeDeliveryTx: signature });
+    await recordCloseDelivery(commerce, requestKey(path), attemptId, signature);
     return signature;
   } catch (error) {
     console.warn({
@@ -1841,507 +971,6 @@ async function waitForCardReceipt(
     });
 }
 
-function markerKeys(dropId: string, boxes: ReadonlyArray<{ originalAssetId: string; receiptAssetId?: string }>): CommerceDocumentKey[] {
-  const keys = boxes.flatMap((box) => [
-    commerceKeys.adminIrlRedeemPackMarker(dropId, box.originalAssetId),
-    ...(box.receiptAssetId ? [commerceKeys.adminIrlRedeemReceiptMarker(dropId, box.receiptAssetId)] : []),
-  ]);
-  return Array.from(new Map(keys.map((key) => [key.path, key])).values());
-}
-
-function dudeIdsByBoxId(order: Record<string, unknown>): Map<number, number[]> {
-  const result = new Map<number, number[]>();
-  if (!Array.isArray(order.irlClaims)) return result;
-  for (const value of order.irlClaims) {
-    if (!isRecord(value) || typeof value.boxId !== 'number' || !Number.isSafeInteger(value.boxId) ||
-      value.boxId < 1 || !Array.isArray(value.dudeIds) ||
-      !value.dudeIds.every((id) => typeof id === 'number' && Number.isSafeInteger(id) && id > 0) ||
-      new Set(value.dudeIds).size !== value.dudeIds.length) {
-      throw markerConflict('marker delivery order assignments are invalid');
-    }
-    result.set(value.boxId, value.dudeIds as number[]);
-  }
-  return result;
-}
-
-function markerConflict(reason?: string): AdminIrlRedeemFinalizeError {
-  return new AdminIrlRedeemFinalizeError('failed-precondition', 'One or more selected items already have Admin IRL claim codes.', {
-    ...(reason ? { reason } : {}),
-  });
-}
-
-async function markerResolution(
-  transaction: CommerceUnitOfWork,
-  dropId: string,
-  selectionKey: string,
-  boxes: ReadonlyArray<{ originalAssetId: string; receiptAssetId?: string }>,
-): Promise<AdminIrlRedeemMarkerReuseResolution> {
-  const markers = await transaction.getMany(markerKeys(dropId, boxes));
-  return resolveAdminIrlRedeemMarkerReuse({
-    dropId,
-    selectionKey,
-    originalAssetIds: boxes.map((box) => box.originalAssetId),
-    markers: markers.map((document) => document?.data || null),
-  });
-}
-
-function completedMarkerReuse(
-  request: CommerceDocumentData,
-  order: Record<string, unknown>,
-  resolution: Extract<AdminIrlRedeemMarkerReuseResolution, { status: 'reuse' }>,
-): CommerceDocumentData {
-  if (order.source !== ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE) throw markerConflict('marker delivery order source mismatch');
-  const byBox = dudeIdsByBoxId(order);
-  const receiptTxs = Array.from(new Set([...normalizeReceiptTxs(order.receiptTxs), ...normalizeReceiptTxs(request.receiptTxs)]));
-  return {
-    ...request,
-    status: 'complete',
-    deliveryId: resolution.deliveryId,
-    receiptTxs,
-    claimCodes: resolution.claimCodes,
-    boxes: resolution.boxes.map((box) => ({ ...box, dudeIds: byBox.get(box.boxId) || [] })),
-    duplicateOfRequestId: resolution.requestId,
-  };
-}
-
-type MarkerReuseReference = {
-  deliveryId: number;
-  sourceRequestId: string;
-  fingerprint: string;
-};
-
-async function markerReuseReference(completed: Record<string, unknown>): Promise<MarkerReuseReference> {
-  const deliveryId = Number(completed.deliveryId);
-  const sourceRequestId = typeof completed.duplicateOfRequestId === 'string' ? completed.duplicateOfRequestId : '';
-  if (!Number.isSafeInteger(deliveryId) || deliveryId < 1 || !/^[A-Za-z0-9_-]{8,128}$/.test(sourceRequestId)) {
-    throw markerConflict('marker completion identity is invalid');
-  }
-  const stable = {
-    deliveryId,
-    sourceRequestId,
-    receiptTxs: normalizeReceiptTxs(completed.receiptTxs),
-    claimCodes: Array.isArray(completed.claimCodes) ? completed.claimCodes : [],
-    boxes: Array.isArray(completed.boxes) ? completed.boxes : [],
-  };
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(stable)));
-  return {
-    deliveryId,
-    sourceRequestId,
-    fingerprint: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join(''),
-  };
-}
-
-async function resolveExistingMarkerCompletion(
-  commerce: CommerceContext,
-  transaction: CommerceUnitOfWork,
-  body: FinalizeRequest,
-  request: StartedRequest,
-  fields: CommerceDocumentData,
-): Promise<{ completed: CommerceDocumentData; reference: MarkerReuseReference } | null> {
-  const selectionKey = buildAdminIrlRedeemSelectionKey({ dropId: body.dropId, originalAssetIds: request.itemIds });
-  const resolution = await markerResolution(
-    transaction,
-    body.dropId,
-    selectionKey,
-    request.items.map((item) => ({ originalAssetId: item.assetId })),
-  );
-  if (resolution.status === 'none') return null;
-  if (resolution.status === 'conflict') throw markerConflict(resolution.reason);
-  const order = await readCommerceRecord(
-    commerce,
-    commerceKeys.deliveryOrder(body.dropId, String(resolution.deliveryId)),
-    transaction,
-  );
-  if (!order) throw markerConflict('marker delivery order missing');
-  const completed = completedMarkerReuse(fields, order.data, resolution);
-  validateWorkflowCompletion(completeResponse(body.dropId, body.requestId, completed), completed);
-  return { completed, reference: await markerReuseReference(completed) };
-}
-
-function completeRequestValues(completed: CommerceDocumentData): CommerceDocumentWriteData {
-  return {
-    status: 'complete',
-    ...(Number.isSafeInteger(completed.deliveryId) ? { deliveryId: completed.deliveryId } : {}),
-    receiptTxs: normalizeReceiptTxs(completed.receiptTxs),
-    claimCodes: Array.isArray(completed.claimCodes) ? completed.claimCodes : [],
-    ...(Array.isArray(completed.boxes) ? { boxes: completed.boxes } : {}),
-    ...(Array.isArray(completed.cards) ? { cards: completed.cards } : {}),
-    ...(typeof completed.duplicateOfRequestId === 'string' ? { duplicateOfRequestId: completed.duplicateOfRequestId } : {}),
-    ...(Number.isSafeInteger(completed.internalDeliveryId) ? { internalDeliveryId: completed.internalDeliveryId } : {}),
-    ...(typeof completed.internalDeliveryPda === 'string' ? { internalDeliveryPda: completed.internalDeliveryPda } : {}),
-    ...(typeof completed.internalDeliveryTx === 'string' ? { internalDeliveryTx: completed.internalDeliveryTx } : {}),
-    ...(typeof completed.closeDeliveryTx === 'string' ? { closeDeliveryTx: completed.closeDeliveryTx } : {}),
-    processingAttemptId: commerceFieldValue.delete(),
-    processingStartedAt: commerceFieldValue.delete(),
-    processingLeaseExpiresAt: commerceFieldValue.delete(),
-    preparedExpiresAt: commerceFieldValue.delete(),
-    pendingFinalizeSubmission: commerceFieldValue.delete(),
-    [WORKFLOW_DRAFT_FIELD]: commerceFieldValue.delete(),
-    [`${WORKFLOW_EXECUTION_FIELD}.failure`]: commerceFieldValue.delete(),
-    [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
-    [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: commerceFieldValue.delete(),
-    completedAt: commerceFieldValue.serverTimestamp(),
-    updatedAt: commerceFieldValue.serverTimestamp(),
-  };
-}
-
-async function completeFromExistingMarkers(
-  commerce: CommerceContext,
-  body: FinalizeRequest,
-  attemptId: string,
-  request: StartedRequest,
-  expected?: MarkerReuseReference,
-): Promise<AdminIrlRedeemFinalizeResponse | null> {
-  const result = await runCommerceTransaction<
-    { status: 'none' } |
-    { status: 'complete'; request: Record<string, unknown> }
-  >(commerce, async (transaction) => {
-    const document = await readCommerceRecord(
-      commerce,
-      commerceKeys.adminIrlRedeemRequest(body.dropId, body.requestId),
-      transaction,
-    );
-    if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
-    if (document.data.status === 'complete') return { status: 'complete' as const, request: document.data };
-    if (document.data.status !== 'processing' || document.data.processingAttemptId !== attemptId) {
-      throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
-    }
-    const resolved = await resolveExistingMarkerCompletion(commerce, transaction, body, request, document.data);
-    if (!resolved) return { status: 'none' as const };
-    if (expected && (
-      resolved.reference.deliveryId !== expected.deliveryId ||
-      resolved.reference.sourceRequestId !== expected.sourceRequestId ||
-      resolved.reference.fingerprint !== expected.fingerprint
-    )) throw markerConflict('marker reuse state changed after draft');
-    await transaction.update(document.key, completeRequestValues(resolved.completed));
-    return { status: 'complete' as const, request: resolved.completed };
-  });
-  return result.status === 'none' ? null : completeResponse(body.dropId, body.requestId, result.request);
-}
-
-async function reusableExistingMarkerState(
-  commerce: CommerceContext,
-  body: FinalizeRequest,
-  attemptId: string,
-  request: StartedRequest,
-): Promise<
-  | { status: 'none' }
-  | { status: 'complete' }
-  | ({ status: 'reuse' } & MarkerReuseReference)
-> {
-  return runCommerceTransaction<
-    | { status: 'none' }
-    | { status: 'complete' }
-    | ({ status: 'reuse' } & MarkerReuseReference)
-  >(commerce, async (transaction) => {
-    const document = await readCommerceRecord(
-      commerce,
-      commerceKeys.adminIrlRedeemRequest(body.dropId, body.requestId),
-      transaction,
-    );
-    if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
-    if (document.data.status === 'complete') return { status: 'complete' as const };
-    if (document.data.status !== 'processing' || document.data.processingAttemptId !== attemptId) {
-      throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
-    }
-    const resolved = await resolveExistingMarkerCompletion(commerce, transaction, body, request, document.data);
-    return resolved
-      ? { status: 'reuse' as const, ...resolved.reference }
-      : { status: 'none' as const };
-  });
-}
-
-function newDeliveryId(): number {
-  return secureRandomInt(2 ** 31 - 1) + 1;
-}
-
-function newClaimCodes(quantity: number): string[] {
-  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > MAX_ITEMS) {
-    throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid receipt claim code quantity.');
-  }
-  return generateUniqueStripeReceiptClaimCodes(quantity);
-}
-
-async function publishPack(
-  commerce: CommerceContext,
-  runtime: Runtime,
-  body: FinalizeRequest,
-  attemptId: string,
-  request: StartedRequest,
-  receiptOwner: string,
-  internal: InternalDelivery,
-  closeDeliveryTx: string | null,
-  receiptTxs: string[],
-  boxes: AdminIrlRedeemBoxBaseInput[],
-): Promise<AdminIrlRedeemFinalizeResponse> {
-  const selectionKey = buildAdminIrlRedeemSelectionKey({
-    dropId: runtime.dropId,
-    originalAssetIds: boxes.map((box) => box.originalAssetId),
-  });
-  for (let attempt = 0; attempt < MAX_DELIVERY_ALLOCATION_ATTEMPTS; attempt += 1) {
-    const deliveryId = newDeliveryId();
-    const claimCodes = newClaimCodes(boxes.length);
-    const boxesWithCodes = boxes.map((box, index) => ({ ...box, receiptClaimCode: claimCodes[index] }));
-    const orderKey = commerceKeys.deliveryOrder(runtime.dropId, String(deliveryId));
-    const claimKeys = claimCodes.map(commerceKeys.claimCode);
-    const result = await runCommerceTransaction<
-      { status: 'collision' } |
-      { status: 'complete'; request: Record<string, unknown> } |
-      { status: 'created'; request: Record<string, unknown>; order: Record<string, unknown> }
-    >(commerce, async (transaction) => {
-      const document = await readCommerceRecord(
-        commerce,
-        commerceKeys.adminIrlRedeemRequest(body.dropId, body.requestId),
-        transaction,
-      );
-      if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
-      if (document.data.status === 'complete') return { status: 'complete' as const, request: document.data };
-      if (document.data.status !== 'processing' || document.data.processingAttemptId !== attemptId) {
-        throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
-      }
-      const resolution = await markerResolution(transaction, runtime.dropId, selectionKey, boxesWithCodes);
-      if (resolution.status === 'conflict') throw markerConflict(resolution.reason);
-      if (resolution.status === 'reuse') {
-        const existingOrder = await readCommerceRecord(
-          commerce,
-          commerceKeys.deliveryOrder(runtime.dropId, String(resolution.deliveryId)),
-          transaction,
-        );
-        if (!existingOrder) throw markerConflict('marker delivery order missing');
-        const completed = completedMarkerReuse(document.data, existingOrder.data, resolution);
-        validateWorkflowCompletion(completeResponse(runtime.dropId, request.requestId, completed), completed);
-        await transaction.update(document.key, completeRequestValues(completed));
-        return { status: 'complete' as const, request: completed };
-      }
-      if (await readCommerceRecord(commerce, orderKey, transaction)) {
-        return { status: 'collision' as const };
-      }
-      const claims = await transaction.getMany(claimKeys);
-      if (claims.some(Boolean)) return { status: 'collision' as const };
-      const order = buildAdminIrlRedeemDeliveryOrderDocument({
-        dropId: runtime.dropId,
-        deliveryId,
-        requestId: request.requestId,
-        owner: request.owner,
-        receiptOwner,
-        transferSignature: body.transferSignature,
-        receiptTxs,
-        boxes: boxesWithCodes,
-      });
-      const orderValues: CommerceDocumentWriteData = {
-        ...order,
-        ...Object.fromEntries(Object.entries(createDeliveryPackStatusProjectionOutbox(runtime, order, commerce.nowMs))
-          .filter(([, value]) => !isCommerceDeleteField(value))),
-      };
-      const claimValues = boxesWithCodes.map((box) => ({
-        ...buildAdminIrlRedeemClaimCodeDocument({
-          dropId: runtime.dropId,
-          deliveryId,
-          owner: request.owner,
-          receiptOwner,
-          requestId: request.requestId,
-          box,
-        }),
-        createdAt: commerceFieldValue.serverTimestamp(),
-        updatedAt: commerceFieldValue.serverTimestamp(),
-      }));
-      const markers = new Map<string, { key: CommerceDocumentKey; values: CommerceDocumentWriteData }>();
-      boxesWithCodes.forEach((box) => {
-        const marker = buildAdminIrlRedeemMarkerDocument({
-          dropId: runtime.dropId,
-          deliveryId,
-          requestId: request.requestId,
-          owner: request.owner,
-          transferSignature: body.transferSignature,
-          selectionKey,
-          box,
-        });
-        for (const key of markerKeys(runtime.dropId, [box])) {
-          markers.set(key.path, {
-            key,
-            values: {
-              ...marker,
-              createdAt: commerceFieldValue.serverTimestamp(),
-            },
-          });
-        }
-      });
-      const completed: CommerceDocumentData = {
-        ...document.data,
-        status: 'complete',
-        deliveryId,
-        internalDeliveryId: internal.deliveryId,
-        internalDeliveryPda: internal.deliveryPda,
-        ...(internal.deliveryTx ? { internalDeliveryTx: internal.deliveryTx } : {}),
-        ...(closeDeliveryTx ? { closeDeliveryTx } : {}),
-        receiptTxs,
-        claimCodes,
-        boxes: boxesWithCodes.map((box) => ({
-          boxId: box.boxId,
-          originalAssetId: box.originalAssetId,
-          receiptAssetId: box.receiptAssetId,
-          claimCode: box.receiptClaimCode,
-          dudeIds: box.dudeIds,
-        })),
-      };
-      await transaction.getMany([
-        orderKey,
-        ...claimKeys,
-        ...Array.from(markers.values(), ({ key }) => key),
-        document.key,
-      ]);
-      await transaction.create(orderKey, {
-        ...orderValues,
-        createdAt: commerceFieldValue.serverTimestamp(),
-        processedAt: commerceFieldValue.serverTimestamp(),
-      });
-      for (const [index, values] of claimValues.entries()) {
-        await transaction.create(claimKeys[index], values);
-      }
-      for (const { key, values } of markers.values()) await transaction.create(key, values);
-      await transaction.update(document.key, completeRequestValues(completed));
-      return { status: 'created' as const, request: completed, order };
-    });
-    if (result.status === 'collision') continue;
-    return completeResponse(runtime.dropId, request.requestId, result.request);
-  }
-  throw new AdminIrlRedeemFinalizeError('unavailable', 'Failed to allocate Admin IRL redeem delivery id or claim codes.');
-}
-
-async function publishCard(
-  commerce: CommerceContext,
-  runtime: Runtime,
-  body: FinalizeRequest,
-  attemptId: string,
-  request: StartedRequest,
-  receiptOwner: string,
-  card: Omit<AdminIrlRedeemCardInput, 'receiptClaimCode'>,
-): Promise<AdminIrlRedeemFinalizeResponse> {
-  const markerKey = commerceKeys.adminIrlRedeemReceiptMarker(runtime.dropId, card.receiptAssetId);
-  for (let attempt = 0; attempt < MAX_DELIVERY_ALLOCATION_ATTEMPTS; attempt += 1) {
-    const deliveryId = newDeliveryId();
-    const claimCode = newClaimCodes(1)[0];
-    const cardWithCode = { ...card, receiptClaimCode: claimCode };
-    const orderKey = commerceKeys.deliveryOrder(runtime.dropId, String(deliveryId));
-    const claimKey = commerceKeys.claimCode(claimCode);
-    const result = await runCommerceTransaction<
-      { status: 'collision' } |
-      { status: 'complete'; request: Record<string, unknown> } |
-      { status: 'created'; request: Record<string, unknown> }
-    >(commerce, async (transaction) => {
-      const document = await readCommerceRecord(
-        commerce,
-        commerceKeys.adminIrlRedeemRequest(body.dropId, body.requestId),
-        transaction,
-      );
-      if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
-      if (document.data.status === 'complete') return { status: 'complete' as const, request: document.data };
-      if (document.data.status !== 'processing' || document.data.processingAttemptId !== attemptId) {
-        throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
-      }
-      const existingMarker = await readCommerceRecord(commerce, markerKey, transaction);
-      if (existingMarker) {
-        const marker = existingMarker.data;
-        const existingDeliveryId = Math.floor(Number(marker.deliveryId));
-        let existingClaimCode = '';
-        try { existingClaimCode = requireStripeReceiptClaimCode(marker.claimCode); } catch { throw markerConflict('invalid card receipt marker claim code'); }
-        if (
-          marker.version !== ADMIN_IRL_REDEEM_CARD_MARKER_VERSION ||
-          marker.source !== ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE ||
-          marker.targetKind !== 'card_receipt' || marker.dropId !== runtime.dropId ||
-          marker.receiptAssetId !== card.receiptAssetId || Number(marker.figureId) !== card.figureId ||
-          !Number.isSafeInteger(existingDeliveryId) || existingDeliveryId < 1 || marker.owner !== request.owner
-        ) throw markerConflict('card receipt marker mismatch');
-        const [order, claim] = await transaction.getMany([
-          commerceKeys.deliveryOrder(runtime.dropId, String(existingDeliveryId)),
-          commerceKeys.claimCode(existingClaimCode),
-        ]);
-        if (!order || !claim) throw markerConflict('card receipt marker order or claim missing');
-        const item = Array.isArray(order.data.items) && isRecord(order.data.items[0]) ? order.data.items[0] : {};
-        const orderClaim = isRecord(order.data.stripeReceiptClaim) ? order.data.stripeReceiptClaim : {};
-        if (
-          order.data.source !== ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE ||
-          !isRecord(order.data.adminIrlRedeem) || order.data.adminIrlRedeem.targetKind !== 'card_receipt' ||
-          order.data.owner !== request.owner || !Array.isArray(order.data.items) || order.data.items.length !== 1 ||
-          item.kind !== 'dude' || Number(item.refId) !== card.figureId || item.assetId !== card.receiptAssetId ||
-          orderClaim.receiptKind !== 'figure' || orderClaim.receiptAssetId !== card.receiptAssetId ||
-          Number(orderClaim.figureId) !== card.figureId || stripeReceiptClaimCodeMaybe(orderClaim) !== existingClaimCode ||
-          claim.data.namespace !== STRIPE_RECEIPT_CLAIM_CODE_NAMESPACE || claim.data.source !== ADMIN_IRL_REDEEM_DELIVERY_ORDER_SOURCE ||
-          claim.data.dropId !== runtime.dropId || Number(claim.data.deliveryId) !== existingDeliveryId ||
-          claim.data.receiptKind !== 'figure' || claim.data.receiptAssetId !== card.receiptAssetId || Number(claim.data.figureId) !== card.figureId ||
-          normalizeStripeReceiptClaimCode(claim.data.code) !== existingClaimCode
-        ) throw markerConflict('card receipt marker order or claim mismatch');
-        const completed: CommerceDocumentData = {
-          ...document.data,
-          status: 'complete',
-          deliveryId: existingDeliveryId,
-          receiptTxs: normalizeReceiptTxs(order.data.receiptTxs),
-          claimCodes: [existingClaimCode],
-          cards: [{ figureId: card.figureId, receiptAssetId: card.receiptAssetId, claimCode: existingClaimCode }],
-          duplicateOfRequestId: marker.requestId,
-        };
-        await transaction.update(document.key, completeRequestValues(completed));
-        return { status: 'complete' as const, request: completed };
-      }
-      const [orderExists, claimExists] = await transaction.getMany([orderKey, claimKey]);
-      if (orderExists || claimExists) return { status: 'collision' as const };
-      const order = buildAdminIrlRedeemCardDeliveryOrderDocument({
-        dropId: runtime.dropId,
-        deliveryId,
-        requestId: request.requestId,
-        owner: request.owner,
-        receiptOwner,
-        transferSignature: body.transferSignature,
-        card: cardWithCode,
-      });
-      const claim = buildAdminIrlRedeemCardClaimCodeDocument({
-        dropId: runtime.dropId,
-        deliveryId,
-        owner: request.owner,
-        receiptOwner,
-        requestId: request.requestId,
-        card: cardWithCode,
-      });
-      const marker = buildAdminIrlRedeemCardMarkerDocument({
-        dropId: runtime.dropId,
-        deliveryId,
-        requestId: request.requestId,
-        owner: request.owner,
-        transferSignature: body.transferSignature,
-        card: cardWithCode,
-      });
-      const completed: CommerceDocumentData = {
-        ...document.data,
-        status: 'complete',
-        deliveryId,
-        receiptTxs: [body.transferSignature],
-        claimCodes: [claimCode],
-        cards: [{ figureId: card.figureId, receiptAssetId: card.receiptAssetId, claimCode }],
-      };
-      await transaction.getMany([orderKey, claimKey, markerKey, document.key]);
-      await transaction.create(orderKey, {
-        ...order,
-        createdAt: commerceFieldValue.serverTimestamp(),
-        processedAt: commerceFieldValue.serverTimestamp(),
-      });
-      await transaction.create(claimKey, {
-        ...claim,
-        createdAt: commerceFieldValue.serverTimestamp(),
-        updatedAt: commerceFieldValue.serverTimestamp(),
-      });
-      await transaction.create(markerKey, {
-        ...marker,
-        createdAt: commerceFieldValue.serverTimestamp(),
-      });
-      await transaction.update(document.key, completeRequestValues(completed));
-      return { status: 'created' as const, request: completed };
-    });
-    if (result.status === 'collision') continue;
-    return completeResponse(runtime.dropId, request.requestId, result.request);
-  }
-  throw new AdminIrlRedeemFinalizeError('unavailable', 'Failed to allocate Admin IRL card receipt delivery id or claim code.');
-}
-
 function workflowCommerceContext(
   env: Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'DATA_DB'>>,
   signal: AbortSignal,
@@ -2426,199 +1055,8 @@ async function loadWorkflowRequest(
   args: AdminIrlRedeemFinalizeWorkflowStageArgs,
   confirmEntry = false,
 ): Promise<LoadedWorkflowRequest> {
-  const payload = parseAdminIrlRedeemFinalizeWorkflowPayload(args.payload);
-  if (!payload || !isAdminIrlRedeemFinalizeOperationId(args.operationId)) {
-    throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid Admin IRL redeem Workflow request.');
-  }
   const commerce = workflowCommerceContext(args.env, args.signal);
-  const key = commerceKeys.adminIrlRedeemRequest(payload.dropId, payload.requestId);
-  return runCommerceTransaction<LoadedWorkflowRequest>(commerce, async (transaction) => {
-    const document = await readCommerceRecord(commerce, key, transaction);
-    if (!document) throw new AdminIrlRedeemFinalizeError('not-found', 'Admin IRL redeem request not found.');
-    const fields = document.data;
-    const owner = canonicalPublicKey(fields.owner);
-    const transferSignature = canonicalSignature(fields.transferSignature);
-    if (!owner || !transferSignature) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem transfer signature is invalid.');
-    }
-    const body = { dropId: payload.dropId, requestId: payload.requestId, transferSignature };
-    const expectedOperationId = await adminIrlRedeemFinalizeOperationIdForWallet(body, owner);
-    if (expectedOperationId !== args.operationId || fields.dropId !== payload.dropId) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem Workflow identity mismatch.');
-    }
-    if (fields.status === 'complete') {
-      return {
-        status: 'complete' as const,
-        response: completeResponse(payload.dropId, payload.requestId, fields),
-        body,
-        commerce,
-      };
-    }
-    if (fields.status !== 'processing' || fields.processingAttemptId !== args.operationId) {
-      throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
-    }
-    const request = startedFinalizeRequest(body, fields, owner);
-    const execution = request.workflowFinalizeV1;
-    if (
-      !execution || execution.operationId !== args.operationId || execution.owner !== owner ||
-      execution.transferSignature !== transferSignature || execution.adminWallet !== request.adminWallet
-    ) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution is invalid.');
-    }
-    const enteredAtMs = Date.now();
-    const enteredEffect = confirmEntry && execution.pendingEffect?.kind === 'create'
-      ? {
-          ...execution.pendingEffect,
-          untilMs: Math.max(execution.pendingEffect.untilMs, enteredAtMs + WORKFLOW_EFFECT_LEASE_MS),
-        }
-      : undefined;
-    await transaction.update(document.key, {
-      processingLeaseExpiresAt: timestamp(enteredAtMs + PROCESSING_LEASE_MS),
-      ...(enteredEffect
-        ? { [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: enteredEffect }
-        : {}),
-      ...(confirmEntry ? {
-        [`${WORKFLOW_EXECUTION_FIELD}.failure`]: commerceFieldValue.delete(),
-        [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
-      } : {}),
-      updatedAt: commerceFieldValue.serverTimestamp(),
-    });
-    return {
-      status: 'started' as const,
-      body,
-      commerce,
-      request,
-      execution,
-      ...(request.workflowPublicationDraftV1 ? { draft: request.workflowPublicationDraftV1 } : {}),
-    };
-  });
-}
-
-function validateWorkflowDraftForRequest(
-  draft: AdminIrlRedeemFinalizeWorkflowPublicationDraftV1,
-  request: StartedRequest,
-  runtime: Runtime,
-): void {
-  if (draft.receiptOwner !== request.adminWallet || draft.targetKind !== request.targetKind) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem publication draft does not match the request.');
-  }
-  if (draft.targetKind === 'card_receipt') {
-    const item = request.items[0];
-    if (
-      request.items.length !== 1 || !item || item.kind !== 'card_receipt' ||
-      draft.card.figureId !== item.refId || draft.card.receiptAssetId !== item.assetId
-    ) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem publication draft does not match the request.');
-    }
-    return;
-  }
-  if (draft.mode === 'marker_reuse') return;
-  const [expectedDeliveryPda] = deriveDeliveryPda(runtime, draft.internalDelivery.deliveryId);
-  if (
-    expectedDeliveryPda.toBase58() !== draft.internalDelivery.deliveryPda ||
-    request.internalDeliveryId !== draft.internalDelivery.deliveryId ||
-    request.internalDeliveryPda !== draft.internalDelivery.deliveryPda ||
-    (request.internalDeliveryTx || null) !== draft.internalDelivery.deliveryTx ||
-    (request.closeDeliveryTx || null) !== draft.closeDeliveryTx ||
-    request.receiptTxs.length !== draft.receiptTxs.length ||
-    request.receiptTxs.some((signature, index) => signature !== draft.receiptTxs[index]) ||
-    draft.boxes.length !== request.items.length ||
-    new Set(draft.boxes.map((box) => box.receiptAssetId)).size !== draft.boxes.length ||
-    new Set(draft.boxes.flatMap((box) => box.dudeIds)).size !== draft.boxes.reduce((sum, box) => sum + box.dudeIds.length, 0) ||
-    draft.boxes.some((box, index) => {
-      const item = request.items[index];
-      return !item || item.kind !== 'box' || box.boxId !== item.refId ||
-        box.originalAssetId !== item.assetId || box.dudeIds.length !== runtime.itemsPerBox ||
-        box.dudeIds.some((dudeId) => dudeId > runtime.maxDudeId);
-    })
-  ) {
-    throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem publication draft does not match the request.');
-  }
-}
-
-async function persistWorkflowOnchain(
-  loaded: Extract<LoadedWorkflowRequest, { status: 'started' }>,
-  onchain: AdminIrlRedeemFinalizeWorkflowOnchainV1,
-): Promise<void> {
-  let persisted = onchain;
-  await runCommerceTransaction(loaded.commerce, async (transaction) => {
-    const document = await readCommerceRecord(
-      loaded.commerce,
-      commerceKeys.adminIrlRedeemRequest(loaded.body.dropId, loaded.body.requestId),
-      transaction,
-    );
-    if (
-      !document || document.data.status !== 'processing' ||
-      document.data.processingAttemptId !== loaded.execution.operationId
-    ) {
-      throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
-    }
-    const current = normalizeWorkflowExecution(document.data[WORKFLOW_EXECUTION_FIELD], loaded.body);
-    if (
-      current.operationId !== loaded.execution.operationId ||
-      current.owner !== loaded.execution.owner ||
-      current.transferSignature !== loaded.execution.transferSignature ||
-      current.adminWallet !== loaded.execution.adminWallet ||
-      JSON.stringify(current.config) !== JSON.stringify(loaded.execution.config)
-    ) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Stored Admin IRL redeem Workflow execution changed.');
-    }
-    const existing = current.onchain;
-    if (existing && (
-      existing.adminWallet !== onchain.adminWallet ||
-      existing.coreCollection !== onchain.coreCollection ||
-      existing.treasury !== onchain.treasury
-    )) {
-      throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL redeem on-chain configuration changed.');
-    }
-    persisted = existing || onchain;
-    await transaction.update(document.key, {
-      [`${WORKFLOW_EXECUTION_FIELD}.onchain`]: persisted,
-      processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-      updatedAt: commerceFieldValue.serverTimestamp(),
-    });
-  });
-  loaded.execution.onchain = persisted;
-}
-
-async function persistWorkflowDraft(
-  loaded: Extract<LoadedWorkflowRequest, { status: 'started' }>,
-  draft: AdminIrlRedeemFinalizeWorkflowPublicationDraftV1,
-): Promise<void> {
-  const runtime = buildAdminIrlRedeemRuntime(loaded.execution.config);
-  await runCommerceTransaction(loaded.commerce, async (transaction) => {
-    const document = await readCommerceRecord(
-      loaded.commerce,
-      commerceKeys.adminIrlRedeemRequest(loaded.body.dropId, loaded.body.requestId),
-      transaction,
-    );
-    if (!document || document.data.status !== 'processing' || document.data.processingAttemptId !== loaded.execution.operationId) {
-      throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
-    }
-    const currentRequest = startedFinalizeRequest(loaded.body, document.data, loaded.request.owner);
-    const candidate = draft.targetKind === 'pack' && draft.mode === 'prepared'
-      ? {
-          ...draft,
-          internalDelivery: {
-            ...draft.internalDelivery,
-            deliveryTx: currentRequest.internalDeliveryTx || null,
-          },
-          closeDeliveryTx: currentRequest.closeDeliveryTx || null,
-          receiptTxs: currentRequest.receiptTxs,
-        }
-      : draft;
-    validateWorkflowDraftForRequest(candidate, currentRequest, runtime);
-    const existing = normalizeWorkflowDraft(document.data[WORKFLOW_DRAFT_FIELD]);
-    if (existing) {
-      validateWorkflowDraftForRequest(existing, currentRequest, runtime);
-      return;
-    }
-    await transaction.update(document.key, {
-      [WORKFLOW_DRAFT_FIELD]: candidate,
-      processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-      updatedAt: commerceFieldValue.serverTimestamp(),
-    });
-  });
+  return { ...await enterWorkflow(commerce, args, confirmEntry), commerce };
 }
 
 export async function reserveAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
@@ -2948,56 +1386,11 @@ export async function cleanupAdminIrlRedeemFinalizeWorkflow(args: Readonly<{
   payload: AdminIrlRedeemFinalizeWorkflowPayload;
   signal: AbortSignal;
 }>): Promise<{ cleared: boolean }> {
-  const payload = parseAdminIrlRedeemFinalizeWorkflowPayload(args.payload);
-  if (!payload) throw new AdminIrlRedeemFinalizeError('invalid-argument', 'Invalid Admin IRL redeem Workflow request.');
-  const workflowError = workflowErrorForCode(
-    isAdminIrlRedeemFinalizeErrorCode(args.error.code) ? args.error.code : 'internal',
-  );
-  const commerce = workflowCommerceContext(args.env, args.signal);
-  return runCommerceTransaction<{ cleared: boolean }>(commerce, async (transaction) => {
-    const document = await readCommerceRecord(
-      commerce,
-      commerceKeys.adminIrlRedeemRequest(payload.dropId, payload.requestId),
-      transaction,
-    );
-    if (!document || document.data.status !== 'processing' || document.data.processingAttemptId !== args.operationId) {
-      return { cleared: false };
-    }
-    const hasProgress = document.data.pendingFinalizeSubmission !== undefined ||
-      document.data.internalDeliveryTx !== undefined ||
-      normalizeReceiptTxs(document.data.receiptTxs).length > 0 ||
-      document.data[WORKFLOW_DRAFT_FIELD] !== undefined;
-    if (hasProgress) {
-      await transaction.update(document.key, {
-        lastFinalizeError: {
-          kind: 'workflow',
-          code: workflowError.code,
-          recovery: workflowError.retryable ? 'automatic' : 'manual',
-        },
-        [`${WORKFLOW_EXECUTION_FIELD}.failure`]: workflowError,
-        processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
-        [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
-        [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: commerceFieldValue.delete(),
-        lastFinalizeErrorAt: commerceFieldValue.serverTimestamp(),
-        updatedAt: commerceFieldValue.serverTimestamp(),
-      });
-      return { cleared: false };
-    }
-    await transaction.update(document.key, {
-      status: 'prepared',
-      lastFinalizeError: { kind: 'workflow', code: workflowError.code },
-      [`${WORKFLOW_EXECUTION_FIELD}.failure`]: workflowError,
-      preparedExpiresAt: timestamp(Date.now() + PREPARED_TTL_MS),
-      processingAttemptId: commerceFieldValue.delete(),
-      processingStartedAt: commerceFieldValue.delete(),
-      processingLeaseExpiresAt: commerceFieldValue.delete(),
-      [WORKFLOW_DRAFT_FIELD]: commerceFieldValue.delete(),
-      [`${WORKFLOW_EXECUTION_FIELD}.instanceCreationPending`]: commerceFieldValue.delete(),
-      [`${WORKFLOW_EXECUTION_FIELD}.pendingEffect`]: commerceFieldValue.delete(),
-      lastFinalizeErrorAt: commerceFieldValue.serverTimestamp(),
-      updatedAt: commerceFieldValue.serverTimestamp(),
-    });
-    return { cleared: true };
+  return recordWorkflowFailure({
+    commerce: workflowCommerceContext(args.env, args.signal),
+    error: args.error,
+    operationId: args.operationId,
+    payload: args.payload,
   });
 }
 
@@ -3041,7 +1434,13 @@ export const adminIrlRedeemFinalizeTestHooks = {
   normalizePendingFinalizeSubmission,
   isDefinitiveTransactionFailure,
   mintPackReceipts,
-  persistPendingFinalizeSubmission,
+  persistPendingFinalizeSubmission: (
+    context: Parameters<typeof persistPendingFinalizeSubmission>[0],
+    path: string,
+    attemptId: string,
+    pending: PendingFinalizeSubmission,
+  ) =>
+    persistPendingFinalizeSubmission(context, requestKey(path), attemptId, pending),
   pendingFinalizeSubmissionAlreadySettled,
   persistWorkflowOnchain,
   probePendingFinalizeSubmission,
@@ -3050,9 +1449,18 @@ export const adminIrlRedeemFinalizeTestHooks = {
   rethrowUnbroadcastFinalizeCancellation,
   runtimeSupportsFinalize,
   scanAssetsByOwner,
-  settlePendingFinalizeSubmission,
+  settlePendingFinalizeSubmission: (
+    context: Parameters<typeof settlePendingFinalizeSubmission>[0],
+    path: string,
+    attemptId: string,
+    pending: PendingFinalizeSubmission,
+    outcome: 'confirmed' | 'expired',
+  ) =>
+    settlePendingFinalizeSubmission(context, requestKey(path), attemptId, pending, outcome),
   startFinalize,
   verifyCardTransfer,
   verifyPackTransfer,
   waitForCardReceipt,
 };
+
+export type { AdminIrlRedeemFinalizeResponse } from './adminIrlRedeemRequestState.js';

@@ -1,5 +1,4 @@
 export {
-  buildRuntime,
   fetchAsset,
   fetchAssetProof,
   loadLookupTable,
@@ -7,3 +6,5 @@ export {
   receiptDropIdentity,
   rpcCall,
 } from './adminIrlRedeemPrepare.js';
+
+export { buildRuntime } from './adminIrlRedeemRuntime.js';

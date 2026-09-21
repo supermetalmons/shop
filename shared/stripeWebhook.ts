@@ -95,9 +95,16 @@ export type StripeWebhookAction =
 export type StripeWebhookTransition = {
   outcome: 'queued' | 'already_pending' | 'already_fulfilled';
   deliveryId?: number;
-  fields: Record<string, unknown>;
-  deleteFields: string[];
-  serverTimestampFields: string[];
+  fields: {
+    lastStripeWebhookEventId: string;
+    fulfillmentProcessor?: typeof STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR;
+    status?: typeof STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING;
+    paymentStatus?: unknown;
+    stripeSessionSummary?: StripeWebhookSession;
+    lastStripeWebhookEventType?: StripeCheckoutFulfillmentEventType;
+  };
+  deleteFields: Array<typeof FAILURE_STATE_FIELDS[number] | typeof PROCESSING_STATE_FIELDS[number]>;
+  serverTimestampFields: Array<'fulfillmentRequestedAt' | 'updatedAt'>;
 };
 
 const STRIPE_CHECKOUT_SESSION_ID_RE = /^[A-Za-z0-9_:-]{4,256}$/;
@@ -164,7 +171,7 @@ function normalizeVariantKey(
   }
 }
 
-function sessionSnapshot(session: StripeWebhookSession): Record<string, unknown> {
+function sessionSnapshot(session: StripeWebhookSession): StripeWebhookSession {
   return {
     id: session.id,
     livemode: session.livemode,

@@ -8,7 +8,6 @@ import { StripeCheckoutFulfillmentError } from '../src/stripeCheckout/errors.ts'
 import { isRetryableStripeCheckoutFulfillmentError } from '../src/stripeCheckout/service.ts';
 import type { ProfileProviderFetch } from '../src/boundedResponse.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
-import { isCommerceServerTimestamp } from '../src/commerceRepositoryTypes.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 import {
   flowDependencies,
@@ -268,7 +267,7 @@ test('Stripe fulfillment defers address encryption setup until the address is pe
 test('Stripe fulfillment provides Worker completion fields for the atomic fulfilled write', () => {
   const fields = stripeCheckoutFulfillmentTestHooks.workerFulfillmentCompletionFields();
   assert.equal(fields.fulfillmentCompletedBy, 'cloudflare_queue_v1');
-  assert.ok(isCommerceServerTimestamp(fields.fulfillmentCompletedAt));
+  assert.deepEqual(fields, { fulfillmentCompletedBy: 'cloudflare_queue_v1' });
 });
 
 type RpcRequest = { id: string; method: string; params: unknown[] };

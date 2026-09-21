@@ -30,6 +30,7 @@ test('new anonymous checkout documents use only the canonical identity contract'
   const checkout = checkoutDocument();
   assert.equal(stripeCheckoutAnonymousOwnerId(AUTH_SUBJECT), `anonymous:${AUTH_SUBJECT}`);
   assert.equal(Object.hasOwn(checkout, 'uid'), false);
+  assert.ok('authSubject' in checkout);
   assert.equal(checkout.authSubject, AUTH_SUBJECT);
   assert.equal(checkout.owner, `anonymous:${AUTH_SUBJECT}`);
   assert.equal(checkout.ownerKind, STRIPE_CHECKOUT_OWNER_KIND_ANONYMOUS);

@@ -65,7 +65,6 @@ import {
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
-  commerceFieldValue,
   commerceKeys,
   type CommerceDocumentData,
   type CommerceDocumentKey,
@@ -161,6 +160,7 @@ async function stripeFulfillmentCancellationFixture(t: TestContext, suffix: stri
   const work = new AbortController();
   const persistence = new AbortController();
   const stripe = await stripeClientForKey(apiKey, 'test');
+  const unexpectedDependency = (): never => { throw new Error('Unexpected fulfillment dependency call'); };
   const params = {
     commerce: { ...fixture.commerce, signal: persistence.signal },
     dropId,
@@ -168,7 +168,36 @@ async function stripeFulfillmentCancellationFixture(t: TestContext, suffix: stri
     checkoutKey: fixture.checkoutKey,
     apiKeys: [apiKey],
     deps: {
-      getDropRuntime: () => ({ dropId, cluster: 'devnet' }),
+      getDropRuntime: () => ({
+        dropId,
+        cluster: 'devnet',
+        itemsPerBox: 1,
+        boxMinterProgramId: pubkey(1),
+        boxMinterConfigPda: pubkey(2),
+        collectionMint: pubkey(3),
+        receiptsMerkleTree: pubkey(4),
+        config: { dropFamily: 'little_swag_hoodies' },
+      }),
+      requireDropId: () => dropId,
+      runRpc: unexpectedDependency,
+      ensureOnchainCoreConfig: unexpectedDependency,
+      requireStripeCheckoutCollectionMatchesConfig: unexpectedDependency,
+      cosigner: unexpectedDependency,
+      encryptAddress: unexpectedDependency,
+      normalizeCountryCode: unexpectedDependency,
+      buildTx: unexpectedDependency,
+      sendAndConfirmSignedTx: unexpectedDependency,
+      isAlreadyExistsError: unexpectedDependency,
+      programs: {
+        bubblegumProgramId: pubkey(5),
+        mplNoopProgramId: pubkey(6),
+        mplAccountCompressionProgramId: pubkey(7),
+        mplCoreProgramId: pubkey(8),
+        mplCoreCpiSigner: pubkey(9),
+      },
+      rpcTimeoutMs: 1_000,
+      txSendTimeoutMs: 1_000,
+      txConfirmTimeoutMs: 1_000,
       summarizeError: (error: unknown) => ({
         message: error instanceof Error ? error.message : String(error),
         ...(error instanceof StripeCheckoutFulfillmentError ? {
@@ -177,7 +206,7 @@ async function stripeFulfillmentCancellationFixture(t: TestContext, suffix: stri
         } : {}),
       }),
       signal: work.signal,
-    } as Parameters<typeof processStripeCheckoutFulfillmentDocument>[0]['deps'],
+    } satisfies Parameters<typeof processStripeCheckoutFulfillmentDocument>[0]['deps'],
   };
   return { ...fixture, params, work, persistence, stripe };
 }
@@ -1388,7 +1417,6 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
     processingAttemptId: 'attempt_current',
     fulfillmentCompletionFields: {
       fulfillmentCompletedBy: 'cloudflare_queue_v1',
-      fulfillmentCompletedAt: commerceFieldValue.serverTimestamp(),
     },
     order: {
       dropId,
@@ -2668,7 +2696,6 @@ test('markStripeCheckoutFulfillmentFulfilled writes only the current processing 
     processingAttemptId: 'attempt_current',
     fulfillmentCompletionFields: {
       fulfillmentCompletedBy: 'cloudflare_queue_v1',
-      fulfillmentCompletedAt: commerceFieldValue.serverTimestamp(),
     },
   });
 

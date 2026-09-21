@@ -26,7 +26,6 @@ import {
   commerceFieldValue,
   commerceKeys,
   type CommerceDocumentRecord,
-  type CommerceDocumentWriteData,
 } from './commerceRepository.js';
 import {
   readCommerceRecord,
@@ -48,6 +47,22 @@ const PACK_STATUS_PROJECTION_FAILURE_COUNT_FIELD = 'packStatusProjectionFailureC
 const PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD = 'packStatusProjectionCompletedAt';
 const PACK_STATUS_PROJECTION_FAILED_AT_FIELD = 'packStatusProjectionFailedAt';
 const PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD = 'packStatusProjectionLastErrorCode';
+
+type ProjectionDeleteField = ReturnType<typeof commerceFieldValue.delete>;
+type ProjectionTimestamp = ReturnType<typeof commerceFieldValue.serverTimestamp>;
+type ProjectionState =
+  | typeof PACK_STATUS_PROJECTION_PENDING
+  | typeof PACK_STATUS_PROJECTION_COMPLETED
+  | typeof PACK_STATUS_PROJECTION_FAILED;
+
+export type DeliveryPackStatusProjectionUpdates = {
+  packStatusProjectionState?: ProjectionState | ProjectionDeleteField;
+  packStatusProjectionNextAttemptAtMs?: number | ProjectionDeleteField;
+  packStatusProjectionFailureCount?: number | ProjectionDeleteField;
+  packStatusProjectionCompletedAt?: ProjectionTimestamp | ProjectionDeleteField;
+  packStatusProjectionFailedAt?: ProjectionTimestamp | ProjectionDeleteField;
+  packStatusProjectionLastErrorCode?: string | ProjectionDeleteField;
+};
 
 class DeliveryPackStatusProjectionInvalidError extends Error {
   constructor(readonly code: string, message: string) {
@@ -91,7 +106,7 @@ export function createDeliveryPackStatusProjectionOutbox(
   runtime: DeliveryRuntime,
   order: Record<string, unknown>,
   nowMs = Date.now(),
-): CommerceDocumentWriteData {
+): DeliveryPackStatusProjectionUpdates {
   if (!shouldProjectNormalIrlPackStatus(runtime, order)) return {};
   if (countDeliveryOrderBoxItems(order.items) < 1 && countDeliveryOrderDudeItems(order.items) < 1) {
     return {};
@@ -160,8 +175,8 @@ async function transitionDeliveryPackStatusProjection(
   context: DeliveryPackStatusContext,
   documentPath: string,
   options: {
-    values: CommerceDocumentWriteData;
-    requiredState: string;
+    values: DeliveryPackStatusProjectionUpdates;
+    requiredState: typeof PACK_STATUS_PROJECTION_PENDING;
   },
 ): Promise<boolean> {
   return runCommerceTransaction(context, async (transaction) => {
@@ -251,7 +266,7 @@ async function recordDeliveryPackStatusProjectionTransientFailure(args: {
       [PACK_STATUS_PROJECTION_LAST_ERROR_CODE_FIELD]: args.errorCode,
       [PACK_STATUS_PROJECTION_COMPLETED_AT_FIELD]: commerceFieldValue.delete(),
       [PACK_STATUS_PROJECTION_FAILED_AT_FIELD]: commerceFieldValue.delete(),
-    });
+    } satisfies DeliveryPackStatusProjectionUpdates);
     return true;
   });
 }

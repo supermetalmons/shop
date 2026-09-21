@@ -62,6 +62,8 @@ export const IX_ADMIN_DELIVER_VARIANT_ORDER = Buffer.from('bf80de4f9c1a0722', 'h
 export const ACCOUNT_ADMIN_DELIVERY_ORDER = Buffer.from('cde7b3967ff802f4', 'hex');
 const ADMIN_DELIVERY_ORDER_RECORD_SIZE = 8 + 32 + 1 + 1 + 4 + 32 + 8 + 1;
 
+export const STRIPE_CHECKOUT_PROCESSING_LEASE_MS = 5 * 60 * 1000;
+
 export type DecodedAdminDeliveryOrderRecord = {
   orderHash: Buffer;
   variantIndex: number;
@@ -468,7 +470,7 @@ function normalizeStripeReceiptClaims(
   return claims;
 }
 
-export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDeliveryOrderDocumentInput): Record<string, unknown> {
+export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDeliveryOrderDocumentInput) {
   const identity = normalizeStripeOffchainDeliveryOrderIdentity(args);
   const metadataIds = normalizeStripeMetadataIds(args);
   const stripeReceiptClaims = normalizeStripeReceiptClaims(args, metadataIds);
@@ -479,13 +481,13 @@ export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDel
   return {
     dropId: args.dropId,
     source: STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE,
-    status: 'ready_to_ship',
+    status: 'ready_to_ship' as const,
     ...identity,
     receiptOwner: args.receiptOwner,
     addressSnapshot: args.addressSnapshot,
     itemIds: [],
     items: metadataIds.map((metadataId) => ({
-      kind: 'box',
+      kind: 'box' as const,
       refId: metadataId,
       ...(variantKey ? { variantKey } : {}),
     })),
@@ -506,7 +508,7 @@ export function buildStripeOffchainDeliveryOrderDocument(args: StripeOffchainDel
   };
 }
 
-export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliveryOrderDocumentInput): Record<string, unknown> {
+export function buildStripeOffchainOrderMarkerDocument(args: StripeOffchainDeliveryOrderDocumentInput) {
   const identity = normalizeStripeOffchainDeliveryOrderIdentity(args);
   const metadataIds = normalizeStripeMetadataIds(args);
   const stripeReceiptClaims = normalizeStripeReceiptClaims(args, metadataIds);

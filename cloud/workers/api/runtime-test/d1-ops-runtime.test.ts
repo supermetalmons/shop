@@ -675,7 +675,6 @@ test('ops D1 migrations preserve historical controls and receipt-transfer limits
     await assert.rejects(deliveryPrepareTestHooks.loadAddress({
       commerceDb: createCommerceD1(),
       nowMs: 4_000,
-      providerFetch: async () => assert.fail('D1-only address read reached an external provider'),
       signal: new AbortController().signal,
     }, env.OPS_DB, missingWallet, 'XbCdEfGhIjKlMnOpQrSt'), /Address not found/);
     await ensureD1Profile(env.OPS_DB, {

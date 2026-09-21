@@ -12,6 +12,10 @@ import {
   type ProfileWritePath,
 } from '../src/profileWrites.ts';
 import { shipStationRateInputHash } from '../src/shipstation/rates.ts';
+import { setFulfillmentAddress } from '../src/fulfillmentAddressStore.ts';
+import type { FulfillmentStoreContext } from '../src/profileWriteCommerce.ts';
+import { claimShipStationRateRefresh } from '../src/shipstation/rateStore.ts';
+import { transitionFulfillmentShipStationLabelPurchase } from '../src/shipstation/labelStore.ts';
 import { createProfileAddressId } from '../../../../shared/profileD1.ts';
 import {
   encryptAddressCipherText,
@@ -5484,3 +5488,42 @@ test('generated Commerce auto IDs are cryptographic-compatible document IDs', ()
   assert.equal(new Set(ids).size, ids.length);
   assert.ok(ids.every((id) => /^[A-Za-z0-9]{20}$/.test(id)));
 });
+
+function assertFulfillmentStoreInputTypes(common: FulfillmentStoreContext): void {
+  void setFulfillmentAddress({
+    common,
+    dropId: 'card_nft_binder',
+    deliveryId: 1,
+    full: 'Delivery address',
+    encrypted: 'ciphertext',
+    hint: 'Delivery address',
+    wallet: OWNER,
+    // @ts-expect-error Address persistence cannot apply arbitrary document patches.
+    updates: { owner: OTHER },
+  });
+  void claimShipStationRateRefresh({
+    common,
+    dropId: 'card_nft_binder',
+    deliveryId: 1,
+    expected: { shipmentId: 'shipment', labelIdentity: '', purchaseIdentity: '', claimId: null, claimedBy: null },
+    claimId: 'claim',
+    wallet: OWNER,
+    onWriteAttempt: () => undefined,
+    // @ts-expect-error Rate claims own their mutation logic inside the store.
+    build: () => ({ updates: { owner: OTHER } }),
+  });
+  void transitionFulfillmentShipStationLabelPurchase({
+    common,
+    dropId: 'card_nft_binder',
+    shipmentId: 'shipment',
+    body: { deliveryId: 1, rateId: 'rate', expectedTotal: { currency: 'usd', amount: 1 }, requestId: 'request' },
+    message: 'Provider result unavailable',
+    wallet: OWNER,
+    // @ts-expect-error Failure persistence cannot mark an unconfirmed purchase complete.
+    nextStatus: 'complete',
+  });
+  // @ts-expect-error Persistence contexts do not expose provider calls.
+  void common.providerFetch;
+}
+
+void assertFulfillmentStoreInputTypes;

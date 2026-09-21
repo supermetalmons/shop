@@ -1,3 +1,4 @@
+import { setFulfillmentAddress } from './fulfillmentAddressStore.js';
 import { z } from 'zod';
 import { normalizeCountryCode } from '../../../../shared/countryNormalization.js';
 import {
@@ -6,15 +7,10 @@ import {
 } from '../../../../shared/fulfillmentAccess.js';
 import { FULFILLMENT_STATUS_OPTIONS } from '../../../../shared/fulfillmentStatus.js';
 import {
-  isActiveShipStationLabel,
-  storedFulfillmentShipStationLabel,
-} from '../../../../shared/shipstationLabels.js';
-import {
   createProfileAddressId,
   PROFILE_ADDRESS_ID_PATTERN,
 } from '../../../../shared/profileD1.js';
 import type {
-  FulfillmentOrderAddress,
   ProfileAddress,
   UpdateFulfillmentAddressResponse,
 } from '../../../../shared/contracts.js';
@@ -34,7 +30,6 @@ import {
 } from './boundedRequest.js';
 import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
-  isRecord,
   ProfileReadError,
 } from './dataAccess.js';
 import {
@@ -45,13 +40,10 @@ import {
 import { rethrowDeferredWorkRegistrationError } from './deferredWork.js';
 import {
   D1CommerceRepository,
-  commerceFieldValue,
 } from './commerceRepository.js';
 import {
-  mutateDeliveryOrder,
   type CommerceWriteCommon,
 } from './profileWriteCommerce.js';
-import { optionalString } from './profileWriteRates.js';
 import { saveD1ProfileAddress } from './profileD1.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
@@ -76,9 +68,6 @@ import {
   supportedDropId,
   requireFulfillmentAccess,
   encryptFulfillmentAddress,
-  rejectIrlShipStationOrder,
-  shipStationState,
-  SHIPSTATION_CLAIM_TTL_MS,
   ShipStationProfileError,
 } from './shipstation/common.js';
 import { shipStationLabelOperations } from './shipstation/labels.js';
@@ -307,77 +296,13 @@ async function updateFulfillmentAddress(
     throw new ProfileReadError('permission-denied', 403, 'Fulfillment address admin access denied.');
   }
   const encryptedAddress = encryptFulfillmentAddress(body.full, addressSecret);
-  return mutateDeliveryOrder<UpdateFulfillmentAddressResponse>({
+  return setFulfillmentAddress({
     common,
     dropId,
     deliveryId: body.deliveryId,
-    build: ({ fields: order }) => {
-      rejectIrlShipStationOrder(order);
-      const shipstation = shipStationState(order);
-      if (optionalString(shipstation.shipmentId)) {
-        throw new ProfileReadError(
-          'failed-precondition',
-          409,
-          'This order is already in ShipStation. Update its delivery address in ShipStation.',
-        );
-      }
-      if (isActiveShipStationLabel(storedFulfillmentShipStationLabel(shipstation.label))) {
-        throw new ProfileReadError(
-          'failed-precondition',
-          409,
-          'This order already has a ShipStation label. Void it before changing the delivery address.',
-        );
-      }
-      const labelPurchase = isRecord(shipstation.labelPurchase) ? shipstation.labelPurchase : {};
-      const purchaseStatus = typeof labelPurchase.status === 'string' ? labelPurchase.status : '';
-      if (purchaseStatus === 'purchasing' || purchaseStatus === 'unknown') {
-        throw new ProfileReadError(
-          'aborted',
-          409,
-          'Check the ShipStation label purchase status before editing this address.',
-        );
-      }
-      const shipmentClaimedAt = typeof shipstation.claimedAt === 'number' ? shipstation.claimedAt : 0;
-      if (shipmentClaimedAt && common.nowMs - shipmentClaimedAt < SHIPSTATION_CLAIM_TTL_MS) {
-        throw new ProfileReadError(
-          'aborted',
-          409,
-          'This order is being added to ShipStation. Try editing the address again in a moment.',
-        );
-      }
-      const ratesClaimedAt = typeof shipstation.ratesClaimedAt === 'number' ? shipstation.ratesClaimedAt : 0;
-      if (ratesClaimedAt && common.nowMs - ratesClaimedAt < SHIPSTATION_CLAIM_TTL_MS) {
-        throw new ProfileReadError(
-          'aborted',
-          409,
-          'ShipStation rates are being refreshed. Try editing the address again in a moment.',
-        );
-      }
-      const snapshot = isRecord(order.addressSnapshot) ? order.addressSnapshot : {};
-      const address: FulfillmentOrderAddress = {
-        full: body.full,
-        encrypted: encryptedAddress.encrypted,
-        hint: encryptedAddress.hint,
-        ...(typeof snapshot.label === 'string' ? { label: snapshot.label } : {}),
-        ...(typeof snapshot.email === 'string' ? { email: snapshot.email } : {}),
-        ...(typeof snapshot.phone === 'string' ? { phone: snapshot.phone } : {}),
-        ...(typeof snapshot.country === 'string' ? { country: snapshot.country } : {}),
-        ...(typeof snapshot.countryCode === 'string' ? { countryCode: snapshot.countryCode } : {}),
-      };
-      return {
-        value: { deliveryId: body.deliveryId, address },
-        updates: {
-          'addressSnapshot.encrypted': encryptedAddress.encrypted,
-          'addressSnapshot.hint': encryptedAddress.hint,
-          fulfillmentAddressUpdatedBy: wallet,
-          fulfillmentAddressUpdatedAt: commerceFieldValue.serverTimestamp(),
-          'shipstation.rateQuotes': commerceFieldValue.delete(),
-          'shipstation.ratesClaimId': commerceFieldValue.delete(),
-          'shipstation.ratesClaimedAt': commerceFieldValue.delete(),
-          'shipstation.ratesClaimedBy': commerceFieldValue.delete(),
-        },
-      };
-    },
+    full: body.full,
+    ...encryptedAddress,
+    wallet,
   });
 }
 

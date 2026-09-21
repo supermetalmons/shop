@@ -1,5 +1,3 @@
-import bs58 from 'bs58';
-import { z } from 'zod';
 import {
   AddressLookupTableAccount,
   AddressLookupTableProgram,
@@ -10,23 +8,8 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
-import {
-  API_DROPS,
-  getApiDrop,
-  type ApiDropConfig,
-} from './dropConfig.js';
-import { bubblegumTransferV2Ix } from './bubblegum.js';
-import {
-  dropAdminIrlRedeemReceiptMarkerPath,
-  dropAdminIrlRedeemRequestPath,
-} from './dropPaths.js';
-import {
-  assetMatchesReceiptDropIdentity,
-  assetMatchesReceiptMetadataIdentity,
-  assetProofTreePublicKey,
-  normalizedAssetProofAccounts,
-  receiptMetadataReference,
-} from './receiptProof.js';
+import bs58 from 'bs58';
+import { z } from 'zod';
 import {
   getAdminIrlRedeemTargetEligibility,
   isAdminIrlRedeemDropFamily,
@@ -37,20 +20,12 @@ import {
   decodeBoxMinterConfigData,
   type DecodedBoxMinterConfigData,
 } from '../../../../shared/boxMinterConfigCodec.js';
-import {
-  BOX_MINTER_CONFIG_SEED,
-  BOX_MINTER_PENDING_OPEN_SEED,
-  isConfiguredBoxMinterItemsPerBox,
-} from '../../../../shared/boxMinterProtocol.js';
+import { BOX_MINTER_PENDING_OPEN_SEED } from '../../../../shared/boxMinterProtocol.js';
 import {
   ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER,
   type AdminIrlRedeemPrepareRequest,
   type AdminIrlRedeemPreparedTxResponse,
 } from '../../../../shared/contracts.js';
-import {
-  assetGroupingCollectionMints,
-  uniqueAssetGroupingCollectionMint,
-} from '../../../../shared/dasAssetCollections.js';
 import {
   dasAssetBoxId,
   dasAssetKind,
@@ -58,9 +33,10 @@ import {
   type DasAsset,
 } from '../../../../shared/dasAsset.js';
 import {
-  normalizeDropId,
-  type SolanaCluster,
-} from '../../../../shared/deploymentCore.js';
+  assetGroupingCollectionMints,
+  uniqueAssetGroupingCollectionMint,
+} from '../../../../shared/dasAssetCollections.js';
+import { normalizeDropId } from '../../../../shared/deploymentCore.js';
 import {
   ADMIN_IRL_REDEEM_ADDITIONAL_WALLET_ADDRESSES,
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
@@ -74,15 +50,16 @@ import {
   MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
+import { AdminIrlRedeemPrepareError } from './adminIrlRedeemErrors.js';
 import {
-  RequestIdentityError,
-  isStaffRequestIdentity,
-  resolveRequestWallet,
-  verifyRequestIdentity,
-  type RequestIdentity,
-} from './requestIdentity.js';
-import { type ProfileProviderFetch } from './boundedResponse.js';
+  type CreateRequestInput,
+  createPreparedRequest as createRequest,
+  deletePreparedRequestAtRevision,
+  loadReceiptMarker,
+} from './adminIrlRedeemRequestStore.js';
+import { type AdminIrlRedeemRuntime, buildRuntime } from './adminIrlRedeemRuntime.js';
 import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
+import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
   isRequestCancellationError,
   isSignalCancellationError,
@@ -90,26 +67,34 @@ import {
   readBoundedRequestJson,
   runCriticalRequestOperation,
 } from './boundedRequest.js';
-import {
-  rethrowDeferredWorkRegistrationError,
-  type DeferredWork,
-} from './deferredWork.js';
-import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
+import { type ProfileProviderFetch } from './boundedResponse.js';
+import { bubblegumTransferV2Ix } from './bubblegum.js';
+import { D1CommerceRepository, commerceKeys } from './commerceRepository.js';
+import { ProfileReadError, isRecord } from './dataAccess.js';
+import { rethrowDeferredWorkRegistrationError, type DeferredWork } from './deferredWork.js';
+import { API_DROPS, getApiDrop, type ApiDropConfig } from './dropConfig.js';
+import { dropAdminIrlRedeemRequestPath } from './dropPaths.js';
 import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
 import {
+  assetMatchesReceiptDropIdentity,
+  assetMatchesReceiptMetadataIdentity,
+  assetProofTreePublicKey,
+  normalizedAssetProofAccounts,
+  receiptMetadataReference,
+} from './receiptProof.js';
+import {
+  RequestIdentityError,
+  isStaffRequestIdentity,
+  resolveRequestWallet,
+  verifyRequestIdentity,
+  type RequestIdentity,
+} from './requestIdentity.js';
+import {
+  SolanaProviderError,
   createSolanaProvider,
   parseSolanaRpcAccount,
-  SolanaProviderError,
   type SolanaRetryPolicy,
 } from './solanaProvider.js';
-import {
-  CommerceWriteConflict,
-  D1CommerceRepository,
-  commerceFieldValue,
-  commerceKeys,
-  type CommerceDocumentRecord,
-} from './commerceRepository.js';
-import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 
 export const ADMIN_IRL_REDEEM_PREPARE_PATH = '/admin/irl-redeem/prepare';
 export { ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER };
@@ -121,7 +106,6 @@ const CLEANUP_TIMEOUT_MS = 5_000;
 const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
 const MAX_ITEMS = 32;
 const ASSET_FETCH_CONCURRENCY = 4;
-const PREPARED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
@@ -152,36 +136,6 @@ type AdminIrlRedeemPrepareEnv = Pick<
   'HELIUS_API_KEY'
 > & Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 
-type AdminIrlRedeemPrepareErrorCode = ApiErrorCode;
-
-class AdminIrlRedeemPrepareError extends Error {
-  constructor(
-    readonly code: AdminIrlRedeemPrepareErrorCode,
-    message: string,
-    readonly details?: unknown,
-  ) {
-    super(message);
-    this.name = 'AdminIrlRedeemPrepareError';
-  }
-}
-
-type AdminIrlRedeemRuntime = {
-  config: ApiDropConfig;
-  dropId: string;
-  cluster: SolanaCluster;
-  boxMinterProgramId: PublicKey;
-  boxMinterConfigPda: PublicKey;
-  collectionMint: PublicKey;
-  receiptsMerkleTree: PublicKey;
-  deliveryLookupTable?: PublicKey;
-  receiptsTreeMaxDepth?: number;
-  receiptsTreeCanopyDepth: number;
-  itemsPerBox: number;
-  maxSupply: number;
-  maxDudeId: number;
-  receiptMaxId: number;
-};
-
 type CommerceContext = {
   commerceDb?: D1Database;
   nowMs: number;
@@ -189,12 +143,6 @@ type CommerceContext = {
   signal: AbortSignal;
   [key: string]: unknown;
 };
-
-function commerceRepository(context: CommerceContext): D1CommerceRepository {
-  if (context.repository) return context.repository;
-  if (context.commerceDb) return new D1CommerceRepository(context.commerceDb);
-  throw new AdminIrlRedeemPrepareError('unavailable', 'Admin IRL redeem preparation is temporarily unavailable.');
-}
 
 type ProviderContext = {
   apiKey: string;
@@ -226,17 +174,6 @@ type ProofContext = {
   proofAccounts: PublicKey[];
   leafOwner: PublicKey;
   leafDelegate: PublicKey;
-};
-
-type CreateRequestInput = {
-  adminWallet: string;
-  dropId: string;
-  itemIds: string[];
-  items: PreparedItem[];
-  owner: string;
-  prepareAttemptId?: string;
-  requestId: string;
-  targetKind: AdminIrlRedeemTargetKind;
 };
 
 type AdminIrlRedeemPrepareDependencies = {
@@ -306,63 +243,6 @@ function canonicalPublicKey(value: string, label: string): PublicKey {
   } catch {
     throw new AdminIrlRedeemPrepareError('invalid-argument', `Invalid ${label}`);
   }
-}
-
-function configuredPublicKey(label: string, value: string | undefined, required = true): PublicKey | undefined {
-  const normalized = String(value || '').trim();
-  if (!normalized) {
-    if (!required) return undefined;
-    throw new AdminIrlRedeemPrepareError('failed-precondition', `${label} is not configured.`);
-  }
-  try {
-    const key = new PublicKey(normalized);
-    if (required && key.equals(PublicKey.default)) {
-      throw new AdminIrlRedeemPrepareError('failed-precondition', `${label} is not configured.`);
-    }
-    return key;
-  } catch (error) {
-    if (error instanceof AdminIrlRedeemPrepareError) throw error;
-    throw new AdminIrlRedeemPrepareError('failed-precondition', `${label} is invalid.`);
-  }
-}
-
-export function buildRuntime(config: ApiDropConfig): AdminIrlRedeemRuntime {
-  const dropId = normalizeDropId(config.dropId);
-  const maxSupply = Number(config.maxSupply);
-  const itemsPerBox = Number(config.itemsPerBox);
-  const receiptMaxId = Number(config.receiptMaxId ?? maxSupply);
-  const maxDudeId = maxSupply * itemsPerBox;
-  const receiptsTreeMaxDepth = Number(config.receiptsTreeMaxDepth);
-  const receiptsTreeCanopyDepth = Number(config.receiptsTreeCanopyDepth ?? 0);
-  if (
-    !Number.isInteger(maxSupply) || maxSupply < 1 ||
-    !isConfiguredBoxMinterItemsPerBox(itemsPerBox) ||
-    !Number.isInteger(receiptMaxId) || receiptMaxId < maxSupply || receiptMaxId > 0xffff_ffff ||
-    !Number.isSafeInteger(maxDudeId) || maxDudeId > 0xffff ||
-    !Number.isInteger(receiptsTreeCanopyDepth) || receiptsTreeCanopyDepth < 0 ||
-    (Number.isInteger(receiptsTreeMaxDepth) && receiptsTreeCanopyDepth >= receiptsTreeMaxDepth)
-  ) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Admin IRL redeem drop configuration is invalid.', { dropId });
-  }
-  const boxMinterProgramId = configuredPublicKey('BOX_MINTER_PROGRAM_ID', config.boxMinterProgramId)!;
-  const boxMinterConfigPda = configuredPublicKey('BOX_MINTER_CONFIG_PDA', config.boxMinterConfigPda, false) ||
-    PublicKey.findProgramAddressSync([Buffer.from(BOX_MINTER_CONFIG_SEED)], boxMinterProgramId)[0];
-  return {
-    config,
-    dropId,
-    cluster: config.solanaCluster,
-    boxMinterProgramId,
-    boxMinterConfigPda,
-    collectionMint: configuredPublicKey('COLLECTION_MINT', config.collectionMint)!,
-    receiptsMerkleTree: configuredPublicKey('RECEIPTS_MERKLE_TREE', config.receiptsMerkleTree)!,
-    deliveryLookupTable: configuredPublicKey('DELIVERY_LOOKUP_TABLE', config.deliveryLookupTable, false),
-    ...(Number.isInteger(receiptsTreeMaxDepth) && receiptsTreeMaxDepth > 0 ? { receiptsTreeMaxDepth } : {}),
-    receiptsTreeCanopyDepth,
-    itemsPerBox,
-    maxSupply,
-    maxDudeId,
-    receiptMaxId,
-  };
 }
 
 function clusterSharesCollectionMint(runtime: AdminIrlRedeemRuntime): boolean {
@@ -653,76 +533,10 @@ async function loadBoundWallet(
   }
 }
 
-async function loadReceiptMarker(
-  context: CommerceContext,
-  dropId: string,
-  assetId: string,
-): Promise<boolean> {
-  const key = commerceKeys.adminIrlRedeemReceiptMarker(dropId, assetId);
-  if (key.path !== dropAdminIrlRedeemReceiptMarkerPath(dropId, assetId)) {
-    throw new AdminIrlRedeemPrepareError('internal', 'Admin IRL redeem preparation failed.');
-  }
-  return Boolean(await commerceRepository(context).get(key));
-}
-
-function requestMatches(value: CommerceDocumentRecord | null, input: CreateRequestInput): boolean {
-  const fields = value?.data;
-  return Boolean(
-    fields &&
-    fields.status === 'prepared' &&
-    fields.dropId === input.dropId &&
-    fields.owner === input.owner &&
-    fields.adminWallet === input.adminWallet &&
-    fields.targetKind === input.targetKind &&
-    JSON.stringify(fields.itemIds) === JSON.stringify(input.itemIds) &&
-    (input.prepareAttemptId === undefined || fields.prepareAttemptId === input.prepareAttemptId)
-  );
-}
-
-async function createRequest(context: CommerceContext, input: CreateRequestInput): Promise<string> {
-  const path = dropAdminIrlRedeemRequestPath(input.dropId, input.requestId);
-  const key = commerceKeys.adminIrlRedeemRequest(input.dropId, input.requestId);
-  if (key.path !== path) throw new AdminIrlRedeemPrepareError('internal', 'Admin IRL redeem preparation failed.');
-  const fields = {
-    dropId: input.dropId,
-    status: 'prepared',
-    owner: input.owner,
-    targetKind: input.targetKind,
-    adminWallet: input.adminWallet,
-    itemIds: input.itemIds,
-    items: input.items,
-    preparedExpiresAt: commerceFieldValue.timestamp(Math.floor((context.nowMs + PREPARED_TTL_MS) / 1000),
-      ((context.nowMs + PREPARED_TTL_MS) % 1000) * 1_000_000),
-    createdAt: commerceFieldValue.serverTimestamp(),
-    updatedAt: commerceFieldValue.serverTimestamp(),
-    ...(input.prepareAttemptId ? { prepareAttemptId: input.prepareAttemptId } : {}),
-  };
-  try {
-    const created = await commerceRepository(context).run(context.nowMs, async (unit) => unit.create(key, fields));
-    return created.updateTime;
-  } catch (error) {
-    if (error instanceof CommerceWriteConflict) {
-      throw new AdminIrlRedeemPrepareError('aborted', 'Admin IRL redeem request collision. Retry.');
-    }
-    const reconciled = await commerceRepository(context).get(key).catch(() => null);
-    if (requestMatches(reconciled, input)) return reconciled!.updateTime;
-    throw error;
-  }
-}
-
-async function deleteRequest(
-  context: CommerceContext,
-  path: string,
-  updateTime: string,
-): Promise<void> {
+async function deleteRequest(context: CommerceContext, path: string, updateTime: string): Promise<void> {
   const match = /^drops\/([^/]+)\/adminIrlRedeemRequests\/([^/]+)$/.exec(path);
   if (!match) throw new AdminIrlRedeemPrepareError('internal', 'Admin IRL redeem preparation failed.');
-  const key = commerceKeys.adminIrlRedeemRequest(match[1], match[2]);
-  await commerceRepository(context).run(context.nowMs, async (unit) => {
-    const current = await unit.get(key);
-    if (!current || current.updateTime !== updateTime) throw new CommerceWriteConflict();
-    await unit.delete(key, { mustExist: true });
-  });
+  await deletePreparedRequestAtRevision(context, commerceKeys.adminIrlRedeemRequest(match[1], match[2]), updateTime);
 }
 
 function commerceAutoId(): string {

@@ -31,7 +31,7 @@ import {
   READY_NOTIFICATION_PENDING_STATE,
   READY_NOTIFICATION_SHIPPER_STATE_FIELD,
 } from '../../../../shared/readyToShipNotificationReconciliation.js';
-import { commerceFieldValue, type CommerceDocumentWriteData } from './commerceRepository.js';
+import { commerceFieldValue } from './commerceRepository.js';
 import { NOTIFICATION_PUBLICATION_RETRY_WINDOW_MS } from './notificationOutboxPublication.js';
 
 export const READY_TO_SHIP_NOTIFICATION_PENDING = READY_NOTIFICATION_PENDING_STATE;
@@ -57,13 +57,43 @@ export const SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD = 'shipperReadyToShipEm
 
 type ReadyToShipNotificationKind = 'buyer_order_received' | 'shipper_ready_to_ship';
 
+export type ReadyToShipNotificationStateField =
+  | typeof BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD
+  | typeof SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD;
+
+type NotificationDeleteField = ReturnType<typeof commerceFieldValue.delete>;
+type NotificationTimestamp = ReturnType<typeof commerceFieldValue.serverTimestamp>;
+type NotificationState =
+  | typeof READY_TO_SHIP_NOTIFICATION_PENDING
+  | typeof READY_TO_SHIP_NOTIFICATION_QUEUED
+  | typeof READY_TO_SHIP_NOTIFICATION_FAILED;
+
+export type ReadyToShipNotificationUpdates = {
+  buyerOrderReceivedEmailState?: NotificationState;
+  shipperReadyToShipEmailState?: NotificationState;
+  buyerOrderReceivedEmailJobId?: string;
+  shipperReadyToShipEmailJobId?: string;
+  buyerOrderReceivedEmailJob?: NotificationEmailJobV1 | NotificationDeleteField;
+  shipperReadyToShipEmailJob?: NotificationEmailJobV1 | NotificationDeleteField;
+  buyerOrderReceivedEmailIdempotencyKey?: string;
+  shipperReadyToShipEmailIdempotencyKey?: string;
+  buyerOrderReceivedEmailQueuedAt?: NotificationTimestamp | NotificationDeleteField;
+  shipperReadyToShipEmailQueuedAt?: NotificationTimestamp | NotificationDeleteField;
+  readyToShipNotificationRetryUntilMs?: number;
+  readyToShipNotificationPublishAttemptCount?: number;
+  readyToShipNotificationPublishClaimId?: string | NotificationDeleteField;
+  readyToShipNotificationPublishClaimExpiresAtMs?: number | NotificationDeleteField;
+  readyToShipNotificationFailedAt?: NotificationTimestamp;
+  readyToShipNotificationLastErrorCode?: string;
+};
+
 type ReadyToShipNotificationMarkerDefinition = {
   kind: ReadyToShipNotificationKind;
-  stateField: string;
-  jobIdField: string;
-  jobField: string;
-  idempotencyKeyField: string;
-  queuedAtField: string;
+  stateField: ReadyToShipNotificationStateField;
+  jobIdField: typeof BUYER_ORDER_RECEIVED_EMAIL_JOB_ID_FIELD | typeof SHIPPER_READY_TO_SHIP_EMAIL_JOB_ID_FIELD;
+  jobField: typeof BUYER_ORDER_RECEIVED_EMAIL_JOB_FIELD | typeof SHIPPER_READY_TO_SHIP_EMAIL_JOB_FIELD;
+  idempotencyKeyField: typeof BUYER_ORDER_RECEIVED_EMAIL_IDEMPOTENCY_KEY_FIELD | typeof SHIPPER_READY_TO_SHIP_EMAIL_IDEMPOTENCY_KEY_FIELD;
+  queuedAtField: typeof BUYER_ORDER_RECEIVED_EMAIL_QUEUED_AT_FIELD | typeof SHIPPER_READY_TO_SHIP_EMAIL_QUEUED_AT_FIELD;
   idempotencySuffix: 'order_received' | 'ready_to_ship';
 };
 
@@ -74,12 +104,12 @@ export type PendingReadyToShipNotification = ReadyToShipNotificationMarkerDefini
 };
 
 export type ReadyToShipNotificationOutbox = {
-  values: CommerceDocumentWriteData;
+  values: ReadyToShipNotificationUpdates;
   pending: PendingReadyToShipNotification[];
 };
 
 export type PendingReadyToShipNotificationInspection = {
-  invalidStateFields: string[];
+  invalidStateFields: ReadyToShipNotificationStateField[];
   pending: PendingReadyToShipNotification[];
 };
 
@@ -187,7 +217,7 @@ export function createReadyToShipNotificationOutbox(args: {
       ? [pendingMarker(markerForKind('shipper_ready_to_ship'), args.dropId, deliveryId, createJobId)]
       : []),
   ];
-  const values: CommerceDocumentWriteData = {};
+  const values: ReadyToShipNotificationUpdates = {};
   for (const marker of pending) {
     values[marker.stateField] = READY_TO_SHIP_NOTIFICATION_PENDING;
     values[marker.jobIdField] = marker.jobId;
@@ -222,7 +252,7 @@ export function inspectPendingReadyToShipNotifications(
   expected?: { deliveryId: number; dropId: string },
 ): PendingReadyToShipNotificationInspection {
   if (order.status !== 'ready_to_ship') return { invalidStateFields: [], pending: [] };
-  const invalidStateFields: string[] = [];
+  const invalidStateFields: ReadyToShipNotificationStateField[] = [];
   const pending: PendingReadyToShipNotification[] = [];
   for (const marker of MARKERS) {
     if (order[marker.stateField] !== READY_TO_SHIP_NOTIFICATION_PENDING) continue;

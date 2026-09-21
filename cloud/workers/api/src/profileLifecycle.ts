@@ -8,9 +8,6 @@ import {
   processingDeliveryRecoveryNextCheckMs,
 } from '../../../../shared/deliveryRecovery.js';
 import { isStaffWalletAddress } from '../../../../shared/fulfillmentAccess.js';
-import { parseDropDeliveryOrderPath } from './dropPaths.js';
-import { normalizeDropId } from '../../../../shared/deploymentCore.js';
-import { stripeCheckoutAnonymousOwnerId } from '../../../../shared/stripeCheckoutSession.js';
 import type {
   ReconcileProfileStateRequest,
   ReconcileProfileStateResponse,
@@ -43,12 +40,9 @@ import {
 import { ProfileReadError } from './dataAccess.js';
 import { apiErrorBody, jsonResponse } from './httpResponse.js';
 import {
-  CommerceWriteConflict,
   D1CommerceRepository,
-  commerceFieldValue,
-  type CommerceDocumentRecord,
 } from './commerceRepository.js';
-import { runCommerceTransaction } from './commerceTransactions.js';
+import { mergeAnonymousStripeOwnerBatch, STRIPE_OWNER_MERGE_BATCH_SIZE } from './profileCommerceStore.js';
 import { isProfileRequestOriginAllowed } from './profileReads.js';
 import { ensureD1Profile } from './profileD1.js';
 import {
@@ -70,7 +64,6 @@ export type ProfileLifecyclePath = typeof SOLANA_AUTH_PATH | typeof PROFILE_RECO
 const AUTH_TIMEOUT_MS = 15_000;
 const RECONCILE_TIMEOUT_MS = 55_000;
 const MAX_REQUEST_BYTES = 4096;
-const STRIPE_OWNER_MERGE_BATCH_SIZE = 450;
 
 const solanaAuthSchema = z.object({
   wallet: z.string().min(32).max(64),
@@ -137,18 +130,6 @@ class AuthWalletBindingSupersededError extends ProfileReadError {
   }
 }
 
-class StripeOwnerMergeUnexpectedPathError extends ProfileReadError {
-  constructor() {
-    super(
-      'failed-precondition',
-      409,
-      'Stripe order reconciliation found invalid server data.',
-      { reason: 'unexpected-delivery-order-path' },
-    );
-    this.name = 'StripeOwnerMergeUnexpectedPathError';
-  }
-}
-
 function errorResponse(error: ProfileReadError): Response {
   return jsonResponse(apiErrorBody(error), error.status);
 }
@@ -194,69 +175,16 @@ function validateAuthWalletSignature(params: {
   if (!signatureValid) throw new ProfileReadError('unauthenticated', 401, 'Invalid signature');
 }
 
-function deliveryOrderPath(document: CommerceDocumentRecord): string {
-  const path = document.key.path;
-  const identity = parseDropDeliveryOrderPath(path);
-  if (!identity) throw new StripeOwnerMergeUnexpectedPathError();
-  const normalizedDropId = normalizeDropId(identity.dropId);
-  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(normalizedDropId)) throw new StripeOwnerMergeUnexpectedPathError();
-  return path;
-}
-
-async function mergeStripeOwnerBatch(params: {
-  common: CommerceCommon;
-  authSubject: string;
-  sourceOwner: string;
-  wallet: string;
-}): Promise<number> {
-  try {
-    return await runCommerceTransaction({
-      nowMs: params.common.nowMs,
-    repository: params.common.repository,
-    signal: params.common.signal,
-  }, async (unit) => {
-    const documents = await unit.queryDeliveryOrdersByOwner({
-      owner: params.sourceOwner,
-      limit: STRIPE_OWNER_MERGE_BATCH_SIZE,
-    });
-    if (documents.length > STRIPE_OWNER_MERGE_BATCH_SIZE) {
-      throw new ProfileReadError('unavailable', 502, 'Profile data is temporarily unavailable.');
-    }
-    for (const document of documents) {
-      deliveryOrderPath(document);
-    }
-    for (const document of documents) {
-      await unit.update(document.key, {
-        mergedAuthSubject: params.authSubject,
-        owner: params.wallet,
-        ownerKind: 'wallet',
-        ownerMergedAt: commerceFieldValue.serverTimestamp(),
-        previousOwner: stripeCheckoutAnonymousOwnerId(params.authSubject),
-      });
-    }
-    return documents.length;
-  });
-  } catch (error) {
-    if (isSignalCancellationError(params.common.signal, error)) throw params.common.signal.reason;
-    if (error instanceof CommerceWriteConflict) {
-      throw new ProfileReadError('aborted', 409, 'Stripe order reconciliation changed. Try again.');
-    }
-    throw error;
-  }
-}
-
 async function mergeStripeOrders(params: {
   common: CommerceCommon;
   authSubject: string;
   wallet: string;
 }): Promise<number> {
   let merged = 0;
-  for (const sourceOwner of [stripeCheckoutAnonymousOwnerId(params.authSubject)]) {
-    for (;;) {
-      const batchCount = await mergeStripeOwnerBatch({ ...params, sourceOwner });
-      merged += batchCount;
-      if (batchCount < STRIPE_OWNER_MERGE_BATCH_SIZE) break;
-    }
+  for (;;) {
+    const batchCount = await mergeAnonymousStripeOwnerBatch(params);
+    merged += batchCount;
+    if (batchCount < STRIPE_OWNER_MERGE_BATCH_SIZE) break;
   }
   return merged;
 }

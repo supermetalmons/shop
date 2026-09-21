@@ -13,13 +13,11 @@ import {
 import {
   STRIPE_WEBHOOK_PATH,
   resolveStripeWebhookAction,
-  stripeWebhookTransition,
   type StripeWebhookAction,
   type StripeWebhookDrop,
   type StripeWebhookEvent,
   type StripeWebhookSecretScope,
   type StripeWebhookSession,
-  type StripeWebhookTransition,
 } from '../../../../shared/stripeWebhook.js';
 import {
   createStripeCheckoutFulfillmentJobV1,
@@ -44,11 +42,8 @@ import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
 import {
   CommerceWriteConflict,
   D1CommerceRepository,
-  commerceFieldValue,
-  commerceKeys,
-  type CommerceDocumentWriteData,
 } from './commerceRepository.js';
-import { runCommerceTransaction } from './commerceTransactions.js';
+import { applyStripeCheckoutWebhook } from './stripeCheckout/sessionStore.js';
 
 export { STRIPE_WEBHOOK_PATH };
 
@@ -265,41 +260,6 @@ async function verifyWebhookEvent(
   throw new StripeWebhookRequestError(400, 'invalid_signature');
 }
 
-function transitionUpdate(
-  action: Extract<StripeWebhookAction, { kind: 'enqueue' }>,
-  transition: StripeWebhookTransition,
-): CommerceDocumentWriteData {
-  return {
-    ...transition.fields,
-    ...Object.fromEntries(transition.deleteFields.map((field) => [field, commerceFieldValue.delete()])),
-    stripeWebhookEventIds: commerceFieldValue.arrayUnion(action.eventId),
-    ...Object.fromEntries(transition.serverTimestampFields.map((field) => [field, commerceFieldValue.serverTimestamp()])),
-  } as CommerceDocumentWriteData;
-}
-
-async function mutateCheckout(
-  action: Extract<StripeWebhookAction, { kind: 'enqueue' }>,
-  common: {
-    commerceDb: D1Database;
-    nowMs: number;
-    signal: AbortSignal;
-  },
-): Promise<StripeWebhookTransition> {
-  const repository = new D1CommerceRepository(common.commerceDb);
-  const key = commerceKeys.stripeCheckout(action.dropId, action.sessionId);
-  return runCommerceTransaction({
-    nowMs: common.nowMs,
-    repository,
-    signal: common.signal,
-  }, async (unit) => {
-    const document = await unit.get(key);
-    if (!document) throw new Error('Stripe checkout session was not created by this app');
-    const transition = stripeWebhookTransition(document.data, action);
-    await unit.update(key, transitionUpdate(action, transition));
-    return transition;
-  });
-}
-
 function actionResponse(
   action: Exclude<StripeWebhookAction, { kind: 'enqueue' }>,
 ): StripeWebhookRequestResult {
@@ -427,8 +387,8 @@ export async function handleStripeWebhookRequest(
         return result;
       }
       const transition = await runCriticalRequestOperation(
-        () => mutateCheckout(action, {
-          commerceDb: env.COMMERCE_DB,
+        () => applyStripeCheckoutWebhook(action, {
+          repository: new D1CommerceRepository(env.COMMERCE_DB),
           nowMs: dependencies.nowMs(),
           signal: deadline.signal,
         }),

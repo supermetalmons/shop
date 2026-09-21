@@ -6,12 +6,9 @@ import {
 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import {
   D1CommerceRepository,
-  commerceFieldValue,
-  commerceKeys,
   type CommerceDocumentRecord,
 } from './commerceRepository.js';
-import { runCommerceTransaction } from './commerceTransactions.js';
-import { stripeCheckoutWriteData } from './stripeCheckout/commerce.js';
+import { markStripeCheckoutReenqueued, recordStripeCheckoutReconciliationFailure } from './stripeCheckout/sessionStore.js';
 
 export const STRIPE_FULFILLMENT_REQUEUE_AFTER_MS = 15 * 60 * 1000;
 type RequeueCandidate = {
@@ -36,7 +33,7 @@ type ReconciliationDependencies = {
 };
 
 
-function reconciliationError(error: unknown): Record<string, unknown> {
+function reconciliationError(error: unknown): { name: string; message?: string } {
   return error instanceof Error
     ? { name: error.name, message: error.message }
     : { name: 'UnknownError' };
@@ -103,25 +100,10 @@ export async function reconcileStaleStripeFulfillments(
     nowMs: () => Date.now(),
     signal,
   };
-  const markEnqueued = overrides.markEnqueued || (async (candidate: RequeueCandidate) => {
-    await runCommerceTransaction(commerce, (transaction) => transaction.update(
-      commerceKeys.stripeCheckout(candidate.dropId, candidate.sessionId),
-      {
-        fulfillmentQueueReenqueuedAt: commerceFieldValue.serverTimestamp(),
-        updatedAt: commerceFieldValue.serverTimestamp(),
-      },
-    ), { shouldRetry: (error) => error.code === 'aborted' });
-  });
-  const markInvalid = overrides.markInvalid || (async (candidate: RequeueCandidate, error: unknown) => {
-    await runCommerceTransaction(commerce, (transaction) => transaction.update(
-      commerceKeys.stripeCheckout(candidate.dropId, candidate.sessionId),
-      stripeCheckoutWriteData({
-        lastFulfillmentReconciliationError: reconciliationError(error),
-        lastFulfillmentReconciliationErrorAt: commerceFieldValue.serverTimestamp(),
-        updatedAt: commerceFieldValue.serverTimestamp(),
-      }),
-    ), { shouldRetry: (error) => error.code === 'aborted' });
-  });
+  const markEnqueued = overrides.markEnqueued || ((candidate: RequeueCandidate) =>
+    markStripeCheckoutReenqueued(commerce, candidate));
+  const markInvalid = overrides.markInvalid || ((candidate: RequeueCandidate, error: unknown) =>
+    recordStripeCheckoutReconciliationFailure(commerce, candidate, reconciliationError(error)));
   let enqueued = 0;
   let failed = 0;
   for (const candidate of candidates) {

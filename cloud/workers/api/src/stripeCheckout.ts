@@ -14,6 +14,7 @@ import {
   StripeCheckoutSessionError,
   createStripeCheckoutIdentity,
   createStripeCheckoutSessionCore,
+  type StripeCheckoutCreatedDocument,
   type StripeCheckoutOnchainConfig,
   type StripeCheckoutProviderRequest,
   type StripeCheckoutProviderResponse,
@@ -42,13 +43,9 @@ import {
 import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
-  CommerceRepositoryError,
   D1CommerceRepository,
-  commerceFieldValue,
-  commerceKeyFromPath,
 } from './commerceRepository.js';
-import { runCommerceTransaction } from './commerceTransactions.js';
-import { stripeCheckoutWriteData } from './stripeCheckout/commerce.js';
+import { createStripeCheckoutDocument } from './stripeCheckout/sessionStore.js';
 import {
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
@@ -111,7 +108,7 @@ type CheckoutDependencies = {
   getDrop?: (dropId: string) => StripeCheckoutSessionDrop | undefined;
   loadOnchainConfig?: (drop: StripeCheckoutSessionDrop) => Promise<StripeCheckoutOnchainConfig>;
   requireFulfillmentPrerequisites?: (config: StripeCheckoutOnchainConfig) => void;
-  persistCheckout?: (path: string, document: Record<string, unknown>) => Promise<void>;
+  persistCheckout?: (path: string, document: StripeCheckoutCreatedDocument) => Promise<void>;
   resolveAuthWalletBinding: typeof resolveD1AuthWalletBinding;
 };
 
@@ -441,37 +438,6 @@ async function createStripeProviderSession(
   });
 }
 
-async function persistCheckoutDocument(
-  path: string,
-  document: Record<string, unknown>,
-  nowMs: number,
-  commerceDb: D1Database,
-): Promise<void> {
-  const key = commerceKeyFromPath(path);
-  if (!key || key.kind !== 'stripe_checkout') {
-    throw new CommerceRepositoryError('invalid-argument', 'Invalid Stripe checkout document path.');
-  }
-  await runCommerceTransaction({
-    repository: new D1CommerceRepository(commerceDb),
-    nowMs,
-  }, async (transaction) => {
-    const existing = await transaction.get(key);
-    if (existing) {
-      if (
-        existing.data.operationId === document.operationId &&
-        existing.data.sessionId === document.sessionId &&
-        existing.data.dropId === document.dropId
-      ) return;
-      throw new StripeCheckoutSessionError('failed-precondition', 'Stripe checkout operation conflicts with an existing session.');
-    }
-    await transaction.create(key, stripeCheckoutWriteData({
-      ...document,
-      createdAt: commerceFieldValue.serverTimestamp(),
-      updatedAt: commerceFieldValue.serverTimestamp(),
-    }));
-  }, { shouldRetry: (error) => error.code === 'aborted' });
-}
-
 export async function handleStripeCheckoutSession(
   request: Request,
   env: CheckoutEnv,
@@ -551,11 +517,10 @@ export async function handleStripeCheckoutSession(
           return runCriticalRequestOperation(
             () => dependencies.persistCheckout
               ? dependencies.persistCheckout(path, document)
-              : persistCheckoutDocument(
+              : createStripeCheckoutDocument(
+                  { repository: new D1CommerceRepository(env.COMMERCE_DB), nowMs: dependencies.nowMs() },
                   path,
                   document,
-                  dependencies.nowMs(),
-                  env.COMMERCE_DB,
                 ),
             { deadline, defer: dependencies.defer },
           );

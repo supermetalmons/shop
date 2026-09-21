@@ -1,4 +1,4 @@
-import { commerceFieldValue, type CommerceDocumentRecord, type CommerceDocumentWriteData } from './commerceRepository.js';
+import { commerceFieldValue, type CommerceDocumentRecord } from './commerceRepository.js';
 import {
   readCommerceRecord,
   requireCommerceKey,
@@ -31,21 +31,24 @@ import {
   inspectPendingReadyToShipNotifications,
   isReadyToShipNotificationJob,
   type PendingReadyToShipNotification,
+  type ReadyToShipNotificationStateField,
+  type ReadyToShipNotificationUpdates,
 } from './readyToShipNotifications.js';
 
 const READY_NOTIFICATION_FAILED_AT_FIELD = 'readyToShipNotificationFailedAt';
 const READY_NOTIFICATION_LAST_ERROR_CODE_FIELD = 'readyToShipNotificationLastErrorCode';
 const CLEANUP_TIMEOUT_MS = 5_000;
-const NOTIFICATION_JOB_FIELDS: Readonly<Record<string, string>> = {
+const NOTIFICATION_STATE_FIELDS = [BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD, SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD] as const;
+const NOTIFICATION_JOB_FIELDS = {
   [BUYER_ORDER_RECEIVED_EMAIL_STATE_FIELD]: BUYER_ORDER_RECEIVED_EMAIL_JOB_FIELD,
   [SHIPPER_READY_TO_SHIP_EMAIL_STATE_FIELD]: SHIPPER_READY_TO_SHIP_EMAIL_JOB_FIELD,
-};
+} as const;
 
 function clearCompletedNotificationClaim(
   fields: Record<string, unknown>,
-  values: CommerceDocumentWriteData,
+  values: ReadyToShipNotificationUpdates,
 ): void {
-  if (Object.keys(NOTIFICATION_JOB_FIELDS).some((stateField) => (
+  if (NOTIFICATION_STATE_FIELDS.some((stateField) => (
     (values[stateField] ?? fields[stateField]) === READY_TO_SHIP_NOTIFICATION_PENDING
   ))) return;
   values[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD] = commerceFieldValue.delete();
@@ -110,12 +113,13 @@ async function markReadyToShipNotificationsQueued(
         fields[marker.idempotencyKeyField] === marker.idempotencyKey
       ));
       if (!matching.length) return { result: [] };
-      const values: CommerceDocumentWriteData = Object.fromEntries(matching.flatMap((marker) => [
-        [marker.stateField, READY_TO_SHIP_NOTIFICATION_QUEUED],
-        [marker.jobIdField, marker.jobId],
-        [marker.jobField, commerceFieldValue.delete()],
-        [marker.queuedAtField, commerceFieldValue.serverTimestamp()],
-      ]));
+      const values: ReadyToShipNotificationUpdates = {};
+      for (const marker of matching) {
+        values[marker.stateField] = READY_TO_SHIP_NOTIFICATION_QUEUED;
+        values[marker.jobIdField] = marker.jobId;
+        values[marker.jobField] = commerceFieldValue.delete();
+        values[marker.queuedAtField] = commerceFieldValue.serverTimestamp();
+      }
       clearCompletedNotificationClaim(fields, values);
       return { values, result: matching.map((marker) => marker.kind) };
     },
@@ -164,19 +168,19 @@ async function claimReadyToShipNotifications(args: {
       };
     },
     busy: () => 'busy',
-    exhausted: (pending) => ({
-      result: 'manual-review',
-      values: {
-        ...Object.fromEntries(pending.flatMap((marker) => [
-          [marker.stateField, READY_TO_SHIP_NOTIFICATION_FAILED],
-          [marker.jobField, commerceFieldValue.delete()],
-        ])),
+    exhausted: (pending) => {
+      const values: ReadyToShipNotificationUpdates = {
         [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: 'manual-review-required',
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
         [READY_NOTIFICATION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
-      },
-    }),
+      };
+      for (const marker of pending) {
+        values[marker.stateField] = READY_TO_SHIP_NOTIFICATION_FAILED;
+        values[marker.jobField] = commerceFieldValue.delete();
+      }
+      return { result: 'manual-review', values };
+    },
     claim: (pending, lease) => ({
       state: pending,
       values: {
@@ -184,7 +188,7 @@ async function claimReadyToShipNotifications(args: {
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: lease.expiresAtMs,
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: lease.attemptCount,
         [READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]: lease.retryUntilMs,
-      },
+      } satisfies ReadyToShipNotificationUpdates,
     }),
   };
   const result = await claimNotificationOutbox({
@@ -210,7 +214,7 @@ async function releaseReadyToShipNotificationClaim(
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: claim.previousAttemptCount,
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD]: commerceFieldValue.delete(),
         [READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_EXPIRES_AT_MS_FIELD]: commerceFieldValue.delete(),
-      },
+      } satisfies ReadyToShipNotificationUpdates,
       result: true,
     }),
   });
@@ -220,25 +224,25 @@ export async function markPendingReadyToShipNotificationsFailed(
   context: CommerceRepositoryContext,
   documentPath: string,
   errorCode: string,
-  targetStateFields?: readonly string[],
+  targetStateFields?: readonly ReadyToShipNotificationStateField[],
   expectedUpdateTime?: string,
 ): Promise<string[]> {
   return runCommerceTransaction(context, async (transaction) => {
     const document = await readCommerceRecord(context, requireCommerceKey(documentPath), transaction);
     if (!document || (expectedUpdateTime && document.updateTime !== expectedUpdateTime)) return [];
-    const stateFields = Object.keys(NOTIFICATION_JOB_FIELDS).filter((fieldPath) => (
+    const stateFields = NOTIFICATION_STATE_FIELDS.filter((fieldPath) => (
       document.data[fieldPath] === READY_TO_SHIP_NOTIFICATION_PENDING &&
       (!targetStateFields || targetStateFields.includes(fieldPath))
     ));
     if (!stateFields.length) return [];
-    const values: CommerceDocumentWriteData = {
-      ...Object.fromEntries(stateFields.flatMap((fieldPath) => [
-        [fieldPath, READY_TO_SHIP_NOTIFICATION_FAILED],
-        [NOTIFICATION_JOB_FIELDS[fieldPath], commerceFieldValue.delete()],
-      ])),
+    const values: ReadyToShipNotificationUpdates = {
       [READY_NOTIFICATION_LAST_ERROR_CODE_FIELD]: errorCode,
       [READY_NOTIFICATION_FAILED_AT_FIELD]: commerceFieldValue.serverTimestamp(),
     };
+    for (const stateField of stateFields) {
+      values[stateField] = READY_TO_SHIP_NOTIFICATION_FAILED;
+      values[NOTIFICATION_JOB_FIELDS[stateField]] = commerceFieldValue.delete();
+    }
     clearCompletedNotificationClaim(document.data, values);
     await transaction.update(document.key, values);
     return stateFields;
@@ -269,7 +273,7 @@ async function persistReadyToShipNotificationJobs(args: {
       if (nowMs >= args.claim.expiresAtMs || nowMs >= args.claim.retryUntilMs) {
         throw new ReadyToShipNotificationEnqueueError('Ready-to-ship notification publication claim expired. Retry later.');
       }
-      const values: CommerceDocumentWriteData = {};
+      const values: ReadyToShipNotificationUpdates = {};
       const pending: PendingReadyToShipNotification[] = [];
       const jobs: NotificationEmailJobV1[] = [];
       for (const { marker, job } of args.prepared) {

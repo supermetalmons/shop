@@ -161,7 +161,7 @@ function checkoutDocument(options: {
   status?: string;
   deliveryId?: number;
 } = {}): Record<string, unknown> {
-  const document = buildStripeCheckoutDocument({
+  const document: Record<string, unknown> = buildStripeCheckoutDocument({
     dropId: options.dropId || DEVNET_DROP,
     sessionId: options.sessionId || 'cs_test_123',
     owner: 'anonymous:auth-user',
