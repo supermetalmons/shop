@@ -138,7 +138,16 @@ function stripeCommerceFixture(
     updateTime: new Date(nowMs - 1).toISOString(),
   });
   const commerce: StripeCheckoutCommerceContext = { repository, nowMs: () => nowMs };
-  return { harness, repository, checkoutKey, commerce, calls };
+  const readDocuments = (kind: CommerceDocumentKey['kind'], dropId?: string) =>
+    harness.database.prepare(`
+      SELECT document_path, document_json FROM commerce_documents
+      WHERE document_kind = ? AND (? IS NULL OR drop_id = ?)
+      ORDER BY document_path
+    `).all(kind, dropId ?? null, dropId ?? null).map((row) => ({
+      path: String(row.document_path),
+      data: JSON.parse(String(row.document_json)) as CommerceDocumentData,
+    }));
+  return { harness, repository, checkoutKey, commerce, calls, readDocuments };
 }
 
 async function stripeFulfillmentCancellationFixture(t: TestContext, suffix: string) {
@@ -1406,7 +1415,7 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
   const dropId = 'little_swag_hoodies_devnet';
   const orderHashHex = 'cd'.repeat(32);
   const markerKey = commerceKeys.offchainOrder(dropId, orderHashHex);
-  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+  const { repository, commerce, checkoutKey, calls, readDocuments } = stripeCommerceFixture(t, {
     status: STRIPE_CHECKOUT_STATUS.PROCESSING,
     processingAttemptId: 'attempt_current',
   }, { dropId, sessionId: 'cs_test_456' });
@@ -1435,9 +1444,9 @@ test('createOrGetStripeOffchainDeliveryOrder creates a Stripe receipt claim code
 
   assert.equal(result.checkoutStatus, 'fulfilled');
   assert.equal(commerceDocumentReadBatches(calls).length, 2);
-  const orders = await repository.query({ kind: 'delivery_order', dropId });
-  const markers = await repository.query({ kind: 'offchain_order', dropId });
-  const claims = await repository.query({ kind: 'claim_code' });
+  const orders = readDocuments('delivery_order', dropId);
+  const markers = readDocuments('offchain_order', dropId);
+  const claims = readDocuments('claim_code');
   const checkout = await repository.get(checkoutKey);
   assert.equal(orders.length, 1);
   assert.equal(markers.length, 1);
@@ -1479,7 +1488,7 @@ test('createOrGetStripeOffchainDeliveryOrder batches reads for the maximum check
   const metadataIds = Array.from({ length: STRIPE_OFFCHAIN_CHECKOUT_MAX_QUANTITY }, (_, index) => 16 + index);
   const boxKeys = metadataIds.map((boxId) => `box_${boxId}`).sort();
   const markerKey = commerceKeys.offchainOrder(dropId, orderHashHex);
-  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+  const { repository, commerce, checkoutKey, calls, readDocuments } = stripeCommerceFixture(t, {
     status: STRIPE_CHECKOUT_STATUS.PROCESSING,
     processingAttemptId: 'attempt_current',
   }, { dropId, sessionId: 'cs_test_multi' });
@@ -1506,9 +1515,9 @@ test('createOrGetStripeOffchainDeliveryOrder batches reads for the maximum check
 
   assert.equal(result.checkoutStatus, 'fulfilled');
   assert.equal(commerceDocumentReadBatches(calls).length, 2);
-  const orders = await repository.query({ kind: 'delivery_order', dropId });
-  const markers = await repository.query({ kind: 'offchain_order', dropId });
-  const claims = await repository.query({ kind: 'claim_code' });
+  const orders = readDocuments('delivery_order', dropId);
+  const markers = readDocuments('offchain_order', dropId);
+  const claims = readDocuments('claim_code');
   const checkout = await repository.get(checkoutKey);
   assert.equal(orders.length, 1);
   assert.equal(markers.length, 1);
@@ -1543,7 +1552,7 @@ test('createOrGetStripeOffchainDeliveryOrder retries allocation collisions after
     await t.test(collisionKind, async (t) => {
       const dropId = 'little_swag_hoodies_devnet';
       const orderHashHex = '56'.repeat(32);
-      const { harness, repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+      const { harness, repository, commerce, checkoutKey, calls, readDocuments } = stripeCommerceFixture(t, {
         status: STRIPE_CHECKOUT_STATUS.PROCESSING,
         processingAttemptId: 'attempt_current',
       }, { dropId });
@@ -1603,14 +1612,14 @@ test('createOrGetStripeOffchainDeliveryOrder retries allocation collisions after
       const collided = await repository.get(collisionKey);
       assert.equal(collided?.version, 1);
       assert.deepEqual(collided?.data, collisionData);
-      const orders = await repository.query({ kind: 'delivery_order', dropId });
-      const markers = await repository.query({ kind: 'offchain_order', dropId });
-      const claims = await repository.query({ kind: 'claim_code' });
+      const orders = readDocuments('delivery_order', dropId);
+      const markers = readDocuments('offchain_order', dropId);
+      const claims = readDocuments('claim_code');
       assert.equal(orders.length, collisionKind === 'delivery_order' ? 2 : 1);
       assert.equal(markers.length, 1);
       assert.equal(claims.length, collisionKind === 'claim_code' ? 3 : 2);
       assert.equal(markers[0].data.deliveryId, result.deliveryId);
-      const allocatedClaims = claims.filter((claim) => claim.key.path !== collisionKey.path);
+      const allocatedClaims = claims.filter((claim) => claim.path !== collisionKey.path);
       assert.deepEqual(allocatedClaims.map((claim) => claim.data.boxId).sort(), [16, 17]);
       assert.ok(allocatedClaims.every((claim) => claim.data.deliveryId === result.deliveryId));
       const checkout = await repository.get(checkoutKey);
@@ -1623,7 +1632,7 @@ test('createOrGetStripeOffchainDeliveryOrder retries allocation collisions after
 test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the critical commerce transaction', async (t) => {
   const dropId = 'card_nft_2';
   const orderHashHex = '12'.repeat(32);
-  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+  const { repository, commerce, checkoutKey, calls, readDocuments } = stripeCommerceFixture(t, {
     status: STRIPE_CHECKOUT_STATUS.PROCESSING,
     processingAttemptId: 'attempt_current',
   }, { dropId, sessionId: 'cs_live_pack' });
@@ -1660,7 +1669,7 @@ test('createOrGetStripeOffchainDeliveryOrder keeps the D1 projection out of the 
   const statements = calls.flatMap((call) => call.method === 'batch' ? call.statements : [call]);
   assert.equal(statements.some(({ sql }) => /pack_status|packStatusEvents/.test(sql)), false);
   for (const kind of ['delivery_order', 'offchain_order', 'claim_code', 'stripe_checkout'] as const) {
-    for (const record of await repository.query({ kind })) {
+    for (const record of readDocuments(kind)) {
       assert.equal(Object.hasOwn(record.data, 'packStatus'), false);
     }
   }
@@ -1681,7 +1690,7 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
   const dropId = 'card_nft_2';
   const orderHashHex = '34'.repeat(32);
   const markerKey = commerceKeys.offchainOrder(dropId, orderHashHex);
-  const { harness, repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+  const { harness, repository, commerce, checkoutKey, calls, readDocuments } = stripeCommerceFixture(t, {
     status: STRIPE_CHECKOUT_STATUS.PROCESSING,
     processingAttemptId: 'attempt_current',
   }, { dropId, sessionId: 'cs_test_pack_retry' });
@@ -1730,8 +1739,8 @@ test('createOrGetStripeOffchainDeliveryOrder reuses existing pack order markers 
 
   assert.deepEqual(result, { deliveryId: 789, checkoutStatus: 'fulfilled' });
   assert.equal(commerceDocumentReadBatches(calls).length, 1);
-  assert.equal((await repository.query({ kind: 'delivery_order', dropId })).length, 0);
-  assert.equal((await repository.query({ kind: 'claim_code' })).length, 0);
+  assert.equal(readDocuments('delivery_order', dropId).length, 0);
+  assert.equal(readDocuments('claim_code').length, 0);
   assert.equal((await repository.get(markerKey))?.version, 1);
   const checkout = await repository.get(checkoutKey);
   assert.ok(checkout);
@@ -2824,7 +2833,7 @@ test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale
     status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED,
     processingAttemptId: 'attempt_new',
   };
-  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData, { dropId });
+  const { repository, commerce, checkoutKey, calls, readDocuments } = stripeCommerceFixture(t, checkoutData, { dropId });
 
   const result = await createOrGetStripeOffchainDeliveryOrder({
     commerce,
@@ -2849,9 +2858,9 @@ test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale
   assert.deepEqual(result, { checkoutStatus: 'stale_processing_attempt' });
   assert.equal(commerceDocumentReadBatches(calls).length, 1);
   assert.equal(commerceDocumentWriteBatches(calls).length, 0);
-  assert.equal((await repository.query({ kind: 'delivery_order', dropId })).length, 0);
-  assert.equal((await repository.query({ kind: 'offchain_order', dropId })).length, 0);
-  assert.equal((await repository.query({ kind: 'claim_code' })).length, 0);
+  assert.equal(readDocuments('delivery_order', dropId).length, 0);
+  assert.equal(readDocuments('offchain_order', dropId).length, 0);
+  assert.equal(readDocuments('claim_code').length, 0);
   const checkout = await repository.get(checkoutKey);
   assert.equal(checkout?.version, 1);
   assert.deepEqual(checkout?.data, checkoutData);
@@ -2860,7 +2869,7 @@ test('createOrGetStripeOffchainDeliveryOrder does not create documents for stale
 test('createOrGetStripeOffchainDeliveryOrder skips candidate reads for fulfilled checkouts without a marker', async (t) => {
   const dropId = 'little_swag_hoodies_devnet';
   const checkoutData = { status: STRIPE_CHECKOUT_STATUS.FULFILLED, deliveryId: 789 };
-  const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, checkoutData, { dropId });
+  const { repository, commerce, checkoutKey, calls, readDocuments } = stripeCommerceFixture(t, checkoutData, { dropId });
   const result = await createOrGetStripeOffchainDeliveryOrder({
     commerce,
     checkoutKey,
@@ -2885,7 +2894,7 @@ test('createOrGetStripeOffchainDeliveryOrder skips candidate reads for fulfilled
   assert.equal(commerceDocumentReadBatches(calls).length, 1);
   assert.equal(commerceDocumentWriteBatches(calls).length, 0);
   for (const kind of ['delivery_order', 'offchain_order', 'claim_code'] as const) {
-    assert.deepEqual(await repository.query({ kind }), []);
+    assert.deepEqual(readDocuments(kind), []);
   }
   const checkout = await repository.get(checkoutKey);
   assert.equal(checkout?.version, 1);

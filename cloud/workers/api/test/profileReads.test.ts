@@ -31,7 +31,6 @@ import {
   commerceKeys,
   type CommerceDocumentData,
   type CommerceDocumentRecord,
-  type CommerceQuery,
 } from '../src/commerceRepository.ts';
 import {
   STRIPE_CHECKOUT_OPERATION_HEADER,
@@ -157,14 +156,14 @@ function legacyFirestoreProfileDependencies(
   overrides: Partial<Parameters<typeof handleProfileReadRequest>[3]> = {},
 ): Parameters<typeof handleProfileReadRequest>[3] {
   const createCommerceRepository = () => {
-    const query = async <T extends CommerceDocumentData>(commerceQuery: CommerceQuery) => {
+    const loadDocuments = async (request: object): Promise<CommerceDocumentRecord[]> => {
       const response = await providerFetch('https://commerce.test/documents:runQuery', {
         method: 'POST',
-        body: JSON.stringify(commerceQuery),
+        body: JSON.stringify(request),
       });
       const payload = await response.json() as unknown;
       if (!Array.isArray(payload)) throw new Error('Invalid repository fixture');
-      return payload.flatMap((entry): CommerceDocumentRecord<T>[] => {
+      return payload.flatMap((entry): CommerceDocumentRecord[] => {
         const document = entry && typeof entry === 'object' && 'document' in entry
           ? (entry as { document?: unknown }).document
           : undefined;
@@ -184,7 +183,7 @@ function legacyFirestoreProfileDependencies(
         const fraction = typeof timestamp === 'string' ? timestamp.match(/\.(\d{1,9})Z$/)?.[1] || '' : '';
         return [{
           createTime: '',
-          data: fields as T,
+          data: fields as CommerceDocumentData,
           key,
           processedAt: Number.isFinite(milliseconds)
             ? { seconds: Math.floor(milliseconds / 1000), nanos: Number(fraction.padEnd(9, '0')) || 0 }
@@ -195,9 +194,14 @@ function legacyFirestoreProfileDependencies(
       });
     };
     return {
-      query,
+      queryDeliveryHistory: (args: Parameters<D1CommerceRepository['queryDeliveryHistory']>[0]) =>
+        loadDocuments({ operation: 'queryDeliveryHistory', ...args }),
+      queryFulfillmentOrders: (args: Parameters<D1CommerceRepository['queryFulfillmentOrders']>[0]) =>
+        loadDocuments({ operation: 'queryFulfillmentOrders', ...args }),
+      queryManualReviewCheckouts: (args: Parameters<D1CommerceRepository['queryManualReviewCheckouts']>[0]) =>
+        loadDocuments({ operation: 'queryManualReviewCheckouts', ...args }),
       queryDeliveryOrderOwners: async (args: Readonly<{ startAfterOwner?: string; limit: number }>) => {
-        const documents = await query({ kind: 'delivery_order' });
+        const documents = await loadDocuments({ operation: 'queryDeliveryOrderOwners', ...args });
         return [...new Set(documents.flatMap((document) =>
           typeof document.data.owner === 'string' ? [document.data.owner] : []))]
           .filter((owner) => args.startAfterOwner === undefined || owner > args.startAfterOwner)
@@ -517,11 +521,10 @@ test('legacy Firestore fixtures preserve shipment and anonymous history query co
       items: [{ kind: 'box', refId: 3 }],
     }],
   });
-  assert.equal(queries.length, 2);
-  const serialized = queries.map((query) => JSON.stringify(query));
-  assert.match(serialized[0], new RegExp(OWNER));
-  assert.match(serialized[1], new RegExp(`anonymous:${UID}`));
-  assert.equal(serialized.every((query) => query.includes('delivery_order') && query.includes('ready_to_ship')), true);
+  assert.deepEqual(queries, [
+    { operation: 'queryDeliveryHistory', owners: [OWNER] },
+    { operation: 'queryDeliveryHistory', owners: [`anonymous:${UID}`] },
+  ]);
 });
 
 test('profile state derives identity server-side and returns independently bounded sections', async () => {
@@ -702,8 +705,9 @@ test('profile state preserves an earlier unavailable section when its sibling ti
     profileDependencies(
       async () => assert.fail('profile state deadline reached provider fetch'),
       () => ({
-        query: async <T extends CommerceDocumentData>() =>
-          new Promise<CommerceDocumentRecord<T>[]>(() => undefined),
+        queryDeliveryHistory: async () => new Promise<CommerceDocumentRecord[]>(() => undefined),
+        queryFulfillmentOrders: async () => [],
+        queryManualReviewCheckouts: async () => [],
         queryDeliveryOrderOwners: async () => new Promise<string[]>(() => undefined),
       }),
       {
@@ -736,9 +740,11 @@ test('profile reads enforce deadlines when D1 ignores the signal', async () => {
       profileDependencies(
         async () => assert.fail('D1 deadline reached provider fetch'),
         () => ({
-          query: async <T extends CommerceDocumentData>() => mode === 'stalled'
-            ? new Promise<CommerceDocumentRecord<T>[]>(() => undefined)
-            : new Promise<CommerceDocumentRecord<T>[]>((resolve) => setTimeout(() => resolve([]), 20)),
+          queryDeliveryHistory: async () => mode === 'stalled'
+            ? new Promise<CommerceDocumentRecord[]>(() => undefined)
+            : new Promise<CommerceDocumentRecord[]>((resolve) => setTimeout(() => resolve([]), 20)),
+          queryFulfillmentOrders: async () => [],
+          queryManualReviewCheckouts: async () => [],
           queryDeliveryOrderOwners: async () => [],
         }),
         { timeoutMs: 5 },
@@ -784,8 +790,9 @@ test('profile state preserves independently completed sections when D1 ignores t
     profileDependencies(
       async () => assert.fail('profile state D1 deadline reached provider fetch'),
       () => ({
-        query: async <T extends CommerceDocumentData>() =>
-          new Promise<CommerceDocumentRecord<T>[]>(() => undefined),
+        queryDeliveryHistory: async () => new Promise<CommerceDocumentRecord[]>(() => undefined),
+        queryFulfillmentOrders: async () => [],
+        queryManualReviewCheckouts: async () => [],
         queryDeliveryOrderOwners: async () => new Promise<string[]>(() => undefined),
       }),
       {
@@ -937,10 +944,9 @@ test('shipment route preserves legacy wallet-shaped Auth UIDs when no session do
     PROFILE_SHIPMENTS_PATH,
     {
       ...legacyFirestoreProfileDependencies(async (_input, init) => {
-        const query = JSON.parse(String(init?.body)) as CommerceQuery;
-        const owner = query.filters?.find((filter) => filter.field === 'owner')?.value;
-        if (typeof owner === 'string') owners.push(owner);
-        else if (Array.isArray(owner)) owners.push(...owner.filter((value): value is string => typeof value === 'string'));
+        const query = JSON.parse(String(init?.body)) as { operation: string; owners: string[] };
+        assert.equal(query.operation, 'queryDeliveryHistory');
+        owners.push(...query.owners);
         return Response.json([]);
       }),
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: OWNER }),
@@ -1058,8 +1064,8 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     env,
     ADMIN_DELIVERY_ORDER_OWNERS_PATH,
     legacyFirestoreProfileDependencies(async (_input, init) => {
-      const query = JSON.parse(String(init?.body)) as CommerceQuery;
-      assert.equal(query.kind, 'delivery_order');
+      const query = JSON.parse(String(init?.body)) as { operation: string };
+      assert.equal(query.operation, 'queryDeliveryOrderOwners');
       return Response.json([
         { document: { name: 'projects/mons-shop/databases/(default)/documents/drops/a/deliveryOrders/1', fields: { owner: stringValue(OWNER) } } },
         { document: { name: 'projects/mons-shop/databases/(default)/documents/drops/a/deliveryOrders/2', fields: { owner: stringValue(OTHER) } } },
@@ -1076,7 +1082,8 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     env,
     FULFILLMENT_ORDERS_PATH,
     legacyFirestoreProfileDependencies(async (_input, init) => {
-      const query = JSON.parse(String(init?.body)) as CommerceQuery;
+      const query = JSON.parse(String(init?.body)) as { operation: string; limit: number };
+      assert.equal(query.operation, 'queryFulfillmentOrders');
       assert.equal(query.limit, 3);
       return Response.json([{ document: {
         name: 'projects/mons-shop/databases/(default)/documents/drops/card_nft_2/deliveryOrders/7',
@@ -1210,7 +1217,9 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
   const dependencies = profileDependencies(
     async () => Response.json({}),
     () => ({
-      query: async () => [],
+      queryDeliveryHistory: async () => [],
+      queryFulfillmentOrders: async () => [],
+      queryManualReviewCheckouts: async () => [],
       queryDeliveryOrderOwners: async ({ limit }) => {
         queryLimits.push(limit);
         return [];

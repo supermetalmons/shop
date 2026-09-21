@@ -5,11 +5,15 @@ import test from 'node:test';
 import { sqlSchemaFingerprint } from '../scripts/shared/sqlSchemaFingerprint.ts';
 import {
   adminIrlRedeemWorkflowStatusQuery,
+  deliveryHistoryQuery,
   deliveryOrdersByOwnerQuery,
   deliveryRecoveryOrdersQuery,
   duePackStatusProjectionsQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
+  fulfillmentOrdersQuery,
+  legacyClaimAssignmentsQuery,
+  manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
   staleStripeFulfillmentsQuery,
   type CommerceSqlQuery,
@@ -1327,6 +1331,21 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
     assert.match(ownerQueryPlan, /SEARCH document USING INDEX commerce_documents_delivery_owner_path \(owner=\?\)/);
     assert.match(ownerQueryPlan, /SEARCH path_revision .*\(document_path=\?\) LEFT-JOIN/);
     assert.doesNotMatch(ownerQueryPlan, /USE TEMP B-TREE/);
+    const historyPlan = planDetails(db, deliveryHistoryQuery({ owners: ['owner'] }));
+    assert.match(historyPlan, /SEARCH commerce_documents USING INDEX commerce_documents_delivery_owner/);
+    const multiOwnerHistoryPlan = planDetails(db, deliveryHistoryQuery({ owners: ['owner', 'other'] }));
+    assert.match(multiOwnerHistoryPlan, /SEARCH commerce_documents USING INDEX commerce_documents_delivery_owner/);
+    for (const startAfter of [undefined, {
+      processedAt: { seconds: 1, nanos: 1 },
+      documentPath: 'drops/drop/deliveryOrders/100',
+    }]) {
+      const fulfillmentPlan = planDetails(db, fulfillmentOrdersQuery({ dropId: 'drop', limit: 1001, startAfter }));
+      assert.match(fulfillmentPlan, /SEARCH commerce_documents USING INDEX commerce_documents_drop_processed_cursor/);
+    }
+    const manualReviewPlan = planDetails(db, manualReviewCheckoutsQuery({ dropId: 'drop' }));
+    assert.match(manualReviewPlan, /SEARCH commerce_documents USING INDEX commerce_documents_manual_review/);
+    const legacyClaimPlan = planDetails(db, legacyClaimAssignmentsQuery({ code: 'claim' }));
+    assert.match(legacyClaimPlan, /SEARCH commerce_documents USING INDEX commerce_documents_assignment_claim/);
     const deliveryRecoveryPlan = planDetails(db, deliveryRecoveryOrdersQuery('owner'));
     assert.match(
       deliveryRecoveryPlan,

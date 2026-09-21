@@ -27,7 +27,6 @@ import {
   isCommerceDeleteField,
   isCommerceServerTimestamp,
   type CommerceDocumentRecord,
-  type CommerceQuery,
   type CommerceUpdateValue,
 } from '../src/commerceRepository.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
@@ -204,15 +203,7 @@ function legacyFirestoreFixtureRepository(harness: LegacyFirestoreCommerceHarnes
       version: 1,
     };
   };
-  const matches = (entry: CommerceDocumentRecord, query: CommerceQuery) =>
-    (query.filters || []).every((filter) => {
-      const value = entry.data[filter.field];
-      return filter.op === 'equal'
-        ? value === filter.value
-        : Array.isArray(filter.value) && filter.value.includes(value as never);
-    });
   return {
-    query: async (query: CommerceQuery) => harness.orders.map(record).filter((entry) => matches(entry, query)),
     queryDeliveryRecoveryOrders: async (owner: string) => harness.orders.map(record).filter((entry) =>
       entry.data.owner === owner &&
       (entry.data.status === 'processing' || entry.data.status === 'prepared')),

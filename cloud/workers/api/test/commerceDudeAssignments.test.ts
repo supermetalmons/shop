@@ -183,7 +183,9 @@ test('failed assignment batches roll back consumed inventory and every document'
   await assert.rejects(assignCommerceDudes(args), /injected storage failure/);
   assert.deepEqual(availableCommerceDudeIds(harness, 'drop'), [1, 2, 3]);
   assert.equal(await repository.get(commerceKeys.boxAssignment('drop', 'box')), null);
-  assert.deepEqual(await repository.query({ kind: 'dude_assignment' }), []);
+  assert.deepEqual(harness.database.prepare(
+    "SELECT document_path FROM commerce_documents WHERE document_kind = 'dude_assignment'",
+  ).all(), []);
 });
 
 test('native card inventory preserves rarity selection and depleted-bucket fallbacks', async () => {

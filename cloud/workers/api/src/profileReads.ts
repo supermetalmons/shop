@@ -1,7 +1,6 @@
 import {
   deliveryOrderSummarySortAt,
   parseDeliveryOrderSummary,
-  PROFILE_SHIPMENT_STATUSES,
 } from '../../../../shared/deliveryOrderSummary.js';
 import {
   FULFILLMENT_ADMIN_WALLET_ADDRESSES,
@@ -225,7 +224,8 @@ function errorResponse(error: ProfileReadError): Response {
 type ProfileReadDependencies = {
   createCommerceRepository: (
     db: D1Database,
-  ) => Pick<D1CommerceRepository, 'query' | 'queryDeliveryOrderOwners'>;
+  ) => Pick<D1CommerceRepository,
+    'queryDeliveryHistory' | 'queryFulfillmentOrders' | 'queryManualReviewCheckouts' | 'queryDeliveryOrderOwners'>;
   loadProfileEmail: typeof loadProfileEmail;
   loadStripeChargebackSessionIds: typeof loadStripeChargebackSessionIds;
   nowMs: () => number;
@@ -415,15 +415,9 @@ async function loadSessionWallet(args: {
 
 async function loadDeliveryHistory(args: {
   owners: readonly string[];
-  repository: Pick<D1CommerceRepository, 'query'>;
+  repository: Pick<D1CommerceRepository, 'queryDeliveryHistory'>;
 }): Promise<DeliveryOrderSummary[]> {
-  const documents = await args.repository.query({
-    filters: [
-      { field: 'owner', op: 'in', value: args.owners },
-      { field: 'status', op: 'in', value: PROFILE_SHIPMENT_STATUSES },
-    ],
-    kind: 'delivery_order',
-  });
+  const documents = await args.repository.queryDeliveryHistory({ owners: args.owners });
   return deliveryHistoryFromDocuments(documents);
 }
 
@@ -628,25 +622,19 @@ async function loadFulfillmentOrders(args: {
   cursor: FulfillmentOrdersCursor | null;
   dropId: string;
   limit: number;
-  repository: Pick<D1CommerceRepository, 'query'>;
+  repository: Pick<D1CommerceRepository, 'queryFulfillmentOrders'>;
   db: D1Database;
   loadStripeChargebackSessionIds: typeof loadStripeChargebackSessionIds;
   signal: AbortSignal;
 }): Promise<{ orders: FulfillmentOrder[]; nextCursor: FulfillmentOrdersCursor | null }> {
-  const documents = await args.repository.query({
+  const documents = await args.repository.queryFulfillmentOrders({
     dropId: args.dropId,
-    filters: [{ field: 'status', op: 'equal', value: 'ready_to_ship' }],
-    kind: 'delivery_order',
     limit: args.limit + 1,
-    orderBy: [
-      { field: 'processedAt', direction: 'desc' },
-      { field: 'documentPath', direction: 'desc' },
-    ],
     ...(args.cursor ? {
-      startAfter: [
-        args.cursor.processedAt,
-        `drops/${args.dropId}/deliveryOrders/${args.cursor.id}`,
-      ],
+      startAfter: {
+        processedAt: args.cursor.processedAt,
+        documentPath: `drops/${args.dropId}/deliveryOrders/${args.cursor.id}`,
+      },
     } : {}),
   });
   args.signal.throwIfAborted();
@@ -744,14 +732,9 @@ async function manualReviewFromDocuments(args: {
 
 async function loadManualReviewDocuments(args: {
   dropId: string;
-  repository: Pick<D1CommerceRepository, 'query'>;
+  repository: Pick<D1CommerceRepository, 'queryManualReviewCheckouts'>;
 }): Promise<CommerceDocumentRecord[]> {
-  return args.repository.query({
-    dropId: args.dropId,
-    filters: [{ field: 'manualRefundReviewRequired', op: 'equal', value: true }],
-    kind: 'stripe_checkout',
-    orderBy: [{ field: 'documentPath', direction: 'asc' }],
-  });
+  return args.repository.queryManualReviewCheckouts({ dropId: args.dropId });
 }
 
 async function loadProfileStateProfile(args: {

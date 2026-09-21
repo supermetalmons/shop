@@ -1505,15 +1505,15 @@ test('Admin IRL D1-only publication is idempotent for card and prepared-pack dra
     assert.equal(completedExecution.failure, undefined);
     assert.equal(completedExecution.instanceCreationPending, undefined);
     assert.equal(completedExecution.pendingEffect, undefined);
-    const orders = await repository.query({
-      kind: 'delivery_order',
-      dropId: DROP_ID,
-    });
+    const orders = harness.database.prepare(`
+      SELECT document_json FROM commerce_documents
+      WHERE document_kind = 'delivery_order' AND drop_id = ?
+    `).all(DROP_ID).map((row) => JSON.parse(String(row.document_json)) as CommerceDocumentData);
     assert.equal(orders.length, 1);
     assert.equal(projection.applied, testCase.targetKind === 'pack' ? 1 : 0);
     assert.equal(projection.attempts, testCase.targetKind === 'pack' ? 1 : 0);
     assert.equal(
-      orders[0]?.data.packStatusProjectionState,
+      orders[0]?.packStatusProjectionState,
       testCase.targetKind === 'pack' ? 'completed' : undefined,
     );
   }

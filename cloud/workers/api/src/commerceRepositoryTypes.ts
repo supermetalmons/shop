@@ -46,39 +46,6 @@ export type CommerceDocumentRecord<
   version: number;
 }>;
 
-export type CommerceIndexedField =
-  | 'buyerOrderReceivedEmailState'
-  | 'fulfillmentProcessor'
-  | 'fulfillmentStatus'
-  | 'irlClaimCode'
-  | 'manualRefundReviewRequired'
-  | 'owner'
-  | 'packStatusProjectionNextAttemptAtMs'
-  | 'packStatusProjectionState'
-  | 'shipperReadyToShipEmailState'
-  | 'source'
-  | 'status';
-
-export type CommerceOrderField = CommerceIndexedField | 'documentPath' | 'processedAt';
-
-export type CommerceFilterValue = string | number | boolean;
-
-export type CommerceQuery = Readonly<{
-  dropId?: string | null;
-  filters?: readonly Readonly<{
-    field: CommerceIndexedField;
-    op: 'equal' | 'in';
-    value: CommerceFilterValue | readonly CommerceFilterValue[];
-  }>[];
-  kind: CommerceDocumentKind;
-  limit?: number;
-  orderBy?: readonly Readonly<{
-    direction: 'asc' | 'desc';
-    field: CommerceOrderField;
-  }>[];
-  startAfter?: readonly (CommerceFilterValue | CommerceTimestamp)[];
-}>;
-
 export type CommerceWriteConflictCode = 'aborted' | 'already-exists' | 'failed-precondition';
 
 export class CommerceWriteConflict extends Error {

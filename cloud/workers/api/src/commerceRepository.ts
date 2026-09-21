@@ -11,10 +11,7 @@ import {
   type CommerceDocumentKind,
   type CommerceDocumentRecord,
   type CommerceDocumentWriteData,
-  type CommerceFilterValue,
-  type CommerceIndexedField,
   type CommerceJsonValue,
-  type CommerceQuery,
   type CommerceTimestamp,
   type CommerceUpdateValue,
 } from './commerceRepositoryTypes.js';
@@ -22,15 +19,20 @@ import { isCommerceDocumentSegment } from '../../../../shared/commerceDocumentPa
 import {
   COMMERCE_DOCUMENT_COLUMNS as DOCUMENT_COLUMNS,
   adminIrlRedeemWorkflowStatusQuery,
+  deliveryHistoryQuery,
   deliveryOrderOwnersQuery,
   deliveryOrdersByOwnerQuery,
   deliveryRecoveryOrdersQuery,
   duePackStatusProjectionsQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
+  fulfillmentOrdersQuery,
+  legacyClaimAssignmentsQuery,
+  manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
   staleStripeFulfillmentsQuery,
   type CommerceSqlQuery,
+  type FulfillmentOrdersQueryArgs,
 } from './commerceQueries.js';
 
 export * from './commerceRepositoryTypes.js';
@@ -66,20 +68,6 @@ type DocumentExpectation = Readonly<{
 const COMMERCE_READ_BATCH_SIZE = 50;
 const COMMERCE_AUTHORITY_SELECT = `SELECT authority_state, revision, documents_revision
   FROM commerce_authority_control WHERE singleton = 1`;
-const INDEXED_COLUMNS: Readonly<Record<CommerceIndexedField, string>> = Object.freeze({
-  buyerOrderReceivedEmailState: 'buyer_notification_state',
-  fulfillmentProcessor: 'fulfillment_processor',
-  fulfillmentStatus: 'fulfillment_status',
-  irlClaimCode: 'irl_claim_code',
-  manualRefundReviewRequired: 'manual_refund_review_required',
-  owner: 'owner',
-  packStatusProjectionNextAttemptAtMs: 'pack_projection_next_attempt_ms',
-  packStatusProjectionState: 'pack_projection_state',
-  shipperReadyToShipEmailState: 'shipper_notification_state',
-  source: 'source',
-  status: 'status',
-});
-
 const COLLECTIONS: Readonly<Record<Exclude<CommerceDocumentKind, 'claim_code' | 'dude_pool'>, string>> = Object.freeze({
   admin_irl_redeem_pack_marker: 'adminIrlRedeemPackMarkers',
   admin_irl_redeem_receipt_marker: 'adminIrlRedeemReceiptMarkers',
@@ -387,119 +375,6 @@ function isTimestampLike(value: unknown): value is CommerceTimestamp {
   return isObject(value) && validTimestamp(value as CommerceTimestamp);
 }
 
-function sqlFilterValue(value: CommerceFilterValue): string | number {
-  if (typeof value === 'string') return value;
-  if (typeof value === 'boolean') return Number(value);
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query filter.');
-}
-
-function ensureQuery(query: CommerceQuery): void {
-  if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 0)) {
-    throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query limit.');
-  }
-  for (const filter of query.filters || []) {
-    if (filter.op === 'in') {
-      if (!Array.isArray(filter.value) || filter.value.length === 0) {
-        throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query filter.');
-      }
-      filter.value.forEach(sqlFilterValue);
-    } else {
-      if (Array.isArray(filter.value)) {
-        throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query filter.');
-      }
-      sqlFilterValue(filter.value as CommerceFilterValue);
-    }
-  }
-  const orderBy = query.orderBy || [];
-  if (!query.startAfter) return;
-  if (
-    orderBy.length === 1 &&
-    orderBy[0].field === 'documentPath' &&
-    query.startAfter.length === 1 &&
-    typeof query.startAfter[0] === 'string'
-  ) return;
-  if (
-    orderBy.length === 2 &&
-    orderBy[0].field === 'processedAt' &&
-    orderBy[0].direction === 'desc' &&
-    orderBy[1].field === 'documentPath' &&
-    orderBy[1].direction === 'desc' &&
-    query.startAfter.length === 2 &&
-    isTimestampLike(query.startAfter[0]) &&
-    typeof query.startAfter[1] === 'string'
-  ) return;
-  throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query cursor.');
-}
-
-function compileCommerceQuery(query: CommerceQuery, authoritative = false): CommerceSqlQuery {
-  ensureQuery(query);
-  const bindings: Array<string | number> = [query.kind];
-  const predicates = ['document_kind = ?'];
-  if (query.dropId !== undefined) {
-    if (query.dropId === null) predicates.push('drop_id IS NULL');
-    else {
-      predicates.push('drop_id = ?');
-      bindings.push(query.dropId);
-    }
-  }
-  for (const filter of query.filters || []) {
-    const column = INDEXED_COLUMNS[filter.field];
-    if (filter.op === 'equal') {
-      predicates.push(`${column} = ?`);
-      bindings.push(sqlFilterValue(filter.value as CommerceFilterValue));
-    } else {
-      const values = filter.value as readonly CommerceFilterValue[];
-      predicates.push(`${column} IN (${values.map(() => '?').join(', ')})`);
-      bindings.push(...values.map(sqlFilterValue));
-    }
-  }
-  const orderBy = query.orderBy || [];
-  if (query.startAfter && orderBy[0]?.field === 'documentPath') {
-    predicates.push(`document_path ${orderBy[0].direction === 'asc' ? '>' : '<'} ?`);
-    bindings.push(query.startAfter[0] as string);
-  } else if (query.startAfter) {
-    const processedAt = query.startAfter[0] as CommerceTimestamp;
-    const documentPath = query.startAfter[1] as string;
-    predicates.push(`(
-      processed_at_seconds IS NULL OR
-      processed_at_seconds < ? OR
-      (processed_at_seconds = ? AND processed_at_nanos < ?) OR
-      (processed_at_seconds = ? AND processed_at_nanos = ? AND document_path < ?)
-    )`);
-    bindings.push(
-      processedAt.seconds,
-      processedAt.seconds,
-      processedAt.nanos,
-      processedAt.seconds,
-      processedAt.nanos,
-      documentPath,
-    );
-  }
-  const orderParts: string[] = [];
-  for (const order of orderBy) {
-    const direction = order.direction === 'asc' ? 'ASC' : 'DESC';
-    if (order.field === 'documentPath') orderParts.push(`document_path ${direction}`);
-    else if (order.field === 'processedAt') {
-      orderParts.push(`processed_at_seconds ${direction}`, `processed_at_nanos ${direction}`);
-    } else orderParts.push(`${INDEXED_COLUMNS[order.field]} ${direction}`);
-  }
-  if (!orderParts.length) orderParts.push('document_path ASC');
-  else if (!orderBy.some((order) => order.field === 'documentPath')) orderParts.push('document_path ASC');
-  const from = authoritative
-    ? 'commerce_authority_control AS authority CROSS JOIN commerce_documents'
-    : 'commerce_documents';
-  if (authoritative) predicates.unshift("authority.singleton = 1 AND authority.authority_state = 'd1'");
-  let sql = `SELECT ${DOCUMENT_COLUMNS} FROM ${from}
-    WHERE ${predicates.join(' AND ')}
-    ORDER BY ${orderParts.join(', ')}`;
-  if (query.limit !== undefined) {
-    sql += ' LIMIT ?';
-    bindings.push(query.limit);
-  }
-  return { bindings, sql };
-}
-
 function reportInefficientQuery(
   operation: string,
   kind: CommerceDocumentKind,
@@ -704,14 +579,29 @@ export class D1CommerceRepository {
     return document ? publicRecord<T>(document) : null;
   }
 
-  async query<T extends CommerceDocumentData>(query: CommerceQuery): Promise<CommerceDocumentRecord<T>[]> {
-    const compiled = compileCommerceQuery(query, true);
-    const result = await this.readBatchWithAuthority(
-      () => this.db.prepare(compiled.sql).bind(...compiled.bindings),
-    );
-    const documents = result.results.map(parseRow);
-    reportInefficientQuery('query', query.kind, result, documents.length);
-    return documents.map((document) => publicRecord<T>(document));
+  async queryDeliveryHistory(args: Readonly<{ owners: readonly string[] }>): Promise<CommerceDocumentRecord[]> {
+    if (!Array.isArray(args.owners) || args.owners.length === 0 ||
+      args.owners.some((owner) => typeof owner !== 'string')) {
+      throw new CommerceRepositoryError('invalid-argument', 'Invalid delivery history owners.');
+    }
+    return this.readDocuments(deliveryHistoryQuery(args), 'delivery-history', 'delivery_order');
+  }
+
+  async queryFulfillmentOrders(args: FulfillmentOrdersQueryArgs): Promise<CommerceDocumentRecord[]> {
+    const limit = positiveQueryLimit(args.limit);
+    if (args.startAfter !== undefined && (
+      !isObject(args.startAfter) || !isTimestampLike(args.startAfter.processedAt) ||
+      typeof args.startAfter.documentPath !== 'string'
+    )) throw new CommerceRepositoryError('invalid-argument', 'Invalid commerce query cursor.');
+    return this.readDocuments(fulfillmentOrdersQuery({ ...args, limit }), 'fulfillment-orders', 'delivery_order');
+  }
+
+  async queryManualReviewCheckouts(args: Readonly<{ dropId: string }>): Promise<CommerceDocumentRecord[]> {
+    return this.readDocuments(manualReviewCheckoutsQuery(args), 'manual-review-checkouts', 'stripe_checkout');
+  }
+
+  async queryLegacyClaimAssignments(args: Readonly<{ code: string }>): Promise<CommerceDocumentRecord[]> {
+    return this.readDocuments(legacyClaimAssignmentsQuery(args), 'legacy-claim-assignments', 'box_assignment');
   }
 
   async queryDeliveryOrderOwners(args: Readonly<{
@@ -836,6 +726,19 @@ export class D1CommerceRepository {
       unit.rollback();
       throw error;
     }
+  }
+
+  private async readDocuments(
+    query: CommerceSqlQuery,
+    operation: string,
+    kind: CommerceDocumentKind,
+  ): Promise<CommerceDocumentRecord[]> {
+    const result = await this.readBatchWithAuthority(
+      () => this.db.prepare(query.sql).bind(...query.bindings),
+    );
+    const documents = result.results.map(parseRow);
+    reportInefficientQuery(operation, kind, result, documents.length);
+    return documents.map((document) => publicRecord(document));
   }
 
   private async readBatchWithAuthority(

@@ -1,11 +1,22 @@
 import { STRIPE_CHECKOUT_STATUS } from '../../../../shared/stripeCheckoutSession.js';
 import { STRIPE_CHECKOUT_FULFILLMENT_PROCESSOR } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import { READY_NOTIFICATION_DUE_SQL } from '../../../../shared/readyNotificationDueSql.js';
+import { PROFILE_SHIPMENT_STATUSES } from '../../../../shared/deliveryOrderSummary.js';
+import type { CommerceTimestamp } from './commerceRepositoryTypes.js';
 
 export type CommerceSqlQuery = {
   bindings: Array<string | number>;
   sql: string;
 };
+
+export type FulfillmentOrdersQueryArgs = Readonly<{
+  dropId: string;
+  limit: number;
+  startAfter?: Readonly<{
+    processedAt: CommerceTimestamp;
+    documentPath: string;
+  }>;
+}>;
 
 const DOCUMENT_COLUMN_NAMES = [
   'document_path',
@@ -35,6 +46,69 @@ const PENDING_READY_NOTIFICATION_INDEXES = Object.freeze({
 
 function qualifiedDocumentColumns(alias: string): string {
   return DOCUMENT_COLUMN_NAMES.map((name) => `${alias}.${name}`).join(', ');
+}
+
+export function deliveryHistoryQuery(args: Readonly<{ owners: readonly string[] }>): CommerceSqlQuery {
+  return {
+    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
+      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
+      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+        AND document_kind = 'delivery_order'
+        AND owner IN (${args.owners.map(() => '?').join(', ')})
+        AND status IN (${PROFILE_SHIPMENT_STATUSES.map(() => '?').join(', ')})
+      ORDER BY document_path ASC`,
+    bindings: [...args.owners, ...PROFILE_SHIPMENT_STATUSES],
+  };
+}
+
+export function fulfillmentOrdersQuery(args: FulfillmentOrdersQueryArgs): CommerceSqlQuery {
+  const cursor = args.startAfter;
+  const cursorPredicate = cursor === undefined ? '' : ` AND (
+        processed_at_seconds IS NULL OR
+        processed_at_seconds < ? OR
+        (processed_at_seconds = ? AND processed_at_nanos < ?) OR
+        (processed_at_seconds = ? AND processed_at_nanos = ? AND document_path < ?)
+      )`;
+  return {
+    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
+      FROM commerce_authority_control AS authority
+      CROSS JOIN commerce_documents INDEXED BY commerce_documents_drop_processed_cursor
+      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+        AND document_kind = 'delivery_order' AND drop_id = ? AND status = 'ready_to_ship'${cursorPredicate}
+      ORDER BY processed_at_seconds DESC, processed_at_nanos DESC, document_path DESC
+      LIMIT ?`,
+    bindings: [args.dropId, ...(cursor === undefined ? [] : [
+      cursor.processedAt.seconds,
+      cursor.processedAt.seconds,
+      cursor.processedAt.nanos,
+      cursor.processedAt.seconds,
+      cursor.processedAt.nanos,
+      cursor.documentPath,
+    ]), args.limit],
+  };
+}
+
+export function manualReviewCheckoutsQuery(args: Readonly<{ dropId: string }>): CommerceSqlQuery {
+  return {
+    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
+      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
+      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+        AND document_kind = 'stripe_checkout' AND drop_id = ? AND manual_refund_review_required = 1
+      ORDER BY document_path ASC`,
+    bindings: [args.dropId],
+  };
+}
+
+export function legacyClaimAssignmentsQuery(args: Readonly<{ code: string }>): CommerceSqlQuery {
+  return {
+    sql: `SELECT ${COMMERCE_DOCUMENT_COLUMNS}
+      FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
+      WHERE authority.singleton = 1 AND authority.authority_state = 'd1'
+        AND document_kind = 'box_assignment' AND irl_claim_code = ?
+      ORDER BY document_path ASC
+      LIMIT 2`,
+    bindings: [args.code],
+  };
 }
 
 export function adminIrlRedeemWorkflowStatusQuery(operationId: string): CommerceSqlQuery {

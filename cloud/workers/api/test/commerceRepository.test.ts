@@ -230,55 +230,86 @@ test('native cursors preserve nanosecond and document-path ordering', async () =
     ],
   );
 
-  const records = await repository.query({
+  seedCommerceDocuments(harness, [
+    { key: commerceKeys.deliveryOrder('poncho', 'null-a'), data: { status: 'ready_to_ship' } },
+    { key: commerceKeys.deliveryOrder('poncho', 'null-z'), data: { status: 'ready_to_ship' } },
+    { key: commerceKeys.deliveryOrder('other', '4'), data: { status: 'ready_to_ship' } },
+    { key: commerceKeys.deliveryOrder('poncho', 'processing'), data: { status: 'processing' } },
+  ]);
+  assert.deepEqual(
+    (await repository.queryFulfillmentOrders({ dropId: 'poncho', limit: 2 }))
+      .map((record) => record.key.documentId),
+    ['3', '2'],
+  );
+  const records = await repository.queryFulfillmentOrders({
     dropId: 'poncho',
-    filters: [{ field: 'status', op: 'equal', value: 'ready_to_ship' }],
-    kind: 'delivery_order',
-    orderBy: [
-      { field: 'processedAt', direction: 'desc' },
-      { field: 'documentPath', direction: 'desc' },
-    ],
-    startAfter: [
-      { seconds: 1_787_054_400, nanos: 123_000_002 },
-      'drops/poncho/deliveryOrders/3',
-    ],
+    limit: 10,
+    startAfter: {
+      processedAt: { seconds: 1_787_054_400, nanos: 123_000_002 },
+      documentPath: 'drops/poncho/deliveryOrders/3',
+    },
   });
-  assert.deepEqual(records.map((record) => record.key.documentId), ['2', '1']);
+  assert.deepEqual(records.map((record) => record.key.documentId), ['2', '1', 'null-z', 'null-a']);
+  assert.deepEqual(records.slice(-2).map((record) => record.processedAt), [null, null]);
 });
 
-test('native queries apply every filter, boolean, order, cursor, and limit in D1', async () => {
+test('delivery history selects every requested owner and shipment status across drops', async () => {
   const harness = createCommerceD1Harness();
   const repository = new D1CommerceRepository(harness.db);
-  await repository.run(10, async (unit) => {
-    await unit.create(commerceKeys.stripeCheckout('drop', 'a'), {
-      fulfillmentProcessor: 'queue',
-      manualRefundReviewRequired: true,
-      status: 'processing',
-    });
-    await unit.create(commerceKeys.stripeCheckout('drop', 'b'), {
-      fulfillmentProcessor: 'queue',
-      manualRefundReviewRequired: true,
-      status: 'pending',
-    });
-    await unit.create(commerceKeys.stripeCheckout('drop', 'c'), {
-      fulfillmentProcessor: 'other',
-      manualRefundReviewRequired: true,
-      status: 'processing',
-    });
-  });
-  const records = await repository.query({
-    dropId: 'drop',
-    filters: [
-      { field: 'fulfillmentProcessor', op: 'equal', value: 'queue' },
-      { field: 'status', op: 'in', value: ['processing', 'pending'] },
-      { field: 'manualRefundReviewRequired', op: 'equal', value: true },
-    ],
-    kind: 'stripe_checkout',
-    limit: 1,
-    orderBy: [{ field: 'documentPath', direction: 'desc' }],
-    startAfter: ['drops/drop/stripeCheckouts/c'],
-  });
-  assert.deepEqual(records.map((record) => record.key.documentId), ['b']);
+  seedCommerceDocuments(harness, [
+    { key: commerceKeys.deliveryOrder('drop', 'a'), data: { owner: 'owner-a', status: 'processing' } },
+    { key: commerceKeys.deliveryOrder('drop', 'b'), data: { owner: 'owner-b', status: 'ready_to_ship' } },
+    { key: commerceKeys.deliveryOrder('other', 'c'), data: { owner: 'owner-a', status: 'ready_to_ship' } },
+    { key: commerceKeys.deliveryOrder('drop', 'wrong-owner'), data: { owner: 'owner-c', status: 'ready_to_ship' } },
+    { key: commerceKeys.deliveryOrder('drop', 'wrong-status'), data: { owner: 'owner-a', status: 'prepared' } },
+    { key: commerceKeys.stripeCheckout('drop', 'wrong-kind'), data: { owner: 'owner-a', status: 'processing' } },
+  ]);
+  const records = await repository.queryDeliveryHistory({ owners: ['owner-b', 'owner-a', 'owner-a'] });
+  assert.deepEqual(records.map((record) => record.key.documentId), ['a', 'b', 'c']);
+  assert.deepEqual(await repository.queryDeliveryHistory({ owners: ['missing'] }), []);
+});
+
+test('manual review reads select flagged checkouts in the requested drop', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  seedCommerceDocuments(harness, [
+    { key: commerceKeys.stripeCheckout('drop', 'a'), data: { manualRefundReviewRequired: true, status: 'processing' } },
+    { key: commerceKeys.stripeCheckout('drop', 'b'), data: { manualRefundReviewRequired: true, status: 'pending' } },
+    { key: commerceKeys.stripeCheckout('drop', 'false'), data: { manualRefundReviewRequired: false } },
+    { key: commerceKeys.stripeCheckout('drop', 'missing'), data: {} },
+    { key: commerceKeys.stripeCheckout('other', 'wrong-drop'), data: { manualRefundReviewRequired: true } },
+    { key: commerceKeys.deliveryOrder('drop', 'wrong-kind'), data: { manualRefundReviewRequired: true } },
+  ]);
+  const records = await repository.queryManualReviewCheckouts({ dropId: 'drop' });
+  assert.deepEqual(records.map((record) => record.key.documentId), ['a', 'b']);
+});
+
+test('legacy claim assignments filter by code across drops and stop after two ordered matches', async () => {
+  const harness = createCommerceD1Harness();
+  const repository = new D1CommerceRepository(harness.db);
+  seedCommerceDocuments(harness, [
+    { key: commerceKeys.boxAssignment('a', '1'), data: { irlClaimCode: 'MATCH' } },
+    { key: commerceKeys.boxAssignment('b', '2'), data: { irlClaimCode: 'MATCH' } },
+    { key: commerceKeys.boxAssignment('c', '3'), data: { irlClaimCode: 'MATCH' } },
+    { key: commerceKeys.boxAssignment('a', 'wrong-code'), data: { irlClaimCode: 'OTHER' } },
+    { key: commerceKeys.deliveryOrder('a', 'wrong-kind'), data: { irlClaimCode: 'MATCH' } },
+  ]);
+  const records = await repository.queryLegacyClaimAssignments({ code: 'MATCH' });
+  assert.deepEqual(records.map((record) => record.key.path), ['drops/a/boxAssignments/1', 'drops/b/boxAssignments/2']);
+  assert.deepEqual(await repository.queryLegacyClaimAssignments({ code: 'MISSING' }), []);
+});
+
+test('named reads reject empty owners and invalid fulfillment limits before querying D1', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
+  const repository = new D1CommerceRepository(harness.db);
+  const isInvalidArgument = (error: unknown) =>
+    error instanceof CommerceRepositoryError && error.code === 'invalid-argument';
+  await assert.rejects(repository.queryDeliveryHistory({ owners: [] }), isInvalidArgument);
+  for (const limit of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    await assert.rejects(repository.queryFulfillmentOrders({ dropId: 'drop', limit }), isInvalidArgument);
+  }
+  assert.equal(calls.length, 0);
 });
 
 test('native reconciliation queries are bounded, ordered, and duplicate-free', async () => {
@@ -616,15 +647,12 @@ test('native timestamps remain monotonic and path ordering is binary', async () 
   assert.equal(Boolean(before && after && after.updateTime > before.updateTime), true);
 
   await repository.run(3_000, async (unit) => {
-    await unit.create(commerceKeys.claimCode('a'), {});
-    await unit.create(commerceKeys.claimCode('_'), {});
-    await unit.create(commerceKeys.claimCode('A'), {});
+    await unit.create(commerceKeys.stripeCheckout('drop', 'a'), { manualRefundReviewRequired: true });
+    await unit.create(commerceKeys.stripeCheckout('drop', '_'), { manualRefundReviewRequired: true });
+    await unit.create(commerceKeys.stripeCheckout('drop', 'A'), { manualRefundReviewRequired: true });
   });
-  const ordered = await repository.query({
-    kind: 'claim_code',
-    orderBy: [{ field: 'documentPath', direction: 'asc' }],
-  });
-  assert.deepEqual(ordered.map((record) => record.key.documentId), ['A', '_', 'a', 'existing']);
+  const ordered = await repository.queryManualReviewCheckouts({ dropId: 'drop' });
+  assert.deepEqual(ordered.map((record) => record.key.documentId), ['A', '_', 'a']);
 });
 
 test('transactional delivery-owner queries use atomic scope snapshots and sorted unique guards', async () => {
@@ -1523,11 +1551,19 @@ test('standalone reads use one authoritative two-statement batch', async () => {
   assert.match(calls[1].statements[1].sql, /document_path = \?\s+LIMIT 1/);
 
   assert.deepEqual(
-    await readWithSingleBatch(calls, () => repository.query({ kind: 'delivery_order' })),
+    await readWithSingleBatch(calls, () => repository.queryDeliveryHistory({ owners: ['owner'] })),
     [],
   );
   assert.deepEqual(
-    await readWithSingleBatch(calls, () => repository.query({ kind: 'claim_code', limit: 0 })),
+    await readWithSingleBatch(calls, () => repository.queryFulfillmentOrders({ dropId: 'drop', limit: 1 })),
+    [],
+  );
+  assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.queryManualReviewCheckouts({ dropId: 'drop' })),
+    [],
+  );
+  assert.deepEqual(
+    await readWithSingleBatch(calls, () => repository.queryLegacyClaimAssignments({ code: 'MISSING' })),
     [],
   );
   assert.deepEqual(
@@ -1592,7 +1628,7 @@ test('standalone reads use one authoritative two-statement batch', async () => {
     await readWithSingleBatch(calls, () => repository.queryDueStripeTerminalNotifications(1)),
     [],
   );
-  assert.equal(calls.length, 11);
+  assert.equal(calls.length, 13);
 });
 
 test('all standalone reads fail closed when commerce is paused', async () => {
@@ -1607,7 +1643,10 @@ test('all standalone reads fail closed when commerce is paused', async () => {
     read: (value: D1CommerceRepository) => Promise<unknown>;
   }[] = [
     { name: 'get', read: (value) => value.get(commerceKeys.claimCode('MISSING')) },
-    { name: 'query', read: (value) => value.query({ kind: 'claim_code' }) },
+    { name: 'queryDeliveryHistory', read: (value) => value.queryDeliveryHistory({ owners: ['owner'] }) },
+    { name: 'queryFulfillmentOrders', read: (value) => value.queryFulfillmentOrders({ dropId: 'drop', limit: 1 }) },
+    { name: 'queryManualReviewCheckouts', read: (value) => value.queryManualReviewCheckouts({ dropId: 'drop' }) },
+    { name: 'queryLegacyClaimAssignments', read: (value) => value.queryLegacyClaimAssignments({ code: 'MISSING' }) },
     {
       name: 'queryDeliveryOrderOwners',
       read: (value) => value.queryDeliveryOrderOwners({ limit: 1 }),
@@ -1759,22 +1798,22 @@ test('a revision committed after a query batch does not retry that snapshot', as
       batchCount += 1;
       if (batchCount !== 1) return;
       seedCommerceDocument(harness, {
-        key: commerceKeys.claimCode('NEW'),
-        data: { status: 'unused' },
+        key: commerceKeys.deliveryOrder('drop', 'NEW'),
+        data: { owner: 'owner', status: 'ready_to_ship' },
       });
     },
   });
   seedCommerceDocument(harness, {
-    key: commerceKeys.claimCode('EXISTING'),
-    data: { status: 'unused' },
+    key: commerceKeys.deliveryOrder('drop', 'EXISTING'),
+    data: { owner: 'owner', status: 'ready_to_ship' },
   });
   const repository = new D1CommerceRepository(harness.db);
 
-  const first = await repository.query({ kind: 'claim_code' });
+  const first = await repository.queryDeliveryHistory({ owners: ['owner'] });
   assert.deepEqual(first.map((record) => record.key.documentId), ['EXISTING']);
   assert.equal(batchCount, 1);
 
-  const second = await repository.query({ kind: 'claim_code' });
+  const second = await repository.queryDeliveryHistory({ owners: ['owner'] });
   assert.deepEqual(second.map((record) => record.key.documentId), ['EXISTING', 'NEW']);
   assert.equal(batchCount, 2);
 });

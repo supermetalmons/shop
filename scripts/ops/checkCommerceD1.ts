@@ -17,6 +17,8 @@ import {
   duePackStatusProjectionsQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
+  fulfillmentOrdersQuery,
+  manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
   staleStripeFulfillmentsQuery,
   type CommerceSqlQuery,
@@ -554,17 +556,22 @@ export function checkCommerceD1(
     'commerce_documents_fulfillment_status',
   );
   requireIndex(
-    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
-      FROM commerce_documents
-      WHERE document_kind = 'stripe_checkout' AND drop_id = 'drop'
-        AND manual_refund_review_required = 1`),
+    queryPlan(manualReviewCheckoutsQuery({ dropId: 'drop' })),
     'commerce_documents_manual_review',
   );
   requireIndex(
-    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
-      FROM commerce_documents
-      WHERE document_kind = 'delivery_order' AND drop_id = 'drop' AND status = 'ready_to_ship'
-      ORDER BY processed_at_seconds DESC, processed_at_nanos DESC, document_path DESC`),
+    queryPlan(fulfillmentOrdersQuery({ dropId: 'drop', limit: 1001 })),
+    'commerce_documents_drop_processed_cursor',
+  );
+  requireIndex(
+    queryPlan(fulfillmentOrdersQuery({
+      dropId: 'drop',
+      limit: 1001,
+      startAfter: {
+        processedAt: { seconds: 1, nanos: 1 },
+        documentPath: 'drops/drop/deliveryOrders/1',
+      },
+    })),
     'commerce_documents_drop_processed_cursor',
   );
   const ownerNotificationPlan = queryPlan(pendingReadyNotificationsQuery({

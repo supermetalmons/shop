@@ -14,6 +14,8 @@ import {
   duePackStatusProjectionsQuery,
   dueReadyNotificationsQuery,
   dueStripeTerminalNotificationsQuery,
+  fulfillmentOrdersQuery,
+  manualReviewCheckoutsQuery,
   pendingReadyNotificationsQuery,
   staleStripeFulfillmentsQuery,
 } from '../cloud/workers/api/src/commerceQueries.ts';
@@ -201,6 +203,16 @@ test('Commerce D1 checker accepts the current schema using complete production q
       deliveryOrderOwnersQuery({ limit: 501 }),
       deliveryOrderOwnersQuery({ limit: 501, startAfterOwner: '11111111111111111111111111111111' }),
       deliveryRecoveryOrdersQuery('11111111111111111111111111111111'),
+      manualReviewCheckoutsQuery({ dropId: 'drop' }),
+      fulfillmentOrdersQuery({ dropId: 'drop', limit: 1001 }),
+      fulfillmentOrdersQuery({
+        dropId: 'drop',
+        limit: 1001,
+        startAfter: {
+          processedAt: { seconds: 1, nanos: 1 },
+          documentPath: 'drops/drop/deliveryOrders/1',
+        },
+      }),
       pendingReadyNotificationsQuery({ limit: 8, owner: 'owner', startAfterPath: 'drops/a/deliveryOrders/1' }),
       pendingReadyNotificationsQuery({ limit: 8, startAfterPath: 'drops/a/deliveryOrders/1' }),
       duePackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 }),
@@ -213,7 +225,7 @@ test('Commerce D1 checker accepts the current schema using complete production q
       const expected = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(productionQuery)}`;
       assert.equal(queries.filter((sql) => sql === expected).length, 1, expected);
     }
-    assert.equal(queries.filter((sql) => sql.startsWith('EXPLAIN QUERY PLAN')).length, 13);
+    assert.equal(queries.filter((sql) => sql.startsWith('EXPLAIN QUERY PLAN')).length, productionPlans.length + 1);
     const smokeQuery = renderCommerceQuerySql(deliveryOrderOwnersQuery({ limit: 1 }));
     assert.equal(queries.filter((sql) => sql === smokeQuery).length, 1);
   } finally {

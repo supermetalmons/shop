@@ -606,11 +606,8 @@ async function loadClaim(
 }
 
 async function resolveLegacyDropIds(context: CommerceReadContext, code: string): Promise<string[]> {
-  const value = await (context.repository || new D1CommerceRepository(context.commerceDb)).query({
-    kind: 'box_assignment',
-    filters: [{ field: 'irlClaimCode', op: 'equal', value: code }],
-    limit: 2,
-  });
+  const value = await (context.repository || new D1CommerceRepository(context.commerceDb))
+    .queryLegacyClaimAssignments({ code });
   const dropIds = new Set<string>();
   for (const document of value) {
     const dropId = normalizeDropId(document.key.dropId || '');

@@ -11,6 +11,7 @@ import {
   commerceKeys,
   type CommerceDocumentData,
   type CommerceDocumentKey,
+  type CommerceTimestamp,
 } from '../src/commerceRepository.ts';
 import { loadStripeChargebackSessionIds, recordStripeChargeback } from '../src/stripeChargebackStore.ts';
 
@@ -18,11 +19,12 @@ function insertDocument(
   db: D1Database,
   key: CommerceDocumentKey,
   data: CommerceDocumentData,
+  processedAt: CommerceTimestamp | null = null,
 ): D1PreparedStatement {
   return db.prepare(`INSERT INTO commerce_documents (
     document_path, document_kind, drop_id, document_id, document_json,
     version, create_time, update_time, processed_at_seconds, processed_at_nanos
-  ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, NULL, NULL)`).bind(
+  ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`).bind(
     key.path,
     key.kind,
     key.dropId,
@@ -30,6 +32,8 @@ function insertDocument(
     JSON.stringify(data),
     '2026-01-01T00:00:00.000Z',
     '2026-01-01T00:00:00.000Z',
+    processedAt?.seconds ?? null,
+    processedAt?.nanos ?? null,
   );
 }
 
@@ -270,6 +274,32 @@ test('commerce repository reads and transaction guards run through the real D1 r
           workflowFinalizeV1: { version: 1, operationId: duplicateWorkflowOperationId },
         },
       )),
+      ...['1', '2', '3'].map((id) => insertDocument(
+        env.COMMERCE_DB,
+        commerceKeys.deliveryOrder('named-reads', id),
+        { owner: 'named-owner', status: 'ready_to_ship' },
+        { seconds: 100, nanos: id === '1' ? 1 : 2 },
+      )),
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('named-reads', 'null'), {
+        owner: 'named-owner', status: 'ready_to_ship',
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('named-reads', 'processing'), {
+        owner: 'named-owner', status: 'processing',
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.deliveryOrder('named-reads', 'prepared'), {
+        owner: 'named-owner', status: 'prepared',
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.stripeCheckout('named-reads', 'manual'), {
+        manualRefundReviewRequired: true,
+      }),
+      insertDocument(env.COMMERCE_DB, commerceKeys.stripeCheckout('named-reads', 'not-manual'), {
+        manualRefundReviewRequired: false,
+      }),
+      ...['a', 'b', 'c'].map((dropId) => insertDocument(
+        env.COMMERCE_DB,
+        commerceKeys.boxAssignment(dropId, 'legacy'),
+        { irlClaimCode: 'RUNTIME-LEGACY' },
+      )),
       env.COMMERCE_DB.prepare(`UPDATE commerce_authority_control
         SET documents_revision = documents_revision + 1,
           updated_at_ms = updated_at_ms + 1
@@ -305,11 +335,37 @@ test('commerce repository reads and transaction guards run through the real D1 r
     assert.deepEqual((await repository.get(claimKey))?.data, { status: 'unused' });
     assert.equal(await repository.get(commerceKeys.claimCode('MISSING')), null);
     assert.deepEqual(
-      (await repository.query({ kind: 'claim_code' })).map((record) => record.key.documentId),
-      ['RUNTIME'],
+      (await repository.queryDeliveryHistory({ owners: ['named-owner'] })).map((record) => record.key.documentId),
+      ['1', '2', '3', 'null', 'processing'],
     );
-    assert.deepEqual(await repository.query({ kind: 'box_assignment' }), []);
-    assert.deepEqual(await repository.query({ kind: 'claim_code', limit: 0 }), []);
+    assert.deepEqual(await repository.queryDeliveryHistory({ owners: ['missing'] }), []);
+    assert.deepEqual(
+      (await repository.queryFulfillmentOrders({ dropId: 'named-reads', limit: 2 }))
+        .map((record) => record.key.documentId),
+      ['3', '2'],
+    );
+    const remainingFulfillment = await repository.queryFulfillmentOrders({
+      dropId: 'named-reads',
+      limit: 10,
+      startAfter: {
+        processedAt: { seconds: 100, nanos: 2 },
+        documentPath: 'drops/named-reads/deliveryOrders/3',
+      },
+    });
+    assert.deepEqual(remainingFulfillment.map((record) => record.key.documentId), ['2', '1', 'null']);
+    assert.deepEqual(remainingFulfillment.map((record) => record.processedAt), [
+      { seconds: 100, nanos: 2 }, { seconds: 100, nanos: 1 }, null,
+    ]);
+    assert.deepEqual(
+      (await repository.queryManualReviewCheckouts({ dropId: 'named-reads' })).map((record) => record.key.documentId),
+      ['manual'],
+    );
+    assert.deepEqual(await repository.queryManualReviewCheckouts({ dropId: 'missing' }), []);
+    assert.deepEqual(
+      (await repository.queryLegacyClaimAssignments({ code: 'RUNTIME-LEGACY' })).map((record) => record.key.path),
+      ['drops/a/boxAssignments/legacy', 'drops/b/boxAssignments/legacy'],
+    );
+    assert.deepEqual(await repository.queryLegacyClaimAssignments({ code: 'MISSING' }), []);
     assert.deepEqual(await repository.queryDeliveryOrderOwners({ limit: 10 }), [
       validOwnerA,
       '2'.repeat(32),
@@ -708,6 +764,16 @@ test('commerce repository reads and transaction guards run through the real D1 r
     const pausedReadyNotificationRowsRead = Number(latestObservedBatchResults()?.[1]?.meta.rows_read);
     assert.equal(Number.isSafeInteger(pausedReadyNotificationRowsRead), true);
     assert.equal(pausedReadyNotificationRowsRead <= 4, true);
+
+    for (const read of [
+      () => observedRepository.queryDeliveryHistory({ owners: ['named-owner'] }),
+      () => observedRepository.queryFulfillmentOrders({ dropId: 'named-reads', limit: 2 }),
+      () => observedRepository.queryManualReviewCheckouts({ dropId: 'named-reads' }),
+      () => observedRepository.queryLegacyClaimAssignments({ code: 'RUNTIME-LEGACY' }),
+    ]) {
+      await assert.rejects(read(),
+        (error: unknown) => error instanceof CommerceRepositoryError && error.code === 'unavailable');
+    }
 
     assert.equal(
       (await observedRepository.getAdminIrlRedeemRequestForWorkflowStatus(workflowOperationId))?.key.path,
