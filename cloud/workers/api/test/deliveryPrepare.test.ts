@@ -192,7 +192,7 @@ test('delivery preparation returns the server-signed owner transaction and exact
   let created: Record<string, unknown> | undefined;
   const result = await handleDeliveryPrepare(request(requestBody(), {
     'X-Mons-Delivery-Prepare-Attempt': '8dc66f5f-0f2d-46aa-85c3-f8744dc46ad5',
-  }), env(), dependencies({
+  }), env(), {}, dependencies({
     createDeliveryOrder: async (_context: unknown, input: Record<string, unknown>) => {
       created = input;
       return '2026-08-20T00:00:01.000Z';
@@ -233,7 +233,7 @@ test('delivery preparation returns the server-signed owner transaction and exact
 test('delivery preparation schedules recovery from the document reservation time', async () => {
   const times = [NOW_MS - 60_000, NOW_MS - 55_000, NOW_MS];
   let nextPreparedProbeAtMs: number | undefined;
-  const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     nowMs: () => times.shift() ?? NOW_MS,
     createDeliveryOrder: async (_context: unknown, input: { nextPreparedProbeAtMs: number }) => {
       nextPreparedProbeAtMs = input.nextPreparedProbeAtMs;
@@ -311,7 +311,7 @@ test('delivery preparation reconciles an applied D1 commit when its result is lo
 test('delivery preparation retries Commerce collisions with a fresh delivery id', async () => {
   const candidates = [7, 8];
   const created: number[] = [];
-  const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     candidateId: () => candidates.shift()!,
     createDeliveryOrder: async (_context: unknown, input: { deliveryId: number }) => {
       created.push(input.deliveryId);
@@ -326,7 +326,7 @@ test('delivery preparation retries Commerce collisions with a fresh delivery id'
 
 test('delivery preparation conditionally cleans up a reserved order after a blockhash failure', async () => {
   const deleted: unknown[][] = [];
-  const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     loadLatestBlockhash: async () => {
       throw new Error('provider failed');
     },
@@ -342,7 +342,7 @@ test('delivery preparation conditionally cleans up a reserved order after a bloc
 
 test('delivery preparation uses a fresh signal to clean up after the overall deadline', async () => {
   let cleanupSignalAborted: boolean | undefined;
-  const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     timeoutMs: 5,
     loadLatestBlockhash: async (context: { signal: AbortSignal }) => new Promise<never>((_resolve, reject) => {
       context.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
@@ -360,7 +360,7 @@ test('delivery preparation returns its deadline and retains an in-flight order w
   let cleanup: { path: string; signalAborted: boolean; updateTime: string } | undefined;
   let finishWrite!: (updateTime: string) => void;
   const write = new Promise<string>((resolve) => { finishWrite = resolve; });
-  const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     createDeliveryOrder: () => write,
     defer: deferred.defer,
     deleteDeliveryOrder: async (context: { signal: AbortSignal }, path: string, updateTime: string) => {
@@ -392,6 +392,7 @@ test('delivery preparation deletes an order that resolves after client cancellat
   const pending = handleDeliveryPrepare(
     new Request(request(requestBody()), { signal: controller.signal }),
     env(),
+    {},
     dependencies({
       createDeliveryOrder: () => {
         markStarted();
@@ -425,6 +426,7 @@ test('delivery preparation deletes its order when blockhash loading settles afte
   const pending = handleDeliveryPrepare(
     new Request(request(requestBody()), { signal: controller.signal }),
     env(),
+    {},
     dependencies({
       defer: deferred.defer,
       loadLatestBlockhash: async () => {
@@ -450,7 +452,7 @@ test('delivery preparation retains cleanup that crosses its deadline', async () 
   const deferred = createDeferredWorkCollector();
   let finishCleanup!: () => void;
   const cleanup = new Promise<void>((resolve) => { finishCleanup = resolve; });
-  const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     defer: deferred.defer,
     timeoutMs: 5,
     loadLatestBlockhash: async () => { throw new Error('provider failed'); },
@@ -465,7 +467,7 @@ test('delivery preparation retains cleanup that crosses its deadline', async () 
 
 test('delivery preparation does not reserve an order after the deadline', async () => {
   let createCalled = false;
-  const result = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     createDeliveryOrder: async () => {
       createCalled = true;
       return '2026-08-20T00:00:01.000Z';
@@ -489,6 +491,7 @@ test('delivery preparation bounds non-cooperative wallet and address reads', asy
     const result = await handleDeliveryPrepare(
       request(requestBody()),
       env(),
+      {},
       dependencies({ ...overrides, timeoutMs: 5 }),
     );
     assert.equal(result.response.status, 504);
@@ -498,7 +501,7 @@ test('delivery preparation bounds non-cooperative wallet and address reads', asy
 test('delivery preparation reports an oversized transaction before reserving an order', async () => {
   const itemIds = Array.from({ length: 32 }, () => Keypair.generate().publicKey.toBase58());
   let createCalled = false;
-  const result = await handleDeliveryPrepare(request({ ...requestBody(), itemIds }), env(), dependencies({
+  const result = await handleDeliveryPrepare(request({ ...requestBody(), itemIds }), env(), {}, dependencies({
     fetchAsset: async (_context: unknown, _runtime: unknown, assetId: string) => asset({ id: assetId }),
     createDeliveryOrder: async () => {
       createCalled = true;
@@ -782,7 +785,7 @@ test('delivery preparation rejects inactive lookup tables', async () => {
 });
 
 test('delivery preparation enforces authentication, session ownership, exact requests, and asset boundaries', async () => {
-  const unauthenticated = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const unauthenticated = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     verifyIdentity: async () => {
       throw new RequestIdentityError('invalid-token');
     },
@@ -792,7 +795,7 @@ test('delivery preparation enforces authentication, session ownership, exact req
   const unsupportedUnauthenticated = await handleDeliveryPrepare(request({
     ...requestBody(),
     dropId: 'not_configured',
-  }), env(), dependencies({
+  }), env(), {}, dependencies({
     verifyIdentity: async () => {
       throw new RequestIdentityError('invalid-token');
     },
@@ -800,32 +803,32 @@ test('delivery preparation enforces authentication, session ownership, exact req
   assert.equal(unsupportedUnauthenticated.response.status, 401);
   assert.equal(unsupportedUnauthenticated.dropId, undefined);
 
-  const denied = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const denied = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     loadBoundWallet: async () => Keypair.generate().publicKey.toBase58(),
   }));
   assert.equal(denied.response.status, 403);
 
-  const malformed = await handleDeliveryPrepare(request({ ...requestBody(), extra: true }), env(), dependencies());
+  const malformed = await handleDeliveryPrepare(request({ ...requestBody(), extra: true }), env(), {}, dependencies());
   assert.equal(malformed.response.status, 400);
 
   const invalidAttempt = await handleDeliveryPrepare(request(requestBody(), {
     'X-Mons-Delivery-Prepare-Attempt': 'invalid',
-  }), env(), dependencies());
+  }), env(), {}, dependencies());
   assert.equal(invalidAttempt.response.status, 400);
 
   const duplicate = await handleDeliveryPrepare(request({
     ...requestBody(),
     itemIds: [ASSET.toBase58(), ASSET.toBase58()],
-  }), env(), dependencies());
+  }), env(), {}, dependencies());
   assert.equal(duplicate.response.status, 400);
 
-  const wrongOwner = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const wrongOwner = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     fetchAsset: async () => asset({ ownership: { owner: Keypair.generate().publicKey.toBase58() } }),
   }));
   assert.equal(wrongOwner.response.status, 409);
 
   let mismatchedAssetCreated = false;
-  const mismatchedAsset = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const mismatchedAsset = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     fetchAsset: async () => asset({ id: Keypair.generate().publicKey.toBase58() }),
     createDeliveryOrder: async () => {
       mismatchedAssetCreated = true;
@@ -835,7 +838,7 @@ test('delivery preparation enforces authentication, session ownership, exact req
   assert.equal(mismatchedAsset.response.status, 409);
   assert.equal(mismatchedAssetCreated, false);
 
-  const certificate = await handleDeliveryPrepare(request(requestBody()), env(), dependencies({
+  const certificate = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
     fetchAsset: async () => asset({
       content: { metadata: { attributes: [{ trait_type: 'type', value: 'certificate' }] } },
     }),
@@ -858,7 +861,7 @@ test('delivery preparation rejects authentication before reading a stalled reque
     body,
     duplex: 'half',
   } as RequestInit & { duplex: 'half' });
-  const result = await handleDeliveryPrepare(stalledRequest, env(), {
+  const result = await handleDeliveryPrepare(stalledRequest, env(), {}, {
     timeoutMs: 1000,
     verifyIdentity: async () => {
       throw new RequestIdentityError('invalid-token');
@@ -878,7 +881,7 @@ test('delivery preparation reports an authenticated stalled request body as a de
     body,
     duplex: 'half',
   } as RequestInit & { duplex: 'half' });
-  const result = await handleDeliveryPrepare(stalledRequest, env(), {
+  const result = await handleDeliveryPrepare(stalledRequest, env(), {}, {
     timeoutMs: 5,
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
   });
@@ -892,7 +895,7 @@ test('delivery preparation cancels sibling asset reads after the first validatio
   const result = await handleDeliveryPrepare(request({
     ...requestBody(),
     itemIds: [ASSET.toBase58(), secondAsset],
-  }), env(), dependencies({
+  }), env(), {}, dependencies({
     fetchAsset: async (context: { signal: AbortSignal }, _runtime: unknown, assetId: string) => {
       if (assetId === ASSET.toBase58()) {
         return asset({ ownership: { owner: Keypair.generate().publicKey.toBase58() } });

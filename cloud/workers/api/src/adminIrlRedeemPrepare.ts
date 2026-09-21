@@ -83,6 +83,7 @@ import {
   receiptMetadataReference,
 } from './receiptProof.js';
 import {
+  type RequestAuthContext,
   RequestIdentityError,
   isStaffRequestIdentity,
   resolveRequestWallet,
@@ -1044,6 +1045,7 @@ const defaultDependencies: AdminIrlRedeemPrepareDependencies = {
 export async function handleAdminIrlRedeemPrepare(
   request: Request,
   env: AdminIrlRedeemPrepareEnv,
+  authContext: RequestAuthContext = {},
   overrides: Partial<AdminIrlRedeemPrepareDependencies> = {},
 ): Promise<AdminIrlRedeemPrepareResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -1058,6 +1060,7 @@ export async function handleAdminIrlRedeemPrepare(
     };
   }
   return withAuthenticatedRequest<AdminIrlRedeemPrepareResult>(request, {
+    authContext,
     opsDb: env.OPS_DB,
     timeoutMessage: 'Admin IRL redeem preparation timed out',
     dependencies,

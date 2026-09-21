@@ -187,6 +187,20 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
     assert.equal(cookieProfile.status, 200);
     assert.equal(((await cookieProfile.json()) as { sessionWallet: string | null }).sessionWallet, null);
 
+    for (const pathname of ['/profile/state', '/admin/profile']) {
+      const forgedStaff = await worker.fetch(`https://api.mons.shop${pathname}`, {
+        method: 'POST',
+        headers: {
+          ...anonymousHeaders,
+          Cookie: cookieHeader,
+          Authorization: 'Mons-Internal-Staff A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz',
+        },
+        body: '{}',
+      });
+      assert.equal(forgedStaff.status, 401);
+      assert.equal((await forgedStaff.json() as { error: { code: string } }).error.code, 'unauthenticated');
+    }
+
     const missingCsrf = await worker.fetch('https://api.mons.shop/profile/state', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:5173', Cookie: cookieHeader },
@@ -244,6 +258,18 @@ test('Wrangler test harness starts the Worker in workerd and preserves route hea
         ),
     ]);
     const seededAuthorization = `Bearer mons_staff_v1.${seededSessionId}.${seededSecret}`;
+    const staffProfile = await worker.fetch('https://api.mons.shop/profile/state', {
+      method: 'POST',
+      headers: {
+        Authorization: seededAuthorization,
+        'Content-Type': 'application/json',
+        Origin: 'https://mons.shop',
+      },
+      body: '{}',
+    });
+    assert.equal(staffProfile.status, 200);
+    assert.equal((await staffProfile.json() as { sessionWallet: string }).sessionWallet, 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz');
+
     const missingAdminWorkflowStatus = await worker.fetch('https://api.mons.shop/admin/irl-redeem/finalize/status', {
       method: 'POST',
       headers: {

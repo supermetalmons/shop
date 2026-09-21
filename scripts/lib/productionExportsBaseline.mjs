@@ -12,6 +12,7 @@ const productionExportBaseline = [
   ["cloud/workers/api/src/bubblegum.ts","exports","IX_BUBBLEGUM_BURN_V2"],
   ["cloud/workers/api/src/bubblegum.ts","exports","IX_BUBBLEGUM_MINT_V2"],
   ["cloud/workers/api/src/commerceRepository.ts","exports","d1RetryCount"],
+  ["cloud/workers/api/src/commerceRepositorySupport.ts","exports","d1RetryCount"],
   ["cloud/workers/api/src/d1PackStatus.ts","exports","readD1PackStatusRecord"],
   ["cloud/workers/api/src/deliveryPrepare.ts","exports","deliveryPrepareTestHooks"],
   ["cloud/workers/api/src/deliveryReceipts.ts","exports","deliveryReceiptTestHooks"],

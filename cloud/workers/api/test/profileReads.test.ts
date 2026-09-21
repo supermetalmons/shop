@@ -136,9 +136,9 @@ function manualReviewDocument() {
 
 function profileDependencies(
   providerFetch: ProfileProviderFetch,
-  createCommerceRepository: NonNullable<Parameters<typeof handleProfileReadRequest>[3]>['createCommerceRepository'],
-  overrides: Partial<Parameters<typeof handleProfileReadRequest>[3]> = {},
-): Parameters<typeof handleProfileReadRequest>[3] {
+  createCommerceRepository: NonNullable<Parameters<typeof handleProfileReadRequest>[4]>['createCommerceRepository'],
+  overrides: Partial<Parameters<typeof handleProfileReadRequest>[4]> = {},
+): Parameters<typeof handleProfileReadRequest>[4] {
   return {
     createCommerceRepository,
     loadProfileEmail: async () => undefined,
@@ -153,8 +153,8 @@ function profileDependencies(
 
 function legacyFirestoreProfileDependencies(
   providerFetch: ProfileProviderFetch,
-  overrides: Partial<Parameters<typeof handleProfileReadRequest>[3]> = {},
-): Parameters<typeof handleProfileReadRequest>[3] {
+  overrides: Partial<Parameters<typeof handleProfileReadRequest>[4]> = {},
+): Parameters<typeof handleProfileReadRequest>[4] {
   const createCommerceRepository = () => {
     const loadDocuments = async (request: object): Promise<CommerceDocumentRecord[]> => {
       const response = await providerFetch('https://commerce.test/documents:runQuery', {
@@ -215,8 +215,8 @@ function legacyFirestoreProfileDependencies(
 
 function d1ProfileDependencies(
   providerFetch: ProfileProviderFetch,
-  overrides: Partial<Parameters<typeof handleProfileReadRequest>[3]> = {},
-): Parameters<typeof handleProfileReadRequest>[3] {
+  overrides: Partial<Parameters<typeof handleProfileReadRequest>[4]> = {},
+): Parameters<typeof handleProfileReadRequest>[4] {
   return profileDependencies(
     providerFetch,
     (database) => new D1CommerceRepository(database),
@@ -255,6 +255,7 @@ test('profile reads preserve identity failure responses and authentication outco
         tokenRequest(PROFILE_STATE_PATH, {}),
         { COMMERCE_DB: harness.db },
         PROFILE_STATE_PATH,
+        {},
         {
           nowMs: () => NOW_MS,
           verifyIdentity: async () => { throw new RequestIdentityError(expected.kind); },
@@ -331,6 +332,7 @@ test('fulfillment adds only matching dispute history without exposing Stripe IDs
     tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 20 }),
     { COMMERCE_DB: harness.db, ADDRESS_DECRYPTION_SECRET: '' },
     FULFILLMENT_ORDERS_PATH,
+    {},
     d1ProfileDependencies(async () => { throw new Error('Unexpected provider request'); }, {
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
       loadStripeChargebackSessionIds: async (db, dropId, sessionIds) => {
@@ -445,6 +447,7 @@ test('profile wallet binding distinguishes cancellation from an earlier D1 failu
     }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
+    {},
     d1ProfileDependencies(providerFetch, {
       resolveD1AuthWalletBinding: () => new Promise<never>((_resolve, reject) => {
         reject(d1Failure);
@@ -464,6 +467,7 @@ test('profile wallet binding distinguishes cancellation from an earlier D1 failu
       }),
       { COMMERCE_DB: createCommerceD1() },
       PROFILE_SHIPMENTS_PATH,
+      {},
       d1ProfileDependencies(providerFetch, {
         resolveD1AuthWalletBinding: async () => {
           cancelledController.abort(cancellation);
@@ -489,6 +493,7 @@ test('legacy Firestore fixtures preserve shipment and anonymous history query co
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
+    {},
     legacyFirestoreProfileDependencies(providerFetch),
   );
   assert.equal(shipments.response.status, 200);
@@ -508,6 +513,7 @@ test('legacy Firestore fixtures preserve shipment and anonymous history query co
     tokenRequest(ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
+    {},
     legacyFirestoreProfileDependencies(providerFetch),
   );
   assert.equal(anonymous.response.status, 200);
@@ -532,6 +538,7 @@ test('profile state derives identity server-side and returns independently bound
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) {
@@ -598,6 +605,7 @@ test('profile state uses D1 wallet sessions without requesting Commerce authSess
       OPS_DB: {} as D1Database,
     },
     PROFILE_STATE_PATH,
+    {},
     legacyFirestoreProfileDependencies(providerFetch, {
       resolveD1AuthWalletBinding: async () => ({ wallet: OWNER, source: 'binding' }),
     }),
@@ -611,6 +619,7 @@ test('staff profile state uses the wallet principal without a Auth session row',
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
@@ -635,6 +644,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async () => assert.fail('missing session reached Commerce'), {
       resolveD1AuthWalletBinding: async () => ({ wallet: null, reason: 'missing-binding' }),
     }),
@@ -650,6 +660,7 @@ test('profile state returns a settled empty session and preserves legacy wallet 
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     {
       ...legacyFirestoreProfileDependencies(async (input) => {
         const url = String(input);
@@ -674,6 +685,7 @@ test('profile state reports section failures without discarding successful data'
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'busy' }, { status: 503 });
@@ -702,6 +714,7 @@ test('profile state preserves an earlier unavailable section when its sibling ti
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     profileDependencies(
       async () => assert.fail('profile state deadline reached provider fetch'),
       () => ({
@@ -737,6 +750,7 @@ test('profile reads enforce deadlines when D1 ignores the signal', async () => {
       tokenRequest(ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, {}),
       { COMMERCE_DB: createCommerceD1() },
       ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH,
+      {},
       profileDependencies(
         async () => assert.fail('D1 deadline reached provider fetch'),
         () => ({
@@ -763,6 +777,7 @@ test('profile reads enforce deadlines when D1 ignores the signal', async () => {
       tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
       { COMMERCE_DB: createCommerceD1() },
       PROFILE_SHIPMENTS_PATH,
+      {},
       d1ProfileDependencies(async () => assert.fail('wallet deadline reached provider fetch'), {
         resolveD1AuthWalletBinding: async () => mode === 'stalled-wallet'
           ? new Promise<never>(() => undefined)
@@ -787,6 +802,7 @@ test('profile state preserves independently completed sections when D1 ignores t
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     profileDependencies(
       async () => assert.fail('profile state D1 deadline reached provider fetch'),
       () => ({
@@ -841,6 +857,7 @@ test('profile state rethrows client cancellation and retains server-timeout sect
     request,
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async () => Response.json([]), {
       loadProfileEmail: async ({ signal }) => {
         markStarted();
@@ -860,6 +877,7 @@ test('profile state rethrows client cancellation and retains server-timeout sect
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async () => Response.json([]), {
       loadProfileEmail: async ({ signal }) => new Promise<string | undefined>((_resolve, reject) => {
         const onAbort = () => reject(signal.reason);
@@ -885,6 +903,7 @@ test('profile state rejects invalid D1 sessions and non-empty requests', async (
     tokenRequest(PROFILE_STATE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async () => assert.fail('invalid D1 session reached Commerce'), {
       resolveD1AuthWalletBinding: async () => { throw new Error('invalid D1 session'); },
     }),
@@ -895,6 +914,7 @@ test('profile state rejects invalid D1 sessions and non-empty requests', async (
     tokenRequest(PROFILE_STATE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_STATE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async () => assert.fail('invalid request reached provider')),
   );
   assert.equal(invalidBody.response.status, 400);
@@ -910,6 +930,7 @@ test('shipment route rejects mismatched sessions and malformed requests before s
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
+    {},
     legacyFirestoreProfileDependencies(providerFetch, {
       resolveD1AuthWalletBinding: async () => ({ wallet: OTHER, source: 'binding' }),
     }),
@@ -926,6 +947,7 @@ test('shipment route rejects mismatched sessions and malformed requests before s
       tokenRequest(PROFILE_SHIPMENTS_PATH, body),
       { COMMERCE_DB: createCommerceD1() },
       PROFILE_SHIPMENTS_PATH,
+      {},
       legacyFirestoreProfileDependencies(async () => assert.fail('invalid request reached provider'), {
         verifyIdentity: async () => assert.fail('invalid request reached authentication'),
         nowMs: () => assert.fail('invalid request read the authentication clock'),
@@ -942,6 +964,7 @@ test('shipment route preserves legacy wallet-shaped Auth UIDs when no session do
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_SHIPMENTS_PATH,
+    {},
     {
       ...legacyFirestoreProfileDependencies(async (_input, init) => {
         const query = JSON.parse(String(init?.body)) as { operation: string; owners: string[] };
@@ -962,6 +985,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async () => Response.json([]), {
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
     }),
@@ -972,6 +996,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async () => {
       return Response.json({ error: 'unexpected' }, { status: 500 });
     }, {
@@ -987,6 +1012,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ fields: { email: stringValue('owner@example.com') } });
@@ -1018,6 +1044,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.includes(`/profiles/${OWNER}?`)) return Response.json({ error: 'missing' }, { status: 404 });
@@ -1035,6 +1062,7 @@ test('admin profile route enforces the existing wallet allowlist and returns can
     tokenRequest(ADMIN_PROFILE_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: createCommerceD1() },
     ADMIN_PROFILE_PATH,
+    {},
     legacyFirestoreProfileDependencies(async (input) => {
       const url = String(input);
       if (url.endsWith('/documents:runQuery')) return Response.json([]);
@@ -1063,6 +1091,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize: 2 }),
     env,
     ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+    {},
     legacyFirestoreProfileDependencies(async (_input, init) => {
       const query = JSON.parse(String(init?.body)) as { operation: string };
       assert.equal(query.operation, 'queryDeliveryOrderOwners');
@@ -1081,6 +1110,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 2, cursor: null }),
     env,
     FULFILLMENT_ORDERS_PATH,
+    {},
     legacyFirestoreProfileDependencies(async (_input, init) => {
       const query = JSON.parse(String(init?.body)) as { operation: string; limit: number };
       assert.equal(query.operation, 'queryFulfillmentOrders');
@@ -1121,6 +1151,7 @@ test('admin and fulfillment read routes preserve access, pagination, masking, an
     tokenRequest(FULFILLMENT_MANUAL_REVIEW_PATH, { dropId: 'card_nft_2' }),
     env,
     FULFILLMENT_MANUAL_REVIEW_PATH,
+    {},
     legacyFirestoreProfileDependencies(async (input, init) => {
       const url = String(input);
       if (url.includes('api.stripe.com')) {
@@ -1180,6 +1211,7 @@ test('delivery-order owner pages are unique, ordered, valid, and cursor-stable',
     tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize: 2 }),
     env,
     ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+    {},
     dependencies,
   );
   assert.equal(first.response.status, 200);
@@ -1200,6 +1232,7 @@ test('delivery-order owner pages are unique, ordered, valid, and cursor-stable',
     tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize: 2, cursor: firstPage.nextCursor }),
     env,
     ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+    {},
     dependencies,
   );
   assert.equal(second.response.status, 200);
@@ -1237,6 +1270,7 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
       tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, body),
       env,
       ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+      {},
       dependencies,
     );
     assert.equal(result.response.status, 200);
@@ -1249,6 +1283,7 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
       tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { pageSize }),
       env,
       ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+      {},
       dependencies,
     );
     assert.equal(result.response.status, 400);
@@ -1267,6 +1302,7 @@ test('delivery-order owner pagination enforces v1 cursors and page-size bounds',
       tokenRequest(ADMIN_DELIVERY_ORDER_OWNERS_PATH, { cursor }),
       env,
       ADMIN_DELIVERY_ORDER_OWNERS_PATH,
+      {},
       dependencies,
     );
     assert.equal(result.response.status, 400, cursor);
@@ -1350,7 +1386,7 @@ test('manual review rethrows client cancellation and retains server-timeout Stri
   const dependencies = (
     stripeStarted: () => void,
     timeoutMs: number,
-  ): Parameters<typeof handleProfileReadRequest>[3] => legacyFirestoreProfileDependencies(
+  ): Parameters<typeof handleProfileReadRequest>[4] => legacyFirestoreProfileDependencies(
     async (input) => {
       if (String(input).includes('api.stripe.com')) {
         stripeStarted();
@@ -1380,6 +1416,7 @@ test('manual review rethrows client cancellation and retains server-timeout Stri
     request,
     env,
     FULFILLMENT_MANUAL_REVIEW_PATH,
+    {},
     dependencies(markStarted, 500),
   );
   await started;
@@ -1390,6 +1427,7 @@ test('manual review rethrows client cancellation and retains server-timeout Stri
     tokenRequest(FULFILLMENT_MANUAL_REVIEW_PATH, { dropId: 'card_nft_2' }),
     env,
     FULFILLMENT_MANUAL_REVIEW_PATH,
+    {},
     dependencies(() => undefined, 5),
   );
   assert.equal(timedOut.response.status, 200);
@@ -1443,7 +1481,7 @@ test('all seven commerce read routes use D1 without Commerce in d1 mode', async 
     resolveD1AuthWalletBinding: async () => ({ wallet: ADMIN, source: 'binding' }),
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN }),
   });
-  const calls: Array<[ProfileReadPath, unknown, Parameters<typeof handleProfileReadRequest>[3]]> = [
+  const calls: Array<[ProfileReadPath, unknown, Parameters<typeof handleProfileReadRequest>[4]]> = [
     [PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }, anonymousDependencies],
     [PROFILE_STATE_PATH, {}, anonymousDependencies],
     [ANONYMOUS_STRIPE_DELIVERY_HISTORY_PATH, {}, anonymousDependencies],
@@ -1453,7 +1491,7 @@ test('all seven commerce read routes use D1 without Commerce in d1 mode', async 
     [FULFILLMENT_MANUAL_REVIEW_PATH, { dropId: 'card_nft_2' }, staffDependencies],
   ];
   for (const [path, body, dependencies] of calls) {
-    const result = await handleProfileReadRequest(tokenRequest(path, body), env, path, dependencies);
+    const result = await handleProfileReadRequest(tokenRequest(path, body), env, path, {}, dependencies);
     assert.equal(result.response.status, 200, path);
     const payload = await result.response.json();
     if (path === FULFILLMENT_ORDERS_PATH) {
@@ -1496,6 +1534,7 @@ test('D1 profile reads enforce owner, drop, status, ordering, and cursor filters
     tokenRequest(PROFILE_SHIPMENTS_PATH, { ownerWallet: OWNER }),
     { COMMERCE_DB: harness.db, OPS_DB: {} as D1Database },
     PROFILE_SHIPMENTS_PATH,
+    {},
     anonymousDependencies,
   );
   assert.equal(shipments.response.status, 200);
@@ -1515,6 +1554,7 @@ test('D1 profile reads enforce owner, drop, status, ordering, and cursor filters
     tokenRequest(FULFILLMENT_ORDERS_PATH, { dropId: 'card_nft_2', limit: 1, cursor: null }),
     fulfillmentEnv,
     FULFILLMENT_ORDERS_PATH,
+    {},
     staffDependencies,
   );
   assert.equal(firstPage.response.status, 200);
@@ -1533,6 +1573,7 @@ test('D1 profile reads enforce owner, drop, status, ordering, and cursor filters
     }),
     fulfillmentEnv,
     FULFILLMENT_ORDERS_PATH,
+    {},
     staffDependencies,
   );
   assert.equal(secondPage.response.status, 200);
@@ -1568,6 +1609,7 @@ test('commerce authority failures fail closed without a provider fallback', asyn
       COMMERCE_DB: {} as D1Database,
     },
     PROFILE_SHIPMENTS_PATH,
+    {},
     legacyFirestoreProfileDependencies(async () => {
       providerCalls += 1;
       return Response.json([{ document: orderDocument() }]);

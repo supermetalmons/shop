@@ -45,6 +45,7 @@ import {
 import { CommerceRepositoryError } from './commerceRepository.js';
 import { isRecord } from './dataAccess.js';
 import {
+  type RequestAuthContext,
   RequestIdentityError,
   isStaffRequestIdentity,
   verifyRequestIdentity,
@@ -390,6 +391,7 @@ async function reconcileAfterFenceError(
 export async function handleAdminIrlRedeemFinalizeWorkflowStart(
   request: Request,
   env: Env,
+  authContext: RequestAuthContext = {},
   overrides: Partial<AdminIrlRedeemFinalizeWorkflowStartDependencies> = {},
 ): Promise<AdminIrlRedeemFinalizeWorkflowRouteResult> {
   if (request.method !== 'POST') {
@@ -404,7 +406,7 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStart(
   let operationId: AdminIrlRedeemFinalizeOperationId | undefined;
   try {
     const body = await readAdminIrlRedeemFinalizeRequest(request, deadline.signal);
-    const identity = await verifyRequestIdentity(request, env.OPS_DB, deadline.signal, Date.now());
+    const identity = await verifyRequestIdentity(request, env.OPS_DB, deadline.signal, Date.now(), authContext);
     if (!isStaffRequestIdentity(identity)) {
       throw new AdminIrlRedeemFinalizeError('unauthenticated', 'Staff wallet authentication is required.');
     }
@@ -841,6 +843,7 @@ async function readStatusOperationId(
 export async function handleAdminIrlRedeemFinalizeWorkflowStatus(
   request: Request,
   env: Env,
+  authContext: RequestAuthContext = {},
   overrides: Partial<AdminIrlRedeemFinalizeWorkflowStatusDependencies> = {},
 ): Promise<AdminIrlRedeemFinalizeWorkflowRouteResult> {
   if (request.method !== 'POST') {
@@ -855,7 +858,7 @@ export async function handleAdminIrlRedeemFinalizeWorkflowStatus(
   let operationId: AdminIrlRedeemFinalizeOperationId | undefined;
   try {
     operationId = await readStatusOperationId(request, deadline.signal);
-    const identity = await verifyRequestIdentity(request, env.OPS_DB, deadline.signal, Date.now());
+    const identity = await verifyRequestIdentity(request, env.OPS_DB, deadline.signal, Date.now(), authContext);
     if (!isStaffRequestIdentity(identity)) {
       throw new AdminIrlRedeemFinalizeError('unauthenticated', 'Staff wallet authentication is required.');
     }

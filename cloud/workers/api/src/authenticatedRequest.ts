@@ -1,6 +1,6 @@
 import { createRequestDeadline, type RequestDeadline } from './boundedRequest.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
-import type { RequestIdentity, RequestIdentityError, verifyRequestIdentity } from './requestIdentity.js';
+import type { RequestAuthContext, RequestIdentity, RequestIdentityError, verifyRequestIdentity } from './requestIdentity.js';
 
 export function requestIdentityErrorDetails(
   error: RequestIdentityError,
@@ -30,6 +30,7 @@ type AuthenticatedRequestContext = {
 export async function withAuthenticatedRequest<T>(
   request: Request,
   options: {
+    authContext?: RequestAuthContext;
     opsDb: D1Database | undefined;
     timeoutMessage: string;
     dependencies: AuthenticatedRequestDependencies;
@@ -61,6 +62,7 @@ export async function withAuthenticatedRequest<T>(
         options.opsDb,
         deadline.signal,
         dependencies.nowMs(),
+        options.authContext,
       ),
     });
   } finally {

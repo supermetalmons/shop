@@ -229,6 +229,7 @@ test('Stripe receipt claim route preserves the authenticated request and exact r
     request(),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({
       verifyIdentity: async () => {
         observedUid = 'auth-uid';
@@ -262,6 +263,7 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
     request(),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(unauthenticated.response.status, 401);
@@ -274,6 +276,7 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
     new Request(`https://api.mons.shop${STRIPE_RECEIPT_CLAIM_PATH}`),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({
       timeoutMs: Number.NaN,
       nowMs: () => assert.fail('Rejected methods must not read the clock'),
@@ -288,6 +291,7 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
     request({ code: CODE, recipient: RECIPIENT, extra: true }),
     env(),
     failOnDeferredWork,
+    {},
     dependencies(),
   );
   assert.equal(extra.response.status, 400);
@@ -296,6 +300,7 @@ test('Stripe receipt claim route enforces authentication, method, exact input, a
     request(),
     env({ COSIGNER_SECRET: '' }),
     failOnDeferredWork,
+    {},
     dependencies(),
   );
   assert.equal(missingSecret.response.status, 502);
@@ -308,6 +313,7 @@ test('Stripe receipt claims reject malformed JSON before authenticating', async 
     request(undefined, { body: '{' }),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({
       nowMs: () => assert.fail('Malformed input must not read the authentication clock'),
       verifyIdentity: async () => {
@@ -332,6 +338,7 @@ test('Stripe receipt claims preserve authentication provider timeout responses',
     request(),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('provider-timeout'); } }),
   );
   assert.equal(result.response.status, 504);
@@ -351,6 +358,7 @@ test('Stripe receipt claim handler returns its deadline and tracks unfinished cl
     request(),
     env(),
     deferred.defer,
+    {},
     dependencies({
       timeoutMs: 1,
       claim: async (
@@ -391,6 +399,7 @@ test('Stripe receipt claim rethrows wrapped client cancellation after cleanup wi
     request(undefined, { signal: controller.signal }),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({
       claim: () => new Promise((_resolve, reject) => {
         finishCleanup = () => reject(new StripeReceiptClaimError(
@@ -422,6 +431,7 @@ test('Stripe receipt claim propagates deferred-work registration failures', asyn
       request(),
       env(),
       () => { throw cause; },
+      {},
       dependencies({
         timeoutMs: 1,
         claim: async () => new Promise(() => undefined),

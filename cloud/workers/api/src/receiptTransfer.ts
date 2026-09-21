@@ -61,7 +61,7 @@ import {
   type ReceiptTransferRateLimitD1Database,
   type ReceiptTransferRateLimitBucket,
 } from './receiptTransferRateLimit.js';
-import { RequestIdentityError, requestIdentitySubject, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { type RequestAuthContext, RequestIdentityError, requestIdentitySubject, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
 import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
@@ -882,6 +882,7 @@ const defaultDependencies: ReceiptTransferDependencies = {
 export async function handleReceiptTransferPrepare(
   request: Request,
   env: ReceiptTransferEnv,
+  authContext: RequestAuthContext = {},
   overrides: Partial<ReceiptTransferDependencies> = {},
 ): Promise<ReceiptTransferResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -896,6 +897,7 @@ export async function handleReceiptTransferPrepare(
     };
   }
   return withAuthenticatedRequest<ReceiptTransferResult>(request, {
+    authContext,
     opsDb: env.OPS_DB,
     timeoutMessage: 'Receipt transfer request timed out',
     dependencies,

@@ -174,6 +174,7 @@ test('issue route preserves the authenticated request and response contract', as
     env(),
     DELIVERY_RECEIPTS_ISSUE_PATH,
     failOnDeferredWork,
+    {},
     dependencies({
       issue: async (body: unknown) => {
         observed = body;
@@ -220,6 +221,7 @@ test('receipt handler propagates deferred-work registration failures', async () 
       env(),
       DELIVERY_RECEIPTS_ISSUE_PATH,
       () => { throw cause; },
+      {},
       dependencies({
         issue: async (...args: Parameters<typeof deliveryReceiptTestHooks.issueReceiptsRequest>) => {
           registerDeferredWork(args[5], Promise.resolve());
@@ -252,6 +254,7 @@ test('recovery route accepts the empty filter and reports recovery metrics', asy
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     failOnDeferredWork,
+    {},
     dependencies(),
   );
   assert.equal(result.response.status, 200);
@@ -377,6 +380,7 @@ test('receipt API reports notification claim read failures as unavailable withou
     }),
     DELIVERY_RECEIPTS_ISSUE_PATH,
     failOnDeferredWork,
+    {},
     dependencies({
       issue: async (...args: Parameters<typeof deliveryReceiptTestHooks.issueReceiptsRequest>) => {
         const [body, , requestEnv, commerce] = args;
@@ -406,6 +410,7 @@ test('receipt routes reject methods and strict invalid payloads before service e
     env(),
     DELIVERY_RECEIPTS_ISSUE_PATH,
     failOnDeferredWork,
+    {},
     dependencies({
       timeoutMs: Number.NaN,
       nowMs: () => assert.fail('Rejected methods must not read the clock'),
@@ -428,6 +433,7 @@ test('receipt routes reject methods and strict invalid payloads before service e
     env(),
     DELIVERY_RECEIPTS_ISSUE_PATH,
     failOnDeferredWork,
+    {},
     dependencies({ issue: async () => { called = true; throw new Error('unexpected'); } }),
   );
   assert.equal(invalid.response.status, 400);
@@ -453,6 +459,7 @@ test('receipt routes reject methods and strict invalid payloads before service e
       env(),
       DELIVERY_RECEIPTS_ISSUE_PATH,
       failOnDeferredWork,
+      {},
       dependencies({ issue: async () => { called = true; throw new Error('unexpected'); } }),
     );
     assert.equal(noncanonical.response.status, 400);
@@ -471,6 +478,7 @@ test('receipt errors omit internal details from the public envelope', async () =
     env(),
     DELIVERY_RECEIPTS_ISSUE_PATH,
     failOnDeferredWork,
+    {},
     dependencies({
       issue: async () => {
         throw new DeliveryReceiptError(
@@ -569,6 +577,7 @@ test('receipt routes enforce bounded JSON and required runtime configuration', a
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     failOnDeferredWork,
+    {},
     dependencies(),
   );
   assert.equal(oversized.response.status, 400);
@@ -578,6 +587,7 @@ test('receipt routes enforce bounded JSON and required runtime configuration', a
     env({ HELIUS_API_KEY: '' }),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     failOnDeferredWork,
+    {},
     dependencies(),
   );
   assert.equal(unavailable.response.status, 503);
@@ -590,6 +600,7 @@ test('receipt routes map invalid authentication and provider authentication fail
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     failOnDeferredWork,
+    {},
     dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); } }),
   );
   assert.equal(invalid.response.status, 401);
@@ -600,6 +611,7 @@ test('receipt routes map invalid authentication and provider authentication fail
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     failOnDeferredWork,
+    {},
     dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('provider-unavailable'); } }),
   );
   assert.equal(provider.response.status, 503);
@@ -614,6 +626,7 @@ test('receipt routes authenticate before parsing malformed JSON', async () => {
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     failOnDeferredWork,
+    {},
     dependencies({
       nowMs: () => {
         clockReads += 1;
@@ -641,6 +654,7 @@ test('receipt routes preserve authentication provider timeout responses', async 
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     failOnDeferredWork,
+    {},
     dependencies({ verifyIdentity: async () => { throw new RequestIdentityError('provider-timeout'); } }),
   );
   assert.equal(result.response.status, 503);
@@ -657,6 +671,7 @@ test('receipt route deadline is stable and retryable', async () => {
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     failOnDeferredWork,
+    {},
     dependencies({
       timeoutMs: 5,
       verifyIdentity: async (_authorization: unknown, _fetch: unknown, signal: AbortSignal) =>
@@ -700,6 +715,7 @@ test('receipt route deadlines retain exactly one stalled issue or recovery opera
       env(),
       path,
       deferred.defer,
+      {},
       dependencies({
         timeoutMs: 5,
         issue: async () => {
@@ -733,6 +749,7 @@ test('receipt route deadlines preserve deferred operation failures', async () =>
     env(),
     DELIVERY_RECEIPTS_RECOVER_PATH,
     deferred.defer,
+    {},
     dependencies({
       timeoutMs: 5,
       recover: () => new Promise((_resolve, reject) => {

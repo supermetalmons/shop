@@ -304,6 +304,51 @@ test('request boundary distinguishes staff rejection from authentication infrast
   }
 });
 
+test('request boundary cancels a stalled staff verification before dispatching the route', async (context) => {
+  const errors: unknown[] = [];
+  context.mock.method(console, 'error', (entry: unknown) => { errors.push(entry); });
+  const controller = new AbortController();
+  const logs: Record<string, unknown>[] = [];
+  let markStarted!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const pendingLookup = new Promise<void>((resolve) => { release = resolve; });
+  const opsDb = d1Database(function prepare(query) {
+    assert.match(query, /FROM staff_auth_sessions/);
+    return {
+      bind() { return this; },
+      async first() {
+        markStarted();
+        await pendingLookup;
+        return null;
+      },
+    } as D1PreparedStatement;
+  });
+  const incoming = new Request('https://api.mons.shop/admin/irl-redeem/finalize', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer mons_staff_v1.123e4567-e89b-42d3-a456-426614174000.${'A'.repeat(43)}`,
+      Origin: 'https://mons.shop',
+    },
+    signal: controller.signal,
+  });
+  const responsePromise = handleRequest(incoming, env({
+    opsDb,
+    commerceDb: d1Database(() => assert.fail('Cancelled request reached commerce')),
+  }), { ...quietDependencies(fetch), log: (entry) => logs.push(entry) });
+  try {
+    await started;
+    controller.abort(new Error('client disconnected during staff verification'));
+    const response = await responsePromise;
+    assert.equal(response.status, 499);
+    assert.equal(await response.text(), '');
+    assert.equal(logs.find((entry) => entry.event === 'shop_api_request')?.requestCancelled, true);
+    assert.deepEqual(errors, []);
+  } finally {
+    release();
+  }
+});
+
 test('request boundary sanitizes unexpected failures and survives terminal log failures', async () => {
   let logAttempts = 0;
   const response = await handleRequest(request('/checkout/session', {

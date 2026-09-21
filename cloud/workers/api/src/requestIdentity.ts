@@ -2,29 +2,21 @@ import {
   AnonymousAuthError,
   verifyAnonymousSession,
 } from './anonymousAuth.js';
-import { isStaffWalletAddress } from '../../../../shared/fulfillmentAccess.js';
-import { canonicalWalletAddress } from '../../../../shared/walletLifecycle.js';
 import { raceWithSignal } from './boundedRequest.js';
-
-const INTERNAL_STAFF_AUTHORIZATION_PREFIX = 'Mons-Internal-Staff ';
 
 export type RequestIdentity =
   | { kind: 'anonymous'; authSubject: string }
   | { kind: 'staff-wallet'; wallet: string };
+
+export type RequestAuthContext = Readonly<{
+  verifiedStaffIdentity?: Extract<RequestIdentity, { kind: 'staff-wallet' }>;
+}>;
 
 export class RequestIdentityError extends Error {
   constructor(readonly kind: 'invalid-token' | 'provider-timeout' | 'provider-unavailable') {
     super(kind);
     this.name = 'RequestIdentityError';
   }
-}
-
-export function internalStaffAuthorization(wallet: string): string {
-  return `${INTERNAL_STAFF_AUTHORIZATION_PREFIX}${wallet}`;
-}
-
-export function isInternalStaffAuthorization(authorization: string | null): boolean {
-  return String(authorization || '').startsWith(INTERNAL_STAFF_AUTHORIZATION_PREFIX);
 }
 
 export function isStaffOnlyApiPath(pathname: string): boolean {
@@ -73,13 +65,10 @@ export async function verifyRequestIdentity(
   db: D1Database | undefined,
   signal: AbortSignal,
   nowMs = Date.now(),
+  authContext: RequestAuthContext = {},
 ): Promise<RequestIdentity> {
+  if (authContext.verifiedStaffIdentity) return authContext.verifiedStaffIdentity;
   const normalized = String(request.headers.get('Authorization') || '');
-  if (normalized.startsWith(INTERNAL_STAFF_AUTHORIZATION_PREFIX)) {
-    const wallet = canonicalWalletAddress(normalized.slice(INTERNAL_STAFF_AUTHORIZATION_PREFIX.length));
-    if (!wallet || !isStaffWalletAddress(wallet)) throw new Error('Invalid internal staff identity');
-    return { kind: 'staff-wallet', wallet };
-  }
   if (normalized) throw new RequestIdentityError('invalid-token');
   throwIfIdentitySignalAborted(request, signal);
   try {

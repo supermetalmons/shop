@@ -158,6 +158,7 @@ test('Admin IRL preparation returns the exact unsigned pack transfer and request
       [ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER]: ATTEMPT_ID,
     }),
     env(),
+    {},
     dependencies({
       createRequest: async (_context: unknown, input: Record<string, unknown>) => {
         operations.push('create');
@@ -217,6 +218,7 @@ test('Admin IRL preparation supports one card receipt and checks its marker and 
   const result = await handleAdminIrlRedeemPrepare(
     request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [RECEIPT.toBase58()] }),
     env(),
+    {},
     dependencies({
       fetchAsset: async () => receiptAsset(),
       fetchAssetProof: async () => {
@@ -254,33 +256,35 @@ test('Admin IRL preparation enforces exact requests, methods, authentication, an
   const wrongMethod = await handleAdminIrlRedeemPrepare(
     new Request(`https://api.mons.shop${ADMIN_IRL_REDEEM_PREPARE_PATH}`),
     env(),
+    {},
     dependencies(),
   );
   assert.equal(wrongMethod.response.status, 405);
 
-  const extra = await handleAdminIrlRedeemPrepare(request({ ...body, extra: true }), env(), dependencies());
+  const extra = await handleAdminIrlRedeemPrepare(request({ ...body, extra: true }), env(), {}, dependencies());
   assert.equal(extra.response.status, 400);
 
   const duplicate = await handleAdminIrlRedeemPrepare(
     request({ ...body, itemIds: [PACK.toBase58(), PACK.toBase58()] }),
     env(),
+    {},
     dependencies(),
   );
   assert.equal(duplicate.response.status, 400);
 
-  const unauthenticated = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
+  const unauthenticated = await handleAdminIrlRedeemPrepare(request(body), env(), {}, dependencies({
     verifyIdentity: async () => {
       throw new RequestIdentityError('invalid-token');
     },
   }));
   assert.equal(unauthenticated.response.status, 401);
 
-  const anonymousOnly = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
+  const anonymousOnly = await handleAdminIrlRedeemPrepare(request(body), env(), {}, dependencies({
     verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: 'auth-uid' }),
   }));
   assert.equal(anonymousOnly.response.status, 401);
 
-  const wrongOwner = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
+  const wrongOwner = await handleAdminIrlRedeemPrepare(request(body), env(), {}, dependencies({
     loadBoundWallet: async () => ADMIN.toBase58(),
     verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: ADMIN.toBase58() }),
   }));
@@ -289,24 +293,24 @@ test('Admin IRL preparation enforces exact requests, methods, authentication, an
 
 test('Admin IRL preparation rejects ownership, pending-open, marker, and proof failures', async () => {
   const packBody = { owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] };
-  const wrongOwner = await handleAdminIrlRedeemPrepare(request(packBody), env(), dependencies({
+  const wrongOwner = await handleAdminIrlRedeemPrepare(request(packBody), env(), {}, dependencies({
     fetchAsset: async () => packAsset({ ownership: { owner: ADMIN.toBase58() } }),
   }));
   assert.equal(wrongOwner.response.status, 409);
 
-  const pending = await handleAdminIrlRedeemPrepare(request(packBody), env(), dependencies({
+  const pending = await handleAdminIrlRedeemPrepare(request(packBody), env(), {}, dependencies({
     loadPendingOpenAccounts: async () => [true],
   }));
   assert.equal(pending.response.status, 409);
 
   const receiptBody = { owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [RECEIPT.toBase58()] };
-  const marker = await handleAdminIrlRedeemPrepare(request(receiptBody), env(), dependencies({
+  const marker = await handleAdminIrlRedeemPrepare(request(receiptBody), env(), {}, dependencies({
     fetchAsset: async () => receiptAsset(),
     loadReceiptMarker: async () => true,
   }));
   assert.equal(marker.response.status, 409);
 
-  const wrongTree = await handleAdminIrlRedeemPrepare(request(receiptBody), env(), dependencies({
+  const wrongTree = await handleAdminIrlRedeemPrepare(request(receiptBody), env(), {}, dependencies({
     fetchAsset: async () => receiptAsset(),
     fetchAssetProof: async () => proof({ tree_id: PROGRAM.toBase58() }),
   }));
@@ -315,7 +319,7 @@ test('Admin IRL preparation rejects ownership, pending-open, marker, and proof f
 
 test('Admin IRL preparation surfaces provider deadlines and conditional-create conflicts', async () => {
   const body = { owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] };
-  const timeout = await handleAdminIrlRedeemPrepare(request(body), env(), dependencies({
+  const timeout = await handleAdminIrlRedeemPrepare(request(body), env(), {}, dependencies({
     timeoutMs: 5,
     loadOnchainState: async (context: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
       context.signal.addEventListener('abort', () => reject(context.signal.reason), { once: true });
@@ -355,6 +359,7 @@ test('Admin IRL preparation cleans up an in-flight request write that lands afte
   const result = await handleAdminIrlRedeemPrepare(
     request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] }),
     env(),
+    {},
     dependencies({
       createRequest: () => write,
       defer: deferred.defer,
@@ -390,6 +395,7 @@ test('Admin IRL preparation cleans up an in-flight request write after client ca
       signal: controller.signal,
     }),
     env(),
+    {},
     dependencies({
       createRequest: () => {
         markStarted();
@@ -420,6 +426,7 @@ test('Admin IRL preparation propagates late-write deferred registration failures
     handleAdminIrlRedeemPrepare(
       request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] }),
       env(),
+      {},
       dependencies({
         createRequest: () => new Promise<string>(() => undefined),
         defer: () => { throw cause; },
@@ -435,6 +442,7 @@ test('Admin IRL preparation does not start its request write after the deadline'
   const result = await handleAdminIrlRedeemPrepare(
     request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] }),
     env(),
+    {},
     dependencies({
       createRequest: async () => {
         createCalled = true;
@@ -456,6 +464,7 @@ test('Admin IRL preparation bounds a non-cooperative receipt-marker read', async
   const result = await handleAdminIrlRedeemPrepare(
     request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [RECEIPT.toBase58()] }),
     env(),
+    {},
     dependencies({
       fetchAsset: async () => receiptAsset(),
       loadReceiptMarker: () => new Promise<boolean>(() => undefined),

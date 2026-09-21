@@ -68,7 +68,7 @@ import type {
   PrepareIrlClaimRequest,
   PrepareIrlClaimResponse,
 } from '../../../../shared/contracts.js';
-import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { type RequestAuthContext, RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
 import {
   isRequestCancellationError,
@@ -1036,6 +1036,7 @@ const defaultDependencies: IrlClaimDependencies = {
 export async function handleIrlClaimPrepare(
   request: Request,
   env: IrlClaimEnv,
+  authContext: RequestAuthContext = {},
   overrides: Partial<IrlClaimDependencies> = {},
 ): Promise<IrlClaimResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -1050,6 +1051,7 @@ export async function handleIrlClaimPrepare(
     };
   }
   return withAuthenticatedRequest<IrlClaimResult>(request, {
+    authContext,
     opsDb: env.OPS_DB,
     timeoutMessage: 'IRL claim request timed out',
     dependencies,

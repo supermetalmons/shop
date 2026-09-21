@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { withAuthenticatedRequest } from '../src/authenticatedRequest.ts';
+import { verifyRequestIdentity } from '../src/requestIdentity.ts';
 
 type RequestOptions = Parameters<typeof withAuthenticatedRequest>[1];
 
@@ -51,6 +52,32 @@ test('authenticated requests verify identity and read the clock only when reques
     nowMs: () => assert.fail('Unused authentication read the clock'),
     verifyIdentity: async () => assert.fail('Unused authentication ran'),
   }), async () => undefined);
+});
+
+test('authenticated requests pass trusted staff context only when authentication is requested', async () => {
+  const request = new Request('https://api.mons.shop/admin/profile', {
+    headers: { Authorization: 'Bearer staff-session' },
+  });
+  const identity = { kind: 'staff-wallet' as const, wallet: 'A87Upx1f1whNV5P8xQCK2YUTwE3uMYigjoKJAF3jiNpz' };
+  const authContext = { verifiedStaffIdentity: identity };
+  let verificationCalls = 0;
+  const result = await withAuthenticatedRequest(request, {
+    ...options({
+      verifyIdentity: async (input, database, signal, nowMs, context) => {
+        verificationCalls += 1;
+        assert.equal(input, request);
+        assert.equal(context, authContext);
+        return verifyRequestIdentity(input, database, signal, nowMs, context);
+      },
+    }),
+    authContext,
+  }, async ({ authenticate }) => {
+    assert.equal(verificationCalls, 0);
+    return authenticate();
+  });
+  assert.equal(result, identity);
+  assert.equal(verificationCalls, 1);
+  assert.equal(request.headers.get('Authorization'), 'Bearer staff-session');
 });
 
 test('authenticated request metrics include successful and throwing provider calls', async (context) => {

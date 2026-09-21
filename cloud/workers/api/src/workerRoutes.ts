@@ -88,7 +88,7 @@ import {
   ANONYMOUS_AUTH_PATHS,
   handleAnonymousAuthRequest,
 } from './anonymousAuth.js';
-import { isStaffOnlyApiPath } from './requestIdentity.js';
+import { isStaffOnlyApiPath, type RequestAuthContext } from './requestIdentity.js';
 import {
   CORS_HEADERS,
   handlePublicMethodNotAllowed,
@@ -136,6 +136,7 @@ type WorkerRoutePolicy = Readonly<{
 }>;
 
 type WorkerRouteContext = {
+  authContext: RequestAuthContext;
   defer: DeferredWork;
   dependencies: WorkerDependencies;
   env: Env;
@@ -231,7 +232,7 @@ async function dispatchNotificationEnqueue(context: WorkerRouteContext): Promise
 }
 
 async function dispatchStripeCheckout(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleStripeCheckoutSession(context.request, context.env, {
+  const result = await handleStripeCheckoutSession(context.request, context.env, context.authContext, {
     defer: context.defer,
   });
   addMetrics(context.metrics, result);
@@ -246,7 +247,7 @@ async function dispatchStripeCheckout(context: WorkerRouteContext): Promise<Work
 }
 
 async function dispatchStripeChargebackBackfill(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleStripeChargebackBackfill(context.request, context.env, {
+  const result = await handleStripeChargebackBackfill(context.request, context.env, context.authContext, {
     defer: context.defer,
   });
   addMetrics(context.metrics, result);
@@ -279,7 +280,7 @@ async function dispatchStripeWebhook(context: WorkerRouteContext): Promise<Worke
 }
 
 async function dispatchIrlClaim(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleIrlClaimPrepare(context.request, context.env);
+  const result = await handleIrlClaimPrepare(context.request, context.env, context.authContext);
   addMetrics(context.metrics, result);
   return {
     response: result.response,
@@ -295,6 +296,7 @@ async function dispatchStripeReceiptClaim(context: WorkerRouteContext): Promise<
     context.request,
     context.env,
     context.defer,
+    context.authContext,
   );
   addMetrics(context.metrics, result);
   return {
@@ -309,7 +311,7 @@ async function dispatchStripeReceiptClaim(context: WorkerRouteContext): Promise<
 }
 
 async function dispatchReceiptTransfer(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleReceiptTransferPrepare(context.request, context.env, {
+  const result = await handleReceiptTransferPrepare(context.request, context.env, context.authContext, {
     defer: context.defer,
   });
   addMetrics(context.metrics, result);
@@ -323,7 +325,7 @@ async function dispatchReceiptTransfer(context: WorkerRouteContext): Promise<Wor
 }
 
 async function dispatchDeliveryPrepare(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleDeliveryPrepare(context.request, context.env, {
+  const result = await handleDeliveryPrepare(context.request, context.env, context.authContext, {
     defer: context.defer,
   });
   addMetrics(context.metrics, result);
@@ -345,6 +347,7 @@ async function dispatchDeliveryReceipt(
     context.env,
     path,
     context.defer,
+    context.authContext,
   );
   addMetrics(context.metrics, result);
   return {
@@ -361,7 +364,7 @@ async function dispatchDeliveryReceipt(
 }
 
 async function dispatchAdminIrlRedeemPrepare(context: WorkerRouteContext): Promise<WorkerRouteResult> {
-  const result = await handleAdminIrlRedeemPrepare(context.request, context.env, {
+  const result = await handleAdminIrlRedeemPrepare(context.request, context.env, context.authContext, {
     defer: context.defer,
   });
   addMetrics(context.metrics, result);
@@ -380,6 +383,7 @@ async function dispatchAdminIrlRedeemFinalize(context: WorkerRouteContext): Prom
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     context.request,
     context.env,
+    context.authContext,
   );
   addMetrics(context.metrics, result);
   return {
@@ -399,6 +403,7 @@ async function dispatchAdminIrlRedeemFinalizeStatus(context: WorkerRouteContext)
   const result = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     context.request,
     context.env,
+    context.authContext,
   );
   addMetrics(context.metrics, result);
   return {
@@ -419,6 +424,7 @@ async function dispatchReveal(context: WorkerRouteContext): Promise<WorkerRouteR
     context.request,
     context.env,
     context.defer,
+    context.authContext,
   );
   addMetrics(context.metrics, result);
   return {
@@ -437,7 +443,7 @@ async function dispatchProfileLifecycle(
   context: WorkerRouteContext,
   path: ProfileLifecyclePath,
 ): Promise<WorkerRouteResult> {
-  const result = await handleProfileLifecycleRequest(context.request, context.env, path, {
+  const result = await handleProfileLifecycleRequest(context.request, context.env, path, context.authContext, {
     defer: context.defer,
   });
   addMetrics(context.metrics, result);
@@ -456,7 +462,7 @@ async function dispatchProfileRead(
   context: WorkerRouteContext,
   path: ProfileReadPath,
 ): Promise<WorkerRouteResult> {
-  const result = await handleProfileReadRequest(context.request, context.env, path);
+  const result = await handleProfileReadRequest(context.request, context.env, path, context.authContext);
   addMetrics(context.metrics, result);
   return {
     response: result.response,
@@ -471,7 +477,7 @@ async function dispatchProfileWrite(
   context: WorkerRouteContext,
   path: ProfileWritePath,
 ): Promise<WorkerRouteResult> {
-  const result = await handleProfileWriteRequest(context.request, context.env, path, {
+  const result = await handleProfileWriteRequest(context.request, context.env, path, context.authContext, {
     defer: context.defer,
   });
   addMetrics(context.metrics, result);

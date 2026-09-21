@@ -19,6 +19,7 @@ import {
   validateSolanaSignInMessage,
 } from '../../../../shared/walletLifecycle.js';
 import {
+  type RequestAuthContext,
   RequestIdentityError,
   isStaffRequestIdentity,
   verifyRequestIdentity,
@@ -314,6 +315,7 @@ export async function handleProfileLifecycleRequest(
   request: Request,
   env: ProfileLifecycleEnv,
   path: ProfileLifecyclePath,
+  authContext: RequestAuthContext = {},
   overrides: Partial<ProfileLifecycleDependencies> = {},
 ): Promise<ProfileLifecycleResult> {
   const dependencies = {
@@ -344,6 +346,7 @@ export async function handleProfileLifecycleRequest(
       env.OPS_DB,
       deadline.signal,
       dependencies.nowMs(),
+      authContext,
     );
     identity = verifiedIdentity;
     const nowMs = dependencies.nowMs();

@@ -12,7 +12,7 @@ import { z } from 'zod';
 import type { RevealDudesSubmissionUnknownDetails } from '../../../../shared/contracts.js';
 import { encodeFinalizeOpenBoxArgs } from '../../../../shared/finalizeOpenBoxArgs.js';
 import { SPL_NOOP_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.js';
-import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { type RequestAuthContext, RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
 import {
   createRequestDeadline,
@@ -377,6 +377,7 @@ export async function handleRevealDudes(
   request: Request,
   env: Env,
   defer: DeferredWork,
+  authContext: RequestAuthContext = {},
   overrides: Partial<RevealDudesDependencies> = {},
 ): Promise<RevealDudesResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -425,6 +426,7 @@ export async function handleRevealDudes(
         env.OPS_DB,
         deadline.signal,
         dependencies.nowMs(),
+        authContext,
       );
     } catch (error) {
       if (error instanceof RequestIdentityError) {

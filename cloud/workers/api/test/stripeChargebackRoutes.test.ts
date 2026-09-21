@@ -57,17 +57,17 @@ test('chargeback backfill requires full administrator access before provider wor
     return emptyPage(body);
   };
   const env = { COMMERCE_DB: createCommerceD1() };
-  const anonymous = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {
+  const anonymous = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {}, {
     backfill,
     verifyIdentity: async () => ({ kind: 'anonymous', authSubject: 'test' }),
   });
   assert.equal(anonymous.response.status, 401);
-  const shipper = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {
+  const shipper = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {}, {
     backfill,
     verifyIdentity: async () => ({ kind: 'staff-wallet', wallet: SHIPPER_FULFILLMENT_ACCESS[0].wallet }),
   });
   assert.equal(shipper.response.status, 403);
-  const expired = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {
+  const expired = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {}, {
     backfill,
     verifyIdentity: async () => { throw new RequestIdentityError('invalid-token'); },
   });
@@ -82,7 +82,7 @@ test('chargeback backfill validates mode, cursor, write, and exact request field
     { mode: 'test', cursor: '' }, { mode: 'test', cursor: `du_${'a'.repeat(256)}` },
     { mode: 'live', write: 'true' }, { mode: 'live', extra: true },
   ]) {
-    const result = await handleStripeChargebackBackfill(backfillRequest(body), { COMMERCE_DB: createCommerceD1() }, {
+    const result = await handleStripeChargebackBackfill(backfillRequest(body), { COMMERCE_DB: createCommerceD1() }, {}, {
       verifyIdentity: adminIdentity,
       backfill: async (input) => { calls += 1; return emptyPage(input); },
     });
@@ -94,7 +94,7 @@ test('chargeback backfill validates mode, cursor, write, and exact request field
 test('chargeback backfill returns dry-run and write results with legacy cursor support', async () => {
   const requests: StripeChargebackBackfillRequest[] = [];
   for (const body of [{ mode: 'live' as const }, { mode: 'test' as const, cursor: 'dp_legacy', write: true }]) {
-    const result = await handleStripeChargebackBackfill(backfillRequest(body), { COMMERCE_DB: createCommerceD1() }, {
+    const result = await handleStripeChargebackBackfill(backfillRequest(body), { COMMERCE_DB: createCommerceD1() }, {}, {
       verifyIdentity: adminIdentity,
       backfill: async (input) => {
         requests.push(input);
@@ -112,14 +112,14 @@ test('chargeback backfill returns dry-run and write results with legacy cursor s
 test('chargeback backfill preserves explicit failures and sanitizes provider exceptions', async () => {
   const failure = { disputeId: 'du_unresolved', code: 'unresolved_app_session' };
   const env = { COMMERCE_DB: createCommerceD1() };
-  const incomplete = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live', write: true }), env, {
+  const incomplete = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live', write: true }), env, {}, {
     verifyIdentity: adminIdentity,
     backfill: async (body) => ({ ...emptyPage(body), scanned: 1, failures: [failure] }),
   });
   assert.equal(incomplete.response.status, 200);
   assert.equal(incomplete.failures, 1);
   assert.deepEqual((await incomplete.response.json() as StripeChargebackBackfillResult).failures, [failure]);
-  const unavailable = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {
+  const unavailable = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {}, {
     verifyIdentity: adminIdentity,
     backfill: async () => { throw new StripeChargebackError('stripe_unavailable', 503, 'sk_live_sensitive'); },
   });
@@ -132,7 +132,7 @@ test('chargeback backfill bounds handler work and rejects other methods', async 
   const wrongMethod = await handleStripeChargebackBackfill(backfillRequest(null, 'GET'), env);
   assert.equal(wrongMethod.response.status, 405);
   assert.equal(wrongMethod.response.headers.get('Allow'), 'POST, OPTIONS');
-  const timedOut = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {
+  const timedOut = await handleStripeChargebackBackfill(backfillRequest({ mode: 'live' }), env, {}, {
     verifyIdentity: adminIdentity,
     timeoutMs: 5,
     backfill: () => new Promise<StripeChargebackBackfillResult>(() => undefined),

@@ -120,7 +120,7 @@ test('checkout handler authenticates, creates one session, and persists the exac
     dropId: DROP.dropId,
     quantity: 1,
     returnUrl: 'https://mons.shop/drop',
-  }), env(), dependencies({
+  }), env(), {}, dependencies({
     createProviderSession: async (input: unknown) => {
       providerRequest = input;
       return { id: 'cs_test_123', url: 'https://checkout.stripe.com/c/pay/test', livemode: false };
@@ -178,7 +178,7 @@ test('checkout accepts legacy requests and generates a collision-safe operation 
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: 'https://mons.shop' },
     body: JSON.stringify({ dropId: DROP.dropId }),
-  }), env(), dependencies({
+  }), env(), {}, dependencies({
     createProviderSession: async (providerRequest: { operationId: string }) => {
       operationId = providerRequest.operationId;
       return { id: 'cs_test_123', url: 'https://checkout.stripe.com/c/pay/test', livemode: false };
@@ -194,6 +194,7 @@ test('staff checkout persists the wallet as the direct order owner', async () =>
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       persistCheckout: async (_path: string, document: Record<string, unknown>) => {
         checkout = document;
@@ -214,6 +215,7 @@ test('linked anonymous checkout persists the wallet as the direct order owner', 
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     { ...env(), OPS_DB: {} as D1Database },
+    {},
     dependencies({
       persistCheckout: async (_path: string, document: Record<string, unknown>) => {
         checkout = document;
@@ -233,6 +235,7 @@ test('checkout handler rejects methods, malformed bodies, extra keys, and oversi
   const wrongMethod = await handleStripeCheckoutSession(
     new Request('https://api.mons.shop/checkout/session'),
     env(),
+    {},
     dependencies(),
   );
   assert.equal(wrongMethod.response.status, 405);
@@ -247,7 +250,7 @@ test('checkout handler rejects methods, malformed bodies, extra keys, and oversi
     request({ dropId: DROP.dropId, returnUrl: 'https://evil.example/drop' }),
     request({ dropId: DROP.dropId, returnUrl: `https://mons.shop/${'x'.repeat(4096)}` }),
   ]) {
-    const result = await handleStripeCheckoutSession(invalid, env(), dependencies());
+    const result = await handleStripeCheckoutSession(invalid, env(), {}, dependencies());
     assert.equal(result.response.status, 400);
     assert.equal(result.authOutcome, 'rejected');
   }
@@ -259,7 +262,7 @@ test('checkout handler maps authentication and provider failures to stable envel
     { kind: 'provider-timeout', status: 504, code: 'deadline-exceeded', message: 'Checkout request timed out.', authOutcome: 'provider-failure' },
     { kind: 'provider-unavailable', status: 502, code: 'unavailable', message: 'Authentication is temporarily unavailable.', authOutcome: 'provider-failure' },
   ] as const) {
-    const result = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), dependencies({
+    const result = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), {}, dependencies({
       verifyIdentity: async () => { throw new RequestIdentityError(failure.kind); },
       createProviderSession: async () => assert.fail('Authentication failure reached Stripe'),
       persistCheckout: async () => assert.fail('Authentication failure persisted a checkout'),
@@ -274,7 +277,7 @@ test('checkout handler maps authentication and provider failures to stable envel
     assert.equal(result.response.headers.get(STRIPE_CHECKOUT_RETRY_HEADER), null);
   }
 
-  const providerFailure = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), dependencies({
+  const providerFailure = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), {}, dependencies({
     createProviderSession: async () => {
       throw new StripeCheckoutSessionError('unavailable', 'Stripe checkout is temporarily unavailable.');
     },
@@ -296,7 +299,7 @@ test('checkout rejects methods and invalid JSON before authentication or clock r
   ] as const) {
     let authenticationCalls = 0;
     let clockReads = 0;
-    const result = await handleStripeCheckoutSession(input, env(), dependencies({
+    const result = await handleStripeCheckoutSession(input, env(), {}, dependencies({
       verifyIdentity: async () => {
         authenticationCalls += 1;
         throw new RequestIdentityError('invalid-token');
@@ -313,13 +316,13 @@ test('checkout rejects methods and invalid JSON before authentication or clock r
 test('checkout reports tracked provider metrics on success and failure', async (context) => {
   let elapsed = 0;
   context.mock.method(performance, 'now', () => elapsed);
-  type ProviderSession = NonNullable<NonNullable<Parameters<typeof handleStripeCheckoutSession>[2]>['createProviderSession']>;
+  type ProviderSession = NonNullable<NonNullable<Parameters<typeof handleStripeCheckoutSession>[3]>['createProviderSession']>;
   const createProviderSession: ProviderSession = async (_input, _mode, _env, providerFetch) => {
     await providerFetch('https://provider.example/checkout');
     return { id: 'cs_test_123', url: 'https://checkout.stripe.com/c/pay/test', livemode: false };
   };
   for (const fail of [false, true]) {
-    const result = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), dependencies({
+    const result = await handleStripeCheckoutSession(request({ dropId: DROP.dropId }), env(), {}, dependencies({
       createProviderSession,
       providerFetch: async () => {
         elapsed += 7;
@@ -369,6 +372,7 @@ test('checkout Stripe provider uses the injected fetch with a stable idempotency
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, {}, client.signal),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -416,6 +420,7 @@ test('checkout retries reuse one effective-owner key while owner changes use dis
   const run = (operationId: string) => handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, { [STRIPE_CHECKOUT_OPERATION_HEADER]: operationId }),
     env(),
+    {},
     dependencies({ createProviderSession: undefined, providerFetch }),
   );
 
@@ -425,6 +430,7 @@ test('checkout retries reuse one effective-owner key while owner changes use dis
   await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, { [STRIPE_CHECKOUT_OPERATION_HEADER]: retryOperationId }),
     { ...env(), OPS_DB: {} as D1Database },
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch,
@@ -434,6 +440,7 @@ test('checkout retries reuse one effective-owner key while owner changes use dis
   await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, { [STRIPE_CHECKOUT_OPERATION_HEADER]: retryOperationId }),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch,
@@ -476,6 +483,7 @@ test('checkout treats changed parameters under one operation key as definitive',
   const run = (returnUrl: string) => handleStripeCheckoutSession(
     request({ dropId: DROP.dropId, returnUrl }, { [STRIPE_CHECKOUT_OPERATION_HEADER]: operationId }),
     env(),
+    {},
     dependencies({ createProviderSession: undefined, providerFetch }),
   );
 
@@ -495,6 +503,7 @@ test('checkout retry does not overwrite a session that already advanced', async 
   const run = () => handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, { [STRIPE_CHECKOUT_OPERATION_HEADER]: operationId }),
     checkoutEnv,
+    {},
     dependencies({ persistCheckout: undefined }),
   );
 
@@ -516,6 +525,7 @@ test('checkout client cancellation aborts the injected Stripe fetch', async () =
   const pending = handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, {}, client.signal),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -543,6 +553,7 @@ test('checkout provider races preserve abort-first and provider-first outcomes',
     handleStripeCheckoutSession(
       request({ dropId: DROP.dropId }, {}, abortFirst.signal),
       env(),
+      {},
       dependencies({
         createProviderSession: undefined,
         providerFetch: async () => {
@@ -562,6 +573,7 @@ test('checkout provider races preserve abort-first and provider-first outcomes',
   const pendingResult = handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, {}, client.signal),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch: () => new Promise((_resolve, reject) => {
@@ -588,6 +600,7 @@ test('checkout provider races preserve abort-first and provider-first outcomes',
     handleStripeCheckoutSession(
       request({ dropId: DROP.dropId }, {}, onchainAbortFirst.signal),
       env(),
+      {},
       dependencies({
         loadOnchainConfig: undefined,
         providerFetch: async () => {
@@ -607,6 +620,7 @@ test('checkout provider races preserve abort-first and provider-first outcomes',
   const pendingOnchain = handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, {}, onchainClient.signal),
     env(),
+    {},
     dependencies({
       loadOnchainConfig: undefined,
       providerFetch: () => new Promise((_resolve, reject) => {
@@ -631,6 +645,7 @@ test('checkout on-chain config keeps stable bounded two-attempt provider reads',
   const retried = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       loadOnchainConfig: undefined,
       providerFetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -653,6 +668,7 @@ test('checkout on-chain config keeps stable bounded two-attempt provider reads',
   const oversized = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       loadOnchainConfig: undefined,
       providerFetch: async () => {
@@ -679,6 +695,7 @@ test('checkout rejects truthy malformed RPC errors even when a result is present
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       loadOnchainConfig: undefined,
       providerFetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -710,6 +727,7 @@ test('checkout does not retry response stream failures', async () => {
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       loadOnchainConfig: undefined,
       providerFetch: async () => {
@@ -735,6 +753,7 @@ test('checkout marks post-provider persistence failures as uncertain', async () 
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       persistCheckout: async () => {
         throw new Error('persistence unavailable');
@@ -760,6 +779,7 @@ test('checkout deadlines retain and track an in-flight idempotent persistence wr
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       defer: (promise: Promise<unknown>) => deferred.push(promise),
       persistCheckout: () => write,
@@ -782,6 +802,7 @@ test('checkout deadline bounds a non-cooperative wallet-binding read', async () 
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     { ...env(), OPS_DB: {} as D1Database },
+    {},
     dependencies({
       createProviderSession: async () => {
         providerCalls += 1;
@@ -800,6 +821,7 @@ test('checkout treats a fully received malformed Stripe success as definitive', 
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch: async () => Response.json({
@@ -823,6 +845,7 @@ test('checkout treats an invalid Stripe success body as uncertain', async () => 
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch: async () => new Response('{"id":', {
@@ -843,6 +866,7 @@ test('checkout treats a fully decoded Stripe error with status 200 as definitive
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch: async () => Response.json({
@@ -860,6 +884,7 @@ test('checkout treats an exhausted Stripe HTTP 500 as uncertain', async () => {
   const result = await handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch: async () => {
@@ -887,6 +912,7 @@ test('checkout preserves a settled Stripe error response when cancellation inter
   const pending = handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, {}, client.signal),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -926,6 +952,7 @@ test('checkout cancellation during an SDK retry preserves the client reason', as
   const pending = handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, {}, client.signal),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch: async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -950,6 +977,7 @@ test('checkout cancellation during an SDK retry ignores a previous attempt statu
   const pending = handleStripeCheckoutSession(
     request({ dropId: DROP.dropId }, {}, client.signal),
     env(),
+    {},
     dependencies({
       createProviderSession: undefined,
       providerFetch: async (_input: RequestInfo | URL, init?: RequestInit) => {

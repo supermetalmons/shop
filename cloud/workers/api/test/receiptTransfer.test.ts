@@ -150,6 +150,7 @@ test('receipt transfer handler returns the exact unsigned owner transaction', as
   const result = await handleReceiptTransferPrepare(
     request(requestBody()),
     env(),
+    {},
     dependencies({
       enforceRateLimit: async (_context: unknown, bucket: { scope: string }) => {
         scopes.push(bucket.scope);
@@ -191,6 +192,7 @@ test('receipt transfer handler enforces exact bounded requests and methods', asy
   const wrongMethod = await handleReceiptTransferPrepare(
     new Request(`https://api.mons.shop${RECEIPT_TRANSFER_PREPARE_PATH}`),
     env(),
+    {},
     dependencies(),
   );
   assert.equal(wrongMethod.response.status, 405);
@@ -203,7 +205,7 @@ test('receipt transfer handler enforces exact bounded requests and methods', asy
     request({ ...requestBody(), destination: PublicKey.default.toBase58() }),
     request({ ...requestBody(), receiptAssetId: 'invalid' }),
   ]) {
-    const result = await handleReceiptTransferPrepare(invalid, env(), dependencies());
+    const result = await handleReceiptTransferPrepare(invalid, env(), {}, dependencies());
     assert.equal(result.response.status, 400);
     assert.equal(result.authOutcome, 'rejected');
   }
@@ -213,6 +215,7 @@ test('receipt transfer handler rejects invalid authentication and missing config
   const unauthenticated = await handleReceiptTransferPrepare(
     request(requestBody()),
     env(),
+    {},
     dependencies({
       verifyIdentity: async () => {
         throw new RequestIdentityError('invalid-token');
@@ -225,6 +228,7 @@ test('receipt transfer handler rejects invalid authentication and missing config
   const unavailable = await handleReceiptTransferPrepare(
     request(requestBody()),
     env({ HELIUS_API_KEY: '' }),
+    {},
     dependencies(),
   );
   assert.equal(unavailable.response.status, 502);
@@ -241,6 +245,7 @@ test('receipt transfer handler keeps the overall deadline authoritative', async 
       duplex: 'half',
     } as RequestInit & { duplex: 'half' }),
     env(),
+    {},
     dependencies({ timeoutMs: 5 }),
   );
   assert.equal(stalledBody.response.status, 504);
@@ -248,6 +253,7 @@ test('receipt transfer handler keeps the overall deadline authoritative', async 
   const stalledRateLimit = await handleReceiptTransferPrepare(
     request(requestBody()),
     env(),
+    {},
     dependencies({
       timeoutMs: 5,
       enforceRateLimit: async (context: { signal: AbortSignal }) =>
@@ -270,6 +276,7 @@ test('receipt transfer returns its deadline and retains only the started rate-li
   const result = await handleReceiptTransferPrepare(
     request(requestBody()),
     env(),
+    {},
     dependencies({
       defer: deferred.defer,
       enforceRateLimit: () => {
@@ -292,6 +299,7 @@ test('receipt transfer does not start its asset rate-limit write after the deadl
   const result = await handleReceiptTransferPrepare(
     request(requestBody()),
     env(),
+    {},
     dependencies({
       enforceRateLimit: async () => { calls += 1; },
       fetchAsset: async () => {
@@ -317,6 +325,7 @@ test('receipt transfer handler preserves asset, owner, metadata, and proof rejec
     const result = await handleReceiptTransferPrepare(
       request(requestBody()),
       env(),
+      {},
       dependencies(overrides),
     );
     assert.equal(result.response.status, 409);

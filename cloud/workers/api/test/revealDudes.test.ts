@@ -167,6 +167,7 @@ test('reveal handler returns the confirmed signature and assigned ids', async ()
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
     deferred.defer,
+    {},
     dependencies({
       confirmRevealSubmission: async () => {
         confirmations += 1;
@@ -202,6 +203,7 @@ test('reveal handler propagates deferred-work registration failures', async () =
       request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
       env(),
       () => { throw cause; },
+      {},
       dependencies(),
     ),
     (error: unknown) =>
@@ -215,6 +217,7 @@ test('reveal handler rejects wallet-session mismatches before any reveal work', 
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({
       loadBoundWallet: async () => Keypair.generate().publicKey.toBase58(),
       validateOnchainConfig: async () => {
@@ -236,6 +239,7 @@ test('paused reveal storage rejects requests before reveal reads or mutations', 
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({
       loadStorageControl: async () => ({
         paused: true,
@@ -304,6 +308,7 @@ test('stalled pre-mutation reads respect the deadline and late success starts no
       request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
       env(),
       failOnDeferredWork,
+      {},
       dependencies(overrides),
     );
     await started;
@@ -322,6 +327,7 @@ test('reveal handler maps a reservation pause race to the maintenance response',
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({
       reserveRevealSubmission: async () => {
         throw new RevealSubmissionStoragePausedError();
@@ -348,6 +354,7 @@ test('reveal handler maps invalid and unavailable request identity', async () =>
       request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
       env(),
       failOnDeferredWork,
+      {},
       dependencies({
         verifyIdentity: async () => {
           throw new RequestIdentityError(kind);
@@ -360,7 +367,7 @@ test('reveal handler maps invalid and unavailable request identity', async () =>
 });
 
 test('reveal handler rejects methods and malformed exact request bodies', async () => {
-  const method = await handleRevealDudes(request({}, { method: 'GET' }), env(), failOnDeferredWork, dependencies());
+  const method = await handleRevealDudes(request({}, { method: 'GET' }), env(), failOnDeferredWork, {}, dependencies());
   assert.equal(method.response.status, 405);
   assert.equal(method.response.headers.get('allow'), 'POST, OPTIONS');
 
@@ -371,7 +378,7 @@ test('reveal handler rejects methods and malformed exact request bodies', async 
     { owner: OWNER.toBase58(), boxAssetId: 'invalid', dropId: DROP_ID },
     { owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: 'unsupported' },
   ]) {
-    const result = await handleRevealDudes(request(body), env(), failOnDeferredWork, dependencies());
+    const result = await handleRevealDudes(request(body), env(), failOnDeferredWork, {}, dependencies());
     assert.equal(result.response.status, 400);
     assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'invalid-argument');
   }
@@ -390,6 +397,7 @@ test('reveal handler queues before send and returns stable recovery details for 
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
     deferred.defer,
+    {},
     dependencies({
       sendAndConfirmTransaction: async (_context: unknown, _runtime: unknown, transaction: VersionedTransaction) => {
         events.push('send');
@@ -427,6 +435,7 @@ test('server deadline after broadcast returns frontend-parsable recovery details
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({
       timeoutMs: 50,
       sendAndConfirmTransaction: async (
@@ -480,6 +489,7 @@ test('durably confirmed stored submission recovers without a provider secret or 
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     { ...env(), HELIUS_API_KEY: '' },
     deferred.defer,
+    {},
     dependencies({
       loadRevealSubmission: async (context: Parameters<typeof revealDudesTestHooks.loadRevealSubmission>[0]) => {
         requestSignal = context.signal;
@@ -531,6 +541,7 @@ test('stored reveal submission rejects a different owner before reconciliation o
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({
       loadRevealSubmission: async () => submission({ owner: Keypair.generate().publicKey.toBase58() }),
       reconcileRevealSubmission: async () => {
@@ -571,6 +582,7 @@ test('unknown stored submission returns recovery details without resending or re
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
     deferred.defer,
+    {},
     dependencies({
       loadRevealSubmission: async () => stored,
       reconcileRevealSubmission: async () => 'unknown',
@@ -610,6 +622,7 @@ test('reconciled stored submission completes durable bookkeeping before acknowle
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     deferred.defer,
+    {},
     dependencies({
       loadRevealSubmission: async () => stored,
       reconcileRevealSubmission: async () => 'confirmed',
@@ -655,6 +668,7 @@ test('reconciled submission persistence failures retain confirmed metrics and re
         assert.fail('existing submissions must not be enqueued again');
       })),
       deferred.defer,
+      {},
       dependencies({
         loadRevealSubmission: async () => source === 'stored' ? existing : null,
         reserveRevealSubmission: async () => ({ submission: existing, owned: false }),
@@ -693,6 +707,7 @@ test('failed or expired stored submissions are conditionally replaced after pend
       request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
       env(),
       deferred.defer,
+      {},
       dependencies({
         loadRevealSubmission: async () => stored,
         reconcileRevealSubmission: async () => {
@@ -744,6 +759,7 @@ test('reservation loser does not replace or persist a failed or expired winner',
         assert.fail('the losing request must not enqueue another submission');
       })),
       deferred.defer,
+      {},
       dependencies({
         reserveRevealSubmission: async () => {
           reservations += 1;
@@ -777,6 +793,7 @@ test('reservation loser returns the confirmed winner without sending its candida
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     deferred.defer,
+    {},
     dependencies({
       reserveRevealSubmission: async (
         _context: unknown,
@@ -824,6 +841,7 @@ test('reservation loser returns an unknown winner without sending or re-enqueuin
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
     deferred.defer,
+    {},
     dependencies({
       reserveRevealSubmission: async () => ({ submission: winner, owned: false }),
       reconcileRevealSubmission: async () => 'unknown',
@@ -847,6 +865,7 @@ test('reveal handler records explicit transaction failures as failed for retry',
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     failOnDeferredWork,
+    {},
     dependencies({
       sendAndConfirmTransaction: async () => {
         throw new RevealDudesError('failed-precondition', 'transaction failed', {
@@ -883,6 +902,7 @@ test('queue failure schedules fresh cleanup and prevents broadcast', async () =>
       throw new Error('queue unavailable');
     })),
     deferred.defer,
+    {},
     dependencies({
       reserveRevealSubmission: async (
         context: Parameters<typeof revealDudesTestHooks.reserveRevealSubmission>[0],
@@ -934,6 +954,7 @@ test('queue deadline retains one enqueue and conditionally fails the reservation
       markQueueStarted();
     }))),
     deferred.defer,
+    {},
     dependencies({
       timeoutMs: 5,
       sendAndConfirmTransaction: async () => {
@@ -975,6 +996,7 @@ test('queue deadline propagates deferred-work registration failures', async () =
       return new Promise(() => undefined);
     })),
     () => { throw cause; },
+    {},
     dependencies({ timeoutMs: 5 }),
   );
 
@@ -1001,6 +1023,7 @@ test('reservation deadline retains one commit and performs one fresh conditional
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
     deferred.defer,
+    {},
     dependencies({
       timeoutMs: 5,
       reserveRevealSubmission: async (
@@ -1058,6 +1081,7 @@ test('assignment deadline retains one assignment and starts no later mutation', 
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
     deferred.defer,
+    {},
     dependencies({
       timeoutMs: 5,
       assignDudes: async () => new Promise((resolve) => {
@@ -1099,6 +1123,7 @@ test('final persistence deadline retains exactly the confirmed journal write', a
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     deferred.defer,
+    {},
     dependencies({
       timeoutMs: 5,
       sendAndConfirmTransaction: async (_context: unknown, _runtime: unknown, transaction: VersionedTransaction) => {
@@ -1148,6 +1173,7 @@ test('confirmed reveal status-write failures return recovery details and leave r
       return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
     })),
     deferred.defer,
+    {},
     dependencies({
       confirmRevealSubmission: async () => {
         confirmCalls += 1;
@@ -1177,6 +1203,7 @@ test('pack-status count outages cannot block a confirmed response', async () => 
     request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
     env(),
     deferred.defer,
+    {},
     dependencies({
       countOnlineRevealPackStatus: async () => {
         countCalls += 1;

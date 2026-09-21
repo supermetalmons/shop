@@ -32,11 +32,12 @@ import {
   D1CommerceRepository,
   type CommerceDocumentData,
 } from '../src/commerceRepository.ts';
-import { internalStaffAuthorization } from '../src/requestIdentity.ts';
+import type { RequestAuthContext } from '../src/requestIdentity.ts';
 import { createCommerceD1Harness, seedCommerceDocument } from './commerceD1Harness.ts';
 
 const OWNER = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
 const OTHER_STAFF = 'AmzcjtuzXkSziYHRqmavPiTsbJveW13wiRhCTRnuheiq';
+const STAFF_AUTH: RequestAuthContext = { verifiedStaffIdentity: { kind: 'staff-wallet', wallet: OWNER } };
 const DROP_ID = 'card_nft_2';
 const REQUEST_ID = 'AbCdEfGhIjKlMnOpQrSt';
 const SIGNATURE = bs58.encode(Keypair.generate().secretKey);
@@ -125,7 +126,6 @@ function apiRequest(path: string, body: unknown, method = 'POST', signal?: Abort
   return new Request(`https://api.mons.shop${path}`, {
     method,
     headers: {
-      Authorization: internalStaffAuthorization(OWNER),
       'Content-Type': 'application/json',
     },
     ...(signal ? { signal } : {}),
@@ -326,6 +326,7 @@ test('Admin IRL Workflow starter reserves D1 then creates one opaque instance', 
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     env(harness, binding),
+    STAFF_AUTH,
     {
       claimEffect: async (args) => {
         claimCalls += 1;
@@ -361,6 +362,7 @@ test('Admin IRL Workflow starter reserves D1 then creates one opaque instance', 
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     env(harness, binding),
+    STAFF_AUTH,
   );
   assert.equal(replayed.response.status, 202);
   assert.equal((await replayed.response.json() as { operationId: string }).operationId, operationId);
@@ -375,15 +377,16 @@ test('Admin IRL Workflow status remains readable while commerce is paused', asyn
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const pending = await started.response.json() as { operationId: string };
   pauseCommerce(harness);
 
   const statusRequest = apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId: pending.operationId });
-  statusRequest.headers.set('Authorization', internalStaffAuthorization(OTHER_STAFF));
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     statusRequest,
     activeEnv,
+    { verifiedStaffIdentity: { kind: 'staff-wallet', wallet: OTHER_STAFF } },
   );
   assert.equal(status.response.status, 202);
   assert.equal(status.dropId, undefined);
@@ -407,6 +410,7 @@ test('Admin IRL Workflow status leaves an observed pending create unchanged', as
   const result = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     env(harness, binding),
+    STAFF_AUTH,
   );
 
   assert.equal(result.response.status, 202);
@@ -433,6 +437,7 @@ test('Admin IRL starter leaves an observed pending create unchanged', async () =
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     env(harness, binding),
+    STAFF_AUTH,
   );
 
   const stored = await new D1CommerceRepository(harness.db)
@@ -452,6 +457,7 @@ test('Admin IRL starter retries an expired create effect', async () => {
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -463,6 +469,7 @@ test('Admin IRL starter retries an expired create effect', async () => {
   const retried = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(retried.response.status, 202);
@@ -476,6 +483,7 @@ test('Admin IRL starter recovers a lost create-claim acknowledgement', async () 
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     env(harness, binding),
+    STAFF_AUTH,
     {
       claimEffect: async (args) => {
         await claimAdminIrlRedeemFinalizeWorkflowEffect(args);
@@ -502,6 +510,7 @@ test('Admin IRL starter projects completion when a create claim loses its revisi
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       claimEffect: async (args) => {
         const stored = await new D1CommerceRepository(harness.db)
@@ -515,6 +524,26 @@ test('Admin IRL starter projects completion when a create claim loses its revisi
 
   assert.equal(result.response.status, 200);
   assert.equal((await result.response.json() as { deliveryId: number }).deliveryId, 7);
+  assert.equal(binding.createCalls, 0);
+});
+
+test('Admin IRL Workflow routes reject fabricated internal staff headers without trusted context', async () => {
+  const harness = createCommerceD1Harness();
+  const binding = new FakeWorkflowBinding();
+  const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
+  const startRequest = apiRequest('/admin/irl-redeem/finalize', BODY);
+  const statusRequest = apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId });
+  for (const request of [startRequest, statusRequest]) {
+    request.headers.set('Authorization', `Mons-Internal-Staff ${OWNER}`);
+  }
+  const results = [
+    await handleAdminIrlRedeemFinalizeWorkflowStart(startRequest, env(harness, binding)),
+    await handleAdminIrlRedeemFinalizeWorkflowStatus(statusRequest, env(harness, binding)),
+  ];
+  for (const result of results) {
+    assert.equal(result.response.status, 401);
+    assert.equal(result.authOutcome, 'rejected');
+  }
   assert.equal(binding.createCalls, 0);
 });
 
@@ -543,6 +572,7 @@ test('Admin IRL Workflow status projects D1 completion and engine states', async
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -554,6 +584,7 @@ test('Admin IRL Workflow status projects D1 completion and engine states', async
   const terminated = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(terminated.response.status, 409);
 
@@ -561,6 +592,7 @@ test('Admin IRL Workflow status projects D1 completion and engine states', async
   const errored = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(errored.response.status, 502);
   assert.deepEqual(await errored.response.json(), {
@@ -577,6 +609,7 @@ test('Admin IRL Workflow status projects D1 completion and engine states', async
   const malformed = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(malformed.response.status, 500);
   assert.equal(JSON.stringify(await malformed.response.json()).includes('provider response'), false);
@@ -585,6 +618,7 @@ test('Admin IRL Workflow status projects D1 completion and engine states', async
   const unknown = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(unknown.response.status, 202);
 
@@ -599,6 +633,7 @@ test('Admin IRL Workflow status projects D1 completion and engine states', async
   const retryableOutput = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(retryableOutput.response.status, 502);
   assert.deepEqual(await retryableOutput.response.json(), {
@@ -623,6 +658,7 @@ test('Admin IRL Workflow status projects D1 completion and engine states', async
   const success = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(success.response.status, 200);
   assert.equal((await success.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -631,6 +667,7 @@ test('Admin IRL Workflow status projects D1 completion and engine states', async
   const completedDespiteTermination = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(completedDespiteTermination.response.status, 200);
   assert.equal((await completedDespiteTermination.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -638,6 +675,7 @@ test('Admin IRL Workflow status projects D1 completion and engine states', async
   const repeated = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(repeated.response.status, 200);
   assert.equal((await repeated.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -662,6 +700,7 @@ test('Admin IRL Workflow status projects D1 completion and engine states', async
   const corrupt = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(corrupt.response.status, 500);
 });
@@ -674,6 +713,7 @@ test('Admin IRL Workflow status rechecks D1 after a terminal engine result', asy
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -690,6 +730,7 @@ test('Admin IRL Workflow status rechecks D1 after a terminal engine result', asy
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(status.response.status, 200);
   assert.equal((await status.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -703,6 +744,7 @@ test('Admin IRL Workflow status rechecks D1 after an engine inspection error', a
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -718,6 +760,7 @@ test('Admin IRL Workflow status rechecks D1 after an engine inspection error', a
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(status.response.status, 200);
   assert.equal((await status.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -731,6 +774,7 @@ test('Admin IRL Workflow status requires an explicit start to recreate missing c
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -742,6 +786,7 @@ test('Admin IRL Workflow status requires an explicit start to recreate missing c
   const unavailable = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(unavailable.response.status, 202);
 
@@ -750,6 +795,7 @@ test('Admin IRL Workflow status requires an explicit start to recreate missing c
   const missing = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(missing.response.status, 409);
   assert.deepEqual(await missing.response.json(), {
@@ -770,6 +816,7 @@ test('Admin IRL starter recreates a missing confirmed Workflow instance', async 
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(started.response.status, 202);
   await clearPendingWorkflowEffect(
@@ -781,6 +828,7 @@ test('Admin IRL starter recreates a missing confirmed Workflow instance', async 
   const recreated = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(recreated.response.status, 202);
@@ -795,6 +843,7 @@ test('Admin IRL starter explicitly recreates a retained manual operation without
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -806,6 +855,7 @@ test('Admin IRL starter explicitly recreates a retained manual operation without
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(status.response.status, 409);
   assert.equal(binding.createCalls, 1);
@@ -828,6 +878,7 @@ test('Admin IRL starter explicitly recreates a retained manual operation without
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(replayed.response.status, 202);
@@ -852,6 +903,7 @@ test('Admin IRL starter keeps an ambiguous manual recreation pending', async () 
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -872,6 +924,7 @@ test('Admin IRL starter keeps an ambiguous manual recreation pending', async () 
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(replayed.response.status, 202);
@@ -896,6 +949,7 @@ test('Admin IRL Workflow status surfaces a persisted retryable failure when its 
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   assert.deepEqual(await cleanupAdminIrlRedeemFinalizeWorkflow({
@@ -910,6 +964,7 @@ test('Admin IRL Workflow status surfaces a persisted retryable failure when its 
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(status.response.status, 502);
   assert.deepEqual(await status.response.json(), {
@@ -925,6 +980,7 @@ test('Admin IRL Workflow status surfaces a persisted retryable failure when its 
   const resourceUnavailable = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(resourceUnavailable.response.status, 502);
   assert.deepEqual(await resourceUnavailable.response.json(), {
@@ -945,6 +1001,7 @@ test('Admin IRL starter preserves confirmed history while restarting a persisted
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   await cleanupAdminIrlRedeemFinalizeWorkflow({
@@ -962,6 +1019,7 @@ test('Admin IRL starter preserves confirmed history while restarting a persisted
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(replayed.response.status, 202);
@@ -987,6 +1045,7 @@ test('Admin IRL starter recreates a genuinely missing persisted retryable Workfl
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   await cleanupAdminIrlRedeemFinalizeWorkflow({
@@ -1009,6 +1068,7 @@ test('Admin IRL starter recreates a genuinely missing persisted retryable Workfl
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(replayed.response.status, 202);
@@ -1029,6 +1089,7 @@ test('Admin IRL starter leaves an unavailable persisted retryable failure unchan
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   await cleanupAdminIrlRedeemFinalizeWorkflow({
@@ -1043,6 +1104,7 @@ test('Admin IRL starter leaves an unavailable persisted retryable failure unchan
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       reserveWorkflow: async () => assert.fail('unavailable inspection must not reserve'),
     },
@@ -1071,6 +1133,7 @@ test('Admin IRL starter cannot erase a terminal failure that lands during reserv
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   await clearPendingWorkflowEffect(harness, operationId);
@@ -1082,6 +1145,7 @@ test('Admin IRL starter cannot erase a terminal failure that lands during reserv
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       reserveWorkflow: async (args) => {
         const stored = await new D1CommerceRepository(harness.db)
@@ -1117,6 +1181,7 @@ test('Admin IRL Workflow status keeps initial and completion-result D1 outages p
   const initial = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
     {
       loadOperation: async () => {
         throw new CommerceRepositoryError('unavailable', 'Commerce is temporarily unavailable.');
@@ -1128,6 +1193,7 @@ test('Admin IRL Workflow status keeps initial and completion-result D1 outages p
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const stored = await new D1CommerceRepository(harness.db)
     .getAdminIrlRedeemRequestForWorkflowStatus(operationId);
@@ -1142,6 +1208,7 @@ test('Admin IRL Workflow status keeps initial and completion-result D1 outages p
   const completion = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     unavailableEnv,
+    STAFF_AUTH,
     {
       loadOperation: ({ operationId: currentOperationId }) => loadAdminIrlRedeemFinalizeWorkflowOperation({
         env: activeEnv,
@@ -1161,6 +1228,7 @@ test('Admin IRL Workflow status projects persisted terminal failures on recheck 
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -1177,6 +1245,7 @@ test('Admin IRL Workflow status projects persisted terminal failures on recheck 
   const rechecked = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(rechecked.response.status, 409);
   assert.deepEqual(await rechecked.response.json(), {
@@ -1191,6 +1260,7 @@ test('Admin IRL Workflow status projects persisted terminal failures on recheck 
   const initial = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(initial.response.status, 409);
   assert.deepEqual(await initial.response.json(), {
@@ -1210,6 +1280,7 @@ test('Admin IRL Workflow status stays pending when an engine error recheck fails
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   await clearPendingWorkflowEffect(harness, operationId);
@@ -1219,6 +1290,7 @@ test('Admin IRL Workflow status stays pending when an engine error recheck fails
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
     {
       loadOperation: async (args) => {
         operationReads += 1;
@@ -1245,6 +1317,7 @@ test('Admin IRL Workflow status stays pending when a terminal engine result rech
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   await clearPendingWorkflowEffect(harness, operationId);
@@ -1254,6 +1327,7 @@ test('Admin IRL Workflow status stays pending when a terminal engine result rech
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
     {
       loadOperation: async (args) => {
         operationReads += 1;
@@ -1280,6 +1354,7 @@ test('Admin IRL Workflow status stays pending when its deadline wins after autho
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const deadline = new AbortController();
@@ -1290,6 +1365,7 @@ test('Admin IRL Workflow status stays pending when its deadline wins after autho
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
     {
       createDeadline: () => ({
         signal: deadline.signal,
@@ -1324,6 +1400,7 @@ test('Admin IRL Workflow routes enforce exact bodies, methods, and missing-insta
   const wrongMethod = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, {}, 'GET'),
     env(harness, binding),
+    STAFF_AUTH,
   );
   assert.equal(wrongMethod.response.status, 405);
   assert.equal(wrongMethod.response.headers.get('allow'), 'POST, OPTIONS');
@@ -1331,12 +1408,14 @@ test('Admin IRL Workflow routes enforce exact bodies, methods, and missing-insta
   const invalid = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId: `airf-v1-${'a'.repeat(64)}`, extra: true }),
     env(harness, binding),
+    STAFF_AUTH,
   );
   assert.equal(invalid.response.status, 400);
 
   const missing = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId: `airf-v1-${'a'.repeat(64)}` }),
     env(harness, binding),
+    STAFF_AUTH,
   );
   assert.equal(missing.response.status, 404);
 });
@@ -1349,6 +1428,7 @@ test('Admin IRL Workflow starter preserves immediate public error contracts', as
       body: '{}',
     }),
     {} as Env,
+    STAFF_AUTH,
   );
   assert.equal(unsupportedContentType.response.status, 400);
   assert.deepEqual(await unsupportedContentType.response.json(), {
@@ -1365,6 +1445,7 @@ test('Admin IRL Workflow starter preserves immediate public error contracts', as
   const detailsError = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     env(harness, new FakeWorkflowBinding()),
+    STAFF_AUTH,
     {
       reserveWorkflow: async () => {
         throw new AdminIrlRedeemFinalizeError(
@@ -1387,6 +1468,7 @@ test('Admin IRL Workflow starter preserves immediate public error contracts', as
   const unknownError = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     env(harness, new FakeWorkflowBinding()),
+    STAFF_AUTH,
     {
       reserveWorkflow: async () => {
         throw {
@@ -1415,6 +1497,7 @@ test('Admin IRL Workflow does not classify Wrangler resource error 10200 as a mi
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   binding.getError = { code: 10200, message: 'instance.not_found' };
@@ -1422,12 +1505,14 @@ test('Admin IRL Workflow does not classify Wrangler resource error 10200 as a mi
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(replayed.response.status, 202);
 
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(status.response.status, 202);
   assert.equal(JSON.stringify(await status.response.json()).includes('Workflow resource'), false);
@@ -1441,6 +1526,7 @@ test('Admin IRL starter rechecks D1 after Workflow inspection error 10200', asyn
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -1456,6 +1542,7 @@ test('Admin IRL starter rechecks D1 after Workflow inspection error 10200', asyn
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(replayed.response.status, 200);
   assert.equal((await replayed.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -1478,6 +1565,7 @@ test('Admin IRL starter rechecks D1 after post-reservation Workflow inspection e
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(result.response.status, 200);
   assert.equal((await result.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -1491,6 +1579,7 @@ test('Admin IRL Workflow status rechecks D1 after Workflow inspection error 1020
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -1506,6 +1595,7 @@ test('Admin IRL Workflow status rechecks D1 after Workflow inspection error 1020
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(status.response.status, 200);
   assert.equal((await status.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -1519,6 +1609,7 @@ test('Admin IRL starter keeps D1 recheck outages retryable after Workflow error 
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     harness,
@@ -1530,6 +1621,7 @@ test('Admin IRL starter keeps D1 recheck outages retryable after Workflow error 
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       loadOperation: async (args) => {
         operationReads += 1;
@@ -1551,6 +1643,7 @@ test('Admin IRL Workflow status keeps D1 recheck outages pending after Workflow 
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   await clearPendingWorkflowEffect(harness, operationId);
@@ -1560,6 +1653,7 @@ test('Admin IRL Workflow status keeps D1 recheck outages pending after Workflow 
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
     {
       loadOperation: async (args) => {
         operationReads += 1;
@@ -1586,6 +1680,7 @@ test('Admin IRL starter keeps completion-read outages retryable after Workflow e
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -1607,6 +1702,7 @@ test('Admin IRL starter keeps completion-read outages retryable after Workflow e
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     unavailableEnv,
+    STAFF_AUTH,
     {
       loadOperation: ({ operationId: currentOperationId }) => loadAdminIrlRedeemFinalizeWorkflowOperation({
         env: activeEnv,
@@ -1626,6 +1722,7 @@ test('Admin IRL Workflow status keeps completion-read outages pending after Work
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -1643,6 +1740,7 @@ test('Admin IRL Workflow status keeps completion-read outages pending after Work
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     unavailableEnv,
+    STAFF_AUTH,
     {
       loadOperation: ({ operationId: currentOperationId }) => loadAdminIrlRedeemFinalizeWorkflowOperation({
         env: activeEnv,
@@ -1692,6 +1790,7 @@ test('Admin IRL starter projects existing terminal failures before reserving aga
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     env(harness, binding),
+    STAFF_AUTH,
   );
   assert.equal(result.response.status, 409);
   assert.equal(binding.created.length, 0);
@@ -1704,6 +1803,7 @@ test('Admin IRL starter projects existing terminal failures before reserving aga
   const repeated = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     env(harness, binding),
+    STAFF_AUTH,
   );
   assert.equal(repeated.response.status, 409);
   assert.equal(binding.created.length, 0);
@@ -1717,6 +1817,7 @@ test('Admin IRL starter rechecks D1 before projecting a terminal engine state', 
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -1733,6 +1834,7 @@ test('Admin IRL starter rechecks D1 before projecting a terminal engine state', 
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(replayed.response.status, 200);
   assert.equal((await replayed.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -1746,6 +1848,7 @@ test('Admin IRL starter exposes an initial completion-read outage as retryable a
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -1762,6 +1865,7 @@ test('Admin IRL starter exposes an initial completion-read outage as retryable a
   const unavailable = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     unavailableEnv,
+    STAFF_AUTH,
     {
       loadOperation: ({ operationId: currentOperationId }) => loadAdminIrlRedeemFinalizeWorkflowOperation({
         env: activeEnv,
@@ -1775,6 +1879,7 @@ test('Admin IRL starter exposes an initial completion-read outage as retryable a
   const recovered = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(recovered.response.status, 200);
   assert.equal((await recovered.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -1788,6 +1893,7 @@ test('Admin IRL starter keeps existing operations recoverable after inspection o
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(started.response.status, 202);
 
@@ -1795,6 +1901,7 @@ test('Admin IRL starter keeps existing operations recoverable after inspection o
   const unavailable = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(unavailable.response.status, 202);
 
@@ -1802,6 +1909,7 @@ test('Admin IRL starter keeps existing operations recoverable after inspection o
   const recovered = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(recovered.response.status, 202);
   assert.equal(binding.created.length, 1);
@@ -1817,6 +1925,7 @@ test('Admin IRL starter keeps newly reserved operations recoverable after inspec
   const unavailable = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(unavailable.response.status, 502);
   assert.equal(
@@ -1829,6 +1938,7 @@ test('Admin IRL starter keeps newly reserved operations recoverable after inspec
   const recovered = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(recovered.response.status, 202);
   assert.equal(binding.created.length, 1);
@@ -1842,6 +1952,7 @@ test('Admin IRL starter exposes unavailable terminal-state rechecks as retryable
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   await clearPendingWorkflowEffect(harness, operationId);
@@ -1851,6 +1962,7 @@ test('Admin IRL starter exposes unavailable terminal-state rechecks as retryable
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       loadOperation: async (args) => {
         operationReads += 1;
@@ -1872,6 +1984,7 @@ test('Admin IRL starter preserves explicit restart recovery through a transient 
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     harness,
@@ -1888,6 +2001,7 @@ test('Admin IRL starter preserves explicit restart recovery through a transient 
   const unavailable = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(unavailable.response.status, 502);
@@ -1902,6 +2016,7 @@ test('Admin IRL starter preserves explicit restart recovery through a transient 
   const recovered = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(recovered.response.status, 202);
   assert.equal(instance.restartCalls, 1);
@@ -1915,6 +2030,7 @@ test('Admin IRL starter preserves explicit create recovery through a transient s
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     harness,
@@ -1930,6 +2046,7 @@ test('Admin IRL starter preserves explicit create recovery through a transient s
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(result.response.status, 502);
@@ -1948,6 +2065,7 @@ test('Admin IRL starter preserves D1 completion during a second inspection outag
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
   await clearPendingWorkflowEffect(harness, operationId);
@@ -1966,6 +2084,7 @@ test('Admin IRL starter preserves D1 completion during a second inspection outag
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(result.response.status, 200);
@@ -1980,6 +2099,7 @@ test('Admin IRL starter preserves D1 terminal failure during a second inspection
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
   await clearPendingWorkflowEffect(harness, operationId);
@@ -1998,6 +2118,7 @@ test('Admin IRL starter preserves D1 terminal failure during a second inspection
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(result.response.status, 409);
@@ -2018,6 +2139,7 @@ test('Admin IRL starter exposes terminal-state recheck deadlines as retryable', 
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   await clearPendingWorkflowEffect(harness, operationId);
@@ -2029,6 +2151,7 @@ test('Admin IRL starter exposes terminal-state recheck deadlines as retryable', 
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       createDeadline: () => ({
         signal: deadline.signal,
@@ -2058,6 +2181,7 @@ test('Admin IRL starter exposes rechecked completion-read outages as retryable',
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -2080,6 +2204,7 @@ test('Admin IRL starter exposes rechecked completion-read outages as retryable',
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     unavailableEnv,
+    STAFF_AUTH,
     {
       loadOperation: ({ operationId: currentOperationId }) => loadAdminIrlRedeemFinalizeWorkflowOperation({
         env: activeEnv,
@@ -2099,6 +2224,7 @@ test('Admin IRL starter fences concurrent restart requests', async () => {
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
   await clearPendingWorkflowEffect(harness, operationId);
@@ -2129,11 +2255,13 @@ test('Admin IRL starter fences concurrent restart requests', async () => {
     handleAdminIrlRedeemFinalizeWorkflowStart(
       apiRequest('/admin/irl-redeem/finalize', BODY),
       activeEnv,
+      STAFF_AUTH,
       { claimEffect },
     ),
     handleAdminIrlRedeemFinalizeWorkflowStart(
       apiRequest('/admin/irl-redeem/finalize', BODY),
       activeEnv,
+      STAFF_AUTH,
       { claimEffect },
     ),
   ]);
@@ -2151,6 +2279,7 @@ test('Admin IRL starter retries a lost restart-claim acknowledgement with the sa
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     harness,
@@ -2163,6 +2292,7 @@ test('Admin IRL starter retries a lost restart-claim acknowledgement with the sa
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       claimEffect: async (args) => {
         assert.equal(args.kind, 'restart');
@@ -2188,6 +2318,7 @@ test('Admin IRL starter reclaims an expired undispatched restart claim', async (
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
   await clearPendingWorkflowEffect(harness, operationId);
@@ -2211,6 +2342,7 @@ test('Admin IRL starter reclaims an expired undispatched restart claim', async (
   const unavailable = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     { claimEffect },
   );
   assert.equal(unavailable.response.status, 202);
@@ -2220,6 +2352,7 @@ test('Admin IRL starter reclaims an expired undispatched restart claim', async (
   const pending = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     { claimEffect },
   );
   assert.equal(pending.response.status, 202);
@@ -2234,6 +2367,7 @@ test('Admin IRL starter reclaims an expired undispatched restart claim', async (
   const recovered = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     { claimEffect },
   );
 
@@ -2250,6 +2384,7 @@ test('Admin IRL starter retries a lost dispatch acknowledgement idempotently', a
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
   await clearPendingWorkflowEffect(harness, operationId);
@@ -2260,6 +2395,7 @@ test('Admin IRL starter retries a lost dispatch acknowledgement idempotently', a
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       dispatchRestart: async (args) => {
         dispatchClaimIds.push(args.claimId);
@@ -2284,6 +2420,7 @@ test('Admin IRL starter rechecks the instance after dispatching restart', async 
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
   await clearPendingWorkflowEffect(harness, operationId);
@@ -2294,6 +2431,7 @@ test('Admin IRL starter rechecks the instance after dispatching restart', async 
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       dispatchRestart: async (args) => {
         const dispatched = await dispatchAdminIrlRedeemFinalizeWorkflowRestart(args);
@@ -2328,6 +2466,7 @@ test('Admin IRL starter retracts a dispatch when its instance becomes missing', 
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
   await clearPendingWorkflowEffect(harness, operationId);
@@ -2337,6 +2476,7 @@ test('Admin IRL starter retracts a dispatch when its instance becomes missing', 
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       dispatchRestart: async (args) => {
         const dispatched = await dispatchAdminIrlRedeemFinalizeWorkflowRestart(args);
@@ -2361,6 +2501,7 @@ test('Admin IRL starter retracts a dispatch when its instance becomes missing', 
   const recovered = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(recovered.response.status, 202);
@@ -2376,6 +2517,7 @@ test('Admin IRL starter retracts and reclaims a dispatch after an inspection out
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
   await clearPendingWorkflowEffect(harness, operationId);
@@ -2385,6 +2527,7 @@ test('Admin IRL starter retracts and reclaims a dispatch after an inspection out
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       dispatchRestart: async (args) => {
         const dispatched = await dispatchAdminIrlRedeemFinalizeWorkflowRestart(args);
@@ -2409,6 +2552,7 @@ test('Admin IRL starter retracts and reclaims a dispatch after an inspection out
   const recovered = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(recovered.response.status, 202);
@@ -2423,6 +2567,7 @@ test('Admin IRL starter rechecks the instance before claiming restart', async ()
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
   await clearPendingWorkflowEffect(harness, operationId);
@@ -2437,6 +2582,7 @@ test('Admin IRL starter rechecks the instance before claiming restart', async ()
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       claimEffect: async () => assert.fail('pending pre-claim inspection must not claim restart'),
     },
@@ -2454,6 +2600,7 @@ test('Admin IRL starter rechecks the instance after claiming restart', async () 
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
   await clearPendingWorkflowEffect(harness, operationId);
@@ -2463,6 +2610,7 @@ test('Admin IRL starter rechecks the instance after claiming restart', async () 
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       claimEffect: async (args) => {
         const claimed = await claimAdminIrlRedeemFinalizeWorkflowEffect(args);
@@ -2489,6 +2637,7 @@ test('Admin IRL starter explicitly restarts active terminated and invalid instan
     await handleAdminIrlRedeemFinalizeWorkflowStart(
       apiRequest('/admin/irl-redeem/finalize', BODY),
       activeEnv,
+      STAFF_AUTH,
     );
     await clearPendingWorkflowEffect(
       harness,
@@ -2500,6 +2649,7 @@ test('Admin IRL starter explicitly restarts active terminated and invalid instan
     const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
       apiRequest('/admin/irl-redeem/finalize', BODY),
       activeEnv,
+      STAFF_AUTH,
     );
 
     assert.equal(result.response.status, 202, state.status);
@@ -2515,6 +2665,7 @@ test('Admin IRL starter restarts retryable outputs and engine failures but not t
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     retryEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     retryHarness,
@@ -2531,6 +2682,7 @@ test('Admin IRL starter restarts retryable outputs and engine failures but not t
   const retried = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     retryEnv,
+    STAFF_AUTH,
   );
   assert.equal(retried.response.status, 202);
   assert.equal(retryBinding.instance.restartCalls, 1);
@@ -2542,6 +2694,7 @@ test('Admin IRL starter restarts retryable outputs and engine failures but not t
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     erroredEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     erroredHarness,
@@ -2551,6 +2704,7 @@ test('Admin IRL starter restarts retryable outputs and engine failures but not t
   const errored = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     erroredEnv,
+    STAFF_AUTH,
   );
   assert.equal(errored.response.status, 202);
   assert.equal(erroredBinding.instance.restartCalls, 1);
@@ -2562,6 +2716,7 @@ test('Admin IRL starter restarts retryable outputs and engine failures but not t
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     repeatedEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     repeatedHarness,
@@ -2575,6 +2730,7 @@ test('Admin IRL starter restarts retryable outputs and engine failures but not t
   const repeated = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     repeatedEnv,
+    STAFF_AUTH,
   );
   assert.equal(repeated.response.status, 202);
   assert.equal(repeatedInstance.restartCalls, 1);
@@ -2583,6 +2739,7 @@ test('Admin IRL starter restarts retryable outputs and engine failures but not t
       operationId: await adminIrlRedeemFinalizeOperationId(BODY, OWNER),
     }),
     repeatedEnv,
+    STAFF_AUTH,
   );
   assert.equal(staleStatus.response.status, 202);
   assert.equal(repeatedInstance.restartCalls, 1);
@@ -2594,6 +2751,7 @@ test('Admin IRL starter restarts retryable outputs and engine failures but not t
   const terminalStarted = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     terminalEnv,
+    STAFF_AUTH,
   );
   const terminalOperationId = (await terminalStarted.response.json() as { operationId: string }).operationId;
   const terminalStored = await new D1CommerceRepository(terminalHarness.db)
@@ -2607,6 +2765,7 @@ test('Admin IRL starter restarts retryable outputs and engine failures but not t
   const terminal = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     terminalEnv,
+    STAFF_AUTH,
   );
   assert.equal(terminal.response.status, 409);
   assert.equal(terminalBinding.instance.restartCalls, 0);
@@ -2620,6 +2779,7 @@ test('Admin IRL starter keeps a restart rejection pending behind its durable cla
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     harness,
@@ -2635,6 +2795,7 @@ test('Admin IRL starter keeps a restart rejection pending behind its durable cla
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(result.response.status, 202);
   assert.equal(instance.restartCalls, 1);
@@ -2648,6 +2809,7 @@ test('Admin IRL starter keeps an accepted manual restart pending through a stale
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -2671,6 +2833,7 @@ test('Admin IRL starter keeps an accepted manual restart pending through a stale
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
 
   assert.equal(replayed.response.status, 202);
@@ -2697,6 +2860,7 @@ test('Admin IRL starter explicitly restarts retained errored, terminated, and in
     const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
       apiRequest('/admin/irl-redeem/finalize', BODY),
       activeEnv,
+      STAFF_AUTH,
     );
     const { operationId } = await started.response.json() as { operationId: string };
     const stored = await new D1CommerceRepository(harness.db)
@@ -2709,6 +2873,7 @@ test('Admin IRL starter explicitly restarts retained errored, terminated, and in
     const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
       apiRequest('/admin/irl-redeem/finalize', BODY),
       activeEnv,
+      STAFF_AUTH,
     );
 
     assert.equal(replayed.response.status, 202, state.status);
@@ -2724,6 +2889,7 @@ test('Admin IRL Workflow keeps polling after an accepted manual restart inspecti
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   const stored = await new D1CommerceRepository(harness.db)
@@ -2742,6 +2908,7 @@ test('Admin IRL Workflow keeps polling after an accepted manual restart inspecti
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(replayed.response.status, 202);
   assert.equal(instance.restartCalls, 1);
@@ -2749,6 +2916,7 @@ test('Admin IRL Workflow keeps polling after an accepted manual restart inspecti
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(status.response.status, 202);
   assert.equal(instance.restartCalls, 1);
@@ -2762,6 +2930,7 @@ test('Admin IRL starter keeps restart error 10200 pending behind its durable cla
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     harness,
@@ -2777,6 +2946,7 @@ test('Admin IRL starter keeps restart error 10200 pending behind its durable cla
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(result.response.status, 202);
   assert.equal(instance.restartCalls, 1);
@@ -2790,6 +2960,7 @@ test('Admin IRL starter keeps a restart acknowledgement failure pending during a
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     harness,
@@ -2808,6 +2979,7 @@ test('Admin IRL starter keeps a restart acknowledgement failure pending during a
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(result.response.status, 202);
   assert.equal(instance.restartCalls, 1);
@@ -2821,6 +2993,7 @@ test('Admin IRL starter never reissues an ambiguous restart after its grace wind
   await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   await clearPendingWorkflowEffect(
     harness,
@@ -2843,6 +3016,7 @@ test('Admin IRL starter never reissues an ambiguous restart after its grace wind
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
     {
       createDeadline: () => ({
         signal: deadline.signal,
@@ -2859,6 +3033,7 @@ test('Admin IRL starter never reissues an ambiguous restart after its grace wind
   const pending = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(pending.response.status, 202);
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
@@ -2881,6 +3056,7 @@ test('Admin IRL starter never reissues an ambiguous restart after its grace wind
   const replayed = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(replayed.response.status, 502);
   assert.deepEqual(await replayed.response.json(), {
@@ -2903,6 +3079,7 @@ test('Admin IRL status projects completion after a restart acknowledgement race'
   const started = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   const { operationId } = await started.response.json() as { operationId: string };
   await clearPendingWorkflowEffect(harness, operationId);
@@ -2922,12 +3099,14 @@ test('Admin IRL status projects completion after a restart acknowledgement race'
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(result.response.status, 202);
   assert.equal(instance.restartCalls, 1);
   const status = await handleAdminIrlRedeemFinalizeWorkflowStatus(
     apiRequest(ADMIN_IRL_REDEEM_FINALIZE_STATUS_PATH, { operationId }),
     activeEnv,
+    STAFF_AUTH,
   );
   assert.equal(status.response.status, 200);
   assert.equal((await status.response.json() as { deliveryId: number }).deliveryId, 7);
@@ -2941,6 +3120,7 @@ test('Admin IRL starter retains its exact lease after an ambiguous create failur
   const result = await handleAdminIrlRedeemFinalizeWorkflowStart(
     apiRequest('/admin/irl-redeem/finalize', BODY),
     env(harness, binding),
+    STAFF_AUTH,
   );
   const operationId = await adminIrlRedeemFinalizeOperationId(BODY, OWNER);
 
@@ -2968,6 +3148,7 @@ test('Admin IRL starter preserves client cancellation during ambiguous create re
     () => handleAdminIrlRedeemFinalizeWorkflowStart(
       apiRequest('/admin/irl-redeem/finalize', BODY, 'POST', controller.signal),
       env(harness, binding),
+      STAFF_AUTH,
     ),
     (error: unknown) => error === reason,
   );
@@ -2998,6 +3179,7 @@ test('Admin IRL starter preserves client cancellation when create recovery finds
     () => handleAdminIrlRedeemFinalizeWorkflowStart(
       apiRequest('/admin/irl-redeem/finalize', BODY, 'POST', controller.signal),
       env(harness, binding),
+      STAFF_AUTH,
     ),
     (error: unknown) => error === reason,
   );

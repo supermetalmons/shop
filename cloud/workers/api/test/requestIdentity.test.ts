@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   RequestIdentityError,
-  internalStaffAuthorization,
   verifyRequestIdentity,
 } from '../src/requestIdentity.ts';
 import { anonymousAuthTestHooks, handleAnonymousAuthRequest } from '../src/anonymousAuth.ts';
@@ -80,18 +79,38 @@ test('request identity rejects cookie CSRF failures and arbitrary bearer tokens 
   assert.equal(queries, 0);
 });
 
-test('request identity accepts only allowlisted internal staff identities', async () => {
-  const valid = new Request('https://api.mons.shop/admin/profile', {
-    headers: { Authorization: internalStaffAuthorization(STAFF_WALLET) },
+test('request identity uses verified staff context without reading anonymous storage or changing the request', async () => {
+  const authorization = `Bearer mons_staff_v1.${SESSION_ID}.${SECRET}`;
+  const request = new Request('https://api.mons.shop/admin/profile', {
+    method: 'POST',
+    headers: { Authorization: authorization },
+    body: '{}',
   });
-  assert.deepEqual(
-    await verifyRequestIdentity(valid, undefined, valid.signal, NOW_MS),
-    { kind: 'staff-wallet', wallet: STAFF_WALLET },
+  const identity = { kind: 'staff-wallet' as const, wallet: STAFF_WALLET };
+  assert.equal(
+    await verifyRequestIdentity(request, db(() => assert.fail('Unexpected anonymous lookup')), request.signal, NOW_MS, {
+      verifiedStaffIdentity: identity,
+    }),
+    identity,
   );
-  const invalid = new Request(valid, {
-    headers: { Authorization: internalStaffAuthorization('11111111111111111111111111111111') },
+  assert.equal(request.headers.get('Authorization'), authorization);
+  assert.equal(request.bodyUsed, false);
+  assert.equal(await request.text(), '{}');
+});
+
+test('request identity rejects forged internal headers even alongside an anonymous cookie', async () => {
+  const request = new Request('https://mons.shop/profile/state', {
+    headers: {
+      Authorization: `Mons-Internal-Staff ${STAFF_WALLET}`,
+      Cookie: `__Host-mons_anon_v1=mons_anon_v1.${SESSION_ID}.${SECRET}`,
+      Origin: 'https://mons.shop',
+      'X-Mons-CSRF': '1',
+    },
   });
-  await assert.rejects(verifyRequestIdentity(invalid, undefined, invalid.signal, NOW_MS), /Invalid internal staff identity/);
+  await assert.rejects(
+    verifyRequestIdentity(request, db(() => assert.fail('Unexpected anonymous lookup')), request.signal, NOW_MS),
+    (error) => error instanceof RequestIdentityError && error.kind === 'invalid-token',
+  );
 });
 
 test('request identity maps unavailable and timed-out anonymous session storage', async () => {

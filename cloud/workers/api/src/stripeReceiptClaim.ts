@@ -59,7 +59,7 @@ import type {
   StripeReceiptClaimRequest,
   StripeReceiptClaimResult,
 } from '../../../../shared/contracts.js';
-import { RequestIdentityError, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { type RequestAuthContext, RequestIdentityError, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import {
   type ProfileProviderFetch,
 } from './boundedResponse.js';
@@ -1341,6 +1341,7 @@ export async function handleStripeReceiptClaim(
   request: Request,
   env: ClaimEnv,
   defer: DeferredWork,
+  authContext: RequestAuthContext = {},
   overrides: Partial<ClaimDependencies> = {},
 ): Promise<StripeReceiptClaimRequestResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -1356,6 +1357,7 @@ export async function handleStripeReceiptClaim(
     };
   }
   return withAuthenticatedRequest(request, {
+    authContext,
     opsDb: env.OPS_DB,
     timeoutMessage: 'Stripe receipt claim timed out',
     dependencies,

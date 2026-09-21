@@ -18,6 +18,7 @@ import {
 } from './deferredWork.js';
 import { jsonResponse } from './httpResponse.js';
 import {
+  type RequestAuthContext,
   isStaffRequestIdentity,
   RequestIdentityError,
   verifyRequestIdentity,
@@ -64,6 +65,7 @@ type BackfillRequestResult = {
 export async function handleStripeChargebackBackfill(
   request: Request,
   env: BackfillEnv,
+  authContext: RequestAuthContext = {},
   overrides: Partial<BackfillDependencies> = {},
 ): Promise<BackfillRequestResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -78,6 +80,7 @@ export async function handleStripeChargebackBackfill(
     };
   }
   return withAuthenticatedRequest<BackfillRequestResult>(request, {
+    authContext,
     opsDb: env.OPS_DB,
     timeoutMessage: 'Stripe chargeback backfill timed out.',
     dependencies,

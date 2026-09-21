@@ -164,6 +164,7 @@ test('IRL claim handler returns the expected partially signed transaction', asyn
   const result = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '123-456 7890' }),
     env(),
+    {},
     dependencies(),
   );
   assert.equal(result.response.status, 200);
@@ -320,6 +321,7 @@ test('IRL claim enforces deadlines when D1 claim reads ignore the signal', async
     const result = await handleIrlClaimPrepare(
       request({ owner: OWNER.toBase58(), code: '1234567890' }),
       env(),
+      {},
       dependencies({
         loadClaim: async () => mode === 'stalled'
           ? new Promise<Record<string, unknown>>(() => undefined)
@@ -540,6 +542,7 @@ test('IRL claim handler enforces exact bounded requests and method handling', as
   const wrongMethod = await handleIrlClaimPrepare(
     new Request(`https://api.mons.shop${IRL_CLAIM_PREPARE_PATH}`),
     env(),
+    {},
     dependencies({
       verifyIdentity: async () => assert.fail('invalid method reached authentication'),
       nowMs: () => assert.fail('invalid method read the authentication clock'),
@@ -554,7 +557,7 @@ test('IRL claim handler enforces exact bounded requests and method handling', as
     request({ owner: OWNER.toBase58(), code: '1234567890', extra: true }),
     request({ owner: OWNER.toBase58(), code: '1'.repeat(2048) }),
   ]) {
-    const result = await handleIrlClaimPrepare(invalid, env(), dependencies({
+    const result = await handleIrlClaimPrepare(invalid, env(), {}, dependencies({
       verifyIdentity: async () => assert.fail('invalid request reached authentication'),
       nowMs: () => assert.fail('invalid request read the authentication clock'),
     }));
@@ -565,6 +568,7 @@ test('IRL claim handler enforces exact bounded requests and method handling', as
   const invalidCode = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: 'abc1234567890' }),
     env(),
+    {},
     dependencies(),
   );
   assert.equal(invalidCode.response.status, 400);
@@ -575,6 +579,7 @@ test('IRL claim handler rejects authentication and wallet-session mismatches', a
   const unauthenticated = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     env(),
+    {},
     dependencies({
       verifyIdentity: async () => {
         throw new RequestIdentityError('invalid-token');
@@ -587,6 +592,7 @@ test('IRL claim handler rejects authentication and wallet-session mismatches', a
   const mismatch = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     env(),
+    {},
     dependencies({ loadBoundWallet: async () => Keypair.generate().publicKey.toBase58() }),
   );
   assert.equal(mismatch.response.status, 403);
@@ -597,6 +603,7 @@ test('IRL claim handler preserves missing and legacy claim resolution outcomes',
   const missing = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     env(),
+    {},
     dependencies({ loadClaim: async () => null }),
   );
   assert.equal(missing.response.status, 404);
@@ -604,6 +611,7 @@ test('IRL claim handler preserves missing and legacy claim resolution outcomes',
   const legacy = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     env(),
+    {},
     dependencies({
       loadClaim: async () => ({ boxId: 7, dudeIds: [1, 2, 3] }),
       resolveLegacyDropIds: async () => [DROP_ID],
@@ -614,6 +622,7 @@ test('IRL claim handler preserves missing and legacy claim resolution outcomes',
   const ambiguous = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     env(),
+    {},
     dependencies({
       loadClaim: async () => ({ boxId: 7, dudeIds: [1, 2, 3] }),
       resolveLegacyDropIds: async () => [DROP_ID, 'other_drop'],
@@ -626,6 +635,7 @@ test('IRL claim handler rejects already-used, invalid proof, and cosigner mismat
   const alreadyUsed = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     env(),
+    {},
     dependencies({
       fetchOwnedAssets: async () => [
         certificateAsset(),
@@ -645,6 +655,7 @@ test('IRL claim handler rejects already-used, invalid proof, and cosigner mismat
   const wrongTree = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     env(),
+    {},
     dependencies({
       fetchAssetProof: async () => ({
         tree_id: Keypair.generate().publicKey.toBase58(),
@@ -658,6 +669,7 @@ test('IRL claim handler rejects already-used, invalid proof, and cosigner mismat
   const wrongCosigner = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     { ...env(), COSIGNER_SECRET: bs58.encode(Keypair.generate().secretKey) },
+    {},
     dependencies(),
   );
   assert.equal(wrongCosigner.response.status, 409);
@@ -669,6 +681,7 @@ test('IRL claim handler returns a stable deadline error', async () => {
   const timedOut = await handleIrlClaimPrepare(
     request({ owner: OWNER.toBase58(), code: '1234567890' }),
     env(),
+    {},
     dependencies({
       timeoutMs: 5,
       verifyIdentity: async (_authorization: string | null, _fetch: unknown, signal: AbortSignal) =>

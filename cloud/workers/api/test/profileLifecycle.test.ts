@@ -254,8 +254,8 @@ function legacyFirestoreFixtureRepository(harness: LegacyFirestoreCommerceHarnes
 function dependencies(
   harness: LegacyFirestoreCommerceHarness,
   timeoutMs = 500,
-  overrides: Partial<Parameters<typeof handleProfileLifecycleRequest>[3]> = {},
-): Parameters<typeof handleProfileLifecycleRequest>[3] {
+  overrides: Partial<Parameters<typeof handleProfileLifecycleRequest>[4]> = {},
+): Parameters<typeof handleProfileLifecycleRequest>[4] {
   const d1Session = () => harness.session
     ? {
         authSubject: UID,
@@ -334,6 +334,7 @@ test('Solana auth validates origin-bound signatures and persists the D1 session 
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
+    {},
     dependencies(harness, 500, {
       upsertProfile: async (_db, input) => {
         profile = input;
@@ -354,7 +355,7 @@ test('Solana auth validates origin-bound signatures and persists the D1 session 
     request(SOLANA_AUTH_PATH, signInBody(), ''),
     request(SOLANA_AUTH_PATH, { ...signInBody(), signature: Array(64).fill(0) }),
   ]) {
-    const rejected = await handleProfileLifecycleRequest(authRequest, env(), SOLANA_AUTH_PATH, dependencies(new LegacyFirestoreCommerceHarness()));
+    const rejected = await handleProfileLifecycleRequest(authRequest, env(), SOLANA_AUTH_PATH, {}, dependencies(new LegacyFirestoreCommerceHarness()));
     assert.ok([401, 403].includes(rejected.response.status));
   }
 });
@@ -365,6 +366,7 @@ test('Solana auth keeps its committed session retryable when D1 profile persiste
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
+    {},
     dependencies(harness, 500, {
       upsertProfile: async () => {
         throw new Error('private D1 failure');
@@ -387,6 +389,7 @@ test('Solana auth applies the request deadline to D1 profile persistence', async
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
+    {},
     dependencies(new LegacyFirestoreCommerceHarness(), 5, {
       defer: deferred.defer,
       upsertProfile: async () => persistence,
@@ -406,6 +409,7 @@ test('D1 wallet-session mode persists without Commerce session access', async ()
     request(SOLANA_AUTH_PATH, signInBody()),
     { ...env(), OPS_DB: {} as D1Database },
     SOLANA_AUTH_PATH,
+    {},
     dependencies(d1Harness, 500, {
       establishD1AuthWalletBinding: async (args) => {
         establishedWallet = args.wallet;
@@ -431,6 +435,7 @@ test('Solana auth preserves D1 superseded and busy response contracts', async ()
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
+    {},
     dependencies(new LegacyFirestoreCommerceHarness(), 500, {
       establishD1AuthWalletBinding: async () => { throw new AuthWalletBindingD1SupersededError(); },
     }),
@@ -449,6 +454,7 @@ test('Solana auth preserves D1 superseded and busy response contracts', async ()
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
+    {},
     dependencies(new LegacyFirestoreCommerceHarness(), 500, {
       establishD1AuthWalletBinding: async () => { throw new AuthWalletBindingD1BusyError(); },
     }),
@@ -479,6 +485,7 @@ test('D1 reconciliation holds and releases its lease without reading Commerce se
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
     { ...env(), COMMERCE_DB: commerceHarness.db, OPS_DB: {} as D1Database },
     PROFILE_RECONCILE_PATH,
+    {},
     dependencies(identityHarness, 500, {
       acquireAuthWalletBindingReconcileLease: async () => ({
         id: '00000000-0000-4000-8000-000000000001',
@@ -521,6 +528,7 @@ test('D1 reconciliation releases a deterministic lease after an abort-caused unk
       incoming,
       env(),
       PROFILE_RECONCILE_PATH,
+      {},
       dependencies(new LegacyFirestoreCommerceHarness(), 500, {
         acquireAuthWalletBindingReconcileLease: async (args) => {
           acquiredLeaseId = args.leaseId || '';
@@ -550,6 +558,7 @@ test('D1 reconciliation preserves an independent acquisition error after a disco
     incoming,
     env(),
     PROFILE_RECONCILE_PATH,
+    {},
     dependencies(new LegacyFirestoreCommerceHarness(), 500, {
       acquireAuthWalletBindingReconcileLease: async () => {
         controller.abort(new Error('near-simultaneous disconnect'));
@@ -569,6 +578,7 @@ test('staff reconciliation uses its wallet directly and skips legacy Auth order 
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
     env(),
     PROFILE_RECONCILE_PATH,
+    {},
     dependencies(new LegacyFirestoreCommerceHarness(), 500, {
       acquireAuthWalletBindingReconcileLease: async () => assert.fail('staff identity acquired a Auth reconciliation lease'),
       resolveD1AuthWalletBinding: async () => assert.fail('staff identity resolved a Auth wallet session'),
@@ -584,6 +594,7 @@ test('staff principals cannot enter the Auth wallet-binding route', async () => 
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
+    {},
     dependencies(new LegacyFirestoreCommerceHarness(), 500, {
       loadD1AuthWalletBinding: async () => assert.fail('staff identity reached Auth wallet-session loading'),
       verifyIdentity: async () => ({ kind: 'staff-wallet' as const, wallet: OWNER }),
@@ -601,6 +612,7 @@ test('anonymous principals cannot bind an allowlisted staff wallet', async () =>
     request(SOLANA_AUTH_PATH, signInBody()),
     env(),
     SOLANA_AUTH_PATH,
+    {},
     dependencies(new LegacyFirestoreCommerceHarness(), 500, {
       isStaffWallet: (wallet) => wallet === OWNER,
       loadD1AuthWalletBinding: async () => assert.fail('allowlisted staff wallet reached Auth wallet-session loading'),
@@ -697,6 +709,7 @@ test('profile reconciliation merges multiple session-validated batches and is id
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
     d1Env,
     PROFILE_RECONCILE_PATH,
+    {},
     d1Dependencies,
   );
   assert.equal(first.response.status, 200);
@@ -734,6 +747,7 @@ test('profile reconciliation merges multiple session-validated batches and is id
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
     d1Env,
     PROFILE_RECONCILE_PATH,
+    {},
     d1Dependencies,
   );
   assert.deepEqual(await second.response.json(), { mergedStripeDeliveryOrders: 0 });
@@ -755,6 +769,7 @@ test('profile reconciliation retries transaction conflicts', async () => {
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true, includeDeliveryRecovery: false }),
     env(),
     PROFILE_RECONCILE_PATH,
+    {},
     dependencies(retry),
   );
   assert.deepEqual(await retryResult.response.json(), { mergedStripeDeliveryOrders: 1 });
@@ -767,6 +782,7 @@ test('profile reconciliation rejects invalid collection-group paths before write
     request(PROFILE_RECONCILE_PATH, { mergeStripeDeliveryOrders: true }),
     env(),
     PROFILE_RECONCILE_PATH,
+    {},
     dependencies(invalid),
   );
   assert.equal(invalidResult.response.status, 409);
@@ -784,6 +800,7 @@ test('profile reconciliation rejects invalid collection-group paths before write
     request(PROFILE_RECONCILE_PATH, {}),
     env(),
     PROFILE_RECONCILE_PATH,
+    {},
     dependencies(recovery),
   );
   assert.deepEqual(await recoveryResult.response.json(), {
@@ -797,6 +814,7 @@ test('profile lifecycle responses never expose credentials or bearer tokens', as
     request(PROFILE_RECONCILE_PATH, {}),
     { COMMERCE_DB: createCommerceD1() },
     PROFILE_RECONCILE_PATH,
+    {},
     {
       ...dependencies(new LegacyFirestoreCommerceHarness()),
       verifyIdentity: async () => ({ kind: 'anonymous' as const, authSubject: UID }),
@@ -813,6 +831,7 @@ test('profile lifecycle enforces exact bodies and stable deadlines', async () =>
     request(PROFILE_RECONCILE_PATH, { includeDeliveryRecovery: true, extra: true }),
     env(),
     PROFILE_RECONCILE_PATH,
+    {},
     dependencies(new LegacyFirestoreCommerceHarness()),
   );
   assert.equal(malformed.response.status, 400);
@@ -821,6 +840,7 @@ test('profile lifecycle enforces exact bodies and stable deadlines', async () =>
     request(PROFILE_RECONCILE_PATH, {}),
     env(),
     PROFILE_RECONCILE_PATH,
+    {},
     {
       ...dependencies(new LegacyFirestoreCommerceHarness()),
       timeoutMs: 5,

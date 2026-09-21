@@ -41,6 +41,7 @@ import { STRIPE_OFFCHAIN_DELIVERY_ORDER_SOURCE } from '../../../../shared/fulfil
 import { isStripeChargebackSessionId } from '../../../../shared/stripeChargebacks.js';
 import { loadStripeChargebackSessionIds } from './stripeChargebackStore.js';
 import {
+  type RequestAuthContext,
   RequestIdentityError,
   isStaffOnlyApiPath,
   isStaffRequestIdentity,
@@ -777,6 +778,7 @@ export async function handleProfileReadRequest(
   request: Request,
   env: ProfileReadEnv,
   path: ProfileReadPath,
+  authContext: RequestAuthContext = {},
   overrides: Partial<ProfileReadDependencies> = {},
 ): Promise<ProfileReadResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -791,6 +793,7 @@ export async function handleProfileReadRequest(
     };
   }
   return withAuthenticatedRequest<ProfileReadResult>(request, {
+    authContext,
     opsDb: env.OPS_DB,
     timeoutMessage: 'Profile request timed out',
     dependencies,

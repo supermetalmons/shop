@@ -60,7 +60,7 @@ import {
   calculateDeliveryLamports,
   normalizeDeliveryUnitsPerBox,
 } from '../../../../shared/shipping.js';
-import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { type RequestAuthContext, RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
 import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
@@ -1110,6 +1110,7 @@ const defaultDependencies: DeliveryPrepareDependencies = {
 export async function handleDeliveryPrepare(
   request: Request,
   env: DeliveryPrepareEnv,
+  authContext: RequestAuthContext = {},
   overrides: Partial<DeliveryPrepareDependencies> = {},
 ): Promise<DeliveryPrepareResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -1124,6 +1125,7 @@ export async function handleDeliveryPrepare(
     };
   }
   return withAuthenticatedRequest<DeliveryPrepareResult>(request, {
+    authContext,
     opsDb: env.OPS_DB,
     timeoutMessage: 'Delivery preparation request timed out',
     dependencies,

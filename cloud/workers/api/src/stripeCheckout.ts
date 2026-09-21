@@ -27,6 +27,7 @@ import {
 } from '../../../../shared/contracts.js';
 import type { StripeCheckoutMode } from '../../../../shared/stripeCheckoutCore.js';
 import {
+  type RequestAuthContext,
   RequestIdentityError,
   verifyRequestIdentity,
   type RequestIdentity,
@@ -441,6 +442,7 @@ async function createStripeProviderSession(
 export async function handleStripeCheckoutSession(
   request: Request,
   env: CheckoutEnv,
+  authContext: RequestAuthContext = {},
   overrides: Partial<CheckoutDependencies> = {},
 ): Promise<StripeCheckoutResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -455,6 +457,7 @@ export async function handleStripeCheckoutSession(
     };
   }
   return withAuthenticatedRequest<StripeCheckoutResult>(request, {
+    authContext,
     opsDb: env.OPS_DB,
     timeoutMessage: 'Checkout request timed out',
     dependencies,

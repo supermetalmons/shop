@@ -51,7 +51,7 @@ import {
   isBase58Bytes,
   isNonZeroBase58Bytes,
 } from '../../../../shared/solanaRpcProxy.js';
-import { RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { type RequestAuthContext, RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
 import {
   isRequestCancellationError,
@@ -1478,6 +1478,7 @@ export async function handleDeliveryReceiptRequest(
   env: DeliveryReceiptsEnv,
   path: typeof DELIVERY_RECEIPTS_ISSUE_PATH | typeof DELIVERY_RECEIPTS_RECOVER_PATH,
   defer: DeferredWork,
+  authContext: RequestAuthContext = {},
   overrides: Partial<DeliveryReceiptDependencies> = {},
 ): Promise<DeliveryReceiptRequestResult> {
   const dependencies = { ...defaultDependencies, ...overrides };
@@ -1492,6 +1493,7 @@ export async function handleDeliveryReceiptRequest(
     };
   }
   return withAuthenticatedRequest(request, {
+    authContext,
     opsDb: env.OPS_DB,
     timeoutMessage: 'Delivery receipt request timed out',
     dependencies,

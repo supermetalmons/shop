@@ -15,6 +15,7 @@ import type {
   UpdateFulfillmentAddressResponse,
 } from '../../../../shared/contracts.js';
 import {
+  type RequestAuthContext,
   RequestIdentityError,
   isStaffOnlyApiPath,
   isStaffRequestIdentity,
@@ -354,6 +355,7 @@ export async function handleProfileWriteRequest(
   request: Request,
   env: ProfileWriteEnv,
   path: ProfileWritePath,
+  authContext: RequestAuthContext = {},
   overrides: Partial<ProfileWriteDependencies> = {},
 ): Promise<ProfileWriteResult> {
   const route = profileWriteOperations.get(path)!;
@@ -365,6 +367,7 @@ export async function handleProfileWriteRequest(
     return { response, metrics: { upstreamCalls: 0, providerDurationMs: 0 }, authOutcome: 'rejected' };
   }
   return withAuthenticatedRequest<ProfileWriteResult>(request, {
+    authContext,
     opsDb: env.OPS_DB,
     timeoutMessage: 'Profile request timed out',
     dependencies,

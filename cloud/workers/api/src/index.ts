@@ -7,10 +7,7 @@ import {
   StaffAuthError,
   verifyStaffSession,
 } from './staffWalletAuth.js';
-import {
-  internalStaffAuthorization,
-  isInternalStaffAuthorization,
-} from './requestIdentity.js';
+import type { RequestAuthContext } from './requestIdentity.js';
 import { loadCommerceAuthorityControl } from './commerceRepository.js';
 import {
   SCHEDULED_RECONCILIATION_TIMEOUT_MS,
@@ -218,7 +215,7 @@ async function dispatchRequest(
   const strictOriginDenied = strictPublicOriginDeniedResponse(route, request);
   if (strictOriginDenied) return { response: strictOriginDenied };
 
-  let staffAuthenticated = false;
+  let authContext: RequestAuthContext = {};
   if (route.staff !== 'skip') {
     const authorization = request.headers.get('Authorization');
     if (isStaffSessionAuthorization(authorization)) {
@@ -227,11 +224,7 @@ async function dispatchRequest(
           verifyStaffSession(authorization, env.OPS_DB),
           request.signal,
         );
-        staffAuthenticated = true;
-        const headers = new Headers(request.headers);
-        headers.set('Authorization', internalStaffAuthorization(staffSession.wallet));
-        const authenticatedRequest = new Request(request, { headers });
-        request = authenticatedRequest;
+        authContext = { verifiedStaffIdentity: { kind: 'staff-wallet', wallet: staffSession.wallet } };
       } catch (error) {
         if (request.signal.aborted && error === request.signal.reason) throw error;
         if (error instanceof StaffAuthError && error.code === 'unauthenticated') {
@@ -261,15 +254,10 @@ async function dispatchRequest(
           logFields: { profileAuthOutcome: 'provider-failure' },
         };
       }
-    } else if (isInternalStaffAuthorization(authorization)) {
-      const headers = new Headers(request.headers);
-      headers.delete('Authorization');
-      const internalRequest = new Request(request, { headers });
-      request = internalRequest;
     }
   }
 
-  if (request.method !== 'OPTIONS' && route.staff === 'required' && !staffAuthenticated) {
+  if (request.method !== 'OPTIONS' && route.staff === 'required' && !authContext.verifiedStaffIdentity) {
     return {
       response: applyProfileCors(request, publicJsonResponse({
         ok: false,
@@ -305,6 +293,7 @@ async function dispatchRequest(
   }
 
   const result = await route.dispatch({
+    authContext,
     defer,
     dependencies,
     env,
