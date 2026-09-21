@@ -10,7 +10,6 @@ import {
   initializeCommerceInventory,
   seedCommerceDocument,
   seedCommerceDocuments,
-  type CommerceD1CallObservation,
 } from './commerceD1Harness.ts';
 import {
   createDeferredWorkCollector,
@@ -23,8 +22,13 @@ import {
   BOX_MINTER_CONFIG_ACCOUNT_SIZE_DROP_SEED,
   BOX_MINTER_CONFIG_DISCRIMINATOR,
 } from '../../../../shared/boxMinterConfigCodec.ts';
-import { IRL_CLAIM_CODE_NAMESPACE, IRL_CLAIM_CODE_DIGITS } from '../src/claimCodes.ts';
+import { IRL_CLAIM_CODE_DIGITS } from '../src/claimCodes.ts';
 import { readCommerceRecord, requireCommerceKey } from '../src/commerceTransactions.ts';
+import {
+  deliveryOrderKey,
+  persistPendingReceiptSubmission,
+  settlePendingReceiptSubmission,
+} from '../src/deliveryReceiptStore.ts';
 import { assignDudesForBox } from '../src/deliveryDudeAssignments.ts';
 import { secureRandomInt } from '../src/deliveryRandom.ts';
 import {
@@ -44,49 +48,11 @@ import { MPL_CORE_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddres
 import { RequestIdentityError } from '../src/requestIdentity.ts';
 import { registerDeferredWork } from '../src/deferredWork.ts';
 import { publishReadyToShipNotifications } from '../src/readyToShipNotificationOutbox.ts';
-import {
-  READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD,
-  READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD,
-  READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD,
-} from '../src/readyToShipNotifications.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
-
-const OWNER = Keypair.generate().publicKey.toBase58();
-const SIGNATURE = bs58.encode(new Uint8Array(64).fill(7));
-const SECOND_SIGNATURE = bs58.encode(new Uint8Array(64).fill(8));
-const READY_NOTIFICATION_NOW_MS = 1_700_000_000_000;
-const READY_NOTIFICATION_RETRY_UNTIL_MS = 8_000_000_000_000;
-function notificationQueue(overrides: Partial<Queue> = {}): Queue {
-  const metrics = { backlogCount: 0, backlogBytes: 0 };
-  return {
-    metrics: async () => metrics,
-    send: async () => ({ metadata: { metrics } }),
-    sendBatch: async () => ({ metadata: { metrics } }),
-    ...overrides,
-  };
-}
-
-function readyNotificationOrderFields(deliveryId: number, includeShipper = false): Record<string, unknown> {
-  return {
-    dropId: 'card_nft_2',
-    deliveryId,
-    owner: OWNER,
-    status: 'ready_to_ship',
-    processedAt: 1_700_000_000_000,
-    addressSnapshot: { email: 'buyer@example.com' },
-    items: [{ kind: 'box', refId: deliveryId }],
-    buyerOrderReceivedEmailState: 'pending',
-    buyerOrderReceivedEmailJobId: `00000000-0000-4000-8000-${String(deliveryId).padStart(12, '0')}`,
-    buyerOrderReceivedEmailIdempotencyKey: `card_nft_2:${deliveryId}:order_received`,
-    [READY_TO_SHIP_NOTIFICATION_RETRY_UNTIL_MS_FIELD]: READY_NOTIFICATION_RETRY_UNTIL_MS,
-    [READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD]: 0,
-    ...(includeShipper ? {
-      shipperReadyToShipEmailState: 'pending',
-      shipperReadyToShipEmailJobId: `00000000-0000-4000-9000-${String(deliveryId).padStart(12, '0')}`,
-      shipperReadyToShipEmailIdempotencyKey: `card_nft_2:${deliveryId}:ready_to_ship`,
-    } : {}),
-  };
-}
+import {
+  OWNER, SIGNATURE, READY_NOTIFICATION_NOW_MS,
+  nativeDeliveryContext, notificationQueue, readyNotificationOrderFields, deliveryCleanupContext,
+} from './deliveryStoreTestSupport.ts';
 
 function receiptAuthDatabase(): D1Database {
   const database = new DatabaseSync(':memory:');
@@ -296,27 +262,6 @@ test('recovery route accepts the empty filter and reports recovery metrics', asy
   assert.equal(payload.walletRecovery.nextCheckAt, null);
 });
 
-async function nativeDeliveryContext(
-  fields: Record<string, unknown>,
-  options: Parameters<typeof createCommerceD1Harness>[0] = {},
-) {
-  const harness = createCommerceD1Harness(options);
-  const repository = new D1CommerceRepository(harness.db);
-  await repository.run(READY_NOTIFICATION_NOW_MS, async (unit) => {
-    await unit.create(commerceKeys.deliveryOrder('card_nft_2', '7'), fields as any);
-  });
-  return {
-    harness,
-    context: {
-      repository,
-      nowMs: READY_NOTIFICATION_NOW_MS,
-      providerFetch: async () => assert.fail('commerce persistence must not use provider fetch'),
-      signal: new AbortController().signal,
-      dataDb: undefined as D1Database | undefined,
-    },
-  };
-}
-
 test('unfiltered recovery uses indexed owner candidates, identity filtering, ordering, and the attempt cap', async () => {
   const harness = createCommerceD1Harness();
   let pendingBatch = Promise.resolve();
@@ -399,69 +344,6 @@ test('unfiltered recovery uses indexed owner candidates, identity filtering, ord
   assert.equal(recoveryQueries, 2);
 });
 
-test('native ready-to-ship persistence includes notification and pack-status outboxes', async () => {
-  for (const signal of [new AbortController().signal, AbortSignal.abort(new Error('request cancelled'))]) {
-    const runtime = deliveryReceiptTestHooks.runtimeForDrop('card_nft_2');
-    const native = await nativeDeliveryContext({
-      deliveryId: 7,
-      owner: OWNER,
-      status: 'processing',
-      addressSnapshot: { email: 'buyer@example.com' },
-      items: [{ kind: 'box', refId: 3 }],
-    });
-    const document = await readCommerceRecord(
-      native.context,
-      requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
-    );
-    assert.ok(document);
-    native.context.signal = signal;
-    await deliveryReceiptTestHooks.markDeliveryReady(native.context, document, runtime, {
-      signature: SIGNATURE,
-      receiptsMinted: 1,
-      receiptTxs: [SIGNATURE],
-      irlClaims: [],
-    });
-    const ready = await readCommerceRecord(
-      native.context,
-      requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
-    );
-    assert.equal(ready?.data.status, 'ready_to_ship');
-    assert.equal(ready?.data.buyerOrderReceivedEmailState, 'pending');
-    assert.equal(ready?.data.shipperReadyToShipEmailState, 'pending');
-    assert.equal(ready?.data.packStatusProjectionState, 'pending');
-    assert.equal(ready?.data.packStatusProjectionNextAttemptAtMs, READY_NOTIFICATION_NOW_MS);
-  }
-});
-
-test('native ready-notification publication claims, queues, and finalizes atomically', async () => {
-  const native = await nativeDeliveryContext(readyNotificationOrderFields(7));
-  const document = await readCommerceRecord(
-    native.context,
-    requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
-  );
-  assert.ok(document);
-  const jobs: unknown[] = [];
-  assert.equal(await publishReadyToShipNotifications({
-    context: native.context,
-    deliveryId: 7,
-    document,
-    dropId: 'card_nft_2',
-    queue: notificationQueue({
-      sendBatch: async (messages) => {
-        jobs.push(...Array.from(messages, (message) => message.body));
-        return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
-      },
-    }),
-  }), true);
-  const finalized = await readCommerceRecord(
-    native.context,
-    requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
-  );
-  assert.equal(jobs.length, 1);
-  assert.equal(finalized?.data.buyerOrderReceivedEmailState, 'queued');
-  assert.equal(finalized?.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
-});
-
 test('receipt API reports notification claim read failures as unavailable without enqueueing', async (context) => {
   let failClaimReads = false;
   let failedReads = 0;
@@ -515,42 +397,6 @@ test('receipt API reports notification claim read failures as unavailable withou
   assert.equal(queueCalls, 0);
   assert.equal(result.response.status, 503);
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'unavailable');
-});
-
-test('pre-enqueue cancellation releases the ready-notification claim and attempt', async () => {
-  const native = await nativeDeliveryContext(readyNotificationOrderFields(7));
-  const document = await readCommerceRecord(
-    native.context,
-    requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
-  );
-  assert.ok(document);
-  const cancellation = new DOMException('request cancelled', 'AbortError');
-  const controller = new AbortController();
-  controller.abort(cancellation);
-  native.context.signal = controller.signal;
-  let queueCalls = 0;
-  await assert.rejects(
-    publishReadyToShipNotifications({
-      context: native.context,
-      deliveryId: 7,
-      document,
-      dropId: 'card_nft_2',
-      queue: notificationQueue({
-        sendBatch: async () => {
-          queueCalls += 1;
-          return { metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } };
-        },
-      }),
-    }),
-    (error: unknown) => error === cancellation,
-  );
-  const released = await readCommerceRecord(
-    native.context,
-    requireCommerceKey('drops/card_nft_2/deliveryOrders/7'),
-  );
-  assert.equal(queueCalls, 0);
-  assert.equal(released?.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_ATTEMPT_COUNT_FIELD], 0);
-  assert.equal(released?.data[READY_TO_SHIP_NOTIFICATION_PUBLISH_CLAIM_ID_FIELD], undefined);
 });
 
 test('receipt routes reject methods and strict invalid payloads before service execution', async () => {
@@ -715,43 +561,6 @@ test('existing assignment revalidates paused authority before returning', async 
     (error: unknown) =>
       error instanceof DeliveryReceiptError && error.code === 'unavailable',
   );
-});
-
-test('pending ready recovery queries all outbox marker states', async () => {
-  const native = await nativeDeliveryContext(readyNotificationOrderFields(7, true));
-  const result = await deliveryReceiptTestHooks.runPendingReadyNotificationQuery(native.context, OWNER);
-  assert.equal(result.length, 1);
-  assert.equal(result[0].data.buyerOrderReceivedEmailState, 'pending');
-  assert.equal(result[0].data.shipperReadyToShipEmailState, 'pending');
-});
-
-test('pending ready recovery pages past malformed identities', async () => {
-  const harness = createCommerceD1Harness();
-  const repository = new D1CommerceRepository(harness.db);
-  await repository.run(READY_NOTIFICATION_NOW_MS, async (unit) => {
-    for (let deliveryId = 1; deliveryId <= 8; deliveryId += 1) {
-      await unit.create(
-        commerceKeys.deliveryOrder('card_nft_2', String(deliveryId)),
-        {
-          ...readyNotificationOrderFields(deliveryId),
-          deliveryId: 999,
-        } as any,
-      );
-    }
-    await unit.create(
-      commerceKeys.deliveryOrder('card_nft_2', '9'),
-      readyNotificationOrderFields(9) as any,
-    );
-  });
-  const context = {
-    repository: new D1CommerceRepository(harness.db),
-    nowMs: READY_NOTIFICATION_NOW_MS,
-    providerFetch: async () => assert.fail('commerce persistence must not use provider fetch'),
-    signal: new AbortController().signal,
-    dataDb: undefined as D1Database | undefined,
-  };
-  const result = await deliveryReceiptTestHooks.runPendingReadyNotificationQuery(context, OWNER);
-  assert.deepEqual(result.map((document) => document.key.documentId), ['9']);
 });
 
 test('receipt routes enforce bounded JSON and required runtime configuration', async () => {
@@ -1076,119 +885,6 @@ test('receipt wallet binding preserves the error that wins an abort race', async
   );
 });
 
-test('receipt submissions are persisted before broadcast and promoted idempotently', async () => {
-  const native = await nativeDeliveryContext({
-    deliveryId: 7,
-    owner: OWNER,
-    status: 'processing',
-    receiptTxs: [SIGNATURE],
-  });
-  const path = 'drops/card_nft_2/deliveryOrders/7';
-  const pending = {
-    signature: SECOND_SIGNATURE,
-    blockhash: Keypair.generate().publicKey.toBase58(),
-    lastValidBlockHeight: 123,
-    assetIds: [Keypair.generate().publicKey.toBase58()],
-  };
-
-  await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
-  let stored = await readCommerceRecord(native.context, requireCommerceKey(path));
-  assert.deepEqual(
-    (stored?.data.receiptRecovery as Record<string, unknown>).pendingSubmission,
-    pending,
-  );
-  assert.deepEqual(stored?.data.receiptTxs, [SIGNATURE]);
-
-  await deliveryReceiptTestHooks.settlePendingReceiptSubmission(
-    native.context,
-    path,
-    pending,
-    'confirmed',
-  );
-  await deliveryReceiptTestHooks.settlePendingReceiptSubmission(
-    native.context,
-    path,
-    pending,
-    'confirmed',
-  );
-
-  stored = await readCommerceRecord(native.context, requireCommerceKey(path));
-  assert.deepEqual(stored?.data.receiptTxs, [SIGNATURE, SECOND_SIGNATURE]);
-  assert.deepEqual(
-    deliveryReceiptTestHooks.confirmedReceiptTransactions(stored?.data || {}),
-    [SIGNATURE, SECOND_SIGNATURE],
-  );
-  assert.equal((stored?.data.receiptRecovery as Record<string, unknown> | undefined)?.pendingSubmission, undefined);
-});
-
-test('receipt submission intent recovers a lost D1 commit acknowledgement', async () => {
-  let armed = false;
-  const native = await nativeDeliveryContext({
-    deliveryId: 7,
-    owner: OWNER,
-    status: 'processing',
-  }, {
-    observeBatchAfterCommit: (observation) => {
-      if (!armed || !observation.statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))) return;
-      armed = false;
-      throw new Error('lost receipt intent acknowledgement');
-    },
-  });
-  const path = 'drops/card_nft_2/deliveryOrders/7';
-  const pending = {
-    signature: SIGNATURE,
-    blockhash: Keypair.generate().publicKey.toBase58(),
-    lastValidBlockHeight: 123,
-    assetIds: [Keypair.generate().publicKey.toBase58()],
-  };
-
-  armed = true;
-  await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
-
-  const stored = await readCommerceRecord(native.context, requireCommerceKey(path));
-  assert.deepEqual(
-    (stored?.data.receiptRecovery as Record<string, unknown>).pendingSubmission,
-    pending,
-  );
-});
-
-test('confirmed receipt settlement survives a lost D1 acknowledgement and replay', async () => {
-  let armed = false;
-  let lostAcknowledgement = false;
-  const native = await nativeDeliveryContext({
-    deliveryId: 7,
-    owner: OWNER,
-    status: 'processing',
-    receiptTxs: [SIGNATURE],
-  }, {
-    observeBatchAfterCommit: ({ statements }) => {
-      if (!armed || !statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))) return;
-      armed = false;
-      lostAcknowledgement = true;
-      throw new Error('lost confirmed receipt settlement acknowledgement');
-    },
-  });
-  const path = 'drops/card_nft_2/deliveryOrders/7';
-  const pending = {
-    signature: SECOND_SIGNATURE,
-    blockhash: Keypair.generate().publicKey.toBase58(),
-    lastValidBlockHeight: 123,
-    assetIds: [Keypair.generate().publicKey.toBase58()],
-  };
-  await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
-
-  armed = true;
-  await deliveryReceiptTestHooks.settlePendingReceiptSubmission(native.context, path, pending, 'confirmed');
-  assert.equal(lostAcknowledgement, true);
-  const settled = await readCommerceRecord(native.context, requireCommerceKey(path));
-  assert.deepEqual(settled?.data.receiptTxs, [SIGNATURE, SECOND_SIGNATURE]);
-  assert.equal((settled?.data.receiptRecovery as Record<string, unknown>).pendingSubmission, undefined);
-
-  await deliveryReceiptTestHooks.settlePendingReceiptSubmission(native.context, path, pending, 'confirmed');
-  const replayed = await readCommerceRecord(native.context, requireCommerceKey(path));
-  assert.deepEqual(replayed, settled);
-});
-
 test('receipt submission recovery confirms only when every asset account is absent', async () => {
   const pending = {
     signature: SIGNATURE,
@@ -1231,193 +927,6 @@ test('receipt confirmation polling accepts rooted legacy signature statuses', as
     assert.deepEqual(result, { ok: true });
     assert.equal(transactionLookups, 0);
   }
-});
-
-test('expired receipt submissions clear without being promoted', async () => {
-  const native = await nativeDeliveryContext({
-    deliveryId: 7,
-    owner: OWNER,
-    status: 'processing',
-  });
-  const path = 'drops/card_nft_2/deliveryOrders/7';
-  const pending = {
-    signature: SIGNATURE,
-    blockhash: Keypair.generate().publicKey.toBase58(),
-    lastValidBlockHeight: 123,
-    assetIds: [Keypair.generate().publicKey.toBase58()],
-  };
-  await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
-  await deliveryReceiptTestHooks.settlePendingReceiptSubmission(
-    native.context,
-    path,
-    pending,
-    'expired',
-  );
-  const stored = await readCommerceRecord(native.context, requireCommerceKey(path));
-  assert.equal((stored?.data.receiptRecovery as Record<string, unknown>).pendingSubmission, undefined);
-  assert.deepEqual(stored?.data.receiptTxs, undefined);
-});
-
-test('receipt persistence, settlement, and cancellation each read their document once', async () => {
-  for (const operation of ['persist', 'settle', 'cancel']) {
-    const calls: CommerceD1CallObservation[] = [];
-    const pending = {
-      signature: SIGNATURE,
-      blockhash: Keypair.generate().publicKey.toBase58(),
-      lastValidBlockHeight: 123,
-      assetIds: [Keypair.generate().publicKey.toBase58()],
-    };
-    const native = await nativeDeliveryContext({
-      deliveryId: 7,
-      status: 'processing',
-      receiptRecovery: {
-        pendingSubmission: pending,
-        attemptCount: 2,
-        lastAttemptAt: 100,
-        leaseExpiresAt: 200,
-      },
-    }, { observeCall: (call) => calls.push(call) });
-    calls.length = 0;
-    const path = 'drops/card_nft_2/deliveryOrders/7';
-    if (operation === 'persist') {
-      await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
-    } else if (operation === 'settle') {
-      await deliveryReceiptTestHooks.settlePendingReceiptSubmission(native.context, path, pending, 'confirmed');
-    } else {
-      await deliveryReceiptTestHooks.cancelDeliveryRecoveryAttempt(native.context, path, {
-        attemptCount: 2,
-        lastAttemptAtMs: 100,
-        leaseExpiresAtMs: 200,
-        previousAttemptCount: 1,
-        previousLastAttemptAt: 50,
-      });
-    }
-    const reads = calls.flatMap((call) => call.method === 'batch' ? call.statements : [call])
-      .filter(({ sql }) => sql.includes('document_json') && /\b(?:FROM|JOIN) commerce_documents\b/.test(sql));
-    assert.equal(reads.length, 1, operation);
-  }
-});
-
-test('receipt retries preserve a competing submission and recovery lease', async () => {
-  for (const operation of ['persist', 'settle', 'cancel']) {
-    const pending = {
-      signature: SIGNATURE,
-      blockhash: Keypair.generate().publicKey.toBase58(),
-      lastValidBlockHeight: 123,
-      assetIds: [Keypair.generate().publicKey.toBase58()],
-    };
-    const competing = { ...pending, signature: SECOND_SIGNATURE };
-    const fields = {
-      deliveryId: 7,
-      status: 'processing',
-      receiptRecovery: {
-        pendingSubmission: pending,
-        attemptCount: 2,
-        lastAttemptAt: 100,
-        leaseExpiresAt: 200,
-      },
-    };
-    let armed = false;
-    let changed = false;
-    const native = await nativeDeliveryContext(fields, {
-      observeBatchAfterCommit: ({ statements }) => {
-        if (!armed || changed || !statements.some(({ sql }) =>
-          sql.includes('document_json') && /\b(?:FROM|JOIN) commerce_documents\b/.test(sql))) return;
-        changed = true;
-        seedCommerceDocument(native.harness, {
-          key: commerceKeys.deliveryOrder('card_nft_2', '7'),
-          data: {
-            ...fields,
-            receiptRecovery: {
-              pendingSubmission: competing,
-              attemptCount: 3,
-              lastAttemptAt: 300,
-              leaseExpiresAt: 400,
-            },
-          },
-          version: 2,
-        });
-      },
-    });
-    armed = true;
-    const path = 'drops/card_nft_2/deliveryOrders/7';
-    if (operation === 'cancel') {
-      await deliveryReceiptTestHooks.cancelDeliveryRecoveryAttempt(native.context, path, {
-        attemptCount: 2,
-        lastAttemptAtMs: 100,
-        leaseExpiresAtMs: 200,
-        previousAttemptCount: 1,
-        previousLastAttemptAt: 50,
-      });
-    } else {
-      await assert.rejects(
-        operation === 'persist'
-          ? deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending)
-          : deliveryReceiptTestHooks.settlePendingReceiptSubmission(native.context, path, pending, 'confirmed'),
-        (error: unknown) => error instanceof DeliveryReceiptError && error.code === 'aborted',
-      );
-    }
-    assert.equal(changed, true, operation);
-    const stored = await readCommerceRecord(native.context, requireCommerceKey(path));
-    assert.deepEqual(stored?.data.receiptRecovery, {
-      pendingSubmission: competing,
-      attemptCount: 3,
-      lastAttemptAt: 300,
-      leaseExpiresAt: 400,
-    });
-    assert.equal(stored?.data.receiptTxs, undefined);
-  }
-});
-
-test('delivery recovery eligibility preserves backoff, prepared probes, and force behavior', () => {
-  assert.deepEqual(
-    deliveryReceiptTestHooks.deliveryRecoveryEligibility({
-      status: 'processing',
-      receiptRecovery: { lastAttemptAt: 99_000 },
-    }, 100_000, false),
-    { eligible: false, outcome: 'not_eligible', message: 'processing order retry backoff is active' },
-  );
-  assert.deepEqual(
-    deliveryReceiptTestHooks.deliveryRecoveryEligibility({
-      status: 'prepared',
-      createdAt: 100,
-      receiptRecovery: { preparedProbeCount: 3 },
-    }, 100_000, false),
-    { eligible: false, outcome: 'not_eligible', message: 'prepared order recovery checks are exhausted' },
-  );
-  assert.deepEqual(
-    deliveryReceiptTestHooks.deliveryRecoveryEligibility({ status: 'prepared_abandoned' }, 100_000, true),
-    { eligible: true },
-  );
-});
-
-test('prepared recovery failures reread the leased order and preserve retryable scheduling', async () => {
-  const path = 'drops/card_nft_2/deliveryOrders/7';
-  const native = await nativeDeliveryContext({
-    deliveryId: 7,
-    owner: OWNER,
-    status: 'prepared',
-    receiptRecovery: { preparedProbeCount: 0, leaseExpiresAt: 90_000 },
-  });
-  await deliveryReceiptTestHooks.handlePreparedRecoveryFailure(
-    native.context,
-    path,
-    'missing_delivery',
-    'failed-precondition',
-    1_000,
-  );
-  await deliveryReceiptTestHooks.handlePreparedRecoveryFailure(
-    native.context,
-    path,
-    'failed',
-    'unavailable',
-    2_000,
-  );
-  const recovered = await readCommerceRecord(native.context, requireCommerceKey(path));
-  const recovery = recovered?.data.receiptRecovery as Record<string, unknown>;
-  assert.equal(recovery.preparedProbeCount, 1);
-  assert.equal(recovery.lastPreparedProbeAt, 1_000);
-  assert.equal(recovery.nextPreparedProbeAt, 90_000);
 });
 
 test('delivery recovery cancellation stops probes and restores its lease attempt', async () => {
@@ -1637,16 +1146,17 @@ test('receipt batch cancellation before broadcast survives a lost settlement ack
       signal: controller.signal,
       lifecycle: {
         prepare: async (pending) => {
-          await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
+          await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, () => deliveryCleanupContext(native.context));
           armed = true;
           controller.abort(reason);
         },
         reconcile: async () => assert.fail('cancelled receipt reached reconciliation'),
-        settle: (pending, outcome) => deliveryReceiptTestHooks.settlePendingReceiptSubmission(
+        settle: (pending, outcome) => settlePendingReceiptSubmission(
           { ...native.context, signal: new AbortController().signal },
-          path,
+          deliveryOrderKey(path),
           pending,
           outcome,
+          () => deliveryCleanupContext({ ...native.context, signal: new AbortController().signal }),
         ),
       },
     }),
@@ -1704,11 +1214,7 @@ test('receipt batch keeps write-ahead state when D1 promotion fails after confir
       }],
       signal: native.context.signal,
       lifecycle: {
-        prepare: (pending) => deliveryReceiptTestHooks.persistPendingReceiptSubmission(
-          native.context,
-          path,
-          pending,
-        ),
+        prepare: (pending) => persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, () => deliveryCleanupContext(native.context)),
         reconcile: async () => assert.fail('confirmed submission reached reconciliation'),
         settle: async (_pending, outcome) => {
           assert.equal(outcome, 'confirmed');
@@ -1809,10 +1315,11 @@ test('ambiguous receipt cancellation keeps its lease and unrelated errors win ab
       failOnDeferredWork,
       {
         retryIssueReceipts: async () => {
-          await deliveryReceiptTestHooks.persistPendingReceiptSubmission(
+          await persistPendingReceiptSubmission(
             ambiguousNative.context,
-            'drops/card_nft_2/deliveryOrders/7',
+            deliveryOrderKey('drops/card_nft_2/deliveryOrders/7'),
             pendingSubmission,
+            () => deliveryCleanupContext(ambiguousNative.context),
           );
           ambiguousController.abort(ambiguousReason);
           throw ambiguousError;
@@ -1900,13 +1407,8 @@ test('settled receipt submission cancellation restores the owning recovery lease
       failOnDeferredWork,
       {
         retryIssueReceipts: async () => {
-          await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
-          await deliveryReceiptTestHooks.settlePendingReceiptSubmission(
-            native.context,
-            path,
-            pending,
-            'confirmed',
-          );
+          await persistPendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, () => deliveryCleanupContext(native.context));
+          await settlePendingReceiptSubmission(native.context, deliveryOrderKey(path), pending, 'confirmed', () => deliveryCleanupContext(native.context));
           controller.abort(reason);
           throw reason;
         },
@@ -1998,26 +1500,6 @@ test('stored delivery item ids reject malformed subsets and duplicates', () => {
     () => deliveryReceiptTestHooks.storedDeliveryItemIds({ itemIds: [first, first] }),
     /duplicate itemIds/,
   );
-});
-
-test('existing assignment claim metadata is idempotently compatible without a box asset field', () => {
-  const expected = {
-    code: '0000000001',
-    dropId: 'card_nft_2',
-    boxAssetId: OWNER,
-    boxId: 1,
-    deliveryId: 7,
-    dudeIds: [1, 2, 3],
-  };
-  assert.equal(deliveryReceiptTestHooks.assignmentClaimCompatible({
-    namespace: IRL_CLAIM_CODE_NAMESPACE,
-    code: expected.code,
-    dropId: expected.dropId,
-    boxId: expected.boxId,
-    deliveryId: expected.deliveryId,
-    owner: OWNER,
-    dudeIds: expected.dudeIds,
-  }, expected, OWNER), true);
 });
 
 test('receipt issuance rejects committed on-chain configuration drift', async () => {
