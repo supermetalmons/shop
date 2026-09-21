@@ -54,6 +54,7 @@ import {
 import { normalizeStripeCheckoutIdentity } from '../../../../../shared/checkoutIdentity.js';
 import { toMillisMaybe } from '../time.js';
 import { StripeCheckoutFulfillmentError } from './errors.js';
+import { isSignalCancellationError, sleepWithSignal } from '../boundedRequest.js';
 import { createStripeTerminalNotificationOutboxFields } from './notificationOutboxState.js';
 import {
   commerceFieldValue,
@@ -208,7 +209,12 @@ export type StripeCheckoutFlowDeps<
   Runtime extends StripeCheckoutDropRuntime,
   Config extends StripeCheckoutOnchainConfig,
 > = DropRuntimeDeps<Runtime> & {
-  connection: (dropRuntime: Runtime) => Connection;
+  runRpc: <T>(
+    dropRuntime: Runtime,
+    operation: (connection: Connection) => Promise<T>,
+    timeoutMs: number,
+    label: string,
+  ) => Promise<T>;
   ensureOnchainCoreConfig: (dropRuntime: Runtime) => Promise<Config>;
   requireStripeCheckoutCollectionMatchesConfig: (
     dropRuntime: Runtime,
@@ -225,12 +231,11 @@ export type StripeCheckoutFlowDeps<
     signers: Keypair[],
   ) => VersionedTransaction;
   sendAndConfirmSignedTx: (
-    conn: Connection,
+    dropRuntime: Runtime,
     tx: VersionedTransaction,
     label: string,
     opts?: { sendTimeoutMs?: number; confirmTimeoutMs?: number },
   ) => Promise<string>;
-  withTimeout: <T>(promise: Promise<T>, ms: number, label: string) => Promise<T>;
   isAlreadyExistsError: (err: unknown) => boolean;
   summarizeError: (err: unknown) => unknown;
   programs: StripeCheckoutPrograms;
@@ -275,10 +280,6 @@ const RETRYABLE_STRIPE_FULFILLMENT_CODES = new Set([
   'unavailable',
 ]);
 const RETRYABLE_GRPC_STATUS_CODES = new Set([4, 8, 10, 13, 14]);
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
-}
 
 function createStripeCheckoutProcessingAttemptId(nowMs: number): string {
   return `${nowMs.toString(36)}:${randomInt(0, 2 ** 32).toString(36)}`;
@@ -354,6 +355,18 @@ export function isRetryableStripeCheckoutFulfillmentError(err: unknown): boolean
   return looksLikeTransientProviderMessage(message);
 }
 
+function normalizeFulfillmentCancellation(error: unknown, signal?: AbortSignal): unknown {
+  if (!signal || !isSignalCancellationError(signal, error)) return error;
+  if (error instanceof StripeCheckoutFulfillmentError) return error;
+  const timedOut = signal.reason instanceof Error && signal.reason.name === 'TimeoutError';
+  const cancellation = new StripeCheckoutFulfillmentError(
+    timedOut ? 'deadline-exceeded' : 'aborted',
+    timedOut ? 'Stripe checkout fulfillment timed out' : 'Stripe checkout fulfillment was cancelled',
+  );
+  Object.defineProperty(cancellation, 'cause', { value: signal.reason });
+  return cancellation;
+}
+
 class StaleStripeCheckoutProcessingAttemptError extends Error {
   constructor() {
     super('Stripe checkout fulfillment attempt no longer owns the processing lease');
@@ -415,17 +428,20 @@ export async function runStripeCheckoutFulfillmentWithRetry<T>(
     maxAttempts?: number;
     retryDelayMs?: number;
     processingAttemptId?: string;
+    signal?: AbortSignal;
   },
 ): Promise<T> {
   const maxAttempts = Math.max(1, Math.floor(Number(params.maxAttempts ?? STRIPE_CHECKOUT_FULFILLMENT_MAX_ATTEMPTS)));
   const retryDelayMs = Math.max(0, Math.floor(Number(params.retryDelayMs ?? STRIPE_CHECKOUT_FULFILLMENT_RETRY_DELAY_MS)));
+  const signal = params.signal || new AbortController().signal;
   let attempt = 1;
 
   while (true) {
+    signal.throwIfAborted();
     try {
       return await operation(attempt);
     } catch (err) {
-      if (attempt >= maxAttempts || !isRetryableStripeCheckoutFulfillmentError(err)) throw err;
+      if (signal.aborted || attempt >= maxAttempts || !isRetryableStripeCheckoutFulfillmentError(err)) throw err;
 
       const retryRecordStatus = await recordStripeCheckoutRetryableFulfillmentError({
         commerce: params.commerce,
@@ -437,7 +453,12 @@ export async function runStripeCheckoutFulfillmentWithRetry<T>(
         processingAttemptId: params.processingAttemptId,
       });
       if (retryRecordStatus === 'stale') throw new StaleStripeCheckoutProcessingAttemptError();
-      await sleep(retryDelayMs);
+      try {
+        await sleepWithSignal(retryDelayMs, signal);
+      } catch (error) {
+        if (isSignalCancellationError(signal, error)) throw err;
+        throw error;
+      }
       attempt += 1;
     }
   }
@@ -1056,15 +1077,22 @@ export async function createOrGetStripeOffchainDeliveryOrder<Runtime extends Str
   throw new StripeCheckoutFulfillmentError('unavailable', 'Failed to allocate off-chain delivery id or receipt claim code (try again)');
 }
 
-async function fetchAdminDeliveryOrderRecord(params: {
-  conn: Connection;
-  dropRuntime: StripeCheckoutDropRuntime;
+async function fetchAdminDeliveryOrderRecord<Runtime extends StripeCheckoutDropRuntime>(params: {
+  dropRuntime: Runtime;
   adminOrderPda: PublicKey;
   context: string;
-  deps: Pick<StripeCheckoutFlowDeps<StripeCheckoutDropRuntime, StripeCheckoutOnchainConfig>, 'withTimeout' | 'rpcTimeoutMs'>;
+  deps: Pick<StripeCheckoutFlowDeps<Runtime, StripeCheckoutOnchainConfig>, 'runRpc' | 'rpcTimeoutMs'>;
 }): Promise<DecodedAdminDeliveryOrderRecord | null> {
-  const { conn, dropRuntime, adminOrderPda, context, deps } = params;
-  const info = await deps.withTimeout(conn.getAccountInfo(adminOrderPda, { commitment: 'confirmed' }), deps.rpcTimeoutMs, context);
+  const { dropRuntime, adminOrderPda, context, deps } = params;
+  const info = await deps.runRpc(
+    dropRuntime,
+    async (connection) => (await connection.getAccountInfoAndContext(
+      adminOrderPda,
+      { commitment: 'confirmed' },
+    )).value,
+    deps.rpcTimeoutMs,
+    context,
+  );
   if (!info) return null;
   if (!info.owner.equals(dropRuntime.boxMinterProgramId)) {
     if (info.owner.equals(SystemProgram.programId) && info.data.length === 0) {
@@ -1186,8 +1214,6 @@ async function fulfillStripeCheckoutSession<
     normalizeCountryCode: deps.normalizeCountryCode,
     dropFamily: dropRuntime.config.dropFamily,
   });
-  const conn = deps.connection(dropRuntime);
-
   const cfg = await deps.ensureOnchainCoreConfig(dropRuntime);
   const signer = deps.cosigner();
   if (!signer.publicKey.equals(cfg.admin)) {
@@ -1201,7 +1227,6 @@ async function fulfillStripeCheckoutSession<
   const receiptOwner = cfg.admin;
   const [adminOrderPda, orderBump] = deriveAdminOrderPda(dropRuntime.boxMinterProgramId, dropRuntime.boxMinterConfigPda, orderHash);
   let record = await fetchAdminDeliveryOrderRecord({
-    conn,
     dropRuntime,
     adminOrderPda,
     context: 'getAccountInfo:adminOrder',
@@ -1234,20 +1259,21 @@ async function fulfillStripeCheckoutSession<
         quantity: checkout.quantity,
       }),
     });
-    const { blockhash } = await deps.withTimeout(
-      conn.getLatestBlockhash('confirmed'),
+    const { blockhash } = await deps.runRpc(
+      dropRuntime,
+      async (connection) => (await connection.getLatestBlockhashAndContext('confirmed')).value,
       deps.rpcTimeoutMs,
       'getLatestBlockhash:stripeCheckoutFulfillment',
     );
     const tx = deps.buildTx([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ix], signer.publicKey, blockhash, [signer]);
     try {
-      receiptTx = await deps.sendAndConfirmSignedTx(conn, tx, 'adminDeliverVariantOrder', {
+      receiptTx = await deps.sendAndConfirmSignedTx(dropRuntime, tx, 'adminDeliverVariantOrder', {
         sendTimeoutMs: deps.txSendTimeoutMs,
         confirmTimeoutMs: deps.txConfirmTimeoutMs,
       });
     } catch (err) {
+      if (deps.signal?.aborted) throw err;
       const maybeRecord = await fetchAdminDeliveryOrderRecord({
-        conn,
         dropRuntime,
         adminOrderPda,
         context: 'getAccountInfo:adminOrderAfterError',
@@ -1260,7 +1286,6 @@ async function fulfillStripeCheckoutSession<
 
   if (!record) {
     record = await fetchAdminDeliveryOrderRecord({
-      conn,
       dropRuntime,
       adminOrderPda,
       context: 'getAccountInfo:adminOrderAfterSend',
@@ -1508,8 +1533,10 @@ export async function processStripeCheckoutFulfillmentDocument<
 
   let started: StripeCheckoutFulfillmentStart;
   try {
+    deps.signal?.throwIfAborted();
     started = await startStripeCheckoutFulfillmentDocument({ commerce, dropId, sessionId, checkoutKey, expectedLivemode });
-  } catch (err) {
+  } catch (error) {
+    const err = normalizeFulfillmentCancellation(error, deps.signal);
     if (isRetryableStripeCheckoutFulfillmentError(err) && !params.treatRetryableFailureAsTerminal) {
       throw err;
     }
@@ -1562,10 +1589,12 @@ export async function processStripeCheckoutFulfillmentDocument<
         checkoutKey: started.checkoutKey,
         summarizeError: deps.summarizeError,
         processingAttemptId: started.processingAttemptId,
+        signal: deps.signal,
       },
     );
     return { status: 'fulfilled', sessionId, ...result };
-  } catch (err) {
+  } catch (error) {
+    const err = normalizeFulfillmentCancellation(error, deps.signal);
     if (err instanceof StripeCheckoutPackStatusProjectionError) throw err;
     if (err instanceof StripeCheckoutProcessingAttemptOwnershipCheckError) {
       throw err;

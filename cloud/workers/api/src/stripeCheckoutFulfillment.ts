@@ -1,8 +1,7 @@
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
 import {
-  Connection,
-  type FetchFn,
+  type Connection,
   Keypair,
   PublicKey,
   TransactionMessage,
@@ -65,7 +64,14 @@ import {
 import type { StripeCheckoutCommerceContext } from './stripeCheckout/commerce.js';
 import { applyPackStatusProjection } from './packStatusProjection.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
-import { heliusRpcUrl } from './solanaProvider.js';
+import { createSolanaConnection } from './solanaConnection.js';
+import type { ProfileProviderFetch } from './boundedResponse.js';
+import {
+  createTimedAbortScope,
+  isSignalCancellationError,
+  raceWithSignal,
+  sleepWithSignal,
+} from './boundedRequest.js';
 
 const RPC_TIMEOUT_MS = 8_000;
 const TX_SEND_TIMEOUT_MS = 12_000;
@@ -83,6 +89,8 @@ const MPL_CORE_COLLECTION_V1_MIN_BYTES = 49;
 type FulfillmentRuntime = StripeCheckoutDropRuntime & {
   config: ApiDropConfig;
 };
+
+type FulfillmentRpc = StripeCheckoutFlowDeps<FulfillmentRuntime, StripeCheckoutOnchainConfig>['runRpc'];
 
 type FulfillmentEnv = Pick<Env,
   | 'ADDRESS_DECRYPTION_SECRET'
@@ -150,34 +158,51 @@ export function fulfillmentRuntime(rawDropId: unknown): FulfillmentRuntime {
   };
 }
 
-function connection(runtime: FulfillmentRuntime, apiKey: string, signal: AbortSignal): Connection {
-  const normalized = apiKey.trim();
-  if (!normalized) throw fulfillmentError('unavailable', 'HELIUS_API_KEY is not configured');
-  return new Connection(heliusRpcUrl(runtime.cluster, normalized), {
-    commitment: 'confirmed',
-    disableRetryOnRateLimit: true,
-    fetch: ((input, init) => fetch(input, {
-      ...init,
-      signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal,
-    })) as FetchFn,
-  });
-}
-
-async function withTimeout<T>(promise: Promise<T>, milliseconds: number, label: string): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_resolve, reject) => {
-        timeout = setTimeout(
-          () => reject(fulfillmentError('deadline-exceeded', `${label} timed out after ${milliseconds}ms`)),
-          milliseconds,
-        );
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
+function createFulfillmentRpc(
+  apiKey: string,
+  signal: AbortSignal,
+  providerFetch: ProfileProviderFetch,
+): FulfillmentRpc {
+  return async <T>(
+    runtime: FulfillmentRuntime,
+    operation: (rpc: Connection) => Promise<T>,
+    timeoutMs: number,
+    label: string,
+  ): Promise<T> => {
+    signal.throwIfAborted();
+    const normalized = apiKey.trim();
+    if (!normalized) throw fulfillmentError('unavailable', 'HELIUS_API_KEY is not configured');
+    const timeoutMessage = `${label} timed out after ${timeoutMs}ms`;
+    const scope = createTimedAbortScope(signal, { timeoutMs, timeoutMessage });
+    try {
+      const rpc = createSolanaConnection({
+        apiKey: normalized,
+        cluster: runtime.cluster,
+        fetch: providerFetch,
+        signal: scope.signal,
+        attemptTimeoutMs: timeoutMs,
+        mapError: (error) => {
+          const mapped = fulfillmentError(
+            error.kind === 'timeout' ? 'deadline-exceeded' : 'unavailable',
+            error.kind === 'timeout' ? timeoutMessage : error.message,
+          );
+          Object.defineProperty(mapped, 'cause', { value: error });
+          return mapped;
+        },
+      });
+      return await raceWithSignal(operation(rpc), scope.signal);
+    } catch (error) {
+      if (isSignalCancellationError(signal, error)) throw signal.reason;
+      if (scope.timedOut() && isSignalCancellationError(scope.signal, error)) {
+        const timeout = fulfillmentError('deadline-exceeded', timeoutMessage);
+        Object.defineProperty(timeout, 'cause', { value: error });
+        throw timeout;
+      }
+      throw error;
+    } finally {
+      scope.dispose();
+    }
+  };
 }
 
 function transactionErrorMessage(error: unknown): string {
@@ -219,22 +244,26 @@ function blockhashOrAccountInUseError(message: string, logs: readonly string[]):
 }
 
 async function waitForSignature(
-  rpc: Connection,
+  runtime: FulfillmentRuntime,
   signature: string,
   timeoutMs: number,
+  runRpc: FulfillmentRpc,
+  signal: AbortSignal,
 ): Promise<{ ok: true } | { ok: false; error: unknown; logs: string[] }> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const result = await withTimeout(
-        rpc.getSignatureStatuses([signature], { searchTransactionHistory: Date.now() - startedAt > 6_000 }),
+      const result = await runRpc(
+        runtime,
+        (rpc) => rpc.getSignatureStatuses([signature], { searchTransactionHistory: Date.now() - startedAt > 6_000 }),
         RPC_TIMEOUT_MS,
         'getSignatureStatuses',
       );
       const status = result.value[0];
       if (status?.err) {
-        const transaction = await withTimeout(
-          rpc.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+        const transaction = await runRpc(
+          runtime,
+          (rpc) => rpc.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
           RPC_TIMEOUT_MS,
           'getTransaction:failed',
         ).catch(() => null);
@@ -245,14 +274,20 @@ async function waitForSignature(
         };
       }
       if (status?.confirmationStatus === 'confirmed' || status?.confirmationStatus === 'finalized') return { ok: true };
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, TX_CONFIRM_POLL_MS));
+    } catch (error) {
+      if (isSignalCancellationError(signal, error)) throw signal.reason;
+    }
+    await sleepWithSignal(TX_CONFIRM_POLL_MS, signal);
   }
-  const transaction = await withTimeout(
-    rpc.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
+  const transaction = await runRpc(
+    runtime,
+    (rpc) => rpc.getTransaction(signature, { maxSupportedTransactionVersion: 0 }),
     RPC_TIMEOUT_MS,
     'getTransaction:timeout',
-  ).catch(() => null);
+  ).catch((error) => {
+    if (isSignalCancellationError(signal, error)) throw signal.reason;
+    return null;
+  });
   if (transaction?.meta && !transaction.meta.err) return { ok: true };
   return {
     ok: false,
@@ -262,20 +297,35 @@ async function waitForSignature(
 }
 
 async function sendAndConfirmSignedTx(
-  rpc: Connection,
+  runtime: FulfillmentRuntime,
   transaction: VersionedTransaction,
   label: string,
+  runRpc: FulfillmentRpc,
+  signal: AbortSignal,
   options: { sendTimeoutMs?: number; confirmTimeoutMs?: number } = {},
 ): Promise<string> {
+  signal.throwIfAborted();
   const signature = bs58.encode(transaction.signatures[0]);
+  const preserveSubmittedCancellation = (error: unknown): never => {
+    if (!isSignalCancellationError(signal, error)) throw error;
+    const cancellation = fulfillmentError(
+      signal.reason instanceof Error && signal.reason.name === 'TimeoutError' ? 'deadline-exceeded' : 'aborted',
+      `${label} transaction submission status unknown (try again)`,
+      { signature, lastError: transactionErrorMessage(signal.reason), maybeSubmitted: true },
+    );
+    Object.defineProperty(cancellation, 'cause', { value: signal.reason });
+    throw cancellation;
+  };
   let sendError: unknown;
   try {
-    await withTimeout(
-      rpc.sendTransaction(transaction, { maxRetries: 2 }),
+    await runRpc(
+      runtime,
+      (rpc) => rpc.sendTransaction(transaction, { maxRetries: 2 }),
       options.sendTimeoutMs ?? TX_SEND_TIMEOUT_MS,
       `sendTransaction:${label}`,
     );
   } catch (error) {
+    if (isSignalCancellationError(signal, error)) preserveSubmittedCancellation(error);
     sendError = error;
   }
   if (sendError) {
@@ -291,14 +341,22 @@ async function sendAndConfirmSignedTx(
         lastLogs: logs.slice(0, 80),
       });
     }
-    if ((await waitForSignature(rpc, signature, 12_000)).ok) return signature;
+    const confirmation = await waitForSignature(runtime, signature, 12_000, runRpc, signal)
+      .catch(preserveSubmittedCancellation);
+    if (confirmation.ok) return signature;
     throw fulfillmentError('unavailable', `${label} transaction submission status unknown (try again)`, {
       signature,
       lastError: transactionErrorMessage(sendError),
       maybeSubmitted: true,
     });
   }
-  const confirmation = await waitForSignature(rpc, signature, options.confirmTimeoutMs ?? TX_CONFIRM_TIMEOUT_MS);
+  const confirmation = await waitForSignature(
+    runtime,
+    signature,
+    options.confirmTimeoutMs ?? TX_CONFIRM_TIMEOUT_MS,
+    runRpc,
+    signal,
+  ).catch(preserveSubmittedCancellation);
   if (confirmation.ok) return signature;
   const message = transactionErrorMessage(confirmation.error);
   throw fulfillmentError(/timeout/i.test(message) ? 'deadline-exceeded' : 'failed-precondition', `${label} transaction not confirmed (try again)`, {
@@ -368,9 +426,10 @@ export function isMplCoreCollectionAccount(
     account.data[0] === MPL_CORE_COLLECTION_V1_DISCRIMINATOR;
 }
 
-async function onchainConfig(runtime: FulfillmentRuntime, rpc: Connection): Promise<StripeCheckoutOnchainConfig> {
-  const [collectionInfo, info] = await withTimeout(
-    rpc.getMultipleAccountsInfo([runtime.collectionMint, runtime.boxMinterConfigPda], { commitment: 'confirmed' }),
+async function onchainConfig(runtime: FulfillmentRuntime, runRpc: FulfillmentRpc): Promise<StripeCheckoutOnchainConfig> {
+  const [collectionInfo, info] = await runRpc(
+    runtime,
+    (rpc) => rpc.getMultipleAccountsInfo([runtime.collectionMint, runtime.boxMinterConfigPda], { commitment: 'confirmed' }),
     RPC_TIMEOUT_MS,
     'getMultipleAccountsInfo:stripeCheckoutConfig',
   );
@@ -450,7 +509,9 @@ export function flowDependencies(
   env: FulfillmentEnv,
   commerce: StripeCheckoutCommerceContext,
   signal: AbortSignal,
+  providerFetch: ProfileProviderFetch = (input, init) => fetch(input, init),
 ): StripeCheckoutFlowDeps<FulfillmentRuntime, StripeCheckoutOnchainConfig> {
+  const runRpc = createFulfillmentRpc(env.HELIUS_API_KEY, signal, providerFetch);
   const countPackStatus = async ({
     dropRuntime,
     orderHashHex,
@@ -484,8 +545,8 @@ export function flowDependencies(
   return {
     requireDropId: (dropId) => fulfillmentRuntime(dropId).dropId,
     getDropRuntime: fulfillmentRuntime,
-    connection: (runtime) => connection(runtime, env.HELIUS_API_KEY, signal),
-    ensureOnchainCoreConfig: (runtime) => onchainConfig(runtime, connection(runtime, env.HELIUS_API_KEY, signal)),
+    runRpc,
+    ensureOnchainCoreConfig: (runtime) => onchainConfig(runtime, runRpc),
     requireStripeCheckoutCollectionMatchesConfig: (runtime, config, code = 'failed-precondition') => {
       if (!runtime.collectionMint.equals(config.coreCollection)) {
         throw fulfillmentError(code, 'COLLECTION_MINT does not match on-chain config', {
@@ -505,8 +566,8 @@ export function flowDependencies(
       if (signers.length) transaction.sign(signers);
       return transaction;
     },
-    sendAndConfirmSignedTx,
-    withTimeout,
+    sendAndConfirmSignedTx: (runtime, transaction, label, options) =>
+      sendAndConfirmSignedTx(runtime, transaction, label, runRpc, signal, options),
     isAlreadyExistsError: (error) => error instanceof CommerceWriteConflict && error.code === 'already-exists',
     summarizeError: summary,
     programs: {

@@ -77,6 +77,8 @@ import {
 } from '../cloud/workers/api/test/commerceD1Harness.ts';
 import { parseStripeTerminalNotificationOutbox } from '../cloud/workers/api/src/stripeCheckout/notificationOutboxState.ts';
 import type { StripeCheckoutCommerceContext } from '../cloud/workers/api/src/stripeCheckout/commerce.ts';
+import { StripeCheckoutFulfillmentError } from '../cloud/workers/api/src/stripeCheckout/errors.ts';
+import { stripeClientForKey } from '../cloud/workers/api/src/stripeCheckout/provider.ts';
 import {
   createStripeCheckoutSessionCore,
   createStripeCheckoutIdentity,
@@ -138,6 +140,46 @@ function stripeCommerceFixture(
   });
   const commerce: StripeCheckoutCommerceContext = { repository, nowMs: () => nowMs };
   return { harness, repository, checkoutKey, commerce, calls };
+}
+
+async function stripeFulfillmentCancellationFixture(t: TestContext, suffix: string) {
+  const dropId = 'little_swag_hoodies_devnet';
+  const sessionId = `cs_test_cancellation_${suffix}`;
+  const apiKey = `sk_test_cancellation_${suffix}`;
+  const fixture = stripeCommerceFixture(t, {
+    ...buildStripeCheckoutDocument({
+      dropId,
+      sessionId,
+      ...createStripeCheckoutIdentity('anon_uid_123'),
+      variantKey: 'XL',
+      unitAmountCents: 100,
+      createdAt: COMMERCE_NOW_MS,
+      updatedAt: COMMERCE_NOW_MS,
+    }),
+    status: STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING,
+  }, { dropId, sessionId });
+  const work = new AbortController();
+  const persistence = new AbortController();
+  const stripe = await stripeClientForKey(apiKey, 'test');
+  const params = {
+    commerce: { ...fixture.commerce, signal: persistence.signal },
+    dropId,
+    sessionId,
+    checkoutKey: fixture.checkoutKey,
+    apiKeys: [apiKey],
+    deps: {
+      getDropRuntime: () => ({ dropId, cluster: 'devnet' }),
+      summarizeError: (error: unknown) => ({
+        message: error instanceof Error ? error.message : String(error),
+        ...(error instanceof StripeCheckoutFulfillmentError ? {
+          code: error.code,
+          ...(error.details === undefined ? {} : { details: error.details }),
+        } : {}),
+      }),
+      signal: work.signal,
+    } as Parameters<typeof processStripeCheckoutFulfillmentDocument>[0]['deps'],
+  };
+  return { ...fixture, params, work, persistence, stripe };
 }
 
 function commerceDocumentWriteBatches(calls: readonly CommerceD1CallObservation[]) {
@@ -2383,6 +2425,126 @@ test('final Queue attempts persist retryable fulfillment failures for manual rev
   assert.equal(notification.outcome, 'manual_review');
 });
 
+test('cancelled fulfillment releases its lease using the live persistence signal', async (t) => {
+  const cases = [
+    { name: 'abort', reason: new Error('queue work stopped'), code: 'aborted' },
+    {
+      name: 'timeout',
+      reason: Object.assign(new Error('queue work expired'), { name: 'TimeoutError' }),
+      code: 'deadline-exceeded',
+    },
+    { name: 'object', reason: { stopped: true }, code: 'aborted' },
+  ] as const;
+  for (const { name, reason, code } of cases) {
+    await t.test(name, async (t) => {
+      const { params, work, persistence, stripe, repository, checkoutKey, calls } =
+        await stripeFulfillmentCancellationFixture(t, name);
+      const retrieve = t.mock.method(stripe.checkout.sessions, 'retrieve', async () => {
+        work.abort(reason);
+        throw reason;
+      });
+
+      await assert.rejects(processStripeCheckoutFulfillmentDocument(params), (error: unknown) => {
+        assert.ok(error instanceof StripeCheckoutFulfillmentError);
+        assert.equal(error.code, code);
+        assert.equal(error.cause, reason);
+        return true;
+      });
+
+      const checkout = await repository.get(checkoutKey);
+      assert.ok(checkout);
+      assert.equal(work.signal.aborted, true);
+      assert.equal(persistence.signal.aborted, false);
+      assert.equal(retrieve.mock.callCount(), 1);
+      assert.equal(commerceDocumentWriteBatches(calls).length, 2);
+      assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+      assert.equal((checkout.data.lastRetryableFulfillmentError as Record<string, unknown>).code, code);
+      assert.equal(Object.hasOwn(checkout.data, 'processingAttemptId'), false);
+      assert.equal(Object.hasOwn(checkout.data, 'processingLeaseExpiresAt'), false);
+      assert.equal(Object.hasOwn(checkout.data, 'manualRefundReviewRequired'), false);
+    });
+  }
+});
+
+test('cancelled fulfillment retains typed submission evidence while releasing its lease', async (t) => {
+  const { params, work, stripe, repository, checkoutKey } =
+    await stripeFulfillmentCancellationFixture(t, 'submitted');
+  const reason = new DOMException('queue work expired', 'TimeoutError');
+  const failure = new StripeCheckoutFulfillmentError('deadline-exceeded', 'confirmation expired', {
+    signature: 'submitted_transaction',
+    maybeSubmitted: true,
+  });
+  failure.cause = reason;
+  const retrieve = t.mock.method(stripe.checkout.sessions, 'retrieve', async () => {
+    work.abort(reason);
+    throw failure;
+  });
+
+  await assert.rejects(processStripeCheckoutFulfillmentDocument(params), (error: unknown) => error === failure);
+
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  assert.equal(retrieve.mock.callCount(), 1);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_PENDING);
+  assert.deepEqual(checkout.data.lastRetryableFulfillmentError, {
+    message: failure.message,
+    code: failure.code,
+    details: failure.details,
+  });
+});
+
+test('final Queue work cancellation persists manual review through the live persistence signal', async (t) => {
+  const { params, work, persistence, stripe, repository, checkoutKey, calls } =
+    await stripeFulfillmentCancellationFixture(t, 'final');
+  const reason = new DOMException('queue work expired', 'TimeoutError');
+  t.mock.method(stripe.checkout.sessions, 'retrieve', async () => {
+    work.abort(reason);
+    throw reason;
+  });
+
+  const result = await processStripeCheckoutFulfillmentDocument({
+    ...params,
+    treatRetryableFailureAsTerminal: true,
+  });
+
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  assert.equal(result.status, 'failed');
+  assert.equal(persistence.signal.aborted, false);
+  assert.equal(commerceDocumentWriteBatches(calls).length, 2);
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
+  assert.equal(checkout.data.manualRefundReviewRequired, true);
+  assert.equal((checkout.data.lastFulfillmentError as Record<string, unknown>).code, 'deadline-exceeded');
+  assert.equal(Object.hasOwn(checkout.data, 'processingAttemptId'), false);
+  assert.equal(parseStripeTerminalNotificationOutbox(checkout.data.stripeTerminalNotification)?.outcome, 'manual_review');
+});
+
+test('a deterministic fulfillment failure wins over coincident work cancellation', async (t) => {
+  const { params, work, stripe, repository, checkoutKey } =
+    await stripeFulfillmentCancellationFixture(t, 'deterministic');
+  const reason = new DOMException('queue work expired', 'TimeoutError');
+  const failure = new StripeCheckoutFulfillmentError('failed-precondition', 'checkout contract mismatch', {
+    expectedQuantity: 1,
+  });
+  const retrieve = t.mock.method(stripe.checkout.sessions, 'retrieve', async () => {
+    work.abort(reason);
+    throw failure;
+  });
+
+  const result = await processStripeCheckoutFulfillmentDocument(params);
+
+  const checkout = await repository.get(checkoutKey);
+  assert.ok(checkout);
+  assert.equal(retrieve.mock.callCount(), 1);
+  assert.equal(result.status, 'failed');
+  assert.equal(checkout.data.status, STRIPE_CHECKOUT_STATUS.FULFILLMENT_FAILED);
+  assert.deepEqual(checkout.data.lastFulfillmentError, {
+    message: failure.message,
+    code: failure.code,
+    details: failure.details,
+  });
+});
+
 test('already-fulfilled Queue retries repair pack status idempotently', async (t) => {
   const { repository, commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
     status: STRIPE_CHECKOUT_STATUS.FULFILLED,
@@ -2749,6 +2911,129 @@ test('runStripeCheckoutFulfillmentWithRetry retries a retryable failure once', a
   const checkout = await repository.get(checkoutKey);
   assert.equal(checkout?.version, 2);
   assert.equal(checkout?.data.lastRetryableFulfillmentAttempt, 1);
+});
+
+test('runStripeCheckoutFulfillmentWithRetry starts no work for an aborted signal', async (t) => {
+  const { commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+  });
+  const reason = new Error('queue work stopped');
+  let attempts = 0;
+
+  await assert.rejects(runStripeCheckoutFulfillmentWithRetry(async () => {
+    attempts += 1;
+  }, {
+    commerce,
+    checkoutKey,
+    summarizeError: String,
+    signal: AbortSignal.abort(reason),
+  }), (error: unknown) => error === reason);
+
+  assert.equal(attempts, 0);
+  assert.equal(calls.length, 0);
+});
+
+test('runStripeCheckoutFulfillmentWithRetry stops after work aborts during an attempt', async (t) => {
+  const { commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+  });
+  const work = new AbortController();
+  const reason = new DOMException('queue work expired', 'TimeoutError');
+  const failure = new StripeCheckoutFulfillmentError('deadline-exceeded', 'confirmation expired', {
+    signature: 'submitted_transaction',
+    maybeSubmitted: true,
+  });
+  failure.cause = reason;
+  let attempts = 0;
+
+  await assert.rejects(runStripeCheckoutFulfillmentWithRetry(async () => {
+    attempts += 1;
+    work.abort(reason);
+    throw failure;
+  }, {
+    commerce,
+    checkoutKey,
+    summarizeError: String,
+    retryDelayMs: 0,
+    signal: work.signal,
+  }), (error: unknown) => error === failure);
+
+  assert.equal(attempts, 1);
+  assert.equal(calls.length, 0);
+});
+
+test('runStripeCheckoutFulfillmentWithRetry aborts backoff without losing submission evidence', async (t) => {
+  const { commerce, checkoutKey, repository } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+    processingAttemptId: 'attempt_current',
+  });
+  const work = new AbortController();
+  const failure = new StripeCheckoutFulfillmentError('unavailable', 'confirmation unavailable', {
+    signature: 'submitted_transaction',
+    maybeSubmitted: true,
+  });
+  const backoffStarted = Promise.withResolvers<void>();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const setTimeout = globalThis.setTimeout;
+  t.mock.method(globalThis, 'setTimeout', (callback: (...args: unknown[]) => void, delay: number, ...args: unknown[]) => {
+    const timer = setTimeout(callback, delay, ...args);
+    if (delay === 30_000) backoffStarted.resolve();
+    return timer;
+  });
+  let attempts = 0;
+  let settled = false;
+  const outcome = runStripeCheckoutFulfillmentWithRetry(async () => {
+    attempts += 1;
+    throw failure;
+  }, {
+    commerce,
+    checkoutKey,
+    processingAttemptId: 'attempt_current',
+    summarizeError: () => ({ code: failure.code, details: failure.details }),
+    retryDelayMs: 30_000,
+    signal: work.signal,
+  }).then(
+    () => { settled = true; return null; },
+    (error: unknown) => { settled = true; return error; },
+  );
+
+  await backoffStarted.promise;
+  work.abort(new DOMException('queue work expired', 'TimeoutError'));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const settledBeforeRetryDelay = settled;
+  t.mock.timers.runAll();
+
+  assert.equal(await outcome, failure);
+  assert.equal(settledBeforeRetryDelay, true);
+  assert.equal(attempts, 1);
+  const checkout = await repository.get(checkoutKey);
+  assert.deepEqual(checkout?.data.lastRetryableFulfillmentError, {
+    code: failure.code,
+    details: failure.details,
+  });
+});
+
+test('runStripeCheckoutFulfillmentWithRetry preserves a deterministic failure when work also aborts', async (t) => {
+  const { commerce, checkoutKey, calls } = stripeCommerceFixture(t, {
+    status: STRIPE_CHECKOUT_STATUS.PROCESSING,
+  });
+  const work = new AbortController();
+  const failure = new StripeCheckoutFulfillmentError('failed-precondition', 'checkout contract mismatch');
+  let attempts = 0;
+
+  await assert.rejects(runStripeCheckoutFulfillmentWithRetry(async () => {
+    attempts += 1;
+    work.abort(new Error('queue work stopped'));
+    throw failure;
+  }, {
+    commerce,
+    checkoutKey,
+    summarizeError: String,
+    signal: work.signal,
+  }), (error: unknown) => error === failure);
+
+  assert.equal(attempts, 1);
+  assert.equal(calls.length, 0);
 });
 
 test('runStripeCheckoutFulfillmentWithRetry does not retry deterministic failures', async (t) => {

@@ -1002,12 +1002,12 @@ async function fetchDeliveryRecord(
   deliveryInfo: AccountInfo<Buffer>;
 } | null> {
   const [expectedDeliveryPda, expectedDeliveryBump] = deriveDeliveryPda(runtime, deliveryId);
-  const deliveryInfo = await connection.getAccountInfo(
+  const deliveryInfo = (await connection.getAccountInfoAndContext(
     expectedDeliveryPda,
     includeData
       ? { commitment: 'confirmed' }
       : { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } },
-  );
+  )).value;
   if (!deliveryInfo) return null;
   if (!deliveryInfo.owner.equals(runtime.boxMinterProgramId)) {
     throw new DeliveryReceiptError('failed-precondition', 'Delivery record PDA is owned by the wrong program.');
@@ -1326,7 +1326,7 @@ async function sendReceiptBatch(args: {
   let lastError: unknown;
   for (let attempt = 0; attempt < TX_MAX_SEND_ATTEMPTS; attempt += 1) {
     if (args.signal.aborted) throw args.signal.reason;
-    const { blockhash, lastValidBlockHeight } = await args.connection.getLatestBlockhash('confirmed');
+    const { blockhash, lastValidBlockHeight } = (await args.connection.getLatestBlockhashAndContext('confirmed')).value;
     let transaction: VersionedTransaction;
     try {
       transaction = buildTransaction(instructions, args.signer.publicKey, blockhash, args.signer);
@@ -1476,12 +1476,12 @@ async function closeDeliveryPda(args: {
   deliveryBump: number;
   signal: AbortSignal;
 }): Promise<string | null> {
-  const info = await args.connection.getAccountInfo(args.deliveryPda, {
+  const info = (await args.connection.getAccountInfoAndContext(args.deliveryPda, {
     commitment: 'confirmed',
     dataSlice: { offset: 0, length: 0 },
-  });
+  })).value;
   if (!info) return null;
-  const { blockhash } = await args.connection.getLatestBlockhash('confirmed');
+  const { blockhash } = (await args.connection.getLatestBlockhashAndContext('confirmed')).value;
   const transaction = buildTransaction([
     ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
     closeDeliveryInstruction({

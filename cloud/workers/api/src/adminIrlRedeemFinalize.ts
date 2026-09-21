@@ -137,7 +137,7 @@ import {
   mintReceiptsInstruction,
   sendAndConfirmSignedTransaction,
 } from './deliveryReceiptOnchain.js';
-import { heliusRpcUrl } from './solanaProvider.js';
+import { createSolanaConnection } from './solanaConnection.js';
 import {
   probeTransactionSubmission,
   type TransactionSubmissionOutcome,
@@ -1086,13 +1086,18 @@ function runtimeSupportsFinalize(runtime: Runtime): void {
 }
 
 function createConnection(provider: ProviderContext, runtime: Runtime): Connection {
-  return new Connection(
-    heliusRpcUrl(runtime.cluster, provider.apiKey),
-    {
-      commitment: 'confirmed',
-      fetch: (input, init) => provider.providerFetch(input, { ...init, signal: provider.signal }),
-    },
-  );
+  return createSolanaConnection({
+    apiKey: provider.apiKey,
+    cluster: runtime.cluster,
+    fetch: provider.providerFetch,
+    signal: provider.signal,
+    mapError: (failure) => new AdminIrlRedeemFinalizeError(
+      failure.kind === 'timeout' ? 'deadline-exceeded' : 'unavailable',
+      failure.kind === 'timeout'
+        ? 'Admin IRL redeem provider request timed out.'
+        : 'Admin IRL redeem provider is temporarily unavailable.',
+    ),
+  });
 }
 
 function mplCoreBurn(asset: PublicKey, collection: PublicKey, signer: PublicKey): TransactionInstruction {
@@ -1260,7 +1265,7 @@ async function holdPendingFinalizeSubmission(
 }
 
 async function probePendingFinalizeSubmission(
-  connection: Pick<Connection, 'getSignatureStatuses' | 'getAccountInfo' | 'getMultipleAccountsInfo' | 'isBlockhashValid'>,
+  connection: Pick<Connection, 'getSignatureStatuses' | 'getAccountInfoAndContext' | 'getMultipleAccountsInfo' | 'isBlockhashValid'>,
   pending: PendingFinalizeSubmission,
 ): Promise<TransactionSubmissionOutcome> {
   return probeTransactionSubmission({
@@ -1268,9 +1273,9 @@ async function probePendingFinalizeSubmission(
     signature: pending.signature,
     blockhash: pending.blockhash,
     hasLanded: async () => pending.kind === 'internal_delivery'
-      ? Boolean(await connection.getAccountInfo(new PublicKey(pending.deliveryPda), {
+      ? Boolean((await connection.getAccountInfoAndContext(new PublicKey(pending.deliveryPda), {
         commitment: 'confirmed', dataSlice: { offset: 0, length: 0 },
-      }))
+      })).value)
       : (await connection.getMultipleAccountsInfo(pending.assetIds.map((assetId) => new PublicKey(assetId)), {
         commitment: 'confirmed', dataSlice: { offset: 0, length: 2 },
       })).every(isTombstone),
@@ -1466,7 +1471,7 @@ async function mintPackReceipts(
       for (let attempt = 0; attempt < 3; attempt += 1) {
         if (commerce.signal.aborted) throw commerce.signal.reason;
         try {
-          const { blockhash } = await connection.getLatestBlockhash('confirmed');
+          const { blockhash } = (await connection.getLatestBlockhashAndContext('confirmed')).value;
           const transaction = buildDeliveryTransaction(instructions, signer.publicKey, blockhash, signer);
           if (transaction.serialize().length > SOLANA_MAX_RAW_TX_BYTES) throw new RangeError('transaction too large');
           const signature = bs58.encode(transaction.signatures[0]);
@@ -1562,7 +1567,7 @@ async function ensureInternalDelivery(
   const assets = request.items.map((item) => new PublicKey(item.assetId));
   const send = async (deliveryId: number, deliveryPda: PublicKey, bump: number): Promise<InternalDelivery> => {
     if (request.internalDeliveryTx) return { deliveryId, deliveryPda: deliveryPda.toBase58(), deliveryTx: request.internalDeliveryTx };
-    const existing = await connection.getAccountInfo(deliveryPda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } });
+    const existing = (await connection.getAccountInfoAndContext(deliveryPda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } })).value;
     if (existing) return { deliveryId, deliveryPda: deliveryPda.toBase58(), deliveryTx: null };
     const instruction = new TransactionInstruction({
       programId: runtime.boxMinterProgramId,
@@ -1585,7 +1590,7 @@ async function ensureInternalDelivery(
     if (sized.serialize().length > SOLANA_MAX_RAW_TX_BYTES) {
       throw new AdminIrlRedeemFinalizeError('failed-precondition', 'Admin IRL internal delivery transaction is too large. Try fewer packs.');
     }
-    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    const { blockhash } = (await connection.getLatestBlockhashAndContext('confirmed')).value;
     const transaction = await buildTransactionWithLookupTables(instructions, signer, blockhash, lookupTables);
     const signature = bs58.encode(transaction.signatures[0]);
     const pendingSubmission: PendingFinalizeSubmission = {
@@ -1619,7 +1624,7 @@ async function ensureInternalDelivery(
   for (let attempt = 0; attempt < MAX_DELIVERY_ALLOCATION_ATTEMPTS; attempt += 1) {
     const deliveryId = secureRandomInt(2 ** 31 - 1) + 1;
     const [pda, bump] = deriveDeliveryPda(runtime, deliveryId);
-    if (await connection.getAccountInfo(pda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } })) continue;
+    if ((await connection.getAccountInfoAndContext(pda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } })).value) continue;
     await updateRequest(commerce, path, attemptId, { internalDeliveryId: deliveryId, internalDeliveryPda: pda.toBase58() });
     return send(deliveryId, pda, bump);
   }
@@ -1639,8 +1644,8 @@ async function closeInternalDelivery(
   try {
     if (request.closeDeliveryTx) return request.closeDeliveryTx;
     const [pda, bump] = deriveDeliveryPda(runtime, internal.deliveryId);
-    if (!await connection.getAccountInfo(pda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } })) return null;
-    const { blockhash } = await connection.getLatestBlockhash('confirmed');
+    if (!(await connection.getAccountInfoAndContext(pda, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } })).value) return null;
+    const { blockhash } = (await connection.getLatestBlockhashAndContext('confirmed')).value;
     const transaction = buildDeliveryTransaction([
       ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
       closeDeliveryInstruction({
@@ -3027,6 +3032,7 @@ export async function loadAdminIrlRedeemFinalizeWorkflowResult(args: Readonly<{
 }
 
 export const adminIrlRedeemFinalizeTestHooks = {
+  createConnection,
   clearDefinitiveFinalizeSubmission,
   completeResponse,
   ensureInternalDelivery,

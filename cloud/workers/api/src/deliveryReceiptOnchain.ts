@@ -7,7 +7,6 @@ import {
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
-  type FetchFn,
 } from '@solana/web3.js';
 import { getApiDrop, type ApiDropConfig } from './dropConfig.js';
 import {
@@ -33,27 +32,19 @@ import {
   MPL_NOOP_PROGRAM_ADDRESS,
   SPL_NOOP_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.js';
+import type { ProfileProviderFetch } from './boundedResponse.js';
 import {
-  cancelResponseBody,
-  readBoundedResponseBytes,
-  type ProfileProviderFetch,
-} from './boundedResponse.js';
-import {
-  createTimedAbortScope,
   isSignalCancellationError,
-  raceWithSignal,
   sleepWithSignal,
 } from './boundedRequest.js';
 import { isRecord } from './dataAccess.js';
 import { DeliveryReceiptError, mapProviderError } from './deliveryReceiptErrors.js';
-import { heliusRpcUrl } from './solanaProvider.js';
+import { createSolanaConnection } from './solanaConnection.js';
 import { hasConfirmedSignatureCommitment } from './transactionSubmissionRecovery.js';
 
 export { DeliveryReceiptError } from './deliveryReceiptErrors.js';
 export { hasConfirmedSignatureCommitment } from './transactionSubmissionRecovery.js';
 
-const PROVIDER_MAX_BYTES = 2 * 1024 * 1024;
-const RPC_TIMEOUT_MS = 8_000;
 export const TX_SEND_TIMEOUT_MS = 12_000;
 export const TX_CONFIRM_TIMEOUT_MS = 25_000;
 const TX_CONFIRM_POLL_MS = 800;
@@ -161,57 +152,28 @@ export function decodeCosigner(secret: string): Keypair {
   }
 }
 
-async function readBoundedProviderResponse(response: Response, signal: AbortSignal): Promise<Uint8Array> {
-  return readBoundedResponseBytes(response, {
-    maxBytes: PROVIDER_MAX_BYTES,
-    signal,
-    createError: (failure) => new DeliveryReceiptError(
-      'unavailable',
-      failure === 'too-large'
-        ? 'Receipt provider returned too much data.'
-        : failure === 'stream-failed'
-          ? 'Receipt provider is temporarily unavailable.'
-          : 'Receipt provider returned an invalid response.',
-    ),
-  });
-}
-
 export function createConnection(context: ProviderContext, runtime: DeliveryRuntime): Connection {
-  const boundedFetch: FetchFn = async (input, init) => {
-    const scope = createTimedAbortScope(context.signal, {
-      timeoutMs: RPC_TIMEOUT_MS,
-      timeoutMessage: 'Receipt provider request timed out',
-    });
-    try {
-      const response = await raceWithSignal(context.fetch(input, {
-        ...init,
-        redirect: 'manual',
-        signal: scope.signal,
-      }), scope.signal);
-      if (!response.ok) {
-        await cancelResponseBody(response);
-        throw new DeliveryReceiptError('unavailable', 'Receipt provider is temporarily unavailable.');
+  return createSolanaConnection({
+    apiKey: context.apiKey,
+    cluster: runtime.cluster,
+    fetch: context.fetch,
+    signal: context.signal,
+    mapError: (failure) => {
+      if (failure.kind === 'timeout') {
+        return new DeliveryReceiptError('deadline-exceeded', 'Receipt provider request timed out.');
       }
-      const body = await readBoundedProviderResponse(response, scope.signal);
-      return new Response(Uint8Array.from(body).buffer, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-    } catch (error) {
-      if (isSignalCancellationError(context.signal, error)) throw context.signal.reason;
-      if (scope.timedOut() && isSignalCancellationError(scope.signal, error)) {
-        throw new DeliveryReceiptError('deadline-exceeded', 'Receipt provider request timed out.');
+      if (failure.bodyFailure) {
+        return new DeliveryReceiptError(
+          'unavailable',
+          failure.bodyFailure === 'too-large'
+            ? 'Receipt provider returned too much data.'
+            : failure.bodyFailure === 'stream-failed'
+              ? 'Receipt provider is temporarily unavailable.'
+              : 'Receipt provider returned an invalid response.',
+        );
       }
-      throw mapProviderError(error, 'Receipt provider is temporarily unavailable.');
-    } finally {
-      scope.dispose();
-    }
-  };
-  return new Connection(heliusRpcUrl(runtime.cluster, context.apiKey), {
-    commitment: 'confirmed',
-    disableRetryOnRateLimit: true,
-    fetch: boundedFetch,
+      return mapProviderError(failure.cause ?? failure, 'Receipt provider is temporarily unavailable.');
+    },
   });
 }
 

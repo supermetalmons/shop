@@ -987,6 +987,42 @@ test('receipt provider stream failures retain the temporary unavailable message'
   );
 });
 
+for (const method of ['getAccountInfoAndContext', 'getLatestBlockhashAndContext'] as const) {
+  test(`receipt ${method} preserves the domain timeout error`, async (context) => {
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const connection = createConnection({
+      apiKey: 'test-key',
+      fetch: async () => new Promise<Response>(() => undefined),
+      signal: new AbortController().signal,
+    }, deliveryReceiptTestHooks.runtimeForDrop('card_nft_2'));
+    const pending = method === 'getAccountInfoAndContext'
+      ? connection.getAccountInfoAndContext(PublicKey.default)
+      : connection.getLatestBlockhashAndContext('confirmed');
+    const rejected = assert.rejects(pending, (error: unknown) =>
+      error instanceof DeliveryReceiptError &&
+      error.code === 'deadline-exceeded' &&
+      error.message === 'Receipt provider request timed out.');
+    context.mock.timers.tick(8_000);
+    await rejected;
+  });
+
+  test(`receipt ${method} preserves exact caller cancellation`, async () => {
+    const controller = new AbortController();
+    const reason = new Error('receipt caller disconnected');
+    const connection = createConnection({
+      apiKey: 'test-key',
+      fetch: async () => new Promise<Response>(() => undefined),
+      signal: controller.signal,
+    }, deliveryReceiptTestHooks.runtimeForDrop('card_nft_2'));
+    const pending = method === 'getAccountInfoAndContext'
+      ? connection.getAccountInfoAndContext(PublicKey.default)
+      : connection.getLatestBlockhashAndContext('confirmed');
+    const rejected = assert.rejects(pending, (error: unknown) => error === reason);
+    controller.abort(reason);
+    await rejected;
+  });
+}
+
 test('receipt wallet binding preserves the error that wins an abort race', async () => {
   const controller = new AbortController();
   const d1Failure = new Error('D1 wallet binding failed first');
@@ -1515,9 +1551,12 @@ test('receipt batch cancellation after send preserves its deterministic submissi
   await assert.rejects(
     deliveryReceiptTestHooks.sendReceiptBatch({
       connection: {
-        getLatestBlockhash: async () => ({
-          blockhash: Keypair.generate().publicKey.toBase58(),
-          lastValidBlockHeight: 123,
+        getLatestBlockhashAndContext: async () => ({
+          context: { slot: 1 },
+          value: {
+            blockhash: Keypair.generate().publicKey.toBase58(),
+            lastValidBlockHeight: 123,
+          },
         }),
         sendTransaction: async (transaction: { signatures: Uint8Array[] }) => {
           submittedSignature = bs58.encode(transaction.signatures[0]);
@@ -1577,9 +1616,12 @@ test('receipt batch cancellation before broadcast survives a lost settlement ack
   await assert.rejects(
     deliveryReceiptTestHooks.sendReceiptBatch({
       connection: {
-        getLatestBlockhash: async () => ({
-          blockhash: Keypair.generate().publicKey.toBase58(),
-          lastValidBlockHeight: 123,
+        getLatestBlockhashAndContext: async () => ({
+          context: { slot: 1 },
+          value: {
+            blockhash: Keypair.generate().publicKey.toBase58(),
+            lastValidBlockHeight: 123,
+          },
         }),
         sendTransaction: async () => assert.fail('cancelled receipt reached broadcast'),
       } as unknown as Parameters<typeof deliveryReceiptTestHooks.sendReceiptBatch>[0]['connection'],
@@ -1635,9 +1677,12 @@ test('receipt batch keeps write-ahead state when D1 promotion fails after confir
   await assert.rejects(
     deliveryReceiptTestHooks.sendReceiptBatch({
       connection: {
-        getLatestBlockhash: async () => ({
-          blockhash: Keypair.generate().publicKey.toBase58(),
-          lastValidBlockHeight: 123,
+        getLatestBlockhashAndContext: async () => ({
+          context: { slot: 1 },
+          value: {
+            blockhash: Keypair.generate().publicKey.toBase58(),
+            lastValidBlockHeight: 123,
+          },
         }),
         sendTransaction: async (transaction: { signatures: Uint8Array[] }) => {
           submittedSignature = bs58.encode(transaction.signatures[0]);
@@ -1690,9 +1735,12 @@ test('receipt batch never promotes a failed signature from missing account evide
   await assert.rejects(
     deliveryReceiptTestHooks.sendReceiptBatch({
       connection: {
-        getLatestBlockhash: async () => ({
-          blockhash: Keypair.generate().publicKey.toBase58(),
-          lastValidBlockHeight: 123,
+        getLatestBlockhashAndContext: async () => ({
+          context: { slot: 1 },
+          value: {
+            blockhash: Keypair.generate().publicKey.toBase58(),
+            lastValidBlockHeight: 123,
+          },
         }),
         sendTransaction: async () => SIGNATURE,
         getSignatureStatuses: async () => ({

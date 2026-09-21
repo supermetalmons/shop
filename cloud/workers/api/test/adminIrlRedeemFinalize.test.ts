@@ -58,6 +58,42 @@ import {
 const OWNER = '8wtxG6HMg4sdYGixfEvJ9eAATheyYsAU3Y7pTmqeA5nM';
 const DROP_ID = 'card_nft_2';
 const REQUEST_ID = 'AbCdEfGhIjKlMnOpQrSt';
+
+for (const method of ['getAccountInfoAndContext', 'getLatestBlockhashAndContext'] as const) {
+  test(`Admin IRL ${method} keeps transport timeouts retryable`, async (context) => {
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    const connection = adminIrlRedeemFinalizeTestHooks.createConnection({
+      apiKey: 'test-key',
+      providerFetch: async () => new Promise<Response>(() => undefined),
+      signal: new AbortController().signal,
+    }, adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]));
+    const pending = method === 'getAccountInfoAndContext'
+      ? connection.getAccountInfoAndContext(PublicKey.default)
+      : connection.getLatestBlockhashAndContext('confirmed');
+    const rejected = assert.rejects(pending, (error: unknown) =>
+      error instanceof AdminIrlRedeemFinalizeError &&
+      error.code === 'deadline-exceeded' &&
+      adminIrlRedeemFinalizeWorkflowError(error).retryable);
+    context.mock.timers.tick(8_000);
+    await rejected;
+  });
+
+  test(`Admin IRL ${method} preserves exact workflow cancellation`, async () => {
+    const controller = new AbortController();
+    const reason = new Error('Admin IRL step cancelled');
+    const connection = adminIrlRedeemFinalizeTestHooks.createConnection({
+      apiKey: 'test-key',
+      providerFetch: async () => new Promise<Response>(() => undefined),
+      signal: controller.signal,
+    }, adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]));
+    const pending = method === 'getAccountInfoAndContext'
+      ? connection.getAccountInfoAndContext(PublicKey.default)
+      : connection.getLatestBlockhashAndContext('confirmed');
+    const rejected = assert.rejects(pending, (error: unknown) => error === reason);
+    controller.abort(reason);
+    await rejected;
+  });
+}
 const SIGNATURE = bs58.encode(Keypair.generate().secretKey);
 
 function adminIrlRedeemFinalizeOperationId(
@@ -2078,9 +2114,9 @@ for (const kind of ['receipt_mint', 'internal_delivery'] as const) {
       let sendCount = 0;
       let sentSignature: string | undefined;
       const connection = {
-        getAccountInfo: async () => null,
+        getAccountInfoAndContext: async () => ({ context: { slot: 1 }, value: null }),
         getMultipleAccountsInfo: async () => [{ data: Buffer.alloc(2) }],
-        getLatestBlockhash: async () => ({ blockhash, lastValidBlockHeight: 100 }),
+        getLatestBlockhashAndContext: async () => ({ context: { slot: 1 }, value: { blockhash, lastValidBlockHeight: 100 } }),
         sendTransaction: async (transaction: VersionedTransaction) => {
           sendCount += 1;
           sentSignature = bs58.encode(transaction.signatures[0]);
@@ -2190,13 +2226,16 @@ test('Admin IRL receipt mint rethrows cancellation on its final retry', { timeou
   context.signal = controller.signal;
   let blockhashCalls = 0;
   const connection = {
-    getLatestBlockhash: async () => {
+    getLatestBlockhashAndContext: async () => {
       blockhashCalls += 1;
       if (blockhashCalls < 3) throw new Error('retry receipt mint');
       controller.abort(reason);
       return {
-        blockhash: Keypair.generate().publicKey.toBase58(),
-        lastValidBlockHeight: 100,
+        context: { slot: 1 },
+        value: {
+          blockhash: Keypair.generate().publicKey.toBase58(),
+          lastValidBlockHeight: 100,
+        },
       };
     },
     getMultipleAccountsInfo: async () => [{ data: Buffer.alloc(2) }],
@@ -2321,15 +2360,15 @@ test('Admin IRL internal delivery recovery confirms only when the delivery PDA e
   };
   for (const account of [null, { owner: PublicKey.default, executable: false, lamports: 1, data: Buffer.alloc(0) }]) {
     const connection = {
-      getAccountInfo: async (address, config) => {
+      getAccountInfoAndContext: async (address, config) => {
         assert.equal(address.toBase58(), pending.deliveryPda);
         assert.deepEqual(config, { commitment: 'confirmed', dataSlice: { offset: 0, length: 0 } });
-        return account;
+        return { context: { slot: 1 }, value: account };
       },
       getMultipleAccountsInfo: async () => { throw new Error('unexpected receipt asset lookup'); },
       getSignatureStatuses: async () => ({ context: { slot: 1 }, value: [null] }),
       isBlockhashValid: async () => ({ context: { slot: 1 }, value: true }),
-    } satisfies Pick<Connection, 'getAccountInfo' | 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'>;
+    } satisfies Pick<Connection, 'getAccountInfoAndContext' | 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'>;
     assert.equal(
       await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(connection, pending),
       account ? 'confirmed' : 'unresolved',
@@ -2352,7 +2391,7 @@ test('Admin IRL receipt recovery confirms only when every asset is absent or a t
     { accounts: [account, { ...account, data: Buffer.alloc(2) }], expected: 'unresolved' },
   ]) {
     const connection = {
-      getAccountInfo: async () => { throw new Error('unexpected delivery PDA lookup'); },
+      getAccountInfoAndContext: async () => { throw new Error('unexpected delivery PDA lookup'); },
       getMultipleAccountsInfo: async (addresses, config) => {
         assert.deepEqual(addresses.map((address) => address.toBase58()), pending.assetIds);
         assert.deepEqual(config, { commitment: 'confirmed', dataSlice: { offset: 0, length: 2 } });
@@ -2360,7 +2399,7 @@ test('Admin IRL receipt recovery confirms only when every asset is absent or a t
       },
       getSignatureStatuses: async () => ({ context: { slot: 1 }, value: [null] }),
       isBlockhashValid: async () => ({ context: { slot: 1 }, value: true }),
-    } satisfies Pick<Connection, 'getAccountInfo' | 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'>;
+    } satisfies Pick<Connection, 'getAccountInfoAndContext' | 'getMultipleAccountsInfo' | 'getSignatureStatuses' | 'isBlockhashValid'>;
     assert.equal(await adminIrlRedeemFinalizeTestHooks.probePendingFinalizeSubmission(connection, pending), expected);
   }
 });
