@@ -97,7 +97,6 @@ import {
 } from './boundedRequest.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
 import {
-  CommerceWriteConflict,
   D1CommerceRepository,
   commerceFieldValue,
   commerceKeys,
@@ -143,6 +142,7 @@ import {
   probeTransactionSubmission,
   type TransactionSubmissionOutcome,
 } from './transactionSubmissionRecovery.js';
+import { mutateSubmissionJournal } from './submissionJournal.js';
 
 export const ADMIN_IRL_REDEEM_FINALIZE_PATH = '/admin/irl-redeem/finalize';
 
@@ -1139,9 +1139,12 @@ async function persistPendingFinalizeSubmission(
   attemptId: string,
   pending: PendingFinalizeSubmission,
 ): Promise<void> {
-  try {
-    await runCommerceTransaction(context, async (transaction) => {
-      const document = await readCommerceRecord(context, requireCommerceKey(path), transaction);
+  await mutateSubmissionJournal({
+    context,
+    key: requireCommerceKey(path),
+    phase: 'persist',
+    createCleanupContext: () => cleanupContext(context),
+    plan: (document) => {
       if (!document || document.data.status !== 'processing' || document.data.processingAttemptId !== attemptId) {
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
       }
@@ -1149,26 +1152,21 @@ async function persistPendingFinalizeSubmission(
       if (existing && !samePendingFinalizeSubmission(existing, pending)) {
         throw new PendingFinalizeSubmissionError();
       }
-      await transaction.update(document.key, {
+      return {
         ...(existing ? {} : { pendingFinalizeSubmission: pending }),
         processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
         updatedAt: commerceFieldValue.serverTimestamp(),
-      });
-    });
-  } catch (error) {
-    if (error instanceof CommerceWriteConflict) throw error;
-    try {
-      const cleanup = cleanupContext(context);
-      const document = await readCommerceRecord(cleanup, requireCommerceKey(path));
+      };
+    },
+    isApplied: (document) => {
       const stored = document && normalizePendingFinalizeSubmission(document.data.pendingFinalizeSubmission);
-      if (
+      return Boolean(
         document?.data.status === 'processing' &&
         document.data.processingAttemptId === attemptId &&
         stored && samePendingFinalizeSubmission(stored, pending)
-      ) return;
-    } catch {}
-    throw error;
-  }
+      );
+    },
+  });
 }
 
 function pendingFinalizeSubmissionAlreadySettled(
@@ -1192,20 +1190,22 @@ async function settlePendingFinalizeSubmission(
   pending: PendingFinalizeSubmission,
   outcome: 'confirmed' | 'expired',
 ): Promise<void> {
-  try {
-    await runCommerceTransaction(context, async (transaction) => {
-      const document = await readCommerceRecord(context, requireCommerceKey(path), transaction);
+  await mutateSubmissionJournal({
+    context,
+    key: requireCommerceKey(path),
+    phase: 'settle',
+    createCleanupContext: () => cleanupContext(context),
+    plan: (document) => {
       if (!document || document.data.status !== 'processing' || document.data.processingAttemptId !== attemptId) {
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem processing lease changed.');
       }
       const stored = normalizePendingFinalizeSubmission(document.data.pendingFinalizeSubmission);
       if (!stored) {
         if (pendingFinalizeSubmissionAlreadySettled(document.data, pending, outcome)) {
-          await transaction.update(document.key, {
+          return {
             processingLeaseExpiresAt: timestamp(Date.now() + PROCESSING_LEASE_MS),
             updatedAt: commerceFieldValue.serverTimestamp(),
-          });
-          return;
+          };
         }
         throw new AdminIrlRedeemFinalizeError('aborted', 'Admin IRL redeem submission recovery changed.');
       }
@@ -1226,21 +1226,17 @@ async function settlePendingFinalizeSubmission(
           values.receiptTxs = Array.from(new Set([...normalizeReceiptTxs(document.data.receiptTxs), pending.signature]));
         }
       }
-      await transaction.update(document.key, values);
-    });
-  } catch (error) {
-    try {
-      const cleanup = cleanupContext(context);
-      const document = await readCommerceRecord(cleanup, requireCommerceKey(path));
+      return values;
+    },
+    isApplied: (document) => {
       const stored = document && normalizePendingFinalizeSubmission(document.data.pendingFinalizeSubmission);
-      if (
+      return Boolean(
         document?.data.status === 'processing' &&
         document.data.processingAttemptId === attemptId &&
         !stored && pendingFinalizeSubmissionAlreadySettled(document.data, pending, outcome)
-      ) return;
-    } catch {}
-    throw error;
-  }
+      );
+    },
+  });
 }
 
 async function holdPendingFinalizeSubmission(

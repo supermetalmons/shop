@@ -1116,6 +1116,43 @@ test('receipt submission intent recovers a lost D1 commit acknowledgement', asyn
   );
 });
 
+test('confirmed receipt settlement survives a lost D1 acknowledgement and replay', async () => {
+  let armed = false;
+  let lostAcknowledgement = false;
+  const native = await nativeDeliveryContext({
+    deliveryId: 7,
+    owner: OWNER,
+    status: 'processing',
+    receiptTxs: [SIGNATURE],
+  }, {
+    observeBatchAfterCommit: ({ statements }) => {
+      if (!armed || !statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))) return;
+      armed = false;
+      lostAcknowledgement = true;
+      throw new Error('lost confirmed receipt settlement acknowledgement');
+    },
+  });
+  const path = 'drops/card_nft_2/deliveryOrders/7';
+  const pending = {
+    signature: SECOND_SIGNATURE,
+    blockhash: Keypair.generate().publicKey.toBase58(),
+    lastValidBlockHeight: 123,
+    assetIds: [Keypair.generate().publicKey.toBase58()],
+  };
+  await deliveryReceiptTestHooks.persistPendingReceiptSubmission(native.context, path, pending);
+
+  armed = true;
+  await deliveryReceiptTestHooks.settlePendingReceiptSubmission(native.context, path, pending, 'confirmed');
+  assert.equal(lostAcknowledgement, true);
+  const settled = await readCommerceRecord(native.context, requireCommerceKey(path));
+  assert.deepEqual(settled?.data.receiptTxs, [SIGNATURE, SECOND_SIGNATURE]);
+  assert.equal((settled?.data.receiptRecovery as Record<string, unknown>).pendingSubmission, undefined);
+
+  await deliveryReceiptTestHooks.settlePendingReceiptSubmission(native.context, path, pending, 'confirmed');
+  const replayed = await readCommerceRecord(native.context, requireCommerceKey(path));
+  assert.deepEqual(replayed, settled);
+});
+
 test('receipt submission recovery confirms only when every asset account is absent', async () => {
   const pending = {
     signature: SIGNATURE,

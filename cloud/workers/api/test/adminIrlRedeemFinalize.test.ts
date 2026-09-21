@@ -1861,6 +1861,126 @@ test('Admin IRL submission settlement survives a lost D1 acknowledgement', async
   assert.deepEqual(document?.data.receiptTxs, [pending.signature]);
 });
 
+test('Admin IRL internal delivery settlement survives a lost D1 acknowledgement and replay', async () => {
+  let armed = false;
+  let lostAcknowledgement = false;
+  const context = commerceContext({
+    dropId: DROP_ID,
+    owner: OWNER,
+    status: 'processing',
+    processingAttemptId: 'attempt',
+    receiptTxs: [SIGNATURE],
+  }, {
+    observeBatchAfterCommit: ({ statements }) => {
+      if (!armed || !statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))) return;
+      armed = false;
+      lostAcknowledgement = true;
+      throw new Error('lost internal delivery settlement acknowledgement');
+    },
+  });
+  const path = `drops/${DROP_ID}/adminIrlRedeemRequests/${REQUEST_ID}`;
+  const pending = {
+    kind: 'internal_delivery' as const,
+    signature: bs58.encode(Keypair.generate().secretKey),
+    blockhash: Keypair.generate().publicKey.toBase58(),
+    deliveryId: 7,
+    deliveryPda: Keypair.generate().publicKey.toBase58(),
+  };
+  await adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(context, path, 'attempt', pending);
+
+  armed = true;
+  await adminIrlRedeemFinalizeTestHooks.settlePendingFinalizeSubmission(
+    context,
+    path,
+    'attempt',
+    pending,
+    'confirmed',
+  );
+  assert.equal(lostAcknowledgement, true);
+  await adminIrlRedeemFinalizeTestHooks.settlePendingFinalizeSubmission(
+    context,
+    path,
+    'attempt',
+    pending,
+    'confirmed',
+  );
+
+  const document = await readCommerceRecord(context, requireCommerceKey(path));
+  assert.equal(document?.data.pendingFinalizeSubmission, undefined);
+  assert.equal(document?.data.internalDeliveryId, pending.deliveryId);
+  assert.equal(document?.data.internalDeliveryPda, pending.deliveryPda);
+  assert.equal(document?.data.internalDeliveryTx, pending.signature);
+  assert.deepEqual(document?.data.receiptTxs, [SIGNATURE]);
+  assert.equal(document?.data.processingAttemptId, 'attempt');
+});
+
+for (const phase of ['persist', 'settle'] as const) {
+  test(`Admin IRL ${phase} recovery rejects a changed attempt despite matching submission state`, async (t) => {
+    const key = commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID);
+    const pending = {
+      kind: 'receipt_mint' as const,
+      signature: bs58.encode(Keypair.generate().secretKey),
+      blockhash: Keypair.generate().publicKey.toBase58(),
+      assetIds: [Keypair.generate().publicKey.toBase58()],
+    };
+    const original = {
+      dropId: DROP_ID,
+      owner: OWNER,
+      status: 'processing',
+      processingAttemptId: 'attempt',
+      processingLeaseExpiresAt: 100,
+      receiptTxs: [SIGNATURE],
+    };
+    const competing = {
+      ...original,
+      processingAttemptId: 'new-attempt',
+      processingLeaseExpiresAt: 1_900_000_000_000,
+      ...(phase === 'persist'
+        ? { pendingFinalizeSubmission: pending }
+        : { receiptTxs: [SIGNATURE, pending.signature] }),
+    };
+    const lostAcknowledgement = new Error(`lost ${phase} acknowledgement after attempt changed`);
+    let armed = false;
+    let changed = false;
+    const harness = createCommerceD1Harness({
+      observeBatchAfterCommit: ({ statements }) => {
+        if (!armed || !statements.some(({ sql }) => sql.includes('INSERT INTO commerce_commit_guards'))) return;
+        armed = false;
+        changed = true;
+        seedCommerceDocument(harness, { key, data: competing, version: 3 });
+        throw lostAcknowledgement;
+      },
+    });
+    t.after(() => harness.database.close());
+    seedCommerceDocument(harness, {
+      key,
+      data: {
+        ...original,
+        ...(phase === 'settle' ? { pendingFinalizeSubmission: pending } : {}),
+      },
+    });
+    const context = {
+      repository: new D1CommerceRepository(harness.db),
+      nowMs: 1_700_000_000_000,
+      providerFetch: async () => assert.fail('commerce persistence must not use provider fetch'),
+      signal: new AbortController().signal,
+    };
+
+    armed = true;
+    await assert.rejects(
+      phase === 'persist'
+        ? adminIrlRedeemFinalizeTestHooks.persistPendingFinalizeSubmission(context, key.path, 'attempt', pending)
+        : adminIrlRedeemFinalizeTestHooks.settlePendingFinalizeSubmission(context, key.path, 'attempt', pending, 'confirmed'),
+      (error) => error === lostAcknowledgement,
+    );
+
+    assert.equal(changed, true);
+    const document = await readCommerceRecord(context, key);
+    assert.deepEqual(document?.data, competing);
+    assert.equal(document?.version, 3);
+  });
+}
+
 test('Admin IRL pre-broadcast cancellation clears only its exact submission intent', async () => {
   const controller = new AbortController();
   const reason = new Error('cancelled before Admin IRL broadcast');

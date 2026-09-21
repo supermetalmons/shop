@@ -125,6 +125,7 @@ import {
   probeTransactionSubmission,
   type TransactionSubmissionOutcome,
 } from './transactionSubmissionRecovery.js';
+import { mutateSubmissionJournal } from './submissionJournal.js';
 
 export const DELIVERY_RECEIPTS_ISSUE_PATH = '/delivery/receipts/issue';
 export const DELIVERY_RECEIPTS_RECOVER_PATH = '/delivery/receipts/recover';
@@ -1809,32 +1810,29 @@ async function persistPendingReceiptSubmission(
   path: string,
   pending: PendingReceiptSubmission,
 ): Promise<void> {
-  try {
-    await runCommerceTransaction(context, async (transaction) => {
-      const document = await readDocument(context, requireCommerceKey(path), transaction);
+  await mutateSubmissionJournal({
+    context,
+    key: requireCommerceKey(path),
+    phase: 'persist',
+    createCleanupContext: () => cleanupContext(context),
+    plan: (document) => {
       if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
       const existing = pendingReceiptSubmission(document.data);
       if (existing && !samePendingReceiptSubmission(existing, pending)) {
         throw new DeliveryReceiptError('aborted', 'A receipt transaction is still being reconciled.');
       }
-      await transaction.update(document.key, {
+      return {
         [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: pending,
         'receiptRecovery.leaseExpiresAt': commerceTimestamp(
           context.nowMs + DELIVERY_AMBIGUOUS_SUBMISSION_LEASE_MS,
         ),
-      });
-    });
-  } catch (error) {
-    if (!(error instanceof CommerceWriteConflict)) {
-      try {
-        const cleanup = cleanupContext(context);
-        const document = await readDocument(cleanup, requireCommerceKey(path));
-        const stored = document && pendingReceiptSubmission(document.data);
-        if (stored && samePendingReceiptSubmission(stored, pending)) return;
-      } catch {}
-    }
-    throw error;
-  }
+      };
+    },
+    isApplied: (document) => {
+      const stored = document && pendingReceiptSubmission(document.data);
+      return Boolean(stored && samePendingReceiptSubmission(stored, pending));
+    },
+  });
 }
 
 async function settlePendingReceiptSubmission(
@@ -1843,9 +1841,12 @@ async function settlePendingReceiptSubmission(
   pending: PendingReceiptSubmission,
   outcome: Exclude<TransactionSubmissionOutcome, 'unresolved'>,
 ): Promise<void> {
-  try {
-    await runCommerceTransaction(context, async (transaction) => {
-      const document = await readDocument(context, requireCommerceKey(path), transaction);
+  await mutateSubmissionJournal({
+    context,
+    key: requireCommerceKey(path),
+    phase: 'settle',
+    createCleanupContext: () => cleanupContext(context),
+    plan: (document) => {
       if (!document) throw new DeliveryReceiptError('not-found', 'Delivery order not found.');
       const existing = pendingReceiptSubmission(document.data);
       if (!existing) {
@@ -1855,23 +1856,19 @@ async function settlePendingReceiptSubmission(
       if (!samePendingReceiptSubmission(existing, pending)) {
         throw new DeliveryReceiptError('aborted', 'Receipt submission recovery changed.');
       }
-      await transaction.update(document.key, {
+      return {
         ...(outcome === 'confirmed' ? { receiptTxs: commerceFieldValue.arrayUnion(pending.signature) } : {}),
         [RECEIPT_RECOVERY_PENDING_SUBMISSION_FIELD]: commerceFieldValue.delete(),
-      });
-    });
-  } catch (error) {
-    try {
-      const cleanup = cleanupContext(context);
-      const document = await readDocument(cleanup, requireCommerceKey(path));
+      };
+    },
+    isApplied: (document) => {
       const stored = document && pendingReceiptSubmission(document.data);
-      if (
+      return Boolean(
         document && !stored &&
         pendingReceiptSubmissionAlreadySettled(document.data, pending, outcome)
-      ) return;
-    } catch {}
-    throw error;
-  }
+      );
+    },
+  });
 }
 
 async function probePendingReceiptSubmission(
