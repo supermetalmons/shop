@@ -7,6 +7,17 @@ import {
   type CheckCommerceD1Query,
 } from '../scripts/ops/checkCommerceD1.ts';
 import { inventoryDropConfigs } from '../scripts/shared/dudeInventoryMaintenance.ts';
+import {
+  adminIrlRedeemWorkflowStatusQuery,
+  deliveryOrderOwnersQuery,
+  deliveryRecoveryOrdersQuery,
+  duePackStatusProjectionsQuery,
+  dueReadyNotificationsQuery,
+  dueStripeTerminalNotificationsQuery,
+  pendingReadyNotificationsQuery,
+  staleStripeFulfillmentsQuery,
+} from '../cloud/workers/api/src/commerceQueries.ts';
+import { renderCommerceQuerySql } from '../scripts/shared/commerceQuerySql.ts';
 
 const migrationNames = [
   '0001_current_schema.sql',
@@ -163,10 +174,15 @@ function seedInventory(database: DatabaseSync, ready = true) {
   return configs[0];
 }
 
-test('Commerce D1 checker accepts the current in-memory schema', () => {
+test('Commerce D1 checker accepts the current schema using complete production queries', () => {
   const database = currentDatabase();
   try {
-    assert.deepEqual(checkCommerceD1(localQuery(database)), {
+    const queries: string[] = [];
+    const query = localQuery(database);
+    assert.deepEqual(checkCommerceD1((sql) => {
+      queries.push(sql);
+      return query(sql);
+    }), {
       authorityState: 'd1',
       authorityRevision: 3,
       inventoryMode: 'legacy',
@@ -181,6 +197,25 @@ test('Commerce D1 checker accepts the current in-memory schema', () => {
         stripe_checkout: 256,
       },
     });
+    const productionPlans = [
+      deliveryOrderOwnersQuery({ limit: 501 }),
+      deliveryOrderOwnersQuery({ limit: 501, startAfterOwner: '11111111111111111111111111111111' }),
+      deliveryRecoveryOrdersQuery('11111111111111111111111111111111'),
+      pendingReadyNotificationsQuery({ limit: 8, owner: 'owner', startAfterPath: 'drops/a/deliveryOrders/1' }),
+      pendingReadyNotificationsQuery({ limit: 8, startAfterPath: 'drops/a/deliveryOrders/1' }),
+      duePackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 }),
+      staleStripeFulfillmentsQuery(1),
+      dueReadyNotificationsQuery({ dueAtMs: 1, limit: 8 }),
+      dueStripeTerminalNotificationsQuery({ dueAtMs: 1, limit: 20 }),
+      adminIrlRedeemWorkflowStatusQuery(`airf-v1-${'0'.repeat(64)}`),
+    ];
+    for (const productionQuery of productionPlans) {
+      const expected = `EXPLAIN QUERY PLAN ${renderCommerceQuerySql(productionQuery)}`;
+      assert.equal(queries.filter((sql) => sql === expected).length, 1, expected);
+    }
+    assert.equal(queries.filter((sql) => sql.startsWith('EXPLAIN QUERY PLAN')).length, 13);
+    const smokeQuery = renderCommerceQuerySql(deliveryOrderOwnersQuery({ limit: 1 }));
+    assert.equal(queries.filter((sql) => sql === smokeQuery).length, 1);
   } finally {
     database.close();
   }

@@ -10,6 +10,18 @@ import { inventoryDropConfigs } from '../shared/dudeInventoryMaintenance.ts';
 import { READY_NOTIFICATION_DUE_SQL } from '../../shared/readyNotificationDueSql.ts';
 import { isCommerceDocumentSegment } from '../../shared/commerceDocumentPath.ts';
 import { isStripeChargebackSessionId, isStripeDisputeId } from '../../shared/stripeChargebacks.ts';
+import {
+  adminIrlRedeemWorkflowStatusQuery,
+  deliveryOrderOwnersQuery,
+  deliveryRecoveryOrdersQuery,
+  duePackStatusProjectionsQuery,
+  dueReadyNotificationsQuery,
+  dueStripeTerminalNotificationsQuery,
+  pendingReadyNotificationsQuery,
+  staleStripeFulfillmentsQuery,
+  type CommerceSqlQuery,
+} from '../../cloud/workers/api/src/commerceQueries.ts';
+import { renderCommerceQuerySql } from '../shared/commerceQuerySql.ts';
 
 function fail(message: string): never {
   throw new Error(message);
@@ -516,80 +528,25 @@ export function checkCommerceD1(
       normalizedSql(row.sql) !== normalizedSql(PENDING_READY_NOTIFICATION_INDEX_SQL[String(row.name)]))
   ) fail('Commerce D1 pending ready-notification indexes are invalid.');
 
-  const initialDeliveryOwnerPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN
-    SELECT DISTINCT document.owner AS owner
-    FROM commerce_authority_control AS authority
-    CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
-    WHERE
-      authority.singleton = 1 AND
-      authority.authority_state = 'd1' AND
-      document.document_kind = 'delivery_order' AND
-      document.owner IS NOT NULL AND
-      typeof(document.owner) = 'text' AND
-      length(document.owner) BETWEEN 32 AND 44 AND
-      document.owner NOT GLOB '*[^0-9A-Za-z]*' AND
-      document.owner NOT GLOB '*[0OIl]*'
-    ORDER BY document.owner ASC
-    LIMIT 501`);
+  const queryPlan = (query: CommerceSqlQuery) =>
+    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN ${renderCommerceQuerySql(query)}`);
+
+  const initialDeliveryOwnerPlan = queryPlan(deliveryOrderOwnersQuery({ limit: 501 }));
   requireSearchIndex(initialDeliveryOwnerPlan, 'commerce_documents_delivery_owner_path');
   requireNoTemporaryBTree(initialDeliveryOwnerPlan, 'initial delivery-owner');
-  const keysetDeliveryOwnerPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN
-    SELECT DISTINCT document.owner AS owner
-    FROM commerce_authority_control AS authority
-    CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
-    WHERE
-      authority.singleton = 1 AND
-      authority.authority_state = 'd1' AND
-      document.document_kind = 'delivery_order' AND
-      document.owner IS NOT NULL AND
-      typeof(document.owner) = 'text' AND
-      length(document.owner) BETWEEN 32 AND 44 AND
-      document.owner NOT GLOB '*[^0-9A-Za-z]*' AND
-      document.owner NOT GLOB '*[0OIl]*' AND
-      document.owner > '11111111111111111111111111111111'
-    ORDER BY document.owner ASC
-    LIMIT 501`);
+  const keysetDeliveryOwnerPlan = queryPlan(deliveryOrderOwnersQuery({
+    limit: 501,
+    startAfterOwner: '11111111111111111111111111111111',
+  }));
   requireSearchIndex(keysetDeliveryOwnerPlan, 'commerce_documents_delivery_owner_path');
   requireNoTemporaryBTree(keysetDeliveryOwnerPlan, 'keyset delivery-owner');
-  const deliveryRecoveryPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN
-    SELECT
-      document.document_path,
-      document.document_kind,
-      document.drop_id,
-      document.document_id,
-      document.document_json,
-      document.version,
-      document.create_time,
-      document.update_time,
-      document.processed_at_seconds,
-      document.processed_at_nanos
-    FROM commerce_authority_control AS authority
-    CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_status
-    WHERE
-      authority.singleton = 1 AND
-      authority.authority_state = 'd1' AND
-      document.document_kind = 'delivery_order' AND
-      document.owner = '11111111111111111111111111111111' AND
-      document.status IN ('processing', 'prepared')`);
+  const deliveryRecoveryPlan = queryPlan(deliveryRecoveryOrdersQuery('11111111111111111111111111111111'));
   requireSearchIndex(deliveryRecoveryPlan, 'commerce_documents_delivery_owner_status');
   if (!deliveryRecoveryPlan.some((row) => normalizedSql(row.detail).includes(
     'commerce_documents_delivery_owner_status (document_kind=? AND owner=? AND status=?)',
   ))) fail('Commerce D1 delivery-recovery query plan does not use the full owner-status prefix.');
   requireNoTemporaryBTree(deliveryRecoveryPlan, 'delivery-recovery');
-  queryRemoteCommerceD1(`SELECT DISTINCT document.owner AS owner
-    FROM commerce_authority_control AS authority
-    CROSS JOIN commerce_documents AS document INDEXED BY commerce_documents_delivery_owner_path
-    WHERE
-      authority.singleton = 1 AND
-      authority.authority_state = 'd1' AND
-      document.document_kind = 'delivery_order' AND
-      document.owner IS NOT NULL AND
-      typeof(document.owner) = 'text' AND
-      length(document.owner) BETWEEN 32 AND 44 AND
-      document.owner NOT GLOB '*[^0-9A-Za-z]*' AND
-      document.owner NOT GLOB '*[0OIl]*'
-    ORDER BY document.owner ASC
-    LIMIT 1`);
+  queryRemoteCommerceD1(renderCommerceQuerySql(deliveryOrderOwnersQuery({ limit: 1 })));
   requireIndex(
     queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
       FROM commerce_documents
@@ -610,91 +567,36 @@ export function checkCommerceD1(
       ORDER BY processed_at_seconds DESC, processed_at_nanos DESC, document_path DESC`),
     'commerce_documents_drop_processed_cursor',
   );
-  const ownerNotificationPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN WITH candidate_paths AS (
-    SELECT document_path FROM commerce_documents
-      INDEXED BY commerce_delivery_orders_buyer_notifications_pending_owner_path
-    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
-      AND buyer_notification_state = 'pending' AND owner = 'owner'
-      AND document_path > 'drops/a/deliveryOrders/1'
-    UNION
-    SELECT document_path FROM commerce_documents
-      INDEXED BY commerce_delivery_orders_shipper_notifications_pending_owner_path
-    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
-      AND shipper_notification_state = 'pending' AND owner = 'owner'
-      AND document_path > 'drops/a/deliveryOrders/1'
-  ) SELECT document_path FROM candidate_paths ORDER BY document_path LIMIT 8`);
+  const ownerNotificationPlan = queryPlan(pendingReadyNotificationsQuery({
+    limit: 8,
+    owner: 'owner',
+    startAfterPath: 'drops/a/deliveryOrders/1',
+  }));
   requireSearchIndex(ownerNotificationPlan, 'commerce_delivery_orders_buyer_notifications_pending_owner_path');
   requireSearchIndex(ownerNotificationPlan, 'commerce_delivery_orders_shipper_notifications_pending_owner_path');
-  const ownerlessNotificationPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN WITH candidate_paths AS (
-    SELECT document_path FROM commerce_documents
-      INDEXED BY commerce_delivery_orders_buyer_notifications_pending
-    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
-      AND buyer_notification_state = 'pending' AND document_path > 'drops/a/deliveryOrders/1'
-    UNION
-    SELECT document_path FROM commerce_documents
-      INDEXED BY commerce_delivery_orders_shipper_notifications_pending
-    WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship'
-      AND shipper_notification_state = 'pending' AND document_path > 'drops/a/deliveryOrders/1'
-  ) SELECT document_path FROM candidate_paths ORDER BY document_path LIMIT 8`);
+  const ownerlessNotificationPlan = queryPlan(pendingReadyNotificationsQuery({
+    limit: 8,
+    startAfterPath: 'drops/a/deliveryOrders/1',
+  }));
   requireSearchIndex(ownerlessNotificationPlan, 'commerce_delivery_orders_buyer_notifications_pending');
   requireSearchIndex(ownerlessNotificationPlan, 'commerce_delivery_orders_shipper_notifications_pending');
   requireIndex(
-    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path FROM commerce_documents
-      WHERE document_kind = 'delivery_order' AND drop_id = 'drop'
-        AND pack_projection_state = 'pending' AND pack_projection_next_attempt_ms <= 1
-      ORDER BY pack_projection_next_attempt_ms, document_path LIMIT 4`),
+    queryPlan(duePackStatusProjectionsQuery({ dropId: 'drop', dueAtMs: 1, limit: 4 })),
     'commerce_documents_pack_projection',
   );
   requireIndex(
-    queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
-      FROM commerce_documents INDEXED BY commerce_stripe_checkouts_reconciliation_due
-      WHERE document_kind = 'stripe_checkout'
-        AND fulfillment_processor = 'cloudflare_queue_v1'
-        AND status IN ('fulfillment_pending', 'processing')
-        AND json_type(document_json, '$.updatedAt') IN ('integer', 'real')
-        AND json_type(document_json, '$.lastStripeWebhookEventId') = 'text'
-        AND CAST(json_extract(document_json, '$.updatedAt') AS INTEGER) <= 1
-      ORDER BY CAST(json_extract(document_json, '$.updatedAt') AS INTEGER), document_path LIMIT 100`),
+    queryPlan(staleStripeFulfillmentsQuery(1)),
     'commerce_stripe_checkouts_reconciliation_due',
   );
 
-  const readyNotificationDuePlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
-    FROM commerce_authority_control AS authority
-    CROSS JOIN commerce_documents INDEXED BY ${READY_NOTIFICATION_DUE_SQL.indexName}
-    WHERE
-      authority.singleton = 1 AND
-      authority.authority_state = 'd1' AND
-      ${READY_NOTIFICATION_DUE_SQL.pendingPredicate} AND
-      (${READY_NOTIFICATION_DUE_SQL.dueAtExpression}) <= 1
-    ORDER BY (${READY_NOTIFICATION_DUE_SQL.dueAtExpression}), document_path
-    LIMIT 8`);
+  const readyNotificationDuePlan = queryPlan(dueReadyNotificationsQuery({ dueAtMs: 1, limit: 8 }));
   requireSearchIndex(readyNotificationDuePlan, READY_NOTIFICATION_DUE_SQL.indexName);
   requireNoTemporaryBTree(readyNotificationDuePlan, 'due ready-notification');
 
-  const stripeTerminalNotificationPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
-    FROM commerce_authority_control AS authority
-    CROSS JOIN commerce_documents INDEXED BY commerce_stripe_terminal_notifications_due
-    WHERE
-      authority.singleton = 1 AND
-      authority.authority_state = 'd1' AND
-      document_kind = 'stripe_checkout' AND
-      (status = 'fulfilled' OR (status = 'fulfillment_failed' AND manual_refund_review_required = 1)) AND
-      json_extract(document_json, '$.stripeTerminalNotificationState') = 'pending' AND
-      CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER) <= 1
-    ORDER BY CAST(json_extract(document_json, '$.stripeTerminalNotificationNextAttemptAtMs') AS INTEGER),
-      document_path
-    LIMIT 20`);
+  const stripeTerminalNotificationPlan = queryPlan(dueStripeTerminalNotificationsQuery({ dueAtMs: 1, limit: 20 }));
   requireSearchIndex(stripeTerminalNotificationPlan, 'commerce_stripe_terminal_notifications_due');
 
-  const adminIrlWorkflowStatusPlan = queryRemoteCommerceD1(`EXPLAIN QUERY PLAN SELECT document_path
-    FROM commerce_authority_control AS authority CROSS JOIN commerce_documents
-    WHERE
-      authority.singleton = 1 AND
-      document_kind = 'admin_irl_redeem_request' AND
-      json_type(document_json, '$.workflowFinalizeV1.operationId') = 'text' AND
-      json_extract(document_json, '$.workflowFinalizeV1.operationId') = 'airf-v1-${'0'.repeat(64)}'
-    ORDER BY document_path ASC
-    LIMIT 2`);
+  const adminIrlWorkflowStatusPlan = queryPlan(adminIrlRedeemWorkflowStatusQuery(`airf-v1-${'0'.repeat(64)}`));
   requireSearchIndex(adminIrlWorkflowStatusPlan, 'commerce_admin_irl_redeem_workflow_operation');
   requireNoTemporaryBTree(adminIrlWorkflowStatusPlan, 'Admin IRL Workflow status');
 
