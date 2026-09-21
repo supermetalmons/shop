@@ -27,7 +27,7 @@ import {
   notificationEnqueueTimestamp,
   signNotificationEnqueueRequest,
 } from '../../../../shared/notificationEnqueueAuth.ts';
-import type { ProviderFetch } from '../src/workerPublicRoutes.ts';
+import type { ProviderFetch } from '../src/publicRouteSupport.ts';
 import { isStaffOnlyApiPath } from '../src/requestIdentity.ts';
 import { loadApiWorkerIndex } from './cloudflareWorkersTestLoader.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';

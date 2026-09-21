@@ -91,16 +91,15 @@ import {
 import { isStaffOnlyApiPath } from './requestIdentity.js';
 import {
   CORS_HEADERS,
-  handleNotificationSubscription,
-  handlePackStatus,
-  handlePost,
   handlePublicMethodNotAllowed,
   handlePublicPreflight,
   publicJsonResponse,
-  packStatusDropIdFromPathname,
   type WorkerDependencies,
   type WorkerRequestMetrics,
-} from './workerPublicRoutes.js';
+} from './publicRouteSupport.js';
+import { handleNotificationSubscription } from './notificationSubscription.js';
+import { handlePackStatus, packStatusDropIdFromPathname } from './packStatusRoute.js';
+import { handlePost } from './shopInventory.js';
 import {
   applyPublicCors,
   publicRequestOrigin,

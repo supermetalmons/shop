@@ -5,11 +5,6 @@ import {
 } from '../../../../shared/dasAssetCollections.js';
 import type { DasAsset } from '../../../../shared/dasAsset.js';
 import {
-  HELIUS_SEARCH_ASSETS_MAX_CANDIDATES,
-  HELIUS_SEARCH_ASSETS_MAX_CURSOR_PAGES,
-  HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES,
-  HELIUS_SEARCH_ASSETS_MAX_PROVIDER_CALLS,
-  HELIUS_SEARCH_ASSETS_MAX_TOTAL_BYTES,
   HELIUS_SEARCH_ASSETS_PAGE_LIMITS,
   heliusSearchAssetsCursorPageInfo,
   heliusSearchAssetsItems,
@@ -17,9 +12,7 @@ import {
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.js';
 import {
   isExactShopInventoryRequest,
-  isExactShopInventoryResponse,
   isExactShopPendingOpenBoxesRequest,
-  isExactShopPendingOpenBoxesResponse,
   SHOP_API_MAX_RESPONSE_ITEMS,
   type ShopExpectedAssetIds,
   type ShopInventoryRequest,
@@ -40,246 +33,52 @@ import {
   type ShopDropRuntime,
 } from '../../../../shared/shopDomain.js';
 import type { SolanaCluster } from '../../../../shared/deploymentCore.js';
-import { isPackStatusSupportedDropId } from '../../../../shared/packStatus.js';
-import {
-  isExactSubscribeToNotificationsRequest,
-  normalizeNotificationEmailRecipient,
-} from '../../../../shared/notificationSubscription.js';
 import { isBase58Bytes } from '../../../../shared/solanaRpcProxy.js';
-import {
-  type RpcProviderFetch,
-  type RpcProxyDependencies,
-  type RpcRequestMetrics,
-} from './rpcProxy.js';
-import {
-  MAX_INVENTORY_RESPONSE_BODY_BYTES,
-  MAX_INVENTORY_SERIALIZED_ITEM_BYTES,
-} from './inventoryLimits.js';
-import {
-  D1_PACK_STATUS_CACHE_TTL_SECONDS,
-  packStatusCacheRequest,
-  parseD1PackStatusCache,
-  readD1PackStatus,
-  readPackStatusMetadata,
-} from './d1PackStatus.js';
-import { registerDeferredWork, type DeferredWork } from './deferredWork.js';
+import { MAX_INVENTORY_SERIALIZED_ITEM_BYTES } from './inventoryLimits.js';
 import {
   PUBLIC_RATE_LIMITS,
   applyPublicCors,
   observePublicRateLimit,
-  publicCorsHeaders,
   publicRequestOrigin,
 } from './publicRequestPolicy.js';
 import {
   createRequestDeadline,
   isRequestCancellationError,
-  raceWithSignal,
-  readBoundedRequestJson,
-  sleepWithSignal,
 } from './boundedRequest.js';
 import {
-  cancelResponseBody,
-  readBoundedResponseJson,
-} from './boundedResponse.js';
-import { jsonResponse as sharedJsonResponse } from './httpResponse.js';
-import { heliusRpcUrl } from './solanaProvider.js';
+  BASE_HEADERS,
+  parseJsonRequestBody,
+  publicJsonResponse,
+  publicOriginDeniedResponse,
+  type WorkerDependencies,
+  type WorkerRequestMetrics,
+} from './publicRouteSupport.js';
+import {
+  ProviderFailure,
+  ProviderReadGate,
+  createAttemptScope,
+  heliusRpc,
+  type ProviderContext,
+} from './shopInventoryProvider.js';
 
 const HELIUS_BATCH_LIMIT = 1000;
-const HELIUS_OVERALL_TIMEOUT_MS = 60_000;
-const HELIUS_ATTEMPT_TIMEOUT_MS = 15_000;
-const EXPECTED_ASSET_RECOVERY_TIMEOUT_MS = 5_000;
-const MAX_REQUEST_BODY_BYTES = 1024;
-const MAX_RESEND_RESPONSE_BODY_BYTES = 8 * 1024;
+
 const PROVIDER_CONCURRENCY = 3;
-const RESEND_CONTACTS_API_URL = 'https://api.resend.com/contacts';
-const RESEND_TIMEOUT_MS = 10_000;
-const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
-const EXISTING_RESEND_CONTACT_ERROR_NAMES = new Set([
-  'contact_already_exists',
-  'duplicate_contact',
-  'already_exists',
-]);
-export const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Access-Control-Max-Age': '86400',
-};
-const PUBLIC_JSON_HEADERS = {
-  ...CORS_HEADERS,
-  'Timing-Allow-Origin': '*',
-};
-const BASE_HEADERS = {
-  ...PUBLIC_JSON_HEADERS,
-  'Cache-Control': 'no-store',
-  'Content-Type': 'application/json; charset=utf-8',
-  'X-Content-Type-Options': 'nosniff',
-};
+
 const PENDING_OPEN_DISCRIMINATOR_BASE58 = bs58.encode(PENDING_OPEN_BOX_DISCRIMINATOR);
 
-export type ProviderFetch = RpcProviderFetch;
-
-type ProviderFailureKind = 'asset-not-found' | 'deadline' | 'timeout' | 'unavailable' | 'page-too-large' | 'limit';
-
-class ProviderFailure extends Error {
-  constructor(readonly kind: ProviderFailureKind) {
-    super(kind);
-    this.name = 'ProviderFailure';
-  }
-}
-
-type AttemptScope = {
-  signal: AbortSignal;
-  timedOut: () => boolean;
-  pauseTimeout: () => void;
-  resumeTimeout: () => void;
-  dispose: () => void;
-};
-
-class ProviderReadGate {
-  private tail = Promise.resolve();
-
-  async run<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
-    const previous = this.tail;
-    const queued = previous.then(() => {
-      if (signal.aborted) throw signal.reason;
-      return operation();
-    });
-    this.tail = queued.then(() => undefined, () => undefined);
-    return raceWithSignal(queued, signal);
-  }
-}
-
-function createAttemptScope(overallSignal: AbortSignal, timeoutMs: number): AttemptScope {
-  const controller = new AbortController();
-  let attemptTimedOut = false;
-  let disposed = false;
-  const onOverallAbort = () => {
-    if (!controller.signal.aborted) controller.abort(overallSignal.reason);
-  };
-  if (overallSignal.aborted) onOverallAbort();
-  else overallSignal.addEventListener('abort', onOverallAbort, { once: true });
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  let timeoutStartedAt = 0;
-  let remainingTimeoutMs = timeoutMs;
-  const pauseTimeout = () => {
-    if (timeout !== undefined) {
-      clearTimeout(timeout);
-      remainingTimeoutMs = Math.max(0, remainingTimeoutMs - (performance.now() - timeoutStartedAt));
-    }
-    timeout = undefined;
-  };
-  const resumeTimeout = () => {
-    if (disposed || controller.signal.aborted || timeout !== undefined) return;
-    if (remainingTimeoutMs <= 0) {
-      attemptTimedOut = true;
-      controller.abort(new DOMException('Provider attempt timed out', 'TimeoutError'));
-      return;
-    }
-    timeoutStartedAt = performance.now();
-    timeout = setTimeout(() => {
-      if (controller.signal.aborted) return;
-      timeout = undefined;
-      remainingTimeoutMs = 0;
-      attemptTimedOut = true;
-      controller.abort(new DOMException('Provider attempt timed out', 'TimeoutError'));
-    }, remainingTimeoutMs);
-  };
-  resumeTimeout();
-  return {
-    signal: controller.signal,
-    timedOut: () => attemptTimedOut,
-    pauseTimeout,
-    resumeTimeout,
-    dispose: () => {
-      if (disposed) return;
-      disposed = true;
-      pauseTimeout();
-      overallSignal.removeEventListener('abort', onOverallAbort);
-    },
-  };
-}
-
-export type WorkerDependencies = RpcProxyDependencies & {
-  cache: Pick<Cache, 'match' | 'put'> | null;
-  expectedAssetRecoveryTimeoutMs: number;
-  providerMaxResponseBodyBytes: number;
-  providerMaxTotalResponseBodyBytes: number;
-  inventoryMaxCandidates: number;
-  inventoryMaxCursorPages: number;
-  inventoryMaxProviderCalls: number;
-  inventoryMaxResponseBodyBytes: number;
-  resendFetch: ProviderFetch;
-  resendTimeoutMs: number;
-  validateInventoryResponse: typeof isExactShopInventoryResponse;
-  validatePendingOpenBoxesResponse: typeof isExactShopPendingOpenBoxesResponse;
-};
-
-export type WorkerRequestMetrics = RpcRequestMetrics & {
-  expectedAssetIds: number;
-  expectedAssetRecoveryFailures: number;
-  expectedAssetResolved: number;
-};
-
-type ProviderContext = {
-  apiKey: string;
-  signal: AbortSignal;
-  dependencies: WorkerDependencies;
-  metrics: WorkerRequestMetrics;
-  providerResponseBodyBytes: number;
-  inventoryCandidates: number;
-  inventoryCursorPages: number;
-  inventoryProviderCalls: number;
-  providerReadGate: ProviderReadGate;
-};
+type ShopInventoryDependencies = ProviderContext['dependencies'] & Pick<WorkerDependencies,
+  | 'log'
+  | 'providerTimeoutMs'
+  | 'validateInventoryResponse'
+  | 'validatePendingOpenBoxesResponse'
+>;
 
 type GroupedInventoryResult = {
   scope: ShopDropRuntime;
   items: ShopInventoryItem[];
   needsFallback: boolean;
 };
-
-export function publicJsonResponse(body: unknown, status: number, headers?: HeadersInit): Response {
-  return sharedJsonResponse(body, status, {
-    headers: { ...PUBLIC_JSON_HEADERS, ...headers },
-  });
-}
-
-function publicOriginDeniedResponse(): Response {
-  return sharedJsonResponse({ ok: false, error: 'invalid-request' }, 403, {
-    headers: {
-      'Vary': 'Origin',
-    },
-  });
-}
-
-export function handlePublicPreflight(request: Request, allowMethods = 'POST, OPTIONS'): Response {
-  const origin = publicRequestOrigin(request);
-  if (!origin) return publicOriginDeniedResponse();
-  return new Response(null, {
-    status: 204,
-    headers: {
-      ...publicCorsHeaders(origin, allowMethods),
-      'Cache-Control': 'no-store',
-    },
-  });
-}
-
-export function handlePublicMethodNotAllowed(request: Request, allowMethods = 'POST, OPTIONS'): Response {
-  const origin = publicRequestOrigin(request);
-  if (!origin) return publicOriginDeniedResponse();
-  return applyPublicCors(
-    publicJsonResponse({ ok: false, error: 'method-not-allowed' }, 405, { Allow: allowMethods }),
-    origin,
-    allowMethods,
-  );
-}
-
-function isExistingResendContactError(value: unknown): boolean {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const name = (value as Record<string, unknown>).name;
-  return typeof name === 'string' && EXISTING_RESEND_CONTACT_ERROR_NAMES.has(name.trim().toLowerCase());
-}
 
 function utf8ByteLength(value: string): number {
   let bytes = 0;
@@ -323,19 +122,6 @@ function compactInventoryItem(item: ShopInventoryItem): ShopInventoryItem {
   throw new ProviderFailure('unavailable');
 }
 
-async function parseJsonRequestBody<T>(
-  request: Request,
-  validate: (value: unknown) => value is T,
-): Promise<T> {
-  const value = await readBoundedRequestJson(request, {
-    maxBytes: MAX_REQUEST_BODY_BYTES,
-    signal: request.signal,
-    createError: () => new Error('invalid-request'),
-  });
-  if (!validate(value)) throw new Error('invalid-request');
-  return value;
-}
-
 async function parseShopRequestBody<T extends ShopInventoryRequest | ShopPendingOpenBoxesRequest>(
   request: Request,
   validate: (value: unknown) => value is T,
@@ -343,172 +129,6 @@ async function parseShopRequestBody<T extends ShopInventoryRequest | ShopPending
   const value = await parseJsonRequestBody(request, validate);
   if (!isBase58Bytes(value.owner, 32)) throw new Error('invalid-request');
   return value;
-}
-
-async function readBoundedJsonResponse(
-  response: Response,
-  context: ProviderContext,
-  pageOverflowIsRetryable = false,
-  signal: AbortSignal = context.signal,
-): Promise<unknown> {
-  const maxBytes = context.dependencies.providerMaxResponseBodyBytes;
-  const contentLength = Number(response.headers.get('Content-Length'));
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    await cancelResponseBody(response);
-    throw new ProviderFailure(pageOverflowIsRetryable ? 'page-too-large' : 'unavailable');
-  }
-  if (
-    Number.isFinite(contentLength) &&
-    context.providerResponseBodyBytes + contentLength > context.dependencies.providerMaxTotalResponseBodyBytes
-  ) {
-    await cancelResponseBody(response);
-    throw new ProviderFailure('limit');
-  }
-  try {
-    return await readBoundedResponseJson(response, {
-      maxBytes,
-      signal,
-      contentType: 'ignore',
-      createError: (failure) => new ProviderFailure(
-        failure === 'too-large' && pageOverflowIsRetryable
-          ? 'page-too-large'
-          : 'unavailable',
-      ),
-      onBytes: (bytes) => {
-        context.providerResponseBodyBytes += bytes;
-        if (context.providerResponseBodyBytes > context.dependencies.providerMaxTotalResponseBodyBytes) {
-          throw new ProviderFailure('limit');
-        }
-      },
-    });
-  } catch (error) {
-    if (signal.aborted && error === signal.reason) throw error;
-    if (error instanceof ProviderFailure) throw error;
-    throw new ProviderFailure('unavailable');
-  }
-}
-
-function isTransientRpcError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const record = error as Record<string, unknown>;
-  if (typeof record.code === 'number' && (record.code === 408 || record.code === 429 || record.code === -32005 || record.code === -32603)) return true;
-  const message = typeof record.message === 'string' ? record.message.toLowerCase() : '';
-  return /timeout|timed out|rate limit|temporar|overload|internal/.test(message);
-}
-
-function isAssetBatchNotFoundRpcError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  return (error as Record<string, unknown>).code === -32004;
-}
-
-function retryDelayMs(dependencies: WorkerDependencies, response?: Response): number {
-  const retryAfterHeader = response?.headers.get('Retry-After');
-  if (retryAfterHeader !== undefined && retryAfterHeader !== null && retryAfterHeader.trim()) {
-    const retryAfter = Number(retryAfterHeader);
-    if (Number.isFinite(retryAfter) && retryAfter >= 0) return Math.min(1000, retryAfter * 1000);
-  }
-  return 100 + (dependencies.randomUint32() % 151);
-}
-
-async function heliusRpc<T>(
-  context: ProviderContext,
-  cluster: SolanaCluster,
-  method: string,
-  params: unknown,
-  options: {
-    assetBatchNotFoundIsRecoverable?: boolean;
-    attemptTimeoutMs?: number;
-    inventoryCall?: boolean;
-    maxAttempts?: number;
-    pageOverflowIsRetryable?: boolean;
-    signal?: AbortSignal;
-  } = {},
-): Promise<T> {
-  const maxAttempts = options.maxAttempts ?? 2;
-  const signal = options.signal ?? context.signal;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    if (signal.aborted) throw signal.reason;
-    if (options.inventoryCall) {
-      if (context.inventoryProviderCalls >= context.dependencies.inventoryMaxProviderCalls) {
-        throw new ProviderFailure('limit');
-      }
-      context.inventoryProviderCalls += 1;
-    }
-    const attemptScope = createAttemptScope(
-      signal,
-      options.attemptTimeoutMs ?? context.dependencies.providerAttemptTimeoutMs,
-    );
-    let response: Response | undefined;
-    const startedAt = performance.now();
-    try {
-      context.metrics.upstreamCalls += 1;
-      const requestId = `${method}-${context.metrics.upstreamCalls}`;
-      response = await raceWithSignal(context.dependencies.providerFetch(
-        heliusRpcUrl(cluster, context.apiKey),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: requestId, method, params }),
-          signal: attemptScope.signal,
-        },
-      ), attemptScope.signal);
-      if (!response.ok) {
-        const retryable = TRANSIENT_HTTP_STATUSES.has(response.status);
-        const failure = new ProviderFailure(
-          response.status === 408 || response.status === 504 ? 'timeout' : 'unavailable',
-        );
-        await cancelResponseBody(response);
-        if (!retryable || attempt + 1 >= maxAttempts) throw failure;
-        if (signal.aborted) throw signal.reason;
-        await context.dependencies.sleep(retryDelayMs(context.dependencies, response), attemptScope.signal);
-        continue;
-      }
-      const successfulResponse = response;
-      attemptScope.pauseTimeout();
-      const payload = await context.providerReadGate.run(attemptScope.signal, () => {
-        attemptScope.resumeTimeout();
-        if (attemptScope.signal.aborted) throw attemptScope.signal.reason;
-        return readBoundedJsonResponse(
-          successfulResponse,
-          context,
-          options.pageOverflowIsRetryable === true,
-          attemptScope.signal,
-        );
-      });
-      if (attemptScope.signal.aborted) throw attemptScope.signal.reason;
-      if (!payload || typeof payload !== 'object') throw new ProviderFailure('unavailable');
-      const rpc = payload as { jsonrpc?: unknown; id?: unknown; result?: unknown; error?: unknown };
-      if (rpc.jsonrpc !== '2.0' || rpc.id !== requestId) throw new ProviderFailure('unavailable');
-      if (rpc.error) {
-        if (options.assetBatchNotFoundIsRecoverable && isAssetBatchNotFoundRpcError(rpc.error)) {
-          throw new ProviderFailure('asset-not-found');
-        }
-        if (attempt + 1 < maxAttempts && isTransientRpcError(rpc.error)) {
-          await context.dependencies.sleep(retryDelayMs(context.dependencies), attemptScope.signal);
-          continue;
-        }
-        throw new ProviderFailure('unavailable');
-      }
-      if (!Object.hasOwn(rpc, 'result')) throw new ProviderFailure('unavailable');
-      return rpc.result as T;
-    } catch (error) {
-      if (signal.aborted && error === signal.reason) throw error;
-      if (error instanceof ProviderFailure) throw error;
-      if (attemptScope.timedOut()) {
-        if (attempt + 1 < maxAttempts) continue;
-        throw new ProviderFailure('timeout');
-      }
-      if (attempt + 1 < maxAttempts) {
-        await context.dependencies.sleep(retryDelayMs(context.dependencies), attemptScope.signal);
-        continue;
-      }
-      throw new ProviderFailure('unavailable');
-    } finally {
-      attemptScope.dispose();
-      context.metrics.providerDurationMs += Math.max(0, performance.now() - startedAt);
-    }
-  }
-  throw new ProviderFailure('unavailable');
 }
 
 async function mapConcurrent<T, R>(items: readonly T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
@@ -938,110 +558,11 @@ async function fetchPendingOpenBoxes(
   return { ok: true, items };
 }
 
-export const sleepWithAbort = sleepWithSignal;
-
-export const defaultDependencies: WorkerDependencies = {
-  cache: typeof caches === 'undefined'
-    ? null
-    : (caches as CacheStorage & { readonly default: Cache }).default,
-  expectedAssetRecoveryTimeoutMs: EXPECTED_ASSET_RECOVERY_TIMEOUT_MS,
-  providerFetch: (input, init) => fetch(input, init),
-  providerTimeoutMs: HELIUS_OVERALL_TIMEOUT_MS,
-  providerAttemptTimeoutMs: HELIUS_ATTEMPT_TIMEOUT_MS,
-  providerMaxResponseBodyBytes: HELIUS_SEARCH_ASSETS_MAX_PAGE_BYTES,
-  providerMaxTotalResponseBodyBytes: HELIUS_SEARCH_ASSETS_MAX_TOTAL_BYTES,
-  inventoryMaxCandidates: HELIUS_SEARCH_ASSETS_MAX_CANDIDATES,
-  inventoryMaxCursorPages: HELIUS_SEARCH_ASSETS_MAX_CURSOR_PAGES,
-  inventoryMaxProviderCalls: HELIUS_SEARCH_ASSETS_MAX_PROVIDER_CALLS,
-  inventoryMaxResponseBodyBytes: MAX_INVENTORY_RESPONSE_BODY_BYTES,
-  randomUint32: () => crypto.getRandomValues(new Uint32Array(1))[0],
-  sleep: sleepWithAbort,
-  log: (entry) => console.log(entry),
-  resendFetch: (input, init) => fetch(input, init),
-  resendTimeoutMs: RESEND_TIMEOUT_MS,
-  validateInventoryResponse: isExactShopInventoryResponse,
-  validatePendingOpenBoxesResponse: isExactShopPendingOpenBoxesResponse,
-};
-
-export function packStatusDropIdFromPathname(pathname: string): string | null | undefined {
-  if (pathname !== '/pack-status' && !pathname.startsWith('/pack-status/')) return undefined;
-  const match = pathname.match(/^\/pack-status\/([^/]+)$/);
-  const dropId = match?.[1] || '';
-  const drop = shopDropById(dropId);
-  return isPackStatusSupportedDropId(dropId) && drop?.solanaCluster === 'mainnet-beta' ? dropId : null;
-}
-
-export async function handlePackStatus(
-  dropId: string,
-  env: Pick<Env, 'DATA_DB'>,
-  dependencies: WorkerDependencies,
-  defer: DeferredWork,
-): Promise<{ response: Response; cacheStatus?: string }> {
-  let cacheWrite: Promise<void> | undefined;
-  let result: { response: Response; cacheStatus?: string };
-  try {
-    if (typeof env.DATA_DB?.prepare !== 'function') throw new Error('pack_status_data_db_not_configured');
-    const metadata = await readPackStatusMetadata(env.DATA_DB);
-    const cacheRequest = packStatusCacheRequest(metadata.cacheGeneration, dropId);
-    let cached: Response | undefined;
-    try {
-      cached = await dependencies.cache?.match(cacheRequest);
-    } catch (error) {
-      dependencies.log({
-        event: 'pack_status_d1_cache_read_failed',
-        dropId,
-        error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
-      });
-    }
-    if (cached) {
-      try {
-        const packStatus = parseD1PackStatusCache(await cached.json(), dropId);
-        if (packStatus) {
-          return {
-            response: publicJsonResponse({ ok: true, packStatus }, 200),
-            cacheStatus: 'D1-HIT',
-          };
-        }
-      } catch {}
-      dependencies.log({ event: 'pack_status_d1_cache_invalid', dropId });
-    }
-    const packStatus = await readD1PackStatus(env.DATA_DB, dropId);
-    if (!packStatus) throw new Error('pack_status_d1_row_missing');
-    if (dependencies.cache) {
-      const cacheResponse = Response.json(packStatus, {
-        headers: { 'Cache-Control': `max-age=${D1_PACK_STATUS_CACHE_TTL_SECONDS}` },
-      });
-      cacheWrite = dependencies.cache.put(cacheRequest, cacheResponse).catch((error) => {
-        dependencies.log({
-          event: 'pack_status_d1_cache_write_failed',
-          dropId,
-          error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
-        });
-      });
-    }
-    result = {
-      response: publicJsonResponse({ ok: true, packStatus }, 200),
-      cacheStatus: 'D1-MISS',
-    };
-  } catch (error) {
-    dependencies.log({
-      event: 'pack_status_d1_unavailable',
-      dropId,
-      error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
-    });
-    return {
-      response: publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502),
-    };
-  }
-  if (cacheWrite) registerDeferredWork(defer, cacheWrite);
-  return result;
-}
-
 export async function handlePost(
   request: Request,
   env: Env,
   pathname: '/inventory' | '/pending-open-boxes',
-  dependencies: WorkerDependencies,
+  dependencies: ShopInventoryDependencies,
   metrics: WorkerRequestMetrics,
 ): Promise<{ response: Response; includeDevnet: boolean }> {
   const origin = publicRequestOrigin(request);
@@ -1128,112 +649,5 @@ export async function handlePost(
     );
   } finally {
     deadline.dispose();
-  }
-}
-
-export async function handleNotificationSubscription(
-  request: Request,
-  env: Env,
-  dependencies: WorkerDependencies,
-  metrics: WorkerRequestMetrics,
-): Promise<Response> {
-  const origin = publicRequestOrigin(request);
-  if (!origin) return publicOriginDeniedResponse();
-  const respond = (response: Response) => applyPublicCors(response, origin, 'POST, OPTIONS');
-  let rawEmail: string;
-  try {
-    rawEmail = (await parseJsonRequestBody(
-      request,
-      isExactSubscribeToNotificationsRequest,
-    )).email;
-  } catch (error) {
-    if (isRequestCancellationError(request, error)) throw error;
-    return respond(publicJsonResponse({ ok: false, error: 'invalid-request' }, 400));
-  }
-  const email = normalizeNotificationEmailRecipient(rawEmail);
-  if (!email) return respond(publicJsonResponse({ ok: false, error: 'invalid-email' }, 400));
-
-  await observePublicRateLimit({
-    binding: env.PUBLIC_NOTIFICATION_RATE_LIMITER,
-    keyScope: 'notification-subscription',
-    limit: PUBLIC_RATE_LIMITS.notification,
-    log: dependencies.log,
-    request,
-    route: '/notifications/subscribe',
-  });
-
-  const apiKey = typeof env.RESEND_CONTACTS_API_KEY === 'string'
-    ? env.RESEND_CONTACTS_API_KEY.trim()
-    : '';
-  if (!apiKey) return respond(publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
-
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.resendTimeoutMs,
-    timeoutMessage: 'Resend request timed out',
-  });
-  const startedAt = performance.now();
-  metrics.upstreamCalls += 1;
-  try {
-    const providerResponse = await raceWithSignal(dependencies.resendFetch(RESEND_CONTACTS_API_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ email, unsubscribed: false }),
-      signal: deadline.signal,
-    }), deadline.signal);
-    if (providerResponse.status === 409) {
-      await cancelResponseBody(providerResponse);
-      return respond(publicJsonResponse({ subscribed: true }, 200));
-    }
-    if (!providerResponse.body) {
-      await cancelResponseBody(providerResponse);
-      return respond(publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
-    }
-    let payload: unknown;
-    try {
-      payload = await readBoundedResponseJson(providerResponse, {
-        maxBytes: MAX_RESEND_RESPONSE_BODY_BYTES,
-        signal: deadline.signal,
-        contentType: 'ignore',
-        createError: (failure) => new Error(
-          failure === 'too-large'
-            ? 'provider-response-too-large'
-            : 'provider-response-invalid',
-        ),
-      });
-    } catch (error) {
-      if (!providerResponse.ok) {
-        return respond(publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
-      }
-      if (isRequestCancellationError(request, error)) throw error;
-      return respond(deadline.timedOut()
-        ? publicJsonResponse({ ok: false, error: 'provider-timeout' }, 504)
-        : publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
-    }
-    if (!providerResponse.ok) {
-      return respond(isExistingResendContactError(payload)
-        ? publicJsonResponse({ subscribed: true }, 200)
-        : publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
-    }
-    if (
-      typeof payload !== 'object' ||
-      payload === null ||
-      Array.isArray(payload) ||
-      typeof (payload as Record<string, unknown>).id !== 'string' ||
-      !(payload as Record<string, unknown>).id
-    ) {
-      return respond(publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
-    }
-    return respond(publicJsonResponse({ subscribed: true }, 200));
-  } catch (error) {
-    if (isRequestCancellationError(request, error)) throw error;
-    return respond(deadline.timedOut()
-      ? publicJsonResponse({ ok: false, error: 'provider-timeout' }, 504)
-      : publicJsonResponse({ ok: false, error: 'provider-unavailable' }, 502));
-  } finally {
-    deadline.dispose();
-    metrics.providerDurationMs += performance.now() - startedAt;
   }
 }

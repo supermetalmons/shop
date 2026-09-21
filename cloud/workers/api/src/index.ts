@@ -22,7 +22,7 @@ import {
   publicJsonResponse,
   type WorkerDependencies,
   type WorkerRequestMetrics,
-} from './workerPublicRoutes.js';
+} from './publicRouteSupport.js';
 import {
   applyWorkerRouteCors,
   strictPublicOriginDeniedResponse,
@@ -48,8 +48,8 @@ export {
   processBackgroundJobBatch,
   processStripeFulfillmentMessage,
 } from './workerBackgroundJobs.js';
-export { sleepWithAbort } from './workerPublicRoutes.js';
-export type { ProviderFetch } from './workerPublicRoutes.js';
+export { sleepWithAbort } from './publicRouteSupport.js';
+export type { ProviderFetch } from './publicRouteSupport.js';
 
 type RequestExecution = {
   defer: DeferredWork;

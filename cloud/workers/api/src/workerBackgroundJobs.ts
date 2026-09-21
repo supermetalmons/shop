@@ -1,7 +1,7 @@
 import { isExactStripeCheckoutFulfillmentJobV1 } from '../../../../shared/stripeCheckoutFulfillmentJob.js';
 import { loadCommerceAuthorityControl } from './commerceRepository.js';
 import { processNotificationQueueMessage } from './notificationEnqueue.js';
-import { processRevealBackgroundJobMessage } from './revealDudes.js';
+import { processRevealBackgroundJobMessage } from './revealDudesBackground.js';
 import { processStripeCheckoutFulfillmentJob } from './stripeCheckoutFulfillment.js';
 
 const NOTIFICATION_EMAIL_QUEUE_NAME = 'mons-shop-notification-emails';

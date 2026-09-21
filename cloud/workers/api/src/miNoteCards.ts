@@ -29,7 +29,7 @@ import {
   observePublicRateLimit,
   publicRequestOrigin,
 } from './publicRequestPolicy.js';
-import type { WorkerDependencies, WorkerRequestMetrics } from './workerPublicRoutes.js';
+import type { WorkerDependencies, WorkerRequestMetrics } from './publicRouteSupport.js';
 
 const MAX_CACHE_BYTES = 1024 * 1024;
 const CACHE_TTL_MS = 60_000;

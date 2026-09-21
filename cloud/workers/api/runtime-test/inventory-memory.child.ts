@@ -7,7 +7,7 @@ import {
   HELIUS_SEARCH_ASSETS_PAGE_LIMITS,
 } from '../../../../shared/heliusDas.js';
 import { listShopCollectionQueryRuntimes } from '../../../../shared/shopDomain.js';
-import type { ProviderFetch } from '../src/workerPublicRoutes.js';
+import type { ProviderFetch } from '../src/publicRouteSupport.js';
 import { MAX_INVENTORY_RESPONSE_BODY_BYTES } from '../src/inventoryLimits.js';
 import { loadApiWorkerIndex } from '../test/cloudflareWorkersTestLoader.js';
 import { failOnDeferredWork } from '../test/deferredWork.js';

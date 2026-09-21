@@ -8,7 +8,7 @@ import {
 } from '../../../../shared/miNoteCards.js';
 import { raceWithSignal } from './boundedRequest.js';
 import { cancelResponseBody, readBoundedResponseJson } from './boundedResponse.js';
-import type { WorkerDependencies, WorkerRequestMetrics } from './workerPublicRoutes.js';
+import type { WorkerDependencies, WorkerRequestMetrics } from './publicRouteSupport.js';
 
 const MAX_PAGE_BYTES = 256 * 1024;
 const MAX_PAGES = 100;
