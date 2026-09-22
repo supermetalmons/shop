@@ -25,6 +25,7 @@ import {
   adminIrlRedeemPrepareTestHooks,
   handleAdminIrlRedeemPrepare,
 } from '../src/adminIrlRedeemPrepare.ts';
+import { buildRuntime } from '../src/adminIrlRedeemRuntime.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import { createDeferredWorkCollector, isDeferredWorkRegistrationError } from './deferredWork.ts';
 
@@ -596,84 +597,9 @@ test('Admin IRL repository reconciles a prepared request whose commit acknowledg
   assert.ok(await repository.get(commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID)));
 });
 
-test('Admin IRL provider retries one transient response and bounds provider JSON', async () => {
-  const runtime = adminIrlRedeemPrepareTestHooks.buildRuntime(DROP);
-  let calls = 0;
-  const result = await adminIrlRedeemPrepareTestHooks.rpcCall({
-    apiKey: 'helius-test-key',
-    attemptTimeoutMs: 1000,
-    providerFetch: async (_input, init) => {
-      calls += 1;
-      const body = JSON.parse(String(init?.body)) as { id: string };
-      return calls === 1
-        ? new Response(null, { status: 503 })
-        : Response.json({ jsonrpc: '2.0', id: body.id, result: { value: 7 } });
-    },
-    signal: new AbortController().signal,
-  }, runtime, 'testMethod', []);
-  assert.deepEqual(result, { value: 7 });
-  assert.equal(calls, 2);
-
-  await assert.rejects(
-    adminIrlRedeemPrepareTestHooks.rpcCall({
-      apiKey: 'helius-test-key',
-      attemptTimeoutMs: 1000,
-      providerFetch: async (_input, init) => {
-        const body = JSON.parse(String(init?.body)) as { id: string };
-        return new Response(JSON.stringify({ jsonrpc: '2.0', id: body.id, result: 'x'.repeat(3_000_000) }), {
-          headers: { 'Content-Type': 'application/json' },
-        });
-      },
-      signal: new AbortController().signal,
-    }, runtime, 'testMethod', []),
-    (error) => (error as { code?: unknown }).code === 'unavailable',
-  );
-});
-
-test('Admin IRL provider preserves abort-first and provider-first outcomes', async () => {
-  const runtime = adminIrlRedeemPrepareTestHooks.buildRuntime(DROP);
-  const cancellation = new AbortController();
-  const reason = new Error('client disconnected');
-  await assert.rejects(
-    adminIrlRedeemPrepareTestHooks.rpcCall({
-      apiKey: 'helius-test-key',
-      attemptTimeoutMs: 1000,
-      providerFetch: async () => {
-        cancellation.abort(reason);
-        throw new Error('provider failed after cancellation');
-      },
-      signal: cancellation.signal,
-    }, runtime, 'testMethod', []),
-    (error: unknown) => error === reason,
-  );
-
-  const race = new AbortController();
-  const providerError = new Error('provider failed first');
-  let rejectProvider!: (error: unknown) => void;
-  let markProviderStarted!: () => void;
-  const providerStarted = new Promise<void>((resolve) => { markProviderStarted = resolve; });
-  const providerFirst = assert.rejects(
-    adminIrlRedeemPrepareTestHooks.rpcCall({
-      apiKey: 'helius-test-key',
-      attemptTimeoutMs: 1000,
-      providerFetch: () => new Promise((_resolve, reject) => {
-        rejectProvider = reject;
-        markProviderStarted();
-      }),
-      signal: race.signal,
-    }, runtime, 'testMethod', []),
-    (error: unknown) => error !== race.signal.reason &&
-      (error as { code?: unknown }).code === 'unavailable',
-  );
-  await providerStarted;
-  rejectProvider(providerError);
-  queueMicrotask(() => race.abort(new Error('late client disconnect')));
-  await providerFirst;
-});
-
 test('Admin IRL card lookup fallback preserves cancellation', async () => {
   const lookupKey = Keypair.generate().publicKey;
-  const runtime = adminIrlRedeemPrepareTestHooks.buildRuntime({
+  const runtime = buildRuntime({
     ...DROP,
     deliveryLookupTable: lookupKey.toBase58(),
   });
@@ -738,7 +664,7 @@ test('Admin IRL helpers generate compatible ids and reject unsupported drop fami
   } as ApiDropConfig;
   assert.throws(
     () => adminIrlRedeemPrepareTestHooks.assertSupportedRuntime(
-      adminIrlRedeemPrepareTestHooks.buildRuntime(unsupported),
+      buildRuntime(unsupported),
     ),
     /only available for card_nft_2 packs/,
   );

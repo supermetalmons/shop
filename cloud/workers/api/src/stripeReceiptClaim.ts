@@ -98,6 +98,7 @@ import {
   parseProof as parseAdminIrlRedeemProof,
   receiptDropIdentity as adminIrlRedeemReceiptDropIdentity,
   rpcCall as adminIrlRedeemRpcCall,
+  type ProviderContext,
 } from './adminIrlRedeemOnchain.js';
 import {
   createConnection as createDeliveryConnection,
@@ -142,11 +143,6 @@ const requestSchema = z.object({
 type ClaimEnv = Pick<Env, 'COSIGNER_SECRET' | 'HELIUS_API_KEY'> &
   Pick<Env, 'COMMERCE_DB'> & Partial<Pick<Env, 'OPS_DB'>>;
 type Runtime = ReturnType<typeof buildAdminIrlRedeemRuntime>;
-type ProviderContext = {
-  apiKey: string;
-  providerFetch: ProfileProviderFetch;
-  signal: AbortSignal;
-};
 type ClaimMetrics = { upstreamCalls: number; providerDurationMs: number };
 type ClaimLogContext = { dropId: string; deliveryId: number };
 type ClaimFlow = 'direct_figure' | 'openable_pack' | 'legacy_pack';

@@ -22,7 +22,7 @@ import {
 import { API_DROPS } from '../src/dropConfig.ts';
 import { readCommerceRecord, requireCommerceKey } from '../src/commerceTransactions.ts';
 import { deriveDeliveryPda, sendAndConfirmSignedTransaction } from '../src/deliveryReceiptOnchain.ts';
-import { adminIrlRedeemPrepareTestHooks } from '../src/adminIrlRedeemPrepare.ts';
+import { buildRuntime } from '../src/adminIrlRedeemRuntime.ts';
 import {
   buildAdminIrlRedeemDeliveryOrderDocument,
   buildAdminIrlRedeemMarkerDocument,
@@ -66,7 +66,7 @@ for (const method of ['getAccountInfoAndContext', 'getLatestBlockhashAndContext'
       apiKey: 'test-key',
       providerFetch: async () => new Promise<Response>(() => undefined),
       signal: new AbortController().signal,
-    }, adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]));
+    }, buildRuntime(API_DROPS[DROP_ID]));
     const pending = method === 'getAccountInfoAndContext'
       ? connection.getAccountInfoAndContext(PublicKey.default)
       : connection.getLatestBlockhashAndContext('confirmed');
@@ -85,7 +85,7 @@ for (const method of ['getAccountInfoAndContext', 'getLatestBlockhashAndContext'
       apiKey: 'test-key',
       providerFetch: async () => new Promise<Response>(() => undefined),
       signal: controller.signal,
-    }, adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]));
+    }, buildRuntime(API_DROPS[DROP_ID]));
     const pending = method === 'getAccountInfoAndContext'
       ? connection.getAccountInfoAndContext(PublicKey.default)
       : connection.getLatestBlockhashAndContext('confirmed');
@@ -1427,7 +1427,7 @@ test('Admin IRL D1-only publication is idempotent for card and prepared-pack dra
     }
     const stored = await new D1CommerceRepository(harness.db).get(requestKey);
     assert.ok(stored);
-    const runtime = adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]);
+    const runtime = buildRuntime(API_DROPS[DROP_ID]);
     const internalDeliveryId = 55;
     const [internalDeliveryPda] = deriveDeliveryPda(runtime, internalDeliveryId);
     let workflowPublicationDraftV1: CommerceDocumentData;
@@ -1570,7 +1570,7 @@ test('Admin IRL receipt owner scans finish pagination before checking uniqueness
 });
 
 test('Admin IRL card receipt indexing rejects malformed proofs without retrying', async () => {
-  const runtime = adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]);
+  const runtime = buildRuntime(API_DROPS[DROP_ID]);
   const hash = bs58.encode(new Uint8Array(32).fill(7));
   const methods: string[] = [];
   await assert.rejects(adminIrlRedeemFinalizeTestHooks.waitForCardReceipt({
@@ -2115,7 +2115,7 @@ for (const kind of ['receipt_mint', 'internal_delivery'] as const) {
       const key = commerceKeys.adminIrlRedeemRequest(DROP_ID, REQUEST_ID);
       const readRequest = () => readCommerceRecord({ ...context, signal: new AbortController().signal }, key);
       const runtime = {
-        ...adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]),
+        ...buildRuntime(API_DROPS[DROP_ID]),
         deliveryLookupTable: undefined,
       };
       const signer = Keypair.generate();
@@ -2279,7 +2279,7 @@ test('Admin IRL receipt mint rethrows cancellation on its final retry', { timeou
     },
     getMultipleAccountsInfo: async () => [{ data: Buffer.alloc(2) }],
   } as unknown as Connection;
-  const runtime = adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]);
+  const runtime = buildRuntime(API_DROPS[DROP_ID]);
 
   await assert.rejects(
     adminIrlRedeemFinalizeTestHooks.mintPackReceipts(

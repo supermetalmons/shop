@@ -3,7 +3,8 @@ import test from 'node:test';
 import bs58 from 'bs58';
 import { PublicKey } from '@solana/web3.js';
 import { API_DROPS } from '../src/dropConfig.ts';
-import { adminIrlRedeemPrepareTestHooks } from '../src/adminIrlRedeemPrepare.ts';
+import { parseProof } from '../src/adminIrlRedeemOnchain.ts';
+import { buildRuntime } from '../src/adminIrlRedeemRuntime.ts';
 import { irlClaimTestHooks } from '../src/irlClaim.ts';
 import { receiptTransferTestHooks } from '../src/receiptTransfer.ts';
 
@@ -24,8 +25,8 @@ const adapters = [
     name: 'admin',
     errorName: 'AdminIrlRedeemPrepareError',
     parse: (asset: Record<string, unknown>, proof: Record<string, unknown>) =>
-      adminIrlRedeemPrepareTestHooks.parseProof(asset, proof, {
-        ...adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS.card_nft_2),
+      parseProof(asset, proof, {
+        ...buildRuntime(API_DROPS.card_nft_2),
         ...runtimeFields,
       }, OWNER.toBase58()),
     missingIdentity: 'Unable to fetch receipt proof for transfer',

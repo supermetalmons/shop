@@ -65,6 +65,7 @@ import {
   fetchAsset as fetchAdminIrlRedeemAsset,
   fetchAssetProof as fetchAdminIrlRedeemAssetProof,
   parseProof as parseAdminIrlRedeemProof,
+  type ProviderContext,
 } from './adminIrlRedeemOnchain.js';
 import {
   completeFromExistingMarkers,
@@ -153,7 +154,6 @@ type CommerceContext = CommerceRepositoryContext & {
   providerFetch: typeof fetch;
   [key: string]: unknown;
 };
-type ProviderContext = Parameters<typeof fetchAdminIrlRedeemAsset>[0];
 type Runtime = ReturnType<typeof buildAdminIrlRedeemRuntime>;
 type OnchainConfig = Awaited<ReturnType<typeof fetchDeliveryOnchainConfig>>;
 
