@@ -14,6 +14,8 @@ import {
 } from '../../../../shared/boxMinterConfigCodec.ts';
 import { MPL_CORE_PROGRAM_ADDRESS, MPL_NOOP_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { buildRuntime as buildAdminIrlRedeemRuntime } from '../src/adminIrlRedeemRuntime.ts';
+import { getApiDrop } from '../src/dropConfig.ts';
 import { readCommerceRecord, requireCommerceKey } from '../src/commerceTransactions.ts';
 import { DeliveryReceiptError, runtimeForDrop, sendAndConfirmSignedTransaction } from '../src/deliveryReceiptOnchain.ts';
 import {
@@ -60,6 +62,21 @@ const RECIPIENT = Keypair.generate().publicKey.toBase58();
 const OTHER_RECIPIENT = Keypair.generate().publicKey.toBase58();
 const RECEIPT_ASSET_ID = Keypair.generate().publicKey.toBase58();
 const SIGNATURE = Keypair.generate().publicKey.toBase58().repeat(2).slice(0, 88);
+
+function sizedClaimTransaction(instructionBytes: number): VersionedTransaction {
+  const signer = Keypair.generate();
+  const transaction = new VersionedTransaction(new TransactionMessage({
+    payerKey: signer.publicKey,
+    recentBlockhash: PublicKey.default.toBase58(),
+    instructions: [new TransactionInstruction({
+      programId: new PublicKey(MPL_NOOP_PROGRAM_ADDRESS),
+      keys: [],
+      data: Buffer.alloc(instructionBytes),
+    })],
+  }).compileToV0Message());
+  transaction.sign([signer]);
+  return transaction;
+}
 
 function request(body: unknown = { code: CODE, recipient: RECIPIENT }, init: RequestInit = {}): Request {
   return new Request(`https://api.mons.shop${STRIPE_RECEIPT_CLAIM_PATH}`, {
@@ -221,6 +238,69 @@ function unclaimedDocuments(): Record<string, Record<string, unknown>> {
     },
   };
 }
+
+test('Stripe receipt claim lookup fallback preserves cancellation', async (context) => {
+  const drop = getApiDrop(DROP_ID);
+  assert.ok(drop);
+  const lookupKey = Keypair.generate().publicKey;
+  const runtime = buildAdminIrlRedeemRuntime({ ...drop, deliveryLookupTable: lookupKey.toBase58() });
+  for (const wrapped of [false, true]) {
+    await context.test(wrapped ? 'wrapped cancellation' : 'direct cancellation', async () => {
+      const controller = new AbortController();
+      const reason = new Error('client disconnected during receipt lookup');
+      let lookupCalls = 0;
+      await assert.rejects(buildWithOptionalLookupTable({
+        provider: {
+          apiKey: 'helius-test-key',
+          signal: controller.signal,
+          providerFetch: async (_input, init) => {
+            const request = JSON.parse(String(init?.body));
+            assert.equal(request.method, 'getAccountInfo');
+            assert.equal(request.params[0], lookupKey.toBase58());
+            lookupCalls += 1;
+            controller.abort(reason);
+            throw wrapped ? new Error('lookup aborted', { cause: reason }) : reason;
+          },
+        },
+        runtime,
+        build: () => sizedClaimTransaction(1100),
+        encodeTooLargeMessage: 'Receipt claim transaction is too large to encode.',
+        packetTooLargeMessage: (rawBytes) => `Receipt claim transaction too large (${rawBytes} bytes > 1232).`,
+      }), (error: unknown) => error === reason);
+      assert.equal(lookupCalls, 1);
+    });
+  }
+});
+
+test('Stripe receipt claim lookup fallback preserves domain sizing errors', async (context) => {
+  const drop = getApiDrop(DROP_ID);
+  assert.ok(drop);
+  const runtime = buildAdminIrlRedeemRuntime({ ...drop, deliveryLookupTable: '' });
+  for (const instructionBytes of [1100, 1400]) {
+    await context.test(instructionBytes === 1100 ? 'packet size' : 'encoding overflow', async () => {
+      const rawBytes = instructionBytes === 1100 ? sizedClaimTransaction(instructionBytes).serialize().length : undefined;
+      await assert.rejects(buildWithOptionalLookupTable({
+        provider: {
+          apiKey: 'helius-test-key',
+          signal: new AbortController().signal,
+          providerFetch: async () => assert.fail('no lookup table is configured'),
+        },
+        runtime,
+        build: () => sizedClaimTransaction(instructionBytes),
+        encodeTooLargeMessage: 'Direct card receipt claim transaction is too large to encode.',
+        packetTooLargeMessage: (size) => `Direct card receipt claim transaction too large (${size} bytes > 1232).`,
+      }), (error: unknown) => {
+        assert.ok(error instanceof StripeReceiptClaimError);
+        assert.equal(error.code, 'failed-precondition');
+        assert.equal(error.message, rawBytes === undefined
+          ? 'Direct card receipt claim transaction is too large to encode.'
+          : `Direct card receipt claim transaction too large (${rawBytes} bytes > 1232).`);
+        assert.deepEqual(error.details, rawBytes === undefined ? undefined : { rawBytes, maxRawBytes: 1232 });
+        return true;
+      });
+    });
+  }
+});
 
 test('Stripe receipt claim route preserves the authenticated request and exact response contract', async () => {
   let observedBody: unknown;

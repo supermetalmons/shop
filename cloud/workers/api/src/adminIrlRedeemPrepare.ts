@@ -95,6 +95,11 @@ import {
   parseSolanaRpcAccount,
   type SolanaRetryPolicy,
 } from './solanaProvider.js';
+import {
+  buildSizedTransaction,
+  isTransactionEncodingTooLarge,
+  SOLANA_MAX_RAW_TX_BYTES,
+} from './solanaTransaction.js';
 
 export const ADMIN_IRL_REDEEM_PREPARE_PATH = '/admin/irl-redeem/prepare';
 export { ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER };
@@ -106,7 +111,6 @@ const CLEANUP_TIMEOUT_MS = 5_000;
 const PROVIDER_ATTEMPT_TIMEOUT_MS = 8_000;
 const MAX_ITEMS = 32;
 const ASSET_FETCH_CONCURRENCY = 4;
-const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const DUMMY_BLOCKHASH = '11111111111111111111111111111111';
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 const ATTEMPT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -707,15 +711,6 @@ function buildTransaction(
   }).compileToV0Message(lookups));
 }
 
-function transactionEncodingTooLarge(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return error instanceof RangeError && (
-    /encoding overruns Uint8Array/i.test(message) ||
-    /offset.*out of range/i.test(message) ||
-    String((error as { code?: unknown }).code || '') === 'ERR_OUT_OF_RANGE'
-  );
-}
-
 function serializePackTransaction(
   instructions: TransactionInstruction[],
   owner: PublicKey,
@@ -731,7 +726,7 @@ function serializePackTransaction(
     );
   } catch (error) {
     if (error instanceof AdminIrlRedeemPrepareError) throw error;
-    if (!transactionEncodingTooLarge(error)) throw error;
+    if (!isTransactionEncodingTooLarge(error)) throw error;
     throw new AdminIrlRedeemPrepareError('failed-precondition', 'Admin IRL redeem transfer transaction is too large to encode. Try fewer packs.');
   }
 }
@@ -745,47 +740,20 @@ async function serializeCardTransaction(args: {
   loadLookupTable: AdminIrlRedeemPrepareDependencies['loadLookupTable'];
 }): Promise<Uint8Array> {
   const instructions = [ComputeBudgetProgram.setComputeUnitLimit({ units: 700_000 }), args.instruction];
-  const build = (lookups: AddressLookupTableAccount[]) => buildTransaction(
-    instructions,
-    args.owner,
-    args.blockhash,
-    lookups,
-  ).serialize();
-  let lookupsPromise: Promise<AddressLookupTableAccount[]> | undefined;
-  const loadLookups = () => {
-    lookupsPromise ??= args.loadLookupTable(args.context, args.runtime).catch((error) => {
-      if (isSignalCancellationError(args.context.signal, error)) throw args.context.signal.reason;
-      return [];
-    });
-    return lookupsPromise;
-  };
-  let raw: Uint8Array;
-  try {
-    raw = build([]);
-  } catch (error) {
-    if (!transactionEncodingTooLarge(error)) throw error;
-    const lookups = await loadLookups();
-    if (!lookups.length) {
-      throw new AdminIrlRedeemPrepareError('failed-precondition', 'Admin IRL card receipt transfer is too large to encode.');
-    }
-    try {
-      raw = build(lookups);
-    } catch (lookupError) {
-      if (!transactionEncodingTooLarge(lookupError)) throw lookupError;
-      throw new AdminIrlRedeemPrepareError('failed-precondition', 'Admin IRL card receipt transfer is too large to encode.');
-    }
-  }
-  if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
-    const lookups = await loadLookups();
-    if (lookups.length) raw = build(lookups);
-  }
-  if (raw.length > SOLANA_MAX_RAW_TX_BYTES) {
-    throw new AdminIrlRedeemPrepareError(
+  const { raw } = await buildSizedTransaction({
+    build: (lookups) => buildTransaction(instructions, args.owner, args.blockhash, lookups),
+    loadLookupTables: () => args.loadLookupTable(args.context, args.runtime),
+    signal: args.context.signal,
+    encodingError: () => new AdminIrlRedeemPrepareError(
       'failed-precondition',
-      `Admin IRL card receipt transfer transaction too large (${raw.length} bytes > ${SOLANA_MAX_RAW_TX_BYTES}).`,
-      { rawBytes: raw.length, maxRawBytes: SOLANA_MAX_RAW_TX_BYTES },
-    );
-  }
+      'Admin IRL card receipt transfer is too large to encode.',
+    ),
+    packetSizeError: (rawBytes) => new AdminIrlRedeemPrepareError(
+      'failed-precondition',
+      `Admin IRL card receipt transfer transaction too large (${rawBytes} bytes > ${SOLANA_MAX_RAW_TX_BYTES}).`,
+      { rawBytes, maxRawBytes: SOLANA_MAX_RAW_TX_BYTES },
+    ),
+  });
   return raw;
 }
 
@@ -940,7 +908,7 @@ async function prepareAdminIrlRedeem(args: {
       }
     } catch (error) {
       if (error instanceof AdminIrlRedeemPrepareError) throw error;
-      if (!transactionEncodingTooLarge(error)) throw error;
+      if (!isTransactionEncodingTooLarge(error)) throw error;
       throw new AdminIrlRedeemPrepareError('failed-precondition', 'Admin IRL redeem transfer transaction is too large to encode. Try fewer packs.');
     }
     const blockhash = await args.dependencies.loadLatestBlockhash(args.providerContext, runtime);

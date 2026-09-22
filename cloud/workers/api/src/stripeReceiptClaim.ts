@@ -116,6 +116,7 @@ import {
   httpStatusForApiErrorCode,
   jsonResponse,
 } from './httpResponse.js';
+import { buildSizedTransaction, SOLANA_MAX_RAW_TX_BYTES } from './solanaTransaction.js';
 
 export const STRIPE_RECEIPT_CLAIM_PATH = '/receipts/stripe/claim';
 
@@ -125,7 +126,6 @@ const DIRECT_SUBMISSION_RESOLUTION_MAX_WAIT_MS = 90_000;
 const DIRECT_SUBMISSION_RESOLUTION_POLL_MS = 2_000;
 const HELIUS_ASSETS_PAGE_LIMIT = 1000;
 const HELIUS_ASSETS_MAX_SEARCH_PAGES = 64;
-const SOLANA_MAX_RAW_TX_BYTES = 1232;
 const BURN_POLICY = { missingAssetResult: true, nonBooleanFlagIsBurnt: false } as const;
 const BUBBLEGUM_PROGRAM_ID = new PublicKey(BUBBLEGUM_PROGRAM_ADDRESS);
 const MPL_NOOP_PROGRAM_ID = new PublicKey(MPL_NOOP_PROGRAM_ADDRESS);
@@ -614,15 +614,6 @@ function buildTransaction(
   return transaction;
 }
 
-function encodingTooLarge(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return error instanceof RangeError && (
-    /encoding overruns Uint8Array/i.test(message) ||
-    /offset.*out of range/i.test(message) ||
-    String(isRecord(error) ? error.code || '' : '') === 'ERR_OUT_OF_RANGE'
-  );
-}
-
 export async function buildWithOptionalLookupTable(args: {
   provider: ProviderContext;
   runtime: Runtime;
@@ -630,41 +621,18 @@ export async function buildWithOptionalLookupTable(args: {
   encodeTooLargeMessage: string;
   packetTooLargeMessage: (rawBytes: number) => string;
 }): Promise<VersionedTransaction> {
-  let lookupTables: AddressLookupTableAccount[] | undefined;
-  const loadLookupTables = async () => {
-    if (lookupTables) return lookupTables;
-    try { lookupTables = await loadAdminIrlRedeemLookupTable(args.provider, args.runtime); }
-    catch { lookupTables = []; }
-    return lookupTables;
-  };
-  const serialize = (tables: AddressLookupTableAccount[]) => {
-    const transaction = args.build(tables);
-    return { transaction, raw: transaction.serialize() };
-  };
-  let built: { transaction: VersionedTransaction; raw: Uint8Array };
-  try {
-    built = serialize([]);
-  } catch (error) {
-    if (!encodingTooLarge(error)) throw error;
-    const tables = await loadLookupTables();
-    if (!tables.length) throw new StripeReceiptClaimError('failed-precondition', args.encodeTooLargeMessage);
-    try { built = serialize(tables); }
-    catch (lookupError) {
-      if (!encodingTooLarge(lookupError)) throw lookupError;
-      throw new StripeReceiptClaimError('failed-precondition', args.encodeTooLargeMessage);
-    }
-  }
-  if (built.raw.length > SOLANA_MAX_RAW_TX_BYTES) {
-    const tables = await loadLookupTables();
-    if (tables.length) built = serialize(tables);
-  }
-  if (built.raw.length > SOLANA_MAX_RAW_TX_BYTES) {
-    throw new StripeReceiptClaimError('failed-precondition', args.packetTooLargeMessage(built.raw.length), {
-      rawBytes: built.raw.length,
-      maxRawBytes: SOLANA_MAX_RAW_TX_BYTES,
-    });
-  }
-  return built.transaction;
+  const { transaction } = await buildSizedTransaction({
+    build: args.build,
+    loadLookupTables: () => loadAdminIrlRedeemLookupTable(args.provider, args.runtime),
+    signal: args.provider.signal,
+    encodingError: () => new StripeReceiptClaimError('failed-precondition', args.encodeTooLargeMessage),
+    packetSizeError: (rawBytes) => new StripeReceiptClaimError(
+      'failed-precondition',
+      args.packetTooLargeMessage(rawBytes),
+      { rawBytes, maxRawBytes: SOLANA_MAX_RAW_TX_BYTES },
+    ),
+  });
+  return transaction;
 }
 
 function signedTransactionSignature(transaction: VersionedTransaction): string {
