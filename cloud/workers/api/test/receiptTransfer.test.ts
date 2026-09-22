@@ -14,6 +14,7 @@ import {
 } from '../src/dropConfig.ts';
 import { BUBBLEGUM_PROGRAM_ADDRESS } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { ProfileReadError } from '../src/dataAccess.ts';
 import { RECEIPT_TRANSFER_RATE_LIMIT_SCHEMA_VERSION } from '../src/receiptTransferRateLimit.ts';
 import {
   handleReceiptTransferPrepare,
@@ -144,6 +145,53 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test('receipt transfer preserves profile errors and logs only unexpected failures', async (context) => {
+  const log = context.mock.method(console, 'error', () => undefined);
+  const details = { itemId: CERTIFICATE.toBase58() };
+  const expected = await handleReceiptTransferPrepare(request(requestBody()), env(), {}, dependencies({
+    loadOnchainState: async () => { throw new ProfileReadError('not-found', 404, 'Receipt missing.', details); },
+  }));
+  assert.equal(expected.response.status, 404);
+  assert.equal(expected.authOutcome, 'rejected');
+  assert.equal(expected.dropId, DROP_ID);
+  assert.deepEqual(await expected.response.json(), {
+    ok: false,
+    error: { code: 'not-found', message: 'Receipt missing.', details },
+  });
+  assert.equal(log.mock.callCount(), 0);
+  const unexpected = await handleReceiptTransferPrepare(request(requestBody()), env(), {}, dependencies({
+    loadOnchainState: async () => { throw new Error('Private failure.'); },
+  }));
+  assert.equal(unexpected.response.status, 500);
+  assert.equal(unexpected.authOutcome, 'provider-failure');
+  assert.deepEqual(await unexpected.response.json(), {
+    ok: false,
+    error: { code: 'internal', message: 'Receipt transfer preparation failed.' },
+  });
+  assert.equal(log.mock.callCount(), 1);
+  assert.deepEqual(log.mock.calls[0].arguments, [{
+    event: 'receipt_transfer_prepare_failed',
+    error: { name: 'Error', message: 'Private failure.' },
+  }]);
+});
+
+test('receipt transfer prioritizes an expired deadline over an identity provider error', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const result = await handleReceiptTransferPrepare(request(requestBody()), env(), {}, dependencies({
+    timeoutMs: 100,
+    verifyIdentity: async () => {
+      context.mock.timers.tick(100);
+      throw new RequestIdentityError('provider-unavailable');
+    },
+  }));
+  assert.equal(result.response.status, 504);
+  assert.equal(result.authOutcome, 'rejected');
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'deadline-exceeded', message: 'Receipt transfer request timed out.' },
+  });
+});
 
 test('receipt transfer handler returns the exact unsigned owner transaction', async () => {
   const scopes: string[] = [];

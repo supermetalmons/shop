@@ -6,7 +6,23 @@ import { stripeCheckoutWriteData } from '../src/stripeCheckout/commerce.ts';
 import { applyStripeCheckoutWebhook } from '../src/stripeCheckout/sessionStore.ts';
 import { markStripeCheckoutFulfillmentFailed, releaseStripeCheckoutFulfillmentForRetry, startStripeCheckoutFulfillmentDocument } from '../src/stripeCheckout/store.ts';
 import { enqueueStripeTerminalNotifications } from '../src/stripeCheckout/notificationOutboxState.ts';
+import { claimStripeTerminalNotifications } from '../src/stripeCheckout/notificationStore.ts';
 import { notificationFixture, OUTBOX_NOW, OUTBOX_LEASE } from './notificationOutboxTestSupport.ts';
+
+test('Stripe terminal notification claims reuse their single outbox read', async (context) => {
+  const state = await notificationFixture(context, 'stripe_terminal');
+  const get = context.mock.method(state.repository.notificationOutbox, 'get');
+  const compareAndSet = context.mock.method(state.repository.notificationOutbox, 'compareAndSet');
+  const signal = new AbortController().signal;
+  const result = await claimStripeTerminalNotifications({
+    dropId: state.intent.dropId, sessionId: state.parentKey.documentId,
+    commerce: { repository: state.repository, nowMs: state.nowMs, signal }, signal,
+  });
+  assert.ok('claim' in result);
+  assert.equal(get.mock.callCount(), 1);
+  assert.equal(compareAndSet.mock.callCount(), 1);
+  assert.deepEqual(result.claim.record, await state.read());
+});
 
 for (const outcome of ['fulfilled', 'manual_review'] as const) {
   test(`Stripe ${outcome}: missing outbox initializes only for explicit replay`, async (context) => {

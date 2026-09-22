@@ -1,9 +1,124 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { withAuthenticatedRequest } from '../src/authenticatedRequest.ts';
-import { verifyRequestIdentity } from '../src/requestIdentity.ts';
+import { classifyAuthenticatedRequestError, withAuthenticatedRequest } from '../src/authenticatedRequest.ts';
+import { ProfileReadError, type ApiErrorCode } from '../src/dataAccess.ts';
+import { DeliveryPrepareError } from '../src/deliveryPrepareErrors.ts';
+import { RequestIdentityError, verifyRequestIdentity } from '../src/requestIdentity.ts';
 
 type RequestOptions = Parameters<typeof withAuthenticatedRequest>[1];
+
+type ClassificationOptions = Parameters<typeof classifyAuthenticatedRequestError>[1];
+
+function classificationOptions(overrides: Partial<ClassificationOptions> = {}): ClassificationOptions {
+  return {
+    authenticated: true,
+    timedOut: false,
+    timeoutPrecedence: 'after-known-errors',
+    timeoutMessage: 'Request timed out.',
+    internalMessage: 'Request failed.',
+    mapDomainError: (error) => error instanceof DeliveryPrepareError ? { error } : undefined,
+    ...overrides,
+  };
+}
+
+test('request errors preserve domain and profile details with their auth classification', () => {
+  const cases: readonly [ApiErrorCode, 'rejected' | 'provider-failure'][] = [
+    ['invalid-argument', 'rejected'],
+    ['unauthenticated', 'rejected'],
+    ['permission-denied', 'rejected'],
+    ['not-found', 'rejected'],
+    ['failed-precondition', 'rejected'],
+    ['resource-exhausted', 'rejected'],
+    ['aborted', 'provider-failure'],
+    ['deadline-exceeded', 'provider-failure'],
+    ['unavailable', 'provider-failure'],
+    ['internal', 'provider-failure'],
+  ];
+  for (const [code, authOutcome] of cases) {
+    const details = { itemId: 'item-1' };
+    for (const error of [
+      new DeliveryPrepareError(code, 'Original failure.', details),
+      new ProfileReadError(code, 503, 'Original failure.', details),
+    ]) {
+      for (const authenticated of [true, false]) {
+        const result = classifyAuthenticatedRequestError(error, classificationOptions({ authenticated }));
+        assert.equal(result.error.code, code);
+        assert.equal(result.error.message, 'Original failure.');
+        assert.equal(result.error.details, details);
+        assert.equal(result.authOutcome, authenticated ? authOutcome : 'rejected');
+        assert.equal(result.unexpected, false);
+      }
+    }
+  }
+});
+
+test('identity failures preserve provider classification before authentication finishes', () => {
+  const cases = [
+    ['invalid-token', 'unauthenticated', 'Authentication is required.', 'rejected'],
+    ['provider-timeout', 'deadline-exceeded', 'Request timed out.', 'provider-failure'],
+    ['provider-unavailable', 'unavailable', 'Authentication is temporarily unavailable.', 'provider-failure'],
+  ] as const;
+  for (const [kind, code, message, authOutcome] of cases) {
+    for (const authenticated of [true, false]) {
+      assert.deepEqual(
+        classifyAuthenticatedRequestError(new RequestIdentityError(kind), classificationOptions({ authenticated })),
+        { error: { code, message }, authOutcome, unexpected: false },
+      );
+    }
+  }
+});
+
+test('request error classification preserves both timeout precedence policies', () => {
+  for (const error of [
+    new DeliveryPrepareError('not-found', 'Item missing.', { itemId: 'item-1' }),
+    new ProfileReadError('unavailable', 503, 'Data unavailable.'),
+    new RequestIdentityError('provider-unavailable'),
+  ]) {
+    for (const authenticated of [true, false]) {
+      const baseOptions = classificationOptions({ authenticated });
+      const expected = classifyAuthenticatedRequestError(error, baseOptions);
+      assert.deepEqual(classifyAuthenticatedRequestError(error, {
+        ...baseOptions,
+        timedOut: true,
+      }), expected);
+      assert.deepEqual(classifyAuthenticatedRequestError(error, {
+        ...baseOptions,
+        timedOut: true,
+        timeoutPrecedence: 'before-known-errors',
+      }), {
+        error: { code: 'deadline-exceeded', message: 'Request timed out.' },
+        authOutcome: authenticated ? 'provider-failure' : 'rejected',
+        unexpected: false,
+      });
+    }
+  }
+});
+
+test('domain adapters can mark write conflicts rejected without changing other aborted errors', () => {
+  const error = new DeliveryPrepareError('aborted', 'Write conflicted.');
+  assert.equal(classifyAuthenticatedRequestError(error, classificationOptions()).authOutcome, 'provider-failure');
+  assert.deepEqual(classifyAuthenticatedRequestError(error, classificationOptions({
+    mapDomainError: (failure) => failure === error ? { error, authOutcome: 'rejected' } : undefined,
+  })), { error, authOutcome: 'rejected', unexpected: false });
+});
+
+test('only unexpected failures request logging and expose the safe internal message', () => {
+  for (const error of [new Error('Private provider details'), { code: 'permission-denied', message: 'Untrusted shape' }, null]) {
+    for (const authenticated of [true, false]) {
+      const authOutcome = authenticated ? 'provider-failure' : 'rejected';
+      assert.deepEqual(classifyAuthenticatedRequestError(error, classificationOptions({ authenticated })), {
+        error: { code: 'internal', message: 'Request failed.' },
+        authOutcome,
+        unexpected: true,
+      });
+      assert.deepEqual(classifyAuthenticatedRequestError(error, classificationOptions({ authenticated, timedOut: true })), {
+        error: { code: 'deadline-exceeded', message: 'Request timed out.' },
+        authOutcome,
+        unexpected: false,
+      });
+    }
+  }
+});
 
 function options(overrides: Partial<RequestOptions['dependencies']> = {}): RequestOptions {
   return {

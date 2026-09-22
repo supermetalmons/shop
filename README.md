@@ -454,7 +454,14 @@ publishing the updated Worker through `npm run deploy:api`; the deployment check
 verifies the index definitions and selective query plans. It preserves commerce
 documents, revisions, and authority state, requires no Commerce pause or document
 backfill, and remains compatible with the previous Worker.
-Append `0013_<description>.sql` for the next change.
+Migration `0013_notification_outbox.sql` moves notification publication state to
+dedicated tables through the [notification outbox cutover](scripts/docs/notification_outbox_cutover.md).
+Migration `0014_drop_legacy_notification_indexes.sql` removes the six legacy
+notification indexes after activation, while preserving their historical fields
+and write fences. An untouched, empty paused database can apply all migrations
+before initialization. Populated legacy databases must finish the `0013` cutover
+first. The checker supports both exact migration baselines during that transition.
+Append `0015_<description>.sql` for the next change.
 The Worker preserves the existing commerce API and transaction behavior through
 the D1 document-store adapter.
 

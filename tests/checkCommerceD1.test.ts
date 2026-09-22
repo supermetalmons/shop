@@ -37,11 +37,13 @@ const migrationNames = [
   '0011_stripe_order_disputes.sql',
   '0012_stripe_identity_lookup_indexes.sql',
   '0013_notification_outbox.sql',
+  '0014_drop_legacy_notification_indexes.sql',
 ] as const;
 
-function currentDatabase(seedDocuments = true): DatabaseSync {
+function currentDatabase(seedDocuments = true, migrationCount: 13 | 14 = 14): DatabaseSync {
   const database = new DatabaseSync(':memory:');
-  for (const name of migrationNames) {
+  const appliedMigrations = migrationNames.slice(0, migrationCount);
+  for (const name of appliedMigrations) {
     database.exec(readFileSync(
       new URL(`../cloud/workers/api/commerce-migrations/${name}`, import.meta.url),
       'utf8',
@@ -52,7 +54,7 @@ function currentDatabase(seedDocuments = true): DatabaseSync {
     name TEXT NOT NULL UNIQUE
   )`);
   const recordMigration = database.prepare('INSERT INTO d1_migrations (name) VALUES (?)');
-  for (const name of migrationNames) {
+  for (const name of appliedMigrations) {
     recordMigration.run(name);
   }
   if (!seedDocuments) return database;
@@ -290,6 +292,50 @@ test('Commerce D1 checker accepts the exact empty post-migration state', () => {
   }
 });
 
+test('Commerce D1 checker still accepts migration 0013 during notification cutover', () => {
+  const database = currentDatabase(true, 13);
+  try {
+    assert.equal(checkCommerceD1(localQuery(database)).notificationOutboxMode, 'legacy');
+  } finally {
+    database.close();
+  }
+});
+
+for (const index of [
+  'commerce_delivery_orders_buyer_notifications_pending',
+  'commerce_delivery_orders_shipper_notifications_pending',
+  'commerce_delivery_orders_buyer_notifications_pending_owner_path',
+  'commerce_delivery_orders_shipper_notifications_pending_owner_path',
+  'commerce_ready_notifications_due',
+  'commerce_stripe_terminal_notifications_due',
+]) {
+  test(`Commerce D1 checker rejects retired index ${index} after migration 0014`, () => {
+    const database = currentDatabase(false);
+    try {
+      database.exec(`CREATE INDEX ${index} ON commerce_documents (document_path)`);
+      assert.throws(() => checkCommerceD1(localQuery(database)), /notification index(?:es)? (?:are|is) invalid/);
+    } finally {
+      database.close();
+    }
+  });
+}
+
+for (const mutation of [
+  "UPDATE d1_migrations SET name = '0014_unexpected.sql' WHERE id = 14",
+  'DELETE FROM d1_migrations WHERE id = 4',
+  "INSERT INTO d1_migrations (name) VALUES ('0015_unexpected.sql')",
+]) {
+  test(`Commerce D1 checker rejects migration history mutation: ${mutation}`, () => {
+    const database = currentDatabase(false);
+    try {
+      database.exec(mutation);
+      assert.throws(() => checkCommerceD1(localQuery(database)), /schema baseline is invalid/);
+    } finally {
+      database.close();
+    }
+  });
+}
+
 test('API deployment rejects active legacy inventory while standalone inspection succeeds', () => {
   const database = currentDatabase();
   try {
@@ -504,7 +550,7 @@ test('Commerce D1 checker rejects a malformed Stripe reconciliation index', () =
 });
 
 test('Commerce D1 checker rejects a missing or malformed due ready-notification index', () => {
-  const database = currentDatabase();
+  const database = currentDatabase(true, 13);
   try {
     database.exec('DROP INDEX commerce_ready_notifications_due');
     assert.throws(
@@ -542,7 +588,7 @@ test('Commerce D1 checker rejects due ready-notification scans and temporary sor
 });
 
 test('Commerce D1 checker rejects a malformed Stripe terminal-notification index', () => {
-  const database = currentDatabase();
+  const database = currentDatabase(true, 13);
   try {
     database.exec(`DROP INDEX commerce_stripe_terminal_notifications_due;
       CREATE INDEX commerce_stripe_terminal_notifications_due

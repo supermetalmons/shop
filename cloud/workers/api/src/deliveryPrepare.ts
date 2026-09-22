@@ -60,9 +60,9 @@ import {
   calculateDeliveryLamports,
   normalizeDeliveryUnitsPerBox,
 } from '../../../../shared/shipping.js';
-import { type RequestAuthContext, RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { type RequestAuthContext, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
-import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
+import { classifyAuthenticatedRequestError, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
   isRequestCancellationError,
   isSignalCancellationError,
@@ -76,7 +76,7 @@ import {
   type DeferredWork,
 } from './deferredWork.js';
 import { isRecord, ProfileReadError } from './dataAccess.js';
-import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLike } from './httpResponse.js';
 import {
   createSolanaProvider,
   parseSolanaRpcAccount,
@@ -232,7 +232,7 @@ export type DeliveryPrepareResult = {
   dropId?: string;
 };
 
-function errorResponse(error: DeliveryPrepareError): Response {
+function errorResponse(error: ApiErrorLike): Response {
   return jsonResponse(apiErrorBody(error), httpStatusForApiErrorCode(error.code, 502));
 }
 
@@ -1174,36 +1174,28 @@ export async function handleDeliveryPrepare(
     } catch (error) {
       rethrowDeferredWorkRegistrationError(error);
       if (isRequestCancellationError(request, error)) throw error;
-      let deliveryError: DeliveryPrepareError;
-      let authOutcome: DeliveryPrepareResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-      if (error instanceof DeliveryPrepareError) {
-        deliveryError = error;
-        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-          authOutcome = 'rejected';
-        }
-      } else if (error instanceof RequestIdentityError) {
-        const mapped = requestIdentityErrorDetails(error, {
-          code: 'deadline-exceeded',
-          message: 'Delivery preparation request timed out.',
-        });
-        deliveryError = new DeliveryPrepareError(mapped.code, mapped.message);
-        authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
-      } else if (error instanceof ProfileReadError) {
-        deliveryError = new DeliveryPrepareError(error.code, error.message, error.details);
-        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-          authOutcome = 'rejected';
-        }
-      } else if (error instanceof CommerceWriteConflict) {
-        deliveryError = new DeliveryPrepareError('aborted', 'Delivery preparation conflicted. Try again.');
-        authOutcome = 'rejected';
-      } else if (deadline.timedOut()) {
-        deliveryError = new DeliveryPrepareError('deadline-exceeded', 'Delivery preparation request timed out.');
-      } else {
+      const { error: deliveryError, authOutcome, unexpected } = classifyAuthenticatedRequestError(error, {
+        authenticated: Boolean(identity),
+        timedOut: deadline.timedOut(),
+        timeoutPrecedence: 'after-known-errors',
+        timeoutMessage: 'Delivery preparation request timed out.',
+        internalMessage: 'Delivery preparation failed.',
+        mapDomainError: (failure) => {
+          if (failure instanceof DeliveryPrepareError) return { error: failure };
+          if (failure instanceof CommerceWriteConflict) {
+            return {
+              error: { code: 'aborted', message: 'Delivery preparation conflicted. Try again.' },
+              authOutcome: 'rejected',
+            };
+          }
+          return undefined;
+        },
+      });
+      if (unexpected) {
         console.error({
           event: 'delivery_prepare_failed',
           error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
         });
-        deliveryError = new DeliveryPrepareError('internal', 'Delivery preparation failed.');
       }
       if (!identity) await request.body?.cancel().catch(() => undefined);
       return { response: errorResponse(deliveryError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };

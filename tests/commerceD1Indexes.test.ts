@@ -1291,6 +1291,10 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       UPDATE commerce_notification_outbox_control SET storage_mode = 'table';
       DELETE FROM commerce_authority_control_lease`);
     resumeCommerceAfterMigration(db);
+    runMigration(db, readFileSync(
+      new URL('../cloud/workers/api/commerce-migrations/0014_drop_legacy_notification_indexes.sql', import.meta.url),
+      'utf8',
+    ));
     db.exec('ANALYZE');
     assert.deepEqual(indexColumns(db, 'commerce_documents_delivery_owner_path'), [
       'owner',
@@ -1317,36 +1321,11 @@ test('Commerce baseline keeps required covering and partial indexes', () => {
       'pack_projection_next_attempt_ms',
       'document_path',
     ]);
-    assert.deepEqual(indexColumns(db, 'commerce_delivery_orders_buyer_notifications_pending'), ['document_path']);
-    assert.deepEqual(indexColumns(db, 'commerce_delivery_orders_shipper_notifications_pending'), ['document_path']);
-    assert.deepEqual(indexColumns(db, 'commerce_delivery_orders_buyer_notifications_pending_owner_path'), [
-      'owner',
-      'document_path',
-    ]);
-    assert.deepEqual(indexColumns(db, 'commerce_delivery_orders_shipper_notifications_pending_owner_path'), [
-      'owner',
-      'document_path',
-    ]);
-    assert.equal(
-      String(db.prepare(`SELECT sql FROM sqlite_schema
-        WHERE type = 'index' AND name = 'commerce_delivery_orders_buyer_notifications_pending_owner_path'`)
-        .get()!.sql).replace(/\s+/g, ' ').trim(),
-      `CREATE INDEX commerce_delivery_orders_buyer_notifications_pending_owner_path
-        ON commerce_documents (owner, document_path)
-        WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
-          buyer_notification_state = 'pending'`.replace(/\s+/g, ' ').trim(),
-    );
-    assert.equal(
-      String(db.prepare(`SELECT sql FROM sqlite_schema
-        WHERE type = 'index' AND name = 'commerce_delivery_orders_shipper_notifications_pending_owner_path'`)
-        .get()!.sql).replace(/\s+/g, ' ').trim(),
-      `CREATE INDEX commerce_delivery_orders_shipper_notifications_pending_owner_path
-        ON commerce_documents (owner, document_path)
-        WHERE document_kind = 'delivery_order' AND status = 'ready_to_ship' AND
-          shipper_notification_state = 'pending'`.replace(/\s+/g, ' ').trim(),
-    );
+    assert.deepEqual(db.prepare(`SELECT name FROM sqlite_schema WHERE type = 'index' AND (
+      name GLOB 'commerce_delivery_orders_*_notifications_pending*' OR
+      name IN ('commerce_ready_notifications_due', 'commerce_stripe_terminal_notifications_due')
+    )`).all(), []);
     assert.deepEqual(indexColumns(db, 'commerce_stripe_checkouts_reconciliation_due'), ['null', 'document_path']);
-    assert.deepEqual(indexColumns(db, 'commerce_stripe_terminal_notifications_due'), ['null', 'document_path']);
     assert.deepEqual(indexColumns(db, 'commerce_notification_outbox_due'), ['next_attempt_at_ms', 'parent_path', 'family']);
     assert.deepEqual(indexColumns(db, 'commerce_notification_outbox_family_due'), ['family', 'next_attempt_at_ms', 'parent_path']);
     assert.deepEqual(indexColumns(db, 'commerce_notification_outbox_pending_path'), ['family', 'parent_path']);

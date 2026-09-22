@@ -18,6 +18,7 @@ import {
   MPL_CORE_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { ProfileReadError } from '../src/dataAccess.ts';
 import {
   ADMIN_IRL_REDEEM_PREPARE_ATTEMPT_HEADER,
   ADMIN_IRL_REDEEM_PREPARE_PATH,
@@ -149,6 +150,59 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test('Admin IRL preparation preserves profile errors and logs only unexpected failures', async (context) => {
+  const log = context.mock.method(console, 'error', () => undefined);
+  const body = { owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] };
+  const details = { itemId: PACK.toBase58() };
+  const expected = await handleAdminIrlRedeemPrepare(request(body), env(), {}, dependencies({
+    loadOnchainState: async () => { throw new ProfileReadError('not-found', 404, 'Pack missing.', details); },
+  }));
+  assert.equal(expected.response.status, 404);
+  assert.equal(expected.authOutcome, 'rejected');
+  assert.equal(expected.dropId, DROP_ID);
+  assert.deepEqual(await expected.response.json(), {
+    ok: false,
+    error: { code: 'not-found', message: 'Pack missing.', details },
+  });
+  assert.equal(log.mock.callCount(), 0);
+  const unexpected = await handleAdminIrlRedeemPrepare(request(body), env(), {}, dependencies({
+    loadOnchainState: async () => { throw new Error('Private failure.'); },
+  }));
+  assert.equal(unexpected.response.status, 500);
+  assert.equal(unexpected.authOutcome, 'provider-failure');
+  assert.deepEqual(await unexpected.response.json(), {
+    ok: false,
+    error: { code: 'internal', message: 'Admin IRL redeem preparation failed.' },
+  });
+  assert.equal(log.mock.callCount(), 1);
+  assert.deepEqual(log.mock.calls[0].arguments, [{
+    event: 'admin_irl_redeem_prepare_failed',
+    error: { name: 'Error', message: 'Private failure.' },
+  }]);
+});
+
+test('Admin IRL preparation prioritizes an expired deadline over an identity provider error', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const result = await handleAdminIrlRedeemPrepare(
+    request({ owner: OWNER.toBase58(), dropId: DROP_ID, itemIds: [PACK.toBase58()] }),
+    env(),
+    {},
+    dependencies({
+      timeoutMs: 100,
+      verifyIdentity: async () => {
+        context.mock.timers.tick(100);
+        throw new RequestIdentityError('provider-unavailable');
+      },
+    }),
+  );
+  assert.equal(result.response.status, 504);
+  assert.equal(result.authOutcome, 'rejected');
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'deadline-exceeded', message: 'Admin IRL redeem preparation timed out.' },
+  });
+});
 
 test('Admin IRL preparation returns the exact unsigned pack transfer and request input', async () => {
   let created: Record<string, unknown> | undefined;

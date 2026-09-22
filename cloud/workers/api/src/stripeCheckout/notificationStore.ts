@@ -75,6 +75,7 @@ export async function claimStripeTerminalNotifications(args: StripeTerminalNotif
   const result = await claimNotificationOutbox({
     repository: args.commerce.repository, parentPath: key.path, family: 'stripe_terminal',
     nowMs: args.nowMs || args.commerce.nowMs, signal: args.signal, parentVersion: document.version,
+    initialRecord: record,
   });
   if (result.outcome !== 'claimed') return { result: skipped(outcome,
     result.outcome === 'none' ? result.record?.state === 'queued' ? 'queued' : 'none' : result.outcome,

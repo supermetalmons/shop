@@ -9,6 +9,144 @@ import {
 } from '../src/notificationOutboxStore.ts';
 import { notificationFixture } from './notificationOutboxTestSupport.ts';
 
+for (const useSnapshot of [false, true]) {
+  test(`claiming ${useSnapshot ? 'with' : 'without'} a snapshot preserves the claim and retry budget`, async (context) => {
+    const fixture = await notificationFixture(context, 'ready');
+    const initialRecord = await fixture.read();
+    const get = context.mock.method(fixture.repository.notificationOutbox, 'get');
+    const compareAndSet = context.mock.method(fixture.repository.notificationOutbox, 'compareAndSet');
+    const result = await claimNotificationOutbox({
+      repository: fixture.repository, parentPath: fixture.parentKey.path, family: 'ready', nowMs: fixture.nowMs,
+      ...(useSnapshot ? { initialRecord } : {}),
+    });
+    assert.equal(result.outcome, 'claimed');
+    if (result.outcome !== 'claimed') throw new Error('Expected notification claim.');
+    assert.equal(get.mock.callCount(), useSnapshot ? 0 : 1);
+    assert.equal(compareAndSet.mock.callCount(), 1);
+    assert.equal(result.previousAttemptCount, initialRecord.attemptCount);
+    assert.equal(result.claim.attemptCount, initialRecord.attemptCount + 1);
+    assert.equal(result.claim.generation, initialRecord.generation);
+    assert.deepEqual(await fixture.read(), result.claim);
+  });
+}
+
+for (const field of ['parentPath', 'family'] as const) {
+  test(`claiming rejects a snapshot with the wrong ${field} before accessing the database`, async (context) => {
+    const fixture = await notificationFixture(context, 'ready');
+    const initialRecord = await fixture.read();
+    const get = context.mock.method(fixture.repository.notificationOutbox, 'get');
+    const compareAndSet = context.mock.method(fixture.repository.notificationOutbox, 'compareAndSet');
+    await assert.rejects(claimNotificationOutbox({
+      repository: fixture.repository, parentPath: fixture.parentKey.path, family: 'ready', nowMs: fixture.nowMs,
+      initialRecord: { ...initialRecord, ...(field === 'parentPath' ? { parentPath: 'other' } : { family: 'shipped' as const }) },
+    }), /snapshot_identity_invalid/);
+    assert.equal(get.mock.callCount(), 0);
+    assert.equal(compareAndSet.mock.callCount(), 0);
+  });
+}
+
+for (const transition of ['claimed', 'cancelled', 'replaced', 'exhausted'] as const) {
+  test(`a stale initial snapshot refreshes an outbox that was ${transition}`, async (context) => {
+    const fixture = await notificationFixture(context, 'ready');
+    const initialRecord = await fixture.read();
+    const args = {
+      repository: fixture.repository, parentPath: fixture.parentKey.path, family: 'ready' as const, nowMs: fixture.nowMs,
+    };
+    if (transition === 'claimed') {
+      await claimNotificationOutbox(args);
+    } else if (transition === 'cancelled') {
+      await fixture.repository.run(fixture.nowMs(), (unit) => unit.cancelNotificationOutbox(fixture.parentKey.path, 'ready'));
+    } else if (transition === 'replaced') {
+      await fixture.repository.run(fixture.nowMs(), (unit) => unit.replaceNotificationOutbox({
+        ...fixture.intent, generation: crypto.randomUUID(),
+      }));
+    } else {
+      await fixture.mutate({ attemptCount: 4 });
+    }
+    const before = await fixture.read();
+    const get = context.mock.method(fixture.repository.notificationOutbox, 'get');
+    const compareAndSet = context.mock.method(fixture.repository.notificationOutbox, 'compareAndSet');
+    const result = await claimNotificationOutbox({ ...args, initialRecord });
+    assert.equal(get.mock.callCount(), 1);
+    assert.equal(compareAndSet.mock.callCount(), transition === 'claimed' || transition === 'cancelled' ? 1 : 2);
+    if (transition === 'replaced') {
+      assert.equal(result.outcome, 'claimed');
+      if (result.outcome !== 'claimed') throw new Error('Expected notification claim.');
+      assert.equal(result.claim.generation, before.generation);
+      assert.notEqual(result.claim.generation, initialRecord.generation);
+      assert.deepEqual(result.claim.entries, before.entries);
+    } else if (transition === 'exhausted') {
+      assert.equal(result.outcome, 'failed');
+      const stored = await fixture.read();
+      assert.equal(stored.state, 'failed');
+      assert.equal(stored.attemptCount, 4);
+      assert.equal(stored.claimId, null);
+    } else {
+      assert.equal(result.outcome, transition === 'claimed' ? 'busy' : 'none');
+      assert.deepEqual(await fixture.read(), before);
+    }
+  });
+}
+
+test('initial snapshots retain parent-version fencing and the six-attempt limit', async (context) => {
+  const fixture = await notificationFixture(context, 'ready');
+  const parent = await fixture.repository.get(fixture.parentKey);
+  assert.ok(parent);
+  const initialRecord = await fixture.read();
+  await fixture.updateOrder({ unrelated: true });
+  const get = context.mock.method(fixture.repository.notificationOutbox, 'get');
+  const compareAndSet = context.mock.method(fixture.repository.notificationOutbox, 'compareAndSet');
+  const result = await claimNotificationOutbox({
+    repository: fixture.repository, parentPath: fixture.parentKey.path, family: 'ready', nowMs: fixture.nowMs,
+    initialRecord, parentVersion: parent.version,
+  });
+  assert.equal(result.outcome, 'busy');
+  assert.equal(compareAndSet.mock.callCount(), 6);
+  assert.equal(get.mock.callCount(), 6);
+  assert.ok(compareAndSet.mock.calls.every((call) => call.arguments[0].parentVersion === parent.version));
+  assert.deepEqual(await fixture.read(), initialRecord);
+});
+
+for (const abortAt of ['start', 'conflict'] as const) {
+  test(`snapshot claiming stops when cancelled at ${abortAt}`, async (context) => {
+    const fixture = await notificationFixture(context, 'ready');
+    const initialRecord = await fixture.read();
+    const controller = new AbortController();
+    const reason = new Error('request-cancelled');
+    const get = context.mock.method(fixture.repository.notificationOutbox, 'get');
+    const compareAndSet = context.mock.method(fixture.repository.notificationOutbox, 'compareAndSet', async () => {
+      controller.abort(reason);
+      return null;
+    });
+    if (abortAt === 'start') controller.abort(reason);
+    await assert.rejects(claimNotificationOutbox({
+      repository: fixture.repository, parentPath: fixture.parentKey.path, family: 'ready', nowMs: fixture.nowMs,
+      initialRecord, signal: controller.signal,
+    }), (error) => error === reason);
+    assert.equal(get.mock.callCount(), 0);
+    assert.equal(compareAndSet.mock.callCount(), abortAt === 'start' ? 0 : 1);
+    assert.deepEqual(await fixture.read(), initialRecord);
+  });
+}
+
+for (const operation of ['write', 'refresh'] as const) {
+  test(`snapshot claiming propagates database ${operation} failures without retrying them`, async (context) => {
+    const fixture = await notificationFixture(context, 'ready');
+    const initialRecord = await fixture.read();
+    const failure = new Error('database-unavailable');
+    const get = context.mock.method(fixture.repository.notificationOutbox, 'get', async () => { throw failure; });
+    const compareAndSet = context.mock.method(fixture.repository.notificationOutbox, 'compareAndSet', async () => {
+      if (operation === 'write') throw failure;
+      return null;
+    });
+    await assert.rejects(claimNotificationOutbox({
+      repository: fixture.repository, parentPath: fixture.parentKey.path, family: 'ready', nowMs: fixture.nowMs, initialRecord,
+    }), (error) => error === failure);
+    assert.equal(compareAndSet.mock.callCount(), 1);
+    assert.equal(get.mock.callCount(), operation === 'write' ? 0 : 1);
+  });
+}
+
 async function claimedFixture(context: test.TestContext) {
   const fixture = await notificationFixture(context, 'ready');
   const claimed = await claimNotificationOutbox({

@@ -18,13 +18,20 @@ export async function claimNotificationOutbox(args: {
   nowMs: () => number;
   signal?: AbortSignal;
   parentVersion?: number;
+  initialRecord?: NotificationOutboxRecord;
 }): Promise<
   | { outcome: 'claimed'; claim: NotificationOutboxRecord; previousAttemptCount: number }
   | { outcome: 'none' | 'busy' | 'failed'; record: NotificationOutboxRecord | null }
 > {
+  args.signal?.throwIfAborted();
+  if (args.initialRecord && (args.initialRecord.parentPath !== args.parentPath || args.initialRecord.family !== args.family)) {
+    throw new Error('notification_publication_snapshot_identity_invalid');
+  }
   for (let attempt = 0; attempt < 6; attempt += 1) {
     args.signal?.throwIfAborted();
-    const record = await args.repository.notificationOutbox.get(args.parentPath, args.family);
+    const record = attempt === 0 && args.initialRecord
+      ? args.initialRecord
+      : await args.repository.notificationOutbox.get(args.parentPath, args.family);
     if (!record || record.state !== 'pending') {
       return { outcome: record?.state === 'failed' ? 'failed' : 'none', record };
     }

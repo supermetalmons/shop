@@ -68,7 +68,7 @@ import type {
   PrepareIrlClaimRequest,
   PrepareIrlClaimResponse,
 } from '../../../../shared/contracts.js';
-import { type RequestAuthContext, RequestIdentityError, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { type RequestAuthContext, resolveRequestWallet, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
 import {
   isRequestCancellationError,
@@ -76,9 +76,9 @@ import {
   raceReadWithSignal,
   readBoundedRequestJson,
 } from './boundedRequest.js';
-import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
+import { classifyAuthenticatedRequestError, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
-import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLike } from './httpResponse.js';
 import {
   createSolanaProvider,
   parseSolanaRpcAccount,
@@ -196,7 +196,7 @@ export type IrlClaimResult = {
   dropId?: string;
 };
 
-function errorResponse(error: IrlClaimError): Response {
+function errorResponse(error: ApiErrorLike): Response {
   return jsonResponse(apiErrorBody(error), httpStatusForApiErrorCode(error.code, 502));
 }
 
@@ -1088,33 +1088,19 @@ export async function handleIrlClaimPrepare(
       return { response: jsonResponse(response, 200), metrics, authOutcome: 'accepted', dropId };
     } catch (error) {
       if (isRequestCancellationError(request, error)) throw error;
-      let claimError: IrlClaimError;
-      let authOutcome: IrlClaimResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-      if (error instanceof IrlClaimError) {
-        claimError = error;
-        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-          authOutcome = 'rejected';
-        }
-      } else if (error instanceof RequestIdentityError) {
-        const mapped = requestIdentityErrorDetails(error, {
-          code: 'deadline-exceeded',
-          message: 'IRL claim request timed out.',
-        });
-        claimError = new IrlClaimError(mapped.code, mapped.message);
-        authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
-      } else if (error instanceof ProfileReadError) {
-        claimError = new IrlClaimError(error.code, error.message, error.details);
-        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-          authOutcome = 'rejected';
-        }
-      } else if (deadline.timedOut()) {
-        claimError = new IrlClaimError('deadline-exceeded', 'IRL claim request timed out.');
-      } else {
+      const { error: claimError, authOutcome, unexpected } = classifyAuthenticatedRequestError(error, {
+        authenticated: Boolean(identity),
+        timedOut: deadline.timedOut(),
+        timeoutPrecedence: 'after-known-errors',
+        timeoutMessage: 'IRL claim request timed out.',
+        internalMessage: 'IRL claim preparation failed.',
+        mapDomainError: (failure) => failure instanceof IrlClaimError ? { error: failure } : undefined,
+      });
+      if (unexpected) {
         console.error({
           event: 'irl_claim_prepare_failed',
           error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
         });
-        claimError = new IrlClaimError('internal', 'IRL claim preparation failed.');
       }
       return { response: errorResponse(claimError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
     }

@@ -1,6 +1,8 @@
 import { createRequestDeadline, type RequestDeadline } from './boundedRequest.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
-import type { RequestAuthContext, RequestIdentity, RequestIdentityError, verifyRequestIdentity } from './requestIdentity.js';
+import { ProfileReadError, type ApiErrorCode } from './dataAccess.js';
+import type { ApiErrorLike } from './httpResponse.js';
+import { RequestIdentityError, type RequestAuthContext, type RequestIdentity, type verifyRequestIdentity } from './requestIdentity.js';
 
 export function requestIdentityErrorDetails(
   error: RequestIdentityError,
@@ -11,6 +13,78 @@ export function requestIdentityErrorDetails(
   }
   if (error.kind === 'provider-timeout') return { ...timeout };
   return { code: 'unavailable', message: 'Authentication is temporarily unavailable.' };
+}
+
+type RequestFailureAuthOutcome = 'rejected' | 'provider-failure';
+
+type MappedRequestError = {
+  error: ApiErrorLike;
+  authOutcome?: RequestFailureAuthOutcome;
+};
+
+type ClassifiedRequestError = {
+  error: ApiErrorLike;
+  authOutcome: RequestFailureAuthOutcome;
+  unexpected: boolean;
+};
+
+const REJECTED_REQUEST_ERROR_CODES: ReadonlySet<ApiErrorCode> = new Set([
+  'invalid-argument', 'unauthenticated', 'permission-denied',
+  'not-found', 'failed-precondition', 'resource-exhausted',
+]);
+
+export function classifyAuthenticatedRequestError(
+  error: unknown,
+  options: {
+    authenticated: boolean;
+    timedOut: boolean;
+    timeoutPrecedence: 'before-known-errors' | 'after-known-errors';
+    timeoutMessage: string;
+    internalMessage: string;
+    mapDomainError: (error: unknown) => MappedRequestError | undefined;
+  },
+): ClassifiedRequestError {
+  const defaultAuthOutcome = options.authenticated ? 'provider-failure' : 'rejected';
+  const timeout: ClassifiedRequestError = {
+    error: { code: 'deadline-exceeded', message: options.timeoutMessage },
+    authOutcome: defaultAuthOutcome,
+    unexpected: false,
+  };
+  if (options.timedOut && options.timeoutPrecedence === 'before-known-errors') return timeout;
+
+  const mapped = options.mapDomainError(error);
+  if (mapped) {
+    return {
+      error: mapped.error,
+      authOutcome: mapped.authOutcome ?? (
+        REJECTED_REQUEST_ERROR_CODES.has(mapped.error.code) ? 'rejected' : defaultAuthOutcome
+      ),
+      unexpected: false,
+    };
+  }
+  if (error instanceof RequestIdentityError) {
+    return {
+      error: requestIdentityErrorDetails(error, {
+        code: 'deadline-exceeded',
+        message: options.timeoutMessage,
+      }),
+      authOutcome: error.kind === 'invalid-token' ? 'rejected' : 'provider-failure',
+      unexpected: false,
+    };
+  }
+  if (error instanceof ProfileReadError) {
+    return {
+      error,
+      authOutcome: REJECTED_REQUEST_ERROR_CODES.has(error.code) ? 'rejected' : defaultAuthOutcome,
+      unexpected: false,
+    };
+  }
+  if (options.timedOut) return timeout;
+  return {
+    error: { code: 'internal', message: options.internalMessage },
+    authOutcome: defaultAuthOutcome,
+    unexpected: true,
+  };
 }
 
 type AuthenticatedRequestDependencies = {

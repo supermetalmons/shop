@@ -25,6 +25,8 @@ import {
   handleDeliveryPrepare,
 } from '../src/deliveryPrepare.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { DeliveryPrepareError } from '../src/deliveryPrepareErrors.ts';
+import { ProfileReadError } from '../src/dataAccess.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
 
 const OWNER = Keypair.generate();
@@ -187,6 +189,51 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test('delivery preparation preserves errors, write-conflict classification, and unexpected logging', async (context) => {
+  const log = context.mock.method(console, 'error', () => undefined);
+  const details = { itemId: ASSET.toBase58() };
+  const cases = [
+    { failure: new ProfileReadError('not-found', 404, 'Address missing.', details), code: 'not-found', message: 'Address missing.', status: 404, authOutcome: 'rejected', details },
+    { failure: new CommerceWriteConflict(), code: 'aborted', message: 'Delivery preparation conflicted. Try again.', status: 409, authOutcome: 'rejected' },
+    { failure: new DeliveryPrepareError('aborted', 'Transaction conflicted.'), code: 'aborted', message: 'Transaction conflicted.', status: 409, authOutcome: 'provider-failure' },
+    { failure: new Error('Private failure.'), code: 'internal', message: 'Delivery preparation failed.', status: 500, authOutcome: 'provider-failure' },
+  ];
+  for (const { failure, code, message, status, authOutcome, details: expectedDetails } of cases) {
+    const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
+      loadOnchainState: async () => { throw failure; },
+    }));
+    assert.equal(result.response.status, status);
+    assert.equal(result.authOutcome, authOutcome);
+    assert.equal(result.dropId, DROP_ID);
+    assert.deepEqual(await result.response.json(), {
+      ok: false,
+      error: { code, message, ...(expectedDetails ? { details: expectedDetails } : {}) },
+    });
+  }
+  assert.equal(log.mock.callCount(), 1);
+  assert.deepEqual(log.mock.calls[0].arguments, [{
+    event: 'delivery_prepare_failed',
+    error: { name: 'Error', message: 'Private failure.' },
+  }]);
+});
+
+test('delivery preparation preserves identity errors when its deadline has already expired', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const result = await handleDeliveryPrepare(request(requestBody()), env(), {}, dependencies({
+    timeoutMs: 100,
+    verifyIdentity: async () => {
+      context.mock.timers.tick(100);
+      throw new RequestIdentityError('provider-unavailable');
+    },
+  }));
+  assert.equal(result.response.status, 502);
+  assert.equal(result.authOutcome, 'provider-failure');
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'unavailable', message: 'Authentication is temporarily unavailable.' },
+  });
+});
 
 test('delivery preparation returns the server-signed owner transaction and exact order input', async () => {
   let created: Record<string, unknown> | undefined;

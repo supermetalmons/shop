@@ -23,7 +23,7 @@ function database(context: { after: (cleanup: () => void) => void }) {
   context.after(() => db.close());
   db.exec('PRAGMA foreign_keys = ON');
   const directory = new URL('../cloud/workers/api/commerce-migrations/', import.meta.url);
-  for (const name of readdirSync(directory).filter((name) => name.endsWith('.sql')).sort()) {
+  for (const name of readdirSync(directory).filter((name) => name.endsWith('.sql') && name <= '0013_notification_outbox.sql').sort()) {
     db.exec(readFileSync(new URL(name, directory), 'utf8'));
   }
   withLease(db, () => db.exec(`UPDATE commerce_authority_control SET paused_at_ms = ${timestamp}, updated_at_ms = ${timestamp};

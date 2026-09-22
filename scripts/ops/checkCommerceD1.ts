@@ -227,7 +227,7 @@ export function checkCommerceD1(
 
   const migrations = queryRemoteCommerceD1('SELECT name FROM d1_migrations ORDER BY id');
   if (
-    migrations.length !== 13 ||
+    (migrations.length !== 13 && migrations.length !== 14) ||
     migrations[0].name !== '0001_current_schema.sql' ||
     migrations[1].name !== '0002_authority_control_lease.sql' ||
     migrations[2].name !== '0003_wipe_readiness_guard.sql' ||
@@ -240,10 +240,12 @@ export function checkCommerceD1(
     migrations[9].name !== '0010_dude_inventory.sql' ||
     migrations[10].name !== '0011_stripe_order_disputes.sql' ||
     migrations[11].name !== '0012_stripe_identity_lookup_indexes.sql' ||
-    migrations[12].name !== '0013_notification_outbox.sql'
+    migrations[12].name !== '0013_notification_outbox.sql' ||
+    (migrations.length === 14 && migrations[13].name !== '0014_drop_legacy_notification_indexes.sql')
   ) {
     fail('Commerce D1 schema baseline is invalid.');
   }
+  const legacyNotificationIndexesRemoved = migrations.length === 14;
 
   const authoritativeTables = queryRemoteCommerceD1(`SELECT name, strict
     FROM pragma_table_list
@@ -572,10 +574,10 @@ export function checkCommerceD1(
 
   const stripeTerminalNotificationIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
     WHERE type = 'index' AND name = 'commerce_stripe_terminal_notifications_due'`);
-  if (
+  if (legacyNotificationIndexesRemoved ? stripeTerminalNotificationIndex.length !== 0 : (
     stripeTerminalNotificationIndex.length !== 1 ||
     normalizedSql(stripeTerminalNotificationIndex[0].sql) !== normalizedSql(STRIPE_TERMINAL_NOTIFICATION_INDEX_SQL)
-  ) fail('Commerce D1 Stripe terminal-notification index is invalid.');
+  )) fail('Commerce D1 Stripe terminal-notification index is invalid.');
 
   for (const [name, expectedSql] of Object.entries(STRIPE_IDENTITY_INDEX_SQL)) {
     const index = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
@@ -595,19 +597,19 @@ export function checkCommerceD1(
 
   const readyNotificationDueIndex = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema
     WHERE type = 'index' AND name = 'commerce_ready_notifications_due'`);
-  if (
+  if (legacyNotificationIndexesRemoved ? readyNotificationDueIndex.length !== 0 : (
     readyNotificationDueIndex.length !== 1 ||
     normalizedSql(readyNotificationDueIndex[0].sql) !== normalizedSql(READY_NOTIFICATION_DUE_INDEX_SQL)
-  ) fail('Commerce D1 due ready-notification index is invalid.');
+  )) fail('Commerce D1 due ready-notification index is invalid.');
 
   const pendingReadyNotificationIndexes = queryRemoteCommerceD1(`SELECT name, sql FROM sqlite_schema
     WHERE type = 'index' AND name GLOB 'commerce_delivery_orders_*_notifications_pending*'
     ORDER BY name`);
-  if (
+  if (legacyNotificationIndexesRemoved ? pendingReadyNotificationIndexes.length !== 0 : (
     pendingReadyNotificationIndexes.length !== Object.keys(PENDING_READY_NOTIFICATION_INDEX_SQL).length ||
     pendingReadyNotificationIndexes.some((row) =>
       normalizedSql(row.sql) !== normalizedSql(PENDING_READY_NOTIFICATION_INDEX_SQL[String(row.name)]))
-  ) fail('Commerce D1 pending ready-notification indexes are invalid.');
+  )) fail('Commerce D1 pending ready-notification indexes are invalid.');
 
   for (const [name, [type, fingerprint]] of Object.entries(NOTIFICATION_SCHEMA_FINGERPRINTS)) {
     const rows = queryRemoteCommerceD1(`SELECT sql FROM sqlite_schema WHERE type = '${type}' AND name = '${name}'`);

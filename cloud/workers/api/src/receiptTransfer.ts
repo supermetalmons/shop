@@ -61,9 +61,9 @@ import {
   type ReceiptTransferRateLimitD1Database,
   type ReceiptTransferRateLimitBucket,
 } from './receiptTransferRateLimit.js';
-import { type RequestAuthContext, RequestIdentityError, requestIdentitySubject, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
+import { type RequestAuthContext, requestIdentitySubject, verifyRequestIdentity, type RequestIdentity } from './requestIdentity.js';
 import { type ProfileProviderFetch } from './boundedResponse.js';
-import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
+import { classifyAuthenticatedRequestError, withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
   isRequestCancellationError,
   isSignalCancellationError,
@@ -74,8 +74,8 @@ import {
   rethrowDeferredWorkRegistrationError,
   type DeferredWork,
 } from './deferredWork.js';
-import { isRecord, ProfileReadError, type ApiErrorCode } from './dataAccess.js';
-import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import { isRecord, type ApiErrorCode } from './dataAccess.js';
+import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLike } from './httpResponse.js';
 import {
   createSolanaProvider,
   parseSolanaRpcAccount,
@@ -196,7 +196,7 @@ type ProofContext = {
   leafDelegate: PublicKey;
 };
 
-function errorResponse(error: ReceiptTransferError): Response {
+function errorResponse(error: ApiErrorLike): Response {
   return jsonResponse(apiErrorBody(error), httpStatusForApiErrorCode(error.code, 502));
 }
 
@@ -936,33 +936,19 @@ export async function handleReceiptTransferPrepare(
     } catch (error) {
       rethrowDeferredWorkRegistrationError(error);
       if (isRequestCancellationError(request, error)) throw error;
-      let transferError: ReceiptTransferError;
-      let authOutcome: ReceiptTransferResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-      if (deadline.timedOut()) {
-        transferError = new ReceiptTransferError('deadline-exceeded', 'Receipt transfer request timed out.');
-      } else if (error instanceof ReceiptTransferError) {
-        transferError = error;
-        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-          authOutcome = 'rejected';
-        }
-      } else if (error instanceof RequestIdentityError) {
-        const mapped = requestIdentityErrorDetails(error, {
-          code: 'deadline-exceeded',
-          message: 'Receipt transfer request timed out.',
-        });
-        transferError = new ReceiptTransferError(mapped.code, mapped.message);
-        authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
-      } else if (error instanceof ProfileReadError) {
-        transferError = new ReceiptTransferError(error.code, error.message, error.details);
-        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-          authOutcome = 'rejected';
-        }
-      } else {
+      const { error: transferError, authOutcome, unexpected } = classifyAuthenticatedRequestError(error, {
+        authenticated: Boolean(identity),
+        timedOut: deadline.timedOut(),
+        timeoutPrecedence: 'before-known-errors',
+        timeoutMessage: 'Receipt transfer request timed out.',
+        internalMessage: 'Receipt transfer preparation failed.',
+        mapDomainError: (failure) => failure instanceof ReceiptTransferError ? { error: failure } : undefined,
+      });
+      if (unexpected) {
         console.error({
           event: 'receipt_transfer_prepare_failed',
           error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
         });
-        transferError = new ReceiptTransferError('internal', 'Receipt transfer preparation failed.');
       }
       return { response: errorResponse(transferError), metrics, authOutcome, ...(dropId ? { dropId } : {}) };
     }

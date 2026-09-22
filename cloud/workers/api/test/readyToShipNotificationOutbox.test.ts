@@ -10,7 +10,7 @@ for (const family of ['ready', 'stripe_terminal'] as const) {
     const before = await state.repository.get(state.parentKey);
     const outboxReads = context.mock.method(state.repository.notificationOutbox, 'get');
     await state.publish();
-    assert.equal(outboxReads.mock.callCount(), 2);
+    assert.equal(outboxReads.mock.callCount(), family === 'stripe_terminal' ? 1 : 2);
     const record = await state.read();
     assert.equal(record.state, 'queued');
     assert.equal(record.attemptCount, 1);
@@ -74,7 +74,7 @@ for (const family of ['ready', 'stripe_terminal'] as const) {
       });
       const outboxReads = context.mock.method(state.repository.notificationOutbox, 'get');
       await assert.rejects(state.publish({ signal: controller.signal }), /cancelled/);
-      assert.equal(outboxReads.mock.callCount(), 2);
+      assert.equal(outboxReads.mock.callCount(), family === 'stripe_terminal' ? 1 : 2);
       const record = await state.read();
       assert.equal(record.attemptCount, 0);
       assert.equal(record.claimId, null);

@@ -19,6 +19,7 @@ import {
   BUBBLEGUM_PROGRAM_ADDRESS,
 } from '../../../../shared/solanaProgramAddresses.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { ProfileReadError } from '../src/dataAccess.ts';
 import { createTimedAbortScope } from '../src/boundedRequest.ts';
 import { commerceKeys } from '../src/commerceRepository.ts';
 import {
@@ -159,6 +160,53 @@ function dependencies(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+test('IRL claim preserves profile errors and logs only unexpected failures', async (context) => {
+  const log = context.mock.method(console, 'error', () => undefined);
+  const body = { owner: OWNER.toBase58(), code: '1234567890' };
+  const details = { itemId: CERTIFICATE.toBase58() };
+  const expected = await handleIrlClaimPrepare(request(body), env(), {}, dependencies({
+    loadOnchainState: async () => { throw new ProfileReadError('not-found', 404, 'Claim missing.', details); },
+  }));
+  assert.equal(expected.response.status, 404);
+  assert.equal(expected.authOutcome, 'rejected');
+  assert.deepEqual(await expected.response.json(), {
+    ok: false,
+    error: { code: 'not-found', message: 'Claim missing.', details },
+  });
+  assert.equal(log.mock.callCount(), 0);
+  const unexpected = await handleIrlClaimPrepare(request(body), env(), {}, dependencies({
+    loadOnchainState: async () => { throw new Error('Private failure.'); },
+  }));
+  assert.equal(unexpected.response.status, 500);
+  assert.equal(unexpected.authOutcome, 'provider-failure');
+  assert.deepEqual(await unexpected.response.json(), {
+    ok: false,
+    error: { code: 'internal', message: 'IRL claim preparation failed.' },
+  });
+  assert.equal(log.mock.callCount(), 1);
+  assert.deepEqual(log.mock.calls[0].arguments, [{
+    event: 'irl_claim_prepare_failed',
+    error: { name: 'Error', message: 'Private failure.' },
+  }]);
+});
+
+test('IRL claim preserves identity errors when its deadline has already expired', async (context) => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  const result = await handleIrlClaimPrepare(request({ owner: OWNER.toBase58(), code: '1234567890' }), env(), {}, dependencies({
+    timeoutMs: 100,
+    verifyIdentity: async () => {
+      context.mock.timers.tick(100);
+      throw new RequestIdentityError('provider-unavailable');
+    },
+  }));
+  assert.equal(result.response.status, 502);
+  assert.equal(result.authOutcome, 'provider-failure');
+  assert.deepEqual(await result.response.json(), {
+    ok: false,
+    error: { code: 'unavailable', message: 'Authentication is temporarily unavailable.' },
+  });
+});
 
 test('IRL claim handler returns the expected partially signed transaction', async () => {
   const result = await handleIrlClaimPrepare(

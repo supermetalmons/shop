@@ -58,7 +58,7 @@ import {
   loadReceiptMarker,
 } from './adminIrlRedeemRequestStore.js';
 import { type AdminIrlRedeemRuntime, buildRuntime } from './adminIrlRedeemRuntime.js';
-import { requestIdentityErrorDetails, withAuthenticatedRequest } from './authenticatedRequest.js';
+import { classifyAuthenticatedRequestError, withAuthenticatedRequest } from './authenticatedRequest.js';
 import { resolveD1AuthWalletBinding } from './authWalletBindingD1.js';
 import {
   isRequestCancellationError,
@@ -74,7 +74,7 @@ import { ProfileReadError, isRecord } from './dataAccess.js';
 import { rethrowDeferredWorkRegistrationError, type DeferredWork } from './deferredWork.js';
 import { API_DROPS, getApiDrop, type ApiDropConfig } from './dropConfig.js';
 import { dropAdminIrlRedeemRequestPath } from './dropPaths.js';
-import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse } from './httpResponse.js';
+import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLike } from './httpResponse.js';
 import {
   assetMatchesReceiptDropIdentity,
   assetMatchesReceiptMetadataIdentity,
@@ -84,7 +84,6 @@ import {
 } from './receiptProof.js';
 import {
   type RequestAuthContext,
-  RequestIdentityError,
   isStaffRequestIdentity,
   resolveRequestWallet,
   verifyRequestIdentity,
@@ -216,7 +215,7 @@ export type AdminIrlRedeemPrepareResult = {
   itemCount?: number;
 };
 
-function errorResponse(error: AdminIrlRedeemPrepareError): Response {
+function errorResponse(error: ApiErrorLike): Response {
   return jsonResponse(apiErrorBody(error), httpStatusForApiErrorCode(error.code, 502));
 }
 
@@ -1121,33 +1120,19 @@ export async function handleAdminIrlRedeemPrepare(
     } catch (error) {
       rethrowDeferredWorkRegistrationError(error);
       if (isRequestCancellationError(request, error)) throw error;
-      let prepareError: AdminIrlRedeemPrepareError;
-      let authOutcome: AdminIrlRedeemPrepareResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-      if (deadline.timedOut()) {
-        prepareError = new AdminIrlRedeemPrepareError('deadline-exceeded', 'Admin IRL redeem preparation timed out.');
-      } else if (error instanceof AdminIrlRedeemPrepareError) {
-        prepareError = error;
-        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-          authOutcome = 'rejected';
-        }
-      } else if (error instanceof RequestIdentityError) {
-        const mapped = requestIdentityErrorDetails(error, {
-          code: 'deadline-exceeded',
-          message: 'Admin IRL redeem preparation timed out.',
-        });
-        prepareError = new AdminIrlRedeemPrepareError(mapped.code, mapped.message);
-        authOutcome = error.kind === 'invalid-token' ? 'rejected' : 'provider-failure';
-      } else if (error instanceof ProfileReadError) {
-        prepareError = new AdminIrlRedeemPrepareError(error.code, error.message, error.details);
-        if (['invalid-argument', 'unauthenticated', 'permission-denied', 'not-found', 'failed-precondition', 'resource-exhausted'].includes(error.code)) {
-          authOutcome = 'rejected';
-        }
-      } else {
+      const { error: prepareError, authOutcome, unexpected } = classifyAuthenticatedRequestError(error, {
+        authenticated: Boolean(identity),
+        timedOut: deadline.timedOut(),
+        timeoutPrecedence: 'before-known-errors',
+        timeoutMessage: 'Admin IRL redeem preparation timed out.',
+        internalMessage: 'Admin IRL redeem preparation failed.',
+        mapDomainError: (failure) => failure instanceof AdminIrlRedeemPrepareError ? { error: failure } : undefined,
+      });
+      if (unexpected) {
         console.error({
           event: 'admin_irl_redeem_prepare_failed',
           error: error instanceof Error ? { name: error.name, message: error.message } : { name: 'UnknownError' },
         });
-        prepareError = new AdminIrlRedeemPrepareError('internal', 'Admin IRL redeem preparation failed.');
       }
       return {
         response: errorResponse(prepareError),
