@@ -30,6 +30,7 @@ import {
   type CommerceUpdateValue,
 } from '../src/commerceRepository.ts';
 import { createDeferredWorkCollector } from './deferredWork.ts';
+import { RequestIdentityError } from '../src/requestIdentity.ts';
 
 const UID = 'auth-lifecycle-user';
 const NOW_MS = Date.parse('2026-08-20T12:00:00.000Z');
@@ -327,6 +328,65 @@ function env(): Pick<Env, 'COMMERCE_DB' | 'OPS_DB'> {
   };
 }
 
+test('profile lifecycle rejects methods, origins, and bodies before authentication', async () => {
+  const cases = [
+    ...([SOLANA_AUTH_PATH, PROFILE_RECONCILE_PATH] as const).map((path) => ({
+      path,
+      incoming: new Request(request(path, {}), { method: 'PUT' }),
+      status: 405,
+      code: 'invalid-argument',
+    })),
+    { path: SOLANA_AUTH_PATH, incoming: request(SOLANA_AUTH_PATH, {}, ''), status: 403, code: 'permission-denied' },
+    { path: SOLANA_AUTH_PATH, incoming: request(SOLANA_AUTH_PATH, {}), status: 400, code: 'invalid-argument' },
+    { path: PROFILE_RECONCILE_PATH, incoming: request(PROFILE_RECONCILE_PATH, { extra: true }), status: 400, code: 'invalid-argument' },
+  ] as const;
+  for (const { path, incoming, status, code } of cases) {
+    const result = await handleProfileLifecycleRequest(incoming, env(), path, {}, dependencies(
+      new LegacyFirestoreCommerceHarness(),
+      500,
+      {
+        nowMs: () => assert.fail('Rejected request read the authentication clock'),
+        verifyIdentity: async () => assert.fail('Rejected request authenticated'),
+        createCommerceRepository: () => assert.fail('Rejected request created a repository'),
+      },
+    ));
+    assert.equal(result.response.status, status);
+    assert.equal((await result.response.json() as { error: { code: string } }).error.code, code);
+    assert.equal(result.authOutcome, 'rejected');
+    assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
+    if (status === 405) {
+      assert.equal(result.response.headers.get('Allow'), 'POST, OPTIONS');
+      assert.equal(incoming.bodyUsed, true);
+    }
+  }
+});
+
+test('profile lifecycle preserves identity error responses and rejected authentication outcomes', async () => {
+  const cases = [
+    ['invalid-token', 401, 'unauthenticated', 'Authentication is required.'],
+    ['provider-timeout', 504, 'deadline-exceeded', 'Profile request timed out.'],
+    ['provider-unavailable', 502, 'unavailable', 'Authentication is temporarily unavailable.'],
+  ] as const;
+  for (const path of [SOLANA_AUTH_PATH, PROFILE_RECONCILE_PATH] as const) {
+    for (const [kind, status, code, message] of cases) {
+      const result = await handleProfileLifecycleRequest(
+        request(path, path === SOLANA_AUTH_PATH ? signInBody() : {}),
+        env(),
+        path,
+        {},
+        dependencies(new LegacyFirestoreCommerceHarness(), 500, {
+          verifyIdentity: async () => { throw new RequestIdentityError(kind); },
+          createCommerceRepository: () => assert.fail('Failed authentication created a repository'),
+        }),
+      );
+      assert.equal(result.response.status, status);
+      assert.deepEqual(await result.response.json(), { ok: false, error: { code, message } });
+      assert.equal(result.authOutcome, 'rejected');
+      assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
+    }
+  }
+});
+
 test('Solana auth validates origin-bound signatures and persists the D1 session and profile', async () => {
   const harness = new LegacyFirestoreCommerceHarness();
   let profile: Record<string, unknown> | undefined;
@@ -342,6 +402,8 @@ test('Solana auth validates origin-bound signatures and persists the D1 session 
     }),
   );
   assert.equal(result.response.status, 200);
+  assert.equal(result.authOutcome, 'accepted');
+  assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
   assert.deepEqual(await result.response.json(), { wallet: OWNER });
   assert.equal(decodedFields(harness.session!).wallet, OWNER);
   assert.deepEqual(profile, {
@@ -441,6 +503,7 @@ test('Solana auth preserves D1 superseded and busy response contracts', async ()
     }),
   );
   assert.equal(superseded.response.status, 409);
+  assert.equal(superseded.authOutcome, 'rejected');
   assert.deepEqual(await superseded.response.json(), {
     ok: false,
     error: {
@@ -460,6 +523,7 @@ test('Solana auth preserves D1 superseded and busy response contracts', async ()
     }),
   );
   assert.equal(busy.response.status, 409);
+  assert.equal(busy.authOutcome, 'rejected');
   assert.deepEqual(await busy.response.json(), {
     ok: false,
     error: { code: 'aborted', message: 'Wallet session is busy. Try again.' },

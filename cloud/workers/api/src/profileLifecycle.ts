@@ -26,8 +26,8 @@ import {
   type RequestIdentity,
 } from './requestIdentity.js';
 import type { ProfileProviderFetch } from './boundedResponse.js';
+import { withAuthenticatedRequest } from './authenticatedRequest.js';
 import {
-  createRequestDeadline,
   isRequestCancellationError,
   isSignalCancellationError,
   raceReadWithSignal,
@@ -323,168 +323,162 @@ export async function handleProfileLifecycleRequest(
     timeoutMs: path === PROFILE_RECONCILE_PATH ? RECONCILE_TIMEOUT_MS : AUTH_TIMEOUT_MS,
     ...overrides,
   };
-  const metrics: ProfileLifecycleMetrics = { upstreamCalls: 0, providerDurationMs: 0 };
   if (request.method !== 'POST') {
     await request.body?.cancel().catch(() => undefined);
     const response = errorResponse(new ProfileReadError('invalid-argument', 405, 'Method not allowed.'));
     response.headers.set('Allow', 'POST, OPTIONS');
-    return { response, metrics, authOutcome: 'rejected' };
+    return { response, metrics: { upstreamCalls: 0, providerDurationMs: 0 }, authOutcome: 'rejected' };
   }
-  const deadline = createRequestDeadline(request, {
-    timeoutMs: dependencies.timeoutMs,
+  return withAuthenticatedRequest<ProfileLifecycleResult>(request, {
+    authContext,
+    opsDb: env.OPS_DB,
     timeoutMessage: 'Profile lifecycle request timed out',
-  });
-  let identity: RequestIdentity | undefined;
-  try {
-    const origin = request.headers.get('Origin') || '';
-    if (path === SOLANA_AUTH_PATH && (!origin || !isProfileRequestOriginAllowed(request))) {
-      throw new ProfileReadError('permission-denied', 403, 'Origin is not allowed.');
-    }
-    const body = await parseRequestBody(request, path, deadline.signal);
-    const verifiedIdentity = await dependencies.verifyIdentity(
-      request,
-      env.OPS_DB,
-      deadline.signal,
-      dependencies.nowMs(),
-      authContext,
-    );
-    identity = verifiedIdentity;
-    const nowMs = dependencies.nowMs();
-    const common: CommerceCommon = {
-      nowMs,
-      repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
-      signal: deadline.signal,
-    };
-    if (path === SOLANA_AUTH_PATH) {
-      if (isStaffRequestIdentity(verifiedIdentity)) {
-        throw new ProfileReadError('permission-denied', 403, 'Staff wallets use staff authentication.');
-      }
-      const authBody = body as z.infer<typeof solanaAuthSchema>;
-      const wallet = canonicalWalletAddress(authBody.wallet);
-      if (!wallet) throw new ProfileReadError('invalid-argument', 400, 'Invalid wallet address');
-      if (dependencies.isStaffWallet(wallet)) {
-        throw new ProfileReadError('permission-denied', 403, 'Staff wallets use staff authentication.');
-      }
-      const originHostname = new URL(origin).hostname;
-      const opsDb = env.OPS_DB;
-      if (!opsDb) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
-      try {
-        const baseline = await raceReadWithSignal(
-          dependencies.loadD1AuthWalletBinding(
-            opsDb,
-            verifiedIdentity.authSubject,
-            deadline.signal,
-          ),
-          deadline.signal,
-        );
-        validateAuthWalletSignature({
-          identity: verifiedIdentity,
-          message: authBody.message,
-          nowMs,
-          originHostname,
-          signature: authBody.signature,
-          wallet,
-        });
-        await runCriticalRequestOperation(
-          () => dependencies.establishD1AuthWalletBinding({
-            authSubject: verifiedIdentity.authSubject,
-            baseline,
-            db: opsDb,
-            nowMs,
-            signal: deadline.signal,
-            wallet,
-          }),
-          { deadline, defer: dependencies.defer },
-        );
-      } catch (error) {
-        rethrowDeferredWorkRegistrationError(error);
-        if (isSignalCancellationError(deadline.signal, error)) throw deadline.signal.reason;
-        if (error instanceof AuthWalletBindingD1SupersededError) throw new AuthWalletBindingSupersededError();
-        if (error instanceof AuthWalletBindingD1BusyError) {
-          throw new ProfileReadError('aborted', 409, error.message);
-        }
-        if (
-          error instanceof ProfileReadError ||
-          error instanceof WalletLifecycleValidationError
-        ) throw error;
-        throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
-      }
-      try {
-        await runCriticalRequestOperation(
-          () => dependencies.upsertProfile(
-            opsDb,
-            { wallet, createdAtMs: nowMs, updatedAtMs: nowMs },
-            deadline.signal,
-          ),
-          { deadline, defer: dependencies.defer },
-        );
-      } catch (error) {
-        rethrowDeferredWorkRegistrationError(error);
-        if (isSignalCancellationError(deadline.signal, error)) throw deadline.signal.reason;
-        throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
-      }
-      return { response: jsonResponse({ wallet }, 200), metrics, authOutcome: 'accepted' };
-    }
-    let response: ReconcileProfileStateResponse;
+    dependencies,
+  }, async ({ deadline, metrics, authenticate }) => {
+    let identity: RequestIdentity | undefined;
     try {
-      const reconciliation = () => reconcileProfileState({
-        body: body as ReconcileProfileStateRequest,
-        common,
-        db: env.OPS_DB,
-        dependencies,
-        identity: verifiedIdentity,
+      const origin = request.headers.get('Origin') || '';
+      if (path === SOLANA_AUTH_PATH && (!origin || !isProfileRequestOriginAllowed(request))) {
+        throw new ProfileReadError('permission-denied', 403, 'Origin is not allowed.');
+      }
+      const body = await parseRequestBody(request, path, deadline.signal);
+      const verifiedIdentity = await authenticate();
+      identity = verifiedIdentity;
+      const nowMs = dependencies.nowMs();
+      const common: CommerceCommon = {
         nowMs,
-      });
-      response = (body as ReconcileProfileStateRequest).mergeStripeDeliveryOrders === true
-        ? await runCriticalRequestOperation(reconciliation, { deadline, defer: dependencies.defer })
-        : await raceReadWithSignal(reconciliation(), deadline.signal);
+        repository: dependencies.createCommerceRepository(env.COMMERCE_DB),
+        signal: deadline.signal,
+      };
+      if (path === SOLANA_AUTH_PATH) {
+        if (isStaffRequestIdentity(verifiedIdentity)) {
+          throw new ProfileReadError('permission-denied', 403, 'Staff wallets use staff authentication.');
+        }
+        const authBody = body as z.infer<typeof solanaAuthSchema>;
+        const wallet = canonicalWalletAddress(authBody.wallet);
+        if (!wallet) throw new ProfileReadError('invalid-argument', 400, 'Invalid wallet address');
+        if (dependencies.isStaffWallet(wallet)) {
+          throw new ProfileReadError('permission-denied', 403, 'Staff wallets use staff authentication.');
+        }
+        const originHostname = new URL(origin).hostname;
+        const opsDb = env.OPS_DB;
+        if (!opsDb) throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+        try {
+          const baseline = await raceReadWithSignal(
+            dependencies.loadD1AuthWalletBinding(
+              opsDb,
+              verifiedIdentity.authSubject,
+              deadline.signal,
+            ),
+            deadline.signal,
+          );
+          validateAuthWalletSignature({
+            identity: verifiedIdentity,
+            message: authBody.message,
+            nowMs,
+            originHostname,
+            signature: authBody.signature,
+            wallet,
+          });
+          await runCriticalRequestOperation(
+            () => dependencies.establishD1AuthWalletBinding({
+              authSubject: verifiedIdentity.authSubject,
+              baseline,
+              db: opsDb,
+              nowMs,
+              signal: deadline.signal,
+              wallet,
+            }),
+            { deadline, defer: dependencies.defer },
+          );
+        } catch (error) {
+          rethrowDeferredWorkRegistrationError(error);
+          if (isSignalCancellationError(deadline.signal, error)) throw deadline.signal.reason;
+          if (error instanceof AuthWalletBindingD1SupersededError) throw new AuthWalletBindingSupersededError();
+          if (error instanceof AuthWalletBindingD1BusyError) {
+            throw new ProfileReadError('aborted', 409, error.message);
+          }
+          if (
+            error instanceof ProfileReadError ||
+            error instanceof WalletLifecycleValidationError
+          ) throw error;
+          throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+        }
+        try {
+          await runCriticalRequestOperation(
+            () => dependencies.upsertProfile(
+              opsDb,
+              { wallet, createdAtMs: nowMs, updatedAtMs: nowMs },
+              deadline.signal,
+            ),
+            { deadline, defer: dependencies.defer },
+          );
+        } catch (error) {
+          rethrowDeferredWorkRegistrationError(error);
+          if (isSignalCancellationError(deadline.signal, error)) throw deadline.signal.reason;
+          throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+        }
+        return { response: jsonResponse({ wallet }, 200), metrics, authOutcome: 'accepted' };
+      }
+      let response: ReconcileProfileStateResponse;
+      try {
+        const reconciliation = () => reconcileProfileState({
+          body: body as ReconcileProfileStateRequest,
+          common,
+          db: env.OPS_DB,
+          dependencies,
+          identity: verifiedIdentity,
+          nowMs,
+        });
+        response = (body as ReconcileProfileStateRequest).mergeStripeDeliveryOrders === true
+          ? await runCriticalRequestOperation(reconciliation, { deadline, defer: dependencies.defer })
+          : await raceReadWithSignal(reconciliation(), deadline.signal);
+      } catch (error) {
+        rethrowDeferredWorkRegistrationError(error);
+        if (isSignalCancellationError(deadline.signal, error)) throw deadline.signal.reason;
+        if (error instanceof ProfileReadError) throw error;
+        throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
+      }
+      return {
+        response: jsonResponse(response, 200),
+        metrics,
+        authOutcome: 'accepted',
+        mergedStripeDeliveryOrders: response.mergedStripeDeliveryOrders,
+      };
     } catch (error) {
       rethrowDeferredWorkRegistrationError(error);
-      if (isSignalCancellationError(deadline.signal, error)) throw deadline.signal.reason;
-      if (error instanceof ProfileReadError) throw error;
-      throw new ProfileReadError('unavailable', 503, 'Profile data is temporarily unavailable.');
-    }
-    return {
-      response: jsonResponse(response, 200),
-      metrics,
-      authOutcome: 'accepted',
-      mergedStripeDeliveryOrders: response.mergedStripeDeliveryOrders,
-    };
-  } catch (error) {
-    rethrowDeferredWorkRegistrationError(error);
-    if (isRequestCancellationError(request, error)) throw error;
-    let profileError: ProfileReadError;
-    let authOutcome: ProfileLifecycleResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
-    if (error instanceof ProfileReadError) {
-      profileError = error;
-      if ([
-        'unauthenticated',
-        'permission-denied',
-        'invalid-argument',
-        'not-found',
-        'aborted',
-        'failed-precondition',
-      ].includes(error.code)) authOutcome = 'rejected';
-    } else if (error instanceof WalletLifecycleValidationError) {
-      const status = error.code === 'permission-denied' ? 403 : error.code === 'failed-precondition' ? 409 : 400;
-      profileError = new ProfileReadError(error.code, status, error.message);
-      authOutcome = 'rejected';
-    } else if (error instanceof RequestIdentityError) {
-      if (error.kind === 'invalid-token') {
-        profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
+      if (isRequestCancellationError(request, error)) throw error;
+      let profileError: ProfileReadError;
+      let authOutcome: ProfileLifecycleResult['authOutcome'] = identity ? 'provider-failure' : 'rejected';
+      if (error instanceof ProfileReadError) {
+        profileError = error;
+        if ([
+          'unauthenticated',
+          'permission-denied',
+          'invalid-argument',
+          'not-found',
+          'aborted',
+          'failed-precondition',
+        ].includes(error.code)) authOutcome = 'rejected';
+      } else if (error instanceof WalletLifecycleValidationError) {
+        const status = error.code === 'permission-denied' ? 403 : error.code === 'failed-precondition' ? 409 : 400;
+        profileError = new ProfileReadError(error.code, status, error.message);
         authOutcome = 'rejected';
-      } else if (error.kind === 'provider-timeout') {
+      } else if (error instanceof RequestIdentityError) {
+        if (error.kind === 'invalid-token') {
+          profileError = new ProfileReadError('unauthenticated', 401, 'Authentication is required.');
+          authOutcome = 'rejected';
+        } else if (error.kind === 'provider-timeout') {
+          profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
+        } else {
+          profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
+        }
+      } else if (deadline.timedOut()) {
         profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
       } else {
-        profileError = new ProfileReadError('unavailable', 502, 'Authentication is temporarily unavailable.');
+        profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
       }
-    } else if (deadline.timedOut()) {
-      profileError = new ProfileReadError('deadline-exceeded', 504, 'Profile request timed out.');
-    } else {
-      profileError = new ProfileReadError('internal', 500, 'Profile request failed.');
+      return { response: errorResponse(profileError), metrics, authOutcome };
     }
-    return { response: errorResponse(profileError), metrics, authOutcome };
-  } finally {
-    deadline.dispose();
-  }
+  });
 }

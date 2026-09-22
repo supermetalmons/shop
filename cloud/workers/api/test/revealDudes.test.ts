@@ -20,6 +20,7 @@ import {
 } from '@solana/web3.js';
 import { PENDING_OPEN_BOX_DISCRIMINATOR } from '../../../../shared/pendingOpenCodec.ts';
 import { RequestIdentityError } from '../src/requestIdentity.ts';
+import { ProfileReadError } from '../src/dataAccess.ts';
 import { RevealSubmissionStoragePausedError } from '../src/revealSubmissionD1.ts';
 import { D1CommerceRepository, commerceKeys } from '../src/commerceRepository.ts';
 import {
@@ -155,7 +156,10 @@ function dependencies(overrides: Record<string, unknown> = {}) {
   };
 }
 
-test('reveal handler returns the confirmed signature and assigned ids', async () => {
+test('reveal handler returns the confirmed signature and counts only foreground provider calls', async (context) => {
+  let elapsed = 0;
+  let providerCalls = 0;
+  context.mock.method(performance, 'now', () => elapsed);
   let confirmations = 0;
   let counted = false;
   const deferred = createDeferredWorkCollector();
@@ -169,10 +173,20 @@ test('reveal handler returns the confirmed signature and assigned ids', async ()
     deferred.defer,
     {},
     dependencies({
+      providerFetch: async () => {
+        providerCalls += 1;
+        elapsed += 7;
+        return new Response('ok');
+      },
+      loadPendingOpen: async (provider: { fetch: typeof fetch }) => {
+        await provider.fetch('https://provider.example/pending');
+        return { pendingPda: PENDING, dudeAssets: [PLACEHOLDER], layout: 'vec' as const };
+      },
       confirmRevealSubmission: async () => {
         confirmations += 1;
       },
-      countOnlineRevealPackStatus: async () => {
+      countOnlineRevealPackStatus: async (repair: Parameters<typeof revealDudesTestHooks.countOnlineRevealPackStatus>[0]) => {
+        await repair.providerFetch('https://provider.example/repair');
         counted = true;
       },
     }),
@@ -191,6 +205,8 @@ test('reveal handler returns the confirmed signature and assigned ids', async ()
   assert.equal(deferred.promises.length, 1);
   await deferred.drain();
   assert.equal(counted, true);
+  assert.equal(providerCalls, 2);
+  assert.deepEqual(result.metrics, { upstreamCalls: 1, providerDurationMs: 7 });
   assert.equal(queued.length, 1);
   assert.equal(isRevealBackgroundJob(queued[0].body), true);
   assert.equal(queued[0].options?.delaySeconds, 5);
@@ -228,6 +244,7 @@ test('reveal handler rejects wallet-session mismatches before any reveal work', 
   );
 
   assert.equal(result.response.status, 403);
+  assert.equal(result.authOutcome, 'rejected');
   assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'permission-denied');
   assert.equal(onchainCalls, 0);
 });
@@ -345,10 +362,10 @@ test('reveal handler maps a reservation pause race to the maintenance response',
 });
 
 test('reveal handler maps invalid and unavailable request identity', async () => {
-  for (const [kind, status, code] of [
-    ['invalid-token', 401, 'unauthenticated'],
-    ['provider-timeout', 504, 'deadline-exceeded'],
-    ['provider-unavailable', 503, 'unavailable'],
+  for (const [kind, status, code, message, authOutcome] of [
+    ['invalid-token', 401, 'unauthenticated', 'Authentication is required.', 'rejected'],
+    ['provider-timeout', 504, 'deadline-exceeded', 'Authentication is temporarily unavailable.', 'provider-failure'],
+    ['provider-unavailable', 503, 'unavailable', 'Authentication is temporarily unavailable.', 'provider-failure'],
   ] as const) {
     const result = await handleRevealDudes(
       request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
@@ -362,14 +379,42 @@ test('reveal handler maps invalid and unavailable request identity', async () =>
       }),
     );
     assert.equal(result.response.status, status);
-    assert.equal((await result.response.json() as { error: { code: string } }).error.code, code);
+    assert.equal(result.authOutcome, authOutcome);
+    assert.deepEqual(await result.response.json(), { error: { code, message } });
   }
 });
 
-test('reveal handler rejects methods and malformed exact request bodies', async () => {
-  const method = await handleRevealDudes(request({}, { method: 'GET' }), env(), failOnDeferredWork, {}, dependencies());
+test('reveal handler preserves auth outcomes before and after wallet authorization', async () => {
+  for (const [stage, failure, code, authOutcome] of [
+    ['loadStorageControl', new RevealDudesError('unavailable', 'Unavailable.'), 'unavailable', 'provider-failure'],
+    ['loadBoundWallet', new ProfileReadError('failed-precondition', 409, 'Unavailable.'), 'failed-precondition', 'provider-failure'],
+    ['loadRevealSubmission', new RevealDudesError('failed-precondition', 'Unavailable.'), 'failed-precondition', 'accepted'],
+    ['loadRevealSubmission', new Error('Private failure.'), 'internal', 'accepted'],
+  ] as const) {
+    const result = await handleRevealDudes(
+      request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }),
+      env(),
+      failOnDeferredWork,
+      {},
+      dependencies({ [stage]: async () => { throw failure; } }),
+    );
+    assert.equal(result.authOutcome, authOutcome);
+    assert.deepEqual(await result.response.json(), {
+      error: { code, message: code === 'internal' ? 'Reveal failed.' : 'Unavailable.' },
+    });
+  }
+});
+
+test('reveal handler rejects methods and malformed exact request bodies before authentication', async () => {
+  const unusedAuthentication = dependencies({
+    nowMs: () => assert.fail('Invalid requests must not read the authentication clock'),
+    verifyIdentity: async () => assert.fail('Invalid requests must not authenticate'),
+  });
+  const method = await handleRevealDudes(request({}, { method: 'GET' }), env(), failOnDeferredWork, {}, unusedAuthentication);
   assert.equal(method.response.status, 405);
   assert.equal(method.response.headers.get('allow'), 'POST, OPTIONS');
+  assert.equal(method.authOutcome, 'rejected');
+  assert.deepEqual(method.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
 
   for (const body of [
     {},
@@ -378,8 +423,10 @@ test('reveal handler rejects methods and malformed exact request bodies', async 
     { owner: OWNER.toBase58(), boxAssetId: 'invalid', dropId: DROP_ID },
     { owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: 'unsupported' },
   ]) {
-    const result = await handleRevealDudes(request(body), env(), failOnDeferredWork, {}, dependencies());
+    const result = await handleRevealDudes(request(body), env(), failOnDeferredWork, {}, unusedAuthentication);
     assert.equal(result.response.status, 400);
+    assert.equal(result.authOutcome, 'rejected');
+    assert.deepEqual(result.metrics, { upstreamCalls: 0, providerDurationMs: 0 });
     assert.equal((await result.response.json() as { error: { code: string } }).error.code, 'invalid-argument');
   }
 });
@@ -1064,6 +1111,55 @@ test('reservation deadline retains one commit and performs one fresh conditional
   assert.equal(queueCalls, 0);
   assert.equal(sendCalls, 0);
   assert.equal(deferred.promises.length, 1);
+});
+
+test('client abort during reservation preserves its reason and cleans up before any broadcast', async () => {
+  const controller = new AbortController();
+  const reason = { kind: 'client-disconnected' };
+  let markReservationStarted!: () => void;
+  let releaseReservation!: () => void;
+  const reservationStarted = new Promise<void>((resolve) => { markReservationStarted = resolve; });
+  let requestSignal: AbortSignal | undefined;
+  let failureSignal: AbortSignal | undefined;
+  let failureCalls = 0;
+  const deferred = createDeferredWorkCollector();
+  const pending = handleRevealDudes(
+    new Request(request({ owner: OWNER.toBase58(), boxAssetId: BOX_ASSET.toBase58(), dropId: DROP_ID }), {
+      signal: controller.signal,
+    }),
+    env(COSIGNER, queue(async () => assert.fail('Aborted reservation must not enqueue'))),
+    deferred.defer,
+    {},
+    dependencies({
+      reserveRevealSubmission: async (
+        context: Parameters<typeof revealDudesTestHooks.reserveRevealSubmission>[0],
+        _runtime: unknown,
+        _boxAssetId: string,
+        candidate: Parameters<typeof revealDudesTestHooks.reserveRevealSubmission>[3],
+      ) => new Promise((resolve) => {
+        requestSignal = context.signal;
+        releaseReservation = () => resolve({ submission: candidate, owned: true });
+        markReservationStarted();
+      }),
+      failRevealSubmission: async (context: Parameters<typeof revealDudesTestHooks.failRevealSubmission>[0]) => {
+        failureCalls += 1;
+        failureSignal = context.signal;
+        return 'failed' as const;
+      },
+      sendAndConfirmTransaction: async () => assert.fail('Aborted reservation must not broadcast'),
+    }),
+  );
+  const rejected = assert.rejects(pending, (error) => error === reason);
+  await reservationStarted;
+  controller.abort(reason);
+  releaseReservation();
+  await rejected;
+  assert.equal(requestSignal?.reason, reason);
+  assert.equal(failureCalls, 1);
+  assert.ok(failureSignal);
+  assert.notEqual(failureSignal, requestSignal);
+  assert.equal(failureSignal.aborted, false);
+  assert.equal(deferred.promises.length, 0);
 });
 
 test('assignment deadline retains one assignment and starts no later mutation', async () => {
