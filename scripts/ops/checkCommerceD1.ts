@@ -36,19 +36,19 @@ function fail(message: string): never {
 }
 
 const NOTIFICATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string, string]>> = Object.freeze({
-  commerce_commit_guard_notification_outbox_validate: ['trigger', 'ab98d81736bc0927987abf669d9b0bffb8d41f5b61a22fa2e6bb2c0905adbca7'],
+  commerce_commit_guard_notification_outbox_validate: ['trigger', '0164a230821f7e9dffda4fb5dc565f28072407a8198a54ea97bc213e13666118'],
   commerce_notification_legacy_insert_fence: ['trigger', '0dbe842e565314c6247a3e8d9a6717daa1df00840f0bc061e5acde00179ed0bf'],
   commerce_notification_legacy_update_fence: ['trigger', 'd62e43b923b7575c8059821ab57159483f1944b151c39a127ba04aeeed810340'],
   commerce_notification_outbox: ['table', '929002240cc9b6bdc4ad070cb7b3beff103687c4daa2819d1847e54b4c5be986'],
   commerce_notification_outbox_control: ['table', '7ba8128b4cbed9569851c913f7c0d7ebb7171728dba0556fca0189808733284e'],
   commerce_notification_outbox_control_delete_guard: ['trigger', '7066c5566748ee845d3ef223326c2a4176462087f4002538c26e604bd0bef331'],
   commerce_notification_outbox_control_insert_guard: ['trigger', 'bbd9280a3c7680efc71558459186be0fdf84ac308c04850985c6a970cc807f3f'],
-  commerce_notification_outbox_control_update_guard: ['trigger', 'a8f61963452b798c3763a058fc8c9953507b3d11923086152de60311731c9c89'],
+  commerce_notification_outbox_control_update_guard: ['trigger', 'f059bc8ed19851aecea61118829b23cdeb19f826f267320fd55270ce58dafafc'],
   commerce_notification_outbox_delete_guard: ['trigger', '0bd6dbf7c0a44193862b61a8ad0484ce7a7795106319fc7b505a889b24706821'],
   commerce_notification_outbox_drop: ['index', '6695c84402bec160831be68e5a163d104e00293aaa28ccce5b21da74458b04af'],
   commerce_notification_outbox_due: ['index', '0c41e4ed80645314f38b7a743ff629b8d48094f62c2688eac6d420e5594cba70'],
   commerce_notification_outbox_family_due: ['index', '77bf8dbb5045e3d29727f5ec1e24ba200e2d2d7703bf1137e365511751e76f3b'],
-  commerce_notification_outbox_insert_guard: ['trigger', 'c0184390d1422d395dd3ee3464a7ec263a99195d8525b63aca2cb93ba5c73352'],
+  commerce_notification_outbox_insert_guard: ['trigger', '1a70336b7739c20139f107881b31b1d86e3363100a8fd19f2d6d0b4a28584ea2'],
   commerce_notification_outbox_pending_owner_insert: ['trigger', '289dfdbdd4b62a43efce7c8f7a57f4b344ad5b55722bdfec42f56f547279d51e'],
   commerce_notification_outbox_pending_owner_path: ['index', 'b12c746376afd70803ab0936f3501f6aab1f6c402da1f5573aeaa8edc7ace346'],
   commerce_notification_outbox_pending_owner_source: ['trigger', '2cde471901e82575575329a663604ba061c4dcf9755806b72ac14f8478d0dc94'],
@@ -61,7 +61,7 @@ const NOTIFICATION_SCHEMA_FINGERPRINTS: Readonly<Record<string, readonly [string
   commerce_notification_outbox_stripe_due_insert: ['trigger', 'b756dc5d600bb1344ffdd08f86848fc7243598ea4113d98879538df3269d17fb'],
   commerce_notification_outbox_stripe_due_source: ['trigger', '8c13c3a33bad1e89807dfc9740128a3f60e34d41f152a5b3c1f8f9c4d7c8dad4'],
   commerce_notification_outbox_stripe_due_state: ['trigger', '55a3f2c4ea6b3d140c1fd9a8470d2330ea0dacbe8a45d35b5143c79868b6443e'],
-  commerce_notification_outbox_update_guard: ['trigger', 'f1b74eef1fc6e0fedc0c849a1128f99c7b42285062667de0ca0e709c9d25705c'],
+  commerce_notification_outbox_update_guard: ['trigger', 'c1bb18cdb3f6848f2b8bd1481beb7403d30ab96502b28acd999a7e53c9c87169'],
 });
 const UUID_V4_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const AUTHORITY_UPDATE_GUARD_SCHEMA_FINGERPRINT = '376e5c3579dd47c8742fb68171df543c2c35fc144a8c2277d66d68fd73c82b07';

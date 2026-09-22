@@ -268,3 +268,63 @@ test('activation rejects a prepared snapshot after the source epoch changes', as
   assert.equal(db.prepare('SELECT storage_mode FROM commerce_notification_outbox_control').get()!.storage_mode, 'legacy');
   assert.throws(() => resume(db), /cutover is incomplete/);
 });
+
+
+test('historical queued shipments without a stored key preserve their confirmed queue identity', async (context) => {
+  const db = database(context);
+  const queuedAtMs = 1787165800000;
+  insert(db, '1', { buyerOrderShippedEmailState: 'queued', buyerOrderShippedEmailJobId: jobId,
+    buyerOrderShippedEmailQueuedAt: queuedAtMs });
+  const before = query(db)('SELECT * FROM commerce_documents');
+  assert.equal((await execute(db, 'status')).validationError, null);
+  pause(db);
+  await execute(db, 'prepare');
+  const [row] = query(db)('SELECT * FROM commerce_notification_outbox').map(parseNotificationOutboxRow);
+  assert.equal(row.state, 'queued');
+  assert.equal(row.nextAttemptAtMs, null);
+  assert.deepEqual(row.entries, [{ kind: 'buyer_order_shipped', jobId, state: 'queued',
+    idempotencyKey: 'drop:1:order_shipped', queuedAtMs }]);
+  await execute(db, 'activate');
+  assert.equal(query(db)("SELECT * FROM commerce_notification_outbox WHERE state = 'pending'").length, 0);
+  assert.deepEqual(query(db)('SELECT * FROM commerce_documents'), before);
+});
+
+test('historical shipped-key recovery rejects ambiguous or malformed marker data', (context) => {
+  const db = database(context);
+  insert(db, '1', { buyerOrderShippedEmailState: 'queued', buyerOrderShippedEmailJobId: jobId,
+    buyerOrderShippedEmailQueuedAt: 1787165800000 });
+  const document = parseCommerceD1DocumentRow(query(db)('SELECT * FROM commerce_documents')[0]);
+  for (const changed of [
+    { buyerOrderShippedEmailState: 'pending' },
+    { buyerOrderShippedEmailIdempotencyKey: null },
+    { buyerOrderShippedEmailIdempotencyKey: '' },
+    { buyerOrderShippedEmailIdempotencyKey: 'wrong-key' },
+    { buyerOrderShippedEmailJobId: 'invalid' },
+    { buyerOrderShippedEmailQueuedAt: undefined },
+    { buyerOrderShippedEmailQueuedAt: null },
+    { buyerOrderShippedEmailQueuedAt: -1 },
+    { buyerOrderShippedEmailQueuedAt: 1.5 },
+    { buyerOrderShippedEmailQueuedAt: '1787165800000' },
+  ]) assert.throws(() => planNotificationOutboxBackfill({ ...document, data: { ...document.data, ...changed } }), /validation failed/);
+  assert.throws(() => planNotificationOutboxBackfill({ ...document, data: {
+    buyerOrderReceivedEmailState: 'queued', buyerOrderReceivedEmailJobId: jobId,
+    buyerOrderReceivedEmailQueuedAt: 1787165800000,
+  } }), /validation failed/);
+});
+
+test('activation catches an unexpected outbox attached to an unmarked historical document', async (context) => {
+  const db = database(context);
+  insert(db, '1', readyFields());
+  insert(db, '2', { status: 'ready_to_ship' });
+  pause(db);
+  await execute(db, 'prepare');
+  withLease(db, () => db.exec(`UPDATE commerce_notification_outbox_control SET preparation_state = 'preparing', prepared_at_ms = NULL;
+    INSERT INTO commerce_notification_outbox SELECT 'drops/drop/deliveryOrders/2', family, drop_id, generation,
+      outcome, state, entries_json, revision, attempt_count, next_attempt_at_ms, claim_id, claim_expires_at_ms,
+      retry_until_ms, created_at_ms, updated_at_ms, last_error_code
+      FROM commerce_notification_outbox WHERE parent_path = 'drops/drop/deliveryOrders/1';
+    UPDATE commerce_notification_outbox_control SET preparation_state = 'ready', prepared_at_ms = ${timestamp}`));
+  await assert.rejects(execute(db, 'activate'), /unexpected records/);
+  assert.equal(db.prepare('SELECT storage_mode FROM commerce_notification_outbox_control').get()!.storage_mode, 'legacy');
+  assert.throws(() => resume(db), /cutover is incomplete/);
+});

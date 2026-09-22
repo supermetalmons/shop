@@ -123,6 +123,10 @@ async function verifyBackfill(query: CommerceAuthorityQuery, renew: () => Promis
   let expectedCount = 0;
   await eachDocument(query, async (document) => {
     const expected = planNotificationOutboxBackfill(document);
+    if (!expected.length) {
+      await renew();
+      return;
+    }
     const actual = (await query(`SELECT * FROM commerce_notification_outbox WHERE parent_path = ${sqlString(document.path)} ORDER BY family`))
       .map(parseNotificationOutboxRow);
     if (!isDeepStrictEqual(actual, expected.sort((a, b) => a.family.localeCompare(b.family)))) {

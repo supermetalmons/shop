@@ -168,27 +168,27 @@ END;
 CREATE TRIGGER commerce_notification_outbox_control_update_guard
 BEFORE UPDATE ON commerce_notification_outbox_control
 BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1 FROM commerce_authority_control AS authority
     JOIN commerce_authority_control_lease AS lease ON lease.singleton = authority.singleton
     WHERE authority.singleton = 1 AND authority.authority_state = 'paused'
       AND authority.paused_at_ms IS NOT NULL
       AND lease.expires_at_ms > CAST(strftime('%s', 'now') AS INTEGER) * 1000
   )
-    THEN RAISE(ABORT, 'notification outbox maintenance is not ready') END;
-  SELECT CASE WHEN NEW.singleton <> OLD.singleton OR OLD.storage_mode = 'table'
-    THEN RAISE(ABORT, 'notification outbox activation is irreversible') END;
-  SELECT CASE WHEN NEW.storage_mode = 'table' AND (
+    THEN RAISE(ABORT, 'notification outbox maintenance is not ready') END);
+  SELECT (CASE WHEN NEW.singleton <> OLD.singleton OR OLD.storage_mode = 'table'
+    THEN RAISE(ABORT, 'notification outbox activation is irreversible') END);
+  SELECT (CASE WHEN NEW.storage_mode = 'table' AND (
     OLD.preparation_state <> 'ready' OR NEW.preparation_state <> 'ready'
     OR NEW.source_documents_revision IS NOT OLD.source_documents_revision
     OR NEW.prepared_at_ms IS NOT OLD.prepared_at_ms
     OR NEW.source_documents_revision <> (SELECT documents_revision FROM commerce_authority_control WHERE singleton = 1)
-  ) THEN RAISE(ABORT, 'notification outbox preparation is incomplete') END;
-  SELECT CASE WHEN NEW.storage_mode = 'legacy' AND NOT (
+  ) THEN RAISE(ABORT, 'notification outbox preparation is incomplete') END);
+  SELECT (CASE WHEN NEW.storage_mode = 'legacy' AND NOT (
     NEW.preparation_state = 'preparing' OR
     (OLD.preparation_state = 'preparing' AND NEW.preparation_state = 'ready'
       AND NEW.source_documents_revision = (SELECT documents_revision FROM commerce_authority_control WHERE singleton = 1))
-  ) THEN RAISE(ABORT, 'invalid notification outbox preparation transition') END;
+  ) THEN RAISE(ABORT, 'invalid notification outbox preparation transition') END);
 END;
 
 CREATE TRIGGER commerce_notification_outbox_resume_guard
@@ -204,7 +204,7 @@ END;
 CREATE TRIGGER commerce_notification_outbox_insert_guard
 BEFORE INSERT ON commerce_notification_outbox
 BEGIN
-  SELECT CASE WHEN NOT (
+  SELECT (CASE WHEN NOT (
     EXISTS (SELECT 1 FROM commerce_authority_control AS authority
       CROSS JOIN commerce_notification_outbox_control AS control
       WHERE authority.singleton = 1 AND control.singleton = 1
@@ -218,21 +218,21 @@ BEGIN
   ) AND EXISTS (
       SELECT 1 FROM commerce_notification_outbox_control WHERE storage_mode = 'legacy' AND preparation_state = 'preparing'
     ))
-  ) THEN RAISE(ABORT, 'notification outbox is unavailable') END;
-  SELECT CASE WHEN NOT EXISTS (
+  ) THEN RAISE(ABORT, 'notification outbox is unavailable') END);
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1 FROM commerce_documents
     WHERE document_path = NEW.parent_path AND drop_id = NEW.drop_id
-      AND document_kind = CASE WHEN NEW.family = 'stripe_terminal' THEN 'stripe_checkout' ELSE 'delivery_order' END
-  ) THEN RAISE(ABORT, 'notification outbox parent mismatch') END;
-  SELECT CASE WHEN EXISTS (
+      AND document_kind = (CASE WHEN NEW.family = 'stripe_terminal' THEN 'stripe_checkout' ELSE 'delivery_order' END)
+  ) THEN RAISE(ABORT, 'notification outbox parent mismatch') END);
+  SELECT (CASE WHEN EXISTS (
     SELECT 1 FROM json_each(NEW.entries_json) AS entry
     WHERE json_type(entry.value) IS NOT 'object'
       OR json_type(entry.value, '$.kind') IS NOT 'text'
       OR json_extract(entry.value, '$.kind') NOT IN (
-        CASE WHEN NEW.family = 'shipped' THEN 'buyer_order_shipped'
-          WHEN NEW.outcome = 'manual_review' THEN 'stripe_checkout_manual_review' ELSE 'buyer_order_received' END,
-        CASE WHEN NEW.family = 'shipped' THEN 'buyer_order_shipped'
-          WHEN NEW.outcome = 'manual_review' THEN 'stripe_checkout_manual_review' ELSE 'shipper_ready_to_ship' END
+        (CASE WHEN NEW.family = 'shipped' THEN 'buyer_order_shipped'
+          WHEN NEW.outcome = 'manual_review' THEN 'stripe_checkout_manual_review' ELSE 'buyer_order_received' END),
+        (CASE WHEN NEW.family = 'shipped' THEN 'buyer_order_shipped'
+          WHEN NEW.outcome = 'manual_review' THEN 'stripe_checkout_manual_review' ELSE 'shipper_ready_to_ship' END)
       )
       OR json_type(entry.value, '$.jobId') IS NOT 'text'
       OR length(json_extract(entry.value, '$.jobId')) <> 36
@@ -245,19 +245,19 @@ BEGIN
         AND json_type(entry.value, '$.payload') IS NOT NULL)
   ) OR (SELECT COUNT(DISTINCT json_extract(value, '$.kind')) FROM json_each(NEW.entries_json)) <>
     json_array_length(NEW.entries_json)
-  THEN RAISE(ABORT, 'invalid notification outbox entries') END;
-  SELECT CASE WHEN NEW.state <> 'cancelled' AND NEW.state <> CASE
+  THEN RAISE(ABORT, 'invalid notification outbox entries') END);
+  SELECT (CASE WHEN NEW.state <> 'cancelled' AND NEW.state <> (CASE
     WHEN EXISTS (SELECT 1 FROM json_each(NEW.entries_json) WHERE json_extract(value, '$.state') = 'pending') THEN 'pending'
     WHEN EXISTS (SELECT 1 FROM json_each(NEW.entries_json) WHERE json_extract(value, '$.state') = 'failed') THEN 'failed'
-    ELSE 'queued' END
-  THEN RAISE(ABORT, 'invalid notification outbox state') END;
+    ELSE 'queued' END)
+  THEN RAISE(ABORT, 'invalid notification outbox state') END);
 
 END;
 
 CREATE TRIGGER commerce_notification_outbox_update_guard
 BEFORE UPDATE ON commerce_notification_outbox
 BEGIN
-  SELECT CASE WHEN NOT (
+  SELECT (CASE WHEN NOT (
     EXISTS (SELECT 1 FROM commerce_authority_control AS authority
       CROSS JOIN commerce_notification_outbox_control AS control
       WHERE authority.singleton = 1 AND control.singleton = 1
@@ -271,21 +271,21 @@ BEGIN
   ) AND EXISTS (
       SELECT 1 FROM commerce_notification_outbox_control WHERE storage_mode = 'legacy' AND preparation_state = 'preparing'
     ))
-  ) THEN RAISE(ABORT, 'notification outbox is unavailable') END;
-  SELECT CASE WHEN NOT EXISTS (
+  ) THEN RAISE(ABORT, 'notification outbox is unavailable') END);
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1 FROM commerce_documents
     WHERE document_path = NEW.parent_path AND drop_id = NEW.drop_id
-      AND document_kind = CASE WHEN NEW.family = 'stripe_terminal' THEN 'stripe_checkout' ELSE 'delivery_order' END
-  ) THEN RAISE(ABORT, 'notification outbox parent mismatch') END;
-  SELECT CASE WHEN EXISTS (
+      AND document_kind = (CASE WHEN NEW.family = 'stripe_terminal' THEN 'stripe_checkout' ELSE 'delivery_order' END)
+  ) THEN RAISE(ABORT, 'notification outbox parent mismatch') END);
+  SELECT (CASE WHEN EXISTS (
     SELECT 1 FROM json_each(NEW.entries_json) AS entry
     WHERE json_type(entry.value) IS NOT 'object'
       OR json_type(entry.value, '$.kind') IS NOT 'text'
       OR json_extract(entry.value, '$.kind') NOT IN (
-        CASE WHEN NEW.family = 'shipped' THEN 'buyer_order_shipped'
-          WHEN NEW.outcome = 'manual_review' THEN 'stripe_checkout_manual_review' ELSE 'buyer_order_received' END,
-        CASE WHEN NEW.family = 'shipped' THEN 'buyer_order_shipped'
-          WHEN NEW.outcome = 'manual_review' THEN 'stripe_checkout_manual_review' ELSE 'shipper_ready_to_ship' END
+        (CASE WHEN NEW.family = 'shipped' THEN 'buyer_order_shipped'
+          WHEN NEW.outcome = 'manual_review' THEN 'stripe_checkout_manual_review' ELSE 'buyer_order_received' END),
+        (CASE WHEN NEW.family = 'shipped' THEN 'buyer_order_shipped'
+          WHEN NEW.outcome = 'manual_review' THEN 'stripe_checkout_manual_review' ELSE 'shipper_ready_to_ship' END)
       )
       OR json_type(entry.value, '$.jobId') IS NOT 'text'
       OR length(json_extract(entry.value, '$.jobId')) <> 36
@@ -298,17 +298,17 @@ BEGIN
         AND json_type(entry.value, '$.payload') IS NOT NULL)
   ) OR (SELECT COUNT(DISTINCT json_extract(value, '$.kind')) FROM json_each(NEW.entries_json)) <>
     json_array_length(NEW.entries_json)
-  THEN RAISE(ABORT, 'invalid notification outbox entries') END;
-  SELECT CASE WHEN NEW.state <> 'cancelled' AND NEW.state <> CASE
+  THEN RAISE(ABORT, 'invalid notification outbox entries') END);
+  SELECT (CASE WHEN NEW.state <> 'cancelled' AND NEW.state <> (CASE
     WHEN EXISTS (SELECT 1 FROM json_each(NEW.entries_json) WHERE json_extract(value, '$.state') = 'pending') THEN 'pending'
     WHEN EXISTS (SELECT 1 FROM json_each(NEW.entries_json) WHERE json_extract(value, '$.state') = 'failed') THEN 'failed'
-    ELSE 'queued' END
-  THEN RAISE(ABORT, 'invalid notification outbox state') END;
-  SELECT CASE WHEN NEW.parent_path IS NOT OLD.parent_path OR NEW.family IS NOT OLD.family
+    ELSE 'queued' END)
+  THEN RAISE(ABORT, 'invalid notification outbox state') END);
+  SELECT (CASE WHEN NEW.parent_path IS NOT OLD.parent_path OR NEW.family IS NOT OLD.family
     OR NEW.drop_id IS NOT OLD.drop_id OR NEW.revision <> OLD.revision + 1
     OR NEW.updated_at_ms < OLD.updated_at_ms
-    THEN RAISE(ABORT, 'notification outbox revision conflict') END;
-  SELECT CASE WHEN NEW.generation = OLD.generation AND (
+    THEN RAISE(ABORT, 'notification outbox revision conflict') END);
+  SELECT (CASE WHEN NEW.generation = OLD.generation AND (
     NEW.outcome IS NOT OLD.outcome OR NEW.created_at_ms <> OLD.created_at_ms
     OR json_array_length(NEW.entries_json) <> json_array_length(OLD.entries_json)
     OR EXISTS (
@@ -327,7 +327,7 @@ BEGIN
           AND json_type(current.value, '$.payload') IS NULL
           AND json_extract(current.value, '$.state') = 'pending' AND NEW.state <> 'cancelled')
     )
-  ) THEN RAISE(ABORT, 'notification outbox identity or payload is immutable') END;
+  ) THEN RAISE(ABORT, 'notification outbox identity or payload is immutable') END);
 END;
 
 CREATE TRIGGER commerce_notification_outbox_delete_guard
@@ -351,10 +351,10 @@ CREATE TRIGGER commerce_commit_guard_notification_outbox_validate
 BEFORE INSERT ON commerce_commit_guards
 WHEN json_array_length(NEW.notification_outbox_expectations_json) > 0
 BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1 FROM commerce_notification_outbox_control WHERE singleton = 1 AND storage_mode = 'table'
-  ) THEN RAISE(ABORT, 'notification outbox is unavailable') END;
-  SELECT CASE WHEN EXISTS (
+  ) THEN RAISE(ABORT, 'notification outbox is unavailable') END);
+  SELECT (CASE WHEN EXISTS (
     SELECT 1 FROM json_each(NEW.notification_outbox_expectations_json) AS expectation
     LEFT JOIN commerce_notification_outbox AS outbox
       ON outbox.parent_path = json_extract(expectation.value, '$.parentPath')
@@ -364,7 +364,7 @@ BEGIN
       OR json_type(expectation.value, '$.revision') IS NOT 'integer'
       OR COALESCE(outbox.revision, -1) <> json_extract(expectation.value, '$.revision')
       OR outbox.generation IS NOT json_extract(expectation.value, '$.generation')
-  ) THEN RAISE(ABORT, 'commerce transaction conflict: notification outbox changed') END;
+  ) THEN RAISE(ABORT, 'commerce transaction conflict: notification outbox changed') END);
 END;
 
 CREATE TRIGGER commerce_notification_legacy_insert_fence

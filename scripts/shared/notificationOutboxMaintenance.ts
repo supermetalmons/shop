@@ -66,7 +66,11 @@ function legacyEntry(args: {
   if (!hasFields(data, [args.prefix])) return null;
   const state = data[`${args.prefix}State`];
   const jobId = data[`${args.prefix}JobId`];
-  const idempotencyKey = data[`${args.prefix}IdempotencyKey`];
+  const storedIdempotencyKey = data[`${args.prefix}IdempotencyKey`];
+  const queuedAtMs = optionalTime(data[`${args.prefix}QueuedAt`], 'queued timestamp');
+  const legacyQueuedShipment = args.kind === 'buyer_order_shipped' && state === 'queued' &&
+    storedIdempotencyKey === undefined && queuedAtMs !== undefined;
+  const idempotencyKey = legacyQueuedShipment ? args.expectedKey : storedIdempotencyKey;
   if (!['pending', 'queued', 'failed'].includes(String(state)) || !isNotificationEmailJobId(jobId) ||
     (idempotencyKey !== args.expectedKey && (!args.allowRetry || idempotencyKey !== `${args.expectedKey}:retry:${jobId}`))) {
     throw new Error(`Invalid legacy notification identity: ${args.document.path} ${args.prefix}.`);
@@ -77,7 +81,6 @@ function legacyEntry(args: {
     payload.context.dropId !== args.document.dropId || payload.context.deliveryId !== deliveryId(args.document))) {
     throw new Error(`Invalid legacy notification payload: ${args.document.path} ${args.prefix}.`);
   }
-  const queuedAtMs = optionalTime(data[`${args.prefix}QueuedAt`], 'queued timestamp');
   return {
     kind: args.kind, jobId, idempotencyKey: String(idempotencyKey), state: state as NotificationOutboxEntry['state'],
     ...(isNotificationEmailJobV1(payload) && state === 'pending' ? { payload } : {}),
