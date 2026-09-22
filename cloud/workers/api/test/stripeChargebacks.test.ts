@@ -17,6 +17,7 @@ import {
 import {
   createCommerceD1Harness,
   seedCommerceDocument,
+  type CommerceD1CallObservation,
   type CommerceD1Harness,
 } from './commerceD1Harness.ts';
 import { normalizeStripeDispute } from '../../../../shared/stripeChargebacks.ts';
@@ -101,17 +102,26 @@ test('chargeback storage is idempotent, detects identity conflicts, and never ch
   harness.database.close();
 });
 
-test('chargeback lookup is scoped to exact drop/session identities and returns a deduplicated set', async () => {
-  const harness = createCommerceD1Harness();
+test('chargeback lookup batches exact drop/session identities and returns a deduplicated set', async () => {
+  const calls: CommerceD1CallObservation[] = [];
+  const harness = createCommerceD1Harness({ observeCall: (call) => calls.push(call) });
   await recordStripeChargeback(harness.db, storedRecord());
   await recordStripeChargeback(harness.db, storedRecord({ disputeId: 'du_second' }));
   await recordStripeChargeback(harness.db, storedRecord({ sessionId: 'cs_test_history', livemode: false }));
-  const ids = Array.from({ length: 55 }, (_, i) => `cs_live_other${i}`);
+  await recordStripeChargeback(harness.db, storedRecord({ sessionId: 'cs_live_other0' }));
+  const ids = Array.from({ length: 998 }, (_, i) => `cs_live_other${i}`);
+  calls.length = 0;
   assert.deepEqual(await loadStripeChargebackSessionIds(harness.db, 'retired_drop', [
     ...ids, 'cs_live_history', 'cs_test_history', 'cs_live_history', ' cs_live_history',
-  ]), new Set(['cs_live_history', 'cs_test_history']));
+  ]), new Set(['cs_live_other0', 'cs_live_history', 'cs_test_history']));
+  assert.deepEqual(calls.map((call) => call.method), ['batch']);
+  assert.equal(calls[0].method === 'batch' && calls[0].statements.length, 20);
   assert.deepEqual(await loadStripeChargebackSessionIds(harness.db, 'other_drop', ['cs_live_history']), new Set());
+  calls.length = 0;
   assert.deepEqual(await loadStripeChargebackSessionIds(harness.db, 'retired_drop', []), new Set());
+  assert.deepEqual(await loadStripeChargebackSessionIds(harness.db, 'retired_drop', [' cs_live_history']), new Set());
+  assert.deepEqual(await loadStripeChargebackSessionIds(harness.db, 'invalid/drop', ['cs_live_history']), new Set());
+  assert.deepEqual(calls, []);
   harness.database.close();
 });
 

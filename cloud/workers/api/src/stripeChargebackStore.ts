@@ -73,12 +73,16 @@ export async function loadStripeChargebackSessionIds(
 ): Promise<Set<string>> {
   const ids = Array.from(new Set(sessionIds.filter(isStripeChargebackSessionId)));
   const matches = new Set<string>();
-  if (!isCommerceDocumentSegment(dropId)) return matches;
+  if (!isCommerceDocumentSegment(dropId) || ids.length === 0) return matches;
+  const statements: D1PreparedStatement[] = [];
   for (let index = 0; index < ids.length; index += 50) {
     const batch = ids.slice(index, index + 50);
-    const result = await db.prepare(`SELECT DISTINCT session_id FROM stripe_order_disputes
+    statements.push(db.prepare(`SELECT DISTINCT session_id FROM stripe_order_disputes
       WHERE drop_id = ? AND session_id IN (${batch.map(() => '?').join(', ')})`)
-      .bind(dropId, ...batch).all<{ session_id: string }>();
+      .bind(dropId, ...batch));
+  }
+  const results = await db.batch<{ session_id: string }>(statements);
+  for (const result of results) {
     for (const row of result.results) matches.add(row.session_id);
   }
   return matches;
