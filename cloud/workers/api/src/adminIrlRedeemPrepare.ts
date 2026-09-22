@@ -8,7 +8,6 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from '@solana/web3.js';
-import bs58 from 'bs58';
 import { z } from 'zod';
 import {
   getAdminIrlRedeemTargetEligibility,
@@ -78,8 +77,9 @@ import { apiErrorBody, httpStatusForApiErrorCode, jsonResponse, type ApiErrorLik
 import {
   assetMatchesReceiptDropIdentity,
   assetMatchesReceiptMetadataIdentity,
-  assetProofTreePublicKey,
-  normalizedAssetProofAccounts,
+  decodeReceiptProof,
+  ReceiptProofDecodeError,
+  type DecodedReceiptProof,
   receiptMetadataReference,
 } from './receiptProof.js';
 import {
@@ -164,20 +164,6 @@ type PreparedItem = {
   assetId: string;
   kind: 'box' | 'card_receipt';
   refId: number;
-};
-
-type ProofContext = {
-  merkleTree: PublicKey;
-  root: Buffer;
-  dataHash: Buffer;
-  creatorHash: Buffer;
-  assetDataHash: Buffer | null;
-  flags: number | null;
-  nonce: number;
-  index: number;
-  proofAccounts: PublicKey[];
-  leafOwner: PublicKey;
-  leafDelegate: PublicKey;
 };
 
 type AdminIrlRedeemPrepareDependencies = {
@@ -567,85 +553,30 @@ export function receiptDropIdentity(runtime: AdminIrlRedeemRuntime) {
   };
 }
 
-function bytes32(value: string, label: string): Buffer {
-  let decoded: Uint8Array;
-  try {
-    decoded = bs58.decode(value);
-  } catch {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', `Invalid ${label}`);
-  }
-  if (decoded.length !== 32) throw new AdminIrlRedeemPrepareError('failed-precondition', `Invalid ${label} length`);
-  return Buffer.from(decoded);
-}
-
 export function parseProof(
   asset: DasAsset,
   proof: Record<string, unknown>,
   runtime: AdminIrlRedeemRuntime,
   owner: string,
-): ProofContext {
-  const compression = isRecord(asset.compression) ? asset.compression : {};
-  const merkleTree = assetProofTreePublicKey(proof);
-  const root = typeof proof.root === 'string' ? proof.root : '';
-  if (!merkleTree || !root) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Unable to fetch receipt proof for transfer');
-  }
-  if (!merkleTree.equals(runtime.receiptsMerkleTree)) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Receipt does not belong to the configured receipts tree');
-  }
-  const nonce = Number(compression.leaf_id ?? compression.leafId);
-  if (!Number.isSafeInteger(nonce) || nonce < 0 || nonce > 0xffff_ffff) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Unable to parse receipt leaf id');
-  }
-  let proofAccounts: PublicKey[];
+): DecodedReceiptProof {
   try {
-    proofAccounts = normalizedAssetProofAccounts(proof, {
-      maxDepth: runtime.receiptsTreeMaxDepth,
-      canopyDepth: runtime.receiptsTreeCanopyDepth,
+    return decodeReceiptProof({
+      asset,
+      proof,
+      expectedTree: runtime.receiptsMerkleTree,
+      expectedOwner: owner,
+      dimensions: {
+        maxDepth: runtime.receiptsTreeMaxDepth,
+        canopyDepth: runtime.receiptsTreeCanopyDepth,
+      },
     });
   } catch (error) {
+    if (!(error instanceof ReceiptProofDecodeError)) throw error;
     throw new AdminIrlRedeemPrepareError(
       'failed-precondition',
-      error instanceof Error ? error.message : 'Unable to parse receipt proof path',
+      error.reason === 'index-out-of-range' ? 'Unable to parse receipt leaf id' : error.message,
     );
   }
-  const indexedOwner = isRecord(asset.ownership) && typeof asset.ownership.owner === 'string'
-    ? asset.ownership.owner
-    : '';
-  if (indexedOwner !== owner) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Receipt proof owner does not match the expected wallet');
-  }
-  let leafOwner: PublicKey;
-  let leafDelegate: PublicKey;
-  try {
-    leafOwner = new PublicKey(indexedOwner);
-    leafDelegate = new PublicKey(
-      isRecord(asset.ownership) && typeof asset.ownership.delegate === 'string'
-        ? asset.ownership.delegate
-        : indexedOwner,
-    );
-  } catch {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Receipt proof owner is invalid');
-  }
-  const flags = compression.flags == null ? null : Number(compression.flags);
-  if (flags != null && (!Number.isInteger(flags) || flags < 0 || flags > 0xff)) {
-    throw new AdminIrlRedeemPrepareError('failed-precondition', 'Receipt proof flags are invalid');
-  }
-  return {
-    merkleTree,
-    root: bytes32(root, 'assetProof.root'),
-    dataHash: bytes32(String(compression.data_hash ?? compression.dataHash ?? ''), 'asset.compression.data_hash'),
-    creatorHash: bytes32(String(compression.creator_hash ?? compression.creatorHash ?? ''), 'asset.compression.creator_hash'),
-    assetDataHash: compression.asset_data_hash || compression.assetDataHash
-      ? bytes32(String(compression.asset_data_hash ?? compression.assetDataHash), 'asset.compression.asset_data_hash')
-      : null,
-    flags,
-    nonce,
-    index: nonce,
-    proofAccounts,
-    leafOwner,
-    leafDelegate,
-  };
 }
 
 function coreTransferInstruction(args: {
@@ -670,7 +601,7 @@ function coreTransferInstruction(args: {
 }
 
 function cardReceiptTransferInstruction(
-  proof: ProofContext,
+  proof: DecodedReceiptProof,
   owner: PublicKey,
   admin: PublicKey,
   coreCollection: PublicKey,

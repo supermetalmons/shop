@@ -20,8 +20,9 @@ import {
   normalizeIrlClaimCode,
 } from './claimCodes.js';
 import {
-  assetProofTreePublicKey,
-  normalizedAssetProofAccounts,
+  decodeReceiptProof,
+  ReceiptProofDecodeError,
+  type DecodedReceiptProof,
 } from './receiptProof.js';
 import {
   BoxMinterConfigCodecError,
@@ -665,101 +666,40 @@ function borshOption(value?: Buffer | null): Buffer {
   return value ? Buffer.concat([Buffer.from([1]), value]) : Buffer.from([0]);
 }
 
-function bytes32(value: string, label: string): Buffer {
-  let decoded: Uint8Array;
-  try {
-    decoded = bs58.decode(value);
-  } catch {
-    throw new IrlClaimError('failed-precondition', `Invalid ${label}`);
-  }
-  if (decoded.length !== 32) throw new IrlClaimError('failed-precondition', `Invalid ${label} length`);
-  return Buffer.from(decoded);
-}
-
-type ProofContext = {
-  merkleTree: PublicKey;
-  root: Buffer;
-  dataHash: Buffer;
-  creatorHash: Buffer;
-  assetDataHash: Buffer | null;
-  flags: number | null;
-  nonce: number;
-  index: number;
-  proofAccounts: PublicKey[];
-  leafOwner: PublicKey;
-  leafDelegate: PublicKey;
-};
-
 function parseProof(
   asset: DasAsset,
   proof: Record<string, unknown>,
   runtime: IrlClaimRuntime,
   owner: string,
-): ProofContext {
-  const compression = isRecord(asset.compression) ? asset.compression : {};
-  const merkleTree = assetProofTreePublicKey(proof);
-  const root = typeof proof.root === 'string' ? proof.root : '';
-  if (!merkleTree || !root) throw new IrlClaimError('failed-precondition', 'Unable to fetch certificate proof for burn');
-  if (!merkleTree.equals(runtime.receiptsMerkleTree)) {
-    throw new IrlClaimError('failed-precondition', 'Certificate does not belong to the configured receipts tree', {
-      certificateTree: merkleTree.toBase58(),
-      receiptsTree: runtime.receiptsMerkleTree.toBase58(),
-      dropId: runtime.dropId,
-    });
-  }
-  const nonce = Number(compression.leaf_id ?? compression.leafId);
-  if (!Number.isSafeInteger(nonce) || nonce < 0) {
-    throw new IrlClaimError('failed-precondition', 'Unable to parse certificate leaf id');
-  }
-  const index = Math.floor(nonce);
-  if (index > 0xffff_ffff) throw new IrlClaimError('failed-precondition', 'Certificate leaf index out of range');
-  if (!Array.isArray(proof.proof) || proof.proof.length > 64) {
-    throw new IrlClaimError('failed-precondition', 'Receipt proof path is invalid');
-  }
-  let proofAccounts: PublicKey[];
+): DecodedReceiptProof {
   try {
-    proofAccounts = normalizedAssetProofAccounts(proof, {
-      maxDepth: runtime.receiptsTreeMaxDepth,
-      canopyDepth: runtime.receiptsTreeCanopyDepth,
+    return decodeReceiptProof({
+      asset,
+      proof,
+      expectedTree: runtime.receiptsMerkleTree,
+      expectedOwner: owner,
+      dimensions: {
+        maxDepth: runtime.receiptsTreeMaxDepth,
+        canopyDepth: runtime.receiptsTreeCanopyDepth,
+      },
+      maxProofAccounts: 64,
     });
   } catch (error) {
-    throw new IrlClaimError('failed-precondition', error instanceof Error ? error.message : 'Unable to parse receipt proof path');
+    if (!(error instanceof ReceiptProofDecodeError)) throw error;
+    const messages: Partial<Record<ReceiptProofDecodeError['reason'], string>> = {
+      'missing-proof': 'Unable to fetch certificate proof for burn',
+      'tree-mismatch': 'Certificate does not belong to the configured receipts tree',
+      'invalid-nonce': 'Unable to parse certificate leaf id',
+      'index-out-of-range': 'Certificate leaf index out of range',
+      'invalid-flags': 'Invalid burn flags',
+    };
+    const details = error.reason === 'tree-mismatch' ? {
+      certificateTree: error.details?.receiptTree,
+      receiptsTree: error.details?.receiptsTree,
+      dropId: runtime.dropId,
+    } : undefined;
+    throw new IrlClaimError('failed-precondition', messages[error.reason] ?? error.message, details);
   }
-  const indexedOwner = isRecord(asset.ownership) && typeof asset.ownership.owner === 'string'
-    ? asset.ownership.owner
-    : '';
-  if (indexedOwner !== owner) throw new IrlClaimError('failed-precondition', 'Receipt proof owner does not match the expected wallet');
-  let leafOwner: PublicKey;
-  let leafDelegate: PublicKey;
-  try {
-    leafOwner = new PublicKey(indexedOwner);
-    leafDelegate = new PublicKey(
-      isRecord(asset.ownership) && typeof asset.ownership.delegate === 'string'
-        ? asset.ownership.delegate
-        : indexedOwner,
-    );
-  } catch {
-    throw new IrlClaimError('failed-precondition', 'Receipt proof owner is invalid');
-  }
-  const flags = compression.flags == null ? null : Number(compression.flags);
-  if (flags != null && (!Number.isInteger(flags) || flags < 0 || flags > 0xff)) {
-    throw new IrlClaimError('failed-precondition', 'Invalid burn flags');
-  }
-  return {
-    merkleTree,
-    root: bytes32(root, 'assetProof.root'),
-    dataHash: bytes32(String(compression.data_hash ?? compression.dataHash ?? ''), 'asset.compression.data_hash'),
-    creatorHash: bytes32(String(compression.creator_hash ?? compression.creatorHash ?? ''), 'asset.compression.creator_hash'),
-    assetDataHash: compression.asset_data_hash || compression.assetDataHash
-      ? bytes32(String(compression.asset_data_hash ?? compression.assetDataHash), 'asset.compression.asset_data_hash')
-      : null,
-    flags,
-    nonce,
-    index,
-    proofAccounts,
-    leafOwner,
-    leafDelegate,
-  };
 }
 
 function deriveTreeConfig(merkleTree: PublicKey): PublicKey {
@@ -769,7 +709,7 @@ function deriveTreeConfig(merkleTree: PublicKey): PublicKey {
 function burnInstruction(
   owner: PublicKey,
   coreCollection: PublicKey,
-  proof: ProofContext,
+  proof: DecodedReceiptProof,
 ): TransactionInstruction {
   const data = Buffer.concat([
     IX_BURN_V2,

@@ -1,6 +1,8 @@
 import { PublicKey } from '@solana/web3.js';
+import bs58 from 'bs58';
 import { uniqueAssetGroupingCollectionMint } from '../../../../shared/dasAssetCollections.js';
 import { dasAssetMetadataUri, type DasAsset } from '../../../../shared/dasAsset.js';
+import { isRecord } from './dataAccess.js';
 import {
   boxIdFromMetadataUri,
   dudeIdFromMetadataUri,
@@ -28,6 +30,134 @@ export type ReceiptProofTreeDimensions = {
   maxDepth?: number;
   canopyDepth?: number;
 };
+
+export type DecodedReceiptProof = {
+  merkleTree: PublicKey;
+  root: Buffer;
+  dataHash: Buffer;
+  creatorHash: Buffer;
+  assetDataHash: Buffer | null;
+  flags: number | null;
+  nonce: number;
+  index: number;
+  proofAccounts: PublicKey[];
+  leafOwner: PublicKey;
+  leafDelegate: PublicKey;
+};
+
+type ReceiptProofDecodeErrorReason =
+  | 'missing-proof'
+  | 'tree-mismatch'
+  | 'invalid-nonce'
+  | 'index-out-of-range'
+  | 'invalid-proof-path'
+  | 'proof-normalization'
+  | 'owner-mismatch'
+  | 'invalid-owner'
+  | 'invalid-flags'
+  | 'invalid-hash'
+  | 'invalid-hash-length';
+
+export class ReceiptProofDecodeError extends Error {
+  constructor(
+    readonly reason: ReceiptProofDecodeErrorReason,
+    message: string,
+    readonly details?: { receiptTree: string; receiptsTree: string },
+  ) {
+    super(message);
+    this.name = 'ReceiptProofDecodeError';
+  }
+}
+
+function bytes32(value: string, label: string): Buffer {
+  let decoded: Uint8Array;
+  try {
+    decoded = bs58.decode(value);
+  } catch {
+    throw new ReceiptProofDecodeError('invalid-hash', `Invalid ${label}`);
+  }
+  if (decoded.length !== 32) throw new ReceiptProofDecodeError('invalid-hash-length', `Invalid ${label} length`);
+  return Buffer.from(decoded);
+}
+
+export function decodeReceiptProof(args: {
+  asset: DasAsset;
+  proof: Record<string, unknown>;
+  expectedTree: PublicKey;
+  expectedOwner: string;
+  dimensions?: ReceiptProofTreeDimensions;
+  maxProofAccounts?: number;
+}): DecodedReceiptProof {
+  const { asset, proof, expectedTree, expectedOwner } = args;
+  const compression = isRecord(asset.compression) ? asset.compression : {};
+  const merkleTree = assetProofTreePublicKey(proof);
+  const root = typeof proof.root === 'string' ? proof.root : '';
+  if (!merkleTree || !root) {
+    throw new ReceiptProofDecodeError('missing-proof', 'Unable to fetch receipt proof for transfer');
+  }
+  if (!merkleTree.equals(expectedTree)) {
+    throw new ReceiptProofDecodeError('tree-mismatch', 'Receipt does not belong to the configured receipts tree', {
+      receiptTree: merkleTree.toBase58(),
+      receiptsTree: expectedTree.toBase58(),
+    });
+  }
+  const nonce = Number(compression.leaf_id ?? compression.leafId);
+  if (!Number.isSafeInteger(nonce) || nonce < 0) {
+    throw new ReceiptProofDecodeError('invalid-nonce', 'Unable to parse receipt leaf id');
+  }
+  if (nonce > 0xffff_ffff) {
+    throw new ReceiptProofDecodeError('index-out-of-range', 'Receipt leaf index out of range');
+  }
+  if (args.maxProofAccounts !== undefined && (!Array.isArray(proof.proof) || proof.proof.length > args.maxProofAccounts)) {
+    throw new ReceiptProofDecodeError('invalid-proof-path', 'Receipt proof path is invalid');
+  }
+  let proofAccounts: PublicKey[];
+  try {
+    proofAccounts = normalizedAssetProofAccounts(proof, args.dimensions);
+  } catch (error) {
+    throw new ReceiptProofDecodeError(
+      'proof-normalization',
+      error instanceof Error ? error.message : 'Unable to parse receipt proof path',
+    );
+  }
+  const indexedOwner = isRecord(asset.ownership) && typeof asset.ownership.owner === 'string'
+    ? asset.ownership.owner
+    : '';
+  if (indexedOwner !== expectedOwner) {
+    throw new ReceiptProofDecodeError('owner-mismatch', 'Receipt proof owner does not match the expected wallet');
+  }
+  let leafOwner: PublicKey;
+  let leafDelegate: PublicKey;
+  try {
+    leafOwner = new PublicKey(indexedOwner);
+    leafDelegate = new PublicKey(
+      isRecord(asset.ownership) && typeof asset.ownership.delegate === 'string'
+        ? asset.ownership.delegate
+        : indexedOwner,
+    );
+  } catch {
+    throw new ReceiptProofDecodeError('invalid-owner', 'Receipt proof owner is invalid');
+  }
+  const flags = compression.flags == null ? null : Number(compression.flags);
+  if (flags != null && (!Number.isInteger(flags) || flags < 0 || flags > 0xff)) {
+    throw new ReceiptProofDecodeError('invalid-flags', 'Receipt proof flags are invalid');
+  }
+  return {
+    merkleTree,
+    root: bytes32(root, 'assetProof.root'),
+    dataHash: bytes32(String(compression.data_hash ?? compression.dataHash ?? ''), 'asset.compression.data_hash'),
+    creatorHash: bytes32(String(compression.creator_hash ?? compression.creatorHash ?? ''), 'asset.compression.creator_hash'),
+    assetDataHash: compression.asset_data_hash || compression.assetDataHash
+      ? bytes32(String(compression.asset_data_hash ?? compression.assetDataHash), 'asset.compression.asset_data_hash')
+      : null,
+    flags,
+    nonce,
+    index: nonce,
+    proofAccounts,
+    leafOwner,
+    leafDelegate,
+  };
+}
 
 export function assetProofTreePublicKey(proof: unknown): PublicKey | null {
   if (!proof || typeof proof !== 'object') return null;

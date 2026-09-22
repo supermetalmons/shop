@@ -1569,6 +1569,45 @@ test('Admin IRL receipt owner scans finish pagination before checking uniqueness
   assert.equal(callsAfterDeadline, 0);
 });
 
+test('Admin IRL card receipt indexing rejects malformed proofs without retrying', async () => {
+  const runtime = adminIrlRedeemPrepareTestHooks.buildRuntime(API_DROPS[DROP_ID]);
+  const hash = bs58.encode(new Uint8Array(32).fill(7));
+  const methods: string[] = [];
+  await assert.rejects(adminIrlRedeemFinalizeTestHooks.waitForCardReceipt({
+    apiKey: 'helius',
+    signal: new AbortController().signal,
+    providerFetch: async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { id: string; method: string };
+      methods.push(body.method);
+      assert.ok(methods.length <= 2, 'malformed proofs must not trigger indexing retries');
+      assert.ok(body.method === 'getAsset' || body.method === 'getAssetProof');
+      return Response.json({
+        jsonrpc: '2.0',
+        id: body.id,
+        result: body.method === 'getAsset' ? {
+          id: OWNER,
+          grouping: [{ group_key: 'collection', group_value: runtime.collectionMint.toBase58() }],
+          content: { json_uri: `${runtime.config.metadataBase}/rf9.json` },
+          ownership: { owner: OWNER },
+          compression: { leaf_id: 4, data_hash: hash, creator_hash: hash, flags: 256 },
+        } : {
+          tree_id: runtime.receiptsMerkleTree.toBase58(),
+          root: hash,
+          proof: Array.from({ length: runtime.receiptsTreeMaxDepth ?? 0 }, () => OWNER),
+        },
+      });
+    },
+  }, runtime, OWNER, 9, OWNER), (error: unknown) => {
+    assert.ok(error instanceof AdminIrlRedeemFinalizeError);
+    assert.equal(error.code, 'failed-precondition');
+    assert.equal(error.message, 'Receipt proof flags are invalid');
+    assert.equal(error.details, undefined);
+    assert.equal(adminIrlRedeemFinalizeWorkflowError(error).retryable, false);
+    return true;
+  });
+  assert.deepEqual(methods, ['getAsset', 'getAssetProof']);
+});
+
 test('Admin IRL receipt indexing preserves exact request cancellation', async () => {
   const cardController = new AbortController();
   const cardReason = new Error('card receipt lookup cancelled');
