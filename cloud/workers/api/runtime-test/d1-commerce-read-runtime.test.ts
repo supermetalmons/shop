@@ -627,6 +627,34 @@ test('commerce repository reads and transaction guards run through the real D1 r
       },
     } as D1Database;
     const observedRepository = new D1CommerceRepository(observedDb);
+    const missingOutboxPath = commerceKeys.deliveryOrder('runtime', 'outbox-bulk-missing').path;
+    const outboxPaths = Array.from({ length: 101 }, (_, index) => index === 37
+      ? missingOutboxPath
+      : commerceKeys.deliveryOrder('runtime', `paused-${index}`).path);
+    const requestedOutboxPaths = [...outboxPaths.toReversed(), missingOutboxPath, outboxPaths[20]];
+    const outboxes = await observedRepository.notificationOutbox.getMany(requestedOutboxPaths, 'ready');
+    assert.deepEqual(
+      outboxes.map((record) => record.parentPath).sort(),
+      outboxPaths.filter((path) => path !== missingOutboxPath).sort(),
+    );
+    assert.ok(outboxes.every((record) => record.family === 'ready'));
+    assert.deepEqual(observedBatchSizes, [4]);
+    assert.equal(observedPreparedSql.length, 4);
+    assert.equal(observedPreparedSql.filter((sql) => /FROM commerce_authority_control WHERE singleton = 1/.test(sql)).length, 1);
+    const outboxReadSql = observedPreparedSql.filter((sql) => /FROM commerce_notification_outbox WHERE family = \? AND parent_path IN/.test(sql));
+    assert.deepEqual(outboxReadSql.map((sql) => sql.match(/\?/g)?.length ?? 0), [51, 51, 2]);
+
+    observedBatchSizes.length = 0;
+    observedPreparedSql.length = 0;
+    assert.deepEqual(await observedRepository.notificationOutbox.getMany(requestedOutboxPaths, 'shipped'), []);
+    assert.deepEqual(observedBatchSizes, [4]);
+
+    observedBatchSizes.length = 0;
+    observedPreparedSql.length = 0;
+    assert.deepEqual(await observedRepository.notificationOutbox.getMany([], 'ready'), []);
+    assert.equal(observedBatchSizes.length, 0);
+    assert.equal(observedPreparedSql.length, 0);
+
     for (const firstAccess of ['point', 'bulk', 'owner', 'mutation'] as const) {
       observedBatchSizes.length = 0;
       observedPreparedSql.length = 0;

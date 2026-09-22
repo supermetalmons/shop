@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { D1CommerceRepository, CommerceWriteConflict, commerceKeys, commerceFieldValue } from '../src/commerceRepository.ts';
+import { D1CommerceRepository, CommerceRepositoryError, CommerceWriteConflict, commerceKeys, commerceFieldValue } from '../src/commerceRepository.ts';
 import { notificationOutboxDueQuery } from '../src/commerceQueries.ts';
-import { createCommerceD1Harness, seedCommerceDocument, seedNotificationOutbox } from './commerceD1Harness.ts';
+import { createCommerceD1Harness, seedCommerceDocument, seedNotificationOutbox, type CommerceD1CallObservation } from './commerceD1Harness.ts';
 import { parseNotificationOutboxRecord, shippedNotificationState, type NotificationOutboxCreate } from '../../../../shared/notificationOutbox.ts';
 import { createNotificationEmailJobV1 } from '../../../../shared/notificationEmailJob.ts';
 
@@ -13,11 +13,31 @@ const input = (): NotificationOutboxCreate => ({
   retryUntilMs: 10_000,
 });
 
-function fixture(context: test.TestContext, options: { notificationOutboxMode?: 'legacy' | 'table' } = {}) {
+function fixture(context: test.TestContext, options: Parameters<typeof createCommerceD1Harness>[0] = {}) {
   const harness = createCommerceD1Harness(options);
   context.after(() => harness.database.close());
   seedCommerceDocument(harness, { key, data: { owner: 'wallet', status: 'ready_to_ship', fulfillmentStatus: 'Shipped' } });
   return { harness, repository: new D1CommerceRepository(harness.db) };
+}
+
+function seedShippedOutboxes(harness: ReturnType<typeof createCommerceD1Harness>, count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const parentKey = commerceKeys.deliveryOrder('card_nft_2', String(index + 1));
+    seedCommerceDocument(harness, { key: parentKey, version: 2, data: { status: 'ready_to_ship' } });
+    const draft = input();
+    const record = parseNotificationOutboxRecord({
+      ...draft, parentPath: parentKey.path, outcome: null, state: 'pending', revision: 1,
+      entries: [{ ...draft.entries[0], idempotencyKey: `card_nft_2:${index + 1}:order_shipped` }],
+      attemptCount: 0, nextAttemptAtMs: 100, claimId: null, claimExpiresAtMs: null,
+      createdAtMs: 100, updatedAtMs: 100, lastErrorCode: null,
+    });
+    seedNotificationOutbox(harness, record);
+    return record;
+  });
+}
+
+function isUnavailable(error: unknown): boolean {
+  return error instanceof CommerceRepositoryError && error.code === 'unavailable';
 }
 
 function pause(harness: ReturnType<typeof createCommerceD1Harness>) {
@@ -142,6 +162,7 @@ test('legacy mode stays writable by old code but fails closed for table publishe
   const { repository } = fixture(context, { notificationOutboxMode: 'legacy' });
   await repository.run(100, (unit) => unit.update(key, { buyerOrderShippedEmailState: 'pending' }));
   await assert.rejects(repository.notificationOutbox.get(key.path, 'shipped'), /unavailable/);
+  await assert.rejects(repository.notificationOutbox.getMany([key.path], 'shipped'), isUnavailable);
   await assert.rejects(repository.run(100, (unit) => unit.enqueueNotificationOutbox(input())), /unavailable/);
 });
 
@@ -161,6 +182,7 @@ test('paused authority blocks publishers; a leased maintenance parent delete cas
   assert.throws(() => harness.database.prepare('DELETE FROM commerce_notification_outbox WHERE parent_path = ?').run(key.path), /maintenance/);
   pause(harness);
   await assert.rejects(repository.notificationOutbox.get(key.path, 'shipped'), /unavailable/);
+  await assert.rejects(repository.notificationOutbox.getMany([key.path], 'shipped'), isUnavailable);
   await assert.rejects(repository.notificationOutbox.compareAndSet({ expected: original, nowMs: 300, changes: { nextAttemptAtMs: 500 } }), /unavailable/);
   harness.database.prepare('DELETE FROM commerce_documents WHERE document_path = ?').run(key.path);
   assert.equal(harness.database.prepare('SELECT COUNT(*) AS count FROM commerce_notification_outbox').get()?.count, 0);
@@ -191,6 +213,80 @@ test('due queries read only active rows and use the due index', async (context) 
   const plan = harness.database.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.bindings);
   assert.match(JSON.stringify(plan), /commerce_notification_outbox_family_due/);
   assert.throws(() => seedNotificationOutbox(harness, parseNotificationOutboxRecord({ ...original, entries: [] })), /Invalid/);
+});
+
+for (const count of [50, 51, 101, 1000]) {
+  test(`getMany reads ${count} outboxes in one authority-checked batch`, async (context) => {
+    const calls: CommerceD1CallObservation[] = [];
+    const { harness, repository } = fixture(context, { observeCall: (call) => calls.push(call) });
+    const expected = seedShippedOutboxes(harness, count);
+    const actual = await repository.notificationOutbox.getMany(expected.map((record) => record.parentPath), 'shipped');
+    const byPath = (left: typeof expected[number], right: typeof expected[number]) => left.parentPath.localeCompare(right.parentPath);
+    assert.deepEqual(actual.sort(byPath), expected.sort(byPath));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].method, 'batch');
+    if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch call.');
+    assert.equal(calls[0].statements.length, Math.ceil(count / 50) + 1);
+    assert.match(calls[0].statements[0].sql, /FROM commerce_authority_control/);
+    for (const [index, statement] of calls[0].statements.slice(1).entries()) {
+      assert.equal((statement.sql.match(/\?/g) || []).length, Math.min(50, count - index * 50) + 1);
+    }
+  });
+}
+
+test('getMany deduplicates across chunks and excludes missing and other-family outboxes', async (context) => {
+  const calls: CommerceD1CallObservation[] = [];
+  const { harness, repository } = fixture(context, { observeCall: (call) => calls.push(call) });
+  const expected = seedShippedOutboxes(harness, 51);
+  const missingKey = commerceKeys.deliveryOrder('card_nft_2', '52');
+  const readyKey = commerceKeys.deliveryOrder('card_nft_2', '53');
+  for (const parentKey of [missingKey, readyKey]) {
+    seedCommerceDocument(harness, { key: parentKey, data: { status: 'ready_to_ship' } });
+  }
+  seedNotificationOutbox(harness, {
+    ...expected[0], parentPath: readyKey.path, family: 'ready', entries: [{
+      kind: 'buyer_order_received', jobId: crypto.randomUUID(), idempotencyKey: 'card_nft_2:53:order_received', state: 'pending',
+    }],
+  });
+  const paths = expected.map((record) => record.parentPath);
+  const actual = await repository.notificationOutbox.getMany([...paths, missingKey.path, readyKey.path, ...paths], 'shipped');
+  assert.deepEqual(actual.map((record) => record.parentPath).sort(), paths.sort());
+  assert.ok(actual.every((record) => record.family === 'shipped'));
+  assert.equal(calls.length, 1);
+  if (calls[0].method !== 'batch') assert.fail('Expected one D1 batch call.');
+  assert.equal(calls[0].statements.length, 3);
+});
+
+test('getMany skips D1 for empty input', async (context) => {
+  const calls: CommerceD1CallObservation[] = [];
+  const { repository } = fixture(context, { observeCall: (call) => calls.push(call) });
+  assert.deepEqual(await repository.notificationOutbox.getMany([], 'shipped'), []);
+  assert.deepEqual(calls, []);
+});
+
+test('getMany rejects incomplete or malformed batches without returning partial outboxes', async (context) => {
+  const { harness } = fixture(context);
+  const paths = seedShippedOutboxes(harness, 51).map((record) => record.parentPath);
+  const cases: Array<[string, (results: D1Result<Record<string, unknown>>[]) => unknown]> = [
+    ['failed later result', (results) => [...results.slice(0, -1), { ...results.at(-1), success: false }]],
+    ['malformed later rows', (results) => [...results.slice(0, -1), { ...results.at(-1), results: null }]],
+    ['null later result', (results) => [...results.slice(0, -1), null]],
+    ['missing result', (results) => results.slice(0, -1)],
+    ['extra result', (results) => [...results, results.at(-1)]],
+    ['non-array batch', () => null],
+  ];
+  for (const [name, corrupt] of cases) {
+    await context.test(name, async () => {
+      const db = new Proxy(harness.db, {
+        get(target, property, receiver) {
+          if (property === 'batch') return async (statements: D1PreparedStatement[]) =>
+            corrupt(await target.batch<Record<string, unknown>>(statements));
+          return Reflect.get(target, property, receiver);
+        },
+      });
+      await assert.rejects(new D1CommerceRepository(db).notificationOutbox.getMany(paths, 'shipped'), isUnavailable);
+    });
+  }
 });
 
 test('pending-owner lookup tracks source eligibility and outbox state without revising outboxes', async (context) => {
